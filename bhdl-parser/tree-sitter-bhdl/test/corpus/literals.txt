@@ -294,29 +294,36 @@ interface SimpleInterface {
   }
 }
 
-interface DDR_Interface (data_width: integer = 64) { // NOTE: parameter decl grammar not done yet
+interface DDR_Interface (data_width: integer = 64) { // Param with type
    parameters {
-     num_bytes = data_width / 8; // NOTE: expr grammar not done yet
+     num_bytes = data_width / 8; // Param without type
    }
    pins {
-     generate for i in 0 to data_width-1 { // NOTE: expr grammar not done yet
+     generate for i in 0 to data_width-1 {
        DQ: inout signal;
      }
    }
 }
 
 ---
-// Placeholder
+// Placeholder - Adjust after parsing
 (source_file
   (interface_definition name: (identifier)
     (pins_block
       (pin_port_declaration name: (identifier) direction: (kw_in) type: (type_specification_signal_power base: (kw_signal)))
       (pin_port_declaration name: (identifier) direction: (kw_out) type: (type_specification_signal_power base: (kw_signal)))))
-  (interface_definition name: (identifier) declaration_parameters: (interface_declaration_parameter_list (parameter_declaration name: (identifier) default_value: (identifier)))
+  (interface_definition name: (identifier)
+    declaration_parameters: (interface_declaration_parameter_list
+      (interface_parameter_declaration // Param with type
+        name: (identifier)
+        param_type: (identifier) // Expect parsed type name
+        default_value: (integer_literal)))
     (parameters_block
-      (parameter_declaration name: (identifier) default_value: (identifier)))
+      (parameter_declaration // Param without type
+        name: (identifier)
+        default_value: (binary_expression (_expression (identifier)) (_expression (integer_literal)))))
     (pins_block
-      (generate_block variable: (identifier) range: (range_to start: (integer_literal) end: (identifier))
+      (generate_block variable: (identifier) range: (range_to start: (integer_literal) end: (binary_expression (_expression (identifier)) (_expression (integer_literal))))
         body: (pin_port_declaration name: (identifier) direction: (kw_inout) type: (type_specification_signal_power base: (kw_signal))))))
 )
 
@@ -417,5 +424,132 @@ component Arrays {
     (parameter_declaration name: (identifier) default_value: (array_literal (_expression (numeric_literal)) (_expression (numeric_literal))))
     (parameter_declaration name: (identifier) default_value: (array_literal))
     (parameter_declaration name: (identifier) default_value: (array_literal (_expression (string_literal)) (_expression (string_literal))))
+  ))
+)
+
+=== Comparison Expressions ===
+
+10kOhm > 500Ohm
+5Vdc < 1mA
+length <= 10mm
+width >= 0.2mm
+
+---
+// Placeholder
+(source_file
+  (binary_expression (_expression (numeric_literal)) (_expression (numeric_literal)))
+  (binary_expression (_expression (numeric_literal)) (_expression (numeric_literal)))
+  (binary_expression (_expression (identifier)) (_expression (numeric_literal)))
+  (binary_expression (_expression (identifier)) (_expression (numeric_literal)))
+)
+
+=== Logical Expressions ===
+
+!true
+flag1 && flag2
+true || false
+a > b && c < d
+!(a == b)
+
+---
+// Placeholder
+(source_file
+  (unary_expression (_expression (boolean_literal)))
+  (binary_expression (_expression (identifier)) (_expression (identifier)))
+  (binary_expression (_expression (boolean_literal)) (_expression (boolean_literal)))
+  (binary_expression
+    (_expression (binary_expression (_expression (identifier)) (_expression (identifier))))
+    (_expression (binary_expression (_expression (identifier)) (_expression (identifier)))))
+  (unary_expression (_expression (parenthesized_expression (_expression (binary_expression (_expression (identifier)) (_expression (identifier)))))))
+)
+
+=== Function Call Expressions ===
+
+sqrt(value)
+utils.calc(1, 2)
+my_func()
+obj.method(arg1, arg2, )
+
+---
+// Placeholder
+(source_file
+  (function_call_expression function: (identifier) arguments: (argument_list (_expression (identifier))))
+  (function_call_expression function: (member_access object: (identifier) property: (identifier)) arguments: (argument_list (_expression (integer_literal)) (_expression (integer_literal))))
+  (function_call_expression function: (identifier) arguments: (argument_list))
+  (function_call_expression function: (member_access object: (identifier) property: (identifier)) arguments: (argument_list (_expression (identifier)) (_expression (identifier))))
+)
+
+=== Library Statement ===
+
+library company_stdlib "path/to/company/lib";
+
+---
+// Placeholder
+(source_file (library_statement name: (identifier) path: (string_literal)))
+
+=== Generate with Local Variable ===
+
+connections {
+  generate for byte_idx in 0 to 7 {
+    local mcu_high = (byte_idx + 1) * 8 - 1;
+    CPU -> PHY; // Simplified connection
+  }
+}
+
+---
+// Placeholder
+(source_file (connections_block
+  (generate_block variable: (identifier) range: (range_to start: (integer_literal) end: (integer_literal))
+    body:
+      (local_variable_declaration name: (identifier) value: (binary_expression (_expression (parenthesized_expression (_expression (binary_expression (_expression (identifier)) (_expression (integer_literal)))))) (_expression (integer_literal))))
+      (connection_statement source: (identifier) operator: "->" target: (identifier))
+  ))
+)
+
+=== Ternary Expression ===
+
+component VariantComponent {
+  parameters {
+    SKU = "Base";
+  }
+  components {
+    OpAmp U_FeatureAmp {
+       population: (SKU == "Premium") ? "Installed" : "DNP";
+    }
+  }
+}
+
+---
+// Placeholder
+(source_file (component_definition name: (identifier)
+  (parameters_block
+    (parameter_declaration name: (identifier) default_value: (string_literal)))
+  (components_block
+    (component_instantiation type: (identifier) name: (identifier)
+      (property_assignment property_name: (identifier)
+        value: (ternary_expression
+          condition: (parenthesized_expression (_expression (binary_expression (_expression (identifier)) (_expression (string_literal)))))
+          consequence: (string_literal)
+          alternative: (string_literal)))))
+  ))
+)
+
+=== Typed Parameters ===
+
+component TypedParams {
+  parameters {
+    width: integer = 32;
+    delay: time = 5ns;
+    name: string;
+  }
+}
+
+---
+// Placeholder
+(source_file (component_definition name: (identifier)
+  (parameters_block
+    (parameter_declaration name: (identifier) param_type: (identifier) default_value: (integer_literal))
+    (parameter_declaration name: (identifier) param_type: (identifier) default_value: (numeric_literal))
+    (parameter_declaration name: (identifier) param_type: (identifier))
   ))
 )
