@@ -1,0 +1,231 @@
+// Sensor Circuits Library
+// Standard sensor interface topologies for BHDL
+
+// Assuming base component imports:
+// import StandardLibrary.Passives.{Resistor, Capacitor};
+// import StandardLibrary.Semiconductors.{Photodiode};
+// import StandardLibrary.ICs.{OpAmp, InstrumentationAmp, CurrentSource, SchmittTrigger, RelaxationOscillator, SignalConditioner};
+// import StandardLibrary.Sensors.{Thermistor, PressureSensor, LDR, Accelerometer, PIR_Sensor, HumiditySensorCapacitive};
+// import CircuitPatterns.non_inverting_amplifier; // If used directly
+
+// ---------------------------------------------------------
+// Temperature Sensor Interfaces
+// ---------------------------------------------------------
+
+// Thermistor interface module with voltage divider
+module ThermistorInterfaceDivider {
+  ports {
+    ADC_INPUT: out signal;
+    VREF: in power;
+    GND: ground;
+  }
+  parameters {
+    ntc_resistance_nominal: resistance = 10kOhm;
+    // Beta value not used directly in structure, assumed for thermistor component selection
+    // beta_value: real = 3950;
+    pullup_res_value: resistance = module.ntc_resistance_nominal; // Typically match nominal NTC R
+    filter_cap_value: capacitance = 100nF;
+  }
+  components {
+    Resistor R_PULL { value: module.pullup_res_value; };
+    Thermistor R_NTC { resistance_nominal: module.ntc_resistance_nominal; }; // Beta passed to component
+    Capacitor C_FILTER { value: module.filter_cap_value; };
+  }
+  connections {
+    VREF -> R_PULL.1;
+    R_PULL.2 -> ADC_INPUT; // Output node
+
+    ADC_INPUT -> R_NTC.1;
+    R_NTC.2 -> GND;
+
+    // Filtering capacitor
+    ADC_INPUT -> C_FILTER.1;
+    C_FILTER.2 -> GND;
+  }
+}
+
+// Note: Thermocouple and RTD interfaces removed due to complexity and reliance on unspecified components.
+
+// ---------------------------------------------------------
+// Pressure Sensor Interfaces
+// ---------------------------------------------------------
+
+// Bridge pressure sensor direct connection module (Amplification done externally)
+module BridgePressureSensorInterface {
+  ports {
+    SENSOR_OUT_P: out signal;
+    SENSOR_OUT_N: out signal;
+    VCC: in power;
+    GND: ground;
+    SENSOR_INSTANCE: component; // Pass the sensor component instance
+  }
+  connections {
+    VCC -> SENSOR_INSTANCE.VCC; // Assume sensor has VCC, GND, OUT_P, OUT_N pins
+    GND -> SENSOR_INSTANCE.GND;
+    SENSOR_INSTANCE.OUT_P -> SENSOR_OUT_P;
+    SENSOR_INSTANCE.OUT_N -> SENSOR_OUT_N;
+  }
+}
+
+// I2C MEMS pressure sensor module (handles pullups and bypass)
+module I2CPressureSensorInterface {
+  ports {
+    SCL: inout signal;
+    SDA: inout signal;
+    VCC: in power;
+    GND: ground;
+    SENSOR_INSTANCE: component; // Pass the sensor instance
+  }
+  parameters {
+    pullup_value: resistance = 4.7kOhm;
+    bypass_cap_value: capacitance = 100nF;
+  }
+  components {
+    Resistor R_SCL { value: module.pullup_value; };
+    Resistor R_SDA { value: module.pullup_value; };
+    Capacitor C_BYPASS { value: module.bypass_cap_value; };
+  }
+  connections {
+    // Connect Sensor
+    SCL -> SENSOR_INSTANCE.SCL;
+    SDA -> SENSOR_INSTANCE.SDA;
+    VCC -> SENSOR_INSTANCE.VCC;
+    GND -> SENSOR_INSTANCE.GND;
+
+    // Pull-ups
+    VCC -> R_SCL.1;
+    R_SCL.2 -> SCL;
+    VCC -> R_SDA.1;
+    R_SDA.2 -> SDA;
+
+    // Decoupling
+    VCC -> C_BYPASS.1;
+    C_BYPASS.2 -> GND;
+  }
+}
+
+// ---------------------------------------------------------
+// Light Sensor Interfaces
+// ---------------------------------------------------------
+
+// Photodiode transimpedance amplifier module (Basic TIA)
+module PhotodiodeTIA {
+  ports {
+    TIA_OUT: out signal;
+    VCC: in power;
+    GND: ground;
+    PHOTODIODE_INSTANCE: component; // Pass the photodiode instance
+    OPAMP_INSTANCE: component; // Pass the opamp instance
+  }
+  parameters {
+    feedback_res_value: resistance = 1MOhm;
+    feedback_cap_value: capacitance = 10pF; // For stability
+  }
+  components {
+    Resistor R_FEEDBACK { value: module.feedback_res_value; };
+    Capacitor C_FEEDBACK { value: module.feedback_cap_value; };
+  }
+  connections {
+    // Power OpAmp
+    VCC -> OPAMP_INSTANCE.VCC;
+    GND -> OPAMP_INSTANCE.GND; // Assuming single supply or VEE connected externally
+
+    // Photodiode (Anode to GND, Cathode to Inverting Input)
+    PHOTODIODE_INSTANCE.A -> GND;
+    PHOTODIODE_INSTANCE.C -> OPAMP_INSTANCE.IN_N;
+
+    // TIA Configuration
+    OPAMP_INSTANCE.IN_P -> GND; // Non-inverting input to ground
+    OPAMP_INSTANCE.IN_N -> R_FEEDBACK.1;
+    R_FEEDBACK.2 -> OPAMP_INSTANCE.OUT;
+    OPAMP_INSTANCE.OUT -> TIA_OUT; // Module output
+
+    // Stability Capacitor in parallel with feedback resistor
+    OPAMP_INSTANCE.IN_N -> C_FEEDBACK.1;
+    C_FEEDBACK.2 -> OPAMP_INSTANCE.OUT;
+  }
+}
+
+// LDR (Light Dependent Resistor) interface module
+module LDRInterfaceDivider {
+  ports {
+    ADC_INPUT: out signal;
+    VCC: in power;
+    GND: ground;
+  }
+  parameters {
+    pullup_res_value: resistance = 10kOhm; // Value depends on LDR range
+    filter_cap_value: capacitance = 100nF;
+  }
+  components {
+    Resistor R_PULL { value: module.pullup_res_value; };
+    LDR R_LDR; // Assume LDR component exists
+    Capacitor C_FILTER { value: module.filter_cap_value; };
+  }
+  connections {
+    VCC -> R_PULL.1;
+    R_PULL.2 -> ADC_INPUT;
+
+    ADC_INPUT -> R_LDR.1;
+    R_LDR.2 -> GND;
+
+    // Output filtering
+    ADC_INPUT -> C_FILTER.1;
+    C_FILTER.2 -> GND;
+  }
+}
+
+// ---------------------------------------------------------
+// Motion Sensor Interfaces
+// ---------------------------------------------------------
+
+// Accelerometer SPI interface module (Handles bypass caps)
+module SPIAccelerometerInterface {
+  ports {
+    // SPI Interface Ports
+    MOSI: in signal;
+    MISO: out signal;
+    SCK: in signal;
+    CS: in signal;
+    INT_OUT: out signal; // Interrupt from accelerometer
+    // Power Ports
+    VCC: in power;
+    GND: ground;
+    // Component instance
+    ACCEL_INSTANCE: component;
+  }
+  parameters {
+    bypass_cap1_value: capacitance = 100nF;
+    bypass_cap2_value: capacitance = 10uF;
+  }
+  components {
+    Capacitor C_BYPASS_1 { value: module.bypass_cap1_value; };
+    Capacitor C_BYPASS_2 { value: module.bypass_cap2_value; };
+  }
+  connections {
+    // SPI Connections
+    MOSI -> ACCEL_INSTANCE.MOSI; // Assume standard pin names on accel component
+    MISO <- ACCEL_INSTANCE.MISO;
+    SCK -> ACCEL_INSTANCE.SCK;
+    CS -> ACCEL_INSTANCE.CS;
+
+    // Interrupt
+    ACCEL_INSTANCE.INT -> INT_OUT;
+
+    // Power
+    VCC -> ACCEL_INSTANCE.VCC;
+    GND -> ACCEL_INSTANCE.GND;
+
+    // Decoupling
+    VCC -> C_BYPASS_1.1;
+    C_BYPASS_1.2 -> GND;
+    VCC -> C_BYPASS_2.1;
+    C_BYPASS_2.2 -> GND;
+  }
+}
+
+// Note: PIR and Humidity sensor interfaces removed due to complexity and
+// reliance on unspecified components or non-standard features.
+
+// Removed non-standard library wrapper and export block.
+// Top-level definitions are assumed exported. 

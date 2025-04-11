@@ -1,0 +1,149 @@
+// Connection Patterns Example
+// Illustrates common circuit connection patterns using functions
+
+board ConnectionPatternsExample {
+  // Import physical components from libraries
+  import libraries.Passives.{Resistor, Capacitor, Inductor, Transformer};
+  import libraries.Semiconductors.{Diode, BJT, MOSFET};
+  import libraries.ICs.{OpAmp, Comparator, LogicGate};
+  
+  // Import circuit functions
+  import CircuitPatterns.{voltage_divider, rc_filter, low_pass_filter, high_pass_filter, 
+                          inverting_amplifier, non_inverting_amplifier, comparator_circuit, 
+                          differential_amplifier};
+  import PowerCircuits.{linear_regulator, tvs_protection, reverse_polarity_protection};
+  import DigitalCircuits.{pullup_resistor, pulldown_resistor, rc_debounce};
+  
+  // Board metadata
+  author: "BHDL Team";
+  version: "1.0";
+  description: "Example of common circuit connection patterns using circuit functions";
+  
+  // External connections
+  ports {
+    VCC: in power(12VDC, 500mA);
+    GND: ground;
+    VIN_ANALOG: in signal(analog, 0V to 5V);
+    VIN_PWM: in signal(digital, 0V to 5V, PWM);
+    VOUT_FILTERED: out signal(analog, 0V to 5V);
+    VOUT_AMPLIFIED: out signal(analog, 0V to 12V);
+    VIN_SWITCH: in signal(digital, active low);
+    VOUT_5V: out power(5VDC, 100mA);
+    VOUT_COMPARATOR: out signal(digital, 0V to 5V);
+  }
+  
+  connections {
+    // Input protection with TVS diode
+    tvs_protection(
+      VCC,                           // Input voltage to protect
+      VCC_PROTECTED,                 // Protected output voltage
+      [D_TVS, Diode, "TVS", 15V]     // TVS diode specification
+    );
+    
+    // Reverse polarity protection
+    reverse_polarity_protection(
+      VCC_PROTECTED,                       // Input power
+      VCC_SAFE,                            // Protected output
+      [Q_PROT, MOSFET, "P-Channel", 30V],  // P-Channel MOSFET
+      GND                                  // Ground reference
+    );
+    
+    // 5V Linear regulator
+    linear_regulator(
+      VCC_SAFE,                      // Input voltage
+      VOUT_5V,                       // Regulated output
+      GND,                           // Ground reference
+      5.0,                           // Output voltage
+      [U_REG, OpAmp, "LM317"],       // Regulator IC
+      [R1_REG, Resistor, 240Ω, 1%],  // Reference resistor
+      [R2_REG, Resistor, 750Ω, 1%],  // Feedback resistor
+      [C_IN, Capacitor, 1µF],        // Input capacitor
+      [C_OUT, Capacitor, 10µF]       // Output capacitor
+    );
+    
+    // Voltage divider for creating a reference
+    voltage_divider(
+      VCC_SAFE,                      // Input voltage
+      VREF,                          // Output voltage
+      GND,                           // Ground reference
+      [R1_DIV, Resistor, 10kΩ, 1%],  // Upper resistor
+      [R2_DIV, Resistor, 10kΩ, 1%]   // Lower resistor
+    );
+    
+    // RC low-pass filter for PWM signal
+    rc_filter(
+      VIN_PWM,                       // Input signal
+      VIN_FILTERED,                  // Filtered output
+      [R_FILT, Resistor, 10kΩ],      // Filter resistor
+      [C_FILT, Capacitor, 1µF]       // Filter capacitor
+    );
+    
+    // More complex low pass filter (2nd order)
+    low_pass_filter(
+      VIN_FILTERED,                  // Input signal
+      VOUT_FILTERED,                 // Filtered output
+      GND,                           // Ground reference
+      1000,                          // Cutoff frequency in Hz
+      [R1_LP, Resistor, 10kΩ],       // First resistor
+      [R2_LP, Resistor, 10kΩ],       // Second resistor
+      [C1_LP, Capacitor, 15nF],      // First capacitor
+      [C2_LP, Capacitor, 15nF]       // Second capacitor
+    );
+    
+    // High-pass filter for input signals
+    high_pass_filter(
+      VIN_ANALOG,                    // Input signal
+      VIN_ANALOG_AC,                 // AC-coupled output
+      GND,                           // Ground reference
+      10,                            // Cutoff frequency in Hz
+      [R_HP, Resistor, 10kΩ],        // Resistor
+      [C_HP, Capacitor, 1µF]         // Capacitor
+    );
+    
+    // Non-inverting amplifier
+    non_inverting_amplifier(
+      [U_AMP, OpAmp, "LM358"],       // Op-amp
+      VIN_ANALOG_AC,                 // Input signal
+      VOUT_AMPLIFIED,                // Amplified output
+      [R_GAIN1, Resistor, 10kΩ, 1%], // Feedback resistor
+      [R_GAIN2, Resistor, 1kΩ, 1%]   // Ground resistor
+    );
+    
+    // Comparator with hysteresis
+    comparator_circuit(
+      [U_COMP, Comparator, "LM339"], // Comparator
+      VIN_ANALOG,                    // Input signal
+      VREF,                          // Reference voltage
+      VOUT_COMPARATOR,               // Comparator output
+      VCC_SAFE,                      // Positive supply
+      GND,                           // Ground reference
+      [R_HYS, Resistor, 100kΩ],      // Hysteresis resistor
+      [R_PULL, Resistor, 10kΩ]       // Pullup resistor
+    );
+    
+    // Debounce circuit for input switch
+    rc_debounce(
+      VIN_SWITCH,                    // Input signal (switch)
+      VIN_DEBOUNCED,                 // Debounced output
+      VCC_SAFE,                      // Pull-up voltage
+      [R_DEBOUNCE, Resistor, 10kΩ],  // Debounce resistor
+      [C_DEBOUNCE, Capacitor, 100nF] // Debounce capacitor
+    );
+    
+    // Digital input with pullup resistor
+    pullup_resistor(
+      VIN_DEBOUNCED,                 // Input signal
+      VCC_SAFE,                      // Pull-up voltage
+      [R_PU, Resistor, 10kΩ]         // Pull-up resistor
+    );
+  }
+  
+  // Design validation
+  validation {
+    check output_voltage(VOUT_5V, 5.0V ±5%);
+    check output_current(VOUT_5V, capable of 100mA);
+    check filter_response(VIN_PWM to VOUT_FILTERED, -3dB at 1kHz);
+    check signal_amplitude(VOUT_AMPLIFIED, 10x VIN_ANALOG);
+    check comparator(VOUT_COMPARATOR, high when VIN_ANALOG > VREF);
+  }
+} 

@@ -1,0 +1,190 @@
+// Circuit Patterns Example
+// Demonstrates the use of circuit functions for common op-amp configurations
+
+board CircuitPatternsExample {
+  // Import circuit pattern functions
+  import CircuitPatterns.{
+    non_inverting_amplifier,
+    inverting_amplifier,
+    buffer_amplifier,
+    summing_amplifier,
+    differential_amplifier,
+    integrator,
+    sallen_key_lowpass
+  };
+  
+  // Board metadata
+  author: "BHDL Team";
+  description: "Demonstration of circuit function patterns";
+  version: "1.0";
+  
+  // External connections
+  ports {
+    VCC: in power(15VDC, 100mA);
+    VEE: in power(-15VDC, 100mA);
+    GND: ground;
+    INPUT_1: in signal;
+    INPUT_2: in signal;
+    OUTPUT_BUFFER: out signal;
+    OUTPUT_NONINV: out signal;
+    OUTPUT_INV: out signal;
+    OUTPUT_SUM: out signal;
+    OUTPUT_DIFF: out signal;
+    OUTPUT_INT: out signal;
+    OUTPUT_LPF: out signal;
+  }
+  
+  // Component declarations
+  components {
+    // Op-amps for different circuit functions
+    component OpAmp U1 {
+      type: general;
+      gain_bandwidth: 1MHz;
+      slew_rate: 1V/µs;
+    }
+    
+    component OpAmp U2 {
+      type: general;
+      gain_bandwidth: 1MHz;
+      slew_rate: 1V/µs;
+    }
+    
+    component OpAmp U3 {
+      type: general;
+      gain_bandwidth: 1MHz;
+      slew_rate: 1V/µs;
+    }
+    
+    component OpAmp U4 {
+      type: general;
+      gain_bandwidth: 1MHz;
+      slew_rate: 1V/µs;
+    }
+    
+    component OpAmp U5 {
+      type: general;
+      gain_bandwidth: 1MHz;
+      slew_rate: 1V/µs;
+    }
+    
+    component OpAmp U6 {
+      type: general;
+      gain_bandwidth: 1MHz;
+      slew_rate: 1V/µs;
+    }
+    
+    component OpAmp U7 {
+      type: general;
+      gain_bandwidth: 1MHz;
+      slew_rate: 1V/µs;
+    }
+    
+    // Pre-declared components that will be used in the circuit functions
+    component Resistor R_FB1 {
+      value: 10kΩ;
+      tolerance: 1%;
+    }
+    
+    component Resistor R_FB2 {
+      value: 1kΩ;
+      tolerance: 1%;
+    }
+  }
+  
+  // Connections using circuit functions
+  connections {
+    // Connect power to all op-amps
+    VCC -> U1.VCC -> U2.VCC -> U3.VCC -> U4.VCC -> U5.VCC -> U6.VCC -> U7.VCC;
+    VEE -> U1.VEE -> U2.VEE -> U3.VEE -> U4.VEE -> U5.VEE -> U6.VEE -> U7.VEE;
+    GND -> U1.GND -> U2.GND -> U3.GND -> U4.GND -> U5.GND -> U6.GND -> U7.GND;
+    
+    // Add bypass capacitors for each op-amp
+    U1.VCC <|C_BYPASS1, Capacitor, 100nF|> GND;
+    U1.VEE <|C_BYPASS2, Capacitor, 100nF|> GND;
+    
+    // Buffer amplifier using function (unity gain)
+    buffer_amplifier(
+      U1,                // Op-amp component
+      INPUT_1,           // Input signal
+      OUTPUT_BUFFER      // Output signal
+    );
+    
+    // Non-inverting amplifier with gain = 11 (1 + 10k/1k)
+    non_inverting_amplifier(
+      U2,                           // Op-amp component
+      INPUT_1,                      // Input signal
+      OUTPUT_NONINV,                // Output signal
+      R_FB1,                        // Feedback resistor (pre-declared)
+      R_FB2                         // Ground resistor (pre-declared)
+    );
+    
+    // Inverting amplifier with gain = -10 (-10k/1k)
+    inverting_amplifier(
+      U3,                           // Op-amp component
+      INPUT_1,                      // Input signal
+      OUTPUT_INV,                   // Output signal
+      [R_IN, Resistor, 1kΩ, 1%],    // Input resistor (inline)
+      [R_F, Resistor, 10kΩ, 1%]     // Feedback resistor (inline)
+    );
+    
+    // Summing amplifier (inverting summer)
+    summing_amplifier(
+      U4,                                // Op-amp component
+      [INPUT_1, INPUT_2],                // Input signals
+      OUTPUT_SUM,                        // Output signal
+      [                                  // Input resistors
+        [R_SUM1, Resistor, 10kΩ, 1%],
+        [R_SUM2, Resistor, 10kΩ, 1%]
+      ],
+      [R_SUMF, Resistor, 10kΩ, 1%]       // Feedback resistor
+    );
+    
+    // Differential amplifier
+    differential_amplifier(
+      U5,                               // Op-amp component
+      INPUT_1,                          // Positive input
+      INPUT_2,                          // Negative input
+      OUTPUT_DIFF,                      // Output signal
+      [R_DIFF1, Resistor, 10kΩ, 1%],    // R1
+      [R_DIFF2, Resistor, 10kΩ, 1%],    // R2
+      [R_DIFF3, Resistor, 10kΩ, 1%],    // R3
+      [R_DIFF4, Resistor, 10kΩ, 1%]     // R4
+    );
+    
+    // Integrator
+    integrator(
+      U6,                               // Op-amp component
+      INPUT_1,                          // Input signal
+      OUTPUT_INT,                       // Output signal
+      [R_INT, Resistor, 100kΩ, 1%],     // Input resistor
+      [C_INT, Capacitor, 100nF, 5%]     // Feedback capacitor
+    );
+    
+    // Sallen-Key Low-Pass Filter (2nd order)
+    sallen_key_lowpass(
+      U7,                               // Op-amp component
+      INPUT_1,                          // Input signal
+      OUTPUT_LPF,                       // Output signal
+      [R_LPF1, Resistor, 10kΩ, 1%],     // R1
+      [R_LPF2, Resistor, 10kΩ, 1%],     // R2
+      [C_LPF1, Capacitor, 10nF, 5%],    // C1
+      [C_LPF2, Capacitor, 10nF, 5%]     // C2
+    );
+  }
+  
+  // Design notes section to document the circuit behavior
+  design_notes {
+    // Circuit functions automatically handle internal node generation and connections
+    // This prevents errors and simplifies implementation of common topologies
+    
+    // Calculate cutoff frequency for the Sallen-Key filter
+    // fc = 1/(2π√(R1*R2*C1*C2)) = 1/(2π√(10k*10k*10n*10n)) ≈ 1.6kHz
+    
+    // Buffer gain = 1
+    // Non-inverting gain = 1 + R_FB1/R_FB2 = 1 + 10k/1k = 11
+    // Inverting gain = -R_F/R_IN = -10k/1k = -10
+    // Summing gain = -R_SUMF/R_SUMx = -10k/10k = -1 for each input
+    // Differential gain = R_DIFF4/R_DIFF2 = 10k/10k = 1 (when all resistors are equal)
+    // Integrator time constant = R_INT * C_INT = 100k * 100n = 10ms
+  }
+} 

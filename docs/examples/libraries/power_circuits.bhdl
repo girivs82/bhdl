@@ -1,0 +1,265 @@
+// Power Circuits Library
+// Standard power supply circuit topologies for BHDL
+
+// Assuming necessary base component definitions are imported
+// import StandardLibrary.Passives.{Resistor, Capacitor, Inductor};
+// import StandardLibrary.Semiconductors.{Diode, PMOSFET, TVSDiode};
+// import StandardLibrary.ICs.{SwitchingController, LinearRegulatorIC, OpAmp}; // Example IC types
+// import StandardLibrary.Misc.{LED};
+
+// ---------------------------------------------------------
+// Linear Regulator Circuits
+// ---------------------------------------------------------
+
+// Basic linear regulator module with decoupling
+module LinearRegulatorCircuit {
+  ports {
+    IN_PWR: in power;
+    OUT_PWR: out power;
+    GND: ground;
+    REG_INSTANCE: component; // Pass the specific regulator instance
+  }
+  components {
+    // Define standard decoupling caps here
+    Capacitor C_IN { value: 10uF; voltage: 25Vdc; } // Standardized units
+    Capacitor C_OUT { value: 10uF; voltage: 16Vdc; }
+    Capacitor C_OUT_HF { value: 100nF; voltage: 16Vdc; }
+  }
+  connections {
+    IN_PWR -> REG_INSTANCE.IN; // Assume regulator component has IN, OUT, GND pins
+    REG_INSTANCE.OUT -> OUT_PWR;
+    REG_INSTANCE.GND -> GND;
+
+    // Connect decoupling capacitors
+    IN_PWR -> C_IN.1;
+    C_IN.2 -> GND;
+    OUT_PWR -> C_OUT.1;
+    C_OUT.2 -> GND;
+    OUT_PWR -> C_OUT_HF.1;
+    C_OUT_HF.2 -> GND;
+  }
+}
+
+// Adjustable linear regulator module with feedback resistors
+module AdjustableLinearRegulatorCircuit {
+  ports {
+    IN_PWR: in power;
+    OUT_PWR: out power;
+    GND: ground;
+    REG_INSTANCE: component; // Pass the specific regulator instance
+  }
+  parameters {
+    r1_value: resistance = required;
+    r2_value: resistance = required;
+    cap_in_value: capacitance = 10uF;
+    cap_in_voltage: voltage = 25Vdc;
+    cap_out_value: capacitance = 10uF;
+    cap_out_voltage: voltage = 16Vdc;
+    cap_outhf_value: capacitance = 100nF;
+    cap_outhf_voltage: voltage = 16Vdc;
+  }
+  components {
+    // Instantiate feedback resistors based on parameters
+    Resistor R1 { value: module.r1_value; }
+    Resistor R2 { value: module.r2_value; }
+    // Decoupling caps
+    Capacitor C_IN { value: module.cap_in_value; voltage: module.cap_in_voltage; }
+    Capacitor C_OUT { value: module.cap_out_value; voltage: module.cap_out_voltage; }
+    Capacitor C_OUT_HF { value: module.cap_outhf_value; voltage: module.cap_outhf_voltage; }
+  }
+  connections {
+    IN_PWR -> REG_INSTANCE.IN;
+    REG_INSTANCE.OUT -> OUT_PWR;
+    REG_INSTANCE.GND -> GND;
+
+    // Connect feedback resistors (assume ADJ pin on regulator)
+    OUT_PWR -> R1.1;
+    R1.2 -> REG_INSTANCE.ADJ; // Feedback node implicitly created
+    REG_INSTANCE.ADJ -> R2.1;
+    R2.2 -> GND;
+
+    // Connect decoupling capacitors
+    IN_PWR -> C_IN.1;
+    C_IN.2 -> GND;
+    OUT_PWR -> C_OUT.1;
+    C_OUT.2 -> GND;
+    OUT_PWR -> C_OUT_HF.1;
+    C_OUT_HF.2 -> GND;
+  }
+}
+
+// ---------------------------------------------------------
+// Switching Regulator Circuits
+// ---------------------------------------------------------
+
+// Buck converter (step-down) module
+module BuckConverterCircuit {
+  ports {
+    IN_PWR: in power;
+    OUT_PWR: out power;
+    GND: ground;
+    CTRL_INSTANCE: component; // Pass the controller instance
+  }
+  parameters {
+    inductor_value: inductance = required;
+    cap_in_value: capacitance = 10uF;
+    cap_out_value: capacitance = 22uF;
+    // Add other params like current ratings if needed
+  }
+  components {
+    Inductor L1 { value: module.inductor_value; }; // Current rating should be specified or inherited
+    Capacitor C_IN { value: module.cap_in_value; }; // Voltage rating needed
+    Capacitor C_OUT { value: module.cap_out_value; }; // Voltage rating needed
+  }
+  connections {
+    // Power path (assume controller has IN, SW, GND, FB pins)
+    IN_PWR -> CTRL_INSTANCE.IN;
+    CTRL_INSTANCE.SW -> L1.1; // SW node implicitly created
+    L1.2 -> OUT_PWR;
+    CTRL_INSTANCE.GND -> GND;
+
+    // Feedback (assuming connection to OUT)
+    OUT_PWR -> CTRL_INSTANCE.FB;
+
+    // Input and output capacitors
+    IN_PWR -> C_IN.1;
+    C_IN.2 -> GND;
+    OUT_PWR -> C_OUT.1;
+    C_OUT.2 -> GND;
+  }
+}
+
+// Boost converter (step-up) module
+module BoostConverterCircuit {
+  ports {
+    IN_PWR: in power;
+    OUT_PWR: out power;
+    GND: ground;
+    CTRL_INSTANCE: component; // Pass controller instance
+  }
+  parameters {
+     inductor_value: inductance = required;
+     diode_type: component_type = Diode; // Allow specifying diode type
+     cap_in_value: capacitance = 10uF;
+     cap_out_value: capacitance = 22uF;
+  }
+  components {
+    Inductor L1 { value: module.inductor_value; };
+    Diode D1 { type: module.diode_type; }; // Instantiate the diode
+    Capacitor C_IN { value: module.cap_in_value; };
+    Capacitor C_OUT { value: module.cap_out_value; };
+  }
+  connections {
+    // Power path (assume controller has IN, SW, GND, FB)
+    IN_PWR -> L1.1;
+    L1.2 -> CTRL_INSTANCE.SW; // SW node implicitly created
+    L1.2 -> D1.A; // Diode anode also connects to SW node
+    D1.K -> OUT_PWR; // Diode cathode connects to output
+    CTRL_INSTANCE.GND -> GND;
+    IN_PWR -> CTRL_INSTANCE.IN; // Controller might need VIN sensing
+
+    // Feedback
+    OUT_PWR -> CTRL_INSTANCE.FB;
+
+    // Input and output capacitors
+    IN_PWR -> C_IN.1;
+    C_IN.2 -> GND;
+    OUT_PWR -> C_OUT.1;
+    C_OUT.2 -> GND;
+  }
+}
+
+// ---------------------------------------------------------
+// Power Protection Circuits
+// ---------------------------------------------------------
+
+// Reverse polarity protection with diode module
+module ReversePolarityProtectionDiode {
+  ports {
+    INPUT: in power;
+    OUTPUT: out power;
+    GND: ground; // GND might be needed for bypass cap
+  }
+  parameters {
+    diode_type: component_type = Diode; // e.g., Schottky
+    diode_current: current = 1A;
+    cap_value: capacitance = 10uF;
+    cap_voltage: voltage = 25Vdc;
+  }
+  components {
+    Diode D_PROT { type: module.diode_type; current_rating: module.diode_current; };
+    Capacitor C_BYPASS { value: module.cap_value; voltage: module.cap_voltage; };
+  }
+  connections {
+    INPUT -> D_PROT.A;
+    D_PROT.K -> OUTPUT;
+    // Bypass cap on output
+    OUTPUT -> C_BYPASS.1;
+    C_BYPASS.2 -> GND;
+  }
+}
+
+// Reverse polarity protection with P-MOSFET module
+module ReversePolarityProtectionMosfet {
+  ports {
+    INPUT: in power;
+    OUTPUT: out power;
+    GND: ground;
+  }
+  parameters {
+    mosfet_type: component_type = PMOSFET;
+    r_gate_value: resistance = 100kOhm;
+    cap_value: capacitance = 10uF;
+    cap_voltage: voltage = 25Vdc;
+  }
+  components {
+    PMOSFET M_PROT { type: module.mosfet_type; };
+    Resistor R_GATE { value: module.r_gate_value; };
+    // Optional Zener for gate protection could be added here
+    Capacitor C_BYPASS { value: module.cap_value; voltage: module.cap_voltage; };
+  }
+  connections {
+    INPUT -> M_PROT.S; // Source connected to Input for P-MOSFET reverse protection
+    M_PROT.D -> OUTPUT; // Drain connected to Output
+    M_PROT.G -> R_GATE.1; // Gate resistor
+    R_GATE.2 -> GND;    // Gate pulled to GND to turn on when INPUT is positive
+    // Optional Zener would go between Gate and Source (Input)
+
+    // Bypass cap on output
+    OUTPUT -> C_BYPASS.1;
+    C_BYPASS.2 -> GND;
+  }
+}
+
+// TVS protection for signal lines module
+module TVSProtectionSignal {
+  ports {
+    SIGNAL_IN: inout signal; // Use inout as direction might vary
+    SIGNAL_OUT: inout signal;
+    GND: ground;
+  }
+  parameters {
+      r_limit_value: resistance = 10Ohm; // Adjusted default
+      tvs_type: component_type = TVSDiode;
+  }
+  components {
+      Resistor R_LIMIT { value: module.r_limit_value; };
+      TVSDiode TVS { type: module.tvs_type; }; // Needs breakdown voltage etc.
+  }
+  connections {
+      SIGNAL_IN -> R_LIMIT.1;
+      R_LIMIT.2 -> SIGNAL_OUT;
+      // TVS connects between output signal and ground
+      SIGNAL_OUT -> TVS.1;
+      TVS.2 -> GND;
+  }
+}
+
+// Note: Removed power_distribution_switch, current_limiter, battery_charger,
+// signal_isolator, power_isolator modules as their implementation was complex,
+// potentially non-standard (calculate), or requires specific component definitions
+// not assumed to be available in a generic library.
+// These are better handled as specific application modules or board-level implementations.
+
+// Removed non-standard export block.
+// Top-level definitions are assumed exported. 

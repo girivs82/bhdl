@@ -1,0 +1,107 @@
+// Protection Components Library
+library Protection {
+  version: "1.0.0";
+  author: "BHDL Team";
+  description: "Protection components for electronic circuits";
+
+  // Fuse Component
+  component Fuse {
+    pins {
+      1: in;
+      2: out;
+    }
+    
+    properties {
+      rating: required;
+      type: fast_blow;  // fast_blow, slow_blow, resettable
+      voltage: required;
+      breaking_capacity: 50A;
+    }
+  }
+
+  // Varistor Component
+  component Varistor {
+    pins {
+      1: passive;
+      2: passive;
+    }
+    
+    properties {
+      voltage: required;
+      energy: required;
+      clamping_ratio: 1.6;
+      response_time: <25ns;
+    }
+  }
+  
+  // TVS Diode Component
+  component TVSDiode {
+    pins {
+      1: passive;
+      2: passive;
+    }
+    
+    properties {
+      breakdown_voltage: required;
+      clamping_voltage: required;
+      peak_pulse_current: required;
+      direction: unidirectional;  // unidirectional, bidirectional
+    }
+  }
+  
+  // Diode Component
+  component Diode {
+    pins {
+      A: in;    // Anode
+      K: out;   // Cathode
+    }
+    
+    properties {
+      voltage: required;
+      current: required;
+      forward_voltage: 0.7V;
+      reverse_recovery: 50ns;
+      type: standard;  // standard, fast, schottky, zener
+    }
+  }
+  
+  // Schottky Diode Component
+  component SchottkyDiode {
+    pins {
+      A: in;    // Anode
+      K: out;   // Cathode
+    }
+    
+    properties {
+      voltage: required;
+      current: required;
+      forward_voltage: 0.3V;
+      reverse_recovery: 10ns;
+    }
+  }
+  
+  // Current Limiter
+  component CurrentLimiter {
+    pins {
+      IN: in;
+      OUT: out;
+      GND: power_in;
+    }
+    
+    properties {
+      current_limit: required;
+      trip_time: 10ms;
+      auto_reset: true;
+    }
+  }
+  
+  // Public exports
+  export {
+    Fuse,
+    Varistor,
+    TVSDiode,
+    Diode,
+    SchottkyDiode,
+    CurrentLimiter
+  }
+} 

@@ -1,0 +1,151 @@
+// Circuit Libraries Demo
+// Demonstrates the use of various BHDL circuit modules
+//
+// Author: BHDL Team
+// Date: 2023-06-01 (Updated based on Refactored Libraries)
+// Version: 1.1
+//
+// This example shows how various circuit modules can be combined
+// to create a complete electronic system.
+
+// Note: This example uses specific signal/power types (e.g., cmos_3v3, i2c_signal_3v3, lv_digital_power) 
+// for demonstration. In a standard library, these might be defined using base types 
+// (signal, power) with appropriate constraints or attributes.
+
+// Import standard types (Assumed available)
+// import StandardLibrary.Types.{cmos_3v3, i2c_signal_3v3, lv_digital_power, lv_analog_power, system_clock, line_level};
+
+// Import required circuit modules from libraries (using relative paths for example)
+import examples.libraries.PowerCircuits.{BuckConverterCircuit, ReversePolarityProtectionMosfet};
+import examples.libraries.DigitalCircuits.{CrystalOscillatorCircuit, I2CPullups, ManualResetActiveLow, DebouncedButtonActiveLow, LedOutputActiveHigh};
+import examples.libraries.SensorCircuits.{ThermistorInterfaceDivider, BridgePressureSensorInterface};
+import examples.libraries.RFCircuits.{LCLowPassFilter};
+
+board CircuitLibrariesDemo {
+
+  // External connections
+  ports {
+    VIN: in power; // Type assumed: e.g., 12Vdc_Input
+    GND: ground;
+    I2C_SCL: inout i2c_signal_3v3; // Use specific type
+    I2C_SDA: inout i2c_signal_3v3; // Use specific type
+    ANALOG_IN: in signal; //(line_level); // Specify appropriate analog type
+    RF_OUT: out signal; //(cmos_3v3); // Specify appropriate digital type
+    USER_BUTTON: in signal; //(cmos_3v3); // Connected to debouncer module input
+  }
+
+  // --- Placeholder Component Definitions --- 
+  component Microcontroller {
+    pins {
+      VDD: in lv_digital_power; VSS: ground;
+      RESET_N: in cmos_3v3;
+      XTAL1: inout system_clock; XTAL2: inout system_clock;
+      SCL: out i2c_signal_3v3; SDA: inout i2c_signal_3v3;
+      ADC0: in signal; ADC1: in signal; ADC2: in signal; ADC3: in signal;
+      GPIO0: in cmos_3v3; GPIO1: out cmos_3v3;
+      TX: out cmos_3v3; RX: in cmos_3v3;
+    }
+  }
+  component Crystal {
+    pins { X1: inout signal; X2: inout signal; }
+    properties { frequency: frequency = 16MHz; }
+  }
+  component PressureSensor {
+    pins { VCC: in lv_analog_power; GND: ground; OUT_P: out signal; OUT_N: out signal; }
+  }
+  component BuckController { // Placeholder for buck controllers
+      pins { IN: in power; SW: out signal; GND: ground; FB: in signal; }
+  }
+  // --- End Placeholder Definitions --- 
+
+  // Component Instantiations
+  components {
+    // Main Components
+    MCU: Microcontroller;
+    XTAL: Crystal { frequency: 16MHz; };
+    PRESSURE: PressureSensor;
+    BuckCtrl_5V: BuckController;
+    BuckCtrl_3V3: BuckController;
+
+    // Instantiate Circuit Modules
+    RevProt_Mod: ReversePolarityProtectionMosfet;
+    BC_5V: BuckConverterCircuit { inductor_value: 10uH; cap_in_value: 22uF; cap_out_value: 47uF; CTRL_INSTANCE: BuckCtrl_5V; }; // Example values
+    BC_3V3: BuckConverterCircuit { inductor_value: 4.7uH; cap_in_value: 10uF; cap_out_value: 22uF; CTRL_INSTANCE: BuckCtrl_3V3; }; // Example values
+    OSC_Mod: CrystalOscillatorCircuit { CRYSTAL_INSTANCE: XTAL; cap_load_value: 18pF; }; // Example load cap value
+    Reset_Mod: ManualResetActiveLow;
+    I2C_Mod: I2CPullups;
+    Button_Mod: DebouncedButtonActiveLow;
+    LED_Mod: LedOutputActiveHigh { led_color: "Green"; current_limit_res_value: 330Ohm; }; // Use ActiveHigh LED example
+    Therm_Mod: ThermistorInterfaceDivider { ntc_resistance_nominal: 10kOhm; };
+    Pressure_Mod: BridgePressureSensorInterface { SENSOR_INSTANCE: PRESSURE; };
+    LPF_Mod: LCLowPassFilter { l_value: 1uH; c_value: 100pF; }; // Example L/C values
+  }
+
+  // Net Declarations
+  net VIN_PROTECTED: power;
+  net VCC_5V: power { voltage: 5.0Vdc; }; // Added explicit voltage
+  net VCC_3V3: lv_digital_power; // Use specific type for MCU VDD
+
+  connections {
+    // Power Management
+    VIN -> RevProt_Mod.INPUT;
+    RevProt_Mod.OUTPUT -> VIN_PROTECTED;
+    GND -> RevProt_Mod.GND;
+
+    VIN_PROTECTED -> BC_5V.IN_PWR;
+    BC_5V.OUT_PWR -> VCC_5V;
+    GND -> BC_5V.GND;
+
+    VCC_5V -> BC_3V3.IN_PWR;
+    BC_3V3.OUT_PWR -> VCC_3V3;
+    GND -> BC_3V3.GND;
+
+    // Digital Section
+    VCC_3V3 -> MCU.VDD;
+    GND -> MCU.VSS;
+
+    MCU.XTAL1 -> OSC_Mod.MCU_XTAL1;
+    MCU.XTAL2 -> OSC_Mod.MCU_XTAL2;
+    GND -> OSC_Mod.GND;
+
+    MCU.RESET_N -> Reset_Mod.RESET_OUT;
+    VCC_3V3 -> Reset_Mod.VCC;
+    GND -> Reset_Mod.GND;
+
+    // I2C
+    MCU.SCL -> I2C_Mod.SCL;
+    MCU.SDA -> I2C_Mod.SDA;
+    VCC_3V3 -> I2C_Mod.VCC;
+    I2C_Mod.SCL -> I2C_SCL; // Connect module port to board port
+    I2C_Mod.SDA -> I2C_SDA; // Connect module port to board port
+
+    // Button
+    MCU.GPIO0 <- Button_Mod.BUTTON_OUT;
+    USER_BUTTON -> Button_Mod.BUTTON_IN_PORT;
+    VCC_3V3 -> Button_Mod.VCC;
+    GND -> Button_Mod.GND;
+
+    // LED
+    MCU.GPIO1 -> LED_Mod.DRIVE_PIN;
+    GND -> LED_Mod.GND;
+
+    // Sensor Section
+    MCU.ADC0 <- Therm_Mod.ADC_INPUT;
+    VCC_3V3 -> Therm_Mod.VREF;
+    GND -> Therm_Mod.GND;
+
+    MCU.ADC1 <- Pressure_Mod.SENSOR_OUT_P;
+    MCU.ADC2 <- Pressure_Mod.SENSOR_OUT_N;
+    VCC_3V3 -> Pressure_Mod.VCC;
+    GND -> Pressure_Mod.GND;
+
+    ANALOG_IN -> MCU.ADC3;
+
+    // RF Output Section
+    MCU.TX -> LPF_Mod.INPUT_PORT;
+    LPF_Mod.OUTPUT_PORT -> RF_OUT;
+    // Assume LPF GND handled internally or connect explicitly if needed
+    // GND -> LPF_Mod.GND;
+
+  }
+} 

@@ -1,0 +1,21 @@
+# This file defines the workspace for BHDL tooling.
+
+[workspace]
+members = [
+    "bhdl-parser",
+    "bhdl-analyzer",
+    "bhdl-netlist",
+    "bhdl-synthesizer",
+    "bhdl-cli",
+    "bhdl-lsp",
+]
+
+# Use the latest resolver for better dependency management.
+resolver = "2"
+
+# Optional: Define shared workspace dependencies, profiles, etc. here if needed later.
+# [workspace.dependencies]
+# serde = { version = "1.0", features = ["derive"] }
+
+# [profile.release]
+# ...

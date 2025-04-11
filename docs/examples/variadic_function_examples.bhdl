@@ -1,0 +1,174 @@
+// Variadic Function Examples
+// Demonstrates the use of variadic parameters in circuit functions
+
+board VariadicFunctionExamples {
+  // Import physical components from libraries
+  import libraries.Passives.{Resistor, Capacitor, Inductor, Ferrite};
+  import libraries.ICs.{OpAmp, Comparator};
+  import libraries.Semiconductors.{Diode, MOSFET};
+  
+  // Import circuit functions with variadic parameters
+  import PowerCircuits.{power_supply_filtering, power_sequencing};
+  import CircuitPatterns.{multi_stage_filter, resistor_ladder, capacitor_bank};
+  
+  // Board metadata
+  author: "BHDL Team";
+  version: "1.0";
+  description: "Examples of circuit functions with variadic parameters";
+  
+  // External connections
+  ports {
+    VIN: in power(12VDC, 1A);
+    GND: ground;
+    VCC_5V: out power(5VDC, 500mA);
+    VCC_3V3: out power(3.3VDC, 300mA);
+    SIGNAL_IN: in signal(analog, 0V to 5V);
+    SIGNAL_OUT: out signal(analog, 0V to 3.3V);
+    SIGNAL_FILT_1: out signal(analog, 0V to 3.3V);
+    SIGNAL_FILT_2: out signal(analog, 0V to 3.3V);
+    SIGNAL_FILT_3: out signal(analog, 0V to 3.3V);
+  }
+  
+  connections {
+    // EXAMPLE 1: Power Supply Filtering with Variadic Capacitors
+    //--------------------------------------------------------
+    
+    // Basic filtering with just two capacitors
+    power_supply_filtering(
+      VIN,                                  // Input voltage
+      GND,                                  // Ground reference
+      "Basic filtering",                    // Optional description
+      [C_BULK1, ElectrolyticCapacitor, 470µF, 25V],
+      [C_BYPASS1, Capacitor, 100nF, 50V, X7R]
+    );
+    
+    // Complex filtering with four capacitors of different values
+    power_supply_filtering(
+      VCC_5V,                               // Input voltage
+      GND,                                  // Ground reference
+      "Multi-frequency filtering",          // Optional description
+      [C_BULK2, ElectrolyticCapacitor, 100µF, 10V],
+      [C_BYPASS2, Capacitor, 10µF, 10V, X7R],
+      [C_BYPASS3, Capacitor, 100nF, 10V, X7R],
+      [C_BYPASS4, Capacitor, 1nF, 10V, COG]
+    );
+    
+    // Advanced filtering with mixed component types
+    power_supply_filtering(
+      VCC_3V3,                              // Input voltage
+      GND,                                  // Ground reference
+      "RF filtering with ferrite",          // Optional description
+      [C_BULK3, ElectrolyticCapacitor, 47µF, 6.3V],
+      [L_FILT, Ferrite, "BLM21", 100Ω@100MHz],
+      [C_BYPASS5, Capacitor, 1µF, 6.3V, X7R],
+      [C_BYPASS6, Capacitor, 100nF, 6.3V, X7R],
+      [C_BYPASS7, Capacitor, 10nF, 6.3V, X7R],
+      [C_BYPASS8, Capacitor, 100pF, 6.3V, COG]
+    );
+    
+    // EXAMPLE 2: Multi-Stage Filters with Variable Stages
+    //--------------------------------------------------------
+    
+    // Single stage low-pass filter (simple case)
+    multi_stage_filter(
+      SIGNAL_IN,                           // Input signal
+      SIGNAL_FILT_1,                       // Output signal
+      GND,                                 // Ground reference
+      1000,                                // Cutoff frequency (Hz)
+      // Just one filter stage
+      [[R_FILT1, Resistor, 10kΩ], [C_FILT1, Capacitor, 15nF]]
+    );
+    
+    // Two stage low-pass filter (medium complexity)
+    multi_stage_filter(
+      SIGNAL_IN,                           // Input signal
+      SIGNAL_FILT_2,                       // Output signal
+      GND,                                 // Ground reference
+      500,                                 // Cutoff frequency (Hz)
+      // First filter stage
+      [[R_FILT2, Resistor, 20kΩ], [C_FILT2, Capacitor, 15nF]],
+      // Second filter stage
+      [[R_FILT3, Resistor, 20kΩ], [C_FILT3, Capacitor, 15nF]]
+    );
+    
+    // Three stage low-pass filter (high complexity for better roll-off)
+    multi_stage_filter(
+      SIGNAL_IN,                           // Input signal
+      SIGNAL_FILT_3,                       // Output signal
+      GND,                                 // Ground reference
+      100,                                 // Cutoff frequency (Hz)
+      // First filter stage
+      [[R_FILT4, Resistor, 10kΩ], [C_FILT4, Capacitor, 150nF]],
+      // Second filter stage
+      [[R_FILT5, Resistor, 10kΩ], [C_FILT5, Capacitor, 150nF]],
+      // Third filter stage
+      [[R_FILT6, Resistor, 10kΩ], [C_FILT6, Capacitor, 150nF]]
+    );
+    
+    // EXAMPLE 3: Resistor Ladder with Variadic Taps
+    //--------------------------------------------------------
+    
+    // Simple voltage divider with two outputs
+    resistor_ladder(
+      VCC_5V,                              // Top voltage
+      GND,                                 // Bottom voltage (ground)
+      // Resistor values from top to bottom
+      [R_DIV1, Resistor, 1kΩ, 1%],
+      [R_DIV2, Resistor, 2kΩ, 1%],
+      [R_DIV3, Resistor, 3kΩ, 1%],
+      // Output taps with names (could be any number of taps)
+      {REF_3V3, REF_2V5}
+    );
+    
+    // EXAMPLE 4: Capacitor Bank for Tuning Circuit
+    //--------------------------------------------------------
+    
+    // Capacitor bank with default-off switches
+    capacitor_bank(
+      NODE_A,                              // First terminal
+      NODE_B,                              // Second terminal
+      // Any number of capacitors with enable signals
+      {[C_BANK1, Capacitor, 10pF], ENABLE_C1},
+      {[C_BANK2, Capacitor, 22pF], ENABLE_C2},
+      {[C_BANK3, Capacitor, 47pF], ENABLE_C3},
+      {[C_BANK4, Capacitor, 100pF], ENABLE_C4}
+    );
+    
+    // EXAMPLE 5: Power Sequencing with Variadic Rails
+    //--------------------------------------------------------
+    
+    // Power-up sequence for multiple voltage rails
+    power_sequencing(
+      POWER_GOOD,                          // Power good output signal
+      // Format: {voltage rail, delay, power-good threshold}
+      {VCC_5V, 0ms, 4.75V},                // First rail (turns on immediately)
+      {VCC_3V3, 10ms, 3.1V},               // Second rail (after 10ms delay)
+      {VCC_1V8, 20ms, 1.7V},               // Third rail (after 20ms delay)
+      {VCC_1V2, 30ms, 1.1V}                // Fourth rail (after 30ms delay)
+    );
+    
+    // Route the final filtered signal to the output
+    SIGNAL_FILT_3 -> SIGNAL_OUT;
+  }
+  
+  // Design validation
+  validation {
+    check power_supply_noise(VCC_5V, <50mVpp);
+    check power_supply_noise(VCC_3V3, <30mVpp);
+    check signal_attenuation(SIGNAL_IN to SIGNAL_FILT_1, -3dB at 1kHz);
+    check signal_attenuation(SIGNAL_IN to SIGNAL_FILT_2, -40dB at 1kHz);
+    check signal_attenuation(SIGNAL_IN to SIGNAL_FILT_3, -60dB at 1kHz);
+  }
+  
+  // Design notes on variadic parameters
+  design_notes {
+    notes: [
+      "This example demonstrates how variadic parameters allow circuit functions to handle varying numbers of components:",
+      "1. Power supply filtering with different numbers and types of capacitors",
+      "2. Multi-stage filters with 1, 2, or 3 filtering stages",
+      "3. Resistor ladder with any number of resistors and output taps",
+      "4. Capacitor bank with variable number of switched capacitors",
+      "5. Power sequencing with variable number of voltage rails"
+    ];
+  }
+} 

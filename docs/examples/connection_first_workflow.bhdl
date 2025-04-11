@@ -1,0 +1,127 @@
+// Connection-First Workflow Example
+// This example shows the evolution of a design using the connection-first approach
+
+// PHASE 1: INITIAL CIRCUIT SKETCH
+// --------------------------------
+// Designer starts by creating a simple LED circuit with minimal details
+// At this point, components are "implied" and would be created by the IDE
+
+/*
+board LEDCircuit {
+  ports {
+    VIN: in power;
+    GND: ground;
+  }
+  
+  connections {
+    // Simple LED circuit sketch with current limiting
+    VIN -> R1.1;
+    R1.2 -> LED1.A;
+    LED1.K -> GND;
+    
+    // Add power indicator
+    VIN -> R2.1;
+    R2.2 -> LED2.A;
+    LED2.K -> GND;
+    
+    // Add bypass capacitor
+    VIN -> C1.1;
+    C1.2 -> GND;
+  }
+}
+*/
+
+// PHASE 2: COMPONENT EXTRACTION
+// -----------------------------
+// Designer uses "Extract Components" command in IDE
+// The IDE helps fill in required properties
+
+/*
+board LEDCircuit {
+  ports {
+    VIN: in power;
+    GND: ground;
+  }
+  
+  components {
+    // Components extracted from connections
+    component Resistor R1;  // IDE prompts for value
+    component LED LED1;     // IDE prompts for color/current
+    component Resistor R2;  // IDE prompts for value
+    component LED LED2;     // IDE prompts for color/current
+    component Capacitor C1; // IDE prompts for value/voltage
+  }
+  
+  connections {
+    // Same connections as before
+    VIN -> R1.1;
+    R1.2 -> LED1.A;
+    LED1.K -> GND;
+    
+    VIN -> R2.1;
+    R2.2 -> LED2.A;
+    LED2.K -> GND;
+    
+    VIN -> C1.1;
+    C1.2 -> GND;
+  }
+}
+*/
+
+// PHASE 3: COMPLETED DESIGN (Updated)
+// -------------------------
+// Designer completes component properties and finalizes the design
+
+board LEDCircuit_Phase3 { // Renamed to avoid conflict if phases were uncommented
+  // Import components from libraries (Conceptual)
+  // import StandardLibrary.Passives.{Resistor, Capacitor};
+  // import StandardLibrary.Misc.{LED};
+
+  author: "BHDL Team";
+  version: "1.1"; // Updated version
+  description: "Simple LED circuit with power indicator (Updated)";
+
+  parameters {
+    input_voltage: voltage = 12Vdc;
+    led_current: current = 15mA;
+    led_color: string = "red"; // Use string for color
+  }
+
+  ports {
+    VIN: in power { voltage: 12Vdc; }; // Standard power syntax
+    GND: ground;
+  }
+
+  // --- Placeholder Component Definitions ---
+  component Resistor { pins {1: inout signal; 2: inout signal;} properties {value: resistance; tolerance: percentage=5pct; power: power=0.25W;} }
+  component LED { pins {A: in signal; K: out signal;} properties {color: string="red"; current: current=15mA; voltage_drop: voltage=1.8Vdc; package: string="0805";} }
+  component Capacitor { pins {1: inout signal; 2: inout signal;} properties {value: capacitance=10uF; voltage: voltage=16Vdc; type: string="ceramic"; temperature_coefficient: string="X7R";} }
+  // --- End Placeholders --- 
+
+  components {
+    R1: Resistor { value: 470Ohm; }; // Standard unit
+    LED1: LED { color: board.led_color; current: board.led_current; voltage_drop: 1.8Vdc; };
+    R2: Resistor { value: 1kOhm; }; // Standard unit
+    LED2: LED { color: "green"; current: 10mA; voltage_drop: 2.1Vdc; };
+    C1: Capacitor { value: 10uF; voltage: 16Vdc; }; // Standard unit
+  }
+
+  // Connections using standard syntax
+  connections {
+    // Main LED circuit
+    VIN -> R1.1;
+    R1.2 -> LED1.A;
+    LED1.K -> GND;
+
+    // Power indicator circuit
+    VIN -> R2.1;
+    R2.2 -> LED2.A;
+    LED2.K -> GND;
+
+    // Bypass capacitor
+    VIN -> C1.1;
+    C1.2 -> GND;
+  }
+
+  // Removed non-standard validation block
+} 

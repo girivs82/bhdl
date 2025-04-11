@@ -1,0 +1,258 @@
+// DDR4 Memory Subsystem Example
+// Demonstrates functional interface groups for DDR4 memory connections
+
+// Assuming standard types are available/imported
+// import StandardLibrary.Types.{lvcmos_1v2, lv_power_1v2, lv_power_0v6};
+
+// Define DDR4 Data Interface
+interface DDR4Data {
+  parameters {
+    // is_controller: boolean = true; // Role determined by component using the interface
+    width: int = 16;                    // Data width in bits per component
+    ecc: boolean = false;               // ECC support
+  }
+  
+  pins {
+    // Data signals (Use inout for bi-directional signals)
+    DQ[0:width-1]: inout signal(lvcmos_1v2);     // Data pins
+    DQS[0:width/8-1]: inout signal(lvcmos_1v2);  // Data strobe (1 per byte)
+    DQS_n[0:width/8-1]: inout signal(lvcmos_1v2); // Differential data strobe
+    // Directionality depends on controller/DRAM role, handle via connection
+    DM_DBI[0:width/8-1]: inout signal(lvcmos_1v2); // Data mask or data bus inversion
+  }
+  
+  // Constraints block removed - Apply constraints during connection
+}
+
+// Define DDR4 Command Interface
+interface DDR4Command {
+  parameters {
+    // is_controller: boolean = true;
+    ranks: int = 1;                     // Number of ranks
+  }
+  
+  pins {
+    // Command signals (Use inout, direction determined by connection)
+    CS_n[0:ranks-1]: inout signal(lvcmos_1v2);   // Chip select (per rank)
+    ACT_n: inout signal(lvcmos_1v2);             // Activation command
+    RAS_n_A16: inout signal(lvcmos_1v2);         // Row address strobe / A16 (shared)
+    CAS_n_A15: inout signal(lvcmos_1v2);         // Column address strobe / A15 (shared)
+    WE_n_A14: inout signal(lvcmos_1v2);          // Write enable / A14 (shared)
+    CKE[0:ranks-1]: inout signal(lvcmos_1v2);    // Clock enable (per rank)
+    ODT[0:ranks-1]: inout signal(lvcmos_1v2);    // On-die termination (per rank)
+    RESET_n: inout signal(lvcmos_1v2);           // Reset
+  }
+}
+
+// Define DDR4 Address Interface
+interface DDR4Address {
+  parameters {
+    // is_controller: boolean = true;
+  }
+  
+  pins {
+    // Address signals (Use inout)
+    A[0:13]: inout signal(lvcmos_1v2);         // Row address bits A0-A13
+    BA[0:1]: inout signal(lvcmos_1v2);         // Bank address
+    BG[0:1]: inout signal(lvcmos_1v2);         // Bank group
+    PAR: inout signal(lvcmos_1v2);             // Command/address parity
+    ALERT_n: inout signal(lvcmos_1v2);         // Alert (error reporting)
+  }
+  
+  // Constraints block removed
+}
+
+// Define DDR4 Clock Interface
+interface DDR4Clock {
+  parameters {
+    // is_controller: boolean = true;
+    data_rate: frequency = 3200MHz; // Use standard frequency unit (e.g., MHz, assuming MT/s maps to this)
+  }
+  
+  pins {
+    // Clock signals (Use inout)
+    CK: inout signal(lvcmos_1v2);              // Primary clock
+    CK_n: inout signal(lvcmos_1v2);            // Complementary clock
+  }
+  
+  // Constraints block removed
+}
+
+// Component definition for DDR4 Memory Controller
+component DDR4Controller {
+  parameters {
+    width: int = 64;      // Data width (64-bit typical)
+    ranks: int = 2;       // Number of ranks
+    data_rate: frequency = 3200MHz;  // Transfer speed
+  }
+  
+  // Interfaces
+  interfaces {
+    DATA: interface DDR4Data { width: module.width; }
+    CMD: interface DDR4Command { ranks: module.ranks; }
+    ADDR: interface DDR4Address;
+    CLK: interface DDR4Clock { data_rate: module.data_rate; }
+  }
+  
+  // Power pins defined separately from interfaces
+  pins {
+    VDD: in power { voltage: 1.2Vdc; }; // Use explicit power type syntax
+    VDDQ: in power { voltage: 1.2Vdc; };
+    VSS: ground;          // Ground
+  }
+}
+
+// Component definition for DDR4 DRAM
+component DDR4DRAM {
+  parameters {
+    density: enum {d4Gb, d8Gb, d16Gb} = d8Gb;  // Density options
+    width: int = 16;                       // Data bus width (typically x4, x8, or x16)
+    speed_bin: frequency = 3200MHz;  // Speed bin
+  }
+  
+  // Interfaces
+  interfaces {
+    DATA: interface DDR4Data { width: module.width; }
+    CMD: interface DDR4Command { ranks: 1; }
+    ADDR: interface DDR4Address;
+    CLK: interface DDR4Clock { data_rate: module.speed_bin; }
+  }
+  
+  // Power pins defined separately from interfaces
+  pins {
+    VDD: in power { voltage: 1.2Vdc; };
+    VDDQ: in power { voltage: 1.2Vdc; };
+    VSS: ground;          // Ground
+    VREF: in power { voltage: 0.6Vdc; };    // Reference voltage (typically VDD/2)
+  }
+}
+
+// Component definition for Resistor
+component Resistor { // Placeholder passive
+    pins { 1: inout signal; 2: inout signal; }
+    properties { value: resistance; tolerance: percentage = 1pct; }
+}
+
+// Component definition for VoltageBuffer
+component VoltageBuffer { // Placeholder buffer
+    pins { IN: in power; OUT: out power; EN: in signal; GND: ground; }
+    properties { output_voltage: voltage = 0.6Vdc; accuracy: percentage = 1pct; }
+}
+
+// Board definition with DDR4 subsystem
+board DDR4MemorySystem {
+  author: "BHDL Team";
+  description: "DDR4 Memory Subsystem Example";
+  version: "1.1";
+  
+  // Board parameters
+  parameters {
+    mem_data_rate: frequency = 3200MHz;
+  }
+  
+  // Component instantiation
+  components {
+    // DDR4 controller
+    CTRL: DDR4Controller {
+      width: 64;
+      ranks: 2;
+      data_rate: board.mem_data_rate;
+    }
+    
+    // Four x16 DRAMs to create a 64-bit data bus
+    DRAM0: DDR4DRAM { density: d8Gb; width: 16; speed_bin: 3200MHz; }
+    DRAM1: DDR4DRAM { density: d8Gb; width: 16; speed_bin: 3200MHz; }
+    DRAM2: DDR4DRAM { density: d8Gb; width: 16; speed_bin: 3200MHz; }
+    DRAM3: DDR4DRAM { density: d8Gb; width: 16; speed_bin: 3200MHz; }
+    
+    // Termination resistors (Example instantiation, actual count/connection varies)
+    // Use generate for for large arrays if supported, otherwise list individually or use module
+    // RTERM_A0: Resistor { value: 40Ohm; };
+    // RTERM_A1: Resistor { value: 40Ohm; };
+    // ... etc for all address/command lines needing termination ...
+    
+    // Reference voltage buffer
+    VREF_BUF: VoltageBuffer { output_voltage: 0.6Vdc; accuracy: 1pct; }
+  }
+  
+  // Net definitions
+  net VDD_1V2: power { voltage: 1.2Vdc; };
+  net VREF_DDR4: power { voltage: 0.6Vdc; };
+  net GND: ground;
+  
+  // Connections section
+  connections {
+    // Power connections
+    CTRL.VDD -> VDD_1V2;
+    CTRL.VDDQ -> VDD_1V2;
+    CTRL.VSS -> GND;
+    
+    // Connect VREF Buffer
+    VDD_1V2 -> VREF_BUF.IN; // Assuming buffer input from VDD
+    GND -> VREF_BUF.GND;
+    // VREF_BUF.EN -> Some_Enable_Signal; // Enable the buffer
+    VREF_BUF.OUT -> VREF_DDR4;
+    
+    // Connect DRAM Power (using generate for loop example)
+    generate i for 0 to 3 {
+      connect (eval("DRAM"+i+".VDD")) -> VDD_1V2;
+      connect (eval("DRAM"+i+".VDDQ")) -> VDD_1V2;
+      connect (eval("DRAM"+i+".VSS")) -> GND;
+      connect (eval("DRAM"+i+".VREF")) -> VREF_DDR4;
+    }
+    
+    // Clock Interface (Controller to all DRAMs)
+    CTRL.CLK.CK -> DRAM0.CLK.CK, DRAM1.CLK.CK, DRAM2.CLK.CK, DRAM3.CLK.CK;
+    CTRL.CLK.CK_n -> DRAM0.CLK.CK_n, DRAM1.CLK.CK_n, DRAM2.CLK.CK_n, DRAM3.CLK.CK_n;
+    
+    // Address/Command Interface (Controller to all DRAMs - simplified)
+    // Note: Rank-specific signals (CS_n, CKE, ODT) need careful connection based on ranks
+    CTRL.CMD.ACT_n -> DRAM0.CMD.ACT_n, DRAM1.CMD.ACT_n, DRAM2.CMD.ACT_n, DRAM3.CMD.ACT_n;
+    CTRL.CMD.RAS_n_A16 -> DRAM0.CMD.RAS_n_A16, DRAM1.CMD.RAS_n_A16, DRAM2.CMD.RAS_n_A16, DRAM3.CMD.RAS_n_A16;
+    CTRL.CMD.CAS_n_A15 -> DRAM0.CMD.CAS_n_A15, DRAM1.CMD.CAS_n_A15, DRAM2.CMD.CAS_n_A15, DRAM3.CMD.CAS_n_A15;
+    CTRL.CMD.WE_n_A14 -> DRAM0.CMD.WE_n_A14, DRAM1.CMD.WE_n_A14, DRAM2.CMD.WE_n_A14, DRAM3.CMD.WE_n_A14;
+    CTRL.ADDR.A -> DRAM0.ADDR.A, DRAM1.ADDR.A, DRAM2.ADDR.A, DRAM3.ADDR.A; // Connect Address Bus A[0:13]
+    CTRL.ADDR.BA -> DRAM0.ADDR.BA, DRAM1.ADDR.BA, DRAM2.ADDR.BA, DRAM3.ADDR.BA; // Connect Bank Address BA[0:1]
+    CTRL.ADDR.BG -> DRAM0.ADDR.BG, DRAM1.ADDR.BG, DRAM2.ADDR.BG, DRAM3.ADDR.BG; // Connect Bank Group BG[0:1]
+    // Add PAR, RESET_n, ALERT_n, CS_n, CKE, ODT connections similarly...
+    
+    // Data Interface (Controller DQ[0:63] mapped to four x16 DRAMs)
+    // Example: Controller DQ[0:15] -> DRAM0 DQ[0:15], etc.
+    CTRL.DATA.DQ[0:15] <-> DRAM0.DATA.DQ[0:15];
+    CTRL.DATA.DQS[0:1] <-> DRAM0.DATA.DQS[0:1];
+    CTRL.DATA.DQS_n[0:1] <-> DRAM0.DATA.DQS_n[0:1];
+    CTRL.DATA.DM_DBI[0:1] <-> DRAM0.DATA.DM_DBI[0:1];
+    
+    CTRL.DATA.DQ[16:31] <-> DRAM1.DATA.DQ[0:15];
+    CTRL.DATA.DQS[2:3] <-> DRAM1.DATA.DQS[0:1];
+    CTRL.DATA.DQS_n[2:3] <-> DRAM1.DATA.DQS_n[0:1];
+    CTRL.DATA.DM_DBI[2:3] <-> DRAM1.DATA.DM_DBI[0:1];
+    
+    CTRL.DATA.DQ[32:47] <-> DRAM2.DATA.DQ[0:15];
+    CTRL.DATA.DQS[4:5] <-> DRAM2.DATA.DQS[0:1];
+    CTRL.DATA.DQS_n[4:5] <-> DRAM2.DATA.DQS_n[0:1];
+    CTRL.DATA.DM_DBI[4:5] <-> DRAM2.DATA.DM_DBI[0:1];
+    
+    CTRL.DATA.DQ[48:63] <-> DRAM3.DATA.DQ[0:15];
+    CTRL.DATA.DQS[6:7] <-> DRAM3.DATA.DQS[0:1];
+    CTRL.DATA.DQS_n[6:7] <-> DRAM3.DATA.DQS_n[0:1];
+    CTRL.DATA.DM_DBI[6:7] <-> DRAM3.DATA.DM_DBI[0:1];
+    
+    // --- Constraint Examples --- 
+    // (Apply constraints to connections or nets)
+    constrain (CTRL.CLK.CK) { max_length: 50mm; impedance: 40Ohm +/- 5pct; }
+    constrain (CTRL.ADDR.A) { group: AddrBus; impedance: 40Ohm +/- 5pct; }
+    constrain (group(AddrBus)) { length_match_tolerance: 2mm; }
+    
+    // Define net classes (could be imported from library)
+    net_class DDRData {
+       min_trace_width: 0.1mm;
+       min_clearance: 0.1mm;
+       impedance: 45Ohm +/- 10pct;
+       default_via_style: "DDR_Via";
+    }
+    // Assign data nets to the net class
+    constrain (CTRL.DATA.DQ) { net_class: "DDRData"; }
+    constrain (CTRL.DATA.DQS) { net_class: "DDRData"; }
+  }
+} 

@@ -1,0 +1,179 @@
+// Standard Type Definitions
+// BHDL Standard Library
+
+// --- Audio Signal Types ---
+typedef line_level {
+  type: signal; domain: analog;
+  voltage: 0.894Vrms;       // Consumer line level (-10dBV)
+  impedance: 10kOhm;
+  bandwidth: 20Hz to 20kHz;
+}
+
+typedef pro_line_level {
+  type: signal; domain: analog;
+  voltage: 1.228Vrms;       // Professional line level (+4dBu)
+  impedance: 600Ohm;
+  bandwidth: 20Hz to 20kHz;
+}
+
+typedef mic_level {
+  type: signal; domain: analog;
+  voltage: 2mVrms to 100mVrms;
+  impedance: 150Ohm to 600Ohm;
+  bandwidth: 20Hz to 20kHz;
+}
+
+typedef instrument_level {
+  type: signal; domain: analog;
+  voltage: 100mVrms to 1Vrms;
+  impedance: 10kOhm to 1MOhm; // Corrected unit
+  bandwidth: 20Hz to 20kHz;
+}
+
+typedef speaker {
+  type: signal; domain: analog; // Assuming analog audio
+  impedance: required; // Use 'required' keyword if value must be provided at instantiation
+  power_rating: required;
+  bandwidth: 20Hz to 20kHz;
+  // Calculated fields removed as they are non-standard;
+  // Tools could derive these if needed, but not part of type definition itself.
+  // voltage: calculated("√(power_rating * impedance)");
+  // current: calculated("√(power_rating / impedance)");
+}
+
+// --- Power Types ---
+typedef lv_digital_power { // Renamed from lv_digital for clarity (matches spec)
+  type: power;
+  voltage: 3.3Vdc;
+  tolerance: +/- 5pct; // Updated syntax
+  ripple: <50mVpp; // Specify Peak-to-Peak if intended
+}
+
+typedef lv_analog_power { // Renamed from lv_analog for clarity (matches spec)
+  type: power;
+  voltage: 5Vdc;
+  tolerance: +/- 2pct; // Updated syntax
+  ripple: <10mVpp; // Specify Peak-to-Peak if intended
+  noise: <100uVrms in 20Hz to 20kHz; // Standardized unit uVrms
+}
+
+// --- Digital Signal Types ---
+typedef ttl {
+  type: signal; domain: digital;
+  voltage_high: 5.0Vdc;
+  voltage_low: 0Vdc;
+  threshold_high: 2.0Vdc; // Assume typical/min based on spec example
+  threshold_low: 0.8Vdc; // Assume typical/max based on spec example
+  rise_time: <22ns;
+  fanout: 10; // Fanout might be a property rather than intrinsic type characteristic
+}
+
+typedef cmos_5v {
+  type: signal; domain: digital;
+  voltage_high: 5.0Vdc;
+  voltage_low: 0Vdc;
+  threshold_high: 3.5Vdc;
+  threshold_low: 1.5Vdc;
+  rise_time: <20ns;
+  input_leakage: <1uA; // Standardized unit
+}
+
+// NOTE: cmos_3v3 was defined twice, keeping this version which includes leakage
+typedef cmos_3v3 {
+  type: signal; domain: digital;
+  voltage_high: 3.3Vdc;
+  voltage_low: 0Vdc;
+  threshold_high: 2.0Vdc;
+  threshold_low: 0.8Vdc;
+  rise_time: <10ns;
+  input_leakage: <1uA; // Standardized unit
+}
+
+typedef lvcmos_2v5 {
+  type: signal; domain: digital;
+  voltage_high: 2.5Vdc;
+  voltage_low: 0Vdc;
+  threshold_high: 1.7Vdc;
+  threshold_low: 0.7Vdc;
+  rise_time: <8ns;
+  input_leakage: <1uA; // Standardized unit
+}
+
+typedef lvcmos_1v8 {
+  type: signal; domain: digital;
+  voltage_high: 1.8Vdc;
+  voltage_low: 0Vdc;
+  threshold_high: 1.2Vdc;
+  threshold_low: 0.6Vdc;
+  rise_time: <5ns;
+  input_leakage: <1uA; // Standardized unit
+}
+
+typedef lvcmos_1v2 {
+  type: signal; domain: digital;
+  voltage_high: 1.2Vdc;
+  voltage_low: 0Vdc;
+  threshold_high: 0.8Vdc;
+  threshold_low: 0.4Vdc;
+  rise_time: <3ns;
+  input_leakage: <1uA; // Standardized unit
+}
+
+// NOTE: lvds was defined twice, keeping this version which is more detailed
+typedef lvds {
+  type: signal; domain: differential; // Use domain for classification
+  voltage_high: 1.4Vdc; // Assuming DC level for high state
+  voltage_low: 1.0Vdc;  // Assuming DC level for low state
+  differential: true;
+  termination: 100Ohm; // Standardized unit
+  common_mode: 1.2Vdc;
+  swing: 350mV;
+  rise_time: <300ps;
+}
+
+
+// --- Clock Types ---
+// NOTE: system_clock was defined twice, keeping this version
+typedef system_clock {
+  type: signal; domain: clock; // Use domain for classification
+  frequency: 100MHz;
+  jitter: <100ps;
+  duty_cycle: 50pct +/- 5pct; // Updated syntax
+  // Assuming clock uses standard logic levels, e.g., cmos_3v3
+  voltage_high: 3.3Vdc; // Inherited/Specified levels
+  voltage_low: 0Vdc;
+}
+
+// NOTE: crystal_clock was defined twice, keeping this version
+typedef crystal_clock {
+  type: signal; domain: clock; // Use domain for classification
+  differential: true;
+  amplitude: 1Vpeak; // Assuming Vpeak is acceptable unit variant
+  frequency: required;
+}
+
+// --- Thermal Types (as Property Sets - matching spec discussion) ---
+// Note: Changed from typedef to property_set as 'type: thermal' is invalid.
+// These represent characteristics rather than pin electrical types.
+property_set commercial_thermal {
+  operating_temperature: 0degC to 70degC; // Standardized unit
+  storage_temperature: -40degC to 85degC; // Standardized unit
+}
+
+property_set industrial_thermal {
+  operating_temperature: -40degC to 85degC; // Standardized unit
+  storage_temperature: -55degC to 125degC; // Standardized unit
+}
+
+// --- I2C Type Example (from spec) ---
+typedef i2c_signal_3v3 {
+  type: signal; domain: digital;
+  voltage_high: 3.3Vdc; voltage_low: 0Vdc;
+  threshold_high: 2.0Vdc; threshold_low: 0.8Vdc;
+  is_open_drain: true;
+  default_pullup_resistance: 4.7kOhm; // Default pull-up value for automation
+}
+
+
+// Remove non-standard 'export' block.
+// Assume top-level definitions are implicitly exported. 

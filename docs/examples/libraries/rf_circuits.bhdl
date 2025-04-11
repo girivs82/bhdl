@@ -1,0 +1,165 @@
+// RF and Communication Circuits Library
+// Standard RF and communication topologies for BHDL
+
+// Assuming base component imports:
+// import StandardLibrary.Passives.{Resistor, Capacitor, Inductor};
+// import StandardLibrary.Semiconductors.{Transistor, Diode, MOSFET};
+// import StandardLibrary.ICs.{OpAmp, MixerIC, OscillatorIC, RS485_Transceiver};
+// import StandardLibrary.Misc.{Crystal};
+
+// ---------------------------------------------------------
+// Antenna Matching Networks
+// ---------------------------------------------------------
+
+// Pi matching network module
+module PiMatchingNetwork {
+  ports {
+    INPUT_PORT: inout signal;
+    OUTPUT_PORT: inout signal;
+    GND: ground;
+  }
+  parameters {
+    c1_value: capacitance = 10pF;
+    l1_value: inductance = 10nH;
+    c2_value: capacitance = 10pF;
+    component_package: string = "0402"; // Example for RF components
+  }
+  components {
+    Capacitor C1 { value: module.c1_value; package: module.component_package; }
+    Inductor L1 { value: module.l1_value; package: module.component_package; }
+    Capacitor C2 { value: module.c2_value; package: module.component_package; }
+  }
+  connections {
+    INPUT_PORT -> C1.1;
+    C1.2 -> GND;
+    INPUT_PORT -> L1.1;
+    L1.2 -> OUTPUT_PORT;
+    OUTPUT_PORT -> C2.1;
+    C2.2 -> GND;
+  }
+}
+
+// L matching network (high-pass) module
+module LMatchingNetworkHighPass {
+  ports {
+    INPUT_PORT: inout signal;
+    OUTPUT_PORT: inout signal;
+    GND: ground;
+  }
+  parameters {
+    c1_value: capacitance = 10pF;
+    l1_value: inductance = 10nH;
+    component_package: string = "0402";
+  }
+  components {
+    Capacitor C1 { value: module.c1_value; package: module.component_package; }
+    Inductor L1 { value: module.l1_value; package: module.component_package; }
+  }
+  connections {
+    INPUT_PORT -> C1.1;
+    C1.2 -> OUTPUT_PORT;
+    OUTPUT_PORT -> L1.1;
+    L1.2 -> GND;
+  }
+}
+
+// L matching network (low-pass) module
+module LMatchingNetworkLowPass {
+  ports {
+    INPUT_PORT: inout signal;
+    OUTPUT_PORT: inout signal;
+    GND: ground;
+  }
+  parameters {
+    l1_value: inductance = 10nH;
+    c1_value: capacitance = 10pF;
+    component_package: string = "0402";
+  }
+  components {
+    Inductor L1 { value: module.l1_value; package: module.component_package; }
+    Capacitor C1 { value: module.c1_value; package: module.component_package; }
+  }
+  connections {
+    INPUT_PORT -> L1.1;
+    L1.2 -> OUTPUT_PORT;
+    OUTPUT_PORT -> C1.1;
+    C1.2 -> GND;
+  }
+}
+
+// ---------------------------------------------------------
+// Filters
+// ---------------------------------------------------------
+
+// LC low-pass filter module
+module LCLowPassFilter {
+  ports {
+    INPUT_PORT: inout signal;
+    OUTPUT_PORT: inout signal;
+    GND: ground;
+  }
+  parameters {
+    // Parameters should define component values directly,
+    // calculation logic belongs outside the reusable module definition.
+    l_value: inductance = required;
+    c_value: capacitance = required;
+    // cutoff_freq: frequency = required;
+    // impedance: resistance = 50Ohm;
+    component_package: string = "0402";
+  }
+  components {
+    Inductor L1 { value: module.l_value; package: module.component_package; }
+    Capacitor C1 { value: module.c_value; package: module.component_package; }
+  }
+  connections {
+    INPUT_PORT -> L1.1;
+    L1.2 -> OUTPUT_PORT;
+    OUTPUT_PORT -> C1.1;
+    C1.2 -> GND;
+  }
+}
+
+// LC high-pass filter module
+module LCHighPassFilter {
+  ports {
+    INPUT_PORT: inout signal;
+    OUTPUT_PORT: inout signal;
+    GND: ground;
+  }
+  parameters {
+    l_value: inductance = required;
+    c_value: capacitance = required;
+    component_package: string = "0402";
+  }
+  components {
+    Capacitor C1 { value: module.c_value; package: module.component_package; }
+    Inductor L1 { value: module.l_value; package: module.component_package; }
+  }
+  connections {
+    INPUT_PORT -> C1.1;
+    C1.2 -> OUTPUT_PORT;
+    OUTPUT_PORT -> L1.1;
+    L1.2 -> GND;
+  }
+}
+
+// Note: Bandpass filter removed due to ambiguity in structure (node1).
+
+// ---------------------------------------------------------
+// RF Amplifier Circuits (Removed - Require specific transistor models and complex biasing)
+// ---------------------------------------------------------
+
+// ---------------------------------------------------------
+// Oscillator Circuits (Removed - Require specific transistor/IC models and complex feedback)
+// ---------------------------------------------------------
+
+// ---------------------------------------------------------
+// Mixer Circuits (Removed - Require specific transistor/IC models)
+// ---------------------------------------------------------
+
+// ---------------------------------------------------------
+// Communication Interface Circuits (Removed - RS485 example requires specific transceiver)
+// ---------------------------------------------------------
+
+// Removed non-standard library wrapper and export block.
+// Top-level definitions are assumed exported. 

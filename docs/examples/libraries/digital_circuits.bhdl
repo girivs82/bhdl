@@ -1,0 +1,259 @@
+// Digital Circuits Library
+// Standard digital circuit topologies for BHDL
+
+// Assuming base component imports:
+// import StandardLibrary.Passives.{Resistor, Capacitor};
+// import StandardLibrary.Semiconductors.{Diode, PMOSFET, NMOSFET, TVSDiode};
+// import StandardLibrary.Misc.{Crystal, LED, Switch, Inverter};
+// import StandardLibrary.Connectors.{USB_Connector};
+// import StandardLibrary.ICs.{ResetSupervisor, SPI_Flash_IC};
+
+// ---------------------------------------------------------
+// Clock Circuits
+// ---------------------------------------------------------
+
+// Crystal oscillator module with load capacitors
+module CrystalOscillatorCircuit {
+  ports {
+    MCU_XTAL1: inout signal; // Connect to MCU XTAL1 pin
+    MCU_XTAL2: inout signal; // Connect to MCU XTAL2 pin
+    CRYSTAL_INSTANCE: component; // Pass the crystal instance
+    GND: ground;
+  }
+  parameters {
+    cap_load_value: capacitance = 22pF;
+  }
+  components {
+    Capacitor C_LOAD1 { value: module.cap_load_value; type: ceramic; temp_coeff: "C0G"; }
+    Capacitor C_LOAD2 { value: module.cap_load_value; type: ceramic; temp_coeff: "C0G"; }
+  }
+  connections {
+    // Connect crystal to MCU pins via ports
+    MCU_XTAL1 -> CRYSTAL_INSTANCE.X1; // Assume Crystal component has X1, X2 pins
+    MCU_XTAL2 -> CRYSTAL_INSTANCE.X2;
+
+    // Connect load capacitors
+    CRYSTAL_INSTANCE.X1 -> C_LOAD1.1;
+    C_LOAD1.2 -> GND;
+    CRYSTAL_INSTANCE.X2 -> C_LOAD2.1;
+    C_LOAD2.2 -> GND;
+  }
+}
+
+// Note: RC oscillator module removed due to ambiguity in implementation detail.
+
+// ---------------------------------------------------------
+// Reset Circuits
+// ---------------------------------------------------------
+
+// Module for Power-on Reset using a Supervisor IC
+module PowerOnResetSupervisor {
+  ports {
+    RESET_OUT: out signal; // Output reset signal (active low/high depends on supervisor)
+    VCC_MONITOR: in power;
+    GND: ground;
+  }
+  parameters {
+    supervisor_type: component_type = ResetSupervisor; // Specify supervisor component type
+    bypass_cap_value: capacitance = 100nF;
+  }
+  components {
+    ResetSupervisor U_RESET { type: module.supervisor_type; }; // Instantiate supervisor
+    Capacitor C_BYPASS { value: module.bypass_cap_value; };
+  }
+  connections {
+    VCC_MONITOR -> U_RESET.VCC;
+    GND -> U_RESET.GND;
+    U_RESET.RESET -> RESET_OUT; // Assume RESET pin on supervisor
+
+    // Decoupling
+    VCC_MONITOR -> C_BYPASS.1;
+    C_BYPASS.2 -> GND;
+  }
+}
+
+// Module for Manual Reset Button (Active Low configuration)
+module ManualResetActiveLow {
+  ports {
+    RESET_OUT: inout signal; // Connect to the IC's reset pin
+    VCC: in power;
+    GND: ground;
+  }
+  parameters {
+    pullup_res_value: resistance = 10kOhm;
+    debounce_cap_value: capacitance = 100nF;
+  }
+  components {
+    Resistor R_PULL { value: module.pullup_res_value; };
+    Capacitor C_DEBOUNCE { value: module.debounce_cap_value; };
+    Switch SW_RESET { type: "SPST"; actuation: "Pushbutton"; default_state: "NO"; };
+  }
+  connections {
+    VCC -> R_PULL.1;
+    R_PULL.2 -> RESET_OUT;
+
+    RESET_OUT -> C_DEBOUNCE.1;
+    C_DEBOUNCE.2 -> GND;
+
+    RESET_OUT -> SW_RESET.1;
+    SW_RESET.2 -> GND;
+  }
+}
+
+// Note: Active high version could be a separate module if needed.
+
+// ---------------------------------------------------------
+// Bus Termination Circuits
+// ---------------------------------------------------------
+
+// Module for standard I2C Pull-up Resistors
+module I2CPullups {
+  ports {
+    SCL: inout signal;
+    SDA: inout signal;
+    VCC: in power;
+  }
+  parameters {
+    pullup_value: resistance = 4.7kOhm;
+  }
+  components {
+    Resistor R_SCL { value: module.pullup_value; };
+    Resistor R_SDA { value: module.pullup_value; };
+  }
+  connections {
+    VCC -> R_SCL.1;
+    R_SCL.2 -> SCL;
+    VCC -> R_SDA.1;
+    R_SDA.2 -> SDA;
+  }
+}
+
+// Module for Series Termination
+module SeriesTermination {
+  ports {
+    SIGNAL_IN: in signal; // Driver output
+    SIGNAL_OUT: out signal; // Trace input
+  }
+  parameters {
+    resistance_value: resistance = required;
+  }
+  components {
+    Resistor R_TERM { value: module.resistance_value; };
+  }
+  connections {
+    SIGNAL_IN -> R_TERM.1;
+    R_TERM.2 -> SIGNAL_OUT;
+  }
+}
+
+// Module for Differential Termination (Resistor across pair)
+module DifferentialTermination {
+  ports {
+    SIGNAL_P: inout signal;
+    SIGNAL_N: inout signal;
+  }
+  parameters {
+    resistance_value: resistance = 100Ohm;
+  }
+  components {
+    Resistor R_DIFF { value: module.resistance_value; };
+  }
+  connections {
+    SIGNAL_P -> R_DIFF.1;
+    SIGNAL_N -> R_DIFF.2;
+  }
+}
+
+// ---------------------------------------------------------
+// Level Shifting Circuits (Removed - complex, depend on specific ICs/MOSFETs)
+// ---------------------------------------------------------
+
+// ---------------------------------------------------------
+// Interface Circuits (Removed - best handled at board level with specific connectors/ICs)
+// ---------------------------------------------------------
+
+// ---------------------------------------------------------
+// Input Circuits
+// ---------------------------------------------------------
+
+// Module for Debounced Button Input (Active Low configuration)
+module DebouncedButtonActiveLow {
+  ports {
+    BUTTON_OUT: out signal; // Signal to the IC input pin
+    BUTTON_IN_PORT: in signal; // Connection to the physical button switch
+    VCC: in power;
+    GND: ground;
+  }
+  parameters {
+    pullup_res_value: resistance = 10kOhm;
+    debounce_cap_value: capacitance = 100nF;
+  }
+  components {
+    Resistor R_PULL { value: module.pullup_res_value; };
+    Capacitor C_DEBOUNCE { value: module.debounce_cap_value; };
+    // Switch is assumed external, connected to BUTTON_IN_PORT
+  }
+  connections {
+    VCC -> R_PULL.1;
+    R_PULL.2 -> BUTTON_OUT;
+
+    BUTTON_OUT -> C_DEBOUNCE.1;
+    C_DEBOUNCE.2 -> GND;
+
+    // Connect the output signal to the external button port
+    BUTTON_OUT -> BUTTON_IN_PORT;
+  }
+}
+
+// Note: RC Filter module removed - simple enough to implement directly.
+
+// ---------------------------------------------------------
+// Output Circuits
+// ---------------------------------------------------------
+
+// Module for LED Output Driver (Active Low drive pin)
+module LedOutputActiveLow {
+  ports {
+    DRIVE_PIN: in signal; // Input signal from driver (e.g., MCU GPIO)
+    VCC: in power;
+  }
+  parameters {
+    led_color: string = "Green";
+    current_limit_res_value: resistance = 330Ohm;
+  }
+  components {
+    Resistor R_LED { value: module.current_limit_res_value; };
+    LED D_LED { color: module.led_color; };
+  }
+  connections {
+    VCC -> R_LED.1;
+    R_LED.2 -> D_LED.A; // Anode
+    D_LED.K -> DRIVE_PIN; // Cathode driven low by input pin
+  }
+}
+
+// Module for LED Output Driver (Active High drive pin)
+module LedOutputActiveHigh {
+  ports {
+    DRIVE_PIN: in signal; // Input signal from driver (e.g., MCU GPIO)
+    GND: ground;
+  }
+  parameters {
+    led_color: string = "Green";
+    current_limit_res_value: resistance = 330Ohm;
+  }
+  components {
+    Resistor R_LED { value: module.current_limit_res_value; };
+    LED D_LED { color: module.led_color; };
+  }
+  connections {
+    DRIVE_PIN -> R_LED.1;
+    R_LED.2 -> D_LED.A; // Anode
+    D_LED.K -> GND; // Cathode to ground
+  }
+}
+
+// Note: High-side switch module removed due to complexity/dependency on specific components.
+
+// Removed non-standard library wrapper and export block.
+// Top-level definitions are assumed exported. 

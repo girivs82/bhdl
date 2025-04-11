@@ -1,0 +1,151 @@
+// AC-DC Power Supply Example (Refactored)
+// Demonstrates standard component usage for a power supply design
+
+// Assuming standard library imports
+// import StandardLibrary.Protection.{Fuse, Varistor, SchottkyDiode};
+// import StandardLibrary.Power.{EMIFilter, Transformer, BridgeRectifier, LinearRegulator};
+// import StandardLibrary.Passives.{ElectrolyticCapacitor, Capacitor, FerriteBead};
+// import StandardLibrary.Types.{...};
+
+board AC_DC_PowerSupply_Refactored {
+  author: "BHDL Team";
+  version: "1.1"; // Updated
+  description: "230Vac to 5Vdc, 5W power supply (Refactored)";
+
+  // Board parameters (Using standard units)
+  parameters {
+    input_voltage_nom: voltage = 230Vac;
+    input_freq: frequency = 50Hz;
+    output_voltage: voltage = 5Vdc;
+    output_current: current = 1A;
+    output_power: power = 5W;
+  }
+
+  // External connections (Using standard types)
+  ports {
+    AC_L: in power; // Assumed 230Vac based on params
+    AC_N: in power; // Assumed 230Vac based on params
+    GND: ground; // Chassis/Safety Ground (potentially separate from DC GND)
+    DC_OUT: out power; // Assumed 5Vdc, 1A based on params
+    DC_GND: ground; // DC Ground reference
+  }
+
+  // --- Placeholder Component Definitions --- 
+  component Fuse { pins { IN: inout power; OUT: inout power; } properties { rating: current; type: enum{slow_blow, fast_acting}; voltage: voltage; } }
+  component Varistor { pins { 1: inout power; 2: inout power; } properties { voltage: voltage; energy: energy; } }
+  component EMIFilter { pins { L_IN: in power; N_IN: in power; L_OUT: out power; N_OUT: out power; } properties { mode: enum{common_mode, differential}; current: current; } }
+  component Transformer { pins { PRI_1: in power; PRI_2: in power; SEC_1: out power; SEC_2: out power; } properties { primary: voltage; secondary: voltage; power: power; isolation: enum{basic, reinforced}; } }
+  component BridgeRectifier { pins { AC1: in power; AC2: in power; DC_P: out power; DC_N: out power; } properties { voltage: voltage; current: current; } }
+  component LinearRegulator { pins { IN: in power; OUT: out power; GND: ground; ADJ: in signal; } properties { output_voltage: voltage; current: current; dropout: voltage; } }
+  component SchottkyDiode { pins { A: in power; K: out power; } properties { voltage: voltage; current: current; } }
+  component FerriteBead { pins { 1: inout power; 2: inout power; } properties { impedance: resistance; current: current; } }
+  component Capacitor { pins {1: inout signal; 2: inout signal;} properties {value: capacitance; voltage: voltage; type: string="X7R";} }
+  component ElectrolyticCapacitor { pins {POS: inout power; NEG: inout power;} properties {value: capacitance; voltage: voltage;} }
+  component Resistor { pins {1: inout signal; 2: inout signal;} properties {value: resistance;} }
+  // --- End Placeholders --- 
+
+  // Components instantiation (Using standard syntax and units)
+  components {
+    // Input protection
+    F1: Fuse { rating: 500mA; type: slow_blow; voltage: 250Vac; };
+    MOV1: Varistor { voltage: 250Vac; energy: 10J; };
+
+    // EMI filtering
+    EMI1: EMIFilter { mode: common_mode; current: 500mA; }; // Attenuation is a performance spec, not property
+
+    // AC to DC conversion
+    T1: Transformer { primary: 230Vac; secondary: 9Vac; power: 6W; isolation: reinforced; };
+    RECT1: BridgeRectifier { voltage: 25Vdc; current: 1A; };
+    C1: ElectrolyticCapacitor { value: 1000uF; voltage: 16Vdc; }; // Bulk cap
+
+    // Regulation stage
+    REG1: LinearRegulator { output_voltage: 5Vdc; current: 1A; dropout: 2Vdc; }; // Protection is inherent
+    // Regulator caps (previously inline)
+    C_IN_REG: ElectrolyticCapacitor { value: 10uF; voltage: 25Vdc; };
+    C_OUT_REG: ElectrolyticCapacitor { value: 47uF; voltage: 10Vdc; };
+    C_BYPASS_REG: Capacitor { value: 100nF; voltage: 10Vdc; };
+
+    // Output protection & filtering
+    D1_OUT: SchottkyDiode { voltage: 20Vdc; current: 1A; }; // Output reverse protection?
+    FB1: FerriteBead { impedance: 100Ohm; current: 1A; };
+    // RC Filter components (previously inline)
+    R_FILT: Resistor { value: 0.1Ohm; }; // Example value for RC filter R
+    C_FILT: Capacitor { value: 1uF; voltage: 10Vdc; }; // Example value for RC filter C
+
+    // Additional Output Smoothing Caps (Original C_SMOOTH, C_HF, C_OUT - purpose unclear, consolidating)
+    C_OUT_SMOOTH1: ElectrolyticCapacitor { value: 220uF; voltage: 10Vdc; };
+    C_OUT_SMOOTH2: Capacitor { value: 100nF; voltage: 10Vdc; type: "X7R"; };
+  }
+
+  // Net Declarations
+  net AC_FUSED: power;
+  net AC_L_FILTERED: power;
+  net AC_N_FILTERED: power;
+  net RECT_IN_1: power;
+  net RECT_IN_2: power;
+  net DC_UNREG: power;
+  net DC_REG_OUT: power;
+  net DC_OUT_PROTECTED: power;
+  net DC_FILTERED: power;
+
+  connections {
+    // Input Protection (Fuse in series, MOV in parallel)
+    AC_L -> F1.IN;
+    F1.OUT -> AC_FUSED;
+    AC_FUSED -> MOV1.1; // MOV across Line and Neutral after fuse
+    AC_N -> MOV1.2;
+
+    // EMI Filtering
+    AC_FUSED -> EMI1.L_IN;
+    AC_N -> EMI1.N_IN;
+    EMI1.L_OUT -> AC_L_FILTERED;
+    EMI1.N_OUT -> AC_N_FILTERED;
+
+    // AC to DC Conversion: Transformer -> Rectifier -> Bulk Cap
+    AC_L_FILTERED -> T1.PRI_1;
+    AC_N_FILTERED -> T1.PRI_2;
+    T1.SEC_1 -> RECT_IN_1;
+    T1.SEC_2 -> RECT_IN_2;
+    RECT_IN_1 -> RECT1.AC1;
+    RECT_IN_2 -> RECT1.AC2;
+    RECT1.DC_P -> DC_UNREG;
+    RECT1.DC_N -> DC_GND; // Connect rectifier negative to DC Ground
+    DC_UNREG -> C1.POS;
+    C1.NEG -> DC_GND;
+
+    // Regulation Stage (Linear Regulator with Caps)
+    DC_UNREG -> REG1.IN;
+    REG1.OUT -> DC_REG_OUT;
+    REG1.GND -> DC_GND;
+    // Connect regulator caps
+    REG1.IN -> C_IN_REG.POS;
+    C_IN_REG.NEG -> DC_GND;
+    REG1.OUT -> C_OUT_REG.POS;
+    C_OUT_REG.NEG -> DC_GND;
+    REG1.OUT -> C_BYPASS_REG.1;
+    C_BYPASS_REG.2 -> DC_GND;
+
+    // Output Protection & Filtering
+    DC_REG_OUT -> D1_OUT.A; // Assuming reverse protection
+    D1_OUT.K -> DC_OUT_PROTECTED;
+    DC_OUT_PROTECTED -> FB1.1;
+    FB1.2 -> DC_FILTERED;
+
+    // Output RC Filter (Replaces function call)
+    DC_FILTERED -> R_FILT.1;
+    R_FILT.2 -> DC_OUT; // Connect R output to main DC_OUT port
+    DC_OUT -> C_FILT.1; // Connect C across output
+    C_FILT.2 -> DC_GND;
+
+    // Output Smoothing Capacitors (Connected at final output)
+    DC_OUT -> C_OUT_SMOOTH1.POS;
+    C_OUT_SMOOTH1.NEG -> DC_GND;
+    DC_OUT -> C_OUT_SMOOTH2.1;
+    C_OUT_SMOOTH2.2 -> DC_GND;
+
+    // Connect DC Ground to main board Ground (if applicable, depends on isolation)
+    // DC_GND -> GND; // This depends on safety requirements
+  }
+
+  // Removed non-standard validation block.
+} 

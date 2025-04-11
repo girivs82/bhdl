@@ -1,0 +1,61 @@
+// Controls Library
+// BHDL Controls Library
+
+// Import Potentiometer from Passives for backward compatibility
+import libraries.Passives.{Potentiometer};
+
+// Rotary Encoder component
+component RotaryEncoder {
+  pins {
+    A: out digital;       // Quadrature output A
+    B: out digital;       // Quadrature output B
+    SW: out digital = optional;  // Optional push switch
+    COM: ground;          // Common pin
+  }
+  
+  properties {
+    type: enum {incremental, absolute} = incremental;
+    ppr: integer = 24;    // Pulses per revolution
+    detents: boolean = true;  // Mechanical detents/clicks
+    switch: boolean = false;  // Has push switch
+    voltage: voltage = 5V;    // Operating voltage
+  }
+  
+  // Component selection criteria
+  component_selection {
+    // Selection criteria similar to potentiometer
+    // ...
+  }
+}
+
+// Toggle Switch component
+component ToggleSwitch {
+  pins {
+    1: passive;
+    2: passive;
+    3: passive = optional;  // For SPDT
+    4: passive = optional;  // For DPST/DPDT
+    5: passive = optional;  // For DPDT
+    6: passive = optional;  // For DPDT
+  }
+  
+  properties {
+    type: enum {SPST, SPDT, DPST, DPDT} = SPST;
+    current_rating: current = 1A;
+    voltage_rating: voltage = 24V;
+    position: enum {on_off, on_on, on_off_on} = on_off;
+  }
+  
+  // Component selection criteria
+  component_selection {
+    // Selection criteria for toggle switches
+    // ...
+  }
+}
+
+// Export components defined in this library and re-exported components
+export {
+  Potentiometer,  // Re-exported from Passives
+  RotaryEncoder,
+  ToggleSwitch
+} 

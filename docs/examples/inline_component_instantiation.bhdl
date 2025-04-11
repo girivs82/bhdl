@@ -1,0 +1,129 @@
+// Inline Component Instantiation Example - Refactored
+// Demonstrates standard component instantiation and module usage
+
+// Assuming standard imports:
+// import StandardLibrary.Types.{...};
+// import StandardLibrary.Passives.{Resistor, Capacitor};
+// import StandardLibrary.ICs.{OpAmp, LDO};
+// import StandardLibrary.Semiconductors.{Diode, TVSDiode};
+// import StandardLibrary.PowerCircuits.{LinearRegulatorCircuit, TVSProtectionSignal};
+// import StandardLibrary.DigitalCircuits.{RCFilterModule}; // Assuming an RC filter module exists or define locally
+// import StandardLibrary.CircuitPatterns.{NonInvertingAmplifier}; // Assuming OpAmp module
+
+// Placeholder RC Filter Module (if not imported)
+module RCFilterModule {
+  ports { INPUT: in signal; OUTPUT: out signal; GND: ground; }
+  parameters { r_value: resistance = 1kOhm; c_value: capacitance = 10nF; }
+  components { R1: Resistor {value: module.r_value;}; C1: Capacitor {value: module.c_value;}; }
+  connections { INPUT -> R1.1; R1.2 -> OUTPUT; OUTPUT -> C1.1; C1.2 -> GND; }
+}
+
+// Placeholder Voltage Divider Module (if not imported)
+module VoltageDividerModule {
+    ports { INPUT: in power; OUTPUT: out signal; GND: ground; }
+    parameters { r_top_value: resistance = 10kOhm; r_bottom_value: resistance = 5kOhm; }
+    components { R_Top: Resistor {value: module.r_top_value;}; R_Bottom: Resistor {value: module.r_bottom_value;}; }
+    connections { INPUT -> R_Top.1; R_Top.2 -> OUTPUT; R_Top.2 -> R_Bottom.1; R_Bottom.2 -> GND; }
+}
+
+board StandardComponentInstantiationExample { // Renamed board
+  author: "BHDL Team";
+  version: "1.1"; // Updated
+  description: "Example demonstrating standard component instantiation and module usage";
+
+  ports {
+    VIN: in power; // Assumed 12Vdc, 500mA
+    GND: ground;
+    SENSOR_IN: in signal; //(analog, 0V to 5V);
+    SIGNAL_OUT: out signal; //(analog, 0V to 5V);
+    REG_5V_OUT: out power; // Assumed 5Vdc, 100mA
+  }
+
+  // --- Placeholder Component Definitions --- 
+  component OpAmp { pins { IN_P: in signal; IN_N: in signal; OUT: out signal; VCC: in power; GND: ground; } }
+  component Resistor { pins {1: inout signal; 2: inout signal;} properties {value: resistance; tolerance: percentage=1pct; power: power=0.25W;} }
+  component Capacitor { pins {1: inout signal; 2: inout signal;} properties {value: capacitance; type: string="X7R"; voltage: voltage=25Vdc;} }
+  component LDO { pins { IN: in power; OUT: out power; ADJ: in signal; GND: ground;} }
+  component TVSDiode { pins { 1: inout signal; 2: inout signal; } properties { clamp_voltage: voltage = 5.5Vdc; } }
+  // --- End Placeholders --- 
+
+  components {
+    // OpAmps
+    MAIN_OPAMP: OpAmp;
+    OP_AMP2: OpAmp;
+
+    // Passives for traditional RC filter
+    R1_filt: Resistor { value: 10kOhm; };
+    C1_filt: Capacitor { value: 100nF; };
+
+    // LDO (Regulator IC)
+    U_REG: LDO;
+
+    // TVS Diode
+    D_TVS: TVSDiode { clamp_voltage: 5.5Vdc; };
+
+    // Instantiate Modules (Replaces function calls with inline components)
+    VoltDiv_Mod: VoltageDividerModule { r_top_value: 10kOhm; r_bottom_value: 5kOhm; };
+    Amp_Mod: NonInvertingAmplifier { OPAMP_INSTANCE: OP_AMP2; feedback_res_value: 10kOhm; ground_res_value: 2.2kOhm; };
+    Reg_Mod: LinearRegulatorCircuit { REG_INSTANCE: U_REG; }; // Assuming simple fixed regulator module
+    // TVS_Mod: TVSProtectionSignal; // Not suitable for protecting analog signal directly
+    RC_Filt_Mod: RCFilterModule { r_value: 1kOhm; c_value: 10nF; };
+  }
+
+  // Net Declarations
+  net FILTERED_SIGNAL: signal;
+  net REFERENCE: signal;
+  net AMPLIFIED_SIGNAL: signal;
+  net PROTECTED_SIGNAL: signal;
+  net VCC_5V: power { voltage: 5.0Vdc; }; // Net for regulated 5V
+
+  connections {
+    // Connect Power to OpAmps
+    VCC_5V -> MAIN_OPAMP.VCC, OP_AMP2.VCC;
+    GND -> MAIN_OPAMP.GND, OP_AMP2.GND;
+
+    // Section 1: Traditional RC filter
+    SENSOR_IN -> R1_filt.1;
+    R1_filt.2 -> FILTERED_SIGNAL;
+    FILTERED_SIGNAL -> C1_filt.1;
+    C1_filt.2 -> GND;
+
+    // Section 2: Using Modules (Replaces inline examples)
+
+    // Voltage Divider Module
+    VIN -> VoltDiv_Mod.INPUT;
+    REFERENCE <- VoltDiv_Mod.OUTPUT;
+    GND -> VoltDiv_Mod.GND;
+
+    // Non-inverting Amplifier Module
+    FILTERED_SIGNAL -> Amp_Mod.INPUT;
+    AMPLIFIED_SIGNAL <- Amp_Mod.OUTPUT;
+    VCC_5V -> Amp_Mod.VCC; // Connect module power
+    GND -> Amp_Mod.GND;
+
+    // 5V Regulator Module
+    VIN -> Reg_Mod.IN_PWR;
+    VCC_5V <- Reg_Mod.OUT_PWR;
+    GND -> Reg_Mod.GND;
+    // Note: Assumes U_REG is a fixed 5V regulator or configured internally by the module.
+    // The original example had inline resistors suggesting an adjustable LDO (like LM317),
+    // which would require the AdjustableLinearRegulatorCircuit module and passing resistor values.
+
+    // TVS Protection (Direct connection - module might not be suitable)
+    AMPLIFIED_SIGNAL -> D_TVS.1;
+    D_TVS.2 -> GND;
+    AMPLIFIED_SIGNAL -> PROTECTED_SIGNAL; // Net after TVS
+
+    // RC Filter Module
+    PROTECTED_SIGNAL -> RC_Filt_Mod.INPUT;
+    SIGNAL_OUT <- RC_Filt_Mod.OUTPUT;
+    GND -> RC_Filt_Mod.GND;
+
+    // Section 3: Mixed usage removed
+
+    // Connect Board Output Port
+    VCC_5V -> REG_5V_OUT;
+  }
+
+  // Removed non-standard validation and design_notes blocks.
+} 

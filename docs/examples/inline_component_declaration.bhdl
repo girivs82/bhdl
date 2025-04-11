@@ -1,0 +1,166 @@
+// Inline Component Declaration Example - Refactored
+// Demonstrates standard component instantiation and module usage
+
+// Assuming standard imports:
+// import StandardLibrary.Types.{...};
+// import StandardLibrary.Passives.{Resistor, Capacitor, Inductor};
+// import StandardLibrary.ICs.{OpAmp, Microcontroller, LDO};
+// import StandardLibrary.Semiconductors.{Diode, SchottkyDiode};
+// import StandardLibrary.Misc.{LED};
+// import StandardLibrary.CircuitPatterns.{NonInvertingAmplifier, SallenKeyLowPassUnityGain};
+
+board StandardComponentExample { // Renamed board
+  author: "BHDL Team";
+  version: "1.1"; // Updated
+  description: "Demonstration of standard component instantiation and module usage (Updated)";
+
+  // External connections
+  ports {
+    VCC_IN: in power; // Assumed 5Vdc, 1A
+    GND: ground;
+    INPUT: in signal;
+    OUTPUT: out signal;
+    FILTER_OUT: out signal;
+  }
+
+  // --- Placeholder Component Definitions --- 
+  component OpAmp { pins { IN_P: in signal; IN_N: in signal; OUT: out signal; VCC: in power; GND: ground; } }
+  component Microcontroller { pins { VDD: in power; GND: ground; ADC1: in signal; DAC1: out signal; GPIO1: out signal; SCL: inout signal; SDA: inout signal; } }
+  component Inductor { pins {1: inout signal; 2: inout signal;} properties {value: inductance; current: current;} }
+  component ElectrolyticCapacitor { pins {POS: inout signal; NEG: inout signal;} properties {value: capacitance; voltage: voltage;} }
+  component Capacitor { pins {1: inout signal; 2: inout signal;} properties {value: capacitance; voltage: voltage; type: string="X7R";} }
+  component Resistor { pins {1: inout signal; 2: inout signal;} properties {value: resistance; tolerance: percentage=1pct; power: power=0.25W;} }
+  component SchottkyDiode { pins {A: in signal; K: out signal;} }
+  component LED { pins {A: in signal; K: out signal;} properties {color: string="Green"; current: current=20mA;} }
+  // --- End Placeholders --- 
+
+  components {
+    // Main ICs
+    U1: OpAmp;
+    U2: OpAmp;
+    MCU: Microcontroller;
+
+    // Power Input Filtering
+    L_FILTER: Inductor { value: 10uH; current: 1A; };
+    C_BULK: ElectrolyticCapacitor { value: 47uF; voltage: 10Vdc; };
+    C_DECOUP1: Capacitor { value: 10uF; voltage: 10Vdc; };
+    C_DECOUP2: Capacitor { value: 100nF; voltage: 10Vdc; };
+    C_MCU: Capacitor { value: 100nF; voltage: 10Vdc; };
+    C_OPAMP1: Capacitor { value: 100nF; };
+    C_OPAMP2: Capacitor { value: 100nF; };
+
+    // Input Filtering
+    R_IN: Resistor { value: 1kOhm; };
+    C_IN_FILT: Capacitor { value: 100nF; };
+
+    // Amplifier Module Instantiation
+    Amp_Mod: NonInvertingAmplifier {
+        OPAMP_INSTANCE: U1;
+        feedback_res_value: 10kOhm;
+        ground_res_value: 1kOhm;
+    };
+
+    // Filter Module Instantiation
+    Filter_Mod: SallenKeyLowPassUnityGain {
+        OPAMP_INSTANCE: U2;
+        r_value: 10kOhm;
+        c_value: 10nF;
+    };
+
+    // Signal Conditioning Components
+    D_CLAMP_UP: SchottkyDiode;
+    D_CLAMP_DN: SchottkyDiode;
+    R_LED: Resistor { value: 330Ohm; };
+    D_LED: LED { color: "Green"; current: 20mA; };
+    R_DIV1: Resistor { value: 10kOhm; };
+    R_DIV2: Resistor { value: 10kOhm; };
+    R_FILT_DAC: Resistor { value: 1kOhm; };
+    C_FILT_DAC: Capacitor { value: 10nF; };
+    R_SCL_PU: Resistor { value: 4.7kOhm; };
+    R_SDA_PU: Resistor { value: 4.7kOhm; };
+
+    // Series components (Removed non-standard connection)
+    R_LIMIT_OUT: Resistor { value: 1kOhm; };
+    C_COUPLING_OUT: Capacitor { value: 1uF; };
+    R_TERM_OUT: Resistor { value: 50Ohm; };
+
+  }
+
+  // Net Declarations
+  net VCC_FILTERED: power;
+  net AMP_IN: signal;
+  net DIV_OUT: signal;
+  net RC_NODE_DAC: signal;
+  net LED_NODE: signal;
+  net OUT_TEMP1: signal;
+  net OUT_TEMP2: signal;
+
+  connections {
+    // Power supply filtering and decoupling
+    VCC_IN -> L_FILTER.1;
+    L_FILTER.2 -> VCC_FILTERED;
+    VCC_FILTERED -> C_BULK.POS; GND -> C_BULK.NEG;
+    VCC_FILTERED -> C_DECOUP1.1; GND -> C_DECOUP1.2;
+    VCC_FILTERED -> C_DECOUP2.1; GND -> C_DECOUP2.2;
+
+    // MCU power
+    VCC_FILTERED -> MCU.VDD;
+    MCU.VDD -> C_MCU.1; GND -> C_MCU.2;
+    MCU.GND -> GND;
+
+    // OpAmp power
+    VCC_FILTERED -> U1.VCC, U2.VCC;
+    GND -> U1.GND, U2.GND;
+    U1.VCC -> C_OPAMP1.1; GND -> C_OPAMP1.2;
+    U2.VCC -> C_OPAMP2.1; GND -> C_OPAMP2.2;
+
+    // Input filtering
+    INPUT -> R_IN.1; R_IN.2 -> AMP_IN;
+    AMP_IN -> C_IN_FILT.1; GND -> C_IN_FILT.2;
+
+    // Non-inverting amplifier module connections
+    AMP_IN -> Amp_Mod.INPUT;
+    OUTPUT <- Amp_Mod.OUTPUT;
+    VCC_FILTERED -> Amp_Mod.VCC;
+    GND -> Amp_Mod.GND;
+
+    // Sallen-Key Low-Pass Filter module connections
+    INPUT -> Filter_Mod.INPUT; // Connect board input to filter
+    FILTER_OUT <- Filter_Mod.OUTPUT;
+    VCC_FILTERED -> Filter_Mod.VCC;
+    GND -> Filter_Mod.GND;
+
+    // Signal conditioning
+    // Clamping diodes
+    INPUT -> D_CLAMP_DN.A; GND -> D_CLAMP_DN.K; // Lower clamp
+    VCC_FILTERED -> D_CLAMP_UP.K; INPUT -> D_CLAMP_UP.A; // Upper clamp
+
+    // LED indicator
+    MCU.GPIO1 -> R_LED.1; R_LED.2 -> LED_NODE;
+    LED_NODE -> D_LED.A; D_LED.K -> GND;
+
+    // Input voltage divider
+    VCC_FILTERED -> R_DIV1.1; R_DIV1.2 -> DIV_OUT;
+    DIV_OUT -> R_DIV2.1; R_DIV2.2 -> GND;
+    DIV_OUT -> MCU.ADC1;
+
+    // RC filter for DAC
+    MCU.DAC1 -> R_FILT_DAC.1; R_FILT_DAC.2 -> RC_NODE_DAC;
+    RC_NODE_DAC -> C_FILT_DAC.1; C_FILT_DAC.2 -> GND;
+    // RC_NODE_DAC -> AMP_IN; // Original connection - careful with connecting multiple outputs
+
+    // I2C pull-up resistors
+    VCC_FILTERED -> R_SCL_PU.1; R_SCL_PU.2 -> MCU.SCL;
+    VCC_FILTERED -> R_SDA_PU.1; R_SDA_PU.2 -> MCU.SDA;
+
+    // Series components connection (Replaces non-standard chain)
+    MCU.GPIO2 -> R_LIMIT_OUT.1;
+    R_LIMIT_OUT.2 -> OUT_TEMP1;
+    OUT_TEMP1 -> C_COUPLING_OUT.1;
+    C_COUPLING_OUT.2 -> OUT_TEMP2;
+    OUT_TEMP2 -> R_TERM_OUT.1;
+    R_TERM_OUT.2 -> OUTPUT; // Final output point
+  }
+
+  // Removed non-standard design_rules and design_notes blocks.
+} 

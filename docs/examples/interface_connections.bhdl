@@ -1,0 +1,138 @@
+// Interface Connections Example
+// Demonstrating interface definitions and connection patterns
+
+// Assuming standard imports (Syntax TBD)
+// import StandardLibrary.Types.{...};
+// import StandardLibrary.ICs.{STM32F4, W25Q64, AT24C256, BME280, MAX31855, RS485Transceiver, LDO};
+// import StandardLibrary.Connectors.{USB_C, Header};
+// import StandardLibrary.Passives.{Resistor};
+// import StandardLibrary.DigitalCircuits.{I2CPullups};
+
+board InterfaceExampleBoard {
+  author: "BHDL Team";
+  version: "1.1"; // Updated version
+  description: "Example of interface connections in BHDL (Updated)";
+
+  parameters {
+    mcu_voltage: voltage = 3.3Vdc;
+    io_voltage: voltage = 3.3Vdc;
+    sensor_bus_frequency: frequency = 400kHz;
+  }
+
+  // External connections (Simplified to basic signals/power)
+  ports {
+    // USB_DP: inout signal; USB_DM: inout signal; USB_VBUS: in power;
+    // CAN_H: inout signal; CAN_L: inout signal;
+    RS485_A: inout signal;
+    RS485_B: inout signal;
+    EXT_SPI_MOSI: out signal; EXT_SPI_MISO: in signal; EXT_SPI_SCK: out signal; EXT_SPI_CS: out signal;
+    EXT_I2C_SCL: inout signal; EXT_I2C_SDA: inout signal;
+    VIN: in power; // Assumed 5Vdc, 500mA
+    GND: ground;
+  }
+
+  components {
+    // Microcontroller
+    MCU1: STM32F4 { package: LQFP144; core_frequency: 168MHz; }; // Standard instantiation
+
+    // Flash memory
+    FLASH1: W25Q64 { package: SOIC8; };
+
+    // EEPROM
+    EEPROM1: AT24C256 { package: SOIC8; address: 0x50; };
+
+    // Environmental sensor
+    TEMP_SENSOR: BME280 { package: LGA; address: 0x76; };
+
+    // Thermocouple interface
+    THERMO: MAX31855 { package: SOIC8; type: K; };
+
+    // RS485 transceiver
+    RS485_XCVR: RS485Transceiver { package: SOIC8; };
+
+    // Connectors (Assuming component definitions exist)
+    // USB_CONN: USB_C;
+    I2C_HEADER: Header { pins: 4; pitch: 2.54mm; };
+    SPI_HEADER: Header { pins: 6; pitch: 2.54mm; };
+
+    // Power regulator
+    REG_3V3: LDO { input_voltage: 5Vdc; output_voltage: 3.3Vdc; output_current: 1A; }; // Explicit instantiation
+
+    // I2C Pullups using module
+    I2C1_PULL: I2CPullups { pullup_value: 4.7kOhm; };
+    // I2C2_PULL: I2CPullups { pullup_value: 4.7kOhm; }; // If needed for second bus
+  }
+
+  // Net Declarations
+  net VCC_3V3: power { voltage: 3.3Vdc; };
+
+  connections {
+    // Power connections
+    VIN -> REG_3V3.IN; // Assume IN, OUT, GND pins on LDO
+    REG_3V3.OUT -> VCC_3V3;
+    REG_3V3.GND -> GND;
+
+    // Connect power to components
+    VCC_3V3 -> MCU1.VDD; GND -> MCU1.VSS; // Assuming VDD/VSS pins
+    VCC_3V3 -> FLASH1.VCC; GND -> FLASH1.GND; // Assuming VCC/GND pins
+    VCC_3V3 -> EEPROM1.VCC; GND -> EEPROM1.GND;
+    VCC_3V3 -> TEMP_SENSOR.VDD; GND -> TEMP_SENSOR.GND; // Assuming VDD/GND
+    VCC_3V3 -> THERMO.VCC; GND -> THERMO.GND;
+    VCC_3V3 -> RS485_XCVR.VCC; GND -> RS485_XCVR.GND;
+
+    // SPI Flash connection (Connect pins within interfaces)
+    MCU1.SPI1.MOSI -> FLASH1.SPI.SI; // SI = Slave Input (MOSI)
+    MCU1.SPI1.MISO <- FLASH1.SPI.SO; // SO = Slave Output (MISO)
+    MCU1.SPI1.SCK -> FLASH1.SPI.SCK;
+    MCU1.SPI1.CS -> FLASH1.SPI.CS; // Assuming direct CS connection
+
+    // SPI Thermocouple (Connect pins within interfaces)
+    MCU1.SPI2.MOSI -> THERMO.SPI.SI;
+    MCU1.SPI2.MISO <- THERMO.SPI.SO;
+    MCU1.SPI2.SCK -> THERMO.SPI.SCK;
+    MCU1.GPIO.PB12 -> THERMO.SPI.CS; // Use specific GPIO for CS (as per original intent)
+
+    // SPI External header (Connect pins)
+    MCU1.SPI3.MOSI -> EXT_SPI_MOSI;
+    MCU1.SPI3.MISO <- EXT_SPI_MISO;
+    MCU1.SPI3.SCK -> EXT_SPI_SCK;
+    MCU1.SPI3.CS -> EXT_SPI_CS;
+    // Connect board ports to header pins (conceptual)
+    // EXT_SPI_MOSI -> SPI_HEADER.PIN1;
+    // EXT_SPI_MISO -> SPI_HEADER.PIN2;
+    // ... etc ...
+
+    // I2C bus connection (Connect pins for multiple slaves)
+    MCU1.I2C1.SCL -> EEPROM1.I2C.SCL, TEMP_SENSOR.I2C.SCL;
+    MCU1.I2C1.SDA <-> EEPROM1.I2C.SDA, TEMP_SENSOR.I2C.SDA;
+
+    // Connect I2C Pullups module
+    MCU1.I2C1.SCL -> I2C1_PULL.SCL;
+    MCU1.I2C1.SDA -> I2C1_PULL.SDA;
+    VCC_3V3 -> I2C1_PULL.VCC;
+
+    // I2C external header connection (Connect pins)
+    MCU1.I2C2.SCL -> EXT_I2C_SCL;
+    MCU1.I2C2.SDA -> EXT_I2C_SDA;
+    // Connect board ports to header pins (conceptual)
+    // EXT_I2C_SCL -> I2C_HEADER.PIN1;
+    // EXT_I2C_SDA -> I2C_HEADER.PIN2;
+    // VCC_3V3 -> I2C_HEADER.PIN3;
+    // GND -> I2C_HEADER.PIN4;
+
+    // USB interface connection (Conceptual - requires USB_C component def)
+    // MCU1.USB.DP -> USB_CONN.USB.DP;
+    // MCU1.USB.DM -> USB_CONN.USB.DM;
+    // USB_CONN.USB.VBUS -> USB_VBUS;
+
+    // RS485 interface (Connect pins)
+    MCU1.UART1.TX -> RS485_XCVR.DI;
+    MCU1.UART1.RX <- RS485_XCVR.RO;
+    MCU1.GPIO.PB1 -> RS485_XCVR.DE; // Data Enable pin
+    MCU1.GPIO.PB2 -> RS485_XCVR.RE_N; // Receive Enable pin (active low)
+    RS485_XCVR.A <-> RS485_A; // Connect transceiver to board port
+    RS485_XCVR.B <-> RS485_B; // Connect transceiver to board port
+  }
+
+  // Removed non-standard 'validation' block.
+} 
