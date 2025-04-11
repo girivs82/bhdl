@@ -1,0 +1,184 @@
+// Digital Interface Example
+// Demonstrates various digital interfacing techniques
+
+// Assuming standard imports:
+// import StandardLibrary.Types.{cmos_3v3, cmos_5v, i2c_signal_3v3, i2c_signal_5v};
+// import StandardLibrary.ICs.{LevelShifter, LogicBuffer};
+// import StandardLibrary.Protection.{TVSDiode};
+// import StandardLibrary.Connectors.{PinHeader};
+// import StandardLibrary.Passives.{Resistor, Capacitor};
+// import StandardLibrary.DigitalCircuits.{I2CPullups}; // Use module for pullups
+
+board DigitalInterfaceExample {
+  author: "BHDL Team";
+  version: "1.1"; // Updated version
+  description: "Digital interface example with level shifting and signal protection (Updated)";
+
+  parameters {
+    input_logic_level: voltage = 3.3Vdc;
+    output_logic_level: voltage = 5.0Vdc;
+    i2c_pullup_value: resistance = 4.7kOhm;
+    // protection_level: voltage = 12V; // Removed, define TVS properties directly
+  }
+
+  // External connections
+  ports {
+    // Power inputs
+    VCC_3V3: in power { voltage: 3.3Vdc; }; // Use standard syntax
+    VCC_5V: in power { voltage: 5.0Vdc; }; // Use standard syntax
+    GND: ground;
+
+    // 3.3V side signals (Use standard types)
+    I2C_3V3_SCL: inout i2c_signal_3v3;
+    I2C_3V3_SDA: inout i2c_signal_3v3;
+    UART_3V3_TX: out cmos_3v3; // Changed direction based on usage
+    UART_3V3_RX: in cmos_3v3; // Changed direction based on usage
+    SPI_3V3_MOSI: out cmos_3v3;
+    SPI_3V3_MISO: in cmos_3v3;
+    SPI_3V3_SCK: out cmos_3v3;
+    SPI_3V3_CS: out cmos_3v3;
+
+    // 5V side signals
+    I2C_5V_SCL: inout signal; //(i2c_signal_5v);
+    I2C_5V_SDA: inout signal; //(i2c_signal_5v);
+    UART_5V_TX: in signal; //(cmos_5v); // Changed direction based on usage
+    UART_5V_RX: out signal; //(cmos_5v); // Changed direction based on usage
+    SPI_5V_MOSI: in signal; //(cmos_5v);
+    SPI_5V_MISO: out signal; //(cmos_5v);
+    SPI_5V_SCK: in signal; //(cmos_5v);
+    SPI_5V_CS: in signal; //(cmos_5v);
+  }
+
+  // Placeholder Component Definitions
+  component LevelShifter {
+    pins { VL: in power; VH: in power; GND: ground; A1: inout signal; B1: inout signal; A2: inout signal; B2: inout signal; A3: inout signal; B3: inout signal; A4: inout signal; B4: inout signal; OE: in signal; }
+    properties { type: enum {bidirectional, unidirectional}; channels: integer; low_voltage: voltage; high_voltage: voltage; }
+  }
+  component LogicBuffer {
+      pins { A1: in signal; Y1: out signal; A2: in signal; Y2: out signal; OE: in signal; VCC: in power; GND: ground; }
+      properties { ic_package: string = "74HC125"; }
+  }
+  component TVSDiode { pins { 1: inout signal; 2: inout signal; } properties { clamp_voltage: voltage = 5Vdc; } }
+  component PinHeader { pins { Pin[1:*]; } properties { pins: integer; rows: integer=1; pitch: distance=2.54mm; } }
+  component Resistor { pins {1: inout signal; 2: inout signal;} properties {value: resistance;} }
+  component Capacitor { pins {1: inout signal; 2: inout signal;} properties {value: capacitance;} }
+  // End Placeholders
+
+  components {
+    // I2C level shifter
+    I2C_LS: LevelShifter { type: bidirectional; channels: 2; low_voltage: 3.3Vdc; high_voltage: 5.0Vdc; };
+    // UART level shifter
+    UART_LS: LevelShifter { type: unidirectional; channels: 2; low_voltage: 3.3Vdc; high_voltage: 5.0Vdc; };
+    // SPI level shifter
+    SPI_LS: LevelShifter { type: unidirectional; channels: 4; low_voltage: 3.3Vdc; high_voltage: 5.0Vdc; };
+
+    // I2C Pullups (using module)
+    I2C_3V3_PULL: I2CPullups { pullup_value: board.i2c_pullup_value; };
+    I2C_5V_PULL: I2CPullups { pullup_value: board.i2c_pullup_value; };
+
+    // Protection Diode
+    D_TVS_TX_3V3: TVSDiode { clamp_voltage: 5Vdc; }; // Example TVS
+
+    // Buffers
+    BUF_SCK: LogicBuffer { ic_package: "74HC125"; };
+    BUF_MOSI: LogicBuffer { ic_package: "74HC125"; };
+
+    // Filter Components
+    R_FILT_MISO: Resistor { value: 100Ohm; };
+    C_FILT_MISO: Capacitor { value: 100pF; };
+
+    // Connection headers
+    J1: PinHeader { pins: 8; rows: 2; pitch: 2.54mm; };
+    J2: PinHeader { pins: 8; rows: 2; pitch: 2.54mm; };
+  }
+
+  // Intermediate Nets
+  net UART_3V3_TX_PROT: cmos_3v3;
+  net SPI_5V_SCK_BUF: signal; // Assuming 5V output from buffer
+  net SPI_5V_MOSI_BUF: signal; // Assuming 5V output from buffer
+  net SPI_5V_MISO_FILT: signal; // Assuming 5V after filter
+
+  connections {
+    // Power connections for Level Shifters
+    VCC_3V3 -> I2C_LS.VL, UART_LS.VL, SPI_LS.VL;
+    VCC_5V -> I2C_LS.VH, UART_LS.VH, SPI_LS.VH;
+    GND -> I2C_LS.GND, UART_LS.GND, SPI_LS.GND;
+    // Assume OE pins are enabled appropriately
+
+    // I2C Connections
+    VCC_3V3 -> I2C_3V3_PULL.VCC;
+    I2C_3V3_SCL -> I2C_3V3_PULL.SCL;
+    I2C_3V3_SDA -> I2C_3V3_PULL.SDA;
+
+    VCC_5V -> I2C_5V_PULL.VCC;
+    I2C_5V_SCL -> I2C_5V_PULL.SCL;
+    I2C_5V_SDA -> I2C_5V_PULL.SDA;
+
+    // I2C Level Shifting (Connect pins directly)
+    I2C_3V3_SCL <-> I2C_LS.A1; // Low voltage side
+    I2C_3V3_SDA <-> I2C_LS.A2;
+    I2C_5V_SCL <-> I2C_LS.B1; // High voltage side
+    I2C_5V_SDA <-> I2C_LS.B2;
+
+    // UART Connections
+    // TVS Protection on 3.3V TX before level shifter
+    UART_3V3_TX -> D_TVS_TX_3V3.1; // Simplified TVS connection
+    D_TVS_TX_3V3.2 -> GND;
+    UART_3V3_TX -> UART_3V3_TX_PROT; // Connect signal past TVS
+
+    // UART Level Shifting (Unidirectional: A->B for TX, B->A for RX)
+    UART_3V3_TX_PROT -> UART_LS.A1; // 3.3V TX -> 5V TX
+    UART_5V_TX <- UART_LS.B1;
+    UART_5V_RX -> UART_LS.B2; // 5V RX -> 3.3V RX
+    UART_3V3_RX <- UART_LS.A2;
+
+    // SPI Connections
+    // SPI Level Shifting (Unidirectional)
+    SPI_3V3_MOSI -> SPI_LS.A1; // 3.3V MOSI -> 5V MOSI
+    SPI_5V_MOSI <- SPI_LS.B1;
+    SPI_5V_MISO -> SPI_LS.B2; // 5V MISO -> 3.3V MISO
+    SPI_3V3_MISO <- SPI_LS.A2;
+    SPI_3V3_SCK -> SPI_LS.A3; // 3.3V SCK -> 5V SCK
+    SPI_5V_SCK <- SPI_LS.B3;
+    SPI_3V3_CS -> SPI_LS.A4; // 3.3V CS -> 5V CS
+    SPI_5V_CS <- SPI_LS.B4;
+
+    // Buffering 5V SPI Signals
+    SPI_5V_SCK -> BUF_SCK.A1; // Buffer SCK
+    BUF_SCK.Y1 -> SPI_5V_SCK_BUF;
+    VCC_5V -> BUF_SCK.VCC; GND -> BUF_SCK.GND;
+
+    SPI_5V_MOSI -> BUF_MOSI.A1; // Buffer MOSI
+    BUF_MOSI.Y1 -> SPI_5V_MOSI_BUF;
+    VCC_5V -> BUF_MOSI.VCC; GND -> BUF_MOSI.GND;
+
+    // Filtering 5V MISO Signal
+    SPI_5V_MISO -> R_FILT_MISO.1;
+    R_FILT_MISO.2 -> SPI_5V_MISO_FILT;
+    SPI_5V_MISO_FILT -> C_FILT_MISO.1;
+    C_FILT_MISO.2 -> GND;
+
+    // Connection to headers
+    // J1 - 3.3V side
+    VCC_3V3 -> J1.Pin[1];
+    GND -> J1.Pin[2];
+    I2C_3V3_SCL -> J1.Pin[3];
+    I2C_3V3_SDA -> J1.Pin[4];
+    UART_3V3_TX -> J1.Pin[5];
+    UART_3V3_RX -> J1.Pin[6];
+    SPI_3V3_MISO -> J1.Pin[7];
+    SPI_3V3_MOSI -> J1.Pin[8];
+
+    // J2 - 5V side
+    VCC_5V -> J2.Pin[1];
+    GND -> J2.Pin[2];
+    I2C_5V_SCL -> J2.Pin[3];
+    I2C_5V_SDA -> J2.Pin[4];
+    UART_5V_TX -> J2.Pin[5];
+    UART_5V_RX -> J2.Pin[6];
+    SPI_5V_MISO_FILT -> J2.Pin[7]; // Using filtered signal
+    SPI_5V_MOSI_BUF -> J2.Pin[8];  // Using buffered signal
+  }
+
+  // Removed non-standard validation and design_notes blocks
+} 

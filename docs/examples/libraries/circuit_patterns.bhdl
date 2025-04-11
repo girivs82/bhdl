@@ -1,0 +1,238 @@
+// Circuit Patterns Library
+// Standard circuit topologies for BHDL
+
+// Assuming base component imports:
+// import StandardLibrary.Passives.{Resistor, Capacitor};
+// import StandardLibrary.ICs.{OpAmp};
+
+// ---------------------------------------------------------
+// Op-Amp Circuit Pattern Modules
+// ---------------------------------------------------------
+
+// Non-inverting amplifier module: Gain = 1 + Rf/Rg
+module NonInvertingAmplifier {
+  ports {
+    INPUT: in signal;
+    OUTPUT: out signal;
+    VCC: in power;
+    GND: ground; // Or VEE if dual supply
+    // OpAmp instance passed in for flexibility
+    OPAMP_INSTANCE: component;
+  }
+  parameters {
+    feedback_res_value: resistance = required;
+    ground_res_value: resistance = required;
+  }
+  components {
+    Resistor R_FEEDBACK { value: module.feedback_res_value; };
+    Resistor R_GROUND { value: module.ground_res_value; };
+  }
+  connections {
+    // Power the op-amp
+    VCC -> OPAMP_INSTANCE.VCC;
+    GND -> OPAMP_INSTANCE.GND; // Connect GND/VEE port
+
+    // Amplifier connections
+    INPUT -> OPAMP_INSTANCE.IN_P;
+    OPAMP_INSTANCE.OUT -> OUTPUT;
+
+    // Feedback network
+    OUTPUT -> R_FEEDBACK.1;
+    R_FEEDBACK.2 -> OPAMP_INSTANCE.IN_N; // Feedback node
+    OPAMP_INSTANCE.IN_N -> R_GROUND.1;
+    R_GROUND.2 -> GND;
+  }
+}
+
+// Inverting amplifier module: Gain = -Rf/Rin
+module InvertingAmplifier {
+  ports {
+    INPUT: in signal;
+    OUTPUT: out signal;
+    VCC: in power;
+    GND: ground; // Or VEE
+    OPAMP_INSTANCE: component;
+  }
+  parameters {
+    input_res_value: resistance = required;
+    feedback_res_value: resistance = required;
+  }
+  components {
+    Resistor R_INPUT { value: module.input_res_value; };
+    Resistor R_FEEDBACK { value: module.feedback_res_value; };
+  }
+  connections {
+    // Power the op-amp
+    VCC -> OPAMP_INSTANCE.VCC;
+    GND -> OPAMP_INSTANCE.GND;
+
+    // Amplifier connections
+    GND -> OPAMP_INSTANCE.IN_P; // Non-inverting input to ground
+    INPUT -> R_INPUT.1;
+    R_INPUT.2 -> OPAMP_INSTANCE.IN_N; // Inverting node
+    OPAMP_INSTANCE.IN_N -> R_FEEDBACK.1;
+    R_FEEDBACK.2 -> OPAMP_INSTANCE.OUT;
+    OPAMP_INSTANCE.OUT -> OUTPUT;
+  }
+}
+
+// Unity gain buffer module (voltage follower)
+module BufferAmplifier {
+  ports {
+    INPUT: in signal;
+    OUTPUT: out signal;
+    VCC: in power;
+    GND: ground; // Or VEE
+    OPAMP_INSTANCE: component;
+  }
+  connections {
+    // Power the op-amp
+    VCC -> OPAMP_INSTANCE.VCC;
+    GND -> OPAMP_INSTANCE.GND;
+
+    // Follower connections
+    INPUT -> OPAMP_INSTANCE.IN_P;
+    OPAMP_INSTANCE.OUT -> OPAMP_INSTANCE.IN_N; // Feedback
+    OPAMP_INSTANCE.OUT -> OUTPUT;
+  }
+}
+
+// Summing amplifier module: Vout = -(V1/R1 + V2/R2...) * Rf
+module SummingAmplifier {
+  // Note: Handling variable number of inputs requires generate-for
+  // This simplified version assumes fixed number (e.g., 2 inputs)
+  // or relies on external connection logic for inputs.
+  ports {
+    INPUT_1: in signal;
+    INPUT_2: in signal;
+    // Add more inputs or use array/generate if needed
+    OUTPUT: out signal;
+    VCC: in power;
+    GND: ground; // Or VEE
+    OPAMP_INSTANCE: component;
+  }
+  parameters {
+    input1_res_value: resistance = required;
+    input2_res_value: resistance = required;
+    feedback_res_value: resistance = required;
+  }
+  components {
+    Resistor R_IN1 { value: module.input1_res_value; };
+    Resistor R_IN2 { value: module.input2_res_value; };
+    Resistor R_FEEDBACK { value: module.feedback_res_value; };
+  }
+  connections {
+    // Power the op-amp
+    VCC -> OPAMP_INSTANCE.VCC;
+    GND -> OPAMP_INSTANCE.GND;
+
+    // Amplifier connections
+    GND -> OPAMP_INSTANCE.IN_P;
+    OPAMP_INSTANCE.OUT -> OUTPUT;
+
+    // Feedback
+    OPAMP_INSTANCE.IN_N -> R_FEEDBACK.1;
+    R_FEEDBACK.2 -> OPAMP_INSTANCE.OUT;
+
+    // Input summing at inverting node
+    INPUT_1 -> R_IN1.1;
+    R_IN1.2 -> OPAMP_INSTANCE.IN_N;
+    INPUT_2 -> R_IN2.1;
+    R_IN2.2 -> OPAMP_INSTANCE.IN_N;
+  }
+}
+
+// Differential amplifier module
+module DifferentialAmplifier {
+  ports {
+    INPUT_POS: in signal;
+    INPUT_NEG: in signal;
+    OUTPUT: out signal;
+    VCC: in power;
+    GND: ground; // Or VEE
+    OPAMP_INSTANCE: component;
+  }
+  parameters {
+    // Assumes balanced resistors R1=R2, R3=R4 for common diff amp config
+    // Gain = R4/R1 (or R3/R2)
+    r1_r2_value: resistance = required;
+    r3_r4_value: resistance = required;
+  }
+  components {
+    Resistor R1 { value: module.r1_r2_value; };
+    Resistor R2 { value: module.r1_r2_value; };
+    Resistor R3 { value: module.r3_r4_value; };
+    Resistor R4 { value: module.r3_r4_value; };
+  }
+  connections {
+    // Power the op-amp
+    VCC -> OPAMP_INSTANCE.VCC;
+    GND -> OPAMP_INSTANCE.GND;
+
+    // Amplifier connections
+    INPUT_NEG -> R2.1;
+    R2.2 -> OPAMP_INSTANCE.IN_P;
+    OPAMP_INSTANCE.IN_P -> R3.1;
+    R3.2 -> GND;
+
+    INPUT_POS -> R1.1;
+    R1.2 -> OPAMP_INSTANCE.IN_N;
+    OPAMP_INSTANCE.IN_N -> R4.1;
+    R4.2 -> OPAMP_INSTANCE.OUT;
+
+    OPAMP_INSTANCE.OUT -> OUTPUT;
+  }
+}
+
+// Note: Integrator, Differentiator modules removed due to complexity/ideal nature.
+
+// ---------------------------------------------------------
+// Filter Circuit Pattern Modules
+// ---------------------------------------------------------
+
+// Sallen-Key Low-Pass Filter module (2nd order, unity gain variant)
+module SallenKeyLowPassUnityGain {
+  ports {
+    INPUT: in signal;
+    OUTPUT: out signal;
+    VCC: in power;
+    GND: ground; // Or VEE
+    OPAMP_INSTANCE: component;
+  }
+  parameters {
+    // Requires equal resistors R1=R2=R, equal caps C1=C2=C for simplest calculation
+    // Corner Freq = 1 / (2 * pi * R * C)
+    r_value: resistance = required;
+    c_value: capacitance = required;
+  }
+  components {
+    Resistor R1 { value: module.r_value; };
+    Resistor R2 { value: module.r_value; };
+    Capacitor C1 { value: module.c_value; };
+    Capacitor C2 { value: module.c_value; };
+  }
+  connections {
+    // Power the op-amp
+    VCC -> OPAMP_INSTANCE.VCC;
+    GND -> OPAMP_INSTANCE.GND;
+
+    // Filter Structure (Unity Gain Sallen-Key)
+    INPUT -> R1.1;
+    R1.2 -> R2.1; // Node 1
+    R1.2 -> C1.1;
+    R2.2 -> OPAMP_INSTANCE.IN_P; // Node 2
+    R2.2 -> C2.1;
+
+    OPAMP_INSTANCE.OUT -> OUTPUT;
+    OUTPUT -> OPAMP_INSTANCE.IN_N; // Feedback for unity gain buffer
+    OUTPUT -> C1.2; // Feedback capacitor connection
+
+    OPAMP_INSTANCE.IN_P -> C2.2; // Capacitor to non-inverting input
+  }
+}
+
+// Note: MFB band-pass filter removed due to complexity.
+// Note: Filtered amplifier removed as it combines patterns.
+
+// Removed non-standard library wrapper and export block.
+// Top-level definitions are assumed exported. 

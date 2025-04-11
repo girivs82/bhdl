@@ -1,0 +1,171 @@
+// Waveform Generator Example (Refactored)
+// Demonstrates standard component usage for a 555-based generator
+
+// Assuming standard library imports
+// import StandardLibrary.Passives.{Capacitor, ElectrolyticCapacitor, Resistor};
+// import StandardLibrary.ICs.{Timer555, OpAmp, Buffer};
+// import StandardLibrary.Controls.{Potentiometer};
+// import StandardLibrary.Types.{...};
+
+board WaveformGeneratorRefactored {
+  author: "BHDL Team";
+  version: "1.1"; // Updated
+  description: "Configurable square/triangle/sawtooth wave generator (Refactored)";
+
+  // Board parameters (Using standard units)
+  parameters {
+    supply_voltage: voltage = 9Vdc;
+    // Frequency/duty ranges are design goals, not direct parameters usually
+    // Output amplitude is typically close to supply_voltage for 555/OpAmps
+  }
+
+  // External connections (Using standard types)
+  ports {
+    VIN: in power; // Assumed 9Vdc based on params
+    GND: ground;
+    SQUARE_OUT: out signal;
+    TRI_OUT: out signal;
+    SAW_OUT: out signal;
+    // FREQ_ADJ, DUTY_ADJ are represented by potentiometers below
+  }
+
+  // --- Placeholder Component Definitions --- 
+  component Timer555 { pins { VCC: in power; GND: ground; OUT: out signal; DISCH: out signal; THRESH: in signal; TRIG: in signal; CTRL: in signal; RESET: in signal; } properties { type: enum{cmos, bipolar}; } }
+  component OpAmp { pins { IN_P: in signal; IN_N: in signal; OUT: out signal; VCC: in power; GND: ground; } }
+  component Buffer { pins { IN: in signal; OUT: out signal; VCC: in power; GND: ground; } }
+  component Potentiometer { pins { 1: inout signal; 2: out signal; 3: inout signal; } properties { value: resistance; taper: enum{linear, audio, logarithmic}; } }
+  component Capacitor { pins {1: inout signal; 2: inout signal;} properties {value: capacitance; voltage: voltage; type: string="Film";} }
+  component ElectrolyticCapacitor { pins {POS: inout power; NEG: inout power;} properties {value: capacitance; voltage: voltage;} }
+  component Resistor { pins {1: inout signal; 2: inout signal;} properties {value: resistance; tolerance: percentage=5pct;} }
+  // --- End Placeholders --- 
+
+  // Components instantiation (Using standard syntax and units)
+  components {
+    // Power supply filtering
+    C_PWR1: ElectrolyticCapacitor { value: 47uF; voltage: 16Vdc; };
+    C_PWR2: Capacitor { value: 100nF; voltage: 16Vdc; type: "Ceramic"; }; // Assume ceramic
+
+    // Timer oscillator
+    U1: Timer555 { type: cmos; };
+
+    // Variable resistors
+    POT_FREQ: Potentiometer { value: 100kOhm; taper: logarithmic; };
+    POT_DUTY: Potentiometer { value: 100kOhm; taper: linear; };
+
+    // Fixed resistor
+    R1: Resistor { value: 1kOhm; };
+
+    // Timing capacitor
+    C_TIMING: Capacitor { value: 100nF; voltage: 16Vdc; type: "Film"; };
+
+    // Control voltage filter capacitor
+    C_CTRL: Capacitor { value: 10nF; voltage: 16Vdc; type: "Ceramic"; }; // Assume ceramic
+
+    // Integrator components
+    R_INT1: Resistor { value: 10kOhm; tolerance: 1pct; };
+    INTEGRATOR: OpAmp;
+    C_INT: Capacitor { value: 10nF; voltage: 16Vdc; type: "Film"; };
+
+    // Sawtooth buffer
+    SAW_BUFFER: Buffer;
+
+    // Triangle inverter components
+    TRI_INVERTER: OpAmp;
+    R_INV1: Resistor { value: 10kOhm; tolerance: 1pct; };
+    R_INV2: Resistor { value: 10kOhm; tolerance: 1pct; };
+
+    // Output filtering (Purpose unclear, removing C_FILT, C_FILT_HF, C_BIAS for simplicity)
+    // C_FILT: ElectrolyticCapacitor { value: 10uF; voltage: 16Vdc; };
+    // C_FILT_HF: Capacitor { value: 100nF; voltage: 16Vdc; };
+    // C_BIAS: Capacitor { value: 1uF; voltage: 16Vdc; type: "Film"; };
+  }
+
+  // Net Declarations
+  net DISCHARGE_NODE: signal;
+  net THRESHOLD_NODE: signal;
+  net TRIGGER_NODE: signal;
+  net CONTROL_NODE: signal;
+  net RA_NODE: signal;
+  net RB_NODE: signal;
+  net WIPER_FREQ: signal;
+  net INTEGRATOR_IN: signal;
+  net INTEGRATOR_OUT: signal;
+
+  connections {
+    // Power supply filtering
+    VIN -> C_PWR1.POS; GND -> C_PWR1.NEG;
+    VIN -> C_PWR2.1; GND -> C_PWR2.2;
+
+    // Timer power and output
+    VIN -> U1.VCC;
+    GND -> U1.GND;
+    U1.OUT -> SQUARE_OUT;
+    VIN -> U1.RESET; // Tie reset high
+
+    // Timer control pins
+    U1.DISCH -> DISCHARGE_NODE;
+    U1.THRESH -> THRESHOLD_NODE;
+    U1.TRIG -> TRIGGER_NODE;
+    U1.CTRL -> CONTROL_NODE;
+
+    // Frequency and Duty Cycle Control Network (Astable configuration)
+    VIN -> POT_FREQ.1; // Top of frequency pot to VIN
+    POT_FREQ.2 -> WIPER_FREQ; // Wiper output (not directly used here)
+    POT_FREQ.3 -> RA_NODE; // Bottom of frequency pot forms RA node
+
+    RA_NODE -> R1.1; // RA node connects to fixed R1
+    R1.2 -> RB_NODE; // Other side of R1 forms RB node
+
+    RB_NODE -> POT_DUTY.1; // RB node connects to top of duty pot
+    POT_DUTY.2 -> DISCHARGE_NODE; // Wiper connects to Discharge pin
+    POT_DUTY.3 -> DISCHARGE_NODE; // Bottom of duty pot also connects to Discharge
+
+    // Connections to Timer Pins
+    RA_NODE -> U1.VCC; // Connect top of timing network (RA) to VCC
+    RB_NODE -> DISCHARGE_NODE; // Connect midpoint (RB) to Discharge
+    DISCHARGE_NODE -> THRESHOLD_NODE; // Connect Discharge to Threshold
+    THRESHOLD_NODE -> TRIGGER_NODE; // Connect Threshold to Trigger
+
+    // Timing Capacitor
+    THRESHOLD_NODE -> C_TIMING.1;
+    C_TIMING.2 -> GND;
+
+    // Control Voltage Filter
+    CONTROL_NODE -> C_CTRL.1;
+    C_CTRL.2 -> GND;
+
+    // --- Wave Shaping --- 
+
+    // Integrator for Triangle/Sawtooth
+    // Input resistor from 555 Discharge pin (creates current proportional to charging)
+    SQUARE_OUT -> R_INT1.1; // Use square wave output as input to integrator resistor
+    R_INT1.2 -> INTEGRATOR_IN;
+
+    // OpAmp Integrator Configuration
+    INTEGRATOR_IN -> INTEGRATOR.IN_N; // Signal to inverting input
+    GND -> INTEGRATOR.IN_P; // Non-inverting input to ground (or VCC/2 bias)
+    INTEGRATOR.OUT -> C_INT.1; // Feedback capacitor
+    C_INT.2 -> INTEGRATOR.IN_N;
+    INTEGRATOR.OUT -> INTEGRATOR_OUT;
+    VIN -> INTEGRATOR.VCC; // Power OpAmp
+    GND -> INTEGRATOR.GND;
+
+    // Sawtooth Output Buffer
+    INTEGRATOR_OUT -> SAW_BUFFER.IN;
+    SAW_BUFFER.OUT -> SAW_OUT;
+    VIN -> SAW_BUFFER.VCC;
+    GND -> SAW_BUFFER.GND;
+
+    // Triangle Output (Inverter Configuration)
+    INTEGRATOR_OUT -> R_INV1.1; // Input resistor
+    R_INV1.2 -> TRI_INVERTER.IN_N;
+    GND -> TRI_INVERTER.IN_P; // Non-inverting input to ground (or VCC/2 bias)
+    TRI_INVERTER.OUT -> R_INV2.1; // Feedback resistor
+    R_INV2.2 -> TRI_INVERTER.IN_N;
+    TRI_INVERTER.OUT -> TRI_OUT;
+    VIN -> TRI_INVERTER.VCC; // Power OpAmp
+    GND -> TRI_INVERTER.GND;
+  }
+
+  // Removed non-standard validation block.
+} 

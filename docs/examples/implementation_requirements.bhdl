@@ -1,0 +1,361 @@
+// Implementation Requirements Example
+// This example demonstrates how to use implementation requirements to handle
+// component-specific details in mid-level abstractions
+
+// Generic regulator specification (mid-level abstraction)
+board PowerSupplyDesign {
+  // Board parameters
+  parameters {
+    vin_voltage: 12V;
+    vout_voltage: 3.3V;
+    iout_max: 1.5A;
+  }
+  
+  // Component definitions
+  components {
+    // Generic regulator specification
+    regulator REG1 {
+      type: buck;              // Requested topology
+      input: VIN;
+      output: VOUT;
+      voltage: vout_voltage;   // Parametric voltage
+      current: iout_max;
+      efficiency: >90%;
+    }
+    
+    // Generic input protection
+    diode D1 {
+      type: schottky;
+      current: >iout_max * 1.5;
+      voltage: vin_voltage * 1.5;
+    }
+  }
+  
+  // Generic connections
+  connections {
+    // Simple power path
+    VIN -> D1 -> REG1 -> VOUT;
+    
+    // Ground connection
+    REG1.GND -> GND;
+  }
+}
+
+// Specific component implementation for regulator with implementation requirements
+component TPS62160 implements regulator {
+  // Core component definition
+  pins {
+    VIN: in power;         // Input voltage
+    EN: in digital;        // Enable pin
+    GND: ground;           // Ground
+    SW: out power;         // Switching output
+    FB: in analog;         // Feedback pin
+    PGND: ground;          // Power ground
+  }
+  
+  // Electrical characteristics
+  electrical {
+    vin: range(3V to 17V);
+    vout: range(1V to 6V);
+    iout: range(0A to 1A);
+    switching_frequency: 2.25MHz;
+  }
+  
+  // Implementation requirements section
+  implementation_requirements {
+    // Required external components section
+    required_components {
+      // Pull-up resistor for enable pin
+      component Resistor R_EN {
+        value: 100kΩ;
+        connect: {
+          1: this.EN;      // Connect to enable pin
+          2: this.VIN;     // Connect to input voltage
+        }
+      }
+      
+      // Feedback resistor network
+      component Resistor R_FB1 {
+        value: 100kΩ;      // Fixed value
+        tolerance: 1%;     // Tight tolerance for accuracy
+        connect: {
+          1: this.FB;      // Connect to feedback pin
+          2: GND;          // Connect to ground
+        }
+      }
+      
+      // Output voltage setting resistor (calculated value)
+      component Resistor R_FB2 {
+        // Calculate resistor value based on output voltage
+        value: calculate("R_FB1.value * ((VOUT/1.25V) - 1)");
+        tolerance: 1%;     // Tight tolerance for accuracy
+        connect: {
+          1: this.SW;      // Connect to switch node
+          2: this.FB;      // Connect to feedback pin
+        }
+      }
+      
+      // Output capacitor (required for stability)
+      component Capacitor C_OUT {
+        value: derived_from(parameters.load_current, parameters.load_transient);
+        voltage_rating: VOUT * 1.2;
+        esr: <derived_from(parameters.ripple_voltage);
+        type: implement_as(VOUT, parameters.load_current);
+      }
+      
+      // Input capacitor (required for stability)
+      component Capacitor C_IN {
+        value: derived_from(iout_max, input_ripple);
+        voltage: vin_voltage * 1.5;
+        type: implement_as(vin_voltage, iout_max);
+      }
+      
+      // Inductor (required for buck operation)
+      component Inductor L1 {
+        value: 2.2µH;
+        current_rating: >iout_max * 1.3;
+        dcr: <100mΩ;      // Low DC resistance for efficiency
+        connect: {
+          1: this.SW;      // Connect to switch node
+          2: VOUT;         // Connect to output voltage
+        }
+      }
+    }
+    
+    // Required constraints section
+    required_constraints {
+      // Proper trace widths for power paths
+      trace_width(this.SW): calculate("0.25mm + (iout_max * 0.2mm/A)");
+      trace_width(this.VIN): calculate("0.25mm + (iout_max * 0.2mm/A)");
+      trace_width(VOUT): calculate("0.25mm + (iout_max * 0.2mm/A)");
+      
+      // Placement constraints
+      place(C_OUT): near(this.SW, max_distance: 5mm);
+      place(C_IN): near(this.VIN, max_distance: 5mm);
+      place(L1): near(this.SW, max_distance: 5mm);
+      
+      // Thermal management
+      copper_pour: under(this.PGND, size: min_pad_area * 3);
+    }
+    
+    // Recommended configurations (optional)
+    recommendations {
+      // Additional input protection
+      input_protection: {
+        component TVS D_TVS {
+          voltage: VIN * 1.2;
+          connect: {
+            1: this.VIN;
+            2: this.GND;
+          }
+        }
+      }
+      
+      // EMI reduction
+      emi_reduction: {
+        component Ferrite F1 {
+          impedance: 100Ω at 100MHz;
+          current_rating: >iout_max * 1.5;
+          connect: {
+            1: VIN;
+            2: this.VIN;
+          }
+        }
+      }
+    }
+  }
+  
+  // Mapping of generic regulator pins to specific pins
+  pin_mapping {
+    input: VIN;
+    output: SW;
+    enable: EN;
+    ground: [GND, PGND];
+  }
+  
+  // Component-specific additional parameters
+  parameters {
+    switching_frequency: 2.25MHz;
+    quiescent_current: 17µA;
+    efficiency: 95% at 3.3V/500mA;
+  }
+}
+
+// Example of another implementation option for the same generic regulator
+component LM2596 implements regulator {
+  // Core component definition
+  pins {
+    VIN: in power;
+    ON_OFF: in digital;
+    GND: ground;
+    OUT: out power;
+    FB: in analog;
+  }
+  
+  // This component has different implementation requirements
+  implementation_requirements {
+    // Required external components (differ from TPS62160)
+    required_components {
+      // Different feedback resistor values
+      component Resistor R_FB1 {
+        value: 1kΩ;
+        connect: {
+          1: this.FB;
+          2: GND;
+        }
+      }
+      
+      component Resistor R_FB2 {
+        value: calculate("R_FB1.value * ((VOUT/1.23V) - 1)");
+        connect: {
+          1: VOUT;
+          2: this.FB;
+        }
+      }
+      
+      // Larger inductor for lower frequency
+      component Inductor L1 {
+        value: 33µH;
+        current_rating: >iout_max * 1.5;
+        connect: {
+          1: this.OUT;
+          2: VOUT;
+        }
+      }
+      
+      // Different capacitor values
+      component Capacitor C_OUT {
+        value: 220µF;
+        type: electrolytic;
+        voltage_rating: vout_voltage * 1.5;
+        connect: {
+          1: VOUT;
+          2: GND;
+        }
+      }
+      
+      // Additional output capacitor for ripple
+      component Capacitor C_OUT2 {
+        value: 1µF;
+        type: ceramic;
+        connect: {
+          1: VOUT;
+          2: GND;
+        }
+      }
+    }
+    
+    // Different required constraints
+    required_constraints {
+      trace_width(this.OUT): calculate("0.5mm + (iout_max * 0.3mm/A)");
+      place(C_OUT): near(VOUT, max_distance: 10mm);
+    }
+  }
+  
+  // Different pin mapping
+  pin_mapping {
+    input: VIN;
+    output: OUT;
+    enable: ON_OFF;
+    ground: GND;
+  }
+}
+
+// Example showing how a synthesizer would convert the generic design
+// to a specific implementation using TPS62160
+board SynthesizedDesign {
+  // Original parameters
+  parameters {
+    vin_voltage: 12V;
+    vout_voltage: 3.3V;
+    iout_max: 1.5A;
+  }
+  
+  // Synthesized components (specific implementations)
+  components {
+    // Specific regulator component (selected by synthesizer)
+    component TPS62160 REG1 {
+      // Component-specific parameters
+    }
+    
+    // Input protection diode
+    component BAT54 D1 {
+      // Implementation details
+    }
+    
+    // Required external components (added by synthesizer)
+    component Resistor R_EN {
+      value: 100kΩ;
+    }
+    
+    component Resistor R_FB1 {
+      value: 100kΩ;
+      tolerance: 1%;
+    }
+    
+    component Resistor R_FB2 {
+      value: 164kΩ;  // Calculated for 3.3V output
+      tolerance: 1%;
+    }
+    
+    component Capacitor C_OUT {
+      value: derived_from(parameters.load_current, parameters.load_transient);
+      voltage_rating: VOUT * 1.2;
+      esr: <derived_from(parameters.ripple_voltage);
+      type: implement_as(VOUT, parameters.load_current);
+    }
+    
+    component Capacitor C_IN {
+      value: derived_from(iout_max, input_ripple);
+      voltage: vin_voltage * 1.5;
+      type: implement_as(vin_voltage, iout_max);
+    }
+    
+    component Inductor L1 {
+      value: 2.2µH;
+      current_rating: 2A;
+    }
+  }
+  
+  // Synthesized connections (including required connections)
+  connections {
+    // Original power path
+    VIN -> D1.A;
+    D1.K -> REG1.VIN;
+    REG1.SW -> L1.1;
+    L1.2 -> VOUT;
+    
+    // Ground connections
+    REG1.GND -> GND;
+    REG1.PGND -> GND;
+    
+    // Required additional connections (from implementation_requirements)
+    REG1.VIN -> R_EN.2;
+    R_EN.1 -> REG1.EN;
+    
+    REG1.FB -> R_FB1.1;
+    R_FB1.2 -> GND;
+    
+    REG1.SW -> R_FB2.1;
+    R_FB2.2 -> REG1.FB;
+    
+    REG1.SW -> C_OUT.1;
+    C_OUT.2 -> GND;
+    
+    REG1.VIN -> C_IN.1;
+    C_IN.2 -> GND;
+  }
+  
+  // Applied constraints (from implementation_requirements)
+  constraints {
+    trace_width(REG1.SW): 0.55mm;  // Calculated based on current
+    trace_width(REG1.VIN): 0.55mm;
+    trace_width(VOUT): 0.55mm;
+    
+    place(C_OUT): near(REG1.SW, max_distance: 5mm);
+    place(C_IN): near(REG1.VIN, max_distance: 5mm);
+    place(L1): near(REG1.SW, max_distance: 5mm);
+    
+    copper_pour: under(REG1.PGND, size: 30mm²);
+  }
+} 

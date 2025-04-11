@@ -1,0 +1,153 @@
+// Power Supply Functions Library
+// Standard circuit functions for power supply filtering with variadic parameters
+
+library PowerSupplyFunctions {
+  // Import component types needed for the library
+  import libraries.Passives.{Resistor, Capacitor, ElectrolyticCapacitor, Ferrite, Inductor};
+  import libraries.Semiconductors.{Diode};
+  
+  // Basic power supply filtering with variable number of capacitors
+  // This allows for any number of capacitors to be placed in parallel
+  function power_supply_filtering(
+    input_rail,        // Input power rail to filter
+    ground_rail,       // Ground reference
+    description = "",  // Optional description of the filtering (default empty)
+    ...capacitors      // Variable number of capacitors
+  ) {
+    // Implementation connecting all capacitors in parallel between power and ground
+    foreach (cap in capacitors) {
+      // Check if component is a ferrite/inductor (series element) or capacitor (parallel)
+      if (cap.component_type == "Ferrite" || cap.component_type == "Inductor") {
+        // Series element - create an intermediate node
+        node_name = `${input_rail}_filt_${cap.name}`;
+        input_rail -[cap]-> node_name;
+        // Update the input rail name for subsequent components
+        input_rail = node_name;
+      } else {
+        // Parallel element (capacitor) - connect between rail and ground
+        input_rail <|cap|> ground_rail;
+      }
+    }
+    
+    // Return connections for future chaining
+    return {input_rail, ground_rail};
+  }
+  
+  // EMI/RFI pi filter with variadic capacitors
+  // This is a more specialized filter with inductor or ferrite between capacitors
+  function pi_filter(
+    input_rail,             // Input power rail to filter
+    output_rail,            // Output power rail (filtered)
+    ground_rail,            // Ground reference
+    inductor_ferrite,       // Series inductor or ferrite bead
+    ...capacitors           // Variable number of capacitors (distributed at input and output)
+  ) {
+    // Calculate number of capacitors
+    count = length(capacitors);
+    
+    // Place half of capacitors at input, half at output
+    // With odd number, place extra capacitor at output
+    input_count = floor(count / 2);
+    output_count = count - input_count;
+    
+    // Input side capacitors
+    for (i = 0; i < input_count; i++) {
+      input_rail <|capacitors[i]|> ground_rail;
+    }
+    
+    // Series inductor/ferrite
+    input_rail -[inductor_ferrite]-> output_rail;
+    
+    // Output side capacitors
+    for (i = input_count; i < count; i++) {
+      output_rail <|capacitors[i]|> ground_rail;
+    }
+    
+    // Return connections for future chaining
+    return {input_rail, output_rail, ground_rail};
+  }
+  
+  // Multiple voltage rail filtering with shared ground
+  // Allows filtering any number of voltage rails in a single function call
+  function multi_rail_filtering(
+    ground_rail,              // Shared ground reference
+    ...rail_capacitor_pairs   // Variable number of {rail, capacitor} pairs
+  ) {
+    // Each pair contains a voltage rail and its filtering capacitor
+    foreach (pair in rail_capacitor_pairs) {
+      rail = pair[0];
+      cap = pair[1];
+      
+      // Connect capacitor between rail and ground
+      rail <|cap|> ground_rail;
+    }
+    
+    // Return the ground reference
+    return {ground_rail};
+  }
+  
+  // Load capacitance with ESR consideration
+  // Takes variadic list of output capacitors
+  function output_load_capacitance(
+    voltage_rail,            // Voltage rail to filter
+    ground_rail,             // Ground reference
+    required_capacitance,    // Minimum required total capacitance
+    max_esr,                 // Maximum allowable ESR
+    ...output_capacitors     // Output capacitors to consider
+  ) {
+    // Connect all capacitors in parallel
+    foreach (cap in output_capacitors) {
+      voltage_rail <|cap|> ground_rail;
+    }
+    
+    // Return connections
+    return {voltage_rail, ground_rail};
+  }
+  
+  // Digital IC power supply decoupling network
+  // This implements a standard decoupling pattern with bulk + bypass caps
+  function digital_ic_decoupling(
+    ic_vcc,                  // Power pin of the IC
+    ic_gnd,                  // Ground pin of the IC
+    power_rail,              // Input power rail
+    ground_rail,             // Ground reference
+    bulk_capacitor,          // Bulk decoupling capacitor
+    ...bypass_capacitors     // Variable number of bypass capacitors
+  ) {
+    // Connect IC power pins to rails
+    power_rail -> ic_vcc;
+    ic_gnd -> ground_rail;
+    
+    // Connect bulk capacitor first (typically electrolytic/tantalum)
+    power_rail <|bulk_capacitor|> ground_rail;
+    
+    // Connect all bypass capacitors (typically ceramic)
+    foreach (cap in bypass_capacitors) {
+      // Place bypass capacitors as close as possible to IC
+      ic_vcc <|cap|> ic_gnd;
+    }
+    
+    // Return connections
+    return {ic_vcc, ic_gnd, power_rail, ground_rail};
+  }
+  
+  // Power sequencing for multiple voltage rails
+  function power_sequencing(
+    power_good_signal,       // Power good output signal
+    ...sequenced_rails       // Variable number of {rail, delay, threshold} tuples
+  ) {
+    // Implementation would handle proper sequencing logic
+    // For now, just return the power good signal
+    return {power_good_signal};
+  }
+  
+  // Export the functions for use in other files
+  export {
+    power_supply_filtering,
+    pi_filter,
+    multi_rail_filtering,
+    output_load_capacitance,
+    digital_ic_decoupling,
+    power_sequencing
+  };
+} 

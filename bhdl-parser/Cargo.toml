@@ -1,0 +1,26 @@
+[package]
+name = "bhdl-parser"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "bhdl_parser"
+path = "src/lib.rs"
+
+[dependencies]
+# Remove pest dependencies
+# pest = "2.7"
+# pest_derive = "2.7"
+
+# Remove parol dependencies
+# parol_runtime = "3.0"
+log = "0.4"
+miette = { version = "7.5", features = ["fancy"] }
+thiserror = "1.0"
+
+# Add nom dependency
+nom = "7.1"
+
+# Remove parol build dependency
+# [build-dependencies]
+# parol = "3.0"

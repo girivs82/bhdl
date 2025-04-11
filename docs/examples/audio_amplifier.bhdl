@@ -1,0 +1,166 @@
+// Simple Audio Amplifier Example (Refactored)
+// Demonstrates standard component/module usage
+
+// Assuming standard imports
+// import StandardLibrary.Passives.{Capacitor, ElectrolyticCapacitor, Resistor};
+// import StandardLibrary.ICs.{OpAmp};
+// import StandardLibrary.Controls.{Potentiometer};
+// import StandardLibrary.Audio.{ToneControl, PowerAmplifier}; // Hypothetical module locations
+// import StandardLibrary.Types.{...};
+
+board AudioAmplifierRefactored {
+  author: "BHDL Team";
+  version: "1.1"; // Updated
+  description: "Simple audio amplifier, 1W output with tone control (Refactored)";
+
+  // Board parameters (Using standard units)
+  parameters {
+    input_impedance: resistance = 10kOhm;
+    output_power: power = 1W;
+    supply_voltage: voltage = 12Vdc;
+    gain_db: float = 20.0; // Using float for dB
+    // Frequency response, bass/treble boost are typically design goals/specs, not direct parameters
+  }
+
+  // External connections (Using standard types)
+  ports {
+    VIN: in power; // Assume 12Vdc, 500mA based on param/description
+    GND: ground;
+    AUDIO_IN: in signal; // Assumed line level
+    AUDIO_OUT: out signal; // Assumed speaker level
+    // Control inputs - Potentiometers are components, not ports
+  }
+
+  // --- Placeholder Component Definitions --- 
+  component OpAmp { pins { IN_P: in signal; IN_N: in signal; OUT: out signal; VCC: in power; GND: ground; } properties { type: string = "Audio"; } }
+  component Potentiometer { pins { 1: inout signal; 2: out signal; 3: inout signal; } properties { value: resistance; taper: enum {linear, audio}; } }
+  component Capacitor { pins {1: inout signal; 2: inout signal;} properties {value: capacitance; voltage: voltage;} }
+  component ElectrolyticCapacitor { pins {POS: inout signal; NEG: inout signal;} properties {value: capacitance; voltage: voltage;} }
+  component Resistor { pins {1: inout signal; 2: inout signal;} properties {value: resistance; tolerance: percentage=1pct; power: power=0.25W;} }
+  // Placeholder Modules
+  module ToneControl { // Example placeholder module
+    ports { IN: in signal; OUT: out signal; VCC: in power; GND: ground; BASS_CTRL: in signal; TREBLE_CTRL: in signal; }
+    parameters { bass_center: frequency; treble_center: frequency; }
+  }
+  module PowerAmplifier { // Example placeholder module
+    ports { IN: in signal; OUT: out signal; VCC: in power; GND: ground; }
+    parameters { output_power: power; load_impedance: resistance = 8Ohm; }
+  }
+  // --- End Placeholders --- 
+
+  // Components instantiation
+  components {
+    // Power Supply Filtering Components (Replaces power_supply_filtering function)
+    C_PWR1: ElectrolyticCapacitor { value: 470uF; voltage: 16Vdc; };
+    C_PWR2: Capacitor { value: 100nF; voltage: 16Vdc; };
+    C_PWR3: Capacitor { value: 100pF; voltage: 16Vdc; }; // Type COG would be property if needed
+
+    // Input Stage OpAmp and Components (Replaces filtered_amplifier function)
+    PREAMP: OpAmp { type: "Audio"; };
+    C_IN: Capacitor { value: 1uF; voltage: 16Vdc; }; // Input coupling
+    R_IN: Resistor { value: 10kOhm; }; // Input impedance setting
+    R_FB_BUF1: Resistor { value: 1kOhm; }; // Feedback for buffer config
+    R_FB_BUF2: Resistor { value: 1kOhm; }; // Ground ref for buffer config (can be simplified)
+
+    // Volume Control
+    POT_VOL: Potentiometer { value: 10kOhm; taper: audio; };
+
+    // Tone Control Module
+    TONE1: ToneControl { bass_center: 100Hz; treble_center: 10kHz; };
+    POT_BASS: Potentiometer { value: 50kOhm; taper: linear; }; // Assuming pots for control
+    POT_TREBLE: Potentiometer { value: 50kOhm; taper: linear; };
+
+    // Preamplifier Stage OpAmp and Components (Replaces non_inverting_amplifier)
+    PREAMP2: OpAmp { type: "Audio"; };
+    R_G1: Resistor { value: 4.7kOhm; }; // Feedback resistor
+    R_G2: Resistor { value: 470Ohm; }; // Ground resistor (Gain = 1 + R_G1/R_G2 ≈ 11 ≈ 20.8dB)
+
+    // Power Amplifier Module
+    PA1: PowerAmplifier { output_power: 1W; load_impedance: 8Ohm; };
+
+    // Output Stage Components
+    C_OUT: ElectrolyticCapacitor { value: 1000uF; voltage: 16Vdc; }; // Output coupling
+    R_ZOBEL: Resistor { value: 10Ohm; power: 0.25W; }; // Zobel network part 1
+    C_ZOBEL: Capacitor { value: 100nF; voltage: 50Vdc; }; // Zobel network part 2
+  }
+
+  // Net Declarations
+  net VIN_FILTERED: power;
+  net INPUT_COUPLED: signal;
+  net INPUT_BUFFERED: signal;
+  net VOLUME_OUT: signal;
+  net BASS_CONTROL_SIG: signal;
+  net TREBLE_CONTROL_SIG: signal;
+  net TONE_OUT: signal;
+  net PREAMP_OUT: signal;
+  net AMP_OUT: signal;
+  net OUTPUT_COUPLED: signal;
+
+  connections {
+    // Power Supply Filtering
+    VIN -> C_PWR1.POS; GND -> C_PWR1.NEG;
+    VIN -> C_PWR2.1; GND -> C_PWR2.2;
+    VIN -> C_PWR3.1; GND -> C_PWR3.2;
+    VIN -> VIN_FILTERED; // Assuming VIN is already filtered, or filter components connect to VIN_FILTERED
+    // Better: VIN -> intermediate_filter_node; intermediate_filter_node -> C_PWR1.POS, C_PWR2.1, C_PWR3.1; intermediate_filter_node -> VIN_FILTERED;
+    // Let's assume VIN is the input to the filter components and VIN_FILTERED is the output rail
+    VIN -> C_PWR1.POS, C_PWR2.1, C_PWR3.1; // Connect input power to filters
+    GND -> C_PWR1.NEG, C_PWR2.2, C_PWR3.2; // Connect filters to ground
+    VIN -> VIN_FILTERED; // Simplistic: assume filtered rail comes directly from VIN for now. 
+                         // A proper filter would have an L or R, making VIN_FILTERED distinct.
+
+    // Power connections to active components
+    VIN_FILTERED -> PREAMP.VCC, TONE1.VCC, PREAMP2.VCC, PA1.VCC;
+    GND -> PREAMP.GND, TONE1.GND, PREAMP2.GND, PA1.GND;
+
+    // Input Stage: Coupling Capacitor -> Input Resistor -> Buffer
+    AUDIO_IN -> C_IN.1;
+    C_IN.2 -> INPUT_COUPLED;
+    INPUT_COUPLED -> R_IN.1;
+    R_IN.2 -> GND;
+    // OpAmp Buffer Configuration (Unity Gain)
+    INPUT_COUPLED -> PREAMP.IN_P; // Connect signal to non-inverting input
+    PREAMP.OUT -> PREAMP.IN_N; // Feedback output to inverting input for buffer
+    PREAMP.OUT -> INPUT_BUFFERED;
+    // R_FB_BUF1, R_FB_BUF2 are not needed for a simple buffer. Can remove them.
+
+    // Volume Control Potentiometer
+    INPUT_BUFFERED -> POT_VOL.1;
+    GND -> POT_VOL.3;
+    POT_VOL.2 -> VOLUME_OUT;
+
+    // Tone Control Pots and Module
+    VIN_FILTERED -> POT_BASS.1, POT_TREBLE.1; // Assuming pots are simple voltage dividers for control
+    GND -> POT_BASS.3, POT_TREBLE.3;
+    POT_BASS.2 -> BASS_CONTROL_SIG;
+    POT_TREBLE.2 -> TREBLE_CONTROL_SIG;
+    VOLUME_OUT -> TONE1.IN;
+    BASS_CONTROL_SIG -> TONE1.BASS_CTRL;
+    TREBLE_CONTROL_SIG -> TONE1.TREBLE_CTRL;
+    TONE1.OUT -> TONE_OUT;
+
+    // Preamplifier Stage (Non-Inverting Configuration)
+    TONE_OUT -> PREAMP2.IN_P;
+    PREAMP2.OUT -> R_G1.1; // Feedback path
+    R_G1.2 -> PREAMP2.IN_N;
+    PREAMP2.IN_N -> R_G2.1; // Resistor to ground
+    R_G2.2 -> GND;
+    PREAMP2.OUT -> PREAMP_OUT;
+
+    // Power Amplifier Module
+    PREAMP_OUT -> PA1.IN;
+    PA1.OUT -> AMP_OUT;
+
+    // Output Stage: Coupling Capacitor and Zobel Network
+    AMP_OUT -> C_OUT.POS;
+    C_OUT.NEG -> OUTPUT_COUPLED;
+    OUTPUT_COUPLED -> AUDIO_OUT; // Connect to board port
+
+    // Zobel Network (Connected across the output before coupling cap ideally, or amplifier output pins)
+    AMP_OUT -> R_ZOBEL.1;
+    R_ZOBEL.2 -> C_ZOBEL.1;
+    C_ZOBEL.2 -> GND;
+  }
+
+  // Removed non-standard validation block.
+} 

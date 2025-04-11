@@ -1,0 +1,147 @@
+// Power Components Library
+library Power {
+  version: "1.0.0";
+  author: "BHDL Team";
+  description: "Power components for electronic circuits";
+
+  // Linear Regulator Component
+  component LinearRegulator {
+    pins {
+      IN: in power;
+      OUT: out power;
+      GND: power_in;
+    }
+    
+    properties {
+      input: required;
+      output: required;
+      current: required;
+      dropout: required;
+      protection: {thermal};
+    }
+  }
+
+  // LDO Regulator Component
+  component LDORegulator {
+    pins {
+      IN: in power;
+      OUT: out power;
+      GND: power_in;
+      EN: in digital;
+    }
+    
+    properties {
+      input: required;
+      output: required;
+      current: required;
+      dropout: <0.5V;
+      psrr: 60dB;
+      protection: {thermal, overcurrent};
+    }
+  }
+  
+  // Buck Converter Component
+  component BuckConverter {
+    pins {
+      VIN: in power;
+      SW: out power;
+      FB: in analog;
+      EN: in digital;
+      GND: power_in;
+      PG: out digital;
+    }
+    
+    properties {
+      input: required;
+      output: required;
+      current: required;
+      switching_frequency: 600kHz;
+      efficiency: 85%;
+      features: {soft_start, current_limit, thermal_shutdown};
+    }
+  }
+  
+  // Boost Converter Component
+  component BoostConverter {
+    pins {
+      VIN: in power;
+      SW: out power;
+      FB: in analog;
+      EN: in digital;
+      GND: power_in;
+      PG: out digital;
+    }
+    
+    properties {
+      input: required;
+      output: required;
+      current: required;
+      switching_frequency: 1.2MHz;
+      efficiency: 85%;
+      features: {soft_start, current_limit, thermal_shutdown};
+    }
+  }
+  
+  // Transformer Component
+  component Transformer {
+    pins {
+      PRI_1: in power;
+      PRI_2: in power;
+      SEC_1: out power;
+      SEC_2: out power;
+    }
+    
+    properties {
+      primary: required;
+      secondary: required;
+      power: required;
+      isolation: basic;  // basic, reinforced, double
+      turns_ratio: calculated;
+    }
+  }
+  
+  // Rectifier Component
+  component BridgeRectifier {
+    pins {
+      AC1: in power;
+      AC2: in power;
+      DC_POS: out power;
+      DC_NEG: out power;
+    }
+    
+    properties {
+      voltage: required;
+      current: required;
+      forward_voltage: 1.4V;
+      type: standard;  // standard, schottky, fast
+    }
+  }
+  
+  // EMI Filter Component
+  component EMIFilter {
+    pins {
+      L_IN: in power;
+      N_IN: in power;
+      L_OUT: out power;
+      N_OUT: out power;
+    }
+    
+    properties {
+      mode: common_mode;  // common_mode, differential_mode, both
+      current: required;
+      attenuation: required;
+      frequency_range: 150kHz to 30MHz;
+    }
+  }
+  
+  // Public exports
+  export {
+    LinearRegulator,
+    LDORegulator,
+    BuckConverter,
+    BoostConverter,
+    Transformer,
+    BridgeRectifier,
+    EMIFilter
+  }
+} 

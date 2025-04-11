@@ -1,0 +1,211 @@
+// Transistor and Multi-Pin Component Examples
+// Demonstrating simplified connection patterns for 3+ pin devices
+
+board TransistorExamples {
+  // Import components from libraries
+  import Semiconductor.{BJT, MOSFET, OpAmp};
+  import Passives.{Resistor, Capacitor};
+  
+  // Board metadata
+  author: "BHDL Team";
+  version: "1.0";
+  description: "Examples of transistor and multi-pin component connections";
+  
+  // External connections
+  ports {
+    VCC: in power(5VDC, 200mA);
+    DUAL_VCC: in power(12VDC, 100mA);
+    DUAL_VEE: in power(-12VDC, 100mA);
+    GND: ground;
+    
+    IN_1: in signal(-1VDC to 1VDC, 1mA);
+    IN_2: in signal(-1VDC to 1VDC, 1mA);
+    IN_3: in signal(-1VDC to 1VDC, 1mA);
+    IN_4: in signal(-1VDC to 1VDC, 1mA);
+    IN_5: in signal(-1VDC to 1VDC, 1mA);
+    CTRL: in digital(0VDC to 5VDC, 1mA);
+    
+    CE_OUT: out signal(0VDC to 5VDC, 20mA);
+    CC_OUT: out signal(0VDC to 5VDC, 20mA);
+    CB_OUT: out signal(0VDC to 5VDC, 20mA);
+    PNP_OUT: out signal(0VDC to 5VDC, 20mA);
+    NMOS_OUT: out signal(0VDC to 5VDC, 100mA);
+    PMOS_OUT: out signal(0VDC to 5VDC, 100mA);
+    AMP_OUT: out signal(-10VDC to 10VDC, 10mA);
+  }
+  
+  // Components instantiation
+  components {
+    // BJT transistors
+    component BJT Q1 {  // NPN for common emitter
+      type: NPN;
+      package: TO-92;
+      current: 50mA;
+      gain: >100;
+    }
+    
+    component BJT Q2 {  // NPN for common collector
+      type: NPN;
+      package: TO-92;
+      current: 50mA;
+      gain: >100;
+    }
+    
+    component BJT Q3 {  // NPN for common base
+      type: NPN;
+      package: TO-92;
+      current: 50mA;
+      gain: >100;
+    }
+    
+    component BJT Q4 {  // PNP for examples
+      type: PNP;
+      package: SOT-23;
+      current: 30mA;
+      gain: >100;
+    }
+    
+    component BJT Q5 {  // PNP for examples
+      type: PNP;
+      package: SOT-23;
+      current: 30mA;
+      gain: >100;
+    }
+    
+    // MOSFETs
+    component MOSFET M1 {  // N-channel for switching
+      type: N_CHANNEL;
+      r_ds_on: <0.1Ω;
+      v_gs_threshold: 2VDC;
+      current: 1A;
+    }
+    
+    component MOSFET M2 {  // P-channel for switching
+      type: P_CHANNEL;
+      r_ds_on: <0.2Ω;
+      v_gs_threshold: -2VDC;
+      current: 1A;
+    }
+    
+    component MOSFET M3 {  // N-channel for source follower
+      type: N_CHANNEL;
+      r_ds_on: <0.1Ω;
+      v_gs_threshold: 2VDC;
+      current: 100mA;
+    }
+    
+    // Op-Amp
+    component OpAmp U1 {
+      type: general_purpose;
+      supply: dual;
+      bandwidth: >1MHz;
+    }
+    
+    // Passive components - Resistors
+    component Resistor RB1 { value: 10kΩ; }   // Base resistor for Q1
+    component Resistor RC1 { value: 1kΩ; }    // Collector resistor for Q1
+    component Resistor RB2 { value: 10kΩ; }   // Base resistor for Q2
+    component Resistor RE2 { value: 1kΩ; }    // Emitter resistor for Q2
+    component Resistor RB3 { value: 10kΩ; }   // Base bias for Q3
+    component Resistor RC3 { value: 1kΩ; }    // Collector resistor for Q3
+    component Resistor RE3 { value: 1kΩ; }    // Emitter resistor for Q3
+    component Resistor RB4 { value: 10kΩ; }   // Base resistor for Q4
+    component Resistor RC4 { value: 1kΩ; }    // Collector resistor for Q4
+    component Resistor RB5 { value: 10kΩ; }   // Base resistor for Q5
+    component Resistor RE5 { value: 1kΩ; }    // Emitter resistor for Q5
+    component Resistor RG1 { value: 10kΩ; }   // Gate resistor for M1
+    component Resistor RD1 { value: 1kΩ; }    // Drain resistor for M1
+    component Resistor RG2 { value: 10kΩ; }   // Gate resistor for M2
+    component Resistor RG3 { value: 10kΩ; }   // Gate resistor for M3
+    component Resistor RS3 { value: 1kΩ; }    // Source resistor for M3
+    component Resistor RF  { value: 10kΩ; }   // Feedback resistor for U1
+    component Resistor RG  { value: 1kΩ; }    // Gain setting resistor for U1
+    
+    // Passive components - Capacitors
+    component Capacitor C1 { value: 10µF; }   // Coupling capacitor for Q1
+    component Capacitor C2 { value: 10µF; }   // Coupling capacitor for Q2
+    component Capacitor C3 { value: 10µF; }   // Coupling capacitor for Q3
+    component Capacitor C4 { value: 10µF; }   // Coupling capacitor for Q4
+    component Capacitor C5 { value: 10µF; }   // Coupling capacitor for Q5
+    component Capacitor C6 { value: 10µF; }   // Output capacitor for op-amp
+    component Capacitor CD { value: 100nF; }  // Decoupling capacitor
+  }
+  
+  // Connections using multi-pin component pattern
+  connections {
+    // NPN Common Emitter amplifier (Q1)
+    IN_1 -[C1]-> Q1_BASE;
+    Q1_BASE -[RB1]-> GND;
+    VCC -[RC1]-> Q1_COLLECTOR;
+    {Q1_BASE} -[Q1(NPN):B,C,E]-> {, Q1_COLLECTOR, GND};  // NPN common emitter
+    Q1_COLLECTOR -> CE_OUT;
+    
+    // NPN Common Collector / Emitter Follower (Q2)
+    IN_2 -[C2]-> Q2_BASE;
+    {Q2_BASE, VCC} -[Q2(NPN):B,C,E]-> {, , Q2_EMITTER};  // NPN emitter follower
+    Q2_EMITTER -[RE2]-> GND;
+    Q2_EMITTER -> CC_OUT;
+    
+    // NPN Common Base (Q3)
+    // Generate bias voltage
+    {VCC} <|RB3|> GND;
+    RB3.2 -> Q3_BASE;  // Bias voltage at RB3/GND junction
+    IN_3 -[C3]-> Q3_EMITTER;
+    Q3_EMITTER -[RE3]-> GND;
+    VCC -[RC3]-> Q3_COLLECTOR;
+    {Q3_BASE, Q3_EMITTER} -[Q3(NPN):B,E,C]-> {, , Q3_COLLECTOR};  // NPN common base
+    Q3_COLLECTOR -> CB_OUT;
+    
+    // PNP Common Emitter (Q4)
+    IN_4 -[C4]-> Q4_BASE;
+    Q4_BASE -[RB4]-> GND;
+    GND -[RC4]-> Q4_COLLECTOR;
+    {Q4_BASE} -[Q4(PNP):B,E,C]-> {, VCC, Q4_COLLECTOR};  // PNP common emitter
+    Q4_COLLECTOR -> PNP_OUT;
+    
+    // PNP Common Collector / Emitter Follower (Q5)
+    IN_5 -[C5]-> Q5_BASE;
+    {Q5_BASE, GND} -[Q5(PNP):B,C,E]-> {, , Q5_EMITTER};  // PNP emitter follower
+    Q5_EMITTER -[RE5]-> VCC;
+    Q5_EMITTER -> CC_OUT;  // Same output as NPN follower
+    
+    // N-MOSFET as low-side switch (M1)
+    CTRL -[RG1]-> M1_GATE;
+    VCC -[RD1]-> M1_DRAIN;
+    {M1_GATE, M1_DRAIN} -[M1(N):G,D,S]-> {, , GND};  // N-MOSFET switch
+    M1_DRAIN -> NMOS_OUT;
+    
+    // P-MOSFET as high-side switch (M2)
+    CTRL -[RG2]-> M2_GATE;
+    {M2_GATE, VCC} -[M2(P):G,S,D]-> {, , M2_DRAIN};  // P-MOSFET switch
+    M2_DRAIN -> PMOS_OUT;
+    
+    // N-MOSFET source follower (M3)
+    IN_1 -[RG3]-> M3_GATE;
+    {M3_GATE, VCC} -[M3(N):G,D,S]-> {, , M3_SOURCE};  // N-MOSFET source follower
+    M3_SOURCE -[RS3]-> GND;
+    M3_SOURCE -> NMOS_OUT;  // Same output as switch for simplicity
+    
+    // Op-amp non-inverting amplifier
+    IN_1 -> U1_PLUS;
+    {U1_PLUS, U1_MINUS, DUAL_VCC} -[U1(OpAmp):+,-,VCC,GND,OUT]-> {, , , DUAL_VEE, U1_OUT};
+    U1_OUT -[RF]-> U1_MINUS;
+    U1_MINUS -[RG]-> GND;
+    U1_OUT -[C6]-> AMP_OUT;
+    
+    // Decoupling
+    DUAL_VCC <|CD|> DUAL_VEE;
+    VCC <|CD|> GND;
+  }
+  
+  // Design validation
+  validation {
+    check signal_range(CE_OUT, 0VDC to 5VDC);
+    check signal_range(CC_OUT, 0VDC to 5VDC);
+    check signal_range(CB_OUT, 0VDC to 5VDC);
+    check signal_range(PNP_OUT, 0VDC to 5VDC);
+    check signal_range(NMOS_OUT, 0VDC to 5VDC);
+    check signal_range(PMOS_OUT, 0VDC to 5VDC);
+    check signal_range(AMP_OUT, -10VDC to 10VDC);
+  }
+} 

@@ -1,0 +1,38 @@
+// Integrated Circuits Library
+// BHDL Standard Library - ICs
+
+// General purpose operational amplifier component
+component OpAmp {
+  pins {
+    IN_P: in signal;    // Non-inverting input (Assumes generic signal type unless specified)
+    IN_N: in signal;    // Inverting input
+    OUT: out signal;    // Output
+    VCC: in power;      // Positive supply
+    GND: ground;        // Ground/negative supply
+    VEE: in power;      // Optional negative supply for dual supply op-amps (Presence determined by connection)
+  }
+
+  properties {
+    type: enum {general, audio, precision, high_speed, low_power} = general;
+    channels: integer = 1; // Simplified range, validation by tool (1 to 4)
+    gain_bandwidth: frequency = 1MHz;
+    slew_rate: real = 1V/us; // Use standard units (V/us or V/s)
+    input_impedance: resistance = 1MOhm; // Standard unit
+    output_current: current = 25mA;
+    input_offset: voltage = 1mV;
+    noise: real = 10nV/sqrt(Hz); // Assuming complex unit handled
+    cmrr: real = 90dB; // Assuming dB handled
+    psrr: real = 90dB; // Assuming dB handled
+    supply_voltage: voltage_range = 2.7Vdc to 5.5Vdc; // Use range syntax and Vdc
+  }
+
+  // Removed non-standard 'component_selection' block.
+  // Selection criteria belong to tooling or separate configuration.
+
+  // Removed non-standard 'implementation_requirements' block.
+  // Context components (like bypass caps) should be handled in modules or board design.
+
+}
+
+// Add other common ICs here following the same principles...
+// e.g., VoltageRegulator, ADC, DAC, Microcontroller base types etc. 

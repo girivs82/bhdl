@@ -1,0 +1,98 @@
+// Audio Components
+// BHDL Standard Library - Audio Components
+
+// This library contains physical audio components (ICs, etc.)
+// For reusable subcircuits, see the modules/audio_modules.bhdl file (if it exists)
+
+// Assuming necessary base type imports
+// import StandardLibrary.Types.{...};
+
+// Audio IC Components
+
+// Audio Codec component
+component AudioCodec {
+  pins {
+    // Analog audio interface (Assume appropriate types like line_level, mic_level)
+    LINEIN_L: in signal; //(line_level);
+    LINEIN_R: in signal; //(line_level);
+    LINEOUT_L: out signal; //(line_level);
+    LINEOUT_R: out signal; //(line_level);
+    MIC_IN: in signal; //(mic_level);
+    HP_OUT_L: out signal; //(headphone_level?)
+    HP_OUT_R: out signal; //(headphone_level?)
+
+    // Digital interface (Assume types like cmos_3v3 or similar)
+    MCLK: in signal; // Should be domain: clock
+    BCLK: inout signal;
+    LRCLK: inout signal;
+    SDIN: in signal;
+    SDOUT: out signal;
+
+    // Control interface (Assume i2c_signal_3v3 or similar)
+    SCL: in signal;
+    SDA: inout signal;
+
+    // Power (Assume types like lv_digital_power, lv_analog_power)
+    VDD: in power;
+    AVDD: in power;
+    GND: ground;
+  }
+
+  properties {
+    resolution: enum {16, 24, 32} = 24; // Use enum for specific choices
+    sample_rate: frequency = 8kHz to 192kHz; // Standard range syntax
+    snr: real = 100dB; // Assuming dB handled
+    thd: percentage = 0.001pct; // Use pct
+  }
+
+  // Removed non-standard 'component_selection' block.
+
+}
+
+// Audio Amplifier IC component
+component AudioAmplifierIC {
+  pins {
+    // Assume appropriate signal types
+    IN_L: in signal;
+    IN_R: in signal;
+    OUT_L: out signal;
+    OUT_R: out signal;
+    MUTE: in signal; // Optional pin, type depends on logic level
+    STBY: in signal; // Optional pin
+    VCC: in power;
+    GND: ground;
+  }
+
+  properties {
+    channels: integer = 2; // Simplified range (1 to 8), tool validation
+    power_rating: power = required; // Clarified property name
+    type: enum {headphone, speaker, line} = speaker;
+    class: enum {ab, d} = ab;
+    thd: percentage = 0.1pct; // Use pct
+  }
+
+  // Removed non-standard 'component_selection' block.
+
+}
+
+// Microphone Preamplifier IC component
+component MicPreampIC { // Renamed to clarify it's an IC component
+  pins {
+    // Assume mic_level input, line_level output?
+    IN: in signal;
+    OUT: out signal;
+    VCC: in power;
+    GND: ground;
+    GAIN_SEL: in signal; // Optional pin
+  }
+
+  properties {
+    gain: real_range = 20dB to 60dB; // Assuming dB handled, added _range suffix
+    noise: real = 2nV/sqrt(Hz); // Assuming complex unit handled
+    thd: percentage = 0.01pct; // Use pct
+    phantom_power: boolean = false;
+  }
+
+  // Removed non-standard 'component_selection' block.
+
+} 

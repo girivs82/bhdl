@@ -1,0 +1,142 @@
+// Passive Components Library
+// BHDL Standard Library - Passives
+
+// Resistor Component
+component Resistor {
+  pins {
+    // For standard resistors, pins are interchangeable and don't have inherent direction
+    1: inout signal; // Changed from 'passive'
+    2: inout signal; // Changed from 'passive'
+  }
+
+  properties {
+    value: resistance = required; // Value must be specified at instantiation
+    tolerance: percentage = 5pct; // Use 'pct' unit
+    power: power = 0.25W;
+    temperature_coefficient: real = 100ppm/degC; // Use 'degC'
+    // 'ppm' is not standard, representation might need discussion or use scientific notation for coefficient
+  }
+}
+
+// Capacitor Component (Non-polarized)
+component Capacitor {
+  pins {
+    1: inout signal; // Changed from 'passive'
+    2: inout signal; // Changed from 'passive'
+  }
+
+  properties {
+    value: capacitance = required;
+    voltage: voltage = required; // Assume DC voltage rating unless otherwise specified
+    tolerance: percentage = 10pct; // Use 'pct' unit
+    type: enum {ceramic, film, mica} = ceramic; // Specify allowed types
+    temperature_coefficient: string = "X7R"; // Use string for standard codes
+  }
+}
+
+// Electrolytic Capacitor (polarized)
+component ElectrolyticCapacitor {
+  pins {
+    POS: inout signal; // Positive terminal
+    NEG: inout signal; // Negative terminal
+  }
+
+  properties {
+    value: capacitance = required;
+    voltage: voltage = required;
+    tolerance: percentage = 20pct; // Use 'pct' unit
+    ripple_current: current = required;
+    low_esr: boolean = false;
+    lifetime: time = 1000h; // Standard unit
+    // Note: Polarity is implied by pin names and component type
+  }
+}
+
+// Inductor Component
+component Inductor {
+  pins {
+    1: inout signal; // Changed from 'passive'
+    2: inout signal; // Changed from 'passive'
+  }
+
+  properties {
+    value: inductance = required;
+    current: current = required; // DC current rating
+    tolerance: percentage = 10pct; // Use 'pct' unit
+    dcr: resistance = 0.1Ohm; // Use 'Ohm'
+    type: enum {unshielded, shielded, semi_shielded} = unshielded;
+    saturation_current: current = required;
+    frequency_rating: frequency; // Optional: Frequency at which inductance/Q is specified
+  }
+}
+
+// Ferrite Bead Component
+component FerriteBead {
+  pins {
+    1: inout signal; // Changed from 'passive'
+    2: inout signal; // Changed from 'passive'
+  }
+
+  properties {
+    impedance: resistance = required; // Impedance value
+    at_frequency: frequency = 100MHz; // Frequency at which impedance is specified (use property)
+    current: current = required; // DC current rating
+    dcr: resistance = 0.1Ohm; // Use 'Ohm'
+  }
+}
+
+// Potentiometer Component
+component Potentiometer {
+  pins {
+    1: inout signal; // End terminal A
+    2: inout signal; // Wiper terminal W
+    3: inout signal; // End terminal B
+  }
+
+  properties {
+    value: resistance = required;     // Total resistance (End A to End B)
+    taper: enum {linear, audio, reverse_audio, logarithmic} = linear;
+    power: power = 0.25W;
+    tolerance: percentage = 20pct;      // Use 'pct' unit
+    travel: angle = 270deg;             // Use standard unit 'deg'
+    // 'control' property removed - Potentiometer state isn't typically set by BHDL property
+  }
+
+  // Removed non-standard 'component_selection' block.
+  // Selection criteria belong to tooling or separate configuration.
+
+}
+
+// Resistor Divider Network (as a Module encapsulating Resistors)
+// Note: Representing this as a 'module' is often better than a 'component'
+// because it's built from other components.
+module ResistorDivider {
+  ports { // Modules have 'ports' not 'pins'
+    IN: in signal;
+    OUT: out signal;
+    GND: ground;
+  }
+
+  properties { // Parameters for the module
+    r_top_value: resistance = required;
+    r_bottom_value: resistance = required;
+    tolerance: percentage = 1pct; // Use 'pct' unit
+    // Ratio removed - can be calculated by tools/users, not fixed module property
+  }
+
+  // Internal Implementation
+  components {
+    Resistor R_Top { value: module.r_top_value; tolerance: module.tolerance; }
+    Resistor R_Bottom { value: module.r_bottom_value; tolerance: module.tolerance; }
+  }
+
+  connections {
+    IN -> R_Top.1;
+    R_Top.2 -> R_Bottom.1;
+    R_Top.2 -> OUT; // Output is the junction
+    R_Bottom.2 -> GND;
+  }
+}
+
+// Removed non-standard 'library' wrapper and 'export' block.
+// Top-level definitions are assumed exported. 

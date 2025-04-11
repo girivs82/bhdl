@@ -1,0 +1,160 @@
+// Pump Controller Example (Refactored)
+// Demonstrates standard component usage for a pump control system
+
+// Assuming standard library imports
+// import StandardLibrary.Power.{Regulator};
+// import StandardLibrary.Passives.{Capacitor, ElectrolyticCapacitor};
+// import StandardLibrary.ICs.{LevelShifter, Microcontroller, MOSFETDriver, CurrentMonitor, Watchdog, FrequencyToVoltage};
+// import StandardLibrary.Types.{...};
+
+board PumpControllerRefactored {
+  author: "BHDL Team";
+  version: "1.1"; // Updated
+  description: "Water pump controller with tank level and flow monitoring (Refactored)";
+
+  // Board parameters (Using standard units)
+  parameters {
+    supply_voltage: voltage = 24Vdc;
+    pump_control_voltage: voltage = 24Vdc;
+    pump_max_current: current = 5A;
+    logic_voltage: voltage = 3.3Vdc;
+    // Other params are design specs/goals
+  }
+
+  // External connections (Using standard types)
+  ports {
+    VIN: in power; // Assumed 24Vdc based on params
+    GND: ground;
+    TANK_HIGH: in signal; // Assume 5V CMOS based on original
+    TANK_LOW: in signal;  // Assume 5V CMOS based on original
+    FLOW_PULSE: in signal; // Assume 5V CMOS based on original
+    PUMP_OUT: out power; // Assume 24Vdc, 5A based on params
+    AUTO_MODE: in signal; // Assume 3.3V logic
+    MANUAL_ON: in signal; // Assume 3.3V logic
+    ALARM: out signal; // Assume 3.3V logic
+    STATUS_OK: out signal; // Assume 3.3V logic
+    PUMP_RUNNING: out signal; // Assume 3.3V logic
+  }
+
+  // --- Placeholder Component Definitions --- 
+  component Regulator { pins { IN: in power; OUT: out power; GND: ground; EN: in signal; } properties { type: enum{switching_buck, ldo}; output_voltage: voltage; current: current; } }
+  component LevelShifter { pins { IN_H: in signal; OUT_L: out signal; VH: in power; VL: in power; GND: ground; } properties { channels: integer=1; } }
+  component Microcontroller { pins { VDD: in power; GND: ground; GPIO1: inout signal; GPIO2: inout signal; GPIO3: inout signal; GPIO4: inout signal; GPIO5: inout signal; GPIO6: out signal; GPIO7: out signal; GPIO8: out signal; GPIO9: out signal; ADC1: in signal; ADC2: in signal; WDT_KICK: out signal; RESET_N: in signal;} properties { flash: memory_size; ram: memory_size; } }
+  component MOSFETDriver { pins { IN: in signal; VIN: in power; OUT: out power; GND: ground; } properties { type: enum{high_side, low_side}; voltage: voltage; current: current; } }
+  component CurrentMonitor { pins { IN: inout power; OUT: inout power; SENSE: out signal; VCC: in power; GND: ground; } properties { range_min: current = 0A; range_max: current = 5A; } }
+  component Watchdog { pins { KICK: in signal; RESET: out signal; VCC: in power; GND: ground; } properties { timeout: time; } }
+  component FrequencyToVoltage { pins { IN: in signal; OUT: out signal; VCC: in power; GND: ground; } properties { input_freq_min: frequency; input_freq_max: frequency; output_voltage_min: voltage; output_voltage_max: voltage; } }
+  component Capacitor { pins {1: inout signal; 2: inout signal;} properties {value: capacitance; voltage: voltage; type: string="X7R";} }
+  component ElectrolyticCapacitor { pins {POS: inout power; NEG: inout power;} properties {value: capacitance; voltage: voltage;} }
+  // --- End Placeholders --- 
+
+  // Components instantiation (Using standard syntax and units)
+  components {
+    // Power supply section
+    REG1: Regulator { type: switching_buck; output_voltage: 3.3Vdc; current: 500mA; };
+    C_PWR1: ElectrolyticCapacitor { value: 470uF; voltage: 35Vdc; };
+    C_PWR2: Capacitor { value: 100nF; voltage: 35Vdc; };
+    C_3V3_1: Capacitor { value: 10uF; voltage: 10Vdc; };
+
+    // Input level shifters (Assuming 5V input signals to 3.3V logic)
+    LS_HIGH: LevelShifter;
+    LS_LOW: LevelShifter;
+    LS_FLOW: LevelShifter;
+
+    // Microcontroller
+    MCU: Microcontroller { flash: 128kByte; ram: 32kByte; }; // Use kByte
+
+    // Pump control driver
+    DRIVER1: MOSFETDriver { type: high_side; voltage: 24Vdc; current: 5A; };
+
+    // Monitoring
+    I_MON: CurrentMonitor { range_max: 5A; };
+    WDT: Watchdog { timeout: 1s; };
+    FV1: FrequencyToVoltage { input_freq_max: 500Hz; output_voltage_max: 3.3Vdc; };
+
+    // Decoupling capacitors (Simplified)
+    C_BYPASS_MCU: Capacitor { value: 100nF; voltage: 10Vdc; };
+    C_BYPASS_OTHER: Capacitor { value: 100nF; voltage: 10Vdc; };
+  }
+
+  // Net Declarations
+  net VDD_3V3: power { voltage: 3.3Vdc; };
+  net TANK_HIGH_3V3: signal;
+  net TANK_LOW_3V3: signal;
+  net FLOW_PULSE_3V3: signal;
+  net PUMP_CTRL: signal;
+
+  connections {
+    // Power Supply and Filtering
+    VIN -> C_PWR1.POS; GND -> C_PWR1.NEG;
+    VIN -> C_PWR2.1; GND -> C_PWR2.2;
+    VIN -> REG1.IN;
+    GND -> REG1.GND;
+    REG1.OUT -> VDD_3V3;
+    VDD_3V3 -> C_3V3_1.1;
+    C_3V3_1.2 -> GND;
+
+    // Level Shifters (Assuming VH=VIN(24V), VL=VDD_3V3)
+    VIN -> LS_HIGH.VH, LS_LOW.VH, LS_FLOW.VH;
+    VDD_3V3 -> LS_HIGH.VL, LS_LOW.VL, LS_FLOW.VL;
+    GND -> LS_HIGH.GND, LS_LOW.GND, LS_FLOW.GND;
+    TANK_HIGH -> LS_HIGH.IN_H;
+    LS_HIGH.OUT_L -> TANK_HIGH_3V3;
+    TANK_LOW -> LS_LOW.IN_H;
+    LS_LOW.OUT_L -> TANK_LOW_3V3;
+    FLOW_PULSE -> LS_FLOW.IN_H;
+    LS_FLOW.OUT_L -> FLOW_PULSE_3V3;
+
+    // Microcontroller Connections
+    VDD_3V3 -> MCU.VDD;
+    GND -> MCU.GND;
+    MCU.VDD -> C_BYPASS_MCU.1; C_BYPASS_MCU.2 -> GND; // MCU Decoupling
+
+    // Sensor Inputs to MCU
+    TANK_HIGH_3V3 -> MCU.GPIO1;
+    TANK_LOW_3V3 -> MCU.GPIO2;
+    FLOW_PULSE_3V3 -> MCU.GPIO3;
+
+    // Control Inputs to MCU
+    AUTO_MODE -> MCU.GPIO4;
+    MANUAL_ON -> MCU.GPIO5;
+
+    // Outputs from MCU
+    MCU.GPIO6 -> PUMP_CTRL;
+    MCU.GPIO7 -> ALARM;
+    MCU.GPIO8 -> STATUS_OK;
+    MCU.GPIO9 -> PUMP_RUNNING;
+
+    // Pump Control Driver
+    PUMP_CTRL -> DRIVER1.IN;
+    VIN -> DRIVER1.VIN;
+    DRIVER1.OUT -> PUMP_OUT;
+    GND -> DRIVER1.GND;
+
+    // Current Monitoring
+    // Assuming I_MON is in series with PUMP_OUT line
+    DRIVER1.OUT -> I_MON.IN; // Or connect VIN -> I_MON.IN depending on monitor type
+    I_MON.OUT -> PUMP_OUT; // If monitor is inline
+    I_MON.SENSE -> MCU.ADC1;
+    VDD_3V3 -> I_MON.VCC;
+    GND -> I_MON.GND;
+
+    // Watchdog Timer
+    MCU.WDT_KICK -> WDT.KICK;
+    WDT.RESET -> MCU.RESET_N;
+    VDD_3V3 -> WDT.VCC;
+    GND -> WDT.GND;
+
+    // Flow Pulse to Voltage Converter
+    FLOW_PULSE_3V3 -> FV1.IN;
+    FV1.OUT -> MCU.ADC2;
+    VDD_3V3 -> FV1.VCC;
+    GND -> FV1.GND;
+
+    // Other Decoupling (Example for other ICs)
+    VDD_3V3 -> C_BYPASS_OTHER.1;
+    C_BYPASS_OTHER.2 -> GND;
+  }
+
+  // Removed non-standard firmware block.
+} 
