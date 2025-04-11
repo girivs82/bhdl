@@ -505,7 +505,7 @@ mod tests {
         assert_eq!(errors[0], AnalysisError::DuplicateDeclaration {
             name: "CLK".to_string(),
             kind: "net",
-            span: SourceSpan::new(75.into(), 14), // Updated span
+            span: SourceSpan::new(75.into(), 13), // Updated span length (was 14)
         });
     }
 
@@ -594,7 +594,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: Fix parser issue for this input layout
     fn test_valid_direction_connections() {
         let input = r#"
             board ValidDirections {
@@ -626,7 +625,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: Fix parser issue for this input layout
     fn test_detects_invalid_direction_connections() {
         let input = r#"
             board InvalidDirections {

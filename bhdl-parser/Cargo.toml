@@ -3,6 +3,9 @@ name = "bhdl-parser"
 version = "0.1.0"
 edition = "2021"
 
+# Restore build script config
+build = "build.rs"
+
 [lib]
 name = "bhdl_parser"
 path = "src/lib.rs"
@@ -15,12 +18,34 @@ path = "src/lib.rs"
 # Remove parol dependencies
 # parol_runtime = "3.0"
 log = "0.4"
-miette = { version = "7.5", features = ["fancy"] }
+miette = { version = "7.5.0", features = ["fancy"] }
 thiserror = "1.0"
 
-# Add nom dependency
-nom = "7.1"
+# Add bhdl-netlist dependency
+bhdl-netlist = { path = "../bhdl-netlist" }
 
-# Remove parol build dependency
+# Restore tree-sitter runtime dependency
+tree-sitter = "0.22"
+
+# Remove old tree-sitter build dependencies
+# cc = "1.0"
+# tree-sitter-cli = { version = "0.22", features = ["generate"] }
+
+# Remove old tree-sitter build dependencies
 # [build-dependencies]
 # parol = "3.0"
+
+# lalrpop-util = { version = "0.20", features = ["lexer"] }
+# Remove logos as tree-sitter handles tokenization
+# logos = "0.14"
+
+# Remove rust-sitter dependency
+# rust-sitter = "0.4.4"
+
+[build-dependencies]
+# Restore tree-sitter build dependencies
+cc = "1.0"
+tree-sitter-cli = { version = "0.22" }
+
+# Remove rust-sitter build tool dependency
+# rust-sitter-tool = "0.4.4"
