@@ -6,17 +6,20 @@ module.exports = grammar({
     $.comment
   ],
 
-  // Define external scanner tokens
-  externals: $ => [
-    $.arrow,
-    $.bidir_arrow,
-    // Add other external tokens here if needed
-  ],
+  // Remove external scanner config
+  // externals: $ => [...],
 
   word: $ => $.identifier,
 
-  // Remove expression precedences
-  // precedences: $ => [...],
+  // Define precedence levels for expressions
+  precedences: $ => [
+    ['member'], // Add back member/subscript access
+    ['unary'],
+    ['multiplicative'],
+    ['additive'],
+    ['range'],
+    // Add other levels later if needed (e.g., comparison, logical)
+  ],
 
   rules: {
     source_file: $ => repeat(choice(
@@ -289,13 +292,30 @@ module.exports = grammar({
 
     // Placeholder connection statement
     connection_statement: $ => seq(
-      field('source', $.identifier),
-      field('operator', choice($.arrow, $.bidir_arrow)),
-      field('target', $.identifier),
+      field('source', $._connection_endpoint),
+      field('operator', choice('->', '<=>')),
+      field('target', $._connection_endpoint),
       ';'
     ),
 
-    _connection_endpoint: $ => $.identifier, // Placeholder
+    // Restore standard endpoint definition
+    _connection_endpoint: $ => choice(
+      $.identifier,
+      $.member_access,
+      $.subscript_access
+    ),
+
+    // Restore member and subscript access rules
+    member_access: $ => prec.left('member', seq(
+      field('object', $._connection_endpoint),
+      '.',
+      field('property', $.identifier)
+    )),
+
+    subscript_access: $ => prec.left('member', seq(
+      field('object', $._connection_endpoint),
+      field('index', $.bus_specifier)
+    )),
 
     interface_usage_declaration: $ => seq(
       field('name', $.identifier),
@@ -355,15 +375,48 @@ module.exports = grammar({
     kw_power: $ => 'power',
 
     // === Expressions ===
-    // Revert _expression to only include non-recursive base cases
-    // TODO: Properly implement expression parsing (arithmetic, unary, range, paren, etc.)
-    // Current precedence rules lead to conflicts or incorrect parsing.
     _expression: $ => choice(
       $.numeric_literal,
       $.string_literal,
       $.boolean_literal,
       $.identifier,
-      $.integer_literal
+      $.integer_literal,
+      $.parenthesized_expression,
+      $.unary_expression,
+      $.binary_expression,
+      $.range_expression,
+      $.array_literal
+    ),
+
+    parenthesized_expression: $ => seq('(', $._expression, ')'),
+
+    // Add binary expressions with precedence
+    binary_expression: $ => choice(
+      prec.left('additive', seq($._expression, '+', $._expression)),
+      prec.left('additive', seq($._expression, '-', $._expression)),
+      prec.left('multiplicative', seq($._expression, '*', $._expression)),
+      prec.left('multiplicative', seq($._expression, '/', $._expression))
+    ),
+
+    // Add unary expression with precedence
+    unary_expression: $ => prec.right('unary', seq(
+      '-', // Only minus for now
+      $._expression
+    )),
+
+    // Add range expression with precedence
+    range_expression: $ => prec.left('range', seq(
+      $._expression, 'to', $._expression
+    )),
+
+    array_literal: $ => seq(
+      '[',
+      optional(seq(
+        $._expression,
+        repeat(seq(',', $._expression))
+      )),
+      optional(','), // Allow trailing comma
+      ']'
     ),
 
     // === Literals ===

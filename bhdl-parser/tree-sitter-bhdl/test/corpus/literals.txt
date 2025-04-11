@@ -12,42 +12,68 @@
 
 board ConnectionBoard {
   components {
-    CPU U1 {}; // Added {} to make instantiation valid
-    Memory MEM0 {}; // Added {}
+    CPU U1 {};
+    Memory MEM0 {};
   }
   connections {
-    // Pin to Pin (Will parse as ident -> ident for now)
-    U1 -> MEM0; // Simplified for placeholder
+    // Pin to Pin
+    U1.TXD -> MEM0.RXD;
 
     // Net to Pin
-    Net_A -> U1;
+    Net_A -> U1.Pin1;
 
     // Pin to Net
-    U1 -> Net_B;
+    U1.Pin2 -> Net_B;
 
-    // Bus Slice Connection (Not parsable with placeholder)
-    // U1.DATA[7:0] -> MEM0.D[7:0];
+    // Bus Slice Connection
+    U1.DATA[7:0] -> MEM0.D[7:0];
 
-    // Single Bit Access (Not parsable with placeholder)
-    // U1.ChipSelect[0] -> MEM0.CS;
+    // Single Bit Access
+    U1.ChipSelect[0] -> MEM0.CS;
 
-    // Interface Connection (Will parse as ident <=> ident for now)
-    U1 <=> MEM0;
+    // Interface Connection
+    U1.I2C <=> MEM0.I2C;
   }
 }
 
 ---
-// Placeholder
+// Placeholder - Adjust after parsing
 (source_file (board_definition name: (identifier)
   (components_block
     (component_instantiation type: (identifier) name: (identifier))
     (component_instantiation type: (identifier) name: (identifier))
   )
   (connections_block
-    (connection_statement source: (identifier) operator: '->' target: (identifier))
-    (connection_statement source: (identifier) operator: '->' target: (identifier))
-    (connection_statement source: (identifier) operator: '->' target: (identifier))
-    (connection_statement source: (identifier) operator: '<=>' target: (identifier))
+    // U1.TXD -> MEM0.RXD;
+    (connection_statement
+      source: (member_access object: (identifier) property: (identifier))
+      operator: '->'
+      target: (member_access object: (identifier) property: (identifier)))
+    // Net_A -> U1.Pin1;
+    (connection_statement
+      source: (identifier)
+      operator: '->'
+      target: (member_access object: (identifier) property: (identifier)))
+    // U1.Pin2 -> Net_B;
+    (connection_statement
+      source: (member_access object: (identifier) property: (identifier))
+      operator: '->'
+      target: (identifier))
+    // U1.DATA[7:0] -> MEM0.D[7:0];
+    (connection_statement
+      source: (subscript_access object: (member_access object: (identifier) property: (identifier)) index: (bus_specifier high: (integer_literal) low: (integer_literal)))
+      operator: '->'
+      target: (subscript_access object: (member_access object: (identifier) property: (identifier)) index: (bus_specifier high: (integer_literal) low: (integer_literal))))
+    // U1.ChipSelect[0] -> MEM0.CS;
+    (connection_statement
+      source: (subscript_access object: (member_access object: (identifier) property: (identifier)) index: (bus_specifier high: (integer_literal)))
+      operator: '->'
+      target: (member_access object: (identifier) property: (identifier)))
+    // U1.I2C <=> MEM0.I2C;
+    (connection_statement
+      source: (member_access object: (identifier) property: (identifier))
+      operator: '<=>'
+      target: (member_access object: (identifier) property: (identifier)))
   )
 ))
 
@@ -160,7 +186,8 @@ board ConstraintBoard {
 (source_file
   (binary_expression
     (_expression (numeric_literal))
-    (_expression (binary_expression (_expression (numeric_literal)) (_expression (numeric_literal)))))
+    (_expression (binary_expression (_expression (numeric_literal)) (_expression (numeric_literal))))
+  )
   (binary_expression
     (_expression (parenthesized_expression (_expression (binary_expression (_expression (numeric_literal)) (_expression (numeric_literal))))))
     (_expression (numeric_literal)))
@@ -349,3 +376,46 @@ board LayoutBoard {
     (property_assignment property_name: (identifier) value: (numeric_literal))
     (property_assignment property_name: (identifier) value: (string_literal)))
 ))
+
+=== Parenthesized Expression ===
+
+component ParenDemo {
+  parameters {
+    a = (1);
+    b = (a);
+    c = (1 + 2); // Requires binary expression later
+  }
+}
+
+---
+// Placeholder
+(source_file (component_definition name: (identifier)
+  (parameters_block
+    (parameter_declaration name: (identifier) default_value: (parenthesized_expression (_expression (integer_literal))))
+    (parameter_declaration name: (identifier) default_value: (parenthesized_expression (_expression (identifier))))
+    (parameter_declaration name: (identifier) default_value: (parenthesized_expression (_expression (integer_literal)))) // Simple placeholder for inner expr
+  ))
+)
+
+=== Array Literals ===
+
+component Arrays {
+  parameters {
+    list1 = [1, 2, 3];
+    list2 = [10uF, 1uF,]; // Trailing comma
+    list3 = []; // Empty
+    list4 = ["A", "B"];
+    // list5 = [ [1], [2] ]; // Nested - requires list in expression
+  }
+}
+
+---
+// Placeholder
+(source_file (component_definition name: (identifier)
+  (parameters_block
+    (parameter_declaration name: (identifier) default_value: (array_literal (_expression (integer_literal)) (_expression (integer_literal)) (_expression (integer_literal))))
+    (parameter_declaration name: (identifier) default_value: (array_literal (_expression (numeric_literal)) (_expression (numeric_literal))))
+    (parameter_declaration name: (identifier) default_value: (array_literal))
+    (parameter_declaration name: (identifier) default_value: (array_literal (_expression (string_literal)) (_expression (string_literal))))
+  ))
+)
