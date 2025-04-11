@@ -13,12 +13,15 @@ module.exports = grammar({
 
   // Define precedence levels for expressions
   precedences: $ => [
-    ['member'], // Add back member/subscript access
+    ['call', 'member'],
     ['unary'],
     ['multiplicative'],
     ['additive'],
+    ['comparative'],
+    ['logical_and'],
+    ['logical_or'],
     ['range'],
-    // Add other levels later if needed (e.g., comparison, logical)
+    ['ternary'],
   ],
 
   rules: {
@@ -228,12 +231,48 @@ module.exports = grammar({
       '}'
     ),
 
+    // === Generate Block ===
+    generate_block: $ => seq(
+      'generate',
+      'for',
+      field('variable', $.identifier),
+      'in',
+      field('range', $._generate_range),
+      '{',
+      field('body', repeat(choice(
+        $.local_variable_declaration,
+        $.pin_port_declaration,
+        $.component_instantiation,
+        $.connection_statement,
+      ))),
+      '}'
+    ),
+
+    // Add missing _generate_range rules
+    _generate_range: $ => choice(
+      $.range_to,
+      $.range_upto,
+      $.identifier
+    ),
+
+    range_to: $ => seq(
+      field('start', $._expression),
+      'to',
+      field('end', $._expression)
+    ),
+
+    range_upto: $ => seq(
+      field('start', $._expression),
+      'upto',
+      field('end', $._expression)
+    ),
+
     // === Declarations / Instantiations / Statements ===
     parameter_declaration: $ => choice(
       seq( // With type: name : type [ = value ];
         field('name', $.identifier),
         ':',
-        field('param_type', $.identifier),
+        field('param_type', $._type_name),
         optional(seq('=', field('default_value', $._expression))),
         ';'
       ),
@@ -245,22 +284,22 @@ module.exports = grammar({
       )
     ),
 
-    // For use in interface definition parameter lists (no semicolon)
     interface_parameter_declaration: $ => choice(
       seq( // With type: name : type [ = value ]
         field('name', $.identifier),
         ':',
-        field('param_type', $.identifier),
-        optional(seq('=', field('default_value', choice($.integer_literal, $.numeric_literal, $.string_literal, $.boolean_literal, $.identifier)))),
-        // No semicolon
+        field('param_type', $._type_name),
+        optional(seq('=', field('default_value', $._expression)))
       ),
       seq( // Without type: name = value
         field('name', $.identifier),
         '=',
-        field('default_value', choice($.integer_literal, $.numeric_literal, $.string_literal, $.boolean_literal, $.identifier)),
-        // No semicolon
+        field('default_value', $._expression)
       )
     ),
+
+    // Define what constitutes a type name (just identifier for now)
+    _type_name: $ => $.identifier,
 
     // Use explicit keyword rules
     pin_port_declaration: $ => seq(
@@ -376,16 +415,22 @@ module.exports = grammar({
 
     // === Expressions ===
     _expression: $ => choice(
+      // Literals & Base Cases
       $.numeric_literal,
       $.string_literal,
       $.boolean_literal,
       $.identifier,
       $.integer_literal,
+      // Operators / Constructs
       $.parenthesized_expression,
       $.unary_expression,
       $.binary_expression,
       $.range_expression,
-      $.array_literal
+      $.array_literal,
+      $.function_call_expression,
+      $.member_access,
+      $.subscript_access,
+      $.ternary_expression
     ),
 
     parenthesized_expression: $ => seq('(', $._expression, ')'),
@@ -395,12 +440,20 @@ module.exports = grammar({
       prec.left('additive', seq($._expression, '+', $._expression)),
       prec.left('additive', seq($._expression, '-', $._expression)),
       prec.left('multiplicative', seq($._expression, '*', $._expression)),
-      prec.left('multiplicative', seq($._expression, '/', $._expression))
+      prec.left('multiplicative', seq($._expression, '/', $._expression)),
+      prec.left('comparative', seq($._expression, '>', $._expression)),
+      prec.left('comparative', seq($._expression, '>=', $._expression)),
+      prec.left('comparative', seq($._expression, '<', $._expression)),
+      prec.left('comparative', seq($._expression, '<=', $._expression)),
+      prec.left('comparative', seq($._expression, '==', $._expression)),
+      prec.left('comparative', seq($._expression, '!=', $._expression)),
+      prec.left('logical_and', seq($._expression, '&&', $._expression)),
+      prec.left('logical_or', seq($._expression, '||', $._expression))
     ),
 
     // Add unary expression with precedence
     unary_expression: $ => prec.right('unary', seq(
-      '-', // Only minus for now
+      choice('-', '!'),
       $._expression
     )),
 
@@ -417,6 +470,22 @@ module.exports = grammar({
       )),
       optional(','), // Allow trailing comma
       ']'
+    ),
+
+    // Add function call expression
+    function_call_expression: $ => prec('call', seq(
+      field('function', $._connection_endpoint), // Function can be identifier or member access
+      field('arguments', $.argument_list)
+    )),
+
+    argument_list: $ => seq(
+      '(',
+      optional(seq(
+        $._expression,
+        repeat(seq(',', $._expression))
+      )),
+      optional(','), // Allow trailing comma
+      ')'
     ),
 
     // === Literals ===
@@ -440,6 +509,24 @@ module.exports = grammar({
     comment: $ => token(choice(
       seq('//', /.*/),
       seq('/*', /[^*]*\*+([^/*][^*]*\*+)*/, '/')
+    )),
+
+    // Add local variable declaration rule
+    local_variable_declaration: $ => seq(
+      'local',
+      field('name', $.identifier),
+      '=',
+      field('value', $._expression),
+      ';'
+    ),
+
+    // Add ternary conditional expression
+    ternary_expression: $ => prec.right('ternary', seq(
+      field('condition', $._expression),
+      '?',
+      field('consequence', $._expression),
+      ':',
+      field('alternative', $._expression)
     )),
   },
 });
