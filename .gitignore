@@ -4,3 +4,8 @@
 # Editor / OS specific
 .vscode/
 .DS_Store 
+# Ignore generated tree-sitter C code
+bhdl-parser/tree-sitter-bhdl/src/
+
+# DO NOT ignore scanner.c if it's hand-written!
+!bhdl-parser/tree-sitter-bhdl/src/scanner.c

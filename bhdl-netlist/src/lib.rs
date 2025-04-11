@@ -1,5 +1,6 @@
 use serde::{Serialize, Deserialize};
-use std::collections::HashMap; // Keep for later potential use with properties
+ // Keep for later potential use with properties
+use std::fmt;
 
 pub fn add(left: u64, right: u64) -> u64 {
     left + right
@@ -55,5 +56,68 @@ impl Netlist {
             instances: Vec::new(),
             nets: Vec::new(),
         }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
+pub enum Unit {
+    // Electrical
+    Volts,      // V
+    Amperes,    // A
+    Ohms,       // Ω
+    Farads,     // F
+    Henrys,     // H
+    Watts,      // W
+    // Frequency
+    Hertz,      // Hz
+    // Time
+    Seconds,    // s
+    // Temperature
+    Celsius,    // °C
+    Kelvin,     // K
+    // Dimensionless / Counts
+    Percent,    // %
+    Decibels,   // dB
+    Count,      // e.g., for integer parameters
+    Unitless,   // For abstract numerical values
+    // Add more as needed...
+}
+
+impl fmt::Display for Unit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let symbol = match self {
+            Unit::Volts => "V",
+            Unit::Amperes => "A",
+            Unit::Ohms => "Ω",
+            Unit::Farads => "F",
+            Unit::Henrys => "H",
+            Unit::Watts => "W",
+            Unit::Hertz => "Hz",
+            Unit::Seconds => "s",
+            Unit::Celsius => "°C",
+            Unit::Kelvin => "K",
+            Unit::Percent => "%",
+            Unit::Decibels => "dB",
+            Unit::Count => "", // No unit symbol for count
+            Unit::Unitless => "", // No unit symbol for unitless
+        };
+        write!(f, "{}", symbol)
+    }
+}
+
+
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
+pub struct Quantity {
+    pub value: f64, // Using f64 for flexibility, might need adjustment based on precision requirements
+    pub unit: Unit,
+    // Optional: Add tolerance, min/max later if needed
+    // pub tolerance_percent: Option<f64>,
+    // pub min_value: Option<f64>,
+    // pub max_value: Option<f64>,
+}
+
+impl fmt::Display for Quantity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}{}", self.value, self.unit)
     }
 }
