@@ -38,6 +38,7 @@
   },
   "grammars": [
     {
+      "name": "bhdl",
       "scope": "source.bhdl",
       "file-types": [
         "bhdl"

@@ -151,6 +151,9 @@ capacitors: [10uF, 1uF, 100nF]; // Use uF/nF
 input_voltage: 5Vdc to 24Vdc;
 operating_temp: -40degC to 85degC;
 tolerance: 5pct; // Use pct
+
+// Enum Value Literal (distinct from declaration)
+state_value: StateType'Active; // Example: Assigning an enum value
 ```
 
 **Reasoning**: Including units directly in the syntax prevents unit conversion errors and makes the code more readable. Using standard ASCII characters (e.g., `Ohm`, `uF`, `degC`, `pct`, `Vdc`/`Vac`) enhances typability and portability across different systems. Advanced types like ranges directly express design constraints.
@@ -1097,16 +1100,17 @@ board PowerSupply {
   
   // Parameters
   parameters {
-    input_voltage: 12Vdc;
-    output_voltage: 5Vdc;
-    max_current: 2A;
+    // Use '=' for default value assignment in parameters blocks
+    input_voltage = 12Vdc;
+    output_voltage = 5Vdc;
+    max_current: current = 2A; // Optional type specification
   }
   
   // External ports
   ports {
-    VIN: in power(12Vdc, 2A);  // Can accept up to 2A
+    VIN: in power(12Vdc, 2A);  // Example: Type with implicit properties
     GND: ground;
-    VOUT: out power(5Vdc, 2A); // Can supply up to 2A
+    VOUT: out power(5Vdc, 2A); // Example: Type with implicit properties
   }
   
   // ** Layer Stackup Definition **
@@ -1151,8 +1155,9 @@ module VoltageRegulator {
   
   // Parameters
   parameters {
-    output_voltage: 5Vdc;
-    max_current: 1A;
+    // Use '=' for default value assignment
+    output_voltage = 5Vdc;
+    max_current: current = 1A;
   }
   
   // Internal implementation
@@ -1601,16 +1606,18 @@ BHDL is designed not just for description but also for enabling automated design
 
 ### 4.3 Pin Definitions in Components
 
-Within a `component` definition, pins are declared in the `pins { ... }` block. Each pin definition specifies its name, direction (`in`, `out`, `inout`), and electrical type (Section 2.4).
+Within a `component` definition, pins are declared in the `pins { ... }` block. Each pin definition specifies its name, direction (`in`, `out`, `inout`), and electrical type (Section 2.4). The leading `pin` keyword is optional.
 
 ```bhdl
 component ExampleIC {
   pins {
+    // Keyword 'pin' is optional
     VDD: in power(lv_digital_power);
     GND: ground;
     ENABLE: in signal(cmos_3v3);
     DATA_OUT: out signal(cmos_3v3);
     BIDIR_PIN: inout signal(cmos_1v8);
+    RESET_N: in signal; // Assumes signal type if only direction is given after colon
   }
 }
 ```

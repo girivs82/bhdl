@@ -7,6 +7,11 @@ function commaSep1(rule) {
   return seq(rule, repeat(seq(',', rule)));
 }
 
+// Helper function for keywords using alias
+function kw(keyword) {
+  return alias(keyword, keyword);
+}
+
 module.exports = grammar({
   name: 'bhdl',
 
@@ -15,35 +20,75 @@ module.exports = grammar({
     $.comment
   ],
 
-  // Remove external scanner config
-  // externals: $ => [...],
-
   word: $ => $.identifier,
 
   // Define precedence levels for expressions
   precedences: $ => [
     ['call', 'member', 'instantiation'],
+    ['definition'],
     ['member', 'subscript'],
     ['unary'],
+    ['range_expr'],
     ['multiplicative'],
     ['additive'],
     ['comparative'],
     ['logical_and'],
     ['logical_or'],
-    ['range'],
     ['ternary'],
-    ['definition'],
   ],
 
   conflicts: $ => [
-    // [$.component_instantiation, $.connection_statement]
+    // Explicitly resolve conflicts between keywords and identifier
+    [$.kw_board, $.identifier],
+    [$.kw_end, $.identifier],
+    [$.kw_module, $.identifier],
+    [$.kw_component, $.identifier],
+    [$.kw_property_set, $.identifier],
+    [$.kw_typedef, $.identifier],
+    [$.kw_interface, $.identifier],
+    [$.kw_net_class, $.identifier],
+    [$.kw_via_style, $.identifier],
+    [$.kw_library, $.identifier],
+    [$.kw_use, $.identifier],
+    [$.kw_generate, $.identifier],
+    [$.kw_constraint, $.identifier],
+    [$.kw_parameters, $.identifier],
+    [$.kw_ports, $.identifier],
+    [$.kw_components, $.identifier],
+    [$.kw_connections, $.identifier],
+    [$.kw_layer_stackup, $.identifier],
+    [$.kw_default_design_rules, $.identifier],
+    [$.kw_pins, $.identifier],
+    [$.kw_interfaces, $.identifier],
+    [$.kw_for, $.identifier],
+    [$.kw_all, $.identifier],
+    [$.kw_in, $.identifier],
+    [$.kw_out, $.identifier],
+    [$.kw_inout, $.identifier],
+    [$.kw_signal, $.identifier],
+    [$.kw_power, $.identifier],
+    [$.kw_ground, $.identifier], // Added ground
+    [$.kw_pin, $.identifier],
+    [$.kw_loop, $.identifier], // Added loop
+    [$.kw_time, $.identifier],
+    [$.kw_boolean, $.identifier],
+    [$.kw_string, $.identifier],
+    [$.kw_char, $.identifier],
+    [$.kw_physical, $.identifier],
+
+    // Resolve potential conflict between range_expression and other binary ops
+    [$.range_expression, $.binary_expression],
+    // [_generate_range_expression, $._expression], // Removed
+    [$.scoped_type_name, $._expression], // Resolve ambiguity in generate blocks
+    [$._expression, $.physical_literal], // Resolve ambiguity in constraint blocks etc.
+    [$._expression, $.pin_port_declaration] // Resolve generate block pin decl vs expression
   ],
 
   rules: {
     source_file: $ => repeat($._top_level_item),
 
     _top_level_item: $ => choice(
-      // Definitions
+      $.import_statement,
       $.board_definition,
       $.module_definition,
       $.component_definition,
@@ -52,34 +97,19 @@ module.exports = grammar({
       $.interface_definition,
       $.net_class_definition,
       $.via_style_definition,
-
-      // Other Blocks/Statements
-      $.constraint_block, // Should constraint be top-level?
-      $.library_statement,
-      $.use_statement,
-      $.generate_block, // Should generate be top-level?
-
-      // Test cases / Simple top-level statements
-      $._top_level_expression_statement,
-      $._top_level_boolean_statement, 
-      $._top_level_string_statement,  
-      $._top_level_char_statement,    
-      $._top_level_enum_statement,    
-      $._top_level_physical_statement,
-      $._top_level_time_statement,    
+      $.generate_block, // Allow generate at top level
+      $._top_level_expression_statement, // Allow standalone expressions (like literals.txt)
+      $.assignment_statement, // Allow top-level assignment
       $.comment
     ),
 
-    // Wrapper rules for top-level literals followed by a semicolon
-    _top_level_boolean_statement: $ => seq($.boolean_literal, ';'),
-    _top_level_string_statement: $ => seq($.string_literal, ';'),
-    _top_level_char_statement: $ => seq($.char_literal, ';'),
-    _top_level_enum_statement: $ => seq($.enum_literal, ';'),
-    _top_level_physical_statement: $ => seq($.physical_literal, ';'),
-    _top_level_time_statement: $ => seq($.time_literal, ';'),
-
-    // Added rule for top-level expression statements
-    _top_level_expression_statement: $ => seq($._base_expression, ';'),
+    // === Assignment Statement ===
+    assignment_statement: $ => seq(
+      field('left', $.identifier), // Assuming only assign to simple identifier for now
+      '=',
+      field('right', $._expression),
+      ';'
+    ),
 
     // === Structural Elements ===
     import_statement: $ => seq(
@@ -91,608 +121,591 @@ module.exports = grammar({
     import_path: $ => seq($.identifier, repeat(seq('.', $.identifier))),
     import_list: $ => seq(
       '{',
-      optional(seq($.identifier, repeat(seq(',', $.identifier)))),
+      optional(commaSep1($.identifier)), // Use commaSep1
       '}'
     ),
 
-    board_definition: $ => seq(
-      'board',
+    board_definition: $ => prec('definition', seq(
+      $.kw_board,
       field('name', $.identifier),
+      optional(field('parameters', $.declaration_parameter_list)), // Added board parameters ()
       '{',
-      repeat(choice(
+      repeat($._board_item),
+      '}',
+      optional(seq($.kw_end, $.kw_board, optional(field('end_name', $.identifier)))), // Make end optional
+      ';'
+    )),
+
+    _board_item: $ => choice(
         $.parameters_block,
         $.ports_block,
         $.components_block,
         $.connections_block,
-        $.constraint_block,
         $.layer_stackup_block,
-        $.default_design_rules_block
-      )),
-      '}'
+        $.default_design_rules_block,
+        $.constraint_statement, // Allow constraints directly in board
+        $.generate_block,       // Allow generate directly in board
+        $.component_definition, // Allow nested definitions? (Check spec)
+        $.module_definition,
+        $.typedef_definition,
+        $.interface_definition,
+        $.net_class_definition,
+        $.via_style_definition,
+        $.property_set_definition,
+        $.comment
     ),
 
-    module_definition: $ => seq(
-      'module',
+    module_definition: $ => prec('definition', seq(
+      $.kw_module,
       field('name', $.identifier),
+      optional(field('parameters', $.declaration_parameter_list)), // Added module parameters ()
       '{',
-      repeat(choice(
+      repeat($._module_item),
+      '}',
+      optional(seq($.kw_end, $.kw_module, optional(field('end_name', $.identifier)))), // Make end optional
+      ';'
+    )),
+
+     _module_item: $ => choice(
          $.parameters_block,
          $.ports_block,
          $.components_block,
-         $.connections_block
-      )),
-      '}'
-    ),
+         $.connections_block,
+         $.generate_block, // Allow generate in module
+         $.constraint_statement, // Allow constraints in module
+         $.component_definition, // Allow nested definitions? (Check spec)
+         $.module_definition,
+         $.typedef_definition,
+         $.interface_definition,
+         $.property_set_definition,
+         $.comment
+     ),
 
-    component_definition: $ => seq(
-      'component',
+    component_definition: $ => prec('definition', seq(
+      $.kw_component,
       field('name', $.identifier),
-      '{',
-       repeat(choice(
-         $.parameters_block,
-         $.pins_block,
-         $.interfaces_block
-       )),
-      '}'
+      optional(field('parameters', $.declaration_parameter_list)), // Added component parameters ()
+      // Make body optional for simple declarations
+      optional(seq(
+         '{',
+         repeat($._component_item),
+         '}'
+      )),
+      optional(seq($.kw_end, $.kw_component, optional(field('end_name', $.identifier)))), // Make end optional
+      ';'
+    )),
+
+    _component_item: $ => choice(
+       $.parameters_block,
+       $.pins_block,
+       $.interfaces_block,
+       $.generate_block, // Allow generate in component
+       $.constraint_statement, // Allow constraints in component
+       $.comment
     ),
 
     typedef_definition: $ => prec('definition', seq(
-      'typedef',
+      $.kw_typedef,
       field('name', $.identifier),
       optional(seq('extends', field('parent', $.identifier))),
       '{',
-      repeat($.property_assignment),
-      '}'
+      repeat($.property_assignment), // Uses :
+      '}',
+      optional(seq($.kw_end, $.kw_typedef)), // Make end optional
+      ';'
     )),
 
     property_set_definition: $ => prec('definition', seq(
-      'property_set',
+      $.kw_property_set,
       field('name', $.identifier),
       '{',
-      repeat($.property_assignment),
-      '}'
+      repeat($.property_assignment), // Uses :
+      '}',
+      ';'
     )),
 
-    property_assignment: $ => seq(
-      field('property_name', $.identifier),
-      ':',
-      field('value', $._expression),
+    interface_definition: $ => prec('definition', seq(
+      $.kw_interface,
+      field('name', $.identifier),
+      optional(field('parameters', $.declaration_parameter_list)), // Use standard declaration parameters
+      '{',
+      repeat($._interface_item),
+      '}',
+      optional(seq($.kw_end, $.kw_interface)), // Make end optional
       ';'
+    )),
+
+    _interface_item: $ => choice(
+      $.parameters_block,
+      $.pins_block, // Note: Spec uses 'pins' inside interface
+      $.generate_block,
+      $.comment
     ),
 
-    // Property assignment without trailing semicolon (for use in {} blocks)
-    _property_assignment_no_semi: $ => seq(
-      field('property_name', $.identifier),
-      ':',
-      field('value', $._expression)
-    ),
-
-    interface_definition: $ => seq(
-      'interface',
-      field('name', $.identifier),
-      optional(field('declaration_parameters', $.interface_declaration_parameter_list)),
-      '{',
-      repeat(choice(
-        $.parameters_block,
-        $.pins_block
-      )),
-      '}'
-    ),
-
-    interface_declaration_parameter_list: $ => seq(
-        '(',
-        optional(seq(
-          $.interface_parameter_declaration,
-          repeat(seq(',', $.interface_parameter_declaration))
-        )),
-        optional(','),
-        ')'
-    ),
-
-    net_class_definition: $ => seq(
-      'net_class',
+    net_class_definition: $ => prec('definition', seq(
+      $.kw_net_class,
       field('name', $.identifier),
       '{',
-      repeat($.property_assignment),
-      '}'
-    ),
+      repeat($.property_assignment), // Uses :
+      '}',
+      optional(seq($.kw_end, $.kw_net_class)), // Make end optional
+      ';'
+    )),
 
-    via_style_definition: $ => seq(
-      'via_style',
+    via_style_definition: $ => prec('definition', seq(
+      $.kw_via_style,
       field('name', $.identifier),
       '{',
-      repeat($.property_assignment),
-      '}'
-    ),
+      repeat($.property_assignment), // Uses :
+      '}',
+      optional(seq($.kw_end, $.kw_via_style)), // Make end optional
+      ';'
+    )),
 
-    // === Blocks ===
+    // === Blocks within structures ===
     parameters_block: $ => seq(
-      'parameters',
+      $.kw_parameters,
       '{',
-      repeat(choice($.parameter_declaration, $.generate_block)),
+      repeat(choice($.parameter_declaration, $.generate_block)), // Allow generate here
       '}'
     ),
 
     ports_block: $ => seq(
-      'ports',
+      $.kw_ports,
       '{',
-      repeat(choice($.pin_port_declaration, $.generate_block)),
+      repeat(choice($.pin_port_declaration, $.generate_block)), // Allow generate here
       '}'
     ),
 
     pins_block: $ => seq(
-      'pins',
+      $.kw_pins,
       '{',
-      repeat(choice($.pin_port_declaration, $.generate_block)),
+      repeat(choice($.pin_port_declaration, $.generate_block)), // Allow generate here
       '}'
     ),
 
-    interfaces_block: $ => seq(
-      'interfaces',
+    interfaces_block: $ => seq( // Added based on spec
+      $.kw_interfaces,
       '{',
-      repeat(choice($.interface_usage_declaration, $.generate_block)),
+      repeat(choice($.interface_usage_declaration, $.generate_block)), // Allow generate here
       '}'
     ),
 
     components_block: $ => seq(
-      'components',
+      $.kw_components,
       '{',
-      repeat(choice($.component_instantiation, $.generate_block)),
+      repeat(choice($.component_instantiation, $.generate_block)), // Allow generate here
       '}'
     ),
 
     connections_block: $ => seq(
-      'connections',
+      $.kw_connections,
       '{',
-      repeat(choice($.connection_statement, $.generate_block)),
-      '}'
-    ),
-
-    constraint_block: $ => seq(
-      'constrain',
-      '(',
-      field('target', $._connection_endpoint),
-      ')',
-      '{',
-      repeat($.property_assignment),
+      repeat(choice($.connection_statement, $.generate_block)), // Allow generate here
       '}'
     ),
 
     layer_stackup_block: $ => seq(
-      'layer_stackup',
+      $.kw_layer_stackup,
       '{',
       repeat($.layer_definition),
       '}'
     ),
 
     layer_definition: $ => seq(
-      'layer',
+      'layer', // Using string literal as 'layer' is not a dedicated keyword
       field('name', $.identifier),
       ':',
       '{',
-      repeat($.property_assignment),
+      repeat($.property_assignment), // Uses :
       '}',
       ';'
     ),
 
     default_design_rules_block: $ => seq(
-      'default_design_rules',
+      $.kw_default_design_rules,
       '{',
-      repeat($.property_assignment),
+      repeat($.property_assignment), // Uses :
       '}'
     ),
 
-    // === Generate Block ===
+    // === Generate Constructs ===
     generate_block: $ => seq(
-      'generate',
-      'for',
-      field('variable', $.identifier),
-      'in',
-      field('range', $._generate_range),
-      '{',
-      field('body', repeat($._generate_statement)),
-      '}'
+      $.kw_generate,
+      $.generate_for_statement // Currently only 'for' is supported
     ),
 
-    // Define what can go inside a generate block body
-    _generate_statement: $ => choice(
-        $.local_variable_declaration,
-        $.component_instantiation,
-        $.connection_statement,
-        $.pin_port_declaration
+    // Define a simplified bound expression for generate loop ranges
+    _simple_generate_bound: $ => choice(
+      $.identifier,
+      $.integer_literal
     ),
 
-    // Add missing _generate_range rules
-    _generate_range: $ => choice(
-      $.range_to,
-      $.range_upto,
-      $.identifier
-    ),
-
-    range_to: $ => seq(
-      field('start', $._expression),
-      'to',
-      field('end', $._expression)
-    ),
-
-    range_upto: $ => seq(
-      field('start', $._expression),
-      'upto',
-      field('end', $._expression)
-    ),
-
-    // === Declarations / Instantiations / Statements ===
-    parameter_declaration: $ => choice(
-      seq( // With type: name : type [ = value ];
-        field('name', $.identifier),
-        ':',
-        field('param_type', $._type_name),
-        optional(seq('=', field('default_value', $._expression))),
-        ';'
-      ),
-      seq( // Without type: name = value ;
-        field('name', $.identifier),
-        '=',
-        field('default_value', $._expression),
-        ';'
+    // Define a simpler range specifically for generate loops using the simplified bounds
+    _simple_generate_range: $ => choice(
+      $.identifier, // Iterate over list
+      seq(
+        field('lower', $._simple_generate_bound),
+        field('operator', token(choice('..', 'to', 'upto'))),
+        field('upper', $._simple_generate_bound)
       )
     ),
 
-    interface_parameter_declaration: $ => choice(
-      seq( // With type: name : type [ = value ]
+    generate_for_statement: $ => seq(
+      'for',
+      field('variable', $.identifier),
+      $.kw_in,
+      field('range', $._simple_generate_range), // Use the new simplified range
+      choice(
+        seq(
+          '{',
+          field('body', repeat($._generate_body_item)),
+          '}'
+        ),
+        seq(
+          'loop',
+          field('body', repeat($._generate_body_item)),
+          $.kw_end, 'loop', ';'
+        )
+      )
+    ),
+
+    _generate_body_item: $ => choice(
+      // $.local_variable_declaration, // Add if needed
+      $.component_instantiation,
+      $.connection_statement,
+      $.pin_port_declaration,
+      $.parameter_declaration,
+      $.constraint_statement,
+      $.generate_block // Nested generate
+    ),
+
+    // === Declarations / Instantiations / Statements ===
+
+    // Parameter list for declarations ( board(), module(), component(), interface() )
+    declaration_parameter_list: $ => seq(
+        '(',
+        optional(commaSep($.parameter_declaration_item)),
+        ')'
+    ),
+    // Item within the above list
+    parameter_declaration_item: $ => seq(
         field('name', $.identifier),
         ':',
         field('param_type', $._type_name),
         optional(seq('=', field('default_value', $._expression)))
-      ),
-      seq( // Without type: name = value
-        field('name', $.identifier),
-        '=',
-        field('default_value', $._expression)
-      )
     ),
 
-    // Define what constitutes a type name (just identifier for now)
-    _type_name: $ => $.identifier,
-
-    // BHDL Pin/Port Declaration (aligned with Spec v1)
-    pin_port_declaration: $ => choice(
-      // Case 1: Ground pin (no direction, no subtype)
-      seq(
-        'pin',
-        field('name', seq(field('base_name', $.identifier), optional(field('bus', $.bus_specifier)))),
-        ':',
-        $.kw_ground,
-        repeat($.attribute),
-        ';'
-      ),
-      // Case 2: Signal/Power pin (requires direction)
-      seq(
-        'pin',
-        field('name', seq(field('base_name', $.identifier), optional(field('bus', $.bus_specifier)))),
-        ':',
-        field('direction', $._pin_direction),
-        field('base_type', choice($.kw_signal, $.kw_power)),
-        optional(seq('(', field('subtype', $._type_name), ')')),
-        repeat($.attribute),
-        ';'
-      )
-    ),
-
-    // Correct pin directions based on spec
-    _pin_direction: $ => choice($.kw_in, $.kw_out, $.kw_inout),
-
-    // New rule for pin/port subscript using expression
-    pin_port_subscript: $ => seq(
-        '[',
-        field('index', $._expression),
-        ']'
-    ),
-
-    // === Component Instantiation Parameter Rules ===
-    component_parameter_list_curly: $ => seq(
-      '{',
-      optional(commaSep($.component_parameter_assignment)),
-      optional(','),
-      '}'
-    ),
-
-    component_parameter_assignment: $ => seq(
+    // Parameter declaration inside parameters { } block
+    parameter_declaration: $ => seq(
       field('name', $.identifier),
-      '=',
-      field('value', $._expression)
-    ),
-
-    // component_instantiation definition - REQUIRE curly braces
-    component_instantiation: $ => seq(
-      field('type', $.identifier),
-      field('name', seq(field('base_name', $.identifier), optional(field('bus', $.bus_specifier)))), // Inlined name
-      field('parameters', $.component_parameter_list_curly), // Parameters field is now MANDATORY
-      ';'
-    ),
-
-    // Connection statement rule
-    connection_statement: $ => seq(
-      field('source', $._connection_endpoint),
-      field('operator', choice('->', '<=>')),
-      field('target', $._connection_endpoint),
-      ';'
-    ),
-
-    // Restore standard endpoint definition
-    _connection_endpoint: $ => choice(
-      $.identifier,
-      $.member_access,
-      $.subscript_access
-    ),
-
-    // Restore member and subscript access rules
-    member_access: $ => prec.left('member', seq(
-      field('object', $._connection_endpoint),
-      '.',
-      field('property', $.identifier)
-    )),
-
-    subscript_access: $ => prec.left('member', seq(
-      field('object', $._connection_endpoint),
-      field('index', $.bus_specifier)
-    )),
-
-    interface_usage_declaration: $ => seq(
-      field('name', $.identifier),
-      ':',
-      $.kw_interface,
-      field('type', $.identifier),
-      optional(field('parameters', $.interface_parameter_list)),
-      ';'
-    ),
-
-    // RE-ADD interface_parameter_list definition
-    interface_parameter_list: $ => seq(
-      '(',
-      optional(seq(
-        $.interface_parameter_assignment,
-        repeat(seq(',', $.interface_parameter_assignment))
-      )),
-      optional(','),
-      ')'
-    ),
-
-    // RE-ADD interface_parameter_assignment definition
-    interface_parameter_assignment: $ => seq(
-      field('name', $.identifier),
-      '=',
-      field('value', $._expression)
-    ),
-
-    // ... (bus_specifier, type_specification, keywords, expressions, literals, identifiers, comments) ...
-    bus_specifier: $ => seq(
-      '[',
-      field('high', $._expression),
-      optional(seq(':', field('low', $._expression))),
-      ']'
-    ),
-
-    type_specification_signal_power: $ => seq(
-      field('base', $._base_type_signal_power_keyword),
-      optional(seq('(', field('subtype', $.identifier), ')'))
-    ),
-    type_specification_ground: $ => seq(
-      field('base', $._base_type_ground_keyword),
-      optional(seq('(', field('subtype', $.identifier), ')'))
-    ),
-
-    // === Keywords (defined as rules) ===
-    _direction_keyword: $ => choice($.kw_in, $.kw_out, $.kw_inout),
-    kw_in: $ => 'in',
-    kw_out: $ => 'out',
-    kw_inout: $ => 'inout',
-    kw_ground: $ => 'ground',
-    kw_interface: $ => 'interface',
-
-    _base_type_signal_power_keyword: $ => choice($.kw_signal, $.kw_power),
-    _base_type_ground_keyword: $ => $.kw_ground,
-    kw_signal: $ => 'signal',
-    kw_power: $ => 'power',
-
-    // === Expressions ===
-    _base_expression: $ => choice(
-      // Literals & Base Cases (excluding physical, time, string, boolean, null, enum, char)
-      $.identifier,
-      $.integer_literal,
-      $.float_literal,
-      // Operators / Constructs
-      $.parenthesized_expression,
-      $.unary_expression,
-      $.binary_expression,
-      $.range_expression,
-      $.array_literal,
-      $.function_call_expression,
-      $.member_access,
-      $.subscript_access,
-      $.ternary_expression
-    ),
-
-    // Original _expression rule (includes ALL expression types)
-    _expression: $ => choice(
-      // Literals & Base Cases
-      $.physical_literal,
-      $.time_literal,
-      $.string_literal,
-      $.boolean_literal,
-      $.null_literal,
-      $.enum_literal,
-      $.char_literal,
-      $.identifier,
-      $.integer_literal,
-      $.float_literal,
-      // Operators / Constructs
-      $.parenthesized_expression,
-      $.unary_expression,
-      $.binary_expression,
-      $.range_expression,
-      $.array_literal,
-      $.function_call_expression,
-      $.member_access,
-      $.subscript_access,
-      $.ternary_expression
-    ),
-
-    parenthesized_expression: $ => seq('(', $._expression, ')'),
-
-    // Add binary expressions with precedence
-    binary_expression: $ => choice(
-      prec.left('additive', seq($._expression, '+', $._expression)),
-      prec.left('additive', seq($._expression, '-', $._expression)),
-      prec.left('multiplicative', seq($._expression, '*', $._expression)),
-      prec.left('multiplicative', seq($._expression, '/', $._expression)),
-      prec.left('comparative', seq($._expression, '>', $._expression)),
-      prec.left('comparative', seq($._expression, '>=', $._expression)),
-      prec.left('comparative', seq($._expression, '<', $._expression)),
-      prec.left('comparative', seq($._expression, '<=', $._expression)),
-      prec.left('comparative', seq($._expression, '==', $._expression)),
-      prec.left('comparative', seq($._expression, '!=', $._expression)),
-      prec.left('logical_and', seq($._expression, '&&', $._expression)),
-      prec.left('logical_or', seq($._expression, '||', $._expression))
-    ),
-
-    // Add unary expression with precedence
-    unary_expression: $ => prec.right('unary', seq(
-      choice('-', '!'),
-      $._expression
-    )),
-
-    // Add range expression with precedence
-    range_expression: $ => prec.left('range', seq(
-      $._expression, 'to', $._expression
-    )),
-
-    array_literal: $ => seq(
-      '[',
-      optional(seq(
-        $._expression,
-        repeat(seq(',', $._expression))
-      )),
-      optional(','), // Allow trailing comma
-      ']'
-    ),
-
-    // Add function call expression
-    function_call_expression: $ => prec('call', seq(
-      field('function', $._connection_endpoint),
-      field('arguments', $.argument_list)
-    )),
-
-    argument_list: $ => seq(
-      '(',
-      optional(seq(
-        $._expression,
-        repeat(seq(',', $._expression))
-      )),
-      optional(','), // Allow trailing comma
-      ')'
-    ),
-
-    // === Literals ===
-    boolean_literal: $ => choice('true', 'false'),
-    string_literal: $ => /\"([^\"\\\\]|\\\\.)*\"/,
-    integer_literal: $ => token(/-?\d([\d_]*\d)?/),
-    float_literal: $ => token(/-?(\d([\d_]*\d)?\.\d*|\.\d([\d_]*\d)?)([eE][-+]?\d([\d_]*\d)?)?/),
-    null_literal: $ => 'null',
-
-    // Re-add char_literal definition
-    char_literal: $ => /'[^']'/,
-
-    enum_literal: $ => seq(
-      $.identifier,
-      '::',
-      $.identifier
-    ),
-
-    // Redefine physical_literal as a single token
-    physical_literal: $ => token(/-?\d([\d_]*\d)?(\.\d([\d_]*\d)?)?([eE][-+]?\d([\d_]*\d)?)?[TGMKkµmunpf]?(Vdc|Vac|Vrms|Vpp|V|A|Ohm|F|H|W|Hz|degC|pct|S|dB|bit|Bd|cd|lm|lx|mm|µm|mil|in)/),
-
-    // Redefine time_literal as a single token
-    time_literal: $ => token(/-?\d([\d_]*\d)?(\.\d([\d_]*\d)?)?([eE][-+]?\d([\d_]*\d)?)?[mµunpfa]?s/),
-
-    // === Identifiers ===
-    identifier: $ => /[a-zA-Z_][a-zA-Z0-9_]*/,
-
-    // === Comments ===
-    comment: $ => token(choice(
-      seq('//', /.*/),
-      seq('/*', /[^*]*\*+([^/*][^*]*\*+)*/, '/')
-    )),
-
-    // Add local variable declaration rule
-    local_variable_declaration: $ => seq(
-      'local',
-      field('name', $.identifier),
-      '=',
+      optional(seq(':', field('param_type', $._type_name))), // Optional type
+      '=', // Use equals for assignment
       field('value', $._expression),
       ';'
     ),
 
-    // Add ternary conditional expression
-    ternary_expression: $ => prec.right('ternary', seq(
-      field('condition', $._expression),
-      '?',
-      field('consequence', $._expression),
+    property_assignment: $ => seq(
+      field('property_name', $.identifier),
+      ':', // Use colon based on spec
+      field('value', $._expression),
+      ';'
+    ),
+
+    // For properties inside {} blocks like layer defs, constraints
+    _property_assignment_no_semi: $ => seq(
+      field('property_name', $.identifier),
       ':',
-      field('alternative', $._expression)
+      field('value', $._expression)
+      // No semicolon
+    ),
+
+    _type_name: $ => choice(
+      $.identifier, // Simple type name
+      $.scoped_type_name // e.g. Library.Type
+    ),
+    scoped_type_name: $ => prec.left(seq(
+        field('scope', $.identifier),
+        '.',
+        field('name', $._type_name) // Allow nested scopes
     )),
 
-    // Add library_statement definition here
-    library_statement: $ => seq(
-      'library',
-      field('name', $.identifier),
-      ';'
+
+    pin_port_declaration: $ => seq(
+        optional(choice('pin', 'port')), // Make keyword optional
+        field('name', seq(field('base_name', $.identifier), optional(field('bus', $.bus_specifier)))),
+        ':',
+        choice(
+          // Case 1: Ground (no direction, no subtype)
+          $.kw_ground,
+          // Case 2: Signal/Power (requires direction)
+          seq(
+            field('direction', $._pin_direction),
+            // Make base_type optional, assume 'signal' if missing when direction is present
+            optional(field('base_type', choice($.kw_signal, $.kw_power))),
+            optional(seq('(', field('subtype', $._type_name), ')')), // Optional subtype in parens
+          )
+        ),
+        // repeat($.attribute), // Attributes TBD
+        ';'
     ),
 
-    // Add use_statement definition here
-    use_statement: $ => seq(
-      'use',
-      field('library_name', $.identifier),
-      '.',
+    _pin_direction: $ => choice($.kw_in, $.kw_out, $.kw_inout),
+
+    bus_specifier: $ => seq( // For things like DATA[7:0]
+        '[',
+        field('high', $._expression),
+        optional(seq(':', field('low', $._expression))), // Allow single index or range
+        ']'
+    ),
+
+    // Component Instantiation
+     component_instantiation: $ => prec('instantiation', seq(
+      field('type', $._type_name),
+      field('name', seq(field('base_name', $.identifier), optional(field('bus', $.bus_specifier)))),
+      // Parameters can use () or {} according to examples/needs clarification
+      // For now, require one or the other
       choice(
-        field('item_name', $.identifier),
-        '*'
+         field('parameters_paren', $.component_parameter_list_paren),
+         field('parameters_curly', $.component_parameter_list_curly)
       ),
       ';'
-    ),
+    )),
 
-    // Added definition for instance_subscript_expr
-    instance_subscript_expr: $ =>
-      seq($.identifier, '[', $._expression, ']'),
-
-    instance_parameter_assignment: $ => seq(
-      field('name', $.identifier),
-      '=',
-      field('value', $._expression)
-    ),
-
-    instance_parameter_list: $ => choice(
-      seq('{', commaSep($.instance_parameter_assignment), '}'),
-      seq('(', commaSep($.instance_parameter_assignment), ')')
+    component_parameter_list_paren: $ => seq(
+      '(',
+      optional(commaSep($.component_parameter_assignment)),
+      ')'
     ),
 
     component_parameter_list_curly: $ => seq(
       '{',
       optional(commaSep($.component_parameter_assignment)),
-      optional(','),
       '}'
     ),
 
     component_parameter_assignment: $ => seq(
       field('name', $.identifier),
+      '=', // Parameter assignments use '='
+      field('value', $._expression)
+    ),
+
+    // Interface Usage Declaration (inside interfaces {} block)
+    interface_usage_declaration: $ => seq(
+      field('name', $.identifier),
+      ':',
+      $.kw_interface,
+      field('type', $._type_name),
+      optional(field('arguments', $.interface_argument_list)), // Arguments passed to interface type
+      // Optional pin mapping for components (Spec 3.4)
+      optional(seq(
+         $.kw_pins, ':', '{', // Example: pins: { MOSI: P1_0; ... }
+         repeat($.interface_pin_mapping),
+         '}'
+      )),
+      ';'
+    ),
+
+    interface_argument_list: $ => seq( // e.g. AxiBus(addr_width=32, data_width=64)
+       '(',
+       optional(commaSep($.interface_argument_assignment)),
+       ')'
+    ),
+
+    interface_argument_assignment: $ => seq( // e.g. addr_width=32
+      field('name', $.identifier),
       '=',
       field('value', $._expression)
     ),
 
-    // Define attribute rule
-    attribute: $ => choice(
-      seq(field('key', $.identifier), '=', field('value', $._expression)),
-      field('flag', $.identifier) // For standalone attributes like VCC
+    interface_pin_mapping: $ => seq( // e.g. MOSI: P1_0;
+      field('interface_pin', $.identifier),
+      ':',
+      field('component_pin', $.identifier),
+      ';'
     ),
-  },
+
+
+    // Connection statement rule
+    connection_statement: $ => seq(
+      field('source', $._connection_endpoint),
+      field('operator', choice('->', '<-', '<=>')), // Allow <- and <=>
+      field('target', $._connection_endpoint),
+      optional(seq('{', repeat($._property_assignment_no_semi), '}')), // Optional inline constraints
+      ';'
+    ),
+
+    _connection_endpoint: $ => choice(
+      $.identifier,       // Net name or GND/VCC implicit nets
+      $.member_access,    // Component.Pin, Module.Port
+      $.subscript_access  // Bus[index], Component[index].Pin
+    ),
+
+    // A constraint *statement* (assuming it applies to generated items or top level)
+    constraint_statement: $ => seq(
+      $.kw_constraint,
+      // Target can be more complex: net, pin, component, group etc.
+      // Using _expression for now, needs refinement based on spec examples (Sec 5)
+      field('target', $._expression),
+      '{',
+      repeat($.property_assignment), // Uses property_assignment with : and ;
+      '}'
+      // No semicolon after constraint block in examples
+    ),
+
+    // === Expressions ===
+    _expression: $ => choice(
+      $.binary_expression,
+      $.unary_expression,
+      $.ternary_expression,
+      $.range_expression,
+      $.member_access, // Re-add here for general expressions
+      $.subscript_access, // Re-add here for general expressions
+      $.function_call_expression,
+      $.parenthesized_expression,
+      $.identifier,
+      $.physical_literal,
+      $.integer_literal,
+      $.float_literal,
+      $.boolean_literal,
+      $.string_literal,
+      $.char_literal,
+      $.enum_value_literal
+      // Add other expression forms as needed
+    ),
+
+    parenthesized_expression: $ => seq(
+      '(',
+      $._expression,
+      ')'
+    ),
+
+    binary_expression: $ => choice(
+      prec.left('logical_or', seq($._expression, '||', $._expression)),
+      prec.left('logical_and', seq($._expression, '&&', $._expression)),
+      prec.left('comparative', seq($._expression, choice('==', '!=', '<', '<=', '>', '>='), $._expression)),
+      prec.left('additive', seq($._expression, choice('+', '-'), $._expression)),
+      prec.left('multiplicative', seq($._expression, choice('*', '/'), $._expression))
+      // Add bitwise operators etc. if needed
+    ),
+
+    unary_expression: $ => prec.left('unary', seq(
+      choice('!', '-'), // Add other unary ops like +, ~ if needed
+      $._expression
+    )),
+
+    ternary_expression: $ => prec.right('ternary', seq(
+        $._expression, '?', $._expression, ':', $._expression
+    )),
+
+    range_expression: $ => prec.left('range_expr', seq(
+      field('lower', $._expression),
+      // Use token() to help lexer disambiguate from '.' in float literals
+      field('operator', token(choice('..', 'to', 'upto'))),
+      field('upper', $._expression)
+    )),
+
+    member_access: $ => prec.left('member', seq(
+      field('object', $._expression), // Allow expressions like (complex_obj).member
+      '.',
+      field('property', $.identifier)
+    )),
+
+    subscript_access: $ => prec.left('subscript', seq(
+      field('object', $._expression), // Allow (complex_obj)[idx]
+      field('index', $.bus_specifier) // Reuse bus_specifier for index access
+    )),
+
+    function_call_expression: $ => prec('call', seq(
+        field('function', $._expression), // Allows obj.method()
+        field('arguments', $.argument_list)
+    )),
+
+    argument_list: $ => seq(
+        '(',
+        optional(commaSep($.argument_assignment)),
+        ')'
+    ),
+    argument_assignment: $ => choice( // Allow positional or named args
+        $._expression, // Positional
+        seq(field('name', $.identifier), '=', field('value', $._expression)) // Named
+    ),
+
+    // Wrapper for top-level expression statements ending in semicolon
+    _top_level_expression_statement: $ => seq($._expression, ';'),
+
+
+    // === Literals ===
+    physical_literal: $ => seq(
+        choice($.integer_literal, $.float_literal),
+        $.identifier // Unit (e.g., V, kOhm, uF, MHz) - Relaxed for now
+        // TODO: Define specific unit patterns if needed: /(V|A|Ohm|F|H|W|Hz|s|degC|pct|S|dB|bit|Bd|cd|lm|lx)/
+    ),
+
+    integer_literal: $ => /\d+/,
+    float_literal: $ => /\d+\.\d*(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?|\d+[eE][+-]?\d+/,
+    boolean_literal: $ => choice('true', 'false'),
+    string_literal: $ => /\"([^\\\"]|\\.)*\"/,
+    char_literal: $ => /\'([^\\\']|\\.)*\'/,
+    // Enum value literal like Type'Value
+    enum_value_literal: $ => seq($.identifier, '\'', $.identifier),
+
+    // === Keywords ===
+    // Use alias helper `kw` for all keywords to avoid conflicts with identifier rule
+    kw_board: $ => kw('board'),
+    kw_end: $ => kw('end'),
+    kw_module: $ => kw('module'),
+    kw_component: $ => kw('component'),
+    kw_property_set: $ => kw('property_set'),
+    kw_typedef: $ => kw('typedef'),
+    kw_interface: $ => kw('interface'),
+    kw_net_class: $ => kw('net_class'),
+    kw_via_style: $ => kw('via_style'),
+    kw_library: $ => kw('library'), // Assuming 'library' might be used
+    kw_use: $ => kw('use'),       // Assuming 'use' might be used
+    kw_generate: $ => kw('generate'),
+    kw_constraint: $ => kw('constraint'),
+    kw_parameters: $ => kw('parameters'),
+    kw_ports: $ => kw('ports'),
+    kw_components: $ => kw('components'),
+    kw_connections: $ => kw('connections'),
+    kw_layer_stackup: $ => kw('layer_stackup'),
+    kw_default_design_rules: $ => kw('default_design_rules'),
+    kw_pins: $ => kw('pins'),
+    kw_interfaces: $ => kw('interfaces'),
+    kw_for: $ => kw('for'),
+    kw_loop: $ => kw('loop'), // Added
+    kw_all: $ => kw('all'), // Assuming 'all' might be used
+    kw_in: $ => kw('in'),
+    kw_out: $ => kw('out'),
+    kw_inout: $ => kw('inout'),
+    kw_signal: $ => kw('signal'),
+    kw_power: $ => kw('power'),
+    kw_ground: $ => kw('ground'), // Added
+    kw_pin: $ => kw('pin'),     // Not technically a keyword in pin decl
+    kw_port: $ => kw('port'),   // Not technically a keyword in port decl
+    kw_time: $ => kw('time'),   // Example from spec, maybe type?
+    kw_boolean: $ => kw('boolean'), // Maybe type?
+    kw_string: $ => kw('string'),   // Maybe type?
+    kw_char: $ => kw('char'),     // Maybe type?
+    kw_physical: $ => kw('physical'), // Maybe type?
+
+    // === Identifier ===
+    identifier: $ => /[a-zA-Z_][a-zA-Z0-9_]*/,
+
+    // === Comment ===
+    comment: $ => token(choice(
+      seq('//', /(\\(.|\r?\n)|[^\\\n])*/),
+      seq(
+        '/*',
+        /[^*]*\*+([^/*][^*]*\*+)*/,
+        '/'
+      )
+    )),
+
+    _generate_range_expression: $ => choice(
+      $.range_expression, // Reference the main range expression rule
+      $.identifier // Allow iteration over a list variable
+    ),
+  }
 });
