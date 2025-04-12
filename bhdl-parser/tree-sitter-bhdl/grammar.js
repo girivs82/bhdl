@@ -1,3 +1,12 @@
+// Helper function for comma-separated lists
+function commaSep(rule) {
+  return seq(rule, repeat(seq(',', rule)), optional(','));
+}
+
+function commaSep1(rule) {
+  return seq(rule, repeat(seq(',', rule)));
+}
+
 module.exports = grammar({
   name: 'bhdl',
 
@@ -13,7 +22,8 @@ module.exports = grammar({
 
   // Define precedence levels for expressions
   precedences: $ => [
-    ['call', 'member'],
+    ['call', 'member', 'instantiation'],
+    ['member', 'subscript'],
     ['unary'],
     ['multiplicative'],
     ['additive'],
@@ -22,11 +32,18 @@ module.exports = grammar({
     ['logical_or'],
     ['range'],
     ['ternary'],
+    ['definition'],
+  ],
+
+  conflicts: $ => [
+    // [$.component_instantiation, $.connection_statement]
   ],
 
   rules: {
-    source_file: $ => repeat(choice(
-      $.import_statement,
+    source_file: $ => repeat($._top_level_item),
+
+    _top_level_item: $ => choice(
+      // Definitions
       $.board_definition,
       $.module_definition,
       $.component_definition,
@@ -35,15 +52,34 @@ module.exports = grammar({
       $.interface_definition,
       $.net_class_definition,
       $.via_style_definition,
-      // Allow others for testing
-      $.boolean_literal,
-      $.string_literal,
-      $.numeric_literal,
-      $.integer_literal,
-      $.identifier,
-      $.comment,
-      $.constraint_block
-    )),
+
+      // Other Blocks/Statements
+      $.constraint_block, // Should constraint be top-level?
+      $.library_statement,
+      $.use_statement,
+      $.generate_block, // Should generate be top-level?
+
+      // Test cases / Simple top-level statements
+      $._top_level_expression_statement,
+      $._top_level_boolean_statement, 
+      $._top_level_string_statement,  
+      $._top_level_char_statement,    
+      $._top_level_enum_statement,    
+      $._top_level_physical_statement,
+      $._top_level_time_statement,    
+      $.comment
+    ),
+
+    // Wrapper rules for top-level literals followed by a semicolon
+    _top_level_boolean_statement: $ => seq($.boolean_literal, ';'),
+    _top_level_string_statement: $ => seq($.string_literal, ';'),
+    _top_level_char_statement: $ => seq($.char_literal, ';'),
+    _top_level_enum_statement: $ => seq($.enum_literal, ';'),
+    _top_level_physical_statement: $ => seq($.physical_literal, ';'),
+    _top_level_time_statement: $ => seq($.time_literal, ';'),
+
+    // Added rule for top-level expression statements
+    _top_level_expression_statement: $ => seq($._base_expression, ';'),
 
     // === Structural Elements ===
     import_statement: $ => seq(
@@ -100,20 +136,35 @@ module.exports = grammar({
       '}'
     ),
 
-    typedef_definition: $ => seq(
+    typedef_definition: $ => prec('definition', seq(
       'typedef',
       field('name', $.identifier),
-      ':',
-      field('type', $.type_specification_signal_power),
-      ';'
-    ),
+      optional(seq('extends', field('parent', $.identifier))),
+      '{',
+      repeat($.property_assignment),
+      '}'
+    )),
 
-    property_set_definition: $ => seq(
+    property_set_definition: $ => prec('definition', seq(
       'property_set',
       field('name', $.identifier),
       '{',
       repeat($.property_assignment),
       '}'
+    )),
+
+    property_assignment: $ => seq(
+      field('property_name', $.identifier),
+      ':',
+      field('value', $._expression),
+      ';'
+    ),
+
+    // Property assignment without trailing semicolon (for use in {} blocks)
+    _property_assignment_no_semi: $ => seq(
+      field('property_name', $.identifier),
+      ':',
+      field('value', $._expression)
     ),
 
     interface_definition: $ => seq(
@@ -158,42 +209,42 @@ module.exports = grammar({
     parameters_block: $ => seq(
       'parameters',
       '{',
-      repeat($.parameter_declaration),
+      repeat(choice($.parameter_declaration, $.generate_block)),
       '}'
     ),
 
     ports_block: $ => seq(
       'ports',
       '{',
-      repeat($.pin_port_declaration),
+      repeat(choice($.pin_port_declaration, $.generate_block)),
       '}'
     ),
 
     pins_block: $ => seq(
       'pins',
       '{',
-      repeat($.pin_port_declaration),
+      repeat(choice($.pin_port_declaration, $.generate_block)),
       '}'
     ),
 
     interfaces_block: $ => seq(
       'interfaces',
       '{',
-      repeat($.interface_usage_declaration),
+      repeat(choice($.interface_usage_declaration, $.generate_block)),
       '}'
     ),
 
     components_block: $ => seq(
       'components',
       '{',
-      repeat($.component_instantiation),
+      repeat(choice($.component_instantiation, $.generate_block)),
       '}'
     ),
 
     connections_block: $ => seq(
       'connections',
       '{',
-      repeat($.connection_statement),
+      repeat(choice($.connection_statement, $.generate_block)),
       '}'
     ),
 
@@ -239,13 +290,16 @@ module.exports = grammar({
       'in',
       field('range', $._generate_range),
       '{',
-      field('body', repeat(choice(
+      field('body', repeat($._generate_statement)),
+      '}'
+    ),
+
+    // Define what can go inside a generate block body
+    _generate_statement: $ => choice(
         $.local_variable_declaration,
-        $.pin_port_declaration,
         $.component_instantiation,
         $.connection_statement,
-      ))),
-      '}'
+        $.pin_port_declaration
     ),
 
     // Add missing _generate_range rules
@@ -301,35 +355,63 @@ module.exports = grammar({
     // Define what constitutes a type name (just identifier for now)
     _type_name: $ => $.identifier,
 
-    // Use explicit keyword rules
-    pin_port_declaration: $ => seq(
-      field('name', $.identifier),
-      optional($.bus_specifier),
-      ':',
-      choice(
-        seq(field('direction', $._direction_keyword), field('type', $.type_specification_signal_power)),
-        seq(field('type', $.type_specification_ground))
+    // BHDL Pin/Port Declaration (aligned with Spec v1)
+    pin_port_declaration: $ => choice(
+      // Case 1: Ground pin (no direction, no subtype)
+      seq(
+        'pin',
+        field('name', seq(field('base_name', $.identifier), optional(field('bus', $.bus_specifier)))),
+        ':',
+        $.kw_ground,
+        repeat($.attribute),
+        ';'
       ),
-      ';'
+      // Case 2: Signal/Power pin (requires direction)
+      seq(
+        'pin',
+        field('name', seq(field('base_name', $.identifier), optional(field('bus', $.bus_specifier)))),
+        ':',
+        field('direction', $._pin_direction),
+        field('base_type', choice($.kw_signal, $.kw_power)),
+        optional(seq('(', field('subtype', $._type_name), ')')),
+        repeat($.attribute),
+        ';'
+      )
     ),
 
+    // Correct pin directions based on spec
+    _pin_direction: $ => choice($.kw_in, $.kw_out, $.kw_inout),
+
+    // New rule for pin/port subscript using expression
+    pin_port_subscript: $ => seq(
+        '[',
+        field('index', $._expression),
+        ']'
+    ),
+
+    // === Component Instantiation Parameter Rules ===
+    component_parameter_list_curly: $ => seq(
+      '{',
+      optional(commaSep($.component_parameter_assignment)),
+      optional(','),
+      '}'
+    ),
+
+    component_parameter_assignment: $ => seq(
+      field('name', $.identifier),
+      '=',
+      field('value', $._expression)
+    ),
+
+    // component_instantiation definition - REQUIRE curly braces
     component_instantiation: $ => seq(
       field('type', $.identifier),
-      field('name', $.identifier),
-      '{',
-      repeat($.property_assignment),
-      '}',
-      optional(';')
-    ),
-
-    property_assignment: $ => seq(
-      field('property_name', $.identifier),
-      ':',
-      field('value', $._expression),
+      field('name', seq(field('base_name', $.identifier), optional(field('bus', $.bus_specifier)))), // Inlined name
+      field('parameters', $.component_parameter_list_curly), // Parameters field is now MANDATORY
       ';'
     ),
 
-    // Placeholder connection statement
+    // Connection statement rule
     connection_statement: $ => seq(
       field('source', $._connection_endpoint),
       field('operator', choice('->', '<=>')),
@@ -365,29 +447,29 @@ module.exports = grammar({
       ';'
     ),
 
+    // RE-ADD interface_parameter_list definition
     interface_parameter_list: $ => seq(
       '(',
-      // Allow comma-separated list of assignments
       optional(seq(
         $.interface_parameter_assignment,
         repeat(seq(',', $.interface_parameter_assignment))
       )),
-      // Allow optional trailing comma
       optional(','),
       ')'
     ),
 
+    // RE-ADD interface_parameter_assignment definition
     interface_parameter_assignment: $ => seq(
       field('name', $.identifier),
       '=',
-      field('value', $._expression) // Reuse expression rule
+      field('value', $._expression)
     ),
 
     // ... (bus_specifier, type_specification, keywords, expressions, literals, identifiers, comments) ...
     bus_specifier: $ => seq(
       '[',
-      field('high', $.integer_literal),
-      optional(seq(':', field('low', $.integer_literal))),
+      field('high', $._expression),
+      optional(seq(':', field('low', $._expression))),
       ']'
     ),
 
@@ -414,13 +496,36 @@ module.exports = grammar({
     kw_power: $ => 'power',
 
     // === Expressions ===
-    _expression: $ => choice(
-      // Literals & Base Cases
-      $.numeric_literal,
-      $.string_literal,
-      $.boolean_literal,
+    _base_expression: $ => choice(
+      // Literals & Base Cases (excluding physical, time, string, boolean, null, enum, char)
       $.identifier,
       $.integer_literal,
+      $.float_literal,
+      // Operators / Constructs
+      $.parenthesized_expression,
+      $.unary_expression,
+      $.binary_expression,
+      $.range_expression,
+      $.array_literal,
+      $.function_call_expression,
+      $.member_access,
+      $.subscript_access,
+      $.ternary_expression
+    ),
+
+    // Original _expression rule (includes ALL expression types)
+    _expression: $ => choice(
+      // Literals & Base Cases
+      $.physical_literal,
+      $.time_literal,
+      $.string_literal,
+      $.boolean_literal,
+      $.null_literal,
+      $.enum_literal,
+      $.char_literal,
+      $.identifier,
+      $.integer_literal,
+      $.float_literal,
       // Operators / Constructs
       $.parenthesized_expression,
       $.unary_expression,
@@ -474,7 +579,7 @@ module.exports = grammar({
 
     // Add function call expression
     function_call_expression: $ => prec('call', seq(
-      field('function', $._connection_endpoint), // Function can be identifier or member access
+      field('function', $._connection_endpoint),
       field('arguments', $.argument_list)
     )),
 
@@ -490,17 +595,25 @@ module.exports = grammar({
 
     // === Literals ===
     boolean_literal: $ => choice('true', 'false'),
-    string_literal: $ => /"[^"]*"/,
-    integer_literal: $ => token(/\d+/),
-    numeric_literal: $ => {
-      const number = /\d+(\.\d*)?|\.\d+/;
-      const prefixes = /[TGMkmunpf]/;
-      const units = /Vdc|Vac|Vrms|Vpp|V|A|Ohm|F|H|W|Hz|s|degC|pct|S|dB|bit|Bd|cd|lm|lx|mm|um|mil|in/;
-      return token(seq(
-        number,
-        optional(seq(optional(prefixes), units))
-      ));
-    },
+    string_literal: $ => /\"([^\"\\\\]|\\\\.)*\"/,
+    integer_literal: $ => token(/-?\d([\d_]*\d)?/),
+    float_literal: $ => token(/-?(\d([\d_]*\d)?\.\d*|\.\d([\d_]*\d)?)([eE][-+]?\d([\d_]*\d)?)?/),
+    null_literal: $ => 'null',
+
+    // Re-add char_literal definition
+    char_literal: $ => /'[^']'/,
+
+    enum_literal: $ => seq(
+      $.identifier,
+      '::',
+      $.identifier
+    ),
+
+    // Redefine physical_literal as a single token
+    physical_literal: $ => token(/-?\d([\d_]*\d)?(\.\d([\d_]*\d)?)?([eE][-+]?\d([\d_]*\d)?)?[TGMKkµmunpf]?(Vdc|Vac|Vrms|Vpp|V|A|Ohm|F|H|W|Hz|degC|pct|S|dB|bit|Bd|cd|lm|lx|mm|µm|mil|in)/),
+
+    // Redefine time_literal as a single token
+    time_literal: $ => token(/-?\d([\d_]*\d)?(\.\d([\d_]*\d)?)?([eE][-+]?\d([\d_]*\d)?)?[mµunpfa]?s/),
 
     // === Identifiers ===
     identifier: $ => /[a-zA-Z_][a-zA-Z0-9_]*/,
@@ -528,5 +641,58 @@ module.exports = grammar({
       ':',
       field('alternative', $._expression)
     )),
+
+    // Add library_statement definition here
+    library_statement: $ => seq(
+      'library',
+      field('name', $.identifier),
+      ';'
+    ),
+
+    // Add use_statement definition here
+    use_statement: $ => seq(
+      'use',
+      field('library_name', $.identifier),
+      '.',
+      choice(
+        field('item_name', $.identifier),
+        '*'
+      ),
+      ';'
+    ),
+
+    // Added definition for instance_subscript_expr
+    instance_subscript_expr: $ =>
+      seq($.identifier, '[', $._expression, ']'),
+
+    instance_parameter_assignment: $ => seq(
+      field('name', $.identifier),
+      '=',
+      field('value', $._expression)
+    ),
+
+    instance_parameter_list: $ => choice(
+      seq('{', commaSep($.instance_parameter_assignment), '}'),
+      seq('(', commaSep($.instance_parameter_assignment), ')')
+    ),
+
+    component_parameter_list_curly: $ => seq(
+      '{',
+      optional(commaSep($.component_parameter_assignment)),
+      optional(','),
+      '}'
+    ),
+
+    component_parameter_assignment: $ => seq(
+      field('name', $.identifier),
+      '=',
+      field('value', $._expression)
+    ),
+
+    // Define attribute rule
+    attribute: $ => choice(
+      seq(field('key', $.identifier), '=', field('value', $._expression)),
+      field('flag', $.identifier) // For standalone attributes like VCC
+    ),
   },
 });
