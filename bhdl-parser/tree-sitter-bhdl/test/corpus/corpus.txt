@@ -1,3 +1,34 @@
+===
+
+board TestBoard {
+} end board;
+
+---
+
+(source_file (board_definition name: (identifier) body: (board_body)))
+
+===
+
+component MCU end component;
+
+---
+
+(source_file (component_definition name: (identifier) body: (component_body)))
+
+===
+
+typedef MemorySpec {
+  type = DDR4;
+  capacity = 16GB;
+  data_width = 64 bits;
+} end typedef;
+
+---
+
+(source_file (typedef_definition name: (identifier) body: (typedef_body (property_assignment name: (identifier) value: (identifier)) (property_assignment name: (identifier) value: (physical_literal)) (property_assignment name: (identifier) value: (physical_literal)))))
+
+===
+
 // Minimal test case for component instantiation
 
 // Valid Physical Literal for use in parameters
@@ -47,23 +78,23 @@ component LED { pins { A: in; K: out; } } end component;
 // Typedef Definition
 // ------------------
 typedef MemorySpec {
-  type: DDR4;
-  capacity: 16GB;
-  data_width: 64 bits;
+  type = DDR4;
+  capacity = 16GB;
+  data_width = 64 bits;
 } end typedef;
 
 // Typedef Definition with Inheritance
 // -----------------------------------
 typedef FastMemorySpec extends MemorySpec {
-  speed: 3200MHz;
+  speed : 3200MHz;
 } end typedef;
 
 // Property Set Definition
 // -----------------------
 property_set ManufacturerInfo {
-  manufacturer_name: "Example Corp.";
-  part_number: "XYZ-1234"; // with comment
-}
+  manufacturer_name : "Example Corp.";
+  part_number : "XYZ-1234"; // with comment
+};
 
 // Component with Interfaces
 // -------------------------
@@ -80,9 +111,9 @@ component InterfaceUser {
 board ConstraintExample { // No error follows this one... interesting.
 
     constraint cpu { // Example: Assign properties to cpu component instance
-      location = U1;
-      voltage = 3.3V;
-      placement_region = "Top Left";
+      location : U1;
+      voltage : 3.3V;
+      placement_region : "Top Left";
     }
 
     constraint mem.p1 { // Example: Assign property to a pin

@@ -1,0 +1,1 @@
+component ComplexParams { parameters { width = 16 * (1 + 2); frequency_range = 10MHz .. 20kHz; } } end component;
