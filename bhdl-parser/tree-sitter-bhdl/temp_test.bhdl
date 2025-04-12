@@ -1,1 +1,1 @@
-component ComplexParams { parameters { width = 16 * (1 + 2); frequency_range = 10MHz .. 20kHz; } } end component;
+board TestBoard { parameters { N: integer = 4; } components { MCU P1 {}; Device DEVICE1 {}; Capacitor C1 { value = 10uF, voltage = 16Vdc }; generate for idx in (0..1) { LED L[idx] {}; } generate for i in (0..N-1) { Resistor R_GEN[i] { Value = 1kOhm }; } } connections { P1.out -> DEVICE1.in; C1.p1 -> GND; } } end board;

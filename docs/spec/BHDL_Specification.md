@@ -936,6 +936,8 @@ generate for <variable> in <range_or_list> {
     *   An existing list or array variable.
     *   A range with a step (Syntax TBD, e.g., `0 to 63 step 8`).
 
++ **Note:** The body of a `generate for` loop **must** be enclosed in curly braces `{ ... }`. The `loop ... end loop;` syntax, while potentially used elsewhere, is **not** supported for `generate for` statements.
+
 **Usage within `pins` block:**
 ```bhdl
 // Example: Generating DDR Data/Strobe pins based on a parameter
