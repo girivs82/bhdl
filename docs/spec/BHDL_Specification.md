@@ -1350,10 +1350,10 @@ component ComplexSoC {
 // --- Example: Board using the SoC --- 
 board MuxDemoBoard {
    components {
-      ComplexSoC U_SOC;
-      SPI_Flash U_FLASH;
-      I2C_Sensor U_SENSOR;
-      UART_Header J_UART1;
+      ComplexSoC U_SOC {}; // Use {}
+      SPI_Flash U_FLASH {}; // Use {}
+      I2C_Sensor U_SENSOR {}; // Use {}
+      UART_Header J_UART1 {}; // Use {}
    }
 
    connections {
@@ -1461,11 +1461,11 @@ board DDR_System {
   }
 
   components {
-    DDR_Controller CTRL { controller_width: module.controller_width; }
+    DDR_Controller CTRL { controller_width: module.controller_width }; // Use {}
 
     // Generate DRAM chip instances, named U_DRAM[0], U_DRAM[1], etc.
     generate for i in 0 to num_chips-1 {
-      DDR_Chip U_DRAM[i] { chip_width: module.chip_width; }
+      DDR_Chip U_DRAM[i] { chip_width: module.chip_width }; // Use {}
     }
   }
 

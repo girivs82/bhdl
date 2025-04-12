@@ -1,0 +1,44 @@
+// Minimal test case for component instantiation
+
+// Valid Physical Literal for use in parameters
+1kOhm;
+
+board TestBoard {
+  parameters {
+    N: integer = 4;
+  }
+
+  components {
+    // --- Instantiations ---
+
+    // Parameter-less (Requires {})
+    MCU P1 {};
+    Device DEVICE1 {};
+
+    // With parameters
+    Capacitor C1 { value = 10uF, voltage = 16Vdc };
+
+    // Inside generate block (parameter-less)
+    generate for idx in 0..1 {
+       LED L[idx] {};
+    }
+
+    // Inside generate block (with parameters)
+    generate for i in 0..N-1 {
+       Resistor R_GEN[i] { Value = 1kOhm };
+    }
+  }
+
+  connections {
+    // Basic connection to check endpoints are still okay
+    P1.out -> DEVICE1.in;
+    C1.p1 -> GND;
+  }
+}
+
+// --- Other constructs to avoid unrelated errors ---
+component MCU {} // Minimal component def
+component Device {} // Minimal component def
+component Capacitor { pins { p1: inout; p2: inout; } } // Minimal def
+component Resistor { pins { p1: inout; p2: inout; } } // Minimal def
+component LED { pins { A: in; K: out; } } // Minimal def 

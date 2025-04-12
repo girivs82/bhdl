@@ -1,14 +1,8 @@
-=== Numeric Literal with Unit and Prefix ===
+// === Numeric Literal with Unit and Prefix ===
 
-4kOhm
+4kOhm;
 
----
-// Placeholder
-(source_file (numeric_literal))
-
-// ... (restore all previous test cases for literals, identifiers, comments, imports, blocks) ...
-
-=== Connection Statements ===
+// === Connection Statements ===
 
 board ConnectionBoard {
   components {
@@ -34,96 +28,34 @@ board ConnectionBoard {
     // Interface Connection
     U1.I2C <=> MEM0.I2C;
   }
-}
+};
 
----
-// Placeholder - Adjust after parsing
-(source_file (board_definition name: (identifier)
-  (components_block
-    (component_instantiation type: (identifier) name: (identifier))
-    (component_instantiation type: (identifier) name: (identifier))
-  )
-  (connections_block
-    // U1.TXD -> MEM0.RXD;
-    (connection_statement
-      source: (member_access object: (identifier) property: (identifier))
-      operator: '->'
-      target: (member_access object: (identifier) property: (identifier)))
-    // Net_A -> U1.Pin1;
-    (connection_statement
-      source: (identifier)
-      operator: '->'
-      target: (member_access object: (identifier) property: (identifier)))
-    // U1.Pin2 -> Net_B;
-    (connection_statement
-      source: (member_access object: (identifier) property: (identifier))
-      operator: '->'
-      target: (identifier))
-    // U1.DATA[7:0] -> MEM0.D[7:0];
-    (connection_statement
-      source: (subscript_access object: (member_access object: (identifier) property: (identifier)) index: (bus_specifier high: (integer_literal) low: (integer_literal)))
-      operator: '->'
-      target: (subscript_access object: (member_access object: (identifier) property: (identifier)) index: (bus_specifier high: (integer_literal) low: (integer_literal))))
-    // U1.ChipSelect[0] -> MEM0.CS;
-    (connection_statement
-      source: (subscript_access object: (member_access object: (identifier) property: (identifier)) index: (bus_specifier high: (integer_literal)))
-      operator: '->'
-      target: (member_access object: (identifier) property: (identifier)))
-    // U1.I2C <=> MEM0.I2C;
-    (connection_statement
-      source: (member_access object: (identifier) property: (identifier))
-      operator: '<=>'
-      target: (member_access object: (identifier) property: (identifier)))
-  )
-))
+// === Empty Component Definition ===
 
-=== Empty Component Instantiation ===
+component EmptyComp {}
 
-=== Connection Statements ===
-
-=== Typedef Definition ===
+// === Typedef Definition ===
 
 typedef cmos_3v3 {
   type: signal;
   domain: digital;
   voltage_high: 3.3Vdc;
-}
+};
 
----
-// Placeholder
-(source_file (typedef_definition name: (identifier)
-  (property_assignment property_name: (identifier) value: (identifier))
-  (property_assignment property_name: (identifier) value: (identifier))
-  (property_assignment property_name: (identifier) value: (numeric_literal))
-))
-
-=== Typedef with Inheritance ===
+// === Typedef with Inheritance ===
 
 typedef high_quality extends line_level {
   thd: 0.001pct;
-}
+};
 
----
-// Placeholder
-(source_file (typedef_definition name: (identifier) parent: (identifier)
-  (property_assignment property_name: (identifier) value: (numeric_literal))
-))
-
-=== Property Set Definition ===
+// === Property Set Definition ===
 
 property_set commercial_thermal {
   operating_temperature: 0degC;
   storage_temperature: -40degC; // TODO: Handle unary minus later
-}
+};
 
----
-// Placeholder
-(source_file (property_set_definition name: (identifier)
-  (property_assignment property_name: (identifier) value: (numeric_literal))
-  (property_assignment property_name: (identifier) value: (numeric_literal))
-))
-
-=== Interface Usage Declaration ===
+// === Interface Usage Declaration ===
 
 component MyComponent {
   interfaces {
@@ -131,29 +63,11 @@ component MyComponent {
     MEM: interface DDR_Interface(data_width=64, frequency=400MHz);
     DBG: interface JTAG(speed = 10MHz, chain = 1, ); // Trailing comma
   }
-}
+};
 
----
-// Placeholder
-(source_file (component_definition name: (identifier)
-  (interfaces_block
-    (interface_usage_declaration name: (identifier) type: (identifier))
-    (interface_usage_declaration name: (identifier) type: (identifier)
-      parameters: (interface_parameter_list
-        (interface_parameter_assignment name: (identifier) value: (integer_literal))
-        (interface_parameter_assignment name: (identifier) value: (numeric_literal))
-      ))
-    (interface_usage_declaration name: (identifier) type: (identifier)
-       parameters: (interface_parameter_list
-         (interface_parameter_assignment name: (identifier) value: (numeric_literal))
-         (interface_parameter_assignment name: (identifier) value: (integer_literal))
-       ))
-  ))
-)
+// === Constraint Block ===
 
-=== Constraint Block ===
-
-board ConstraintBoard {
+board ConstraintBoard { // Line 139
   constrain (MCU) { // Target is just identifier for now
     max_length: 50mm;
     impedance: 50Ohm;
@@ -164,75 +78,27 @@ board ConstraintBoard {
   }
 }
 
----
-// Placeholder
-(source_file (board_definition name: (identifier)
-  (constraint_block target: (identifier)
-    (property_assignment property_name: (identifier) value: (numeric_literal))
-    (property_assignment property_name: (identifier) value: (numeric_literal))
-    (property_assignment property_name: (identifier) value: (string_literal))
-  )
-  (constraint_block target: (identifier))
-))
+// === Arithmetic Expressions ===
 
-=== Arithmetic Expressions ===
+5 + 3 * 2;
+(5 + 3) * 2;
+-10 / 2;
 
-5 + 3 * 2
-(5 + 3) * 2
--10 / 2
+// === Range Expression ===
 
----
-// Placeholder
-(source_file
-  (binary_expression
-    (_expression (numeric_literal))
-    (_expression (binary_expression (_expression (numeric_literal)) (_expression (numeric_literal))))
-  )
-  (binary_expression
-    (_expression (parenthesized_expression (_expression (binary_expression (_expression (numeric_literal)) (_expression (numeric_literal))))))
-    (_expression (numeric_literal)))
-  (binary_expression
-    (_expression (unary_expression (_expression (numeric_literal))))
-    (_expression (numeric_literal)))
-)
+5Vdc to 24Vdc;
+-40degC to 85degC;
 
-=== Range Expression ===
-
-5Vdc to 24Vdc
--40degC to 85degC
-
----
-// Placeholder
-(source_file
-  (range_expression (_expression (numeric_literal)) (_expression (numeric_literal)))
-  (range_expression (_expression (unary_expression (_expression (numeric_literal)))) (_expression (numeric_literal)))
-)
-
-=== Combined Expression in Property ===
+// === Combined Expression in Property ===
 
 component Demo {
   parameters {
     val = 10 * (5 + 2);
     temp_range = -10 to 40;
   }
-}
+};
 
----
-// Placeholder
-(source_file (component_definition name: (identifier)
-  (parameters_block
-    (parameter_declaration name: (identifier)
-      default_value: (binary_expression
-        (_expression (numeric_literal))
-        (_expression (parenthesized_expression (_expression (binary_expression (_expression (numeric_literal)) (_expression (numeric_literal))))))))
-    (parameter_declaration name: (identifier)
-      default_value: (range_expression
-        (_expression (unary_expression (_expression (numeric_literal))))
-        (_expression (numeric_literal))))
-  ))
-)
-
-=== Generate For Loops ===
+// === Generate For Loops ===
 
 component DDR_PHY {
   parameters {
@@ -241,15 +107,15 @@ component DDR_PHY {
   pins {
     // Generate DQ pins
     generate for i in 0 to data_width-1 {
-      DQ: inout signal; // Simplified pin decl for now
+      pin DQ: inout signal;
     }
     // Generate DQS pairs
     generate for i in 0 upto 8 {
-      DQS_P: inout signal;
-      DQS_N: inout signal;
+      pin DQS_P: inout signal;
+      pin DQS_N: inout signal;
     }
   }
-}
+};
 
 board BusConnection {
   components {
@@ -262,37 +128,16 @@ board BusConnection {
        CPU -> PHY; // Simplified connection
     }
   }
-}
+};
 
----
-// Placeholder
-(source_file
-  (component_definition name: (identifier)
-    (parameters_block
-      (parameter_declaration name: (identifier) default_value: (integer_literal)))
-    (pins_block
-      (generate_block variable: (identifier) range: (range_to start: (integer_literal) end: (binary_expression (_expression (identifier)) (_expression (integer_literal))))
-        body: (pin_port_declaration name: (identifier) direction: (kw_inout) type: (type_specification_signal_power base: (kw_signal))))
-      (generate_block variable: (identifier) range: (range_upto start: (integer_literal) end: (integer_literal))
-        body:
-          (pin_port_declaration name: (identifier) direction: (kw_inout) type: (type_specification_signal_power base: (kw_signal)))
-          (pin_port_declaration name: (identifier) direction: (kw_inout) type: (type_specification_signal_power base: (kw_signal))))))
-  (board_definition name: (identifier)
-    (components_block
-      (generate_block variable: (identifier) range: (range_to start: (integer_literal) end: (integer_literal))
-        body: (component_instantiation type: (identifier) name: (identifier) (bus_specifier high: (identifier)))))
-    (connections_block
-      (generate_block variable: (identifier) range: (range_to start: (integer_literal) end: (integer_literal))
-        body: (connection_statement source: (identifier) operator: "->" target: (identifier))))))
-
-=== Interface Definition ===
+// === Interface Definition ===
 
 interface SimpleInterface {
   pins {
-    CLK: in signal;
-    DATA: out signal;
+    pin CLK: in signal;
+    pin DATA: out signal;
   }
-}
+};
 
 interface DDR_Interface (data_width: integer = 64) { // Param with type
    parameters {
@@ -300,57 +145,24 @@ interface DDR_Interface (data_width: integer = 64) { // Param with type
    }
    pins {
      generate for i in 0 to data_width-1 {
-       DQ: inout signal;
+       pin DQ: inout signal;
      }
    }
-}
+};
 
----
-// Placeholder - Adjust after parsing
-(source_file
-  (interface_definition name: (identifier)
-    (pins_block
-      (pin_port_declaration name: (identifier) direction: (kw_in) type: (type_specification_signal_power base: (kw_signal)))
-      (pin_port_declaration name: (identifier) direction: (kw_out) type: (type_specification_signal_power base: (kw_signal)))))
-  (interface_definition name: (identifier)
-    declaration_parameters: (interface_declaration_parameter_list
-      (interface_parameter_declaration // Param with type
-        name: (identifier)
-        param_type: (identifier) // Expect parsed type name
-        default_value: (integer_literal)))
-    (parameters_block
-      (parameter_declaration // Param without type
-        name: (identifier)
-        default_value: (binary_expression (_expression (identifier)) (_expression (integer_literal)))))
-    (pins_block
-      (generate_block variable: (identifier) range: (range_to start: (integer_literal) end: (binary_expression (_expression (identifier)) (_expression (integer_literal))))
-        body: (pin_port_declaration name: (identifier) direction: (kw_inout) type: (type_specification_signal_power base: (kw_signal))))))
-)
-
-=== Net Class and Via Style Definitions ===
+// === Net Class and Via Style Definitions ===
 
 net_class Power {
   min_trace_width: 0.5mm;
   default_via_style: "PowerVia";
-}
+};
 
 via_style StandardVia {
   drill: 0.3mm;
   pad_diameter: 0.6mm;
-}
+};
 
----
-// Placeholder
-(source_file
-  (net_class_definition name: (identifier)
-    (property_assignment property_name: (identifier) value: (numeric_literal))
-    (property_assignment property_name: (identifier) value: (string_literal)))
-  (via_style_definition name: (identifier)
-    (property_assignment property_name: (identifier) value: (numeric_literal))
-    (property_assignment property_name: (identifier) value: (numeric_literal)))
-)
-
-=== Layer Stackup and Default Design Rules ===
+// === Layer Stackup and Default Design Rules ===
 
 board LayoutBoard {
   layer_stackup {
@@ -364,27 +176,9 @@ board LayoutBoard {
     min_clearance: 0.2mm;
     default_via_style: "StandardVia";
   }
-}
+};
 
----
-// Placeholder
-(source_file (board_definition name: (identifier)
-  (layer_stackup_block
-    (layer_definition name: (identifier)
-      (property_assignment property_name: (identifier) value: (identifier))
-      (property_assignment property_name: (identifier) value: (numeric_literal)))
-    (layer_definition name: (identifier)
-      (property_assignment property_name: (identifier) value: (identifier)))
-    (layer_definition name: (identifier)
-      (property_assignment property_name: (identifier) value: (identifier))
-      (property_assignment property_name: (identifier) value: (numeric_literal))))
-  (default_design_rules_block
-    (property_assignment property_name: (identifier) value: (numeric_literal))
-    (property_assignment property_name: (identifier) value: (numeric_literal))
-    (property_assignment property_name: (identifier) value: (string_literal)))
-))
-
-=== Parenthesized Expression ===
+// === Parenthesized Expression ===
 
 component ParenDemo {
   parameters {
@@ -392,19 +186,9 @@ component ParenDemo {
     b = (a);
     c = (1 + 2); // Requires binary expression later
   }
-}
+};
 
----
-// Placeholder
-(source_file (component_definition name: (identifier)
-  (parameters_block
-    (parameter_declaration name: (identifier) default_value: (parenthesized_expression (_expression (integer_literal))))
-    (parameter_declaration name: (identifier) default_value: (parenthesized_expression (_expression (identifier))))
-    (parameter_declaration name: (identifier) default_value: (parenthesized_expression (_expression (integer_literal)))) // Simple placeholder for inner expr
-  ))
-)
-
-=== Array Literals ===
+// === Array Literals ===
 
 component Arrays {
   parameters {
@@ -414,99 +198,46 @@ component Arrays {
     list4 = ["A", "B"];
     // list5 = [ [1], [2] ]; // Nested - requires list in expression
   }
-}
+};
 
----
-// Placeholder
-(source_file (component_definition name: (identifier)
-  (parameters_block
-    (parameter_declaration name: (identifier) default_value: (array_literal (_expression (integer_literal)) (_expression (integer_literal)) (_expression (integer_literal))))
-    (parameter_declaration name: (identifier) default_value: (array_literal (_expression (numeric_literal)) (_expression (numeric_literal))))
-    (parameter_declaration name: (identifier) default_value: (array_literal))
-    (parameter_declaration name: (identifier) default_value: (array_literal (_expression (string_literal)) (_expression (string_literal))))
-  ))
-)
+// === Comparison Expressions ===
 
-=== Comparison Expressions ===
+10kOhm > 500Ohm;
+5Vdc < 1mA;
+length <= 10mm;
+width >= 0.2mm;
 
-10kOhm > 500Ohm
-5Vdc < 1mA
-length <= 10mm
-width >= 0.2mm
+// === Logical Expressions ===
 
----
-// Placeholder
-(source_file
-  (binary_expression (_expression (numeric_literal)) (_expression (numeric_literal)))
-  (binary_expression (_expression (numeric_literal)) (_expression (numeric_literal)))
-  (binary_expression (_expression (identifier)) (_expression (numeric_literal)))
-  (binary_expression (_expression (identifier)) (_expression (numeric_literal)))
-)
+!true;
+flag1 && flag2;
+true || false;
+a > b && c < d;
+!(a == b);
 
-=== Logical Expressions ===
+// === Function Call Expressions ===
 
-!true
-flag1 && flag2
-true || false
-a > b && c < d
-!(a == b)
+sqrt(value);
+utils.calc(1, 2);
+my_func();
+obj.method(arg1, arg2, );
 
----
-// Placeholder
-(source_file
-  (unary_expression (_expression (boolean_literal)))
-  (binary_expression (_expression (identifier)) (_expression (identifier)))
-  (binary_expression (_expression (boolean_literal)) (_expression (boolean_literal)))
-  (binary_expression
-    (_expression (binary_expression (_expression (identifier)) (_expression (identifier))))
-    (_expression (binary_expression (_expression (identifier)) (_expression (identifier)))))
-  (unary_expression (_expression (parenthesized_expression (_expression (binary_expression (_expression (identifier)) (_expression (identifier)))))))
-)
-
-=== Function Call Expressions ===
-
-sqrt(value)
-utils.calc(1, 2)
-my_func()
-obj.method(arg1, arg2, )
-
----
-// Placeholder
-(source_file
-  (function_call_expression function: (identifier) arguments: (argument_list (_expression (identifier))))
-  (function_call_expression function: (member_access object: (identifier) property: (identifier)) arguments: (argument_list (_expression (integer_literal)) (_expression (integer_literal))))
-  (function_call_expression function: (identifier) arguments: (argument_list))
-  (function_call_expression function: (member_access object: (identifier) property: (identifier)) arguments: (argument_list (_expression (identifier)) (_expression (identifier))))
-)
-
-=== Library Statement ===
+// === Library Statement ===
 
 library company_stdlib "path/to/company/lib";
 
----
-// Placeholder
-(source_file (library_statement name: (identifier) path: (string_literal)))
+// === Generate with Local Variable ===
 
-=== Generate with Local Variable ===
-
-connections {
-  generate for byte_idx in 0 to 7 {
-    local mcu_high = (byte_idx + 1) * 8 - 1;
-    CPU -> PHY; // Simplified connection
+board TestBoard_LocalVars { // Wrap in a board
+  connections {
+    generate for byte_idx in 0 to 7 {
+      local mcu_high = (byte_idx + 1) * 8 - 1;
+      CPU -> PHY; // Simplified connection
+    }
   }
-}
+};
 
----
-// Placeholder
-(source_file (connections_block
-  (generate_block variable: (identifier) range: (range_to start: (integer_literal) end: (integer_literal))
-    body:
-      (local_variable_declaration name: (identifier) value: (binary_expression (_expression (parenthesized_expression (_expression (binary_expression (_expression (identifier)) (_expression (integer_literal)))))) (_expression (integer_literal))))
-      (connection_statement source: (identifier) operator: "->" target: (identifier))
-  ))
-)
-
-=== Ternary Expression ===
+// === Ternary Expression ===
 
 component VariantComponent {
   parameters {
@@ -517,24 +248,9 @@ component VariantComponent {
        population: (SKU == "Premium") ? "Installed" : "DNP";
     }
   }
-}
+};
 
----
-// Placeholder
-(source_file (component_definition name: (identifier)
-  (parameters_block
-    (parameter_declaration name: (identifier) default_value: (string_literal)))
-  (components_block
-    (component_instantiation type: (identifier) name: (identifier)
-      (property_assignment property_name: (identifier)
-        value: (ternary_expression
-          condition: (parenthesized_expression (_expression (binary_expression (_expression (identifier)) (_expression (string_literal)))))
-          consequence: (string_literal)
-          alternative: (string_literal)))))
-  ))
-)
-
-=== Typed Parameters ===
+// === Typed Parameters ===
 
 component TypedParams {
   parameters {
@@ -542,14 +258,30 @@ component TypedParams {
     delay: time = 5ns;
     name: string;
   }
-}
+};
 
----
-// Placeholder
-(source_file (component_definition name: (identifier)
-  (parameters_block
-    (parameter_declaration name: (identifier) param_type: (identifier) default_value: (integer_literal))
-    (parameter_declaration name: (identifier) param_type: (identifier) default_value: (numeric_literal))
-    (parameter_declaration name: (identifier) param_type: (identifier))
-  ))
-)
+// === Component Instantiation with Parameters ===
+
+MyComponent C1 { // Use {}
+  Width: 32
+  Height: 10mm
+};
+MyComp C2{};   // Use {}
+
+// === Typedef Definition ===
+
+typedef MyProperties {
+   MyProp: 10mm;
+};
+
+// === Typedef Definition ===
+
+typedef MyProperties2 {
+   MyProp: 10mm;
+};
+
+// === Typedef Definition with Inheritance ===
+
+typedef MyDerivedProperties extends MyProperties {
+  AnotherProp: true;
+}
