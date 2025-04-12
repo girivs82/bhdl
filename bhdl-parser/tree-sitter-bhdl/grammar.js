@@ -28,9 +28,9 @@ module.exports = grammar({
     ['definition'],
     ['member', 'subscript'],
     ['unary'],
-    ['range_expr'],
     ['multiplicative'],
     ['additive'],
+    ['range_expr'],
     ['comparative'],
     ['logical_and'],
     ['logical_or'],
@@ -335,38 +335,16 @@ module.exports = grammar({
       $.generate_for_statement // Currently only 'for' is supported
     ),
 
-    // Define a simplified bound expression for generate loop ranges
-    _simple_generate_bound: $ => choice(
-      $.identifier,
-      $.integer_literal
-    ),
-
-    // Define a simpler range specifically for generate loops using the simplified bounds
-    _simple_generate_range: $ => choice(
-      $.identifier, // Iterate over list
-      seq(
-        field('lower', $._simple_generate_bound),
-        field('operator', token(choice('..', 'to', 'upto'))),
-        field('upper', $._simple_generate_bound)
-      )
-    ),
-
     generate_for_statement: $ => seq(
       'for',
       field('variable', $.identifier),
       $.kw_in,
-      field('range', $._simple_generate_range), // Use the new simplified range
-      choice(
-        seq(
-          '{',
-          field('body', repeat($._generate_body_item)),
-          '}'
-        ),
-        seq(
-          'loop',
-          field('body', repeat($._generate_body_item)),
-          $.kw_end, 'loop', ';'
-        )
+      field('range', $._generate_range_expression),
+      // Only allow {} block for generate for body
+      seq(
+        '{',
+        field('body', repeat($._generate_body_item)),
+        '}'
       )
     ),
 
@@ -600,7 +578,6 @@ module.exports = grammar({
 
     range_expression: $ => prec.left('range_expr', seq(
       field('lower', $._expression),
-      // Use token() to help lexer disambiguate from '.' in float literals
       field('operator', token(choice('..', 'to', 'upto'))),
       field('upper', $._expression)
     )),
@@ -643,7 +620,8 @@ module.exports = grammar({
     ),
 
     integer_literal: $ => /\d+/,
-    float_literal: $ => /\d+\.\d*(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?|\d+[eE][+-]?\d+/,
+    // Require digit after decimal point to avoid conflict with '..' range op
+    float_literal: $ => /\d+\.\d+(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?|\d+[eE][+-]?\d+/,
     boolean_literal: $ => choice('true', 'false'),
     string_literal: $ => /\"([^\\\"]|\\.)*\"/,
     char_literal: $ => /\'([^\\\']|\\.)*\'/,
@@ -704,8 +682,8 @@ module.exports = grammar({
     )),
 
     _generate_range_expression: $ => choice(
-      $.range_expression, // Reference the main range expression rule
-      $.identifier // Allow iteration over a list variable
+      $.range_expression,
+      $.identifier
     ),
   }
 });

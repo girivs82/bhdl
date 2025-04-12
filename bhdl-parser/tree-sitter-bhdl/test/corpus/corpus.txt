@@ -50,12 +50,12 @@ board TestBoard {
     Capacitor C1 { value = 10uF, voltage = 16Vdc };
 
     // Inside generate block (parameter-less)
-    generate for idx in 0..1 {
+    generate for idx in (0..1) {
        LED L[idx] {};
     }
 
     // Inside generate block (with parameters)
-    generate for i in 0..N-1 {
+    generate for i in (0..N-1) {
        Resistor R_GEN[i] { Value = 1kOhm };
     }
   }
@@ -148,9 +148,9 @@ component SignalTest {
   }
   pins {
     // Simple generate for pins
-    generate i in 0 .. DATA_WIDTH-1 loop
+    generate i in (0 .. DATA_WIDTH-1) {
         pin data_out[i] : out signal;
-    end loop; // Added end loop
+    }
   }
 } end component;
 
@@ -160,10 +160,10 @@ component PortTest {
   }
   ports {
     // Simple generate for ports
-    generate i in 0 .. width-1 loop
+    generate i in (0 .. width-1) {
       port data_in[i] : inout signal; // Corrected from pin to port
       port data_out[i] : inout signal;
-    end loop; // Added end loop
+    }
   }
 } end component;
 
@@ -178,10 +178,10 @@ board GeneratedCircuit {
   }
   components {
     // Generate component instantiations
-    generate i in 0 .. NUM_RESISTORS-1 loop
+    generate i in (0 .. NUM_RESISTORS-1) {
       Resistor R_GEN[i](Value=1k); // Instantiation with () parameters
       Series R_SER[i]{Value=1k};   // Instantiation with {} parameters
-    end loop; // Added end loop
+    }
   }
   pins {
       pin Vin, Vout;
@@ -192,9 +192,9 @@ board GeneratedCircuit {
   }
   connections {
       // Connect generated components
-      generate i in 0 .. NUM_RESISTORS-2 loop
+      generate i in (0 .. NUM_RESISTORS-2) {
           R_GEN[i].p2 -> R_GEN[i+1].p1;
-      end loop; // Added end loop
+      }
       Vin -> R_GEN[0].p1;
       R_GEN[NUM_RESISTORS-1].p2 -> Vout;
       P1 -> R_SER[0].p_in;
@@ -219,15 +219,15 @@ component PinConstraints {
         width = 8;
     }
     pins {
-        generate i in 0 .. width-1 loop
+        generate i in (0 .. width-1) {
             pin data[i] : inout signal;
-        end loop; // Added end loop
+        }
         pin clk : in signal;
     }
     // Constraint within component def
-    generate i in 0 .. width-1 loop
+    generate i in (0 .. width-1) {
         constraint data[i] { io_standard = LVCMOS33; }
-    end loop; // Added end loop
+    }
 } end component;
 
 // Local Variable Declarations (Generate Block)
