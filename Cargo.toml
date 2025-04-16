@@ -7,7 +7,7 @@ members = [
     "bhdl-netlist",
     "bhdl-synthesizer",
     "bhdl-cli",
-    "bhdl-lsp",
+    "bhdl-lsp", "bhdl-ast",
 ]
 
 # Use the latest resolver for better dependency management.
