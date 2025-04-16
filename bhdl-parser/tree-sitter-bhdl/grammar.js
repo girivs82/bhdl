@@ -81,7 +81,13 @@ module.exports = grammar({
     // [_generate_range_expression, $._expression], // Removed
     [$.scoped_type_name, $._expression], // Resolve ambiguity in generate blocks
     [$._expression, $.physical_literal], // Resolve ambiguity in constraint blocks etc.
-    [$._expression, $.pin_port_declaration] // Resolve generate block pin decl vs expression
+    [$._expression, $.pin_port_declaration], // Resolve generate block pin decl vs expression
+    
+    // Resolve conflict between parameter declaration keyword and identifier
+    [$.kw_param, $.identifier],
+
+    // Resolve ambiguity between expression list in parens and generic expression
+    [$.component_parameter_list_paren, $._expression]
   ],
 
   rules: {
@@ -97,7 +103,6 @@ module.exports = grammar({
       $.interface_definition,
       $.net_class_definition,
       $.via_style_definition,
-      $.generate_block, // Allow generate at top level
       $._top_level_expression_statement, // Allow standalone expressions (like literals.txt)
       $.assignment_statement, // Allow top-level assignment
       $.comment
@@ -132,7 +137,6 @@ module.exports = grammar({
       '{',
       repeat($._board_item),
       '}',
-      optional(seq($.kw_end, $.kw_board, optional(field('end_name', $.identifier)))), // Make end optional
       ';'
     )),
 
@@ -144,7 +148,6 @@ module.exports = grammar({
         $.layer_stackup_block,
         $.default_design_rules_block,
         $.constraint_statement, // Allow constraints directly in board
-        $.generate_block,       // Allow generate directly in board
         $.component_definition, // Allow nested definitions? (Check spec)
         $.module_definition,
         $.typedef_definition,
@@ -162,7 +165,6 @@ module.exports = grammar({
       '{',
       repeat($._module_item),
       '}',
-      optional(seq($.kw_end, $.kw_module, optional(field('end_name', $.identifier)))), // Make end optional
       ';'
     )),
 
@@ -171,8 +173,6 @@ module.exports = grammar({
          $.ports_block,
          $.components_block,
          $.connections_block,
-         $.generate_block, // Allow generate in module
-         $.constraint_statement, // Allow constraints in module
          $.component_definition, // Allow nested definitions? (Check spec)
          $.module_definition,
          $.typedef_definition,
@@ -185,13 +185,11 @@ module.exports = grammar({
       $.kw_component,
       field('name', $.identifier),
       optional(field('parameters', $.declaration_parameter_list)), // Added component parameters ()
-      // Make body optional for simple declarations
       optional(seq(
          '{',
          repeat($._component_item),
          '}'
       )),
-      optional(seq($.kw_end, $.kw_component, optional(field('end_name', $.identifier)))), // Make end optional
       ';'
     )),
 
@@ -199,8 +197,6 @@ module.exports = grammar({
        $.parameters_block,
        $.pins_block,
        $.interfaces_block,
-       $.generate_block, // Allow generate in component
-       $.constraint_statement, // Allow constraints in component
        $.comment
     ),
 
@@ -211,7 +207,6 @@ module.exports = grammar({
       '{',
       repeat($.property_assignment), // Uses :
       '}',
-      optional(seq($.kw_end, $.kw_typedef)), // Make end optional
       ';'
     )),
 
@@ -231,14 +226,12 @@ module.exports = grammar({
       '{',
       repeat($._interface_item),
       '}',
-      optional(seq($.kw_end, $.kw_interface)), // Make end optional
       ';'
     )),
 
     _interface_item: $ => choice(
       $.parameters_block,
       $.pins_block, // Note: Spec uses 'pins' inside interface
-      $.generate_block,
       $.comment
     ),
 
@@ -248,7 +241,6 @@ module.exports = grammar({
       '{',
       repeat($.property_assignment), // Uses :
       '}',
-      optional(seq($.kw_end, $.kw_net_class)), // Make end optional
       ';'
     )),
 
@@ -258,7 +250,6 @@ module.exports = grammar({
       '{',
       repeat($.property_assignment), // Uses :
       '}',
-      optional(seq($.kw_end, $.kw_via_style)), // Make end optional
       ';'
     )),
 
@@ -266,42 +257,42 @@ module.exports = grammar({
     parameters_block: $ => seq(
       $.kw_parameters,
       '{',
-      repeat(choice($.parameter_declaration, $.generate_block)), // Allow generate here
+      repeat($.parameter_declaration),
       '}'
     ),
 
     ports_block: $ => seq(
       $.kw_ports,
       '{',
-      repeat(choice($.pin_port_declaration, $.generate_block)), // Allow generate here
+      repeat($.pin_port_declaration),
       '}'
     ),
 
     pins_block: $ => seq(
       $.kw_pins,
       '{',
-      repeat(choice($.pin_port_declaration, $.generate_block)), // Allow generate here
+      repeat($.pin_port_declaration),
       '}'
     ),
 
     interfaces_block: $ => seq( // Added based on spec
       $.kw_interfaces,
       '{',
-      repeat(choice($.interface_usage_declaration, $.generate_block)), // Allow generate here
+      repeat($.interface_usage_declaration),
       '}'
     ),
 
     components_block: $ => seq(
       $.kw_components,
       '{',
-      repeat(choice($.component_instantiation, $.generate_block)), // Allow generate here
+      repeat($.component_instantiation),
       '}'
     ),
 
     connections_block: $ => seq(
       $.kw_connections,
       '{',
-      repeat(choice($.connection_statement, $.generate_block)), // Allow generate here
+      repeat($.connection_statement),
       '}'
     ),
 
@@ -376,6 +367,7 @@ module.exports = grammar({
 
     // Parameter declaration inside parameters { } block
     parameter_declaration: $ => seq(
+      $.kw_param, // Add keyword here
       field('name', $.identifier),
       optional(seq(':', field('param_type', $._type_name))), // Optional type
       '=', // Use equals for assignment
@@ -410,22 +402,24 @@ module.exports = grammar({
 
 
     pin_port_declaration: $ => seq(
-        optional(choice('pin', 'port')), // Make keyword optional
-        field('name', seq(field('base_name', $.identifier), optional(field('bus', $.bus_specifier)))),
-        ':',
-        choice(
-          // Case 1: Ground (no direction, no subtype)
-          $.kw_ground,
-          // Case 2: Signal/Power (requires direction)
-          seq(
-            field('direction', $._pin_direction),
-            // Make base_type optional, assume 'signal' if missing when direction is present
-            optional(field('base_type', choice($.kw_signal, $.kw_power))),
-            optional(seq('(', field('subtype', $._type_name), ')')), // Optional subtype in parens
-          )
-        ),
-        // repeat($.attribute), // Attributes TBD
-        ';'
+        optional(field('pin_port_kw', choice('pin', 'port'))), // Optional keyword
+        field('name', $.identifier),                         // Name identifier
+        ':',                                                 // Colon
+        field('kind', choice(                                // Kind specifier
+          // Case 1: Ground
+          $.kw_ground, // Use keyword alias
+          // Case 2: Signal/Power -> Give this seq a name
+          $.pin_port_type_spec 
+        )),
+        optional(field('bus', $.bus_specifier)),             // Optional bus specifier
+        ';'                                                  // Semicolon
+    ),
+
+    // Define the named rule for the signal/power sequence
+    pin_port_type_spec: $ => seq(
+        field('direction', $._pin_direction),           // Direction (in/out/inout)
+        optional(field('base_type', choice($.kw_signal, $.kw_power))), // Optional signal/power
+        optional(seq('(', field('subtype', $._type_name), ')')),       // Optional subtype
     ),
 
     _pin_direction: $ => choice($.kw_in, $.kw_out, $.kw_inout),
@@ -440,24 +434,29 @@ module.exports = grammar({
     // Component Instantiation
      component_instantiation: $ => prec('instantiation', seq(
       field('type', $._type_name),
-      field('name', seq(field('base_name', $.identifier), optional(field('bus', $.bus_specifier)))),
+      field('name', $.identifier), // Simplified name field
+      optional(field('bus', $.bus_specifier)), // Optional bus specifier after name
       // Parameters can use () or {} according to examples/needs clarification
       // For now, require one or the other
-      choice(
-         field('parameters_paren', $.component_parameter_list_paren),
-         field('parameters_curly', $.component_parameter_list_curly)
+      optional( // Make parameters optional entirely
+        choice(
+           field('parameters_paren', $.component_parameter_list_paren),
+           field('parameters_curly', $.component_parameter_list_curly)
+        )
       ),
       ';'
     )),
 
     component_parameter_list_paren: $ => seq(
       '(',
-      optional(commaSep($.component_parameter_assignment)),
+      // Explicitly allow physical literals in addition to general expressions
+      optional(commaSep(choice($._expression, $.physical_literal))), 
       ')'
     ),
 
     component_parameter_list_curly: $ => seq(
       '{',
+      // Curly braces should use named assignments
       optional(commaSep($.component_parameter_assignment)),
       '}'
     ),
@@ -639,8 +638,8 @@ module.exports = grammar({
     kw_interface: $ => kw('interface'),
     kw_net_class: $ => kw('net_class'),
     kw_via_style: $ => kw('via_style'),
-    kw_library: $ => kw('library'), // Assuming 'library' might be used
-    kw_use: $ => kw('use'),       // Assuming 'use' might be used
+    kw_library: $ => kw('library'),
+    kw_use: $ => kw('use'),
     kw_generate: $ => kw('generate'),
     kw_constraint: $ => kw('constraint'),
     kw_parameters: $ => kw('parameters'),
@@ -652,21 +651,30 @@ module.exports = grammar({
     kw_pins: $ => kw('pins'),
     kw_interfaces: $ => kw('interfaces'),
     kw_for: $ => kw('for'),
-    kw_loop: $ => kw('loop'), // Added
-    kw_all: $ => kw('all'), // Assuming 'all' might be used
+    kw_loop: $ => kw('loop'),
+    kw_all: $ => kw('all'),
     kw_in: $ => kw('in'),
     kw_out: $ => kw('out'),
     kw_inout: $ => kw('inout'),
     kw_signal: $ => kw('signal'),
     kw_power: $ => kw('power'),
-    kw_ground: $ => kw('ground'), // Added
-    kw_pin: $ => kw('pin'),     // Not technically a keyword in pin decl
-    kw_port: $ => kw('port'),   // Not technically a keyword in port decl
-    kw_time: $ => kw('time'),   // Example from spec, maybe type?
-    kw_boolean: $ => kw('boolean'), // Maybe type?
-    kw_string: $ => kw('string'),   // Maybe type?
-    kw_char: $ => kw('char'),     // Maybe type?
-    kw_physical: $ => kw('physical'), // Maybe type?
+    kw_ground: $ => kw('ground'),
+    kw_pin: $ => kw('pin'),
+    kw_port: $ => kw('port'),
+    kw_time: $ => kw('time'),
+    kw_boolean: $ => kw('boolean'),
+    kw_string: $ => kw('string'),
+    kw_char: $ => kw('char'),
+    kw_physical: $ => kw('physical'),
+    kw_to: $ => kw('to'),
+    kw_upto: $ => kw('upto'),
+    kw_not: $ => kw('not'),
+    kw_and: $ => kw('and'),
+    kw_or: $ => kw('or'),
+    kw_xor: $ => kw('xor'),
+    kw_group: $ => kw('group'),
+    kw_layer: $ => kw('layer'),
+    kw_param: $ => kw('param'),
 
     // === Identifier ===
     identifier: $ => /[a-zA-Z_][a-zA-Z0-9_]*/,

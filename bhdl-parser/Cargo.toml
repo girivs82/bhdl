@@ -24,8 +24,11 @@ thiserror = "1.0"
 # Add bhdl-netlist dependency
 bhdl-netlist = { path = "../bhdl-netlist" }
 
-# Restore tree-sitter runtime dependency
-tree-sitter = "0.22"
+# Add bhdl-ast dependency
+bhdl-ast = { path = "../bhdl-ast" }
+
+# Update tree-sitter runtime dependency to 0.25.x to match CLI
+tree-sitter = "0.25.3"
 
 # Remove old tree-sitter build dependencies
 # cc = "1.0"
@@ -45,7 +48,8 @@ tree-sitter = "0.22"
 [build-dependencies]
 # Restore tree-sitter build dependencies
 cc = "1.0"
-tree-sitter-cli = { version = "0.22" }
+# Update CLI build dependency to align with runtime 0.25.x
+tree-sitter-cli = { version = "0.25.3" } 
 
 # Remove rust-sitter build tool dependency
 # rust-sitter-tool = "0.4.4"
