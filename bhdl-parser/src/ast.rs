@@ -85,17 +85,12 @@ pub(crate) fn get_span(node: Node) -> bhdl_ast::Span { // Return bhdl_ast::Span
 
 /// Parses an identifier node.
 fn get_identifier(node: Node, source: &str) -> ParseResult<Identifier> {
-    // An identifier node *must* have the kind "identifier" according to the grammar.
-    // The grammar is responsible for ensuring keywords are not matched as identifiers.
     if node.kind() != "identifier" {
-         return Err(ParseError::new(
-             format!("Internal Error: Expected node kind 'identifier', found '{}'", node.kind()),
-             Some(node) // Pass node for span info in error
-         ));
+        return Err(ParseError::new("Expected identifier node", Some(node)));
     }
     Ok(Identifier {
         span: get_span(node),
-        name: get_text(node, source)?.to_string(),
+        value: get_text(node, source)?.to_string(), // Use 'value' field
     })
 }
 
@@ -119,11 +114,13 @@ fn build_literal(node: Node, source: &str) -> ParseResult<Expression> {
     let text = get_text(node, source)?;
     match node.kind() {
         "integer_literal" => {
-            // TODO: Handle potential prefixes like 0x, 0b? Units handled by physical_literal
-             let _value = text.replace('_', "").parse::<i64>() // Keep parse check for validation
-                 .map_err(|e| ParseError::new(format!("Invalid integer literal '{}': {}", text, e), Some(node)))?;
-            // Create the specific literal struct
-            let literal_node = IntegerLiteral { span, value_text: text.to_string() };
+            let span = get_span(node);
+            let text = get_text(node, source)?;
+            let value = text.parse::<u64>().map_err(|e| ParseError::new(
+                format!("Failed to parse integer literal '{}': {}", text, e),
+                Some(node)
+            ))?;
+            let literal_node = IntegerLiteral { span, value }; // Use 'value' field
             Ok(Expression::IntegerLiteral(literal_node))
         }
         "float_literal" => {
@@ -234,27 +231,21 @@ fn build_expression(node: Node, source: &str) -> ParseResult<Expression> {
         }
         // Member Access: object.property
         "member_access_expression" => {
-            let object_node = get_req_child(node, "base")?; // Assuming 'base' field name
-            let property_node = get_req_child(node, "member")?; // Assuming 'member' field name
+            // Grammar: prec.left('member', seq(field('object', $._expression), '.', field('property', $.identifier)))
+            // Note: The grammar change was for connection endpoints (`member_access`), not general expressions (`member_access_expression`).
+            // General expressions still expect an identifier property.
+            let object_node = get_req_child(node, "object")?;
+            let property_node = get_req_child(node, "property")?; // Should be identifier
 
-            // Find dot span
-            let mut dot_span = None;
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                 if child.kind() == "." { // Check for literal dot token
-                    dot_span = Some(get_span(child));
-                    break;
-                 }
-            }
-
-            let object_expr = build_expression(object_node, source)?;
-            let property_ident = get_identifier(property_node, source)?; // Member must be an identifier
+            let object = build_expression(object_node, source)?;
+            let property_ident = get_identifier(property_node, source)?;
+            let dot_span = get_dot_span(node)?;
 
             let member_access_expr = MemberAccessExpression {
-                span,
-                object: object_expr,
-                dot_span: dot_span.ok_or_else(|| ParseError::new("Missing '.' in member access", Some(node)))?,
-                property: property_ident,
+                span: get_span(node),
+                object: object, // No need to Box::new here, build_expression returns Expression
+                dot_span,
+                property: MemberAccessProperty::Identifier(property_ident), // Wrap in enum variant
             };
             Ok(Expression::MemberAccess(Box::new(member_access_expr))) // Wrap in Box and Enum Variant
         }
@@ -466,65 +457,112 @@ fn build_argument_list(node: Node, source: &str) -> ParseResult<(Vec<Argument>, 
 
 /// Builds a connection endpoint node.
 fn build_connection_endpoint(node: Node, source: &str) -> ParseResult<ConnectionEndpoint> {
-    // Grammar for _connection_endpoint: choice($.identifier, $.member_access_expression, $.subscript_expression)
-    // Note: We pass the node that matched one of these choices.
+    // Grammar for _connection_endpoint: choice($.identifier, $.member_access, $.subscript_access)
     match node.kind() {
         "identifier" => {
             Ok(ConnectionEndpoint::Identifier(get_identifier(node, source)?))
         }
-        "member_access_expression" => {
-            // Re-use the logic from build_expression for MemberAccess, but wrap in ConnectionEndpoint variant
-            let object_node = get_req_child(node, "base")?;
-            let property_node = get_req_child(node, "member")?;
+        "member_access" => { // Match the specific endpoint kind name
+            // Need to parse fields specific to the simpler member_access rule if it's different
+            // Assuming it still has 'object'/'base' and 'property'/'member' fields for now
+            let object_node = get_req_child(node, "object").or_else(|_| get_req_child(node, "base"))?; // Try common field names
+            let property_node = get_req_child(node, "property").or_else(|_| get_req_child(node, "member"))?;
+
             let mut dot_span = None;
             let mut cursor = node.walk();
-             for child in node.children(&mut cursor) {
-                 if child.kind() == "." { dot_span = Some(get_span(child)); break; }
-             }
+            for child in node.children(&mut cursor) {
+                if child.kind() == "." { dot_span = Some(get_span(child)); break; }
+            }
 
-            let object_expr = build_expression(object_node, source)?; // Build the base expression
-            let property_ident = get_identifier(property_node, source)?;
+             // The object part of a simple member_access for connection might just be an identifier
+             // We need to handle this differently from build_expression which expects a full Expression.
+             // For now, let's assume the object IS an identifier for component.pin
+             let object_ident = if object_node.kind() == "identifier" {
+                  get_identifier(object_node, source)?
+             } else {
+                  // This case needs more thought if the grammar allows complex bases here
+                  return Err(ParseError::new(format!("Expected identifier base for connection endpoint member access, found {}", object_node.kind()), Some(object_node)));
+             };
 
+            // Check the kind of the property node
+            let property_value = match property_node.kind() {
+                "identifier" => {
+                    // Existing logic: get the identifier
+                    MemberAccessProperty::Identifier(get_identifier(property_node, source)?)
+                }
+                "integer_literal" => {
+                    // New logic: get the integer literal
+                    // Assuming get_integer_literal returns a struct/tuple with value and span
+                    // We might need to define get_integer_literal if it doesn't exist
+                    let literal_text = get_text(property_node, source)?;
+                    // For now, store the text. We might need a dedicated IntegerLiteral struct later.
+                    // We also need to adjust MemberAccessExpression's 'property' field type.
+                    MemberAccessProperty::Integer(IntegerLiteral {
+                        span: get_span(property_node),
+                        value: literal_text.parse::<u64>().map_err(|e| ParseError::new(format!("Failed to parse integer literal '{}': {}", literal_text, e), Some(property_node)))?,
+                        // TODO: Consider how to store this if it's not always u64
+                    })
+                }
+                _ => {
+                    return Err(ParseError::new(
+                        format!(
+                            "Expected identifier or integer literal for member access property, found '{}'",
+                            property_node.kind()
+                        ),
+                        Some(property_node),
+                    ));
+                }
+            };
+
+            // We need to create a MemberAccessExpression struct to fit the Enum variant
+            // This feels clunky - ideally the AST would have simpler variants for endpoints
             let member_access_expr = MemberAccessExpression {
                 span: get_span(node),
-                object: object_expr,
+                 object: Expression::Identifier(object_ident), // Wrap the base identifier in an Expression
                 dot_span: dot_span.ok_or_else(|| ParseError::new("Missing '.' in member access endpoint", Some(node)))?,
-                property: property_ident,
+                property: property_value, // Use the extracted property value (Ident or Int)
             };
             Ok(ConnectionEndpoint::MemberAccess(Box::new(member_access_expr)))
         }
-        "subscript_expression" => {
-            // Re-use the logic from build_expression for SubscriptAccess, but wrap in ConnectionEndpoint variant
-            let object_node = get_req_child(node, "base")?;
+        "subscript_access" => { // Match the specific endpoint kind name
+            // Similarly, parse fields for the simpler subscript_access rule
+            let object_node = get_req_child(node, "object").or_else(|_| get_req_child(node, "base"))?;
             let index_node = get_req_child(node, "index")?; // This should be a bus_specifier node
 
             let mut start_bracket_span: Option<Span> = None;
             let mut end_bracket_span: Option<Span> = None;
             let mut cursor = node.walk();
-             for child in node.children(&mut cursor) {
-                 if child.kind() == "[" { start_bracket_span = Some(get_span(child)); }
-                 if child.kind() == "]" { end_bracket_span = Some(get_span(child)); }
-             }
-             let index_span = match (start_bracket_span, end_bracket_span) {
-                 (Some(start), Some(end)) => Ok(bhdl_ast::Span::union(start, end)),
-                 _ => Err(ParseError::new("Missing brackets '[]' in subscript endpoint", Some(node)))
-             }?;
+            for child in node.children(&mut cursor) {
+                if child.kind() == "[" { start_bracket_span = Some(get_span(child)); }
+                if child.kind() == "]" { end_bracket_span = Some(get_span(child)); }
+            }
+            let index_span = match (start_bracket_span, end_bracket_span) {
+                (Some(start), Some(end)) => Ok(bhdl_ast::Span::union(start, end)),
+                _ => Err(ParseError::new("Missing brackets '[]' in subscript endpoint", Some(node)))
+            }?;
 
-            let object_expr = build_expression(object_node, source)?;
+             // Assume object is identifier for Comp[idx].Pin etc.
+             let object_ident = if object_node.kind() == "identifier" {
+                 get_identifier(object_node, source)?
+             } else {
+                 return Err(ParseError::new(format!("Expected identifier base for connection endpoint subscript access, found {}", object_node.kind()), Some(object_node)));
+             };
+
             let index_specifier = build_bus_specifier(index_node, source)?;
 
+             // Create the SubscriptAccessExpression struct for the Enum variant
             let subscript_access_expr = SubscriptAccessExpression {
                 span: get_span(node),
-                object: object_expr,
+                 object: Expression::Identifier(object_ident), // Wrap base identifier
                 index: Box::new(index_specifier),
                 index_span,
             };
              Ok(ConnectionEndpoint::SubscriptAccess(Box::new(subscript_access_expr)))
         }
-         // Should not happen if grammar is correct for _connection_endpoint rule
         _ => Err(ParseError::new(format!("Unexpected node kind for connection endpoint: '{}'", node.kind()), Some(node))),
     }
 }
+
 
 fn build_top_level_item(node: Node, source: &str) -> ParseResult<TopLevelItem> {
      match node.kind() {
@@ -1725,17 +1763,23 @@ fn build_parameter_assignment(node: Node, source: &str) -> ParseResult<Parameter
 
 
 fn build_connection_statement(node: Node, source: &str) -> ParseResult<ConnectionStatement> {
-    // Grammar: seq(field('source', $._connection_endpoint), field('op', $._connection_operator), field('target', $._connection_endpoint), ';')
-     if node.kind() != "connection_statement" {
+    // Grammar: seq(field('source',...), field('operator',...), field('target',...), optional(field('constraints', $.property_block)), ';')
+    if node.kind() != "connection_statement" {
         return Err(ParseError::new(format!("Expected connection_statement, found '{}'", node.kind()), Some(node)));
     }
-    let source_node = get_req_child(node, "source")?;
-    let op_node = get_req_child(node, "op")?;
-    let target_node = get_req_child(node, "target")?;
 
+    // Use child_by_field_name to get required fields directly
+    let source_node = node.child_by_field_name("source")
+                        .ok_or_else(|| ParseError::new("Missing 'source' field in connection_statement", Some(node)))?;
+    let op_node = node.child_by_field_name("operator")
+                      .ok_or_else(|| ParseError::new("Missing 'operator' field in connection_statement", Some(node)))?;
+    let target_node = node.child_by_field_name("target")
+                        .ok_or_else(|| ParseError::new("Missing 'target' field in connection_statement", Some(node)))?;
+    // We don't need the optional 'constraints' field for the AST, so we ignore it.
+
+    // --- Operator ---
     let op_span = get_span(op_node);
     let operator_text = op_node.utf8_text(source.as_bytes())?.trim();
-
     let op = match operator_text {
         "->" => bhdl_ast::ConnectionOperator::Ltr,
         "<-" => bhdl_ast::ConnectionOperator::Rtl,
@@ -1743,9 +1787,11 @@ fn build_connection_statement(node: Node, source: &str) -> ParseResult<Connectio
         _ => return Err(ParseError::new(format!("Unknown connection operator: '{}'", operator_text), Some(op_node))),
     };
 
+    // --- Endpoints ---
     let source_endpoint = build_connection_endpoint(source_node, source)?;
     let target_endpoint = build_connection_endpoint(target_node, source)?;
 
+    // --- Result ---
     Ok(ConnectionStatement {
         span: get_span(node),
         source: source_endpoint,
@@ -1780,4 +1826,15 @@ pub(crate) fn build_ast(root_node: Node, source: &str) -> ParseResult<SourceFile
     }
 
     Ok(SourceFile { span, items })
+}
+
+// Helper to find the span of the '.' token within a node (like member_access)
+fn get_dot_span(node: Node) -> ParseResult<Span> {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "." { // Check for literal dot token
+            return Ok(get_span(child));
+        }
+    }
+    Err(ParseError::new("Missing '.' token", Some(node)))
 }
