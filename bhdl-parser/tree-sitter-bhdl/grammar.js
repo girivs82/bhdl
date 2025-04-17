@@ -103,7 +103,7 @@ module.exports = grammar({
       $.interface_definition,
       $.net_class_definition,
       $.via_style_definition,
-      $._top_level_expression_statement, // Allow standalone expressions (like literals.txt)
+      $._top_level_expression_statement, // Restore this rule
       $.assignment_statement, // Allow top-level assignment
       $.comment
     ),
@@ -136,8 +136,7 @@ module.exports = grammar({
       optional(field('parameters', $.declaration_parameter_list)), // Added board parameters ()
       '{',
       repeat($._board_item),
-      '}',
-      ';'
+      '}'
     )),
 
     _board_item: $ => choice(
@@ -401,7 +400,7 @@ module.exports = grammar({
     )),
 
 
-    pin_port_declaration: $ => seq(
+    pin_port_declaration: $ => prec('definition', seq(
         optional(field('pin_port_kw', choice('pin', 'port'))), // Optional keyword
         field('name', $.identifier),                         // Name identifier
         ':',                                                 // Colon
@@ -413,7 +412,7 @@ module.exports = grammar({
         )),
         optional(field('bus', $.bus_specifier)),             // Optional bus specifier
         ';'                                                  // Semicolon
-    ),
+    )),
 
     // Define the named rule for the signal/power sequence
     pin_port_type_spec: $ => seq(
@@ -431,14 +430,13 @@ module.exports = grammar({
         ']'
     ),
 
-    // Component Instantiation
+    // Component Instantiation (Restored Optional Parts)
      component_instantiation: $ => prec('instantiation', seq(
-      field('type', $._type_name),
-      field('name', $.identifier), // Simplified name field
-      optional(field('bus', $.bus_specifier)), // Optional bus specifier after name
-      // Parameters can use () or {} according to examples/needs clarification
-      // For now, require one or the other
-      optional( // Make parameters optional entirely
+      field('name', $.identifier), // Instance name first
+      ':', 
+      field('type', $._type_name),  // Type name second
+      optional(field('bus', $.bus_specifier)), // Optional bus specifier
+      optional( // Optional parameters
         choice(
            field('parameters_paren', $.component_parameter_list_paren),
            field('parameters_curly', $.component_parameter_list_curly)
@@ -447,6 +445,7 @@ module.exports = grammar({
       ';'
     )),
 
+    // Keep parameter list rules defined, just not used by simplified instantiation
     component_parameter_list_paren: $ => seq(
       '(',
       // Explicitly allow physical literals in addition to general expressions
@@ -456,7 +455,7 @@ module.exports = grammar({
 
     component_parameter_list_curly: $ => seq(
       '{',
-      // Curly braces should use named assignments
+      // Restore optional commaSep to allow empty {}
       optional(commaSep($.component_parameter_assignment)),
       '}'
     ),
@@ -464,7 +463,7 @@ module.exports = grammar({
     component_parameter_assignment: $ => seq(
       field('name', $.identifier),
       '=', // Parameter assignments use '='
-      field('value', $._expression)
+      field('value', $._expression) // Revert back to _expression
     ),
 
     // Interface Usage Declaration (inside interfaces {} block)
@@ -584,7 +583,7 @@ module.exports = grammar({
     member_access: $ => prec.left('member', seq(
       field('object', $._expression), // Allow expressions like (complex_obj).member
       '.',
-      field('property', $.identifier)
+      field('property', choice($.identifier, $.integer_literal)) // Allow identifier OR integer literal
     )),
 
     subscript_access: $ => prec.left('subscript', seq(

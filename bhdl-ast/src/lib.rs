@@ -37,7 +37,7 @@ impl Span {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Identifier {
     pub span: Span,
-    pub name: String,
+    pub value: String,
 }
 
 /// Represents a physical literal (value + unit).
@@ -50,13 +50,18 @@ pub struct PhysicalLiteral {
     // pub value: Option<f64>,
 }
 
-/// Represents an integer literal.
+/// Represents an integer literal in the source code.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IntegerLiteral {
     pub span: Span,
-    pub value_text: String, // Keep original text
-    // Optional: Parsed numeric value
-    // pub value: Option<i64>, // Or u64, or arbitrary precision
+    pub value: u64, // Assuming u64 for now
+}
+
+/// Enum to represent the property in a member access (Identifier or Integer)
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum MemberAccessProperty {
+    Identifier(Identifier),
+    Integer(IntegerLiteral),
 }
 
 // Add structs for the new literals we didn't define initially
@@ -526,12 +531,13 @@ pub struct Argument {
     pub value: Expression,
 }
 
+/// Represents a member access expression (e.g., `a.b` or `Comp1.pin`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct MemberAccessExpression {
     pub span: Span,
     pub object: Expression,
     pub dot_span: Span,
-    pub property: Identifier,
+    pub property: MemberAccessProperty,
 }
 
 /// Represents accessing an element or slice of a bus/array.
@@ -553,7 +559,7 @@ pub struct RangeExpression {
     pub upper: Expression,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RangeOperator {
     // Exclusive, // .. - Is this used in BHDL spec? Grammar has to, upto
     InclusiveTo, // to
@@ -610,7 +616,7 @@ pub enum PinPortKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PinDirection { In, Out, Inout }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -668,7 +674,7 @@ pub struct ConnectionStatement {
     // pub constraints: Option<ConstraintBody>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConnectionOperator { Ltr, Rtl, BiDi } // ->, <-, <=>
 
 #[derive(Debug, Clone, PartialEq)]
@@ -691,14 +697,14 @@ mod tests {
     fn dummy_ident(name: &str) -> Identifier {
         Identifier {
             span: dummy_span(),
-            name: name.to_string(),
+            value: name.to_string(),
         }
     }
 
     #[test]
     fn test_expression_structs() {
         // Test basic literals
-        let _int_lit = Expression::IntegerLiteral(IntegerLiteral { span: dummy_span(), value_text: "10".to_string() });
+        let _int_lit = Expression::IntegerLiteral(IntegerLiteral { span: dummy_span(), value: 10 });
         let _phys_lit = Expression::PhysicalLiteral(PhysicalLiteral { span: dummy_span(), value_text: "4.7".to_string(), unit: "kOhm".to_string() });
         let _bool_lit = Expression::BooleanLiteral(BooleanLiteral { span: dummy_span(), value: true });
         let _string_lit = Expression::StringLiteral(StringLiteral { span: dummy_span(), value: "hello".to_string() });
@@ -708,8 +714,8 @@ mod tests {
             span: dummy_span(),
             op_span: dummy_span(),
             op: BinaryOperator::Add,
-            left: Expression::IntegerLiteral(IntegerLiteral { span: dummy_span(), value_text: "5".to_string() }),
-            right: Expression::IntegerLiteral(IntegerLiteral { span: dummy_span(), value_text: "3".to_string() }),
+            left: Expression::IntegerLiteral(IntegerLiteral { span: dummy_span(), value: 5 }),
+            right: Expression::IntegerLiteral(IntegerLiteral { span: dummy_span(), value: 3 }),
         }));
 
         // Test unary expression
@@ -717,13 +723,13 @@ mod tests {
             span: dummy_span(),
             op_span: dummy_span(),
             op: UnaryOperator::Negate,
-            operand: Expression::IntegerLiteral(IntegerLiteral { span: dummy_span(), value_text: "10".to_string() }),
+            operand: Expression::IntegerLiteral(IntegerLiteral { span: dummy_span(), value: 10 }),
         }));
 
         // Test parenthesized expression
         let _paren_expr = Expression::Parenthesized(Box::new(ParenthesizedExpression {
             span: dummy_span(),
-            expression: Expression::IntegerLiteral(IntegerLiteral { span: dummy_span(), value_text: "42".to_string() }),
+            expression: Expression::IntegerLiteral(IntegerLiteral { span: dummy_span(), value: 42 }),
         }));
 
         // Test function call
@@ -731,7 +737,7 @@ mod tests {
             span: dummy_span(),
             function: Expression::Identifier(dummy_ident("my_func")),
             arguments: vec![
-                Argument { span: dummy_span(), name: None, value: Expression::IntegerLiteral(IntegerLiteral { span: dummy_span(), value_text: "1".to_string() }) },
+                Argument { span: dummy_span(), name: None, value: Expression::IntegerLiteral(IntegerLiteral { span: dummy_span(), value: 1 }) },
                 Argument { span: dummy_span(), name: Some(dummy_ident("param")), value: Expression::BooleanLiteral(BooleanLiteral { span: dummy_span(), value: false }) }
             ],
             arg_list_span: dummy_span(),
@@ -742,7 +748,7 @@ mod tests {
             span: dummy_span(),
             object: Expression::Identifier(dummy_ident("my_obj")),
             dot_span: dummy_span(),
-            property: dummy_ident("field"),
+            property: MemberAccessProperty::Identifier(dummy_ident("field")),
         }));
 
         // Test subscript access (single index)
@@ -751,7 +757,7 @@ mod tests {
             object: Expression::Identifier(dummy_ident("my_array")),
             index: Box::new(BusSpecifier {
                  span: dummy_span(),
-                 high: Expression::IntegerLiteral(IntegerLiteral { span: dummy_span(), value_text: "3".to_string() }),
+                 high: Expression::IntegerLiteral(IntegerLiteral { span: dummy_span(), value: 3 }),
                  colon_span: None,
                  low: None
             }),
@@ -764,9 +770,9 @@ mod tests {
             object: Expression::Identifier(dummy_ident("my_bus")),
             index: Box::new(BusSpecifier {
                  span: dummy_span(),
-                 high: Expression::IntegerLiteral(IntegerLiteral { span: dummy_span(), value_text: "7".to_string() }),
+                 high: Expression::IntegerLiteral(IntegerLiteral { span: dummy_span(), value: 7 }),
                  colon_span: Some(dummy_span()),
-                 low: Some(Expression::IntegerLiteral(IntegerLiteral { span: dummy_span(), value_text: "0".to_string() }))
+                 low: Some(Expression::IntegerLiteral(IntegerLiteral { span: dummy_span(), value: 0 }))
             }),
             index_span: dummy_span(),
         }));
@@ -777,7 +783,7 @@ mod tests {
             span: dummy_span(),
             op_span: dummy_span(),
             op: RangeOperator::InclusiveTo,
-            lower: Expression::IntegerLiteral(IntegerLiteral { span: dummy_span(), value_text: "0".to_string() }),
+            lower: Expression::IntegerLiteral(IntegerLiteral { span: dummy_span(), value: 0 }),
             upper: Expression::Identifier(dummy_ident("MAX_VAL")),
         }));
 
@@ -797,7 +803,7 @@ mod tests {
             value: Expression::PhysicalLiteral(PhysicalLiteral { span: dummy_span(), value_text: "12".to_string(), unit: "Vdc".to_string() }),
             eq_span: Some(dummy_span()), // Assuming type: name = value style
         };
-        assert_eq!(_param_decl.name.name, "InputVoltage");
+        assert_eq!(_param_decl.name.value, "InputVoltage");
 
         // Test PinPortDeclaration (Input Signal)
         let _pin_decl_in = PinPortDeclaration {
@@ -843,9 +849,9 @@ mod tests {
             name: dummy_ident("VOUT"),
             bus_specifier: Some(BusSpecifier {
                 span: dummy_span(),
-                high: Expression::IntegerLiteral(IntegerLiteral { span: dummy_span(), value_text: "1".to_string() }),
+                high: Expression::IntegerLiteral(IntegerLiteral { span: dummy_span(), value: 1 }),
                 colon_span: Some(dummy_span()),
-                low: Some(Expression::IntegerLiteral(IntegerLiteral { span: dummy_span(), value_text: "0".to_string() })),
+                low: Some(Expression::IntegerLiteral(IntegerLiteral { span: dummy_span(), value: 0 })),
             }),
             kind: PinPortKind::SignalPower {
                 span: dummy_span(),
@@ -887,7 +893,7 @@ mod tests {
                  span: dummy_span(),
                  object: Expression::Identifier(dummy_ident("U1")),
                  dot_span: dummy_span(),
-                 property: dummy_ident("TXD"),
+                 property: MemberAccessProperty::Identifier(dummy_ident("TXD")),
             })),
             op: ConnectionOperator::Ltr,
             op_span: dummy_span(),
