@@ -30,48 +30,72 @@ While VHDL and Verilog focus on digital logic with limited analog support, BHDL 
 
 ### 1.4 Connection-First Workflow
 
-A key innovation of BHDL is its support for a connection-first design workflow. Unlike traditional HDLs that require rigid component declaration before connections, BHDL enables a more intuitive design process:
+**Note:** While the original design explored implicit component creation, the revised specification emphasizes **explicit declaration** for improved clarity and parsing robustness. The "connection-first" *workflow* is now primarily supported by **IDE tooling** rather than language syntax allowing implicit creation.
+
+**Tooling-Assisted Workflow:**
+
+1.  **Sketch Connections:** In a BHDL-aware IDE, designers can still type connections involving potentially undeclared components or nets (e.g., `VIN -> R1.1;`).
+2.  **IDE Assistance:** The IDE flags `R1` as undeclared and offers **code actions** (e.g., quick fixes, lightbulb suggestions) to:
+    *   Automatically generate a basic `Resistor R1 {};` declaration in the `components` block.
+    *   Automatically generate a `net VIN: signal;` declaration in the `nets` block (if `VIN` is also undeclared).
+3.  **Refine Declarations:** The designer then refines the generated declarations by adding necessary parameters (`value = 1kOhm;`), types, etc.
+
+**Example (Tooling-Assisted):**
+
+```bhdl
+// In connections block (designer types this first)
+connections {
+  VIN -> R1.1; // R1, VIN are initially flagged by IDE
+  R1.1 -> C1.1; // C1 flagged
+  C1.2 -> GND; // GND flagged (if not predefined)
+  R1.2 -> LED1.A; // LED1 flagged
+  LED1.K -> GND;
+}
+
+// IDE assists in generating these declarations:
+nets { // Explicit net declarations required
+  net VIN: power; // Assuming power type based on context or user choice
+  net Net_R1_C1: signal; // Auto-generated or named net
+  net Net_R1_LED: signal;
+  net GND: ground; // Assuming ground is a predefined or declared net
+}
+
+components { // Explicit component declarations required
+  Resistor R1 { value = 1kOhm; tolerance = 5pct; } // Designer fills in details
+  Capacitor C1 { value = 10uF; voltage = 25Vdc; } // Designer fills in details
+  LED LED1 { color = red; current = 20mA; } // Designer fills in details
+}
+
+// Refined connections using declared nets (optional but clearer)
+connections {
+  VIN -> R1.1;
+  R1.1 -> Net_R1_C1; C1.1 -> Net_R1_C1; // Connecting both pins to the explicit net
+  C1.2 -> GND;
+  R1.2 -> Net_R1_LED; LED1.A -> Net_R1_LED;
+  LED1.K -> GND;
+  // OR simplified pin-to-pin if intermediate net name isn't needed
+  // VIN -> R1.1;
+  // R1.1 -> C1.1; // Implicit net between R1.1 and C1.1
+  // C1.2 -> GND;
+  // R1.2 -> LED1.A; // Implicit net between R1.2 and LED1.A
+  // LED1.K -> GND;
+}
 
 ```
-// Connection-first workflow example
-// Step 1: Quickly sketch connections with minimal component details
-VIN -> R1.1 -> C1.1;  // R1 and C1 implicitly created
-C1.2 -> GND;
-R1.2 -> LED1.A;       // LED1 implicitly created 
-LED1.K -> GND;
 
-// Step 2: Extract and formalize components when ready
-component Resistor R1 {
-  value: 1kOhm;  // Use Ohm
-  tolerance: 5pct; // Use pct
-}
+This tooling-based approach offers similar advantages to the original concept:
 
-component ElectrolyticCapacitor C1 {
-  value: 10uF;   // Use uF
-  voltage: 25Vdc;
-}
-
-component LED LED1 {
-  color: red;
-  current: 20mA;
-}
-```
-
-This approach offers several advantages:
-
-1. **Natural design flow** - Mirrors how engineers actually think about circuits
-2. **Rapid prototyping** - Sketch connections quickly without formal component declarations
-3. **Reduced context switching** - Fewer back-and-forth movements between declarations and connections
-4. **Gradual refinement** - Start with a circuit sketch, then formalize incrementally
-5. **Preserves separation** - Maintains clean separation between library components and connections in final designs
-
-While the language syntax supports both traditional and connection-first workflows, the BHDL IDE tooling is specifically optimized for the connection-first approach, with features like component inference, property completion, and automated extraction.
+1.  **Natural design flow:** Focus on connectivity first.
+2.  **Rapid prototyping:** Sketch connections quickly.
+3.  **Reduced context switching:** Generate declarations via code actions without manually navigating.
+4.  **Gradual refinement:** Formalize declarations as needed.
+5.  **Structural Clarity:** Maintains a clean, explicit structure in the final code, aiding parsing and readability.
 
 ### 1.5 Why a Text-Based Language for Board Design?
 
 Many experienced board designers are highly proficient with graphical schematic capture tools. So, why introduce a text-based language like BHDL? BHDL is not intended to simply replicate graphical schematics in text, but rather to offer a different, complementary approach with distinct advantages, designed *specifically* with the board designer's workflow in mind:
 
-1.  **Intuitive Capture at Design Speed:** Features like the **connection-first workflow** (Section 1.4), integrated **physical units** (Section 2.3), and **circuit functions** (Section 3.5) are designed to let you capture circuit ideas directly, often mirroring how you might initially sketch or think about connectivity, without getting bogged down in graphical layout or premature component definition. The goal is to describe the *intent* quickly and naturally.
+1.  **Intuitive Capture at Design Speed:** Features like the **tooling-assisted connection-first workflow** (Section 1.4), integrated **physical units** (Section 2.3), and **circuit functions** (Section 3.5) are designed to let you capture circuit ideas directly, often mirroring how you might initially sketch or think about connectivity, without getting bogged down in graphical layout or premature component definition. The goal is to describe the *intent* quickly and naturally.
 2.  **Reducing Tool Friction:** While graphical tools excel at visualization, they can sometimes introduce friction in tasks like managing complex parameters, reusing circuits across projects, or performing detailed electrical rule checks early. BHDL aims to streamline these aspects.
 3.  **Powerful Abstraction & Reuse:** Defining reusable **modules** (Section 3.2), **interfaces** (Section 3.4), **types** (Section 2.4), and **circuit functions** (Section 3.5) in text allows for powerful, parameterizable reuse that often goes beyond simple copy-paste in graphical tools. Standard circuit blocks can be instantiated with one line.
 4.  **Enhanced Verification:** By capturing electrical properties directly in **types** and performing **unit-aware calculations** (Section 2.3.3), BHDL enables more robust automated checks for electrical compatibility and design rule violations early in the process.
@@ -87,28 +111,51 @@ BHDL offers a structured, verifiable, and reusable way to describe complex circu
 
 ### 2.1 Basic Syntax
 
-```
+```bhdl
 // Comments use C-style syntax
 /* Multi-line comments
    are also supported */
 
-// Top-level board definition
+// Top-level board definition uses { }
 board BoardName {
-  // Board contents
+  // Board contents (properties assigned with '=')
+  author = "Design Team";
+
+  // Blocks also use { }
+  parameters {
+    param1 = 10;
+  }
+  components { /* ... */ }
+  nets { /* ... */ }
+  connections { /* ... */ }
+  // ... other blocks ...
 }
 
-// Module definition
+// Module definition uses { }
 module ModuleName {
   // Module contents
 }
 
-// Component definition
+// Component definition uses { }
 component ComponentName {
-  // Component specifications
+  // Component specifications (properties assigned with '=')
+  value = 100uF;
+}
+
+// Interface definition uses { }
+interface InterfaceName {
+  // Interface contents
+}
+
+// Type definition uses { }
+typedef TypeName {
+  // Type properties assigned with '='
+  type = signal;
+  domain = digital;
 }
 ```
 
-**Reasoning**: The C-style syntax is familiar to most engineers, reducing the learning curve. The clear hierarchical structure mirrors how designers think about boards as collections of modules and components.
+**Reasoning**: The C-style syntax is familiar. Consistent use of `{}` for all blocks and `=` for all assignments simplifies parsing and improves readability by reducing syntactic variations.
 
 ### 2.2 Naming Conventions
 
@@ -120,87 +167,78 @@ component ComponentName {
 
 ### 2.3 Basic Data Types
 
-```
-// Numeric types with units (using typable ASCII units)
-voltage: 3.3Vdc;       // DC voltage
-ac_voltage: 230Vac;    // AC voltage
-rms_voltage: 0.894Vrms; // RMS voltage
-current: 100mA;
-resistance: 4.7kOhm;    // Use kOhm instead of kΩ
-capacitance: 10uF;      // Use uF instead of µF
-inductance: 10uH;       // Use uH instead of µH
-frequency: 16MHz;
-time: 10ns;
-temperature: 85degC;    // Use degC instead of °C
-duty_cycle: 50pct;      // Use pct instead of %
+```bhdl
+// Properties assigned using '='
+parameters {
+  // Numeric types with units (using typable ASCII units)
+  voltage = 3.3Vdc;       // DC voltage
+  ac_voltage = 230Vac;    // AC voltage
+  rms_voltage = 0.894Vrms; // RMS voltage
+  current = 100mA;
+  resistance = 4.7kOhm;    // Use kOhm instead of kΩ
+  capacitance = 10uF;      // Use uF instead of µF
+  inductance = 10uH;       // Use uH instead of µH
+  frequency = 16MHz;
+  time = 10ns;
+  temperature = 85degC;    // Use degC instead of °C
+  duty_cycle = 50pct;      // Use pct instead of %
 
-// Boolean type
-enable: true;
-active_low: false;
+  // Boolean type
+  enable = true;
+  active_low = false;
 
-// String type
-part_number: "LM317T";
+  // String type
+  part_number = "LM317T";
 
-// Enumerations
-package: enum {SOIC-8, TSSOP-16, QFN-32};
+  // Enumerations (Declaration - specific syntax TBD, example assumes predefined enum type 'PackageType')
+  // package_type: PackageType = PackageType'SOIC8; // Example usage if enum type exists
+  package_option = enum { SOIC8, TSSOP16, QFN32 }; // Inline enum definition (alternative)
+  selected_package = package_option'SOIC8; // Selecting a value
 
-// Arrays
-capacitors: [10uF, 1uF, 100nF]; // Use uF/nF
+  // Arrays/Lists
+  capacitors = [10uF, 1uF, 100nF]; // Use uF/nF
 
-// Ranges
-input_voltage: 5Vdc to 24Vdc;
-operating_temp: -40degC to 85degC;
-tolerance: 5pct; // Use pct
+  // Ranges (Used in types or constraints)
+  // input_voltage_range = 5Vdc to 24Vdc; // Direct range assignment might be less common for simple parameters
+  operating_temp = -40degC to 85degC;
+  tolerance_pct = 5pct; // Use pct
 
-// Enum Value Literal (distinct from declaration)
-state_value: StateType'Active; // Example: Assigning an enum value
+  // Enum Value Literal (distinct from declaration)
+  // state_value = StateType'Active; // Example: Assigning an enum value
+}
+
+// Type usage example within a pin definition
+pins {
+   // Assuming StateType exists
+   // STATUS: out signal(StateType);
+}
 ```
 
 **Reasoning**: Including units directly in the syntax prevents unit conversion errors and makes the code more readable. Using standard ASCII characters (e.g., `Ohm`, `uF`, `degC`, `pct`, `Vdc`/`Vac`) enhances typability and portability across different systems. Advanced types like ranges directly express design constraints.
 
 ### 2.3.1 Component Specifications and Ratings
 
-When specifying component ratings (such as voltage ratings for capacitors), values are assumed to be minimum required values unless explicitly stated otherwise.
+When specifying component ratings (such as voltage ratings for capacitors) within component definitions or instances, use the standard assignment syntax. Values are assumed to be minimum required values unless explicitly stated otherwise using comparison operators.
 
-```
-// Capacitor with 16V minimum DC voltage rating
-component Capacitor C1 {
-  value: 100nF;
-  voltage: 16Vdc;  // Minimum voltage rating (DC assumed if not specified)
+```bhdl
+// Capacitor definition with 16V minimum DC voltage rating
+component Capacitor {
+  // Default/base properties
+  pins { 1: inout signal; 2: inout signal; }
+  // Default parameters
+  value: capacitance = required; // Must be specified at instantiation
+  voltage: voltage = 0Vdc; // Default voltage rating
 }
 
-// Inline component with voltage rating
-[C2, Capacitor, 100nF, 25Vdc]  // Minimum 25Vdc rating
-```
-
-This simplifies the syntax by omitting explicit comparators (like `>=`) when they can be inferred from context. The rating values represent the minimum requirements that must be met or exceeded by the physical components.
-
-Other component ratings follow the same pattern where practical:
-
-```
-// Current rating is minimum required
-component Inductor L1 {
-  value: 10uH;
-  current: 1A;       // Minimum DC current rating
+// Instantiation of the Capacitor
+components {
+  Capacitor C1 {
+    value = 100nF;
+    voltage = 16Vdc;  // Minimum voltage rating for this instance
+  }
 }
 
-// Power rating is minimum required
-component Resistor R1 {
-  value: 10kOhm;
-  power: 0.25W;      // Minimum power rating
-}
-```
-
-When a maximum constraint is needed, it should be explicitly specified with the `<` or `<=` operator. Similarly, minimums can be explicitly denoted with `>` or `>=` if needed for clarity, though often implied by context for ratings.
-
-```
-// Maximum values use explicit operator
-input_offset: <5mV;    // Maximum input offset
-noise: <10nV/sqrt(Hz); // Maximum noise (example complex unit)
-ripple: <50mVpp;       // Maximum peak-to-peak ripple
-
-// Explicit minimum (less common for ratings, useful for specs)
-output_drive_strength: >10mA;
+// Deprecated Inline component syntax is removed. Use explicit declaration.
 ```
 
 ### 2.3.2 Unit Definitions and Syntax
@@ -312,45 +350,45 @@ Each base type carries a different set of implicit electrical characteristics an
 
 #### 2.4.2 Extending Types with typedef
 
-The core types are extended using the `typedef` mechanism to create domain-specific types with rich electrical characteristics:
+The core types are extended using the `typedef` mechanism to create domain-specific types with rich electrical characteristics. Use standard assignment syntax (`=`) within the block.
 
-```
-// Type definition syntax
+```bhdl
+// Type definition syntax uses '='
 typedef <TypeName> {
-  type: <BaseType>;          // Mandatory: signal, power, or ground
-  domain: <DomainName>;       // Optional: e.g., digital, analog, clock, differential
-  // --- Common Electrical Properties --- 
-  voltage_high: voltage;      // For digital types
-  voltage_low: voltage;
-  threshold_high: voltage;
-  threshold_low: voltage;
-  impedance: resistance;
-  bandwidth: frequency_range;
-  // --- Properties for Automation --- 
-  is_open_drain: boolean = false; // Optional: Indicates open-drain/collector output
-  default_pullup_resistance: resistance; // Optional: Default pull-up for open-drain
+  type = <BaseType>;          // Mandatory: signal, power, or ground
+  domain = <DomainName>;       // Optional: e.g., digital, analog, clock, differential
+  // --- Common Electrical Properties ---
+  voltage_high = voltage;      // For digital types
+  voltage_low = voltage;
+  threshold_high = voltage;
+  threshold_low = voltage;
+  impedance = resistance;
+  bandwidth = frequency_range; // Example: 20Hz to 20kHz
+  // --- Properties for Automation ---
+  is_open_drain = false; // Optional: Indicates open-drain/collector output
+  default_pullup = resistance; // Optional: Default pull-up for open-drain
   // ... other properties like rise_time, leakage, etc. ...
 }
 
 // Example: 3.3V CMOS type
 typedef cmos_3v3 {
-  type: signal; domain: digital;
-  voltage_high: 3.3Vdc; voltage_low: 0Vdc;
-  threshold_high: 2.0Vdc; threshold_low: 0.8Vdc;
-  rise_time: <10ns; input_leakage: <1uA;
+  type = signal; domain = digital;
+  voltage_high = 3.3Vdc; voltage_low = 0Vdc;
+  threshold_high = 2.0Vdc; threshold_low = 0.8Vdc;
+  rise_time = <10ns; input_leakage = <1uA;
 }
 
 // Example: I2C signal type defining open-drain and default pull-up
 typedef i2c_signal_3v3 {
-  type: signal; domain: digital;
-  voltage_high: 3.3Vdc; voltage_low: 0Vdc;
-  threshold_high: 2.0Vdc; threshold_low: 0.8Vdc;
-  is_open_drain: true;
-  default_pullup_resistance: 4.7kOhm; // Default pull-up value for automation
+  type = signal; domain = digital;
+  voltage_high = 3.3Vdc; voltage_low = 0Vdc;
+  threshold_high = 2.0Vdc; threshold_low = 0.8Vdc;
+  is_open_drain = true;
+  default_pullup = 4.7kOhm; // Default pull-up value for automation
   // Could add max capacitance, speed ratings etc.
 }
 
-// Type usage
+// Type usage in pin definitions
 pins {
   CLK: in signal(cmos_3v3);   // A 3.3V CMOS clock input
   SDA: inout signal(i2c_signal_3v3); // An I2C signal pin
@@ -361,28 +399,24 @@ pins {
 
 #### 2.4.3 Pin Directions and Types
 
-Pin direction is orthogonal to the pin type and specified separately. BHDL supports three pin directions:
-
-- **in**: Input to the component/module/board
-- **out**: Output from the component/module/board
-- **inout**: Bidirectional pin
+Pin direction is orthogonal to the pin type and specified separately. BHDL supports three pin directions: `in`, `out`, `inout`.
 
 Directions are combined with types to fully specify a pin's electrical characteristics:
 
-```
+```bhdl
 pins {
   // Different directions with the same signal type
   DATA_IN: in signal(cmos_3v3);
   DATA_OUT: out signal(cmos_3v3);
   DATA_BIDIR: inout signal(cmos_3v3);
-  
+
   // Differential signals (use inout and rely on type properties)
-  DIFF_P: inout signal(lvds); // Changed from bidir to inout
-  DIFF_N: inout signal(lvds); // Changed from bidir to inout
-  
+  DIFF_P: inout signal(lvds); // Assumes 'lvds' type defined elsewhere
+  DIFF_N: inout signal(lvds);
+
   // Power and ground
-  VDD: in power(lv_digital_power);
-  VOUT: out power(lv_digital);
+  VDD: in power(lv_digital_power); // Assumes 'lv_digital_power' type defined
+  VOUT: out power(lv_digital); // Assumes 'lv_digital' type defined
   GND: ground;
 }
 ```
@@ -418,225 +452,185 @@ component Resistor R1 {
 
 #### 2.4.4 Standard Library Types
 
-The BHDL standard library includes predefined types for common domains:
-```
+The BHDL standard library includes predefined types for common domains (using `=` for assignment):
+```bhdl
 // Digital signal types in libraries/types.bhdl
 typedef ttl {
-  type: signal;
-  domain: digital;
-  voltage_high: 5.0Vdc;
-  voltage_low: 0Vdc;
-  threshold_high: 2.0Vdc;
-  threshold_low: 0.8Vdc;
-  rise_time: <22ns;
-  fanout: 10;
+  type = signal;
+  domain = digital;
+  voltage_high = 5.0Vdc;
+  voltage_low = 0Vdc;
+  threshold_high = 2.0Vdc;
+  threshold_low = 0.8Vdc;
+  rise_time = <22ns;
+  fanout = 10;
 }
 
 typedef cmos_5v {
-  type: signal;
-  domain: digital;
-  voltage_high: 5.0Vdc;
-  voltage_low: 0Vdc;
-  threshold_high: 3.5Vdc;
-  threshold_low: 1.5Vdc;
-  rise_time: <20ns;
-  input_leakage: <1uA;
+  type = signal;
+  domain = digital;
+  voltage_high = 5.0Vdc;
+  voltage_low = 0Vdc;
+  threshold_high = 3.5Vdc;
+  threshold_low = 1.5Vdc;
+  rise_time = <20ns;
+  input_leakage = <1uA;
 }
 
 typedef cmos_3v3 {
-  type: signal;
-  domain: digital;
-  voltage_high: 3.3Vdc;
-  voltage_low: 0Vdc;
-  threshold_high: 2.0Vdc;
-  threshold_low: 0.8Vdc;
-  rise_time: <10ns;
-  input_leakage: <1uA;
+  type = signal;
+  domain = digital;
+  voltage_high = 3.3Vdc;
+  voltage_low = 0Vdc;
+  threshold_high = 2.0Vdc;
+  threshold_low = 0.8Vdc;
+  rise_time = <10ns;
+  input_leakage = <1uA;
 }
 
 typedef lvcmos_2v5 {
-  type: signal;
-  domain: digital;
-  voltage_high: 2.5Vdc;
-  voltage_low: 0Vdc;
-  threshold_high: 1.7Vdc;
-  threshold_low: 0.7Vdc;
-  rise_time: <8ns;
-  input_leakage: <1uA;
+  type = signal;
+  domain = digital;
+  voltage_high = 2.5Vdc;
+  voltage_low = 0Vdc;
+  threshold_high = 1.7Vdc;
+  threshold_low = 0.7Vdc;
+  rise_time = <8ns;
+  input_leakage = <1uA;
 }
 
 typedef lvcmos_1v8 {
-  type: signal;
-  domain: digital;
-  voltage_high: 1.8Vdc;
-  voltage_low: 0Vdc;
-  threshold_high: 1.2Vdc;
-  threshold_low: 0.6Vdc;
-  rise_time: <5ns;
-  input_leakage: <1uA;
+  type = signal;
+  domain = digital;
+  voltage_high = 1.8Vdc;
+  voltage_low = 0Vdc;
+  threshold_high = 1.2Vdc;
+  threshold_low = 0.6Vdc;
+  rise_time = <5ns;
+  input_leakage = <1uA;
 }
 
 typedef lvcmos_1v2 {
-  type: signal;
-  domain: digital;
-  voltage_high: 1.2Vdc;
-  voltage_low: 0Vdc;
-  threshold_high: 0.8Vdc;
-  threshold_low: 0.4Vdc;
-  rise_time: <3ns;
-  input_leakage: <1uA;
+  type = signal;
+  domain = digital;
+  voltage_high = 1.2Vdc;
+  voltage_low = 0Vdc;
+  threshold_high = 0.8Vdc;
+  threshold_low = 0.4Vdc;
+  rise_time = <3ns;
+  input_leakage = <1uA;
 }
 
 typedef lvds {
-  type: signal;
-  domain: differential; // More specific than just digital
-  voltage_high: 1.4Vdc; // Typical high level
-  voltage_low: 1.0Vdc;  // Typical low level
-  differential: true;
-  termination: 100Ohm;
-  common_mode: 1.2Vdc;
-  swing: 350mV;
-  rise_time: <300ps;
+  type = signal;
+  domain = differential; // More specific than just digital
+  voltage_high = 1.4Vdc; // Typical high level
+  voltage_low = 1.0Vdc;  // Typical low level
+  differential = true;
+  termination = 100Ohm;
+  common_mode = 1.2Vdc;
+  swing = 350mV;
+  rise_time = <300ps;
 }
-```
 
-**Audio Signal Types**:
-```
+// Audio Signal Types
 typedef line_level {
-  type: signal;
-  domain: analog;
-  voltage: 0.894Vrms;       // Consumer line level (-10dBV)
-  impedance: 10kOhm;
-  bandwidth: 20Hz to 20kHz;
+  type = signal;
+  domain = analog;
+  voltage = 0.894Vrms;       // Consumer line level (-10dBV)
+  impedance = 10kOhm;
+  bandwidth = 20Hz to 20kHz;
 }
 
-typedef pro_line_level {
-  type: signal;
-  domain: analog;
-  voltage: 1.228Vrms;       // Professional line level (+4dBu)
-  impedance: 600Ohm;
-  bandwidth: 20Hz to 20kHz;
-}
-
-typedef mic_level {
-  type: signal;
-  domain: analog;
-  voltage: 2mVrms to 100mVrms;
-  impedance: 150Ohm to 600Ohm;
-  bandwidth: 20Hz to 20kHz;
-}
-```
-
-**Power Types**:
-```
+// Power Types
 typedef lv_digital_power { // Renamed for clarity
-  type: power;
-  voltage: 3.3Vdc;
-  tolerance: 5pct; // Use pct
-  ripple: <50mVpp; // Explicitly Peak-to-Peak
+  type = power;
+  voltage = 3.3Vdc;
+  tolerance = 5pct; // Use pct
+  ripple = <50mVpp; // Explicitly Peak-to-Peak
 }
 
-typedef lv_analog_power { // Renamed for clarity
-  type: power;
-  voltage: 5Vdc;
-  tolerance: 2pct; // Use pct
-  ripple: <10mVpp; // Explicitly Peak-to-Peak
-  noise: <100uVrms in 20Hz to 20kHz; // Use uVrms
-}
-```
-
-**Clock Types**:
-```
+// Clock Types
 typedef system_clock {
-  type: signal;
-  domain: clock;
-  frequency: 100MHz;
-  jitter: <100ps;
-  duty_cycle: 50pct +/- 5pct; // Use pct and +/- syntax
+  type = signal;
+  domain = clock;
+  frequency = 100MHz;
+  jitter = <100ps;
+  duty_cycle = 50pct +/- 5pct; // Use pct and +/- syntax
   // Assuming clock uses standard logic levels, e.g., cmos_3v3
   // These can be specified directly or inherited from another type
-  voltage_high: 3.3Vdc;
-  voltage_low: 0Vdc;
+  voltage_high = 3.3Vdc;
+  voltage_low = 0Vdc;
 }
 
-typedef crystal_clock {
-  type: signal;
-  domain: clock;
-  differential: true;
-  amplitude: 1Vpeak;
-  frequency: required; // Frequency must be specified at use time
-}
-```
-
-**Thermal Types**:
-```
-// Note: Thermal properties might be better suited as component/board constraints
-// rather than pin types. Defining them here without a core 'type' field.
+// Thermal Types (Property Sets might be a better fit - see original spec)
+// Define as property_set if not tied to pin types directly
 property_set commercial_thermal {
-  operating_temperature: 0degC to 70degC;
-  storage_temperature: -40degC to 85degC;
+  operating_temperature = 0degC to 70degC;
+  storage_temperature = -40degC to 85degC;
 }
 
 property_set industrial_thermal {
-  operating_temperature: -40degC to 85degC;
-  storage_temperature: -55degC to 125degC;
+  operating_temperature = -40degC to 85degC;
+  storage_temperature = -55degC to 125degC;
 }
 ```
 
 #### 2.4.5 User-Defined Types
 
-Users can define custom types for domain-specific needs:
+Users can define custom types for domain-specific needs (using `=`):
 
-```
+```bhdl
 // In myproject/custom_types.bhdl
 typedef automotive_signal {
-  type: signal;
-  domain: custom; // Or perhaps 'analog' or 'digital' depending on use
-  voltage: 0Vdc to 5Vdc;
-  impedance: 100Ohm;
-  rise_time: <100ns;
-  esd_protection: 15kV;
-  reverse_voltage_protection: true;
+  type = signal;
+  domain = custom; // Or perhaps 'analog' or 'digital' depending on use
+  voltage = 0Vdc to 5Vdc;
+  impedance = 100Ohm;
+  rise_time = <100ns;
+  esd_protection = 15kV;
+  reverse_voltage_protection = true;
 }
 
 typedef medical_power {
-  type: power;
-  voltage: 12Vdc;
-  isolation: 4kV;
-  leakage_current: <10uA;
-  certifications: ["IEC 60601-1", "UL 60601-1"];
+  type = power;
+  voltage = 12Vdc;
+  isolation = 4kV;
+  leakage_current = <10uA;
+  certifications = ["IEC 60601-1", "UL 60601-1"];
 }
 ```
 
 #### 2.4.6 Type Inheritance and Extension
 
-Types can inherit and extend other types:
+Types can inherit and extend other types (using `extends` keyword, properties assigned with `=`):
 
-```
+```bhdl
 // Extending a base type
 typedef high_quality_line_level extends line_level {
-  thd: <0.001pct;           // Total harmonic distortion (use pct)
-  snr: >100dB;            // Signal-to-noise ratio
-  crosstalk: <-80dB;      // Channel crosstalk
+  thd = <0.001pct;           // Total harmonic distortion (use pct)
+  snr = >100dB;            // Signal-to-noise ratio
+  crosstalk = <-80dB;      // Channel crosstalk
 }
 
 // Creating a variant
 typedef battery_power extends lv_digital_power { // Using renamed type
-  voltage: 3.7Vdc;        // Li-ion nominal voltage
-  voltage_range: 3.0Vdc to 4.2Vdc;
-  protection: {
-    overcurrent: true;
-    overvoltage: true;
-    undervoltage: true;
+  voltage = 3.7Vdc;        // Li-ion nominal voltage
+  voltage_range = 3.0Vdc to 4.2Vdc;
+  // Nested block for structured properties, still uses '='
+  protection = {
+    overcurrent = true;
+    overvoltage = true;
+    undervoltage = true;
   };
 }
 ```
 
 #### 2.4.7 Using Type Definitions
 
-Types are used throughout BHDL to provide rich, domain-specific parameters:
+Types are used throughout BHDL (properties assigned with `=`):
 
-```
+```bhdl
 // Importing types
 import Types.{cmos_3v3, lvds, lv_digital_power}; // Updated power type name
 
@@ -660,7 +654,7 @@ board DigitalInterface {
   // Component instantiations
   components {
     FPGA U1 {
-      io_standard: cmos_3v3;  // Using type as a parameter
+      io_standard = cmos_3v3;  // Using type as a parameter
     }
   }
   
@@ -699,15 +693,17 @@ The BHDL type system provides several key benefits:
 
 ### 2.5 Type Definitions
 
-BHDL provides a flexible type definition mechanism that allows both standard library types and user-defined types. This enables type-safe design with domain-specific parameter sets.
+*(Note: This section largely duplicates 2.4.2-2.4.8 and can potentially be merged or removed for conciseness if 2.4 is sufficiently clear. The following retains the structure but updates syntax)*
 
-```
-// Type definition syntax
+BHDL provides a flexible type definition mechanism that allows both standard library types and user-defined types, using the `typedef` keyword and standard assignment (`=`).
+
+```bhdl
+// Type definition syntax uses '='
 typedef line_level {
-  type: signal;          // Base type category
-  voltage: 0.894Vrms;    // Consumer line level (typical -10dBV)
-  impedance: 10kOhm;
-  bandwidth: 20Hz to 20kHz;
+  type = signal;          // Base type category
+  voltage = 0.894Vrms;    // Consumer line level (typical -10dBV)
+  impedance = 10kOhm;
+  bandwidth = 20Hz to 20kHz;
 }
 
 // Type usage
@@ -716,149 +712,128 @@ ports {
 }
 ```
 
-**Reasoning**: The `typedef` mechanism provides a general-purpose way to define structured types without introducing specialized keywords for each domain. This keeps the language simpler while enabling rich type checking and domain-specific parameters.
+**Reasoning**: The `typedef` mechanism provides a general-purpose way to define structured types. Consistent use of `=` simplifies parsing.
 
 #### 2.5.1 Standard Library Types
 
-Standard types are defined in the BHDL standard library and can be imported:
+Standard types are defined in the BHDL standard library and can be imported. Examples updated for `=` assignment:
 
-```
+```bhdl
 // In libraries/types.bhdl
 // Audio signal types
 typedef line_level {
-  type: signal;
-  voltage: 0.894Vrms;       // Consumer line level (-10dBV)
-  impedance: 10kOhm;
-  bandwidth: 20Hz to 20kHz;
+  type = signal;
+  voltage = 0.894Vrms;       // Consumer line level (-10dBV)
+  impedance = 10kOhm;
+  bandwidth = 20Hz to 20kHz;
 }
 
-typedef pro_line_level {
-  type: signal;
-  voltage: 1.228Vrms;       // Professional line level (+4dBu)
-  impedance: 600Ohm;
-  bandwidth: 20Hz to 20kHz;
-}
-
-typedef mic_level {
-  type: signal;
-  voltage: 2mVrms to 100mVrms;
-  impedance: 150Ohm to 600Ohm;
-  bandwidth: 20Hz to 20kHz;
-}
+// ... other standard types updated similarly ...
 
 // Power types
 typedef lv_digital_power {
-  type: power;
-  voltage: 3.3Vdc;
-  tolerance: 5pct;
-  ripple: <50mVpp;
+  type = power;
+  voltage = 3.3Vdc;
+  tolerance = 5pct;
+  ripple = <50mVpp;
 }
 
-typedef lv_analog_power {
-  type: power;
-  voltage: 5Vdc;
-  tolerance: 2pct;
-  ripple: <10mVpp;
-  noise: <100uVrms in 20Hz to 20kHz;
-}
+// ... other standard types updated similarly ...
 
 // Digital interface types
 typedef lvds {
-  type: digital;
-  voltage_high: 1.4Vdc;
-  voltage_low: 1.0Vdc;
-  differential: true;
-  termination: 100Ohm;
-  rise_time: <300ps;
+  type = signal; // Clarified base type
+  domain = differential;
+  voltage_high = 1.4Vdc;
+  voltage_low = 1.0Vdc;
+  differential = true;
+  termination = 100Ohm;
+  rise_time = <300ps;
 }
 
 typedef cmos_3v3 {
-  type: digital;
-  voltage_high: 3.3Vdc;
-  voltage_low: 0Vdc;
-  threshold_high: >2.0Vdc;
-  threshold_low: <0.8Vdc;
-  rise_time: <5ns;
+  type = signal; // Clarified base type
+  domain = digital;
+  voltage_high = 3.3Vdc;
+  voltage_low = 0Vdc;
+  threshold_high = >2.0Vdc; // Or use threshold_high = 2.0Vdc and rely on tool interpretation
+  threshold_low = <0.8Vdc; // Or use threshold_low = 0.8Vdc
+  rise_time = <5ns;
 }
 
 // Clock types
 typedef system_clock {
-  type: clock;
-  frequency: 100MHz;
-  jitter: <100ps;
-  duty_cycle: 50pct +/- 5pct;
+  type = signal; // Clarified base type
+  domain = clock;
+  frequency = 100MHz;
+  jitter = <100ps;
+  duty_cycle = 50pct +/- 5pct;
 }
 
-// Thermal types
-typedef commercial_thermal {
-  type: thermal;
-  operating_temperature: 0degC to 70degC;
-  storage_temperature: -40degC to 85degC;
+// Thermal types (as property sets)
+property_set commercial_thermal {
+  operating_temperature = 0degC to 70degC;
+  storage_temperature = -40degC to 85degC;
 }
 ```
 
 #### 2.5.2 User-Defined Types
 
-Users can define custom types for domain-specific needs:
+Users can define custom types using `=`:
 
-```
+```bhdl
 // In myproject/custom_types.bhdl
 typedef automotive_signal {
-  type: signal;
-  domain: custom; // Or perhaps 'analog' or 'digital' depending on use
-  voltage: 0Vdc to 5Vdc;
-  impedance: 100Ohm;
-  rise_time: <100ns;
-  esd_protection: 15kV;
-  reverse_voltage_protection: true;
+  type = signal;
+  domain = custom;
+  voltage = 0Vdc to 5Vdc;
+  impedance = 100Ohm;
+  rise_time = <100ns;
+  esd_protection = 15kV;
+  reverse_voltage_protection = true;
 }
 
-typedef medical_power {
-  type: power;
-  voltage: 12Vdc;
-  isolation: 4kV;
-  leakage_current: <10uA;
-  certifications: ["IEC 60601-1", "UL 60601-1"];
-}
+// ... other user types updated similarly ...
 
 typedef adc_interface {
-  type: analog;
-  voltage_range: 0Vdc to 3.3Vdc;
-  resolution: 12bit;
-  sampling_rate: 1MSPS;
-  input_impedance: >1MOhm;
+  type = signal; // Assuming analog signals are base type 'signal' with domain 'analog'
+  domain = analog;
+  voltage_range = 0Vdc to 3.3Vdc;
+  resolution = 12bit;
+  sampling_rate = 1MSPS;
+  input_impedance = >1MOhm;
 }
 ```
 
 #### 2.5.3 Type Inheritance and Extension
 
-Types can inherit and extend other types:
+Types inherit using `extends` and assign properties with `=`:
 
-```
+```bhdl
 // Extending a base type
 typedef high_quality_line_level extends line_level {
-  thd: <0.001pct;           // Total harmonic distortion (use pct)
-  snr: >100dB;            // Signal-to-noise ratio
-  crosstalk: <-80dB;      // Channel crosstalk
+  thd = <0.001pct;
+  snr = >100dB;
+  crosstalk = <-80dB;
 }
 
 // Creating a variant
-typedef battery_power extends lv_digital_power { // Using renamed type
-  voltage: 3.7Vdc;        // Li-ion nominal voltage
-  voltage_range: 3.0Vdc to 4.2Vdc;
-  protection: {
-    overcurrent: true;
-    overvoltage: true;
-    undervoltage: true;
+typedef battery_power extends lv_digital_power {
+  voltage = 3.7Vdc;
+  voltage_range = 3.0Vdc to 4.2Vdc;
+  protection = { // Nested block uses '='
+    overcurrent = true;
+    overvoltage = true;
+    undervoltage = true;
   };
 }
 ```
 
 #### 2.5.4 Using Type Definitions
 
-Types are used throughout BHDL to provide rich, domain-specific parameters:
+Types are used throughout BHDL, assignments use `=`:
 
-```
+```bhdl
 // Importing types
 import libraries.types.{line_level, lv_digital_power, cmos_3v3, system_clock};
 import myproject.custom_types.{automotive_signal};
@@ -869,202 +844,143 @@ module AudioInterface {
     // Signal types
     AUDIO_IN_L: in signal(line_level);
     AUDIO_IN_R: in signal(line_level);
-    AUDIO_OUT: out signal(pro_line_level);
-    
+    AUDIO_OUT: out signal(pro_line_level); // Assumes pro_line_level is defined
+
     // Power types
-    VDD: in power(lv_analog_power);
+    VDD: in power(lv_analog_power); // Assumes lv_analog_power is defined
     VDDA: in power(lv_analog_power);
-    
+
     // Digital interface types
-    SPI_MOSI: in digital(cmos_3v3);
-    SPI_MISO: out digital(cmos_3v3);
-    SPI_SCK: in digital(cmos_3v3);
-    
+    SPI_MOSI: in signal(cmos_3v3); // Changed from 'digital' keyword if not a base type
+    SPI_MISO: out signal(cmos_3v3);
+    SPI_SCK: in signal(cmos_3v3);
+
     // Clock type
-    CLK: in clock(system_clock);
+    CLK: in signal(system_clock); // Changed from 'clock' keyword if not a base type
   }
-  
+
   // Internal components
   components {
-    component ADC U1 {
-      input_type: line_level;      // Using type as a parameter
-      reference_voltage: 5Vdc;
-      resolution: 24bit;
+    ADC U1 { // Assuming ADC is a defined component type
+      input_type = line_level;      // Using type as a parameter value
+      reference_voltage = 5Vdc;
+      resolution = 24bit;
     }
-    
-    component OpAmp U2 {
-      supply_voltage: lv_analog_power;   // Using type as a parameter
-      gain_bandwidth: 10MHz;
-      slew_rate: 10V/µs;
+
+    OpAmp U2 { // Assuming OpAmp is a defined component type
+      supply_voltage_type = lv_analog_power; // Parameter name clarified
+      gain_bandwidth = 10MHz;
+      slew_rate = 10V/us; // Corrected unit
     }
   }
 }
 
 // Using types in connection constraints
-connection AUDIO_IN to U1.IN {
-  match_impedance: true;           // Ensures impedance matching based on types
-  max_length: 50mm;
-  shield: required;
+// Uses the standard 'constrain' block (See Section 5.1)
+constrain (AUDIO_IN -> U1.IN) { // Target the connection (syntax TBD) or the net
+  match_impedance = true; // Ensures impedance matching based on types
+  max_length = 50mm;
+  shield = required;
 }
 
-// Using types in component selection
-component_selection {
-  filter: {
-    input_type: line_level;        // Filter by type compatibility
-    operating_temperature: commercial_thermal;
-  }
-}
+// Using types in component selection (Conceptual - Tool-specific)
+// component_selection {
+//   filter = {
+//     input_type = line_level;        // Filter by type compatibility
+//     operating_temperature = commercial_thermal; // Reference property set
+//   }
+// }
 ```
 
-**Reasoning**: This comprehensive type system enables design intent to be expressed at a high level while providing detailed electrical characteristics for validation and synthesis. It allows component selection and connection checking based on domain-specific requirements, reducing errors and improving design automation.
+// ... existing code ...
 
 ### 2.6 Generative Constructs (`generate for`)
 
-To handle repetitive structures like large buses or arrays of components efficiently, BHDL provides a `generate for` loop. This allows pins, connections, or components to be created programmatically based on parameters or ranges, significantly reducing boilerplate code and the potential for manual errors.
+*(Syntax remains largely the same, ensuring body is always enclosed in `{}` and using standard assignment `=` if properties are set within generated components)*
 
-**Syntax:**
 ```bhdl
+// Syntax reminder
 generate for <variable> in <range_or_list> {
   // Pin definitions, component instantiations, or connection statements
-  // The <variable> can be used within the generated statements (e.g., in names or indices)
+  // Use '=' for any assignments within the block
 }
-```
-*   `<variable>`: The loop variable (e.g., `i`, `byte_index`).
-*   `<range_or_list>`: Defines the iteration space. Common forms include:
-    *   `start_value to end_value`: Inclusive range (e.g., `0 to 63`).
-    *   `start_value upto end_value`: Exclusive range (e.g., `0 upto 64`, equivalent to `0 to 63`).
-    *   An existing list or array variable.
-    *   A range with a step (Syntax TBD, e.g., `0 to 63 step 8`).
 
-+ **Note:** The body of a `generate for` loop **must** be enclosed in curly braces `{ ... }`. The `loop ... end loop;` syntax, while potentially used elsewhere, is **not** supported for `generate for` statements.
-
-**Usage within `pins` block:**
-```bhdl
-// Example: Generating DDR Data/Strobe pins based on a parameter
+// Usage within `pins` block:
 component DDR_PHY {
   parameters {
-    data_width: integer = 64;
+    data_width = 64; // Use '='
   }
   pins {
+    local num_bytes = data_width / 8; // Local calculation for clarity
     // Generate DQ pins using the data_width parameter
     generate for i in 0 to data_width-1 {
-      DQ[i]: inout signal(ddr_dq_type); // Creates DQ[0], DQ[1], ..., DQ[63]
+      DQ[i]: inout signal(ddr_dq_type); // Assumes ddr_dq_type defined
     }
     // Generate DQS pairs using the calculated num_bytes parameter
     generate for i in 0 to num_bytes-1 {
-      DQS_P[i]: inout signal(ddr_dqs_type); // Creates DQS_P[0]...DQS_P[7]
-      DQS_N[i]: inout signal(ddr_dqs_type); // Creates DQS_N[0]...DQS_N[7]
+      DQS_P[i]: inout signal(ddr_dqs_type); // Assumes ddr_dqs_type defined
+      DQS_N[i]: inout signal(ddr_dqs_type);
     }
     // ... other pins (ADDR, CMD, CLK etc.) ...
   }
   // ... component details ...
 }
-```
 
-**Usage within `connections` block:**
-```bhdl
-// Example: Connecting a 64-bit data bus directly bit-by-bit
+// Usage within `connections` block:
 connections {
-  // Assume CPU and PHY components have DQ[0..63] pins
+  // Assume CPU and PHY components declared with DQ[0..63] pins
   generate for i in 0 to 63 {
-    CPU.DQ[i] -> PHY.DQ[i];
+    CPU.DQ[i] -> PHY.DQ[i]; // Direct pin-to-pin connection
   }
 }
-```
 
-**Usage within `components` block:**
-```bhdl
-// Example: Instantiating an array of termination resistors
-parameters { num_leds: integer = 8; }
+// Usage within `components` block:
+parameters { num_leds = 8; }
 components {
   generate for i in 0 to num_leds-1 {
-    Resistor R_LED[i] { value: 330Ohm; package: "0603"; }
+    // Use '=' for assignments in generated components
+    Resistor R_LED[i] { value = 330Ohm; package = "0603"; }
   }
   // ... other components ...
 }
 ```
 
+// ... existing code ...
+
 ### 2.7 Bus Notation and Slicing
 
-Signals or ports declared as arrays (often using `generate for` or direct array syntax like `DATA[0:7]`) represent buses. BHDL provides standard notation for accessing individual elements or sub-ranges (slices) of these buses.
+*(Syntax remains the same)*
 
-*   **Array Declaration:**
-    *   Using `generate for` (see Section 2.6) is common for large parameterized buses.
-    *   Direct declaration: `DATA[0:7]: out signal(cmos_3v3);` defines an 8-bit bus.
-
-*   **Individual Element Access:** `BUS_NAME[index]`
-    *   Accesses a single element of the array (e.g., `DATA[7]`, `DQ[0]`).
-    *   The index must be within the defined bounds of the array.
-
-*   **Slicing:** `BUS_NAME[high_index : low_index]`
-    *   Selects a contiguous sub-range (slice) of the bus, from `low_index` up to `high_index`, inclusive.
-    *   The indices define the range within the original bus numbering.
-    *   Example: `DATA[15:8]` selects 8 bits (bits 8, 9, ..., 15) from the `DATA` bus.
-    *   When used in connections, the width of the source slice must match the width of the target slice or port.
-
-**Example: Connecting Slices**
-```bhdl
-// Assume MCU has DATA_OUT[31:0] and Peripheral has DATA_IN[15:0]
-connections {
-  // Connect lower 16 bits of MCU output to peripheral input
-  MCU.DATA_OUT[15:0] -> Peripheral.DATA_IN[15:0];
-
-  // Connect upper 8 bits of MCU output somewhere else
-  MCU.DATA_OUT[31:24] -> DebugConnector.PINS[7:0];
-}
-```
-
-**Example: Byte Swizzling Connection using `generate for` and slicing**
-
-This powerful combination allows for complex bus manipulations, such as reversing byte lanes between two components.
+// ... existing code ...
 
 ```bhdl
-// Connect a 64-bit bus (8 bytes) with byte lanes reversed
-// MCU.DATA[7:0]   -> PHY.DATA[63:56]
-// MCU.DATA[15:8]  -> PHY.DATA[55:48]
-// ...
-// MCU.DATA[63:56] -> PHY.DATA[7:0]
+// Example: Byte Swizzling Connection using `generate for` and slicing
 parameters {
-  data_width: integer = 64;
-  num_bytes: integer = data_width / 8;
+  data_width = 64; // Use '='
+  num_bytes = data_width / 8;
 }
 connections {
+  // Assume MCU and PHY components and DATA nets/pins are declared
   generate for byte_idx in 0 to num_bytes-1 {
     // Calculate indices for MCU slice (standard byte order)
-    local mcu_high = (byte_idx + 1) * 8 - 1; // e.g., 7, 15, ..., 63
-    local mcu_low = byte_idx * 8;           // e.g., 0, 8, ..., 56
+    local mcu_high = (byte_idx + 1) * 8 - 1;
+    local mcu_low = byte_idx * 8;
 
     // Calculate indices for PHY slice (reversed byte order)
-    local phy_byte_num = num_bytes - 1 - byte_idx; // e.g., 7, 6, ..., 0
-    local phy_high = (phy_byte_num + 1) * 8 - 1;   // e.g., 63, 55, ..., 7
-    local phy_low = phy_byte_num * 8;             // e.g., 56, 48, ..., 0
+    local phy_byte_num = num_bytes - 1 - byte_idx;
+    local phy_high = (phy_byte_num + 1) * 8 - 1;
+    local phy_low = phy_byte_num * 8;
 
-    // Connect the corresponding slices
+    // Connect the corresponding slices (Pin-to-Pin or via explicit Nets)
     MCU.DATA[mcu_high : mcu_low] -> PHY.DATA[phy_high : phy_low];
-
-    // --- Optional Bit Swizzling ---
-    // If needed, a nested loop and a bit-level map could connect individual bits here instead
-    // of connecting the 8-bit slices directly.
   }
 }
 ```
 
 ### 2.8 Importing Libraries (`import`)
 
-To promote reuse and modularity, BHDL supports importing definitions from other files or libraries using the `import` statement. This allows designs to leverage standard component definitions, types, interfaces, functions, net classes, via styles, and other reusable elements.
+*(Syntax remains the same, example updated)*
 
-**Syntax:**
-```bhdl
-import <LibraryPath> { <Symbol1>, <Symbol2>, ... };
-import <LibraryPath>.*; // Import all exported symbols (use with caution)
-```
-*   `<LibraryPath>`: A path to the BHDL file or library module, typically relative to the project source or configured library paths. Dot notation is often used for hierarchical libraries (e.g., `StandardLibrary.Components`, `CompanyStandards.DRC`). The exact path resolution mechanism depends on the tool implementation.
-*   `<SymbolN>`: The specific names (components, types, functions, etc.) to be imported into the current scope.
-*   `.*`: Imports all symbols exported by the target library. This can potentially pollute the namespace and is generally recommended only for foundational libraries or when explicitly desired.
-
-**Scope:** Imported symbols are brought into the scope where the `import` statement appears.
-
-**Example:**
 ```bhdl
 // Import specific types and components from standard libraries
 import StandardLibrary.Types.{cmos_3v3, lv_digital_power};
@@ -1079,98 +995,161 @@ import StandardLibrary.CircuitPatterns.non_inverting_amplifier;
 board MyBoard {
   // Use imported definitions
   default_design_rules {
-    default_via_style: "StandardVia"; // Reference imported style
+    default_via_style = "StandardVia"; // Use '='
   }
   ports { SIGNAL_IN: in signal(cmos_3v3); }
-  components { Resistor R1 { value: 10kOhm; } }
-  connections { ... }
-  constrain (VDD) { net_class: "PowerNetClass"; } // Reference imported class
+  components { Resistor R1 { value = 10kOhm; } } // Use '='
+  nets { net VDD: power(lv_digital_power); } // Declare nets explicitly
+  connections { /* ... */ }
+  constrain (VDD) { net_class = "PowerNetClass"; } // Use '='
 }
 ```
 
-Libraries themselves typically define what symbols they `export` for external use (Syntax for `export` TBD or assumed implicit based on top-level definitions in the library file).
+// ... existing code ...
 
 ## 3. Board and Module Structure
 
 ### 3.1 Board Definition
 
-```
+```bhdl
 board PowerSupply {
-  // Metadata
-  author: "Design Team";
-  version: "1.0";
-  
-  // Parameters
+  // Metadata (use '=')
+  author = "Design Team";
+  version = "1.0";
+
+  // Parameters (use '=')
   parameters {
-    // Use '=' for default value assignment in parameters blocks
     input_voltage = 12Vdc;
     output_voltage = 5Vdc;
-    max_current: current = 2A; // Optional type specification
+    max_current = 2A; // Type specification less common here, inferred or checked by tool
   }
-  
-  // External ports
+
+  // External ports (Syntax: name: direction type(optional_spec))
   ports {
-    VIN: in power(12Vdc, 2A);  // Example: Type with implicit properties
+    VIN: in power(12Vdc, 2A);  // Example: Type with implicit properties - Needs well-defined type 'power'
     GND: ground;
-    VOUT: out power(5Vdc, 2A); // Example: Type with implicit properties
+    VOUT: out power(5Vdc, 2A);
   }
-  
-  // ** Layer Stackup Definition **
+
+  // ** Layer Stackup Definition ** (use '=')
   layer_stackup {
-    layer TOP: { type: signal; material: "Copper"; thickness: 0.035mm; };
-    layer DIEL1: { type: dielectric; material: "FR4"; thickness: 1.5mm; epsilon_r: 4.5; };
-    layer BOTTOM: { type: signal; material: "Copper"; thickness: 0.035mm; };
+    layer TOP { type = signal; material = "Copper"; thickness = 0.035mm; };
+    layer DIEL1 { type = dielectric; material = "FR4"; thickness = 1.5mm; epsilon_r = 4.5; };
+    layer BOTTOM { type = signal; material = "Copper"; thickness = 0.035mm; };
     // More complex stackups would include plane layers, masks, silk, etc.
   }
-  
-  // ** Default Design Rules **
+
+  // ** Default Design Rules ** (use '=')
   default_design_rules {
-    min_trace_width: 0.2mm;
-    min_clearance: 0.2mm; // Default trace-trace, trace-pad, etc.
-    min_via_drill: 0.3mm;
-    min_via_pad_diameter: 0.6mm;
-    min_annular_ring: 0.1mm;
-    default_via_style: "StandardVia"; // References a defined via_style (See Sec 5.5)
-  
-    // Optional: Default net class assignments
+    min_trace_width = 0.2mm;
+    min_clearance = 0.2mm; // Default trace-trace, trace-pad, etc.
+    min_via_drill = 0.3mm;
+    min_via_pad_diameter = 0.6mm;
+    min_annular_ring = 0.1mm;
+    default_via_style = "StandardVia"; // References a defined via_style (See Sec 5.5)
+
+    // Optional: Default net class assignments (syntax uses function-like call TBD)
     // assign_net_class("Power", nets_matching("VDD_*"));
   }
-  
-  // Implementation contents (components, connections, constraints, etc.)
-  // ...
+
+  // ** Component Instantiation ** (Mandatory block)
+  components {
+     // Instantiate components defined elsewhere (e.g., libraries or local definitions)
+     VoltageRegulator U1 { output_voltage = 5Vdc; }; // Pass instance parameters using '='
+     Resistor R1 { value = 1kOhm; };
+     Capacitor C1 { value = 10uF; voltage = 16Vdc; };
+     // ... other components
+  }
+
+  // ** Net Declarations ** (Mandatory block)
+  nets {
+     net VDD_IN: power(input_voltage); // Reference board parameter
+     net VDD_OUT: power(output_voltage);
+     net GND_NET: ground; // Explicit ground net
+     net ENABLE_SIG: signal; // Generic signal
+     // ... other nets
+  }
+
+  // ** Connections ** (Connect declared components using declared nets or pin-to-pin)
+  connections {
+     VIN -> VDD_IN; // Connect port to net
+     VDD_IN -> U1.IN; // Connect net to component pin
+     U1.OUT -> VDD_OUT; // Connect component pin to net
+     VDD_OUT -> VOUT; // Connect net to port
+
+     U1.ENABLE -> ENABLE_SIG;
+
+     // Connect ground pins to the declared ground net
+     U1.GND -> GND_NET;
+     R1.2 -> GND_NET; // Example connection
+     C1.2 -> GND_NET;
+     GND -> GND_NET; // Connect ground port to ground net
+
+     // Example pin-to-pin (implicitly creates anonymous net)
+     // SomeOtherComponent.PIN_A -> R1.1;
+  }
+
+  // ** Constraints ** (Apply constraints to nets, pins, components, connections)
+  constrain (VDD_OUT) { // Target a net
+     net_class = "Power"; // Assign net class using '='
+     max_ripple = 50mVpp;
+  }
+  // ... other blocks like placement_constraints ...
 }
 ```
 
-**Reasoning**: The board structure follows a declarative style that clearly separates metadata, parameters, interfaces, physical structure (`layer_stackup`), default rules (`default_design_rules`), and implementation. This makes it easier to understand the board's purpose, requirements, and manufacturing constraints.
+**Reasoning**: The board structure follows a declarative style. Explicit `components` and `nets` blocks enhance clarity and simplify parsing compared to implicit creation. Consistent use of `=` simplifies syntax.
 
 ### 3.2 Module Definition
 
-```
+```bhdl
 module VoltageRegulator {
   // External interface
   ports {
-    IN: in power(8Vdc to 35Vdc, 2A);  // Can accept up to 2A
-    OUT: out power(5Vdc, 1A);         // Can supply up to 1A
+    IN: in power(8Vdc to 35Vdc, 2A);
+    OUT: out power(5Vdc, 1A);
     GND: ground;
-    ENABLE: in digital;
+    ENABLE: in signal; // Assume base 'signal' type if not specified
   }
-  
-  // Parameters
+
+  // Parameters (use '=')
   parameters {
-    // Use '=' for default value assignment
     output_voltage = 5Vdc;
-    max_current: current = 1A;
+    max_current = 1A;
   }
-  
-  // Internal implementation
-  // ...
+
+  // Internal implementation (requires internal components, nets, connections)
+  components {
+     // Internal component instances, e.g., the regulator IC, passives
+     RegulatorIC U_IC { /* ... */ };
+     Resistor R_FB1 { value = 10kOhm; };
+     // ...
+  }
+  nets {
+     // Internal nets
+     net FeedbackNet: signal;
+     net InternalGND: ground;
+     // ...
+  }
+  connections {
+     // Connect ports to internal components/nets
+     IN -> U_IC.VIN;
+     ENABLE -> U_IC.EN;
+     GND -> InternalGND; // Connect module ground port to internal ground net
+     U_IC.GND -> InternalGND;
+     R_FB1.2 -> InternalGND;
+
+     // Internal connections
+     U_IC.FB -> FeedbackNet; R_FB1.1 -> FeedbackNet; // Example feedback connection
+     U_IC.VOUT -> OUT; // Connect internal IC output to module output port
+
+     // ... other internal connections
+  }
+  // ... Optional internal constraints ...
 }
 
 ### 3.2.1 Modules for Encapsulating Component Context
-
-A common and powerful use of modules is to encapsulate a base library component (`component`) along with its mandatory surrounding context, such as required pull-up/pull-down resistors or essential decoupling capacitors. This creates a higher-level, pre-configured block that enforces design standards and simplifies instantiation for board designers.
-
-**Example:** Consider a complex IC component (`Base_IC`) that requires a specific configuration pin (`CONFIG`) to always be pulled down with a `10kOhm` resistor in standard company designs. Instead of requiring every designer to add this resistor manually when using `Base_IC`, a module can encapsulate this:
+// ... (Example updated for '=' and explicit blocks) ...
 
 ```bhdl
 // --- In a company library file ---
@@ -1181,74 +1160,79 @@ import CompanyInternalLib.Components.{Base_IC}; // The raw IC component
 module Configured_IC {
   // Expose only the necessary pins/ports of the Base_IC
   ports {
-    DATA_BUS: like Base_IC.DATA_BUS;
+    DATA_BUS: like Base_IC.DATA_BUS; // 'like' syntax might need refinement or replacement
     CONTROL_SIGNALS: like Base_IC.CONTROL_SIGNALS;
     POWER: like Base_IC.POWER;
     GND: ground;
-    // Note: Base_IC.CONFIG pin is NOT exposed
   }
 
   // Pass through relevant parameters if needed
   parameters {
-    speed_grade: string = "standard";
+    speed_grade = "standard"; // Use '='
   }
 
   // Internal implementation
-  components {
+  components { // Explicit block
     Base_IC U1 { // Instantiate the raw IC
-      speed: module.speed_grade;
+      speed = module.speed_grade; // Use '='
     }
     Resistor R_PULLDOWN { // The mandatory pull-down
-      value: 10kOhm;
-      tolerance: 5pct;
+      value = 10kOhm; // Use '='
+      tolerance = 5pct; // Use '='
     }
   }
-
-  connections {
+  nets { // Explicit block
+      net ConfigNet: signal;
+      net InternalGND: ground;
+      // Potentially nets for DATA_BUS, CONTROL_SIGNALS, POWER if not directly passed through
+  }
+  connections { // Explicit block
     // Internal connection enforces the pull-down
-    U1.CONFIG -> R_PULLDOWN.1;
-    R_PULLDOWN.2 -> GND;
+    U1.CONFIG -> ConfigNet; R_PULLDOWN.1 -> ConfigNet;
+    R_PULLDOWN.2 -> InternalGND;
+    GND -> InternalGND; // Connect module port to internal net
+    U1.GND -> InternalGND;
 
-    // Connect exposed module ports to internal IC pins
-    DATA_BUS <=> U1.DATA_BUS;
+    // Connect exposed module ports to internal IC pins (using <=> for interface/bus assumed)
+    // Or connect explicitly if not using interface operator
+    DATA_BUS <=> U1.DATA_BUS; // Assumes operator works on port/pin groups/interfaces
     CONTROL_SIGNALS <=> U1.CONTROL_SIGNALS;
-    POWER -> U1.POWER;
-    GND -> U1.GND;
+    POWER -> U1.POWER; // Assuming POWER is a simple port/pin here
   }
 }
 
 // --- In a board design file ---
 board MySystem {
   // ... other components ...
-  components {
+  components { // Explicit block
     // Designers instantiate the configured module, not the base IC
     Configured_IC IC_Main {
-      speed_grade: "high";
+      speed_grade = "high"; // Use '='
     }
+    // ... other component instances
   }
-
-  connections {
+  nets { // Explicit block
+     net MAIN_DATA_BUS: bus( /* type? width? */ ); // Define bus net if needed
+     // ... other nets
+  }
+  connections { // Explicit block
     // Connect to the ports of the Configured_IC module
-    MAIN_DATA_BUS <=> IC_Main.DATA_BUS;
+    MAIN_DATA_BUS <=> IC_Main.DATA_BUS; // Assumes <=> connects declared net and module port group
     // ... other connections ...
   }
 }
 ```
 
-By instantiating `Configured_IC`, the designer gets the base IC functionality with the mandatory pull-down already implemented and enforced internally, promoting consistency and reducing errors. This is a key way BHDL supports creating robust, reusable mid-level abstractions.
-
-### 3.3 Module Instantiation
-```
+// ... existing code ...
 
 ### 3.4 Interface Definition and Connection
 
-// **Interfaces with Generated Arrays:**
-// Interfaces can leverage `generate for` to define large, parameterized buses concisely.
+// ... (Interface definition uses '='. Component definition uses '=' and explicit `pin_map`) ...
 
 // Simplified DDR Interface Definition Example
-interface DDR_Interface (data_width: integer = 64) {
+interface DDR_Interface (data_width = 64) { // Use '=' for default parameter value
    parameters {
-     num_bytes: integer = data_width / 8;
+     num_bytes = data_width / 8; // Use '='
    }
    pins {
      // Generate data bus
@@ -1267,10 +1251,11 @@ interface DDR_Interface (data_width: integer = 64) {
 // Component using the interface
 component DDR_Controller {
   parameters {
-     dw: integer = 64; // Data width parameter for the controller
+     dw = 64; // Use '='
   }
   interfaces {
-    MEM: interface DDR_Interface(data_width=dw); // Instantiate interface, passing the width
+    // Instantiate interface, passing the width using '='
+    MEM: interface DDR_Interface { data_width=dw; } // Instantiate using block + assignment
   }
   // ... other controller-specific pins ...
 }
@@ -1278,11 +1263,11 @@ component DDR_Controller {
 // Component representing the DDR PHY/Memory
 component DDR_PHY {
   parameters {
-    data_width: integer = 64;
+    data_width = 64; // Use '='
   }
   interfaces {
      // Assuming PHY also uses the same interface definition for compatibility
-     BUS: interface DDR_Interface(data_width=module.data_width);
+     BUS: interface DDR_Interface { data_width=module.data_width; } // Use block + assignment
   }
   // ... other PHY pins ...
 }
@@ -1290,432 +1275,198 @@ component DDR_PHY {
 // Connecting interfaces with generated arrays
 board TopLevel {
   components {
-    DDR_Controller CPU(dw=64);
-    DDR_PHY MEM_PHY(data_width=64);
+    DDR_Controller CPU { dw=64; }; // Use '=' for instance parameters
+    DDR_PHY MEM_PHY { data_width=64; }; // Use '='
+  }
+  nets {
+     // Nets might be implicitly created by interface connection or declared explicitly
   }
   connections {
-    // The interface connection operator `<=>` implicitly connects all generated pins
+    // The interface connection operator `<=>` implicitly connects all pins
     // by matching names within the interface definition.
-    // Connects CPU.MEM.DQ[0..63] to MEM_PHY.BUS.DQ[0..63],
-    // CPU.MEM.DQS_P[0..7] to MEM_PHY.BUS.DQS_P[0..7], etc.
     CPU.MEM <=> MEM_PHY.BUS;
 
-    // If manual connection or swizzling of generated buses within interfaces is needed,
-    // use `generate for` loops combined with slicing on the interface pins:
+    // Manual connection/swizzling still uses generate + slicing
     // generate for i in 0 to 63 { CPU.MEM.DQ[i] -> SOME_OTHER_DEVICE.DATA[i]; }
   }
 }
 
 // **Interfaces within Components (Pin Multiplexing)**
-
-When defined within a `component`, an `interface` serves not only to group related signals but also to map the logical pins of the interface (e.g., `MOSI`, `TX`) to the underlying physical pins of the component (e.g., `P1_0`, `GPIO_23`). This provides a clear mechanism for handling pin multiplexing (pinmux).
-
-By connecting to a specific interface instance on the component (e.g., `MySoC.SPI1`), the designer explicitly declares the intended function for the underlying physical pins associated with that interface.
+// Uses simplified 'functions' list property on pins and explicit 'pin_map' in interface instance.
 
 ```bhdl
-// --- Example: Component with Multiplexed Pins via Interfaces --- 
+// --- Example: Component with Multiplexed Pins via Interfaces ---
 component ComplexSoC {
   // ... parameters ...
 
-  // Define physical pins (potentially with function documentation - see Section 4.x)
+  // Define physical pins with optional function documentation
   pins {
-     P1_0: inout signal(cmos_3v3) { 
-       functions: ["GPIO_1_0", "SPI1_MOSI", "UART0_TX", "I2C0_SDA"]; // Document potential roles
-     }
-     P1_1: inout signal(cmos_3v3) { 
-       functions: ["GPIO_1_1", "SPI1_MISO", "UART0_RX", "I2C0_SCL"];
-     }
-     P1_2: inout signal(cmos_3v3) { functions: ["GPIO_1_2", "SPI1_SCK"]; }
-     P1_3: inout signal(cmos_3v3) { functions: ["GPIO_1_3", "SPI1_CS"]; }
+     // Use comma separated properties after type, assign with '='
+     P1_0: inout signal(cmos_3v3), functions = ["GPIO_1_0", "SPI1_MOSI", "UART0_TX", "I2C0_SDA"];
+     P1_1: inout signal(cmos_3v3), functions = ["GPIO_1_1", "SPI1_MISO", "UART0_RX", "I2C0_SCL"];
+     P1_2: inout signal(cmos_3v3), functions = ["GPIO_1_2", "SPI1_SCK"];
+     P1_3: inout signal(cmos_3v3), functions = ["GPIO_1_3", "SPI1_CS"];
+     UART1_TX: out signal(cmos_3v3); // Dedicated pin example
+     UART1_RX: in signal(cmos_3v3); // Dedicated pin example
      // ... other pins ...
   }
 
   // Define available interfaces and map them to physical pins
   interfaces {
-     SPI1: interface SPI { // Standard SPI interface
-        // Map SPI logical pins to SoC physical pins
-        pins: { MOSI: P1_0; MISO: P1_1; SCK: P1_2; CS: P1_3; }
+     // Instantiate an interface type (e.g., SPI) and provide a pin map
+     SPI1: interface SPI { // Assumes SPI interface is defined elsewhere
+        // Explicitly map logical interface pins to physical component pins
+        pin_map = { MOSI = P1_0, MISO = P1_1, SCK = P1_2, CS = P1_3 };
         // Optionally override parameters like max_freq
-        max_freq: 50MHz;
+        max_freq = 50MHz; // Use '='
      }
-     UART0: interface UART { // Standard UART interface
+     UART0: interface UART { // Assumes UART interface is defined elsewhere
         // Map UART logical pins to SoC physical pins (Note: TX/RX share with SPI1)
-        pins: { TX: P1_0; RX: P1_1; }
+        pin_map = { TX = P1_0, RX = P1_1 };
      }
-     I2C0: interface I2C { // Standard I2C interface
+     I2C0: interface I2C { // Assumes I2C interface is defined elsewhere
         // Map I2C logical pins to SoC physical pins (Note: SDA/SCL share with SPI1/UART0)
-        pins: { SDA: P1_0; SCL: P1_1; }
+        pin_map = { SDA = P1_0, SCL = P1_1 };
      }
      UART1: interface UART { // Another UART on dedicated pins
-         pins: { TX: UART1_TX; RX: UART1_RX; }
+         pin_map = { TX = UART1_TX, RX = UART1_RX };
      }
      // ... other interfaces like I2S, SDIO, GPIO_PortA ...
   }
   // ... package, footprint ...
 }
 
-// --- Example: Board using the SoC --- 
+// --- Example: Board using the SoC ---
 board MuxDemoBoard {
    components {
-      ComplexSoC U_SOC {}; // Use {}
-      SPI_Flash U_FLASH {}; // Use {}
-      I2C_Sensor U_SENSOR {}; // Use {}
-      UART_Header J_UART1 {}; // Use {}
+      ComplexSoC U_SOC {}; // Use {} for empty parameters
+      SPI_Flash U_FLASH {}; // Assumes SPI_Flash has SPI interface named 'SPI'
+      I2C_Sensor U_SENSOR {}; // Assumes I2C_Sensor has I2C interface named 'I2C'
+      UART_Header J_UART1 {}; // Assumes UART_Header has pins RX_PIN, TX_PIN
    }
-
+   nets { // Define nets explicitly
+      net UART1_TX_Net: signal(cmos_3v3);
+      net UART1_RX_Net: signal(cmos_3v3);
+      // Nets for SPI and I2C might be implicitly created by <=> or explicitly defined
+   }
    connections {
-      // Connect to the SPI Flash using the SPI1 interface.
-      // This implicitly selects the SPI function for pins P1_0, P1_1, P1_2, P1_3.
+      // Connect using the SPI1 interface instance on the SoC.
+      // The <=> operator connects the interfaces based on the 'pin_map' in U_SOC.SPI1
+      // and the implicit/explicit definition of the SPI interface on U_FLASH.
+      // This implicitly selects the SPI function for pins P1_0, P1_1, P1_2, P1_3 on U_SOC.
       U_SOC.SPI1 <=> U_FLASH.SPI;
 
       // Connect to the I2C Sensor using the I2C0 interface.
-      // This connection attempts to use P1_0 (SDA) and P1_1 (SCL).
-      // **ERROR:** This conflicts with SPI1 usage! BHDL tools must detect this.
+      // **ERROR:** This connection attempts to map P1_0 (SDA) and P1_1 (SCL) again.
+      // BHDL tools must detect this conflict based on the 'pin_map' definitions.
       // U_SOC.I2C0 <=> U_SENSOR.I2C; // <-- Expected validation error here.
 
       // Connect to the UART Header using UART1 (uses dedicated pins).
-      // This is valid as it doesn't conflict with SPI1.
-      U_SOC.UART1.TX -> J_UART1.RX_PIN;
-      U_SOC.UART1.RX <- J_UART1.TX_PIN;
+      // Explicit connection via nets.
+      U_SOC.UART1.TX -> UART1_TX_Net; J_UART1.TX_PIN -> UART1_TX_Net; // Connect both to net
+      UART1_RX_Net -> U_SOC.UART1.RX; UART1_RX_Net -> J_UART1.RX_PIN; // Connect both to net
+      // Alternatively, use the <=> operator if J_UART1 exposes a UART interface.
+      // U_SOC.UART1 <=> J_UART1.UART;
 
-      // If P1_0 was *not* used by SPI1, it could be connected directly for GPIO:
-      // U_SOC.P1_0 -> LED_INDICATOR; // Implies GPIO usage if no interface claims it.
+      // Direct pin connection (implies GPIO usage if not mapped by an active interface connection)
+      // U_SOC.P1_0 -> LED_INDICATOR; // Connect P1_0 directly (if not used by SPI1/I2C0/UART0)
    }
 }
 ```
 
-**Validation:** A key aspect of this approach is tool validation. BHDL tools are expected to track the usage of underlying physical pins. If multiple connections attempt to use interfaces that map to the same physical pin (like `SPI1.MOSI` and `UART0.TX` both mapping to `P1_0` in the example), the tool **must** report a design rule violation (see Section 7). This ensures the selected pin functions do not conflict at the board level.
+**Validation:** ... BHDL tools are expected to track the usage of underlying physical pins based on the `pin_map` definitions in active interface connections. ...
 
-**Reasoning**: Interfaces provide a modular and reusable way to define groups of related pins... [existing text] ...Using interfaces within component definitions to map logical functions to physical pins provides a clear, structured way to manage pin multiplexing, express design intent, and enable automated validation against conflicting pin usage.
+**Reasoning**: ... Using interfaces within component definitions with an explicit `pin_map` provides a clear, structured way to manage pin multiplexing ...
 
-### 3.5 Circuit Function Definitions
-
-```
 // ... existing code ...
-```
-
-### 6.2 Advanced DDR Controller-to-Memory Connection
-
-This example demonstrates connecting a wide DDR controller data bus (e.g., 64-bit) to multiple narrower DRAM chips (e.g., four 16-bit chips), implementing byte-lane swizzling based on a configuration parameter. This showcases the use of parameters, `generate for`, and bus slicing for complex interface wiring.
-
-```bhdl
-// --- Assumed Type Definitions (Simplified) ---
-typedef ddr4_dq {
-  type: signal;
-  domain: differential; // Often SSTL or similar
-  // ... Add relevant voltage levels, timing, termination properties ...
-}
-
-// --- Assumed Component Definitions (Simplified) ---
-component DDR_Controller {
-  parameters {
-    controller_width: integer = 64;
-  }
-  pins {
-    generate for i in 0 to controller_width-1 {
-      DQ[i]: inout signal(ddr4_dq);
-    }
-    // ... other DDR pins like ADDR, CMD, CLK, DQS etc. ...
-  }
-}
-
-component DDR_Chip {
-  parameters {
-    chip_width: integer = 16;
-  }
-  pins {
-    generate for i in 0 to chip_width-1 {
-      DQ[i]: inout signal(ddr4_dq);
-    }
-    // ... other DDR pins like A, BA, CK, CKE, CS etc. ...
-  }
-}
-
-// --- Board Definition ---
-board DDR_System {
-  parameters {
-    // System Parameters
-    controller_width: integer = 64;
-    chip_width: integer = 16;
-    num_chips: integer = controller_width / chip_width; // = 4 in this case
-    bytes_per_chip: integer = chip_width / 8;           // = 2 in this case
-
-    // ** Customizable Swizzle Map Parameter **
-    // Defines how controller bytes map to chip byte lanes. This allows layout optimization
-    // by changing the logical byte connections without modifying the core BHDL code.
-    // Each element maps a physical chip slot.
-    // 'controller_bytes': Lists which controller byte indices (0-7 for 64-bit) connect to this chip.
-    // 'lane_order': Specifies the mapping of those controller bytes to the chip's internal
-    //                byte lanes (0 to bytes_per_chip-1). The value at lane_order[chip_lane]
-    //                indicates the *index* within the 'controller_bytes' list for that chip.
-    chip_byte_map: list = [
-      // Physical Chip Slot 0: Controller Bytes 0, 1 -> Chip Lanes 0, 1 (Normal Order)
-      { chip_idx: 0, controller_bytes: [0, 1], lane_order: [0, 1] },
-
-      // Physical Chip Slot 1: Controller Bytes 2, 3 -> Chip Lanes 1, 0 (Bytes Swapped on Chip 1)
-      { chip_idx: 1, controller_bytes: [2, 3], lane_order: [1, 0] },
-
-      // Physical Chip Slot 2: Controller Bytes 6, 7 -> Chip Lanes 0, 1 (Controller bytes 6/7 map here)
-      { chip_idx: 2, controller_bytes: [6, 7], lane_order: [0, 1] },
-
-      // Physical Chip Slot 3: Controller Bytes 4, 5 -> Chip Lanes 0, 1 (Controller bytes 4/5 map here)
-      { chip_idx: 3, controller_bytes: [4, 5], lane_order: [0, 1] }
-    ];
-    // Note: This map implies controller byte order 0, 1, 2, 3, 6, 7, 4, 5 going to chips 0, 1, 2, 3 respectively.
-
-    // ** Optional Bit Swizzle Map (More Complex - omitted for clarity) **
-    // A similar map could define bit swaps within bytes if the DRAM standard allows.
-  }
-
-  components {
-    DDR_Controller CTRL { controller_width: module.controller_width }; // Use {}
-
-    // Generate DRAM chip instances, named U_DRAM[0], U_DRAM[1], etc.
-    generate for i in 0 to num_chips-1 {
-      DDR_Chip U_DRAM[i] { chip_width: module.chip_width }; // Use {}
-    }
-  }
-
-  connections {
-    // --- DQ Connections with Byte Swizzling ---
-
-    // Iterate through each entry in our custom mapping definition
-    generate for chip_map_entry in chip_byte_map {
-      // Get the physical chip index (0, 1, 2, or 3) for this mapping entry
-      local current_chip_idx = chip_map_entry.chip_idx;
-
-      // Iterate through the byte lanes *on this specific chip* (0 to bytes_per_chip-1, so 0, 1 for 16-bit chips)
-      generate for chip_lane_idx in 0 to bytes_per_chip-1 {
-
-        // --- Determine the Source Controller Byte Index ---
-        // 1. Use 'chip_lane_idx' to look up the position in the chip's 'lane_order' array.
-        //    e.g., For chip 1, lane 0: lane_order[0] is 1. For chip 1, lane 1: lane_order[1] is 0.
-        local controller_byte_list_pos = chip_map_entry.lane_order[chip_lane_idx];
-
-        // 2. Use that position to get the actual Controller Byte Index from the 'controller_bytes' list.
-        //    e.g., For chip 1, lane 0: controller_bytes[1] is 3. (Controller Byte 3 maps to Chip 1, Lane 0)
-        //    e.g., For chip 1, lane 1: controller_bytes[0] is 2. (Controller Byte 2 maps to Chip 1, Lane 1)
-        local controller_byte_idx = chip_map_entry.controller_bytes[controller_byte_list_pos];
-
-        // --- Calculate Controller Slice Indices for this Byte ---
-        local ctrl_hi = (controller_byte_idx + 1) * 8 - 1;
-        local ctrl_lo = controller_byte_idx * 8;
-
-        // --- Calculate Chip Slice Indices for this Byte Lane ---
-        local chip_hi = (chip_lane_idx + 1) * 8 - 1;
-        local chip_lo = chip_lane_idx * 8;
-
-        // --- Generate the Swizzled Connection ---
-        // Connect the calculated controller byte slice to the current chip's byte lane slice.
-        // Example Trace for chip_idx=1, chip_lane_idx=0:
-        //   controller_byte_list_pos = lane_order[0] = 1
-        //   controller_byte_idx = controller_bytes[1] = 3
-        //   ctrl_hi=31, ctrl_lo=24 --> CTRL.DQ[31:24]
-        //   chip_hi=7, chip_lo=0 --> U_DRAM[1].DQ[7:0]
-        //   Connects CTRL.DQ[31:24] -> U_DRAM[1].DQ[7:0]
-        CTRL.DQ[ ctrl_hi : ctrl_lo ] -> U_DRAM[current_chip_idx].DQ[ chip_hi : chip_lo ];
-
-        // --- Optional Bit Swizzling ---
-        // If needed, a nested loop and a bit-level map could connect individual bits here instead
-        // of connecting the 8-bit slices directly.
-      }
-    }
-
-    // --- Address/Command/Control Connections --- 
-    // These often have different routing topologies (e.g., bussed or fly-by).
-    // This example shows simple bussing to all chips. (Actual topology depends on DDR standard)
-    // generate for addr_bit in 0 to 15 { // Assuming 16 address lines in controller/chips
-    //   generate for chip_idx in 0 to num_chips-1 {
-    //      CTRL.A[addr_bit] -> U_DRAM[chip_idx].A[addr_bit];
-    //   }
-    // }
-    // ... connections for CK, CS, CKE, DQS etc. would follow their specific topology rules ...
-    // DQS pairs would likely be handled similarly to DQ, potentially using the same byte map
-    // or a separate one if DQS swizzling differs from DQ.
-  }
-
-  // --- Constraints --- 
-  // Add necessary impedance, length matching, and differential pair constraints
-  // for DQ, DQS, ADDR/CMD, CLK signals according to DDR spec and layout needs.
-  // Example (Conceptual - assumes constraint system supports groups and iteration):
-  // generate for i in 0 to controller_width-1 {
-  //   constrain (CTRL.DQ[i]) { impedance: 40Ohm +/- 10pct; }
-  // }
-  // generate for i in 0 to num_chips-1 {
-  //   constrain (U_DRAM[i].DQ[*]) { impedance: 40Ohm +/- 10pct; }
-  // }
-  // group DQ_BYTES { ... } // Define groups based on byte lanes
-  // constrain group DQ_BYTES { length_match_within_group: 0.5mm; ... }
-}
-```
-
-This example illustrates how `generate for` loops, parameterized components, bus slicing, and configuration parameters (`chip_byte_map`) can work together to manage complex, customizable bus wiring like DDR interfaces within BHDL.
-
-## 7. Design Validation Rules
-
-BHDL is designed not just for description but also for enabling automated design validation. BHDL compilers and analysis tools are expected to perform various checks to ensure design correctness, consistency, and adherence to electrical and physical rules. While specific tool implementations may vary, core validation rules should include:
-
-1.  **Electrical Rules:**
-    *   **Type Compatibility:** Verify compatible electrical types for connected pins (voltage levels, logic thresholds, domains). Report errors for definite incompatibilities (e.g., 5V output to 3.3V input) and warnings for potential issues (e.g., missing impedance match).
-    *   **Pin Directionality:** Check for output-output conflicts (unless open-drain/bus), ensure inputs are driven.
-    *   **Pin Usage Exclusivity (Pinmux):** Report errors if multiple interfaces claim the same physical pin.
-    *   **Unit Consistency:** Ensure valid arithmetic/comparisons with units.
-    *   **Connection Completeness (Optional):** Check for unconnected inputs/outputs.
-
-2.  **Physical/Manufacturing Rules (DRC):**
-    *   **Clearance Violations:** Check trace-to-trace, trace-to-pad, trace-to-via, pad-to-pad, via-to-via, component-to-component, etc., clearances against `default_design_rules` and applicable `net_class` rules.
-    *   **Trace Width Violations:** Check trace widths against minimums defined in `default_design_rules` and `net_class` rules.
-    *   **Annular Ring Violations:** Check via pad sizes against drill sizes based on `via_style` definitions and `default_design_rules` minimums.
-    *   **Via Style Violations:** Check if via usage matches specified `via_style` constraints (e.g., layer span, drill size).
-    *   **Layer Stackup Consistency:** Validate routing and via spans against the defined `layer_stackup`.
-    *   **Constraint Adherence:** Verify that specific constraints defined in Section 5 (impedance, length matching, placement, keepouts, etc.) are met by the layout representation (requires integration with layout data or estimation).
-    *   **Geometric Violations (Optional):** Check for potential manufacturing issues like acid traps, acute angles, silkscreen overlaps, soldermask slivers (typically requires geometric analysis).
-    *   **Connectivity Checks:** Verify logical connectivity from BHDL matches physical connectivity in layout (e.g., checking for shorts and opens based on the BHDL netlist).
-
-3.  **Parameter Consistency:**
-    *   Verify compatibility of parameter values during instantiation.
-    *   Check parameter consistency across connected interfaces.
-
-4.  **Automation:**
-    *   Ensure that implicit actions like pull-ups, level shifters, and termination resistors are correctly applied based on the design intent.
-    *   Verify that the tool's automation does not introduce unintended design changes.
-
-5.  **Design Rule Checks (DRC):**
-    *   Perform checks related to trace widths, clearances, via sizes, layer stackup, and other manufacturing constraints.
-    *   Ensure that the design adheres to the specified design rules and constraints.
-
-6.  **Design Intent Verification:**
-    *   Verify that the design intent captured in BHDL is correctly implemented in the layout.
-    *   Check for any unintended design changes or deviations from the original specification.
-
-7.  **Design Consistency:**
-    *   Ensure that the design is consistent across different design iterations and revisions.
-    *   Verify that the design rules and constraints are applied uniformly throughout the design.
-
-8.  **Design Rule Checking (DRC):**
-    *   Perform checks related to trace widths, clearances, via sizes, layer stackup, and other manufacturing constraints.
-    *   Ensure that the design adheres to the specified design rules and constraints.
-
-9.  **Design Intent Verification:**
-    *   Verify that the design intent captured in BHDL is correctly implemented in the layout.
-    *   Check for any unintended design changes or deviations from the original specification.
-
-10.  **Design Consistency:**
-    *   Ensure that the design is consistent across different design iterations and revisions.
-    *   Verify that the design rules and constraints are applied uniformly throughout the design.
-
-**Reasoning**: By incorporating these checks into the design process, BHDL enables automated design validation that can catch common errors early, significantly improving design reliability and reducing debugging time compared to purely manual or graphical verification methods.
 
 ### 4.3 Pin Definitions in Components
 
-Within a `component` definition, pins are declared in the `pins { ... }` block. Each pin definition specifies its name, direction (`in`, `out`, `inout`), and electrical type (Section 2.4). The leading `pin` keyword is optional.
+Within a `component` definition, pins are declared in the `pins { ... }` block. Each pin definition specifies its name, direction (`in`, `out`, `inout`), electrical type (Section 2.4), and optional properties assigned using `=`.
 
 ```bhdl
 component ExampleIC {
   pins {
-    // Keyword 'pin' is optional
+    // Syntax: Name: direction type(optional_spec), property1 = value1, property2 = value2, ...
     VDD: in power(lv_digital_power);
     GND: ground;
     ENABLE: in signal(cmos_3v3);
     DATA_OUT: out signal(cmos_3v3);
     BIDIR_PIN: inout signal(cmos_1v8);
-    RESET_N: in signal; // Assumes signal type if only direction is given after colon
+    RESET_N: in signal; // Assumes base 'signal' type if only direction is given
+    CONFIG: in signal(cmos_3v3), pullup = true; // Example optional property
   }
 }
 ```
 
 **Optional Pin Function Documentation (for Multiplexed Pins):**
 
-For components with pins that serve multiple functions depending on runtime configuration (pin multiplexing), you can optionally document these potential functions using a `functions` list. This information is primarily for human readability and tooltips; the active function in a specific design is determined by how the pin is connected (typically via an `interface`, see Section 3.4).
+Use the `functions` property assigned to a list of strings to document potential roles.
 
 ```bhdl
 component ComplexSoC {
   pins {
-     P1_0: inout signal(cmos_3v3) { 
-       functions: ["GPIO_1_0", "SPI1_MOSI", "UART0_TX", "I2C0_SDA"]; // Document potential roles
-     }
-     P1_1: inout signal(cmos_3v3) { 
-       functions: ["GPIO_1_1", "SPI1_MISO", "UART0_RX", "I2C0_SCL"];
-     }
-     P1_2: inout signal(cmos_3v3) { functions: ["GPIO_1_2", "SPI1_SCK"]; }
-     P1_3: inout signal(cmos_3v3) { functions: ["GPIO_1_3", "SPI1_CS"]; }
+     P1_0: inout signal(cmos_3v3), functions = ["GPIO_1_0", "SPI1_MOSI", "UART0_TX", "I2C0_SDA"];
+     P1_1: inout signal(cmos_3v3), functions = ["GPIO_1_1", "SPI1_MISO", "UART0_RX", "I2C0_SCL"];
+     P1_2: inout signal(cmos_3v3), functions = ["GPIO_1_2", "SPI1_SCK"];
+     P1_3: inout signal(cmos_3v3), functions = ["GPIO_1_3", "SPI1_CS"];
      // ... other pins ...
   }
-  // ... interfaces map functions to these physical pins ...
+  // ... interfaces map functions to these physical pins via 'pin_map' ...
 }
 ```
 
-This documentation helps users understand the capabilities of the component's pins directly from the BHDL source.
+// ... existing code ...
 
 ### 4.4 Component Population and Variant Management (SKUs)
 
-Real-world designs often require managing product variants or SKUs where certain components are intentionally not populated (DNP - Do Not Populate / DNI - Do Not Install) on specific board builds.
+// ... (Description of 'population' property and board parameters remains the same) ...
 
-BHDL supports this through a combination of board parameterization and a standard component property:
-
-**1. `population` Property:**
-
-Components can have an optional `population` property:
-
-*   **Type:** `string`
-*   **Allowed Values:**
-    *   `"Installed"`: The component is populated on the board (Default).
-    *   `"DNP"` / `"DNI"`: The component is not populated. The footprint typically still exists on the PCB, but the component is omitted during assembly.
-    *   Other tool-specific strings might be supported (e.g., `"Fitted"`, `"Not Fitted"`).
-*   **Default:** If the `population` property is omitted, it defaults to `"Installed"`.
-
-**2. Board Parameters for SKUs:**
-
-The top-level `board` definition can accept parameters (Section 3.1) to specify the current SKU or feature set being built.
+**Example:** (Updated for explicit blocks and `=`)
 
 ```bhdl
-board MyVariantBoard (
-  SKU: string = "Base", // e.g., "Base", "Premium", "Lite"
-  Region: string = "WW" // e.g., "WW", "EU", "NA"
-) {
-  // ... components ...
-}
-```
+board MyVariantBoard (SKU = "Base") { // Use '=' for default parameter
 
-**3. Conditional Population:**
-
-The `population` property within a component definition can use conditional expressions based on the board parameters to determine its state for a given configuration.
-
-**Example:**
-
-```bhdl
-board MyVariantBoard (SKU: string = "Base") {
-
-  // --- Common Components ---
-  component Resistor R1 { value: 1k; } // Implicitly population: "Installed"
-  connect(NetA, R1.1);
-  connect(R1.2, NetB);
-
-  // --- SKU-Specific Components ---
-
-  // Option 1: Feature only populated in "Premium" SKU
-  component OpAmp U_FeatureAmp {
-    part_number: "OPA123";
-    population: (SKU == "Premium") ? "Installed" : "DNP"; // Conditional
-  }
-  connect(NetB, U_FeatureAmp.IN_POS);
-  connect(U_FeatureAmp.OUT, NetC);
-  // Connections remain defined; only assembly is affected by DNP
-
-  // Option 2: Debug header DNP on cost-optimized SKU
-  component DebugHeader J1 {
-    connector_type: "2x5";
-    // DNP on cost-optimized SKU 'Lite'
-    population: (SKU != "Lite") ? "Installed" : "DNP";
+  parameters { // Optional block if more parameters exist
+     Region = "WW";
   }
 
-  // Option 3: Component property variation (value changes per SKU)
-  component Resistor R_Tuning {
-    // Population is always "Installed" (default), but value varies
-    value: (SKU == "VariantA") ? 4.7k : 10k;
+  components { // Explicit component declaration block
+    // --- Common Components ---
+    Resistor R1 { value = 1k; } // Use '=', implicitly population = "Installed"
+
+    // --- SKU-Specific Components ---
+    OpAmp U_FeatureAmp {
+      part_number = "OPA123"; // Use '='
+      // Use standard ternary or if/else expression for conditional assignment
+      population = (SKU == "Premium") ? "Installed" : "DNP";
+    }
+    DebugHeader J1 {
+      connector_type = "2x5"; // Use '='
+      population = (SKU != "Lite") ? "Installed" : "DNP";
+    }
+    Resistor R_Tuning {
+      // Population is implicitly "Installed", value varies
+      value = (SKU == "VariantA") ? 4.7k : 10k; // Use '='
+    }
   }
-  connect(NetC, R_Tuning.1);
-  connect(R_Tuning.2, GND);
+
+  nets { // Explicit net declaration block
+    net NetA: signal;
+    net NetB: signal;
+    net NetC: signal;
+    net GND: ground; // Declare ground net
+  }
+
+  connections { // Explicit connection block
+    // Connections remain defined; only assembly is affected by DNP
+    NetA -> R1.1;
+    R1.2 -> NetB;
+    NetB -> U_FeatureAmp.IN_POS; // Connect even if U_FeatureAmp might be DNP
+    U_FeatureAmp.OUT -> NetC;
+    NetC -> R_Tuning.1;
+    R_Tuning.2 -> GND;
+  }
 }
 
 // Build process selects the active configuration:
@@ -1723,286 +1474,187 @@ board MyVariantBoard (SKU: string = "Base") {
 // > bhdl_build MyVariantBoard --param SKU=Lite
 ```
 
-**Tooling and Workflow:**
-
-*   **BOM Generation:** Tools processing the BHDL design (after evaluating parameters for a specific SKU) can read the `population` property to generate accurate, SKU-specific Bills of Materials.
-*   **Layout/Assembly:** Layout tools can use this information to mark DNP components on assembly drawings or adjust pick-and-place data.
-*   **DRC:** Standard DRC typically operates on the superset netlist. Specific checks related to nets connected only to DNP components might be configurable.
-
-**Reviewability Considerations:**
-
-While conditional population provides flexibility, complex conditions scattered throughout a design can make reviews challenging. Effective management relies on:
-
-1.  **Tooling Support (Primary):** BHDL IDEs and review tools should ideally provide features to visualize the evaluated population status for a selected SKU configuration (e.g., graying out DNP components, showing tooltips). This offers immediate clarity without manual evaluation.
-2.  **Coding Conventions:**
-    *   **Simplicity:** Keep conditional expressions straightforward (e.g., direct comparisons).
-    *   **Proximity:** Group components related to specific features or SKUs.
-    *   **Comments:** Explain the reasoning behind DNP choices, especially for non-obvious conditions.
-    *   **Explicitness (Optional Convention):** Consider always specifying `population`, even if `"Installed"`, to make the intent explicit for every component.
-
-By combining board parameters with the standard `population` property and emphasizing the role of tooling for visualization, BHDL provides a robust mechanism for managing board variants and DNP components.
+// ... (Tooling, Workflow, Reviewability notes remain largely the same) ...
 
 **Note on Workflow and Component Declaration:**
 
-While the specification requires all components to be explicitly declared in the `components` block for clarity and consistency, the intended development workflow leverages IDE tooling. Developers can focus on defining connections first. Language Servers and IDE extensions are expected to provide features (e.g., code actions) that automatically generate the corresponding component declaration in this block when a new component instance name is used in the `connections` block. This approach provides a fluid, sketch-like experience (similar to the intent behind potential inline instantiation features) while maintaining the structural benefits of a centralized component inventory and avoiding language complexities associated with inline declarations.
+The specification **requires** all components and nets to be explicitly declared in the `components` and `nets` blocks, respectively, for clarity, consistency, and simpler parsing. The intended development workflow leverages IDE tooling. Developers can focus on defining connections first. Language Servers and IDE extensions are expected to provide features (e.g., code actions) that automatically generate the corresponding component and net declarations in the appropriate blocks when new identifiers are used in the `connections` block. This approach provides a fluid, sketch-like experience while maintaining the structural benefits of explicit declarations.
 
+### 4.5 Nets and Connections Blocks (Revised)
+
+This section details the mandatory `nets` block for defining logical connections and the `connections` block for specifying how component pins link to these nets.
+
+**`nets` Block:**
+
+All logical nets used to connect component pins must be explicitly declared within a `nets { ... }` block inside a `board` or `module`. This improves readability and simplifies parsing by providing a clear inventory of connections.
+
+*   **Syntax:**
+    ```bhdl
+    nets {
+      net <NetName>: <NetType>(optional_parameters);
+      net <AnotherNetName>: <AnotherType>;
+      net <BusName>[<range>]: <BusType>; // Example bus declaration
+      // ...
+    }
+    ```
+*   `<NetName>`: The unique identifier for the net within its scope.
+*   `<NetType>`: Specifies the electrical characteristics, typically one of the core base types (`signal`, `power`, `ground`) or a user-defined `typedef` (e.g., `cmos_3v3`, `lv_digital_power`). Providing a type enables type checking during connection. If omitted, a generic `signal` type might be assumed by tools, but explicit typing is recommended.
+*   `(optional_parameters)`: For `power` types or specific signal types, relevant parameters like voltage or current capacity can be included, matching the type definition.
+*   Bus Declaration: Arrays of nets representing buses use standard index notation (e.g., `DATA[0:7]`).
+
+**Example `nets` Block:**
+```bhdl
+nets {
+  net SPI_MOSI: signal(cmos_3v3);
+  net SPI_MISO: signal(cmos_3v3);
+  net SPI_SCK: signal(cmos_3v3);
+  net I2C_SDA: signal(i2c_signal_3v3); // Type includes open-drain info
+  net VCC_3V3: power(3.3Vdc, 1A); // Power net with voltage/current spec
+  net VCC_1V8: power(1.8Vdc);
+  net AnalogInput: signal(analog_input_type); // User-defined analog type
+  net DataBus[7:0]: signal(cmos_3v3); // 8-bit data bus
+  net GND: ground; // Essential ground net declaration
+}
+```
+
+**`connections` Block:**
+
+The `connections { ... }` block defines how component instance pins are connected *to* the declared nets, or directly pin-to-pin (which implicitly creates an anonymous net).
+
+*   **Syntax:**
+    *   `NetName -> Pin1, Pin2, ...;` (Connects a declared net to one or more component pins)
+    *   `Pin1, Pin2, ... -> NetName;` (Connects one or more component pins to a declared net)
+    *   `Pin1 -> Pin2;` (Direct pin-to-pin connection)
+    *   `Interface1 <=> Interface2;` (Connects all corresponding pins of two declared interfaces)
+    *   `BusNet[slice] -> BusPin[slice];` (Connects buses or slices using declared nets/pins)
+
+*   **Explicit Nets (Recommended):** Connecting pins explicitly to declared nets is the clearest method.
+    ```bhdl
+    connections {
+      VCC_3V3 -> U1.VCC, U2.VCC, C1.1; // Connect VCC_3V3 net to multiple pins
+      U1.TXD -> UART_TX_Net; // Connect U1.TXD pin to UART_TX_Net
+      UART_RX_Net -> U1.RXD; // Connect UART_RX_Net to U1.RXD
+      U1.GND, U2.GND, C1.2 -> GND; // Connect multiple pins to the GND net
+    }
+    ```
+
+*   **Pin-to-Pin Connections:** Allowed for simple, direct connections. The tool implicitly understands there's a connection (net) between them. Avoid for complex routing or where constraints need to be applied to the net itself.
+    ```bhdl
+    connections {
+       MCU.GPIO0 -> LED1.Anode; // Implicit net between GPIO0 and Anode
+       SeriesResistor.1 -> SeriesResistor.2; // Connecting pins of the same component (less common)
+    }
+    ```
+
+*   **Bus Connections:** Use declared bus nets or direct pin slicing.
+    ```bhdl
+    connections {
+       CPU.DataBus[7:0] -> DataBus[7:0]; // Connect CPU pins to declared DataBus net
+       DataBus[7:0] -> RAM.Data[7:0]; // Connect declared DataBus net to RAM pins
+       // OR direct bus connection (if DataBus net declaration is omitted)
+       // CPU.DataBus[7:0] -> RAM.Data[7:0];
+    }
+    ```
+
+*   **Deprecated Syntax:** Multi-target connections (`PinA, PinB -> NetX, NetY;`) and specialized series/parallel syntax (`-[R1]->`, `<|C1|>`) are **removed** due to ambiguity and parsing complexity. Use `generate for` loops or simple one-to-many/many-to-one connections to explicit nets for repetitive patterns.
+
+**Reasoning:** Explicit `nets` and simplified `connections` blocks make the design structure unambiguous, improve readability, facilitate easier parsing and analysis (like type checking), and align better with how connections are represented in traditional netlists. The tooling-assisted workflow mitigates the verbosity of explicit declarations during initial design sketching.
 
 ## 5. Physical Design Constraints
 
 ### 5.1 Connection Constraints
 
-Constraints can be applied to specific nets or groups of nets to guide routing and influence automated actions (See Section 8).
+Constraints are applied using a `constrain` block, targeting specific declared nets, component pins, connections, or groups. Inline constraints are **removed**.
 
 ```bhdl
-// ... [Existing connection examples] ...
-
-  // Apply constraints using a 'constrain' block or inline modifiers
-
-  // Option 1: Constrain block targeting specific nets
-  constrain (MCU.CLK) {
-    max_length: 50mm;
-    impedance: 50Ohm +/- 5pct;
-    layer_preference: "TOP";
-  }
-
-  // Option 2: Constrain block targeting multiple nets
-  constrain (MCU.DATA[0], MCU.DATA[1]) {
-    impedance: 60Ohm +/- 10pct;
-    group: "DataBus"; // Assign to a routing group
-  }
-
-  // Option 3: Constraining differential pairs
-  constrain (MCU.USB_P, MCU.USB_N) {
-    type: differential_pair;
-    impedance: 90Ohm +/- 5pct;
-    length_match_tolerance: 1mm;
-    max_length: 25mm;
-    primary_layer: "SignalLayer1";
-    gap: 0.2mm; // Target spacing for the pair
-  }
-  
-  // ** Option 4: Constraints for Automation **
-  
-  // Constraining an I2C connection to override default pull-up
-  // Assume U_SOC.I2C0 and U_SENSOR.I2C pins use type i2c_signal_3v3 (default 4.7k pull-up)
-  constrain (U_SOC.I2C0.SDA -> U_SENSOR.SDA) {
-     // Override the default pull-up defined in the i2c_signal_3v3 type for this specific net
-     pullup_resistance: 2.2kOhm; // Use stronger pull-up for higher speed
-     // auto_pullup: true; // This is implied by providing pullup_resistance
-  }
-  constrain (U_SOC.I2C0.SCL -> U_SENSOR.SCL) {
-     pullup_resistance: 2.2kOhm; // Override for SCL too
-  }
-
-  // Example: Connecting between different voltage domains and disabling auto level shift
-  // Assume MCU_3V3.TX is cmos_3v3 and FPGA_1V8.RX is cmos_1v8
-  constrain (MCU_3V3.TX -> FPGA_1V8.RX) {
-      auto_level_shift: false; // Disable automatic insertion, requires manual shifter elsewhere
-  }
-
-  // Example: Disabling automatic pull-up for an open-drain signal (manual implementation desired)
-  // Assume ALERT_N pin type has is_open_drain: true
-  constrain (Sensor.ALERT_N -> MCU.IRQ_PIN) {
-      auto_pullup: false; 
-  }
-  
-  // Option 4: Inline constraints (Syntax TBD - might use annotations or modifiers)
-  // MCU.ADDR[0] -> MEM.A0 { impedance: 50Ohm; }; // Conceptual inline syntax
+// Apply constraints using a 'constrain' block targeting declared elements
+connections {
+  // Assume nets MCU_CLK, MCU_DATA[0], MCU_DATA[1], MCU_USB_P, MCU_USB_N, etc.
+  // and components MCU, Sensor, etc. are declared
+  MCU.CLK_PIN -> MCU_CLK;
+  MCU.DATA_PIN[0] -> MCU_DATA[0];
+  MCU.DATA_PIN[1] -> MCU_DATA[1];
+  MCU.USB_P_PIN -> MCU_USB_P;
+  MCU.USB_N_PIN -> MCU_USB_N;
+  // ... other connections
 }
-// ... [Existing constraint group examples] ...
+
+constrain (MCU_CLK) { // Target a specific NET
+  max_length = 50mm; // Use '='
+  impedance = 50Ohm +/- 5pct; // Use '='
+  layer_preference = "TOP"; // Use '='
+}
+
+constrain (MCU_DATA[0], MCU_DATA[1]) { // Target multiple NETS
+  impedance = 60Ohm +/- 10pct;
+  group = "DataBus"; // Assign to a routing group
+}
+
+constrain (MCU_USB_P, MCU_USB_N) { // Target differential pair NETS
+  type = differential_pair; // Property indicating pair relationship
+  impedance = 90Ohm +/- 5pct;
+  length_match_tolerance = 1mm;
+  max_length = 25mm;
+  primary_layer = "SignalLayer1";
+  gap = 0.2mm; // Target spacing for the pair
+}
+
+// ** Constraints for Automation (Targeting Nets or Connections) **
+
+// Constraining an I2C connection to override default pull-up
+// Assume I2C_SDA, I2C_SCL nets are declared with type i2c_signal_3v3 (default 4.7k pull-up)
+constrain (I2C_SDA) { // Target the net
+   pullup_resistance = 2.2kOhm; // Override default pull-up for this specific net
+   // auto_pullup = true; // Often implied by providing pullup_resistance
+}
+constrain (I2C_SCL) {
+   pullup_resistance = 2.2kOhm; // Override for SCL too
+}
+
+// Example: Disabling auto level shift on a specific connection
+// Target the specific connection (Syntax for connection targeting TBD, using pins for now)
+// constrain (connection(MCU_3V3.TX -> FPGA_1V8.RX)) { // Conceptual connection targeting
+// For now, apply to the net or pins involved if connection targeting not supported
+constrain (Net_TX_to_RX) { // Assuming Net_TX_to_RX is the declared net
+    auto_level_shift = false; // Disable automatic insertion on this net
+}
+
+// Example: Disabling automatic pull-up for an open-drain signal net
+// Assume ALERT_Net is declared with a type having is_open_drain = true
+constrain (ALERT_Net) {
+    auto_pullup = false; // Disable automatic pull-up for this net
+}
+
+// Constraint groups (Conceptual, syntax may vary)
+// group DataBus { ... }
+// constrain group DataBus { length_match_tolerance = 0.5mm; }
 ```
 
-**Common Connection Constraints:**
-
-*   `impedance`: Target characteristic impedance (e.g., `50Ohm`).
-*   `max_length`, `min_length`: Maximum or minimum trace length.
-*   `length_match_tolerance`: Maximum length difference between nets in a group.
-*   `max_skew`: Maximum timing difference between nets in a group.
-*   `differential_pair`: Defines a pair with specific impedance and spacing (`gap`).
-*   `layer`, `layer_preference`, `avoid_layers`: Layer routing rules.
-*   `shielding`, `guard_trace`: Specify shielding requirements.
-*   `group`: Assign nets to a named group for collective constraints.
-*   `topology`: Specify routing topology (e.g., `daisy_chain`, `star`).
-*   `max_via_count`: Limit the number of vias on a net.
-*   **`net_class`** (`string`): Assigns the specified net(s) to a defined Net Class (Section 5.4), inheriting its rules.
-*   **`via_style`** (`string`): Specifies a defined Via Style (Section 5.5) to be used for vias on the specified net(s), overriding defaults.
-*   `pullup_resistance`: Specifies the desired pull-up resistor value for automated insertion (overrides `typedef` default). Implies `auto_pullup: true`.
-*   `pulldown_resistance`: Specifies desired pull-down value for automation (requires relevant `typedef` properties). Implies `auto_pulldown: true`.
-*   `auto_pullup` (`boolean`): Explicitly enable (`true`, default if implicit conditions met) or disable (`false`) automatic pull-up resistor insertion.
-*   `auto_pulldown` (`boolean`): Explicitly enable/disable automatic pull-down insertion.
-*   `auto_level_shift` (`boolean`): Explicitly enable (`true`, default if implicit conditions met) or disable (`false`) automatic level shifter insertion.
+**Common Connection Constraints:** (List remains mostly the same, assigned using `=`)
+*   `impedance = 50Ohm`
+*   `max_length`, `min_length`
+*   `length_match_tolerance`
+*   `max_skew`
+*   `type = differential_pair` (used with `gap`, `impedance`, `length_match_tolerance`)
+*   `gap = 0.2mm` (Spacing within a differential pair)
+*   `layer`, `layer_preference`, `avoid_layers`
+*   `shielding`, `guard_trace`
+*   `group`
+*   `topology`
+*   `max_via_count`
+*   `net_class = "ClassName"` (Assigns net(s) to a Net Class, Section 5.4)
+*   `via_style = "StyleName"` (Specifies Via Style, Section 5.5)
+*   `pullup_resistance` (Specifies desired pull-up value for automation)
+*   `pulldown_resistance` (Specifies desired pull-down value)
+*   `auto_pullup = boolean` (Explicitly enable/disable auto pull-up)
+*   `auto_pulldown = boolean` (Explicitly enable/disable auto pull-down)
+*   `auto_level_shift = boolean` (Explicitly enable/disable auto level shifter)
 
 ### 5.2 Placement Constraints
 // ... existing code ...
 ```
 
 **Reasoning:** Building validation rules directly into the language's expectation enables the development of powerful analysis tools that can catch common design errors early, significantly improving design reliability and reducing debugging time compared to purely graphical schematic capture where such checks are often less integrated or comprehensive.
-
-## 8. Automation Conventions & Implicit Actions
-
-To reduce boilerplate and enforce common design practices, BHDL tools are expected to support certain implicit actions based on the analysis of connections and component types. These conventions allow designers to focus on the core logic while the tool handles standard interface requirements like pull-ups or level shifting. Designers retain control via explicit constraints to override or disable these actions when necessary.
-
-### 8.1 Voltage Domain Inference
-
-Understanding the voltage domain in which signals operate is crucial for automation.
-
-*   **Inference:** A signal pin's voltage domain is primarily inferred from:
-    1.  The voltage levels specified in its `typedef` (e.g., `voltage_high: 3.3Vdc`).
-    2.  The specific `power` rail(s) connected to the `power` input pin(s) of its parent component instance in the board design.
-*   **Component Power:** Components must have clearly defined `power` and `ground` pins in their definition. Tools trace connections to these pins back to board-level power nets (e.g., `VDD_3V3`, `VCC_1V8`) to associate component instances with specific voltage rails.
-*   **Multiple Domains:** Components operating across multiple voltage domains (e.g., separate core and I/O voltages) should define distinct `power` input pins for each domain (e.g., `VDD_CORE`, `VDD_IO`). The `typedef` for pins associated with a specific domain should reflect that domain's voltage levels.
-
-### 8.2 Automatic Pull-up/Pull-down Insertion
-
-Tools should automate the addition of pull-up/pull-down resistors for appropriate signal types, primarily open-drain outputs.
-
-*   **Trigger:** A connection involving a pin whose `typedef` includes `is_open_drain: true` (or a similar property indicating a need for external pull-resistors).
-*   **Action:** The tool implicitly instantiates and connects a pull-up resistor (or pull-down, if specified by type/constraint).
-*   **Rules & Overrides:**
-    1.  **Check Disable:** If the connection has the constraint `auto_pullup: false` (or `auto_pulldown: false`), no action is taken.
-    2.  **Check Override Value:** If `auto_pullup` is not `false`, check if the connection has a `pullup_resistance` constraint (Section 5.1). If yes, use this value for the implicitly added resistor.
-    3.  **Use Type Default:** If `auto_pullup` is not `false` and no `pullup_resistance` constraint exists, check the pin's `typedef` for `default_pullup_resistance`. If defined, use this value.
-    4.  **Error/Warning:** If `auto_pullup` is effectively enabled (by `is_open_drain: true` or `pullup_resistance` constraint) but no value can be determined (no override constraint and no type default), the tool should issue an error or warning.
-    5.  **Rail Connection:** The implicit resistor is connected between the signal net and the appropriate power rail associated with the signal's inferred voltage domain (typically the positive supply rail for pull-ups, ground for pull-downs).
-
-### 8.3 Automatic Level Shifter Insertion
-
-Tools should automate the insertion of level shifters when connecting signals between incompatible voltage domains.
-
-*   **Trigger:** A connection is made between two signal pins (`A -> B`) where their inferred voltage domains (based on `typedef` voltages and component power connections) are significantly different and potentially incompatible (e.g., connecting a `3.3Vdc` output pin `A` to a non-tolerant `1.8Vdc` input pin `B`). Compatibility rules need to consider both nominal levels and input/output thresholds defined in the `typedef`s.
-*   **Action:** The tool implicitly instantiates and connects an appropriate level shifter component.
-*   **Rules & Overrides:**
-    1.  **Check Disable:** If the connection has the constraint `auto_level_shift: false`, no action is taken. The designer is responsible for ensuring compatibility or inserting a manual shifter.
-    2.  **Check Necessity:** If not disabled, the tool analyzes the voltage domains and type thresholds of the connected pins (A and B) to determine if level shifting is required according to built-in or configurable compatibility rules.
-    3.  **Select Shifter Type:** If shifting is deemed necessary, the tool selects an appropriate level shifter component based on:
-        *   Directionality (unidirectional, bidirectional).
-        *   Voltage levels involved (e.g., 3.3V to 1.8V).
-        *   Signal characteristics (speed, type - needed for choosing appropriate shifter topology).
-        *   Availability in a configured component library accessible to the tool.
-    4.  **Instantiate & Connect:** The tool implicitly instantiates the selected shifter, connects its low-voltage side pins to the lower-voltage signal(s)/domain, connects its high-voltage side pins to the higher-voltage signal(s)/domain, and connects the shifter's own power/ground pins to the appropriate board rails.
-    5.  **Configuration:** The specific rules for determining incompatibility and the library of available level shifters are likely configurable within the BHDL tool environment.
-
-### 8.4 Disabling Automation
-
-Designers must have the ability to disable these implicit actions on a per-connection basis when manual control or alternative implementations are desired.
-
-*   **Syntax:** Use connection constraints (Section 5.1).
-    *   `auto_pullup: false;`
-    *   `auto_pulldown: false;`
-    *   `auto_level_shift: false;`
-*   **Use Case:** Needed when using custom pull-up circuits, non-standard level shifting methods, or when the tool's default behavior or component choice is unsuitable for a specific case.
-
-**Integration:** Tools would use these constraints and properties to automate layout tasks, perform DRC checks relevant to high-speed or power design, and ensure the physical implementation matches the design intent captured in BHDL.
-
-### 5.4 Net Classes
-
-Net classes allow grouping nets with similar physical routing requirements and assigning specific design rules that override the board's defaults (defined in `default_design_rules`).
-
-**Definition:**
-Net classes are defined at the board level or, more commonly, **within library files** (e.g., `company_standards.drc.bhdl`) for reuse across multiple projects using the `net_class` keyword. They are brought into a design file using the `import` statement (Section 2.8).
-
-```bhdl
-net_class <ClassName> {
-  // Rule overrides - properties match those in default_design_rules
-  min_trace_width: distance;
-  min_clearance: distance;
-  trace_impedance: resistance; // Target impedance for nets in this class
-  default_via_style: string; // Name of a via_style (See Sec 5.5)
-  max_length: distance;
-  // ... other relevant rules ...
-}
-
-// Example Definitions
-net_class Power {
-  min_trace_width: 0.5mm;
-  min_clearance: 0.4mm;
-  default_via_style: "PowerVia";
-}
-
-net_class HighSpeedDiffPair {
-  min_clearance: 0.15mm; // Clearance between pairs
-  intra_pair_gap: 0.1mm;  // Clearance within a pair
-  trace_impedance: 90Ohm +/- 5pct;
-  default_via_style: "MicroVia_Stacked"; // Example advanced via
-  length_match_group_tolerance: 0.2mm;
-}
-
-net_class AnalogSensitive {
-  min_clearance: 0.5mm; // Extra clearance to other nets
-  shielding_required: true;
-}
-```
-
-**Rule Precedence:**
-When determining the physical rules (width, clearance, via style, etc.) for a specific net, the following order of precedence applies:
-1.  **Specific Constraint:** Rules defined directly on the net or connection within a `constrain` block (Section 5.1) have the highest priority.
-2.  **Net Class:** Rules defined in the `net_class` assigned to the net (if any) have the next priority.
-3.  **Board Default:** Rules defined in the `default_design_rules` block (Section 3.1) have the lowest priority.
-
-**Assignment:**
-Nets can be assigned to a class in several ways (Syntax TBD - needs refinement):
-
-1.  **Explicitly in Connection Constraints:**
-    ```bhdl
-    constrain (VDD_3V3, VDD_1V8) { net_class: "Power"; }
-    constrain (USB_P, USB_N) { net_class: "HighSpeedDiffPair"; }
-    ```
-2.  **By Name Pattern (in `default_design_rules` or dedicated block):**
-    ```bhdl
-    // Within default_design_rules or a dedicated assignment block
-    assign_net_class("Power", nets_matching("VDD_*", "VCC_*"));
-    assign_net_class("AnalogSensitive", nets_matching("AUDIO_*", "SENSOR_AIN"));
-    ```
-3.  **By Associated Component/Pin Property (Implicitly):** Tools could potentially infer classes based on pin types or component properties, but explicit assignment provides more control.
-
-Tools use the rules defined in the assigned `net_class` for DRC checks on those specific nets, falling back to `default_design_rules` for unassigned nets, respecting the defined rule precedence.
-
-### 5.5 Via Styles
-
-Via styles define named templates for vias, specifying their physical construction. Like net classes, they are typically defined in **reusable library files** and imported into board designs.
-
-**Definition:**
-Via styles are defined using the `via_style` keyword.
-
-```bhdl
-via_style <StyleName> {
-  drill: distance;
-  pad_diameter: distance;
-  layer_span: [ <TopLayerName>, <BottomLayerName> ]; // Defines span (e.g., ["TOP", "BOTTOM"] for through-hole)
-  plating_thickness: distance; // Optional
-  thermal_relief_type: enum {none, spokes, flood}; // Optional
-  is_filled: boolean; // Optional: e.g., for via-in-pad
-  // ... other properties ...
-}
-
-// Example Definitions
-via_style StandardVia {
-  drill: 0.3mm;
-  pad_diameter: 0.6mm;
-  layer_span: ["TOP", "BOTTOM"]; // Standard through-hole
-}
-
-via_style PowerVia {
-  drill: 0.5mm;
-  pad_diameter: 1.0mm;
-  layer_span: ["TOP", "BOTTOM"];
-  thermal_relief_type: spokes;
-}
-
-via_style MicroVia_L1_L2 {
-  drill: 0.1mm;
-  pad_diameter: 0.25mm;
-  layer_span: ["TOP", "Layer2"]; // Blind via example
-  is_filled: true;
-}
-```
-
-**Usage:**
-
-*   A `default_via_style` can be set in `default_design_rules` or within a `net_class` by referencing the name of an imported or locally defined `via_style`.
-*   A specific `via_style` can be assigned to override the default for a particular net using connection constraints (e.g., `constrain (MyNet) { via_style: "MicroVia_L1_L2"; }`). The precedence follows the same order as net class rules (Specific Constraint > Net Class Default > Board Default).
-
-Tools use these definitions for DRC checks related to annular rings, via clearances, and manufacturing constraints based on the applicable style determined by the precedence rules.
 
 ## 6. Complete Examples
 // ... existing code ...
