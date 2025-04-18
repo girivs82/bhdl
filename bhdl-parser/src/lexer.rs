@@ -46,6 +46,13 @@ pub fn lex_ident_or_kw(lex: &mut Lexer<LexerToken>) -> KeywordOrIdent {
         "import" => SyntaxKind::IMPORT_KW,
         "from" => SyntaxKind::FROM_KW,
         "as" => SyntaxKind::AS_KW,
+        "to" => SyntaxKind::TO_KW,
+        "layer" => SyntaxKind::LAYER_KW,
+        "extends" => SyntaxKind::EXTENDS_KW,
+        "constrain" => SyntaxKind::CONSTRAIN_KW,
+        "interfaces" => SyntaxKind::INTERFACES_KW,
+        "layer_stackup" => SyntaxKind::LAYER_STACKUP_KW,
+        "default_design_rules" => SyntaxKind::DEFAULT_DESIGN_RULES_KW,
         _ => SyntaxKind::IDENT,
     };
     KeywordOrIdent { kind, text: slice.into() }
@@ -98,6 +105,7 @@ pub enum LexerToken {
     #[token("||")] PipePipe,
     #[token("<<")] LShift,
     #[token(">>")] RShift,
+    #[token("<=>")] IfConnect, // Interface connection token
 
     // This represents an error during lexing. Logos requires an Error variant.
     // It doesn't map directly to a SyntaxKind node, but signifies a lexing failure.

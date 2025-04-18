@@ -49,6 +49,7 @@ pub enum SyntaxKind {
     PIPEPIPE,// ||
     LSHIFT,  // <<
     RSHIFT,  // >>
+    IF_CONNECT, // <=>
 
     // Keywords
     IMPORT_KW, // import
@@ -94,6 +95,8 @@ pub enum SyntaxKind {
     ASSIGN_KW,    // assign
     FROM_KW,      // from
     AS_KW,        // as
+    TO_KW,        // to
+    EXTENDS_KW,   // extends
 
     // Nodes (Grammar rules)
     SOURCE_FILE,    // Root node
@@ -105,7 +108,8 @@ pub enum SyntaxKind {
     BOARD_DEF,      // board BoardName { ... }
     MODULE_DEF,     // module ModuleName { ... }
     COMPONENT_DEF,  // component ComponentName { ... }
-    TYPEDEF_DEF,    // typedef TypeName { ... }
+    TYPEDEF_DEF,    // typedef TypeName [extends Base] { ... }
+    TYPEDEF_BASE,   // Node wrapping the base type name after extends
     STRUCT_DEF,     // struct definition
     ENUM_DEF,       // enum definition
     INTERFACE_DEF,  // interface InterfaceName { ... }
@@ -119,9 +123,9 @@ pub enum SyntaxKind {
     PINS_BLOCK,
     INTERFACES_BLOCK,
     LAYER_STACKUP_BLOCK,
+    LAYER_DEF,          // layer NAME { ... }
     DEFAULT_DESIGN_RULES_BLOCK,
     CONSTRAIN_BLOCK,
-    CONSTRAINT_TARGET, // Node for the target(s) in constrain()
     GENERATE_BLOCK,     // generate { ... }
     FOR_LOOP_GENERATE, // ADDED
     GENERATE_FOR_BLOCK, // ADDED
@@ -136,13 +140,15 @@ pub enum SyntaxKind {
     COMPONENT_TYPE,    // Type name used in component instantiation
     NET_DECL,          // net net_name[range]: type;
     NET_TYPE,          // The type keyword used in net decl (SIGNAL_KW etc)
-    CONNECTION_STMT,   // assign net = expr; or connect pin = net;
+    CONNECTION_STMT,   // PinRef -> PinRef; OR NetRef -> PinRef; OR PinRef -> NetRef; OR AssignStmt
+    ASSIGN_STMT,       // assign NetRef = Expression;
     NET_REF,           // Reference to a net name
     PIN_DECL,          // pin_name[range]: direction type ...;
     INTERFACE_INSTANCE,// IntfName: interface TypeName { ... };
     PIN_MAP_BLOCK,     // pin_map = { ... }
     PIN_MAP_ENTRY,     // LogPin = PhysPin
     PIN_REF,           // instance.pin[range] or net_name[range]
+    CONSTRAINT_TARGET, // Node for the target(s) in constrain()
     BUS_SUFFIX,        // [index] or [high:low]
     RANGE_EXPR,        // start to end
     VALUE,             // Generic value node (number, string, bool, etc.)
@@ -150,10 +156,13 @@ pub enum SyntaxKind {
     TYPE_SPECIFIER,    // (specifier_name)
     PIN_PROPERTIES,    // Pin properties
     PORT_DIRECTION,    // input, output, inout
-    EXPRESSION,        // Placeholder for expression nodes
+    EXPRESSION,        // Generic expression node (might wrap others)
+    BINARY_EXPR,       // Node for binary operations (lhs op rhs)
+    PREFIX_EXPR,       // Node for prefix unary operations (op rhs)
     IDENT_REF,         // Reference to an identifier
     PATH_REF,          // Reference like scope::identifier
     TYPE_PARAMS,       // Added for type parameters like signal(param)
+    PIN_BUS_SUFFIX,    // Node for the [high:low] or [index] suffix
 
     // ERROR must be the last variant for the assertion in kind_from_raw
     ERROR = 65534, // Represents a parsing error node
