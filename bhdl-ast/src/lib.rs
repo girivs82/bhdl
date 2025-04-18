@@ -170,15 +170,120 @@ pub struct AssignmentStatement {
     pub right: Expression,
 }
 
-// --- Property Assignment (Used in Typedef, PropertySet, NetClass, ViaStyle, DDR, Constraints) ---
+// --- Property Assignment (Used everywhere now with '=') ---
 
+/// Represents `name = value` assignment used in various blocks.
 #[derive(Debug, Clone, PartialEq)]
-pub struct PropertyAssignment {
+pub struct PropertyAssignmentEquals {
     pub span: Span,
     pub name: Identifier,
-    pub colon_span: Span,
+    pub eq_span: Span, // Span of the '=' sign
     pub value: Expression, // Value can be any expression
 }
+
+// --- Pin Property Assignment (Used in pin declarations) ---
+
+/// Represents `name = value` assignment used inline in pin declarations.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PinPropertyAssignment {
+    pub span: Span,
+    pub name: Identifier,
+    pub eq_span: Span, // Span of the '=' sign
+    pub value: Expression,
+}
+
+
+// --- Pin Mapping (Used in Interface Instantiation) ---
+
+/// Represents `LogicalPin = PhysicalPin` within a pin_map block.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PinMapping {
+    pub span: Span,
+    pub logical_pin: Identifier,
+    pub eq_span: Span,
+    pub physical_pin: Identifier,
+}
+
+/// Represents the `pin_map = { ... }` property in an interface instantiation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PinMapProperty {
+    pub span: Span, // Span including pin_map = { ... }
+    pub pin_map_kw_span: Span,
+    pub eq_span: Span,
+    pub mappings: Vec<PinMapping>,
+    pub body_span: Span, // Span including braces {}
+}
+
+// --- Net Declarations ---
+
+/// Represents a `net Name[bus]?: Type?;` declaration.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NetDeclaration {
+    pub span: Span,
+    pub net_kw_span: Span,
+    pub name: Identifier,
+    pub bus_specifier: Option<BusSpecifier>,
+    pub net_type: Option<TypeSpecifier>, // Changed from TypeName
+    // Note: Semicolon span might be needed if grammar requires it consistently
+}
+
+/// Represents a `nets { ... }` block.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NetsBlock {
+    pub span: Span, // Span including nets { ... }
+    pub nets_kw_span: Span,
+    pub declarations: Vec<NetDeclaration>,
+    pub body_span: Span, // Span including braces {}
+}
+
+// --- Constraint Targets ---
+
+/// Represents a target for a `constrain` statement (Identifier, Member, Subscript).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConstraintTarget {
+    Identifier(Identifier),
+    MemberAccess(Box<MemberAccessExpression>),
+    SubscriptAccess(Box<SubscriptAccessExpression>),
+}
+
+// --- Type Specifiers ---
+
+/// Represents a type usage (Base, Scoped, Power specific). Matches grammar `_type_specifier`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TypeSpecifier {
+    Base(BaseType), // signal, power, ground keywords
+    Scoped(ScopedTypeName), // Identifier or path like Types.cmos_3v3
+    Power(PowerTypeSpecifier), // power(voltage, current) - Placeholder
+    // TODO: Add other complex type specifiers if needed (e.g., signal(subtype))
+}
+
+/// Placeholder for `power(...)` syntax if needed.
+/// Grammar currently doesn't explicitly parse parameters here.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PowerTypeSpecifier {
+    pub span: Span,
+    pub power_kw_span: Span,
+    // pub voltage: Option<Expression>,
+    // pub current: Option<Expression>,
+}
+
+/// Represents a base type keyword: signal, power, ground.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct BaseType {
+    pub span: Span,
+    pub kind: BaseTypeKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BaseTypeKind { Signal, Power, Ground }
+
+/// Represents a potentially scoped type name like `MyType` or `Lib.Types.MyType`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ScopedTypeName {
+    pub span: Span,
+    pub path: Vec<Identifier>, // Segments of the type path
+}
+
 
 // --- Definitions ---
 
@@ -205,16 +310,16 @@ pub struct ComponentDefinition {
     pub span: Span,
     pub name: Identifier,
     pub parameters_decl: Option<DeclarationParameterList>,
-    pub body: Option<Vec<ComponentItem>>, // Body is optional
-    pub body_span: Option<Span>, // Span including braces {}
+    pub body: Vec<ComponentItem>, // Body is now mandatory {} brace pair
+    pub body_span: Span, // Span including braces {}
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypedefDefinition {
     pub span: Span,
     pub name: Identifier,
-    pub extends: Option<Identifier>, // Optional parent type
-    pub properties: Vec<PropertyAssignment>,
+    pub extends: Option<ScopedTypeName>, // Optional parent type (updated type)
+    pub properties: Vec<PropertyAssignmentEquals>, // Updated
     pub body_span: Span, // Span including braces {}
 }
 
@@ -222,7 +327,7 @@ pub struct TypedefDefinition {
 pub struct PropertySetDefinition {
     pub span: Span,
     pub name: Identifier,
-    pub properties: Vec<PropertyAssignment>,
+    pub properties: Vec<PropertyAssignmentEquals>, // Updated
     pub body_span: Span, // Span including braces {}
 }
 
@@ -239,7 +344,7 @@ pub struct InterfaceDefinition {
 pub struct NetClassDefinition {
     pub span: Span,
     pub name: Identifier,
-    pub properties: Vec<PropertyAssignment>,
+    pub properties: Vec<PropertyAssignmentEquals>, // Updated
     pub body_span: Span, // Span including braces {}
 }
 
@@ -247,7 +352,7 @@ pub struct NetClassDefinition {
 pub struct ViaStyleDefinition {
     pub span: Span,
     pub name: Identifier,
-    pub properties: Vec<PropertyAssignment>,
+    pub properties: Vec<PropertyAssignmentEquals>, // Updated
     pub body_span: Span, // Span including braces {}
 }
 
@@ -258,6 +363,7 @@ pub enum BoardItem {
     ParametersBlock(ParametersBlock),
     PortsBlock(PortsBlock),
     ComponentsBlock(ComponentsBlock),
+    NetsBlock(NetsBlock), // Added NetsBlock
     ConnectionsBlock(ConnectionsBlock),
     LayerStackupBlock(LayerStackupBlock),
     DefaultDesignRulesBlock(DefaultDesignRulesBlock),
@@ -279,6 +385,7 @@ pub enum ModuleItem {
     ParametersBlock(ParametersBlock),
     PortsBlock(PortsBlock),
     ComponentsBlock(ComponentsBlock),
+    NetsBlock(NetsBlock), // Added NetsBlock
     ConnectionsBlock(ConnectionsBlock),
     GenerateBlock(GenerateBlock),
     ConstraintStatement(ConstraintStatement),
@@ -353,7 +460,7 @@ pub struct ConnectionsBlock {
 #[derive(Debug, Clone, PartialEq)]
 pub struct InterfacesBlock { // Used in Component
     pub span: Span, // Span including braces {}
-    pub interfaces: Vec<InterfaceInstantiation>, // Needs definition
+    pub interfaces: Vec<InterfaceInstantiation>, // Uses the updated definition
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -368,13 +475,15 @@ pub struct LayerDefinition {
     pub layer_kw_span: Span,
     pub name: Identifier,
     pub colon_span: Span,
-    pub properties: Vec<PropertyAssignment>, // Uses standard prop assignment
+    pub properties: Vec<PropertyAssignmentEquals>, // Updated
+    pub body_span: Span, // Span including braces {}
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DefaultDesignRulesBlock {
     pub span: Span, // Span including braces {}
-    pub rules: Vec<PropertyAssignment>, // Uses standard prop assignment
+    pub rules: Vec<PropertyAssignmentEquals>, // Updated
+    pub body_span: Span, // Span including braces {}
     // TODO: Consider adding assign_net_class if grammar supports it here
 }
 
@@ -415,17 +524,11 @@ pub struct GenerateForLoop {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConstraintStatement {
     pub span: Span,
-    pub target: ConstraintTarget, // What is being constrained
-    pub body: Vec<PropertyAssignment>, // Constraint rules use prop assignment
+    pub constrain_kw_span: Span,
+    pub targets: Vec<ConstraintTarget>, // Changed from single target
+    pub targets_span: Span, // Span for (...) including parens
+    pub body: Vec<PropertyAssignmentEquals>, // Changed from PropertyAssignment
     pub body_span: Span, // Span including braces {}
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum ConstraintTarget {
-    Net(Expression), // Single net (Ident, MemberAccess, Subscript)
-    NetPair(Expression, Expression), // Differential pair (Expr, Expr)
-    Group(Identifier), // Target a named group (group GroupName)
-    // Others? (e.g., Component placement?)
 }
 
 
@@ -433,10 +536,12 @@ pub enum ConstraintTarget {
 #[derive(Debug, Clone, PartialEq)]
 pub struct InterfaceInstantiation {
     pub span: Span,
-    pub instance_name: Identifier,
-    pub colon_span: Span,
-    pub interface_type: TypeName, // Type of interface being instantiated
-    // TODO: Add parameters/overrides if grammar allows, e.g., { pins: { ... }, max_freq: ... }
+    pub instance_name: Identifier, // Renamed from name
+    pub colon_span: Span, // Kept
+    pub interface_type: ScopedTypeName, // Renamed from iface, changed type
+    pub properties: Vec<PropertyAssignmentEquals>, // Renamed from parameters, changed type
+    pub pin_map_property: Option<PinMapProperty>, // Renamed from pin_map, changed type
+    pub body_span: Span, // Span covering the { ... } block, ADDED
 }
 
 
@@ -584,10 +689,10 @@ pub struct BusSpecifier {
 pub struct ParameterDeclaration {
     pub span: Span,
     pub name: Identifier,
-    pub param_type: Option<TypeName>, // Optional type spec: `name: type = value`
-    pub colon_span: Option<Span>,
+    pub param_type: Option<TypeSpecifier>, // Optional type spec
+    pub colon_span: Option<Span>, // Span for ':' if type is present
+    pub eq_span: Span, // '=' is now mandatory for the value
     pub value: Expression, // Assigned value (required)
-    pub eq_span: Option<Span>, // None if using ':' for type hint
 }
 
 /// Declaration of a pin or port within a pins/ports block.
@@ -597,39 +702,13 @@ pub struct PinPortDeclaration {
     pub is_port: bool, // true if 'port', false if 'pin' (or keyword omitted)
     pub name: Identifier,
     pub bus_specifier: Option<BusSpecifier>, // Optional bus specifier `[H:L]` or `[I]`
-    pub kind: PinPortKind,
-    pub colon_span: Span, // Span of the ':' before the kind (No longer optional)
-    pub properties: Option<Vec<PropertyAssignment>>, // Optional properties block `{...}`
-    pub properties_span: Option<Span>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum PinPortKind {
-    Ground { // ground
-        span: Span,
-    },
-    SignalPower { // signal | power [direction] [(subtype)]
-        span: Span, // Span covers direction, base_type, subtype parts
-        direction: PinDirection,
-        base_type: PinBaseType, // Defaults to Signal if grammar allows omission
-        subtype: Option<TypeName>, // Optional: (subtype)
-    }
+    pub direction: PinDirection,
+    pub type_specifier: TypeSpecifier, // Replaces PinPortKind
+    pub properties: Vec<PinPropertyAssignment>, // Changed from optional block to Vec
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PinDirection { In, Out, Inout }
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum PinBaseType { Signal, Power } // Based on keywords 'signal', 'power'
-
-/// Represents a type name, potentially scoped (e.g., `digital::cmos_3v3`).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct TypeName {
-    pub span: Span,
-    // For now, just the full name like "identifier" or "Scope.Type"
-    // Could parse into segments later if needed.
-    pub name: String,
-}
 
 
 // --- Instantiations & Connections (Already mostly existed) ---
@@ -638,54 +717,54 @@ pub struct TypeName {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComponentInstantiation {
     pub span: Span,
-    pub component_type: TypeName, // Type of component being instantiated
+    pub component_type: ScopedTypeName, // Type of component being instantiated (updated type)
     pub instance_name: Identifier,
     pub instance_bus: Option<BusSpecifier>, // Optional array instantiation `U[0:3]`
-    // Parameters can be passed positionally `(...)` or named `{...}`
-    pub parameters: Option<ComponentParameters>,
-    pub parameters_span: Option<Span>, // Span covering (...) or {...}
+    pub properties: Vec<PropertyAssignmentEquals>, // Replaced parameters Option<ComponentParameters>
+    pub properties_span: Span, // Span covering { ... } including braces
 }
 
+/// Represents a connection statement in the `connections` block.
 #[derive(Debug, Clone, PartialEq)]
-pub enum ComponentParameters {
-    Positional(Vec<Expression>), // Parameters passed as (...)
-    Named(Vec<ParameterAssignment>), // Parameters passed as { name = value, ... }
+pub enum ConnectionStatement {
+    InterfaceConnection { // Target <=> Target
+        span: Span,
+        source: ConnectionTarget,
+        op_span: Span, // Span for <=>, Operator implicit (<=>)
+        target: ConnectionTarget,
+    },
+    PinsToPins { // Vec<Target> -> Vec<Target>
+        span: Span,
+        sources: Vec<ConnectionTarget>,
+        op_span: Span, // Span for ->, Operator implicit (->)
+        targets: Vec<ConnectionTarget>,
+    },
+    PinsToNet { // Vec<Target> -> Target (Net)
+        span: Span,
+        sources: Vec<ConnectionTarget>,
+        op_span: Span, // Span for ->, Operator implicit (->)
+        target_net: ConnectionTarget, // Must resolve to a net
+    },
+    NetToPins { // Target (Net) -> Vec<Target>
+        span: Span,
+        source_net: ConnectionTarget, // Must resolve to a net
+        op_span: Span, // Span for ->, Operator implicit (->)
+        targets: Vec<ConnectionTarget>,
+    },
+    // Removed old variants like MultiTarget, Series, Parallel
 }
 
-/// Assignment of a value to a named parameter during component instantiation.
-/// `name = value` within `{}`.
+/// Represents the target of a connection (Identifier, MemberAccess, SubscriptAccess).
+/// Renamed from ConnectionEndpoint.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ParameterAssignment {
-    pub span: Span,
-    pub name: Identifier,
-    pub eq_span: Span,
-    pub value: Expression,
-}
-
-/// Represents a connection statement `source op target;`
-#[derive(Debug, Clone, PartialEq)]
-pub struct ConnectionStatement {
-    pub span: Span,
-    pub source: ConnectionEndpoint,
-    pub op: ConnectionOperator,
-    pub op_span: Span,
-    pub target: ConnectionEndpoint,
-    // TODO: Add optional inline constraints if grammar supports them
-    // pub constraints: Option<ConstraintBody>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ConnectionOperator { Ltr, Rtl, BiDi } // ->, <-, <=>
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum ConnectionEndpoint {
-    Identifier(Identifier), // Net name like GND, VCC, or user-defined
-    MemberAccess(Box<MemberAccessExpression>), // Comp.Pin, Comp.Interface.Pin
-    SubscriptAccess(Box<SubscriptAccessExpression>), // Bus[idx], Comp[idx].Pin, etc.
+pub enum ConnectionTarget {
+    Identifier(Identifier),
+    MemberAccess(Box<MemberAccessExpression>),
+    SubscriptAccess(Box<SubscriptAccessExpression>),
 }
 
 
-// --- Tests (Keep existing) ---
+// --- Tests (Keep existing, but update parameter declaration test) ---
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -698,6 +777,13 @@ mod tests {
         Identifier {
             span: dummy_span(),
             value: name.to_string(),
+        }
+    }
+
+    fn dummy_scoped_type(path: Vec<&str>) -> ScopedTypeName {
+        ScopedTypeName {
+            span: dummy_span(),
+            path: path.into_iter().map(dummy_ident).collect(),
         }
     }
 
@@ -798,12 +884,14 @@ mod tests {
         let _param_decl = ParameterDeclaration {
             span: dummy_span(),
             name: dummy_ident("InputVoltage"),
-            param_type: Some(TypeName { span: dummy_span(), name: "voltage".to_string() }),
+            // Updated: Use TypeSpecifier/ScopedTypeName
+            param_type: Some(TypeSpecifier::Scoped(dummy_scoped_type(vec!["types", "voltage"]))),
             colon_span: Some(dummy_span()),
             value: Expression::PhysicalLiteral(PhysicalLiteral { span: dummy_span(), value_text: "12".to_string(), unit: "Vdc".to_string() }),
-            eq_span: Some(dummy_span()), // Assuming type: name = value style
+            eq_span: dummy_span(),
         };
         assert_eq!(_param_decl.name.value, "InputVoltage");
+        // Add assertion for type if needed
 
         // Test PinPortDeclaration (Input Signal)
         let _pin_decl_in = PinPortDeclaration {
@@ -811,19 +899,13 @@ mod tests {
             is_port: false,
             name: dummy_ident("CLK"),
             bus_specifier: None,
-            kind: PinPortKind::SignalPower {
-                span: dummy_span(),
-                direction: PinDirection::In,
-                base_type: PinBaseType::Signal,
-                subtype: Some(TypeName { span: dummy_span(), name: "cmos_3v3".to_string() })
-            },
-            colon_span: dummy_span(), // Provide non-optional span
-            properties: None,
-            properties_span: None,
+            direction: PinDirection::In,
+            type_specifier: TypeSpecifier::Base(BaseType { span: dummy_span(), kind: BaseTypeKind::Signal }),
+            properties: vec![], // Updated property field
         };
-         match _pin_decl_in.kind {
-            PinPortKind::SignalPower { base_type, .. } => assert_eq!(base_type, PinBaseType::Signal),
-            _ => panic!("Incorrect pin kind"),
+         match _pin_decl_in.type_specifier {
+            TypeSpecifier::Base(BaseType { kind, .. }) => assert_eq!(kind, BaseTypeKind::Signal),
+            _ => panic!("Incorrect pin type"),
         }
 
         // Test PinPortDeclaration (Ground)
@@ -832,17 +914,16 @@ mod tests {
             is_port: false,
             name: dummy_ident("GND"),
             bus_specifier: None,
-            kind: PinPortKind::Ground { span: dummy_span() },
-            colon_span: dummy_span(), // Provide non-optional span (even though grammatically not needed here, struct requires it)
-            properties: None,
-            properties_span: None,
+            direction: PinDirection::In, // Direction is still required by builder, even if ground
+            type_specifier: TypeSpecifier::Base(BaseType { span: dummy_span(), kind: BaseTypeKind::Ground }),
+            properties: vec![],
         };
-         match _pin_decl_gnd.kind {
-            PinPortKind::Ground { .. } => {}, // Correct
-            _ => panic!("Incorrect pin kind"),
+         match _pin_decl_gnd.type_specifier {
+            TypeSpecifier::Base(BaseType { kind, .. }) => assert_eq!(kind, BaseTypeKind::Ground),
+            _ => panic!("Incorrect pin type"),
         }
 
-         // Test PinPortDeclaration (Output Power with Bus)
+         // Test PinPortDeclaration (Output Power with Bus and Properties)
          let _port_decl_power = PinPortDeclaration {
             span: dummy_span(),
             is_port: true, // It's a port
@@ -853,51 +934,96 @@ mod tests {
                 colon_span: Some(dummy_span()),
                 low: Some(Expression::IntegerLiteral(IntegerLiteral { span: dummy_span(), value: 0 })),
             }),
-            kind: PinPortKind::SignalPower {
-                span: dummy_span(),
-                direction: PinDirection::Out,
-                base_type: PinBaseType::Power,
-                subtype: None // No subtype specified
-            },
-            colon_span: dummy_span(), // Provide non-optional span
-            properties: None,
-            properties_span: None,
+            direction: PinDirection::Out,
+            type_specifier: TypeSpecifier::Base(BaseType { span: dummy_span(), kind: BaseTypeKind::Power }),
+            properties: vec![ // Added properties
+                PinPropertyAssignment {
+                    span: dummy_span(),
+                    name: dummy_ident("voltage"),
+                    eq_span: dummy_span(),
+                    value: Expression::PhysicalLiteral(PhysicalLiteral { span: dummy_span(), value_text: "3.3".to_string(), unit: "V".to_string() })
+                }
+            ],
         };
-         match _port_decl_power.kind {
-            PinPortKind::SignalPower { base_type, .. } => assert_eq!(base_type, PinBaseType::Power),
-            _ => panic!("Incorrect pin kind"),
+         match _port_decl_power.type_specifier {
+            TypeSpecifier::Base(BaseType { kind, .. }) => assert_eq!(kind, BaseTypeKind::Power),
+            _ => panic!("Incorrect pin type"),
         }
+        assert_eq!(_port_decl_power.properties.len(), 1);
 
 
         // Test ComponentInstantiation
         let _comp_inst = ComponentInstantiation {
             span: dummy_span(),
-            component_type: TypeName { span: dummy_span(), name: "Resistor".to_string() },
+            component_type: dummy_scoped_type(vec!["Resistor"]),
             instance_name: dummy_ident("R1"),
             instance_bus: None,
-            parameters: Some(ComponentParameters::Named(vec![
-                ParameterAssignment {
+            properties: vec![ // Updated property field
+                PropertyAssignmentEquals {
                     span: dummy_span(),
                     name: dummy_ident("value"),
-                     eq_span: dummy_span(),
+                    eq_span: dummy_span(),
                     value: Expression::PhysicalLiteral(PhysicalLiteral { span: dummy_span(), value_text: "10".to_string(), unit: "kOhm".to_string() }),
                 }
-            ])),
-            parameters_span: Some(dummy_span()),
+            ],
+            properties_span: dummy_span(), // Added span
         };
 
-        // Test ConnectionStatement
-        let _conn_stmt = ConnectionStatement {
+        // Test ConnectionStatement (InterfaceConnection)
+        let _conn_stmt_iface = ConnectionStatement::InterfaceConnection {
             span: dummy_span(),
-            source: ConnectionEndpoint::MemberAccess(Box::new(MemberAccessExpression {
+            source: ConnectionTarget::MemberAccess(Box::new(MemberAccessExpression { // Use MemberAccess for U1.I2C
                  span: dummy_span(),
                  object: Expression::Identifier(dummy_ident("U1")),
                  dot_span: dummy_span(),
-                 property: MemberAccessProperty::Identifier(dummy_ident("TXD")),
+                 property: MemberAccessProperty::Identifier(dummy_ident("I2C")),
             })),
-            op: ConnectionOperator::Ltr,
-            op_span: dummy_span(),
-            target: ConnectionEndpoint::Identifier(dummy_ident("Net_SerialOut")),
+            op_span: dummy_span(), // Span for <=>
+            target: ConnectionTarget::MemberAccess(Box::new(MemberAccessExpression { // Use MemberAccess for U2.I2C
+                 span: dummy_span(),
+                 object: Expression::Identifier(dummy_ident("U2")),
+                 dot_span: dummy_span(),
+                 property: MemberAccessProperty::Identifier(dummy_ident("I2C")),
+            })),
+        };
+
+        // Example for PinsToPins (->)
+        let _pins_to_pins = ConnectionStatement::PinsToPins {
+            span: dummy_span(),
+            sources: vec![ConnectionTarget::MemberAccess(Box::new(MemberAccessExpression {
+                span: dummy_span(),
+                object: Expression::Identifier(dummy_ident("U1")),
+                dot_span: dummy_span(),
+                property: MemberAccessProperty::Identifier(dummy_ident("TXD")),
+            }))],
+            op_span: dummy_span(), // Span for ->
+            targets: vec![ConnectionTarget::MemberAccess(Box::new(MemberAccessExpression {
+                 span: dummy_span(),
+                 object: Expression::Identifier(dummy_ident("U2")),
+                 dot_span: dummy_span(),
+                 property: MemberAccessProperty::Identifier(dummy_ident("RXD")),
+            }))],
+        };
+
+        // Example for NetToPins (->)
+        let _net_to_pins = ConnectionStatement::NetToPins {
+            span: dummy_span(),
+            source_net: ConnectionTarget::Identifier(dummy_ident("DATA_BUS")), // Example: Net name
+            op_span: dummy_span(), // Span for ->
+            targets: vec![
+                ConnectionTarget::MemberAccess(Box::new(MemberAccessExpression {
+                    span: dummy_span(),
+                    object: Expression::Identifier(dummy_ident("MEM")),
+                    dot_span: dummy_span(),
+                    property: MemberAccessProperty::Identifier(dummy_ident("D")),
+                })),
+                ConnectionTarget::MemberAccess(Box::new(MemberAccessExpression {
+                    span: dummy_span(),
+                    object: Expression::Identifier(dummy_ident("CPU")),
+                    dot_span: dummy_span(),
+                    property: MemberAccessProperty::Identifier(dummy_ident("D")),
+                })),
+            ],
         };
 
 

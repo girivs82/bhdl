@@ -3,7 +3,6 @@
 [workspace]
 members = [
     "bhdl-parser",
-    "bhdl-analyzer",
     "bhdl-netlist",
     "bhdl-synthesizer",
     "bhdl-cli",

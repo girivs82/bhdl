@@ -1,1 +1,0 @@
-board Test { components { U1: MyComp; U1: OtherComp; } }

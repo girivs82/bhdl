@@ -1,0 +1,222 @@
+use rowan::Language;
+use logos::Logos;
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Logos,
+)]
+#[allow(non_camel_case_types)]
+#[repr(u16)]
+pub enum SyntaxKind {
+    // Tokens
+    WHITESPACE = 0, // Trivia
+    COMMENT,        // Trivia
+    IDENT,          // Identifier
+    NUMBER,         // Numeric literal (incl. units)
+    STRING,         // String literal
+    ERROR_TOKEN,    // Unrecognized token
+
+    // Punctuation
+    L_BRACE, // {
+    R_BRACE, // }
+    L_PAREN, // (
+    R_PAREN, // )
+    L_BRACKET, // [
+    R_BRACKET, // ]
+    DOT,     // .
+    COMMA,   // ,
+    COLON,   // :
+    SEMI,    // ;
+    ARROW,   // ->
+    EQ,      // =
+    PLUS,    // +
+    MINUS,   // -
+    STAR,    // *
+    SLASH,   // /
+    PERCENT, // %
+    AMPERSAND, // &
+    PIPE,    // |
+    CARET,   // ^
+    BANG,    // !
+    TILDE,   // ~
+    L_ANGLE, // <
+    R_ANGLE, // >
+    AT,      // @
+    EQEQ,    // ==
+    NEQ,     // !=
+    LTEQ,    // <=
+    GTEQ,    // >=
+    AMPAMP,  // &&
+    PIPEPIPE,// ||
+    LSHIFT,  // <<
+    RSHIFT,  // >>
+
+    // Keywords
+    IMPORT_KW, // import
+    BOARD_KW,  // board
+    MODULE_KW, // module
+    TYPEDEF_KW,   // typedef
+    STRUCT_KW,    // struct
+    ENUM_KW,      // enum
+    INTERFACE_KW, // interface
+    PARAMETERS_KW, // parameters
+    PORTS_KW,      // ports
+    COMPONENTS_KW, // components
+    COMPONENT_KW, // component
+    NETS_KW,       // nets
+    CONNECTIONS_KW,// connections
+    PINS_KW,       // pins
+    INTERFACES_KW, // interfaces
+    NET_KW,        // net
+    LAYER_STACKUP_KW, // layer_stackup
+    LAYER_KW,         // layer
+    DEFAULT_DESIGN_RULES_KW, // default_design_rules
+    CONSTRAIN_KW,  // constrain
+    GENERATE_KW,   // generate
+    FOR_KW,        // for
+    IN_KW,         // in
+    OUT_KW,        // out
+    INOUT_KW,      // inout
+    INPUT_KW,      // input
+    OUTPUT_KW,     // output
+    SIGNAL_KW,     // signal (base type)
+    WIRE_KW,       // wire
+    TRI_KW,        // tri
+    TRIREG_KW,     // trireg
+    UWIRE_KW,      // uwire
+    POWER_KW,      // power (base type)
+    GROUND_KW,     // ground (base type)
+    CLOCK_KW,      // clock
+    FUNCTIONS_KW,   // functions
+    TRUE_KW,
+    FALSE_KW,
+    PORT_KW,      // port
+    CONST_KW,     // const
+    ASSIGN_KW,    // assign
+    FROM_KW,      // from
+    AS_KW,        // as
+
+    // Nodes (Grammar rules)
+    SOURCE_FILE,    // Root node
+    IMPORT_STMT,    // import ...;
+    IMPORT_PATH,    // Ident.Ident...
+    IMPORT_TARGET,  // Final IDENT or { ... } group
+    IMPORT_TARGET_GROUP, // { Item, Item ... }
+    ALIAS,          // `as AliasName` part of import
+    BOARD_DEF,      // board BoardName { ... }
+    MODULE_DEF,     // module ModuleName { ... }
+    COMPONENT_DEF,  // component ComponentName { ... }
+    TYPEDEF_DEF,    // typedef TypeName { ... }
+    STRUCT_DEF,     // struct definition
+    ENUM_DEF,       // enum definition
+    INTERFACE_DEF,  // interface InterfaceName { ... }
+
+    // Common Blocks
+    PARAMETERS_BLOCK,
+    PORTS_BLOCK,
+    COMPONENTS_BLOCK,
+    NETS_BLOCK,
+    CONNECTIONS_BLOCK,
+    PINS_BLOCK,
+    INTERFACES_BLOCK,
+    LAYER_STACKUP_BLOCK,
+    DEFAULT_DESIGN_RULES_BLOCK,
+    CONSTRAIN_BLOCK,
+    CONSTRAINT_TARGET, // Node for the target(s) in constrain()
+    GENERATE_BLOCK,     // generate { ... }
+    FOR_LOOP_GENERATE, // ADDED
+    GENERATE_FOR_BLOCK, // ADDED
+    IF_GENERATE,        // ADDED
+
+    // Items within Blocks
+    PARAM_DECL,        // const param_name: type = value;
+    PORT_DECL,         // port_name: direction type ...;
+    COMPONENT_INST,    // Resistor R1 { ... }
+    PARAM_ASSIGN_BLOCK,// The `(...)` or `{...}` part in component instantiation
+    PARAM_ASSIGN,      // param_name = value (inside PARAM_ASSIGN_BLOCK)
+    COMPONENT_TYPE,    // Type name used in component instantiation
+    NET_DECL,          // net net_name[range]: type;
+    NET_TYPE,          // The type keyword used in net decl (SIGNAL_KW etc)
+    CONNECTION_STMT,   // assign net = expr; or connect pin = net;
+    NET_REF,           // Reference to a net name
+    PIN_DECL,          // pin_name[range]: direction type ...;
+    INTERFACE_INSTANCE,// IntfName: interface TypeName { ... };
+    PIN_MAP_BLOCK,     // pin_map = { ... }
+    PIN_MAP_ENTRY,     // LogPin = PhysPin
+    PIN_REF,           // instance.pin[range] or net_name[range]
+    BUS_SUFFIX,        // [index] or [high:low]
+    RANGE_EXPR,        // start to end
+    VALUE,             // Generic value node (number, string, bool, etc.)
+    TYPE_REF,          // Reference to a type (e.g., cmos_3v3 or signal(cmos_3v3))
+    TYPE_SPECIFIER,    // (specifier_name)
+    PIN_PROPERTIES,    // Pin properties
+    PORT_DIRECTION,    // input, output, inout
+    EXPRESSION,        // Placeholder for expression nodes
+    IDENT_REF,         // Reference to an identifier
+    PATH_REF,          // Reference like scope::identifier
+    TYPE_PARAMS,       // Added for type parameters like signal(param)
+
+    // ERROR must be the last variant for the assertion in kind_from_raw
+    ERROR = 65534, // Represents a parsing error node
+}
+
+impl From<SyntaxKind> for rowan::SyntaxKind {
+    fn from(kind: SyntaxKind) -> Self {
+        Self(kind as u16)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum BhdlLanguage {}
+
+impl Language for BhdlLanguage {
+    type Kind = SyntaxKind;
+
+    fn kind_from_raw(raw: rowan::SyntaxKind) -> Self::Kind {
+        // Check against the explicitly assigned highest value
+        assert!(raw.0 <= SyntaxKind::ERROR as u16, "Invalid SyntaxKind value");
+        unsafe { std::mem::transmute::<u16, SyntaxKind>(raw.0) }
+    }
+
+    fn kind_to_raw(kind: Self::Kind) -> rowan::SyntaxKind {
+        kind.into()
+    }
+}
+
+pub type SyntaxNode = rowan::SyntaxNode<BhdlLanguage>;
+pub type SyntaxToken = rowan::SyntaxToken<BhdlLanguage>;
+pub type SyntaxElement = rowan::SyntaxElement<BhdlLanguage>;
+pub type SyntaxNodeChildren = rowan::SyntaxNodeChildren<BhdlLanguage>;
+pub type SyntaxElementChildren = rowan::SyntaxElementChildren<BhdlLanguage>;
+
+// Helper trait for typed AST nodes (example)
+pub trait AstNode {
+    fn can_cast(kind: SyntaxKind) -> bool where Self: Sized;
+    fn cast(node: SyntaxNode) -> Option<Self> where Self: Sized;
+    fn syntax(&self) -> &SyntaxNode;
+}
+
+// Add more imports if needed for extensions
+// use rowan::NodeOrToken;
+
+// Example extension trait for SyntaxNode (optional but useful)
+pub trait SyntaxNodeExt {
+    fn child<N: AstNode>(&self) -> Option<N>;
+    fn children<N: AstNode>(&self) -> impl Iterator<Item = N>;
+    fn field_token(&self, kind: SyntaxKind) -> Option<SyntaxToken>;
+}
+
+impl SyntaxNodeExt for SyntaxNode {
+    fn child<N: AstNode>(&self) -> Option<N> {
+        self.children().find_map(N::cast)
+    }
+
+    fn children<N: AstNode>(&self) -> impl Iterator<Item = N> {
+        self.children().filter_map(N::cast)
+    }
+
+    fn field_token(&self, kind: SyntaxKind) -> Option<SyntaxToken> {
+        self.children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .find(|token| token.kind() == kind)
+    }
+} 
