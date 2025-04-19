@@ -1,5 +1,4 @@
-use crate::{HasName, Node, BhdlLanguage};
-use crate::items::*;
+use crate::{Node, BhdlLanguage};
 use bhdl_parser::SyntaxKind;
 use rowan::ast::AstNode;
 
