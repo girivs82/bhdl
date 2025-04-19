@@ -3,7 +3,7 @@ use smol_str::SmolStr;
 use crate::syntax::SyntaxKind;
 
 // Struct to hold IDENT/Keyword kind and text
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeywordOrIdent {
     pub kind: SyntaxKind,
     pub text: SmolStr,
@@ -59,16 +59,18 @@ pub fn lex_ident_or_kw(lex: &mut Lexer<LexerToken>) -> KeywordOrIdent {
 }
 
 // Define the NEW LexerToken enum
-#[derive(Logos, Debug, Clone, PartialEq)]
+#[derive(Logos, Debug, Clone, PartialEq, Eq)]
 #[logos(skip r"[ \t\r\n\f]+")] // Ignore whitespace
 #[logos(skip r"//[^\n]*")] // Ignore single-line comments
 #[logos(skip r"/\*([^*]|\*[^/])*\*/")] // Ignore multi-line comments
+#[allow(dead_code)]
 pub enum LexerToken {
     // Units (Higher priority for ambiguous multi-letter, low for single)
-    #[token("kOhm", priority = 3)] kOhmUnit,
-    #[token("MOhm", priority = 3)] MOHmUnit,
-    #[token("GOhm", priority = 3)] GOhmUnit,
-    #[token("Ohm", priority = 3)] OhmUnit, // Increased priority
+    #[token("mOhm", priority = 3)] MOHmUnit,
+    #[token("Gohm", priority = 3)] GOhmUnit,
+    #[token("Ohm", priority = 3)] OhmUnit,
+    // Capacitance
+    #[token("kOhm", priority = 3)] KOhmUnit,
     #[token("uF", priority = 3)] UFUnit,
     #[token("nF", priority = 3)] NFUnit,
     #[token("pF", priority = 3)] PFUnit,

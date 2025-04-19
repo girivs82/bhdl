@@ -96,7 +96,7 @@ fn map_token(token: LexerToken) -> SyntaxKind {
 
         // In parser.rs -> map_token function
         // Map ALL unit tokens to the single UNIT_IDENTIFIER SyntaxKind
-        LexerToken::kOhmUnit | LexerToken::MOHmUnit | LexerToken::GOhmUnit | LexerToken::OhmUnit |
+        LexerToken::KOhmUnit | LexerToken::MOHmUnit | LexerToken::GOhmUnit | LexerToken::OhmUnit |
         LexerToken::UFUnit | LexerToken::NFUnit | LexerToken::PFUnit | LexerToken::FUnit |
         LexerToken::UHUnit | LexerToken::NHUnit | LexerToken::PHUnit | LexerToken::HUnit |
         LexerToken::VdcUnit | LexerToken::VacUnit | LexerToken::VrmsUnit | LexerToken::VppUnit | LexerToken::VUnit |
@@ -940,23 +940,19 @@ impl<'t> Parser<'t> {
     // Used by the expression parser for literals.
     fn parse_value(&mut self) {
         self.builder.start_node(SyntaxKind::VALUE.into()); // Start VALUE node
-        let mut has_sign = false;
+        let mut _has_sign = false; // Prefixed with _
         if self.peek() == Some(SyntaxKind::MINUS) || self.peek() == Some(SyntaxKind::PLUS) {
             self.bump(); // Consume the sign
-            has_sign = true;
+            _has_sign = true; // Prefixed with _
         }
 
         if self.eat(SyntaxKind::NUMBER) {
             // Optional unit - skip trivia (like space) before checking
             self.skip_trivia(); // ADDED: Handle cases like "50 pct"
             if self.peek() == Some(SyntaxKind::UNIT_IDENTIFIER) {
-                // DEBUG:
-                let unit_token = self.tokens.get(self.pos);
-
+                // DEBUG leftover removed
                 self.bump(); // Consume the unit identifier (adds to VALUE node)
-                
-                // DEBUG:
-                let next_token_after_unit = self.tokens.get(self.pos);
+                // DEBUG leftover removed
             }
         } else if self.eat(SyntaxKind::STRING) {
             // String literals are also values
@@ -1020,26 +1016,16 @@ impl<'t> Parser<'t> {
 
         // Parse the left-hand side (LHS) - Condition or start of binary expr
         // Check for prefix operators first
-        let mut lhs_parsed = false;
+        // Removed unused lhs_parsed variable and checks
         if let Some(((), r_bp)) = self.peek().and_then(|k| self.prefix_binding_power(k)) {
             self.builder.start_node(SyntaxKind::PREFIX_EXPR.into());
             self.bump(); // Consume the operator token
             self.parse_expr(r_bp); // Parse the operand with higher precedence
             self.builder.finish_node(); // Finish PREFIX_EXPR
-            lhs_parsed = true;
         } else {
             // If no prefix operator, parse a primary expression
             self.parse_primary_expr();
-            lhs_parsed = true;
         }
-
-        if !lhs_parsed {
-            // If even primary expression failed, report error and maybe return?
-            // self.error("Expected expression".to_string());
-            // No need to finish node, as checkpoint will be abandoned if we return
-            return;
-        }
-
 
         // Loop for infix and ternary operators (Precedence Climbing)
         loop {
@@ -1532,29 +1518,15 @@ pub fn parse(text: &str) -> ParseResult {
     }
 }
 
-// Helper to check if a SyntaxKind is a keyword (adjust as needed)
-// Placed outside the Parser impl block
+// Helper to check if a SyntaxKind is trivia
+// Moved outside the Parser impl block
 impl SyntaxKind {
-    fn is_keyword(self) -> bool {
-        matches!(self,
-            SyntaxKind::IMPORT_KW | SyntaxKind::BOARD_KW | SyntaxKind::MODULE_KW |
-            SyntaxKind::COMPONENT_KW | SyntaxKind::TYPEDEF_KW | SyntaxKind::INTERFACE_KW |
-            SyntaxKind::PARAMETERS_KW | SyntaxKind::PORTS_KW | SyntaxKind::COMPONENTS_KW |
-            SyntaxKind::NETS_KW | SyntaxKind::CONNECTIONS_KW | SyntaxKind::PINS_KW |
-            SyntaxKind::INTERFACES_KW | SyntaxKind::NET_KW | SyntaxKind::LAYER_STACKUP_KW |
-            SyntaxKind::LAYER_KW | SyntaxKind::DEFAULT_DESIGN_RULES_KW | SyntaxKind::CONSTRAIN_KW |
-            SyntaxKind::GENERATE_KW | SyntaxKind::FOR_KW | SyntaxKind::IN_KW |
-            SyntaxKind::OUT_KW | SyntaxKind::INOUT_KW | SyntaxKind::SIGNAL_KW |
-            SyntaxKind::POWER_KW | SyntaxKind::GROUND_KW | SyntaxKind::TRUE_KW |
-            SyntaxKind::FALSE_KW
-            // Add any other keywords here if they are introduced
-        )
-    }
-
     // Add the is_trivia method here
     fn is_trivia(self) -> bool {
         matches!(self, SyntaxKind::WHITESPACE | SyntaxKind::COMMENT)
     }
+    
+    // Removed unused is_keyword method
 }
 
 // Basic test
