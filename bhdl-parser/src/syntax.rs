@@ -41,6 +41,7 @@ pub enum SyntaxKind {
     L_ANGLE, // <
     R_ANGLE, // >
     AT,      // @
+    QUESTION, // ?
     EQEQ,    // ==
     NEQ,     // !=
     LTEQ,    // <=
@@ -163,6 +164,9 @@ pub enum SyntaxKind {
     PATH_REF,          // Reference like scope::identifier
     TYPE_PARAMS,       // Added for type parameters like signal(param)
     PIN_BUS_SUFFIX,    // Node for the [high:low] or [index] suffix
+    TERNARY_EXPR,      // condition ? true_expr : false_expr
+    FUNCTION_CALL_EXPR, // name(arg1, arg2)
+    ARGUMENT_LIST,     // (arg1, arg2)
 
     // ERROR must be the last variant for the assertion in kind_from_raw
     ERROR = 65534, // Represents a parsing error node
