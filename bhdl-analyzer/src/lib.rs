@@ -6,7 +6,7 @@ use bhdl_ast::{
     // Top-level items (TypeDef instead of Typedef, Item might not be needed here)
     items::{ComponentDef, InterfaceDef, TypeDef, Board, Module},
     // Common items needed in visit_node
-    common::{ParamDecl, NetDecl, PinRef, PortDecl, PinDecl, ComponentInst, TypeRef, SimpleIdentRef, IdentRef, NetRef, Value},
+    common::{ParamDecl, NetDecl, PinRef, PortDecl, PinDecl, ComponentInst, TypeRef, SimpleIdentRef, IdentRef, NetRef, Value, BusSuffix},
 };
 use std::collections::HashMap;
 
@@ -30,115 +30,6 @@ impl ResolvedTypeInfo {
 }
 
 // --- Helpers ---
-
-/// Attempts to evaluate a constant syntax expression node as an i64 integer.
-/// Handles integer literals, unary minus, binary ops (+,-,*,/), and parameter references.
-fn evaluate_const_expr_as_i64<'a>(
-    node: &SyntaxNode<BhdlLanguage>,
-    context: &'a Pass2Context<'a>, // Added context for lookups
-) -> Option<i64> {
-    match node.kind() {
-        SyntaxKind::VALUE => {
-            // Direct value node
-            Value::cast(node.clone()).and_then(|v| parse_value_as_i64(&v))
-        }
-        SyntaxKind::PREFIX_EXPR => {
-            // Find the operator token (expect MINUS)
-            let op_token = node.first_token().filter(|t| t.kind() == SyntaxKind::MINUS);
-            // Find the first child node (operand) after the operator token
-            let operand_node = op_token.as_ref().and_then(|op| {
-                node.children_with_tokens()
-                    .filter_map(|e| e.into_node())
-                    .find(|n| n.text_range().start() >= op.text_range().end()) // Find node starting after op
-            });
-            
-            if op_token.is_some() {
-                if let Some(operand) = operand_node {
-                    // Recursively evaluate the operand and negate
-                    evaluate_const_expr_as_i64(&operand, context).map(|val| -val)
-                } else {
-                    None // Malformed prefix expr? (No operand found after operator)
-                }
-            } else {
-                None // Only handle unary minus for now
-            }
-        }
-        SyntaxKind::BINARY_EXPR => {
-            // Find LHS (first child node)
-            let lhs_node = node.children().nth(0);
-            
-            // Find Operator token (first token matching an operator kind AFTER lhs)
-            let op_token = lhs_node.as_ref().and_then(|lhs| {
-                node.children_with_tokens()
-                    .filter(|t| t.text_range().start() >= lhs.text_range().end()) // Look after LHS
-                    .find(|t| matches!(t.kind(), 
-                        SyntaxKind::PLUS | SyntaxKind::MINUS | SyntaxKind::STAR | SyntaxKind::SLASH
-                    ))
-            });
-
-            // Find RHS (first child node AFTER operator)
-            let rhs_node = op_token.as_ref().and_then(|op| {
-                 node.children_with_tokens()
-                    .filter_map(|e| e.into_node())
-                    .find(|n| n.text_range().start() >= op.text_range().end()) // Look after Operator
-            });
-
-            // Ensure all parts were found
-            if let (Some(lhs), Some(rhs), Some(op)) = (lhs_node, rhs_node, op_token) {
-                // Recursively evaluate LHS and RHS, passing context
-                let lhs_val = evaluate_const_expr_as_i64(&lhs, context);
-                let rhs_val = evaluate_const_expr_as_i64(&rhs, context);
-
-                match (lhs_val, rhs_val, op.kind()) {
-                    (Some(l), Some(r), SyntaxKind::PLUS) => Some(l + r),
-                    (Some(l), Some(r), SyntaxKind::MINUS) => Some(l - r),
-                    (Some(l), Some(r), SyntaxKind::STAR) => Some(l * r),
-                    (Some(l), Some(r), SyntaxKind::SLASH) => {
-                        if r != 0 { Some(l / r) } else { None } // Avoid division by zero
-                    }
-                    _ => None, // Operands couldn't be evaluated or unsupported operator
-                }
-            } else {
-                None // Malformed binary expression
-            }
-        }
-        SyntaxKind::IDENT_REF => {
-            IdentRef::cast(node.clone()).and_then(|ident_ref| {
-                ident_ref.token().and_then(|token| {
-                    let name = token.text();
-                    context.lookup(name).and_then(|symbol| {
-                        if symbol.kind == SymbolKind::Parameter {
-                            // Need to find the ParamDecl node and evaluate its value
-                            symbol.definition_node_ptr.as_ref().and_then(|ptr| {
-                                ptr.try_to_node(context.source_file_root)
-                                    .and_then(|param_decl_node| ParamDecl::cast(param_decl_node))
-                                    // UPDATED: Use value_expr() instead of value_expr_node()
-                                    .and_then(|param_decl| param_decl.value_expr()) 
-                                    .and_then(|value_node| {
-                                        // Recursively evaluate the parameter's value expression
-                                        // Pass context down
-                                        evaluate_const_expr_as_i64(&value_node, context)
-                                    })
-                            })
-                        } else {
-                            None // Identifier is not a Parameter
-                        }
-                    })
-                })
-            })
-        }
-        // Handle Parenthesized Expressions - REMOVED as PAREN_EXPR kind doesn't exist
-        /*
-        SyntaxKind::PAREN_EXPR => {
-             // Get the inner expression (skipping parens)
-             node.children().nth(0).and_then(|inner_expr| {
-                 evaluate_const_expr_as_i64(&inner_expr, context)
-             })
-        }
-        */
-        _ => None, // Cannot evaluate other node types as constant i64 yet
-    }
-}
 
 /// Attempts to parse a bhdl_ast::common::Value node as an i64 integer literal.
 /// Assumes the Value node directly represents the number (with optional sign handled by parser).
@@ -170,7 +61,12 @@ pub struct AnalysisResult {
     pub global_scope: SymbolTable,
     pub definition_scopes: HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>,
     pub diagnostics: Vec<Diagnostic>,
+    // Added map for resolved constant values
+    pub resolved_constants: ResolvedConstants, 
 }
+
+// Type alias for the map storing results of constant evaluation
+type ResolvedConstants = HashMap<SyntaxNodePtr<BhdlLanguage>, i64>;
 
 // --- Pass 1: Build Global Scope & Definition Scopes Map --- 
 
@@ -576,88 +472,46 @@ fn resolve_node_type_info<'a>(
     node: &SyntaxNode<BhdlLanguage>,
 ) -> Option<TypeResolutionResult> { // Outer Option for cases where node isn't a reference
     
-    // --- Step 1: Get base symbol info using the helper ---
-    // UPDATED: Call the module-level helper function
     let base_info = get_reference_base_info(context, node)?;
     let symbol = base_info.symbol;
     let declared_base_type = base_info.base_type_name;
     let declared_bounds = base_info.bounds;
 
-    // --- Step 2: Check for BusSuffix on the reference node --- 
-    // This needs to be adapted based on the *actual* reference node kind
     let bus_suffix_node = match node.kind() {
-        // Check specific node types that *can* have a bus suffix
         SyntaxKind::NET_REF => NetRef::cast(node.clone())?.bus_suffix(),
         SyntaxKind::PIN_REF => PinRef::cast(node.clone())?.bus_suffix(),
-        // SimpleIdentRef typically doesn't have a direct suffix in the grammar
-        _ => None, // Other node types don't have bus suffixes
+        _ => None,
     };
 
-    // --- Step 3: Determine final type/bounds based on suffix --- 
     if let Some(suffix) = bus_suffix_node {
-        let (d_high, d_low) = match declared_bounds {
-            Some((h, l)) => (h, l),
-            None => {
-                // Return Err(Diagnostic) instead of adding directly
-                return Some(Err(Diagnostic { 
-                    message: format!("Symbol '{}' is not declared as a bus but used with a suffix", symbol.name),
-                    range: suffix.syntax().text_range(),
-                }));
-            }
-        };
-        let declared_min = d_high.min(d_low);
-        let declared_max = d_high.max(d_low);
-
-        if let Some(index_node) = suffix.index_expr_node() {
-            // UPDATED: Pass context to evaluate_const_expr_as_i64
-            if let Some(index_val) = evaluate_const_expr_as_i64(&index_node, context) {
-                if index_val < declared_min || index_val > declared_max {
-                     // Return Err(Diagnostic)
-                     return Some(Err(Diagnostic {
-                         message: format!("Index '{}' is out of bounds for '{}' (declared as [{}:{}])", index_val, symbol.name, d_high, d_low),
-                         range: index_node.text_range(),
-                     }));
-                }
-                // Index applied, result is scalar
-                Some(Ok(ResolvedTypeInfo { base_type_name: declared_base_type, bounds: None }))
-            } else {
-                 // Return Err(Diagnostic)
-                 return Some(Err(Diagnostic {
-                    message: format!("Index for '{}' must be a constant integer expression", symbol.name),
-                    range: index_node.text_range(),
-                }));
-            }
+        // --- Bounds Check DEFERRED to Pass 4 --- 
+        // Check if symbol was declared as a bus
+        if declared_bounds.is_none() {
+            // Report error immediately, doesn't depend on evaluated suffix constants
+            return Some(Err(Diagnostic { 
+                message: format!("Symbol '{}' is not declared as a bus but used with a suffix", symbol.name),
+                range: suffix.syntax().text_range(),
+            }));
+        }
+        
+        if suffix.index_expr_node().is_some() {
+             // --- Index bounds check deferred to Pass 4 --- 
+             // Previously: evaluated index_expr_node, compared with declared_bounds
+             // Now: We know an index is used, result type is scalar
+             Some(Ok(ResolvedTypeInfo { base_type_name: declared_base_type, bounds: None }))
         }
         else if let Some(range_expr) = suffix.range() {
-            // UPDATED: Pass context to evaluate_const_expr_as_i64
-            if let (Some(h), Some(l)) = (
-                range_expr.lhs_node().and_then(|n| evaluate_const_expr_as_i64(&n, context)),
-                range_expr.rhs_node().and_then(|n| evaluate_const_expr_as_i64(&n, context))
-            ) {
-                let used_min = h.min(l);
-                let used_max = h.max(l);
-                if used_min < declared_min || used_max > declared_max {
-                    // Return Err(Diagnostic)
-                    return Some(Err(Diagnostic {
-                        message: format!("Range [{}:{}] is out of bounds for '{}' (declared as [{}:{}])", h, l, symbol.name, d_high, d_low),
-                        range: range_expr.syntax().text_range(),
-                    }));
-                }
-                // Range applied, result is a bus with these bounds
-                Some(Ok(ResolvedTypeInfo { base_type_name: declared_base_type, bounds: Some((h,l)) }))
-            } else {
-                 // Return Err(Diagnostic)
-                 return Some(Err(Diagnostic {
-                    message: format!("Range bounds for '{}' must be constant integer expressions", symbol.name),
-                    range: range_expr.syntax().text_range(),
-                }));
-            }
+            // --- Range bounds check deferred to Pass 4 --- 
+            // Previously: evaluated range lhs/rhs, compared with declared_bounds
+            // Now: We know a range is used, but cannot determine resulting bounds without Pass 3 results.
+            // For now, just return the *declared* bounds. Pass 4 can refine or error later.
+            // A more accurate Pass 2 could potentially return placeholder bounds.
+            Some(Ok(ResolvedTypeInfo { base_type_name: declared_base_type, bounds: declared_bounds }))
+            // TODO: Revisit if Pass 2 needs more accurate slice bounds info before Pass 4.
         }
         else {
-            // This case should ideally not happen if parser ensures suffix has index/range
             println!("Warning: BusSuffix node found but no index or range child.");
-            // Return None or a generic error? Let's return None for now.
-            None // Indicate failure to resolve type due to unexpected suffix structure
+            None
         }
     } else {
         // No suffix used, return the declared type/bounds directly
@@ -1219,26 +1073,533 @@ fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mut Pa
 }
 
 
+// --- Pass 3: Evaluate Constant Expressions ---
+
+// Function to evaluate constants - uses Pass3Context
+fn evaluate_const_expr_as_i64<'a>(
+    node: &SyntaxNode<BhdlLanguage>,
+    context: &mut Pass3Context<'a>, // Use Pass3Context
+) -> Option<i64> {
+    let node_ptr = SyntaxNodePtr::new(node);
+
+    // Memoization: Check if already evaluated
+    if let Some(value) = context.resolved_constants.get(&node_ptr) {
+        return Some(*value);
+    }
+
+    // --- Evaluation Logic --- 
+    let result = match node.kind() {
+        SyntaxKind::VALUE => {
+            Value::cast(node.clone()).and_then(|v| parse_value_as_i64(&v))
+        }
+        SyntaxKind::PREFIX_EXPR => {
+            let op_token = node.first_token().filter(|t| t.kind() == SyntaxKind::MINUS);
+            let operand_node = op_token.as_ref().and_then(|op| {
+                node.children_with_tokens()
+                    .filter_map(|e| e.into_node())
+                    .find(|n| n.text_range().start() >= op.text_range().end())
+            });
+            
+            if op_token.is_some() {
+                if let Some(operand) = operand_node {
+                    // Recursively evaluate, passing context
+                    evaluate_const_expr_as_i64(&operand, context).map(|val| -val)
+                } else {
+                    context.add_diagnostic("Malformed unary minus expression".to_string(), node.text_range());
+                    None 
+                }
+            } else {
+                context.add_diagnostic("Unsupported prefix operator".to_string(), node.text_range());
+                None
+            }
+        }
+        SyntaxKind::BINARY_EXPR => {
+            let lhs_node = node.children().nth(0);
+            let op_token = lhs_node.as_ref().and_then(|lhs| {
+                node.children_with_tokens()
+                    .filter(|t| t.text_range().start() >= lhs.text_range().end())
+                    .find(|t| matches!(t.kind(), 
+                        SyntaxKind::PLUS | SyntaxKind::MINUS | SyntaxKind::STAR | SyntaxKind::SLASH
+                    ))
+            });
+            let rhs_node = op_token.as_ref().and_then(|op| {
+                 node.children_with_tokens()
+                    .filter_map(|e| e.into_node())
+                    .find(|n| n.text_range().start() >= op.text_range().end())
+            });
+
+            if let (Some(lhs), Some(rhs), Some(op)) = (lhs_node, rhs_node, op_token) {
+                let lhs_val = evaluate_const_expr_as_i64(&lhs, context);
+                let rhs_val = evaluate_const_expr_as_i64(&rhs, context);
+
+                match (lhs_val, rhs_val, op.kind()) {
+                    (Some(l), Some(r), SyntaxKind::PLUS) => Some(l + r),
+                    (Some(l), Some(r), SyntaxKind::MINUS) => Some(l - r),
+                    (Some(l), Some(r), SyntaxKind::STAR) => Some(l * r),
+                    (Some(l), Some(r), SyntaxKind::SLASH) => {
+                        if r != 0 { 
+                            Some(l / r) 
+                        } else { 
+                            context.add_diagnostic("Division by zero in constant expression".to_string(), op.text_range());
+                            None 
+                        }
+                    }
+                    _ => None, // Operands couldn't be evaluated (error already reported) or unsupported operator
+                }
+            } else {
+                context.add_diagnostic("Malformed binary expression".to_string(), node.text_range());
+                None
+            }
+        }
+        SyntaxKind::IDENT_REF => {
+            // Use Option chain, get value_node first, then recurse
+            IdentRef::cast(node.clone())
+                .and_then(|ident_ref| ident_ref.token())
+                .and_then(|token| {
+                    let name = token.text();
+                    // Perform immutable lookup first
+                    match context.lookup(name) {
+                        Some(symbol) if symbol.kind == SymbolKind::Parameter => {
+                            // Found parameter, now get its value expression node (still immutable borrow)
+                            symbol.definition_node_ptr.as_ref()
+                                .and_then(|ptr| ptr.try_to_node(context.source_file_root))
+                                .and_then(|param_decl_node| ParamDecl::cast(param_decl_node))
+                                .and_then(|param_decl| param_decl.value_expr())
+                                // If successful, return Some(value_node) to pass to next step
+                                .or_else(|| {
+                                    context.add_diagnostic(format!("Could not find value expression for parameter '{}'", name), node.text_range());
+                                    None
+                                })
+                        }
+                        Some(symbol) => {
+                            context.add_diagnostic(format!("Symbol '{}' is not a constant parameter (found {:?})", name, symbol.kind), node.text_range());
+                            None
+                        }
+                        None => {
+                            context.add_diagnostic(format!("Undefined constant parameter '{}'", name), node.text_range());
+                            None
+                        }
+                    }
+                })
+                // NOW, with the value_node obtained immutably, make the mutable recursive call
+                .and_then(|value_node| evaluate_const_expr_as_i64(&value_node, context))
+        }
+        _ => {
+            // Add diagnostic only if it's not a simple literal/expr we expect? Maybe not.
+            // Simply return None for unhandled kinds.
+            None
+        }
+    };
+
+    // Store result if successful
+    if let Some(value) = result {
+        context.resolved_constants.insert(node_ptr, value);
+    }
+    
+    result
+}
+
+// Pass 3 Context: Holds state for constant evaluation
+#[derive(Debug)]
+struct Pass3Context<'a> {
+    global_scope: &'a SymbolTable,
+    definition_scopes: &'a HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>,
+    source_file_root: &'a SyntaxNode<BhdlLanguage>,
+    resolved_constants: &'a mut ResolvedConstants, // Mutable map to store results
+    diagnostics: &'a mut Vec<Diagnostic>, // Mutable vec to add evaluation errors
+    // Track current scope stack for lookups during evaluation
+    current_scope_stack: Vec<&'a SymbolTable>, 
+}
+
+impl<'a> Pass3Context<'a> {
+    fn new(
+        global_scope: &'a SymbolTable, 
+        def_scopes: &'a HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>, 
+        source_file_root: &'a SyntaxNode<BhdlLanguage>,
+        resolved_constants: &'a mut ResolvedConstants,
+        diagnostics: &'a mut Vec<Diagnostic>,
+    ) -> Self {
+        Self {
+            global_scope,
+            definition_scopes: def_scopes,
+            source_file_root,
+            resolved_constants,
+            diagnostics,
+            current_scope_stack: vec![global_scope], // Start with global scope
+        }
+    }
+
+    // Add a diagnostic message (reuse from Pass 2 or make specific?)
+    fn add_diagnostic(&mut self, message: String, range: TextRange) {
+        self.diagnostics.push(Diagnostic { message, range });
+    }
+
+    // Lookup symbol by searching up the current scope stack (similar to Pass 2)
+    fn lookup(&self, name: &str) -> Option<&Symbol> {
+        for scope in self.current_scope_stack.iter().rev() {
+            if let Some(symbol) = scope.lookup(name) {
+                return Some(symbol);
+            }
+        }
+        None
+    }
+
+    // Push a scope onto the stack (similar to Pass 2)
+    fn push_scope(&mut self, node_ptr: &SyntaxNodePtr<BhdlLanguage>) {
+        if let Some(scope) = self.definition_scopes.get(node_ptr) {
+            self.current_scope_stack.push(scope);
+        }
+    }
+
+    // Pop the current scope from the stack (similar to Pass 2)
+    fn pop_scope(&mut self) {
+       if self.current_scope_stack.len() > 1 {
+           self.current_scope_stack.pop();
+       }
+    }
+}
+
+// Pass 3 visitor function
+fn visit_node_pass3_const_eval(node: &SyntaxNode<BhdlLanguage>, context: &mut Pass3Context) {
+    let mut pushed_scope = false;
+
+    // --- Scope Handling (Push before visiting children) ---
+    match node.kind() {
+        // Nodes that define a scope (same as Pass 2)
+        SyntaxKind::BOARD_DEF |
+        SyntaxKind::MODULE_DEF |
+        SyntaxKind::COMPONENT_DEF |
+        SyntaxKind::INTERFACE_DEF => {
+             let ptr = SyntaxNodePtr::new(node);
+             context.push_scope(&ptr);
+             pushed_scope = true;
+        }
+        _ => {}
+    }
+
+    // --- Find and Evaluate Constant Expressions --- 
+    match node.kind() {
+        // Evaluate the value assigned to parameters
+        SyntaxKind::PARAM_DECL => {
+            if let Some(expr_node) = ParamDecl::cast(node.clone()).and_then(|p| p.value_expr()) {
+                evaluate_const_expr_as_i64(&expr_node, context); // Ignore Option result, errors handled internally
+            }
+        }
+        // Evaluate expressions within bus suffixes (indices and ranges)
+        SyntaxKind::BUS_SUFFIX => {
+            if let Some(suffix) = BusSuffix::cast(node.clone()) {
+                if let Some(index_expr) = suffix.index_expr_node() {
+                    evaluate_const_expr_as_i64(&index_expr, context);
+                }
+                if let Some(range_expr) = suffix.range() {
+                    if let Some(lhs) = range_expr.lhs_node() {
+                        evaluate_const_expr_as_i64(&lhs, context);
+                    }
+                    if let Some(rhs) = range_expr.rhs_node() {
+                         evaluate_const_expr_as_i64(&rhs, context);
+                    }
+                }
+            }
+        }
+        // Add other places where const evaluation might be needed (e.g., generate-if conditions?)
+        _ => {} 
+    }
+
+    // --- Recurse into Children --- 
+    for child in node.children() {
+        visit_node_pass3_const_eval(&child, context);
+    }
+
+    // --- Scope Handling (Pop after visiting children) ---
+    if pushed_scope {
+        context.pop_scope();
+    }
+}
+
+// --- Pass 4: Bounds Checks ---
+
+// Pass 4 Context: Holds state for bounds checking using resolved constants
+#[derive(Debug)]
+struct Pass4Context<'a> {
+    global_scope: &'a SymbolTable,
+    definition_scopes: &'a HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>,
+    source_file_root: &'a SyntaxNode<BhdlLanguage>,
+    resolved_constants: &'a ResolvedConstants, // Read-only access to constants
+    diagnostics: &'a mut Vec<Diagnostic>,     // Mutable vec to add bounds errors
+    current_scope_stack: Vec<&'a SymbolTable>, // Track current scope for lookups
+}
+
+impl<'a> Pass4Context<'a> {
+     fn new(
+        global_scope: &'a SymbolTable, 
+        def_scopes: &'a HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>, 
+        source_file_root: &'a SyntaxNode<BhdlLanguage>,
+        resolved_constants: &'a ResolvedConstants, // Pass in constants
+        diagnostics: &'a mut Vec<Diagnostic>,
+    ) -> Self {
+        Self {
+            global_scope,
+            definition_scopes: def_scopes,
+            source_file_root,
+            resolved_constants,
+            diagnostics,
+            current_scope_stack: vec![global_scope],
+        }
+    }
+
+    fn add_diagnostic(&mut self, message: String, range: TextRange) {
+        self.diagnostics.push(Diagnostic { message, range });
+    }
+
+    fn lookup(&self, name: &str) -> Option<&Symbol> {
+        for scope in self.current_scope_stack.iter().rev() {
+            if let Some(symbol) = scope.lookup(name) {
+                return Some(symbol);
+            }
+        }
+        None
+    }
+    
+    fn lookup_global(&self, name: &str) -> Option<&Symbol> {
+        self.global_scope.lookup(name)
+    }
+
+    fn push_scope(&mut self, node_ptr: &SyntaxNodePtr<BhdlLanguage>) {
+        if let Some(scope) = self.definition_scopes.get(node_ptr) {
+            self.current_scope_stack.push(scope);
+        }
+    }
+
+    fn pop_scope(&mut self) {
+       if self.current_scope_stack.len() > 1 {
+           self.current_scope_stack.pop();
+       }
+    }
+}
+
+// Pass 4 visitor function
+fn visit_node_pass4_bounds_checks(node: &SyntaxNode<BhdlLanguage>, context: &mut Pass4Context) {
+     let mut pushed_scope = false;
+
+    // --- Scope Handling --- 
+    match node.kind() {
+        SyntaxKind::BOARD_DEF |
+        SyntaxKind::MODULE_DEF |
+        SyntaxKind::COMPONENT_DEF |
+        SyntaxKind::INTERFACE_DEF => {
+             let ptr = SyntaxNodePtr::new(node);
+             context.push_scope(&ptr);
+             pushed_scope = true;
+        }
+        _ => {}
+    }
+
+    // --- Perform Bounds Checks on References --- 
+    match node.kind() {
+        SyntaxKind::NET_REF | SyntaxKind::PIN_REF => { 
+            // Check only nodes that can have suffixes
+            let suffix_node = match node.kind() {
+                SyntaxKind::NET_REF => NetRef::cast(node.clone()).and_then(|nr| nr.bus_suffix()),
+                SyntaxKind::PIN_REF => PinRef::cast(node.clone()).and_then(|pr| pr.bus_suffix()),
+                _ => None, // Should not happen due to outer match
+            };
+
+            if let Some(suffix) = suffix_node {
+                 // 1. Get the referenced symbol's declared bounds (similar to Pass 2)
+                 // Need to find the symbol itself first. Use get_reference_base_info logic carefully.
+                 let base_info = get_reference_base_info_pass4(context, node);
+
+                 if let Some(info) = base_info {
+                     let symbol = info.symbol;
+                     let declared_bounds = info.bounds;
+
+                     if let Some((d_high, d_low)) = declared_bounds {
+                         let declared_min = d_high.min(d_low);
+                         let declared_max = d_high.max(d_low);
+
+                         // 2. Check Index Suffix
+                         if let Some(index_expr_node) = suffix.index_expr_node() {
+                             let index_ptr = SyntaxNodePtr::new(&index_expr_node);
+                             // Look up the evaluated value from Pass 3
+                             if let Some(index_val) = context.resolved_constants.get(&index_ptr) {
+                                 if *index_val < declared_min || *index_val > declared_max {
+                                     context.add_diagnostic(
+                                         format!("Index '{}' is out of bounds for '{}' (declared as [{}:{}])", index_val, symbol.name, d_high, d_low),
+                                         index_expr_node.text_range(),
+                                     );
+                                 }
+                             } else {
+                                 // Constant evaluation failed in Pass 3 (diagnostic already added there)
+                                 // Optionally add another diagnostic here? Maybe not needed.
+                             }
+                         } 
+                         // 3. Check Range Suffix
+                         else if let Some(range_expr) = suffix.range() {
+                             let lhs_ptr = range_expr.lhs_node().map(|n| SyntaxNodePtr::new(&n));
+                             let rhs_ptr = range_expr.rhs_node().map(|n| SyntaxNodePtr::new(&n));
+
+                             if let (Some(h_ptr), Some(l_ptr)) = (lhs_ptr, rhs_ptr) {
+                                 if let (Some(h), Some(l)) = (
+                                     context.resolved_constants.get(&h_ptr),
+                                     context.resolved_constants.get(&l_ptr)
+                                 ) {
+                                     let used_min = h.min(l);
+                                     let used_max = h.max(l);
+                                     if *used_min < declared_min || *used_max > declared_max {
+                                         context.add_diagnostic(
+                                             format!("Range [{}:{}] is out of bounds for '{}' (declared as [{}:{}])", h, l, symbol.name, d_high, d_low),
+                                             range_expr.syntax().text_range(),
+                                         );
+                                     }
+                                 } else {
+                                     // Constant evaluation failed for one or both bounds in Pass 3
+                                 }
+                             } else {
+                                 // Malformed RangeExpr node (missing lhs/rhs)? Should not happen if parser is correct.
+                             }
+                         }
+                     } else {
+                         // Symbol used with suffix but not declared as bus (handled in Pass 2, but check again?)
+                         // Pass 2 check should be sufficient: resolve_node_type_info
+                     }
+                 } else {
+                     // Could not resolve base symbol info for the reference (error likely added in Pass 2)
+                 }
+            } // End if let Some(suffix)
+        } // End NET_REF | PIN_REF case
+        _ => {}
+    }
+
+    // --- Recurse into Children --- 
+    for child in node.children() {
+        visit_node_pass4_bounds_checks(&child, context);
+    }
+
+    // --- Scope Handling --- 
+    if pushed_scope {
+        context.pop_scope();
+    }
+}
+
+// Helper to get base info, adapted for Pass4Context (avoids code duplication)
+// Needs access to scopes like Pass2Context does.
+// Renamed to avoid conflict with the one used by Pass 2.
+fn get_reference_base_info_pass4<'a>(
+    context: &'a Pass4Context<'a>, // Use Pass4Context
+    node: &SyntaxNode<BhdlLanguage>,
+) -> Option<ReferenceBaseInfo<'a>> { // Still returns info with lifetime 'a tied to context
+     let (ident_token, is_instance_pin) = match node.kind() {
+        SyntaxKind::NET_REF => (NetRef::cast(node.clone())?.name_token()?, false),
+        SyntaxKind::PIN_REF => {
+            let pin_ref = PinRef::cast(node.clone())?;
+            if pin_ref.instance_name().is_some() {
+                (pin_ref.pin_name()?, true)
+            } else {
+                 (pin_ref.pin_name()?, false)
+            }
+        }
+        // Only need to handle NetRef/PinRef as those are the only ones checked above
+        _ => return None, 
+    };
+
+    let name = ident_token.text();
+
+    let symbol = if is_instance_pin {
+        let pin_ref = PinRef::cast(node.clone())?; 
+        let inst_name_str = pin_ref.instance_name()?.text().to_string();
+        let pin_name_str = pin_ref.pin_name()?.text().to_string();
+        let inst_name = inst_name_str.as_str();
+        let pin_name = pin_name_str.as_str();
+
+        let inst_symbol = context.lookup(inst_name)?; 
+        if inst_symbol.kind != SymbolKind::Instance { return None; }
+        let type_name = inst_symbol.instance_type_name.as_ref()?;
+        let type_symbol = context.lookup_global(type_name)?; 
+        if !type_symbol.kind.is_component_type_kind() { return None; }
+        let def_node_ptr = type_symbol.definition_node_ptr.as_ref()?;
+        let component_scope_table = context.definition_scopes.get(def_node_ptr)?;
+        component_scope_table.lookup(pin_name)?
+    } else {
+        context.lookup(name)?
+    };
+
+    let decl_node_ptr = symbol.definition_node_ptr.as_ref()?;
+    let decl_node = decl_node_ptr.try_to_node(context.source_file_root)?;
+
+    let type_ref_node = match decl_node.kind() {
+        SyntaxKind::NET_DECL => NetDecl::cast(decl_node)?.type_ref(),
+        SyntaxKind::PORT_DECL => PortDecl::cast(decl_node)?.type_ref(), // PortDecl symbol is Pin kind
+        SyntaxKind::PIN_DECL => PinDecl::cast(decl_node)?.type_ref(),
+        _ => return None, 
+    }?; 
+
+    let base_type_name = type_ref_node.name_token()?.text().to_string();
+
+    let bounds = match (symbol.bus_high, symbol.bus_low) {
+        (Some(h), Some(l)) => Some((h, l)),
+        _ => None,
+    };
+
+    Some(ReferenceBaseInfo {
+        symbol, 
+        base_type_name,
+        bounds,
+    })
+}
+
 // Main analysis function
 pub fn analyze(source_file: &SourceFile) -> AnalysisResult {
     // Pass 1: Build global scope and map of definition node -> its scope
     let (global_scope_table, definition_scopes) =
-         populate_global_scope_and_build_definition_scopes(source_file); // Correct function name
+         populate_global_scope_and_build_definition_scopes(source_file);
     println!("Analyzer: Pass 1 complete. Global symbols: {}, Definition scopes: {}", 
              global_scope_table.children.len(), definition_scopes.len());
 
-    // Pass 2: Resolve references and perform type checking using the map
-    println!("Analyzer: Starting Pass 2 - References...");
+    // Pass 2: Resolve references and perform type checking (without const eval/bounds checks)
+    println!("Analyzer: Starting Pass 2 - References & Basic Types...");
     let mut pass2_context = Pass2Context::new(&global_scope_table, &definition_scopes, &source_file.syntax());
-    // Visit the root node to start Pass 2 traversal
     visit_node_pass2_references(&source_file.syntax(), &mut pass2_context);
     println!("Analyzer: Pass 2 complete. Diagnostics found: {}", pass2_context.diagnostics.len());
 
+    // Pass 3: Evaluate constant expressions
+    println!("Analyzer: Starting Pass 3 - Constant Evaluation...");
+    let mut resolved_constants_map = ResolvedConstants::new();
+    let mut pass3_diagnostics = Vec::new(); // Pass 3 gets its own diagnostics vec initially
+    let mut pass3_context = Pass3Context::new(
+        &global_scope_table, 
+        &definition_scopes, 
+        &source_file.syntax(),
+        &mut resolved_constants_map,
+        &mut pass3_diagnostics, 
+    );
+    visit_node_pass3_const_eval(&source_file.syntax(), &mut pass3_context);
+    println!("Analyzer: Pass 3 complete. Constants evaluated: {}, Diagnostics added: {}", 
+        resolved_constants_map.len(), pass3_diagnostics.len());
+
+    // Pass 4: Perform bounds checks using resolved constants
+    println!("Analyzer: Starting Pass 4 - Bounds Checks...");
+    let mut pass4_diagnostics = Vec::new();
+    let mut pass4_context = Pass4Context::new(
+        &global_scope_table,
+        &definition_scopes,
+        &source_file.syntax(),
+        &resolved_constants_map, // Pass evaluated constants
+        &mut pass4_diagnostics,
+    );
+    visit_node_pass4_bounds_checks(&source_file.syntax(), &mut pass4_context);
+    println!("Analyzer: Pass 4 complete. Diagnostics added: {}", pass4_diagnostics.len());
+
+    // Combine diagnostics from all passes
+    let mut all_diagnostics = pass2_context.diagnostics;
+    all_diagnostics.append(&mut pass3_diagnostics);
+    all_diagnostics.append(&mut pass4_diagnostics);
+    println!("Analyzer: All passes complete. Total diagnostics: {}", all_diagnostics.len());
+
     AnalysisResult {
-        // Clone global_scope_table to fix borrow error
         global_scope: global_scope_table.clone(), 
-        diagnostics: pass2_context.diagnostics,
-        definition_scopes, // Return owned map
+        diagnostics: all_diagnostics, 
+        definition_scopes, 
+        resolved_constants: resolved_constants_map, 
     }
 }
 
@@ -1981,8 +2342,6 @@ mod tests {
         "#);
         let source_file = parse_to_sourcefile(&input);
         let (global_scope, def_scopes) = populate_global_scope_and_build_definition_scopes(&source_file);
-        // DELAYED Context creation: Moved inside the final and_then
-        // let context = Pass2Context::new(&global_scope, &def_scopes, &source_file.syntax()); 
         
         // Find the expression node within the NetDecl
         source_file.syntax().descendants()
@@ -1992,19 +2351,25 @@ mod tests {
             .and_then(|suffix| suffix.range())
             .and_then(|range| range.lhs_node()) // Get the LHS node of the range [expr : 0]
             .and_then(|expr_node| {
-                // Create context *just before* evaluation for the test
-                let context = Pass2Context::new(&global_scope, &def_scopes, &source_file.syntax()); 
+                // Create Pass3 context *just before* evaluation for the test
+                let mut resolved_constants = ResolvedConstants::new();
+                let mut diagnostics = Vec::new();
+                let mut context = Pass3Context::new(
+                    &global_scope, 
+                    &def_scopes, 
+                    &source_file.syntax(),
+                    &mut resolved_constants,
+                    &mut diagnostics, 
+                ); 
                 // Manually push the Board scope onto the context stack for the test
                 let board_node = source_file.syntax().children().find(|n| n.kind() == SyntaxKind::BOARD_DEF);
                 if let Some(board) = board_node {
                      let board_ptr = SyntaxNodePtr::new(&board);
-                     // Need mutable context to push scope
-                     let mut mut_context = context; 
-                     mut_context.push_scope(&board_ptr);
-                     evaluate_const_expr_as_i64(&expr_node, &mut_context)
+                     context.push_scope(&board_ptr);
+                     evaluate_const_expr_as_i64(&expr_node, &mut context)
                 } else {
-                    // Fallback or error if board node not found (shouldn't happen in test)
-                    evaluate_const_expr_as_i64(&expr_node, &context)
+                     // Fallback or error if board node not found (shouldn't happen in test)
+                     evaluate_const_expr_as_i64(&expr_node, &mut context)
                 }
             })
     }
@@ -2056,7 +2421,6 @@ mod tests {
         "#;
          let source_file = parse_to_sourcefile(&input);
         let (global_scope, def_scopes) = populate_global_scope_and_build_definition_scopes(&source_file);
-        let context = Pass2Context::new(&global_scope, &def_scopes, &source_file.syntax());
         
         let expr_node = source_file.syntax().descendants()
             .find(|n| n.kind() == SyntaxKind::NET_DECL)
@@ -2066,13 +2430,21 @@ mod tests {
             .and_then(|range| range.lhs_node())
             .unwrap();
 
-        // Create context and push Board scope before evaluation
-        let mut context = Pass2Context::new(&global_scope, &def_scopes, &source_file.syntax());
+        // Create Pass3 context and push Board scope before evaluation
+        let mut resolved_constants = ResolvedConstants::new();
+        let mut diagnostics = Vec::new();
+        let mut context = Pass3Context::new(
+            &global_scope, 
+            &def_scopes, 
+            &source_file.syntax(),
+            &mut resolved_constants,
+            &mut diagnostics, 
+        );
         let board_node = source_file.syntax().children().find(|n| n.kind() == SyntaxKind::BOARD_DEF).unwrap();
         let board_ptr = SyntaxNodePtr::new(&board_node);
         context.push_scope(&board_ptr);
 
-        assert_eq!(evaluate_const_expr_as_i64(&expr_node, &context), Some(11)); // (5*2) + 1
+        assert_eq!(evaluate_const_expr_as_i64(&expr_node, &mut context), Some(11)); // (5*2) + 1
     }
 
 }
