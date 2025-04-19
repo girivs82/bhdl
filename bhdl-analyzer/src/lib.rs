@@ -14,6 +14,21 @@ mod symbol_table;
 // Added SymbolKind import
 use symbol_table::{Symbol, SymbolKind, SymbolTable};
 
+// Represents resolved type information for checking
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedTypeInfo {
+    base_type_name: String,
+    // Represents width: None for scalar, Some((high, low)) for bus
+    bounds: Option<(i64, i64)>,
+}
+
+impl ResolvedTypeInfo {
+    // Helper to get width (number of bits)
+    fn width(&self) -> Option<u64> {
+        self.bounds.map(|(h, l)| (h - l).abs() as u64 + 1)
+    }
+}
+
 // --- Helpers ---
 
 /// Attempts to evaluate a constant syntax expression node as an i64 integer.
@@ -389,6 +404,7 @@ struct Pass2Context<'a> {
     definition_scopes: &'a HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>,
     diagnostics: Vec<Diagnostic>,
     source_file_root: &'a SyntaxNode<BhdlLanguage>, // Added root node reference
+    is_visiting_assign_rhs: bool, // Flag for context-aware checks
 }
 
 impl<'a> Pass2Context<'a> {
@@ -403,6 +419,7 @@ impl<'a> Pass2Context<'a> {
             definition_scopes: def_scopes,
             diagnostics: Vec::new(),
             source_file_root, // Store reference
+            is_visiting_assign_rhs: false, // Initialize flag
         }
     }
 
@@ -445,6 +462,68 @@ impl<'a> Pass2Context<'a> {
        if self.current_scope_stack.len() > 1 {
            self.current_scope_stack.pop();
        }
+    }
+
+    // Helper to resolve the type name and width of a symbol referenced by a node
+    fn resolve_node_type_info(&self, node: &SyntaxNode<BhdlLanguage>) -> Option<ResolvedTypeInfo> {
+        // println!("[resolve_node_type_info] Trying node: {:?} {:?}", node.kind(), node.text_range()); // DEBUG (Use {:?})
+        // Determine the identifier token and potentially the specific AST node type
+        let ident_token = match node.kind() {
+            SyntaxKind::NET_REF => NetRef::cast(node.clone())?.name_token(),
+            SyntaxKind::PIN_REF => {
+                // For PinRef, we need the pin name, not the instance name
+                let pin_ref = PinRef::cast(node.clone())?;
+                if pin_ref.instance_name().is_some() {
+                     // Instance.Pin -> Check type definition scope
+                     // This is more complex, handle later. For now, return None.
+                     // Need to look up instance, find type, get type scope, look up pin.
+                     return None; // TODO: Handle instance.pin type resolution
+                } else {
+                    // Direct pin/port/net ref (like in board connections)
+                    pin_ref.pin_name()
+                }
+            }
+            SyntaxKind::SIMPLE_IDENT_REF => SimpleIdentRef::cast(node.clone())?.name_token(),
+            SyntaxKind::IDENT_REF => IdentRef::cast(node.clone())?.token(),
+            _ => None, // Not a direct reference node we can easily resolve type for?
+        };
+
+        let name_token = ident_token?;
+        let name = name_token.text();
+        // println!("[resolve_node_type_info] Found ident: {}", name); // DEBUG
+
+        // Lookup the symbol in the current scope context
+        let symbol = self.lookup(name)?;
+        // println!("[resolve_node_type_info] Found symbol: {:?}", symbol.kind); // DEBUG
+
+        // Get base type name and bounds from the symbol
+        // This requires finding the symbol's declaration node to get the TypeRef
+        let decl_node_ptr = symbol.definition_node_ptr.as_ref()?;
+        let decl_node = decl_node_ptr.try_to_node(self.source_file_root)?;
+
+        let type_ref_node = match decl_node.kind() {
+            SyntaxKind::NET_DECL => NetDecl::cast(decl_node)?.type_ref(),
+            SyntaxKind::PORT_DECL => PortDecl::cast(decl_node)?.type_ref(),
+            SyntaxKind::PIN_DECL => PinDecl::cast(decl_node)?.type_ref(),
+             // Handle other potential declaration kinds (e.g., PARAM_DECL?) if needed
+            _ => None,
+        };
+
+        let type_ref_node_resolved = type_ref_node?;
+        // println!("[resolve_node_type_info] Found type ref node: {:?}", type_ref_node_resolved.syntax().text_range()); // DEBUG
+        let base_type_name = type_ref_node_resolved
+            .name_token()?
+            .text()
+            .to_string();
+        // println!("[resolve_node_type_info] Resolved base type name: {}", base_type_name); // DEBUG
+
+        let bounds = match (symbol.bus_high, symbol.bus_low) {
+            (Some(h), Some(l)) => Some((h,l)),
+            _ => None,
+        };
+        // println!("[resolve_node_type_info] Resolved bounds: {:?}", bounds); // DEBUG
+
+        Some(ResolvedTypeInfo { base_type_name, bounds })
     }
 }
 
@@ -722,11 +801,15 @@ fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mut Pa
                                         .and_then(|node| NetDecl::cast(node))
                                         .and_then(|decl| decl.bus_suffix())
                                         .is_some();
+                                        
                                     if declared_as_bus {
-                                        context.add_diagnostic(
-                                            format!("Bus net '{}' used without index or slice in expression", name),
-                                            name_token.text_range(),
-                                        );
+                                        // Check context flag set by ASSIGN_STMT handler
+                                        if !context.is_visiting_assign_rhs { 
+                                            context.add_diagnostic(
+                                                format!("Bus net '{}' used without index or slice in expression", name),
+                                                name_token.text_range(),
+                                            );
+                                        }
                                     }
                                     // Else: Scalar net used in expression is OK for now.
                                 }
@@ -828,39 +911,146 @@ fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mut Pa
         }
         // --- Special handling for Assignment Statements ---
         SyntaxKind::ASSIGN_STMT => {
-            // Explicitly handle AssignStmt to control visit order
-            // Find LHS and RHS nodes
-            let lhs_node = node.children().find(|n| 
-                matches!(n.kind(), SyntaxKind::SIMPLE_IDENT_REF | SyntaxKind::NET_REF | SyntaxKind::PIN_REF)
-            );
-            let rhs_node = node.children().find(|n| 
-                matches!(n.kind(), 
-                    SyntaxKind::PREFIX_EXPR | SyntaxKind::BINARY_EXPR | SyntaxKind::TERNARY_EXPR |
-                    SyntaxKind::FUNCTION_CALL_EXPR | SyntaxKind::VALUE | 
-                    SyntaxKind::IDENT_REF | SyntaxKind::NET_REF | SyntaxKind::PIN_REF
-                )
-            );
+            // Find '=' token index
+            let eq_token_idx = node.children_with_tokens()
+                                   .position(|e| e.kind() == SyntaxKind::EQ);
 
-            // 1. Visit the RHS expression first
-            if let Some(ref rhs) = rhs_node {
-                visit_node_pass2_references(rhs, context);
-            }
-            
-            // 2. Visit the LHS node next (relying on its specific handler, e.g. SIMPLE_IDENT_REF, for checks)
-            if let Some(ref lhs) = lhs_node {
-                 visit_node_pass2_references(lhs, context);
-                 // Remove the explicit LHS kind check here; let SIMPLE_IDENT_REF/NET_REF handle it.
-            }
+            if let Some(idx) = eq_token_idx {
+                 // Find last ref node *before* '='
+                let lhs_node = node.children_with_tokens()
+                                   .take(idx)
+                                   .filter_map(|e| e.into_node())
+                                   .filter(|n| matches!(n.kind(), SyntaxKind::SIMPLE_IDENT_REF | SyntaxKind::NET_REF | SyntaxKind::PIN_REF))
+                                   .last();
 
-            // Find and visit other children (like EQ token) if necessary, although likely trivial
-            for child in node.children() {
-                if Some(&child) != lhs_node.as_ref() && Some(&child) != rhs_node.as_ref() {
-                     visit_node_pass2_references(&child, context);
+                // Find first expression node *after* '='
+                let rhs_node = node.children_with_tokens()
+                                   .skip(idx + 1)
+                                   .filter_map(|e| e.into_node())
+                                   .find(|n| matches!(n.kind(), 
+                                       SyntaxKind::PREFIX_EXPR | SyntaxKind::BINARY_EXPR | SyntaxKind::TERNARY_EXPR |
+                                       SyntaxKind::FUNCTION_CALL_EXPR | SyntaxKind::VALUE | 
+                                       SyntaxKind::IDENT_REF | SyntaxKind::NET_REF | SyntaxKind::PIN_REF
+                                   ));
+
+                // 1. Visit the RHS expression first, setting the context flag
+                if let Some(ref rhs) = rhs_node {
+                    context.is_visiting_assign_rhs = true; // Set flag
+                    visit_node_pass2_references(rhs, context);
+                    context.is_visiting_assign_rhs = false; // Unset flag
                 }
+                
+                // 2. Visit the LHS node next
+                if let Some(ref lhs) = lhs_node {
+                     visit_node_pass2_references(lhs, context);
+                }
+
+                // 3. Perform Type Check
+                if let (Some(lhs), Some(rhs)) = (lhs_node.as_ref(), rhs_node.as_ref()) {
+                     // println!("[ASSIGN_STMT Type Check] LHS Node: {:?} {:?}, RHS Node: {:?} {:?}", lhs.kind(), lhs.text_range(), rhs.kind(), rhs.text_range()); // DEBUG (Use {:?})
+                    let lhs_type_info = context.resolve_node_type_info(lhs);
+                    let rhs_type_info = context.resolve_node_type_info(rhs);
+                    // println!("[ASSIGN_STMT Type Check] Resolved LHS: {:?}, RHS: {:?}", lhs_type_info, rhs_type_info); // DEBUG
+
+                    match (lhs_type_info, rhs_type_info) {
+                        (Some(lhs_ti), Some(rhs_ti)) => {
+                            // Check base type name
+                            if lhs_ti.base_type_name != rhs_ti.base_type_name {
+                                context.add_diagnostic(
+                                    format!(
+                                        "Type mismatch in assignment: cannot assign type '{}' to type '{}'",
+                                        rhs_ti.base_type_name, lhs_ti.base_type_name
+                                    ),
+                                    // Use the range of the whole assignment statement for now
+                                    node.text_range(),
+                                );
+                            }
+                            // Check width
+                            else if lhs_ti.width() != rhs_ti.width() {
+                                 // println!("[ASSIGN_STMT Type Check] Width mismatch detected! LHS={:?}, RHS={:?}", lhs_ti.width(), rhs_ti.width()); // DEBUG
+                                 context.add_diagnostic(
+                                    format!(
+                                        "Width mismatch in assignment: LHS width {:?} does not match RHS width {:?}",
+                                        lhs_ti.width(), rhs_ti.width()
+                                    ),
+                                    node.text_range(),
+                                );
+                            }
+                            // Else: Types are compatible
+                            else {
+                                // println!("[ASSIGN_STMT Type Check] Types compatible: LHS={:?}, RHS={:?}", lhs_ti, rhs_ti); // DEBUG
+                            }
+                        }
+                        (None, _) => { /*println!("[ASSIGN_STMT Type Check] Failed to resolve LHS type"); */} // DEBUG
+                        (_, None) => { /*println!("[ASSIGN_STMT Type Check] Failed to resolve RHS type"); */} // DEBUG
+                    }
+                }
+                else {
+                     // println!("[ASSIGN_STMT Type Check] Could not find LHS and/or RHS node based on EQ"); // DEBUG Updated message
+                }
+
+            } else {
+                 // println!("[ASSIGN_STMT Type Check] Could not find EQ token"); // DEBUG
             }
             
-            // Prevent default recursion since we controlled the visit order
+            // Prevent default recursion
             return; 
+        }
+        // --- Special handling for Connection Statements ---
+        SyntaxKind::CONNECTION_STMT => {
+            if let Some(conn_stmt) = bhdl_ast::common::ConnectionStmt::cast(node.clone()) {
+                // 1. Get source and sink nodes
+                let source_node = conn_stmt.source();
+                let sink_node = conn_stmt.sink();
+
+                // 2. Visit source and sink first to resolve them and check for other errors
+                if let Some(ref src) = source_node {
+                    visit_node_pass2_references(src, context);
+                }
+                 if let Some(ref sink) = sink_node {
+                    visit_node_pass2_references(sink, context);
+                }
+
+                // 3. Perform Type Check
+                if let (Some(src), Some(sink)) = (source_node.as_ref(), sink_node.as_ref()) {
+                    let src_type_info = context.resolve_node_type_info(src);
+                    let sink_type_info = context.resolve_node_type_info(sink);
+
+                    match (src_type_info, sink_type_info) {
+                        (Some(src_ti), Some(sink_ti)) => {
+                            // Check base type name
+                            if src_ti.base_type_name != sink_ti.base_type_name {
+                                context.add_diagnostic(
+                                    format!(
+                                        "Type mismatch in connection: cannot connect type '{}' to type '{}'",
+                                        src_ti.base_type_name, sink_ti.base_type_name
+                                    ),
+                                    // Use the range of the whole connection statement
+                                    node.text_range(), 
+                                );
+                            }
+                            // Check width
+                            else if src_ti.width() != sink_ti.width() {
+                                context.add_diagnostic(
+                                    format!(
+                                        "Width mismatch in connection: Source width {:?} does not match Sink width {:?}",
+                                        src_ti.width(), sink_ti.width()
+                                    ),
+                                    node.text_range(),
+                                );
+                            }
+                            // Else: Types are compatible
+                        }
+                         (None, _) => { /* Failed to resolve source type */ }
+                         (_, None) => { /* Failed to resolve sink type */ }
+                    }
+                }
+                 // Else: Could not get source/sink nodes (parser error?)
+
+            } // End if let Some(conn_stmt)
+            
+            // Prevent default recursion as we handled children
+            return;
         }
         // Add other reference checks here (e.g., for NET_REF with indices/slices)
         _ => {}
@@ -1323,6 +1513,210 @@ mod tests {
             d.message.contains("Index '8' is out of bounds for net 'A' (declared as [0:7])")
         );
         assert!(found, "Expected out-of-bounds diagnostic not found. Diagnostics: {:?}", result.diagnostics);
+    }
+
+    // --- Tests for Assignment Type Checking --- 
+
+    #[test]
+    fn analyze_assign_type_mismatch_base() {
+        let input = r#"
+            typedef MyInt { width=32; }
+            board B {
+                nets { net A: signal; net B: MyInt; }
+                connections { assign A = B; } // Error: MyInt to signal
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
+        assert_eq!(result.diagnostics.len(), 1, "Diagnostics: {:?}", result.diagnostics);
+        assert!(result.diagnostics[0].message.contains("cannot assign type 'MyInt' to type 'signal'"), "Msg: {}", result.diagnostics[0].message);
+    }
+
+    #[test]
+    fn analyze_assign_width_mismatch_bus_scalar() {
+        let input = r#"
+            board B {
+                nets { net A[7:0]: signal; net B: signal; }
+                connections { assign A = B; } // Error: scalar to bus
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
+        assert_eq!(result.diagnostics.len(), 1, "Diagnostics: {:?}", result.diagnostics);
+        // Check the specific message with detailed panic info - Should be LHS Some(8), RHS None
+        let expected_msg = "Width mismatch in assignment: LHS width Some(8) does not match RHS width None";
+        assert!(
+            result.diagnostics[0].message.contains(expected_msg),
+            "Expected msg containing '{}', but got: '{}'",
+            expected_msg,
+            result.diagnostics[0].message
+        );
+    }
+
+    #[test]
+    fn analyze_assign_width_mismatch_scalar_bus() {
+        let input = r#"
+            board B {
+                nets { net A: signal; net B[7:0]: signal; }
+                connections { assign A = B; } // Error: bus to scalar
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
+        assert_eq!(result.diagnostics.len(), 1, "Diagnostics: {:?}", result.diagnostics);
+        // Correct the expected message string to match the actual output
+        let expected_msg = "Width mismatch in assignment: LHS width None does not match RHS width Some(8)";
+        assert!(
+            result.diagnostics[0].message.contains(expected_msg),
+            "Expected msg containing '{}', but got: '{}'",
+            expected_msg,
+            result.diagnostics[0].message
+        );
+    }
+
+    #[test]
+    fn analyze_assign_width_mismatch_bus_bus() {
+        let input = r#"
+            board B {
+                nets { net A[7:0]: signal; net B[3:0]: signal; }
+                connections { assign A = B; } // Error: bus[4] to bus[8]
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
+        assert_eq!(result.diagnostics.len(), 1, "Diagnostics: {:?}", result.diagnostics);
+        // This also triggers the "Bus net 'B' used without index or slice" error first.
+        assert!(result.diagnostics[0].message.contains("Width mismatch in assignment: LHS width Some(8) does not match RHS width Some(4)"), "Msg: {}", result.diagnostics[0].message);
+    }
+
+     #[test]
+    fn analyze_assign_compatible_scalar() {
+        let input = r#"
+            board B {
+                nets { net A: signal; net B: signal; }
+                connections { assign A = B; } // OK
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
+        assert!(result.diagnostics.is_empty(), "Diagnostics found: {:?}", result.diagnostics);
+    }
+
+    #[test]
+    fn analyze_assign_compatible_bus() {
+        let input = r#"
+            board B {
+                nets { net A[7:0]: signal; net B[7:0]: signal; }
+                connections { assign A = B; } // OK
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
+        // This currently fails because IDENT_REF check flags 'B' as needing a suffix.
+        // We need to relax the IDENT_REF check or improve how assign RHS is handled.
+        // For now, expect the error.
+        assert!(result.diagnostics.is_empty(), "Diagnostics found: {:?}", result.diagnostics);
+    }
+
+    // --- Tests for Connection Type Checking --- 
+
+    #[test]
+    fn analyze_conn_type_mismatch_base() {
+        let input = r#"
+            typedef MyInt { width=32; }
+            board B {
+                nets { net A: signal; net B: MyInt; }
+                connections { A -> B; } // Error: signal to MyInt
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
+        assert_eq!(result.diagnostics.len(), 1, "Diagnostics: {:?}", result.diagnostics);
+        assert!(result.diagnostics[0].message.contains("cannot connect type 'signal' to type 'MyInt'"), "Msg: {}", result.diagnostics[0].message);
+    }
+
+    #[test]
+    fn analyze_conn_width_mismatch_bus_scalar() {
+        let input = r#"
+            board B {
+                nets { net A[7:0]: signal; net B: signal; }
+                connections { A -> B; } // Error: bus[8] to scalar
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
+        assert_eq!(result.diagnostics.len(), 1, "Diagnostics: {:?}", result.diagnostics);
+        assert!(result.diagnostics[0].message.contains("Source width Some(8) does not match Sink width None"), "Msg: {}", result.diagnostics[0].message);
+    }
+
+    #[test]
+    fn analyze_conn_width_mismatch_scalar_bus() {
+        let input = r#"
+            board B {
+                nets { net A: signal; net B[7:0]: signal; }
+                connections { A -> B; } // Error: scalar to bus[8]
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
+        assert_eq!(result.diagnostics.len(), 1, "Diagnostics: {:?}", result.diagnostics);
+        assert!(result.diagnostics[0].message.contains("Source width None does not match Sink width Some(8)"), "Msg: {}", result.diagnostics[0].message);
+    }
+
+    #[test]
+    fn analyze_conn_width_mismatch_bus_bus() {
+        let input = r#"
+            board B {
+                nets { net A[7:0]: signal; net B[3:0]: signal; }
+                connections { A -> B; } // Error: bus[8] to bus[4]
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
+        assert_eq!(result.diagnostics.len(), 1, "Diagnostics: {:?}", result.diagnostics);
+        assert!(result.diagnostics[0].message.contains("Source width Some(8) does not match Sink width Some(4)"), "Msg: {}", result.diagnostics[0].message);
+    }
+
+     #[test]
+    fn analyze_conn_compatible_scalar() {
+        let input = r#"
+            board B {
+                nets { net A: signal; net B: signal; }
+                connections { A -> B; } // OK
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
+        assert!(result.diagnostics.is_empty(), "Diagnostics found: {:?}", result.diagnostics);
+    }
+
+    #[test]
+    fn analyze_conn_compatible_bus() {
+        let input = r#"
+            board B {
+                nets { net A[7:0]: signal; net B[7:0]: signal; }
+                connections { A -> B; } // OK
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
+        assert!(result.diagnostics.is_empty(), "Diagnostics found: {:?}", result.diagnostics);
+    }
+    
+    #[test]
+    fn analyze_conn_with_pin_ref() {
+        let input = r#"
+            component C { pins { p: out signal; } }
+            board B {
+                components { C c1 {}; }
+                nets { net N: signal; }
+                connections { c1.p -> N; } // OK (Checks PinRef as source)
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
+        // Expect no errors for now, although type resolution for c1.p is TODO
+        assert!(result.diagnostics.is_empty(), "Diagnostics found: {:?}", result.diagnostics);
     }
 
 }
