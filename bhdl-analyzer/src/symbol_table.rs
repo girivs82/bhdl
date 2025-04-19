@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use rowan::TextRange;
+use rowan::{TextRange, ast::SyntaxNodePtr};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SymbolKind {
@@ -37,16 +37,68 @@ impl SymbolKind {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Symbol {
     pub name: String,
     pub kind: SymbolKind,
     pub span: TextRange,
+    pub instance_type_name: Option<String>,
+    pub definition_node_ptr: Option<SyntaxNodePtr<bhdl_parser::syntax::BhdlLanguage>>,
     // pub definition_span: Option<TextRange>, // TODO: Add span info from CST node
     // pub documentation: Option<String>, // TODO
 }
 
-#[derive(Debug, Default, Clone)]
+impl Symbol {
+    // Constructor for top-level definitions (Board, Module, Component, Interface, Typedef)
+    pub fn new_definition(
+        name: &str,
+        kind: SymbolKind,
+        span: TextRange,
+        def_node_ptr: &SyntaxNodePtr<bhdl_parser::BhdlLanguage>,
+    ) -> Self {
+        Symbol {
+            name: name.to_string(),
+            kind,
+            span,
+            instance_type_name: None,
+            definition_node_ptr: Some(def_node_ptr.clone()),
+        }
+    }
+
+    // Constructor for declarations within a scope (Param, Net, Pin, Port)
+    pub fn new_decl(
+        name: &str,
+        kind: SymbolKind,
+        span: TextRange,
+        decl_node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>, // Use SyntaxNode for decls
+    ) -> Self {
+        Symbol {
+            name: name.to_string(),
+            kind,
+            span,
+            instance_type_name: None,
+            definition_node_ptr: Some(SyntaxNodePtr::new(decl_node)), // Store pointer to decl
+        }
+    }
+
+    // Constructor for component instances
+    pub fn new_instance(
+        name: &str,
+        span: TextRange,
+        instance_type_name: &str,
+        inst_node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>, // Use SyntaxNode for instance
+    ) -> Self {
+        Symbol {
+            name: name.to_string(),
+            kind: SymbolKind::Instance,
+            span,
+            instance_type_name: Some(instance_type_name.to_string()),
+            definition_node_ptr: Some(SyntaxNodePtr::new(inst_node)), // Store pointer to instance node
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, PartialEq)] // Added PartialEq for comparison in lib.rs
 pub struct SymbolTable {
     pub scope_name: Option<String>,
     symbols: HashMap<String, Symbol>,
