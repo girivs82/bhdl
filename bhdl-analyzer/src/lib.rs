@@ -739,51 +739,6 @@ fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mut Pa
                                                                     format!("Symbol '{}' in component type '{}' is not a pin (found {:?})", pin_name, type_name, pin_symbol.kind),
                                                                     pin_name_token.text_range(),
                                                                 );
-                                                            } else {
-                                                                // --- Bus validation for PinRef with instance ---
-                                                                let declared_bounds = (pin_symbol.bus_high, pin_symbol.bus_low);
-                                                                let used_suffix = pin_ref.bus_suffix(); // Get suffix from PinRef
-
-                                                                match (declared_bounds, used_suffix) {
-                                                                    ((Some(dh), Some(dl)), Some(suffix)) => {
-                                                                        let declared_min = dh.min(dl);
-                                                                        let declared_max = dh.max(dl);
-
-                                                                        if let Some(index_node) = suffix.index_expr_node() {
-                                                                            if let Some(index_val) = evaluate_const_expr_as_i64(&index_node) {
-                                                                                if index_val < declared_min || index_val > declared_max {
-                                                                                    context.add_diagnostic(
-                                                                                        format!("Index '{}' is out of bounds for pin '{}.{}' (declared as [{}:{}])", index_val, inst_name, pin_name, dh, dl),
-                                                                                        index_node.text_range(),
-                                                                                    );
-                                                                                }
-                                                                            } else { /* Index not constant i64 literal */ }
-                                                                        } else if let Some(range_expr) = suffix.range() {
-                                                                            if let (Some(uh), Some(ul)) = (
-                                                                                range_expr.lhs_node().and_then(|n| evaluate_const_expr_as_i64(&n)),
-                                                                                range_expr.rhs_node().and_then(|n| evaluate_const_expr_as_i64(&n))
-                                                                            ) {
-                                                                                let used_min = uh.min(ul);
-                                                                                let used_max = uh.max(ul);
-                                                                                if used_min < declared_min || used_max > declared_max {
-                                                                                     context.add_diagnostic(
-                                                                                        format!("Range [{}:{}] is out of bounds for pin '{}.{}' (declared as [{}:{}])", uh, ul, inst_name, pin_name, dh, dl),
-                                                                                        range_expr.syntax().text_range(),
-                                                                                    );
-                                                                                }
-                                                                            } else { /* Range bounds not constant i64 literal */ }
-                                                                        } 
-                                                                    }
-                                                                    ((Some(_), Some(_)), None) => { /* Declared bus, used scalar: OK in PinRef? */ }
-                                                                    ((None, None), Some(suffix)) => {
-                                                                        context.add_diagnostic(
-                                                                            format!("Pin '{}.{}' was not declared as a bus, but used with a suffix", inst_name, pin_name),
-                                                                            suffix.syntax().text_range(),
-                                                                        );
-                                                                    }
-                                                                    ((None, None), None) => { /* Scalar pin: OK */ }
-                                                                    _ => { /* Inconsistent bounds */ }
-                                                                }
                                                             }
                                                         }
                                                     }
@@ -795,19 +750,15 @@ fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mut Pa
                             } 
                         }
                     }
-                } else if let Some(pin_name_token) = pin_ref.pin_name() {
+                } 
+                // REMOVED else if for PinRef without instance, handled by other REF types
+                /*
+                else if let Some(pin_name_token) = pin_ref.pin_name() {
                     // --- Pin Reference without Instance (e.g., P1) ---
                     // This case is now handled by SIMPLE_IDENT_REF
-                    // If it were needed, bus validation would go here similar to above
-                    let pin_name = pin_name_token.text();
-                    match context.lookup(pin_name) {
-                         None => { /* Undefined diagnostic */ }
-                         Some(symbol) => {
-                             if symbol.kind != SymbolKind::Pin && symbol.kind != SymbolKind::Net { /* Not pin/net diagnostic */ }
-                             // Bus validation would need to check symbol.bus_high/low and pin_ref.bus_suffix()
-                         }
-                    }
+                    // ... (old logic) ...
                 } 
+                */
             }
         }
         // Handle Net references (potentially with bus suffixes)
@@ -824,61 +775,16 @@ fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mut Pa
                             );
                         }
                         Some(symbol) => {
-                            // Symbol found. Check if it's actually a Net.
-                            if symbol.kind != SymbolKind::Net {
+                            // Symbol found. Check if it's a valid connection endpoint (Pin or Net)
+                            if symbol.kind != SymbolKind::Net && symbol.kind != SymbolKind::Pin {
                                 context.add_diagnostic(
-                                    format!("Symbol '{}' is not a net (found {:?})", name, symbol.kind),
+                                    format!("Symbol '{}' is not a valid connection endpoint (found {:?})", name, symbol.kind),
                                     name_token.text_range(),
                                 );
                             } else {
-                                // --- Bus validation logic for NET_REF ---
-                                let declared_bounds = (symbol.bus_high, symbol.bus_low);
-                                let used_suffix = net_ref.bus_suffix();
-
-                                match (declared_bounds, used_suffix) {
-                                    ((Some(dh), Some(dl)), Some(suffix)) => {
-                                        // Declared as bus, used with suffix: Validate index/range
-                                        let declared_min = dh.min(dl);
-                                        let declared_max = dh.max(dl);
-
-                                        if let Some(index_node) = suffix.index_expr_node() {
-                                            if let Some(index_val) = evaluate_const_expr_as_i64(&index_node) {
-                                                if index_val < declared_min || index_val > declared_max {
-                                                    context.add_diagnostic(
-                                                        format!("Index '{}' is out of bounds for net '{}' (declared as [{}:{}])", index_val, name, dh, dl),
-                                                        index_node.text_range(),
-                                                    );
-                                                }
-                                            } else { /* Index not constant i64 literal - TODO */ }
-                                        } else if let Some(range_expr) = suffix.range() {
-                                            if let (Some(uh), Some(ul)) = (
-                                                range_expr.lhs_node().and_then(|n| evaluate_const_expr_as_i64(&n)),
-                                                range_expr.rhs_node().and_then(|n| evaluate_const_expr_as_i64(&n))
-                                            ) {
-                                                let used_min = uh.min(ul);
-                                                let used_max = uh.max(ul);
-                                                if used_min < declared_min || used_max > declared_max {
-                                                     context.add_diagnostic(
-                                                        format!("Range [{}:{}] is out of bounds for net '{}' (declared as [{}:{}])", uh, ul, name, dh, dl),
-                                                        range_expr.syntax().text_range(),
-                                                    );
-                                                }
-                                                // TODO: Check directionality?
-                                            } else { /* Range bounds not constant i64 literal - TODO */ }
-                                        }
-                                    }
-                                    ((Some(_), Some(_)), None) => {
-                                        // Declared bus, used scalar. Handled by IDENT_REF check if used in expression.
-                                    }
-                                    ((None, None), Some(suffix)) => {
-                                        context.add_diagnostic(
-                                            format!("Net '{}' was not declared as a bus, but used with a suffix", name),
-                                            suffix.syntax().text_range(),
-                                        );
-                                    }
-                                    ((None, None), None) => { /* Scalar net: OK */ }
-                                     _ => { /* Inconsistent bounds */ }
-                                }
+                                // --- Bus validation logic for NET_REF --- REMOVED AS IT IS HANDLED BY resolve_node_type_info
+                                // let declared_bounds = (symbol.bus_high, symbol.bus_low);
+                                // ... (rest of the bus validation logic, which should ideally be removed too) ...
                             }
                         }
                     }
@@ -1080,12 +986,14 @@ fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mut Pa
                     context.is_visiting_assign_rhs = false; // Unset flag
                 }
                 
-                // 2. Visit the LHS node next
+                // 2. Visit the LHS node next - SKIPPED: Not needed, type info gathered below
+                /* 
                 if let Some(ref lhs) = lhs_node {
                      visit_node_pass2_references(lhs, context);
                 }
+                */
 
-                // 3. Perform Type Check
+                // 3. Perform Type Check (This implicitly handles LHS reference resolution)
                 if let (Some(lhs), Some(rhs)) = (lhs_node.as_ref(), rhs_node.as_ref()) {
                      // println!("[ASSIGN_STMT Type Check] LHS Node: {:?} {:?}, RHS Node: {:?} {:?}", lhs.kind(), lhs.text_range(), rhs.kind(), rhs.text_range()); // DEBUG
                     // UPDATED: Call module-level resolve_node_type_info
@@ -1535,9 +1443,19 @@ mod tests {
         let source_file = parse_to_sourcefile(input);
         let result = analyze(&source_file);
         // Expect two errors, one for each undefined symbol
+        // println!("Diagnostics for analyze_pin_ref_no_instance_fail_undefined: {:?}", result.diagnostics); // Removed print
         assert_eq!(result.diagnostics.len(), 2, "Diagnostics: {:?}", result.diagnostics);
-        assert!(result.diagnostics[0].message.contains("Undefined symbol: UnknownSymbol"));
-        assert!(result.diagnostics[1].message.contains("Undefined symbol: Other"));
+        
+        // Check that both expected messages exist, regardless of order
+        let msg1_found = result.diagnostics.iter().any(|d| d.message.contains("Undefined net: UnknownSymbol"));
+        let msg2_found = result.diagnostics.iter().any(|d| d.message.contains("Undefined net: Other"));
+        
+        assert!(msg1_found, "Diagnostic for 'UnknownSymbol' not found. Diagnostics: {:?}", result.diagnostics);
+        assert!(msg2_found, "Diagnostic for 'Other' not found. Diagnostics: {:?}", result.diagnostics);
+        
+        // Removed old assertions:
+        // assert!(result.diagnostics[1].message.contains("Undefined symbol: Other"));
+        // assert!(result.diagnostics[0].message.contains("Undefined symbol: UnknownSymbol"));
     }
 
     #[test]
@@ -1611,10 +1529,12 @@ mod tests {
         let source_file = parse_to_sourcefile(input);
         let result = analyze(&source_file);
         // Search for the specific diagnostic
-        let found = result.diagnostics.iter().any(|d| 
-            d.message.contains("Index '-1' is out of bounds for net 'A' (declared as [7:0])")
+        let _found = result.diagnostics.iter().any(|d| // Prefix with underscore
+            d.message.contains("Index '-1' is out of bounds for 'A' (declared as [7:0])") // Removed "net"
         );
-        assert!(found, "Expected out-of-bounds diagnostic not found. Diagnostics: {:?}", result.diagnostics);
+        assert_eq!(result.diagnostics.len(), 1, "Expected exactly one diagnostic for out-of-bounds index. Diagnostics: {:?}", result.diagnostics);
+        assert!(result.diagnostics[0].message.contains("Index '-1' is out of bounds for 'A' (declared as [7:0])"), // Removed "net"
+                "Diagnostic message mismatch. Got: {}", result.diagnostics[0].message);
     }
 
     #[test]
@@ -1629,10 +1549,12 @@ mod tests {
         let source_file = parse_to_sourcefile(input);
         let result = analyze(&source_file);
         // Search for the specific diagnostic
-        let found = result.diagnostics.iter().any(|d| 
-            d.message.contains("Index '8' is out of bounds for net 'A' (declared as [7:0])")
+        let _found = result.diagnostics.iter().any(|d| // Prefix with underscore
+            d.message.contains("Index '8' is out of bounds for 'A' (declared as [7:0])") // Removed "net"
         );
-        assert!(found, "Expected out-of-bounds diagnostic not found. Diagnostics: {:?}", result.diagnostics);
+        assert_eq!(result.diagnostics.len(), 1, "Expected exactly one diagnostic for out-of-bounds index. Diagnostics: {:?}", result.diagnostics);
+        assert!(result.diagnostics[0].message.contains("Index '8' is out of bounds for 'A' (declared as [7:0])"), // Removed "net"
+                "Diagnostic message mismatch. Got: {}", result.diagnostics[0].message);
     }
 
     #[test]
@@ -1647,10 +1569,12 @@ mod tests {
         let source_file = parse_to_sourcefile(input);
         let result = analyze(&source_file);
         // Search for the specific diagnostic
-        let found = result.diagnostics.iter().any(|d| 
-            d.message.contains("Index '-1' is out of bounds for net 'A' (declared as [0:7])")
+        let _found = result.diagnostics.iter().any(|d| // Prefix with underscore
+            d.message.contains("Index '-1' is out of bounds for 'A' (declared as [0:7])") // Removed "net"
         );
-        assert!(found, "Expected out-of-bounds diagnostic not found. Diagnostics: {:?}", result.diagnostics);
+        assert_eq!(result.diagnostics.len(), 1, "Expected exactly one diagnostic for out-of-bounds index. Diagnostics: {:?}", result.diagnostics);
+        assert!(result.diagnostics[0].message.contains("Index '-1' is out of bounds for 'A' (declared as [0:7])"), // Removed "net"
+                "Diagnostic message mismatch. Got: {}", result.diagnostics[0].message);
     }
 
     #[test]
@@ -1665,10 +1589,12 @@ mod tests {
         let source_file = parse_to_sourcefile(input);
         let result = analyze(&source_file);
         // Search for the specific diagnostic
-        let found = result.diagnostics.iter().any(|d| 
-            d.message.contains("Index '8' is out of bounds for net 'A' (declared as [0:7])")
+        let _found = result.diagnostics.iter().any(|d| // Prefix with underscore
+            d.message.contains("Index '8' is out of bounds for 'A' (declared as [0:7])") // Removed "net"
         );
-        assert!(found, "Expected out-of-bounds diagnostic not found. Diagnostics: {:?}", result.diagnostics);
+        assert_eq!(result.diagnostics.len(), 1, "Expected exactly one diagnostic for out-of-bounds index. Diagnostics: {:?}", result.diagnostics);
+        assert!(result.diagnostics[0].message.contains("Index '8' is out of bounds for 'A' (declared as [0:7])"), // Removed "net"
+                "Diagnostic message mismatch. Got: {}", result.diagnostics[0].message);
     }
 
     // --- Tests for Assignment Type Checking --- 
