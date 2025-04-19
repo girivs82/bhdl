@@ -74,23 +74,17 @@ pub enum LexerToken {
     #[token("uF", priority = 3)] UFUnit,
     #[token("nF", priority = 3)] NFUnit,
     #[token("pF", priority = 3)] PFUnit,
-    #[token("F", priority = 1)] FUnit, // Low priority
     #[token("uH", priority = 3)] UHUnit,
     #[token("nH", priority = 3)] NHUnit,
     #[token("pH", priority = 3)] PHUnit,
-    #[token("H", priority = 1)] HUnit, // Low priority
     #[token("Vdc", priority = 3)] VdcUnit,
     #[token("Vac", priority = 3)] VacUnit,
     #[token("Vrms", priority = 3)] VrmsUnit,
     #[token("Vpp", priority = 3)] VppUnit,
-    #[token("V", priority = 1)] VUnit, // Low priority
-    #[token("A", priority = 1)] AUnit, // Low priority
-    #[token("W", priority = 1)] WUnit, // Low priority
     #[token("Hz", priority = 3)] HzUnit, // Increased priority
     #[token("kHz", priority = 3)] KHzUnit,
     #[token("MHz", priority = 3)] MHUnit,
     #[token("GHz", priority = 3)] GHUnit,
-    #[token("s", priority = 1)] SUnit, // Low priority
     #[token("ms", priority = 3)] MsUnit,
     #[token("us", priority = 3)] UsUnit,
     #[token("ns", priority = 3)] NsUnit,
@@ -99,7 +93,6 @@ pub enum LexerToken {
     #[token("rad", priority = 3)] RadUnit, // Increased priority
     #[token("dB", priority = 3)] DbUnit,  // Increased priority
     #[token("dBm", priority = 3)] DbmUnit,
-    #[token("%", priority = 1)] PercentUnit, // Low priority for the symbol
     // Add mV, uV, nV
     #[token("mV", priority = 3)] MVUnit,
     #[token("uV", priority = 3)] UVUnit,
