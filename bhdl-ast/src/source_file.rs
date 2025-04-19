@@ -1,5 +1,7 @@
-use crate::{AstNode, HasName, Node};
+use crate::{HasName, Node, BhdlLanguage};
+use crate::items::*;
 use bhdl_parser::SyntaxKind;
+use rowan::ast::AstNode;
 
 // Add definitions for top-level items later
 // use crate::definitions::TopLevelItem;
@@ -9,6 +11,8 @@ use bhdl_parser::SyntaxKind;
 pub struct SourceFile(pub(crate) Node);
 
 impl AstNode for SourceFile {
+    type Language = BhdlLanguage;
+
     fn can_cast(kind: SyntaxKind) -> bool {
         kind == SyntaxKind::SOURCE_FILE
     }

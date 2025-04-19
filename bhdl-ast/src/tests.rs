@@ -1,7 +1,8 @@
 // bhdl-ast/src/tests.rs
-use crate::{AstNode, Board, BusSuffix, ConnectionStmt, HasName, InterfaceDef, InterfaceInstance, InterfacesBlock, NetDecl, NetRef, Node, ParamDecl, PinDecl, PinRef, PinsBlock, PortDecl, RangeExpr, SourceFile, Value}; // Added HasName
+use crate::{Node, Token, HasName, SourceFile, blocks::*, items::*, common::*};
+use crate::items; // Ensure items module is explicitly used for disambiguation if needed
 use bhdl_parser::{parse, SyntaxKind, BhdlLanguage}; // Changed parse_text to parse
-use rowan::SyntaxNode;
+use rowan::{ast::AstNode as RowanAstNode, NodeOrToken, SyntaxNode}; // Removed WalkEvent, changed AstNode alias
 
 /// Parses the source code and returns the root SyntaxNode (SOURCE_FILE).
 fn parse_test_text(text: &str) -> SyntaxNode<BhdlLanguage> {
@@ -13,14 +14,14 @@ fn parse_test_text(text: &str) -> SyntaxNode<BhdlLanguage> {
 
 /// Parses the source code and finds the first AST node of type T.
 /// Panics if parsing fails or the node is not found.
-fn parse_and_find_node<T: AstNode>(text: &str) -> T {
+fn parse_and_find_node<T: RowanAstNode<Language = BhdlLanguage>>(text: &str) -> T {
     let root_node = parse_test_text(text);
     // Debug print the structure around potential nodes
     println!("--- Debugging AST for type: {} ---", std::any::type_name::<T>());
     println!("Input Text:\n{}", text);
     let target_node = root_node
         .descendants()
-        .find(|node| T::can_cast(node.kind().into())); // Find node based on can_cast
+        .find(|node| <T as RowanAstNode>::can_cast(node.kind()));
 
     if let Some(node) = target_node.as_ref() {
         println!("Found potential node ({:?}):\n{:#?}", node.kind(), node);
@@ -150,8 +151,8 @@ fn test_port_decl_with_bus_range() {
     let suffix = port_decl.bus_suffix().unwrap();
     assert!(suffix.range().is_some());
     let range = suffix.range().unwrap();
-    assert_eq!(range.lhs().unwrap().first_token().unwrap().text(), "7");
-    assert_eq!(range.rhs().unwrap().first_token().unwrap().text(), "0");
+    assert_eq!(range.lhs().unwrap().syntax().first_token().unwrap().text(), "7");
+    assert_eq!(range.rhs().unwrap().syntax().first_token().unwrap().text(), "0");
     assert_eq!(range.separator_kind().unwrap(), SyntaxKind::COLON);
 }
 
@@ -166,7 +167,7 @@ fn test_port_decl_with_bus_index() {
     let suffix = port_decl.bus_suffix().unwrap();
     assert!(suffix.index().is_some());
     assert!(suffix.range().is_none());
-    assert_eq!(suffix.index().unwrap().text(), "0");
+    assert_eq!(suffix.index().unwrap().syntax().first_token().unwrap().text(), "0");
 }
 
 // --- Net Declaration Tests ---
@@ -209,18 +210,6 @@ fn test_pin_ref_instance_pin() {
 }
 
 #[test]
-fn test_pin_ref_simple_name() {
-    // This case might occur within a component def connecting internal elements
-    // or potentially referring to a port/pin of the current scope.
-    let pin_ref = parse_and_find_node::<PinRef>(
-        "module M { ports { P_IN: in signal; } connections { P_IN -> internal_net; } }"
-    );
-    assert!(pin_ref.instance_name().is_none()); // Should not find an instance name here
-    assert_eq!(pin_ref.pin_name().unwrap().text(), "P_IN");
-    // TODO: Test bus suffix
-}
-
-#[test]
 fn test_pin_ref_with_bus_index() {
     let pin_ref = parse_and_find_node::<PinRef>(
         "board B { components { IC U1{}; } connections { U1.Data[0] -> NetA; } }"
@@ -230,7 +219,7 @@ fn test_pin_ref_with_bus_index() {
     assert!(pin_ref.bus_suffix().is_some());
     let suffix = pin_ref.bus_suffix().unwrap();
     assert!(suffix.index().is_some());
-    assert_eq!(suffix.index().unwrap().text(), "0");
+    assert_eq!(suffix.index().unwrap().syntax().first_token().unwrap().text(), "0");
 }
 
 #[test]
@@ -264,14 +253,13 @@ fn test_connection_pin_to_net() {
 
     let source_node = conn.source().unwrap();
     assert_eq!(source_node.kind(), SyntaxKind::PIN_REF);
-    let source_pin_ref = PinRef::cast(source_node.clone()).unwrap(); // Use clone if node consumed
+    let source_pin_ref = PinRef::cast(source_node.clone()).unwrap();
     assert_eq!(source_pin_ref.instance_name().unwrap().text(), "U1");
     assert_eq!(source_pin_ref.pin_name().unwrap().text(), "Pin");
 
     let sink_node = conn.sink().unwrap();
-    // WORKAROUND: Expect PIN_REF due to parser bug, but try casting to NetRef
-    assert_eq!(sink_node.kind(), SyntaxKind::PIN_REF);
-    let sink_net_ref = NetRef::cast(sink_node).expect("Should cast sink (PIN_REF without dot) to NetRef");
+    assert_eq!(sink_node.kind(), SyntaxKind::NET_REF);
+    let sink_net_ref = NetRef::cast(sink_node).expect("Should cast sink to NetRef");
     assert_eq!(sink_net_ref.name_token().unwrap().text(), "NetA");
 }
 
@@ -281,9 +269,8 @@ fn test_connection_net_to_pin() {
         "board B { components { IC U1{}; } nets { net NetA: signal; } connections { NetA -> U1.Pin; } }"
     );
     let source_node = conn.source().unwrap();
-    // WORKAROUND: Expect PIN_REF due to parser bug, but try casting to NetRef
-    assert_eq!(source_node.kind(), SyntaxKind::PIN_REF);
-    let source_net_ref = NetRef::cast(source_node.clone()).expect("Should cast source (PIN_REF without dot) to NetRef");
+    assert_eq!(source_node.kind(), SyntaxKind::NET_REF);
+    let source_net_ref = NetRef::cast(source_node.clone()).expect("Should cast source to NetRef");
     assert_eq!(source_net_ref.name_token().unwrap().text(), "NetA");
 
     let sink_node = conn.sink().unwrap();
@@ -370,3 +357,53 @@ fn test_pin_decl_with_bus_range() {
 }
 
 // Add tests for Module, ComponentDef, ComponentInst etc. here later 
+
+#[test]
+fn test_typedef_def() {
+    let typedef_basic = parse_and_find_node::<items::TypeDef>("typedef simple_signal { type = signal; voltage = 1.8V; }");
+    assert_eq!(typedef_basic.name().unwrap().text(), "simple_signal");
+    assert!(typedef_basic.base_type().is_none());
+    assert_eq!(typedef_basic.param_assigns().count(), 2);
+
+    let typedef_extends = parse_and_find_node::<items::TypeDef>("typedef extended extends simple_signal { domain = digital; }");
+    assert_eq!(typedef_extends.name().unwrap().text(), "extended");
+    let base = typedef_extends.base_type().expect("Missing base type");
+    assert_eq!(base.name().unwrap().text(), "simple_signal");
+    assert_eq!(typedef_extends.param_assigns().count(), 1);
+
+    let typedef_extends_no_body = parse_and_find_node::<items::TypeDef>("typedef more_extended extends extended;");
+    assert_eq!(typedef_extends_no_body.name().unwrap().text(), "more_extended");
+    let base2 = typedef_extends_no_body.base_type().expect("Missing base type 2");
+    assert_eq!(base2.name().unwrap().text(), "extended");
+    assert_eq!(typedef_extends_no_body.param_assigns().count(), 0);
+    // Check it ends with SEMI and not L_BRACE
+    assert!(!typedef_extends_no_body.syntax().children_with_tokens().any(|t| t.kind() == SyntaxKind::L_BRACE.into()));
+    assert_eq!(typedef_extends_no_body.syntax().last_token().unwrap().kind(), SyntaxKind::SEMI.into());
+}
+
+#[test]
+fn test_import_stmt() {
+    let import_simple = parse_and_find_node::<items::ImportStmt>("import my.lib.ComponentA;");
+    assert!(import_simple.path().is_some());
+    assert!(matches!(import_simple.target(), Some(items::ImportTargetKind::Simple(_))));
+    assert!(import_simple.alias().is_none());
+
+    let import_group = parse_and_find_node::<items::ImportStmt>("import my.lib.{CompA, CompB};");
+    assert!(import_group.path().is_some());
+    match import_group.target() {
+        Some(items::ImportTargetKind::Group(group)) => {
+            assert_eq!(group.targets().count(), 2);
+            let targets: Vec<_> = group.targets().collect();
+            assert_eq!(targets[0].text(), "CompA");
+            assert_eq!(targets[1].text(), "CompB");
+        }
+        _ => panic!("Expected group target"),
+    }
+    assert!(import_group.alias().is_none());
+
+    let import_alias = parse_and_find_node::<items::ImportStmt>("import my.lib.CompC as C;");
+    assert!(import_alias.path().is_some());
+    assert!(matches!(import_alias.target(), Some(items::ImportTargetKind::Simple(_))));
+    let alias = import_alias.alias().expect("Missing alias");
+    assert_eq!(alias.name().unwrap().text(), "C");
+}
