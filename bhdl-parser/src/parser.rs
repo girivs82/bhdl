@@ -1370,19 +1370,18 @@ impl<'t> Parser<'t> {
         self.builder.start_node(CONNECTION_STMT.into());
 
         // Parse LHS (one or more refs)
-        // Simple LHS identifiers are usually NET_REF or PIN_REF (if no dot, assume NET_REF for now)
-        self.parse_ref_revised(NET_REF); // Use NET_REF for simple LHS refs
+        // Simple identifiers in connections should be generic refs initially
+        self.parse_ref_revised(SIMPLE_IDENT_REF); // Use SIMPLE_IDENT_REF
         while self.eat(COMMA) { // Use eat() for optional comma
-            self.parse_ref_revised(NET_REF); // Use NET_REF for simple LHS refs
+            self.parse_ref_revised(SIMPLE_IDENT_REF); // Use SIMPLE_IDENT_REF
         }
 
         // Expect an arrow or interface connection operator
         if self.eat(ARROW) {
             // Parse RHS for ->
-            // Simple RHS identifiers are usually NET_REF or PIN_REF (assume NET_REF)
-            self.parse_ref_revised(NET_REF); // Use NET_REF for simple RHS refs
+            self.parse_ref_revised(SIMPLE_IDENT_REF); // Use SIMPLE_IDENT_REF
             while self.eat(COMMA) { // Use eat() for optional comma
-                self.parse_ref_revised(NET_REF); // Use NET_REF for simple RHS refs
+                self.parse_ref_revised(SIMPLE_IDENT_REF); // Use SIMPLE_IDENT_REF
             }
         } else if self.eat(IF_CONNECT) {
             // Parse RHS for <=> (likely an interface reference)

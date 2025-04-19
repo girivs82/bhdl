@@ -481,13 +481,41 @@ fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mut Pa
                             // Symbol found. Check if it's a valid kind for a connection endpoint.
                             if symbol.kind != SymbolKind::Pin && symbol.kind != SymbolKind::Net {
                                 context.add_diagnostic(
-                                    format!("Symbol '{}' is not a pin or net (found {:?})", pin_name, symbol.kind),
+                                    format!("Symbol '{}' is not a valid connection endpoint (found {:?})", pin_name, symbol.kind),
                                     pin_name_token.text_range(),
                                 );
                             }
                         }
                      }
                 } // Else: PinRef AST node is missing both instance and pin name - parser bug?
+            }
+        }
+        // Handle Net references (potentially with bus suffixes)
+        SyntaxKind::NET_REF => {
+            if let Some(net_ref) = NetRef::cast(node.clone()) {
+                if let Some(name_token) = net_ref.name_token() {
+                    let name = name_token.text();
+                    // Lookup in current scope stack
+                    match context.lookup(name) {
+                        None => {
+                            context.add_diagnostic(
+                                format!("Undefined net: {}", name),
+                                name_token.text_range(),
+                            );
+                        }
+                        Some(symbol) => {
+                            // Symbol found. Check if it's actually a Net.
+                            if symbol.kind != SymbolKind::Net {
+                                context.add_diagnostic(
+                                    format!("Symbol '{}' is not a net (found {:?})", name, symbol.kind),
+                                    name_token.text_range(),
+                                );
+                            } else {
+                                // TODO: Validate bus suffix if present
+                            }
+                        }
+                    }
+                }
             }
         }
         // Handle the generic simple identifier reference (typically in connections)
@@ -507,7 +535,7 @@ fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mut Pa
                              // Symbol found. Check if it's a valid kind for a connection endpoint.
                              if symbol.kind != SymbolKind::Pin && symbol.kind != SymbolKind::Net {
                                 context.add_diagnostic(
-                                    format!("Symbol '{}' is not a pin or net (found {:?})", name, symbol.kind),
+                                    format!("Symbol '{}' is not a valid connection endpoint (found {:?})", name, symbol.kind),
                                     name_token.text_range(),
                                 );
                             }
@@ -577,39 +605,57 @@ fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mut Pa
                 }
             }
         }
+        // Handle Type references (in declarations etc.)
         SyntaxKind::TYPE_REF => {
-            // Cast using TypeRef from common
             if let Some(type_ref) = TypeRef::cast(node.clone()) {
                 if let Some(name_token) = type_ref.name_token() {
-                    let type_name = name_token.text();
-                    // In Pass 2, check references.
-                    // Try resolving in current scope stack first, then global.
-                    match context.lookup(type_name).or_else(|| context.lookup_global(type_name)) {
-                        None => {
-                            // If it doesn't resolve anywhere, it's undefined.
-                            context.add_diagnostic(
-                                format!("Undefined type: {}", type_name),
-                                name_token.text_range()
-                            );
-                        }
-                        Some(symbol) => {
-                            // If it resolves, check if it's actually a type kind.
-                            // This check should correctly catch parameters used as types.
-                            if symbol.kind != SymbolKind::Typedef && !symbol.kind.is_component_type_kind() {
-                                context.add_diagnostic(
-                                    format!("Symbol '{}' is not a type (found {:?})", type_name, symbol.kind),
-                                    name_token.text_range()
-                                );
-                            } // Else: Type reference resolved successfully!
+                    let name = name_token.text();
+                    // Check built-in types first
+                    let is_builtin = matches!(name.as_ref(), "signal" | "power" | "ground" | "clock" | "wire" | "tri" | "trireg" | "uwire");
+
+                    if !is_builtin {
+                        // Lookup in current scope stack first, then global
+                        match context.lookup(name) {
+                            Some(symbol) => {
+                                // Found locally. Check if it's a valid type kind in this context.
+                                if symbol.kind != SymbolKind::Typedef {
+                                    context.add_diagnostic(
+                                        format!("Symbol '{}' (found locally) is not a defined type (found {:?})", name, symbol.kind),
+                                        name_token.text_range(),
+                                    );
+                                }
+                            }
+                            None => {
+                                // Not found locally, check global scope for TypeDef
+                                match context.lookup_global(name) {
+                                    None => {
+                                        context.add_diagnostic(
+                                            format!("Undefined type: {}", name),
+                                            name_token.text_range(),
+                                        );
+                                    }
+                                    Some(symbol) => {
+                                        // Symbol found globally. Check if it's a TypeDef (lowercase d).
+                                        if symbol.kind != SymbolKind::Typedef {
+                                            context.add_diagnostic(
+                                                format!("Symbol '{}' (found globally) is not a defined type (found {:?})", name, symbol.kind),
+                                                name_token.text_range(),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
         }
-         SyntaxKind::COMPONENT_INST => { // Check the type used in an instance declaration
+        // Check the type used in a component instance declaration
+        SyntaxKind::COMPONENT_INST => {
             if let Some(inst) = ComponentInst::cast(node.clone()) {
                 if let Some(type_name_token) = inst.component_type_name_token() {
                     let type_name = type_name_token.text();
+                    // Lookup component type in global scope
                     match context.lookup_global(type_name) {
                         None => {
                              context.add_diagnostic(
@@ -618,143 +664,18 @@ fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mut Pa
                             );
                         }
                         Some(symbol) => {
+                            // Check if the found symbol is actually a component/module/etc.
                             if !symbol.kind.is_component_type_kind() {
                                 context.add_diagnostic(
                                     format!("Symbol '{}' is not a valid component type (found {:?})", type_name, symbol.kind),
                                     type_name_token.text_range(),
                                 );
                             }
+                            // Else: Component type is valid
                         }
                     }
                 }
-            }
-        }
-        SyntaxKind::NET_REF => {
-            if let Some(net_ref) = NetRef::cast(node.clone()) {
-                if let Some(name_token) = net_ref.name_token() {
-                    let name = name_token.text();
-                    // Lookup in current scope stack
-                    match context.lookup(name) {
-                        None => {
-                            context.add_diagnostic(
-                                format!("Undefined net: {}", name),
-                                name_token.text_range(),
-                            );
-                        }
-                        Some(symbol) => {
-                            // Symbol found. Check if it's actually a Net.
-                            if symbol.kind != SymbolKind::Net {
-                                context.add_diagnostic(
-                                    format!("Symbol '{}' is not a net (found {:?})", name, symbol.kind),
-                                    name_token.text_range(),
-                                );
-                            } else {
-                                // Net symbol found. Get declaration node to check for bus info.
-                                let net_decl_opt: Option<NetDecl> = symbol.definition_node_ptr.as_ref()
-                                    .and_then(|ptr| ptr.try_to_node(context.source_file_root))
-                                    .and_then(|node| NetDecl::cast(node)); // Get Option<NetDecl>
-
-                                let declared_bus_suffix: Option<BusSuffix> = net_decl_opt.as_ref()
-                                    .and_then(|decl| decl.bus_suffix()); // Borrow decl to get suffix
-                                
-                                let declared_as_bus = declared_bus_suffix.is_some();
-
-                                if let Some(suffix) = net_ref.bus_suffix() {
-                                    // --- NetRef has a suffix --- 
-                                    if !declared_as_bus {
-                                        context.add_diagnostic(
-                                            format!("Net '{}' was not declared as a bus, but used with a suffix", name),
-                                            suffix.syntax().text_range(),
-                                        );
-                                    } else {
-                                        // Declared as bus AND used with suffix: OK for now.
-                                        // Get declared bounds from the suffix we already found
-                                        let declared_range = declared_bus_suffix.and_then(|s| s.range());
-
-                                        let (declared_high_opt, declared_low_opt) = declared_range
-                                            .map(|r| (r.lhs().and_then(|v| parse_value_as_i64(&v)), r.rhs().and_then(|v| parse_value_as_i64(&v))))
-                                            .unwrap_or((None, None));
-
-                                        if let Some(index_value_node) = suffix.index() {
-                                            // --- Index Check --- 
-                                            if let (Some(dh), Some(dl)) = (declared_high_opt, declared_low_opt) {
-                                                let declared_min = dh.min(dl);
-                                                let declared_max = dh.max(dl);
-                                                if let Some(index_val) = parse_value_as_i64(&index_value_node) {
-                                                    if index_val < declared_min || index_val > declared_max {
-                                                        context.add_diagnostic(
-                                                            format!(
-                                                                "Index '{}' is out of bounds for net '{}' (declared as [{}:{}])",
-                                                                index_val, name, dh, dl
-                                                            ),
-                                                            index_value_node.syntax().text_range(),
-                                                        );
-                                                    }
-                                                } else {
-                                                    // Index is not a simple integer literal - Requires expr evaluation
-                                                    // TODO: Add diagnostic or support expr evaluation
-                                                }
-                                            } else {
-                                                // Declared range values are not simple integer literals
-                                                // TODO: Add diagnostic or support expr evaluation
-                                            }
-                                        }
-                                        else if let Some(range_expr) = suffix.range() {
-                                            // --- Range Check --- 
-                                            let used_high_opt = range_expr.lhs().and_then(|v| parse_value_as_i64(&v));
-                                            let used_low_opt = range_expr.rhs().and_then(|v| parse_value_as_i64(&v));
-                                            
-                                            if let (Some(dh), Some(dl), Some(uh), Some(ul)) = 
-                                                (declared_high_opt, declared_low_opt, used_high_opt, used_low_opt) 
-                                            {
-                                                // --- Bounds Check --- 
-                                                let declared_min = dh.min(dl);
-                                                let declared_max = dh.max(dl);
-                                                let used_min = uh.min(ul);
-                                                let used_max = uh.max(ul);
-
-                                                if used_min < declared_min || used_max > declared_max {
-                                                    context.add_diagnostic(
-                                                        format!(
-                                                            "Range [{}:{}] is out of bounds for net '{}' (declared as [{}:{}])",
-                                                            uh, ul, name, dh, dl
-                                                        ),
-                                                        range_expr.syntax().text_range(),
-                                                    );
-                                                } else {
-                                                     // --- Direction Check (only if bounds are OK) --- 
-                                                     let declared_descending = dh > dl;
-                                                     let used_descending = uh > ul;
-                                                     if declared_descending != used_descending {
-                                                         context.add_diagnostic(
-                                                            format!(
-                                                                "Range [{}:{}] direction mismatch for net '{}' (declared as [{}:{}])",
-                                                                uh, ul, name, dh, dl
-                                                            ),
-                                                            range_expr.syntax().text_range(),
-                                                         );
-                                                     }
-                                                }
-                                            } else {
-                                                // Declared or used range values are not simple integer literals
-                                                // TODO: Add diagnostic or support expr evaluation for ranges
-                                            }
-                                        }
-                                    }
-                                } else {
-                                     // --- NetRef has NO suffix --- 
-                                     if declared_as_bus {
-                                        context.add_diagnostic(
-                                            format!("Net '{}' was declared as a bus, but used without an index or slice", name),
-                                            name_token.text_range(),
-                                        );
-                                     }
-                                     // Else: Not declared as bus and used without suffix: OK.
-                                }
-                            }
-                        }
-                    }
-                }
+                // Parameter assignments within the instance are handled recursively
             }
         }
         // Add other reference checks here (e.g., for NET_REF with indices/slices)
@@ -936,7 +857,8 @@ mod tests {
         let source_file = parse_to_sourcefile(input);
         let result = analyze(&source_file);
         assert_eq!(result.diagnostics.len(), 1, "Diagnostics: {:?}", result.diagnostics);
-        assert!(result.diagnostics[0].message.contains("Symbol 'NotAType' is not a type"), "Unexpected msg: {}", result.diagnostics[0].message);
+        // Updated assertion message
+        assert!(result.diagnostics[0].message.contains("Symbol 'NotAType' (found locally) is not a defined type (found Parameter)"), "Unexpected msg: {}", result.diagnostics[0].message);
     }
 
     // --- Tests for ComponentInst Type Checks (Pass 2) --- 
@@ -1100,7 +1022,8 @@ mod tests {
         let source_file = parse_to_sourcefile(input);
         let result = analyze(&source_file);
         assert_eq!(result.diagnostics.len(), 1, "Diagnostics: {:?}", result.diagnostics);
-        assert!(result.diagnostics[0].message.contains("Symbol 'NotAPin' is not a pin or net"), "Unexpected msg: {}", result.diagnostics[0].message);
+        // Updated assertion to match the improved diagnostic message
+        assert!(result.diagnostics[0].message.contains("Symbol 'NotAPin' is not a valid connection endpoint (found Parameter)"), "Unexpected msg: {}", result.diagnostics[0].message);
     }
 
     // --- Tests for IDENT_REF Checks (Pass 2) --- 
