@@ -1,6 +1,6 @@
 mod lexer;
+pub mod syntax;
 mod parser;
-mod syntax;
 
 // Re-export key types
 pub use syntax::{SyntaxKind, BhdlLanguage};
