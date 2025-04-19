@@ -313,11 +313,13 @@ impl<'t> Parser<'t> {
         self.expect(SyntaxKind::TYPEDEF_KW);
         self.expect(SyntaxKind::IDENT); // Type Name
 
+        let mut extends_parsed = false;
         // Optional: extends BaseType
         if self.eat(SyntaxKind::EXTENDS_KW) {
+            extends_parsed = true;
             self.builder.start_node(SyntaxKind::TYPEDEF_BASE.into()); // Node for base type
             // Allow keywords or identifiers as base type name
-            if self.current() == Some(SyntaxKind::IDENT) { // Assuming base type is IDENT for now
+            if self.peek() == Some(SyntaxKind::IDENT) { // Assuming base type is IDENT for now
                  self.bump();
             } else {
                  self.error("Expected base type name (identifier) after 'extends'".to_string());
@@ -338,20 +340,16 @@ impl<'t> Parser<'t> {
                 }
             }
             self.expect(SyntaxKind::R_BRACE);
+        } else if extends_parsed {
+            // If extends was parsed and there's no body, expect SEMI
+            self.expect(SyntaxKind::SEMI);
         } else {
-            // If there's no L_BRACE, expect SEMI directly (for `typedef X extends Y;`)
-            // Only expect SEMI if the `extends` keyword was present, otherwise it's an error handled implicitly
-            // (as parser would expect L_BRACE next if no extends was found).
-            // Check if the previous significant token was EXTENDS_KW or the base type IDENT
-            if self.tokens.get(self.pos - 1).map(|(k,_)| *k == SyntaxKind::EXTENDS_KW || *k == SyntaxKind::IDENT ).unwrap_or(false) {
-                 self.expect(SyntaxKind::SEMI);
-             } else if self.peek() != Some(SyntaxKind::L_BRACE) {
-                // If extends was not present, and we don't see L_BRACE, it's an error
-                self.error("Expected '{' to start typedef body".to_string());
-             }
+            // If no extends and no L_BRACE, it's an error
+            self.error(format!("Expected 'extends' or '{{' after typedef name, found {:?}", self.peek()));
+            // Consume the unexpected token? Or let subsequent expects handle it?
+            // Let's not consume here, expect R_BRACE later will likely fail correctly.
         }
 
-        // No semicolon needed here, handled inside the blocks or directly above
         self.builder.finish_node();
     }
 
@@ -2334,12 +2332,13 @@ mod tests {
         let base_type_node_2 = find_node(another_def, TYPEDEF_BASE).expect("No TYPEDEF_BASE for another_type");
         assert_eq!(base_type_node_2.text().to_string(), "simple_power"); // Use to_string()
         // Should not have braces or param assigns if body is empty
-        assert!(!another_def.children_with_tokens().any(|t| t.kind() == L_BRACE));
-        assert_eq!(find_all_nodes(another_def, PARAM_ASSIGN).len(), 0);
-        // It should end directly with a SEMI? Check parser logic
-        // Current `parse_typedef_def` expects L_BRACE...R_BRACE even if empty
-        // TODO: Adjust parser to handle `typedef X extends Y;` (no body)
-        // For now, this test will likely fail or have errors.
+        assert!(!another_def.children_with_tokens().any(|t| t.kind() == L_BRACE), "Should not find L_BRACE in body-less typedef");
+        assert_eq!(find_all_nodes(another_def, PARAM_ASSIGN).len(), 0, "Should find 0 PARAM_ASSIGN in body-less typedef");
+        // It should end directly with a SEMI after the TYPEDEF_BASE node
+        // Find the last significant token/node
+        let last_element = another_def.children_with_tokens().filter(|t| !t.kind().is_trivia()).last().expect("No last element found");
+        assert_eq!(last_element.kind(), SEMI, "Body-less typedef should end with SEMI");
+        // Removed TODO comment as the parser logic is now adjusted.
     }
 
     #[test]
