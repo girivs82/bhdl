@@ -394,6 +394,191 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
 
 // --- Pass 2: Check References --- 
 
+// Result alias for type resolution, returning info or a diagnostic
+type TypeResolutionResult = Result<ResolvedTypeInfo, Diagnostic>;
+
+// Helper struct to return base info (used internally by resolve_node_type_info)
+// Moved outside impl Pass2Context
+#[derive(Debug)]
+struct ReferenceBaseInfo<'s> {
+    symbol: &'s Symbol, // Return reference to avoid cloning
+    base_type_name: String,
+    bounds: Option<(i64, i64)>,
+}
+
+// Helper function to get symbol and declared info (avoids code duplication)
+// Moved outside impl Pass2Context
+// Returns None if the node isn't a resolvable reference or symbol lookup fails.
+fn get_reference_base_info<'a>(
+    context: &'a Pass2Context<'a>, // Use 'a for context
+    node: &SyntaxNode<BhdlLanguage>,
+) -> Option<ReferenceBaseInfo<'a>> { // Use 'a for return type
+     // Determine the identifier token based on the node kind
+    let (ident_token, is_instance_pin) = match node.kind() {
+        SyntaxKind::NET_REF => (NetRef::cast(node.clone())?.name_token()?, false),
+        SyntaxKind::PIN_REF => {
+            let pin_ref = PinRef::cast(node.clone())?;
+            if pin_ref.instance_name().is_some() {
+                (pin_ref.pin_name()?, true)
+            } else {
+                // For PinRef without instance, treat as SimpleIdentRef for lookup
+                // (Should this even happen? Parser might prefer SimpleIdentRef)
+                // Temporarily handle as non-instance pin name
+                 (pin_ref.pin_name()?, false)
+                // Potentially return None or SimpleIdentRef logic?
+            }
+        }
+        SyntaxKind::SIMPLE_IDENT_REF => (SimpleIdentRef::cast(node.clone())?.name_token()?, false),
+        SyntaxKind::IDENT_REF => (IdentRef::cast(node.clone())?.token()?, false),
+        _ => return None,
+    };
+
+    let name = ident_token.text();
+
+    let symbol = if is_instance_pin {
+        let pin_ref = PinRef::cast(node.clone())?; // Recast needed
+        // Bind the results of .text() to ensure longer lifetime
+        let inst_name_str = pin_ref.instance_name()?.text().to_string();
+        let pin_name_str = pin_ref.pin_name()?.text().to_string();
+        let inst_name = inst_name_str.as_str();
+        let pin_name = pin_name_str.as_str();
+
+        let inst_symbol = context.lookup(inst_name)?; // Use context for lookup
+        if inst_symbol.kind != SymbolKind::Instance { return None; }
+        let type_name = inst_symbol.instance_type_name.as_ref()?;
+        let type_symbol = context.lookup_global(type_name)?; // Use context for lookup
+        if !type_symbol.kind.is_component_type_kind() { return None; }
+        let def_node_ptr = type_symbol.definition_node_ptr.as_ref()?;
+        let component_scope_table = context.definition_scopes.get(def_node_ptr)?;
+        component_scope_table.lookup(pin_name)?
+    } else {
+        context.lookup(name)? // Use context for lookup
+    };
+
+    // Find the original declaration node to get the type name
+    // This is crucial for resolving the base type (e.g., 'signal' or a typedef)
+    let decl_node_ptr = symbol.definition_node_ptr.as_ref()?;
+    let decl_node = decl_node_ptr.try_to_node(context.source_file_root)?;
+
+    // Get the TypeRef node from the declaration
+    let type_ref_node = match decl_node.kind() {
+        SyntaxKind::NET_DECL => NetDecl::cast(decl_node)?.type_ref(),
+        SyntaxKind::PORT_DECL => PortDecl::cast(decl_node)?.type_ref(),
+        SyntaxKind::PIN_DECL => PinDecl::cast(decl_node)?.type_ref(),
+        // Add other declaration kinds if needed (e.g., ParamDecl if params can have types)
+        _ => return None, // Symbol has no associated type reference
+    }?; 
+
+    let base_type_name = type_ref_node.name_token()?.text().to_string();
+
+    // Use the bounds stored *on the symbol* during Pass 1
+    let bounds = match (symbol.bus_high, symbol.bus_low) {
+        (Some(h), Some(l)) => Some((h, l)),
+        _ => None,
+    };
+
+    Some(ReferenceBaseInfo {
+        symbol, 
+        base_type_name,
+        bounds,
+    })
+}
+
+// Helper to resolve the type name and width of a symbol referenced by a node.
+// Moved outside impl Pass2Context.
+// Returns a Result: Ok(ResolvedTypeInfo) or Err(Diagnostic)
+fn resolve_node_type_info<'a>(
+    context: &'a Pass2Context<'a>, // Use 'a for context
+    node: &SyntaxNode<BhdlLanguage>,
+) -> Option<TypeResolutionResult> { // Outer Option for cases where node isn't a reference
+    
+    // --- Step 1: Get base symbol info using the helper ---
+    // UPDATED: Call the module-level helper function
+    let base_info = get_reference_base_info(context, node)?; 
+    let symbol = base_info.symbol;
+    let declared_base_type = base_info.base_type_name;
+    let declared_bounds = base_info.bounds;
+
+    // --- Step 2: Check for BusSuffix on the reference node --- 
+    // This needs to be adapted based on the *actual* reference node kind
+    let bus_suffix_node = match node.kind() {
+        // Check specific node types that *can* have a bus suffix
+        SyntaxKind::NET_REF => NetRef::cast(node.clone())?.bus_suffix(),
+        SyntaxKind::PIN_REF => PinRef::cast(node.clone())?.bus_suffix(),
+        // SimpleIdentRef typically doesn't have a direct suffix in the grammar
+        _ => None, // Other node types don't have bus suffixes
+    };
+
+    // --- Step 3: Determine final type/bounds based on suffix --- 
+    if let Some(suffix) = bus_suffix_node {
+        let (d_high, d_low) = match declared_bounds {
+            Some((h, l)) => (h, l),
+            None => {
+                // Return Err(Diagnostic) instead of adding directly
+                return Some(Err(Diagnostic { 
+                    message: format!("Symbol '{}' is not declared as a bus but used with a suffix", symbol.name),
+                    range: suffix.syntax().text_range(),
+                }));
+            }
+        };
+        let declared_min = d_high.min(d_low);
+        let declared_max = d_high.max(d_low);
+
+        if let Some(index_node) = suffix.index_expr_node() {
+            if let Some(index_val) = evaluate_const_expr_as_i64(&index_node) {
+                if index_val < declared_min || index_val > declared_max {
+                     // Return Err(Diagnostic)
+                     return Some(Err(Diagnostic {
+                         message: format!("Index '{}' is out of bounds for '{}' (declared as [{}:{}])", index_val, symbol.name, d_high, d_low),
+                         range: index_node.text_range(),
+                     }));
+                }
+                // Index applied, result is scalar
+                Some(Ok(ResolvedTypeInfo { base_type_name: declared_base_type, bounds: None }))
+            } else {
+                 // Return Err(Diagnostic)
+                 return Some(Err(Diagnostic {
+                    message: format!("Index for '{}' must be a constant integer expression", symbol.name),
+                    range: index_node.text_range(),
+                }));
+            }
+        }
+        else if let Some(range_expr) = suffix.range() {
+            if let (Some(h), Some(l)) = (
+                range_expr.lhs_node().and_then(|n| evaluate_const_expr_as_i64(&n)),
+                range_expr.rhs_node().and_then(|n| evaluate_const_expr_as_i64(&n))
+            ) {
+                let used_min = h.min(l);
+                let used_max = h.max(l);
+                if used_min < declared_min || used_max > declared_max {
+                    // Return Err(Diagnostic)
+                    return Some(Err(Diagnostic {
+                        message: format!("Range [{}:{}] is out of bounds for '{}' (declared as [{}:{}])", h, l, symbol.name, d_high, d_low),
+                        range: range_expr.syntax().text_range(),
+                    }));
+                }
+                // Range applied, result is a bus with these bounds
+                Some(Ok(ResolvedTypeInfo { base_type_name: declared_base_type, bounds: Some((h,l)) }))
+            } else {
+                 // Return Err(Diagnostic)
+                 return Some(Err(Diagnostic {
+                    message: format!("Range bounds for '{}' must be constant integer expressions", symbol.name),
+                    range: range_expr.syntax().text_range(),
+                }));
+            }
+        }
+        else {
+            // This case should ideally not happen if parser ensures suffix has index/range
+            println!("Warning: BusSuffix node found but no index or range child.");
+            // Return None or a generic error? Let's return None for now.
+            None // Indicate failure to resolve type due to unexpected suffix structure
+        }
+    } else {
+        // No suffix used, return the declared type/bounds directly
+        Some(Ok(ResolvedTypeInfo { base_type_name: declared_base_type, bounds: declared_bounds }))
+    }
+}
+
 // Pass 2 Context: Holds analysis state for reference resolution
 #[derive(Debug)]
 struct Pass2Context<'a> {
@@ -464,118 +649,22 @@ impl<'a> Pass2Context<'a> {
        }
     }
 
-    // Helper to resolve the type name and width of a symbol referenced by a node
-    fn resolve_node_type_info(&self, node: &SyntaxNode<BhdlLanguage>) -> Option<ResolvedTypeInfo> {
-        // println!("[resolve_node_type_info] Trying node: {:?} {:?}", node.kind(), node.text_range()); // DEBUG (Use {:?})
-        // Determine the identifier token and potentially the specific AST node type
-        let ident_token = match node.kind() {
-            SyntaxKind::NET_REF => NetRef::cast(node.clone())?.name_token(),
-            SyntaxKind::PIN_REF => {
-                // For PinRef, we need the pin name, not the instance name
-                let pin_ref = PinRef::cast(node.clone())?;
-                if pin_ref.instance_name().is_some() {
-                     // Instance.Pin -> Check type definition scope
-                     let inst_name_token = pin_ref.instance_name()?;
-                     let pin_name_token = pin_ref.pin_name()?;
-                     let inst_name = inst_name_token.text();
-                     let pin_name = pin_name_token.text();
-
-                     // 1. Lookup instance symbol
-                     let inst_symbol = self.lookup(inst_name)?;
-                     // Optional: Add diagnostic if not an instance?
-                     if inst_symbol.kind != SymbolKind::Instance { return None; }
-                     
-                     // 2. Get component type name from instance
-                     let type_name = inst_symbol.instance_type_name.as_ref()?;
-
-                     // 3. Lookup component type symbol (must be global)
-                     let type_symbol = self.lookup_global(type_name)?;
-                      // Optional: Add diagnostic if not a component type kind?
-                     if !type_symbol.kind.is_component_type_kind() { return None; }
-
-                     // 4. Get definition node ptr for the component type
-                     let def_node_ptr = type_symbol.definition_node_ptr.as_ref()?;
-                     
-                     // 5. Get the component's definition scope table
-                     let component_scope_table = self.definition_scopes.get(def_node_ptr)?;
-
-                     // 6. Lookup pin symbol within the component's scope
-                     let pin_symbol = component_scope_table.lookup(pin_name)?;
-                     // Optional: Add diagnostic if not a pin?
-                     if pin_symbol.kind != SymbolKind::Pin { return None; }
-
-                     // 7. Get the pin's declaration node to find its TypeRef
-                     let pin_decl_node_ptr = pin_symbol.definition_node_ptr.as_ref()?;
-                     let pin_decl_node = pin_decl_node_ptr.try_to_node(self.source_file_root)?;
-                     
-                     let pin_type_ref = match pin_decl_node.kind() {
-                         SyntaxKind::PIN_DECL => PinDecl::cast(pin_decl_node)?.type_ref(),
-                         SyntaxKind::PORT_DECL => PortDecl::cast(pin_decl_node)?.type_ref(), // Maybe component ports are stored as PORT_DECL?
-                         _ => return None, // Should be PIN_DECL or PORT_DECL
-                     };
-
-                     // 8. Extract base type name from TypeRef
-                     let pin_base_type_name = pin_type_ref?
-                         .name_token()?
-                         .text()
-                         .to_string();
-
-                     // 9. Get bounds from the pin_symbol
-                     let pin_bounds = match (pin_symbol.bus_high, pin_symbol.bus_low) {
-                        (Some(h), Some(l)) => Some((h,l)),
-                        _ => None,
-                    };
-
-                    // 10. Construct and return ResolvedTypeInfo
-                    return Some(ResolvedTypeInfo { base_type_name: pin_base_type_name, bounds: pin_bounds })
-
-                } else {
-                    // Direct pin/port/net ref (like in board connections) -> Use pin_name
-                    pin_ref.pin_name()
-                }
-            }
-            SyntaxKind::SIMPLE_IDENT_REF => SimpleIdentRef::cast(node.clone())?.name_token(),
-            SyntaxKind::IDENT_REF => IdentRef::cast(node.clone())?.token(),
-            _ => None, // Not a direct reference node we can easily resolve type for?
-        };
-
-        let name_token = ident_token?;
-        let name = name_token.text();
-        // println!("[resolve_node_type_info] Found ident: {}", name); // DEBUG
-
-        // Lookup the symbol in the current scope context
-        let symbol = self.lookup(name)?;
-        // println!("[resolve_node_type_info] Found symbol: {:?}", symbol.kind); // DEBUG
-
-        // Get base type name and bounds from the symbol
-        // This requires finding the symbol's declaration node to get the TypeRef
-        let decl_node_ptr = symbol.definition_node_ptr.as_ref()?;
-        let decl_node = decl_node_ptr.try_to_node(self.source_file_root)?;
-
-        let type_ref_node = match decl_node.kind() {
-            SyntaxKind::NET_DECL => NetDecl::cast(decl_node)?.type_ref(),
-            SyntaxKind::PORT_DECL => PortDecl::cast(decl_node)?.type_ref(),
-            SyntaxKind::PIN_DECL => PinDecl::cast(decl_node)?.type_ref(),
-             // Handle other potential declaration kinds (e.g., PARAM_DECL?) if needed
-            _ => None,
-        };
-
-        let type_ref_node_resolved = type_ref_node?;
-        // println!("[resolve_node_type_info] Found type ref node: {:?}", type_ref_node_resolved.syntax().text_range()); // DEBUG
-        let base_type_name = type_ref_node_resolved
-            .name_token()?
-            .text()
-            .to_string();
-        // println!("[resolve_node_type_info] Resolved base type name: {}", base_type_name); // DEBUG
-
-        let bounds = match (symbol.bus_high, symbol.bus_low) {
-            (Some(h), Some(l)) => Some((h,l)),
-            _ => None,
-        };
-        // println!("[resolve_node_type_info] Resolved bounds: {:?}", bounds); // DEBUG
-
-        Some(ResolvedTypeInfo { base_type_name, bounds })
+    // Helper to resolve the type name and width of a symbol referenced by a node.
+    // Takes mutable diagnostics vec to add bounds errors etc.
+    // MODIFIED: Returns Option<Result<ResolvedTypeInfo, Diagnostic>>
+    /* // METHOD REMOVED - Moved outside impl Pass2Context
+    fn resolve_node_type_info(&self, node: &SyntaxNode<BhdlLanguage>) -> Option<TypeResolutionResult> { 
+        // ... implementation moved ...
     }
+    */
+
+    // Extracted helper to get symbol and declared info (avoids code duplication)
+    // This remains a method using &self as it doesn't need to add diagnostics directly
+    /* // METHOD REMOVED - Moved outside impl Pass2Context
+    fn get_reference_base_info<'s>(&'s self, node: &SyntaxNode<BhdlLanguage>) -> Option<ReferenceBaseInfo<'s>> { 
+        // ... implementation moved ...
+    }
+    */
 }
 
 // Pass 2 recursive visitor
@@ -998,46 +1087,52 @@ fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mut Pa
 
                 // 3. Perform Type Check
                 if let (Some(lhs), Some(rhs)) = (lhs_node.as_ref(), rhs_node.as_ref()) {
-                     // println!("[ASSIGN_STMT Type Check] LHS Node: {:?} {:?}, RHS Node: {:?} {:?}", lhs.kind(), lhs.text_range(), rhs.kind(), rhs.text_range()); // DEBUG (Use {:?})
-                    let lhs_type_info = context.resolve_node_type_info(lhs);
-                    let rhs_type_info = context.resolve_node_type_info(rhs);
-                    // println!("[ASSIGN_STMT Type Check] Resolved LHS: {:?}, RHS: {:?}", lhs_type_info, rhs_type_info); // DEBUG
+                     // println!("[ASSIGN_STMT Type Check] LHS Node: {:?} {:?}, RHS Node: {:?} {:?}", lhs.kind(), lhs.text_range(), rhs.kind(), rhs.text_range()); // DEBUG
+                    // UPDATED: Call module-level resolve_node_type_info
+                     let lhs_resolution = resolve_node_type_info(context, lhs);
+                     let rhs_resolution = resolve_node_type_info(context, rhs);
+                     // println!("[ASSIGN_STMT Type Check] Resolved LHS: {:?}, RHS: {:?}", lhs_resolution, rhs_resolution); // DEBUG
 
-                    match (lhs_type_info, rhs_type_info) {
-                        (Some(lhs_ti), Some(rhs_ti)) => {
-                            // Check base type name
-                            if lhs_ti.base_type_name != rhs_ti.base_type_name {
-                                context.add_diagnostic(
-                                    format!(
-                                        "Type mismatch in assignment: cannot assign type '{}' to type '{}'",
-                                        rhs_ti.base_type_name, lhs_ti.base_type_name
-                                    ),
-                                    // Use the range of the whole assignment statement for now
-                                    node.text_range(),
-                                );
-                            }
-                            // Check width
-                            else if lhs_ti.width() != rhs_ti.width() {
-                                 // println!("[ASSIGN_STMT Type Check] Width mismatch detected! LHS={:?}, RHS={:?}", lhs_ti.width(), rhs_ti.width()); // DEBUG
+                     // Handle the results (Option<Result<...>>)
+                     match (lhs_resolution, rhs_resolution) {
+                         (Some(Ok(lhs_ti)), Some(Ok(rhs_ti))) => {
+                             // Both resolved successfully, perform checks
+                             // Check base type name
+                             if lhs_ti.base_type_name != rhs_ti.base_type_name {
                                  context.add_diagnostic(
-                                    format!(
-                                        "Width mismatch in assignment: LHS width {:?} does not match RHS width {:?}",
-                                        lhs_ti.width(), rhs_ti.width()
-                                    ),
-                                    node.text_range(),
-                                );
-                            }
-                            // Else: Types are compatible
-                            else {
-                                // println!("[ASSIGN_STMT Type Check] Types compatible: LHS={:?}, RHS={:?}", lhs_ti, rhs_ti); // DEBUG
-                            }
-                        }
-                        (None, _) => { /*println!("[ASSIGN_STMT Type Check] Failed to resolve LHS type"); */} // DEBUG
-                        (_, None) => { /*println!("[ASSIGN_STMT Type Check] Failed to resolve RHS type"); */} // DEBUG
-                    }
-                }
-                else {
-                     // println!("[ASSIGN_STMT Type Check] Could not find LHS and/or RHS node based on EQ"); // DEBUG Updated message
+                                     format!(
+                                         "Type mismatch in assignment: cannot assign type '{}' to type '{}'",
+                                         rhs_ti.base_type_name, lhs_ti.base_type_name
+                                     ),
+                                     node.text_range(),
+                                 );
+                             }
+                             // Check width
+                             else if lhs_ti.width() != rhs_ti.width() {
+                                 context.add_diagnostic(
+                                     format!(
+                                         "Width mismatch in assignment: LHS width {:?} does not match RHS width {:?}",
+                                         lhs_ti.width(), rhs_ti.width()
+                                     ),
+                                     node.text_range(),
+                                 );
+                             }
+                             // Else: Types are compatible
+                         }
+                         (Some(Err(diag)), _) => {
+                             // Error resolving LHS, add the diagnostic
+                             context.add_diagnostic(diag.message, diag.range);
+                         }
+                         (_, Some(Err(diag))) => {
+                              // Error resolving RHS, add the diagnostic
+                             context.add_diagnostic(diag.message, diag.range);
+                         }
+                         (None, _) => { /* LHS node wasn't a resolvable reference */ }
+                         (_, None) => { /* RHS node wasn't a resolvable reference */ }
+                     }
+
+                } else {
+                    // println!("[ASSIGN_STMT Type Check] Could not find LHS and/or RHS node based on EQ"); // DEBUG
                 }
 
             } else {
@@ -1064,11 +1159,14 @@ fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mut Pa
 
                 // 3. Perform Type Check
                 if let (Some(src), Some(sink)) = (source_node.as_ref(), sink_node.as_ref()) {
-                    let src_type_info = context.resolve_node_type_info(src);
-                    let sink_type_info = context.resolve_node_type_info(sink);
+                    // UPDATED: Call module-level resolve_node_type_info
+                    let src_resolution = resolve_node_type_info(context, src);
+                    let sink_resolution = resolve_node_type_info(context, sink);
 
-                    match (src_type_info, sink_type_info) {
-                        (Some(src_ti), Some(sink_ti)) => {
+                     // Handle the results (Option<Result<...>>) - No change needed here
+                    match (src_resolution, sink_resolution) {
+                        (Some(Ok(src_ti)), Some(Ok(sink_ti))) => {
+                            // Both resolved successfully, perform checks
                             // Check base type name
                             if src_ti.base_type_name != sink_ti.base_type_name {
                                 context.add_diagnostic(
@@ -1076,8 +1174,7 @@ fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mut Pa
                                         "Type mismatch in connection: cannot connect type '{}' to type '{}'",
                                         src_ti.base_type_name, sink_ti.base_type_name
                                     ),
-                                    // Use the range of the whole connection statement
-                                    node.text_range(), 
+                                    node.text_range(),
                                 );
                             }
                             // Check width
@@ -1092,8 +1189,16 @@ fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mut Pa
                             }
                             // Else: Types are compatible
                         }
-                         (None, _) => { /* Failed to resolve source type */ }
-                         (_, None) => { /* Failed to resolve sink type */ }
+                         (Some(Err(diag)), _) => {
+                            // Error resolving source, add the diagnostic
+                            context.add_diagnostic(diag.message, diag.range);
+                         }
+                         (_, Some(Err(diag))) => {
+                            // Error resolving sink, add the diagnostic
+                             context.add_diagnostic(diag.message, diag.range);
+                         }
+                         (None, _) => { /* Source node wasn't a resolvable reference */ }
+                         (_, None) => { /* Sink node wasn't a resolvable reference */ }
                     }
                 }
                  // Else: Could not get source/sink nodes (parser error?)
