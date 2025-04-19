@@ -150,6 +150,7 @@ fn populate_global_scope_and_build_definition_scopes(source_file: &SourceFile) -
         bus_high: None, // Initialize bus bounds to None
         bus_low: None,
         direction: None, // Added missing field
+        parameter_overrides: None, // Fix E0063
     });
     context.global_scope_mut().insert(Symbol {
         name: "power".to_string(),
@@ -160,6 +161,7 @@ fn populate_global_scope_and_build_definition_scopes(source_file: &SourceFile) -
         bus_high: None, // Initialize bus bounds to None
         bus_low: None,
         direction: None, // Added missing field
+        parameter_overrides: None, // Fix E0063
     });
 
     // Start recursive visit from SourceFile children
@@ -367,14 +369,51 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
         }
         SyntaxKind::COMPONENT_INST => {
              if let Some(inst) = ComponentInst::cast(node.clone()) {
+                // UPDATED: Use component_type_name_token()
                 if let (Some(instance_name_token), Some(type_name_token)) = (inst.name(), inst.component_type_name_token()) {
-                    // Use Symbol::new_instance to store type name
-                    context.current_scope_mut().insert(Symbol::new_instance(
-                        instance_name_token.text(),
+                    let instance_name = instance_name_token.text().to_string();
+                    let type_name = type_name_token.text().to_string();
+
+                    // Create the basic instance symbol first
+                    let mut instance_symbol = Symbol::new_instance(
+                        &instance_name, // Use borrowed string
                         instance_name_token.text_range(),
-                        type_name_token.text(),
-                        node
-                    ));
+                        &type_name, // Use borrowed string
+                        node,
+                    );
+
+                    // Collect parameter overrides
+                    let mut overrides_map = HashMap::new();
+                    // UPDATED: Check for component_inst_body
+                        if let Some(param_block) = inst.param_assign_block() {
+                        // UPDATED: Iterate over body items, cast to ParamAssign
+                            for param_assign in param_block.assignments() {
+                                        let param_name_token = param_assign.name_token();
+                                        // Get the expression node assigned, skipping '=' and whitespace/semicolon
+                                        let value_expr_node = param_assign.syntax().children_with_tokens()
+                                            .skip_while(|e| e.kind() != SyntaxKind::EQ) // Find '=' token
+                                            .skip(1) // Skip '=' itself
+                                            .filter_map(|e| e.into_node()) // Get subsequent nodes
+                                            .find(|n| !matches!(n.kind(), SyntaxKind::WHITESPACE | SyntaxKind::SEMI)); // Find the first non-whitespace/semicolon node
+
+                                        if let (Some(param_name), Some(value_expr)) = (param_name_token, value_expr_node) {
+                                            overrides_map.insert(
+                                                param_name.text().to_string(),
+                                                SyntaxNodePtr::new(&value_expr)
+                                            );
+                                        }
+                             // Handle other items inside instance body if necessary
+                        }
+                    }
+
+                    // Add overrides map to the symbol if not empty
+                    if !overrides_map.is_empty() {
+                        instance_symbol.parameter_overrides = Some(overrides_map);
+                    }
+
+                    // Insert the complete instance symbol into the current scope
+                    context.current_scope_mut().insert(instance_symbol);
+
                     // DO NOT recurse into the instantiation body { ... } in Pass 1
                     // Symbols defined inside belong to the component definition scope.
                     return; // Stop recursion for this branch
@@ -1060,7 +1099,48 @@ fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mut Pa
                                     type_name_token.text_range(),
                                 );
                             }
-                            // Else: Component type is valid
+                            else {
+                                // --- Check Parameter Overrides ---
+                                if let Some(def_node_ptr) = &symbol.definition_node_ptr {
+                                    if let Some(component_scope) = context.definition_scopes.get(def_node_ptr) {
+                                        // Iterate through the parameter assignments in the instance body
+                                        if let Some(param_block) = inst.param_assign_block() {
+                                            for param_assign in param_block.assignments() {
+                                                    if let Some(param_name_token) = param_assign.name_token() {
+                                                        let param_name = param_name_token.text();
+                                                        // Check if param exists in component def scope
+                                                        match component_scope.lookup(param_name) {
+                                                            None => {
+                                                                // Error: Unknown parameter
+                                                                context.add_diagnostic(
+                                                                    format!("Unknown parameter '{}' for component type '{}'", param_name, type_name),
+                                                                    param_name_token.text_range()
+                                                                );
+                                                            }
+                                                            Some(param_symbol) => {
+                                                                // Check if the symbol in def scope is actually a parameter
+                                                                if param_symbol.kind != SymbolKind::Parameter {
+                                                                    context.add_diagnostic(
+                                                                        format!("Symbol '{}' in component type '{}' is not a parameter (found {:?})", param_name, type_name, param_symbol.kind),
+                                                                        param_name_token.text_range()
+                                                                    );
+                                                                }
+                                                                // Else: It's a known parameter.
+                                                                // TODO: Type check assigned value expr against parameter type decl (when params have types)
+                                                                // UPDATED: Also evaluate the assigned value here in Pass 2 if it's a simple value? Maybe not necessary.
+                                                                // If Pass 3 handles it, we don't need it here.
+                                                            }
+                                                        }
+                                                    }
+                                            } // << Loop ends
+                                        } // << `if let Some(param_block)` ends
+                                    } else {
+                                        context.add_diagnostic(format!("Internal Error: Scope not found for component '{}'", type_name), type_name_token.text_range());
+                                    }
+                                } else {
+                                    context.add_diagnostic(format!("Internal Error: Symbol for component '{}' missing definition pointer", type_name), type_name_token.text_range());
+                                }// Else: Component type is valid
+                            }
                         }
                     }
                 }
@@ -1449,38 +1529,71 @@ fn evaluate_const_expr_as_i64<'a>(
             }
         }
         SyntaxKind::IDENT_REF => {
-            // Use Option chain, get value_node first, then recurse
             IdentRef::cast(node.clone())
                 .and_then(|ident_ref| ident_ref.token())
                 .and_then(|token| {
                     let name = token.text();
-                    // Perform immutable lookup first
-                    match context.lookup(name) {
+                    let name_str = name.to_string(); // Get owned string for map lookup
+
+                    // 1. Check for instance override first
+                    if let Some(inst_symbol) = context.current_instance_symbol {
+                        if let Some(overrides) = &inst_symbol.parameter_overrides {
+                            if let Some(override_expr_ptr) = overrides.get(&name_str) {
+                                // Override found, evaluate the override expression
+                                return override_expr_ptr.try_to_node(context.source_file_root)
+                                    .and_then(|override_expr_node| evaluate_const_expr_as_i64(&override_expr_node, context))
+                                    .or_else(|| {
+                                        // Failed to resolve/evaluate override expr (error likely reported in recursive call)
+                                        context.add_diagnostic(format!("Failed to evaluate override expression for parameter '{}' in instance '{}'", name, inst_symbol.name), token.text_range());
+                                        None
+                                    });
+                            }
+                            // Else: No override for this specific parameter, proceed to default value check
+                        }
+                        // Else: Instance symbol has no overrides map, proceed to default value check
+                    }
+                    // Else: Not evaluating within an instance context, proceed to default value check
+
+                    // 2. No override or not in instance context: Evaluate default value
+                    match context.lookup(name) { // Lookup in current scope stack (should include component def scope pushed by visitor)
                         Some(symbol) if symbol.kind == SymbolKind::Parameter => {
-                            // Found parameter, now get its value expression node (still immutable borrow)
                             symbol.definition_node_ptr.as_ref()
                                 .and_then(|ptr| ptr.try_to_node(context.source_file_root))
                                 .and_then(|param_decl_node| ParamDecl::cast(param_decl_node))
-                                .and_then(|param_decl| param_decl.value_expr())
-                                // If successful, return Some(value_node) to pass to next step
+                                .and_then(|param_decl| param_decl.value_expr()) // Get default value expr
+                                .and_then(|value_node| evaluate_const_expr_as_i64(&value_node, context)) // Evaluate default
                                 .or_else(|| {
-                                    context.add_diagnostic(format!("Could not find value expression for parameter '{}'", name), node.text_range());
+                                    context.add_diagnostic(format!("Could not find or evaluate default value expression for parameter '{}'", name), token.text_range());
                                     None
                                 })
                         }
                         Some(symbol) => {
-                            context.add_diagnostic(format!("Symbol '{}' is not a constant parameter (found {:?})", name, symbol.kind), node.text_range());
+                            context.add_diagnostic(format!("Symbol '{}' is not a constant parameter (found {:?})", name, symbol.kind), token.text_range());
                             None
                         }
                         None => {
-                            context.add_diagnostic(format!("Undefined constant parameter '{}'", name), node.text_range());
-                            None
+                            // Check global scope ONLY if not found locally (parameters shouldn't typically be global?)
+                            match context.lookup_global(name) { // Use internal helper that doesn't need mut
+                                Some(g_symbol) if g_symbol.kind == SymbolKind::Parameter => {
+                                    g_symbol.definition_node_ptr.as_ref()
+                                        .and_then(|ptr| ptr.try_to_node(context.source_file_root))
+                                        .and_then(|param_decl_node| ParamDecl::cast(param_decl_node))
+                                        .and_then(|param_decl| param_decl.value_expr())
+                                        .and_then(|value_node| evaluate_const_expr_as_i64(&value_node, context))
+                                        .or_else(|| {
+                                            context.add_diagnostic(format!("Could not find or evaluate global default value expression for parameter '{}'", name), token.text_range());
+                                            None
+                                        })
+                                }
+                                _ => {
+                                    context.add_diagnostic(format!("Undefined constant parameter '{}'", name), token.text_range());
+                                    None
+                                }
+                            }
                         }
                     }
                 })
-                // NOW, with the value_node obtained immutably, make the mutable recursive call
-                .and_then(|value_node| evaluate_const_expr_as_i64(&value_node, context))
-        }
+         }
         _ => {
             // Add diagnostic only if it's not a simple literal/expr we expect? Maybe not.
             // Simply return None for unhandled kinds.
@@ -1506,7 +1619,9 @@ struct Pass3Context<'a> {
     resolved_constants: &'a mut ResolvedConstants, // Mutable map to store results
     diagnostics: &'a mut Vec<Diagnostic>, // Mutable vec to add evaluation errors
     // Track current scope stack for lookups during evaluation
-    current_scope_stack: Vec<&'a SymbolTable>, 
+    current_scope_stack: Vec<&'a SymbolTable>,
+    // Track the symbol of the component instance being evaluated (if any)
+    current_instance_symbol: Option<&'a Symbol>,
 }
 
 impl<'a> Pass3Context<'a> {
@@ -1525,6 +1640,7 @@ impl<'a> Pass3Context<'a> {
             resolved_constants,
             diagnostics,
             current_scope_stack: vec![global_scope], // Start with global scope
+            current_instance_symbol: None, // Initialize instance context to None
         }
     }
 
@@ -1556,13 +1672,21 @@ impl<'a> Pass3Context<'a> {
            self.current_scope_stack.pop();
        }
     }
+
+    // Lookup symbol only in the global scope
+    fn lookup_global(&self, name: &str) -> Option<&Symbol> {
+        // Use the _global_scope field
+        self._global_scope.lookup(name)
+    }
 }
 
 // Pass 3 visitor function
 fn visit_node_pass3_const_eval(node: &SyntaxNode<BhdlLanguage>, context: &mut Pass3Context) {
     let mut pushed_scope = false;
+    let mut pushed_instance_context = false;
+    let previous_instance_symbol = context.current_instance_symbol; // Store previous state
 
-    // --- Scope Handling (Push before visiting children) ---
+    // --- Scope Handling (Push before visiting children) --- 
     match node.kind() {
         // Nodes that define a scope (same as Pass 2)
         SyntaxKind::BOARD_DEF |
@@ -1572,6 +1696,50 @@ fn visit_node_pass3_const_eval(node: &SyntaxNode<BhdlLanguage>, context: &mut Pa
              let ptr = SyntaxNodePtr::new(node);
              context.push_scope(&ptr);
              pushed_scope = true;
+        }
+        SyntaxKind::COMPONENT_INST => {
+            // Set instance context for evaluating overrides inside
+            if let Some(inst_node) = ComponentInst::cast(node.clone()) {
+                if let Some(inst_name_token) = inst_node.name() {
+                    // Lookup the instance symbol defined in Pass 1
+                    // We need to look in the *parent* scope (context.current_scope_stack.last())
+                    if let Some(parent_scope) = context.current_scope_stack.last() {
+                        if let Some(inst_symbol) = parent_scope.lookup(inst_name_token.text()) {
+                             if inst_symbol.kind == SymbolKind::Instance {
+                                 context.current_instance_symbol = Some(inst_symbol);
+                                 pushed_instance_context = true;
+
+                                 // Also push the scope of the component *definition* for resolving default param values
+                                 if let Some(type_name) = &inst_symbol.instance_type_name {
+                                     if let Some(type_symbol) = context.lookup_global(type_name) {
+                                         if let Some(def_ptr) = &type_symbol.definition_node_ptr {
+                                             // UPDATED: Clone the ptr before moving
+                                             let ptr_clone = def_ptr.clone();
+                                             context.push_scope(&ptr_clone);
+                                             pushed_scope = true;
+                                         } else {
+                                            // Error: Component type symbol missing def ptr
+                                            // Pass 2 should have caught this, but maybe add diagnostic?
+                                         }
+                                     } else {
+                                         // Error: Undefined component type
+                                         // Pass 2 should have caught this
+                                     }
+                                 } else {
+                                     // Error: Instance symbol missing type name
+                                     // Pass 1 should ensure this doesn't happen
+                                 }
+                             } else {
+                                 // Error: Found symbol with instance name but it's not an instance
+                                 // Pass 2 should have caught this
+                             }
+                        } else {
+                            // Error: Instance symbol not found in parent scope
+                            // Pass 1 should ensure this doesn't happen
+                        }
+                    } // else: No parent scope? Should not happen
+                } // else: Instance missing name? Parser error.
+            }
         }
         _ => {}
     }
@@ -1612,6 +1780,10 @@ fn visit_node_pass3_const_eval(node: &SyntaxNode<BhdlLanguage>, context: &mut Pa
     // --- Scope Handling (Pop after visiting children) ---
     if pushed_scope {
         context.pop_scope();
+    }
+    // Restore previous instance context if we pushed one for this node
+    if pushed_instance_context {
+        context.current_instance_symbol = previous_instance_symbol;
     }
 }
 

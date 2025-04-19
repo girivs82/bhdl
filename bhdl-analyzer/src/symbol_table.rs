@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use rowan::{TextRange, ast::SyntaxNodePtr};
+use bhdl_parser::BhdlLanguage;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PortDirectionKind {
@@ -8,7 +9,7 @@ pub enum PortDirectionKind {
     InOut,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SymbolKind {
     Board,
     Module,
@@ -38,8 +39,9 @@ impl SymbolKind {
     pub fn is_component_type_kind(&self) -> bool {
         matches!(self, 
             SymbolKind::Component | 
-            SymbolKind::Module // Can modules be instantiated?
-            // SymbolKind::Board // Can boards be instantiated?
+            SymbolKind::Module |
+            SymbolKind::Board |
+            SymbolKind::Interface
         )
     }
 }
@@ -50,10 +52,11 @@ pub struct Symbol {
     pub kind: SymbolKind,
     pub span: TextRange,
     pub instance_type_name: Option<String>,
-    pub definition_node_ptr: Option<SyntaxNodePtr<bhdl_parser::syntax::BhdlLanguage>>,
+    pub definition_node_ptr: Option<SyntaxNodePtr<BhdlLanguage>>,
     pub bus_high: Option<i64>,
     pub bus_low: Option<i64>,
     pub direction: Option<PortDirectionKind>,
+    pub parameter_overrides: Option<HashMap<String, SyntaxNodePtr<BhdlLanguage>>>,
     // pub definition_span: Option<TextRange>, // TODO: Add span info from CST node
     // pub documentation: Option<String>, // TODO
 }
@@ -64,7 +67,7 @@ impl Symbol {
         name: &str,
         kind: SymbolKind,
         span: TextRange,
-        def_node_ptr: &SyntaxNodePtr<bhdl_parser::BhdlLanguage>,
+        def_node_ptr: &SyntaxNodePtr<BhdlLanguage>,
     ) -> Self {
         Symbol {
             name: name.to_string(),
@@ -75,6 +78,7 @@ impl Symbol {
             bus_high: None,
             bus_low: None,
             direction: None,
+            parameter_overrides: None,
         }
     }
 
@@ -83,7 +87,7 @@ impl Symbol {
         name: &str,
         kind: SymbolKind,
         span: TextRange,
-        decl_node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>, // Use SyntaxNode for decls
+        decl_node: &rowan::SyntaxNode<BhdlLanguage>, // Use SyntaxNode for decls
         bus_high: Option<i64>, // Added bus bound parameters
         bus_low: Option<i64>,
         direction: Option<PortDirectionKind>, // Added direction parameter
@@ -97,6 +101,7 @@ impl Symbol {
             bus_high, // Store the bounds
             bus_low,
             direction, // Store the direction
+            parameter_overrides: None,
         }
     }
 
@@ -105,7 +110,7 @@ impl Symbol {
         name: &str,
         span: TextRange,
         instance_type_name: &str,
-        inst_node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>, // Use SyntaxNode for instance
+        inst_node: &rowan::SyntaxNode<BhdlLanguage>, // Use SyntaxNode for instance
     ) -> Self {
         Symbol {
             name: name.to_string(),
@@ -116,6 +121,7 @@ impl Symbol {
             bus_high: None,
             bus_low: None,
             direction: None,
+            parameter_overrides: None,
         }
     }
 }
