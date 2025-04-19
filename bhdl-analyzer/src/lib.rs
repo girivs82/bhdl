@@ -12,7 +12,7 @@ use std::collections::HashMap;
 
 mod symbol_table;
 // Added SymbolKind import
-use symbol_table::{Symbol, SymbolKind, SymbolTable};
+use symbol_table::{Symbol, SymbolKind, SymbolTable, PortDirectionKind};
 
 // Represents resolved type information for checking
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -149,6 +149,7 @@ fn populate_global_scope_and_build_definition_scopes(source_file: &SourceFile) -
         definition_node_ptr: None, // Builtins have no definition node
         bus_high: None, // Initialize bus bounds to None
         bus_low: None,
+        direction: None, // Added missing field
     });
     context.global_scope_mut().insert(Symbol {
         name: "power".to_string(),
@@ -158,6 +159,7 @@ fn populate_global_scope_and_build_definition_scopes(source_file: &SourceFile) -
         definition_node_ptr: None,
         bus_high: None, // Initialize bus bounds to None
         bus_low: None,
+        direction: None, // Added missing field
     });
 
     // Start recursive visit from SourceFile children
@@ -265,6 +267,7 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                         node,
                         None, // No bus bounds for params
                         None,
+                        None, // Added missing direction argument
                     ));
                 }
             }
@@ -277,18 +280,28 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                        .and_then(|suffix| suffix.range())
                        // UPDATED: Use parse_value_as_i64 directly for simple literals in Pass 1
                        .map(|range_expr| (
-                           range_expr.lhs().and_then(|v| parse_value_as_i64(&v)),
-                           range_expr.rhs().and_then(|v| parse_value_as_i64(&v))
+                            range_expr.lhs().and_then(|v| parse_value_as_i64(&v)),
+                            range_expr.rhs().and_then(|v| parse_value_as_i64(&v))
                        ))
                        .unwrap_or((None, None));
+                   // Extract direction
+                   let direction = decl.direction().and_then(|dir_token| {
+                       match dir_token.kind() {
+                           SyntaxKind::IN_KW | SyntaxKind::INPUT_KW => Some(PortDirectionKind::In),
+                           SyntaxKind::OUT_KW | SyntaxKind::OUTPUT_KW => Some(PortDirectionKind::Out),
+                           SyntaxKind::INOUT_KW => Some(PortDirectionKind::InOut),
+                           _ => None,
+                       }
+                   });
                    
                    context.current_scope_mut().insert(Symbol::new_decl(
                        name_token.text(), 
                        SymbolKind::Pin, // Ports are treated as Pins internally
                        name_token.text_range(), 
                        node,
-                       bus_high, // Pass bounds
+                       bus_high, 
                        bus_low,
+                       direction, // Pass direction
                    ));
                }
            }
@@ -300,10 +313,10 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                     let (bus_high, bus_low) = decl.bus_suffix()
                         .and_then(|suffix| suffix.range())
                         // UPDATED: Use parse_value_as_i64 directly for simple literals in Pass 1
-                        .map(|range_expr| (
-                            range_expr.lhs().and_then(|v| parse_value_as_i64(&v)),
-                            range_expr.rhs().and_then(|v| parse_value_as_i64(&v))
-                        ))
+                       .map(|range_expr| (
+                           range_expr.lhs().and_then(|v| parse_value_as_i64(&v)),
+                           range_expr.rhs().and_then(|v| parse_value_as_i64(&v))
+                       ))
                         .unwrap_or((None, None));
 
                      context.current_scope_mut().insert(Symbol::new_decl(
@@ -313,6 +326,7 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                         node,
                         bus_high, // Pass bounds
                         bus_low,
+                        None, // Nets don't have direction
                     ));
                 }
             }
@@ -329,6 +343,15 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                            range_expr.rhs().and_then(|v| parse_value_as_i64(&v))
                        ))
                        .unwrap_or((None, None));
+                   // Extract direction
+                   let direction = decl.direction().and_then(|dir_token| {
+                       match dir_token.kind() {
+                           SyntaxKind::IN_KW | SyntaxKind::INPUT_KW => Some(PortDirectionKind::In),
+                           SyntaxKind::OUT_KW | SyntaxKind::OUTPUT_KW => Some(PortDirectionKind::Out),
+                           SyntaxKind::INOUT_KW => Some(PortDirectionKind::InOut),
+                           _ => None,
+                       }
+                   });
                    
                    context.current_scope_mut().insert(Symbol::new_decl(
                        name_token.text(), 
@@ -337,6 +360,7 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                        node,
                        bus_high, // Pass bounds
                        bus_low,
+                       direction, // Pass direction
                    ));
                }
            }
@@ -966,17 +990,29 @@ fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mut Pa
                                  );
                              }
                              // Else: Types are compatible
-                         }
-                         (Some(Err(diag)), _) => {
-                             // Error resolving LHS, add the diagnostic
-                             context.add_diagnostic(diag.message, diag.range);
-                         }
-                         (_, Some(Err(diag))) => {
-                              // Error resolving RHS, add the diagnostic
-                             context.add_diagnostic(diag.message, diag.range);
-                         }
-                         (None, _) => { /* LHS node wasn't a resolvable reference */ }
-                         (_, None) => { /* RHS node wasn't a resolvable reference */ }
+                             
+                             // --- ADDED: Direction Check for Assignment --- 
+                             // Check if assigning to an input
+                             if let Some(base_lhs_info) = get_reference_base_info(context, lhs) {
+                                 if base_lhs_info.symbol.direction == Some(PortDirectionKind::In) {
+                                     context.add_diagnostic(
+                                         format!("Cannot assign to input symbol '{}'", base_lhs_info.symbol.name),
+                                         lhs.text_range(), // Use range of the LHS reference
+                                     );
+                                 }
+                             }
+                             // Else: Base symbol info not found (error reported elsewhere)
+                          }
+                          (Some(Err(diag)), _) => {
+                              // Error resolving LHS, add the diagnostic
+                              context.add_diagnostic(diag.message, diag.range);
+                          }
+                          (_, Some(Err(diag))) => {
+                               // Error resolving RHS, add the diagnostic
+                              context.add_diagnostic(diag.message, diag.range);
+                          }
+                          (None, _) => { /* LHS node wasn't a resolvable reference */ }
+                          (_, None) => { /* RHS node wasn't a resolvable reference */ }
                      }
 
                 } else {
@@ -1036,17 +1072,41 @@ fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mut Pa
                                 );
                             }
                             // Else: Types are compatible
-                        }
-                         (Some(Err(diag)), _) => {
-                            // Error resolving source, add the diagnostic
-                            context.add_diagnostic(diag.message, diag.range);
-                         }
-                         (_, Some(Err(diag))) => {
-                            // Error resolving sink, add the diagnostic
-                             context.add_diagnostic(diag.message, diag.range);
-                         }
-                         (None, _) => { /* Source node wasn't a resolvable reference */ }
-                         (_, None) => { /* Sink node wasn't a resolvable reference */ }
+
+                             // --- ADDED: Direction Check for Connection --- 
+                             if let (Some(src_info), Some(sink_info)) = (
+                                 get_reference_base_info(context, src),
+                                 get_reference_base_info(context, sink)
+                             ) {
+                                 let src_dir = src_info.symbol.direction;
+                                 let sink_dir = sink_info.symbol.direction;
+
+                                 match (src_dir, sink_dir) {
+                                     // Invalid connections
+                                     (Some(PortDirectionKind::Out), Some(PortDirectionKind::Out)) => {
+                                         context.add_diagnostic("Cannot connect Out port/pin to Out port/pin".to_string(), node.text_range());
+                                     }
+                                     (Some(PortDirectionKind::In), Some(PortDirectionKind::In)) |
+                                     (Some(PortDirectionKind::In), Some(PortDirectionKind::InOut)) |
+                                     (Some(PortDirectionKind::InOut), Some(PortDirectionKind::In)) => {
+                                         context.add_diagnostic("Cannot connect In port/pin as a source or to another In port/pin".to_string(), node.text_range());
+                                     }
+                                     // Valid or uncheckable connections (e.g., involving None directions like nets)
+                                     _ => {} 
+                                 }
+                             }
+                             // Else: Could not get base info for src/sink (error reported elsewhere)
+                          }
+                           (Some(Err(diag)), _) => {
+                              // Error resolving source, add the diagnostic
+                              context.add_diagnostic(diag.message, diag.range);
+                          }
+                          (_, Some(Err(diag))) => {
+                              // Error resolving sink, add the diagnostic
+                              context.add_diagnostic(diag.message, diag.range);
+                          }
+                          (None, _) => { /* Source node wasn't a resolvable reference */ }
+                          (_, None) => { /* Sink node wasn't a resolvable reference */ }
                     }
                 }
                  // Else: Could not get source/sink nodes (parser error?)
@@ -2445,6 +2505,145 @@ mod tests {
         context.push_scope(&board_ptr);
 
         assert_eq!(evaluate_const_expr_as_i64(&expr_node, &mut context), Some(11)); // (5*2) + 1
+    }
+
+    // --- Tests for Directionality Checks --- 
+
+    #[test]
+    fn analyze_assign_to_input_port_fail() {
+        let input = r#"
+            board B {
+                ports { P_IN: in signal; }
+                nets { net N: signal; } // Added 'net' keyword
+                connections { assign P_IN = N; } // Error: Assign to input
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
+        assert_eq!(result.diagnostics.len(), 1, "Diagnostics: {:?}", result.diagnostics);
+        assert!(result.diagnostics[0].message.contains("Cannot assign to input symbol 'P_IN'"), "Msg: {}", result.diagnostics[0].message);
+    }
+
+    #[test]
+    fn analyze_conn_out_to_out_fail() {
+        let input = r#"
+            board B {
+                ports { P_OUT1: out signal; P_OUT2: out signal; }
+                connections { P_OUT1 -> P_OUT2; } // Error: out -> out
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
+        assert_eq!(result.diagnostics.len(), 1, "Diagnostics: {:?}", result.diagnostics);
+        assert!(result.diagnostics[0].message.contains("Cannot connect Out port/pin to Out port/pin"), "Msg: {}", result.diagnostics[0].message);
+    }
+
+    #[test]
+    fn analyze_conn_in_to_in_fail() {
+        let input = r#"
+            board B {
+                ports { P_IN1: in signal; P_IN2: in signal; }
+                connections { P_IN1 -> P_IN2; } // Error: in -> in
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
+        assert_eq!(result.diagnostics.len(), 1, "Diagnostics: {:?}", result.diagnostics);
+        assert!(result.diagnostics[0].message.contains("Cannot connect In port/pin as a source"), "Msg: {}", result.diagnostics[0].message);
+    }
+
+    #[test]
+    fn analyze_conn_in_to_inout_fail() {
+        let input = r#"
+            board B {
+                ports { P_IN: in signal; P_INOUT: inout signal; }
+                connections { P_IN -> P_INOUT; } // Error: in -> inout
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
+        assert_eq!(result.diagnostics.len(), 1, "Diagnostics: {:?}", result.diagnostics);
+        assert!(result.diagnostics[0].message.contains("Cannot connect In port/pin as a source"), "Msg: {}", result.diagnostics[0].message);
+    }
+
+    #[test]
+    fn analyze_conn_inout_to_in_fail() {
+        let input = r#"
+            board B {
+                ports { P_INOUT: inout signal; P_IN: in signal; }
+                connections { P_INOUT -> P_IN; } // Error: inout -> in 
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
+        assert_eq!(result.diagnostics.len(), 1, "Diagnostics: {:?}", result.diagnostics);
+        assert!(result.diagnostics[0].message.contains("Cannot connect In port/pin as a source"), "Msg: {}", result.diagnostics[0].message);
+    }
+
+    #[test]
+    fn analyze_conn_out_to_in_ok() {
+        let input = r#"
+            board B {
+                ports { P_OUT: out signal; P_IN: in signal; }
+                connections { P_OUT -> P_IN; } // OK
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
+        assert!(result.diagnostics.is_empty(), "Diagnostics: {:?}", result.diagnostics);
+    }
+
+    #[test]
+    fn analyze_conn_out_to_inout_ok() {
+        let input = r#"
+            board B {
+                ports { P_OUT: out signal; P_INOUT: inout signal; }
+                connections { P_OUT -> P_INOUT; } // OK
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
+        assert!(result.diagnostics.is_empty(), "Diagnostics: {:?}", result.diagnostics);
+    }
+
+    #[test]
+    fn analyze_conn_inout_to_out_ok() {
+        let input = r#"
+            board B {
+                ports { P_INOUT: inout signal; P_OUT: out signal; }
+                connections { P_INOUT -> P_OUT; } // OK
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
+        assert!(result.diagnostics.is_empty(), "Diagnostics: {:?}", result.diagnostics);
+    }
+
+    #[test]
+    fn analyze_conn_inout_to_inout_ok() {
+        let input = r#"
+            board B {
+                ports { P_INOUT1: inout signal; P_INOUT2: inout signal; }
+                connections { P_INOUT1 -> P_INOUT2; } // OK
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
+        assert!(result.diagnostics.is_empty(), "Diagnostics: {:?}", result.diagnostics);
+    }
+
+     #[test]
+    fn analyze_conn_net_to_in_ok() {
+        let input = r#"
+            board B {
+                nets { net N: signal; } // Added 'net' keyword
+                ports { P_IN: in signal; }
+                connections { N -> P_IN; } // OK (Net has None direction)
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
+        assert!(result.diagnostics.is_empty(), "Diagnostics: {:?}", result.diagnostics);
     }
 
 }
