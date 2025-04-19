@@ -7,4 +7,5 @@ edition = "2021"
 
 [dependencies]
 bhdl-parser = { path = "../bhdl-parser" }
+bhdl-ast = { path = "../bhdl-ast" }
 rowan = "0.15.15"

@@ -210,15 +210,34 @@ impl AstNode for ComponentInst {
     }
 }
 
-impl HasName for ComponentInst {}
+impl HasName for ComponentInst {
+    // Ensure this reliably gets the instance name (second IDENT token)
+    fn name(&self) -> Option<Token> {
+        self.0.children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .filter(|tok| tok.kind() == SyntaxKind::IDENT)
+            .nth(1) 
+    }
+}
 
 impl ComponentInst {
-    pub fn component_type(&self) -> Option<ComponentType> {
-        support::child(&self.0)
+    // Find the component type name (first IDENT token)
+    pub fn component_type_name_token(&self) -> Option<Token> {
+        self.0.children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .find(|tok| tok.kind() == SyntaxKind::IDENT)
+    }
+    
+    // Keep component_type method, but maybe it should return the token?
+    // Or try to find a COMPONENT_TYPE node *first* and fall back?
+    // For now, let's make it return the first IDENT token like component_type_name_token.
+    // This breaks the previous assumption of it returning ComponentType node.
+    pub fn component_type(&self) -> Option<Token> { 
+        self.component_type_name_token()
     }
 
     pub fn param_assign_block(&self) -> Option<ParamAssignBlock> {
-        support::child(&self.0)
+         self.0.children().find_map(ParamAssignBlock::cast)
     }
 }
 
@@ -242,7 +261,8 @@ impl AstNode for ComponentType {
 }
 
 impl ComponentType {
-    pub fn name_ref(&self) -> Option<Node> {
+    // This logic might need adjustment if it's called
+    pub fn name_ref(&self) -> Option<Node> { 
         self.0.first_child()
     }
 }
