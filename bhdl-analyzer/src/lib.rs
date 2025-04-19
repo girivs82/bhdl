@@ -475,11 +475,62 @@ impl<'a> Pass2Context<'a> {
                 let pin_ref = PinRef::cast(node.clone())?;
                 if pin_ref.instance_name().is_some() {
                      // Instance.Pin -> Check type definition scope
-                     // This is more complex, handle later. For now, return None.
-                     // Need to look up instance, find type, get type scope, look up pin.
-                     return None; // TODO: Handle instance.pin type resolution
+                     let inst_name_token = pin_ref.instance_name()?;
+                     let pin_name_token = pin_ref.pin_name()?;
+                     let inst_name = inst_name_token.text();
+                     let pin_name = pin_name_token.text();
+
+                     // 1. Lookup instance symbol
+                     let inst_symbol = self.lookup(inst_name)?;
+                     // Optional: Add diagnostic if not an instance?
+                     if inst_symbol.kind != SymbolKind::Instance { return None; }
+                     
+                     // 2. Get component type name from instance
+                     let type_name = inst_symbol.instance_type_name.as_ref()?;
+
+                     // 3. Lookup component type symbol (must be global)
+                     let type_symbol = self.lookup_global(type_name)?;
+                      // Optional: Add diagnostic if not a component type kind?
+                     if !type_symbol.kind.is_component_type_kind() { return None; }
+
+                     // 4. Get definition node ptr for the component type
+                     let def_node_ptr = type_symbol.definition_node_ptr.as_ref()?;
+                     
+                     // 5. Get the component's definition scope table
+                     let component_scope_table = self.definition_scopes.get(def_node_ptr)?;
+
+                     // 6. Lookup pin symbol within the component's scope
+                     let pin_symbol = component_scope_table.lookup(pin_name)?;
+                     // Optional: Add diagnostic if not a pin?
+                     if pin_symbol.kind != SymbolKind::Pin { return None; }
+
+                     // 7. Get the pin's declaration node to find its TypeRef
+                     let pin_decl_node_ptr = pin_symbol.definition_node_ptr.as_ref()?;
+                     let pin_decl_node = pin_decl_node_ptr.try_to_node(self.source_file_root)?;
+                     
+                     let pin_type_ref = match pin_decl_node.kind() {
+                         SyntaxKind::PIN_DECL => PinDecl::cast(pin_decl_node)?.type_ref(),
+                         SyntaxKind::PORT_DECL => PortDecl::cast(pin_decl_node)?.type_ref(), // Maybe component ports are stored as PORT_DECL?
+                         _ => return None, // Should be PIN_DECL or PORT_DECL
+                     };
+
+                     // 8. Extract base type name from TypeRef
+                     let pin_base_type_name = pin_type_ref?
+                         .name_token()?
+                         .text()
+                         .to_string();
+
+                     // 9. Get bounds from the pin_symbol
+                     let pin_bounds = match (pin_symbol.bus_high, pin_symbol.bus_low) {
+                        (Some(h), Some(l)) => Some((h,l)),
+                        _ => None,
+                    };
+
+                    // 10. Construct and return ResolvedTypeInfo
+                    return Some(ResolvedTypeInfo { base_type_name: pin_base_type_name, bounds: pin_bounds })
+
                 } else {
-                    // Direct pin/port/net ref (like in board connections)
+                    // Direct pin/port/net ref (like in board connections) -> Use pin_name
                     pin_ref.pin_name()
                 }
             }
@@ -1716,6 +1767,88 @@ mod tests {
         let source_file = parse_to_sourcefile(input);
         let result = analyze(&source_file);
         // Expect no errors for now, although type resolution for c1.p is TODO
+        assert!(result.diagnostics.is_empty(), "Diagnostics found: {:?}", result.diagnostics);
+    }
+
+    // --- Tests for Connection Type Checking with Instance.Pin --- 
+
+    #[test]
+    fn analyze_conn_pinref_type_mismatch() {
+        let input = r#"
+            typedef MyInt { width=32; }
+            component C { pins { p: out MyInt; } }
+            board B {
+                components { C c1 {}; }
+                nets { net N: signal; }
+                connections { c1.p -> N; } // Error: MyInt to signal
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
+        assert_eq!(result.diagnostics.len(), 1, "Diagnostics: {:?}", result.diagnostics);
+        assert!(result.diagnostics[0].message.contains("cannot connect type 'MyInt' to type 'signal'"), "Msg: {}", result.diagnostics[0].message);
+    }
+
+    #[test]
+    fn analyze_conn_pinref_width_mismatch_scalar_bus() {
+        let input = r#"
+            component C { pins { p: out signal; } }
+            board B {
+                components { C c1 {}; }
+                nets { net N[7:0]: signal; }
+                connections { c1.p -> N; } // Error: scalar pin to bus net
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
+        assert_eq!(result.diagnostics.len(), 1, "Diagnostics: {:?}", result.diagnostics);
+        assert!(result.diagnostics[0].message.contains("Source width None does not match Sink width Some(8)"), "Msg: {}", result.diagnostics[0].message);
+    }
+
+    #[test]
+    fn analyze_conn_pinref_width_mismatch_bus_scalar() {
+        let input = r#"
+            component C { pins { p[7:0]: out signal; } }
+            board B {
+                components { C c1 {}; }
+                nets { net N: signal; }
+                connections { c1.p -> N; } // Error: bus pin to scalar net
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
+        assert_eq!(result.diagnostics.len(), 1, "Diagnostics: {:?}", result.diagnostics);
+        assert!(result.diagnostics[0].message.contains("Source width Some(8) does not match Sink width None"), "Msg: {}", result.diagnostics[0].message);
+    }
+
+    #[test]
+    fn analyze_conn_pinref_width_mismatch_bus_bus() {
+        let input = r#"
+            component C { pins { p[7:0]: out signal; } }
+            board B {
+                components { C c1 {}; }
+                nets { net N[3:0]: signal; }
+                connections { c1.p -> N; } // Error: bus[8] pin to bus[4] net
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
+        assert_eq!(result.diagnostics.len(), 1, "Diagnostics: {:?}", result.diagnostics);
+        assert!(result.diagnostics[0].message.contains("Source width Some(8) does not match Sink width Some(4)"), "Msg: {}", result.diagnostics[0].message);
+    }
+
+    #[test]
+    fn analyze_conn_pinref_compatible_bus() {
+        let input = r#"
+            component C { pins { p[7:0]: out signal; } }
+            board B {
+                components { C c1 {}; }
+                nets { net N[7:0]: signal; }
+                connections { c1.p -> N; } // OK
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
         assert!(result.diagnostics.is_empty(), "Diagnostics found: {:?}", result.diagnostics);
     }
 
