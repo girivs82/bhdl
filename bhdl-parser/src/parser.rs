@@ -98,21 +98,17 @@ fn map_token(token: LexerToken) -> SyntaxKind {
         // In parser.rs -> map_token function
         // Map ALL unit tokens to the single UNIT_IDENTIFIER SyntaxKind
         LexerToken::KOhmUnit | LexerToken::MOHmUnit | LexerToken::GOhmUnit | LexerToken::OhmUnit |
-        LexerToken::UFUnit | LexerToken::NFUnit | LexerToken::PFUnit | LexerToken::FUnit |
-        LexerToken::UHUnit | LexerToken::NHUnit | LexerToken::PHUnit | LexerToken::HUnit |
-        LexerToken::VdcUnit | LexerToken::VacUnit | LexerToken::VrmsUnit | LexerToken::VppUnit | LexerToken::VUnit |
-        LexerToken::MVUnit | LexerToken::UVUnit | LexerToken::NVUnit | // Add new V units
-        LexerToken::AUnit |
-        LexerToken::MAUnit | LexerToken::UAUnit | LexerToken::NAUnit | // Add new A units
-        LexerToken::WUnit |
-        LexerToken::MWUnit | LexerToken::UWUnit | LexerToken::NWUnit | // Add new W units
+        LexerToken::UFUnit | LexerToken::NFUnit | LexerToken::PFUnit |
+        LexerToken::UHUnit | LexerToken::NHUnit | LexerToken::PHUnit |
+        LexerToken::VdcUnit | LexerToken::VacUnit | LexerToken::VrmsUnit | LexerToken::VppUnit |
+        LexerToken::MVUnit | LexerToken::UVUnit | LexerToken::NVUnit |
+        LexerToken::MAUnit | LexerToken::UAUnit | LexerToken::NAUnit |
+        LexerToken::MWUnit | LexerToken::UWUnit | LexerToken::NWUnit |
         LexerToken::HzUnit | LexerToken::KHzUnit | LexerToken::MHUnit | LexerToken::GHUnit |
-        LexerToken::SUnit | LexerToken::MsUnit | LexerToken::UsUnit | LexerToken::NsUnit | LexerToken::PsUnit |
+        LexerToken::MsUnit | LexerToken::UsUnit | LexerToken::NsUnit | LexerToken::PsUnit |
         LexerToken::DegUnit | LexerToken::RadUnit |
         LexerToken::DbUnit | LexerToken::DbmUnit |
-        LexerToken::PercentUnit |
         LexerToken::PctUnit |
-        // Add length units
         LexerToken::MMUnit | LexerToken::UMUnit | LexerToken::NMUnit | LexerToken::MILUnit
         => SyntaxKind::UNIT_IDENTIFIER,
 
@@ -941,20 +937,43 @@ impl<'t> Parser<'t> {
     // Used by the expression parser for literals.
     fn parse_value(&mut self) {
         self.builder.start_node(SyntaxKind::VALUE.into()); // Start VALUE node
-        let mut _has_sign = false; // Prefixed with _
+        let mut _has_sign = false;
         if self.peek() == Some(SyntaxKind::MINUS) || self.peek() == Some(SyntaxKind::PLUS) {
             self.bump(); // Consume the sign
-            _has_sign = true; // Prefixed with _
+            _has_sign = true;
         }
 
         if self.eat(SyntaxKind::NUMBER) {
-            // Optional unit - skip trivia (like space) before checking
-            self.skip_trivia(); // ADDED: Handle cases like "50 pct"
-            if self.peek() == Some(SyntaxKind::UNIT_IDENTIFIER) {
-                // DEBUG leftover removed
-                self.bump(); // Consume the unit identifier (adds to VALUE node)
-                // DEBUG leftover removed
+            // Check if the *next* token is an IDENT matching a known single-letter unit.
+            // Use peek() because trivia (like spaces) might be valid *between* number and unit,
+            // although adjacent is more common (e.g., 10k vs 10 k). Let's allow space for now.
+            if self.peek() == Some(SyntaxKind::IDENT) {
+                // Need to get the actual text of the upcoming IDENT token
+                // We can't use self.tokens[self.pos] directly because peek() advances internally.
+                // Let's find the actual index peek() stops at.
+                let mut next_token_pos = self.pos;
+                while self.tokens.get(next_token_pos).map_or(false, |(k, _)| k.is_trivia()) {
+                    next_token_pos += 1;
+                }
+
+                if let Some((_, text)) = self.tokens.get(next_token_pos) {
+                    // Check if the IDENT text is a single-letter unit
+                    match text.as_str() {
+                        "F" | "H" | "V" | "A" | "W" | "s" | "%" => {
+                            // It's a unit, consume it as part of the VALUE node.
+                            // We need to bump up to and including this token.
+                            self.skip_trivia(); // Consume any trivia before the unit IDENT
+                            self.bump(); // Consume the unit IDENT itself
+                        }
+                        _ => { /* Not a single-letter unit IDENT, do nothing extra */ }
+                    }
+                }
+            } 
+            // Also check for multi-letter units (which are UNIT_IDENTIFIER kind)
+            else if self.peek() == Some(SyntaxKind::UNIT_IDENTIFIER) { 
+                 self.bump(); // Consume the multi-letter unit
             }
+
         } else if self.eat(SyntaxKind::STRING) {
             // String literals are also values
         } else if self.eat(SyntaxKind::TRUE_KW) || self.eat(SyntaxKind::FALSE_KW) {
@@ -2102,7 +2121,7 @@ mod tests {
     // works correctly for parameters in other blocks (e.g., components, constrain).
     // This suggests a potential subtle state issue or bug related to the interface context.
     // TEMPORARILY COMMENTED OUT due to persistent failure with units in interface parameters
-    /* #[test]
+    #[test]
     fn parse_interface_definition() {
         let input = r#"
             interface SimpleSPI {
@@ -2145,7 +2164,7 @@ mod tests {
         assert!(find_node(power_def, PARAMETERS_BLOCK).is_some());
         let power_pins = find_node(power_def, PINS_BLOCK).expect("No PINS_BLOCK in PowerDelivery");
         assert_eq!(find_all_nodes(&power_pins, PIN_DECL).len(), 2);
-    } */
+    }
 
     #[test]
     fn parse_pin_bus_suffix() {
