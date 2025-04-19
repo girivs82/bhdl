@@ -1,8 +1,8 @@
 // bhdl-ast/src/tests.rs
-use crate::{Node, Token, HasName, SourceFile, blocks::*, items::*, common::*};
+use crate::{Node, HasName, blocks::*, items::*, common::*};
 use crate::items; // Ensure items module is explicitly used for disambiguation if needed
-use bhdl_parser::{parse, SyntaxKind, BhdlLanguage}; // Changed parse_text to parse
-use rowan::{ast::AstNode as RowanAstNode, NodeOrToken, SyntaxNode}; // Removed WalkEvent, changed AstNode alias
+use bhdl_parser::{SyntaxKind, BhdlLanguage}; // Changed parse_text to parse
+use rowan::{ast::AstNode as RowanAstNode, SyntaxNode}; // Removed WalkEvent, changed AstNode alias
 
 /// Parses the source code and returns the root SyntaxNode (SOURCE_FILE).
 fn parse_test_text(text: &str) -> SyntaxNode<BhdlLanguage> {

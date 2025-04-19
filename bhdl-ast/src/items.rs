@@ -6,7 +6,6 @@ use crate::{
     HasName, Node, Token, BhdlLanguage,
 };
 // Explicitly import type used in support::children calls below
-use crate::common::ParamAssign;
 use bhdl_parser::SyntaxKind;
 use rowan::{ast::support, SyntaxNode};
 use rowan::ast::AstNode;

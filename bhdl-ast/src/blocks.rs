@@ -2,7 +2,7 @@ use crate::{Node, BhdlLanguage};
 // Explicitly import types used in support::children calls below
 use crate::common::{ParamDecl, PortDecl, ComponentInst, NetDecl, ConnectionStmt, PinDecl, InterfaceInstance};
 use bhdl_parser::SyntaxKind;
-use rowan::{ast::support, SyntaxNode, ast::AstNode as RowanAstNode};
+use rowan::{ast::support, SyntaxNode};
 use rowan::ast::AstNode;
 
 // --- Parameters Block ---
