@@ -563,34 +563,23 @@ impl AstNode for BusSuffix {
 }
 
 impl BusSuffix {
-    /// Returns the `Value` node if this suffix represents an index access (e.g., `[0]`).
+    /// Returns the `Value` node if this suffix represents an index access (e.g., `[0]`),
+    /// but only if it does not contain a RangeExpr.
     pub fn index(&self) -> Option<Value> {
-        let child_kinds: Vec<_> = self.0.children_with_tokens()
-            .filter(|t| t.kind() != SyntaxKind::WHITESPACE)
-            .map(|t| t.kind())
-            .collect();
-
-        if child_kinds == [SyntaxKind::L_BRACKET, SyntaxKind::VALUE, SyntaxKind::R_BRACKET] {
-            self.0.children().find_map(Value::cast)
-        } else {
-            None
+        // If a RangeExpr child exists, this is not an index access.
+        if self.range().is_some() {
+            return None;
         }
+        // Otherwise, find the first expression-like child (Value or Expr)
+        // Let's assume the parser places a Value node for simple indices for now.
+        self.0.children().find_map(Value::cast)
     }
 
-    /// Returns a `RangeExpr` wrapper if this suffix represents a range access (e.g., `[7:0]`).
-    /// Note: This constructs a temporary `RangeExpr` as the parser doesn't create one inside `BUS_SUFFIX`.
+    /// Returns the `RangeExpr` node if this suffix represents a range access (e.g., `[7:0]`),
+    /// by looking for a child node of that kind.
     pub fn range(&self) -> Option<RangeExpr> {
-        let child_kinds: Vec<_> = self.0.children_with_tokens()
-            .filter(|t| t.kind() != SyntaxKind::WHITESPACE)
-            .map(|t| t.kind())
-            .collect();
-
-        if child_kinds == [SyntaxKind::L_BRACKET, SyntaxKind::VALUE, SyntaxKind::COLON, SyntaxKind::VALUE, SyntaxKind::R_BRACKET] {
-            // Wrap the current SyntaxNode in a RangeExpr for API consistency.
-            Some(RangeExpr(self.0.clone()))
-        } else {
-            None
-        }
+        // Directly find the RangeExpr node created by the parser
+        self.0.children().find_map(RangeExpr::cast)
     }
 }
 
@@ -599,10 +588,12 @@ impl BusSuffix {
 pub struct RangeExpr(SyntaxNode<BhdlLanguage>);
 
 impl RangeExpr {
+    // Find the first child expression (likely Value)
     pub fn lhs(&self) -> Option<Value> {
-        self.0.children().filter_map(Value::cast).nth(0)
+        self.0.children().find_map(Value::cast)
     }
 
+    // Find the second child expression (likely Value)
     pub fn rhs(&self) -> Option<Value> {
         self.0.children().filter_map(Value::cast).nth(1)
     }
@@ -619,28 +610,14 @@ impl rowan::ast::AstNode for RangeExpr {
     type Language = BhdlLanguage;
 
     fn can_cast(kind: SyntaxKind) -> bool {
-        // RangeExpr can be represented by BUS_SUFFIX if it contains the range pattern,
-        // or potentially a dedicated RANGE_EXPR node if the parser created one.
-        kind == SyntaxKind::BUS_SUFFIX || kind == SyntaxKind::RANGE_EXPR
+        // Now only casts from the dedicated RANGE_EXPR kind
+        kind == SyntaxKind::RANGE_EXPR
     }
 
     fn cast(node: SyntaxNode<BhdlLanguage>) -> Option<Self> {
+        // Simple cast based on the kind
         if Self::can_cast(node.kind()) {
-            // Additional check: Ensure the BUS_SUFFIX actually contains a range pattern
-            if node.kind() == SyntaxKind::BUS_SUFFIX {
-                 let child_kinds: Vec<_> = node.children_with_tokens()
-                    .filter(|t| t.kind() != SyntaxKind::WHITESPACE)
-                    .map(|t| t.kind())
-                    .collect();
-                if child_kinds == [SyntaxKind::L_BRACKET, SyntaxKind::VALUE, SyntaxKind::COLON, SyntaxKind::VALUE, SyntaxKind::R_BRACKET] {
-                    Some(Self(node))
-                } else {
-                    None // BUS_SUFFIX exists but doesn't represent a range here
-                }
-            } else {
-                 Some(Self(node)) // Assume dedicated RANGE_EXPR is valid
-            }
-
+            Some(Self(node))
         } else {
             None
         }
