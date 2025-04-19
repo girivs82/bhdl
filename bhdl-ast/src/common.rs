@@ -38,10 +38,26 @@ impl ParamDecl {
     }
 
     pub fn default_value(&self) -> Option<Value> {
+        // Find the VALUE node after the EQ token
         self.0.children_with_tokens()
-            .skip_while(|element| element.kind() != SyntaxKind::EQ)
+            .skip_while(|e| e.kind() != SyntaxKind::EQ)
             .skip(1)
-            .find_map(|element| element.into_node().and_then(Value::cast))
+            .find_map(|e| e.into_node().and_then(Value::cast))
+    }
+
+    // Added: Get the expression node assigned to the parameter
+    pub fn value_expr(&self) -> Option<Node> {
+        self.0.children_with_tokens()
+            .skip_while(|e| e.kind() != SyntaxKind::EQ)
+            .skip(1)
+            .find_map(|e| e.into_node())
+            // Filter for valid expression node kinds
+            .filter(|n| matches!(n.kind(), 
+                SyntaxKind::VALUE | SyntaxKind::IDENT_REF | SyntaxKind::BINARY_EXPR | 
+                SyntaxKind::PREFIX_EXPR // Add other expression kinds if needed
+                // SyntaxKind::PAREN_EXPR -> Assuming parser handles this via BINARY/PREFIX etc.
+                // If PAREN_EXPR exists and wraps expressions, add it here.
+            ))
     }
 }
 

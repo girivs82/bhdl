@@ -32,29 +32,110 @@ impl ResolvedTypeInfo {
 // --- Helpers ---
 
 /// Attempts to evaluate a constant syntax expression node as an i64 integer.
-/// Currently handles integer literals (Value) and unary minus on integer literals.
-fn evaluate_const_expr_as_i64(node: &SyntaxNode<BhdlLanguage>) -> Option<i64> {
+/// Handles integer literals, unary minus, binary ops (+,-,*,/), and parameter references.
+fn evaluate_const_expr_as_i64<'a>(
+    node: &SyntaxNode<BhdlLanguage>,
+    context: &'a Pass2Context<'a>, // Added context for lookups
+) -> Option<i64> {
     match node.kind() {
         SyntaxKind::VALUE => {
             // Direct value node
             Value::cast(node.clone()).and_then(|v| parse_value_as_i64(&v))
         }
         SyntaxKind::PREFIX_EXPR => {
-            // Check for unary minus
-            let op = node.first_token().filter(|t| t.kind() == SyntaxKind::MINUS);
-            let operand_node = node.children().nth(0); // First child should be the operand expression
+            // Find the operator token (expect MINUS)
+            let op_token = node.first_token().filter(|t| t.kind() == SyntaxKind::MINUS);
+            // Find the first child node (operand) after the operator token
+            let operand_node = op_token.as_ref().and_then(|op| {
+                node.children_with_tokens()
+                    .filter_map(|e| e.into_node())
+                    .find(|n| n.text_range().start() >= op.text_range().end()) // Find node starting after op
+            });
             
-            if op.is_some() {
+            if op_token.is_some() {
                 if let Some(operand) = operand_node {
                     // Recursively evaluate the operand and negate
-                    evaluate_const_expr_as_i64(&operand).map(|val| -val)
+                    evaluate_const_expr_as_i64(&operand, context).map(|val| -val)
                 } else {
-                    None // Malformed prefix expr?
+                    None // Malformed prefix expr? (No operand found after operator)
                 }
             } else {
                 None // Only handle unary minus for now
             }
         }
+        SyntaxKind::BINARY_EXPR => {
+            // Find LHS (first child node)
+            let lhs_node = node.children().nth(0);
+            
+            // Find Operator token (first token matching an operator kind AFTER lhs)
+            let op_token = lhs_node.as_ref().and_then(|lhs| {
+                node.children_with_tokens()
+                    .filter(|t| t.text_range().start() >= lhs.text_range().end()) // Look after LHS
+                    .find(|t| matches!(t.kind(), 
+                        SyntaxKind::PLUS | SyntaxKind::MINUS | SyntaxKind::STAR | SyntaxKind::SLASH
+                    ))
+            });
+
+            // Find RHS (first child node AFTER operator)
+            let rhs_node = op_token.as_ref().and_then(|op| {
+                 node.children_with_tokens()
+                    .filter_map(|e| e.into_node())
+                    .find(|n| n.text_range().start() >= op.text_range().end()) // Look after Operator
+            });
+
+            // Ensure all parts were found
+            if let (Some(lhs), Some(rhs), Some(op)) = (lhs_node, rhs_node, op_token) {
+                // Recursively evaluate LHS and RHS, passing context
+                let lhs_val = evaluate_const_expr_as_i64(&lhs, context);
+                let rhs_val = evaluate_const_expr_as_i64(&rhs, context);
+
+                match (lhs_val, rhs_val, op.kind()) {
+                    (Some(l), Some(r), SyntaxKind::PLUS) => Some(l + r),
+                    (Some(l), Some(r), SyntaxKind::MINUS) => Some(l - r),
+                    (Some(l), Some(r), SyntaxKind::STAR) => Some(l * r),
+                    (Some(l), Some(r), SyntaxKind::SLASH) => {
+                        if r != 0 { Some(l / r) } else { None } // Avoid division by zero
+                    }
+                    _ => None, // Operands couldn't be evaluated or unsupported operator
+                }
+            } else {
+                None // Malformed binary expression
+            }
+        }
+        SyntaxKind::IDENT_REF => {
+            IdentRef::cast(node.clone()).and_then(|ident_ref| {
+                ident_ref.token().and_then(|token| {
+                    let name = token.text();
+                    context.lookup(name).and_then(|symbol| {
+                        if symbol.kind == SymbolKind::Parameter {
+                            // Need to find the ParamDecl node and evaluate its value
+                            symbol.definition_node_ptr.as_ref().and_then(|ptr| {
+                                ptr.try_to_node(context.source_file_root)
+                                    .and_then(|param_decl_node| ParamDecl::cast(param_decl_node))
+                                    // UPDATED: Use value_expr() instead of value_expr_node()
+                                    .and_then(|param_decl| param_decl.value_expr()) 
+                                    .and_then(|value_node| {
+                                        // Recursively evaluate the parameter's value expression
+                                        // Pass context down
+                                        evaluate_const_expr_as_i64(&value_node, context)
+                                    })
+                            })
+                        } else {
+                            None // Identifier is not a Parameter
+                        }
+                    })
+                })
+            })
+        }
+        // Handle Parenthesized Expressions - REMOVED as PAREN_EXPR kind doesn't exist
+        /*
+        SyntaxKind::PAREN_EXPR => {
+             // Get the inner expression (skipping parens)
+             node.children().nth(0).and_then(|inner_expr| {
+                 evaluate_const_expr_as_i64(&inner_expr, context)
+             })
+        }
+        */
         _ => None, // Cannot evaluate other node types as constant i64 yet
     }
 }
@@ -298,9 +379,10 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                    // Extract bus bounds if suffix exists
                    let (bus_high, bus_low) = decl.bus_suffix()
                        .and_then(|suffix| suffix.range())
+                       // UPDATED: Use parse_value_as_i64 directly for simple literals in Pass 1
                        .map(|range_expr| (
-                           range_expr.lhs_node().and_then(|n| evaluate_const_expr_as_i64(&n)),
-                           range_expr.rhs_node().and_then(|n| evaluate_const_expr_as_i64(&n))
+                           range_expr.lhs().and_then(|v| parse_value_as_i64(&v)),
+                           range_expr.rhs().and_then(|v| parse_value_as_i64(&v))
                        ))
                        .unwrap_or((None, None));
                    
@@ -321,9 +403,10 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                     // Extract bus bounds if suffix exists
                     let (bus_high, bus_low) = decl.bus_suffix()
                         .and_then(|suffix| suffix.range())
+                        // UPDATED: Use parse_value_as_i64 directly for simple literals in Pass 1
                         .map(|range_expr| (
-                            range_expr.lhs_node().and_then(|n| evaluate_const_expr_as_i64(&n)),
-                            range_expr.rhs_node().and_then(|n| evaluate_const_expr_as_i64(&n))
+                            range_expr.lhs().and_then(|v| parse_value_as_i64(&v)),
+                            range_expr.rhs().and_then(|v| parse_value_as_i64(&v))
                         ))
                         .unwrap_or((None, None));
 
@@ -344,9 +427,10 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                    // Extract bus bounds if suffix exists
                    let (bus_high, bus_low) = decl.bus_suffix()
                        .and_then(|suffix| suffix.range())
+                       // UPDATED: Use parse_value_as_i64 directly for simple literals in Pass 1
                        .map(|range_expr| (
-                           range_expr.lhs_node().and_then(|n| evaluate_const_expr_as_i64(&n)),
-                           range_expr.rhs_node().and_then(|n| evaluate_const_expr_as_i64(&n))
+                           range_expr.lhs().and_then(|v| parse_value_as_i64(&v)),
+                           range_expr.rhs().and_then(|v| parse_value_as_i64(&v))
                        ))
                        .unwrap_or((None, None));
                    
@@ -494,7 +578,7 @@ fn resolve_node_type_info<'a>(
     
     // --- Step 1: Get base symbol info using the helper ---
     // UPDATED: Call the module-level helper function
-    let base_info = get_reference_base_info(context, node)?; 
+    let base_info = get_reference_base_info(context, node)?;
     let symbol = base_info.symbol;
     let declared_base_type = base_info.base_type_name;
     let declared_bounds = base_info.bounds;
@@ -525,7 +609,8 @@ fn resolve_node_type_info<'a>(
         let declared_max = d_high.max(d_low);
 
         if let Some(index_node) = suffix.index_expr_node() {
-            if let Some(index_val) = evaluate_const_expr_as_i64(&index_node) {
+            // UPDATED: Pass context to evaluate_const_expr_as_i64
+            if let Some(index_val) = evaluate_const_expr_as_i64(&index_node, context) {
                 if index_val < declared_min || index_val > declared_max {
                      // Return Err(Diagnostic)
                      return Some(Err(Diagnostic {
@@ -544,9 +629,10 @@ fn resolve_node_type_info<'a>(
             }
         }
         else if let Some(range_expr) = suffix.range() {
+            // UPDATED: Pass context to evaluate_const_expr_as_i64
             if let (Some(h), Some(l)) = (
-                range_expr.lhs_node().and_then(|n| evaluate_const_expr_as_i64(&n)),
-                range_expr.rhs_node().and_then(|n| evaluate_const_expr_as_i64(&n))
+                range_expr.lhs_node().and_then(|n| evaluate_const_expr_as_i64(&n, context)),
+                range_expr.rhs_node().and_then(|n| evaluate_const_expr_as_i64(&n, context))
             ) {
                 let used_min = h.min(l);
                 let used_max = h.max(l);
@@ -1881,6 +1967,112 @@ mod tests {
         let source_file = parse_to_sourcefile(input);
         let result = analyze(&source_file);
         assert!(result.diagnostics.is_empty(), "Diagnostics found: {:?}", result.diagnostics);
+    }
+
+    // --- Tests for Constant Expression Evaluation --- 
+
+    // Helper to evaluate expression string in a simple board context
+    fn eval_expr_str(expr_str: &str) -> Option<i64> {
+        let input = format!(r#"
+            board B {{
+                parameters {{ P1 = 10; P2 = -3; }}
+                nets {{ net N[({expr_str}):0]: signal; }}
+            }}
+        "#);
+        let source_file = parse_to_sourcefile(&input);
+        let (global_scope, def_scopes) = populate_global_scope_and_build_definition_scopes(&source_file);
+        // DELAYED Context creation: Moved inside the final and_then
+        // let context = Pass2Context::new(&global_scope, &def_scopes, &source_file.syntax()); 
+        
+        // Find the expression node within the NetDecl
+        source_file.syntax().descendants()
+            .find(|n| n.kind() == SyntaxKind::NET_DECL)
+            .and_then(NetDecl::cast)
+            .and_then(|net_decl| net_decl.bus_suffix())
+            .and_then(|suffix| suffix.range())
+            .and_then(|range| range.lhs_node()) // Get the LHS node of the range [expr : 0]
+            .and_then(|expr_node| {
+                // Create context *just before* evaluation for the test
+                let context = Pass2Context::new(&global_scope, &def_scopes, &source_file.syntax()); 
+                // Manually push the Board scope onto the context stack for the test
+                let board_node = source_file.syntax().children().find(|n| n.kind() == SyntaxKind::BOARD_DEF);
+                if let Some(board) = board_node {
+                     let board_ptr = SyntaxNodePtr::new(&board);
+                     // Need mutable context to push scope
+                     let mut mut_context = context; 
+                     mut_context.push_scope(&board_ptr);
+                     evaluate_const_expr_as_i64(&expr_node, &mut_context)
+                } else {
+                    // Fallback or error if board node not found (shouldn't happen in test)
+                    evaluate_const_expr_as_i64(&expr_node, &context)
+                }
+            })
+    }
+
+    #[test]
+    fn test_eval_const_literal() {
+        assert_eq!(eval_expr_str("5"), Some(5));
+        assert_eq!(eval_expr_str("-12"), Some(-12));
+    }
+
+    #[test]
+    fn test_eval_const_param_ref() {
+        assert_eq!(eval_expr_str("P1"), Some(10));
+        assert_eq!(eval_expr_str("P2"), Some(-3));
+        assert_eq!(eval_expr_str("NonExistentParam"), None); // Undefined param
+    }
+
+    #[test]
+    fn test_eval_const_binary_ops() {
+        assert_eq!(eval_expr_str("1 + 2"), Some(3));
+        assert_eq!(eval_expr_str("P1 - 4"), Some(6)); // 10 - 4
+        assert_eq!(eval_expr_str("3 * P1"), Some(30)); // 3 * 10
+        assert_eq!(eval_expr_str("P1 / 5"), Some(2)); // 10 / 5
+        assert_eq!(eval_expr_str("P1 + P2"), Some(7)); // 10 + (-3)
+        assert_eq!(eval_expr_str("10 / 0"), None); // Division by zero
+    }
+
+    #[test]
+    fn test_eval_const_unary_minus() {
+        assert_eq!(eval_expr_str("-P1"), Some(-10));
+        assert_eq!(eval_expr_str("-P2"), Some(3)); // -(-3)
+        assert_eq!(eval_expr_str("-(1 + 4)"), Some(-5));
+    }
+
+    #[test]
+    fn test_eval_const_parens() {
+        assert_eq!(eval_expr_str("(1 + 2) * 3"), Some(9));
+        assert_eq!(eval_expr_str("P1 / (1 + 1)"), Some(5)); // 10 / 2
+    }
+
+    #[test]
+    fn test_eval_const_nested_param() {
+        // Parameter whose value depends on another
+        let input = r#"
+            board B {
+                parameters { P_BASE = 5; P_OFFSET = P_BASE * 2; }
+                nets { net N[(P_OFFSET + 1):0]: signal; } 
+            }
+        "#;
+         let source_file = parse_to_sourcefile(&input);
+        let (global_scope, def_scopes) = populate_global_scope_and_build_definition_scopes(&source_file);
+        let context = Pass2Context::new(&global_scope, &def_scopes, &source_file.syntax());
+        
+        let expr_node = source_file.syntax().descendants()
+            .find(|n| n.kind() == SyntaxKind::NET_DECL)
+            .and_then(NetDecl::cast)
+            .and_then(|net_decl| net_decl.bus_suffix())
+            .and_then(|suffix| suffix.range())
+            .and_then(|range| range.lhs_node())
+            .unwrap();
+
+        // Create context and push Board scope before evaluation
+        let mut context = Pass2Context::new(&global_scope, &def_scopes, &source_file.syntax());
+        let board_node = source_file.syntax().children().find(|n| n.kind() == SyntaxKind::BOARD_DEF).unwrap();
+        let board_ptr = SyntaxNodePtr::new(&board_node);
+        context.push_scope(&board_ptr);
+
+        assert_eq!(evaluate_const_expr_as_i64(&expr_node, &context), Some(11)); // (5*2) + 1
     }
 
 }
