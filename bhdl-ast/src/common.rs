@@ -563,15 +563,31 @@ impl AstNode for BusSuffix {
 }
 
 impl BusSuffix {
-    /// Returns the `Value` node if this suffix represents an index access (e.g., `[0]`),
-    /// but only if it does not contain a RangeExpr.
-    pub fn index(&self) -> Option<Value> {
+    /// Returns the `SyntaxNode` of the expression if this suffix represents an index access (e.g., `[0]`, `[-1]`, `[WIDTH-1]`),
+    /// but only if it does not contain a RangeExpr child.
+    pub fn index_expr_node(&self) -> Option<SyntaxNode<BhdlLanguage>> {
         // If a RangeExpr child exists, this is not an index access.
         if self.range().is_some() {
             return None;
         }
-        // Otherwise, find the first expression-like child (Value or Expr)
-        // Let's assume the parser places a Value node for simple indices for now.
+        // Find the first child node that is likely an expression
+        self.0.children().find(|node| 
+            matches!(node.kind(), 
+                SyntaxKind::VALUE | SyntaxKind::IDENT_REF | SyntaxKind::PREFIX_EXPR | 
+                SyntaxKind::BINARY_EXPR // Add others if needed
+            )
+        )
+    }
+
+    /// Deprecated: Use index_expr_node instead.
+    /// Returns the `Value` node if this suffix represents a simple index access (e.g., `[0]`),
+    /// but only if it does not contain a RangeExpr.
+    #[deprecated = "Use index_expr_node which returns the full SyntaxNode"] // Mark as deprecated
+    pub fn index(&self) -> Option<Value> {
+         // If a RangeExpr child exists, this is not an index access.
+        if self.range().is_some() {
+            return None;
+        }
         self.0.children().find_map(Value::cast)
     }
 
@@ -588,14 +604,21 @@ impl BusSuffix {
 pub struct RangeExpr(SyntaxNode<BhdlLanguage>);
 
 impl RangeExpr {
-    // Find the first child expression (likely Value)
-    pub fn lhs(&self) -> Option<Value> {
-        self.0.children().find_map(Value::cast)
+    // Return the SyntaxNode for the LHS expression
+    pub fn lhs_node(&self) -> Option<SyntaxNode<BhdlLanguage>> {
+        self.0.children().nth(0)
+    }
+    // Return the SyntaxNode for the RHS expression
+    pub fn rhs_node(&self) -> Option<SyntaxNode<BhdlLanguage>> {
+        self.0.children().nth(1) // Assumes lhs is 0, rhs is 1. Remove semicolon.
     }
 
-    // Find the second child expression (likely Value)
+    // Keep old methods for compatibility for now, but maybe deprecate?
+    pub fn lhs(&self) -> Option<Value> {
+        self.lhs_node().and_then(Value::cast)
+    }
     pub fn rhs(&self) -> Option<Value> {
-        self.0.children().filter_map(Value::cast).nth(1)
+        self.rhs_node().and_then(Value::cast)
     }
 
     pub fn separator_kind(&self) -> Option<SyntaxKind> {

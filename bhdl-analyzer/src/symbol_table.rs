@@ -44,6 +44,8 @@ pub struct Symbol {
     pub span: TextRange,
     pub instance_type_name: Option<String>,
     pub definition_node_ptr: Option<SyntaxNodePtr<bhdl_parser::syntax::BhdlLanguage>>,
+    pub bus_high: Option<i64>,
+    pub bus_low: Option<i64>,
     // pub definition_span: Option<TextRange>, // TODO: Add span info from CST node
     // pub documentation: Option<String>, // TODO
 }
@@ -62,6 +64,8 @@ impl Symbol {
             span,
             instance_type_name: None,
             definition_node_ptr: Some(def_node_ptr.clone()),
+            bus_high: None,
+            bus_low: None,
         }
     }
 
@@ -71,6 +75,8 @@ impl Symbol {
         kind: SymbolKind,
         span: TextRange,
         decl_node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>, // Use SyntaxNode for decls
+        bus_high: Option<i64>, // Added bus bound parameters
+        bus_low: Option<i64>,
     ) -> Self {
         Symbol {
             name: name.to_string(),
@@ -78,6 +84,8 @@ impl Symbol {
             span,
             instance_type_name: None,
             definition_node_ptr: Some(SyntaxNodePtr::new(decl_node)), // Store pointer to decl
+            bus_high, // Store the bounds
+            bus_low,
         }
     }
 
@@ -94,6 +102,8 @@ impl Symbol {
             span,
             instance_type_name: Some(instance_type_name.to_string()),
             definition_node_ptr: Some(SyntaxNodePtr::new(inst_node)), // Store pointer to instance node
+            bus_high: None,
+            bus_low: None,
         }
     }
 }
