@@ -64,8 +64,69 @@ pub fn lex_ident_or_kw(lex: &mut Lexer<LexerToken>) -> KeywordOrIdent {
 #[logos(skip r"//[^\n]*")] // Ignore single-line comments
 #[logos(skip r"/\*([^*]|\*[^/])*\*/")] // Ignore multi-line comments
 pub enum LexerToken {
-    #[regex("[a-zA-Z_][a-zA-Z0-9_]*", lex_ident_or_kw)]
-    KeywordOrIdent(KeywordOrIdent), // Carries kind and text
+    // Units (Higher priority for ambiguous multi-letter, low for single)
+    #[token("kOhm", priority = 3)] kOhmUnit,
+    #[token("MOhm", priority = 3)] MOHmUnit,
+    #[token("GOhm", priority = 3)] GOhmUnit,
+    #[token("Ohm", priority = 3)] OhmUnit, // Increased priority
+    #[token("uF", priority = 3)] UFUnit,
+    #[token("nF", priority = 3)] NFUnit,
+    #[token("pF", priority = 3)] PFUnit,
+    #[token("F", priority = 1)] FUnit, // Low priority
+    #[token("uH", priority = 3)] UHUnit,
+    #[token("nH", priority = 3)] NHUnit,
+    #[token("pH", priority = 3)] PHUnit,
+    #[token("H", priority = 1)] HUnit, // Low priority
+    #[token("Vdc", priority = 3)] VdcUnit,
+    #[token("Vac", priority = 3)] VacUnit,
+    #[token("Vrms", priority = 3)] VrmsUnit,
+    #[token("Vpp", priority = 3)] VppUnit,
+    #[token("V", priority = 1)] VUnit, // Low priority
+    #[token("A", priority = 1)] AUnit, // Low priority
+    #[token("W", priority = 1)] WUnit, // Low priority
+    #[token("Hz", priority = 3)] HzUnit, // Increased priority
+    #[token("kHz", priority = 3)] KHzUnit,
+    #[token("MHz", priority = 3)] MHUnit,
+    #[token("GHz", priority = 3)] GHUnit,
+    #[token("s", priority = 1)] SUnit, // Low priority
+    #[token("ms", priority = 3)] MsUnit,
+    #[token("us", priority = 3)] UsUnit,
+    #[token("ns", priority = 3)] NsUnit,
+    #[token("ps", priority = 3)] PsUnit,
+    #[token("deg", priority = 3)] DegUnit, // Increased priority
+    #[token("rad", priority = 3)] RadUnit, // Increased priority
+    #[token("dB", priority = 3)] DbUnit,  // Increased priority
+    #[token("dBm", priority = 3)] DbmUnit,
+    #[token("%", priority = 1)] PercentUnit, // Low priority for the symbol
+    // Add mV, uV, nV
+    #[token("mV", priority = 3)] MVUnit,
+    #[token("uV", priority = 3)] UVUnit,
+    #[token("nV", priority = 3)] NVUnit,
+
+    // ... after AUnit ...
+    // Add mA, uA, nA
+    #[token("mA", priority = 3)] MAUnit,
+    #[token("uA", priority = 3)] UAUnit,
+    #[token("nA", priority = 3)] NAUnit,
+
+    // ... after WUnit ...
+    // Add mW, uW, nW
+    #[token("mW", priority = 3)] MWUnit,
+    #[token("uW", priority = 3)] UWUnit,
+    #[token("nW", priority = 3)] NWUnit,
+
+    // ... after PercentUnit ...
+    // Add pct as an alternative
+    #[token("pct", priority = 3)] PctUnit,
+    // Add length units
+    #[token("mm", priority = 3)] MMUnit,
+    #[token("um", priority = 3)] UMUnit,
+    #[token("nm", priority = 3)] NMUnit,
+    #[token("mil", priority = 3)] MILUnit,
+
+    // Catch-all for keywords and identifiers (Keep priority = 2)
+    #[regex("[a-zA-Z_][a-zA-Z0-9_]*", lex_ident_or_kw, priority = 2)]
+    KeywordOrIdent(KeywordOrIdent),
 
     // Simple tokens (can have simple names, don't need to match SyntaxKind names)
     #[token("(")] LParen,
@@ -94,8 +155,12 @@ pub enum LexerToken {
     #[token(">")] RAngle,
     #[token("@")] At,
 
-    #[regex(r"[0-9]+(?:_[0-9]+)*")] Number,
-    #[regex(r#""([^"\\]|\\.)*""#)] String,
+    // Updated Number regex to handle integers and floats (basic)
+    #[regex(r"[0-9]+(?:_[0-9]+)*(?:\.[0-9]+(?:_[0-9]+)*)?", priority = 1)] 
+    Number,
+    // String literal regex
+    #[regex(r#""([^"\\]|\\.)*""#, priority = 1)] 
+    String,
 
     #[token("->")] Arrow,
     #[token("==")] EqEq,
@@ -108,10 +173,8 @@ pub enum LexerToken {
     #[token(">>")] RShift,
     #[token("<=>")] IfConnect, // Interface connection token
 
-    // This represents an error during lexing. Logos requires an Error variant.
-    // It doesn't map directly to a SyntaxKind node, but signifies a lexing failure.
-    // REMOVE #[error] - Not needed in Logos 0.13+
-    Error, // Required by Logos for error handling
+    // Error token (Logos handles this internally now)
+    // Error, // Removed explicit Error variant
 }
 
 #[cfg(test)]
