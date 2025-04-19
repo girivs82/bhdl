@@ -165,9 +165,9 @@ fn test_port_decl_with_bus_index() {
     assert_eq!(port_decl.name().unwrap().text(), "CS");
     assert!(port_decl.bus_suffix().is_some());
     let suffix = port_decl.bus_suffix().unwrap();
-    assert!(suffix.index().is_some());
+    assert!(suffix.index_expr_node().is_some());
     assert!(suffix.range().is_none());
-    assert_eq!(suffix.index().unwrap().syntax().first_token().unwrap().text(), "0");
+    assert_eq!(suffix.index_expr_node().unwrap().text(), "0");
 }
 
 // --- Net Declaration Tests ---
@@ -218,8 +218,8 @@ fn test_pin_ref_with_bus_index() {
     assert_eq!(pin_ref.pin_name().unwrap().text(), "Data");
     assert!(pin_ref.bus_suffix().is_some());
     let suffix = pin_ref.bus_suffix().unwrap();
-    assert!(suffix.index().is_some());
-    assert_eq!(suffix.index().unwrap().syntax().first_token().unwrap().text(), "0");
+    assert!(suffix.index_expr_node().is_some());
+    assert_eq!(suffix.index_expr_node().unwrap().text(), "0");
 }
 
 #[test]
