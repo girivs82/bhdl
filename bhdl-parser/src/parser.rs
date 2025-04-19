@@ -1321,11 +1321,12 @@ impl<'t> Parser<'t> {
             self.parse_bus_suffix(); // Parse the bus suffix
             self.builder.finish_node(); // Finish NET_REF node
 
-        // Simple net reference (NetName)
+        // Simple identifier reference (NetName, PinName, PortName etc.)
         } else {
-            self.builder.start_node_at(cp, NET_REF.into()); // Start NET_REF node at the checkpoint
-            // No more tokens to consume for a simple net ref
-            self.builder.finish_node(); // Finish NET_REF node
+            // Create a more generic node type for simple identifiers
+            self.builder.start_node_at(cp, SIMPLE_IDENT_REF.into()); 
+            // No more tokens to consume for a simple ref
+            self.builder.finish_node(); // Finish SIMPLE_IDENT_REF node
         }
         // No outer marker node anymore
     }

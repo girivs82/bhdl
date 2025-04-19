@@ -169,6 +169,9 @@ pub enum SyntaxKind {
     ARGUMENT_LIST,     // (arg1, arg2)
     UNIT_IDENTIFIER,   // A unit like kOhm, Vdc, pct, etc.
 
+    // References
+    SIMPLE_IDENT_REF, // Reference consisting of a single identifier (could be Net, Pin, Port, etc.)
+
     // ERROR must be the last variant for the assertion in kind_from_raw
     ERROR = 65534, // Represents a parsing error node
 }
