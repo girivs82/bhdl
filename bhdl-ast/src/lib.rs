@@ -4,23 +4,8 @@ use rowan::{SyntaxNode, SyntaxToken};
 pub type Node = SyntaxNode<BhdlLanguage>;
 pub type Token = SyntaxToken<BhdlLanguage>;
 
-/// A trait for types that correspond to a single SyntaxKind.
-/// Nodes in the concrete syntax tree are untyped. We use this trait
-/// to cast SyntaxNodes into typed AST nodes.
-pub trait AstNode: Sized {
-    /// Returns `true` if the given `SyntaxKind` can be cast into `Self`.
-    fn can_cast(kind: SyntaxKind) -> bool;
-
-    /// Casts a `SyntaxNode` into `Self`.
-    /// Returns `None` if the node's kind is not compatible.
-    fn cast(node: Node) -> Option<Self>;
-
-    /// Returns the underlying `SyntaxNode`.
-    fn syntax(&self) -> &Node;
-}
-
 /// Helper trait for AST nodes that have a name.
-pub trait HasName: AstNode {
+pub trait HasName: rowan::ast::AstNode<Language = BhdlLanguage> {
     /// Returns the name token associated with this node.
     fn name(&self) -> Option<Token> {
         self.syntax()
@@ -43,7 +28,7 @@ pub mod source_file; // Declare the module
 pub use source_file::SourceFile;
 
 // Re-export items
-pub use items::{Board, ComponentDef, InterfaceDef, Module};
+pub use items::{Board, ComponentDef, InterfaceDef, Module, TypeDef, ImportStmt};
 // Add other items like InterfaceDef, etc. here as they are defined
 
 // Re-export blocks
