@@ -163,7 +163,12 @@ impl AstNode for Value {
 }
 
 impl Value {
-    // TODO: Add methods to get specific value kinds/tokens (number(), string(), boolean())
+    pub fn number_literal(&self) -> Option<Token> {
+        self.0.children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .find(|t| t.kind() == SyntaxKind::NUMBER)
+    }
+    // TODO: Add methods to get specific value kinds/tokens (string(), boolean())
 }
 
 // --- Identifier Reference ---
