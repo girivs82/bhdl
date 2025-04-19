@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use rowan::{TextRange, ast::SyntaxNodePtr};
-use rowan::SyntaxNode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PortDirectionKind {

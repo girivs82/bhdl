@@ -524,7 +524,8 @@ fn resolve_node_type_info<'a>(
              // Now: We know an index is used, result type is scalar
              Some(Ok(ResolvedTypeInfo { base_type_name: declared_base_type, bounds: None }))
         }
-        else if let Some(range_expr) = suffix.range() {
+        // Prefix unused variable with underscore
+        else if let Some(_range_expr) = suffix.range() {
             // --- Range bounds check deferred to Pass 4 --- 
             // Previously: evaluated range lhs/rhs, compared with declared_bounds
             // Now: We know a range is used, but cannot determine resulting bounds without Pass 3 results.
@@ -1262,7 +1263,8 @@ fn evaluate_const_expr_as_i64<'a>(
 // Pass 3 Context: Holds state for constant evaluation
 #[derive(Debug)]
 struct Pass3Context<'a> {
-    global_scope: &'a SymbolTable,
+    // Prefix unused field with underscore
+    _global_scope: &'a SymbolTable,
     definition_scopes: &'a HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>,
     source_file_root: &'a SyntaxNode<BhdlLanguage>,
     resolved_constants: &'a mut ResolvedConstants, // Mutable map to store results
@@ -1280,7 +1282,8 @@ impl<'a> Pass3Context<'a> {
         diagnostics: &'a mut Vec<Diagnostic>,
     ) -> Self {
         Self {
-            global_scope,
+            // Update field name in constructor
+            _global_scope: global_scope,
             definition_scopes: def_scopes,
             source_file_root,
             resolved_constants,
