@@ -1622,7 +1622,7 @@ fn visit_node_pass3_const_eval(node: &SyntaxNode<BhdlLanguage>, context: &mut Pa
 struct Pass4Context<'a> {
     global_scope: &'a SymbolTable,
     definition_scopes: &'a HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>,
-    source_file_root: &'a SyntaxNode<BhdlLanguage>,
+    // REMOVED: source_file_root: &'a SyntaxNode<BhdlLanguage>,
     resolved_constants: &'a ResolvedConstants, // Read-only access to constants
     diagnostics: &'a mut Vec<Diagnostic>,     // Mutable vec to add bounds errors
     current_scope_stack: Vec<&'a SymbolTable>, // Track current scope for lookups
@@ -1632,14 +1632,14 @@ impl<'a> Pass4Context<'a> {
      fn new(
         global_scope: &'a SymbolTable, 
         def_scopes: &'a HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>, 
-        source_file_root: &'a SyntaxNode<BhdlLanguage>,
+        // REMOVED: source_file_root: &'a SyntaxNode<BhdlLanguage>,
         resolved_constants: &'a ResolvedConstants, // Pass in constants
         diagnostics: &'a mut Vec<Diagnostic>,
     ) -> Self {
         Self {
             global_scope,
             definition_scopes: def_scopes,
-            source_file_root,
+            // REMOVED: source_file_root,
             resolved_constants,
             diagnostics,
             current_scope_stack: vec![global_scope],
@@ -1847,7 +1847,7 @@ pub fn analyze(source_file: &SourceFile) -> AnalysisResult {
     let mut pass4_context = Pass4Context::new(
         &global_scope_table,
         &definition_scopes,
-        &source_file.syntax(),
+        // REMOVED: &source_file.syntax(),
         &resolved_constants_map, // Pass evaluated constants
         &mut pass4_diagnostics,
     );
