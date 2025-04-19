@@ -6,7 +6,7 @@ use bhdl_ast::{
     // Top-level items (TypeDef instead of Typedef, Item might not be needed here)
     items::{ComponentDef, InterfaceDef, TypeDef, Board, Module},
     // Common items needed in visit_node
-    common::{ParamDecl, NetDecl, PinRef, PortDecl, PinDecl, ComponentInst, TypeRef, SimpleIdentRef, IdentRef, NetRef, Value, BusSuffix},
+    common::{ParamDecl, NetDecl, PinRef, PortDecl, PinDecl, ComponentInst, TypeRef, SimpleIdentRef, IdentRef, NetRef, Value},
 };
 use std::collections::HashMap;
 
