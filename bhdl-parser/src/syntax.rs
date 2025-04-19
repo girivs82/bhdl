@@ -186,8 +186,7 @@ impl Language for BhdlLanguage {
     type Kind = SyntaxKind;
 
     fn kind_from_raw(raw: rowan::SyntaxKind) -> Self::Kind {
-        // Check against the explicitly assigned highest value
-        assert!(raw.0 <= SyntaxKind::ERROR as u16, "Invalid SyntaxKind value");
+        assert!(raw.0 < SyntaxKind::ERROR as u16);
         unsafe { std::mem::transmute::<u16, SyntaxKind>(raw.0) }
     }
 
@@ -198,39 +197,39 @@ impl Language for BhdlLanguage {
 
 pub type SyntaxNode = rowan::SyntaxNode<BhdlLanguage>;
 pub type SyntaxToken = rowan::SyntaxToken<BhdlLanguage>;
-pub type SyntaxElement = rowan::SyntaxElement<BhdlLanguage>;
-pub type SyntaxNodeChildren = rowan::SyntaxNodeChildren<BhdlLanguage>;
-pub type SyntaxElementChildren = rowan::SyntaxElementChildren<BhdlLanguage>;
+// pub type SyntaxElement = rowan::SyntaxElement<BhdlLanguage>; // Commented out - unused
+// pub type SyntaxNodeChildren = rowan::SyntaxNodeChildren<BhdlLanguage>; // Commented out - unused
+// pub type SyntaxElementChildren = rowan::SyntaxElementChildren<BhdlLanguage>; // Commented out - unused
 
 // Helper trait for typed AST nodes (example)
-pub trait AstNode {
-    fn can_cast(kind: SyntaxKind) -> bool where Self: Sized;
-    fn cast(node: SyntaxNode) -> Option<Self> where Self: Sized;
-    fn syntax(&self) -> &SyntaxNode;
-}
+// pub trait AstNode {
+//     fn can_cast(kind: SyntaxKind) -> bool where Self: Sized;
+//     fn cast(node: SyntaxNode) -> Option<Self> where Self: Sized;
+//     fn syntax(&self) -> &SyntaxNode;
+// }
 
 // Add more imports if needed for extensions
 // use rowan::NodeOrToken;
 
 // Example extension trait for SyntaxNode (optional but useful)
-pub trait SyntaxNodeExt {
-    fn child<N: AstNode>(&self) -> Option<N>;
-    fn children<N: AstNode>(&self) -> impl Iterator<Item = N>;
-    fn field_token(&self, kind: SyntaxKind) -> Option<SyntaxToken>;
-}
+// pub trait SyntaxNodeExt {
+//     fn child<N: AstNode>(&self) -> Option<N>;
+//     fn children<N: AstNode>(&self) -> impl Iterator<Item = N>;
+//     fn field_token(&self, kind: SyntaxKind) -> Option<SyntaxToken>;
+// }
 
-impl SyntaxNodeExt for SyntaxNode {
-    fn child<N: AstNode>(&self) -> Option<N> {
-        self.children().find_map(N::cast)
-    }
+// impl SyntaxNodeExt for SyntaxNode {
+//     fn child<N: AstNode>(&self) -> Option<N> {
+//         self.children().find_map(N::cast)
+//     }
 
-    fn children<N: AstNode>(&self) -> impl Iterator<Item = N> {
-        self.children().filter_map(N::cast)
-    }
+//     fn children<N: AstNode>(&self) -> impl Iterator<Item = N> {
+//         self.children().filter_map(N::cast)
+//     }
 
-    fn field_token(&self, kind: SyntaxKind) -> Option<SyntaxToken> {
-        self.children_with_tokens()
-            .filter_map(|element| element.into_token())
-            .find(|token| token.kind() == kind)
-    }
-} 
+//     fn field_token(&self, kind: SyntaxKind) -> Option<SyntaxToken> {
+//         self.children_with_tokens()
+//             .filter_map(|element| element.into_token())
+//             .find(|token| token.kind() == kind)
+//     }
+// } 
