@@ -528,20 +528,32 @@ impl<'t> Parser<'t> {
 
     // Reconstructed parse_bus_suffix
     fn parse_bus_suffix(&mut self) {
-        // Ensure we are at L_BRACKET before starting node?
-        if self.peek_raw() != Some(SyntaxKind::L_BRACKET) {
+        // Ensure we are at L_BRACKET before starting node? Use peek() to handle trivia.
+        if self.peek() != Some(SyntaxKind::L_BRACKET) {
              self.error("Expected '[' to start bus suffix".to_string());
              return; // Don't proceed if no bracket
         }
-        self.builder.start_node(SyntaxKind::BUS_SUFFIX.into()); // Corrected kind
+        self.builder.start_node(SyntaxKind::BUS_SUFFIX.into()); // Start BUS_SUFFIX node
         self.expect(SyntaxKind::L_BRACKET);
-        self.parse_expr(0); // Use parse_expr instead of parse_value
-        // Check for colon indicating a range [high:low]
-        if self.eat(SyntaxKind::COLON) {
-            self.parse_expr(0); // Use parse_expr instead of parse_value
+
+        // Checkpoint *before* parsing the first potential part of the range/index
+        let expr1_checkpoint = self.builder.checkpoint();
+        self.parse_expr(0); // Parse the first expression (index or high bound)
+
+        // Check if it's a range
+        if self.peek() == Some(SyntaxKind::COLON) {
+            // It's a range, create a RANGE_EXPR node around the two expressions
+            self.builder.start_node_at(expr1_checkpoint, SyntaxKind::RANGE_EXPR.into());
+            self.expect(SyntaxKind::COLON); // Consume COLON (expect handles trivia)
+            self.parse_expr(0); // Parse the second expression (low bound)
+            self.builder.finish_node(); // Finish RANGE_EXPR
+        } else {
+            // It's just an index. The first expression is already parsed.
+            // No RANGE_EXPR node needed. The first expr remains a direct child of BUS_SUFFIX.
         }
+
         self.expect(SyntaxKind::R_BRACKET);
-        self.builder.finish_node();
+        self.builder.finish_node(); // Finish BUS_SUFFIX
     }
 
     // ADD parse_interfaces_block (called by parse_component_def)
@@ -1108,19 +1120,30 @@ impl<'t> Parser<'t> {
                 self.parse_value(); // Handles literals and units
             }
             Some(SyntaxKind::IDENT) => {
-                // Potential variable/parameter reference OR function call
                 let checkpoint = self.builder.checkpoint(); // Checkpoint before IDENT
-                self.builder.start_node(SyntaxKind::IDENT_REF.into());
-                self.bump(); // Consume IDENT
-                self.builder.finish_node();
+                self.bump(); // Consume IDENT (don't wrap in node yet)
 
-                // Check if it's followed by '(' indicating a function call
-                if self.peek() == Some(SyntaxKind::L_PAREN) {
-                    self.builder.start_node_at(checkpoint, SyntaxKind::FUNCTION_CALL_EXPR.into());
-                    self.parse_argument_list();
-                    self.builder.finish_node();
-                } 
-                // If not followed by '(', it remains just an IDENT_REF
+                // Check what follows the identifier
+                match self.peek() {
+                    Some(SyntaxKind::L_PAREN) => {
+                        // Function Call: Wrap IDENT in FUNCTION_CALL_EXPR
+                        self.builder.start_node_at(checkpoint, SyntaxKind::FUNCTION_CALL_EXPR.into());
+                        self.parse_argument_list(); // Consumes (...) including parens
+                        self.builder.finish_node();
+                    }
+                    Some(SyntaxKind::L_BRACKET) => {
+                        // Net/Pin Reference with Suffix: Wrap IDENT in NET_REF (or similar)
+                        // For now, assume NET_REF. Might need refinement later.
+                        self.builder.start_node_at(checkpoint, SyntaxKind::NET_REF.into());
+                        self.parse_bus_suffix(); // Consumes [...] including brackets
+                        self.builder.finish_node();
+                    }
+                    _ => {
+                        // Simple Identifier Reference: Wrap IDENT in IDENT_REF
+                        self.builder.start_node_at(checkpoint, SyntaxKind::IDENT_REF.into());
+                        self.builder.finish_node(); // Finishes node containing only the IDENT bumped earlier
+                    }
+                }
             }
             Some(SyntaxKind::L_PAREN) => {
                 self.bump(); // Consume '('
@@ -1278,9 +1301,9 @@ impl<'t> Parser<'t> {
         self.builder.finish_node();
     }
 
-    // Revised parsing logic for references (NET_REF, PIN_REF)
-    // Replaces the old parse_pin_or_net_ref and aims to correctly start nodes.
-    fn parse_ref_revised(&mut self) {
+    // Revised parsing logic for references (NET_REF, PIN_REF, SIMPLE_IDENT_REF)
+    // Accepts the SyntaxKind to use if the reference is just a simple identifier.
+    fn parse_ref_revised(&mut self, simple_kind: SyntaxKind) {
         // Start the appropriate node kind *after* parsing the initial identifier
         // to determine if it's a net or part of a pin ref.
 
@@ -1321,12 +1344,11 @@ impl<'t> Parser<'t> {
             self.parse_bus_suffix(); // Parse the bus suffix
             self.builder.finish_node(); // Finish NET_REF node
 
-        // Simple identifier reference (NetName, PinName, PortName etc.)
+        // Simple identifier reference (Use the provided simple_kind)
         } else {
-            // Create a more generic node type for simple identifiers
-            self.builder.start_node_at(cp, SIMPLE_IDENT_REF.into()); 
+            self.builder.start_node_at(cp, simple_kind.into());
             // No more tokens to consume for a simple ref
-            self.builder.finish_node(); // Finish SIMPLE_IDENT_REF node
+            self.builder.finish_node(); // Finish the node (e.g., NET_REF, SIMPLE_IDENT_REF)
         }
         // No outer marker node anymore
     }
@@ -1335,8 +1357,8 @@ impl<'t> Parser<'t> {
     fn parse_assign_stmt(&mut self) {
         self.builder.start_node(ASSIGN_STMT.into());
         self.expect(ASSIGN_KW); // Consume the 'assign' keyword first!
-        // Use parse_ref_revised for the left-hand side
-        self.parse_ref_revised();
+        // Use parse_ref_revised for the left-hand side, specifying NET_REF for simple idents
+        self.parse_ref_revised(NET_REF);
         self.expect(EQ);
         self.parse_expr(0); // Parse the right-hand side expression
         self.expect(SEMI);
@@ -1348,27 +1370,31 @@ impl<'t> Parser<'t> {
         self.builder.start_node(CONNECTION_STMT.into());
 
         // Parse LHS (one or more refs)
-        self.parse_ref_revised(); // Use revised function
+        // Simple LHS identifiers are usually NET_REF or PIN_REF (if no dot, assume NET_REF for now)
+        self.parse_ref_revised(NET_REF); // Use NET_REF for simple LHS refs
         while self.eat(COMMA) { // Use eat() for optional comma
-            self.parse_ref_revised(); // Use revised function
+            self.parse_ref_revised(NET_REF); // Use NET_REF for simple LHS refs
         }
 
         // Expect an arrow or interface connection operator
         if self.eat(ARROW) {
             // Parse RHS for ->
-            self.parse_ref_revised(); // Use revised function
+            // Simple RHS identifiers are usually NET_REF or PIN_REF (assume NET_REF)
+            self.parse_ref_revised(NET_REF); // Use NET_REF for simple RHS refs
             while self.eat(COMMA) { // Use eat() for optional comma
-                self.parse_ref_revised(); // Use revised function
+                self.parse_ref_revised(NET_REF); // Use NET_REF for simple RHS refs
             }
         } else if self.eat(IF_CONNECT) {
             // Parse RHS for <=> (likely an interface reference)
-            self.parse_ref_revised(); // Use revised function (might need InterfaceRef later)
+            // Interfaces are referred to by simple name, use SIMPLE_IDENT_REF here?
+            // Let's stick with NET_REF for now, might need INTERFACE_REF later.
+            self.parse_ref_revised(NET_REF);
             // Interface connections are typically 1-to-1, check for trailing comma.
             if self.peek() == Some(COMMA) {
                 self.error("Interface connection operator <=> expects a single target on each side.".to_string());
                  // Consume the comma and potentially following refs to allow parsing to continue
                  while self.eat(COMMA) {
-                     self.parse_ref_revised(); // Use revised function
+                     self.parse_ref_revised(NET_REF);
                  }
             }
         } else {
@@ -1455,41 +1481,41 @@ impl<'t> Parser<'t> {
     // Add stubs for the new block parsers called from parse_board_def
 
     fn parse_layer_stackup_block(&mut self) {
-        self.builder.start_node(LAYER_STACKUP_BLOCK.into());
-        self.expect(LAYER_STACKUP_KW);
-        self.expect(L_BRACE);
+        self.builder.start_node(SyntaxKind::LAYER_STACKUP_BLOCK.into());
+        self.expect(SyntaxKind::LAYER_STACKUP_KW);
+        self.expect(SyntaxKind::L_BRACE);
         // Parse layer definitions
-        while self.peek() == Some(LAYER_KW) {
+        while self.peek() == Some(SyntaxKind::LAYER_KW) {
             self.parse_layer_def();
         }
         // Handle unexpected tokens inside block?
-        if self.peek() != Some(R_BRACE) && self.peek().is_some() {
+        if self.peek() != Some(SyntaxKind::R_BRACE) && self.peek().is_some() {
             self.error(format!("Expected 'layer' keyword or '}}', found {:?}", self.peek()));
             // Consume until R_BRACE
-            while self.peek() != Some(R_BRACE) && self.peek().is_some() {
+            while self.peek() != Some(SyntaxKind::R_BRACE) && self.peek().is_some() {
                 self.bump_any();
             }
         }
-        self.expect(R_BRACE);
+        self.expect(SyntaxKind::R_BRACE);
         self.builder.finish_node();
     }
 
     // Parses: layer NAME { prop = value; ... }
     fn parse_layer_def(&mut self) {
-        self.builder.start_node(LAYER_DEF.into());
-        self.expect(LAYER_KW);
+        self.builder.start_node(SyntaxKind::LAYER_DEF.into());
+        self.expect(SyntaxKind::LAYER_KW);
         self.expect(IDENT); // Layer Name
-        self.expect(L_BRACE);
+        self.expect(SyntaxKind::L_BRACE);
         // Parse assignments inside
-        while self.peek() != Some(R_BRACE) && self.peek().is_some() {
-            if self.peek() == Some(IDENT) {
+        while self.peek() != Some(SyntaxKind::R_BRACE) && self.peek().is_some() {
+            if self.peek() == Some(SyntaxKind::IDENT) {
                 self.parse_param_assign(); // Reuse param assign
             } else {
                 self.error(format!("Expected layer property assignment (identifier = value) or '}}', found {:?}", self.peek()));
                 self.bump_any();
             }
         }
-        self.expect(R_BRACE);
+        self.expect(SyntaxKind::R_BRACE);
         // Optional semicolon? Spec example doesn't show one, but consistency might suggest it? Assume NO for now.
         self.builder.finish_node();
     }
@@ -1524,11 +1550,11 @@ impl<'t> Parser<'t> {
             // Could be a net name or start of pin ref
             // Peek ahead for DOT to differentiate
             if self.peek_n(1) == Some(SyntaxKind::DOT) || self.peek_n(1) == Some(SyntaxKind::L_BRACKET) {
-                self.parse_ref_revised(); // Use the revised function
+                self.parse_ref_revised(NET_REF); // Use the revised function
             } else {
                 // Just a simple IDENT (net name)
                 // Should also be parsed as a NET_REF for consistency
-                self.parse_ref_revised(); // Use the revised function here too
+                self.parse_ref_revised(SIMPLE_IDENT_REF); // Use the revised function here too
             }
         } else {
             self.error("Expected target identifier (net name or pin reference) inside constrain parentheses".to_string());
@@ -1738,17 +1764,18 @@ mod tests {
         let data_bus_suffix = find_node(data_bus_decl, BUS_SUFFIX).expect("No BUS_SUFFIX found for DataBus");
 
         // More robust assertion checking node kinds within the suffix:
-        // Use children_with_tokens and filter trivia
-        let mut suffix_elems = data_bus_suffix.children_with_tokens().filter(|e| !e.kind().is_trivia()); 
-        assert_eq!(suffix_elems.next().expect("Missing L_BRACKET token").kind(), L_BRACKET, "Expected L_BRACKET");
-        // Flexible Assertion: Check that the next element is *some kind* of expression node, not specific punctuation
-        let high_bound_kind = suffix_elems.next().expect("Missing high bound expr element").kind();
-        assert!(!matches!(high_bound_kind, L_BRACKET | R_BRACKET | COLON | SEMI), "High bound kind ({:?}) should be an expression kind", high_bound_kind);
-        assert_eq!(suffix_elems.next().expect("Missing COLON token").kind(), COLON, "Expected COLON");
-        let low_bound_kind = suffix_elems.next().expect("Missing low bound expr element").kind();
-        assert!(!matches!(low_bound_kind, L_BRACKET | R_BRACKET | COLON | SEMI), "Low bound kind ({:?}) should be an expression kind", low_bound_kind);
-        assert_eq!(suffix_elems.next().expect("Missing R_BRACKET token").kind(), R_BRACKET, "Expected R_BRACKET");
-        assert!(suffix_elems.next().is_none(), "Unexpected extra element in bus suffix");
+        // Find the RangeExpr node within the suffix
+        let range_expr = find_node(&data_bus_suffix, RANGE_EXPR).expect("No RANGE_EXPR inside BUS_SUFFIX");
+        // Optional: Check contents of range_expr if needed
+        let mut range_children = range_expr.children_with_tokens().filter(|e| !e.kind().is_trivia());
+        let high_val_el = range_children.next().expect("Missing high bound element in range");
+        let colon_el = range_children.next().expect("Missing colon element in range");
+        let low_val_el = range_children.next().expect("Missing low bound element in range");
+        // Check kinds are appropriate (VALUE, IDENT_REF, etc. - simple VALUE for now)
+        assert_eq!(high_val_el.kind(), VALUE);
+        assert_eq!(colon_el.kind(), COLON);
+        assert_eq!(low_val_el.kind(), VALUE);
+        assert!(range_children.next().is_none(), "Extra elements in range_expr");
 
         let data_bus_type = find_node(data_bus_decl, TYPE_REF).unwrap().first_token().unwrap();
         assert_eq!(data_bus_type.kind(), SIGNAL_KW);
@@ -2529,8 +2556,13 @@ mod tests {
 
         // Check structure of the first call: calculate(x, y + 1)
         let call1 = &func_call_nodes[0];
-        let ident_ref1 = find_node(call1, IDENT_REF).expect("No IDENT_REF in call1");
-        assert_eq!(ident_ref1.text().to_string(), "calculate");
+        // Find the function name token directly
+        let func_name_token = call1.children_with_tokens()
+            .find(|t| t.kind() == IDENT)
+            .and_then(|t| t.into_token())
+            .expect("No IDENT token (function name) in call1");
+        assert_eq!(func_name_token.text(), "calculate"); // Corrected assertion
+        
         let arg_list1 = find_node(call1, ARGUMENT_LIST).expect("No ARGUMENT_LIST in call1");
         // Arg list should contain 2 expressions separated by comma
         // Corrected check: Filter SyntaxElements that are nodes using as_node().is_some()
@@ -2540,8 +2572,12 @@ mod tests {
 
         // Check structure of the second call: get_status()
         let call2 = &func_call_nodes[1];
-        let ident_ref2 = find_node(call2, IDENT_REF).expect("No IDENT_REF in call2");
-        assert_eq!(ident_ref2.text().to_string(), "get_status");
+        // Find the function name token directly
+        let func_name_token2 = call2.children_with_tokens()
+            .find(|t| t.kind() == IDENT)
+            .and_then(|t| t.into_token())
+            .expect("No IDENT token (function name) in call2");
+        assert_eq!(func_name_token2.text(), "get_status"); // Corrected assertion
         let arg_list2 = find_node(call2, ARGUMENT_LIST).expect("No ARGUMENT_LIST in call2");
         // Corrected check: Filter SyntaxElements that are nodes using as_node().is_some()
         let arg_nodes2 = arg_list2.children_with_tokens().filter(|el| el.as_node().is_some()).count(); 
