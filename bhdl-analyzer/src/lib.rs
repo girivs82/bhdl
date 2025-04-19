@@ -6,7 +6,7 @@ use bhdl_ast::{
     // Top-level items (TypeDef instead of Typedef, Item might not be needed here)
     items::{ComponentDef, InterfaceDef, TypeDef, Board, Module},
     // Common items needed in visit_node
-    common::{ParamDecl, NetDecl, PinRef, PortDecl, PinDecl, ComponentInst, TypeRef, SimpleIdentRef},
+    common::{ParamDecl, NetDecl, PinRef, PortDecl, PinDecl, ComponentInst, TypeRef, SimpleIdentRef, IdentRef, NetRef},
 };
 use std::collections::HashMap;
 
@@ -302,15 +302,21 @@ struct Pass2Context<'a> {
     // Map built in Pass 1: Definition Node -> Its SymbolTable
     definition_scopes: &'a HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>,
     diagnostics: Vec<Diagnostic>,
+    source_file_root: &'a SyntaxNode<BhdlLanguage>, // Added root node reference
 }
 
 impl<'a> Pass2Context<'a> {
-    fn new(global_scope: &'a SymbolTable, def_scopes: &'a HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>) -> Self {
+    fn new(
+        global_scope: &'a SymbolTable, 
+        def_scopes: &'a HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>, 
+        source_file_root: &'a SyntaxNode<BhdlLanguage> // Added parameter
+    ) -> Self {
         Self {
             global_scope,
             current_scope_stack: vec![global_scope], // Start with global scope
             definition_scopes: def_scopes,
             diagnostics: Vec::new(),
+            source_file_root, // Store reference
         }
     }
 
@@ -359,7 +365,7 @@ impl<'a> Pass2Context<'a> {
 // Pass 2 recursive visitor
 fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mut Pass2Context) {
     // Debug print to see visited nodes
-    println!("Pass 2 Visiting: {:?} ({:?})", node.kind(), node.text_range());
+    // println!("Pass 2 Visiting: {:?} ({:?}) - Text: {}", node.kind(), node.text_range(), node.text()); // REMOVED DEBUG PRINT
 
     let mut pushed_scope = false;
 
@@ -406,7 +412,7 @@ fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mut Pa
                                             format!("Undefined component type: {}", type_name),
                                             // Ideally use the type token range from COMPONENT_INST if available,
                                             // otherwise fall back to instance name range
-                                            inst_symbol.span, 
+                                            inst_symbol.span,
                                         );
                                     }
                                     Some(type_symbol) => {
@@ -451,9 +457,9 @@ fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mut Pa
                     }
                 } else if let Some(pin_name_token) = pin_ref.pin_name() {
                     // --- Pin Reference without Instance (e.g., P1) ---
-                    // This branch should now theoretically only be hit if the parser
-                    // incorrectly created a PIN_REF for a simple identifier, which it shouldn't.
-                    // Keeping the logic for robustness, but SIMPLE_IDENT_REF handles the main case.
+                    // println!("DEBUG: Visiting simple PIN_REF: {}", pin_name_token.text()); // REMOVED DEBUG PRINT
+                    // This branch is likely unreachable for simple identifiers based on parser behavior.
+                    // SIMPLE_IDENT_REF handles these cases now.
                      let pin_name = pin_name_token.text();
                      match context.lookup(pin_name) {
                         None => {
@@ -463,23 +469,24 @@ fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mut Pa
                             );
                         }
                         Some(symbol) => {
+                            // Symbol found. Check if it's a valid kind for a connection endpoint.
                             if symbol.kind != SymbolKind::Pin && symbol.kind != SymbolKind::Net {
                                 context.add_diagnostic(
                                     format!("Symbol '{}' is not a pin or net (found {:?})", pin_name, symbol.kind),
                                     pin_name_token.text_range(),
                                 );
-                            } // Else: Direct reference resolved successfully!
+                            }
                         }
                      }
                 } // Else: PinRef AST node is missing both instance and pin name - parser bug?
             }
         }
-        // Handle the new generic simple identifier reference
+        // Handle the generic simple identifier reference (typically in connections)
         SyntaxKind::SIMPLE_IDENT_REF => {
             if let Some(ident_ref) = SimpleIdentRef::cast(node.clone()) {
                 if let Some(name_token) = ident_ref.name_token() {
                     let name = name_token.text();
-                    // Lookup in current scope stack (could be pin, port, net)
+                    // Lookup in current scope stack (could be pin, port, net, etc.)
                     match context.lookup(name) {
                         None => {
                             context.add_diagnostic(
@@ -488,16 +495,74 @@ fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mut Pa
                             );
                         }
                         Some(symbol) => {
-                            // Check if it's a valid target for connections/assignments (Pin or Net)
-                            // TODO: This check might be too strict if SIMPLE_IDENT_REF is used
-                            //       in other contexts (e.g., expressions referring to parameters).
-                            //       Context from parent node might be needed later.
-                            if symbol.kind != SymbolKind::Pin && symbol.kind != SymbolKind::Net {
+                             // Symbol found. Check if it's a valid kind for a connection endpoint.
+                             if symbol.kind != SymbolKind::Pin && symbol.kind != SymbolKind::Net {
                                 context.add_diagnostic(
                                     format!("Symbol '{}' is not a pin or net (found {:?})", name, symbol.kind),
                                     name_token.text_range(),
                                 );
-                            } // Else: Reference resolved successfully!
+                            }
+                             // Kind checks for expression usage are handled by IDENT_REF.
+                        }
+                    }
+                }
+            }
+        }
+        // Handle identifier references within expressions
+        SyntaxKind::IDENT_REF => {
+             if let Some(ident_ref) = IdentRef::cast(node.clone()) {
+                if let Some(name_token) = ident_ref.token() {
+                    let name = name_token.text();
+                    // Lookup in current scope stack
+                    match context.lookup(name) {
+                        None => {
+                            context.add_diagnostic(
+                                format!("Undefined symbol: {}", name),
+                                name_token.text_range(),
+                            );
+                        }
+                        Some(symbol) => {
+                            // Symbol found. Check if its kind is valid in an expression context.
+                            match symbol.kind {
+                                // Kinds generally allowed in expressions:
+                                SymbolKind::Parameter |
+                                SymbolKind::Pin => { // Allow pins for now, might refine later based on expression context
+                                    // Potentially add type checking later based on expression context
+                                }
+                                SymbolKind::Net => {
+                                    // Check if a bus net is used without a suffix
+                                    let net_decl_node = symbol.definition_node_ptr.as_ref()
+                                        .and_then(|ptr| ptr.try_to_node(context.source_file_root));
+                                    let declared_as_bus = net_decl_node
+                                        .and_then(|node| NetDecl::cast(node))
+                                        .and_then(|decl| decl.bus_suffix())
+                                        .is_some();
+                                    if declared_as_bus {
+                                        context.add_diagnostic(
+                                            format!("Bus net '{}' used without index or slice in expression", name),
+                                            name_token.text_range(),
+                                        );
+                                    }
+                                    // Else: Scalar net used in expression is OK for now.
+                                }
+                                // Kinds generally *not* allowed directly in expressions:
+                                SymbolKind::Board |
+                                SymbolKind::Module |
+                                SymbolKind::Component |
+                                SymbolKind::Interface |
+                                SymbolKind::Typedef |
+                                SymbolKind::Instance => { // Removed redundant Pin arm
+                                    context.add_diagnostic(
+                                        format!(
+                                            "Symbol '{}' of kind {:?} cannot be used directly in an expression",
+                                            name,
+                                            symbol.kind
+                                        ),
+                                        name_token.text_range(),
+                                    );
+                                }
+                                // Add cases for other kinds if necessary
+                            }
                         }
                     }
                 }
@@ -544,29 +609,98 @@ fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mut Pa
                             );
                         }
                         Some(symbol) => {
-                            if !symbol.kind.is_component_type_kind() { // Must be Board/Module/Component/Interface
+                            if !symbol.kind.is_component_type_kind() {
                                 context.add_diagnostic(
-                                    format!("Symbol '{}' is not a component/module/board/interface type (found {:?})", type_name, symbol.kind),
+                                    format!("Symbol '{}' is not a valid component type (found {:?})", type_name, symbol.kind),
                                     type_name_token.text_range(),
                                 );
                             }
-                            // TODO: Check if Interface type is used directly as instance?
                         }
                     }
                 }
             }
         }
-         // TODO: Add checks for NetRef, PortRef (if different from PinRef), etc.
+        SyntaxKind::NET_REF => {
+            if let Some(net_ref) = NetRef::cast(node.clone()) {
+                if let Some(name_token) = net_ref.name_token() {
+                    let name = name_token.text();
+                    // Lookup in current scope stack
+                    match context.lookup(name) {
+                        None => {
+                            context.add_diagnostic(
+                                format!("Undefined net: {}", name),
+                                name_token.text_range(),
+                            );
+                        }
+                        Some(symbol) => {
+                            // Symbol found. Check if it's actually a Net.
+                            if symbol.kind != SymbolKind::Net {
+                                context.add_diagnostic(
+                                    format!("Symbol '{}' is not a net (found {:?})", name, symbol.kind),
+                                    name_token.text_range(),
+                                );
+                            } else {
+                                // Net symbol found. Get declaration node to check for bus info.
+                                let net_decl_node = symbol.definition_node_ptr.as_ref()
+                                    .and_then(|ptr| ptr.try_to_node(context.source_file_root)); // Use context field
+
+                                let declared_as_bus = net_decl_node
+                                    .and_then(|node| NetDecl::cast(node))
+                                    .and_then(|decl| decl.bus_suffix())
+                                    .is_some();
+
+                                if let Some(suffix) = net_ref.bus_suffix() {
+                                    // --- NetRef has a suffix --- 
+                                    if !declared_as_bus {
+                                        context.add_diagnostic(
+                                            format!("Net '{}' was not declared as a bus, but used with a suffix", name),
+                                            suffix.syntax().text_range(),
+                                        );
+                                    } else {
+                                        // Declared as bus AND used with suffix: OK for now.
+                                        // TODO: Validate index/range values against declaration.
+                                        if let Some(_index_value) = suffix.index() {
+                                            // TODO: Evaluate index, check bounds
+                                        }
+                                        else if let Some(_range_expr) = suffix.range() {
+                                            // TODO: Evaluate range, check bounds & direction
+                                        }
+                                        else {
+                                            // Should not happen if BusSuffix AST is correct
+                                            context.add_diagnostic(
+                                                format!("Invalid bus suffix structure for net '{}'", name),
+                                                suffix.syntax().text_range(),
+                                            );
+                                        }
+                                    }
+                                } else {
+                                     // --- NetRef has NO suffix --- 
+                                     if declared_as_bus {
+                                        context.add_diagnostic(
+                                            format!("Net '{}' was declared as a bus, but used without an index or slice", name),
+                                            name_token.text_range(), // Use name token range for error
+                                        );
+                                     }
+                                     // Else: Not declared as bus and used without suffix: OK.
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Add other reference checks here (e.g., for NET_REF with indices/slices)
         _ => {}
     }
 
-    // Recursively visit children
+    // --- Recurse into Children ---
     for child in node.children() {
         visit_node_pass2_references(&child, context);
     }
 
-    // Pop the scope if we pushed one for this node (after visiting children)
+    // --- Scope Handling (Pop after visiting children) ---
     if pushed_scope {
+       // Only pop if we pushed a scope for *this* specific node visit
         context.pop_scope();
     }
 }
@@ -582,7 +716,7 @@ pub fn analyze(source_file: &SourceFile) -> AnalysisResult {
 
     // Pass 2: Resolve references and perform type checking using the map
     println!("Analyzer: Starting Pass 2 - References...");
-    let mut pass2_context = Pass2Context::new(&global_scope_table, &definition_scopes);
+    let mut pass2_context = Pass2Context::new(&global_scope_table, &definition_scopes, &source_file.syntax());
     // Visit the root node to start Pass 2 traversal
     visit_node_pass2_references(&source_file.syntax(), &mut pass2_context);
     println!("Analyzer: Pass 2 complete. Diagnostics found: {}", pass2_context.diagnostics.len());
@@ -775,7 +909,7 @@ mod tests {
         let source_file = parse_to_sourcefile(input);
         let result = analyze(&source_file);
         assert_eq!(result.diagnostics.len(), 1, "Diagnostics: {:?}", result.diagnostics);
-        assert!(result.diagnostics[0].message.contains("Symbol 'NotAComp' is not a component/module/board/interface type"), "Unexpected msg: {}", result.diagnostics[0].message);
+        assert!(result.diagnostics[0].message.contains("Symbol 'NotAComp' is not a valid component type"), "Unexpected msg: {}", result.diagnostics[0].message);
     }
 
     // --- Tests for PinRef Checks (Pass 2) --- 
@@ -901,4 +1035,49 @@ mod tests {
         assert!(result.diagnostics[0].message.contains("Symbol 'NotAPin' is not a pin or net"), "Unexpected msg: {}", result.diagnostics[0].message);
     }
 
+    // --- Tests for IDENT_REF Checks (Pass 2) --- 
+
+    #[test]
+    fn analyze_ident_ref_in_assign_ok() {
+        let input = r#"
+            board MyBoard {
+                nets { net A: signal; net B: signal; }
+                connections { assign A = B; } // B should resolve
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
+        assert!(result.diagnostics.is_empty(), "Diagnostics found: {:?}", result.diagnostics);
+    }
+
+    #[test]
+    fn analyze_ident_ref_in_assign_fail() {
+        let input = r#"
+            board MyBoard {
+                nets { net A: signal; }
+                connections { assign A = UndefinedVar; } // UndefinedVar should fail
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
+        assert_eq!(result.diagnostics.len(), 1, "Diagnostics: {:?}", result.diagnostics);
+        assert!(result.diagnostics[0].message.contains("Undefined symbol: UndefinedVar"), "Unexpected msg: {}", result.diagnostics[0].message);
+    }
+
+    #[test]
+    fn analyze_ident_ref_in_param_default_fail() {
+        let input = r#"
+            board MyBoard {
+                // Reference UndefinedParam in default value
+                parameters { MyParam = UndefinedParam + 1; }
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
+        assert_eq!(result.diagnostics.len(), 1, "Diagnostics: {:?}", result.diagnostics);
+        assert!(result.diagnostics[0].message.contains("Undefined symbol: UndefinedParam"), "Unexpected msg: {}", result.diagnostics[0].message);
+    }
+
 }
+
+
