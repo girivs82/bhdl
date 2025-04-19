@@ -1380,34 +1380,6 @@ impl<'t> Parser<'t> {
         self.builder.finish_node();
     }
 
-    // Parses an identifier, possibly followed by .identifier/.number and/or [high:low]
-    // Updated to handle dot access and bus suffix as part of the reference.
-    // NOTE: This function seems redundant now with parse_ref_revised, but keeping it for reference
-    //       until we confirm parse_ref_revised covers all cases.
-    fn parse_pin_or_net_ref(&mut self) {
-        self.builder.start_node(PIN_REF.into()); // Default to PIN_REF for now, might need adjustment
-        if !self.eat(IDENT) {
-            self.error("Expected pin or net name (identifier)".to_string());
-            self.builder.finish_node();
-            return;
-        }
-
-        // Handle dot access (e.g., U1.PinName or C1.1)
-        while self.eat(DOT) {
-            // Expect IDENT or NUMBER after dot
-            if !self.eat(IDENT) && !self.eat(NUMBER) { // Allow NUMBER
-                self.error("Expected identifier or number after '.' in pin/net reference".to_string());
-                break; // Stop parsing dot chain
-            }
-        }
-
-        // Optional bus suffix after identifier or dot access
-        if self.peek() == Some(L_BRACKET) {
-            self.parse_bus_suffix();
-        }
-        self.builder.finish_node();
-    }
-
     // Parses: generate for <var> in <range> { <pin_decl>... }
     fn parse_generate_for_pins(&mut self) {
         self.builder.start_node(GENERATE_FOR_BLOCK.into());
@@ -1549,10 +1521,11 @@ impl<'t> Parser<'t> {
             // Could be a net name or start of pin ref
             // Peek ahead for DOT to differentiate
             if self.peek_n(1) == Some(SyntaxKind::DOT) || self.peek_n(1) == Some(SyntaxKind::L_BRACKET) {
-                self.parse_pin_or_net_ref(); // Handles IDENT.PIN or IDENT[..] or just IDENT
+                self.parse_ref_revised(); // Use the revised function
             } else {
                 // Just a simple IDENT (net name)
-                self.bump();
+                // Should also be parsed as a NET_REF for consistency
+                self.parse_ref_revised(); // Use the revised function here too
             }
         } else {
             self.error("Expected target identifier (net name or pin reference) inside constrain parentheses".to_string());
@@ -2114,13 +2087,6 @@ mod tests {
         // We implicitly tested bus suffix in the name part during previous steps.
     }
 
-    // TODO: Fix parsing of parameters with units inside interface definitions.
-    // The test `parse_interface_definition` below is commented out because it fails
-    // when parsing `max_current = 2A;` within the `parameters` block, even though
-    // the same parsing logic (`parse_param_assign` -> `parse_expr` -> `parse_value`)
-    // works correctly for parameters in other blocks (e.g., components, constrain).
-    // This suggests a potential subtle state issue or bug related to the interface context.
-    // TEMPORARILY COMMENTED OUT due to persistent failure with units in interface parameters
     #[test]
     fn parse_interface_definition() {
         let input = r#"
