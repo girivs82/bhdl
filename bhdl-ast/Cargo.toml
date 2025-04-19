@@ -4,18 +4,5 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-# Add tree-sitter as a dependency because Span uses tree_sitter::Point
-# Update runtime version to 0.25.x
-tree-sitter = "0.25.3"
-
-# If you need other dependencies for AST functionality, add them here.
-# Example: arbitrary precision decimals
-# rust_decimal = "1.32"
-# Example: error handling
-# thiserror = "1.0"
-
-
-[dev-dependencies]
-# Add dependencies needed only for running tests or examples
-# For instance, if you have tests that use helper functions:
-# pretty_assertions = "1.1"
+bhdl-parser = { path = "../bhdl-parser" }
+rowan = "0.15.15" 
