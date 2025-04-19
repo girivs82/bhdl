@@ -1,5 +1,5 @@
 use crate::{Node, Token, BhdlLanguage, blocks::PinMapBlock, HasName};
-use bhdl_parser::SyntaxKind;
+use bhdl_parser::SyntaxKind::{self, SIMPLE_IDENT_REF};
 use rowan::{ast::support, TextRange, SyntaxNode};
 // Import the AstNode trait directly for manual implementation
 use rowan::ast::AstNode;
@@ -188,6 +188,34 @@ impl AstNode for IdentRef {
 impl IdentRef {
     pub fn token(&self) -> Option<Token> {
         self.0.first_token()
+    }
+}
+
+// --- Simple Identifier Reference ---
+// Represents a reference that is just a single identifier (could be net, pin, port, etc.)
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SimpleIdentRef(Node);
+
+impl AstNode for SimpleIdentRef {
+    type Language = BhdlLanguage;
+    fn can_cast(kind: SyntaxKind) -> bool {
+        kind == SIMPLE_IDENT_REF // Use the imported constant
+    }
+    fn cast(node: SyntaxNode<Self::Language>) -> Option<Self> {
+        if Self::can_cast(node.kind()) { Some(Self(node)) } else { None }
+    }
+    fn syntax(&self) -> &SyntaxNode<Self::Language> {
+        &self.0
+    }
+}
+
+impl SimpleIdentRef {
+    // Find the single IDENT token within this node
+    pub fn name_token(&self) -> Option<Token> {
+        self.0.children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .find(|tok| tok.kind() == SyntaxKind::IDENT)
     }
 }
 

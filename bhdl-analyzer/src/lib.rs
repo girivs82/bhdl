@@ -6,7 +6,7 @@ use bhdl_ast::{
     // Top-level items (TypeDef instead of Typedef, Item might not be needed here)
     items::{ComponentDef, InterfaceDef, TypeDef, Board, Module},
     // Common items needed in visit_node
-    common::{ParamDecl, NetDecl, PinRef, PortDecl, PinDecl, ComponentInst, TypeRef, NetRef},
+    common::{ParamDecl, NetDecl, PinRef, PortDecl, PinDecl, ComponentInst, TypeRef, SimpleIdentRef},
 };
 use std::collections::HashMap;
 
@@ -30,12 +30,6 @@ pub struct AnalysisResult {
 }
 
 // --- Pass 1: Build Global Scope & Definition Scopes Map --- 
-
-// Holder for Pass 1 results
-struct Pass1Result {
-    global_scope: SymbolTable,
-    definition_scopes: HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>,
-}
 
 // Pass 1 Context: Manages the stack *during* building and collects definition scopes
 struct Pass1Context {
@@ -457,18 +451,18 @@ fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mut Pa
                     }
                 } else if let Some(pin_name_token) = pin_ref.pin_name() {
                     // --- Pin Reference without Instance (e.g., P1) ---
-                    // Look up directly in the current scope stack
+                    // This branch should now theoretically only be hit if the parser
+                    // incorrectly created a PIN_REF for a simple identifier, which it shouldn't.
+                    // Keeping the logic for robustness, but SIMPLE_IDENT_REF handles the main case.
                      let pin_name = pin_name_token.text();
                      match context.lookup(pin_name) {
                         None => {
-                            // Symbol not found in current scope stack.
                             context.add_diagnostic(
                                 format!("Undefined symbol: {}", pin_name),
                                 pin_name_token.text_range(),
                             );
                         }
                         Some(symbol) => {
-                            // Symbol found, check if it's a valid target kind.
                             if symbol.kind != SymbolKind::Pin && symbol.kind != SymbolKind::Net {
                                 context.add_diagnostic(
                                     format!("Symbol '{}' is not a pin or net (found {:?})", pin_name, symbol.kind),
@@ -480,33 +474,34 @@ fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mut Pa
                 } // Else: PinRef AST node is missing both instance and pin name - parser bug?
             }
         }
-        // Added case to handle NET_REF, as the parser currently misidentifies direct pin refs.
-        SyntaxKind::NET_REF => {
-             // TODO: This logic duplicates the PIN_REF (no instance) case.
-             // Ideally, the parser should produce a more generic IDENT_REF or 
-             // correctly identify PIN_REF vs NET_REF based on context.
-             if let Some(net_ref) = NetRef::cast(node.clone()) { // Use imported NetRef
-                 if let Some(name_token) = net_ref.name_token() {
-                     let name = name_token.text();
-                      match context.lookup(name) {
-                         None => {
-                             context.add_diagnostic(
-                                 format!("Undefined symbol: {}", name),
-                                 name_token.text_range(),
-                             );
-                         }
-                         Some(symbol) => {
-                             // Symbol found, check if it's a valid target kind (Pin or Net).
-                             if symbol.kind != SymbolKind::Pin && symbol.kind != SymbolKind::Net {
-                                 context.add_diagnostic(
-                                     format!("Symbol '{}' is not a pin or net (found {:?})", name, symbol.kind),
-                                     name_token.text_range(),
-                                 );
-                             } // Else: Direct reference resolved successfully!
-                         }
-                      }
-                 }
-             }
+        // Handle the new generic simple identifier reference
+        SyntaxKind::SIMPLE_IDENT_REF => {
+            if let Some(ident_ref) = SimpleIdentRef::cast(node.clone()) {
+                if let Some(name_token) = ident_ref.name_token() {
+                    let name = name_token.text();
+                    // Lookup in current scope stack (could be pin, port, net)
+                    match context.lookup(name) {
+                        None => {
+                            context.add_diagnostic(
+                                format!("Undefined symbol: {}", name),
+                                name_token.text_range(),
+                            );
+                        }
+                        Some(symbol) => {
+                            // Check if it's a valid target for connections/assignments (Pin or Net)
+                            // TODO: This check might be too strict if SIMPLE_IDENT_REF is used
+                            //       in other contexts (e.g., expressions referring to parameters).
+                            //       Context from parent node might be needed later.
+                            if symbol.kind != SymbolKind::Pin && symbol.kind != SymbolKind::Net {
+                                context.add_diagnostic(
+                                    format!("Symbol '{}' is not a pin or net (found {:?})", name, symbol.kind),
+                                    name_token.text_range(),
+                                );
+                            } // Else: Reference resolved successfully!
+                        }
+                    }
+                }
+            }
         }
         SyntaxKind::TYPE_REF => {
             // Cast using TypeRef from common
