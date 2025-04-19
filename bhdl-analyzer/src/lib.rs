@@ -6,7 +6,7 @@ use bhdl_ast::{
     // Top-level items (TypeDef instead of Typedef, Item might not be needed here)
     items::{ComponentDef, InterfaceDef, TypeDef, Board, Module},
     // Common items needed in visit_node
-    common::{ParamDecl, NetDecl, PinRef, PortDecl, PinDecl, ComponentInst, TypeRef},
+    common::{ParamDecl, NetDecl, PinRef, PortDecl, PinDecl, ComponentInst, TypeRef, NetRef},
 };
 use std::collections::HashMap;
 
@@ -364,6 +364,9 @@ impl<'a> Pass2Context<'a> {
 
 // Pass 2 recursive visitor
 fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mut Pass2Context) {
+    // Debug print to see visited nodes
+    println!("Pass 2 Visiting: {:?} ({:?})", node.kind(), node.text_range());
+
     let mut pushed_scope = false;
 
     // --- Scope Handling (Push before visiting children) ---
@@ -476,6 +479,34 @@ fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mut Pa
                      }
                 } // Else: PinRef AST node is missing both instance and pin name - parser bug?
             }
+        }
+        // Added case to handle NET_REF, as the parser currently misidentifies direct pin refs.
+        SyntaxKind::NET_REF => {
+             // TODO: This logic duplicates the PIN_REF (no instance) case.
+             // Ideally, the parser should produce a more generic IDENT_REF or 
+             // correctly identify PIN_REF vs NET_REF based on context.
+             if let Some(net_ref) = NetRef::cast(node.clone()) { // Use imported NetRef
+                 if let Some(name_token) = net_ref.name_token() {
+                     let name = name_token.text();
+                      match context.lookup(name) {
+                         None => {
+                             context.add_diagnostic(
+                                 format!("Undefined symbol: {}", name),
+                                 name_token.text_range(),
+                             );
+                         }
+                         Some(symbol) => {
+                             // Symbol found, check if it's a valid target kind (Pin or Net).
+                             if symbol.kind != SymbolKind::Pin && symbol.kind != SymbolKind::Net {
+                                 context.add_diagnostic(
+                                     format!("Symbol '{}' is not a pin or net (found {:?})", name, symbol.kind),
+                                     name_token.text_range(),
+                                 );
+                             } // Else: Direct reference resolved successfully!
+                         }
+                      }
+                 }
+             }
         }
         SyntaxKind::TYPE_REF => {
             // Cast using TypeRef from common
@@ -844,7 +875,7 @@ mod tests {
         assert!(result.diagnostics.is_empty(), "Diagnostics found: {:?}", result.diagnostics);
     }
 
-    /* // TODO: Fix visitor/AST for connections block - These tests currently fail because PIN_REFs are not visited.
+    // Re-enabled tests after fixing parser issues. Still need to investigate visitor path for connections.
     #[test]
     fn analyze_pin_ref_no_instance_fail_undefined() {
         let input = r#"
@@ -854,12 +885,13 @@ mod tests {
         "#;
         let source_file = parse_to_sourcefile(input);
         let result = analyze(&source_file);
+        // Expect two errors, one for each undefined symbol
         assert_eq!(result.diagnostics.len(), 2, "Diagnostics: {:?}", result.diagnostics);
         assert!(result.diagnostics[0].message.contains("Undefined symbol: UnknownSymbol"));
         assert!(result.diagnostics[1].message.contains("Undefined symbol: Other"));
     }
 
-     #[test]
+    #[test]
     fn analyze_pin_ref_no_instance_fail_not_pin_or_net() {
         let input = r#"
             board MyBoard {
@@ -873,6 +905,5 @@ mod tests {
         assert_eq!(result.diagnostics.len(), 1, "Diagnostics: {:?}", result.diagnostics);
         assert!(result.diagnostics[0].message.contains("Symbol 'NotAPin' is not a pin or net"), "Unexpected msg: {}", result.diagnostics[0].message);
     }
-    */
 
 }

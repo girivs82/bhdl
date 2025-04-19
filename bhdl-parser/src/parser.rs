@@ -1215,7 +1215,11 @@ impl<'t> Parser<'t> {
         while let Some(kind) = self.peek() {
             match kind {
                 SyntaxKind::R_BRACE => break,
-                SyntaxKind::IDENT => self.parse_component_inst(), // Instantiation starts with Type IDENT
+                SyntaxKind::IDENT => { // Found start of an instantiation
+                     self.parse_component_inst();
+                     // After parsing an instance, optionally consume a semicolon
+                     self.eat(SyntaxKind::SEMI);
+                }
                 _ => {
                     self.error(format!("Expected component instantiation (identifier) or '}}', found {:?}", kind));
                     self.bump_any();
