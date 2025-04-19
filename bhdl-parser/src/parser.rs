@@ -61,6 +61,7 @@ fn map_token_stream(text: &str) -> Vec<(SyntaxKind, SmolStr)> {
                 LexerToken::Caret => (SyntaxKind::CARET, slice),
                 LexerToken::Bang => (SyntaxKind::BANG, slice),
                 LexerToken::Tilde => (SyntaxKind::TILDE, slice),
+                LexerToken::Question => (SyntaxKind::QUESTION, slice),
                 LexerToken::LAngle => (SyntaxKind::L_ANGLE, slice),
                 LexerToken::RAngle => (SyntaxKind::R_ANGLE, slice),
                 LexerToken::At => (SyntaxKind::AT, slice),
@@ -507,10 +508,10 @@ impl<'t> Parser<'t> {
         }
         self.builder.start_node(SyntaxKind::BUS_SUFFIX.into()); // Corrected kind
         self.expect(SyntaxKind::L_BRACKET);
-        self.parse_expr(0); // NEW - Parse first expression (index or high bound)
+        self.parse_expr(0); // Use parse_expr instead of parse_value
         // Check for colon indicating a range [high:low]
         if self.eat(SyntaxKind::COLON) {
-            self.parse_expr(0); // NEW - Parse low bound expression
+            self.parse_expr(0); // Use parse_expr instead of parse_value
         }
         self.expect(SyntaxKind::R_BRACKET);
         self.builder.finish_node();
@@ -939,7 +940,8 @@ impl<'t> Parser<'t> {
     // Get the binding power (precedence) for prefix unary operators
     fn prefix_binding_power(&self, kind: SyntaxKind) -> Option<((), u8)> {
         match kind {
-            SyntaxKind::PLUS | SyntaxKind::MINUS => Some(((), 5)), // Higher precedence for unary +/- 
+            SyntaxKind::PLUS | SyntaxKind::MINUS => Some(((), 13)), // Unary + / - (Higher than binary +/-)
+            SyntaxKind::BANG | SyntaxKind::TILDE => Some(((), 13)), // Logical NOT, Bitwise NOT
             _ => None,
         }
     }
@@ -947,9 +949,27 @@ impl<'t> Parser<'t> {
     // Get the binding power (precedence) for infix binary operators
     fn infix_binding_power(&self, kind: SyntaxKind) -> Option<(u8, u8)> {
         match kind {
-            SyntaxKind::PLUS | SyntaxKind::MINUS => Some((1, 2)), // Left-associative
-            SyntaxKind::STAR | SyntaxKind::SLASH => Some((3, 4)), // Left-associative
-            // Add other binary operators here (comparison, logical, etc.) later
+            // Lowest precedence
+            SyntaxKind::PIPEPIPE => Some((1, 2)),    // || (logical OR)
+            SyntaxKind::AMPAMP => Some((3, 4)),      // && (logical AND)
+            SyntaxKind::PIPE => Some((5, 6)),        // | (bitwise OR)
+            SyntaxKind::CARET => Some((7, 8)),       // ^ (bitwise XOR)
+            SyntaxKind::AMPERSAND => Some((9, 10)),   // & (bitwise AND)
+            SyntaxKind::EQEQ | SyntaxKind::NEQ => Some((11, 12)), // ==, != (equality)
+            SyntaxKind::L_ANGLE | SyntaxKind::R_ANGLE | SyntaxKind::LTEQ | SyntaxKind::GTEQ => Some((11, 12)), // <, >, <=, >= (comparison)
+            // Shift operators <<, >> could go here if needed
+            SyntaxKind::PLUS | SyntaxKind::MINUS => Some((13, 14)), // +, - (additive)
+            SyntaxKind::STAR | SyntaxKind::SLASH | SyntaxKind::PERCENT => Some((15, 16)), // *, /, % (multiplicative)
+            // Highest precedence (excluding prefix/postfix)
+            _ => None,
+        }
+    }
+
+    // Get the binding power for the ternary '?' operator (treat similar to infix)
+    // ':' is handled specially within parse_expr
+    fn ternary_binding_power(&self, kind: SyntaxKind) -> Option<(u8, u8)> {
+        match kind {
+            SyntaxKind::QUESTION => Some((4, 3)), // Use QUESTION now. Precedence slightly above assignment, right-associative for ':' part
             _ => None,
         }
     }
@@ -957,14 +977,14 @@ impl<'t> Parser<'t> {
     // Main expression parsing function using precedence climbing
     // Parses expressions with a minimum binding power (precedence level)
     fn parse_expr(&mut self, min_bp: u8) {
-        self.builder.start_node(SyntaxKind::EXPRESSION.into()); // Start a general EXPR node
+        // Start a general EXPR node - Or maybe handle this differently? See below.
+        let mut checkpoint = self.builder.checkpoint(); // Checkpoint before LHS
 
-        // Parse the left-hand side (LHS)
+        // Parse the left-hand side (LHS) - Condition or start of binary expr
         // Check for prefix operators first
         let mut lhs_parsed = false;
         if let Some(((), r_bp)) = self.peek().and_then(|k| self.prefix_binding_power(k)) {
             self.builder.start_node(SyntaxKind::PREFIX_EXPR.into());
-            let op = self.peek().unwrap(); // We know it's there
             self.bump(); // Consume the operator token
             self.parse_expr(r_bp); // Parse the operand with higher precedence
             self.builder.finish_node(); // Finish PREFIX_EXPR
@@ -974,56 +994,67 @@ impl<'t> Parser<'t> {
             self.parse_primary_expr();
             lhs_parsed = true;
         }
-        
+
         if !lhs_parsed {
             // If even primary expression failed, report error and maybe return?
-            // parse_primary_expr should ideally report its own error.
             // self.error("Expected expression".to_string());
-            self.builder.finish_node(); // Finish potentially empty EXPRESSION
+            // No need to finish node, as checkpoint will be abandoned if we return
             return;
         }
 
 
-        // Loop for infix operators (Precedence Climbing)
+        // Loop for infix and ternary operators (Precedence Climbing)
         loop {
             let current_op = match self.peek() {
                 Some(op) => op,
                 None => break, // End of input
             };
 
+            // Check for ternary first due to its unique structure
+            if current_op == SyntaxKind::QUESTION { // Use QUESTION now
+                 if let Some((l_bp, r_bp)) = self.ternary_binding_power(current_op) {
+                     if l_bp < min_bp {
+                         break;
+                     }
+
+                    // Start TERNARY_EXPR node, wrapping the LHS (condition)
+                    self.builder.start_node_at(checkpoint, SyntaxKind::TERNARY_EXPR.into());
+                    self.bump(); // Consume '?' (BANG)
+
+                    // Parse the 'true' expression
+                    self.parse_expr(r_bp); // r_bp determines right-associativity for ':'
+
+                    // Expect ':'
+                    self.expect(SyntaxKind::COLON);
+
+                    // Parse the 'false' expression
+                    self.parse_expr(r_bp); // Use same r_bp for right-associativity
+
+                    self.builder.finish_node(); // Finish TERNARY_EXPR
+                    checkpoint = self.builder.checkpoint(); // Update checkpoint after ternary
+                    continue; // Restart loop check after ternary
+                 }
+            }
+
+            // Standard infix binary operators
             if let Some((l_bp, r_bp)) = self.infix_binding_power(current_op) {
                 if l_bp < min_bp {
                     break; // Operator precedence is lower than current minimum
                 }
-                
+
                 // Consume the operator
-                self.bump(); 
+                self.bump();
 
-                // Start a BINARY_EXPR node. IMPORTANT: Need to manage the LHS.
-                // The GreenNodeBuilder doesn't easily allow re-parenting the previously parsed LHS.
-                // A common approach is to have parse_expr *return* the parsed node/marker 
-                // and build the tree structure afterwards, or use checkpoints.
-                // For simplicity in CST generation, we might create a slightly flatter structure:
-                // EXPRESSION -> (LHS) OP (RHS)
-                // Where LHS and RHS are themselves parsed by parse_expr.
-                // Let's try starting the BINARY_EXPR node *before* parsing RHS.
-                // The LHS is already part of the current EXPRESSION node.
-                // We need to wrap the operation: EXPRESSION -> BINARY_EXPR -> (LHS EXPR) OP (RHS EXPR)
-                // This gets complex with the builder API. Let's stick to a flatter CST for now:
-                // Callers start EXPRESSION. parse_expr adds LHS, then loops adding OP RHS ...
-                // This means the structure doesn't perfectly represent precedence in the tree directly,
-                // but relies on the parsing order. For a proper AST, restructuring would be needed.
-                
-                // Modification for simpler CST: Add operator, then parse RHS.
-                // Caller already started EXPRESSION node.
-
+                // Wrap the LHS and operator with RHS into a BINARY_EXPR node
+                self.builder.start_node_at(checkpoint, SyntaxKind::BINARY_EXPR.into());
                 self.parse_expr(r_bp); // Parse the right-hand side (RHS)
-
+                self.builder.finish_node(); // Finish BINARY_EXPR
+                checkpoint = self.builder.checkpoint(); // Update checkpoint after binary expr
             } else {
                 break; // Not a binary operator we handle or end of expression part
             }
         }
-         self.builder.finish_node(); // Finish EXPRESSION node
+         // No overall EXPRESSION node finished here - nodes are created by prefix/primary/binary/ternary calls
     }
 
     // Parses primary expressions: Literals, Identifiers, Parenthesized expressions
@@ -1035,12 +1066,19 @@ impl<'t> Parser<'t> {
                 self.parse_value(); // Handles literals and units
             }
             Some(SyntaxKind::IDENT) => {
-                // Could be a variable/parameter reference
-                // Potentially wrap in IDENT_REF_EXPR node?
-                // Need to handle potential function calls `ident(...)` or array access `ident[...]` later
-                self.builder.start_node(SyntaxKind::IDENT_REF.into()); // Assuming it's a reference for now
+                // Potential variable/parameter reference OR function call
+                let checkpoint = self.builder.checkpoint(); // Checkpoint before IDENT
+                self.builder.start_node(SyntaxKind::IDENT_REF.into());
                 self.bump(); // Consume IDENT
                 self.builder.finish_node();
+
+                // Check if it's followed by '(' indicating a function call
+                if self.peek() == Some(SyntaxKind::L_PAREN) {
+                    self.builder.start_node_at(checkpoint, SyntaxKind::FUNCTION_CALL_EXPR.into());
+                    self.parse_argument_list();
+                    self.builder.finish_node();
+                } 
+                // If not followed by '(', it remains just an IDENT_REF
             }
             Some(SyntaxKind::L_PAREN) => {
                 self.bump(); // Consume '('
@@ -1056,6 +1094,27 @@ impl<'t> Parser<'t> {
                 self.builder.finish_node();
             }
         }
+    }
+
+    // Parses the argument list for a function call: (arg1, arg2, ...)
+    fn parse_argument_list(&mut self) {
+        self.builder.start_node(SyntaxKind::ARGUMENT_LIST.into());
+        self.expect(SyntaxKind::L_PAREN);
+
+        // Parse comma-separated expressions until ')'
+        let mut first_arg = true;
+        while self.peek() != Some(SyntaxKind::R_PAREN) && self.peek().is_some() {
+            if !first_arg {
+                self.expect(SyntaxKind::COMMA);
+                // Handle potential trailing comma before ')'
+                if self.peek() == Some(SyntaxKind::R_PAREN) { break; }
+            }
+            first_arg = false;
+            self.parse_expr(0); // Parse argument expression
+        }
+
+        self.expect(SyntaxKind::R_PAREN);
+        self.builder.finish_node();
     }
 
     // --- End of Expression Parsing ---
@@ -1618,18 +1677,19 @@ mod tests {
         let data_bus_ident = data_bus_decl.children_with_tokens().filter_map(|e| e.into_token()).find(|t| t.kind() == IDENT).unwrap();
         assert_eq!(data_bus_ident.text(), "DataBus");
         let data_bus_suffix = find_node(data_bus_decl, BUS_SUFFIX).expect("No BUS_SUFFIX found for DataBus");
-        // Original fragile assertion:
-        // let suffix_tokens: Vec<_> = data_bus_suffix.children_with_tokens().filter_map(|e| e.into_token()).collect();
-        // assert_eq!(suffix_tokens.len(), 5);
 
-        // More robust assertion checking node kinds:
-        let mut suffix_children = data_bus_suffix.children_with_tokens();
-        assert_eq!(suffix_children.next().unwrap().kind(), L_BRACKET);
-        assert_eq!(suffix_children.next().unwrap().kind(), EXPRESSION);
-        assert_eq!(suffix_children.next().unwrap().kind(), COLON);
-        assert_eq!(suffix_children.next().unwrap().kind(), EXPRESSION);
-        assert_eq!(suffix_children.next().unwrap().kind(), R_BRACKET);
-        assert!(suffix_children.next().is_none());
+        // More robust assertion checking node kinds within the suffix:
+        // Use children_with_tokens and filter trivia
+        let mut suffix_elems = data_bus_suffix.children_with_tokens().filter(|e| !e.kind().is_trivia()); 
+        assert_eq!(suffix_elems.next().expect("Missing L_BRACKET token").kind(), L_BRACKET, "Expected L_BRACKET");
+        // Flexible Assertion: Check that the next element is *some kind* of expression node, not specific punctuation
+        let high_bound_kind = suffix_elems.next().expect("Missing high bound expr element").kind();
+        assert!(!matches!(high_bound_kind, L_BRACKET | R_BRACKET | COLON | SEMI), "High bound kind ({:?}) should be an expression kind", high_bound_kind);
+        assert_eq!(suffix_elems.next().expect("Missing COLON token").kind(), COLON, "Expected COLON");
+        let low_bound_kind = suffix_elems.next().expect("Missing low bound expr element").kind();
+        assert!(!matches!(low_bound_kind, L_BRACKET | R_BRACKET | COLON | SEMI), "Low bound kind ({:?}) should be an expression kind", low_bound_kind);
+        assert_eq!(suffix_elems.next().expect("Missing R_BRACKET token").kind(), R_BRACKET, "Expected R_BRACKET");
+        assert!(suffix_elems.next().is_none(), "Unexpected extra element in bus suffix");
 
         let data_bus_type = find_node(data_bus_decl, TYPE_REF).unwrap().first_token().unwrap();
         assert_eq!(data_bus_type.kind(), SIGNAL_KW);
@@ -2113,8 +2173,8 @@ mod tests {
         assert_eq!(lhs_element.as_node().unwrap().first_token().unwrap().text(), "A");
         assert_eq!(children.next().unwrap().kind(), EQ);
         let rhs_element = children.next().unwrap(); 
-        assert_eq!(rhs_element.kind(), EXPRESSION);
-        // Simplified assertion for simple expression `B`:
+        // Updated Assertion: Check the kind of the RHS node directly
+        assert_eq!(rhs_element.kind(), IDENT_REF, "Expected IDENT_REF on RHS");
         assert_eq!(rhs_element.as_node().unwrap().first_token().unwrap().text(), "B"); 
         assert_eq!(children.next().unwrap().kind(), SEMI);
         assert!(children.next().is_none());
@@ -2287,19 +2347,142 @@ mod tests {
         assert!(result.errors.is_empty(), "Expected no parse errors for precedence expression");
 
         let assign_stmt = find_node(&result.syntax(), ASSIGN_STMT).expect("ASSIGN_STMT not found");
-        let expr = assign_stmt.children().find(|n| n.kind() == EXPRESSION).expect("EXPRESSION not found");
+        // Updated Assertion: Remove check for top-level EXPRESSION node
+        // let expr = assign_stmt.children().find(|n| n.kind() == EXPRESSION).expect("EXPRESSION not found");
         
-        // Basic structural check: Does it contain expected operators?
-        assert!(expr.text().to_string().contains('+'));
-        assert!(expr.text().to_string().contains('*'));
-        assert!(expr.text().to_string().contains('-'));
-        assert!(expr.text().to_string().contains('/'));
-        assert!(expr.text().to_string().contains('('));
-        
-        // Remove the problematic assertion
-        // let tokens: Vec<_> = expr.children_with_tokens().filter_map(|e| e.into_token()).collect();
-        // let kinds: Vec<_> = tokens.iter().map(|t| t.kind()).collect();
-        // assert!(kinds.contains(&NUMBER)); 
+        // Basic structural check: Does the assign statement text contain expected operators?
+        let assign_text = assign_stmt.text().to_string();
+        assert!(assign_text.contains('+'));
+        assert!(assign_text.contains('*'));
+        assert!(assign_text.contains('-'));
+        assert!(assign_text.contains('/'));
+        assert!(assign_text.contains('('));
+    }
+
+    #[test]
+    fn parse_complex_expression() {
+        let input = r#"
+            board Test {
+                connections {
+                    // Test precedence and associativity
+                    assign A = 1 + 2 * 3 == 7 && 4 / 2 > 1;
+                    // Test parentheses and unary operators
+                    assign B = !( (x + -y) * ~z | 5 ); 
+                }
+            }
+        "#;
+        let result = parse(input);
+        println!("Complex Expr Parse errors: {:?}\n", result.errors);
+        println!("Complex Expr Syntax Tree:\n{:#?}", result.syntax());
+        // For now, just check that it parses without errors.
+        // A more detailed check would require inspecting the CST structure
+        // or building an AST.
+        assert!(result.errors.is_empty(), "Expected no parse errors for complex expression");
+
+        let assign_stmts = find_all_nodes(&result.syntax(), ASSIGN_STMT);
+        assert_eq!(assign_stmts.len(), 2, "Expected two assign statements");
+
+        // Corrected Assertion: Look for specific expression nodes within the assign statement
+        // Basic check on the first expression's nodes/text content
+        let assign1 = &assign_stmts[0];
+        assert!(assign1.text().to_string().contains("=="));
+        assert!(assign1.text().to_string().contains("&&"));
+        assert!(assign1.text().to_string().contains(">"));
+        // Verify structure by looking for binary expressions
+        assert!(find_all_nodes(assign1, BINARY_EXPR).len() > 0, "Expected BINARY_EXPR nodes in assign1");
+
+        // Basic check on the second expression's nodes/text content
+        let assign2 = &assign_stmts[1];
+        assert!(assign2.text().to_string().contains("!"));
+        assert!(assign2.text().to_string().contains("~"));
+        assert!(assign2.text().to_string().contains("|"));
+        assert!(assign2.text().to_string().contains("("));
+        // Verify structure by looking for prefix and binary expressions
+        assert!(find_all_nodes(assign2, PREFIX_EXPR).len() > 0, "Expected PREFIX_EXPR nodes in assign2");
+        assert!(find_all_nodes(assign2, BINARY_EXPR).len() > 0, "Expected BINARY_EXPR nodes in assign2");
+    }
+
+    #[test]
+    fn parse_ternary_expression() {
+        let input = r#"
+            board Test {
+                connections {
+                    // Simple ternary
+                    assign A = condition ? 1 : 0;
+                    // Nested ternary (right-associative)
+                    assign B = cond1 ? val1 : cond2 ? val2 : val3; 
+                    // Ternary within other expressions
+                    assign C = x + (y > 0 ? y : -y) * 2;
+                }
+            }
+        "#;
+        let result = parse(input);
+        println!("Ternary Expr Parse errors: {:?}\n", result.errors);
+        println!("Ternary Expr Syntax Tree:\n{:#?}", result.syntax());
+        // Just check for absence of errors for now
+        assert!(result.errors.is_empty(), "Expected no parse errors for ternary expression");
+
+        let assign_stmts = find_all_nodes(&result.syntax(), ASSIGN_STMT);
+        assert_eq!(assign_stmts.len(), 3, "Expected three assign statements");
+
+        // Find TERNARY_EXPR nodes
+        let ternary_nodes = find_all_nodes(&result.syntax(), TERNARY_EXPR);
+        // Corrected Assertion: Expect 4 nodes due to nesting
+        assert_eq!(ternary_nodes.len(), 4, "Expected four ternary expressions (including nested)"); 
+
+        // Optional: More detailed checks on structure if needed
+        // e.g., check children of ternary_nodes[1] to confirm nesting
+    }
+
+    #[test]
+    fn parse_function_call_expression() {
+        let input = r#"
+            board Test {
+                connections {
+                    // Simple function call
+                    assign A = calculate(x, y + 1);
+                    // Function call with no args
+                    assign B = get_status();
+                    // Nested function calls
+                    assign C = outer(inner(z), 10);
+                    // Function call within other expressions
+                    assign D = 5 * check(status);
+                }
+            }
+        "#;
+        let result = parse(input);
+        println!("Function Call Parse errors: {:?}\n", result.errors);
+        println!("Function Call Syntax Tree:\n{:#?}", result.syntax());
+        // Just check for absence of errors and presence of func call nodes
+        assert!(result.errors.is_empty(), "Expected no parse errors for function call expression");
+
+        let assign_stmts = find_all_nodes(&result.syntax(), ASSIGN_STMT);
+        assert_eq!(assign_stmts.len(), 4, "Expected four assign statements");
+
+        // Find FUNCTION_CALL_EXPR nodes
+        let func_call_nodes = find_all_nodes(&result.syntax(), FUNCTION_CALL_EXPR);
+        assert_eq!(func_call_nodes.len(), 5, "Expected five function call expressions (including nested)");
+
+        // Check structure of the first call: calculate(x, y + 1)
+        let call1 = &func_call_nodes[0];
+        let ident_ref1 = find_node(call1, IDENT_REF).expect("No IDENT_REF in call1");
+        assert_eq!(ident_ref1.text().to_string(), "calculate");
+        let arg_list1 = find_node(call1, ARGUMENT_LIST).expect("No ARGUMENT_LIST in call1");
+        // Arg list should contain 2 expressions separated by comma
+        // Corrected check: Filter SyntaxElements that are nodes using as_node().is_some()
+        let arg_nodes1 = arg_list1.children_with_tokens().filter(|el| el.as_node().is_some()).count(); 
+        assert_eq!(arg_nodes1, 2, "Expected 2 argument nodes in call1");
+        assert!(arg_list1.children_with_tokens().any(|t| t.kind() == COMMA));
+
+        // Check structure of the second call: get_status()
+        let call2 = &func_call_nodes[1];
+        let ident_ref2 = find_node(call2, IDENT_REF).expect("No IDENT_REF in call2");
+        assert_eq!(ident_ref2.text().to_string(), "get_status");
+        let arg_list2 = find_node(call2, ARGUMENT_LIST).expect("No ARGUMENT_LIST in call2");
+        // Corrected check: Filter SyntaxElements that are nodes using as_node().is_some()
+        let arg_nodes2 = arg_list2.children_with_tokens().filter(|el| el.as_node().is_some()).count(); 
+        assert_eq!(arg_nodes2, 0, "Expected 0 argument nodes in call2");
+
     }
 
 } 

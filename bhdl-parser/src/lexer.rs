@@ -88,6 +88,7 @@ pub enum LexerToken {
     #[token("|")] Pipe,
     #[token("^")] Caret,
     #[token("!")] Bang,
+    #[token("?")] Question,
     #[token("~")] Tilde,
     #[token("<")] LAngle,
     #[token(">")] RAngle,
