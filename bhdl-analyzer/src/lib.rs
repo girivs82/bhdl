@@ -6,13 +6,22 @@ use bhdl_ast::{
     // Top-level items (TypeDef instead of Typedef, Item might not be needed here)
     items::{ComponentDef, InterfaceDef, TypeDef, Board, Module},
     // Common items needed in visit_node
-    common::{ParamDecl, NetDecl, PinRef, PortDecl, PinDecl, ComponentInst, TypeRef, SimpleIdentRef, IdentRef, NetRef},
+    common::{ParamDecl, NetDecl, PinRef, PortDecl, PinDecl, ComponentInst, TypeRef, SimpleIdentRef, IdentRef, NetRef, Value, BusSuffix},
 };
 use std::collections::HashMap;
 
 mod symbol_table;
 // Added SymbolKind import
 use symbol_table::{Symbol, SymbolKind, SymbolTable};
+
+// --- Helpers ---
+
+/// Attempts to parse a bhdl_ast::common::Value node as an i64 integer literal.
+fn parse_value_as_i64(value_node: &Value) -> Option<i64> {
+    value_node
+        .number_literal()
+        .and_then(|token| token.text().parse::<i64>().ok())
+}
 
 // Represents a diagnostic message (error, warning)
 #[derive(Debug, Clone)]
@@ -641,13 +650,14 @@ fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mut Pa
                                 );
                             } else {
                                 // Net symbol found. Get declaration node to check for bus info.
-                                let net_decl_node = symbol.definition_node_ptr.as_ref()
-                                    .and_then(|ptr| ptr.try_to_node(context.source_file_root)); // Use context field
+                                let net_decl_opt: Option<NetDecl> = symbol.definition_node_ptr.as_ref()
+                                    .and_then(|ptr| ptr.try_to_node(context.source_file_root))
+                                    .and_then(|node| NetDecl::cast(node)); // Get Option<NetDecl>
 
-                                let declared_as_bus = net_decl_node
-                                    .and_then(|node| NetDecl::cast(node))
-                                    .and_then(|decl| decl.bus_suffix())
-                                    .is_some();
+                                let declared_bus_suffix: Option<BusSuffix> = net_decl_opt.as_ref()
+                                    .and_then(|decl| decl.bus_suffix()); // Borrow decl to get suffix
+                                
+                                let declared_as_bus = declared_bus_suffix.is_some();
 
                                 if let Some(suffix) = net_ref.bus_suffix() {
                                     // --- NetRef has a suffix --- 
@@ -658,19 +668,77 @@ fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mut Pa
                                         );
                                     } else {
                                         // Declared as bus AND used with suffix: OK for now.
-                                        // TODO: Validate index/range values against declaration.
-                                        if let Some(_index_value) = suffix.index() {
-                                            // TODO: Evaluate index, check bounds
+                                        // Get declared bounds from the suffix we already found
+                                        let declared_range = declared_bus_suffix.and_then(|s| s.range());
+
+                                        let (declared_high_opt, declared_low_opt) = declared_range
+                                            .map(|r| (r.lhs().and_then(|v| parse_value_as_i64(&v)), r.rhs().and_then(|v| parse_value_as_i64(&v))))
+                                            .unwrap_or((None, None));
+
+                                        if let Some(index_value_node) = suffix.index() {
+                                            // --- Index Check --- 
+                                            if let (Some(dh), Some(dl)) = (declared_high_opt, declared_low_opt) {
+                                                let declared_min = dh.min(dl);
+                                                let declared_max = dh.max(dl);
+                                                if let Some(index_val) = parse_value_as_i64(&index_value_node) {
+                                                    if index_val < declared_min || index_val > declared_max {
+                                                        context.add_diagnostic(
+                                                            format!(
+                                                                "Index '{}' is out of bounds for net '{}' (declared as [{}:{}])",
+                                                                index_val, name, dh, dl
+                                                            ),
+                                                            index_value_node.syntax().text_range(),
+                                                        );
+                                                    }
+                                                } else {
+                                                    // Index is not a simple integer literal - Requires expr evaluation
+                                                    // TODO: Add diagnostic or support expr evaluation
+                                                }
+                                            } else {
+                                                // Declared range values are not simple integer literals
+                                                // TODO: Add diagnostic or support expr evaluation
+                                            }
                                         }
-                                        else if let Some(_range_expr) = suffix.range() {
-                                            // TODO: Evaluate range, check bounds & direction
-                                        }
-                                        else {
-                                            // Should not happen if BusSuffix AST is correct
-                                            context.add_diagnostic(
-                                                format!("Invalid bus suffix structure for net '{}'", name),
-                                                suffix.syntax().text_range(),
-                                            );
+                                        else if let Some(range_expr) = suffix.range() {
+                                            // --- Range Check --- 
+                                            let used_high_opt = range_expr.lhs().and_then(|v| parse_value_as_i64(&v));
+                                            let used_low_opt = range_expr.rhs().and_then(|v| parse_value_as_i64(&v));
+                                            
+                                            if let (Some(dh), Some(dl), Some(uh), Some(ul)) = 
+                                                (declared_high_opt, declared_low_opt, used_high_opt, used_low_opt) 
+                                            {
+                                                // --- Bounds Check --- 
+                                                let declared_min = dh.min(dl);
+                                                let declared_max = dh.max(dl);
+                                                let used_min = uh.min(ul);
+                                                let used_max = uh.max(ul);
+
+                                                if used_min < declared_min || used_max > declared_max {
+                                                    context.add_diagnostic(
+                                                        format!(
+                                                            "Range [{}:{}] is out of bounds for net '{}' (declared as [{}:{}])",
+                                                            uh, ul, name, dh, dl
+                                                        ),
+                                                        range_expr.syntax().text_range(),
+                                                    );
+                                                } else {
+                                                     // --- Direction Check (only if bounds are OK) --- 
+                                                     let declared_descending = dh > dl;
+                                                     let used_descending = uh > ul;
+                                                     if declared_descending != used_descending {
+                                                         context.add_diagnostic(
+                                                            format!(
+                                                                "Range [{}:{}] direction mismatch for net '{}' (declared as [{}:{}])",
+                                                                uh, ul, name, dh, dl
+                                                            ),
+                                                            range_expr.syntax().text_range(),
+                                                         );
+                                                     }
+                                                }
+                                            } else {
+                                                // Declared or used range values are not simple integer literals
+                                                // TODO: Add diagnostic or support expr evaluation for ranges
+                                            }
                                         }
                                     }
                                 } else {
@@ -678,7 +746,7 @@ fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mut Pa
                                      if declared_as_bus {
                                         context.add_diagnostic(
                                             format!("Net '{}' was declared as a bus, but used without an index or slice", name),
-                                            name_token.text_range(), // Use name token range for error
+                                            name_token.text_range(),
                                         );
                                      }
                                      // Else: Not declared as bus and used without suffix: OK.
@@ -1076,6 +1144,70 @@ mod tests {
         let result = analyze(&source_file);
         assert_eq!(result.diagnostics.len(), 1, "Diagnostics: {:?}", result.diagnostics);
         assert!(result.diagnostics[0].message.contains("Undefined symbol: UndefinedParam"), "Unexpected msg: {}", result.diagnostics[0].message);
+    }
+
+        #[test]
+    #[ignore] // Parser doesn't support suffix in connections/assign yet
+    fn analyze_net_ref_index_out_of_bounds_low() {
+        let input = r#"
+            board B {
+                nets { net A[7:0]: signal; }
+                parameters { X=1; }
+                connections { assign X = A[-1]; } // Index too low
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
+        assert_eq!(result.diagnostics.len(), 1, "Diagnostics: {:?}", result.diagnostics);
+        assert!(result.diagnostics[0].message.contains("Index '-1' is out of bounds for net 'A' (declared as [7:0])"), "Unexpected msg: {}", result.diagnostics[0].message);
+    }
+
+    #[test]
+    #[ignore] // Parser doesn't support suffix in connections/assign yet
+    fn analyze_net_ref_index_out_of_bounds_high() {
+        let input = r#"
+            board B {
+                nets { net A[7:0]: signal; }
+                parameters { X=1; }
+                connections { assign X = A[8]; } // Index too high
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
+        assert_eq!(result.diagnostics.len(), 1, "Diagnostics: {:?}", result.diagnostics);
+        assert!(result.diagnostics[0].message.contains("Index '8' is out of bounds for net 'A' (declared as [7:0])"), "Unexpected msg: {}", result.diagnostics[0].message);
+    }
+
+    #[test]
+    #[ignore] // Parser doesn't support suffix in connections/assign yet
+    fn analyze_net_ref_index_out_of_bounds_low_reversed() {
+        let input = r#"
+            board B {
+                nets { net A[0:7]: signal; } // Reversed range
+                parameters { X=1; }
+                connections { assign X = A[-1]; } // Index too low
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
+        assert_eq!(result.diagnostics.len(), 1, "Diagnostics: {:?}", result.diagnostics);
+        assert!(result.diagnostics[0].message.contains("Index '-1' is out of bounds for net 'A' (declared as [0:7])"), "Unexpected msg: {}", result.diagnostics[0].message);
+    }
+
+    #[test]
+    #[ignore] // Parser doesn't support suffix in connections/assign yet
+    fn analyze_net_ref_index_out_of_bounds_high_reversed() {
+        let input = r#"
+            board B {
+                nets { net A[0:7]: signal; } // Reversed range
+                parameters { X=1; }
+                connections { assign X = A[8]; } // Index too high
+            }
+        "#;
+        let source_file = parse_to_sourcefile(input);
+        let result = analyze(&source_file);
+        assert_eq!(result.diagnostics.len(), 1, "Diagnostics: {:?}", result.diagnostics);
+        assert!(result.diagnostics[0].message.contains("Index '8' is out of bounds for net 'A' (declared as [0:7])"), "Unexpected msg: {}", result.diagnostics[0].message);
     }
 
 }
