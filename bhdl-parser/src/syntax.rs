@@ -99,6 +99,11 @@ pub enum SyntaxKind {
     TO_KW,        // to
     EXTENDS_KW,   // extends
 
+    // Keywords for individual items within blocks (NEW)
+    PIN_KW,       // pin
+    PARAMETER_KW, // parameter
+    CONNECT_KW,   // connect
+
     // Nodes (Grammar rules)
     SOURCE_FILE,    // Root node
     IMPORT_STMT,    // import ...;
@@ -171,6 +176,10 @@ pub enum SyntaxKind {
 
     // References
     SIMPLE_IDENT_REF, // Reference consisting of a single identifier (could be Net, Pin, Port, etc.)
+
+    // Added for Connection Statements
+    CONNECTION_LHS,    // Wrapper node for LHS refs
+    CONNECTION_RHS,    // Wrapper node for RHS refs
 
     // ERROR must be the last variant for the assertion in kind_from_raw
     ERROR = 65534, // Represents a parsing error node

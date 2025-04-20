@@ -119,8 +119,8 @@ pub enum LexerToken {
     #[token("nm", priority = 3)] NMUnit,
     #[token("mil", priority = 3)] MILUnit,
 
-    // Catch-all for keywords and identifiers (Keep priority = 2)
-    #[regex("[a-zA-Z_][a-zA-Z0-9_]*", lex_ident_or_kw, priority = 2)]
+    // Keywords and Identifiers recognized by a callback
+    #[regex("[a-zA-Z_][a-zA-Z0-9_]*", keyword_or_ident_callback)]
     KeywordOrIdent(KeywordOrIdent),
 
     // Simple tokens (can have simple names, don't need to match SyntaxKind names)
@@ -170,6 +170,66 @@ pub enum LexerToken {
 
     // Error token (Logos handles this internally now)
     // Error, // Removed explicit Error variant
+}
+
+fn keyword_or_ident_callback(lex: &mut Lexer<LexerToken>) -> KeywordOrIdent {
+    let slice = lex.slice();
+    let kind = match slice {
+        // Top Level Keywords
+        "board" => SyntaxKind::BOARD_KW,
+        "module" => SyntaxKind::MODULE_KW,
+        "component" => SyntaxKind::COMPONENT_KW, // Used for def & inst
+        "interface" => SyntaxKind::INTERFACE_KW,
+        "typedef" => SyntaxKind::TYPEDEF_KW,
+        "import" => SyntaxKind::IMPORT_KW,
+        "const" => SyntaxKind::CONST_KW,
+
+        // Block Keywords
+        "parameters" => SyntaxKind::PARAMETERS_KW,
+        "ports" => SyntaxKind::PORTS_KW,
+        "pins" => SyntaxKind::PINS_KW,
+        "nets" => SyntaxKind::NETS_KW,
+        "components" => SyntaxKind::COMPONENTS_KW,
+        "connections" => SyntaxKind::CONNECTIONS_KW,
+        "interfaces" => SyntaxKind::INTERFACES_KW,
+        "layer_stackup" => SyntaxKind::LAYER_STACKUP_KW,
+        "default_design_rules" => SyntaxKind::DEFAULT_DESIGN_RULES_KW,
+        "constrain" => SyntaxKind::CONSTRAIN_KW,
+
+        // Item Keywords (NEW)
+        "net" => SyntaxKind::NET_KW,
+        "pin" => SyntaxKind::PIN_KW,
+        "port" => SyntaxKind::PORT_KW,
+        "parameter" => SyntaxKind::PARAMETER_KW,
+        "connect" => SyntaxKind::CONNECT_KW,
+        "assign" => SyntaxKind::ASSIGN_KW,
+        "layer" => SyntaxKind::LAYER_KW,
+
+        // Other Keywords
+        "in" => SyntaxKind::IN_KW,
+        "out" => SyntaxKind::OUT_KW,
+        "inout" => SyntaxKind::INOUT_KW,
+        "signal" => SyntaxKind::SIGNAL_KW,
+        "power" => SyntaxKind::POWER_KW,
+        "ground" => SyntaxKind::GROUND_KW,
+        "clock" => SyntaxKind::CLOCK_KW,
+        "wire" => SyntaxKind::WIRE_KW,
+        "tri" => SyntaxKind::TRI_KW,
+        "trireg" => SyntaxKind::TRIREG_KW,
+        "uwire" => SyntaxKind::UWIRE_KW,
+        "generate" => SyntaxKind::GENERATE_KW,
+        "for" => SyntaxKind::FOR_KW,
+        "to" => SyntaxKind::TO_KW,
+        "extends" => SyntaxKind::EXTENDS_KW,
+        "as" => SyntaxKind::AS_KW,
+        "true" => SyntaxKind::TRUE_KW,
+        "false" => SyntaxKind::FALSE_KW,
+        // "pin_map" is NOT a keyword, parsed as IDENT
+
+        // Default to IDENT if not a keyword
+        _ => SyntaxKind::IDENT,
+    };
+    KeywordOrIdent { kind, text: slice.into() }
 }
 
 #[cfg(test)]
