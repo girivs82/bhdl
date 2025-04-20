@@ -333,7 +333,7 @@ impl<'t> Parser<'t> {
             // Parse assignments inside (reuse param_assign logic)
             while self.peek() != Some(SyntaxKind::R_BRACE) && self.peek().is_some() {
                 if self.peek() == Some(SyntaxKind::IDENT) {
-                    self.parse_param_assign();
+                    self.parse_param_assign_no_kw(); // MOD: Call no_kw version
                 } else {
                     self.error(format!("Expected type property assignment (identifier = value) or '}}', found {:?}", self.peek()));
                     self.bump_any();
@@ -426,12 +426,12 @@ impl<'t> Parser<'t> {
                 // Add other relevant blocks if needed (e.g., constraints?)
                 Some(kind) => {
                     self.error(format!("Unexpected token inside component definition: {:?}. Expected block keyword or '}}'.", kind));
-                    self.bump_any();
-                }
+                 self.bump_any();
+            }
                 None => {
                     self.error("Unexpected end of file inside component definition block".to_string());
                     break;
-                }
+        }
             }
         }
 
@@ -439,25 +439,20 @@ impl<'t> Parser<'t> {
         self.builder.finish_node();
     }
 
-    // Reconstructed parse_pins_block
+    // Parses a block of pin declarations: pins { ... }
     fn parse_pins_block(&mut self) {
-        self.builder.start_node(SyntaxKind::PINS_BLOCK.into());
-        self.expect(SyntaxKind::PINS_KW);
-        self.expect(SyntaxKind::L_BRACE);
+        self.builder.start_node(PINS_BLOCK.into());
+        self.expect(PINS_KW);
+        self.expect(L_BRACE);
 
         loop {
             self.skip_trivia();
             match self.peek() {
-                Some(SyntaxKind::R_BRACE) => break,
-                Some(SyntaxKind::IDENT) | Some(SyntaxKind::NUMBER) => { // Pin names can be IDENT or NUMBER
-                    self.parse_pin_decl();
-                }
-                Some(SyntaxKind::GENERATE_KW) => {
-                    // Handle generate for pins
-                    self.parse_generate_for_pins(); // Assumes this was defined/retained
-                }
+                Some(R_BRACE) => break,
+                Some(PIN_KW) => self.parse_pin_decl(), // Expect PIN_KW
+                Some(GENERATE_KW) => self.parse_generate_for_pins(), // Added for generate blocks
                 Some(kind) => {
-                    self.error(format!("Expected pin declaration (identifier/number), generate block, or '}}', found {:?}", kind));
+                    self.error(format!("Expected pin declaration (starting with 'pin'), 'generate' or '}}', found {:?}", kind));
                     self.bump_any();
                 }
                 None => {
@@ -467,92 +462,55 @@ impl<'t> Parser<'t> {
             }
         }
 
-        self.expect(SyntaxKind::R_BRACE);
+        self.expect(R_BRACE);
         self.builder.finish_node();
     }
 
-    // Reconstructed parse_pin_decl
+    // Parses a single pin declaration: pin <name>[bus_suffix] [: <type>] [= <default>]; // MOD: Correct order
     fn parse_pin_decl(&mut self) {
         self.builder.start_node(SyntaxKind::PIN_DECL.into());
-        // Pin names can be IDENT or NUMBER (e.g., for connectors)
-        if !self.eat(SyntaxKind::IDENT) && !self.eat(SyntaxKind::NUMBER) {
-             self.error("Expected pin name (identifier or number)".to_string());
-             self.builder.finish_node();
-             return;
-        }
+        self.expect(SyntaxKind::PIN_KW); // Consume PIN_KW
+        self.expect(SyntaxKind::IDENT); // Pin name
 
-        // Optional bus suffix
+        // MOD: Optional bus suffix parsed HERE (after name, before colon)
         if self.peek() == Some(SyntaxKind::L_BRACKET) {
             self.parse_bus_suffix();
         }
-        self.expect(SyntaxKind::COLON);
 
-        // Direction is required *unless* type is GROUND_KW
-        let is_ground = self.peek() == Some(SyntaxKind::GROUND_KW);
-        if !is_ground {
-            match self.peek() {
-                Some(SyntaxKind::IN_KW) | Some(SyntaxKind::OUT_KW) | Some(SyntaxKind::INOUT_KW) => {
-                    self.bump(); // Consume direction keyword
-                }
-                _ => {
-                    // Report error but proceed, hoping to find type
-                    self.error("Expected pin direction (in, out, inout)".to_string());
-                }
-            }
+        // Optional type annotation
+        if self.eat(SyntaxKind::COLON) {
+            self.parse_type_ref();
         }
 
-        // Parse type reference
-        self.parse_type_ref(); // E.g., signal, power, ground, or custom type like cmos_3v3
-
-        // Optional pin properties (comma separated after type)
-        if self.eat(SyntaxKind::COMMA) {
-            self.builder.start_node(SyntaxKind::PIN_PROPERTIES.into());
-             loop {
-                // Simple property parse: key=value
-                if self.peek() == Some(SyntaxKind::IDENT) {
-                    self.parse_param_assign(); // Reuse simple key=value parsing
-                    if !self.eat(SyntaxKind::COMMA) {
-                        break; // Exit loop if no comma follows property
-                    }
-                } else {
-                    self.error(format!("Expected pin property assignment (identifier = value) after comma, found {:?}", self.peek()));
-                    break; // Exit loop on error
-                }
-            }
-            self.builder.finish_node(); // Finish PIN_PROPERTIES
+        // Optional default value (not typical for pins, but maybe for future flexibility?)
+        if self.eat(SyntaxKind::EQ) {
+            self.parse_expr(0); // Parse the default value expression
         }
 
         self.expect(SyntaxKind::SEMI);
-        self.builder.finish_node();
+        self.builder.finish_node(); // Finish PIN_DECL
     }
 
     // Reconstructed parse_bus_suffix
     fn parse_bus_suffix(&mut self) {
-        // Ensure we are at L_BRACKET before starting node? Use peek() to handle trivia.
-        if self.peek() != Some(SyntaxKind::L_BRACKET) {
-             self.error("Expected '[' to start bus suffix".to_string());
-             return; // Don't proceed if no bracket
-        }
-        self.builder.start_node(SyntaxKind::BUS_SUFFIX.into()); // Start BUS_SUFFIX node
-        self.expect(SyntaxKind::L_BRACKET);
+        // Assumes L_BRACKET has been consumed by the caller
+        self.builder.start_node(BUS_SUFFIX.into());
 
-        // Checkpoint *before* parsing the first potential part of the range/index
-        let expr1_checkpoint = self.builder.checkpoint();
-        self.parse_expr(0); // Parse the first expression (index or high bound)
+        // Parse the first expression (high bound or single index)
+        let checkpoint_before_first_expr = self.builder.checkpoint();
+        self.parse_expr(0);
 
-        // Check if it's a range
-        if self.peek() == Some(SyntaxKind::COLON) {
-            // It's a range, create a RANGE_EXPR node around the two expressions
-            self.builder.start_node_at(expr1_checkpoint, SyntaxKind::RANGE_EXPR.into());
-            self.expect(SyntaxKind::COLON); // Consume COLON (expect handles trivia)
-            self.parse_expr(0); // Parse the second expression (low bound)
+        // Check if a colon follows, indicating a range
+        if self.peek() == Some(COLON) {
+            // It's a range. Re-wrap the first expression, colon, and second expression
+            self.builder.start_node_at(checkpoint_before_first_expr, RANGE_EXPR.into());
+            self.expect(COLON); // Consume colon
+            self.parse_expr(0); // Parse second expr (low)
             self.builder.finish_node(); // Finish RANGE_EXPR
-        } else {
-            // It's just an index. The first expression is already parsed.
-            // No RANGE_EXPR node needed. The first expr remains a direct child of BUS_SUFFIX.
         }
+        // If no colon, the first expr is just part of BUS_SUFFIX
 
-        self.expect(SyntaxKind::R_BRACKET);
+        self.expect(R_BRACKET);
         self.builder.finish_node(); // Finish BUS_SUFFIX
     }
 
@@ -566,11 +524,13 @@ impl<'t> Parser<'t> {
             self.skip_trivia();
             match self.peek() {
                 Some(SyntaxKind::R_BRACE) => break,
-                Some(SyntaxKind::IDENT) => { // Interface instance starts with IDENT (name)
+                // MOD: Expect INTERFACE_KW, not IDENT
+                Some(SyntaxKind::INTERFACE_KW) => {
                     self.parse_interface_inst();
                 }
                 Some(kind) => {
-                    self.error(format!("Expected interface instance (identifier) or '}}', found {:?}", kind));
+                    // MOD: Update error message
+                    self.error(format!("Expected interface instance (starting with 'interface') or '}}', found {:?}", kind));
                     self.bump_any();
                 }
                 None => {
@@ -584,38 +544,47 @@ impl<'t> Parser<'t> {
         self.builder.finish_node();
     }
 
-    // ADD parse_interface_inst (called by parse_interfaces_block)
-    // Parses: InstName: interface TypeName { pin_map = { ... }, param = value; ... }
+    // MOD: parse_interface_inst (called by parse_interfaces_block)
+    // Parses: interface <instance_name>: <interface_type_name> { pin_map = { ... }, param = value; ... }
     fn parse_interface_inst(&mut self) {
         self.builder.start_node(SyntaxKind::INTERFACE_INSTANCE.into());
-        self.expect(SyntaxKind::IDENT); // Instance Name (e.g., MEM, SPI1)
-        // Optional ':' ? Spec examples vary, assume optional for now or require? Let's require based on example.
-        self.expect(SyntaxKind::COLON);
-        self.expect(SyntaxKind::INTERFACE_KW); // 'interface' keyword
+        self.expect(SyntaxKind::INTERFACE_KW); // MOD: Expect INTERFACE_KW first
+        self.expect(SyntaxKind::IDENT); // MOD: Instance Name (e.g., MEM, SPI1)
+        self.expect(SyntaxKind::COLON); // Required colon
+        // REMOVE: self.expect(SyntaxKind::INTERFACE_KW); // No longer here
         self.expect(SyntaxKind::IDENT); // Interface Type Name (e.g., DDR_Interface, SPI)
 
         // Parse block with pin_map and optional parameter overrides
         self.expect(SyntaxKind::L_BRACE);
-         while self.peek() != Some(SyntaxKind::R_BRACE) && self.peek().is_some() {
+        loop {
+            self.skip_trivia();
             match self.peek() {
-                // Change PIN_MAP_KW to IDENT
+                Some(SyntaxKind::R_BRACE) => break,
+                // MOD: Check for IDENT "pin_map"
                 Some(SyntaxKind::IDENT) => {
-                    // Check if the identifier is actually "pin_map"
-                    let current_token_text = self.tokens.get(self.pos).map(|(_, text)| text.clone());
-                    if current_token_text.as_deref() == Some("pin_map") {
+                    // Peek at the token text without consuming
+                    let mut next_non_trivia_pos = self.pos;
+                    while self.tokens.get(next_non_trivia_pos).map_or(false, |(k,_)| k.is_trivia()) {
+                         next_non_trivia_pos += 1;
+                    }
+                    let is_pin_map = self.tokens.get(next_non_trivia_pos).map_or(false, |(_, text)| text.as_str() == "pin_map");
+
+                    if is_pin_map && self.peek_n(1) == Some(SyntaxKind::EQ) {
+                        // It's a pin_map block
                         self.parse_pin_map_block();
                     } else {
-                        // Assume it's a parameter assignment
-                        self.parse_param_assign();
+                        // Assume it's a parameter override
+                        self.parse_param_assign_no_kw();
                     }
                 }
-                // Some(SyntaxKind::PIN_MAP_KW) => self.parse_pin_map_block(), // Removed
-                // Some(SyntaxKind::IDENT) => self.parse_param_assign(), // Combined above
                 Some(kind) => {
-                    self.error(format!("Expected 'pin_map' assignment or parameter assignment or '}}' inside interface instance, found {:?}", kind));
-                     self.bump_any();
+                    self.error(format!("Expected 'pin_map', parameter assignment, or '}}', found {:?}", kind));
+                    self.bump_any();
                 }
-                None => break, // EOF
+                None => {
+                    self.error("Unexpected end of file inside interface instance block".to_string());
+                    break;
+                }
             }
         }
         self.expect(SyntaxKind::R_BRACE);
@@ -732,108 +701,71 @@ impl<'t> Parser<'t> {
         self.builder.finish_node();
     }
 
+    // Parses a block of parameter assignments: parameters { ... }
     fn parse_parameters_block(&mut self) {
         self.builder.start_node(SyntaxKind::PARAMETERS_BLOCK.into());
         self.expect(SyntaxKind::PARAMETERS_KW);
         self.expect(SyntaxKind::L_BRACE);
-        while let Some(kind) = self.peek() {
-            match kind {
-                SyntaxKind::R_BRACE => break,
-                SyntaxKind::IDENT => self.parse_param_assign(),
-                _ => {
-                    self.error(format!("Expected parameter assignment (identifier) or '}}', found {:?}", kind));
-                    self.bump_any();
-                }
+
+        while self.peek() != Some(SyntaxKind::R_BRACE) && self.peek().is_some() {
+            if self.peek() == Some(SyntaxKind::PARAMETER_KW) { // MOD: Use PARAMETER_KW
+                self.parse_param_assign();
+            } else {
+                self.error(format!("Expected parameter declaration (starting with 'parameter') or '}}' in parameters block, found {:?}", self.current())); // MOD: Error message
+                self.bump_any(); // Recovery
             }
         }
+
         self.expect(SyntaxKind::R_BRACE);
-        self.builder.finish_node();
+        self.builder.finish_node(); // Finish PARAMETERS_BLOCK
     }
 
-    fn parse_param_assign(&mut self) {
-         self.builder.start_node(SyntaxKind::PARAM_ASSIGN.into());
-         self.expect(SyntaxKind::IDENT); // Name (e.g., value, tolerance)
-         // Optional type annotation
-         if self.eat(SyntaxKind::COLON) {
-             self.parse_type_ref(); // TODO: Define and implement parse_type_ref properly if needed here
-         }
-         self.expect(SyntaxKind::EQ);    // =
+    // Parses a single parameter assignment: parameter <name> [: <type>] = <value>; // MOD: Updated comment
+    fn parse_param_assign(&mut self) { // Changed name from decl to assign for clarity
+        self.builder.start_node(SyntaxKind::PARAM_ASSIGN.into());
+        self.expect(SyntaxKind::PARAMETER_KW); // MOD: Use PARAMETER_KW
+        self.expect(SyntaxKind::IDENT); // Parameter name
 
-         // Special check for type keywords in assignment (common in typedef)
-         match self.peek() {
-            Some(SyntaxKind::SIGNAL_KW) |
-            Some(SyntaxKind::POWER_KW) |
-            Some(SyntaxKind::GROUND_KW) => {
-                // Consume the keyword directly as the value
-                // We might wrap this in a VALUE node for consistency?
-                self.builder.start_node(SyntaxKind::VALUE.into());
-                self.bump(); 
-                self.builder.finish_node();
-            }
-            _ => {
-                 // Otherwise, parse a regular value/expression
-                 self.parse_expr(0); // NEW - Allow full expressions
-            }
-         }
+        // Optional type annotation
+        if self.eat(SyntaxKind::COLON) {
+            self.parse_type_ref();
+        }
 
-         self.expect(SyntaxKind::SEMI);
-         self.builder.finish_node();
+        self.expect(SyntaxKind::EQ); // Expect '='
+        self.parse_expr(0);         // Parse the value expression
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node(); // Finish PARAM_ASSIGN
     }
 
+    // Parses a block of port declarations: ports { ... }
     fn parse_ports_block(&mut self) {
         self.builder.start_node(SyntaxKind::PORTS_BLOCK.into());
         self.expect(SyntaxKind::PORTS_KW);
         self.expect(SyntaxKind::L_BRACE);
 
-        // Parse port declarations
-        loop {
-            self.skip_trivia();
-            match self.peek() {
-                Some(SyntaxKind::R_BRACE) => break, // End of block
-                Some(SyntaxKind::IDENT) => {
-                    // Looks like the start of a port declaration
-                    self.parse_port_decl();
-                }
-                Some(kind) => {
-                    self.error(format!("Expected port declaration (identifier) or '}}', found {:?}", kind));
-                    self.bump_any(); // Consume unexpected token to allow recovery
-                }
-                None => {
-                    self.error("Unexpected end of file inside ports block".to_string());
-                    break;
-                }
+        // Loop until R_BRACE or end of file
+        while self.peek() != Some(SyntaxKind::R_BRACE) && self.peek().is_some() {
+            if self.peek() == Some(SyntaxKind::PORT_KW) { // Expect PORT_KW
+                self.parse_port_decl();
+            } else {
+                 self.error(format!("Expected port declaration (starting with 'port') or '}}' in ports block, found {:?}", self.current()));
+                 self.bump_any(); // Recovery
             }
         }
 
         self.expect(SyntaxKind::R_BRACE);
-        self.builder.finish_node();
+        self.builder.finish_node(); // Finish PORTS_BLOCK
     }
 
+    // Parses a single port declaration: port <name> : <interface_type>;
     fn parse_port_decl(&mut self) {
         self.builder.start_node(SyntaxKind::PORT_DECL.into());
+        self.expect(SyntaxKind::PORT_KW); // Consume PORT_KW
         self.expect(SyntaxKind::IDENT); // Port name
-        // Optional bus suffix
-        if self.peek() == Some(SyntaxKind::L_BRACKET) {
-            self.parse_bus_suffix();
-        }
         self.expect(SyntaxKind::COLON);
-
-        // Direction is *required* for ports according to spec 2.4.3 / 3.1 examples
-        match self.peek() {
-            Some(SyntaxKind::IN_KW) | Some(SyntaxKind::OUT_KW) | Some(SyntaxKind::INOUT_KW) => {
-                self.bump(); // Consume direction keyword
-            }
-            _ => {
-                // Report error but proceed, hoping to find type
-                self.error("Expected port direction (in, out, inout)".to_string());
-            }
-        }
-
-        // Parse type reference
-        self.parse_type_ref(); // E.g., signal, power, ground, or custom type like cmos_3v3
-
+        self.parse_type_ref(); // Interface type (must be an IDENT for an interface def)
         self.expect(SyntaxKind::SEMI);
-        self.builder.finish_node();
+        self.builder.finish_node(); // Finish PORT_DECL
     }
 
     fn parse_nets_block(&mut self) {
@@ -841,23 +773,19 @@ impl<'t> Parser<'t> {
         self.expect(SyntaxKind::NETS_KW);
         self.expect(SyntaxKind::L_BRACE);
 
-        // Parse net declarations
-        loop {
-            self.skip_trivia();
+        // Loop to parse multiple net declarations
+        while self.peek() != Some(SyntaxKind::R_BRACE) && self.peek().is_some() {
+            // Expect NET_KW to start a net declaration
             match self.peek() {
-                Some(SyntaxKind::R_BRACE) => break, // End of block
-                Some(SyntaxKind::NET_KW) => {
-                    // Consume NET_KW and parse the rest of the declaration
-                    self.parse_net_decl(); // parse_net_decl now consumes NET_KW
+                Some(SyntaxKind::NET_KW) => { // Expect NET_KW now
+                    self.parse_net_decl();
                 }
-                Some(kind) => {
-                     self.error(format!("Expected 'net' keyword or '}}', found {:?}", kind));
-                     self.bump_any(); // Consume unexpected token
+                Some(_) => {
+                    self.error("Expected 'net' keyword or '}'".to_string()); // Updated error msg
+                    // Attempt to recover by consuming the unexpected token
+                    self.bump_any();
                 }
-                None => {
-                    self.error("Unexpected end of file inside nets block".to_string());
-                    break;
-                }
+                None => break, // End of file unexpectedly
             }
         }
 
@@ -865,33 +793,27 @@ impl<'t> Parser<'t> {
         self.builder.finish_node();
     }
 
+    // Parses a single net declaration: net <name>[bus_suffix] : <type> [= <default>]; // MOD: Correct order
     fn parse_net_decl(&mut self) {
-         self.builder.start_node(SyntaxKind::NET_DECL.into());
-         // Expect NET_KW at the beginning of the declaration
-         self.expect(SyntaxKind::NET_KW);
+        self.builder.start_node(SyntaxKind::NET_DECL.into());
+        self.expect(SyntaxKind::NET_KW); // Expect NET_KW here now
+        self.expect(SyntaxKind::IDENT); // Net name
 
-         // Parse IDENT [BUS_SUFFIX]? COLON TYPE_REF [= EXPRESSION]? SEMI
-         if self.eat(SyntaxKind::IDENT) {
-             // Optional bus suffix
-             if self.peek() == Some(SyntaxKind::L_BRACKET) {
-                 self.parse_bus_suffix();
-             }
-         } else {
-             self.error("Expected net name (identifier) after 'net' keyword".to_string());
-             // Recovery: finish node and return?
-             self.builder.finish_node();
-             return;
-         }
+        // MOD: Optional bus suffix parsed HERE (after name, before colon)
+        if self.peek() == Some(SyntaxKind::L_BRACKET) {
+            self.parse_bus_suffix();
+        }
 
-         self.expect(SyntaxKind::COLON);
-         self.parse_type_ref();
+        self.expect(SyntaxKind::COLON); // Separator
+        self.parse_type_ref(); // Parse the type reference
 
-         // Optional default assignment
-         if self.eat(SyntaxKind::EQ) {
-             self.parse_expr(0); // NEW - Parse the RHS expression
-         }
-         self.expect(SyntaxKind::SEMI);
-         self.builder.finish_node();
+        // Optional default value (not really applicable to nets, but maybe later?)
+        if self.eat(SyntaxKind::EQ) {
+            self.parse_expr(0); // Parse expression for default value
+        }
+
+        self.expect(SyntaxKind::SEMI); // Expect semicolon terminator
+        self.builder.finish_node();
     }
 
     fn parse_type_ref(&mut self) {
@@ -1230,38 +1152,53 @@ impl<'t> Parser<'t> {
 
     // --- Existing Block/Item Parsers ---
     fn parse_components_block(&mut self) {
-        self.builder.start_node(SyntaxKind::COMPONENTS_BLOCK.into());
-        self.expect(SyntaxKind::COMPONENTS_KW);
-        self.expect(SyntaxKind::L_BRACE);
+        self.builder.start_node(COMPONENTS_BLOCK.into());
+        self.expect(COMPONENTS_KW);
+        self.expect(L_BRACE);
 
-        // Parse component instantiations
-        while let Some(kind) = self.peek() {
+        loop {
+            self.skip_trivia();
+            let kind = self.peek();
             match kind {
-                SyntaxKind::R_BRACE => break,
-                SyntaxKind::IDENT => { // Found start of an instantiation
-                     self.parse_component_inst();
-                     // After parsing an instance, optionally consume a semicolon
-                     self.eat(SyntaxKind::SEMI);
+                Some(R_BRACE) => break,
+                // Expect COMPONENT_KW before each component instance
+                Some(COMPONENT_KW) => {
+                    self.parse_component_inst();
+                }
+                None => {
+                    self.error("Unexpected end of file inside components block".to_string());
+                    break;
                 }
                 _ => {
-                    self.error(format!("Expected component instantiation (identifier) or '}}', found {:?}", kind));
-                    self.bump_any();
+                    self.error(format!("Expected 'component' keyword or '}}', found {:?}", kind));
+                    self.bump_any(); // Consume unexpected token to attempt recovery
                 }
             }
         }
 
-        self.expect(SyntaxKind::R_BRACE);
+        self.expect(R_BRACE);
         self.builder.finish_node();
     }
 
+    // Parses: component <type> <name> { ... } [;]
+    // Parses: component <type> <name> (); [;] // For components without params
     fn parse_component_inst(&mut self) {
-        self.builder.start_node(SyntaxKind::COMPONENT_INST.into());
-        self.expect(SyntaxKind::IDENT); // Component Type
-        self.expect(SyntaxKind::IDENT); // Instance Name
-        self.expect(SyntaxKind::L_BRACE);
-        self.parse_component_params(); // Parse parameters inside {}
-        self.expect(SyntaxKind::R_BRACE);
-        // Note: Semicolon is not specified after component instantiation in the spec examples
+        self.builder.start_node(COMPONENT_INST.into());
+        self.expect(COMPONENT_KW); // Consume the 'component' keyword
+        self.expect(IDENT); // Component Type
+        self.expect(IDENT); // Instance Name
+
+        // Parameters block { ... } or ();
+        if self.eat(L_BRACE) {
+            self.parse_component_params();
+            self.expect(R_BRACE);
+        } else if self.eat(SEMI) {
+            // If no parameters, just consume the semicolon
+        } else {
+            self.error("Expected '}' or ';' after component instantiation".to_string());
+            self.bump_any();
+        }
+
         self.builder.finish_node();
     }
 
@@ -1280,24 +1217,30 @@ impl<'t> Parser<'t> {
     }
 
     fn parse_connections_block(&mut self) {
-        self.builder.start_node(SyntaxKind::CONNECTIONS_BLOCK.into());
-        self.expect(SyntaxKind::CONNECTIONS_KW);
-        self.expect(SyntaxKind::L_BRACE);
+        self.builder.start_node(CONNECTIONS_BLOCK.into());
+        self.expect(CONNECTIONS_KW);
+        self.expect(L_BRACE);
 
-        // Parse connection or assign statements
-        while let Some(kind) = self.peek() {
+        loop {
+            self.skip_trivia();
+            let kind = self.peek();
             match kind {
-                SyntaxKind::R_BRACE => break,
-                SyntaxKind::ASSIGN_KW => self.parse_assign_stmt(), // Added case for assign
-                SyntaxKind::IDENT => self.parse_connection_stmt(), // Regular connection starts with IDENT
+                Some(R_BRACE) => break,
+                // Expect CONNECT_KW or ASSIGN_KW
+                Some(CONNECT_KW) => self.parse_connection_stmt(),
+                Some(ASSIGN_KW) => self.parse_assign_stmt(),
+                None => {
+                    self.error("Unexpected end of file inside connections block".to_string());
+                    break;
+                }
                 _ => {
-                    self.error(format!("Expected connection statement (identifier) or assign statement or '}}', found {:?}", kind));
-                    self.bump_any();
+                    self.error(format!("Expected 'connect' or 'assign' keyword or '}}', found {:?}", kind));
+                    self.bump_any(); // Consume unexpected token
                 }
             }
         }
 
-        self.expect(SyntaxKind::R_BRACE);
+        self.expect(R_BRACE);
         self.builder.finish_node();
     }
 
@@ -1367,33 +1310,33 @@ impl<'t> Parser<'t> {
 
     // This function parses -> and <=> connections
     fn parse_connection_stmt(&mut self) {
-        self.builder.start_node(CONNECTION_STMT.into());
+        self.builder.start_node(SyntaxKind::CONNECTION_STMT.into());
+        self.expect(SyntaxKind::CONNECT_KW); // ADD: Expect CONNECT_KW keyword
 
         // Parse LHS (one or more refs)
-        // Use NET_REF as default for connection endpoints
-        self.parse_ref_revised(NET_REF); // Use NET_REF as default
+        // Use SIMPLE_IDENT_REF as default kind for potentially simple names
+        self.parse_ref_revised(SIMPLE_IDENT_REF); // Use SIMPLE_IDENT_REF
         while self.eat(COMMA) { // Use eat() for optional comma
-            self.parse_ref_revised(NET_REF); // Use NET_REF as default
+            self.parse_ref_revised(SIMPLE_IDENT_REF); // Use SIMPLE_IDENT_REF
         }
 
         // Expect an arrow or interface connection operator
         if self.eat(ARROW) {
             // Parse RHS for ->
-            self.parse_ref_revised(NET_REF); // Use NET_REF as default
+            self.parse_ref_revised(SIMPLE_IDENT_REF); // Use SIMPLE_IDENT_REF
             while self.eat(COMMA) { // Use eat() for optional comma
-                self.parse_ref_revised(NET_REF); // Use NET_REF as default
+                self.parse_ref_revised(SIMPLE_IDENT_REF); // Use SIMPLE_IDENT_REF
             }
         } else if self.eat(IF_CONNECT) {
             // Parse RHS for <=> (likely an interface reference)
-            // Interfaces are referred to by simple name, use SIMPLE_IDENT_REF here?
-            // Let's stick with NET_REF for now, might need INTERFACE_REF later.
-            self.parse_ref_revised(NET_REF);
+            // Use SIMPLE_IDENT_REF here as well, analyzer resolves interface name
+            self.parse_ref_revised(SIMPLE_IDENT_REF);
             // Interface connections are typically 1-to-1, check for trailing comma.
             if self.peek() == Some(COMMA) {
                 self.error("Interface connection operator <=> expects a single target on each side.".to_string());
                  // Consume the comma and potentially following refs to allow parsing to continue
                  while self.eat(COMMA) {
-                     self.parse_ref_revised(NET_REF);
+                     self.parse_ref_revised(SIMPLE_IDENT_REF); // Use SIMPLE_IDENT_REF
                  }
             }
         } else {
@@ -1405,7 +1348,7 @@ impl<'t> Parser<'t> {
         }
 
         self.expect(SEMI);
-        self.builder.finish_node();
+        self.builder.finish_node(); // Finish CONNECTION_STMT
     }
 
     // Parses: generate for <var> in <range> { <pin_decl>... }
@@ -1423,12 +1366,12 @@ impl<'t> Parser<'t> {
             self.skip_trivia();
             match self.peek() {
                 Some(R_BRACE) => break,
-                // Pin names can be IDENT or NUMBER
-                Some(IDENT) | Some(NUMBER) => {
+                // Pin declarations inside generate must start with PIN_KW
+                Some(PIN_KW) => { // << CHANGED: Expect PIN_KW
                     self.parse_pin_decl();
                 }
                 Some(kind) => {
-                    self.error(format!("Expected pin declaration (identifier or number) or '}}' in generate for block, found {:?}", kind));
+                    self.error(format!("Expected 'pin' keyword or '}}' in generate for block, found {:?}", kind)); // << CHANGED: Error message
                     self.bump_any(); // Consume unexpected token
                 }
                 None => {
@@ -1465,7 +1408,9 @@ impl<'t> Parser<'t> {
                 R_BRACE => break, // End of block
                 PARAMETERS_KW => self.parse_parameters_block(), // Reuse
                 PINS_KW => self.parse_pins_block(), // Reuse
-                // Add INTERFACES_KW? Spec isn't clear if interfaces can contain other interfaces directly.
+                // Allow interface instances inside interface defs? Needs INTERFACES_KW block.
+                // For now, only allow params and pins.
+                // INTERFACE_KW => self.parse_interface_inst(), // If interfaces block is added
                 _ => {
                     self.error(format!("Unexpected token inside interface definition: {:?}. Expected parameters, pins, or '}}'.", kind));
                     self.bump_any(); // Consume unexpected token
@@ -1484,7 +1429,7 @@ impl<'t> Parser<'t> {
         self.expect(SyntaxKind::LAYER_STACKUP_KW);
         self.expect(SyntaxKind::L_BRACE);
         // Parse layer definitions
-        while self.peek() == Some(SyntaxKind::LAYER_KW) {
+        while self.peek() == Some(SyntaxKind::LAYER_KW) { // Expect LAYER_KW
             self.parse_layer_def();
         }
         // Handle unexpected tokens inside block?
@@ -1502,13 +1447,16 @@ impl<'t> Parser<'t> {
     // Parses: layer NAME { prop = value; ... }
     fn parse_layer_def(&mut self) {
         self.builder.start_node(SyntaxKind::LAYER_DEF.into());
-        self.expect(SyntaxKind::LAYER_KW);
+        self.expect(SyntaxKind::LAYER_KW); // Expect LAYER_KW
         self.expect(IDENT); // Layer Name
         self.expect(SyntaxKind::L_BRACE);
         // Parse assignments inside
         while self.peek() != Some(SyntaxKind::R_BRACE) && self.peek().is_some() {
+            // Expect parameter assignment (IDENT = ...) starting with IDENT
             if self.peek() == Some(SyntaxKind::IDENT) {
-                self.parse_param_assign(); // Reuse param assign
+                 // Should we expect PARAM_KW here? Spec says layer properties are just key=value pairs.
+                 // Let's assume NO PARAM_KW for now, as it's not a parameter block.
+                self.parse_param_assign_no_kw(); // Use a version without keyword expectation
             } else {
                 self.error(format!("Expected layer property assignment (identifier = value) or '}}', found {:?}", self.peek()));
                 self.bump_any();
@@ -1525,14 +1473,49 @@ impl<'t> Parser<'t> {
         self.expect(SyntaxKind::L_BRACE);
         // Parse design rule assignments (reuse param_assign logic)
         while self.peek() != Some(SyntaxKind::R_BRACE) && self.peek().is_some() {
+            // Expect IDENT for rule name
             if self.peek() == Some(SyntaxKind::IDENT) {
-                self.parse_param_assign();
+                // Design rules are also key=value, not parameter decls.
+                self.parse_param_assign_no_kw(); // Use a version without keyword expectation
             } else {
                 self.error(format!("Expected design rule assignment (identifier = value) or '}}', found {:?}", self.peek()));
                 self.bump_any();
             }
         }
         self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
+    // Helper for param assignments where the keyword isn't expected (e.g., inside layer/design rule/typedef blocks) // MOD: Added typedef
+    fn parse_param_assign_no_kw(&mut self) {
+        self.builder.start_node(PARAM_ASSIGN.into());
+        self.expect(IDENT); // Parameter Name (or rule/property name)
+        self.expect(EQ);
+
+        // MOD: Check for type keywords as direct values before falling back to parse_expr
+        match self.peek() {
+            Some(SyntaxKind::SIGNAL_KW) |
+            Some(SyntaxKind::POWER_KW) |
+            Some(SyntaxKind::GROUND_KW) |
+            Some(SyntaxKind::CLOCK_KW) |
+            Some(SyntaxKind::WIRE_KW) |
+            Some(SyntaxKind::TRI_KW) |
+            Some(SyntaxKind::TRIREG_KW) |
+            Some(SyntaxKind::UWIRE_KW) => {
+                // If it's a known type keyword, consume it as the value
+                 // Need to wrap it in a VALUE node for consistency?
+                 // Let's create a VALUE node containing just the keyword token.
+                 self.builder.start_node(VALUE.into());
+                 self.bump(); // Consume the type keyword token
+                 self.builder.finish_node(); // Finish the VALUE node
+            }
+            _ => {
+                // Otherwise, parse a general expression
+                self.parse_expr(0);
+            }
+        }
+
+        self.expect(SEMI);
         self.builder.finish_node();
     }
 
@@ -1571,7 +1554,7 @@ impl<'t> Parser<'t> {
             // Reuse param_assign logic for now. 
             // TODO: Need to handle specific constraint value syntax (e.g., ranges, +/-)
             if self.peek() == Some(SyntaxKind::IDENT) {
-                self.parse_param_assign();
+                self.parse_param_assign_no_kw(); // MOD: Call the no_kw version
             } else {
                 self.error(format!("Expected constraint assignment (identifier = value) or '}}', found {:?}", self.peek()));
                 self.bump_any();
@@ -1843,8 +1826,8 @@ mod tests {
     #[test]
     fn parse_board_with_junk_inside() {
         let result = parse("board Foo { junk }");
-        println!("Parse errors: {:?}\n", result.errors);
-        println!("Syntax Tree:\n{:#?}", result.syntax());
+        println!("Parse errors: {:?}\\n", result.errors);
+        println!("Syntax Tree:\\n{:#?}", result.syntax());
         assert!(!result.errors.is_empty());
         let root = result.syntax();
         assert_eq!(root.kind(), SOURCE_FILE);
@@ -1852,14 +1835,16 @@ mod tests {
         assert!(board_def.is_some());
         let board_def = board_def.unwrap();
         assert!(board_def.children_with_tokens().any(|t| t.kind() == BOARD_KW));
-        assert!(board_def.children_with_tokens().any(|t| t.kind() == IDENT && t.as_token().map(|tok| tok.text()) == Some(&SmolStr::new("Foo")) ));
+        // MOD: Fix SmolStr comparison using direct ==
+        assert!(board_def.children_with_tokens().any(|t| t.kind() == IDENT && t.as_token().map(|tok| tok.text() == "Foo") == Some(true) ));
         assert!(board_def.children_with_tokens().any(|t| t.kind() == L_BRACE));
         assert!(board_def.children_with_tokens().any(|t| t.kind() == R_BRACE));
         // Check that 'junk' was consumed (might be IDENT or ERROR_TOKEN)
         // Since 'junk' is a valid identifier according to the lexer rule,
         // and our parser expects specific keywords or '}' inside the board,
         // 'junk' will be lexed as IDENT and cause a parser error "Unexpected token..."
-        assert!(board_def.children_with_tokens().any(|t| t.kind() == IDENT && t.as_token().map(|tok| tok.text()) == Some(&SmolStr::new("junk"))));
+        // MOD: Fix SmolStr comparison using direct ==
+        assert!(board_def.children_with_tokens().any(|t| t.kind() == IDENT && t.as_token().map(|tok| tok.text() == "junk") == Some(true)));
     }
 
     #[test]
@@ -2601,7 +2586,7 @@ mod tests {
             println!("Testing input: {}", input_str);
             let result = parse(input_str);
             println!("Parse errors: {:?}", result.errors);
-            println!("Syntax Tree:\n{:#?}", result.syntax());
+            println!("Syntax Tree:\\n{:#?}", result.syntax());
             assert!(result.errors.is_empty(), "Parse errors for input: {}", input_str);
 
             let assign_stmt = find_node(&result.syntax(), ASSIGN_STMT)
@@ -2624,4 +2609,6 @@ mod tests {
         }
     }
 
-} 
+} // This is the single, correct closing brace for `mod tests`
+
+// NOTE: Any tests defined AFTER the above closing brace were duplicates and have been removed.

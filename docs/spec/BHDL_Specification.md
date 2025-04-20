@@ -45,40 +45,41 @@ While VHDL and Verilog focus on digital logic with limited analog support, BHDL 
 ```bhdl
 // In connections block (designer types this first)
 connections {
-  VIN -> R1.1; // R1, VIN are initially flagged by IDE
-  R1.1 -> C1.1; // C1 flagged
-  C1.2 -> GND; // GND flagged (if not predefined)
-  R1.2 -> LED1.A; // LED1 flagged
-  LED1.K -> GND;
+  // Keywords 'connect' or 'assign' are required for statements inside this block
+  connect VIN -> R1.1; // R1, VIN are initially flagged by IDE
+  connect R1.1 -> C1.1; // C1 flagged
+  connect C1.2 -> GND; // GND flagged (if not predefined)
+  connect R1.2 -> LED1.A; // LED1 flagged
+  connect LED1.K -> GND;
 }
 
 // IDE assists in generating these declarations:
-nets { // Explicit net declarations required
+nets { // Explicit net declarations required, with 'net' keyword
   net VIN: power; // Assuming power type based on context or user choice
   net Net_R1_C1: signal; // Auto-generated or named net
   net Net_R1_LED: signal;
   net GND: ground; // Assuming ground is a predefined or declared net
 }
 
-components { // Explicit component declarations required
-  Resistor R1 { value = 1kOhm; tolerance = 5pct; } // Designer fills in details
-  Capacitor C1 { value = 10uF; voltage = 25Vdc; } // Designer fills in details
-  LED LED1 { color = red; current = 20mA; } // Designer fills in details
+components { // Explicit component declarations required, with 'component' keyword
+  component Resistor R1 { value = 1kOhm; tolerance = 5pct; } // Designer fills in details
+  component Capacitor C1 { value = 10uF; voltage = 25Vdc; } // Designer fills in details
+  component LED LED1 { color = red; current = 20mA; } // Designer fills in details
 }
 
 // Refined connections using declared nets (optional but clearer)
 connections {
-  VIN -> R1.1;
-  R1.1 -> Net_R1_C1; C1.1 -> Net_R1_C1; // Connecting both pins to the explicit net
-  C1.2 -> GND;
-  R1.2 -> Net_R1_LED; LED1.A -> Net_R1_LED;
-  LED1.K -> GND;
+  connect VIN -> R1.1;
+  connect R1.1 -> Net_R1_C1; connect C1.1 -> Net_R1_C1; // Connecting both pins to the explicit net
+  connect C1.2 -> GND;
+  connect R1.2 -> Net_R1_LED; connect LED1.A -> Net_R1_LED;
+  connect LED1.K -> GND;
   // OR simplified pin-to-pin if intermediate net name isn't needed
-  // VIN -> R1.1;
-  // R1.1 -> C1.1; // Implicit net between R1.1 and C1.1
-  // C1.2 -> GND;
-  // R1.2 -> LED1.A; // Implicit net between R1.2 and LED1.A
-  // LED1.K -> GND;
+  // connect VIN -> R1.1;
+  // connect R1.1 -> C1.1; // Implicit net between R1.1 and C1.1
+  // connect C1.2 -> GND;
+  // connect R1.2 -> LED1.A; // Implicit net between R1.2 and LED1.A
+  // connect LED1.K -> GND;
 }
 
 ```
@@ -123,28 +124,31 @@ board BoardName {
 
   // Blocks also use { }
   parameters {
-    param1 = 10;
+    parameter param1 = 10; // Keyword 'parameter' required
   }
-  components { /* ... */ }
-  nets { /* ... */ }
-  connections { /* ... */ }
+  components { component Resistor R1 {}; /* Keyword 'component' required */ }
+  nets { net NetA: signal; /* Keyword 'net' required */ }
+  connections { connect NetA -> R1.1; /* Keyword 'connect' or 'assign' required */ }
   // ... other blocks ...
 }
 
 // Module definition uses { }
 module ModuleName {
   // Module contents
+  parameters { parameter internalParam = 5; }
 }
 
 // Component definition uses { }
 component ComponentName {
   // Component specifications (properties assigned with '=')
   value = 100uF;
+  pins { pin P1: inout signal; /* Keyword 'pin' required */ }
 }
 
 // Interface definition uses { }
 interface InterfaceName {
   // Interface contents
+  pins { pin Data: inout signal; /* Keyword 'pin' required */ }
 }
 
 // Type definition uses { }
@@ -155,7 +159,7 @@ typedef TypeName {
 }
 ```
 
-**Reasoning**: The C-style syntax is familiar. Consistent use of `{}` for all blocks and `=` for all assignments simplifies parsing and improves readability by reducing syntactic variations.
+**Reasoning**: The C-style syntax is familiar. Consistent use of `{}` for all blocks and `=` for all assignments simplifies parsing and improves readability by reducing syntactic variations. **Requiring explicit keywords for items within blocks enhances clarity and parsing robustness.**
 
 ### 2.2 Naming Conventions
 
@@ -170,47 +174,48 @@ typedef TypeName {
 ```bhdl
 // Properties assigned using '='
 parameters {
-  // Numeric types with units (using typable ASCII units)
-  voltage = 3.3Vdc;       // DC voltage
-  ac_voltage = 230Vac;    // AC voltage
-  rms_voltage = 0.894Vrms; // RMS voltage
-  current = 100mA;
-  resistance = 4.7kOhm;    // Use kOhm instead of kΩ
-  capacitance = 10uF;      // Use uF instead of µF
-  inductance = 10uH;       // Use uH instead of µH
-  frequency = 16MHz;
-  time = 10ns;
-  temperature = 85degC;    // Use degC instead of °C
-  duty_cycle = 50pct;      // Use pct instead of %
+  // Keyword 'parameter' required for each item
+  parameter voltage = 3.3Vdc;       // DC voltage
+  parameter ac_voltage = 230Vac;    // AC voltage
+  parameter rms_voltage = 0.894Vrms; // RMS voltage
+  parameter current = 100mA;
+  parameter resistance = 4.7kOhm;    // Use kOhm instead of kΩ
+  parameter capacitance = 10uF;      // Use uF instead of µF
+  parameter inductance = 10uH;       // Use uH instead of µH
+  parameter frequency = 16MHz;
+  parameter time = 10ns;
+  parameter temperature = 85degC;    // Use degC instead of °C
+  parameter duty_cycle = 50pct;      // Use pct instead of %
 
   // Boolean type
-  enable = true;
-  active_low = false;
+  parameter enable = true;
+  parameter active_low = false;
 
   // String type
-  part_number = "LM317T";
+  parameter part_number = "LM317T";
 
   // Enumerations (Declaration - specific syntax TBD, example assumes predefined enum type 'PackageType')
-  // package_type: PackageType = PackageType'SOIC8; // Example usage if enum type exists
-  package_option = enum { SOIC8, TSSOP16, QFN32 }; // Inline enum definition (alternative)
-  selected_package = package_option'SOIC8; // Selecting a value
+  // parameter package_type: PackageType = PackageType'SOIC8; // Example usage if enum type exists
+  parameter package_option = enum { SOIC8, TSSOP16, QFN32 }; // Inline enum definition (alternative)
+  parameter selected_package = package_option'SOIC8; // Selecting a value
 
   // Arrays/Lists
-  capacitors = [10uF, 1uF, 100nF]; // Use uF/nF
+  parameter capacitors = [10uF, 1uF, 100nF]; // Use uF/nF
 
   // Ranges (Used in types or constraints)
-  // input_voltage_range = 5Vdc to 24Vdc; // Direct range assignment might be less common for simple parameters
-  operating_temp = -40degC to 85degC;
-  tolerance_pct = 5pct; // Use pct
+  // parameter input_voltage_range = 5Vdc to 24Vdc; // Direct range assignment might be less common for simple parameters
+  parameter operating_temp = -40degC to 85degC;
+  parameter tolerance_pct = 5pct; // Use pct
 
   // Enum Value Literal (distinct from declaration)
-  // state_value = StateType'Active; // Example: Assigning an enum value
+  // parameter state_value = StateType'Active; // Example: Assigning an enum value
 }
 
 // Type usage example within a pin definition
 pins {
+   // Keyword 'pin' required
    // Assuming StateType exists
-   // STATUS: out signal(StateType);
+   // pin STATUS: out signal(StateType);
 }
 ```
 
@@ -224,15 +229,16 @@ When specifying component ratings (such as voltage ratings for capacitors) withi
 // Capacitor definition with 16V minimum DC voltage rating
 component Capacitor {
   // Default/base properties
-  pins { 1: inout signal; 2: inout signal; }
+  pins { pin 1: inout signal; pin 2: inout signal; } // Keyword 'pin' required
   // Default parameters
+  // Parameters block not strictly needed here if part of component base spec
   value: capacitance = required; // Must be specified at instantiation
   voltage: voltage = 0Vdc; // Default voltage rating
 }
 
 // Instantiation of the Capacitor
-components {
-  Capacitor C1 {
+components { // Keyword 'component' required
+  component Capacitor C1 {
     value = 100nF;
     voltage = 16Vdc;  // Minimum voltage rating for this instance
   }
@@ -333,10 +339,10 @@ These core types reflect the fundamental categories of connections in electronic
 
 ```
 // Core base type examples 
-pins {
-  DATA: in signal;       // A generic signal input
-  VCC: in power;         // A power supply input
-  GND: ground;           // A ground connection
+pins { // Keyword 'pin' required
+  pin DATA: in signal;       // A generic signal input
+  pin VCC: in power;         // A power supply input
+  pin GND: ground;           // A ground connection
 }
 ```
 
@@ -389,9 +395,9 @@ typedef i2c_signal_3v3 {
 }
 
 // Type usage in pin definitions
-pins {
-  CLK: in signal(cmos_3v3);   // A 3.3V CMOS clock input
-  SDA: inout signal(i2c_signal_3v3); // An I2C signal pin
+pins { // Keyword 'pin' required
+  pin CLK: in signal(cmos_3v3);   // A 3.3V CMOS clock input
+  pin SDA: inout signal(i2c_signal_3v3); // An I2C signal pin
 }
 ```
 
@@ -404,20 +410,20 @@ Pin direction is orthogonal to the pin type and specified separately. BHDL suppo
 Directions are combined with types to fully specify a pin's electrical characteristics:
 
 ```bhdl
-pins {
+pins { // Keyword 'pin' required
   // Different directions with the same signal type
-  DATA_IN: in signal(cmos_3v3);
-  DATA_OUT: out signal(cmos_3v3);
-  DATA_BIDIR: inout signal(cmos_3v3);
+  pin DATA_IN: in signal(cmos_3v3);
+  pin DATA_OUT: out signal(cmos_3v3);
+  pin DATA_BIDIR: inout signal(cmos_3v3);
 
   // Differential signals (use inout and rely on type properties)
-  DIFF_P: inout signal(lvds); // Assumes 'lvds' type defined elsewhere
-  DIFF_N: inout signal(lvds);
+  pin DIFF_P: inout signal(lvds); // Assumes 'lvds' type defined elsewhere
+  pin DIFF_N: inout signal(lvds);
 
   // Power and ground
-  VDD: in power(lv_digital_power); // Assumes 'lv_digital_power' type defined
-  VOUT: out power(lv_digital); // Assumes 'lv_digital' type defined
-  GND: ground;
+  pin VDD: in power(lv_digital_power); // Assumes 'lv_digital_power' type defined
+  pin VOUT: out power(lv_digital); // Assumes 'lv_digital' type defined
+  pin GND: ground;
 }
 ```
 
@@ -441,9 +447,9 @@ For passive components like resistors or capacitors, all pins are typically `ino
 
 ```
 component Resistor R1 {
-  pins {
-    1: inout signal;
-    2: inout signal;
+  pins { // Keyword 'pin' required
+    pin 1: inout signal;
+    pin 2: inout signal;
   }
 }
 ```
@@ -636,24 +642,24 @@ import Types.{cmos_3v3, lvds, lv_digital_power}; // Updated power type name
 
 // Using types in a board definition
 board DigitalInterface {
-  ports {
+  ports { // Keyword 'port' required
     // Digital signal pins with specific electrical characteristics
-    DATA[0:7]: in signal(cmos_3v3);
-    SERIAL_TX: out signal(cmos_3v3);
-    SERIAL_RX: in signal(cmos_3v3);
+    port DATA[0:7]: in signal(cmos_3v3);
+    port SERIAL_TX: out signal(cmos_3v3);
+    port SERIAL_RX: in signal(cmos_3v3);
     
     // Differential signaling
-    LVDS_P: out signal(lvds);
-    LVDS_N: out signal(lvds);
+    port LVDS_P: out signal(lvds);
+    port LVDS_N: out signal(lvds);
     
     // Power pins
-    VDD: in power(lv_digital_power); // Updated power type name
-    GND: ground;
+    port VDD: in power(lv_digital_power); // Updated power type name
+    port GND: ground;
   }
   
   // Component instantiations
-  components {
-    FPGA U1 {
+  components { // Keyword 'component' required
+    component FPGA U1 {
       io_standard = cmos_3v3;  // Using type as a parameter
     }
   }
@@ -707,8 +713,8 @@ typedef line_level {
 }
 
 // Type usage
-ports {
-  AUDIO_IN: in signal(line_level);
+ports { // Keyword 'port' required
+  port AUDIO_IN: in signal(line_level);
 }
 ```
 
@@ -840,34 +846,34 @@ import myproject.custom_types.{automotive_signal};
 
 // Using types in a module definition
 module AudioInterface {
-  ports {
+  ports { // Keyword 'port' required
     // Signal types
-    AUDIO_IN_L: in signal(line_level);
-    AUDIO_IN_R: in signal(line_level);
-    AUDIO_OUT: out signal(pro_line_level); // Assumes pro_line_level is defined
+    port AUDIO_IN_L: in signal(line_level);
+    port AUDIO_IN_R: in signal(line_level);
+    port AUDIO_OUT: out signal(pro_line_level); // Assumes pro_line_level is defined
 
     // Power types
-    VDD: in power(lv_analog_power); // Assumes lv_analog_power is defined
-    VDDA: in power(lv_analog_power);
+    port VDD: in power(lv_analog_power); // Assumes lv_analog_power is defined
+    port VDDA: in power(lv_analog_power);
 
     // Digital interface types
-    SPI_MOSI: in signal(cmos_3v3); // Changed from 'digital' keyword if not a base type
-    SPI_MISO: out signal(cmos_3v3);
-    SPI_SCK: in signal(cmos_3v3);
+    port SPI_MOSI: in signal(cmos_3v3); // Changed from 'digital' keyword if not a base type
+    port SPI_MISO: out signal(cmos_3v3);
+    port SPI_SCK: in signal(cmos_3v3);
 
     // Clock type
-    CLK: in signal(system_clock); // Changed from 'clock' keyword if not a base type
+    port CLK: in signal(system_clock); // Changed from 'clock' keyword if not a base type
   }
 
   // Internal components
-  components {
-    ADC U1 { // Assuming ADC is a defined component type
+  components { // Keyword 'component' required
+    component ADC U1 { // Assuming ADC is a defined component type
       input_type = line_level;      // Using type as a parameter value
       reference_voltage = 5Vdc;
       resolution = 24bit;
     }
 
-    OpAmp U2 { // Assuming OpAmp is a defined component type
+    component OpAmp U2 { // Assuming OpAmp is a defined component type
       supply_voltage_type = lv_analog_power; // Parameter name clarified
       gain_bandwidth = 10MHz;
       slew_rate = 10V/us; // Corrected unit
@@ -892,7 +898,92 @@ constrain (AUDIO_IN -> U1.IN) { // Target the connection (syntax TBD) or the net
 // }
 ```
 
-// ... existing code ...
+#### 2.5.5 Type Inheritance and Extension
+
+Types inherit using `extends` and assign properties with `=`:
+
+```bhdl
+// Extending a base type
+typedef high_quality_line_level extends line_level {
+  thd = <0.001pct;
+  snr = >100dB;
+  crosstalk = <-80dB;
+}
+
+// Creating a variant
+typedef battery_power extends lv_digital_power {
+  voltage = 3.7Vdc;
+  voltage_range = 3.0Vdc to 4.2Vdc;
+  protection = { // Nested block uses '='
+    overcurrent = true;
+    overvoltage = true;
+    undervoltage = true;
+  };
+}
+```
+
+#### 2.5.6 Using Type Definitions
+
+Types are used throughout BHDL, assignments use `=`:
+
+```bhdl
+// Importing types
+import libraries.types.{line_level, lv_digital_power, cmos_3v3, system_clock};
+import myproject.custom_types.{automotive_signal};
+
+// Using types in a module definition
+module AudioInterface {
+  ports { // Keyword 'port' required
+    // Signal types
+    port AUDIO_IN_L: in signal(line_level);
+    port AUDIO_IN_R: in signal(line_level);
+    port AUDIO_OUT: out signal(pro_line_level); // Assumes pro_line_level is defined
+
+    // Power types
+    port VDD: in power(lv_analog_power); // Assumes lv_analog_power is defined
+    port VDDA: in power(lv_analog_power);
+
+    // Digital interface types
+    port SPI_MOSI: in signal(cmos_3v3); // Changed from 'digital' keyword if not a base type
+    port SPI_MISO: out signal(cmos_3v3);
+    port SPI_SCK: in signal(cmos_3v3);
+
+    // Clock type
+    port CLK: in signal(system_clock); // Changed from 'clock' keyword if not a base type
+  }
+
+  // Internal components
+  components { // Keyword 'component' required
+    component ADC U1 { // Assuming ADC is a defined component type
+      input_type = line_level;      // Using type as a parameter value
+      reference_voltage = 5Vdc;
+      resolution = 24bit;
+    }
+
+    component OpAmp U2 { // Assuming OpAmp is a defined component type
+      supply_voltage_type = lv_analog_power; // Parameter name clarified
+      gain_bandwidth = 10MHz;
+      slew_rate = 10V/us; // Corrected unit
+    }
+  }
+}
+
+// Using types in connection constraints
+// Uses the standard 'constrain' block (See Section 5.1)
+constrain (AUDIO_IN -> U1.IN) { // Target the connection (syntax TBD) or the net
+  match_impedance = true; // Ensures impedance matching based on types
+  max_length = 50mm;
+  shield = required;
+}
+
+// Using types in component selection (Conceptual - Tool-specific)
+// component_selection {
+//   filter = {
+//     input_type = line_level;        // Filter by type compatibility
+//     operating_temperature = commercial_thermal; // Reference property set
+//   }
+// }
+```
 
 ### 2.6 Generative Constructs (`generate for`)
 
@@ -902,24 +993,25 @@ constrain (AUDIO_IN -> U1.IN) { // Target the connection (syntax TBD) or the net
 // Syntax reminder
 generate for <variable> in <range_or_list> {
   // Pin definitions, component instantiations, or connection statements
+  // **Keywords required inside generate based on context**
   // Use '=' for any assignments within the block
 }
 
 // Usage within `pins` block:
 component DDR_PHY {
-  parameters {
-    data_width = 64; // Use '='
+  parameters { // Keyword 'parameter' required
+    parameter data_width = 64; // Use '='
   }
-  pins {
+  pins { // Keyword 'pin' required for items inside
     local num_bytes = data_width / 8; // Local calculation for clarity
     // Generate DQ pins using the data_width parameter
     generate for i in 0 to data_width-1 {
-      DQ[i]: inout signal(ddr_dq_type); // Assumes ddr_dq_type defined
+      pin DQ[i]: inout signal(ddr_dq_type); // Keyword 'pin' required
     }
     // Generate DQS pairs using the calculated num_bytes parameter
     generate for i in 0 to num_bytes-1 {
-      DQS_P[i]: inout signal(ddr_dqs_type); // Assumes ddr_dqs_type defined
-      DQS_N[i]: inout signal(ddr_dqs_type);
+      pin DQS_P[i]: inout signal(ddr_dqs_type); // Keyword 'pin' required
+      pin DQS_N[i]: inout signal(ddr_dqs_type); // Keyword 'pin' required
     }
     // ... other pins (ADDR, CMD, CLK etc.) ...
   }
@@ -927,85 +1019,23 @@ component DDR_PHY {
 }
 
 // Usage within `connections` block:
-connections {
+connections { // Keyword 'connect' or 'assign' required for items inside
   // Assume CPU and PHY components declared with DQ[0..63] pins
   generate for i in 0 to 63 {
-    CPU.DQ[i] -> PHY.DQ[i]; // Direct pin-to-pin connection
+    connect CPU.DQ[i] -> PHY.DQ[i]; // Keyword 'connect' required
   }
 }
 
 // Usage within `components` block:
-parameters { num_leds = 8; }
-components {
+parameters { parameter num_leds = 8; } // Keyword 'parameter' required
+components { // Keyword 'component' required for items inside
   generate for i in 0 to num_leds-1 {
     // Use '=' for assignments in generated components
-    Resistor R_LED[i] { value = 330Ohm; package = "0603"; }
+    component Resistor R_LED[i] { value = 330Ohm; package = "0603"; } // Keyword 'component' required
   }
   // ... other components ...
 }
 ```
-
-// ... existing code ...
-
-### 2.7 Bus Notation and Slicing
-
-*(Syntax remains the same)*
-
-// ... existing code ...
-
-```bhdl
-// Example: Byte Swizzling Connection using `generate for` and slicing
-parameters {
-  data_width = 64; // Use '='
-  num_bytes = data_width / 8;
-}
-connections {
-  // Assume MCU and PHY components and DATA nets/pins are declared
-  generate for byte_idx in 0 to num_bytes-1 {
-    // Calculate indices for MCU slice (standard byte order)
-    local mcu_high = (byte_idx + 1) * 8 - 1;
-    local mcu_low = byte_idx * 8;
-
-    // Calculate indices for PHY slice (reversed byte order)
-    local phy_byte_num = num_bytes - 1 - byte_idx;
-    local phy_high = (phy_byte_num + 1) * 8 - 1;
-    local phy_low = phy_byte_num * 8;
-
-    // Connect the corresponding slices (Pin-to-Pin or via explicit Nets)
-    MCU.DATA[mcu_high : mcu_low] -> PHY.DATA[phy_high : phy_low];
-  }
-}
-```
-
-### 2.8 Importing Libraries (`import`)
-
-*(Syntax remains the same, example updated)*
-
-```bhdl
-// Import specific types and components from standard libraries
-import StandardLibrary.Types.{cmos_3v3, lv_digital_power};
-import StandardLibrary.Components.{Resistor, Capacitor};
-
-// Import net class and via style definitions from a company library
-import CompanyStandards.DRC.{PowerNetClass, StandardVia};
-
-// Import a specific circuit function
-import StandardLibrary.CircuitPatterns.non_inverting_amplifier;
-
-board MyBoard {
-  // Use imported definitions
-  default_design_rules {
-    default_via_style = "StandardVia"; // Use '='
-  }
-  ports { SIGNAL_IN: in signal(cmos_3v3); }
-  components { Resistor R1 { value = 10kOhm; } } // Use '='
-  nets { net VDD: power(lv_digital_power); } // Declare nets explicitly
-  connections { /* ... */ }
-  constrain (VDD) { net_class = "PowerNetClass"; } // Use '='
-}
-```
-
-// ... existing code ...
 
 ## 3. Board and Module Structure
 
@@ -1018,17 +1048,17 @@ board PowerSupply {
   version = "1.0";
 
   // Parameters (use '=')
-  parameters {
-    input_voltage = 12Vdc;
-    output_voltage = 5Vdc;
-    max_current = 2A; // Type specification less common here, inferred or checked by tool
+  parameters { // Keyword 'parameter' required
+    parameter input_voltage = 12Vdc;
+    parameter output_voltage = 5Vdc;
+    parameter max_current = 2A; // Type specification less common here, inferred or checked by tool
   }
 
-  // External ports (Syntax: name: direction type(optional_spec))
-  ports {
-    VIN: in power(12Vdc, 2A);  // Example: Type with implicit properties - Needs well-defined type 'power'
-    GND: ground;
-    VOUT: out power(5Vdc, 2A);
+  // External ports (Syntax: port name: direction type(optional_spec))
+  ports { // Keyword 'port' required
+    port VIN: in power(12Vdc, 2A);  // Example: Type with implicit properties - Needs well-defined type 'power'
+    port GND: ground;
+    port VOUT: out power(5Vdc, 2A);
   }
 
   // ** Layer Stackup Definition ** (use '=')
@@ -1053,16 +1083,16 @@ board PowerSupply {
   }
 
   // ** Component Instantiation ** (Mandatory block)
-  components {
+  components { // Keyword 'component' required
      // Instantiate components defined elsewhere (e.g., libraries or local definitions)
-     VoltageRegulator U1 { output_voltage = 5Vdc; }; // Pass instance parameters using '='
-     Resistor R1 { value = 1kOhm; };
-     Capacitor C1 { value = 10uF; voltage = 16Vdc; };
+     component VoltageRegulator U1 { output_voltage = 5Vdc; }; // Pass instance parameters using '='
+     component Resistor R1 { value = 1kOhm; };
+     component Capacitor C1 { value = 10uF; voltage = 16Vdc; };
      // ... other components
   }
 
   // ** Net Declarations ** (Mandatory block)
-  nets {
+  nets { // Keyword 'net' required
      net VDD_IN: power(input_voltage); // Reference board parameter
      net VDD_OUT: power(output_voltage);
      net GND_NET: ground; // Explicit ground net
@@ -1071,22 +1101,22 @@ board PowerSupply {
   }
 
   // ** Connections ** (Connect declared components using declared nets or pin-to-pin)
-  connections {
-     VIN -> VDD_IN; // Connect port to net
-     VDD_IN -> U1.IN; // Connect net to component pin
-     U1.OUT -> VDD_OUT; // Connect component pin to net
-     VDD_OUT -> VOUT; // Connect net to port
+  connections { // Keyword 'connect' or 'assign' required
+     connect VIN -> VDD_IN; // Connect port to net
+     connect VDD_IN -> U1.IN; // Connect net to component pin
+     connect U1.OUT -> VDD_OUT; // Connect component pin to net
+     connect VDD_OUT -> VOUT; // Connect net to port
 
-     U1.ENABLE -> ENABLE_SIG;
+     connect U1.ENABLE -> ENABLE_SIG;
 
      // Connect ground pins to the declared ground net
-     U1.GND -> GND_NET;
-     R1.2 -> GND_NET; // Example connection
-     C1.2 -> GND_NET;
-     GND -> GND_NET; // Connect ground port to ground net
+     connect U1.GND -> GND_NET;
+     connect R1.2 -> GND_NET; // Example connection
+     connect C1.2 -> GND_NET;
+     connect GND -> GND_NET; // Connect ground port to ground net
 
      // Example pin-to-pin (implicitly creates anonymous net)
-     // SomeOtherComponent.PIN_A -> R1.1;
+     // connect SomeOtherComponent.PIN_A -> R1.1;
   }
 
   // ** Constraints ** (Apply constraints to nets, pins, components, connections)
@@ -1098,50 +1128,50 @@ board PowerSupply {
 }
 ```
 
-**Reasoning**: The board structure follows a declarative style. Explicit `components` and `nets` blocks enhance clarity and simplify parsing compared to implicit creation. Consistent use of `=` simplifies syntax.
+**Reasoning**: The board structure follows a declarative style. Explicit `components` and `nets` blocks **with internal keywords** enhance clarity and simplify parsing compared to implicit creation. Consistent use of `=` simplifies syntax.
 
 ### 3.2 Module Definition
 
 ```bhdl
 module VoltageRegulator {
   // External interface
-  ports {
-    IN: in power(8Vdc to 35Vdc, 2A);
-    OUT: out power(5Vdc, 1A);
-    GND: ground;
-    ENABLE: in signal; // Assume base 'signal' type if not specified
+  ports { // Keyword 'port' required
+    port IN: in power(8Vdc to 35Vdc, 2A);
+    port OUT: out power(5Vdc, 1A);
+    port GND: ground;
+    port ENABLE: in signal; // Assume base 'signal' type if not specified
   }
 
   // Parameters (use '=')
-  parameters {
-    output_voltage = 5Vdc;
-    max_current = 1A;
+  parameters { // Keyword 'parameter' required
+    parameter output_voltage = 5Vdc;
+    parameter max_current = 1A;
   }
 
   // Internal implementation (requires internal components, nets, connections)
-  components {
+  components { // Keyword 'component' required
      // Internal component instances, e.g., the regulator IC, passives
-     RegulatorIC U_IC { /* ... */ };
-     Resistor R_FB1 { value = 10kOhm; };
+     component RegulatorIC U_IC { /* ... */ };
+     component Resistor R_FB1 { value = 10kOhm; };
      // ...
   }
-  nets {
+  nets { // Keyword 'net' required
      // Internal nets
      net FeedbackNet: signal;
      net InternalGND: ground;
      // ...
   }
-  connections {
+  connections { // Keyword 'connect' required
      // Connect ports to internal components/nets
-     IN -> U_IC.VIN;
-     ENABLE -> U_IC.EN;
-     GND -> InternalGND; // Connect module ground port to internal ground net
-     U_IC.GND -> InternalGND;
-     R_FB1.2 -> InternalGND;
+     connect IN -> U_IC.VIN;
+     connect ENABLE -> U_IC.EN;
+     connect GND -> InternalGND; // Connect module ground port to internal ground net
+     connect U_IC.GND -> InternalGND;
+     connect R_FB1.2 -> InternalGND;
 
      // Internal connections
-     U_IC.FB -> FeedbackNet; R_FB1.1 -> FeedbackNet; // Example feedback connection
-     U_IC.VOUT -> OUT; // Connect internal IC output to module output port
+     connect U_IC.FB -> FeedbackNet; connect R_FB1.1 -> FeedbackNet; // Example feedback connection
+     connect U_IC.VOUT -> OUT; // Connect internal IC output to module output port
 
      // ... other internal connections
   }
@@ -1149,7 +1179,7 @@ module VoltageRegulator {
 }
 
 ### 3.2.1 Modules for Encapsulating Component Context
-// ... (Example updated for '=' and explicit blocks) ...
+// ... (Example updated for '=' and explicit blocks + keywords) ...
 
 ```bhdl
 // --- In a company library file ---
@@ -1159,71 +1189,71 @@ import CompanyInternalLib.Components.{Base_IC}; // The raw IC component
 // Module providing the IC with its mandatory pull-down
 module Configured_IC {
   // Expose only the necessary pins/ports of the Base_IC
-  ports {
-    DATA_BUS: like Base_IC.DATA_BUS; // 'like' syntax might need refinement or replacement
-    CONTROL_SIGNALS: like Base_IC.CONTROL_SIGNALS;
-    POWER: like Base_IC.POWER;
-    GND: ground;
+  ports { // Keyword 'port' required
+    port DATA_BUS: like Base_IC.DATA_BUS; // 'like' syntax might need refinement or replacement
+    port CONTROL_SIGNALS: like Base_IC.CONTROL_SIGNALS;
+    port POWER: like Base_IC.POWER;
+    port GND: ground;
   }
 
   // Pass through relevant parameters if needed
-  parameters {
-    speed_grade = "standard"; // Use '='
+  parameters { // Keyword 'parameter' required
+    parameter speed_grade = "standard"; // Use '='
   }
 
   // Internal implementation
-  components { // Explicit block
-    Base_IC U1 { // Instantiate the raw IC
+  components { // Keyword 'component' required
+    component Base_IC U1 { // Instantiate the raw IC
       speed = module.speed_grade; // Use '='
     }
-    Resistor R_PULLDOWN { // The mandatory pull-down
+    component Resistor R_PULLDOWN { // The mandatory pull-down
       value = 10kOhm; // Use '='
       tolerance = 5pct; // Use '='
     }
   }
-  nets { // Explicit block
+  nets { // Keyword 'net' required
       net ConfigNet: signal;
       net InternalGND: ground;
       // Potentially nets for DATA_BUS, CONTROL_SIGNALS, POWER if not directly passed through
   }
-  connections { // Explicit block
+  connections { // Keyword 'connect' required
     // Internal connection enforces the pull-down
-    U1.CONFIG -> ConfigNet; R_PULLDOWN.1 -> ConfigNet;
-    R_PULLDOWN.2 -> InternalGND;
-    GND -> InternalGND; // Connect module port to internal net
-    U1.GND -> InternalGND;
+    connect U1.CONFIG -> ConfigNet; connect R_PULLDOWN.1 -> ConfigNet;
+    connect R_PULLDOWN.2 -> InternalGND;
+    connect GND -> InternalGND; // Connect module port to internal net
+    connect U1.GND -> InternalGND;
 
     // Connect exposed module ports to internal IC pins (using <=> for interface/bus assumed)
     // Or connect explicitly if not using interface operator
-    DATA_BUS <=> U1.DATA_BUS; // Assumes operator works on port/pin groups/interfaces
-    CONTROL_SIGNALS <=> U1.CONTROL_SIGNALS;
-    POWER -> U1.POWER; // Assuming POWER is a simple port/pin here
+    connect DATA_BUS <=> U1.DATA_BUS; // Assumes operator works on port/pin groups/interfaces
+    connect CONTROL_SIGNALS <=> U1.CONTROL_SIGNALS;
+    connect POWER -> U1.POWER; // Assuming POWER is a simple port/pin here
   }
 }
 
 // --- In a board design file ---
 board MySystem {
   // ... other components ...
-  components { // Explicit block
+  components { // Keyword 'component' required
     // Designers instantiate the configured module, not the base IC
-    Configured_IC IC_Main {
+    component Configured_IC IC_Main {
       speed_grade = "high"; // Use '='
     }
     // ... other component instances
   }
-  nets { // Explicit block
+  nets { // Keyword 'net' required
      net MAIN_DATA_BUS: bus( /* type? width? */ ); // Define bus net if needed
      // ... other nets
   }
-  connections { // Explicit block
+  connections { // Keyword 'connect' required
     // Connect to the ports of the Configured_IC module
-    MAIN_DATA_BUS <=> IC_Main.DATA_BUS; // Assumes <=> connects declared net and module port group
+    connect MAIN_DATA_BUS <=> IC_Main.DATA_BUS; // Assumes <=> connects declared net and module port group
     // ... other connections ...
   }
 }
 ```
 
-// ... existing code ...
+// ... unchanged ...
 
 ### 3.4 Interface Definition and Connection
 
@@ -1231,18 +1261,18 @@ board MySystem {
 
 // Simplified DDR Interface Definition Example
 interface DDR_Interface (data_width = 64) { // Use '=' for default parameter value
-   parameters {
-     num_bytes = data_width / 8; // Use '='
+   parameters { // Keyword 'parameter' required
+     parameter num_bytes = data_width / 8; // Use '='
    }
-   pins {
+   pins { // Keyword 'pin' required
      // Generate data bus
      generate for i in 0 to data_width-1 {
-       DQ[i]: inout signal(ddr_dq_type); // Assumes ddr_dq_type is defined elsewhere
+       pin DQ[i]: inout signal(ddr_dq_type); // Assumes ddr_dq_type is defined elsewhere
      }
      // Generate strobe pairs
      generate for i in 0 to num_bytes-1 {
-       DQS_P[i]: inout signal(ddr_dqs_type); // Assumes ddr_dqs_type is defined
-       DQS_N[i]: inout signal(ddr_dqs_type);
+       pin DQS_P[i]: inout signal(ddr_dqs_type); // Assumes ddr_dqs_type is defined
+       pin DQS_N[i]: inout signal(ddr_dqs_type);
      }
      // ... other DDR signals like ADDR, CMD, CLK etc. would also be defined here ...
    }
@@ -1250,44 +1280,45 @@ interface DDR_Interface (data_width = 64) { // Use '=' for default parameter val
 
 // Component using the interface
 component DDR_Controller {
-  parameters {
-     dw = 64; // Use '='
+  parameters { // Keyword 'parameter' required
+     parameter dw = 64; // Use '='
   }
-  interfaces {
+  interfaces { // Keyword 'interface' required
     // Instantiate interface, passing the width using '='
-    MEM: interface DDR_Interface { data_width=dw; } // Instantiate using block + assignment
+    interface MEM: DDR_Interface { data_width=dw; } // Instantiate using block + assignment
   }
   // ... other controller-specific pins ...
 }
 
 // Component representing the DDR PHY/Memory
 component DDR_PHY {
-  parameters {
-    data_width = 64; // Use '='
+  parameters { // Keyword 'parameter' required
+    parameter data_width = 64; // Use '='
   }
-  interfaces {
+  interfaces { // Keyword 'interface' required
      // Assuming PHY also uses the same interface definition for compatibility
-     BUS: interface DDR_Interface { data_width=module.data_width; } // Use block + assignment
+     interface BUS: DDR_Interface { data_width=module.data_width; } // Use block + assignment
   }
   // ... other PHY pins ...
 }
 
 // Connecting interfaces with generated arrays
 board TopLevel {
-  components {
-    DDR_Controller CPU { dw=64; }; // Use '=' for instance parameters
-    DDR_PHY MEM_PHY { data_width=64; }; // Use '='
+  components { // Keyword 'component' required
+    component DDR_Controller CPU { dw=64; }; // Use '=' for instance parameters
+    component DDR_PHY MEM_PHY { data_width=64; }; // Use '='
   }
   nets {
+     // Keyword 'net' would be required if nets are declared explicitly
      // Nets might be implicitly created by interface connection or declared explicitly
   }
-  connections {
+  connections { // Keyword 'connect' required
     // The interface connection operator `<=>` implicitly connects all pins
     // by matching names within the interface definition.
-    CPU.MEM <=> MEM_PHY.BUS;
+    connect CPU.MEM <=> MEM_PHY.BUS;
 
     // Manual connection/swizzling still uses generate + slicing
-    // generate for i in 0 to 63 { CPU.MEM.DQ[i] -> SOME_OTHER_DEVICE.DATA[i]; }
+    // generate for i in 0 to 63 { connect CPU.MEM.DQ[i] -> SOME_OTHER_DEVICE.DATA[i]; }
   }
 }
 
@@ -1300,35 +1331,35 @@ component ComplexSoC {
   // ... parameters ...
 
   // Define physical pins with optional function documentation
-  pins {
+  pins { // Keyword 'pin' required
      // Use comma separated properties after type, assign with '='
-     P1_0: inout signal(cmos_3v3), functions = ["GPIO_1_0", "SPI1_MOSI", "UART0_TX", "I2C0_SDA"];
-     P1_1: inout signal(cmos_3v3), functions = ["GPIO_1_1", "SPI1_MISO", "UART0_RX", "I2C0_SCL"];
-     P1_2: inout signal(cmos_3v3), functions = ["GPIO_1_2", "SPI1_SCK"];
-     P1_3: inout signal(cmos_3v3), functions = ["GPIO_1_3", "SPI1_CS"];
-     UART1_TX: out signal(cmos_3v3); // Dedicated pin example
-     UART1_RX: in signal(cmos_3v3); // Dedicated pin example
+     pin P1_0: inout signal(cmos_3v3), functions = ["GPIO_1_0", "SPI1_MOSI", "UART0_TX", "I2C0_SDA"];
+     pin P1_1: inout signal(cmos_3v3), functions = ["GPIO_1_1", "SPI1_MISO", "UART0_RX", "I2C0_SCL"];
+     pin P1_2: inout signal(cmos_3v3), functions = ["GPIO_1_2", "SPI1_SCK"];
+     pin P1_3: inout signal(cmos_3v3), functions = ["GPIO_1_3", "SPI1_CS"];
+     pin UART1_TX: out signal(cmos_3v3); // Dedicated pin example
+     pin UART1_RX: in signal(cmos_3v3); // Dedicated pin example
      // ... other pins ...
   }
 
   // Define available interfaces and map them to physical pins
-  interfaces {
+  interfaces { // Keyword 'interface' required
      // Instantiate an interface type (e.g., SPI) and provide a pin map
-     SPI1: interface SPI { // Assumes SPI interface is defined elsewhere
+     interface SPI1: SPI { // Assumes SPI interface is defined elsewhere
         // Explicitly map logical interface pins to physical component pins
         pin_map = { MOSI = P1_0, MISO = P1_1, SCK = P1_2, CS = P1_3 };
         // Optionally override parameters like max_freq
         max_freq = 50MHz; // Use '='
      }
-     UART0: interface UART { // Assumes UART interface is defined elsewhere
+     interface UART0: UART { // Assumes UART interface is defined elsewhere
         // Map UART logical pins to SoC physical pins (Note: TX/RX share with SPI1)
         pin_map = { TX = P1_0, RX = P1_1 };
      }
-     I2C0: interface I2C { // Assumes I2C interface is defined elsewhere
+     interface I2C0: I2C { // Assumes I2C interface is defined elsewhere
         // Map I2C logical pins to SoC physical pins (Note: SDA/SCL share with SPI1/UART0)
         pin_map = { SDA = P1_0, SCL = P1_1 };
      }
-     UART1: interface UART { // Another UART on dedicated pins
+     interface UART1: UART { // Another UART on dedicated pins
          pin_map = { TX = UART1_TX, RX = UART1_RX };
      }
      // ... other interfaces like I2S, SDIO, GPIO_PortA ...
@@ -1338,38 +1369,38 @@ component ComplexSoC {
 
 // --- Example: Board using the SoC ---
 board MuxDemoBoard {
-   components {
-      ComplexSoC U_SOC {}; // Use {} for empty parameters
-      SPI_Flash U_FLASH {}; // Assumes SPI_Flash has SPI interface named 'SPI'
-      I2C_Sensor U_SENSOR {}; // Assumes I2C_Sensor has I2C interface named 'I2C'
-      UART_Header J_UART1 {}; // Assumes UART_Header has pins RX_PIN, TX_PIN
+   components { // Keyword 'component' required
+      component ComplexSoC U_SOC {}; // Use {} for empty parameters
+      component SPI_Flash U_FLASH {}; // Assumes SPI_Flash has SPI interface named 'SPI'
+      component I2C_Sensor U_SENSOR {}; // Assumes I2C_Sensor has I2C interface named 'I2C'
+      component UART_Header J_UART1 {}; // Assumes UART_Header has pins RX_PIN, TX_PIN
    }
-   nets { // Define nets explicitly
+   nets { // Keyword 'net' required
       net UART1_TX_Net: signal(cmos_3v3);
       net UART1_RX_Net: signal(cmos_3v3);
       // Nets for SPI and I2C might be implicitly created by <=> or explicitly defined
    }
-   connections {
+   connections { // Keyword 'connect' required
       // Connect using the SPI1 interface instance on the SoC.
       // The <=> operator connects the interfaces based on the 'pin_map' in U_SOC.SPI1
       // and the implicit/explicit definition of the SPI interface on U_FLASH.
       // This implicitly selects the SPI function for pins P1_0, P1_1, P1_2, P1_3 on U_SOC.
-      U_SOC.SPI1 <=> U_FLASH.SPI;
+      connect U_SOC.SPI1 <=> U_FLASH.SPI;
 
       // Connect to the I2C Sensor using the I2C0 interface.
       // **ERROR:** This connection attempts to map P1_0 (SDA) and P1_1 (SCL) again.
       // BHDL tools must detect this conflict based on the 'pin_map' definitions.
-      // U_SOC.I2C0 <=> U_SENSOR.I2C; // <-- Expected validation error here.
+      // connect U_SOC.I2C0 <=> U_SENSOR.I2C; // <-- Expected validation error here.
 
       // Connect to the UART Header using UART1 (uses dedicated pins).
       // Explicit connection via nets.
-      U_SOC.UART1.TX -> UART1_TX_Net; J_UART1.TX_PIN -> UART1_TX_Net; // Connect both to net
-      UART1_RX_Net -> U_SOC.UART1.RX; UART1_RX_Net -> J_UART1.RX_PIN; // Connect both to net
+      connect U_SOC.UART1.TX -> UART1_TX_Net; connect J_UART1.TX_PIN -> UART1_TX_Net; // Connect both to net
+      connect UART1_RX_Net -> U_SOC.UART1.RX; connect UART1_RX_Net -> J_UART1.RX_PIN; // Connect both to net
       // Alternatively, use the <=> operator if J_UART1 exposes a UART interface.
-      // U_SOC.UART1 <=> J_UART1.UART;
+      // connect U_SOC.UART1 <=> J_UART1.UART;
 
       // Direct pin connection (implies GPIO usage if not mapped by an active interface connection)
-      // U_SOC.P1_0 -> LED_INDICATOR; // Connect P1_0 directly (if not used by SPI1/I2C0/UART0)
+      // connect U_SOC.P1_0 -> LED_INDICATOR; // Connect P1_0 directly (if not used by SPI1/I2C0/UART0)
    }
 }
 ```
@@ -1382,19 +1413,19 @@ board MuxDemoBoard {
 
 ### 4.3 Pin Definitions in Components
 
-Within a `component` definition, pins are declared in the `pins { ... }` block. Each pin definition specifies its name, direction (`in`, `out`, `inout`), electrical type (Section 2.4), and optional properties assigned using `=`.
+Within a `component` definition, pins are declared in the `pins { ... }` block. Each pin definition **must** start with the `pin` keyword, followed by its name, direction (`in`, `out`, `inout`), electrical type (Section 2.4), and optional properties assigned using `=`.
 
 ```bhdl
 component ExampleIC {
-  pins {
-    // Syntax: Name: direction type(optional_spec), property1 = value1, property2 = value2, ...
-    VDD: in power(lv_digital_power);
-    GND: ground;
-    ENABLE: in signal(cmos_3v3);
-    DATA_OUT: out signal(cmos_3v3);
-    BIDIR_PIN: inout signal(cmos_1v8);
-    RESET_N: in signal; // Assumes base 'signal' type if only direction is given
-    CONFIG: in signal(cmos_3v3), pullup = true; // Example optional property
+  pins { // Keyword 'pin' required
+    // Syntax: pin Name: direction type(optional_spec), property1 = value1, property2 = value2, ...
+    pin VDD: in power(lv_digital_power);
+    pin GND: ground;
+    pin ENABLE: in signal(cmos_3v3);
+    pin DATA_OUT: out signal(cmos_3v3);
+    pin BIDIR_PIN: inout signal(cmos_1v8);
+    pin RESET_N: in signal; // Assumes base 'signal' type if only direction is given
+    pin CONFIG: in signal(cmos_3v3), pullup = true; // Example optional property
   }
 }
 ```
@@ -1405,11 +1436,11 @@ Use the `functions` property assigned to a list of strings to document potential
 
 ```bhdl
 component ComplexSoC {
-  pins {
-     P1_0: inout signal(cmos_3v3), functions = ["GPIO_1_0", "SPI1_MOSI", "UART0_TX", "I2C0_SDA"];
-     P1_1: inout signal(cmos_3v3), functions = ["GPIO_1_1", "SPI1_MISO", "UART0_RX", "I2C0_SCL"];
-     P1_2: inout signal(cmos_3v3), functions = ["GPIO_1_2", "SPI1_SCK"];
-     P1_3: inout signal(cmos_3v3), functions = ["GPIO_1_3", "SPI1_CS"];
+  pins { // Keyword 'pin' required
+     pin P1_0: inout signal(cmos_3v3), functions = ["GPIO_1_0", "SPI1_MOSI", "UART0_TX", "I2C0_SDA"];
+     pin P1_1: inout signal(cmos_3v3), functions = ["GPIO_1_1", "SPI1_MISO", "UART0_RX", "I2C0_SCL"];
+     pin P1_2: inout signal(cmos_3v3), functions = ["GPIO_1_2", "SPI1_SCK"];
+     pin P1_3: inout signal(cmos_3v3), functions = ["GPIO_1_3", "SPI1_CS"];
      // ... other pins ...
   }
   // ... interfaces map functions to these physical pins via 'pin_map' ...
@@ -1422,50 +1453,50 @@ component ComplexSoC {
 
 // ... (Description of 'population' property and board parameters remains the same) ...
 
-**Example:** (Updated for explicit blocks and `=`)
+**Example:** (Updated for explicit blocks and keywords `=`)
 
 ```bhdl
 board MyVariantBoard (SKU = "Base") { // Use '=' for default parameter
 
-  parameters { // Optional block if more parameters exist
-     Region = "WW";
+  parameters { // Keyword 'parameter' required
+     parameter Region = "WW";
   }
 
-  components { // Explicit component declaration block
+  components { // Keyword 'component' required
     // --- Common Components ---
-    Resistor R1 { value = 1k; } // Use '=', implicitly population = "Installed"
+    component Resistor R1 { value = 1k; } // Use '=', implicitly population = "Installed"
 
     // --- SKU-Specific Components ---
-    OpAmp U_FeatureAmp {
+    component OpAmp U_FeatureAmp {
       part_number = "OPA123"; // Use '='
       // Use standard ternary or if/else expression for conditional assignment
       population = (SKU == "Premium") ? "Installed" : "DNP";
     }
-    DebugHeader J1 {
+    component DebugHeader J1 {
       connector_type = "2x5"; // Use '='
       population = (SKU != "Lite") ? "Installed" : "DNP";
     }
-    Resistor R_Tuning {
+    component Resistor R_Tuning {
       // Population is implicitly "Installed", value varies
       value = (SKU == "VariantA") ? 4.7k : 10k; // Use '='
     }
   }
 
-  nets { // Explicit net declaration block
+  nets { // Keyword 'net' required
     net NetA: signal;
     net NetB: signal;
     net NetC: signal;
     net GND: ground; // Declare ground net
   }
 
-  connections { // Explicit connection block
+  connections { // Keyword 'connect' required
     // Connections remain defined; only assembly is affected by DNP
-    NetA -> R1.1;
-    R1.2 -> NetB;
-    NetB -> U_FeatureAmp.IN_POS; // Connect even if U_FeatureAmp might be DNP
-    U_FeatureAmp.OUT -> NetC;
-    NetC -> R_Tuning.1;
-    R_Tuning.2 -> GND;
+    connect NetA -> R1.1;
+    connect R1.2 -> NetB;
+    connect NetB -> U_FeatureAmp.IN_POS; // Connect even if U_FeatureAmp might be DNP
+    connect U_FeatureAmp.OUT -> NetC;
+    connect NetC -> R_Tuning.1;
+    connect R_Tuning.2 -> GND;
   }
 }
 
@@ -1478,7 +1509,7 @@ board MyVariantBoard (SKU = "Base") { // Use '=' for default parameter
 
 **Note on Workflow and Component Declaration:**
 
-The specification **requires** all components and nets to be explicitly declared in the `components` and `nets` blocks, respectively, for clarity, consistency, and simpler parsing. The intended development workflow leverages IDE tooling. Developers can focus on defining connections first. Language Servers and IDE extensions are expected to provide features (e.g., code actions) that automatically generate the corresponding component and net declarations in the appropriate blocks when new identifiers are used in the `connections` block. This approach provides a fluid, sketch-like experience while maintaining the structural benefits of explicit declarations.
+The specification **requires** all components and nets to be explicitly declared **using their respective keywords (`component`, `net`)** in the `components` and `nets` blocks, respectively, for clarity, consistency, and simpler parsing. The intended development workflow leverages IDE tooling. Developers can focus on defining connections first. Language Servers and IDE extensions are expected to provide features (e.g., code actions) that automatically generate the corresponding component and net declarations in the appropriate blocks when new identifiers are used in the `connections` block. This approach provides a fluid, sketch-like experience while maintaining the structural benefits of explicit declarations.
 
 ### 4.5 Nets and Connections Blocks (Revised)
 
@@ -1486,7 +1517,7 @@ This section details the mandatory `nets` block for defining logical connections
 
 **`nets` Block:**
 
-All logical nets used to connect component pins must be explicitly declared within a `nets { ... }` block inside a `board` or `module`. This improves readability and simplifies parsing by providing a clear inventory of connections.
+All logical nets used to connect component pins must be explicitly declared within a `nets { ... }` block inside a `board` or `module`. Each declaration **must** start with the `net` keyword. This improves readability and simplifies parsing by providing a clear inventory of connections.
 
 *   **Syntax:**
     ```bhdl
@@ -1504,7 +1535,7 @@ All logical nets used to connect component pins must be explicitly declared with
 
 **Example `nets` Block:**
 ```bhdl
-nets {
+nets { // Keyword 'net' required
   net SPI_MOSI: signal(cmos_3v3);
   net SPI_MISO: signal(cmos_3v3);
   net SPI_SCK: signal(cmos_3v3);
@@ -1519,46 +1550,47 @@ nets {
 
 **`connections` Block:**
 
-The `connections { ... }` block defines how component instance pins are connected *to* the declared nets, or directly pin-to-pin (which implicitly creates an anonymous net).
+The `connections { ... }` block defines how component instance pins are connected *to* the declared nets, or directly pin-to-pin (which implicitly creates an anonymous net). Each statement **must** begin with either the `connect` or `assign` keyword.
 
 *   **Syntax:**
-    *   `NetName -> Pin1, Pin2, ...;` (Connects a declared net to one or more component pins)
-    *   `Pin1, Pin2, ... -> NetName;` (Connects one or more component pins to a declared net)
-    *   `Pin1 -> Pin2;` (Direct pin-to-pin connection)
-    *   `Interface1 <=> Interface2;` (Connects all corresponding pins of two declared interfaces)
-    *   `BusNet[slice] -> BusPin[slice];` (Connects buses or slices using declared nets/pins)
+    *   `connect NetName -> Pin1, Pin2, ...;` (Connects a declared net to one or more component pins)
+    *   `connect Pin1, Pin2, ... -> NetName;` (Connects one or more component pins to a declared net)
+    *   `connect Pin1 -> Pin2;` (Direct pin-to-pin connection)
+    *   `connect Interface1 <=> Interface2;` (Connects all corresponding pins of two declared interfaces)
+    *   `connect BusNet[slice] -> BusPin[slice];` (Connects buses or slices using declared nets/pins)
+    *   `assign TargetPin = Expression;` (Assigns result of expression to a target pin/net - details TBD)
 
 *   **Explicit Nets (Recommended):** Connecting pins explicitly to declared nets is the clearest method.
     ```bhdl
-    connections {
-      VCC_3V3 -> U1.VCC, U2.VCC, C1.1; // Connect VCC_3V3 net to multiple pins
-      U1.TXD -> UART_TX_Net; // Connect U1.TXD pin to UART_TX_Net
-      UART_RX_Net -> U1.RXD; // Connect UART_RX_Net to U1.RXD
-      U1.GND, U2.GND, C1.2 -> GND; // Connect multiple pins to the GND net
+    connections { // Keyword 'connect' required
+      connect VCC_3V3 -> U1.VCC, U2.VCC, C1.1; // Connect VCC_3V3 net to multiple pins
+      connect U1.TXD -> UART_TX_Net; // Connect U1.TXD pin to UART_TX_Net
+      connect UART_RX_Net -> U1.RXD; // Connect UART_RX_Net to U1.RXD
+      connect U1.GND, U2.GND, C1.2 -> GND; // Connect multiple pins to the GND net
     }
     ```
 
 *   **Pin-to-Pin Connections:** Allowed for simple, direct connections. The tool implicitly understands there's a connection (net) between them. Avoid for complex routing or where constraints need to be applied to the net itself.
     ```bhdl
-    connections {
-       MCU.GPIO0 -> LED1.Anode; // Implicit net between GPIO0 and Anode
-       SeriesResistor.1 -> SeriesResistor.2; // Connecting pins of the same component (less common)
+    connections { // Keyword 'connect' required
+       connect MCU.GPIO0 -> LED1.Anode; // Implicit net between GPIO0 and Anode
+       connect SeriesResistor.1 -> SeriesResistor.2; // Connecting pins of the same component (less common)
     }
     ```
 
 *   **Bus Connections:** Use declared bus nets or direct pin slicing.
     ```bhdl
-    connections {
-       CPU.DataBus[7:0] -> DataBus[7:0]; // Connect CPU pins to declared DataBus net
-       DataBus[7:0] -> RAM.Data[7:0]; // Connect declared DataBus net to RAM pins
+    connections { // Keyword 'connect' required
+       connect CPU.DataBus[7:0] -> DataBus[7:0]; // Connect CPU pins to declared DataBus net
+       connect DataBus[7:0] -> RAM.Data[7:0]; // Connect declared DataBus net to RAM pins
        // OR direct bus connection (if DataBus net declaration is omitted)
-       // CPU.DataBus[7:0] -> RAM.Data[7:0];
+       // connect CPU.DataBus[7:0] -> RAM.Data[7:0];
     }
     ```
 
 *   **Deprecated Syntax:** Multi-target connections (`PinA, PinB -> NetX, NetY;`) and specialized series/parallel syntax (`-[R1]->`, `<|C1|>`) are **removed** due to ambiguity and parsing complexity. Use `generate for` loops or simple one-to-many/many-to-one connections to explicit nets for repetitive patterns.
 
-**Reasoning:** Explicit `nets` and simplified `connections` blocks make the design structure unambiguous, improve readability, facilitate easier parsing and analysis (like type checking), and align better with how connections are represented in traditional netlists. The tooling-assisted workflow mitigates the verbosity of explicit declarations during initial design sketching.
+**Reasoning:** Explicit `nets` and simplified `connections` blocks **with mandatory internal keywords** make the design structure unambiguous, improve readability, facilitate easier parsing and analysis (like type checking), and align better with how connections are represented in traditional netlists. The tooling-assisted workflow mitigates the verbosity of explicit declarations during initial design sketching.
 
 ## 5. Physical Design Constraints
 
