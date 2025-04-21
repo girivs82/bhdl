@@ -1,0 +1,14 @@
+[package]
+name = "bhdl-visualizer"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bhdl-netlist = { path = "../bhdl-netlist" }
+svg = "0.16"
+quick-xml = { version = "0.31", features = ["serialize"] }
+
+[dev-dependencies]
+# Add quick-xml here too if needed for tests, but likely only needed in lib
