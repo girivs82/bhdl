@@ -1,9 +1,10 @@
 // Contains the main Netlist struct and its methods
-use crate::types::{ModuleId, InstanceId, NetId, PortId, PinId, ModuleKind, ConnectionPoint};
+use crate::types::{ModuleId, InstanceId, NetId, PortId, PinId, ModuleKind, ConnectionPoint, Width, PortDirection};
 use crate::definition::ModuleDefinition;
 use crate::instance::Instance;
 use crate::net::Net;
-use slotmap::{SlotMap, SecondaryMap};
+use crate::portpin::{Port, Pin};
+use slotmap::{SlotMap, SecondaryMap, new_key_type};
 use serde::{Serialize, Deserialize};
 
 // Main Netlist Structure
@@ -12,10 +13,10 @@ pub struct Netlist {
     pub modules: SlotMap<ModuleId, ModuleDefinition>,
     pub instances: SlotMap<InstanceId, Instance>,
     pub nets: SlotMap<NetId, Net>,
-    // Potentially other maps for components, interfaces if needed separately
+    pub ports: SlotMap<PortId, Port>,
+    pub pins: SlotMap<PinId, Pin>,
     
-    // Store the top-level module/board ID
-    pub top_level_module: Option<ModuleId>, // Or InstanceId if top is an instance
+    pub top_level_module: Option<ModuleId>,
 }
 
 impl Netlist {
@@ -28,21 +29,16 @@ impl Netlist {
         let module_def = ModuleDefinition {
             name,
             kind,
-            ports: SecondaryMap::new(),
+            ports: Vec::new(),
+            pins: Vec::new(),
             internal_instances: Vec::new(),
             internal_nets: Vec::new(),
-            pins: if kind == ModuleKind::PhysicalComponent || kind == ModuleKind::Interface {
-                Some(SecondaryMap::new()) 
-            } else { 
-                None 
-            },
         };
         self.modules.insert(module_def)
     }
 
     // Add an instance of a module
     pub fn add_instance(&mut self, name: String, module_id: ModuleId) -> Option<InstanceId> {
-        // Check if module_id exists
         if self.modules.contains_key(module_id) {
             let instance = Instance {
                 name,
@@ -50,7 +46,7 @@ impl Netlist {
             };
             Some(self.instances.insert(instance))
         } else {
-            None // Return None if the module definition doesn't exist
+            None
         }
     }
 
@@ -64,46 +60,34 @@ impl Netlist {
     }
 
     // Connect a point to a net
-    // TODO: Add more validation (e.g., does instance/port/pin exist?)
     pub fn connect(&mut self, net_id: NetId, point: ConnectionPoint) -> Result<(), String> {
         if let Some(net) = self.nets.get_mut(net_id) {
-            // Basic validation (can be expanded)
             match point {
                 ConnectionPoint::InstancePort(inst_id, port_id) => {
                     if !self.instances.contains_key(inst_id) {
                         return Err(format!("Instance {:?} does not exist", inst_id));
                     }
-                    // Need to check if port_id exists within the instance's module definition
-                    // This requires looking up the module definition via inst_id
-                    // let inst = &self.instances[inst_id];
-                    // let module_def = &self.modules[inst.definition];
-                    // if !module_def.ports.contains_key(port_id) { ... }
+                    if !self.ports.contains_key(port_id) {
+                         return Err(format!("Port {:?} does not exist", port_id));
+                    }
                 }
                 ConnectionPoint::ModulePort(port_id) => {
-                    if let Some(top_mod_id) = self.top_level_module {
-                         if let Some(module_def) = self.modules.get(top_mod_id) {
-                             if !module_def.ports.contains_key(port_id) {
-                                return Err(format!("Port {:?} does not exist in top module {:?}", port_id, top_mod_id));
-                             }
-                         } else {
-                             return Err(format!("Top module {:?} does not exist", top_mod_id));
-                         }
-                    } else {
-                        return Err("Cannot connect to ModulePort: No top-level module set".to_string());
+                     if !self.ports.contains_key(port_id) {
+                         return Err(format!("Port {:?} does not exist", port_id));
                     }
+                     if self.top_level_module.is_none() {
+                        return Err("Cannot connect to ModulePort: No top-level module set".to_string());
+                     }
                 }
                 ConnectionPoint::InstancePin(inst_id, pin_id) => {
                     if !self.instances.contains_key(inst_id) {
                         return Err(format!("Instance {:?} does not exist", inst_id));
                     }
-                     // Need to check if pin_id exists within the instance's module definition's pins
-                    // let inst = &self.instances[inst_id];
-                    // let module_def = &self.modules[inst.definition];
-                    // if module_def.pins.as_ref().map_or(true, |pins| !pins.contains_key(pin_id)) { ... }
+                    if !self.pins.contains_key(pin_id) {
+                        return Err(format!("Pin {:?} does not exist", pin_id));
+                    }
                 }
             }
-            
-            // Add the connection if validation passes (or is skipped for now)
             net.connections.push(point);
             Ok(())
         } else {
@@ -111,8 +95,70 @@ impl Netlist {
         }
     }
 
-     // TODO: Add methods for adding ports/pins to modules, 
-    //       associating instances/nets with parent modules (for hierarchy),
-    //       setting top_level_module, etc.
+    // Add a port globally and associate it with a module
+    pub fn add_port(&mut self, module_id: ModuleId, name: String, direction: PortDirection, width: Option<Width>) -> Option<PortId> {
+        if let Some(module_def) = self.modules.get_mut(module_id) {
+            if module_def.kind == ModuleKind::PhysicalComponent {
+                return None; // Cannot add ports to physical components
+            }
+            let port = Port {
+                name,
+                direction,
+                width,
+                module: module_id,
+                net: None,
+            };
+            let port_id = self.ports.insert(port);
+            module_def.ports.push(port_id);
+            Some(port_id)
+        } else {
+            None // Module doesn't exist
+        }
+    }
+
+    // Add a pin globally and associate it with a module
+    pub fn add_pin(&mut self, module_id: ModuleId, name: String) -> Option<PinId> {
+         if let Some(module_def) = self.modules.get_mut(module_id) {
+            if !matches!(module_def.kind, ModuleKind::PhysicalComponent | ModuleKind::Interface) {
+                return None; 
+            }
+            let pin = Pin {
+                name,
+                module: module_id,
+                electrical_type: None,
+            };
+            let pin_id = self.pins.insert(pin);
+            module_def.pins.push(pin_id);
+            Some(pin_id)
+        } else {
+            None // Module doesn't exist
+        }
+    }
+
+    // --- Getter methods ---
+
+    pub fn get_module(&self, module_id: ModuleId) -> Option<&ModuleDefinition> {
+        self.modules.get(module_id)
+    }
+
+    pub fn get_instance(&self, instance_id: InstanceId) -> Option<&Instance> {
+        self.instances.get(instance_id)
+    }
+
+    pub fn get_net(&self, net_id: NetId) -> Option<&Net> {
+        self.nets.get(net_id)
+    }
+
+    // Get port from global map
+    pub fn get_port(&self, port_id: PortId) -> Option<&Port> {
+        self.ports.get(port_id)
+    }
+
+    // Get pin from global map
+    pub fn get_pin(&self, pin_id: PinId) -> Option<&Pin> {
+        self.pins.get(pin_id)
+    }
+
+    // TODO: Add methods for associating instances/nets with parent modules, setting top_level_module, etc.
 
 } 
