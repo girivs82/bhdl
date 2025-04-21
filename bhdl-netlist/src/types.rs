@@ -12,6 +12,9 @@ new_key_type! {
     pub struct PinId; // For physical pins within components/interfaces
 }
 
+// Define Width type alias
+pub type Width = usize;
+
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum ModuleKind {
     Module,

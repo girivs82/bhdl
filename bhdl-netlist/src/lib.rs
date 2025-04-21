@@ -1,15 +1,5 @@
 use serde::{Serialize, Deserialize};
 use std::fmt;
-use slotmap::{SlotMap, SecondaryMap, new_key_type};
-
-// Define stable keys for netlist elements
-new_key_type! { 
-    pub struct ModuleId;
-    pub struct InstanceId;
-    pub struct NetId;
-    pub struct PortId;
-    pub struct PinId; // For physical pins within components/interfaces
-}
 
 // Removed old placeholder add function
 // pub fn add(left: u64, right: u64) -> u64 {
@@ -105,12 +95,9 @@ pub mod portpin;
 pub mod net;
 pub mod netlist;
 
-// Re-export key types and IDs for easier use
-pub use types::{* // Re-export everything from types for now
-    // Explicitly list if preferred later for clarity
-    // ModuleId, InstanceId, NetId, PortId, PinId,
-    // ModuleKind, PortDirection, ConnectionPoint, Unit, Quantity 
-};
+// Re-export key types and IDs from the types module
+pub use types::{*}; // Continue re-exporting everything from types
+
 pub use definition::ModuleDefinition;
 pub use instance::Instance;
 pub use portpin::{Port, Pin};
