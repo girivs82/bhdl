@@ -1,5 +1,5 @@
 // Contains the Port and Pin structs
-use crate::types::{PortDirection, NetId, ModuleId, PinId, Width};
+use crate::types::{PortDirection, NetId, ModuleId, Width};
 use serde::{Serialize, Deserialize};
 
 // Represents a connection point on a ModuleDefinition or Instance

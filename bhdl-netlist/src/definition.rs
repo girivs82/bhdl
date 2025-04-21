@@ -1,7 +1,7 @@
 // Contains the ModuleDefinition struct
 use crate::types::{ModuleKind, PortId, PinId, InstanceId, NetId};
 // Removed Port/Pin imports as they are not stored here directly anymore
-use slotmap::SecondaryMap; // Keep for potential future use with params?
+ // Keep for potential future use with params?
 use serde::{Serialize, Deserialize};
 
 // Represents a definition of a module/component/interface/board
