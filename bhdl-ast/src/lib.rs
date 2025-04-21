@@ -1,13 +1,25 @@
-use bhdl_parser::{SyntaxKind, BhdlLanguage};
-use rowan::{SyntaxNode, SyntaxToken};
+//! Abstract Syntax Tree (AST) for the BHDL language.
 
-pub type Node = SyntaxNode<BhdlLanguage>;
-pub type Token = SyntaxToken<BhdlLanguage>;
+// Re-export core parser types
+pub use bhdl_parser::{SyntaxKind, BhdlLanguage}; // Keep base language and kind
 
-/// Helper trait for AST nodes that have a name.
-pub trait HasName: rowan::ast::AstNode<Language = BhdlLanguage> {
+// Use rowan types directly for Node/Token
+pub use rowan::{SyntaxNode, SyntaxToken};
+
+// AST node trait (re-exported)
+pub use rowan::ast::AstNode;
+
+// Module declarations
+pub mod blocks;
+pub mod items;
+pub mod common;
+pub mod expr; 
+pub mod source_file; // Ensure source_file module is declared
+
+// Core HasName trait (defined here)
+pub trait HasName: AstNode<Language = BhdlLanguage> {
     /// Returns the name token associated with this node.
-    fn name(&self) -> Option<Token> {
+    fn name(&self) -> Option<SyntaxToken<BhdlLanguage>> {
         self.syntax()
             .children_with_tokens()
             .filter_map(|element| element.into_token())
@@ -15,37 +27,12 @@ pub trait HasName: rowan::ast::AstNode<Language = BhdlLanguage> {
     }
 }
 
-// Modules for specific AST node types
-pub mod blocks;
-pub mod items;
-pub mod common;
-// pub mod expressions; // Future module
-// pub mod types; // Future module for type expressions etc.
-
-pub mod source_file; // Declare the module
-
-// Re-export core types
+// Consolidated Re-exports
 pub use source_file::SourceFile;
-
-// Re-export items
-pub use items::{Board, ComponentDef, InterfaceDef, Module, TypeDef, ImportStmt};
-// Add other items like InterfaceDef, etc. here as they are defined
-
-// Re-export blocks
-pub use blocks::{
-    ComponentsBlock, ConnectionsBlock, ConstrainBlock, DefaultDesignRulesBlock, InterfacesBlock,
-    LayerStackupBlock, NetsBlock, ParametersBlock, PinMapBlock, PinsBlock, PortsBlock,
-    /* PropertySetBlock, */ TypeDefBlock,
-}; // Commented out PropertySetBlock
-// Add other blocks here as they are defined
-
-// Re-export common elements
-pub use common::{
-    BusSuffix, ComponentInst, ComponentType, ConnectionStmt, IdentRef, InterfaceInstance, NetDecl,
-    NetRef, ParamAssign, ParamAssignBlock, ParamDecl, PinDecl, PinRef, PortDecl, PortDirection,
-    RangeExpr, TypeRef, Value,
-};
-// Add other common elements here as they are defined
+pub use items::{Board, Module, ComponentDef, InterfaceDef, TypeDef, ImportStmt, ImportPath, Alias, ImportTarget, ImportTargetGroup, ImportTargetKind};
+pub use blocks::{ParametersBlock, PortsBlock, NetsBlock, PinsBlock, LayerStackupBlock, PinMapBlock, ConstrainBlock, DefaultDesignRulesBlock, InterfacesBlock};
+pub use common::{ParamAssign, PortDecl, PinDecl, NetDecl, TypeRef, BusSuffix, RangeExpr, Value, ComponentInst, ConnectionStmt, PinRef, NetRef, IdentRef, SimpleIdentRef, ComponentType, PortDirection, ParamDecl, ParamAssignBlock};
+pub use expr::{Expr, PrefixExpr, BinaryExpr};
 
 // Add tests module
 #[cfg(test)]

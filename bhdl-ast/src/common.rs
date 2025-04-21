@@ -1,707 +1,370 @@
-use crate::{Node, Token, BhdlLanguage, blocks::PinMapBlock, HasName};
-use bhdl_parser::SyntaxKind::{self, SIMPLE_IDENT_REF};
-use rowan::{ast::support, TextRange, SyntaxNode};
-// Import the AstNode trait directly for manual implementation
-use rowan::ast::AstNode;
+use crate::{SyntaxKind, BhdlLanguage, SyntaxNode, SyntaxToken, HasName}; // Use SyntaxNode/Token
+use crate::expr::Expr;
+use rowan::ast::{AstNode, AstChildren};
+use crate::blocks::PinMapBlock; // Import PinMapBlock
+use rowan::NodeOrToken; // Needed for SyntaxNodeExt
+// Removed import for TypeDef as it's not used here
 
-// --- Parameter Declaration ---
+// Add helper trait/method for skipping trivia
+trait SyntaxNodeExt {
+    fn first_non_trivia_token(&self) -> Option<SyntaxToken<BhdlLanguage>>;
+}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParamDecl(Node);
+impl SyntaxNodeExt for SyntaxNode<BhdlLanguage> {
+    fn first_non_trivia_token(&self) -> Option<SyntaxToken<BhdlLanguage>> {
+        self.children_with_tokens()
+            .find_map(|element| match element {
+                NodeOrToken::Node(_) => None, // Skip child nodes
+                NodeOrToken::Token(token) => {
+                    // Check for trivia kinds directly
+                    if !matches!(token.kind(), SyntaxKind::WHITESPACE | SyntaxKind::COMMENT) {
+                        Some(token)
+                    } else {
+                        None
+                    }
+                }
+            })
+    }
+}
 
-// Add manual impl
+// --- Common AST Node Structures ---
+
+// --- Parameter Declaration --- (within parameter block, no keyword)
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ParamDecl(pub(crate) SyntaxNode<BhdlLanguage>); // This struct might be redundant if only ParamAssign exists
 impl AstNode for ParamDecl {
-    type Language = BhdlLanguage;
-    fn can_cast(kind: SyntaxKind) -> bool {
-        // Allow casting from PARAM_ASSIGN as well, as parser uses it for non-const params
-        kind == SyntaxKind::PARAM_DECL || kind == SyntaxKind::PARAM_ASSIGN
-    }
-    fn cast(node: SyntaxNode<Self::Language>) -> Option<Self> {
-        if Self::can_cast(node.kind()) { Some(Self(node)) } else { None }
-    }
-    fn syntax(&self) -> &SyntaxNode<Self::Language> {
-        &self.0
-    }
+    type Language = BhdlLanguage; // Added Language
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::PARAM_DECL }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
 }
-
-impl HasName for ParamDecl {
-    fn name(&self) -> Option<Token> {
-        self.0.children_with_tokens()
-            .filter_map(|e| e.into_token())
-            .find(|tok| tok.kind() == SyntaxKind::IDENT)
-    }
-}
-
+impl HasName for ParamDecl {}
 impl ParamDecl {
-    pub fn type_ref(&self) -> Option<TypeRef> {
-        self.0.children().find_map(TypeRef::cast)
-    }
+    pub fn type_ref(&self) -> Option<TypeRef> { self.0.children().find_map(TypeRef::cast) }
+    pub fn default_value(&self) -> Option<Expr> { self.0.children().find_map(Expr::cast) }
+}
 
-    pub fn default_value(&self) -> Option<Value> {
-        // Find the VALUE node after the EQ token
-        self.0.children_with_tokens()
-            .skip_while(|e| e.kind() != SyntaxKind::EQ)
-            .skip(1)
-            .find_map(|e| e.into_node().and_then(Value::cast))
+// --- Type Reference ---
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TypeRef(pub(crate) SyntaxNode<BhdlLanguage>);
+impl AstNode for TypeRef {
+    type Language = BhdlLanguage; // Added Language
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::TYPE_REF }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+impl TypeRef {
+    pub fn name_token(&self) -> Option<SyntaxToken<BhdlLanguage>> { 
+        self.0.first_non_trivia_token()
     }
+    // Add methods for type parameters later
+}
 
-    // Added: Get the expression node assigned to the parameter
-    pub fn value_expr(&self) -> Option<Node> {
+// --- Bus Suffix --- `[index]` or `[high:low]`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct BusSuffix(pub(crate) SyntaxNode<BhdlLanguage>);
+impl AstNode for BusSuffix {
+    type Language = BhdlLanguage; // Added Language
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::BUS_SUFFIX }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+impl BusSuffix {
+    pub fn range(&self) -> Option<RangeExpr> { self.0.children().find_map(RangeExpr::cast) }
+    pub fn index_expr(&self) -> Option<Expr> { 
+        // Find Expr child that isn't part of a RangeExpr child
+        self.0.children()
+            .find(|node| node.parent().map(|p| p.kind() != SyntaxKind::RANGE_EXPR).unwrap_or(true))
+            .and_then(Expr::cast)
+    }
+    // Helper to get index node directly for simple cases
+    pub fn index_expr_node(&self) -> Option<SyntaxNode<BhdlLanguage>> {
+        self.0.children()
+            .find(|node| node.parent().map(|p| p.kind() != SyntaxKind::RANGE_EXPR).unwrap_or(true) && Expr::can_cast(node.kind()))
+    }
+}
+
+// --- Range Expression --- `lhs:rhs`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RangeExpr(pub(crate) SyntaxNode<BhdlLanguage>);
+impl AstNode for RangeExpr {
+    type Language = BhdlLanguage; // Added Language
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::RANGE_EXPR }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+impl RangeExpr {
+    pub fn lhs(&self) -> Option<Expr> { self.0.children().find_map(Expr::cast) }
+    pub fn rhs(&self) -> Option<Expr> { self.0.children().filter_map(Expr::cast).nth(1) }
+    pub fn separator_kind(&self) -> Option<SyntaxKind> {
         self.0.children_with_tokens()
-            .skip_while(|e| e.kind() != SyntaxKind::EQ)
-            .skip(1)
-            .find_map(|e| e.into_node())
-            // Filter for valid expression node kinds
-            .filter(|n| matches!(n.kind(), 
-                SyntaxKind::VALUE | SyntaxKind::IDENT_REF | SyntaxKind::BINARY_EXPR | 
-                SyntaxKind::PREFIX_EXPR // Add other expression kinds if needed
-                // SyntaxKind::PAREN_EXPR -> Assuming parser handles this via BINARY/PREFIX etc.
-                // If PAREN_EXPR exists and wraps expressions, add it here.
-            ))
+            .find(|t| t.kind() == SyntaxKind::COLON)
+            .map(|t| t.kind())
+    }
+    // Helpers to get nodes directly
+    pub fn lhs_node(&self) -> Option<SyntaxNode<BhdlLanguage>> { self.0.children().find(|n| Expr::can_cast(n.kind())) }
+    pub fn rhs_node(&self) -> Option<SyntaxNode<BhdlLanguage>> { self.0.children().filter(|n| Expr::can_cast(n.kind())).nth(1) }
+}
+
+// --- Value --- (e.g., number, string literal)
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Value(pub(crate) SyntaxNode<BhdlLanguage>); // Use SyntaxNode
+impl AstNode for Value {
+    type Language = BhdlLanguage; // Added Language
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::VALUE }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+
+// --- Parameter Assignment --- `param_name = value`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ParamAssign(pub(crate) SyntaxNode<BhdlLanguage>); // Use SyntaxNode
+impl AstNode for ParamAssign {
+    type Language = BhdlLanguage; // Added Language
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::PARAM_ASSIGN }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+impl HasName for ParamAssign {}
+impl ParamAssign {
+    pub fn value(&self) -> Option<Expr> { self.0.children().find_map(Expr::cast) }
+    pub fn value_literal_token(&self) -> Option<SyntaxToken<BhdlLanguage>> {
+        self.value().and_then(|expr| match expr {
+            Expr::Value(val) => val.syntax().first_non_trivia_token(),
+            _ => None, // Or handle other Expr variants if needed
+        })
     }
 }
 
 // --- Port Declaration ---
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PortDecl(Node);
-
-// Add manual impl
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PortDecl(pub(crate) SyntaxNode<BhdlLanguage>); // Use SyntaxNode
 impl AstNode for PortDecl {
-    type Language = BhdlLanguage;
-    fn can_cast(kind: SyntaxKind) -> bool {
-        kind == SyntaxKind::PORT_DECL
-    }
-    fn cast(node: SyntaxNode<Self::Language>) -> Option<Self> {
-        if Self::can_cast(node.kind()) { Some(Self(node)) } else { None }
-    }
-    fn syntax(&self) -> &SyntaxNode<Self::Language> {
-        &self.0
-    }
+    type Language = BhdlLanguage; // Added Language
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::PORT_DECL }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
 }
-
 impl HasName for PortDecl {}
-
 impl PortDecl {
-    pub fn direction(&self) -> Option<Token> {
-        self.0.children_with_tokens()
-            .filter_map(|element| element.into_token())
-            .find(|token| PortDirection::is_direction_kind(token.kind()))
-    }
-
-    pub fn type_ref(&self) -> Option<TypeRef> {
-        self.0.children().find_map(TypeRef::cast)
-    }
-
-    pub fn bus_suffix(&self) -> Option<BusSuffix> {
-        self.0.children().find_map(BusSuffix::cast)
-    }
+    pub fn type_ref(&self) -> Option<TypeRef> { self.0.children().find_map(TypeRef::cast) }
+    pub fn bus_suffix(&self) -> Option<BusSuffix> { self.0.children().find_map(BusSuffix::cast) }
 }
 
-// --- Type Reference ---
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TypeRef(Node);
-
-// Add manual impl
-impl AstNode for TypeRef {
-    type Language = BhdlLanguage;
-    fn can_cast(kind: SyntaxKind) -> bool {
-        kind == SyntaxKind::TYPE_REF
-    }
-    fn cast(node: SyntaxNode<Self::Language>) -> Option<Self> {
-        if Self::can_cast(node.kind()) { Some(Self(node)) } else { None }
-    }
-    fn syntax(&self) -> &SyntaxNode<Self::Language> {
-        &self.0
-    }
+// --- Pin Declaration --- (within component pins { ... })
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PinDecl(pub(crate) SyntaxNode<BhdlLanguage>); // Use SyntaxNode
+impl AstNode for PinDecl {
+    type Language = BhdlLanguage; // Added Language
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::PIN_DECL }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+impl HasName for PinDecl {}
+impl PinDecl {
+    pub fn type_ref(&self) -> Option<TypeRef> { self.0.children().find_map(TypeRef::cast) }
+    pub fn bus_suffix(&self) -> Option<BusSuffix> { self.0.children().find_map(BusSuffix::cast) }
 }
 
-impl TypeRef {
-    pub fn name_token(&self) -> Option<Token> {
-        // Find first IDENT or known type keyword
-        self.0
-            .children_with_tokens()
-            .filter_map(|e| e.into_token())
-            .find(|tok| {
-                matches!(tok.kind(),
-                    SyntaxKind::IDENT |
-                    SyntaxKind::SIGNAL_KW | // Add keywords
-                    SyntaxKind::POWER_KW
-                    // TODO: Add more base type keywords if parser uses them here
-                )
-            })
-    }
-    // TODO: Add method for parameters like signal(cmos_3v3)
+// --- Net Declaration ---
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct NetDecl(pub(crate) SyntaxNode<BhdlLanguage>); // Use SyntaxNode
+impl AstNode for NetDecl {
+    type Language = BhdlLanguage; // Added Language
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::NET_DECL }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
 }
-
-// --- Port Direction ---
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PortDirection(Token);
-
-impl PortDirection {
-    pub fn token(&self) -> &Token {
-        &self.0
-    }
-
-    pub fn kind(&self) -> SyntaxKind {
-        self.0.kind()
-    }
-
-    pub fn text_range(&self) -> TextRange {
-        self.0.text_range()
-    }
-
-    // Add a helper for checking if a token kind is a direction
-    pub fn is_direction_kind(kind: SyntaxKind) -> bool {
-        matches!(kind, SyntaxKind::IN_KW | SyntaxKind::OUT_KW | SyntaxKind::INOUT_KW | SyntaxKind::INPUT_KW | SyntaxKind::OUTPUT_KW)
-    }
-}
-
-// --- Value (Literal) ---
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Value(Node);
-
-// Add manual impl
-impl AstNode for Value {
-    type Language = BhdlLanguage;
-    fn can_cast(kind: SyntaxKind) -> bool {
-        kind == SyntaxKind::VALUE
-    }
-    fn cast(node: SyntaxNode<Self::Language>) -> Option<Self> {
-        if Self::can_cast(node.kind()) { Some(Self(node)) } else { None }
-    }
-    fn syntax(&self) -> &SyntaxNode<Self::Language> {
-        &self.0
-    }
-}
-
-impl Value {
-    pub fn number_literal(&self) -> Option<Token> {
-        self.0.children_with_tokens()
-            .filter_map(|e| e.into_token())
-            .find(|t| t.kind() == SyntaxKind::NUMBER)
-    }
-    // TODO: Add methods to get specific value kinds/tokens (string(), boolean())
-}
-
-// --- Identifier Reference ---
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IdentRef(Node);
-
-// Add manual impl
-impl AstNode for IdentRef {
-    type Language = BhdlLanguage;
-    fn can_cast(kind: SyntaxKind) -> bool {
-        kind == SyntaxKind::IDENT_REF
-    }
-    fn cast(node: SyntaxNode<Self::Language>) -> Option<Self> {
-        if Self::can_cast(node.kind()) { Some(Self(node)) } else { None }
-    }
-    fn syntax(&self) -> &SyntaxNode<Self::Language> {
-        &self.0
-    }
-}
-
-impl IdentRef {
-    pub fn token(&self) -> Option<Token> {
-        self.0.first_token()
-    }
-}
-
-// --- Simple Identifier Reference ---
-// Represents a reference that is just a single identifier (could be net, pin, port, etc.)
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SimpleIdentRef(Node);
-
-impl AstNode for SimpleIdentRef {
-    type Language = BhdlLanguage;
-    fn can_cast(kind: SyntaxKind) -> bool {
-        kind == SIMPLE_IDENT_REF // Use the imported constant
-    }
-    fn cast(node: SyntaxNode<Self::Language>) -> Option<Self> {
-        if Self::can_cast(node.kind()) { Some(Self(node)) } else { None }
-    }
-    fn syntax(&self) -> &SyntaxNode<Self::Language> {
-        &self.0
-    }
-}
-
-impl SimpleIdentRef {
-    // Find the single IDENT token within this node
-    pub fn name_token(&self) -> Option<Token> {
-        self.0.children_with_tokens()
-            .filter_map(|e| e.into_token())
-            .find(|tok| tok.kind() == SyntaxKind::IDENT)
-    }
+impl HasName for NetDecl {}
+impl NetDecl {
+    pub fn type_ref(&self) -> Option<TypeRef> { self.0.children().find_map(TypeRef::cast) }
+    pub fn bus_suffix(&self) -> Option<BusSuffix> { self.0.children().find_map(BusSuffix::cast) }
+    pub fn default_value(&self) -> Option<Expr> { self.0.children().find_map(Expr::cast) }
 }
 
 // --- Component Instantiation ---
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ComponentInst(Node);
-
-// Add manual impl
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ComponentInst(pub(crate) SyntaxNode<BhdlLanguage>); // Use SyntaxNode
 impl AstNode for ComponentInst {
-    type Language = BhdlLanguage;
-    fn can_cast(kind: SyntaxKind) -> bool {
-        kind == SyntaxKind::COMPONENT_INST
-    }
-    fn cast(node: SyntaxNode<Self::Language>) -> Option<Self> {
-        if Self::can_cast(node.kind()) { Some(Self(node)) } else { None }
-    }
-    fn syntax(&self) -> &SyntaxNode<Self::Language> {
-        &self.0
-    }
+    type Language = BhdlLanguage; // Added Language
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::COMPONENT_INST }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
 }
-
-impl HasName for ComponentInst {
-    // Ensure this reliably gets the instance name (second IDENT token)
-    fn name(&self) -> Option<Token> {
-        self.0.children_with_tokens()
-            .filter_map(|e| e.into_token())
-            .filter(|tok| tok.kind() == SyntaxKind::IDENT)
-            .nth(1) 
-    }
-}
-
+impl HasName for ComponentInst {}
 impl ComponentInst {
-    // Find the component type name (first IDENT token)
-    pub fn component_type_name_token(&self) -> Option<Token> {
-        self.0.children_with_tokens()
-            .filter_map(|e| e.into_token())
-            .find(|tok| tok.kind() == SyntaxKind::IDENT)
-    }
-    
-    // Keep component_type method, but maybe it should return the token?
-    // Or try to find a COMPONENT_TYPE node *first* and fall back?
-    // For now, let's make it return the first IDENT token like component_type_name_token.
-    // This breaks the previous assumption of it returning ComponentType node.
-    pub fn component_type(&self) -> Option<Token> { 
-        self.component_type_name_token()
-    }
-
-    pub fn param_assign_block(&self) -> Option<ParamAssignBlock> {
-         self.0.children().find_map(ParamAssignBlock::cast)
-    }
-}
-
-// --- Component Type (in Instantiation) ---
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ComponentType(Node);
-
-// Add manual impl
-impl AstNode for ComponentType {
-    type Language = BhdlLanguage;
-    fn can_cast(kind: SyntaxKind) -> bool {
-        kind == SyntaxKind::COMPONENT_TYPE
-    }
-    fn cast(node: SyntaxNode<Self::Language>) -> Option<Self> {
-        if Self::can_cast(node.kind()) { Some(Self(node)) } else { None }
-    }
-    fn syntax(&self) -> &SyntaxNode<Self::Language> {
-        &self.0
-    }
-}
-
-impl ComponentType {
-    // This logic might need adjustment if it's called
-    pub fn name_ref(&self) -> Option<Node> { 
-        self.0.first_child()
-    }
-}
-
-// --- Parameter Assignment Block --- `{...}` or `(...)` in instantiation
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParamAssignBlock(Node);
-
-// Add manual impl
-impl AstNode for ParamAssignBlock {
-    type Language = BhdlLanguage;
-    fn can_cast(kind: SyntaxKind) -> bool {
-        kind == SyntaxKind::PARAM_ASSIGN_BLOCK
-    }
-    fn cast(node: SyntaxNode<Self::Language>) -> Option<Self> {
-        if Self::can_cast(node.kind()) { Some(Self(node)) } else { None }
-    }
-    fn syntax(&self) -> &SyntaxNode<Self::Language> {
-        &self.0
-    }
-}
-
-impl ParamAssignBlock {
-    pub fn assignments(&self) -> impl Iterator<Item = ParamAssign> {
-        support::children(&self.0)
-    }
-}
-
-// --- Parameter Assignment --- `param_name = value`
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParamAssign(Node);
-
-// Add manual impl
-impl AstNode for ParamAssign {
-    type Language = BhdlLanguage;
-    fn can_cast(kind: SyntaxKind) -> bool {
-        kind == SyntaxKind::PARAM_ASSIGN
-    }
-    fn cast(node: SyntaxNode<Self::Language>) -> Option<Self> {
-        if Self::can_cast(node.kind()) { Some(Self(node)) } else { None }
-    }
-    fn syntax(&self) -> &SyntaxNode<Self::Language> {
-        &self.0
-    }
-}
-
-impl ParamAssign {
-    pub fn name_token(&self) -> Option<Token> {
+    pub fn component_type_name(&self) -> Option<SyntaxToken<BhdlLanguage>> { // Changed return type
         self.0.children_with_tokens()
             .filter_map(|e| e.into_token())
             .find(|t| t.kind() == SyntaxKind::IDENT)
     }
-
-    pub fn value(&self) -> Option<Value> {
-        self.0.children_with_tokens()
-            .skip_while(|element| element.kind() != SyntaxKind::EQ)
-            .skip(1)
-            .find_map(|element| element.into_node().and_then(Value::cast))
+    // Reimplement name() using HasName trait default
+    // pub fn name(&self) -> Option<SyntaxToken<BhdlLanguage>> { ... }
+    pub fn param_assign_block(&self) -> Option<ParamAssignBlock> {
+        self.0.children().find_map(ParamAssignBlock::cast)
     }
 }
 
-// --- Net Declaration ---
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NetDecl(Node);
-
-// Add manual impl
-impl AstNode for NetDecl {
-    type Language = BhdlLanguage;
-    fn can_cast(kind: SyntaxKind) -> bool {
-        kind == SyntaxKind::NET_DECL
-    }
-    fn cast(node: SyntaxNode<Self::Language>) -> Option<Self> {
-        if Self::can_cast(node.kind()) { Some(Self(node)) } else { None }
-    }
-    fn syntax(&self) -> &SyntaxNode<Self::Language> {
-        &self.0
-    }
-}
-
-impl HasName for NetDecl {}
-
-impl NetDecl {
-    pub fn net_keyword(&self) -> Option<Token> {
-        self.0.first_token().filter(|t| t.kind() == SyntaxKind::NET_KW)
-    }
-
-    pub fn type_ref(&self) -> Option<TypeRef> {
-        self.0.children().find_map(TypeRef::cast)
-    }
-
-    pub fn bus_suffix(&self) -> Option<BusSuffix> {
-        self.0.children().find_map(BusSuffix::cast)
-    }
-}
-
-// --- Pin Reference --- (e.g., U1.PIN_A[0])
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PinRef(Node);
-
-// Add manual impl
-impl AstNode for PinRef {
-    type Language = BhdlLanguage;
-    fn can_cast(kind: SyntaxKind) -> bool {
-        kind == SyntaxKind::PIN_REF
-    }
-    fn cast(node: SyntaxNode<Self::Language>) -> Option<Self> {
-        if Self::can_cast(node.kind()) { Some(Self(node)) } else { None }
-    }
-    fn syntax(&self) -> &SyntaxNode<Self::Language> {
-        &self.0
-    }
-}
-
-impl PinRef {
-    pub fn instance_name(&self) -> Option<Token> {
-        let mut children = self.0.children_with_tokens().peekable();
-        let first_ident = children.find(|e| e.kind() == SyntaxKind::IDENT).and_then(|e| e.into_token());
-        if children.peek().map_or(false, |e| e.kind() == SyntaxKind::DOT) {
-            first_ident
-        } else {
-            None
-        }
-    }
-
-    pub fn pin_name(&self) -> Option<Token> {
-        let has_dot = self.0.children_with_tokens().any(|e| e.kind() == SyntaxKind::DOT);
-        let mut idents = self.0.children_with_tokens()
-            .filter(|e| e.kind() == SyntaxKind::IDENT)
-            .filter_map(|e| e.into_token());
-
-        if has_dot {
-            idents.nth(1)
-        } else {
-            idents.next()
-        }
-    }
-
-    pub fn bus_suffix(&self) -> Option<BusSuffix> {
-        self.0.children().find_map(BusSuffix::cast)
-    }
-}
-
-// --- Net Reference --- (e.g., NetA[0])
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NetRef(Node);
-
-// Add manual impl
-impl AstNode for NetRef {
-    type Language = BhdlLanguage;
-    fn can_cast(kind: SyntaxKind) -> bool {
-        kind == SyntaxKind::NET_REF
-    }
-    fn cast(node: SyntaxNode<Self::Language>) -> Option<Self> {
-        if Self::can_cast(node.kind()) { Some(Self(node)) } else { None }
-    }
-    fn syntax(&self) -> &SyntaxNode<Self::Language> {
-        &self.0
-    }
-}
-
-impl NetRef {
-    pub fn name_token(&self) -> Option<Token> {
-        self.0.first_token().filter(|t| t.kind() == SyntaxKind::IDENT)
-    }
-
-    pub fn bus_suffix(&self) -> Option<BusSuffix> {
-        self.0.children().find_map(BusSuffix::cast)
-    }
-}
-
-// --- Connection Statement ---
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConnectionStmt(Node);
-
-// Add manual impl
-impl AstNode for ConnectionStmt {
-    type Language = BhdlLanguage;
-    fn can_cast(kind: SyntaxKind) -> bool {
-        kind == SyntaxKind::CONNECTION_STMT
-    }
-    fn cast(node: SyntaxNode<Self::Language>) -> Option<Self> {
-        if Self::can_cast(node.kind()) { Some(Self(node)) } else { None }
-    }
-    fn syntax(&self) -> &SyntaxNode<Self::Language> {
-        &self.0
-    }
-}
-
-impl ConnectionStmt {
-    pub fn source(&self) -> Option<Node> {
-        self.0.children_with_tokens()
-            .take_while(|element| element.kind() != SyntaxKind::ARROW)
-            .filter_map(|element| element.into_node())
-            .last()
-    }
-
-    pub fn sink(&self) -> Option<Node> {
-        self.0.children_with_tokens()
-            .skip_while(|element| element.kind() != SyntaxKind::ARROW)
-            .skip(1)
-            .find_map(|element| element.into_node())
-    }
-}
-
-// --- Pin Declaration --- (within component pins { ... })
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PinDecl(Node);
-
-// Add manual impl
-impl AstNode for PinDecl {
-    type Language = BhdlLanguage;
-    fn can_cast(kind: SyntaxKind) -> bool {
-        kind == SyntaxKind::PIN_DECL
-    }
-    fn cast(node: SyntaxNode<Self::Language>) -> Option<Self> {
-        if Self::can_cast(node.kind()) { Some(Self(node)) } else { None }
-    }
-    fn syntax(&self) -> &SyntaxNode<Self::Language> {
-        &self.0
-    }
-}
-
-impl HasName for PinDecl {}
-
-impl PinDecl {
-    pub fn direction(&self) -> Option<Token> {
-        self.0.children_with_tokens()
-            .filter_map(|element| element.into_token())
-            .find(|token| PortDirection::is_direction_kind(token.kind()))
-    }
-
-    pub fn type_ref(&self) -> Option<TypeRef> {
-        self.0.children().find_map(TypeRef::cast)
-    }
-
-    pub fn bus_suffix(&self) -> Option<BusSuffix> {
-        self.0.children().find_map(BusSuffix::cast)
-    }
-}
-
-// --- Bus Suffix --- ([index] or [high:low])
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BusSuffix(Node);
-
-// Add manual impl
-impl AstNode for BusSuffix {
-    type Language = BhdlLanguage;
-    fn can_cast(kind: SyntaxKind) -> bool {
-        kind == SyntaxKind::BUS_SUFFIX
-    }
-    fn cast(node: SyntaxNode<Self::Language>) -> Option<Self> {
-        if Self::can_cast(node.kind()) { Some(Self(node)) } else { None }
-    }
-    fn syntax(&self) -> &SyntaxNode<Self::Language> {
-        &self.0
-    }
-}
-
-impl BusSuffix {
-    /// Returns the `SyntaxNode` of the expression if this suffix represents an index access (e.g., `[0]`, `[-1]`, `[WIDTH-1]`),
-    /// but only if it does not contain a RangeExpr child.
-    pub fn index_expr_node(&self) -> Option<SyntaxNode<BhdlLanguage>> {
-        // If a RangeExpr child exists, this is not an index access.
-        if self.range().is_some() {
-            return None;
-        }
-        // Find the first child node that is likely an expression
-        self.0.children().find(|node| 
-            matches!(node.kind(), 
-                SyntaxKind::VALUE | SyntaxKind::IDENT_REF | SyntaxKind::PREFIX_EXPR | 
-                SyntaxKind::BINARY_EXPR // Add others if needed
-            )
-        )
-    }
-
-    /// Deprecated: Use index_expr_node instead.
-    /// Returns the `Value` node if this suffix represents a simple index access (e.g., `[0]`),
-    /// but only if it does not contain a RangeExpr.
-    #[deprecated = "Use index_expr_node which returns the full SyntaxNode"] // Mark as deprecated
-    pub fn index(&self) -> Option<Value> {
-         // If a RangeExpr child exists, this is not an index access.
-        if self.range().is_some() {
-            return None;
-        }
-        self.0.children().find_map(Value::cast)
-    }
-
-    /// Returns the `RangeExpr` node if this suffix represents a range access (e.g., `[7:0]`),
-    /// by looking for a child node of that kind.
-    pub fn range(&self) -> Option<RangeExpr> {
-        // Directly find the RangeExpr node created by the parser
-        self.0.children().find_map(RangeExpr::cast)
-    }
-}
-
-/// Represents a range expression like `7:0`.
+// --- Parameter Assignment Block --- `(...)` or `{...}` in ComponentInst
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct RangeExpr(SyntaxNode<BhdlLanguage>);
-
-impl RangeExpr {
-    // Return the SyntaxNode for the LHS expression
-    pub fn lhs_node(&self) -> Option<SyntaxNode<BhdlLanguage>> {
-        self.0.children().nth(0)
-    }
-    // Return the SyntaxNode for the RHS expression
-    pub fn rhs_node(&self) -> Option<SyntaxNode<BhdlLanguage>> {
-        self.0.children().nth(1) // Assumes lhs is 0, rhs is 1. Remove semicolon.
-    }
-
-    // Keep old methods for compatibility for now, but maybe deprecate?
-    pub fn lhs(&self) -> Option<Value> {
-        self.lhs_node().and_then(Value::cast)
-    }
-    pub fn rhs(&self) -> Option<Value> {
-        self.rhs_node().and_then(Value::cast)
-    }
-
-    pub fn separator_kind(&self) -> Option<SyntaxKind> {
-        self.0.children_with_tokens()
-           .filter_map(|it| it.into_token())
-           .find(|token| token.kind() == SyntaxKind::COLON)
-           .map(|token| token.kind())
+pub struct ParamAssignBlock(pub(crate) SyntaxNode<BhdlLanguage>); // Use SyntaxNode
+impl AstNode for ParamAssignBlock {
+    type Language = BhdlLanguage; // Added Language
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::PARAM_ASSIGN_BLOCK }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+impl ParamAssignBlock {
+    pub fn assignments(&self) -> impl Iterator<Item = ParamAssign> { 
+        self.0.children().filter_map(ParamAssign::cast)
     }
 }
 
-impl rowan::ast::AstNode for RangeExpr {
-    type Language = BhdlLanguage;
-
-    fn can_cast(kind: SyntaxKind) -> bool {
-        // Now only casts from the dedicated RANGE_EXPR kind
-        kind == SyntaxKind::RANGE_EXPR
+// --- Connection Statement --- `connect source -> sink;`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ConnectionStmt(pub(crate) SyntaxNode<BhdlLanguage>); // Use SyntaxNode
+impl AstNode for ConnectionStmt {
+    type Language = BhdlLanguage; // Added Language
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::CONNECTION_STMT }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+impl ConnectionStmt {
+    fn find_ref_node(node: &SyntaxNode<BhdlLanguage>, skip: usize) -> Option<SyntaxNode<BhdlLanguage>> {
+        node.children()
+            .filter(|n| {
+                PinRef::can_cast(n.kind()) || 
+                NetRef::can_cast(n.kind()) || 
+                IdentRef::can_cast(n.kind()) || 
+                SimpleIdentRef::can_cast(n.kind())
+            })
+            .nth(skip)
     }
 
-    fn cast(node: SyntaxNode<BhdlLanguage>) -> Option<Self> {
-        // Simple cast based on the kind
-        if Self::can_cast(node.kind()) {
-            Some(Self(node))
-        } else {
-            None
-        }
+    pub fn source(&self) -> Option<SyntaxNode<BhdlLanguage>> {
+        Self::find_ref_node(&self.0, 0)
     }
-
-    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> {
-        &self.0
+    pub fn sink(&self) -> Option<SyntaxNode<BhdlLanguage>> {
+        Self::find_ref_node(&self.0, 1)
     }
 }
 
-// --- Interface Instance --- (within components/modules interfaces { ... })
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InterfaceInstance(Node);
-
-// Add manual impl
-impl AstNode for InterfaceInstance {
-    type Language = BhdlLanguage;
-    fn can_cast(kind: SyntaxKind) -> bool {
-        kind == SyntaxKind::INTERFACE_INSTANCE
-    }
-    fn cast(node: SyntaxNode<Self::Language>) -> Option<Self> {
-        if Self::can_cast(node.kind()) { Some(Self(node)) } else { None }
-    }
-    fn syntax(&self) -> &SyntaxNode<Self::Language> {
-        &self.0
-    }
+// --- Pin Reference --- `instance.pin` or `pin`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PinRef(pub(crate) SyntaxNode<BhdlLanguage>); // Use SyntaxNode
+impl AstNode for PinRef {
+    type Language = BhdlLanguage; // Added Language
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::PIN_REF }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
 }
-
-impl HasName for InterfaceInstance {}
-
-impl InterfaceInstance {
-    pub fn interface_keyword(&self) -> Option<Token> {
+impl PinRef {
+    pub fn instance_name(&self) -> Option<SyntaxToken<BhdlLanguage>> {
         self.0.children_with_tokens()
             .filter_map(|e| e.into_token())
-            .find(|t| t.kind() == SyntaxKind::INTERFACE_KW)
+            .find(|t| t.kind() == SyntaxKind::IDENT && t.next_token().map(|nt| nt.kind() == SyntaxKind::DOT).unwrap_or(false))
     }
-
-    pub fn type_ref(&self) -> Option<TypeRef> {
-        self.0.children().find_map(TypeRef::cast)
+    pub fn pin_name(&self) -> Option<SyntaxToken<BhdlLanguage>> {
+        self.0.children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .filter(|t| t.kind() == SyntaxKind::IDENT)
+            .last()
     }
+    pub fn bus_suffix(&self) -> Option<BusSuffix> { self.0.children().find_map(BusSuffix::cast) }
+}
 
-    pub fn pin_map_block(&self) -> Option<PinMapBlock> {
+// --- Net Reference --- `net_name`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct NetRef(pub(crate) SyntaxNode<BhdlLanguage>); // Use SyntaxNode
+impl AstNode for NetRef {
+    type Language = BhdlLanguage; // Added Language
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::NET_REF }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+impl NetRef {
+    pub fn name_token(&self) -> Option<SyntaxToken<BhdlLanguage>> { 
+        self.0.children_with_tokens()
+            .filter_map(|el| el.into_token())
+            .find(|tok| tok.kind() == SyntaxKind::IDENT)
+    }
+    pub fn bus_suffix(&self) -> Option<BusSuffix> { self.0.children().find_map(BusSuffix::cast) }
+}
+
+// --- Identifier Reference --- (Used in expressions, etc.)
+#[derive(Debug, Clone, PartialEq, Eq, Hash)] 
+pub struct IdentRef(pub(crate) SyntaxNode<BhdlLanguage>); // Use SyntaxNode
+impl AstNode for IdentRef {
+    type Language = BhdlLanguage; // Added Language
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::IDENT_REF }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+impl IdentRef {
+    pub fn token(&self) -> Option<SyntaxToken<BhdlLanguage>> { self.0.first_token() }
+}
+
+// --- Simple Identifier Reference --- (Used where only a simple name is allowed, e.g., LHS of assign?)
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SimpleIdentRef(pub(crate) SyntaxNode<BhdlLanguage>); // Use SyntaxNode
+impl AstNode for SimpleIdentRef {
+    type Language = BhdlLanguage; // Added Language
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::SIMPLE_IDENT_REF }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+impl SimpleIdentRef {
+    pub fn name_token(&self) -> Option<SyntaxToken<BhdlLanguage>> { self.0.first_non_trivia_token() }
+}
+
+// --- Interface Instance --- (Inside interfaces block)
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct InterfaceInstance(pub(crate) SyntaxNode<BhdlLanguage>); // Use SyntaxNode
+impl AstNode for InterfaceInstance {
+    type Language = BhdlLanguage; // Added Language
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::INTERFACE_INSTANCE }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+impl HasName for InterfaceInstance {}
+impl InterfaceInstance {
+    pub fn interface_type_name(&self) -> Option<SyntaxToken<BhdlLanguage>> {
+        self.0.children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .filter(|t| t.kind() == SyntaxKind::IDENT)
+            .nth(1) // First IDENT is instance name, second is type name
+    }
+    pub fn pin_map_block(&self) -> Option<PinMapBlock> { // Assumes PinMapBlock defined elsewhere (e.g., blocks.rs)
         self.0.children().find_map(PinMapBlock::cast)
+    }
+    pub fn param_assigns(&self) -> impl Iterator<Item = ParamAssign> {
+        self.0.children().filter_map(ParamAssign::cast)
     }
 }
 
-// Add other common nodes like Expression, PinRef, etc. later 
+// --- Component Type --- (Used in ComponentInst)
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ComponentType(pub(crate) SyntaxNode<BhdlLanguage>); // Use SyntaxNode
+impl AstNode for ComponentType {
+    type Language = BhdlLanguage; // Added Language
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::COMPONENT_TYPE }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+impl ComponentType {
+    pub fn name_token(&self) -> Option<SyntaxToken<BhdlLanguage>> { self.0.first_token() }
+}
+
+// --- Port Direction --- (Keywords: in, out, inout)
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PortDirection(pub(crate) SyntaxToken<BhdlLanguage>); // Use SyntaxToken
+impl PortDirection {
+    pub fn is_direction_kind(kind: SyntaxKind) -> bool {
+        matches!(kind, SyntaxKind::IN_KW | SyntaxKind::OUT_KW | SyntaxKind::INOUT_KW)
+    }
+    pub fn cast(token: SyntaxToken<BhdlLanguage>) -> Option<Self> {
+        if Self::is_direction_kind(token.kind()) { Some(Self(token)) } else { None }
+    }
+    pub fn syntax(&self) -> &SyntaxToken<BhdlLanguage> { &self.0 }
+    pub fn kind(&self) -> SyntaxKind { self.0.kind() }
+}

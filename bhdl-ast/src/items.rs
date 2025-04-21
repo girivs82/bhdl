@@ -1,428 +1,215 @@
-use crate::{
-    blocks::{
-        ComponentsBlock, ConnectionsBlock, DefaultDesignRulesBlock, InterfacesBlock, LayerStackupBlock, NetsBlock,
-        ParametersBlock, PinsBlock, PortsBlock,
-    },
-    HasName, Node, Token, BhdlLanguage,
-};
-// Explicitly import type used in support::children calls below
-use bhdl_parser::SyntaxKind;
-use rowan::{ast::support, SyntaxNode};
-use rowan::ast::AstNode;
+use crate::{SyntaxKind, BhdlLanguage, SyntaxNode, SyntaxToken, HasName};
+use rowan::ast::{AstNode, AstChildren};
+use crate::blocks::{ParametersBlock, PortsBlock, NetsBlock, PinsBlock, LayerStackupBlock, DefaultDesignRulesBlock, InterfacesBlock, ConstrainBlock};
+use crate::common::{TypeRef, ParamAssign, ComponentInst, ConnectionStmt, PortDecl, NetDecl, PinDecl};
+use crate::expr::Expr;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Board(Node);
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Board(pub(crate) SyntaxNode<BhdlLanguage>);
 
-impl rowan::ast::AstNode for Board {
+impl AstNode for Board {
     type Language = BhdlLanguage;
-    fn can_cast(kind: bhdl_parser::SyntaxKind) -> bool {
-        kind == SyntaxKind::BOARD_DEF
-    }
-    fn cast(node: SyntaxNode<Self::Language>) -> Option<Self> {
-        if <Self as rowan::ast::AstNode>::can_cast(node.kind()) {
-            Some(Self(node))
-        } else {
-            None
-        }
-    }
-    fn syntax(&self) -> &SyntaxNode<Self::Language> {
-        &self.0
-    }
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::BOARD_DEF }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
 }
 
 impl HasName for Board {}
 
-// Methods to access board contents
 impl Board {
-    pub fn parameters_block(&self) -> Option<ParametersBlock> {
-        support::child(&self.0)
-    }
-
-    pub fn ports_block(&self) -> Option<PortsBlock> {
-        support::child(&self.0)
-    }
-
-    pub fn layer_stackup_block(&self) -> Option<LayerStackupBlock> {
-        support::child(&self.0)
-    }
-
-    pub fn default_design_rules_block(&self) -> Option<DefaultDesignRulesBlock> {
-        support::child(&self.0)
-    }
-
-    pub fn components_block(&self) -> Option<ComponentsBlock> {
-        support::child(&self.0)
-    }
-
-    pub fn nets_block(&self) -> Option<NetsBlock> {
-        support::child(&self.0)
-    }
-
-    pub fn connections_block(&self) -> Option<ConnectionsBlock> {
-        support::child(&self.0)
-    }
-
-    // TODO: Add methods for other optional blocks like `constrain`, metadata assignments (author, version)
+    pub fn parameters_block(&self) -> Option<ParametersBlock> { self.0.children().find_map(ParametersBlock::cast) }
+    pub fn ports_block(&self) -> Option<PortsBlock> { self.0.children().find_map(PortsBlock::cast) }
+    pub fn layer_stackup_block(&self) -> Option<LayerStackupBlock> { self.0.children().find_map(LayerStackupBlock::cast) }
+    pub fn default_design_rules_block(&self) -> Option<DefaultDesignRulesBlock> { self.0.children().find_map(DefaultDesignRulesBlock::cast) }
+    pub fn nets_block(&self) -> Option<NetsBlock> { self.0.children().find_map(NetsBlock::cast) }
+    pub fn interfaces_block(&self) -> Option<InterfacesBlock> { self.0.children().find_map(InterfacesBlock::cast) }
 }
 
-// --- Module Definition ---
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Module(pub(crate) SyntaxNode<BhdlLanguage>);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Module(Node);
-
-impl rowan::ast::AstNode for Module {
+impl AstNode for Module {
     type Language = BhdlLanguage;
-    fn can_cast(kind: bhdl_parser::SyntaxKind) -> bool {
-        kind == SyntaxKind::MODULE_DEF
-    }
-    fn cast(node: SyntaxNode<Self::Language>) -> Option<Self> {
-        if <Self as rowan::ast::AstNode>::can_cast(node.kind()) {
-            Some(Self(node))
-        } else {
-            None
-        }
-    }
-    fn syntax(&self) -> &SyntaxNode<Self::Language> {
-        &self.0
-    }
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::MODULE_DEF }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
 }
 
 impl HasName for Module {}
 
-// Methods to access module contents
 impl Module {
-    // Modules typically have ports, parameters, internal components, nets, connections, pins, interfaces
-    pub fn ports_block(&self) -> Option<PortsBlock> {
-        support::child(&self.0)
+    pub fn ports_block(&self) -> Option<PortsBlock> { self.0.children().find_map(PortsBlock::cast) }
+    pub fn parameters_block(&self) -> Option<ParametersBlock> { self.0.children().find_map(ParametersBlock::cast) }
+    pub fn nets_block(&self) -> Option<NetsBlock> { self.0.children().find_map(NetsBlock::cast) }
+    pub fn pins_block(&self) -> Option<PinsBlock> { self.0.children().find_map(PinsBlock::cast) }
+    pub fn interfaces_block(&self) -> Option<InterfacesBlock> { self.0.children().find_map(InterfacesBlock::cast) }
+    pub fn component_instances(&self) -> impl Iterator<Item = ComponentInst> {
+        self.0.children().filter_map(ComponentInst::cast)
     }
-
-    pub fn parameters_block(&self) -> Option<ParametersBlock> {
-        support::child(&self.0)
+    pub fn connections(&self) -> impl Iterator<Item = ConnectionStmt> {
+        self.0.children().filter_map(ConnectionStmt::cast)
     }
-
-    pub fn components_block(&self) -> Option<ComponentsBlock> {
-        support::child(&self.0)
-    }
-
-    pub fn nets_block(&self) -> Option<NetsBlock> {
-        support::child(&self.0)
-    }
-
-    pub fn connections_block(&self) -> Option<ConnectionsBlock> {
-        support::child(&self.0)
-    }
-
-    pub fn pins_block(&self) -> Option<PinsBlock> {
-        support::child(&self.0) // Might be present in some module types? Check spec usage. Often in components.
-    }
-
-    pub fn interfaces_block(&self) -> Option<InterfacesBlock> {
-        support::child(&self.0) // Modules can expose interfaces
-    }
-
-    // TODO: Add methods for constrain blocks, etc.
 }
 
-// --- Component Definition ---
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ComponentDef(pub(crate) SyntaxNode<BhdlLanguage>);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ComponentDef(Node);
-
-impl rowan::ast::AstNode for ComponentDef {
+impl AstNode for ComponentDef {
     type Language = BhdlLanguage;
-    fn can_cast(kind: bhdl_parser::SyntaxKind) -> bool {
-        kind == SyntaxKind::COMPONENT_DEF
-    }
-    fn cast(node: SyntaxNode<Self::Language>) -> Option<Self> {
-        if <Self as rowan::ast::AstNode>::can_cast(node.kind()) {
-            Some(Self(node))
-        } else {
-            None
-        }
-    }
-    fn syntax(&self) -> &SyntaxNode<Self::Language> {
-        &self.0
-    }
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::COMPONENT_DEF }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
 }
 
 impl HasName for ComponentDef {}
 
-// Methods to access component definition contents
 impl ComponentDef {
-    // Components typically have parameters, pins, and potentially interfaces
-    pub fn parameters_block(&self) -> Option<ParametersBlock> {
-        support::child(&self.0)
-    }
-
-    pub fn pins_block(&self) -> Option<PinsBlock> {
-        support::child(&self.0)
-    }
-
-    pub fn interfaces_block(&self) -> Option<InterfacesBlock> {
-        support::child(&self.0)
-    }
-
-    // TODO: Add methods for properties like footprint, package, etc.
+    pub fn parameters_block(&self) -> Option<ParametersBlock> { self.0.children().find_map(ParametersBlock::cast) }
+    pub fn pins_block(&self) -> Option<PinsBlock> { self.0.children().find_map(PinsBlock::cast) }
+    pub fn interfaces_block(&self) -> Option<InterfacesBlock> { self.0.children().find_map(InterfacesBlock::cast) }
+    pub fn constraint_block(&self) -> Option<ConstrainBlock> { self.0.children().find_map(ConstrainBlock::cast) }
 }
 
-// --- Interface Definition ---
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct InterfaceDef(pub(crate) SyntaxNode<BhdlLanguage>);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InterfaceDef(Node);
-
-impl rowan::ast::AstNode for InterfaceDef {
+impl AstNode for InterfaceDef {
     type Language = BhdlLanguage;
-    fn can_cast(kind: bhdl_parser::SyntaxKind) -> bool {
-        kind == SyntaxKind::INTERFACE_DEF
-    }
-    fn cast(node: SyntaxNode<Self::Language>) -> Option<Self> {
-        if <Self as rowan::ast::AstNode>::can_cast(node.kind()) {
-            Some(Self(node))
-        } else {
-            None
-        }
-    }
-    fn syntax(&self) -> &SyntaxNode<Self::Language> {
-        &self.0
-    }
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::INTERFACE_DEF }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
 }
 
 impl HasName for InterfaceDef {}
 
-// Methods to access interface definition contents
 impl InterfaceDef {
-    // Interfaces typically define parameters and pins
-    pub fn parameters_block(&self) -> Option<ParametersBlock> {
-        support::child(&self.0)
-    }
-
-    pub fn pins_block(&self) -> Option<PinsBlock> {
-        support::child(&self.0)
-    }
-    // Interfaces might also have ports if they are module-like? Check spec. Primarily pins.
+    pub fn parameters_block(&self) -> Option<ParametersBlock> { self.0.children().find_map(ParametersBlock::cast) }
+    pub fn pins_block(&self) -> Option<PinsBlock> { self.0.children().find_map(PinsBlock::cast) }
 }
 
-// --- Typedef Definition ---
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TypeDef(pub(crate) SyntaxNode<BhdlLanguage>);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TypeDef(Node);
-
-impl rowan::ast::AstNode for TypeDef {
+impl AstNode for TypeDef {
     type Language = BhdlLanguage;
-    fn can_cast(kind: bhdl_parser::SyntaxKind) -> bool {
-        kind == SyntaxKind::TYPEDEF_DEF
-    }
-    fn cast(node: SyntaxNode<Self::Language>) -> Option<Self> {
-        if <Self as rowan::ast::AstNode>::can_cast(node.kind()) {
-            Some(Self(node))
-        } else {
-            None
-        }
-    }
-    fn syntax(&self) -> &SyntaxNode<Self::Language> {
-        &self.0
-    }
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::TYPEDEF_DEF }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
 }
 
 impl HasName for TypeDef {}
 
 impl TypeDef {
-    /// Returns the base type this typedef extends, if any.
-    pub fn base_type(&self) -> Option<TypeDefBase> {
-        support::child(&self.0)
-    }
-
-    /// Returns an iterator over the parameter assignments in the typedef body.
-    pub fn param_assigns(&self) -> impl Iterator<Item = crate::common::ParamAssign> {
-        // Find all PARAM_ASSIGN nodes within this TypeDef node
-        support::children(&self.0)
+    pub fn base_type(&self) -> Option<TypeDefBase> { self.0.children().find_map(TypeDefBase::cast) }
+    pub fn param_assigns(&self) -> impl Iterator<Item = ParamAssign> {
+        self.0.children().filter_map(ParamAssign::cast)
     }
 }
 
-// Wrapper for the base type identifier in `extends BaseType`
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TypeDefBase(Node);
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TypeDefBase(pub(crate) SyntaxNode<BhdlLanguage>);
 
-impl rowan::ast::AstNode for TypeDefBase {
+impl AstNode for TypeDefBase {
     type Language = BhdlLanguage;
-    fn can_cast(kind: bhdl_parser::SyntaxKind) -> bool {
-        kind == SyntaxKind::TYPEDEF_BASE
-    }
-    fn cast(node: SyntaxNode<Self::Language>) -> Option<Self> {
-        if <Self as rowan::ast::AstNode>::can_cast(node.kind()) {
-            Some(Self(node))
-        } else {
-            None
-        }
-    }
-    fn syntax(&self) -> &SyntaxNode<Self::Language> {
-        &self.0
-    }
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::TYPEDEF_BASE }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
 }
 
 impl TypeDefBase {
-    /// Returns the name token of the base type.
-    pub fn name(&self) -> Option<Token> {
-        self.syntax()
-            .children_with_tokens()
-            .filter_map(|element| element.into_token())
-            .find(|token| token.kind() == SyntaxKind::IDENT)
-    }
+    pub fn name(&self) -> Option<SyntaxToken<BhdlLanguage>> { self.0.first_token() }
 }
 
-// --- Import Statement ---
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ImportStmt(pub(crate) SyntaxNode<BhdlLanguage>);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ImportStmt(Node);
-
-impl rowan::ast::AstNode for ImportStmt {
+impl AstNode for ImportStmt {
     type Language = BhdlLanguage;
-    fn can_cast(kind: bhdl_parser::SyntaxKind) -> bool {
-        kind == SyntaxKind::IMPORT_STMT
-    }
-    fn cast(node: SyntaxNode<Self::Language>) -> Option<Self> {
-        if <Self as rowan::ast::AstNode>::can_cast(node.kind()) {
-            Some(Self(node))
-        } else {
-            None
-        }
-    }
-    fn syntax(&self) -> &SyntaxNode<Self::Language> {
-        &self.0
-    }
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::IMPORT_STMT }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
 }
 
 impl ImportStmt {
-    /// Returns the import path node.
-    pub fn path(&self) -> Option<ImportPath> {
-        support::child(&self.0)
-    }
-
-    /// Returns the import target (simple or group), if present.
-    /// Note: A simple import like `import a.b.c;` technically has an empty `IMPORT_TARGET` node.
+    pub fn path(&self) -> Option<ImportPath> { self.0.children().find_map(ImportPath::cast) }
     pub fn target(&self) -> Option<ImportTargetKind> {
-        if let Some(group) = support::child::<ImportTargetGroup>(&self.0) {
-            Some(ImportTargetKind::Group(group))
-        } else if let Some(simple) = support::child::<ImportTarget>(&self.0) {
-            Some(ImportTargetKind::Simple(simple))
-        } else {
-            None
-        }
+        self.0.children().find_map(ImportTarget::cast).map(ImportTargetKind::Simple)
+            .or_else(|| self.0.children().find_map(ImportTargetGroup::cast).map(ImportTargetKind::Group))
     }
+    pub fn alias(&self) -> Option<Alias> { self.0.children().find_map(Alias::cast) }
+}
 
-    /// Returns the alias node, if present (e.g., `import a as b;`).
-    pub fn alias(&self) -> Option<Alias> {
-        support::child(&self.0)
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ImportPath(pub(crate) SyntaxNode<BhdlLanguage>);
+
+impl AstNode for ImportPath {
+    type Language = BhdlLanguage;
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::IMPORT_PATH }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+
+impl ImportPath {
+    pub fn segments(&self) -> impl Iterator<Item = SyntaxToken<BhdlLanguage>> {
+        self.0.children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .filter(|t| t.kind() == SyntaxKind::IDENT)
     }
 }
 
-// Wrapper for the import path
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ImportPath(Node);
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ImportTarget(pub(crate) SyntaxNode<BhdlLanguage>);
 
-impl rowan::ast::AstNode for ImportPath {
+impl AstNode for ImportTarget {
     type Language = BhdlLanguage;
-    fn can_cast(kind: bhdl_parser::SyntaxKind) -> bool {
-        kind == SyntaxKind::IMPORT_PATH
-    }
-    fn cast(node: SyntaxNode<Self::Language>) -> Option<Self> {
-        if <Self as rowan::ast::AstNode>::can_cast(node.kind()) {
-            Some(Self(node))
-        } else {
-            None
-        }
-    }
-    fn syntax(&self) -> &SyntaxNode<Self::Language> {
-        &self.0
-    }
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::IMPORT_TARGET }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
 }
 
-// Wrapper for the simple import target (usually empty, target implied by path)
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ImportTarget(Node);
-
-impl rowan::ast::AstNode for ImportTarget {
-    type Language = BhdlLanguage;
-    fn can_cast(kind: bhdl_parser::SyntaxKind) -> bool {
-        kind == SyntaxKind::IMPORT_TARGET
-    }
-    fn cast(node: SyntaxNode<Self::Language>) -> Option<Self> {
-        if <Self as rowan::ast::AstNode>::can_cast(node.kind()) {
-            Some(Self(node))
-        } else {
-            None
-        }
-    }
-    fn syntax(&self) -> &SyntaxNode<Self::Language> {
-        &self.0
-    }
+impl ImportTarget {
+    pub fn name(&self) -> Option<SyntaxToken<BhdlLanguage>> { self.0.first_token() }
+    pub fn is_wildcard(&self) -> bool { self.0.first_token().map_or(false, |t| t.kind() == SyntaxKind::STAR) }
 }
 
-// Wrapper for the grouped import target { A, B, ... }
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ImportTargetGroup(Node);
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ImportTargetGroup(pub(crate) SyntaxNode<BhdlLanguage>);
 
-impl rowan::ast::AstNode for ImportTargetGroup {
+impl AstNode for ImportTargetGroup {
     type Language = BhdlLanguage;
-    fn can_cast(kind: bhdl_parser::SyntaxKind) -> bool {
-        kind == SyntaxKind::IMPORT_TARGET_GROUP
-    }
-    fn cast(node: SyntaxNode<Self::Language>) -> Option<Self> {
-        if <Self as rowan::ast::AstNode>::can_cast(node.kind()) {
-            Some(Self(node))
-        } else {
-            None
-        }
-    }
-    fn syntax(&self) -> &SyntaxNode<Self::Language> {
-        &self.0
-    }
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::IMPORT_TARGET_GROUP }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
 }
 
 impl ImportTargetGroup {
-    /// Returns an iterator over the identifier tokens within the group.
-    pub fn targets(&self) -> impl Iterator<Item = Token> {
-        self.syntax()
-            .children_with_tokens()
-            .filter_map(|element| element.into_token())
-            .filter(|token| token.kind() == SyntaxKind::IDENT)
+    pub fn targets(&self) -> impl Iterator<Item = SyntaxToken<BhdlLanguage>> {
+        self.0.children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .filter(|t| t.kind() == SyntaxKind::IDENT)
     }
 }
 
-// Wrapper for the alias identifier
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Alias(Node);
-
-impl rowan::ast::AstNode for Alias {
-    type Language = BhdlLanguage;
-    fn can_cast(kind: bhdl_parser::SyntaxKind) -> bool {
-        kind == SyntaxKind::ALIAS
-    }
-    fn cast(node: SyntaxNode<Self::Language>) -> Option<Self> {
-        if <Self as rowan::ast::AstNode>::can_cast(node.kind()) {
-            Some(Self(node))
-        } else {
-            None
-        }
-    }
-    fn syntax(&self) -> &SyntaxNode<Self::Language> {
-        &self.0
-    }
-}
-
-impl Alias {
-    /// Returns the alias name token.
-    pub fn name(&self) -> Option<Token> {
-        self.syntax()
-            .children_with_tokens()
-            .filter_map(|element| element.into_token())
-            .find(|token| token.kind() == SyntaxKind::IDENT)
-    }
-}
-
-// Enum to represent the kind of import target
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ImportTargetKind {
     Simple(ImportTarget),
     Group(ImportTargetGroup),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Alias(pub(crate) SyntaxNode<BhdlLanguage>);
+
+impl AstNode for Alias {
+    type Language = BhdlLanguage;
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::ALIAS }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+
+impl Alias {
+    pub fn name(&self) -> Option<SyntaxToken<BhdlLanguage>> {
+        self.0.children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .find(|t| t.kind() == SyntaxKind::IDENT)
+    }
 } 
