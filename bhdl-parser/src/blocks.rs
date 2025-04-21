@@ -124,10 +124,15 @@ impl<'t> Parser<'t> {
         self.expect(SyntaxKind::L_BRACE);
 
         while self.peek() != Some(SyntaxKind::R_BRACE) && self.peek().is_some() {
-            if self.peek() == Some(SyntaxKind::PARAMETER_KW) {
-                self.parse_param_assign();
+            // Parameters inside a parameters block do NOT start with the 'parameter' keyword
+            // They are simple assignments: name = value;
+            if self.peek() == Some(SyntaxKind::IDENT) {
+                self.parse_param_assign_no_kw(); // Use the version without the keyword
             } else {
-                self.error(format!("Expected parameter declaration (starting with 'parameter') or '}}' in parameters block, found {:?}", self.peek())); // Use peek()
+                self.error(format!(
+                    "Expected parameter assignment (identifier = value;) or '}}', found {:?}",
+                    self.peek()
+                ));
                 self.bump_any(); // Recovery
             }
         }
