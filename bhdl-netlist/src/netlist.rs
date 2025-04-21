@@ -159,6 +159,63 @@ impl Netlist {
         self.pins.get(pin_id)
     }
 
+    // --- Query methods ---
+
+    /// Finds the NetId of the net connected to a specific port of a specific instance.
+    /// Returns None if the instance/port doesn't exist or isn't connected.
+    /// Note: This currently iterates through all nets. Optimization may be needed for large netlists.
+    pub fn find_net_for_instance_port(&self, instance_id: InstanceId, port_id: PortId) -> Option<NetId> {
+        for (net_id, net) in self.nets.iter() {
+            for connection in &net.connections {
+                if let ConnectionPoint::InstancePort(conn_inst_id, conn_port_id) = connection {
+                    if *conn_inst_id == instance_id && *conn_port_id == port_id {
+                        return Some(net_id);
+                    }
+                }
+            }
+        }
+        None // Not found
+    }
+
+    /// Finds all ports of a specific instance and the nets they are connected to.
+    /// Returns a Vec of (PortId, NetId) tuples.
+    /// Note: This currently iterates through all nets. Optimization may be needed.
+    pub fn find_nets_for_instance(&self, instance_id: InstanceId) -> Vec<(PortId, NetId)> {
+        let mut results = Vec::new();
+        // Check if the instance exists first (optional, but good practice)
+        if !self.instances.contains_key(instance_id) {
+            return results; // Return empty vec if instance doesn't exist
+        }
+
+        for (net_id, net) in self.nets.iter() {
+            for connection in &net.connections {
+                if let ConnectionPoint::InstancePort(conn_inst_id, conn_port_id) = connection {
+                    if *conn_inst_id == instance_id {
+                        results.push((*conn_port_id, net_id));
+                    }
+                }
+            }
+        }
+        results
+    }
+
+    /// Removes a specific connection point from a net.
+    /// Returns Ok(()) if the connection was found and removed.
+    /// Returns Err if the net does not exist or the connection point was not found on that net.
+    pub fn disconnect(&mut self, net_id: NetId, point_to_remove: ConnectionPoint) -> Result<(), String> {
+        if let Some(net) = self.nets.get_mut(net_id) {
+            let initial_len = net.connections.len();
+            net.connections.retain(|p| *p != point_to_remove);
+            if net.connections.len() < initial_len {
+                Ok(())
+            } else {
+                Err(format!("Connection point {:?} not found on net {:?}", point_to_remove, net_id))
+            }
+        } else {
+            Err(format!("Net {:?} does not exist", net_id))
+        }
+    }
+
     // TODO: Add methods for associating instances/nets with parent modules, setting top_level_module, etc.
 
 } 
