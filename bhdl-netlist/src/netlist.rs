@@ -4,7 +4,7 @@ use crate::definition::ModuleDefinition;
 use crate::instance::Instance;
 use crate::net::Net;
 use crate::portpin::{Port, Pin};
-use slotmap::{SlotMap, SecondaryMap, new_key_type};
+use slotmap::SlotMap;
 use serde::{Serialize, Deserialize};
 
 // Main Netlist Structure
