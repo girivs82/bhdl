@@ -7,8 +7,20 @@ edition = "2021"
 
 [dependencies]
 bhdl-netlist = { path = "../bhdl-netlist" }
-svg = "0.16"
+svg = "0.16.0"
+log = "0.4"
+env_logger = "0.10"
+getrandom = { version = "0.2", features = ["js"] }
 quick-xml = { version = "0.31", features = ["serialize"] }
+rand = "0.8"
+petgraph = "0.6.4"
+rayon = "1.8.1"
+ordered-float = "2.10"
+slotmap = { version = "1", features = ["serde"] }
 
 [dev-dependencies]
 # Add quick-xml here too if needed for tests, but likely only needed in lib
+
+[lib]
+name = "bhdl_visualizer"
+path = "src/lib.rs"

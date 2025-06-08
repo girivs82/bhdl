@@ -1,0 +1,17 @@
+Layout Debug Information
+========================
+
+Component Layouts:
+  Instance InstanceId(2v1): center=(-150.00, 150.00), size=(24.00, 10.00), rotation=90.00°
+  Instance InstanceId(1v1): center=(0.00, 150.00), size=(60.00, 80.00), rotation=0.00°
+  Instance InstanceId(4v1): center=(-150.00, 70.00), size=(10.00, 23.00), rotation=0.00°
+  Instance InstanceId(5v1): center=(150.00, 70.00), size=(10.00, 23.00), rotation=0.00°
+  Instance InstanceId(6v1): center=(0.00, 250.00), size=(20.00, 12.00), rotation=0.00°
+  Instance InstanceId(3v1): center=(150.00, 150.00), size=(24.00, 10.00), rotation=90.00°
+
+Net Layouts:
+  Net NetId(1v1): 3 segments
+  Net NetId(2v1): 3 segments
+  Net NetId(3v1): 5 segments
+
+Bounding Box: (-205.00, 8.50) to (205.00, 306.00)
