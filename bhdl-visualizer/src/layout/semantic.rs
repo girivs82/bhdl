@@ -528,73 +528,82 @@ impl<'a> SemanticLayoutEngine<'a> {
         feedback: &[InstanceId],
         positions: &mut HashMap<InstanceId, Point>
     ) {
-        let regulator_x = 0.0;
-        let regulator_y = 150.0; // SVG coordinates
+        // Constraint-based layout: define relationships, not absolute positions
+        let regulator_center = Point::new(0.0, 0.0); // Start at origin
         
-        // Place the regulator at the center
-        positions.insert(regulator, Point::new(regulator_x, regulator_y));
-        self.component_rotations.insert(regulator, 0.0); // Standard orientation
+        // Place the regulator at the logical center
+        positions.insert(regulator, regulator_center);
+        self.component_rotations.insert(regulator, 0.0);
         
-        // Place input capacitors to the left of the regulator
-        // Align capacitor pin 1 (top when rotated 90°) with LDO VIN pin
+        // Calculate spacing based on component pin geometry
+        let regulator_pin_offset = self.estimate_pin_offset_for_component(regulator, 
+            self.find_pin_by_name(regulator, "VIN").unwrap_or_default());
+        let cap_pin_offset = if let Some(&cap_id) = input_caps.first() {
+            self.estimate_pin_offset_for_component(cap_id, 
+                self.find_pin_by_name(cap_id, "1").unwrap_or_default())
+        } else {
+            Point::new(20.0, 0.0) // Default capacitor pin offset
+        };
+        
+        // Calculate spacing to align pins perfectly
+        let horizontal_spacing = regulator_pin_offset.x.abs() + cap_pin_offset.x.abs() + 20.0; // 20.0 minimum clearance
+        let pin_alignment_offset = 20.0; // For 90° rotated caps, this aligns pin 1 with regulator pins
+        
+        // Place input capacitors to the left with perfect pin alignment
         for (i, &cap_id) in input_caps.iter().enumerate() {
-            let cap_x = regulator_x - 150.0 - (i as f64 * 60.0); // Left side with more spacing to avoid overlap
-            
-            // Calculate Y position to align pins:
-            // LDO VIN pin is at regulator_y (center + 0)
-            // Rotated capacitor pin 1 is at center - 20 (top pin when rotated 90°)
-            // So capacitor center should be at regulator_y + 20 to align pins
-            let cap_y = regulator_y + 20.0; // Align capacitor top pin with LDO pin
+            let cap_x = regulator_center.x - horizontal_spacing - (i as f64 * 60.0);
+            let cap_y = regulator_center.y + pin_alignment_offset; // Align cap pin 1 with regulator pin
             
             positions.insert(cap_id, Point::new(cap_x, cap_y));
-            // Rotate capacitors 90 degrees so bottom pin connects to ground below
-            self.component_rotations.insert(cap_id, 90.0);
+            self.component_rotations.insert(cap_id, 90.0); // Rotate for vertical pin orientation
         }
         
-        // Place output capacitors to the right of the regulator
-        // Align capacitor pin 1 (top when rotated 90°) with LDO VOUT pin
+        // Place output capacitors to the right with perfect pin alignment
         for (i, &cap_id) in output_caps.iter().enumerate() {
-            let cap_x = regulator_x + 150.0 + (i as f64 * 60.0); // Right side with more spacing to avoid overlap
-            
-            // Calculate Y position to align pins:
-            // LDO VOUT pin is at regulator_y (center + 0)
-            // Rotated capacitor pin 1 is at center - 20 (top pin when rotated 90°)
-            // So capacitor center should be at regulator_y + 20 to align pins
-            let cap_y = regulator_y + 20.0; // Align capacitor top pin with LDO pin
+            let cap_x = regulator_center.x + horizontal_spacing + (i as f64 * 60.0);
+            let cap_y = regulator_center.y + pin_alignment_offset; // Align cap pin 1 with regulator pin
             
             positions.insert(cap_id, Point::new(cap_x, cap_y));
-            // Rotate capacitors 90 degrees so bottom pin connects to ground below  
-            self.component_rotations.insert(cap_id, 90.0);
+            self.component_rotations.insert(cap_id, 90.0); // Rotate for vertical pin orientation
         }
         
-        // Place feedback components below the regulator
+        // Place feedback components below the regulator with proportional spacing
         for (i, &fb_id) in feedback.iter().enumerate() {
-            let fb_x = regulator_x + (i as f64 * 40.0);
-            let fb_y = regulator_y + 60.0;
+            let fb_x = regulator_center.x + (i as f64 * 40.0);
+            let fb_y = regulator_center.y + 60.0;
             positions.insert(fb_id, Point::new(fb_x, fb_y));
-            self.component_rotations.insert(fb_id, 0.0); // Standard orientation
+            self.component_rotations.insert(fb_id, 0.0);
         }
         
-        // Place VIN power symbol above and to the left (ensure it stays within canvas bounds)
+        // Place power symbols with constraint-based positioning
         if let Some(vin_id) = self.find_power_source_instance() {
-            let vin_x = regulator_x - 150.0; // Align with input capacitor
-            let vin_y = regulator_y - 80.0; // Above the circuit with good margin
+            // Align VIN symbol with input capacitor X position for straight vertical routing
+            let vin_x = if let Some(&cap_id) = input_caps.first() {
+                positions.get(&cap_id).map(|p| p.x).unwrap_or(regulator_center.x - horizontal_spacing)
+            } else {
+                regulator_center.x - horizontal_spacing
+            };
+            let vin_y = regulator_center.y - 80.0; // Above circuit with good clearance
             positions.insert(vin_id, Point::new(vin_x, vin_y));
             self.component_rotations.insert(vin_id, 0.0);
         }
         
-        // Place VOUT power symbol above and to the right (ensure it stays within canvas bounds)
         if let Some(vout_id) = self.find_power_output_instance() {
-            let vout_x = regulator_x + 150.0; // Align with output capacitor
-            let vout_y = regulator_y - 80.0; // Above the circuit with good margin
+            // Align VOUT symbol with output capacitor X position for straight vertical routing
+            let vout_x = if let Some(&cap_id) = output_caps.first() {
+                positions.get(&cap_id).map(|p| p.x).unwrap_or(regulator_center.x + horizontal_spacing)
+            } else {
+                regulator_center.x + horizontal_spacing
+            };
+            let vout_y = regulator_center.y - 80.0; // Above circuit with good clearance
             positions.insert(vout_id, Point::new(vout_x, vout_y));
             self.component_rotations.insert(vout_id, 0.0);
         }
         
-        // Place ground symbol below the regulator
+        // Place ground symbol below with center alignment for optimal routing
         if let Some(ground_id) = self.find_ground_instance() {
-            let ground_x = regulator_x;
-            let ground_y = regulator_y + 100.0; // Below all components
+            let ground_x = regulator_center.x; // Center align with regulator
+            let ground_y = regulator_center.y + 100.0; // Below all components
             positions.insert(ground_id, Point::new(ground_x, ground_y));
             self.component_rotations.insert(ground_id, 0.0);
         }
@@ -716,8 +725,9 @@ impl<'a> SemanticLayoutEngine<'a> {
                             
                             // Skip positioning power symbols - let PowerRegulator handle them
                             if !is_power_symbol {
-                                // Non-ground power components use grid layout with much larger spacing
-                                let grid_spacing = 150.0; // Increased from 50.0 to 150.0
+                                                            // Non-ground power components use grid layout with dynamic spacing
+                            let component_count = components.len() as f64;
+                            let grid_spacing = 50.0 + (component_count * 10.0); // Dynamic spacing based on component count
                                 let start_x = -(components.len() as f64) * grid_spacing / 2.0;
                                 let index = components.iter().position(|&id| id == comp_id).unwrap_or(0);
                                 let x = start_x + (index as f64) * grid_spacing;
@@ -1462,6 +1472,21 @@ impl<'a> SemanticLayoutEngine<'a> {
 
     pub fn get_component_rotations(&self) -> &HashMap<InstanceId, f64> {
         &self.component_rotations
+    }
+
+    fn find_pin_by_name(&self, instance_id: InstanceId, pin_name: &str) -> Option<PinId> {
+        if let Some(instance) = self.analyzer.netlist.instances.get(instance_id) {
+            if let Some(module) = self.analyzer.netlist.modules.get(instance.definition) {
+                for &pin_id in &module.pins {
+                    if let Some(pin) = self.analyzer.netlist.pins.get(pin_id) {
+                        if pin.name == pin_name {
+                            return Some(pin_id);
+                        }
+                    }
+                }
+            }
+        }
+        None
     }
 }
 
