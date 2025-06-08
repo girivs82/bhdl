@@ -1,0 +1,70 @@
+<svg width="800" height="600" xmlns="http://www.w3.org/2000/svg">
+  <rect width="800" height="600" fill="#f8f8f8" stroke="#dddddd" stroke-width="1"/>
+  <defs>
+<pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+<path d="M 20 0 L 0 0 0 20" fill="none" stroke="#e0e0e0" stroke-width="0.5"/>
+</pattern>
+</defs>
+<rect width="100%" height="100%" fill="url(#grid)"/>
+  <g id="U1" transform="translate(400,150)">
+<rect x="-25" y="-15" width="50" height="30" fill="white" stroke="black" stroke-width="2" rx="3"/>
+<text x="0" y="-5" text-anchor="middle" font-family="Arial" font-size="10" fill="black">U1</text>
+<text x="0" y="8" text-anchor="middle" font-family="Arial" font-size="8" fill="gray">LDO</text>
+<!-- VIN pin -->
+<line x1="-35" y1="0" x2="-25" y2="0" stroke="black" stroke-width="1"/>
+<text x="-30" y="-3" text-anchor="middle" font-family="Arial" font-size="8" fill="gray">VIN</text>
+<!-- VOUT pin -->
+<line x1="25" y1="0" x2="35" y2="0" stroke="black" stroke-width="1"/>
+<text x="30" y="-3" text-anchor="middle" font-family="Arial" font-size="8" fill="gray">VOUT</text>
+<!-- GND pin -->
+<line x1="0" y1="15" x2="0" y2="25" stroke="black" stroke-width="1"/>
+<text x="5" y="20" text-anchor="start" font-family="Arial" font-size="8" fill="gray">GND</text>
+<!-- EN pin -->
+<line x1="0" y1="-15" x2="0" y2="-25" stroke="black" stroke-width="1"/>
+<text x="5" y="-18" text-anchor="start" font-family="Arial" font-size="8" fill="gray">EN</text>
+</g>
+  <g id="VIN" transform="translate(250,70)">
+<!-- Power symbol - upward arrow -->
+<line x1="0" y1="15" x2="0" y2="-15" stroke="black" stroke-width="3"/>
+<path d="M 0 -15 L -8 -5 L 8 -5 Z" fill="black" stroke="black"/>
+<text x="0" y="-25" text-anchor="middle" font-family="Arial" font-size="12" fill="black">VIN</text>
+<text x="0" y="30" text-anchor="middle" font-family="Arial" font-size="8" fill="gray">PWR</text>
+</g>
+  <g id="C_IN" transform="translate(250,170) rotate(90)">
+<line x1="-3" y1="-12" x2="-3" y2="12" stroke="black" stroke-width="2"/>
+<line x1="3" y1="-12" x2="3" y2="12" stroke="black" stroke-width="2"/>
+<line x1="-20" y1="0" x2="-3" y2="0" stroke="black" stroke-width="1"/>
+<line x1="3" y1="0" x2="20" y2="0" stroke="black" stroke-width="1"/>
+<text x="0" y="-20" text-anchor="middle" font-family="Arial" font-size="12" fill="black">C_IN</text>
+<text x="0" y="30" text-anchor="middle" font-family="Arial" font-size="10" fill="gray">10µF</text>
+</g>
+  <g id="VOUT" transform="translate(550,70)">
+<!-- Power symbol - upward arrow -->
+<line x1="0" y1="15" x2="0" y2="-15" stroke="black" stroke-width="3"/>
+<path d="M 0 -15 L -8 -5 L 8 -5 Z" fill="black" stroke="black"/>
+<text x="0" y="-25" text-anchor="middle" font-family="Arial" font-size="12" fill="black">VOUT</text>
+<text x="0" y="30" text-anchor="middle" font-family="Arial" font-size="8" fill="gray">PWR</text>
+</g>
+  <g id="C_OUT" transform="translate(550,170) rotate(90)">
+<line x1="-3" y1="-12" x2="-3" y2="12" stroke="black" stroke-width="2"/>
+<line x1="3" y1="-12" x2="3" y2="12" stroke="black" stroke-width="2"/>
+<line x1="-20" y1="0" x2="-3" y2="0" stroke="black" stroke-width="1"/>
+<line x1="3" y1="0" x2="20" y2="0" stroke="black" stroke-width="1"/>
+<text x="0" y="-20" text-anchor="middle" font-family="Arial" font-size="12" fill="black">C_OUT</text>
+<text x="0" y="30" text-anchor="middle" font-family="Arial" font-size="10" fill="gray">10µF</text>
+</g>
+  <g id="GND" transform="translate(400,250)">
+<line x1="0" y1="-10" x2="0" y2="0" stroke="black" stroke-width="2"/>
+<line x1="-15" y1="0" x2="15" y2="0" stroke="black" stroke-width="2"/>
+<line x1="-10" y1="5" x2="10" y2="5" stroke="black" stroke-width="2"/>
+<line x1="-5" y1="10" x2="5" y2="10" stroke="black" stroke-width="2"/>
+<text x="0" y="-20" text-anchor="middle" font-family="Arial" font-size="12" fill="black">GND</text>
+</g>
+  <line x1="250" y1="55" x2="250" y2="150" stroke="black" stroke-width="1.5"/>
+  <line x1="250" y1="150" x2="365" y2="150" stroke="black" stroke-width="1.5"/>
+  <line x1="435" y1="150" x2="550" y2="150" stroke="black" stroke-width="1.5"/>
+  <line x1="550" y1="150" x2="550" y2="55" stroke="black" stroke-width="1.5"/>
+  <path d="M 250 190 L 250 240 L 400 240" fill="none" stroke="black" stroke-width="1.5"/>
+  <path d="M 550 190 L 550 240 L 400 240" fill="none" stroke="black" stroke-width="1.5"/>
+  <line x1="400" y1="175" x2="400" y2="240" stroke="black" stroke-width="1.5"/>
+</svg>
