@@ -46,15 +46,20 @@ fn main() {
                 .map(|m| m.name.clone())
                 .unwrap_or_else(|| "Unknown".to_string());
             
-            // Transform layout coordinates to SVG coordinates
-            // The layout engine places components in layout space. We need to center this in our SVG viewport.
-            let centered_x = position.x + svg_center_x;
-            let centered_y = position.y + svg_center_y - 300.0; // Translate so y=300 becomes y=300 (center)
+                    // Transform layout coordinates to SVG coordinates
+        // The layout engine places components in layout space. We need to center this in our SVG viewport.
+        let centered_x = position.x + svg_center_x;
+        let centered_y = position.y + svg_center_y;
             
             // Get rotation from layout if available
             let rotation = component_layouts.get(instance_id)
                 .map(|layout| layout.rotation)
                 .unwrap_or(0.0);
+            
+            // Remove hardcoded positioning - use proper alignment instead
+            
+            println!("DEBUG: {} layout pos({}, {}) -> SVG pos({}, {})", 
+                     instance.name, position.x, position.y, centered_x, centered_y);
             
             let (symbol_svg, pin_locations) = generate_component_symbol_with_rotation(
                 &instance.name, 
@@ -67,12 +72,29 @@ fn main() {
             svg_content.push_str(&symbol_svg);
             svg_content.push('\n');
             
-            // Store pin locations for routing (also offset)
+            // Store pin locations for routing - pin_pos is in local coordinates, 
+            // but SVG will automatically transform them via the group's translate() and rotate()
+            // For routing purposes, we need world coordinates with proper rotation applied
             for (pin_name, pin_pos) in pin_locations {
-                let final_pin_pos = Point::new(centered_x + pin_pos.x, centered_y + pin_pos.y);
+                // Apply rotation transformation to get world coordinates
+                let rotation_rad = rotation.to_radians();
+                let cos_r = rotation_rad.cos();
+                let sin_r = rotation_rad.sin();
+                
+                // Rotate the local pin position
+                let rotated_x = pin_pos.x * cos_r - pin_pos.y * sin_r;
+                let rotated_y = pin_pos.x * sin_r + pin_pos.y * cos_r;
+                
+                let world_pin_pos = Point::new(
+                    centered_x + rotated_x,
+                    centered_y + rotated_y
+                );
+                
+                println!("DEBUG: {} pin {} local({}, {}) rot={:.0}° -> world({:.1}, {:.1})", 
+                         instance.name, pin_name, pin_pos.x, pin_pos.y, rotation, world_pin_pos.x, world_pin_pos.y);
                 all_pin_locations.insert(
                     format!("{}.{}", instance.name, pin_name), 
-                    final_pin_pos
+                    world_pin_pos
                 );
             }
         }
@@ -95,11 +117,31 @@ fn main() {
     ];
     
     // Create component obstacle information with actual SVG positions and bounds
-    let component_obstacles = vec![
-        // Only include the LDO as an obstacle - capacitor plates should not block 
-        // their own connections since wires connect TO the plates
-        (Point::new(400.0, 150.0), 50.0, 30.0),  // LDO center, width, height
-    ];
+    let mut component_obstacles = Vec::new();
+    
+    // Add obstacles for components that should block routing
+    for (instance_id, position) in &layout_result.component_positions {
+        if let Some(instance) = netlist.get_instance(*instance_id) {
+            let module_name = netlist.get_module(instance.definition)
+                .map(|m| m.name.clone())
+                .unwrap_or_else(|| "Unknown".to_string());
+            
+            // Only add obstacles for components that should block routing (like the LDO)
+            // Capacitor plates should not block their own connections
+            match module_name.as_str() {
+                "VoltageRegulator" => {
+                    let centered_x = position.x + svg_center_x;
+                    let centered_y = position.y + svg_center_y;
+                    // Make obstacle smaller so pins (±35 X, ±25 Y) are outside the obstacle bounds
+                    component_obstacles.push((Point::new(centered_x, centered_y), 50.0, 30.0));
+                },
+                _ => {
+                    // Don't add obstacles for power symbols, capacitors, etc.
+                    // They should not block routing to their own pins
+                }
+            }
+        }
+    }
     
     let routing_lines = create_smart_routing_for_connections_with_obstacles(&all_pin_locations, &connections, &component_obstacles);
     
