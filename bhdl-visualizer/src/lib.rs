@@ -6,6 +6,8 @@ pub mod global_router;
 pub mod maze_router;
 pub mod pathfinder;
 pub mod routing;
+pub mod routing_costs;
+pub mod cost_pathfinder;
 pub mod geometry;
 pub mod components;
 pub mod grid;
@@ -18,6 +20,10 @@ pub use routing::{create_smart_routing_for_connections, create_smart_routing_for
 pub use geometry::{line_segment_intersects_rectangle, point_in_rectangle, rectangles_intersect};
 pub use components::{generate_component_symbol, generate_component_symbol_with_rotation};
 pub use grid::generate_grid_background;
+
+// Re-export cost-based routing
+pub use routing_costs::{RoutingCosts, CostGrid, Route, RouteSegment, SignalType, Direction, CostRoutingConfig};
+pub use cost_pathfinder::{CostAwarePathfinder, MultiNetRouter};
 
 // Define LayoutHints here
 use std::collections::HashMap;
