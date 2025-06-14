@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use super::{Component, SupplierChoice};
 
 /// Requirements for component synthesis
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComponentRequirements {
     // Electrical requirements
     pub resistance: Option<f64>,
@@ -32,7 +32,7 @@ pub struct ComponentRequirements {
 }
 
 /// Application context for component selection
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ComponentApplication {
     PowerSupply,
     SignalProcessing,
@@ -48,7 +48,7 @@ pub enum ComponentApplication {
 }
 
 /// Component criticality for reliability requirements
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ComponentCriticality {
     Critical,    // Safety-critical, high reliability required
     Important,   // Important for functionality
@@ -222,7 +222,7 @@ impl ComponentOption {
     }
 
     /// Calculate how well component specs match requirements
-    fn calculate_spec_match_score(component: &Component, requirements: &ComponentRequirements) -> f64 {
+    pub fn calculate_spec_match_score(component: &Component, requirements: &ComponentRequirements) -> f64 {
         let mut matches = 0;
         let mut total_checks = 0;
 

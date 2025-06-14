@@ -566,13 +566,97 @@ async fn synthesize_component(
     requirements: &str, 
     alternatives: usize
 ) -> Result<()> {
+    use bhdl_components::{ComponentLibrary, synthesis::SynthesisEngine};
+    use bhdl_components::types::ComponentRequirements;
+    
     println!("{}", style(format!("🧪 Synthesizing {} component", component_type)).bold().blue());
     println!("📋 Requirements: {}", requirements);
     
-    // TODO: Implement component synthesis
-    println!("⚠️  Component synthesis not yet implemented");
-    println!("🔮 Coming in Phase 3.0.4!");
-    
+    // Parse JSON requirements
+    let parsed_requirements: ComponentRequirements = match serde_json::from_str(requirements) {
+        Ok(req) => req,
+        Err(e) => {
+            // Try to create basic requirements for common component types
+            match component_type.to_lowercase().as_str() {
+                "resistor" => {
+                    println!("📝 Using default resistor requirements (1kΩ, 0.25W, 5%)");
+                    ComponentRequirements::resistor(1000.0, 0.25, 0.05, 100)
+                }
+                "capacitor" => {
+                    println!("📝 Using default capacitor requirements (100nF, 50V, 20%)");
+                    ComponentRequirements::capacitor(100e-9, 50.0, 0.20, 100)
+                }
+                "inductor" => {
+                    println!("📝 Using default inductor requirements (1µH, 1A, 20%)");
+                    ComponentRequirements::inductor(1e-6, 1.0, 0.20, 100)
+                }
+                _ => {
+                    println!("❌ Failed to parse requirements JSON: {}", e);
+                    println!("💡 For custom requirements, use JSON format like:");
+                    println!("   {{\"resistance\": 1000.0, \"power_rating\": 0.25, \"tolerance\": 0.05, \"quantity\": 100}}");
+                    return Ok(());
+                }
+            }
+        }
+    };
+
+    // Create services
+    let library = ComponentLibrary::new(db_path).await?;
+    let synthesis_engine = SynthesisEngine::new();
+
+    // Perform synthesis
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(ProgressStyle::default_spinner()
+        .template("{spinner:.green} {msg}")
+        .unwrap());
+    pb.set_message("Synthesizing component...");
+
+    let result = synthesis_engine.synthesize_component(component_type, &parsed_requirements, library.get_database()).await?;
+
+    pb.finish_with_message("Synthesis complete");
+
+    // Display results
+    println!("\n🎯 Synthesis Results:");
+    println!("📊 Confidence: {:.1}%", result.confidence * 100.0);
+    println!("📝 Notes:");
+    for note in &result.synthesis_notes {
+        println!("  • {}", note);
+    }
+
+    if let Some(recommended) = &result.recommended {
+        println!("\n✅ Recommended Component:");
+        println!("  🏷️  {}", style(&recommended.component.name).cyan().bold());
+        println!("  🆔 ID: {}", recommended.component.id);
+        if let Some(manufacturer) = &recommended.component.manufacturer {
+            println!("  🏭 Manufacturer: {}", manufacturer);
+        }
+        if let Some(part_number) = &recommended.component.part_number {
+            println!("  🔢 Part Number: {}", part_number);
+        }
+        println!("  💰 Unit Price: ${:.4}", recommended.supplier_choice.unit_price);
+        println!("  📦 Total Cost: ${:.2}", recommended.total_cost);
+        println!("  📊 Stock: {}", recommended.supplier_choice.quantity_available);
+        println!("  ⏱️  Lead Time: {} days", recommended.lead_time);
+        println!("  🎯 Score: {:.2}", recommended.fitness_score);
+        println!("  📝 Reason: {}", recommended.selection_reason);
+    }
+
+    if !result.alternatives.is_empty() {
+        println!("\n🔄 Alternative Options:");
+        for (i, alt) in result.alternatives.iter().enumerate().take(alternatives - 1) {
+            println!("{}. {} (Score: {:.2}, ${:.4}/unit)", 
+                    style(i + 2).bold(),
+                    style(&alt.component.name).cyan(),
+                    alt.fitness_score,
+                    alt.supplier_choice.unit_price);
+        }
+    }
+
+    if result.alternatives.is_empty() && result.recommended.is_none() {
+        println!("\n❌ No suitable components found");
+        println!("💡 Try adjusting your requirements or importing more components");
+    }
+
     Ok(())
 }
 

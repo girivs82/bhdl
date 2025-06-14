@@ -1,30 +1,41 @@
-//! Component synthesis module (placeholder for Phase 3.0.4)
+//! Component synthesis module
+//!
+//! This module provides comprehensive component synthesis capabilities, converting
+//! abstract ComponentRequirements into concrete ComponentOption selections through
+//! intelligent matching, optimization, and supplier integration.
 
+pub mod engine;
+pub mod matcher;
+pub mod optimizer;
 pub mod synthesizer;
 pub mod selector;
-pub mod optimizer;
+
+// Re-export the main synthesis engine
+pub use engine::SynthesisEngine;
 
 use crate::types::*;
 use crate::database::ComponentDatabase;
 
-/// Main component synthesizer
+/// Main component synthesizer (legacy interface - use SynthesisEngine for new code)
 pub struct ComponentSynthesizer {
-    // Placeholder - will be implemented in Phase 3.0.4
+    engine: SynthesisEngine,
 }
 
 impl ComponentSynthesizer {
     pub fn new() -> Self {
-        Self {}
+        Self {
+            engine: SynthesisEngine::new(),
+        }
     }
     
     pub async fn synthesize(
         &self,
-        _component_type: &str,
-        _requirements: &ComponentRequirements,
-        _database: &ComponentDatabase,
+        component_type: &str,
+        requirements: &ComponentRequirements,
+        database: &ComponentDatabase,
     ) -> anyhow::Result<SynthesisResult> {
-        // Placeholder implementation
-        Ok(SynthesisResult::new())
+        // Delegate to the new synthesis engine
+        self.engine.synthesize_component(component_type, requirements, database).await
     }
 }
 

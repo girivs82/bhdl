@@ -21,7 +21,7 @@ pub use types::{
 
 pub use database::ComponentDatabase;
 pub use cache::ComponentCache;
-pub use synthesis::ComponentSynthesizer;
+pub use synthesis::{ComponentSynthesizer, SynthesisEngine};
 pub use search::ComponentSearchEngine;
 
 /// Main component library API
@@ -135,6 +135,25 @@ impl ComponentLibrary {
     /// Update supplier data for a component
     pub async fn update_supplier_data(&self, supplier_data: &SupplierData) -> anyhow::Result<()> {
         self.database.upsert_supplier_data(supplier_data).await
+    }
+
+    /// Find components by electrical specifications
+    pub async fn find_components_by_specs(
+        &self,
+        category: &types::ComponentCategory,
+        specs: &[(String, f64, f64)],
+    ) -> anyhow::Result<Vec<Component>> {
+        self.database.find_components_by_specs(category, specs).await
+    }
+
+    /// Get components by category
+    pub async fn get_components_by_category(&self, category: &types::ComponentCategory) -> anyhow::Result<Vec<Component>> {
+        self.database.get_components_by_category(category).await
+    }
+
+    /// Get reference to the database (for synthesis engine)
+    pub fn get_database(&self) -> &ComponentDatabase {
+        &self.database
     }
 }
 
