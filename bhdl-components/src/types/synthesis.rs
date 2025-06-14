@@ -98,6 +98,36 @@ impl Default for SelectionCriteria {
     }
 }
 
+impl SelectionCriteria {
+    /// Create selection criteria based on component requirements
+    pub fn from_requirements(requirements: &ComponentRequirements) -> Self {
+        match requirements.criticality {
+            ComponentCriticality::Critical => Self {
+                price_weight: 0.1,
+                availability_weight: 0.3,
+                lead_time_weight: 0.2,
+                spec_match_weight: 0.3,
+                reliability_weight: 0.1,
+            },
+            ComponentCriticality::Important => Self {
+                price_weight: 0.2,
+                availability_weight: 0.3,
+                lead_time_weight: 0.2,
+                spec_match_weight: 0.25,
+                reliability_weight: 0.05,
+            },
+            ComponentCriticality::Standard => Self::default(),
+            ComponentCriticality::NonCritical => Self {
+                price_weight: 0.5,
+                availability_weight: 0.2,
+                lead_time_weight: 0.1,
+                spec_match_weight: 0.15,
+                reliability_weight: 0.05,
+            },
+        }
+    }
+}
+
 impl ComponentRequirements {
     /// Create requirements for a resistor
     pub fn resistor(resistance: f64, power_rating: f64, tolerance: f64, quantity: u32) -> Self {

@@ -12,6 +12,7 @@ pub mod supplier;
 pub mod synthesis;
 pub mod search;
 pub mod types;
+pub mod config;
 
 // Re-export key types for convenience
 pub use types::{
@@ -21,7 +22,7 @@ pub use types::{
 
 pub use database::ComponentDatabase;
 pub use cache::ComponentCache;
-pub use synthesis::{ComponentSynthesizer, SynthesisEngine};
+pub use synthesis::{ComponentSynthesizer, SynthesisEngine, TwoStageSynthesizer, TwoStageConfig};
 pub use search::ComponentSearchEngine;
 
 /// Main component library API

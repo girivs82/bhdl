@@ -271,14 +271,14 @@ mod tests {
     use super::*;
     use tokio_test;
 
-    #[tokio_test::async_test]
+    #[tokio::test]
     async fn test_trustedparts_client_creation() {
         let config = TrustedPartsConfig::default();
         let client = TrustedPartsClient::new(config);
         assert!(client.is_ok());
     }
 
-    #[tokio_test::async_test]
+    #[tokio::test]
     async fn test_supplier_data_conversion() {
         let client = TrustedPartsClient::new(TrustedPartsConfig::default()).unwrap();
         

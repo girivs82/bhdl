@@ -105,6 +105,39 @@ impl ComponentMatcher {
         Ok(candidates.into_iter().take(max_results).collect())
     }
 
+    /// Find component candidates for two-stage synthesis
+    pub async fn find_component_candidates(
+        &self,
+        requirements: &ComponentRequirements,
+        database: &ComponentDatabase,
+    ) -> Result<Vec<Component>> {
+        debug!("Finding component candidates for two-stage synthesis");
+
+        // Determine component category from requirements
+        let category = self.infer_component_category(requirements);
+        
+        // Build specification filters
+        let spec_filters = self.build_specification_filters(requirements);
+        
+        // Query database for matching components
+        let candidates = if spec_filters.is_empty() {
+            // No specific electrical specs, get all components of category
+            database.get_components_by_category(&category).await?
+        } else {
+            // Use electrical spec filtering
+            database.find_components_by_specs(&category, &spec_filters).await?
+        };
+        
+        debug!("Found {} candidates before requirements filtering", candidates.len());
+        
+        // Filter by additional requirements
+        let filtered_candidates = self.filter_by_requirements(&candidates, requirements)?;
+        
+        debug!("Filtered to {} candidates after requirements check", filtered_candidates.len());
+        
+        Ok(filtered_candidates)
+    }
+
     /// Parse component type string into category
     fn parse_component_category(&self, component_type: &str) -> Result<ComponentCategory> {
         let lower_type = component_type.to_lowercase();
@@ -547,6 +580,73 @@ impl ComponentMatcher {
         }
 
         score.min(1.0)
+    }
+
+    /// Infer component category from requirements
+    fn infer_component_category(&self, requirements: &ComponentRequirements) -> ComponentCategory {
+        if requirements.resistance.is_some() {
+            ComponentCategory::Resistor
+        } else if requirements.capacitance.is_some() {
+            ComponentCategory::Capacitor
+        } else if requirements.inductance.is_some() {
+            ComponentCategory::Inductor
+        } else {
+            // Default to IC for complex requirements
+            ComponentCategory::IC
+        }
+    }
+
+    /// Build specification filters for database query
+    fn build_specification_filters(&self, requirements: &ComponentRequirements) -> Vec<(String, f64, f64)> {
+        let mut filters = Vec::new();
+
+        if let Some(resistance) = requirements.resistance {
+            let tolerance = requirements.tolerance.unwrap_or(0.05);
+            let min_val = resistance * (1.0 - tolerance);
+            let max_val = resistance * (1.0 + tolerance);
+            filters.push(("resistance".to_string(), min_val, max_val));
+        }
+
+        if let Some(capacitance) = requirements.capacitance {
+            let tolerance = requirements.tolerance.unwrap_or(0.20); // 20% default for caps
+            let min_val = capacitance * (1.0 - tolerance);
+            let max_val = capacitance * (1.0 + tolerance);
+            filters.push(("capacitance".to_string(), min_val, max_val));
+        }
+
+        if let Some(inductance) = requirements.inductance {
+            let tolerance = requirements.tolerance.unwrap_or(0.20);
+            let min_val = inductance * (1.0 - tolerance);
+            let max_val = inductance * (1.0 + tolerance);
+            filters.push(("inductance".to_string(), min_val, max_val));
+        }
+
+        if let Some(voltage_rating) = requirements.voltage_rating {
+            // Voltage rating should be at least 20% higher than required
+            let min_voltage = voltage_rating * self.voltage_safety_factor;
+            filters.push(("voltage_rating".to_string(), min_voltage, f64::MAX));
+        }
+
+        if let Some(power_rating) = requirements.power_rating {
+            // Power rating should be at least 50% higher than required
+            let min_power = power_rating * self.power_safety_factor;
+            filters.push(("power_rating".to_string(), min_power, f64::MAX));
+        }
+
+        filters
+    }
+
+    /// Filter components by additional requirements
+    fn filter_by_requirements(&self, components: &[Component], requirements: &ComponentRequirements) -> Result<Vec<Component>> {
+        let mut filtered = Vec::new();
+
+        for component in components {
+            if self.matches_requirements(component, requirements) {
+                filtered.push(component.clone());
+            }
+        }
+
+        Ok(filtered)
     }
 }
 

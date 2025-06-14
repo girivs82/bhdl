@@ -4,6 +4,10 @@
 //! real-time availability, pricing, and supply chain information.
 
 pub mod trustedparts;
+pub mod nexar;
+pub mod digikey;
+pub mod multi_backend;
+pub mod cache;
 
 use anyhow::Result;
 use log::{info, warn, error};
@@ -117,6 +121,16 @@ impl SupplierService {
             Ok(age > Duration::hours(self.refresh_interval_hours))
         } else {
             Ok(true) // No data means we need to fetch it
+        }
+    }
+
+    /// Check if supplier data is fresh within the given hours
+    pub async fn is_data_fresh(&self, component_id: ComponentId, max_age_hours: i64) -> Result<bool> {
+        if let Some(supplier_data) = self.get_supplier_data(component_id).await? {
+            let age = Utc::now() - supplier_data.last_updated;
+            Ok(age <= Duration::hours(max_age_hours))
+        } else {
+            Ok(false) // No data means it's not fresh
         }
     }
 
@@ -237,7 +251,7 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    #[tokio_test::async_test]
+    #[tokio::test]
     async fn test_supplier_service_creation() {
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("test.db");
