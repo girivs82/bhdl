@@ -83,20 +83,20 @@ CREATE TABLE IF NOT EXISTS footprint_pads (
     pad_type TEXT NOT NULL
 );
 
--- Supply chain data
+-- Supply chain data (updated for multi-supplier support)
 CREATE TABLE IF NOT EXISTS supplier_data (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     component_id INTEGER NOT NULL REFERENCES components(id) ON DELETE CASCADE,
     supplier_name TEXT NOT NULL,
-    part_number TEXT NOT NULL,
+    supplier_part_number TEXT NOT NULL,
     manufacturer_part_number TEXT NOT NULL,
-    price_breaks TEXT NOT NULL, -- JSON array of price breaks
-    stock_quantity INTEGER NOT NULL,
-    lead_time_days INTEGER NOT NULL,
-    minimum_order_quantity INTEGER NOT NULL DEFAULT 1,
-    packaging TEXT NOT NULL,
-    last_updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    currency TEXT NOT NULL DEFAULT 'USD'
+    manufacturer TEXT NOT NULL,
+    availability INTEGER NOT NULL DEFAULT 0,
+    lead_time_days INTEGER, -- Can be NULL if unknown
+    moq INTEGER NOT NULL DEFAULT 1, -- Minimum Order Quantity
+    price_breaks TEXT NOT NULL, -- JSON array of price breaks with currency
+    datasheet_url TEXT,
+    last_updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Indexes for performance
@@ -146,7 +146,7 @@ END;
 "#;
 
 /// Database version for migration tracking
-pub const SCHEMA_VERSION: i32 = 1;
+pub const SCHEMA_VERSION: i32 = 2;
 
 /// Check if database exists and has correct schema
 pub fn check_schema_version(conn: &rusqlite::Connection) -> rusqlite::Result<i32> {

@@ -8,7 +8,7 @@
 pub mod database;
 pub mod cache;
 pub mod kicad;
-pub mod suppliers;
+pub mod supplier;
 pub mod synthesis;
 pub mod search;
 pub mod types;
@@ -125,6 +125,16 @@ impl ComponentLibrary {
     /// Get cache sizes
     pub async fn get_cache_sizes(&self) -> cache::CacheSizes {
         self.cache.get_cache_sizes().await
+    }
+
+    /// Get supplier data for a component
+    pub async fn get_supplier_data(&self, component_id: ComponentId) -> anyhow::Result<Option<SupplierData>> {
+        self.database.get_supplier_data(component_id).await
+    }
+
+    /// Update supplier data for a component
+    pub async fn update_supplier_data(&self, supplier_data: &SupplierData) -> anyhow::Result<()> {
+        self.database.upsert_supplier_data(supplier_data).await
     }
 }
 

@@ -61,7 +61,7 @@ impl ComponentDatabase {
     }
 
     /// Get supplier data for component
-    pub async fn get_supplier_data(&self, component_id: ComponentId) -> anyhow::Result<Vec<SupplierData>> {
+    pub async fn get_supplier_data(&self, component_id: ComponentId) -> anyhow::Result<Option<SupplierData>> {
         queries::get_supplier_data(&self.connection, component_id)
     }
 
@@ -87,6 +87,21 @@ impl ComponentDatabase {
     /// Get component count statistics
     pub async fn get_component_stats(&self) -> anyhow::Result<ComponentStats> {
         queries::get_component_stats(&self.connection)
+    }
+
+    /// Count components with supplier data
+    pub async fn count_components_with_supplier_data(&self) -> anyhow::Result<u32> {
+        queries::count_components_with_supplier_data(&self.connection)
+    }
+
+    /// Find components with stale supplier data
+    pub async fn find_components_with_stale_supplier_data(&self, cutoff_time: chrono::DateTime<chrono::Utc>) -> anyhow::Result<Vec<ComponentId>> {
+        queries::find_components_with_stale_supplier_data(&self.connection, cutoff_time)
+    }
+
+    /// Count total components
+    pub async fn count_components(&self) -> anyhow::Result<u32> {
+        queries::count_components(&self.connection)
     }
 }
 

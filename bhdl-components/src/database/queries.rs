@@ -3,6 +3,7 @@
 use rusqlite::{Connection, Result as SqliteResult, params, Row};
 use crate::types::*;
 use super::ComponentStats;
+use chrono::{DateTime, Utc};
 
 /// Get component by ID
 pub fn get_component_by_id(conn: &Connection, id: ComponentId) -> anyhow::Result<Option<Component>> {
@@ -177,66 +178,88 @@ pub fn delete_component(conn: &Connection, id: ComponentId) -> anyhow::Result<()
 }
 
 /// Get supplier data for component
-pub fn get_supplier_data(conn: &Connection, component_id: ComponentId) -> anyhow::Result<Vec<SupplierData>> {
+pub fn get_supplier_data(conn: &Connection, component_id: ComponentId) -> anyhow::Result<Option<SupplierData>> {
     let mut stmt = conn.prepare(
-        "SELECT id, component_id, supplier_name, part_number, manufacturer_part_number,
-                price_breaks, stock_quantity, lead_time_days, minimum_order_quantity,
-                packaging, last_updated, currency
+        "SELECT component_id, supplier_name, supplier_part_number, manufacturer_part_number,
+                manufacturer, availability, lead_time_days, moq, price_breaks, datasheet_url, last_updated
          FROM supplier_data WHERE component_id = ?1"
     )?;
     
-    let supplier_data: Vec<SupplierData> = stmt.query_map([component_id], |row| {
-        let price_breaks_json: String = row.get(5)?;
+    let supplier_infos: Result<Vec<SupplierInfo>, _> = stmt.query_map([component_id], |row| {
+        let price_breaks_json: String = row.get(8)?;
         let price_breaks: Vec<PriceBreak> = serde_json::from_str(&price_breaks_json)
-            .map_err(|e| rusqlite::Error::InvalidColumnType(5, "price_breaks".to_string(), rusqlite::types::Type::Text))?;
+            .map_err(|_e| rusqlite::Error::InvalidColumnType(8, "price_breaks".to_string(), rusqlite::types::Type::Text))?;
         
-        Ok(SupplierData {
-            id: row.get(0)?,
-            component_id: row.get(1)?,
-            supplier_name: row.get(2)?,
-            part_number: row.get(3)?,
-            manufacturer_part_number: row.get(4)?,
+        Ok(SupplierInfo {
+            supplier_name: row.get(1)?,
+            supplier_part_number: row.get(2)?,
+            manufacturer_part_number: row.get(3)?,
+            manufacturer: row.get(4)?,
+            availability: row.get(5)?,
+            lead_time_days: row.get(6)?,
+            moq: row.get(7)?,
             price_breaks,
-            stock_quantity: row.get(6)?,
-            lead_time_days: row.get(7)?,
-            minimum_order_quantity: row.get(8)?,
-            packaging: parse_packaging_type(row.get::<_, String>(9)?),
+            datasheet_url: row.get(9)?,
             last_updated: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(10)?)
-                .map_err(|e| rusqlite::Error::InvalidColumnType(10, "last_updated".to_string(), rusqlite::types::Type::Text))?
+                .map_err(|_e| rusqlite::Error::InvalidColumnType(10, "last_updated".to_string(), rusqlite::types::Type::Text))?
                 .with_timezone(&chrono::Utc),
-            currency: row.get(11)?,
         })
-    })?.collect::<Result<Vec<_>, _>>()?;
+    })?.collect();
     
-    Ok(supplier_data)
+    match supplier_infos {
+        Ok(suppliers) => {
+            if suppliers.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(SupplierData {
+                    component_id,
+                    suppliers,
+                    last_updated: chrono::Utc::now(),
+                }))
+            }
+        }
+        Err(e) => Err(anyhow::anyhow!("Failed to load supplier data: {}", e)),
+    }
 }
 
 /// Insert or update supplier data
 pub fn upsert_supplier_data(conn: &Connection, supplier_data: &SupplierData) -> anyhow::Result<()> {
-    let price_breaks_json = serde_json::to_string(&supplier_data.price_breaks)?;
+    // Start transaction
+    let tx = conn.unchecked_transaction()?;
     
-    let mut stmt = conn.prepare(
-        "INSERT OR REPLACE INTO supplier_data 
-         (component_id, supplier_name, part_number, manufacturer_part_number,
-          price_breaks, stock_quantity, lead_time_days, minimum_order_quantity,
-          packaging, last_updated, currency)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
+    // Delete existing supplier data for this component
+    tx.execute(
+        "DELETE FROM supplier_data WHERE component_id = ?1",
+        [supplier_data.component_id]
     )?;
     
-    stmt.execute(params![
-        supplier_data.component_id,
-        supplier_data.supplier_name,
-        supplier_data.part_number,
-        supplier_data.manufacturer_part_number,
-        price_breaks_json,
-        supplier_data.stock_quantity,
-        supplier_data.lead_time_days,
-        supplier_data.minimum_order_quantity,
-        supplier_data.packaging.as_str(),
-        supplier_data.last_updated.to_rfc3339(),
-        supplier_data.currency,
-    ])?;
+    // Insert new supplier data
+    for supplier in &supplier_data.suppliers {
+        let price_breaks_json = serde_json::to_string(&supplier.price_breaks)?;
+        
+        tx.execute(
+            "INSERT INTO supplier_data 
+             (component_id, supplier_name, supplier_part_number, manufacturer_part_number,
+              manufacturer, availability, lead_time_days, moq, price_breaks, datasheet_url, last_updated)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                supplier_data.component_id,
+                supplier.supplier_name,
+                supplier.supplier_part_number,
+                supplier.manufacturer_part_number,
+                supplier.manufacturer,
+                supplier.availability,
+                supplier.lead_time_days,
+                supplier.moq,
+                price_breaks_json,
+                supplier.datasheet_url,
+                supplier.last_updated.to_rfc3339()
+            ]
+        )?;
+    }
     
+    // Commit transaction
+    tx.commit()?;
     Ok(())
 }
 
@@ -585,4 +608,44 @@ fn pin_shape_to_string(pin_shape: &PinShape) -> &'static str {
         PinShape::EdgeClockHigh => "edge_clock_high",
         PinShape::NonLogic => "non_logic",
     }
+}
+
+// Supplier data helper functions
+
+/// Count components with supplier data
+pub fn count_components_with_supplier_data(conn: &Connection) -> anyhow::Result<u32> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(DISTINCT component_id) FROM supplier_data",
+        [],
+        |row| row.get(0)
+    )?;
+    Ok(count as u32)
+}
+
+/// Find components with stale supplier data
+pub fn find_components_with_stale_supplier_data(
+    conn: &Connection, 
+    cutoff_time: DateTime<Utc>
+) -> anyhow::Result<Vec<ComponentId>> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT component_id FROM supplier_data 
+         WHERE datetime(last_updated) < datetime(?1)"
+    )?;
+    
+    let component_ids: Result<Vec<ComponentId>, _> = stmt.query_map(
+        [cutoff_time.to_rfc3339()],
+        |row| Ok(row.get(0)?)
+    )?.collect();
+    
+    Ok(component_ids?)
+}
+
+/// Count total components
+pub fn count_components(conn: &Connection) -> anyhow::Result<u32> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM components",
+        [],
+        |row| row.get(0)
+    )?;
+    Ok(count as u32)
 }

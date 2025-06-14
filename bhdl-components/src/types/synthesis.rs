@@ -185,7 +185,7 @@ impl ComponentOption {
         }
 
         // Availability score
-        let availability_score = if supplier_choice.quantity_available >= requirements.quantity {
+        let availability_score = if supplier_choice.quantity_available >= requirements.quantity as i32 {
             1.0
         } else {
             supplier_choice.quantity_available as f64 / requirements.quantity as f64
@@ -195,10 +195,14 @@ impl ComponentOption {
 
         // Lead time score
         if let Some(max_lead_time) = requirements.max_lead_time_days {
-            let lead_time_score = if supplier_choice.lead_time_days <= max_lead_time {
-                (max_lead_time - supplier_choice.lead_time_days) as f64 / max_lead_time as f64
+            let lead_time_score = if let Some(supplier_lead_time) = supplier_choice.lead_time_days {
+                if supplier_lead_time <= max_lead_time as i32 {
+                    (max_lead_time as i32 - supplier_lead_time) as f64 / max_lead_time as f64
+                } else {
+                    0.0 // Exceeds maximum lead time
+                }
             } else {
-                0.0 // Exceeds maximum lead time
+                0.5 // Unknown lead time gets middle score
             };
             score += lead_time_score * criteria.lead_time_weight;
             total_weight += criteria.lead_time_weight;
