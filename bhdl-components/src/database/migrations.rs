@@ -37,6 +37,37 @@ fn run_migration(conn: &mut Connection, version: i32) -> anyhow::Result<()> {
             tx.execute_batch(SCHEMA_SQL)?;
             set_schema_version(&tx, 1)?;
         }
+        2 => {
+            // Update supplier_data table for multi-supplier support
+            println!("Updating supplier_data table for multi-supplier support...");
+            
+            // Drop existing supplier_data table and recreate with new schema
+            tx.execute("DROP TABLE IF EXISTS supplier_data", [])?;
+            
+            tx.execute(r#"
+                CREATE TABLE supplier_data (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    component_id INTEGER NOT NULL REFERENCES components(id) ON DELETE CASCADE,
+                    supplier_name TEXT NOT NULL,
+                    supplier_part_number TEXT NOT NULL,
+                    manufacturer_part_number TEXT NOT NULL,
+                    manufacturer TEXT NOT NULL,
+                    availability INTEGER NOT NULL DEFAULT 0,
+                    lead_time_days INTEGER,
+                    moq INTEGER NOT NULL DEFAULT 1,
+                    price_breaks TEXT NOT NULL,
+                    datasheet_url TEXT,
+                    last_updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            "#, [])?;
+            
+            // Recreate supplier data indexes
+            tx.execute("CREATE INDEX IF NOT EXISTS idx_supplier_data_component_id ON supplier_data(component_id)", [])?;
+            tx.execute("CREATE INDEX IF NOT EXISTS idx_supplier_data_supplier ON supplier_data(supplier_name)", [])?;
+            tx.execute("CREATE INDEX IF NOT EXISTS idx_supplier_data_mpn ON supplier_data(manufacturer_part_number)", [])?;
+            
+            set_schema_version(&tx, 2)?;
+        }
         _ => {
             return Err(anyhow::anyhow!("Unknown migration version: {}", version));
         }

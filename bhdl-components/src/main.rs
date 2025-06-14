@@ -87,6 +87,12 @@ enum Commands {
         action: DatabaseCommands,
     },
     
+    /// Supplier data management
+    Supplier {
+        #[command(subcommand)]
+        action: SupplierCommands,
+    },
+    
     /// Synthesis and part selection
     Synthesize {
         /// Component type (resistor, capacitor, etc.)
@@ -123,6 +129,36 @@ enum DatabaseCommands {
         #[arg(short, long)]
         output: PathBuf,
     },
+}
+
+/// Supplier data management
+#[derive(Subcommand)]
+enum SupplierCommands {
+    /// Update supplier data for components
+    Update {
+        /// Component ID or part number
+        component: String,
+        
+        /// Force update even if data is fresh
+        #[arg(short, long)]
+        force: bool,
+    },
+    
+    /// Show supplier data for a component
+    Show {
+        /// Component ID
+        component_id: u32,
+    },
+    
+    /// Refresh all stale supplier data
+    RefreshAll {
+        /// Maximum age in hours before refresh
+        #[arg(short, long, default_value = "24")]
+        max_age_hours: i64,
+    },
+    
+    /// Show supplier statistics
+    Stats,
 }
 
 #[tokio::main]
@@ -164,6 +200,23 @@ async fn main() -> Result<()> {
                 DatabaseCommands::Init { force } => init_database(&cli.database, force).await?,
                 DatabaseCommands::Vacuum => vacuum_database(&cli.database).await?,
                 DatabaseCommands::Export { output } => export_database(&cli.database, &output).await?,
+            }
+        }
+        
+        Commands::Supplier { action } => {
+            match action {
+                SupplierCommands::Update { component, force } => {
+                    update_supplier_data(&cli.database, &component, force).await?
+                }
+                SupplierCommands::Show { component_id } => {
+                    show_supplier_data(&cli.database, &component_id).await?
+                }
+                SupplierCommands::RefreshAll { max_age_hours } => {
+                    refresh_all_supplier_data(&cli.database, &max_age_hours).await?
+                }
+                SupplierCommands::Stats => {
+                    show_supplier_stats(&cli.database).await?
+                }
             }
         }
         
@@ -519,6 +572,160 @@ async fn synthesize_component(
     // TODO: Implement component synthesis
     println!("⚠️  Component synthesis not yet implemented");
     println!("🔮 Coming in Phase 3.0.4!");
+    
+    Ok(())
+}
+
+async fn update_supplier_data(db_path: &PathBuf, component: &str, force: bool) -> Result<()> {
+    use bhdl_components::supplier::{SupplierService, trustedparts::TrustedPartsConfig};
+    
+    println!("{}", style(format!("🔄 Updating supplier data for '{}'", component)).bold().blue());
+    
+    // Create supplier service
+    let config = TrustedPartsConfig::default();
+    let supplier_service = SupplierService::new(db_path, config).await?;
+    
+    // Try to parse as component ID first, then search by name
+    let library = ComponentLibrary::new(db_path).await?;
+    
+    if let Ok(component_id) = component.parse::<u32>() {
+        // Component ID provided
+        if let Some(comp) = library.get_component(component_id).await? {
+            let part_number = comp.part_number.as_deref()
+                .or(Some(&comp.name))
+                .unwrap_or(component);
+            
+            if force || supplier_service.needs_refresh(component_id).await? {
+                supplier_service.update_component_supplier_data(component_id, part_number).await?;
+                println!("✅ Updated supplier data for component {}", component_id);
+            } else {
+                println!("ℹ️  Supplier data is up to date (use --force to refresh anyway)");
+            }
+        } else {
+            println!("❌ Component ID {} not found", component_id);
+        }
+    } else {
+        // Search by name/part number
+        let search_results = library.search_components(component).await?;
+        if let Some(comp) = search_results.first() {
+            let part_number = comp.part_number.as_deref()
+                .or(Some(&comp.name))
+                .unwrap_or(component);
+            
+            if force || supplier_service.needs_refresh(comp.id).await? {
+                supplier_service.update_component_supplier_data(comp.id, part_number).await?;
+                println!("✅ Updated supplier data for component '{}' (ID: {})", comp.name, comp.id);
+            } else {
+                println!("ℹ️  Supplier data is up to date (use --force to refresh anyway)");
+            }
+        } else {
+            println!("❌ Component '{}' not found", component);
+        }
+    }
+    
+    Ok(())
+}
+
+async fn show_supplier_data(db_path: &PathBuf, component_id: &u32) -> Result<()> {
+    println!("{}", style(format!("📦 Supplier Data for Component {}", component_id)).bold().blue());
+    
+    let library = ComponentLibrary::new(db_path).await?;
+    
+    if let Some(supplier_data) = library.get_supplier_data(*component_id).await? {
+        println!("🕐 Last Updated: {}", supplier_data.last_updated.format("%Y-%m-%d %H:%M:%S UTC"));
+        println!("🏪 {} supplier(s) found:\n", supplier_data.suppliers.len());
+        
+        for (i, supplier) in supplier_data.suppliers.iter().enumerate() {
+            println!("{}. {}", style(i + 1).bold(), style(&supplier.supplier_name).cyan().bold());
+            println!("   🏭 Manufacturer: {}", supplier.manufacturer);
+            println!("   🔢 MPN: {}", supplier.manufacturer_part_number);
+            println!("   📦 Stock: {}", supplier.availability);
+            
+            if let Some(lead_time) = supplier.lead_time_days {
+                println!("   ⏱️  Lead Time: {} days", lead_time);
+            }
+            
+            println!("   📊 MOQ: {}", supplier.moq);
+            
+            if !supplier.price_breaks.is_empty() {
+                println!("   💰 Pricing:");
+                for price_break in &supplier.price_breaks {
+                    println!("      • {}+ units: {:.4} {}", 
+                            price_break.quantity, 
+                            price_break.unit_price, 
+                            price_break.currency);
+                }
+            }
+            
+            if let Some(datasheet) = &supplier.datasheet_url {
+                println!("   📋 Datasheet: {}", datasheet);
+            }
+            
+            println!("   🕐 Updated: {}", supplier.last_updated.format("%Y-%m-%d %H:%M:%S UTC"));
+            println!();
+        }
+    } else {
+        println!("❌ No supplier data found for component {}", component_id);
+        println!("💡 Use 'bhdl-components supplier update {}' to fetch supplier data", component_id);
+    }
+    
+    Ok(())
+}
+
+async fn refresh_all_supplier_data(db_path: &PathBuf, max_age_hours: &i64) -> Result<()> {
+    use bhdl_components::supplier::{SupplierService, trustedparts::TrustedPartsConfig};
+    
+    println!("{}", style("🔄 Refreshing Stale Supplier Data").bold().blue());
+    println!("⏰ Max age: {} hours", max_age_hours);
+    
+    let config = TrustedPartsConfig::default();
+    let mut supplier_service = SupplierService::new(db_path, config).await?;
+    supplier_service.set_refresh_interval_hours(*max_age_hours);
+    
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(ProgressStyle::default_spinner()
+        .template("{spinner:.green} {msg}")
+        .unwrap());
+    pb.set_message("Finding stale components...");
+    
+    let result = supplier_service.refresh_stale_data().await?;
+    
+    pb.finish_with_message("Refresh complete");
+    
+    println!("\n📊 Refresh Summary:");
+    println!("  ✅ Successful: {}", style(result.successful_updates).green());
+    println!("  ❌ Failed: {}", style(result.failed_updates).red());
+    println!("  📈 Success Rate: {:.1}%", result.success_rate() * 100.0);
+    
+    if !result.errors.is_empty() {
+        println!("\n⚠️  Errors:");
+        for error in &result.errors {
+            println!("  • {}", error);
+        }
+    }
+    
+    Ok(())
+}
+
+async fn show_supplier_stats(db_path: &PathBuf) -> Result<()> {
+    use bhdl_components::supplier::{SupplierService, trustedparts::TrustedPartsConfig};
+    
+    println!("{}", style("📊 Supplier Data Statistics").bold().blue());
+    
+    let config = TrustedPartsConfig::default();
+    let supplier_service = SupplierService::new(db_path, config).await?;
+    let stats = supplier_service.get_supplier_stats().await?;
+    
+    println!("📁 Database: {}", db_path.display());
+    println!("📦 Total Components: {}", style(stats.total_components).cyan());
+    println!("🏪 With Supplier Data: {}", style(stats.components_with_supplier_data).green());
+    println!("❌ Without Supplier Data: {}", style(stats.components_without_supplier_data).red());
+    println!("⚠️  Stale Data: {}", style(stats.stale_components).yellow());
+    println!("📈 Coverage: {:.1}%", stats.cache_coverage_percent);
+    
+    if stats.components_without_supplier_data > 0 {
+        println!("\n💡 Tip: Use 'bhdl-components supplier refresh-all' to update stale data");
+    }
     
     Ok(())
 }
