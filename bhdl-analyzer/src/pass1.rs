@@ -9,7 +9,7 @@ use bhdl_ast::{
 };
 
 use crate::symbol_table::{Symbol, SymbolKind, SymbolTable, PortDirectionKind}; // Use crate:: for local module
-use crate::helpers::parse_value_as_i64; // Use helper from local module
+use crate::helpers::parse_expr_as_i64; // Use helper from local module
 
 // --- Pass 1: Build Global Scope & Definition Scopes Map --- 
 
@@ -200,18 +200,13 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                    let (bus_high, bus_low) = decl.bus_suffix()
                        .and_then(|suffix| suffix.range())
                        .map(|range_expr| (
-                            range_expr.lhs().and_then(|v| parse_value_as_i64(&v)),
-                            range_expr.rhs().and_then(|v| parse_value_as_i64(&v))
+                            range_expr.lhs().and_then(|v| parse_expr_as_i64(&v)),
+                            range_expr.rhs().and_then(|v| parse_expr_as_i64(&v))
                        ))
                        .unwrap_or((None, None));
-                   let direction = decl.direction().and_then(|dir_token| {
-                       match dir_token.kind() {
-                           SyntaxKind::IN_KW | SyntaxKind::INPUT_KW => Some(PortDirectionKind::In),
-                           SyntaxKind::OUT_KW | SyntaxKind::OUTPUT_KW => Some(PortDirectionKind::Out),
-                           SyntaxKind::INOUT_KW => Some(PortDirectionKind::InOut),
-                           _ => None,
-                       }
-                   });
+                   // Note: PinDecl doesn't have direction() method, 
+                   // direction would be inferred from context or parent
+                   let direction = None; // Placeholder - could be enhanced to look at context
                    
                    context.current_scope_mut().insert(Symbol::new_decl(
                        name_token.text(), 
@@ -231,8 +226,8 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                     let (bus_high, bus_low) = decl.bus_suffix()
                         .and_then(|suffix| suffix.range())
                        .map(|range_expr| (
-                           range_expr.lhs().and_then(|v| parse_value_as_i64(&v)),
-                           range_expr.rhs().and_then(|v| parse_value_as_i64(&v))
+                           range_expr.lhs().and_then(|v| parse_expr_as_i64(&v)),
+                           range_expr.rhs().and_then(|v| parse_expr_as_i64(&v))
                        ))
                         .unwrap_or((None, None));
 
@@ -254,18 +249,13 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                    let (bus_high, bus_low) = decl.bus_suffix()
                        .and_then(|suffix| suffix.range())
                        .map(|range_expr| (
-                           range_expr.lhs().and_then(|v| parse_value_as_i64(&v)),
-                           range_expr.rhs().and_then(|v| parse_value_as_i64(&v))
+                           range_expr.lhs().and_then(|v| parse_expr_as_i64(&v)),
+                           range_expr.rhs().and_then(|v| parse_expr_as_i64(&v))
                        ))
                        .unwrap_or((None, None));
-                   let direction = decl.direction().and_then(|dir_token| {
-                       match dir_token.kind() {
-                           SyntaxKind::IN_KW | SyntaxKind::INPUT_KW => Some(PortDirectionKind::In),
-                           SyntaxKind::OUT_KW | SyntaxKind::OUTPUT_KW => Some(PortDirectionKind::Out),
-                           SyntaxKind::INOUT_KW => Some(PortDirectionKind::InOut),
-                           _ => None,
-                       }
-                   });
+                   // Note: PinDecl doesn't have direction() method, 
+                   // direction would be inferred from context or parent
+                   let direction = None; // Placeholder - could be enhanced to look at context
                    
                    context.current_scope_mut().insert(Symbol::new_decl(
                        name_token.text(), 
@@ -281,7 +271,7 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
         }
         SyntaxKind::COMPONENT_INST => {
              if let Some(inst) = ComponentInst::cast(node.clone()) {
-                if let (Some(instance_name_token), Some(type_name_token)) = (inst.name(), inst.component_type_name_token()) {
+                if let (Some(instance_name_token), Some(type_name_token)) = (inst.name(), inst.component_type_name()) {
                     let instance_name = instance_name_token.text().to_string();
                     let type_name = type_name_token.text().to_string();
                     let mut instance_symbol = Symbol::new_instance(
@@ -293,7 +283,7 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                     let mut overrides_map = HashMap::new();
                         if let Some(param_block) = inst.param_assign_block() {
                             for param_assign in param_block.assignments() {
-                                        let param_name_token = param_assign.name_token();
+                                        let param_name_token = param_assign.name();
                                         let value_expr_node = param_assign.syntax().children_with_tokens()
                                             .skip_while(|e| e.kind() != SyntaxKind::EQ) 
                                             .skip(1) 
