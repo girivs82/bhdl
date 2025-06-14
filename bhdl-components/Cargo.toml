@@ -1,0 +1,38 @@
+[package]
+name = "bhdl-components"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "bhdl_components"
+path = "src/lib.rs"
+
+[dependencies]
+# Database
+rusqlite = { version = "0.31", features = ["bundled", "serde_json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Caching
+lru = "0.12"
+tokio = { version = "1.0", features = ["sync", "time", "macros", "rt-multi-thread"] }
+
+# HTTP client for supplier APIs
+reqwest = { version = "0.11", features = ["json"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# S-expression parsing for KiCad
+sexp = "1.1"
+
+# Math for component selection
+ordered-float = "4.0"
+
+# Date/time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+tempfile = "3.0"
+tokio-test = "0.4"

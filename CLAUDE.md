@@ -84,11 +84,32 @@ Tests are organized per crate:
 - Test utilities in `tests/common.rs` modules
 - Example BHDL files in `docs/examples/` for integration testing
 
+## Component Database Management
+
+### Database Files
+- **Never commit database files** (*.db, *.sqlite) to version control
+- Database files are user-specific and can become very large
+- Use temporary databases for testing (automatically cleaned up)
+
+### Sample Data
+- `bhdl-components/sample_data/basic_components.kicad_sym` - Sample KiCad symbols for testing
+- Use `cargo run --example kicad_integration` to see KiCad parsing in action
+- Real component libraries should be imported from KiCad installations
+
+### Setting Up Component Database
+```bash
+# Run the integration demo to create and populate a sample database
+cargo run -p bhdl-components --example kicad_integration
+
+# For production use, import from KiCad libraries
+# (Future: CLI command will be available)
+```
+
 ## Known Gaps
 
-- Direct integration between analyzer and netlist generation is incomplete
-- CLI and LSP implementations are placeholders
+- CLI and LSP implementations are placeholders  
 - End-to-end source-to-visualization pipeline needs integration work
+- KiCad footprint parsing not yet implemented
 
 ## Important Files
 
