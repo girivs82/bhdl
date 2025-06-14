@@ -27,6 +27,9 @@ pub enum SyntaxKind {
     COLON,   // :
     SEMI,    // ;
     ARROW,   // ->
+    BI_ARROW, // <->
+    FLOW_OP, // |>
+    INTERFACE_OP, // <=>
     EQ,      // =
     PLUS,    // +
     MINUS,   // -
@@ -50,7 +53,7 @@ pub enum SyntaxKind {
     PIPEPIPE,// ||
     LSHIFT,  // <<
     RSHIFT,  // >>
-    IF_CONNECT, // <=>
+    IF_CONNECT, // <=> (legacy - use INTERFACE_OP)
 
     // Keywords
     IMPORT_KW, // import
@@ -98,6 +101,9 @@ pub enum SyntaxKind {
     AS_KW,        // as
     TO_KW,        // to
     EXTENDS_KW,   // extends
+    IF_KW,        // if
+    ELSE_KW,      // else
+    WHEN_KW,      // when
 
     // Keywords for individual items within blocks (NEW)
     PIN_KW,       // pin
@@ -136,6 +142,10 @@ pub enum SyntaxKind {
     FOR_LOOP_GENERATE, // ADDED
     GENERATE_FOR_BLOCK, // ADDED
     IF_GENERATE,        // ADDED
+    GENERATE_STMT,      // generate for ... { ... }
+    CONDITIONAL_STMT,   // if (...) { ... } else { ... }
+    FLOW_STMT,          // name: flow_expr;
+    FLOW_EXPR,          // flow expression with |> operators
 
     // Items within Blocks
     PARAM_DECL,        // const param_name: type = value;

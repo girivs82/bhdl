@@ -371,11 +371,41 @@ impl<'t> Parser<'t> {
         self.builder.finish_node(); // Finish CONNECTION_STMT
     }
 
-    // Parses a range expression used in generate loops: START_EXPR to END_EXPR
+    // Parses a range expression used in generate loops: START_EXPR .. END_EXPR or START_EXPR to END_EXPR
     pub(crate) fn parse_range_expr(&mut self) {
         self.builder.start_node(SyntaxKind::RANGE_EXPR.into());
         self.parse_expr(0); // Parse start expression
-        self.expect(SyntaxKind::TO_KW);
+        
+        // Accept either ".." or "to" as range operator
+        if self.peek() == Some(SyntaxKind::DOT) {
+            // Check for ".." pattern
+            let mut pos = self.pos;
+            while pos < self.tokens.len() && self.tokens[pos].0.is_trivia() {
+                pos += 1;
+            }
+            
+            if pos < self.tokens.len() && self.tokens[pos].0 == SyntaxKind::DOT {
+                pos += 1;
+                while pos < self.tokens.len() && self.tokens[pos].0.is_trivia() {
+                    pos += 1;
+                }
+                
+                if pos < self.tokens.len() && self.tokens[pos].0 == SyntaxKind::DOT {
+                    // Found ".." pattern, consume both dots
+                    self.bump(); // First DOT
+                    self.bump(); // Second DOT
+                } else {
+                    self.error("Expected '..' for range operator".to_string());
+                }
+            } else {
+                self.error("Expected '..' for range operator".to_string());
+            }
+        } else if self.eat(SyntaxKind::TO_KW) {
+            // "to" keyword works too
+        } else {
+            self.error("Expected '..' or 'to' for range operator".to_string());
+        }
+        
         self.parse_expr(0); // Parse end expression
         self.builder.finish_node();
     }

@@ -14,6 +14,7 @@ mod blocks;
 mod top_level;
 mod lexer;
 mod syntax;
+mod error_recovery;
 mod tests;
 
 // Re-export key types
@@ -124,6 +125,9 @@ fn map_token(token: LexerToken) -> SyntaxKind {
         LexerToken::Number => SyntaxKind::NUMBER,
         LexerToken::String => SyntaxKind::STRING,
         LexerToken::Arrow => SyntaxKind::ARROW,
+        LexerToken::BiArrow => SyntaxKind::BI_ARROW,
+        LexerToken::FlowOp => SyntaxKind::FLOW_OP,
+        LexerToken::InterfaceOp => SyntaxKind::INTERFACE_OP,
         LexerToken::EqEq => SyntaxKind::EQEQ,
         LexerToken::Neq => SyntaxKind::NEQ,
         LexerToken::LtEq => SyntaxKind::LTEQ,
@@ -132,20 +136,43 @@ fn map_token(token: LexerToken) -> SyntaxKind {
         LexerToken::PipePipe => SyntaxKind::PIPEPIPE,
         LexerToken::LShift => SyntaxKind::LSHIFT,
         LexerToken::RShift => SyntaxKind::RSHIFT,
-        LexerToken::IfConnect => SyntaxKind::IF_CONNECT,
-        LexerToken::KOhmUnit | LexerToken::MOHmUnit | LexerToken::GOhmUnit | LexerToken::OhmUnit |
-        LexerToken::UFUnit | LexerToken::NFUnit | LexerToken::PFUnit |
-        LexerToken::UHUnit | LexerToken::NHUnit | LexerToken::PHUnit |
-        LexerToken::VdcUnit | LexerToken::VacUnit | LexerToken::VrmsUnit | LexerToken::VppUnit |
-        LexerToken::MVUnit | LexerToken::UVUnit | LexerToken::NVUnit |
-        LexerToken::MAUnit | LexerToken::UAUnit | LexerToken::NAUnit |
-        LexerToken::MWUnit | LexerToken::UWUnit | LexerToken::NWUnit |
-        LexerToken::HzUnit | LexerToken::KHzUnit | LexerToken::MHUnit | LexerToken::GHUnit |
-        LexerToken::MsUnit | LexerToken::UsUnit | LexerToken::NsUnit | LexerToken::PsUnit |
-        LexerToken::DegUnit | LexerToken::RadUnit |
-        LexerToken::DbUnit | LexerToken::DbmUnit |
-        LexerToken::PctUnit |
-        LexerToken::MMUnit | LexerToken::UMUnit | LexerToken::NMUnit | LexerToken::MILUnit
+        // Resistance units (Unicode and ASCII)
+        LexerToken::OhmUnicode | LexerToken::KOhmUnicode | LexerToken::MOhmUnicode | LexerToken::MilliOhmUnicode |
+        LexerToken::OhmUnit | LexerToken::KOhmUnit | LexerToken::MOhmUnit | LexerToken::MilliOhmUnit |
+        
+        // Voltage units
+        LexerToken::VUnit | LexerToken::VdcUnit | LexerToken::VacUnit | LexerToken::VrmsUnit | LexerToken::VppUnit |
+        LexerToken::MVUnit | LexerToken::UVUnicode | LexerToken::UVUnit | LexerToken::NVUnit |
+        
+        // Current units
+        LexerToken::AUnit | LexerToken::MAUnit | LexerToken::UAUnicode | LexerToken::UAUnit | LexerToken::NAUnit |
+        
+        // Capacitance units
+        LexerToken::FUnit | LexerToken::UFUnicode | LexerToken::UFUnit | LexerToken::NFUnit | LexerToken::PFUnit |
+        
+        // Inductance units
+        LexerToken::HUnit | LexerToken::UHUnicode | LexerToken::UHUnit | LexerToken::MHUnit | LexerToken::NHUnit |
+        
+        // Frequency units
+        LexerToken::HzUnit | LexerToken::KHzUnit | LexerToken::MHzUnit | LexerToken::GHzUnit |
+        
+        // Time units
+        LexerToken::SUnit | LexerToken::MsUnit | LexerToken::UsUnicode | LexerToken::UsUnit | LexerToken::NsUnit | LexerToken::PsUnit |
+        
+        // Temperature units
+        LexerToken::DegCUnicode | LexerToken::DegCUnit | LexerToken::KelvinUnit |
+        
+        // Percentage units
+        LexerToken::PercentUnit | LexerToken::PctUnit |
+        
+        // Power units
+        LexerToken::WUnit | LexerToken::MWUnit | LexerToken::UWUnicode | LexerToken::UWUnit | LexerToken::NWUnit |
+        
+        // Length units
+        LexerToken::MMUnit | LexerToken::UMUnicode | LexerToken::UMUnit | LexerToken::NMUnit | LexerToken::MILUnit |
+        
+        // Additional units
+        LexerToken::DbUnit | LexerToken::DbmUnit
         => SyntaxKind::UNIT_IDENTIFIER,
     }
 }

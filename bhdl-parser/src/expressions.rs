@@ -23,17 +23,23 @@ impl<'t> Parser<'t> {
     // Get the binding power (precedence) for infix binary operators
     fn infix_binding_power(&self, kind: SyntaxKind) -> Option<(u8, u8)> {
         match kind {
-            // Lowest precedence
-            SyntaxKind::PIPEPIPE => Some((1, 2)),    // || (logical OR)
-            SyntaxKind::AMPAMP => Some((3, 4)),      // && (logical AND)
-            SyntaxKind::PIPE => Some((5, 6)),        // | (bitwise OR)
-            SyntaxKind::CARET => Some((7, 8)),       // ^ (bitwise XOR)
-            SyntaxKind::AMPERSAND => Some((9, 10)),   // & (bitwise AND)
-            SyntaxKind::EQEQ | SyntaxKind::NEQ => Some((11, 12)), // ==, != (equality)
-            SyntaxKind::L_ANGLE | SyntaxKind::R_ANGLE | SyntaxKind::LTEQ | SyntaxKind::GTEQ => Some((11, 12)), // <, >, <=, >= (comparison)
+            // Lowest precedence - Flow operators for circuit flow paradigm
+            SyntaxKind::FLOW_OP => Some((1, 2)),     // |> (flow operator)
+            SyntaxKind::INTERFACE_OP => Some((1, 2)), // <=> (interface connection)
+            SyntaxKind::BI_ARROW => Some((2, 3)),    // <-> (bidirectional connection)
+            SyntaxKind::ARROW => Some((2, 3)),       // -> (connection)
+            
+            // Standard operators
+            SyntaxKind::PIPEPIPE => Some((4, 5)),    // || (logical OR)
+            SyntaxKind::AMPAMP => Some((6, 7)),      // && (logical AND)
+            SyntaxKind::PIPE => Some((8, 9)),        // | (bitwise OR)
+            SyntaxKind::CARET => Some((10, 11)),     // ^ (bitwise XOR)
+            SyntaxKind::AMPERSAND => Some((12, 13)), // & (bitwise AND)
+            SyntaxKind::EQEQ | SyntaxKind::NEQ => Some((14, 15)), // ==, != (equality)
+            SyntaxKind::L_ANGLE | SyntaxKind::R_ANGLE | SyntaxKind::LTEQ | SyntaxKind::GTEQ => Some((14, 15)), // <, >, <=, >= (comparison)
             // Shift operators <<, >> could go here if needed
-            SyntaxKind::PLUS | SyntaxKind::MINUS => Some((13, 14)), // +, - (additive)
-            SyntaxKind::STAR | SyntaxKind::SLASH | SyntaxKind::PERCENT => Some((15, 16)), // *, /, % (multiplicative)
+            SyntaxKind::PLUS | SyntaxKind::MINUS => Some((16, 17)), // +, - (additive)
+            SyntaxKind::STAR | SyntaxKind::SLASH | SyntaxKind::PERCENT => Some((18, 19)), // *, /, % (multiplicative)
             // Highest precedence (excluding prefix/postfix)
             _ => None,
         }
@@ -136,10 +142,32 @@ impl<'t> Parser<'t> {
                 // Check what follows the identifier
                 match self.peek() {
                     Some(SyntaxKind::L_PAREN) => {
-                        // Function Call: Wrap IDENT in FUNCTION_CALL_EXPR
-                        self.builder.start_node_at(checkpoint, SyntaxKind::FUNCTION_CALL_EXPR.into());
-                        self.parse_argument_list(); // Consumes (...) including parens
-                        self.builder.finish_node();
+                        // Could be Function Call or Component Instantiation
+                        // Check if this looks like component instantiation pattern
+                        if self.is_component_instantiation() {
+                            // Component Instantiation: Wrap IDENT in COMPONENT_INST
+                            self.builder.start_node_at(checkpoint, SyntaxKind::COMPONENT_INST.into());
+                            self.parse_component_parameters(); // Consumes (...) including parens
+                            // Optional pin access: .pin
+                            if self.peek() == Some(SyntaxKind::DOT) {
+                                self.bump(); // Consume DOT
+                                match self.peek() {
+                                    Some(SyntaxKind::IDENT) | Some(SyntaxKind::NUMBER) => {
+                                        self.bump(); // Consume pin identifier/number
+                                    }
+                                    _ => {
+                                        // Pin access is optional, don't error if not found
+                                        // Just leave the DOT as part of the next expression
+                                    }
+                                }
+                            }
+                            self.builder.finish_node();
+                        } else {
+                            // Function Call: Wrap IDENT in FUNCTION_CALL_EXPR
+                            self.builder.start_node_at(checkpoint, SyntaxKind::FUNCTION_CALL_EXPR.into());
+                            self.parse_argument_list(); // Consumes (...) including parens
+                            self.builder.finish_node();
+                        }
                     }
                     Some(SyntaxKind::L_BRACKET) => {
                         // Net/Pin Reference with Suffix: Wrap IDENT in NET_REF (or similar)
@@ -247,6 +275,60 @@ impl<'t> Parser<'t> {
              // self.builder.finish_node();
         }
         self.builder.finish_node(); // Finish VALUE node
+    }
+
+    // Helper function to determine if an IDENT(...) pattern is a component instantiation
+    // This is a heuristic - we assume it's a component if the parameters contain electrical units
+    // or if the identifier starts with a capital letter (component naming convention)
+    fn is_component_instantiation(&self) -> bool {
+        // Simple heuristic: Check if first parameter contains a unit or if identifier looks like a component
+        // For now, assume all IDENT(...) in expressions are component instantiations
+        // since function calls are less common in circuit descriptions
+        true
+    }
+
+    // Parses component parameters: (param1, param2, ...) where params can have units
+    pub(crate) fn parse_component_parameters(&mut self) {
+        self.builder.start_node(SyntaxKind::PARAM_ASSIGN_BLOCK.into());
+        self.expect(SyntaxKind::L_PAREN);
+
+        // Parse comma-separated parameters until ')'
+        let mut first_param = true;
+        while self.peek() != Some(SyntaxKind::R_PAREN) && self.peek().is_some() {
+            if !first_param {
+                self.expect(SyntaxKind::COMMA);
+                // Handle potential trailing comma before ')'
+                if self.peek() == Some(SyntaxKind::R_PAREN) { break; }
+            }
+            first_param = false;
+            
+            // Parse parameter: can be named (name=value) or positional (value)
+            self.builder.start_node(SyntaxKind::PARAM_ASSIGN.into());
+            
+            // Check if it's a named parameter (IDENT = value)
+            if self.peek() == Some(SyntaxKind::IDENT) {
+                let checkpoint = self.builder.checkpoint();
+                self.bump(); // Consume IDENT
+                
+                if self.peek() == Some(SyntaxKind::EQ) {
+                    // Named parameter
+                    self.bump(); // Consume '='
+                    self.parse_expr(0); // Parse value
+                } else {
+                    // Positional parameter - the IDENT we consumed is the value
+                    self.builder.start_node_at(checkpoint, SyntaxKind::IDENT_REF.into());
+                    self.builder.finish_node();
+                }
+            } else {
+                // Positional parameter - parse the value expression
+                self.parse_expr(0);
+            }
+            
+            self.builder.finish_node(); // Finish PARAM_ASSIGN
+        }
+
+        self.expect(SyntaxKind::R_PAREN);
+        self.builder.finish_node(); // Finish PARAM_ASSIGN_BLOCK
     }
 
     // --- End of Expression Parsing ---

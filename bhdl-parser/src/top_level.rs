@@ -2,7 +2,7 @@
 // Will be populated in the next step.
 
 use crate::syntax::SyntaxKind;
-use super::core::{Parser};
+use super::core::{Parser, SyntaxKindExt};
 
 impl<'t> Parser<'t> {
     // Main parsing entry point
@@ -223,8 +223,19 @@ impl<'t> Parser<'t> {
                 Some(SyntaxKind::LAYER_STACKUP_KW) => self.parse_layer_stackup_block(),
                 Some(SyntaxKind::DEFAULT_DESIGN_RULES_KW) => self.parse_default_design_rules_block(),
                 Some(SyntaxKind::CONSTRAIN_KW) => self.parse_constrain_block(),
+                Some(SyntaxKind::GENERATE_KW) => self.parse_generate_stmt(),
+                Some(SyntaxKind::IF_KW) => self.parse_conditional_stmt(),
+                // Support direct circuit flow statements (e.g., VCC -> Res(330Ω).1 -> LED.A;)
+                Some(SyntaxKind::IDENT) => {
+                    // Check if this is a flow statement (name: flow_expr) or direct connection
+                    if self.is_flow_statement() {
+                        self.parse_flow_stmt();
+                    } else {
+                        self.parse_connection_expr();
+                    }
+                }
                 Some(kind) => {
-                    self.error(format!("Unexpected token inside board definition: {:?}. Expected block keyword (...) or '}}'.", kind));
+                    self.error(format!("Unexpected token inside board definition: {:?}. Expected block keyword, flow statement, or '}}'.", kind));
                     self.bump_any();
                 }
                 None => {
@@ -261,4 +272,196 @@ impl<'t> Parser<'t> {
         self.expect(SyntaxKind::R_BRACE);
         self.builder.finish_node(); // No semicolon after interface def
     }
+
+    // Helper to determine if an IDENT starts a flow statement (name: expr)
+    fn is_flow_statement(&self) -> bool {
+        // Look ahead to see if IDENT is followed by COLON
+        let mut pos = self.pos;
+        
+        // Skip trivia after IDENT
+        while pos < self.tokens.len() && self.tokens[pos].0.is_trivia() {
+            pos += 1;
+        }
+        
+        // Skip the IDENT itself
+        if pos < self.tokens.len() && self.tokens[pos].0 == SyntaxKind::IDENT {
+            pos += 1;
+        }
+        
+        // Skip trivia after IDENT
+        while pos < self.tokens.len() && self.tokens[pos].0.is_trivia() {
+            pos += 1;
+        }
+        
+        // Check if next non-trivia token is COLON
+        pos < self.tokens.len() && self.tokens[pos].0 == SyntaxKind::COLON
+    }
+
+    // Parse a flow statement: name: flow_expr;
+    pub(crate) fn parse_flow_stmt(&mut self) {
+        self.builder.start_node(SyntaxKind::FLOW_STMT.into());
+        self.expect(SyntaxKind::IDENT); // Flow name
+        self.expect(SyntaxKind::COLON);
+        self.parse_flow_expr(); // Parse the flow expression
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+
+    // Parse a flow expression: element |> element |> element
+    pub(crate) fn parse_flow_expr(&mut self) {
+        self.builder.start_node(SyntaxKind::FLOW_EXPR.into());
+        self.parse_expr(0); // Parse as general expression which handles flow operators
+        self.builder.finish_node();
+    }
+
+    // Parse a direct connection expression: VCC -> Res(330Ω).1 -> LED.A;
+    pub(crate) fn parse_connection_expr(&mut self) {
+        self.builder.start_node(SyntaxKind::CONNECTION_STMT.into());
+        self.parse_expr(0); // Parse as general expression which handles connection operators
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+
+    // Parse a generate statement: generate for var in range { ... }
+    pub(crate) fn parse_generate_stmt(&mut self) {
+        self.builder.start_node(SyntaxKind::GENERATE_STMT.into());
+        self.expect(SyntaxKind::GENERATE_KW);
+        self.expect(SyntaxKind::FOR_KW);
+        self.expect(SyntaxKind::IDENT); // Loop variable
+        self.expect(SyntaxKind::IN_KW);
+        self.parse_range_expr(); // Range expression
+        self.expect(SyntaxKind::L_BRACE);
+        
+        // Parse statements inside generate block
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) => break,
+                Some(SyntaxKind::IDENT) => {
+                    if self.is_flow_statement() {
+                        self.parse_flow_stmt();
+                    } else {
+                        self.parse_connection_expr();
+                    }
+                }
+                Some(kind) => {
+                    self.error(format!("Unexpected token inside generate block: {:?}. Expected connection statement or '}}'.", kind));
+                    self.bump_any();
+                }
+                None => {
+                    self.error("Unexpected end of file inside generate block".to_string());
+                    break;
+                }
+            }
+        }
+        
+        self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
+    // Parse a conditional statement: if (condition) { ... } else { ... }
+    pub(crate) fn parse_conditional_stmt(&mut self) {
+        self.builder.start_node(SyntaxKind::CONDITIONAL_STMT.into());
+        self.expect(SyntaxKind::IF_KW);
+        self.expect(SyntaxKind::L_PAREN);
+        self.parse_expr(0); // Parse condition
+        self.expect(SyntaxKind::R_PAREN);
+        self.expect(SyntaxKind::L_BRACE);
+        
+        // Parse statements inside if block
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) => break,
+                Some(SyntaxKind::IDENT) => {
+                    if self.is_flow_statement() {
+                        self.parse_flow_stmt();
+                    } else if self.is_assignment_statement() {
+                        self.parse_assignment_expr();
+                    } else {
+                        self.parse_connection_expr();
+                    }
+                }
+                Some(kind) => {
+                    self.error(format!("Unexpected token inside if block: {:?}. Expected statement or '}}'.", kind));
+                    self.bump_any();
+                }
+                None => {
+                    self.error("Unexpected end of file inside if block".to_string());
+                    break;
+                }
+            }
+        }
+        
+        self.expect(SyntaxKind::R_BRACE);
+        
+        // Optional else block
+        if self.eat(SyntaxKind::ELSE_KW) {
+            self.expect(SyntaxKind::L_BRACE);
+            
+            // Parse statements inside else block
+            loop {
+                self.skip_trivia();
+                match self.peek() {
+                    Some(SyntaxKind::R_BRACE) => break,
+                    Some(SyntaxKind::IDENT) => {
+                        if self.is_flow_statement() {
+                            self.parse_flow_stmt();
+                        } else if self.is_assignment_statement() {
+                            self.parse_assignment_expr();
+                        } else {
+                            self.parse_connection_expr();
+                        }
+                    }
+                    Some(kind) => {
+                        self.error(format!("Unexpected token inside else block: {:?}. Expected statement or '}}'.", kind));
+                        self.bump_any();
+                    }
+                    None => {
+                        self.error("Unexpected end of file inside else block".to_string());
+                        break;
+                    }
+                }
+            }
+            
+            self.expect(SyntaxKind::R_BRACE);
+        }
+        
+        self.builder.finish_node();
+    }
+
+    // Helper to determine if an IDENT starts an assignment statement (name = expr)
+    fn is_assignment_statement(&self) -> bool {
+        // Look ahead to see if IDENT is followed by EQ
+        let mut pos = self.pos;
+        
+        // Skip trivia after IDENT
+        while pos < self.tokens.len() && self.tokens[pos].0.is_trivia() {
+            pos += 1;
+        }
+        
+        // Skip the IDENT itself
+        if pos < self.tokens.len() && self.tokens[pos].0 == SyntaxKind::IDENT {
+            pos += 1;
+        }
+        
+        // Skip trivia after IDENT
+        while pos < self.tokens.len() && self.tokens[pos].0.is_trivia() {
+            pos += 1;
+        }
+        
+        // Check if next non-trivia token is EQ
+        pos < self.tokens.len() && self.tokens[pos].0 == SyntaxKind::EQ
+    }
+
+    // Parse an assignment expression: name = expr;
+    pub(crate) fn parse_assignment_expr(&mut self) {
+        self.builder.start_node(SyntaxKind::ASSIGN_STMT.into());
+        self.expect(SyntaxKind::IDENT); // Variable name
+        self.expect(SyntaxKind::EQ);
+        self.parse_expr(0); // Parse the assignment value
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+
 } 
