@@ -1,17 +1,22 @@
 //! Component synthesis module
 //!
-//! This module provides comprehensive component synthesis capabilities, converting
-//! abstract ComponentRequirements into concrete ComponentOption selections through
-//! intelligent matching, optimization, and supplier integration.
+//! This module provides two-stage component synthesis:
+//! 1. Spec-based selection from local database (fast, comprehensive)
+//! 2. Live supplier lookup for shortlisted candidates (accurate, limited scope)
+//!
+//! Due to API limits (50 parts/request) and data volatility (daily price changes),
+//! we avoid large-scale caching and focus on targeted real-time lookups.
 
 pub mod engine;
 pub mod matcher;
 pub mod optimizer;
 pub mod synthesizer;
 pub mod selector;
+pub mod two_stage;
 
-// Re-export the main synthesis engine
+// Re-export synthesis engines
 pub use engine::SynthesisEngine;
+pub use two_stage::{TwoStageSynthesizer, TwoStageConfig};
 
 use crate::types::*;
 use crate::database::ComponentDatabase;

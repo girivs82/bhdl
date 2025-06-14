@@ -1,0 +1,159 @@
+    println!("\n📊 Refresh Summary:");
+    println!("  ✅ Successful: {}", style(result.successful_updates).green());
+    println!("  ❌ Failed: {}", style(result.failed_updates).red());
+    println!("  📈 Success Rate: {:.1}%", result.success_rate() * 100.0);
+    
+    if !result.errors.is_empty() {
+        println!("\n⚠️  Errors:");
+        for error in &result.errors {
+            println!("  • {}", error);
+        }
+    }
+    
+    Ok(())
+}
+
+async fn show_supplier_stats(db_path: &PathBuf) -> Result<()> {
+    use bhdl_components::supplier::{SupplierService, trustedparts::TrustedPartsConfig};
+    
+    println!("{}", style("📊 Supplier Data Statistics").bold().blue());
+    
+    let config = TrustedPartsConfig::default();
+    let supplier_service = SupplierService::new(db_path, config).await?;
+    let stats = supplier_service.get_supplier_stats().await?;
+    
+    println!("📁 Database: {}", db_path.display());
+    println!("📦 Total Components: {}", style(stats.total_components).cyan());
+    println!("🏪 With Supplier Data: {}", style(stats.components_with_supplier_data).green());
+    println!("❌ Without Supplier Data: {}", style(stats.components_without_supplier_data).red());
+    println!("⚠️  Stale Data: {}", style(stats.stale_components).yellow());
+    println!("📈 Coverage: {:.1}%", stats.cache_coverage_percent);
+    
+    if stats.components_without_supplier_data > 0 {
+        println!("\n💡 Tip: Use 'bhdl-components supplier refresh-all' to update stale data");
+    }
+    
+    Ok(())
+}
+
+async fn init_config() -> Result<()> {
+    use bhdl_components::config::SupplierConfig;
+    
+    println!("{}", style("🔧 Initializing BHDL Supplier Configuration").bold().blue());
+    
+    // Create example config
+    SupplierConfig::create_example_config()?;
+    
+    println!("\n📝 Example configuration file created: bhdl-supplier-config.example.toml");
+    println!("\n🚀 Next steps:");
+    println!("  1. Copy the example file:");
+    println!("     cp bhdl-supplier-config.example.toml bhdl-supplier-config.toml");
+    println!("\n  2. Edit the file with your API credentials:");
+    println!("     - Nexar: Get free API access at https://nexar.com/api");
+    println!("     - DigiKey: Register at https://developer.digikey.com");
+    println!("\n  3. Or set environment variables:");
+    println!("     export NEXAR_CLIENT_ID='your_client_id'");
+    println!("     export NEXAR_CLIENT_SECRET='your_client_secret'");
+    println!("\n  4. Test your configuration:");
+    println!("     bhdl-components config test");
+    
+    Ok(())
+}
+
+async fn show_config() -> Result<()> {
+    use bhdl_components::config::SupplierConfig;
+    
+    println!("{}", style("📋 Current BHDL Supplier Configuration").bold().blue());
+    
+    let config = SupplierConfig::load()?;
+    
+    println!("\n🔌 Configured Backends:");
+    
+    if config.nexar.is_some() {
+        println!("  ✅ Nexar API");
+    } else {
+        println!("  ❌ Nexar API (not configured)");
+    }
+    
+    if config.digikey.is_some() {
+        println!("  ✅ DigiKey API");
+    } else {
+        println!("  ❌ DigiKey API (not configured)");
+    }
+    
+    if config.trustedparts.is_some() {
+        println!("  ✅ TrustedParts API");
+    } else {
+        println!("  ⚠️  TrustedParts API (requires business account)");
+    }
+    
+    println!("\n⚙️  Settings:");
+    println!("  Default backend: {}", config.default_backend.as_deref().unwrap_or("auto"));
+    println!("  Max concurrent requests: {}", config.max_concurrent_requests.unwrap_or(3));
+    
+    if let Some(cache_dir) = &config.cache_directory {
+        println!("  Cache directory: {}", cache_dir.display());
+    }
+    
+    println!("\n💡 To configure credentials:");
+    println!("  - Run 'bhdl-components config init' to create a config file");
+    println!("  - Or set environment variables (NEXAR_CLIENT_ID, etc.)");
+    
+    Ok(())
+}
+
+async fn test_supplier_backends(backend: &str) -> Result<()> {
+    use bhdl_components::config::SupplierConfig;
+    use bhdl_components::supplier::multi_backend::{MultiBackendSupplierService, MultiBackendConfig};
+    
+    println!("{}", style("🧪 Testing Supplier Backend Connections").bold().blue());
+    
+    let config = SupplierConfig::load()?;
+    
+    // Build multi-backend config from supplier config
+    let multi_config = MultiBackendConfig {
+        nexar: config.to_nexar_config(),
+        digikey: config.to_digikey_config(),
+        ..Default::default()
+    };
+    
+    let mut service = MultiBackendSupplierService::new(multi_config).await?;
+    
+    println!("\n🔍 Testing backend: {}", backend);
+    
+    // Perform health checks
+    let health_results = service.check_all_backends_health().await?;
+    
+    for (backend_type, health) in &health_results {
+        println!("\n📡 Backend: {}", backend_type);
+        if health.is_healthy {
+            println!("  ✅ Status: Healthy");
+            println!("  ⏱️  Response time: {}ms", health.response_time_ms);
+            if let Some(quota) = health.quota_limit {
+                println!("  📊 API quota: {} calls/month", quota);
+            }
+        } else {
+            println!("  ❌ Status: Unhealthy");
+        }
+    }
+    
+    // Test a sample search
+    println!("\n🔎 Testing component search for 'LM358'...");
+    
+    let test_results = service.search_component_suppliers(&["LM358".to_string()]).await?;
+    
+    if !test_results.suppliers.is_empty() {
+        println!("  ✅ Found {} supplier results", test_results.suppliers.len());
+        for (i, supplier) in test_results.suppliers.iter().take(3).enumerate() {
+            println!("  {}. {} - {} ({})", 
+                    i + 1, 
+                    supplier.supplier_name,
+                    supplier.manufacturer_part_number,
+                    supplier.manufacturer);
+        }
+    } else {
+        println!("  ⚠️  No results found (check API credentials)");
+    }
+    
+    Ok(())
+}

@@ -93,6 +93,12 @@ enum Commands {
         action: SupplierCommands,
     },
     
+    /// Configuration management
+    Config {
+        #[command(subcommand)]
+        action: ConfigCommands,
+    },
+    
     /// Synthesis and part selection
     Synthesize {
         /// Component type (resistor, capacitor, etc.)
@@ -105,6 +111,18 @@ enum Commands {
         /// Number of alternatives to show
         #[arg(short, long, default_value = "5")]
         alternatives: usize,
+        
+        /// Enable live supplier data lookup (costs API calls)
+        #[arg(long)]
+        enable_supplier_lookup: bool,
+        
+        /// Maximum candidates to query suppliers for
+        #[arg(long, default_value = "10")]
+        max_supplier_queries: usize,
+        
+        /// Preferred supplier backend (nexar, digikey, auto)
+        #[arg(long, default_value = "auto")]
+        supplier_backend: String,
     },
 }
 
@@ -128,6 +146,23 @@ enum DatabaseCommands {
         /// Output file
         #[arg(short, long)]
         output: PathBuf,
+    },
+}
+
+/// Configuration management
+#[derive(Subcommand)]
+enum ConfigCommands {
+    /// Generate example configuration file
+    Init,
+    
+    /// Show current configuration
+    Show,
+    
+    /// Test API connections
+    Test {
+        /// Specific backend to test (nexar, digikey, all)
+        #[arg(default_value = "all")]
+        backend: String,
     },
 }
 
@@ -220,8 +255,16 @@ async fn main() -> Result<()> {
             }
         }
         
-        Commands::Synthesize { component_type, requirements, alternatives } => {
-            synthesize_component(&cli.database, &component_type, &requirements, alternatives).await?;
+        Commands::Config { action } => {
+            match action {
+                ConfigCommands::Init => init_config().await?,
+                ConfigCommands::Show => show_config().await?,
+                ConfigCommands::Test { backend } => test_supplier_backends(&backend).await?,
+            }
+        }
+        
+        Commands::Synthesize { component_type, requirements, alternatives, enable_supplier_lookup, max_supplier_queries, supplier_backend } => {
+            synthesize_component(&cli.database, &component_type, &requirements, alternatives, enable_supplier_lookup, max_supplier_queries, &supplier_backend).await?;
         }
     }
     
@@ -564,7 +607,10 @@ async fn synthesize_component(
     db_path: &PathBuf, 
     component_type: &str, 
     requirements: &str, 
-    alternatives: usize
+    alternatives: usize,
+    enable_supplier_lookup: bool,
+    max_supplier_queries: usize,
+    supplier_backend: &str,
 ) -> Result<()> {
     use bhdl_components::{ComponentLibrary, synthesis::SynthesisEngine};
     use bhdl_components::types::ComponentRequirements;
@@ -810,6 +856,90 @@ async fn show_supplier_stats(db_path: &PathBuf) -> Result<()> {
     if stats.components_without_supplier_data > 0 {
         println!("\n💡 Tip: Use 'bhdl-components supplier refresh-all' to update stale data");
     }
+    
+    Ok(())
+}
+
+
+async fn init_config() -> Result<()> {
+    use bhdl_components::config::SupplierConfig;
+    
+    println!("{}", style("🔧 Initializing BHDL Supplier Configuration").bold().blue());
+    
+    // Create example config
+    SupplierConfig::create_example_config()?;
+    
+    println!("
+📝 Example configuration file created: bhdl-supplier-config.example.toml");
+    println!("
+🚀 Next steps:");
+    println!("  1. Copy the example file:");
+    println!("     cp bhdl-supplier-config.example.toml bhdl-supplier-config.toml");
+    println!("
+  2. Edit the file with your API credentials:");
+    println!("     - Nexar: Get free API access at https://nexar.com/api");
+    println!("     - DigiKey: Register at https://developer.digikey.com");
+    println!("
+  3. Or set environment variables:");
+    println!("     export NEXAR_CLIENT_ID='your_client_id'");
+    println!("     export NEXAR_CLIENT_SECRET='your_client_secret'");
+    println!("
+  4. Test your configuration:");
+    println!("     bhdl-components config test");
+    
+    Ok(())
+}
+
+async fn show_config() -> Result<()> {
+    use bhdl_components::config::SupplierConfig;
+    
+    println!("{}", style("📋 Current BHDL Supplier Configuration").bold().blue());
+    
+    let config = SupplierConfig::load()?;
+    
+    println!("
+🔌 Configured Backends:");
+    
+    if config.has_nexar() {
+        println!("  ✅ Nexar API");
+    } else {
+        println!("  ❌ Nexar API (not configured)");
+    }
+    
+    if config.has_digikey() {
+        println!("  ✅ DigiKey API");
+    } else {
+        println!("  ❌ DigiKey API (not configured)");
+    }
+    
+    println!("  ⚠️  TrustedParts API (requires business account)");
+    
+    println!("
+⚙️  Settings:");
+    println!("  Default backend: {}", config.default_backend);
+    println!("  Max concurrent requests: 3");
+    
+    println!("
+💡 To configure credentials:");
+    println!("  - Run 'bhdl-components config init' to create a config file");
+    println!("  - Or set environment variables (NEXAR_CLIENT_ID, etc.)");
+    
+    Ok(())
+}
+
+async fn test_supplier_backends(backend: &str) -> Result<()> {
+    println!("{}", style("🧪 Testing Supplier Backend Connections").bold().blue());
+    println!("🔍 Testing backend: {}", backend);
+    
+    // For now, just show that the feature is available
+    // Full implementation would require the multi-backend service to be integrated
+    println!("
+⚠️  Backend testing feature coming soon!");
+    println!("💡 Use environment variables to configure APIs:");
+    println!("   export NEXAR_CLIENT_ID='your_client_id'");
+    println!("   export NEXAR_CLIENT_SECRET='your_client_secret'");
+    println!("   export DIGIKEY_CLIENT_ID='your_client_id'");
+    println!("   export DIGIKEY_CLIENT_SECRET='your_client_secret'");
     
     Ok(())
 }
