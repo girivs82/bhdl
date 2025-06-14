@@ -9,7 +9,7 @@ use bhdl_ast::{HasName,
 
 use crate::symbol_table::{Symbol, SymbolKind, SymbolTable};
 use crate::types::{Diagnostic, ResolvedConstants};
-use crate::helpers::parse_value_as_i64;
+use crate::helpers::{parse_expr_as_i64, parse_value_as_i64};
 
 // --- Pass 3: Evaluate Constant Expressions ---
 
@@ -152,7 +152,7 @@ fn evaluate_const_expr_as_i64<'a>(
                                 
                                 maybe_def_scope_stack.and_then(|def_scope_stack| {
                                     ParamDecl::cast(param_decl_node.clone())
-                                        .and_then(|param_decl| param_decl.value_expr()) 
+                                        .and_then(|param_decl| param_decl.default_value()) 
                                         .and_then(|value_node| {
                                             // Preserve the current instance symbol when evaluating defaults
                                             let mut def_context = Pass3Context {
@@ -164,7 +164,7 @@ fn evaluate_const_expr_as_i64<'a>(
                                                 current_scope_stack: def_scope_stack,     
                                                 current_instance_symbol: context.current_instance_symbol, // Pass current instance context
                                             };
-                                            evaluate_const_expr_as_i64(&value_node, &mut def_context)
+                                            evaluate_const_expr_as_i64(value_node.syntax(), &mut def_context)
                                         })
                                         .or_else(|| {
                                             context.add_diagnostic(format!("Could not find default value expression node for parameter '{}'", param_symbol_to_eval.name), param_symbol_to_eval.span);
@@ -320,8 +320,8 @@ pub fn visit_node_pass3_const_eval(node: &SyntaxNode<BhdlLanguage>, context: &mu
     match node.kind() {
         SyntaxKind::PARAM_DECL => {
             // Evaluate default value expression
-            if let Some(expr_node) = ParamDecl::cast(node.clone()).and_then(|p| p.value_expr()) {
-                evaluate_const_expr_as_i64(&expr_node, context); 
+            if let Some(expr_node) = ParamDecl::cast(node.clone()).and_then(|p| p.default_value()) {
+                evaluate_const_expr_as_i64(expr_node.syntax(), context); 
             }
         }
         SyntaxKind::PARAM_ASSIGN => {

@@ -2,11 +2,11 @@ use std::collections::HashMap;
 use rowan::{SyntaxNode, TextRange, ast::SyntaxNodePtr};
 use rowan::ast::AstNode;
 use bhdl_parser::{SyntaxKind, BhdlLanguage};
-use bhdl_ast::{
+use bhdl_ast::{HasName,
     // Needed for Pass2Context, visitors, resolve_node_type_info etc.
-    // Removed: SourceFile, HasName, Board, Module, ComponentDef, InterfaceDef
+    // Removed: SourceFile, Board, Module, ComponentDef, InterfaceDef
     // items::{Board, Module, ComponentDef, InterfaceDef}, // For scope handling - REMOVED
-    common::{NetDecl, PinRef, PortDecl, PinDecl, ComponentInst, TypeRef, SimpleIdentRef, IdentRef, NetRef}, // Removed Value, BusSuffix
+    common::{NetDecl, PinRef, PortDecl, PinDecl, ComponentInst, TypeRef, SimpleIdentRef, IdentRef, NetRef, ParamAssign}, // Added ParamAssign
 };
 
 use crate::symbol_table::{Symbol, SymbolKind, SymbolTable, PortDirectionKind};
@@ -453,7 +453,7 @@ pub fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mu
         }
         SyntaxKind::COMPONENT_INST => {
             if let Some(inst) = ComponentInst::cast(node.clone()) {
-                if let Some(type_name_token) = inst.component_type_name_token() {
+                if let Some(type_name_token) = inst.component_type_name() {
                     let type_name = type_name_token.text();
                     match context.lookup_global(type_name) {
                         None => {
@@ -474,7 +474,7 @@ pub fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mu
                                     if let Some(component_scope) = context.definition_scopes.get(def_node_ptr) {
                                         if let Some(param_block) = inst.param_assign_block() {
                                             for param_assign in param_block.assignments() {
-                                                    if let Some(param_name_token) = param_assign.name_token() {
+                                                    if let Some(param_name_token) = param_assign.name() {
                                                         let param_name = param_name_token.text();
                                                         match component_scope.lookup(param_name) {
                                                             None => {
