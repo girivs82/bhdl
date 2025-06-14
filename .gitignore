@@ -9,3 +9,16 @@ bhdl-parser/tree-sitter-bhdl/src/
 
 # DO NOT ignore scanner.c if it's hand-written!
 !bhdl-parser/tree-sitter-bhdl/src/scanner.c
+
+# Component database files
+*.db
+*.sqlite
+*.sqlite3
+bhdl-components/components.db
+bhdl-components/test_*.db
+**/components.db
+**/test_components.db
+
+# KiCad symbol cache
+kicad_symbol_cache/
+*.kicad_sym.cache
