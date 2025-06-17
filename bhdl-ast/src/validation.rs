@@ -4,7 +4,8 @@
 //! they follow BHDL language rules and constraints.
 
 use crate::flow::{FlowStmt, FlowExpr, ComponentInstantiation, GenerateStmt, ConditionalStmt, AssignStmt};
-use crate::common::{ConnectionStmt, ParamAssign, PinRef, NetRef, IdentRef, Value, RangeExpr};
+use crate::common::{ParamAssign, PinRef, NetRef, IdentRef, Value, RangeExpr};
+use crate::v2_statements::ConnectionStmt;
 use crate::expr::{Expr, BinaryExpr, PrefixExpr, TernaryExpr, FunctionCallExpr, ComponentInstExpr};
 use crate::items::{Board, Module, ComponentDef};
 use crate::{SyntaxKind, BhdlLanguage, SyntaxNode, HasName};

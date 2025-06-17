@@ -4,8 +4,8 @@ use rowan::ast::AstNode;
 use bhdl_parser::{SyntaxKind, BhdlLanguage};
 use bhdl_ast::{
     SourceFile, HasName,
-    items::{Board, Module, ComponentDef, InterfaceDef, TypeDef},
-    common::{ParamDecl, PortDecl, NetDecl, PinDecl, ComponentInst}, // Removed Value
+    items::{Board, Module, ComponentDef, InterfaceDef, TypedefDef},
+    common::{ParamDecl, PortDecl, NetDecl, ComponentInst}, // Removed Value and PinDecl (v1.0)
 };
 
 use crate::symbol_table::{Symbol, SymbolKind, SymbolTable, PortDirectionKind}; // Use crate:: for local module
@@ -167,7 +167,7 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
             }
         }
          SyntaxKind::TYPEDEF_DEF => {
-             if let Some(def_node) = TypeDef::cast(node.clone()) {
+             if let Some(def_node) = TypedefDef::cast(node.clone()) {
                 if let Some(name_token) = def_node.name() {
                     let node_ptr = SyntaxNodePtr::new(node);
                     context.current_scope_mut().insert(Symbol::new_definition(
@@ -243,8 +243,8 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                 }
             }
         }
-        SyntaxKind::PIN_DECL => { 
-             if let Some(decl) = PinDecl::cast(node.clone()) {
+        SyntaxKind::PORT_DECL => { 
+             if let Some(decl) = PortDecl::cast(node.clone()) {
                if let Some(name_token) = decl.name() {
                    let (bus_high, bus_low) = decl.bus_suffix()
                        .and_then(|suffix| suffix.range())

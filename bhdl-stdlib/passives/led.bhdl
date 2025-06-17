@@ -1,0 +1,35 @@
+// Light Emitting Diode Component Module
+// Supports LED(red), LED(green, 3mm) style instantiation
+
+module LED(color: string = "red", size: string = "5mm") {
+    pin A: signal in;   // Anode (+)
+    pin K: signal out;  // Cathode (-)
+    
+    // Metadata for component database
+    attribute component_class = "led";
+    attribute color = color;
+    attribute size = size;
+    
+    // Electrical characteristics based on color
+    attribute forward_voltage = 
+        color == "red" ? "2.0V" :
+        color == "yellow" ? "2.1V" :
+        color == "green" ? "2.2V" :
+        color == "blue" ? "3.2V" :
+        color == "white" ? "3.3V" :
+        color == "ir" ? "1.4V" :      // Infrared
+        color == "uv" ? "3.8V" :      // Ultraviolet
+        "2.0V";                       // Default
+    
+    attribute forward_current = "20mA";  // Typical 20mA
+    
+    // KiCad symbol mapping
+    attribute kicad_symbol = "Device:LED";
+    
+    // Package based on size
+    attribute package = 
+        size == "3mm" ? "LED_THT:LED_D3.0mm" :
+        size == "5mm" ? "LED_THT:LED_D5.0mm" :
+        size == "smd" ? "LED_SMD:LED_0805_2012Metric" :
+        "LED_THT:LED_D5.0mm";
+}

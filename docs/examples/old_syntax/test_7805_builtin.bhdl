@@ -1,0 +1,58 @@
+// 7805 regulator circuit using built-in types only
+// Uses 'power' built-in type and defines components
+
+// Component type definitions
+component LM7805 {
+    pins {
+        pin IN: power;
+        pin OUT: power;
+        pin GND: power;  // Using power for ground as well
+    }
+}
+
+component Capacitor {
+    parameters {
+        parameter value: capacitance;
+        parameter voltage: voltage = 16V;
+    }
+    pins {
+        pin plus: power;
+        pin minus: power;  // Using power for ground connection
+    }
+}
+
+// Main board definition
+board LinearRegulator {
+    nets {
+        net VIN: power;
+        net VOUT: power;
+        net GND: power;  // Ground is also a power net
+    }
+    
+    components {
+        component LM7805 REG1;
+        component Capacitor CAP1 { 
+            parameter value = 330uF;
+            parameter voltage = 25V;
+        }
+        component Capacitor CAP2 {
+            parameter value = 100nF;
+            parameter voltage = 16V;
+        }
+    }
+    
+    connections {
+        // Input section
+        connect VIN -> CAP1.plus;
+        connect CAP1.plus -> REG1.IN;
+        connect CAP1.minus -> GND;
+        
+        // Regulator ground
+        connect REG1.GND -> GND;
+        
+        // Output section
+        connect REG1.OUT -> CAP2.plus;
+        connect CAP2.plus -> VOUT;
+        connect CAP2.minus -> GND;
+    }
+}

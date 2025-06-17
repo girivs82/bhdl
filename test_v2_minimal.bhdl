@@ -1,0 +1,3 @@
+board MinimalTest {
+    power VCC = 5V @ 1A;
+}

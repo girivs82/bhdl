@@ -66,15 +66,18 @@ The toolchain follows a multi-stage pipeline:
 - **Netlist Layer**: Type-safe IDs (`ModuleId`, `InstanceId`, `NetId`), `ConnectionPoint`
 - **Visualization Layer**: `LayoutEngine`, `Point`, `LayoutHints`, `RoutingCosts`
 
-## BHDL Language Features
+## BHDL Language Features (v2.0)
 
-BHDL supports hierarchical electronic design with:
-- **Structure**: boards, modules, components, interfaces
-- **Parameters**: with electrical units and expressions
-- **Types**: signal, power, ground with voltage/current specifications
-- **Components**: resistors, capacitors, ICs with physical packages
-- **Connections**: explicit net declarations and connection statements
+BHDL v2.0 uses a flow-based syntax for intuitive circuit description:
+- **Structure**: boards with direct flow connections, modules with inline pins
+- **Flow operators**: `->` (connection), `<->` (bidirectional), `|>` (flow), `<=>` (interface)
+- **Power/Ground**: Explicit declarations `power VCC = 5V @ 1A;` and `ground GND;`
+- **Direct instantiation**: `VCC -> Res(10k).1 -> LED(red).A;`
+- **Module definition**: `module Name(params) { pin name: type direction; ... }`
+- **Generate constructs**: `generate for i in 0..n { ... }` for repetitive structures
 - **Units**: Comprehensive electrical unit system (V, A, Ω, F, H, Hz, etc.)
+
+**Note**: v1.0 block-based syntax (pins {}, parameters {}, etc.) has been completely removed.
 
 ## Test Structure
 
@@ -113,7 +116,76 @@ cargo run -p bhdl-components --example kicad_integration
 
 ## Important Files
 
-- `docs/spec/BHDL_Specification.md` - Complete language specification
+- `docs/spec/BHDL_Complete_Specification.md` - Complete v2.0 language specification
 - `docs/examples/` - Example BHDL circuit files
 - `bhdl-visualizer/src/symbols/` - Component symbol definitions
 - Various `*.svg` files in `bhdl-visualizer/` - Test visualization outputs
+
+## Development Reminders
+
+### SVG Visualization Quality Control
+⚠️ **CRITICAL**: After generating any SVG visualization, always:
+1. **Read and inspect the actual SVG content** - don't just assume it worked
+2. **Check for component overlapping** - components should be clearly separated
+3. **Verify all components are visible** - ensure viewBox includes all elements
+4. **Validate proper routing** - connections should be clear and not overlapping
+5. **Test with different circuit types** - simple and complex circuits
+6. **Never claim success without visual verification**
+
+Common SVG issues to watch for:
+- Components rendered at same coordinates (overlapping)
+- Components outside viewBox boundaries (not visible)
+- Incorrect SVG transform calculations
+- Missing or malformed component symbols
+- Routing lines that don't connect properly to pins
+
+## BHDL Version 2.0 Support
+
+✅ **CURRENT STATUS**: The parser now fully supports BHDL v2.0 flow-based syntax. All v1.0 syntax support has been removed.
+
+**Key v2.0 Features:**
+- Official spec: `docs/spec/BHDL_Complete_Specification.md` (v2.0)
+- Flow operators: `->` (unidirectional), `<->` (bidirectional), `|>` (flow)
+- Direct component instantiation: `VCC -> Res(4.7kΩ).1 -> LED(red).A;`
+- Generate constructs: `generate for i in 0..7 { ... }`
+- Flow specifications: `power_flow: USB_5V |> regulation |> distribution;`
+- Power/ground declarations: `power VCC = 5V @ 1A;`
+- Module syntax with inline pins: `module Res(value: resistance) { pin 1: signal inout; ... }`
+
+**Migration Notes:**
+- Old v1.0 examples moved to `docs/examples/old_syntax/` for reference
+- All library files updated to v2.0 syntax
+- Parser, AST, and analyzer only support v2.0 constructs
+
+## End-to-End Pipeline Development Policy
+
+⚠️ **CRITICAL DEVELOPMENT RULE**: When developing and testing the BHDL pipeline:
+
+1. **NO MOCKING/HARDCODING**: Never mock or hardcode values just to get through the pipeline flow
+2. **PROPER IMPLEMENTATION REQUIRED**: Each stage must properly process real data from the previous stage
+3. **AUTHENTIC DATA FLOW**: Parser → AST → Analyzer → Netlist → Visualizer must use authentic data structures
+4. **REAL COMPONENT MATCHING**: Components must be matched to actual KiCad symbols, not placeholder data
+5. **GENUINE TESTING**: Test with real circuits that can be verified at each pipeline stage
+
+This ensures we build a robust, production-ready toolchain rather than a demo with shortcuts.
+
+## Current Pipeline Testing Status
+
+### Recent Progress (2025-06-16)
+1. **Power Domain Propagation Fix**: Fixed analyzer to properly propagate power domains through components
+   - Power domains now correctly flow from sources through resistors to other components
+   - This should improve component inference by providing proper voltage/current context
+
+2. **Component Inference Testing**: Working on testing if the power domain fix improved component selection
+   - Need to verify components are being inferred with proper power ratings
+   - Testing with 7805 regulator circuit
+
+3. **Known Issues**:
+   - Component matching in synthesizer fails to find components in database
+   - Visualization has overlapping components and routing issues
+   - Need to complete end-to-end pipeline with proper component database integration
+
+### Test Commands
+- `cargo run --bin test_pipeline_7805` - Test 7805 regulator circuit through pipeline
+- `cargo run --bin end_to_end_test` - Run complete end-to-end test
+- `cargo run -p bhdl-components --example kicad_integration` - Set up component database

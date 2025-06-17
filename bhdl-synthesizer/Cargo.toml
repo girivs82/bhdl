@@ -1,6 +1,26 @@
 [package]
 name = "bhdl-synthesizer"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+description = "BHDL synthesizer - converts semantic analysis to netlists with preserved context"
+
+[[bin]]
+name = "end_to_end_test"
+path = "src/bin/end_to_end_test.rs"
+
+[[bin]]
+name = "test_unified_svg"
+path = "../test_unified_svg.rs"
 
 [dependencies]
+bhdl-analyzer = { path = "../bhdl-analyzer" }
+bhdl-netlist = { path = "../bhdl-netlist" }
+bhdl-ast = { path = "../bhdl-ast" }
+bhdl-parser = { path = "../bhdl-parser" }
+bhdl-components = { path = "../bhdl-components" }
+bhdl-common = { path = "../bhdl-common" }
+anyhow = "1.0"
+log = "0.4"
+env_logger = "0.11"
+console = "0.15"
+tokio = { version = "1.0", features = ["sync", "time", "macros", "rt-multi-thread"] }

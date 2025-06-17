@@ -1,61 +1,130 @@
-// Controls Library
-// BHDL Controls Library
+// Control Components Library - BHDL v2.0
+// User interface and control components
 
-// Import Potentiometer from Passives for backward compatibility
-import libraries.Passives.{Potentiometer};
-
-// Rotary Encoder component
-component RotaryEncoder {
-  pins {
-    A: out digital;       // Quadrature output A
-    B: out digital;       // Quadrature output B
-    SW: out digital = optional;  // Optional push switch
-    COM: ground;          // Common pin
-  }
-  
-  properties {
-    type: enum {incremental, absolute} = incremental;
-    ppr: integer = 24;    // Pulses per revolution
-    detents: boolean = true;  // Mechanical detents/clicks
-    switch: boolean = false;  // Has push switch
-    voltage: voltage = 5V;    // Operating voltage
-  }
-  
-  // Component selection criteria
-  component_selection {
-    // Selection criteria similar to potentiometer
-    // ...
-  }
+// Potentiometer Module
+module Potentiometer(value: resistance) {
+    pin 1: signal inout;    // End terminal 1
+    pin 2: signal inout;    // Wiper
+    pin 3: signal inout;    // End terminal 2
+    
+    attribute component_class = "potentiometer";
+    attribute taper = "linear";  // or "logarithmic"
+    attribute tolerance = "20%";
+    attribute power_rating = "0.25W";
 }
 
-// Toggle Switch component
-component ToggleSwitch {
-  pins {
-    1: passive;
-    2: passive;
-    3: passive = optional;  // For SPDT
-    4: passive = optional;  // For DPST/DPDT
-    5: passive = optional;  // For DPDT
-    6: passive = optional;  // For DPDT
-  }
-  
-  properties {
-    type: enum {SPST, SPDT, DPST, DPDT} = SPST;
-    current_rating: current = 1A;
-    voltage_rating: voltage = 24V;
-    position: enum {on_off, on_on, on_off_on} = on_off;
-  }
-  
-  // Component selection criteria
-  component_selection {
-    // Selection criteria for toggle switches
-    // ...
-  }
+// Alias for convenience
+module Pot = Potentiometer;
+
+// Rotary Encoder Module
+module RotaryEncoder(pulses_per_revolution: int = 24) {
+    pin A: signal out;      // Channel A
+    pin B: signal out;      // Channel B
+    pin SW: signal out;     // Push switch (if present)
+    pin C: ground;          // Common
+    pin VCC: power in;
+    
+    attribute component_class = "encoder";
+    attribute type = "incremental";
+    attribute ppr = pulses_per_revolution;
+    attribute detents = pulses_per_revolution;
 }
 
-// Export components defined in this library and re-exported components
-export {
-  Potentiometer,  // Re-exported from Passives
-  RotaryEncoder,
-  ToggleSwitch
-} 
+// Push Button Module
+module PushButton(type: string = "momentary") {
+    pin 1: signal inout;
+    pin 2: signal inout;
+    pin 3: signal inout when type == "DPDT";
+    pin 4: signal inout when type == "DPDT";
+    
+    attribute component_class = "switch";
+    attribute action = type;
+    attribute rating = "50mA @ 12V";
+}
+
+// Toggle Switch Module
+module ToggleSwitch(poles: int = 1, throws: int = 2) {
+    pin COM[1:poles]: signal inout;
+    pin NO[1:poles]: signal inout;
+    pin NC[1:poles]: signal inout when throws == 2;
+    
+    attribute component_class = "switch";
+    attribute type = "toggle";
+    attribute configuration = "${poles}P${throws}T";
+}
+
+// DIP Switch Module
+module DIPSwitch(positions: int = 8) {
+    pin SW[1:positions]: signal inout;
+    pin COM[1:positions]: signal inout;
+    
+    attribute component_class = "switch";
+    attribute type = "DIP";
+    attribute positions = positions;
+}
+
+// Joystick Module
+module Joystick() {
+    pin VRX: signal out;    // X-axis potentiometer
+    pin VRY: signal out;    // Y-axis potentiometer
+    pin SW: signal out;     // Push button
+    pin VCC: power in;
+    pin GND: ground;
+    
+    attribute component_class = "joystick";
+    attribute type = "analog";
+    attribute axes = "2";
+}
+
+// Touch Sensor Module
+module TouchSensor() {
+    pin SIG: signal out;
+    pin VCC: power in;
+    pin GND: ground;
+    
+    attribute component_class = "sensor";
+    attribute type = "capacitive_touch";
+    attribute sensitivity = "adjustable";
+}
+
+// Slide Potentiometer
+module SlidePot(value: resistance, length: length = 60mm) {
+    pin 1: signal inout;
+    pin 2: signal inout;    // Wiper
+    pin 3: signal inout;
+    
+    attribute component_class = "potentiometer";
+    attribute type = "slide";
+    attribute travel = length;
+}
+
+// Membrane Keypad
+module MembraneKeypad(rows: int = 4, cols: int = 4) {
+    pin ROW[1:rows]: signal out;
+    pin COL[1:cols]: signal in;
+    
+    attribute component_class = "keypad";
+    attribute type = "membrane";
+    attribute keys = "${rows}x${cols}";
+}
+
+// Thumbwheel Switch
+module ThumbwheelSwitch() {
+    pin C: signal inout;    // Common
+    pin 0-9: signal out;    // BCD outputs
+    
+    attribute component_class = "switch";
+    attribute type = "thumbwheel";
+    attribute encoding = "BCD";
+}
+
+// Limit Switch
+module LimitSwitch() {
+    pin C: signal inout;    // Common
+    pin NO: signal inout;   // Normally open
+    pin NC: signal inout;   // Normally closed
+    
+    attribute component_class = "switch";
+    attribute type = "limit";
+    attribute actuator = "lever";
+}

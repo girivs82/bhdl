@@ -1,0 +1,7 @@
+board LEDCircuit {
+    power VCC = 12V @ 1A;
+    ground GND;
+    
+    // LED circuit with current limiting resistor
+    VCC -> Res() -> LED(red) -> GND;  // Should infer ~470R for 12V -> 2V red LED @ 20mA
+}

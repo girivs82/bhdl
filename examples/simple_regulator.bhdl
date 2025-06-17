@@ -1,0 +1,24 @@
+// Simplified Linear Regulator for Current Parser
+// Uses only supported syntax constructs
+
+board SimpleRegulator {
+    flow {
+        regulator_module -> filtering_module -> output_module;
+    }
+    
+    flow {
+        enable_signal -> regulator_module;
+    }
+}
+
+component VoltageRegulator {
+    
+}
+
+component InputFilter {
+
+}
+
+component OutputFilter {
+
+}

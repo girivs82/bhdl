@@ -1,142 +1,183 @@
-// Passive Components Library
+// Passive Components Library - BHDL v2.0
 // BHDL Standard Library - Passives
 
-// Resistor Component
-component Resistor {
-  pins {
-    // For standard resistors, pins are interchangeable and don't have inherent direction
-    1: inout signal; // Changed from 'passive'
-    2: inout signal; // Changed from 'passive'
-  }
-
-  properties {
-    value: resistance = required; // Value must be specified at instantiation
-    tolerance: percentage = 5pct; // Use 'pct' unit
-    power: power = 0.25W;
-    temperature_coefficient: real = 100ppm/degC; // Use 'degC'
-    // 'ppm' is not standard, representation might need discussion or use scientific notation for coefficient
-  }
+// Resistor Module
+module Resistor(
+    value: resistance,
+    power_rating: power = 250m,     // Default 250mW (1/4W) in EDA convention
+    tolerance: real = 5.0,          // Default 5% tolerance
+    voltage_rating: voltage = 0V    // 0V means auto-calculate
+) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+    
+    attribute component_class = "resistor";
+    attribute tolerance = tolerance + "%";
+    attribute temperature_coefficient = "100ppm/°C";
+    
+    // Power rating selection with proper derating
+    attribute power_rating = power_rating;
+    
+    // Voltage rating: if not specified, calculate from sqrt(P*R) with derating
+    attribute voltage_rating = if voltage_rating == 0V {
+        sqrt(power_rating * value) * 0.7  // 70% derating factor
+    } else {
+        voltage_rating
+    };
+    
+    // Package selection based on power rating (SMD)
+    attribute package = match power_rating {
+        p when p <= 63m => "0402",    // 1/16W
+        p when p <= 125m => "0603",   // 1/8W
+        p when p <= 250m => "0805",   // 1/4W  
+        p when p <= 500m => "1206",   // 1/2W
+        p when p <= 1.0 => "2010",    // 1W
+        p when p <= 2.0 => "2512",    // 2W
+        _ => "THT"  // Through-hole for high power
+    };
 }
 
-// Capacitor Component (Non-polarized)
-component Capacitor {
-  pins {
-    1: inout signal; // Changed from 'passive'
-    2: inout signal; // Changed from 'passive'
-  }
+// Alias for convenience
+module Res = Resistor;
 
-  properties {
-    value: capacitance = required;
-    voltage: voltage = required; // Assume DC voltage rating unless otherwise specified
-    tolerance: percentage = 10pct; // Use 'pct' unit
-    type: enum {ceramic, film, mica} = ceramic; // Specify allowed types
-    temperature_coefficient: string = "X7R"; // Use string for standard codes
-  }
+// Capacitor Module (Non-polarized)
+module Capacitor(
+    value: capacitance, 
+    voltage_rating: voltage = 50V,
+    tolerance: real = 20.0
+) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+    
+    attribute component_class = "capacitor";
+    attribute tolerance = tolerance + "%";
+    
+    // Select dielectric based on capacitance value and requirements
+    attribute dielectric = match value {
+        c when c <= 100p => "C0G/NP0",    // Ultra-stable for small values
+        c when c <= 10n => "X7R",         // Good temp stability
+        c when c <= 1u => "X7R",          // Standard MLCC
+        c when c <= 10u => "X5R",         // Higher cap MLCC
+        _ => "Y5V"                        // High cap, less stable
+    };
+    
+    // Voltage rating with derating (use 2x working voltage)
+    attribute voltage_rating = voltage_rating;
+    attribute recommended_working_voltage = voltage_rating * 0.5;
+    
+    // Package selection based on value and voltage
+    attribute package = match (value, voltage_rating) {
+        (c, v) when c <= 100p && v <= 50V => "0402",
+        (c, v) when c <= 1n && v <= 50V => "0603",
+        (c, v) when c <= 100n && v <= 50V => "0805",
+        (c, v) when c <= 1u && v <= 50V => "1206",
+        (c, v) when v > 50V => "1210",  // Higher voltage needs larger package
+        _ => "1206"  // Default
+    };
 }
 
-// Electrolytic Capacitor (polarized)
-component ElectrolyticCapacitor {
-  pins {
-    POS: inout signal; // Positive terminal
-    NEG: inout signal; // Negative terminal
-  }
+// Alias for convenience
+module Cap = Capacitor;
 
-  properties {
-    value: capacitance = required;
-    voltage: voltage = required;
-    tolerance: percentage = 20pct; // Use 'pct' unit
-    ripple_current: current = required;
-    low_esr: boolean = false;
-    lifetime: time = 1000h; // Standard unit
-    // Note: Polarity is implied by pin names and component type
-  }
+// Polarized Capacitor (Electrolytic)
+module ElectrolyticCapacitor(value: capacitance, voltage: voltage) {
+    pin +: signal in;  // Positive terminal
+    pin -: signal out; // Negative terminal
+    
+    attribute component_class = "capacitor_polarized";
+    attribute tolerance = "20%";
+    attribute type = "electrolytic";
 }
 
-// Inductor Component
-component Inductor {
-  pins {
-    1: inout signal; // Changed from 'passive'
-    2: inout signal; // Changed from 'passive'
-  }
-
-  properties {
-    value: inductance = required;
-    current: current = required; // DC current rating
-    tolerance: percentage = 10pct; // Use 'pct' unit
-    dcr: resistance = 0.1Ohm; // Use 'Ohm'
-    type: enum {unshielded, shielded, semi_shielded} = unshielded;
-    saturation_current: current = required;
-    frequency_rating: frequency; // Optional: Frequency at which inductance/Q is specified
-  }
+// Inductor Module
+module Inductor(value: inductance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+    
+    attribute component_class = "inductor";
+    attribute tolerance = "10%";
+    attribute saturation_current = "1A";
 }
 
-// Ferrite Bead Component
-component FerriteBead {
-  pins {
-    1: inout signal; // Changed from 'passive'
-    2: inout signal; // Changed from 'passive'
-  }
+// Alias for convenience
+module L = Inductor;
 
-  properties {
-    impedance: resistance = required; // Impedance value
-    at_frequency: frequency = 100MHz; // Frequency at which impedance is specified (use property)
-    current: current = required; // DC current rating
-    dcr: resistance = 0.1Ohm; // Use 'Ohm'
-  }
+// LED Module
+module LED(
+    color: string = "red",
+    forward_current: current = 20m,  // Default 20mA in EDA convention
+    power_rating: power = 100m       // Default 100mW
+) {
+    pin A: signal in;  // Anode
+    pin K: signal out; // Cathode
+    
+    attribute component_class = "led";
+    
+    // Forward voltage depends on color
+    attribute forward_voltage = match color {
+        "red" => "2.0V",
+        "yellow" => "2.1V", 
+        "green" => "2.2V",
+        "blue" => "3.2V",
+        "white" => "3.3V",
+        "infrared" => "1.5V",
+        _ => "2.0V"  // Default
+    };
+    
+    // These would ideally come from component database
+    attribute forward_current = forward_current;
+    attribute max_current = forward_current * 1.5;  // 50% safety margin
+    attribute power_rating = power_rating;
 }
 
-// Potentiometer Component
-component Potentiometer {
-  pins {
-    1: inout signal; // End terminal A
-    2: inout signal; // Wiper terminal W
-    3: inout signal; // End terminal B
-  }
-
-  properties {
-    value: resistance = required;     // Total resistance (End A to End B)
-    taper: enum {linear, audio, reverse_audio, logarithmic} = linear;
-    power: power = 0.25W;
-    tolerance: percentage = 20pct;      // Use 'pct' unit
-    travel: angle = 270deg;             // Use standard unit 'deg'
-    // 'control' property removed - Potentiometer state isn't typically set by BHDL property
-  }
-
-  // Removed non-standard 'component_selection' block.
-  // Selection criteria belong to tooling or separate configuration.
-
+// Diode Module
+module Diode(type: string = "1N4148") {
+    pin A: signal in;  // Anode
+    pin K: signal out; // Cathode
+    
+    attribute component_class = "diode";
+    attribute forward_voltage = "0.7V";
+    attribute reverse_voltage = "100V";
+    attribute forward_current = "300mA";
 }
 
-// Resistor Divider Network (as a Module encapsulating Resistors)
-// Note: Representing this as a 'module' is often better than a 'component'
-// because it's built from other components.
-module ResistorDivider {
-  ports { // Modules have 'ports' not 'pins'
-    IN: in signal;
-    OUT: out signal;
-    GND: ground;
-  }
-
-  properties { // Parameters for the module
-    r_top_value: resistance = required;
-    r_bottom_value: resistance = required;
-    tolerance: percentage = 1pct; // Use 'pct' unit
-    // Ratio removed - can be calculated by tools/users, not fixed module property
-  }
-
-  // Internal Implementation
-  components {
-    Resistor R_Top { value: module.r_top_value; tolerance: module.tolerance; }
-    Resistor R_Bottom { value: module.r_bottom_value; tolerance: module.tolerance; }
-  }
-
-  connections {
-    IN -> R_Top.1;
-    R_Top.2 -> R_Bottom.1;
-    R_Top.2 -> OUT; // Output is the junction
-    R_Bottom.2 -> GND;
-  }
+// Zener Diode Module
+module ZenerDiode(voltage: voltage) {
+    pin A: signal in;  // Anode
+    pin K: signal out; // Cathode
+    
+    attribute component_class = "zener_diode";
+    attribute zener_voltage = voltage;
+    attribute tolerance = "5%";
+    attribute power_rating = "500mW";
 }
 
-// Removed non-standard 'library' wrapper and 'export' block.
-// Top-level definitions are assumed exported. 
+// Crystal Module
+module Crystal(frequency: frequency) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+    
+    attribute component_class = "crystal";
+    attribute tolerance = "50ppm";
+    attribute load_capacitance = "12pF";
+    attribute esr = "50Ω";
+}
+
+// Button/Switch Module
+module Button() {
+    pin 1: signal inout;
+    pin 2: signal inout;
+    
+    attribute component_class = "switch";
+    attribute type = "momentary";
+    attribute rating = "12V @ 50mA";
+}
+
+// Test Point Module
+module TestPoint() {
+    pin 1: signal inout;
+    
+    attribute component_class = "test_point";
+    attribute shape = "round";
+    attribute diameter = "1mm";
+}

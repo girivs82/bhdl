@@ -570,12 +570,76 @@ impl KiCadSymbolParser {
         })
     }
 
-    fn parse_polyline(&self, _content: &[Sexp]) -> Result<KiCadGraphic, KiCadParseError> {
-        // TODO: Implement polyline parsing
+    fn parse_polyline(&self, content: &[Sexp]) -> Result<KiCadGraphic, KiCadParseError> {
+        let mut points = Vec::new();
+        let mut stroke_width = 0.254; // Default KiCad stroke width
+        let mut stroke_type = "default".to_string();
+        
+        for item in content {
+            if let Sexp::List(list) = item {
+                if let Some(Sexp::Atom(Atom::S(tag))) = list.first() {
+                    match tag.as_str() {
+                        "pts" => {
+                            // Parse points: (pts (xy x1 y1) (xy x2 y2) ...)
+                            for pt_item in &list[1..] {
+                                if let Sexp::List(pt_list) = pt_item {
+                                    if let Some(Sexp::Atom(Atom::S(xy_tag))) = pt_list.first() {
+                                        if xy_tag == "xy" && pt_list.len() >= 3 {
+                                            if let (Some(Sexp::Atom(x_atom)), Some(Sexp::Atom(y_atom))) = 
+                                                (pt_list.get(1), pt_list.get(2)) {
+                                                let x = match x_atom {
+                                                    Atom::F(f) => *f,
+                                                    Atom::I(i) => *i as f64,
+                                                    Atom::S(s) => s.parse::<f64>().unwrap_or(0.0),
+                                                };
+                                                let y = match y_atom {
+                                                    Atom::F(f) => *f,
+                                                    Atom::I(i) => *i as f64,
+                                                    Atom::S(s) => s.parse::<f64>().unwrap_or(0.0),
+                                                };
+                                                points.push((x, y));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        "stroke" => {
+                            // Parse stroke: (stroke (width 0.254) (type default))
+                            for stroke_item in &list[1..] {
+                                if let Sexp::List(stroke_list) = stroke_item {
+                                    if let Some(Sexp::Atom(Atom::S(stroke_tag))) = stroke_list.first() {
+                                        match stroke_tag.as_str() {
+                                            "width" => {
+                                                if let Some(Sexp::Atom(width_atom)) = stroke_list.get(1) {
+                                                    stroke_width = match width_atom {
+                                                        Atom::F(f) => *f,
+                                                        Atom::I(i) => *i as f64,
+                                                        Atom::S(s) => s.parse::<f64>().unwrap_or(0.254),
+                                                    };
+                                                }
+                                            }
+                                            "type" => {
+                                                if let Some(Sexp::Atom(Atom::S(type_str))) = stroke_list.get(1) {
+                                                    stroke_type = type_str.clone();
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        
         Ok(KiCadGraphic::Polyline {
-            points: vec![],
-            stroke_width: 0.0,
-            stroke_type: "default".to_string(),
+            points,
+            stroke_width,
+            stroke_type,
         })
     }
 

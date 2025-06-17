@@ -1,0 +1,59 @@
+// 7805 regulator circuit with correct v1.0 syntax
+
+// Component type definitions
+component LM7805 {
+    pins {
+        pin IN: power;
+        pin OUT: power;
+        pin GND: power;
+    }
+}
+
+component Capacitor {
+    parameters {
+        value = required;
+        voltage = 16V;
+    }
+    pins {
+        pin plus: power;
+        pin minus: power;
+    }
+}
+
+// Main board definition
+board LinearRegulator {
+    nets {
+        net VIN: power;
+        net VOUT: power;
+        net GND: power;
+    }
+    
+    components {
+        component LM7805 REG1;
+        
+        component Capacitor CAP1 { 
+            parameter value = 330uF;
+            parameter voltage = 25V;
+        }
+        
+        component Capacitor CAP2 {
+            parameter value = 100nF;
+            parameter voltage = 16V;
+        }
+    }
+    
+    connections {
+        // Input section
+        connect VIN -> CAP1.plus;
+        connect CAP1.plus -> REG1.IN;
+        connect CAP1.minus -> GND;
+        
+        // Regulator ground
+        connect REG1.GND -> GND;
+        
+        // Output section
+        connect REG1.OUT -> CAP2.plus;
+        connect CAP2.plus -> VOUT;
+        connect CAP2.minus -> GND;
+    }
+}

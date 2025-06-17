@@ -1,0 +1,3 @@
+board TestBoard {
+    power VDD = 3.3V @ 1A;
+}

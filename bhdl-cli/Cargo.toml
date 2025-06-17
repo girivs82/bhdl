@@ -4,3 +4,27 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+bhdl-parser = { path = "../bhdl-parser" }
+bhdl-ast = { path = "../bhdl-ast" }
+bhdl-analyzer = { path = "../bhdl-analyzer" }
+bhdl-synthesizer = { path = "../bhdl-synthesizer" }
+bhdl-netlist = { path = "../bhdl-netlist" }
+bhdl-visualizer = { path = "../bhdl-visualizer" }
+rowan = "0.15"
+tokio = { version = "1.35", features = ["rt", "macros"] }
+
+[[bin]]
+name = "test_analyzer"
+path = "src/bin/test_analyzer.rs"
+
+[[bin]]
+name = "test_synthesizer"
+path = "src/bin/test_synthesizer.rs"
+
+[[bin]]
+name = "test_visualizer"
+path = "src/bin/test_visualizer.rs"
+
+[[bin]]
+name = "debug_connection"
+path = "src/bin/debug_connection.rs"

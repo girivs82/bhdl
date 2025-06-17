@@ -1,0 +1,19 @@
+board ArrayPinAccessTest {
+    power VCC = 3.3V @ 1A;
+    ground GND;
+    
+    // Test various array indexing patterns
+    generate for i in 0..7 {
+        // Array component instantiation with pin access
+        VCC -> leds[i]: LED(green).A;
+        leds[i].K -> GND;
+        
+        // Array indexing in expressions
+        VCC -> Res(10k).1 -> status[i]: LED(red).A;
+        status[i].K -> GND;
+    }
+    
+    // Direct array element access
+    leds[0].K -> Res(100).1 -> GND;
+    status[3].A -> test_point;
+}

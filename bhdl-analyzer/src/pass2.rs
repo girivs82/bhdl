@@ -6,7 +6,7 @@ use bhdl_ast::{HasName,
     // Needed for Pass2Context, visitors, resolve_node_type_info etc.
     // Removed: SourceFile, Board, Module, ComponentDef, InterfaceDef
     // items::{Board, Module, ComponentDef, InterfaceDef}, // For scope handling - REMOVED
-    common::{NetDecl, PinRef, PortDecl, PinDecl, ComponentInst, TypeRef, SimpleIdentRef, IdentRef, NetRef, ParamAssign}, // Added ParamAssign
+    common::{NetDecl, PinRef, PortDecl, ComponentInst, TypeRef, SimpleIdentRef, IdentRef, NetRef, ParamAssign}, // Removed PinDecl (v1.0)
 };
 
 use crate::symbol_table::{Symbol, SymbolKind, SymbolTable, PortDirectionKind};
@@ -53,7 +53,7 @@ pub(crate) fn resolve_node_type_info<'a>(
                             match decl_node.kind() {
                                 SyntaxKind::NET_DECL => NetDecl::cast(decl_node)?.type_ref(),
                                 SyntaxKind::PORT_DECL => PortDecl::cast(decl_node)?.type_ref(),
-                                SyntaxKind::PIN_DECL => PinDecl::cast(decl_node)?.type_ref(),
+                                // v2.0 doesn't have PIN_DECL - pins are PORT_DECL in modules
                                 _ => None, 
                             }
                         })
@@ -122,7 +122,7 @@ pub(crate) fn resolve_node_type_info<'a>(
                                                             .and_then(|decl_node| {
                                                                 match decl_node.kind() {
                                                                     SyntaxKind::PORT_DECL => PortDecl::cast(decl_node)?.type_ref(),
-                                                                    SyntaxKind::PIN_DECL => PinDecl::cast(decl_node)?.type_ref(),
+                                                                    // v2.0 doesn't have PIN_DECL - pins are PORT_DECL in modules
                                                                     _ => None, 
                                                                 }
                                                             })
@@ -177,7 +177,7 @@ pub(crate) fn resolve_node_type_info<'a>(
                             .and_then(|decl_node| {
                                 match decl_node.kind() {
                                     SyntaxKind::PORT_DECL => PortDecl::cast(decl_node)?.type_ref(),
-                                    SyntaxKind::PIN_DECL => PinDecl::cast(decl_node)?.type_ref(),
+                                    // v2.0 doesn't have PIN_DECL - pins are PORT_DECL in modules
                                     _ => None, 
                                 }
                             })
@@ -579,40 +579,21 @@ pub fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mu
             recurse_children = false; 
         }
         SyntaxKind::CONNECTION_STMT => {
-            if let Some(conn_stmt) = bhdl_ast::common::ConnectionStmt::cast(node.clone()) {
-                if let (Some(src), Some(sink)) = (conn_stmt.source(), conn_stmt.sink()) {
-                    let src_resolution = resolve_node_type_info(context, &src, false);
-                    let sink_resolution = resolve_node_type_info(context, &sink, false);
-                    let mut src_ti: Option<ResolvedTypeInfo> = None;
-                    let mut sink_ti: Option<ResolvedTypeInfo> = None;
-                    
-                    if let Some(res) = src_resolution { match res { Ok(ti) => src_ti = Some(ti), Err(diag) => context.add_diagnostic(diag.message, diag.range), } }
-                    if let Some(res) = sink_resolution { match res { Ok(ti) => sink_ti = Some(ti), Err(diag) => context.add_diagnostic(diag.message, diag.range), } }
-
-                    if let (Some(src_type_info), Some(sink_type_info)) = (src_ti, sink_ti) {
-                        if src_type_info.base_type_name != sink_type_info.base_type_name {
-                            context.add_diagnostic(format!("Type mismatch in connection: cannot connect type '{}' to type '{}'", src_type_info.base_type_name, sink_type_info.base_type_name), node.text_range());
-                        } else if src_type_info.width() != sink_type_info.width() {
-                            context.add_diagnostic(format!("Width mismatch in connection: Source width {:?} does not match Sink width {:?}", src_type_info.width(), sink_type_info.width()), node.text_range());
-                        }
-                        // Check directionality
-                        let src_symbol = context.lookup_symbol_for_ref_node(&src);
-                        let sink_symbol = context.lookup_symbol_for_ref_node(&sink);
-                        if let (Some(src_sym), Some(sink_sym)) = (src_symbol, sink_symbol) {
-                            match (src_sym.direction, sink_sym.direction) {
-                                (Some(PortDirectionKind::Out), Some(PortDirectionKind::Out)) => { context.add_diagnostic("Cannot connect Out port/pin to Out port/pin".to_string(), node.text_range()); }
-                                (Some(PortDirectionKind::In), Some(PortDirectionKind::In)) |
-                                (Some(PortDirectionKind::In), Some(PortDirectionKind::InOut)) |
-                                (Some(PortDirectionKind::InOut), Some(PortDirectionKind::In)) => { context.add_diagnostic("Cannot connect In port/pin as a source or to another In port/pin".to_string(), node.text_range()); }
-                                _ => {} 
-                            } 
-                        } 
-                    } 
-                } else {
-                    if conn_stmt.source().is_none() { context.add_diagnostic("Could not identify source node in connection".to_string(), node.text_range()); }
-                    if conn_stmt.sink().is_none() { context.add_diagnostic("Could not identify sink node in connection".to_string(), node.text_range()); }
+            // v2.0 connection statement only
+            if let Some(v2_conn) = bhdl_ast::v2_statements::ConnectionStmt::cast(node.clone()) {
+                // v2.0 connection statement - validate flow expressions
+                if let Some(_flow_expr) = v2_conn.expr() {
+                    // For now, just check that the flow expression exists
+                    // TODO: Implement full v2.0 flow validation
+                    // This would involve:
+                    // - Traversing BINARY_EXPR nodes
+                    // - Resolving component instantiations
+                    // - Checking type compatibility along the flow
                 }
-            } 
+            } else {
+                // This shouldn't happen with v2.0 only support
+                context.add_diagnostic("Invalid connection statement format".to_string(), node.text_range());
+            }
             recurse_children = false; 
         }
         _ => {}

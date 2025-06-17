@@ -1,0 +1,11 @@
+board EDAUnitsTest {
+    power VCC = 5V @ 1A;
+    ground GND;
+    
+    // Test various EDA-style unit abbreviations
+    VCC -> Res(10k).1 -> LED(red).A;
+    VCC -> Res(4.7k).1 -> LED(green).A;
+    VCC -> Cap(100n).+ -> GND;
+    VCC -> Cap(10u).+ -> GND;
+    VCC -> Res(1M).1 -> sensor.VDD;
+}

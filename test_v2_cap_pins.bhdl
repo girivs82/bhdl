@@ -1,0 +1,8 @@
+board CapPinTest {
+    power VCC = 5V @ 1A;
+    ground GND;
+    
+    // Test capacitor with explicit pin names
+    VCC -> Cap(100n).plus -> GND;
+    VCC -> Cap(10u).minus -> GND;
+}

@@ -1,0 +1,4 @@
+board NamedHandleTest {
+    power VCC = 5V @ 1A;
+    VCC -> regulator: LinearReg(3.3V, 1A).IN;
+}

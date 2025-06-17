@@ -1,0 +1,5 @@
+// Simple LED circuit using BHDL v2.0 flow syntax
+// Universal pattern: source -> component(parameters) -> destination
+
+VCC -> Res(4.7kΩ).1 -> LED(red).A;
+LED.K -> GND;

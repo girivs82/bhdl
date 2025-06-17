@@ -1,0 +1,4 @@
+board UnitTest {
+    power VCC = 5V @ 1A;
+    VCC -> Res(10kOhm).1;
+}

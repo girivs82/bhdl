@@ -7,11 +7,20 @@ edition = "2021"
 
 [dependencies]
 bhdl-netlist = { path = "../bhdl-netlist" }
-svg = "0.16.0"
+bhdl-synthesizer = { path = "../bhdl-synthesizer" }
+bhdl-components = { path = "../bhdl-components" }
+bhdl-analyzer = { path = "../bhdl-analyzer" }
+bhdl-parser = { path = "../bhdl-parser" }
+bhdl-ast = { path = "../bhdl-ast" }
+bhdl-common = { path = "../bhdl-common" }
+anyhow = "1.0"
 log = "0.4"
 env_logger = "0.10"
-getrandom = { version = "0.2", features = ["js"] }
+tokio = { version = "1.0", features = ["rt", "rt-multi-thread", "macros"] }
+regex = "1.0"
+svg = "0.16.0"
 quick-xml = { version = "0.31", features = ["serialize"] }
+getrandom = { version = "0.2", features = ["js"] }
 rand = "0.8"
 petgraph = "0.6.4"
 rayon = "1.8.1"
@@ -19,8 +28,13 @@ ordered-float = "2.10"
 slotmap = { version = "1", features = ["serde"] }
 
 [dev-dependencies]
-# Add quick-xml here too if needed for tests, but likely only needed in lib
+tempfile = "3.0"
+tokio-test = "0.4"
 
 [lib]
 name = "bhdl_visualizer"
 path = "src/lib.rs"
+
+[[bin]]
+name = "test_ascii"
+path = "src/bin/test_ascii.rs"

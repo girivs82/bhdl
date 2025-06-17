@@ -63,14 +63,7 @@ pub enum SyntaxKind {
     STRUCT_KW,    // struct
     ENUM_KW,      // enum
     INTERFACE_KW, // interface
-    PARAMETERS_KW, // parameters
-    PORTS_KW,      // ports
-    COMPONENTS_KW, // components
-    COMPONENT_KW, // component
-    NETS_KW,       // nets
-    CONNECTIONS_KW,// connections
-    PINS_KW,       // pins
-    INTERFACES_KW, // interfaces
+    COMPONENT_KW, // component (for direct instantiation in v2.0)
     NET_KW,        // net
     LAYER_STACKUP_KW, // layer_stackup
     LAYER_KW,         // layer
@@ -105,10 +98,11 @@ pub enum SyntaxKind {
     ELSE_KW,      // else
     WHEN_KW,      // when
 
-    // Keywords for individual items within blocks (NEW)
+    // Keywords for individual items  
     PIN_KW,       // pin
     PARAMETER_KW, // parameter
     CONNECT_KW,   // connect
+    ATTRIBUTE_KW, // attribute
 
     // Nodes (Grammar rules)
     SOURCE_FILE,    // Root node
@@ -126,14 +120,7 @@ pub enum SyntaxKind {
     ENUM_DEF,       // enum definition
     INTERFACE_DEF,  // interface InterfaceName { ... }
 
-    // Common Blocks
-    PARAMETERS_BLOCK,
-    PORTS_BLOCK,
-    COMPONENTS_BLOCK,
-    NETS_BLOCK,
-    CONNECTIONS_BLOCK,
-    PINS_BLOCK,
-    INTERFACES_BLOCK,
+    // v2.0 Blocks (minimal)
     LAYER_STACKUP_BLOCK,
     LAYER_DEF,          // layer NAME { ... }
     DEFAULT_DESIGN_RULES_BLOCK,
@@ -146,6 +133,11 @@ pub enum SyntaxKind {
     CONDITIONAL_STMT,   // if (...) { ... } else { ... }
     FLOW_STMT,          // name: flow_expr;
     FLOW_EXPR,          // flow expression with |> operators
+    
+    // Individual statements for linear regulator syntax
+    POWER_DECL,         // power VIN = 12V @ 2A;
+    GROUND_DECL,        // ground GND;
+    CONNECTION_TARGET,  // U1.input or vin_rail
 
     // Items within Blocks
     PARAM_DECL,        // const param_name: type = value;
@@ -159,10 +151,6 @@ pub enum SyntaxKind {
     CONNECTION_STMT,   // PinRef -> PinRef; OR NetRef -> PinRef; OR PinRef -> NetRef; OR AssignStmt
     ASSIGN_STMT,       // assign NetRef = Expression;
     NET_REF,           // Reference to a net name
-    PIN_DECL,          // pin_name[range]: direction type ...;
-    INTERFACE_INSTANCE,// IntfName: interface TypeName { ... };
-    PIN_MAP_BLOCK,     // pin_map = { ... }
-    PIN_MAP_ENTRY,     // LogPin = PhysPin
     PIN_REF,           // instance.pin[range] or net_name[range]
     CONSTRAINT_TARGET, // Node for the target(s) in constrain()
     BUS_SUFFIX,        // [index] or [high:low]
@@ -183,6 +171,17 @@ pub enum SyntaxKind {
     FUNCTION_CALL_EXPR, // name(arg1, arg2)
     ARGUMENT_LIST,     // (arg1, arg2)
     UNIT_IDENTIFIER,   // A unit like kOhm, Vdc, pct, etc.
+    
+    // Unit token kinds (for v2.0 unit support)
+    V_UNIT, MV_UNIT, UV_UNIT,
+    A_UNIT, MA_UNIT, UA_UNIT,
+    OHM_UNIT, KOHM_UNIT, MOHM_UNIT,
+    F_UNIT, UF_UNIT, NF_UNIT, PF_UNIT,
+    HZ_UNIT, KHZ_UNIT, MHZ_UNIT, GHZ_UNIT,
+    W_UNIT, MW_UNIT, UW_UNIT,
+    S_UNIT, MS_UNIT, US_UNIT, NS_UNIT,
+    PARAM_LIST,        // Parameter list (param1=value1, param2=value2)
+    ARRAY_EXPR,        // Array expression [item1, item2, ...]
 
     // References
     SIMPLE_IDENT_REF, // Reference consisting of a single identifier (could be Net, Pin, Port, etc.)

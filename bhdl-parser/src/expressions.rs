@@ -5,9 +5,10 @@ use crate::syntax::SyntaxKind;
 use super::core::{Parser, SyntaxKindExt};
 
 impl<'t> Parser<'t> {
-    // Expression parsing functions (parse_expr, parse_primary_expr, precedence funcs, parse_value, etc.)
-    // pub(crate) fn parse_expr(&mut self, min_bp: u8) { ... }
-    // ... other implementations ...
+    // Alias for compatibility
+    pub(crate) fn parse_expression(&mut self) {
+        self.parse_expr(0);
+    }
 
     // --- Expression Parsing (Precedence Climbing) ---
 
@@ -106,6 +107,38 @@ impl<'t> Parser<'t> {
                  }
             }
 
+            // Check for named handle syntax in connection context (handle: Type)
+            if current_op == SyntaxKind::COLON {
+                // Check if this looks like a named handle pattern
+                // Look ahead to see if we have: COLON IDENT L_PAREN
+                let mut lookahead = self.pos + 1;
+                while lookahead < self.tokens.len() && self.tokens[lookahead].0.is_trivia() {
+                    lookahead += 1;
+                }
+                
+                let is_named_handle = if lookahead < self.tokens.len() && self.tokens[lookahead].0 == SyntaxKind::IDENT {
+                    // Check for opening paren after the identifier
+                    lookahead += 1;
+                    while lookahead < self.tokens.len() && self.tokens[lookahead].0.is_trivia() {
+                        lookahead += 1;
+                    }
+                    lookahead < self.tokens.len() && self.tokens[lookahead].0 == SyntaxKind::L_PAREN
+                } else {
+                    false
+                };
+                
+                if is_named_handle {
+                    // This is a named handle, not a ternary operator
+                    self.bump(); // Consume COLON
+                    
+                    // Parse the component instantiation that follows
+                    self.parse_primary_expr(); // This will parse Type(...).pin
+                    
+                    // Don't wrap in any special node - the connection is already being parsed
+                    continue;
+                }
+            }
+            
             // Standard infix binary operators
             if let Some((l_bp, r_bp)) = self.infix_binding_power(current_op) {
                 if l_bp < min_bp {
@@ -152,8 +185,11 @@ impl<'t> Parser<'t> {
                             if self.peek() == Some(SyntaxKind::DOT) {
                                 self.bump(); // Consume DOT
                                 match self.peek() {
-                                    Some(SyntaxKind::IDENT) | Some(SyntaxKind::NUMBER) => {
-                                        self.bump(); // Consume pin identifier/number
+                                    Some(SyntaxKind::IDENT) | Some(SyntaxKind::NUMBER) | Some(SyntaxKind::UNIT_IDENTIFIER) => {
+                                        self.bump(); // Consume pin identifier/number/unit (for pins like .A, .K)
+                                    }
+                                    Some(SyntaxKind::PLUS) | Some(SyntaxKind::MINUS) => {
+                                        self.bump(); // Consume + or - as pin names (for capacitor pins)
                                     }
                                     _ => {
                                         // Pin access is optional, don't error if not found
@@ -176,6 +212,40 @@ impl<'t> Parser<'t> {
                         // Need to ensure parse_bus_suffix is pub(crate)
                         self.builder.start_node_at(checkpoint, SyntaxKind::NET_REF.into());
                         self.parse_bus_suffix(); // Consumes [...] including brackets
+                        
+                        // Check for pin access after array indexing: leds[0].K
+                        if self.peek() == Some(SyntaxKind::DOT) {
+                            self.bump(); // Consume DOT
+                            match self.peek() {
+                                Some(SyntaxKind::IDENT) | Some(SyntaxKind::NUMBER) | Some(SyntaxKind::UNIT_IDENTIFIER) => {
+                                    self.bump(); // Consume pin identifier/number/unit (for pins like .A, .K)
+                                }
+                                Some(SyntaxKind::PLUS) | Some(SyntaxKind::MINUS) => {
+                                    self.bump(); // Consume + or - as pin names (for capacitor pins)
+                                }
+                                _ => {
+                                    self.error("Expected pin name after '.'".to_string());
+                                }
+                            }
+                        }
+                        
+                        self.builder.finish_node();
+                    }
+                    Some(SyntaxKind::DOT) => {
+                        // Pin access on simple identifier: LED.A
+                        self.builder.start_node_at(checkpoint, SyntaxKind::PIN_REF.into());
+                        self.bump(); // Consume DOT
+                        match self.peek() {
+                            Some(SyntaxKind::IDENT) | Some(SyntaxKind::NUMBER) | Some(SyntaxKind::UNIT_IDENTIFIER) => {
+                                self.bump(); // Consume pin identifier/number/unit (for pins like .A, .K)
+                            }
+                            Some(SyntaxKind::PLUS) | Some(SyntaxKind::MINUS) => {
+                                self.bump(); // Consume + or - as pin names (for capacitor pins)
+                            }
+                            _ => {
+                                self.error("Expected pin name after '.'".to_string());
+                            }
+                        }
                         self.builder.finish_node();
                     }
                     _ => {
@@ -189,6 +259,10 @@ impl<'t> Parser<'t> {
                 self.bump(); // Consume '('
                 self.parse_expr(0); // Parse nested expression (reset precedence)
                 self.expect(SyntaxKind::R_PAREN); // Expect ')'
+            }
+            Some(SyntaxKind::L_BRACKET) => {
+                // Array expression: [item1, item2, ...]
+                self.parse_array_expr();
             }
             _ => {
                 self.error(format!("Expected literal, identifier, or '(' for expression factor, found {:?}", self.peek())); // Use peek()
@@ -245,15 +319,21 @@ impl<'t> Parser<'t> {
                 }
 
                 if let Some((_, text)) = self.tokens.get(next_token_pos) {
-                    // Check if the IDENT text is a single-letter unit
+                    // Check if the IDENT text is a unit or unit prefix
                     match text.as_str() {
+                        // Base units
                         "F" | "H" | "V" | "A" | "W" | "s" | "%" => {
                             // It's a unit, consume it as part of the VALUE node.
-                            // We need to bump up to and including this token.
                             self.skip_trivia(); // Consume any trivia before the unit IDENT
                             self.bump(); // Consume the unit IDENT itself
                         }
-                        _ => { /* Not a single-letter unit IDENT, do nothing extra */ }
+                        // Common EDA unit prefixes (single letter)
+                        "k" | "K" | "M" | "G" | "m" | "u" | "n" | "p" | "f" => {
+                            // It's a unit prefix, consume it as part of the VALUE node.
+                            self.skip_trivia(); // Consume any trivia before the prefix IDENT
+                            self.bump(); // Consume the prefix IDENT itself
+                        }
+                        _ => { /* Not a unit-related IDENT, do nothing extra */ }
                     }
                 }
             } 
@@ -285,6 +365,49 @@ impl<'t> Parser<'t> {
         // For now, assume all IDENT(...) in expressions are component instantiations
         // since function calls are less common in circuit descriptions
         true
+    }
+    
+    // Helper to determine if we're parsing inside a connection expression
+    // This helps disambiguate colon usage (named handle vs ternary operator)
+    fn is_in_connection_context(&self) -> bool {
+        // More robust heuristic: Check if we're in a context where named handles are allowed
+        // This includes after connection operators or at the start of connection statements
+        
+        // Look back through recent tokens
+        let mut pos = self.pos.saturating_sub(10); // Look back up to 10 tokens
+        let mut found_arrow = false;
+        
+        while pos < self.pos {
+            if let Some((kind, _)) = self.tokens.get(pos) {
+                match kind {
+                    // Connection operators indicate we're in a connection context
+                    SyntaxKind::ARROW | SyntaxKind::BI_ARROW | SyntaxKind::INTERFACE_OP => {
+                        found_arrow = true;
+                    }
+                    // If we find these, we're likely at the start of a new statement
+                    SyntaxKind::SEMI | SyntaxKind::L_BRACE => {
+                        // Reset - we're past the previous statement
+                        found_arrow = false;
+                    }
+                    _ => {}
+                }
+            }
+            pos += 1;
+        }
+        
+        // Also check if the previous non-trivia token was an identifier that could be a handle name
+        if !found_arrow {
+            let mut check_pos = self.pos.saturating_sub(1);
+            while check_pos > 0 && self.tokens.get(check_pos).map_or(false, |(k, _)| k.is_trivia()) {
+                check_pos = check_pos.saturating_sub(1);
+            }
+            if let Some((SyntaxKind::IDENT, _)) = self.tokens.get(check_pos) {
+                // We have IDENT followed by COLON - likely a named handle
+                return true;
+            }
+        }
+        
+        found_arrow
     }
 
     // Parses component parameters: (param1, param2, ...) where params can have units

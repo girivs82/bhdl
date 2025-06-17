@@ -1,0 +1,13 @@
+board TestSynthesizer {
+    power VCC = 5V @ 1A;
+    ground GND;
+    
+    // Simple resistor divider
+    VCC -> R1 -> divider -> R2 -> GND;
+    R1: Res(10k);
+    R2: Res(10k);
+    
+    // Decoupling capacitor
+    VCC -> C1 -> GND;
+    C1: Cap(100n);
+}

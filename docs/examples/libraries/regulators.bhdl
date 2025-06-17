@@ -1,0 +1,230 @@
+// Voltage Regulator Components Library - BHDL v2.0
+// Standard linear and switching voltage regulators
+
+// LM7805 - 5V 1A Linear Regulator
+module LM7805(package: string = "TO-220") {
+    // Universal pin names (same across all packages)
+    pin IN: power in;
+    pin GND: ground;
+    pin OUT: power out;
+    
+    // Component attributes
+    attribute component_class = "voltage_regulator";
+    attribute regulator_type = "linear";
+    attribute output_voltage = "5V";
+    attribute max_current = "1A";
+    attribute dropout_voltage = "2V";
+    attribute quiescent_current = "8mA";
+    
+    // Package-specific physical pin mapping
+    attribute pin_mapping = match package {
+        "TO-220" => {
+            IN: 1,    // Input
+            GND: 2,   // Ground (also tab)
+            OUT: 3    // Output
+        },
+        "DPAK" | "TO-252" => {
+            IN: 1,    // Input
+            GND: 4,   // Tab is ground
+            OUT: 3    // Output
+        },
+        "D2PAK" | "TO-263" => {
+            IN: 1,    // Input
+            GND: 4,   // Tab is ground
+            OUT: 3    // Output
+        },
+        _ => {
+            error: "Unknown package type"
+        }
+    };
+    
+    // Thermal characteristics by package
+    attribute thermal_resistance = match package {
+        "TO-220" => "5°C/W",      // Junction to case
+        "DPAK" => "8°C/W",
+        "D2PAK" => "3°C/W",
+        _ => "unknown"
+    };
+}
+
+// LM7812 - 12V 1A Linear Regulator
+module LM7812(package: string = "TO-220") {
+    pin IN: power in;
+    pin GND: ground;
+    pin OUT: power out;
+    
+    attribute component_class = "voltage_regulator";
+    attribute output_voltage = "12V";
+    attribute max_current = "1A";
+    attribute dropout_voltage = "2V";
+    
+    // Same pin mapping as LM7805
+    attribute pin_mapping = match package {
+        "TO-220" => { IN: 1, GND: 2, OUT: 3 },
+        "DPAK" => { IN: 1, GND: 4, OUT: 3 },
+        _ => { error: "Unknown package" }
+    };
+}
+
+// LM1117 - Low Dropout Regulator (multiple voltage options)
+module LM1117(
+    voltage: voltage = 3.3V,
+    package: string = "SOT-223"
+) {
+    pin IN: power in;
+    pin GND: ground;
+    pin OUT: power out;
+    
+    attribute component_class = "voltage_regulator";
+    attribute regulator_type = "ldo";
+    attribute output_voltage = voltage;
+    attribute max_current = "800mA";
+    attribute dropout_voltage = "1.2V";
+    
+    attribute pin_mapping = match package {
+        "SOT-223" => {
+            IN: 3,
+            GND: 1,
+            OUT: [2, 4]  // Pin 2 and tab (pin 4) are connected
+        },
+        "TO-220" => {
+            IN: 3,
+            GND: 1,
+            OUT: 2
+        },
+        "TO-252" => {
+            IN: 3,
+            GND: 1,    // Tab is also ground
+            OUT: 2
+        },
+        _ => { error: "Unknown package" }
+    };
+}
+
+// LM317 - Adjustable Voltage Regulator
+module LM317(package: string = "TO-220") {
+    pin IN: power in;
+    pin ADJ: signal inout;  // Adjust pin
+    pin OUT: power out;
+    
+    attribute component_class = "voltage_regulator";
+    attribute regulator_type = "adjustable";
+    attribute output_voltage = "1.25V to 37V";  // Adjustable range
+    attribute max_current = "1.5A";
+    attribute dropout_voltage = "3V";
+    
+    attribute pin_mapping = match package {
+        "TO-220" => {
+            ADJ: 1,   // Adjust
+            OUT: 2,   // Output (also tab)
+            IN: 3     // Input
+        },
+        "DPAK" => {
+            ADJ: 1,
+            OUT: 4,   // Tab
+            IN: 3
+        },
+        _ => { error: "Unknown package" }
+    };
+    
+    // Formula for output voltage based on feedback resistors
+    attribute vout_formula = "Vout = 1.25V * (1 + R2/R1)";
+}
+
+// TPS7A47 - Ultra-Low Noise LDO
+module TPS7A47(
+    voltage: voltage = 3.3V,
+    package: string = "MSOP-8"
+) {
+    pin IN: power in;
+    pin EN: signal in;     // Enable
+    pin GND: ground;
+    pin OUT: power out;
+    pin NR: signal inout;  // Noise reduction
+    pin SS: signal inout;  // Soft-start
+    pin FB: signal in;     // Feedback (for adjustable version)
+    pin PG: signal out;    // Power good
+    
+    attribute component_class = "voltage_regulator";
+    attribute regulator_type = "ultra_low_noise_ldo";
+    attribute output_voltage = voltage;
+    attribute max_current = "1A";
+    attribute noise = "4.17µVRMS";  // 10Hz to 100kHz
+    
+    attribute pin_mapping = match package {
+        "MSOP-8" => {
+            OUT: [1, 2],  // Pins 1 and 2 tied together
+            NR: 3,
+            GND: 4,
+            PG: 5,
+            FB: 6,
+            SS: 7,
+            IN: 8,
+            EN: 8         // Tied to IN for always-on
+        },
+        _ => { error: "Unknown package" }
+    };
+}
+
+// Switching Regulator Example
+module LM2596(package: string = "TO-220-5") {
+    pin IN: power in;
+    pin GND: ground;
+    pin OUT: signal out;    // Switch output (to inductor)
+    pin FB: signal in;      // Feedback
+    pin EN: signal in;      // Enable/ON/OFF
+    
+    attribute component_class = "voltage_regulator";
+    attribute regulator_type = "buck_converter";
+    attribute output_voltage = "adjustable";
+    attribute max_current = "3A";
+    attribute switching_frequency = "150kHz";
+    
+    attribute pin_mapping = match package {
+        "TO-220-5" => {
+            IN: 1,
+            OUT: 2,    // Switch output
+            GND: 3,    // Also tab
+            FB: 4,
+            EN: 5
+        },
+        _ => { error: "Unknown package" }
+    };
+}
+
+// High-level abstraction modules
+
+// Generic linear regulator - system will select specific part
+module LinearRegulator(
+    output: voltage,
+    current: current,
+    dropout: voltage = 2V,
+    package: string = "TO-220"
+) {
+    pin IN: power in;
+    pin GND: ground;
+    pin OUT: power out;
+    
+    attribute component_class = "voltage_regulator";
+    attribute selection_hint = "linear";
+    
+    // This is a virtual module - analyzer will map to specific part
+    // based on voltage, current, and dropout requirements
+}
+
+// Generic power supply - highest abstraction
+module PowerSupply(
+    output: voltage,
+    current: current,
+    ripple: voltage = 100mV,
+    efficiency: real = 0.7
+) {
+    pin IN: power in;
+    pin GND: ground;
+    pin OUT: power out;
+    
+    attribute component_class = "power_supply";
+    
+    // This is a virtual module - analyzer will determine topology
+    // (linear vs switching) and generate implementation
+}

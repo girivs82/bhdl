@@ -1,0 +1,7 @@
+board ArrayIndexTest {
+    power VCC = 5V @ 1A;
+    ground GND;
+    
+    VCC -> led[0]: LED(red).A;
+    led[0].K -> GND;
+}

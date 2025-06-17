@@ -196,11 +196,9 @@ impl<'t> ErrorRecovery for Parser<'t> {
     fn recover_from_interface_error(&mut self, context: &RecoveryContext) {
         self.error("Recovering from interface error".to_string());
         
-        // Interface-related delimiters
+        // Interface-related delimiters for v2.0
         let interface_delimiters = vec![
             SyntaxKind::INTERFACE_OP, // <=> - interface connection
-            SyntaxKind::PARAMETERS_KW, // parameters
-            SyntaxKind::PINS_KW,      // pins
             SyntaxKind::R_BRACE,      // } - end block
             SyntaxKind::SEMI,         // ; - end statement
         ];
@@ -305,9 +303,8 @@ impl<'t> ErrorRecovery for Parser<'t> {
             // Statement starts
             SyntaxKind::GENERATE_KW | SyntaxKind::IF_KW => true,
             
-            // Block starts
-            SyntaxKind::PARAMETERS_KW | SyntaxKind::COMPONENTS_KW | SyntaxKind::NETS_KW 
-            | SyntaxKind::CONNECTIONS_KW | SyntaxKind::PINS_KW | SyntaxKind::INTERFACES_KW => true,
+            // v2.0 block starts
+            SyntaxKind::GENERATE_KW | SyntaxKind::CONSTRAIN_KW => true,
             
             // Top-level item starts
             SyntaxKind::BOARD_KW | SyntaxKind::MODULE_KW | SyntaxKind::COMPONENT_KW 

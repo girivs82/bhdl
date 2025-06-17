@@ -1,0 +1,29 @@
+// Simple 7805 regulator circuit - avoiding lexer issues
+board LinearRegulator {
+    nets {
+        net VIN: power;
+        net VOUT: power;
+        net GND: ground;
+    }
+    
+    components {
+        component LM7805 REG1;
+        component Capacitor CAP1 { 
+            parameter value = 330uF;
+        }
+        component Capacitor CAP2 {
+            parameter value = 100nF;
+        }
+    }
+    
+    connections {
+        connect VIN -> CAP1.plus;
+        connect CAP1.plus -> REG1.IN;
+        connect CAP1.minus -> GND;
+        
+        connect REG1.GND -> GND;
+        connect REG1.OUT -> CAP2.plus;
+        connect CAP2.plus -> VOUT;
+        connect CAP2.minus -> GND;
+    }
+}

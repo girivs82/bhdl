@@ -223,18 +223,14 @@ impl fmt::Display for PowerAnalysisError {
 impl PowerAnalysisContext {
     /// Create a new power analysis context
     pub fn new() -> Self {
-        let mut context = Self {
+        Self {
             domains: HashMap::new(),
             level_shifted_signals: Vec::new(),
             power_sequence: Vec::new(),
             component_domains: HashMap::new(),
             errors: Vec::new(),
             warnings: Vec::new(),
-        };
-
-        // Add common power domains
-        context.add_standard_domains();
-        context
+        }
     }
 
     /// Add standard power domains commonly used in designs
@@ -273,6 +269,12 @@ impl PowerAnalysisContext {
     /// Add a custom power domain
     pub fn add_domain(&mut self, domain: PowerDomain) {
         self.domains.insert(domain.name.clone(), domain);
+    }
+    
+    /// Add a ground domain to the context
+    pub fn add_ground_domain(&mut self, name: String) {
+        // Ground domains are already added as 0V power domains
+        // This method is for any special ground tracking if needed
     }
 
     /// Get a power domain by name
@@ -512,8 +514,11 @@ impl PowerAnalysisContext {
 pub fn analyze_power_domains(syntax: &SyntaxNode<BhdlLanguage>) -> PowerAnalysisContext {
     let mut context = PowerAnalysisContext::new();
     
-    // Walk the syntax tree and identify power-related constructs
+    // First pass: identify power domains and initial connections
     visit_node_for_power_analysis(syntax, &mut context);
+    
+    // Second pass: propagate power domains through the circuit
+    propagate_power_domains_in_circuit(syntax, &mut context);
     
     // Generate power sequence
     if let Err(error) = context.generate_power_sequence() {
@@ -526,11 +531,20 @@ pub fn analyze_power_domains(syntax: &SyntaxNode<BhdlLanguage>) -> PowerAnalysis
 /// Visit nodes in the syntax tree for power analysis
 fn visit_node_for_power_analysis(node: &SyntaxNode<BhdlLanguage>, context: &mut PowerAnalysisContext) {
     match node.kind() {
+        SyntaxKind::POWER_DECL => {
+            analyze_power_declaration(node, context);
+        }
+        SyntaxKind::GROUND_DECL => {
+            analyze_ground_declaration(node, context);
+        }
         SyntaxKind::COMPONENT_INST => {
             analyze_component_power_requirements(node, context);
         }
         SyntaxKind::FLOW_EXPR => {
             analyze_flow_power_domains(node, context);
+        }
+        SyntaxKind::CONNECTION_STMT => {
+            analyze_connection_power_domains(node, context);
         }
         SyntaxKind::BINARY_EXPR => {
             analyze_signal_connections(node, context);
@@ -544,36 +558,481 @@ fn visit_node_for_power_analysis(node: &SyntaxNode<BhdlLanguage>, context: &mut 
     }
 }
 
+/// Analyze a power declaration node
+fn analyze_power_declaration(node: &SyntaxNode<BhdlLanguage>, context: &mut PowerAnalysisContext) {
+    use bhdl_ast::{PowerDecl, AstNode};
+    
+    if let Some(power_decl) = PowerDecl::cast(node.clone()) {
+        if let Some(name_token) = power_decl.name() {
+            let name = name_token.text().to_string();
+            
+            // Parse voltage value
+            let voltage = power_decl.voltage()
+                .and_then(|v| parse_electrical_value(&v))
+                .unwrap_or(0.0);
+                
+            // Parse current value
+            let current = power_decl.current()
+                .and_then(|c| parse_electrical_value(&c))
+                .unwrap_or(1.0);
+            
+            // Create power domain
+            let mut domain = PowerDomain::new(name.clone(), voltage);
+            domain.max_current = current;
+            
+            // Add to context
+            context.add_domain(domain);
+        }
+    }
+}
+
+/// Analyze a ground declaration node
+fn analyze_ground_declaration(node: &SyntaxNode<BhdlLanguage>, context: &mut PowerAnalysisContext) {
+    use bhdl_ast::{GroundDecl, AstNode};
+    
+    if let Some(ground_decl) = GroundDecl::cast(node.clone()) {
+        if let Some(name_token) = ground_decl.name() {
+            let name = name_token.text().to_string();
+            
+            // Ground is a special 0V power domain
+            let domain = PowerDomain::new(name.clone(), 0.0);
+            
+            // Add to context
+            context.add_domain(domain);
+            context.add_ground_domain(name_token.text().to_string());
+        }
+    }
+}
+
+/// Parse electrical values with units (e.g., "5V", "1A", "100mA")
+fn parse_electrical_value(value_str: &str) -> Option<f64> {
+    let value_str = value_str.trim();
+    
+    // Find where the number ends and unit begins
+    let num_end = value_str.chars()
+        .position(|c| c.is_alphabetic())
+        .unwrap_or(value_str.len());
+    
+    let (num_part, unit_part) = value_str.split_at(num_end);
+    
+    // Parse the numeric part
+    let mut value = num_part.parse::<f64>().ok()?;
+    
+    // Apply unit multiplier
+    match unit_part {
+        "mV" => value *= 0.001,
+        "V" => {}, // Base unit
+        "kV" => value *= 1000.0,
+        "uA" | "µA" => value *= 0.000001,
+        "mA" => value *= 0.001,
+        "A" => {}, // Base unit
+        _ => {}, // Unknown unit, assume base
+    }
+    
+    Some(value)
+}
+
 /// Analyze power requirements for component instantiation
 fn analyze_component_power_requirements(node: &SyntaxNode<BhdlLanguage>, context: &mut PowerAnalysisContext) {
-    // Extract component type and parameters
-    if let Some(ident_token) = node.first_token() {
-        let component_type = ident_token.text();
+    // This function is called during the first pass to identify component instances
+    // We should NOT assign domains here - that happens during power propagation
+    // For now, just note the component exists
+    
+    // Extract component instance name if this is a named component
+    // Format: name: ComponentType(params)
+    if let Some(parent) = node.parent() {
+        if parent.kind() == SyntaxKind::COMPONENT_INST {
+            // Try to get the instance name from a preceding identifier
+            let mut instance_name = None;
+            
+            // Look for pattern like "R1: Res(10k)"
+            if let Some(prev_token) = parent.first_token() {
+                // The first token might be the instance name
+                let text = prev_token.text();
+                if text != ":" && !text.is_empty() {
+                    instance_name = Some(text.to_string());
+                }
+            }
+            
+            // If we found an instance name, we can track it
+            // But don't assign a domain yet - that happens during connection analysis
+            if let Some(name) = instance_name {
+                // Just note that this component exists
+                // The domain will be assigned when we trace power connections
+                println!("Power Analysis: Found component instance '{}'", name);
+            }
+        }
+    }
+}
+
+/// Analyze power domains in connection statements
+fn analyze_connection_power_domains(node: &SyntaxNode<BhdlLanguage>, context: &mut PowerAnalysisContext) {
+    use bhdl_ast::v2_statements::ConnectionStmt;
+    
+    if let Some(conn_stmt) = ConnectionStmt::cast(node.clone()) {
+        // Get the full connection text
+        let conn_text = conn_stmt.text();
         
-        // Infer power domain based on component type
-        let power_domain = match component_type {
-            "STM32H7" | "STM32F4" => "VCC_3V3",
-            "ESP32" => "VCC_3V3",
-            "TPS63070" => "USB_5V", // Buck-boost converter
-            "AMS1117" => "USB_5V",  // Linear regulator
-            "SensorIC" => "VCC_1V8", // Low power sensor
-            _ => "VCC_3V3", // Default to 3.3V
-        };
+        // Parse chained connections: VCC -> R1 -> LED1 -> GND
+        let parts: Vec<&str> = conn_text.split("->").map(|s| s.trim()).collect();
         
-        context.assign_component_domain(component_type.to_string(), power_domain.to_string());
+        if parts.len() >= 2 {
+            // Process each connection pair
+            for i in 0..parts.len() - 1 {
+                let lhs_full = parts[i];
+                let rhs_full = parts[i + 1];
+                
+                // Clean up the parts (remove semicolon, extract component names)
+                let lhs = lhs_full.trim_end_matches(';').trim();
+                let rhs = rhs_full.trim_end_matches(';').trim();
+                
+                // Extract component name from LHS (handle pin references)
+                let lhs_component = if let Some(dot_pos) = lhs.find('.') {
+                    lhs[..dot_pos].trim()
+                } else {
+                    lhs
+                };
+                
+                // Extract target identifier from RHS (handle named handles)
+                let rhs_target = if let Some(colon_pos) = rhs.find(':') {
+                    rhs[..colon_pos].trim()
+                } else if let Some(dot_pos) = rhs.find('.') {
+                    rhs[..dot_pos].trim()
+                } else {
+                    rhs
+                };
+                
+                println!("Power Analysis: Processing connection '{}' -> '{}'", lhs_component, rhs_target);
+                
+                // Check if LHS is a power domain or component connected to power
+                if context.domains.contains_key(lhs_component) {
+                    // Get the source domain - could be the component itself or its assigned domain
+                    let source_domain = if let Some(assigned_domain) = context.component_domains.get(lhs_component) {
+                        assigned_domain.clone()
+                    } else {
+                        lhs_component.to_string()
+                    };
+                    
+                    // Propagate power domain
+                    if let Some(source_power) = context.domains.get(&source_domain).cloned() {
+                        if rhs_target != "GND" && !context.domains.contains_key(rhs_target) {
+                            let mut derived_domain = source_power.clone();
+                            derived_domain.name = rhs_target.to_string();
+                            println!("Power Analysis: Creating derived power domain '{}' from '{}'", rhs_target, source_domain);
+                            context.domains.insert(rhs_target.to_string(), derived_domain);
+                        }
+                        
+                        // Assign the component to its power source domain
+                        if rhs_target.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false) && rhs_target != "GND" {
+                            context.assign_component_domain(rhs_target.to_string(), source_domain.clone());
+                            println!("Power Analysis: Assigned component '{}' to power domain '{}'", rhs_target, source_domain);
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Also try the normal parsing path in case it works for some connections
+        if let Some(expr) = conn_stmt.expr() {
+            analyze_flow_power_domains(&expr, context);
+        }
     }
 }
 
 /// Analyze power domains in flow expressions
-fn analyze_flow_power_domains(_node: &SyntaxNode<BhdlLanguage>, _context: &mut PowerAnalysisContext) {
-    // TODO: Implement flow-specific power analysis
-    // This would track power flow through the circuit
+fn analyze_flow_power_domains(node: &SyntaxNode<BhdlLanguage>, context: &mut PowerAnalysisContext) {
+    // Implement flow-specific power analysis
+    // This tracks power flow through the circuit and propagates power domains
+    
+    use bhdl_ast::{flow::{FlowExpr, FlowElement}, expr::BinaryExpr};
+    
+    // Handle FlowExpr nodes
+    if let Some(flow_expr) = FlowExpr::cast(node.clone()) {
+        // Extract the flow elements
+        let elements: Vec<_> = flow_expr.elements().collect();
+        
+        // If the first element is a power domain, propagate it through the flow
+        if let Some(first_elem) = elements.first() {
+            match first_elem {
+                FlowElement::Identifier(ident) => {
+                    let source_name = ident.text().to_string();
+                    
+                    // Check if this is a power domain
+                    if context.domains.contains_key(&source_name) {
+                        // This is a power flow! Propagate the domain through passive components
+                        propagate_power_domain_through_flow(&elements, &source_name, context);
+                    }
+                }
+                _ => {} // Other flow elements don't start power flows
+            }
+        }
+    }
+    // Handle BINARY_EXPR nodes (connection statements)
+    else if let Some(binary_expr) = BinaryExpr::cast(node.clone()) {
+        // Check if this is a flow operator (->)
+        if let Some(op) = binary_expr.op() {
+            if op == SyntaxKind::ARROW {
+                // Extract source and target from binary expression
+                if let (Some(lhs), Some(rhs)) = (binary_expr.lhs(), binary_expr.rhs()) {
+                    let lhs_text = lhs.syntax().text().to_string().trim().to_string();
+                    let rhs_text = rhs.syntax().text().to_string().trim().to_string();
+                    
+                    println!("Power Analysis: Processing connection '{}' -> '{}'", lhs_text, rhs_text);
+                    
+                    // Case 1: Direct power domain connections (VIN -> something)
+                    if context.domains.contains_key(&lhs_text) {
+                        println!("Power Analysis: Found power connection from domain '{}'", lhs_text);
+                        println!("Power Analysis: RHS text = '{}'", rhs_text);
+                        
+                        // Extract the target identifier from RHS
+                        // Due to parser structure, for named handles like "fuse: Fuse(1A).1",
+                        // the RHS only contains "fuse" and the colon+instantiation are siblings
+                        let target_name = rhs_text.trim().to_string();
+                        
+                        // Create derived power domain for the target
+                        if let Some(source_power) = context.domains.get(&lhs_text).cloned() {
+                            let mut derived_domain = source_power.clone();
+                            derived_domain.name = target_name.clone();
+                            println!("Power Analysis: Creating derived power domain '{}' from '{}'", target_name, lhs_text);
+                            context.domains.insert(target_name, derived_domain);
+                        }
+                    }
+                    
+                    // Case 2: Power propagation through components (component.pin -> net)
+                    // Check if LHS is a pin reference from a power-propagating component
+                    if let Some(dot_pos) = lhs_text.find('.') {
+                        let component_name = lhs_text[..dot_pos].trim();
+                        
+                        // Check if this component is connected to a power domain
+                        // Look for the component in our tracked power connections
+                        if context.domains.contains_key(component_name) {
+                            println!("Power Analysis: Found power propagation from component '{}'", component_name);
+                            
+                            // Extract target net name from RHS
+                            // Due to parser structure, the RHS text already contains just the identifier
+                            let target_name = rhs_text.trim().to_string();
+                            
+                            // Propagate power domain
+                            if let Some(source_power) = context.domains.get(component_name).cloned() {
+                                let mut derived_domain = source_power.clone();
+                                derived_domain.name = target_name.clone();
+                                println!("Power Analysis: Propagating power domain to '{}' from '{}'", target_name, component_name);
+                                context.domains.insert(target_name, derived_domain);
+                            }
+                        } else {
+                            println!("Power Analysis: Component '{}' not found in power domains (LHS: '{}')", component_name, lhs_text);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Propagate power domain through a flow expression
+fn propagate_power_domain_through_flow(
+    elements: &[bhdl_ast::flow::FlowElement],
+    source_domain: &str,
+    context: &mut PowerAnalysisContext,
+) {
+    use bhdl_ast::flow::FlowElement;
+    
+    // Track the current power domain as we traverse the flow
+    let mut current_domain = source_domain.to_string();
+    
+    for element in elements {
+        match element {
+            FlowElement::Identifier(token) => {
+                let net_name = token.text().to_string();
+                
+                // If this identifier is not already a power domain, mark it as derived
+                if !context.domains.contains_key(&net_name) {
+                    // Create a derived power domain
+                    if let Some(source_power) = context.domains.get(&current_domain).cloned() {
+                        let mut derived_domain = source_power.clone();
+                        derived_domain.name = net_name.clone();
+                        // Mark as derived by adding a note
+                        context.domains.insert(net_name.clone(), derived_domain);
+                    }
+                }
+                
+                // Update current domain for next iteration
+                current_domain = net_name;
+            }
+            FlowElement::ComponentInstantiation(comp_inst) => {
+                // Extract component type name
+                let instance_name = if let Some(comp_type) = comp_inst.component_type() {
+                    comp_type.text().to_string()
+                } else {
+                    // Fallback: use syntax text
+                    comp_inst.syntax().text().to_string()
+                };
+                
+                // Assign this component to the current power domain
+                context.assign_component_domain(instance_name.clone(), current_domain.clone());
+                println!("Power Analysis: Assigned component '{}' to power domain '{}'", instance_name, current_domain);
+                
+                // Check if this is a passive component that propagates power
+                if let Some(comp_type) = comp_inst.component_type() {
+                    let type_name = comp_type.text().to_string();
+                    
+                    // Passive components that propagate power domains
+                    let power_propagating_components = [
+                        "Fuse", "Inductor", "L", "Ferrite", "Res", "R",
+                        "TVSDiode", "Diode", "D", "SchottkyDiode"
+                    ];
+                    
+                    if power_propagating_components.contains(&type_name.as_str()) {
+                        // This component propagates the power domain
+                        // Create a domain for the component itself
+                        if let Some(source_power) = context.domains.get(&current_domain).cloned() {
+                            let mut component_domain = source_power.clone();
+                            component_domain.name = instance_name.clone();
+                            context.domains.insert(instance_name.clone(), component_domain);
+                            // Update current domain to this component
+                            current_domain = instance_name;
+                        }
+                    } else {
+                        // Active component or transformer - power domain may change
+                        // For now, we stop propagation at active components
+                        break;
+                    }
+                }
+            }
+            _ => {
+                // Other flow elements don't affect power propagation
+            }
+        }
+    }
 }
 
 /// Analyze signal connections for power compatibility
 fn analyze_signal_connections(_node: &SyntaxNode<BhdlLanguage>, _context: &mut PowerAnalysisContext) {
     // TODO: Implement signal connection power analysis
     // This would check voltage compatibility between connected pins
+}
+
+/// Second pass: propagate power domains through the circuit
+fn propagate_power_domains_in_circuit(syntax: &SyntaxNode<BhdlLanguage>, context: &mut PowerAnalysisContext) {
+    use bhdl_ast::v2_statements::ConnectionStmt;
+    
+    // Build a map of all connections in the circuit
+    let mut connections: Vec<(String, String)> = Vec::new();
+    
+    // Collect all connections
+    visit_connections_for_propagation(syntax, &mut connections);
+    
+    println!("Power Analysis: Found {} connections to analyze", connections.len());
+    
+    // Keep propagating until no new domains are created
+    let mut changed = true;
+    let mut iterations = 0;
+    const MAX_ITERATIONS: usize = 10; // Prevent infinite loops
+    
+    while changed && iterations < MAX_ITERATIONS {
+        changed = false;
+        iterations += 1;
+        
+        for (source, target) in &connections {
+            // Check if source is a power domain or connected to one
+            let source_domain = if context.domains.contains_key(source) {
+                Some(source.clone())
+            } else {
+                // Check if source is a pin from a component with power
+                if let Some(dot_pos) = source.find('.') {
+                    let component = &source[..dot_pos];
+                    if context.domains.contains_key(component) {
+                        Some(component.to_string())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            };
+            
+            if let Some(domain_name) = source_domain {
+                // Check if target already has a power domain
+                if !context.domains.contains_key(target) {
+                    // Check if this is a power-propagating connection
+                    if is_power_propagating_connection(source, target) {
+                        // Create derived power domain
+                        if let Some(source_power) = context.domains.get(&domain_name).cloned() {
+                            let mut derived_domain = source_power.clone();
+                            derived_domain.name = target.clone();
+                            println!("Power Analysis: Propagating power domain to '{}' from '{}'", target, domain_name);
+                            context.domains.insert(target.clone(), derived_domain);
+                            
+                            // Also assign the component to its source domain
+                            if target.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false) {
+                                context.assign_component_domain(target.clone(), domain_name.clone());
+                                println!("Power Analysis: Assigned component '{}' to domain '{}'", target, domain_name);
+                            }
+                            
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    println!("Power Analysis: Domain propagation completed in {} iterations", iterations);
+}
+
+/// Visit all connections and extract source/target pairs
+fn visit_connections_for_propagation(node: &SyntaxNode<BhdlLanguage>, connections: &mut Vec<(String, String)>) {
+    use bhdl_ast::v2_statements::ConnectionStmt;
+    
+    if let Some(conn_stmt) = ConnectionStmt::cast(node.clone()) {
+        // Parse the connection statement text directly to handle named handles
+        let stmt_text = conn_stmt.syntax().text().to_string();
+        
+        // Extract LHS and RHS from the arrow operator
+        if let Some(arrow_pos) = stmt_text.find("->") {
+            let lhs = stmt_text[..arrow_pos].trim();
+            let rhs_with_semi = stmt_text[arrow_pos + 2..].trim();
+            
+            // Remove trailing semicolon
+            let rhs_full = rhs_with_semi.trim_end_matches(';').trim();
+            
+            // For named handles like "fuse: Fuse(1A).1", extract just the name
+            let rhs = if let Some(colon_pos) = rhs_full.find(':') {
+                rhs_full[..colon_pos].trim()
+            } else {
+                rhs_full
+            };
+            
+            connections.push((lhs.to_string(), rhs.to_string()));
+        }
+    }
+    
+    // Recursively visit children
+    for child in node.children() {
+        visit_connections_for_propagation(&child, connections);
+    }
+}
+
+/// Check if a connection should propagate power domains
+fn is_power_propagating_connection(source: &str, target: &str) -> bool {
+    // Power propagates through:
+    // 1. Direct connections (no component involved)
+    // 2. Connections through passive components
+    
+    // Check if source is a pin reference
+    if source.contains('.') {
+        // This is a pin reference, check the pin number
+        if let Some(dot_pos) = source.rfind('.') {
+            let pin = &source[dot_pos + 1..];
+            // Common power output pins
+            if pin == "2" || pin == "OUT" || pin == "+" || pin == "-" {
+                return true;
+            }
+        }
+    }
+    
+    // Always propagate to non-component identifiers (net names)
+    !target.contains('.')
 }
 
 #[cfg(test)]

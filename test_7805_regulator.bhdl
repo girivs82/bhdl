@@ -1,0 +1,35 @@
+// 7805 Linear Voltage Regulator Circuit
+// Input: 12V DC, Output: 5V DC @ 1A
+// Components: 7805 regulator, input/output capacitors
+
+board LinearRegulator7805 {
+    // Power domains
+    power VIN = 12V @ 2A;
+    power VOUT = 5V @ 1A;
+    ground GND;
+
+    // Power flow specification
+    power_flow: VIN |> input_filtering |> regulation(5V) |> output_filtering |> VOUT;
+
+    // Input filtering capacitor (electrolytic for bulk storage)
+    VIN -> input_cap: Cap(330µF, 25V).+ -> reg_vin;
+    input_cap.- -> GND;
+
+    // Main voltage regulator
+    reg_vin -> regulator: LM7805.IN;
+    regulator.GND -> GND;
+    regulator.OUT -> reg_out;
+
+    // Output filtering capacitor (ceramic for high frequency)
+    reg_out -> output_cap: Cap(100nF, 16V).+ -> VOUT;
+    output_cap.- -> GND;
+
+    // Optional output indicator LED with current limiting resistor
+    VOUT -> led_resistor: Res(330Ω).1 -> power_led: LED(green).A;
+    power_led.K -> GND;
+
+    // Power good indicator
+    if (VOUT.stable && VOUT.voltage > 4.8V) {
+        power_good: true;
+    }
+}

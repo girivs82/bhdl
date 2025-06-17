@@ -1,0 +1,16 @@
+// Minimal test to debug parser issues
+board TestBoard {
+    nets {
+        net A: signal;
+        net B: signal;
+    }
+    
+    components {
+        component TestComp U1;
+    }
+    
+    connections {
+        connect A -> U1.1;
+        connect U1.2 -> B;
+    }
+}

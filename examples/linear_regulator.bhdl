@@ -1,0 +1,28 @@
+// BHDL v2.0 Linear Voltage Regulator Circuit
+// A simple 5V regulated power supply using a 7805 regulator
+
+board LinearRegulator {
+    // Power and ground declarations
+    power VIN = 12V @ 1A;
+    power VCC = 5V @ 500mA;
+    ground GND;
+
+    // Input filtering capacitor with named handle
+    VIN -> C1: Cap(100uF, 25V).pos -> U1: LM7805(package="TO-220").IN;
+    GND -> C1.neg -> U1.GND;
+
+    // Voltage regulator output
+    U1.OUT -> VCC;
+    
+    // Output filtering capacitor
+    VCC -> C2: Cap(10uF, 10V).pos;
+    GND -> C2.neg;
+
+    // LED power indicator
+    VCC -> R1: Res(330).1 -> D1: LED(red).A;
+    GND -> D1.K;
+
+    // Decoupling capacitor
+    VCC -> C3: Cap(100nF).pos;
+    GND -> C3.neg;
+}
