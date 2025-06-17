@@ -55,9 +55,28 @@ The toolchain follows a multi-stage pipeline:
    - Component symbol libraries for passives, ICs, power components
    - SVG generation for circuit diagrams
 
-6. **bhdl-synthesizer**: Future synthesis capabilities (placeholder)
-7. **bhdl-cli**: Command-line interface (placeholder)  
-8. **bhdl-lsp**: Language Server Protocol for IDE integration (placeholder)
+6. **bhdl-synthesizer**: Circuit synthesis and netlist generation
+   - Converts AST and analysis results to structural netlist
+   - Handles component instantiation and net assignment
+   - Supports implicit handle creation for net assignments
+   - Component database integration for real part selection
+
+7. **bhdl-spice**: SPICE-like circuit analysis engine
+   - Newton-Raphson nonlinear DC solver for accurate component modeling
+   - LED forward voltage modeling and diode Shockley equations
+   - Component inference through electrical analysis
+   - Integration with analyzer for power domain propagation
+
+8. **bhdl-stdlib**: Standard component library and parameters
+   - Centralized electrical parameters (LED forward voltage, resistor tolerances)
+   - Removes hardcoded values from core logic
+   - Supports manufacturer datasheet integration
+   - Component parameter definitions for accurate analysis
+
+9. **bhdl-common**: Shared utilities and types (future)
+
+10. **bhdl-cli**: Command-line interface (placeholder)  
+11. **bhdl-lsp**: Language Server Protocol for IDE integration (placeholder)
 
 ### Key Data Structures
 
@@ -73,6 +92,7 @@ BHDL v2.0 uses a flow-based syntax for intuitive circuit description:
 - **Flow operators**: `->` (connection), `<->` (bidirectional), `|>` (flow), `<=>` (interface)
 - **Power/Ground**: Explicit declarations `power VCC = 5V @ 1A;` and `ground GND;`
 - **Direct instantiation**: `VCC -> Res(10k).1 -> LED(red).A;`
+- **Net assignments**: `protected_vin: TVSDiode(15V).1` creates net and implicit handle
 - **Module definition**: `module Name(params) { pin name: type direction; ... }`
 - **Generate constructs**: `generate for i in 0..n { ... }` for repetitive structures
 - **Units**: Comprehensive electrical unit system (V, A, Ω, F, H, Hz, etc.)
@@ -111,17 +131,38 @@ cargo run -p bhdl-components --example kicad_integration
 ## Known Gaps
 
 - CLI and LSP implementations are placeholders  
-- End-to-end source-to-visualization pipeline needs integration work
 - KiCad footprint parsing not yet implemented
+- Remaining visualization issues: component symbol scaling, orthogonal routing
 
 ## Important Files
 
-- `docs/spec/BHDL_Complete_Specification.md` - Complete v2.0 language specification
-- `docs/examples/` - Example BHDL circuit files
+- `docs/spec/BHDL_Complete_Specification.md` - **Complete and authoritative v2.0 specification** (all other specs consolidated here)
+- `docs/examples/` - Example BHDL circuit files demonstrating v2.0 syntax
+- `test_7805_regulator_realistic.bhdl` - Realistic test circuit with net assignments
+- `bhdl-stdlib/electrical_params.bhdl` - Centralized component parameter library
 - `bhdl-visualizer/src/symbols/` - Component symbol definitions
 - Various `*.svg` files in `bhdl-visualizer/` - Test visualization outputs
 
 ## Development Reminders
+
+### Test File Organization
+⚠️ **CRITICAL**: When creating or running tests, NEVER use the project root directory:
+1. **Test binaries** (.rs) → Place in `<crate>/src/bin/` directory
+2. **Test circuits** (.bhdl) → Place in `tests/circuits/{simple|realistic|edge_cases}/`
+3. **Test outputs** (.svg, .net) → Write to `tests/outputs/{svg|netlists}/`
+4. **Temporary files** → Use `tests/scratch/` (git-ignored)
+5. **Run tests** → Use `./tests/run_tests.sh` or cargo commands with proper paths
+
+Example test structure:
+```rust
+// In test binary: bhdl-synthesizer/src/bin/my_test.rs
+let test_file = std::env::args().nth(1)
+    .unwrap_or_else(|| "tests/circuits/realistic/my_circuit.bhdl".to_string());
+    
+let output_path = "tests/outputs/svg/my_test_output.svg";
+```
+
+See `tests/TESTING.md` for complete testing guidelines.
 
 ### SVG Visualization Quality Control
 ⚠️ **CRITICAL**: After generating any SVG visualization, always:
@@ -169,23 +210,41 @@ Common SVG issues to watch for:
 
 This ensures we build a robust, production-ready toolchain rather than a demo with shortcuts.
 
-## Current Pipeline Testing Status
+## Current Pipeline Status
 
-### Recent Progress (2025-06-16)
-1. **Power Domain Propagation Fix**: Fixed analyzer to properly propagate power domains through components
-   - Power domains now correctly flow from sources through resistors to other components
-   - This should improve component inference by providing proper voltage/current context
+### Recent Major Advances
+1. **Complete SPICE Analysis Integration**: Implemented Newton-Raphson nonlinear solver
+   - Accurate LED forward voltage modeling (2.0V drop)
+   - Diode Shockley equation implementation
+   - Component inference through electrical analysis
+   - Power domain propagation through components
 
-2. **Component Inference Testing**: Working on testing if the power domain fix improved component selection
-   - Need to verify components are being inferred with proper power ratings
-   - Testing with 7805 regulator circuit
+2. **Synthesizer Enhancement**: Full netlist generation with component intelligence
+   - Net assignment with implicit handle creation (`protected_vin: TVSDiode(15V).1`)
+   - Component database integration for real part selection
+   - Reference designator auto-generation (R1, D1, C1, etc.)
+   - Proper connection endpoint parsing
 
-3. **Known Issues**:
-   - Component matching in synthesizer fails to find components in database
-   - Visualization has overlapping components and routing issues
-   - Need to complete end-to-end pipeline with proper component database integration
+3. **Specification Consolidation**: Single authoritative v2.0 specification
+   - All spec documents consolidated into `BHDL_Complete_Specification.md`
+   - Prevents documentation drift and maintains consistency
+   - Complete language reference with all features documented
+
+4. **Parameter Library System**: Centralized component parameters in bhdl-stdlib
+   - Removed hardcoded values from core logic (LED 30mA max current, etc.)
+   - Manufacturer datasheet integration support
+   - Accurate component inference using real electrical parameters
+
+### Current Focus Areas
+- Component symbol scaling and visualization improvements
+- Orthogonal routing to proper pin positions
+- Capacitor symbols using parallel plates from database
+- Additional manufacturer datasheet values in stdlib
 
 ### Test Commands
+- `cargo run -p bhdl-synthesizer --bin test_7805_realistic` - Test net assignment handling
 - `cargo run --bin test_pipeline_7805` - Test 7805 regulator circuit through pipeline
 - `cargo run --bin end_to_end_test` - Run complete end-to-end test
 - `cargo run -p bhdl-components --example kicad_integration` - Set up component database
+- `cargo run -p bhdl-spice --bin nonlinear_analysis_test` - Test SPICE solver
+- `cargo test -p bhdl-analyzer` - Test component inference with new parameters

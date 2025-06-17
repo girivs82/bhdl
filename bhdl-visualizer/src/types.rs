@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use bhdl_netlist::{InstanceId, NetId};
 use bhdl_synthesizer::DatabaseComponentInstance;
+use serde::{Serialize, Deserialize};
 
 /// 2D point for layout positioning
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -108,6 +109,7 @@ pub struct Component {
     pub size: Point, // width, height
     pub pins: HashMap<String, Point>, // pin name -> relative position
     pub svg_data: Option<String>,
+    pub label: Option<String>, // Component reference designator
 }
 
 impl Component {
@@ -119,6 +121,7 @@ impl Component {
             size: Point::new(40.0, 20.0), // Default size
             pins: HashMap::new(),
             svg_data: None,
+            label: None,
         }
     }
     
@@ -134,6 +137,11 @@ impl Component {
     
     pub fn with_size(mut self, width: f64, height: f64) -> Self {
         self.size = Point::new(width, height);
+        self
+    }
+    
+    pub fn with_label(mut self, label: String) -> Self {
+        self.label = Some(label);
         self
     }
     
@@ -296,6 +304,37 @@ impl CircuitLayout {
 impl Default for CircuitLayout {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Component orientation for layout
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum Orientation {
+    /// Normal orientation (0 degrees)
+    Normal,
+    /// Rotated 90 degrees clockwise
+    Rotate90,
+    /// Rotated 180 degrees
+    Rotate180,
+    /// Rotated 270 degrees clockwise (90 counter-clockwise)
+    Rotate270,
+    /// Flipped horizontally
+    FlipHorizontal,
+    /// Flipped vertically
+    FlipVertical,
+}
+
+impl Orientation {
+    /// Get rotation angle in degrees
+    pub fn rotation_degrees(&self) -> f64 {
+        match self {
+            Orientation::Normal => 0.0,
+            Orientation::Rotate90 => 90.0,
+            Orientation::Rotate180 => 180.0,
+            Orientation::Rotate270 => 270.0,
+            Orientation::FlipHorizontal => 0.0,
+            Orientation::FlipVertical => 0.0,
+        }
     }
 }
 

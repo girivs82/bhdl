@@ -1,0 +1,132 @@
+// Comprehensive BHDL v2.0 Example
+// Demonstrates all major language features
+
+board USBPoweredDevice {
+    // Power and ground declarations
+    power VIN = 12V @ 2A;        // Input from adapter
+    power VCC = 5V @ 1.5A;       // Regulated 5V
+    power VCC_3V3 = 3.3V @ 1A;   // Regulated 3.3V
+    ground GND;
+    
+    // 1. Basic component instantiation with flow syntax
+    VIN -> fuse: Fuse(2A).1;
+    
+    // 2. Net assignment with implicit handles
+    fuse.2 -> protected_vin: TVSDiode(15V).1;
+    protected_vin.2 -> GND;
+    
+    // 3. Power regulation flow
+    power_flow: protected_vin |> 
+                regulation(5V) |> 
+                filtering |> 
+                distribution;
+    
+    // 4. Component with multiple pin references
+    protected_vin -> reg_5v: LM7805().IN;
+    reg_5v.GND -> GND;
+    reg_5v.OUT -> VCC;
+    
+    // 5. Decoupling capacitors using implicit handles
+    VCC -> c_bulk: ElectrolyticCap(100µF, 10V).+;
+    VCC -> c_bypass: Cap(0.1µF).1;
+    c_bulk.- -> GND;
+    c_bypass.2 -> GND;
+    
+    // 6. Secondary regulator for 3.3V
+    VCC -> reg_3v3: LM1117_3V3().IN;
+    reg_3v3.GND -> GND;
+    reg_3v3.OUT -> VCC_3V3;
+    
+    // 7. Generate construct for LED indicators
+    generate for (rail, color) in [(VCC, "green"), (VCC_3V3, "yellow")] {
+        rail -> Res(1kΩ).1 -> LED(color).A;
+        LED.K -> GND;
+    }
+    
+    // 8. Microcontroller with multiple power domains
+    mcu: STM32F103 {
+        VDD -> VCC_3V3;
+        VSS -> GND;
+        VDDA -> VCC_3V3;  // Analog supply
+        VSSA -> GND;
+    };
+    
+    // 9. I2C interface with automatic level shifting
+    main_i2c: I2C(voltage=3.3V, frequency=400kHz);
+    mcu.I2C1_SCL <-> main_i2c.SCL;
+    mcu.I2C1_SDA <-> main_i2c.SDA;
+    
+    // 10. Sensor with different voltage domain (auto level-shift)
+    sensor: BME280(voltage=1.8V);
+    main_i2c <-> level_shift(from=3.3V, to=1.8V) <-> sensor.i2c;
+    
+    // 11. Crystal oscillator circuit
+    mcu.OSC_IN, mcu.OSC_OUT <-> crystal_circuit(8MHz, load=20pF);
+    
+    // 12. USB connector with ESD protection
+    usb: USB_TypeC();
+    usb.VBUS -> fuse.1;  // Power input
+    usb.DP, usb.DN <- esd_protection(type=TVS, clamp=5.5V);
+    usb.DP -> mcu.USB_DP;
+    usb.DN -> mcu.USB_DN;
+    usb.GND -> GND;
+    
+    // 13. Test points using net references
+    protected_vin -> tp1: TestPoint().1;
+    VCC -> tp2: TestPoint().1;
+    VCC_3V3 -> tp3: TestPoint().1;
+    
+    // 14. Conditional component selection
+    if (high_current_mode) {
+        VCC -> mosfet: MOSFET_N(IRLZ44N).D;
+        mosfet.G -> mcu.GPIO_PA8;
+        mosfet.S -> load_connector.1;
+    } else {
+        VCC -> transistor: BJT_NPN(2N3904).C;
+        transistor.B -> Res(10kΩ).1 -> mcu.GPIO_PA8;
+        transistor.E -> load_connector.1;
+    }
+    
+    // 15. Module instantiation
+    audio_out: AudioAmplifier(gain=20dB) {
+        power_in -> VCC;
+        ground -> GND;
+        input -> mcu.DAC_OUT;
+        output -> speaker_connector;
+    };
+    
+    // Board metadata
+    attribute title = "USB Powered Device with MCU";
+    attribute version = "2.0";
+    attribute author = "BHDL Examples";
+    attribute features = [
+        "Dual voltage rails (5V, 3.3V)",
+        "USB Type-C power input",
+        "I2C sensor with auto level-shifting",
+        "Power indicator LEDs",
+        "Audio output"
+    ];
+}
+
+// Module definition example
+module AudioAmplifier(gain: real = 10dB) {
+    pin power_in: power in;
+    pin ground: ground;
+    pin input: signal in;
+    pin output: signal out;
+    
+    // Internal implementation
+    flow: input |> 
+          ac_coupling |> 
+          amplification(gain) |> 
+          output_driver |> 
+          output;
+    
+    // Component details
+    input -> Cap(1µF).1 -> opamp: LM358().IN+;
+    opamp.IN- -> Res(10kΩ).1 -> opamp.OUT;
+    opamp.IN- -> Res(1kΩ).1 -> ground;
+    opamp.V+ -> power_in;
+    opamp.V- -> ground;
+    opamp.OUT -> Cap(10µF).+ -> output;
+}

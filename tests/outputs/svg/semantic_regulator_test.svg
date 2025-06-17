@@ -1,0 +1,143 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="740" height="230" viewBox="-310 -120 740 230" xmlns="http://www.w3.org/2000/svg">
+<defs><style type="text/css"><![CDATA[
+.component { fill: white; stroke: black; stroke-width: 1.5; }
+.component-text { font-family: Arial, sans-serif; font-size: 10px; text-anchor: middle; fill: black; }
+.pin { fill: none; stroke: red; stroke-width: 1; }
+.pin-label { font-family: Arial, sans-serif; font-size: 6px; fill: black; }
+.pin-number { font-family: Arial, sans-serif; font-size: 5px; fill: #666; }
+.pin-name { font-family: Arial, sans-serif; font-size: 6px; fill: black; }
+.net { fill: none; stroke: blue; stroke-width: 1.2; }
+.net-label { font-family: Arial, sans-serif; font-size: 8px; fill: blue; }
+.grid { stroke: #f0f0f0; stroke-width: 0.5; opacity: 0.5; }
+]]></style></defs>
+<line x1="-350" y1="-120" x2="-350" y2="110" class="grid"/>
+<line x1="-300" y1="-120" x2="-300" y2="110" class="grid"/>
+<line x1="-250" y1="-120" x2="-250" y2="110" class="grid"/>
+<line x1="-200" y1="-120" x2="-200" y2="110" class="grid"/>
+<line x1="-150" y1="-120" x2="-150" y2="110" class="grid"/>
+<line x1="-100" y1="-120" x2="-100" y2="110" class="grid"/>
+<line x1="-50" y1="-120" x2="-50" y2="110" class="grid"/>
+<line x1="0" y1="-120" x2="0" y2="110" class="grid"/>
+<line x1="50" y1="-120" x2="50" y2="110" class="grid"/>
+<line x1="100" y1="-120" x2="100" y2="110" class="grid"/>
+<line x1="150" y1="-120" x2="150" y2="110" class="grid"/>
+<line x1="200" y1="-120" x2="200" y2="110" class="grid"/>
+<line x1="250" y1="-120" x2="250" y2="110" class="grid"/>
+<line x1="300" y1="-120" x2="300" y2="110" class="grid"/>
+<line x1="350" y1="-120" x2="350" y2="110" class="grid"/>
+<line x1="400" y1="-120" x2="400" y2="110" class="grid"/>
+<line x1="-310" y1="-150" x2="430" y2="-150" class="grid"/>
+<line x1="-310" y1="-100" x2="430" y2="-100" class="grid"/>
+<line x1="-310" y1="-50" x2="430" y2="-50" class="grid"/>
+<line x1="-310" y1="0" x2="430" y2="0" class="grid"/>
+<line x1="-310" y1="50" x2="430" y2="50" class="grid"/>
+<line x1="-310" y1="100" x2="430" y2="100" class="grid"/>
+<g><g transform="translate(0, 0) rotate(0) scale(10)">
+
+  <defs>
+    <style type="text/css"><![CDATA[
+      .pin-line { stroke: #000; stroke-width: 0.254; fill: none; }
+      .symbol-line { stroke: #000; stroke-width: 0.254; fill: none; }
+      .symbol-text { font-family: monospace; font-size: 1.27px; fill: #000; }
+      .pin-text { font-family: monospace; font-size: 1.0px; fill: #000; }
+    ]]></style>
+  </defs>
+  <rect x="-5.08" y="-5.08" width="10.16" height="6.985" stroke="#000" stroke-width="0.254" fill="none"/>
+  <line x1="-7.62" y1="0" x2="-5.08" y2="0" class="pin-line"/>
+  <text x="-8.89" y="-0.5" class="pin-text" text-anchor="middle">1</text>
+  <text x="-5.08" y="-0.5" class="pin-text" text-anchor="start">VI</text>
+  <line x1="0" y1="-7.62" x2="0" y2="-5.08" class="pin-line"/>
+  <text x="0.5" y="-8.89" class="pin-text" text-anchor="middle">2</text>
+  <text x="0.5" y="-5.08" class="pin-text" text-anchor="start">GND</text>
+  <line x1="7.62" y1="0" x2="5.08" y2="0" class="pin-line"/>
+  <text x="8.89" y="-0.5" class="pin-text" text-anchor="middle">3</text>
+  <text x="5.08" y="-0.5" class="pin-text" text-anchor="start">VO</text>
+  <text x="0" y="-15.24" class="symbol-text" text-anchor="middle">U</text>
+  <text x="0" y="9.525000000000002" class="symbol-text" text-anchor="middle">LM7805_TO220</text>
+
+</g>
+</g>
+<text x="0" y="-80" class="component-text">U1</text>
+<g><g transform="translate(-200, -30) rotate(90) scale(10)">
+
+  <defs>
+    <style type="text/css"><![CDATA[
+      .pin-line { stroke: #000; stroke-width: 0.254; fill: none; }
+      .symbol-line { stroke: #000; stroke-width: 0.254; fill: none; }
+      .symbol-text { font-family: monospace; font-size: 1.27px; fill: #000; }
+      .pin-text { font-family: monospace; font-size: 1.0px; fill: #000; }
+    ]]></style>
+  </defs>
+  <polyline points="-2.032,0.762 2.032,0.762" stroke="#000" stroke-width="0.508" fill="none"/>
+  <polyline points="-2.032,-0.762 2.032,-0.762" stroke="#000" stroke-width="0.508" fill="none"/>
+  <line x1="0" y1="3.81" x2="0" y2="1.016" class="pin-line"/>
+  <text x="0.5" y="5.08" class="pin-text" text-anchor="middle">1</text>
+  <line x1="0" y1="-3.81" x2="0" y2="-1.016" class="pin-line"/>
+  <text x="0.5" y="-5.08" class="pin-text" text-anchor="middle">2</text>
+  <text x="0" y="-11.43" class="symbol-text" text-anchor="middle">C</text>
+  <text x="0" y="12.7" class="symbol-text" text-anchor="middle">C</text>
+
+</g>
+</g>
+<text x="-200" y="-90" class="component-text">C1</text>
+<g><g transform="translate(200, -30) rotate(90) scale(10)">
+
+  <defs>
+    <style type="text/css"><![CDATA[
+      .pin-line { stroke: #000; stroke-width: 0.254; fill: none; }
+      .symbol-line { stroke: #000; stroke-width: 0.254; fill: none; }
+      .symbol-text { font-family: monospace; font-size: 1.27px; fill: #000; }
+      .pin-text { font-family: monospace; font-size: 1.0px; fill: #000; }
+    ]]></style>
+  </defs>
+  <polyline points="-2.032,0.762 2.032,0.762" stroke="#000" stroke-width="0.508" fill="none"/>
+  <polyline points="-2.032,-0.762 2.032,-0.762" stroke="#000" stroke-width="0.508" fill="none"/>
+  <line x1="0" y1="3.81" x2="0" y2="1.016" class="pin-line"/>
+  <text x="0.5" y="5.08" class="pin-text" text-anchor="middle">1</text>
+  <line x1="0" y1="-3.81" x2="0" y2="-1.016" class="pin-line"/>
+  <text x="0.5" y="-5.08" class="pin-text" text-anchor="middle">2</text>
+  <text x="0" y="-11.43" class="symbol-text" text-anchor="middle">C</text>
+  <text x="0" y="12.7" class="symbol-text" text-anchor="middle">C</text>
+
+</g>
+</g>
+<text x="200" y="-90" class="component-text">C2</text>
+<g><g transform="translate(350, -40) rotate(90) scale(10)">
+
+  <defs>
+    <style type="text/css"><![CDATA[
+      .pin-line { stroke: #000; stroke-width: 0.254; fill: none; }
+      .symbol-line { stroke: #000; stroke-width: 0.254; fill: none; }
+      .symbol-text { font-family: monospace; font-size: 1.27px; fill: #000; }
+      .pin-text { font-family: monospace; font-size: 1.0px; fill: #000; }
+    ]]></style>
+  </defs>
+  <polyline points="-4.572,0 -2.54,0" stroke="#000" stroke-width="0" fill="none"/>
+  <circle cx="0" cy="0" r="0" stroke="#000" stroke-width="0" fill="none"/>
+  <polyline points="-2.032,0 -2.54,0" stroke="#000" stroke-width="0" fill="none"/>
+  <polyline points="-1.016,3.81 -1.016,1.27" stroke="#000" stroke-width="0.254" fill="none"/>
+  <polyline points="-1.016,-1.27 -1.016,-3.81 1.27,-2.54 -1.016,-1.27" stroke="#000" stroke-width="0.254" fill="none"/>
+  <circle cx="0" cy="0" r="0" stroke="#000" stroke-width="0" fill="none"/>
+  <polyline points="1.27,3.81 1.27,1.27 -1.016,2.54 1.27,3.81" stroke="#000" stroke-width="0.254" fill="none"/>
+  <polyline points="1.27,-1.27 1.27,-3.81" stroke="#000" stroke-width="0.254" fill="none"/>
+  <polyline points="2.286,2.54 -2.032,2.54 -2.032,-2.54 2.286,-2.54 2.286,2.54" stroke="#000" stroke-width="0" fill="none"/>
+  <circle cx="0" cy="0" r="0" stroke="#000" stroke-width="0" fill="none"/>
+  <polyline points="2.794,4.318 4.318,5.842 3.556,5.842" stroke="#000" stroke-width="0.2032" fill="none"/>
+  <polyline points="4.064,3.048 5.588,4.572 4.826,4.572" stroke="#000" stroke-width="0.2032" fill="none"/>
+  <polyline points="4.064,0 2.286,0" stroke="#000" stroke-width="0" fill="none"/>
+  <polyline points="4.318,5.842 4.318,5.08" stroke="#000" stroke-width="0.2032" fill="none"/>
+  <polyline points="5.588,4.572 5.588,3.81" stroke="#000" stroke-width="0.2032" fill="none"/>
+  <line x1="-7.62" y1="0" x2="-4.572" y2="0" class="pin-line"/>
+  <text x="-8.89" y="-0.5" class="pin-text" text-anchor="middle">2</text>
+  <text x="-5.08" y="-0.5" class="pin-text" text-anchor="start">AK</text>
+  <line x1="7.62" y1="0" x2="3.81" y2="0" class="pin-line"/>
+  <text x="8.89" y="-0.5" class="pin-text" text-anchor="middle">1</text>
+  <text x="5.08" y="-0.5" class="pin-text" text-anchor="start">KA</text>
+  <text x="0" y="-10.16" class="symbol-text" text-anchor="middle">D</text>
+  <text x="0" y="13.462" class="symbol-text" text-anchor="middle">LED_Dual_Bidirectional</text>
+
+</g>
+</g>
+<text x="350" y="-90" class="component-text">D1</text>
+</svg>

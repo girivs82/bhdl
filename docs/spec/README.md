@@ -2,22 +2,13 @@
 
 ## Current Specification (v2.0)
 
-**Primary Reference**: `BHDL_Complete_Specification.md` - This is the authoritative v2.0 specification.
+**Primary Reference**: `BHDL_Complete_Specification.md` - This is the complete and authoritative v2.0 specification.
 
-## Supporting Documents (v2.0 Compatible)
-
-These documents are consistent with the v2.0 flow-based syntax:
-
-- `Circuit_Flow_Language_Spec.md` - Detailed examples of the flow paradigm
-- `Component_Instantiation_Update.md` - Component instantiation patterns
-- `Level_Shifting_Specification.md` - Automatic level shifting features  
-- `Power_Sequencing_Specification.md` - Power domain management
-- `Simplified_Core_Language.md` - Core language constructs
-- `Team_Workflow_Extensions.md` - Multi-file team workflow
+All specification content has been consolidated into this single comprehensive document to prevent documentation drift and maintain consistency.
 
 ## Archived Documents
 
-Old syntax documents have been moved to `*.old` files:
+Old syntax documents have been moved to `*.old` files for reference:
 
 - `BHDL_Specification.md.old` - Original v1.0 specification
 - `BHDL_Specification_Cleaned.md.old` - Cleaned v1.0 specification  

@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="400" height="300" viewBox="0 0 400 300" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .component { fill: white; stroke: black; stroke-width: 2; }
+    .component-text { font-family: Arial; font-size: 12px; text-anchor: middle; }
+    .pin { fill: black; }
+    .net { fill: none; stroke: blue; stroke-width: 2; }
+    .net-label { font-family: Arial; font-size: 10px; fill: blue; }
+    .ground { fill: none; stroke: green; stroke-width: 2; }
+  </style>
+  
+  <!-- Grid background -->
+  <defs>
+    <pattern id="grid" width="50" height="50" patternUnits="userSpaceOnUse">
+      <path d="M 50 0 L 0 0 0 50" fill="none" stroke="#f0f0f0" stroke-width="1"/>
+    </pattern>
+  </defs>
+  <rect width="400" height="300" fill="url(#grid)" />
+  
+  <!-- U1: LM7805 Regulator (center) -->
+  <g transform="translate(200,150)">
+    <rect x="-40" y="-30" width="80" height="60" class="component"/>
+    <text x="0" y="-10" class="component-text">LM7805</text>
+    <text x="0" y="5" class="component-text">U1</text>
+    <text x="0" y="20" class="component-text">5V REG</text>
+    <circle cx="-40" cy="0" r="2" class="pin"/>
+    <text x="-45" y="-5" class="component-text" style="font-size: 8px; text-anchor: end">IN</text>
+    <circle cx="40" cy="0" r="2" class="pin"/>
+    <text x="45" y="-5" class="component-text" style="font-size: 8px; text-anchor: start">OUT</text>
+    <circle cx="0" cy="30" r="2" class="pin"/>
+    <text x="0" y="40" class="component-text" style="font-size: 8px">GND</text>
+  </g>
+  
+  <!-- C1: Input Capacitor (left, vertical) -->
+  <g transform="translate(100,150)">
+    <rect x="-15" y="-25" width="30" height="50" class="component"/>
+    <text x="0" y="0" class="component-text">C1</text>
+    <text x="0" y="15" class="component-text" style="font-size: 10px">10µF</text>
+    <circle cx="0" cy="-25" r="2" class="pin"/>
+    <circle cx="0" cy="25" r="2" class="pin"/>
+  </g>
+  
+  <!-- C2: Output Capacitor (right, vertical) -->
+  <g transform="translate(300,150)">
+    <rect x="-15" y="-25" width="30" height="50" class="component"/>
+    <text x="0" y="0" class="component-text">C2</text>
+    <text x="0" y="15" class="component-text" style="font-size: 10px">10µF</text>
+    <circle cx="0" cy="-25" r="2" class="pin"/>
+    <circle cx="0" cy="25" r="2" class="pin"/>
+  </g>
+  
+  <!-- VIN Net -->
+  <path d="M 40 150 L 100 150 M 100 150 L 100 125 M 100 150 L 160 150" class="net"/>
+  <text x="50" y="145" class="net-label">VIN</text>
+  
+  <!-- VOUT Net -->
+  <path d="M 240 150 L 300 150 M 300 150 L 300 125 M 300 150 L 360 150" class="net"/>
+  <text x="340" y="145" class="net-label">VOUT</text>
+  
+  <!-- GND Net (Star Ground) -->
+  <path d="M 100 175 L 200 200 M 200 180 L 200 200 M 300 175 L 200 200" class="ground"/>
+  <circle cx="200" cy="200" r="3" fill="none" stroke="green" stroke-width="2"/>
+  <text x="200" y="220" class="net-label" style="fill: green; text-anchor: middle">GND</text>
+  
+  <!-- Labels -->
+  <text x="200" y="30" style="font-family: Arial; font-size: 16px; text-anchor: middle; font-weight: bold">
+    Linear Regulator - Semantic Layout
+  </text>
+  <text x="200" y="280" style="font-family: Arial; font-size: 10px; text-anchor: middle; fill: #666">
+    Power flows left to right • Bypass caps close to regulator • Star ground pattern
+  </text>
+</svg>

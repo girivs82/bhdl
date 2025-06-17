@@ -429,3 +429,149 @@ mod tests {
         assert!(svg_string.matches("line").count() > 10); // Should have many grid lines
     }
 }
+/// SVG renderer for circuit layouts
+pub struct SvgRenderer {
+    show_grid: bool,
+    grid_spacing: f64,
+}
+
+impl SvgRenderer {
+    /// Create a new SVG renderer
+    pub fn new() -> Self {
+        Self {
+            show_grid: true,
+            grid_spacing: 50.0,
+        }
+    }
+    
+    /// Render a circuit layout to SVG
+    pub fn render(&self, layout: &CircuitLayout) -> Result<String, anyhow::Error> {
+        use anyhow::Context;
+        
+        let mut doc = SvgDocument::from_layout(layout);
+        
+        // Add grid if enabled
+        if self.show_grid {
+            doc.add_grid(self.grid_spacing);
+        }
+        
+        // Render components
+        for component in &layout.components {
+            self.render_component(&mut doc, component)?;
+        }
+        
+        // Render nets
+        for net in &layout.nets {
+            self.render_net(&mut doc, net)?;
+        }
+        
+        Ok(doc.to_string())
+    }
+    
+    /// Render a single component
+    fn render_component(&self, doc: &mut SvgDocument, component: &crate::types::Component) -> Result<(), anyhow::Error> {
+        let pos = component.position;
+        
+        // Add component group with transform
+        let transform = format!("translate({}, {}) rotate({})", pos.x, pos.y, component.rotation);
+        
+        if let Some(svg_data) = &component.svg_data {
+            // Parse the SVG data to extract just the inner content
+            // Database SVG includes full SVG tags, we need just the content
+            let inner_svg = if svg_data.contains("<svg") {
+                // Extract content between <svg> tags
+                if let Some(start) = svg_data.find('>') {
+                    if let Some(end) = svg_data.rfind("</svg>") {
+                        svg_data[start+1..end].to_string()
+                    } else {
+                        svg_data.clone()
+                    }
+                } else {
+                    svg_data.clone()
+                }
+            } else {
+                svg_data.clone()
+            };
+            
+            // Scale up the SVG content
+            let scale_factor = 10.0; // Scale up 10x for better visibility
+            
+            // Wrap in group with transform including scale
+            let mut group_content = String::new();
+            writeln!(&mut group_content, "<g transform=\"{} scale({})\">", transform, scale_factor).unwrap();
+            writeln!(&mut group_content, "{}", inner_svg).unwrap();
+            
+            // Don't add debug pin markers - the SVG from database already has proper pin representations
+            
+            writeln!(&mut group_content, "</g>").unwrap();
+            
+            // Add directly as raw content (not using add_raw_svg which adds another group)
+            doc.add_element(SvgElement::Group {
+                transform: None,
+                content: group_content,
+            });
+            
+            // Add component label above the symbol
+            if let Some(label) = &component.label {
+                doc.add_text(
+                    pos.translate(0.0, -component.size.y / 2.0 - 20.0),
+                    label.clone(),
+                    Some("component-text")
+                );
+            }
+        } else {
+            // Use default rectangle
+            let mut group_content = String::new();
+            
+            // Component rectangle
+            writeln!(&mut group_content, 
+                r#"<rect x="{}" y="{}" width="{}" height="{}" class="component"/>"#,
+                -component.size.x / 2.0, -component.size.y / 2.0,
+                component.size.x, component.size.y
+            ).unwrap();
+            
+            // Component label - use component name or instance ID
+            let label = component.label.as_ref()
+                .map(|s| s.as_str())
+                .unwrap_or("?");
+            writeln!(&mut group_content,
+                r#"<text x="0" y="0" class="component-text">{}</text>"#,
+                label
+            ).unwrap();
+            
+            // Add pins
+            for (pin_name, pin_pos) in &component.pins {
+                writeln!(&mut group_content,
+                    r#"<circle cx="{}" cy="{}" r="2" class="pin"/>"#,
+                    pin_pos.x, pin_pos.y
+                ).unwrap();
+                writeln!(&mut group_content,
+                    r#"<text x="{}" y="{}" class="pin-label">{}</text>"#,
+                    pin_pos.x + 5.0, pin_pos.y, pin_name
+                ).unwrap();
+            }
+            
+            doc.add_raw_svg(group_content, Some(transform));
+        }
+        
+        Ok(())
+    }
+    
+    /// Render a net
+    fn render_net(&self, doc: &mut SvgDocument, net: &crate::types::Net) -> Result<(), anyhow::Error> {
+        // Render routing segments
+        for segment in &net.routing_segments {
+            doc.add_routing_segment(segment, Some("net"));
+        }
+        
+        // Add net label if present
+        if let Some(name) = &net.name {
+            if !net.connection_points.is_empty() {
+                let label_pos = net.connection_points[0];
+                doc.add_text(label_pos.translate(5.0, -5.0), name.clone(), Some("net-label"));
+            }
+        }
+        
+        Ok(())
+    }
+}

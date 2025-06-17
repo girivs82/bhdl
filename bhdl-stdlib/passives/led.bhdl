@@ -1,6 +1,9 @@
 // Light Emitting Diode Component Module
 // Supports LED(red), LED(green, 3mm) style instantiation
 
+import { LEDParams, LED_PARAMS_RED, LED_PARAMS_GREEN, LED_PARAMS_BLUE, 
+         LED_PARAMS_WHITE, LED_PARAMS_YELLOW, LED_PARAMS_IR } from "../electrical_params.bhdl";
+
 module LED(color: string = "red", size: string = "5mm") {
     pin A: signal in;   // Anode (+)
     pin K: signal out;  // Cathode (-)
@@ -10,18 +13,31 @@ module LED(color: string = "red", size: string = "5mm") {
     attribute color = color;
     attribute size = size;
     
-    // Electrical characteristics based on color
-    attribute forward_voltage = 
-        color == "red" ? "2.0V" :
-        color == "yellow" ? "2.1V" :
-        color == "green" ? "2.2V" :
-        color == "blue" ? "3.2V" :
-        color == "white" ? "3.3V" :
-        color == "ir" ? "1.4V" :      // Infrared
-        color == "uv" ? "3.8V" :      // Ultraviolet
-        "2.0V";                       // Default
+    // Get electrical parameters based on color
+    const params: LEDParams = 
+        color == "red" ? LED_PARAMS_RED :
+        color == "yellow" ? LED_PARAMS_YELLOW :
+        color == "green" ? LED_PARAMS_GREEN :
+        color == "blue" ? LED_PARAMS_BLUE :
+        color == "white" ? LED_PARAMS_WHITE :
+        color == "ir" ? LED_PARAMS_IR :
+        LED_PARAMS_RED;  // Default to red
     
-    attribute forward_current = "20mA";  // Typical 20mA
+    // Electrical characteristics from parameter structure
+    attribute forward_voltage = params.forward_voltage;
+    attribute forward_current = params.forward_current;
+    attribute max_current = params.max_current;
+    attribute max_reverse_voltage = params.max_reverse_voltage;
+    attribute dynamic_resistance = params.dynamic_resistance;
+    attribute wavelength = params.wavelength;
+    attribute luminous_intensity = params.luminous_intensity;
+    attribute viewing_angle = params.viewing_angle;
+    
+    // SPICE model parameters
+    attribute spice_model = "led";
+    attribute spice_forward_voltage = params.forward_voltage;
+    attribute spice_dynamic_resistance = params.dynamic_resistance;
+    attribute spice_max_current = params.max_current;
     
     // KiCad symbol mapping
     attribute kicad_symbol = "Device:LED";
@@ -30,6 +46,9 @@ module LED(color: string = "red", size: string = "5mm") {
     attribute package = 
         size == "3mm" ? "LED_THT:LED_D3.0mm" :
         size == "5mm" ? "LED_THT:LED_D5.0mm" :
+        size == "0603" ? "LED_SMD:LED_0603_1608Metric" :
+        size == "0805" ? "LED_SMD:LED_0805_2012Metric" :
+        size == "1206" ? "LED_SMD:LED_1206_3216Metric" :
         size == "smd" ? "LED_SMD:LED_0805_2012Metric" :
         "LED_THT:LED_D5.0mm";
 }

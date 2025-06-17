@@ -16,6 +16,9 @@
       <sourceFolder url="file://$MODULE_DIR$/bhdl-components/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/bhdl-components/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/bhdl-parser/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/bhdl-spice/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/bhdl-spice/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/bhdl-visualizer/examples" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/bhdl-visualizer/target" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>

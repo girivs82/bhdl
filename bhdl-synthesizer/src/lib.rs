@@ -46,6 +46,8 @@ enum ConnectionEndpoint {
     Pin(String, String), // (instance_name, pin_name)
     /// Named handle declaration (C1: Cap(...))
     NamedHandle(String, String), // (handle_name, component_type)
+    /// Net assignment with component (net_name: Component(...).pin)
+    NetAssignment(String, String, String), // (net_name, component_type, pin_name)
 }
 
 impl Default for NetlistConfig {
@@ -69,6 +71,9 @@ pub struct NetlistGenerator {
     ast_to_module: HashMap<String, ModuleId>,
     ast_to_instance: HashMap<String, InstanceId>,
     ast_to_net: HashMap<String, NetId>,
+    // Mapping from net assignment handles to instance IDs
+    // When we see "protected_vin: TVSDiode(15V).1", we map "protected_vin" -> TVSDiode instance
+    net_assignment_handles: HashMap<String, InstanceId>,
     // Database component mapper for real component instances
     database_mapper: Option<DatabaseComponentMapper>,
     // Component instances with database symbol references
@@ -91,6 +96,7 @@ impl NetlistGenerator {
             ast_to_module: HashMap::new(),
             ast_to_instance: HashMap::new(),
             ast_to_net: HashMap::new(),
+            net_assignment_handles: HashMap::new(),
             database_mapper: None, // Will be initialized async in generate_from_analysis
             component_instances: Vec::new(),
             type_mapper: ComponentTypeMapper::new(),
@@ -184,15 +190,31 @@ impl NetlistGenerator {
     fn generate_instances_with_semantics(&mut self, analysis: &AnalysisResult) -> Result<()> {
         debug!("Generating instances with semantic context");
 
+        // Track component counts by type for proper reference designators
+        let mut component_counts: HashMap<String, usize> = HashMap::new();
+
         // Extract component inference results for semantic context
         if self.config.include_component_inference {
             let component_context = &analysis.component_inference;
             
             // Create instances based on inferred components
             for component_suggestion in &component_context.inferred_components {
-                let component_name = format!("comp_{}", component_suggestion.component_type);
                 let component_type = &component_suggestion.component_type;
                 let module_kind = self.map_component_type_to_module_kind(component_type);
+                
+                // Generate proper reference designator
+                let instance_name = if let Some(ref name) = component_suggestion.instance_name {
+                    name.clone()
+                } else {
+                    // Generate proper reference designator using unified type mapper
+                    let refdes_prefix = self.type_mapper.get_refdes_prefix(component_type);
+                    
+                    // Increment count for this component type
+                    let count = component_counts.entry(refdes_prefix.clone()).or_insert(0);
+                    *count += 1;
+                    
+                    format!("{}{}", refdes_prefix, count)
+                };
                 
                 // Create module definition for this component type
                 let module_id = self.netlist.add_module(
@@ -200,17 +222,24 @@ impl NetlistGenerator {
                     module_kind
                 );
                 
+                // Add pins to the module based on component type
+                self.add_pins_for_component(&instance_name, component_type, module_id)?;
+                
                 // Create instance of this component
                 let instance_id = self.netlist.add_instance(
-                    component_name.clone(),
+                    instance_name.clone(),
                     module_id
                 ).expect("Failed to add instance");
                 
+                // Create pin instances for this component instance
+                self.netlist.create_pin_instances(instance_id)
+                    .map_err(|e| anyhow::anyhow!("Failed to create pin instances: {}", e))?;
+                
                 self.ast_to_module.insert(component_type.clone(), module_id);
-                self.ast_to_instance.insert(component_name.clone(), instance_id);
+                self.ast_to_instance.insert(instance_name.clone(), instance_id);
                 
                 debug!("Created instance '{}' of type '{}' with semantic kind {:?}", 
-                       component_name, component_type, module_kind);
+                       instance_name, component_type, module_kind);
             }
         }
 
@@ -346,8 +375,15 @@ impl NetlistGenerator {
                 }
                 ConnectionEndpoint::Pin(instance_name, pin_name) => {
                     // This is a component pin reference (C1.pos, U1.IN, etc.)
-                    if let Some(instance_id) = self.ast_to_instance.get(&instance_name) {
-                        if let Some(pin_inst_id) = self.netlist.find_pin_instance(*instance_id, &pin_name) {
+                    // First check if this is a net assignment handle
+                    let instance_id = if let Some(&handle_id) = self.net_assignment_handles.get(&instance_name) {
+                        Some(handle_id)
+                    } else {
+                        self.ast_to_instance.get(&instance_name).copied()
+                    };
+                    
+                    if let Some(inst_id) = instance_id {
+                        if let Some(pin_inst_id) = self.netlist.find_pin_instance(inst_id, &pin_name) {
                             // Connect this pin to the current net
                             let net_id = current_net_id.get_or_insert_with(|| {
                                 self.netlist.add_net(None)
@@ -366,7 +402,7 @@ impl NetlistGenerator {
                             warn!("    Pin {} not found on instance {}", pin_name, instance_name);
                         }
                     } else {
-                        warn!("    Instance {} not found", instance_name);
+                        warn!("    Instance {} not found (checked both regular instances and net assignment handles)", instance_name);
                     }
                 }
                 ConnectionEndpoint::NamedHandle(handle_name, _component_type) => {
@@ -374,6 +410,50 @@ impl NetlistGenerator {
                     // The instance should already be created during component generation
                     if !self.ast_to_instance.contains_key(&handle_name) {
                         warn!("    Named handle {} not found in instances", handle_name);
+                    }
+                }
+                ConnectionEndpoint::NetAssignment(net_name, component_type, pin_name) => {
+                    // This is a net assignment pattern (net_name: Component(...).pin)
+                    // Example: protected_vin: TVSDiode(15V).1
+                    
+                    // First, ensure the net exists
+                    let net_id = self.ensure_net_exists(&net_name);
+                    
+                    // We need to find the component instance that was created for this instantiation
+                    // The challenge is matching the component in the connection to the right instance
+                    
+                    // For now, we'll find the instance by looking at the component type and
+                    // finding an instance that hasn't been assigned a handle yet
+                    let refdes_prefix = self.type_mapper.get_refdes_prefix(&component_type);
+                    
+                    // Find an instance with matching prefix that's not already mapped
+                    let instance_id = self.netlist.instances.iter()
+                        .find(|(id, inst)| {
+                            inst.name.starts_with(&refdes_prefix) &&
+                            !self.net_assignment_handles.values().any(|&mapped_id| mapped_id == *id)
+                        })
+                        .map(|(id, _)| id.clone());
+                    
+                    if let Some(inst_id) = instance_id {
+                        // Create the handle mapping
+                        self.net_assignment_handles.insert(net_name.clone(), inst_id);
+                        info!("    Created handle '{}' for instance {:?}", net_name, inst_id);
+                        
+                        // Find the pin on this instance
+                        if let Some(pin_inst_id) = self.netlist.find_pin_instance(inst_id, &pin_name) {
+                            // Connect this pin to the net
+                            self.netlist.connect(net_id, ConnectionPoint::PinInstance(pin_inst_id))
+                                .map_err(|e| anyhow::anyhow!("Failed to connect pin: {}", e))?;
+                            
+                            info!("    Connected {}({}).{} to net '{}'", component_type, "...", pin_name, net_name);
+                            
+                            // Update current net for chain
+                            current_net_id = Some(net_id);
+                        } else {
+                            warn!("    Pin {} not found on {} instance", pin_name, component_type);
+                        }
+                    } else {
+                        warn!("    No unassigned {} instance found for net assignment '{}'", refdes_prefix, net_name);
                     }
                 }
             }
@@ -426,21 +506,23 @@ impl NetlistGenerator {
     fn parse_connection_endpoint(&self, endpoint: &str) -> ConnectionEndpoint {
         let trimmed = endpoint.trim();
         
-        // Check for named handle declaration (C1: Cap(...))
+        // Check for net assignment pattern (net_name: Component(...).pin)
         if let Some(colon_pos) = trimmed.find(':') {
-            let handle_name = trimmed[..colon_pos].trim().to_string();
+            let net_name = trimmed[..colon_pos].trim().to_string();
             
-            // Extract component type
+            // Extract component type and pin
             let after_colon = trimmed[colon_pos + 1..].trim();
             if let Some(paren_pos) = after_colon.find('(') {
                 let component_type = after_colon[..paren_pos].trim().to_string();
                 
-                // Check if there's also a pin after the component
+                // Check if there's a pin after the component
                 if let Some(dot_pos) = after_colon.rfind('.') {
                     let pin_name = after_colon[dot_pos + 1..].trim().to_string();
-                    return ConnectionEndpoint::Pin(handle_name, pin_name);
+                    // This is a net assignment pattern
+                    return ConnectionEndpoint::NetAssignment(net_name, component_type, pin_name);
                 } else {
-                    return ConnectionEndpoint::NamedHandle(handle_name, component_type);
+                    // This is a named handle without pin (shouldn't happen in valid syntax)
+                    return ConnectionEndpoint::NamedHandle(net_name, component_type);
                 }
             }
         }
