@@ -25,6 +25,12 @@ pub use crate::core::Parser;
 pub use crate::syntax::BhdlLanguage;
 pub use crate::syntax::SyntaxKind;
 
+// Export lex for testing
+pub fn lex(text: &str) -> Vec<(SyntaxKind, SmolStr)> {
+    let tokens: Vec<_> = LexerToken::lexer(text).spanned().collect();
+    map_token_stream(tokens, text)
+}
+
 // Optional: Re-export specific AST node types if desired
 // pub use ast::BoardDef;
 
@@ -68,7 +74,7 @@ fn map_token_stream(tokens: Vec<(Result<LexerToken, ()>, Range<usize>)>, source_
     let mut result = Vec::new();
     let mut current_pos = 0;
 
-    for (lex_result, range) in tokens {
+    for (i, (lex_result, range)) in tokens.iter().enumerate() {
         // Add WHITESPACE for gaps between tokens
         if range.start > current_pos {
             let text = SmolStr::new(&source_text[current_pos..range.start]);
@@ -78,7 +84,38 @@ fn map_token_stream(tokens: Vec<(Result<LexerToken, ()>, Range<usize>)>, source_
         let text = SmolStr::new(&source_text[range.clone()]);
         match lex_result {
             Ok(token) => {
-                result.push((map_token(token), text));
+                let kind = map_token(token.clone());
+                
+                // Post-process unit tokens: if a unit token is not preceded by a number,
+                // treat it as an identifier instead
+                let final_kind = if kind == SyntaxKind::UNIT_IDENTIFIER {
+                    // Check if previous non-whitespace token was a number
+                    let mut prev_was_number = false;
+                    for j in (0..result.len()).rev() {
+                        match result[j].0 {
+                            SyntaxKind::WHITESPACE | SyntaxKind::COMMENT => continue,
+                            SyntaxKind::NUMBER => {
+                                prev_was_number = true;
+                                break;
+                            }
+                            _ => break,
+                        }
+                    }
+                    
+                    if prev_was_number {
+                        kind // Keep as unit
+                    } else {
+                        // Check if this looks like a single-letter identifier that was misclassified
+                        match text.as_str() {
+                            "A" | "F" | "H" | "K" | "V" | "W" | "s" => SyntaxKind::IDENT,
+                            _ => kind, // Keep multi-letter units as units
+                        }
+                    }
+                } else {
+                    kind
+                };
+                
+                result.push((final_kind, text.clone()));
             }
             Err(_) => {
                 result.push((SyntaxKind::ERROR_TOKEN, text));
