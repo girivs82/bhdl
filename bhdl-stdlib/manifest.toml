@@ -1,0 +1,11 @@
+[library]
+name = "bhdl-stdlib"
+version = "1.0.0"
+authors = ["BHDL Team"]
+description = "Standard component library for BHDL"
+
+[components]
+categories = ["passives", "regulators", "connectors", "logic"]
+
+[compatibility]
+bhdl-version = ">=2.0.0"

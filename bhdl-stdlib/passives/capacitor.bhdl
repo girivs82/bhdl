@@ -1,0 +1,43 @@
+// Standard Capacitor Component Module
+// Supports Cap(100n) style instantiation
+
+module Cap(value: capacitance) {
+    pin 1: signal inout;  // Terminal 1 (non-polarized)
+    pin 2: signal inout;  // Terminal 2 (non-polarized)
+    
+    // Metadata for component database
+    attribute component_class = "capacitor";
+    attribute value = value;
+    attribute tolerance = "10%";  // Default 10% tolerance
+    
+    // Determine type based on value
+    attribute capacitor_type = value >= 10µF ? "electrolytic" : "ceramic";
+    attribute voltage_rating = value >= 10µF ? "25V" : "50V";  // Conservative defaults
+    
+    // KiCad symbol mapping based on type
+    attribute kicad_symbol = value >= 10µF ? "Device:CP" : "Device:C";
+    
+    // Available packages
+    attribute packages = value >= 10µF ? 
+                        "THT_Radial_D5.0,THT_Radial_D6.3,THT_Radial_D8.0" :
+                        "0603,0805,1206";
+                   
+    attribute default_package = value >= 10µF ? "THT_Radial_D5.0" : "0805";
+}
+
+// Alias for full name
+module Capacitor = Cap;
+
+// Polarized Capacitor Module
+module ElectrolyticCap(value: capacitance, voltage: voltage = 25V) {
+    pin +: signal in;   // Positive terminal
+    pin -: signal out;  // Negative terminal
+    
+    attribute component_class = "capacitor_polarized";
+    attribute value = value;
+    attribute voltage_rating = voltage;
+    attribute tolerance = "20%";
+    attribute kicad_symbol = "Device:CP";
+    attribute packages = "THT_Radial_D5.0,THT_Radial_D6.3,THT_Radial_D8.0";
+    attribute default_package = "THT_Radial_D6.3";
+}

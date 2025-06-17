@@ -1,5 +1,5 @@
 // Contains the Port and Pin structs
-use crate::types::{PortDirection, NetId, ModuleId, Width};
+use crate::types::{PortDirection, PinDirection, PinType, NetId, ModuleId, Width, PinId, InstanceId, PinInstanceId};
 use serde::{Serialize, Deserialize};
 
 // Represents a connection point on a ModuleDefinition or Instance
@@ -13,11 +13,23 @@ pub struct Port {
     // Add type information later
 }
 
-// Represents a physical pin on a PhysicalComponent or Interface
+// Represents a logical pin definition on a component
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Pin {
-    pub name: String, // Often a number or standard name (e.g., "1", "VCC", "GND")
+    pub id: PinId,               // Unique identifier
+    pub name: String,            // Logical name (e.g., "IN", "OUT", "GND")
+    pub direction: PinDirection, // in, out, inout, power, ground, passive
+    pub pin_type: PinType,       // signal, power, ground, clock, etc.
     pub module: ModuleId,        // Back-reference to the module definition
-    pub electrical_type: Option<String>, // E.g., "power_in", "signal_out", "passive"
-    // Add physical properties, assigned net later
+    pub description: Option<String>, // Optional description
+}
+
+// Represents a pin instance on a component instance
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PinInstance {
+    pub id: PinInstanceId,      // Unique identifier
+    pub pin_def: PinId,         // Reference to pin definition
+    pub instance: InstanceId,   // Parent instance
+    pub net: Option<NetId>,     // Connected net
+    pub connection_name: Option<String>, // Optional name used in connection (e.g., "C1.pos")
 } 

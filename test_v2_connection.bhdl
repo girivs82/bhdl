@@ -1,0 +1,4 @@
+board ConnectionTest {
+    power VCC = 5V @ 1A;
+    VCC -> Res(10k).1 -> LED(red).A;
+}

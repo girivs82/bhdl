@@ -1,0 +1,45 @@
+// Comprehensive BHDL v2.0 Test File (Fixed Units)
+// Tests all seven core constructs from the specification
+
+board PowerSupplyBoard {
+    // Power domains (from spec section 7.1)
+    power USB_5V = 5V @ 2A;
+    power VCC_3V3 = 3.3V @ 1A;
+    power VCC_1V8 = 1.8V @ 0.5A;
+    ground GND;
+
+    // Interface declarations (from spec section 3.3)
+    main_i2c: I2C(voltage=3.3V, frequency=400kHz);
+    status_spi: SPI(voltage=3.3V, frequency=1MHz);
+    
+    // Flow specifications (from spec section 3.2)
+    power_flow: USB_5V |> protection |> regulation |> distribution;
+    
+    // Component instantiation (from spec section 3.1)
+    USB_5V -> input_cap: Cap(100µF).+ ;
+    input_cap.- -> GND;
+    
+    // Named component handle
+    USB_5V -> regulator: LinearReg(3.3V, 1A).IN;
+    regulator.GND -> GND;
+    regulator.OUT -> VCC_3V3;
+    
+    // Direct connections with proper units
+    VCC_3V3 -> Res(4.7kΩ).1 -> LED(red).A;
+    LED.K -> GND;
+    
+    // Generate constructs (from spec section 3.4)
+    generate for i in 0..3 {
+        VCC_3V3 -> Res(10kΩ).1 -> status_led[i]: LED(green).A;
+        status_led[i].K -> GND;
+    }
+    
+    // Conditional logic (from spec section 3.5)
+    if (debug_mode) {
+        VCC_3V3 -> Res(1kΩ).1 -> debug_led: LED(yellow).A;
+        debug_led.K -> GND;
+    }
+    
+    // Interface connections
+    main_i2c <-> [temp_sensor, eeprom];
+}

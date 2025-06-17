@@ -1,0 +1,496 @@
+# Bus Interface Specification for Circuit Flow Language
+
+## 1. Interface-First Design Philosophy
+
+Board designers think in terms of **interfaces** (I2C, SPI, DDR), not individual signals. The language should support this natural abstraction.
+
+## 2. Standard Bus Interface Definitions
+
+### 2.1 Communication Bus Interfaces
+
+```cfl
+// I2C Interface Definition
+interface I2C {
+  signals {
+    SCL: inout i2c_clock;     // Clock line (open-drain)
+    SDA: inout i2c_data;      // Data line (open-drain)
+  }
+  
+  electrical {
+    voltage_levels = [1.8V, 3.3V, 5V];
+    drive_strength = open_drain;
+    pullup_required = true;
+    max_frequency = 400kHz;  // Default, can be overridden
+  }
+  
+  protocol {
+    addressing = 7bit | 10bit;
+    multi_master = supported;
+    clock_stretching = supported;
+  }
+}
+
+// SPI Interface Definition  
+interface SPI {
+  signals {
+    MOSI: out spi_signal;     // Master Out, Slave In
+    MISO: in spi_signal;      // Master In, Slave Out  
+    SCK: out spi_clock;       // Serial Clock
+    CS: out spi_select;       // Chip Select (active low)
+  }
+  
+  electrical {
+    voltage_levels = [1.8V, 3.3V, 5V];
+    drive_strength = cmos;
+    max_frequency = 50MHz;
+  }
+  
+  protocol {
+    modes = [0, 1, 2, 3];     // Clock polarity/phase
+    bit_order = msb_first | lsb_first;
+    multi_slave = supported;
+  }
+}
+
+// UART Interface
+interface UART {
+  signals {
+    TX: out uart_signal;
+    RX: in uart_signal;
+    RTS: out flow_control(optional);
+    CTS: in flow_control(optional);
+  }
+  
+  electrical {
+    voltage_levels = [1.8V, 3.3V, 5V, 12V, ±12V];
+    drive_strength = cmos | rs232;
+  }
+  
+  protocol {
+    baud_rates = [9600, 115200, 921600, ...];
+    data_bits = [7, 8];
+    stop_bits = [1, 2];
+    parity = [none, even, odd];
+  }
+}
+
+// USB Interface
+interface USB2_FullSpeed {
+  signals {
+    DP: inout usb_diff_signal(positive);
+    DN: inout usb_diff_signal(negative);
+    VBUS: in power(5V);
+    GND: ground;
+    ID: in logic(optional);    // For OTG
+  }
+  
+  electrical {
+    differential_impedance = 90Ω ± 15%;
+    common_mode_voltage = 1.65V;
+    swing = 3.3V;
+  }
+  
+  protocol {
+    speed = full_speed;        // 12 Mbps
+    power_delivery = [100mA, 500mA];
+  }
+}
+```
+
+### 2.2 Memory Bus Interfaces
+
+```cfl
+// DDR3 Interface (Parameterized)
+interface DDR3 {
+  parameters {
+    data_width: integer = 16;      // 8, 16, 32, 64
+    address_width: integer = 14;   // Depends on density
+    bank_width: integer = 3;       // DDR3 has 8 banks
+  }
+  
+  // Generate data signals based on width
+  signals {
+    generate data_signals for i in 0..data_width-1 {
+      DQ[i]: inout ddr_data_signal;
+    }
+    
+    generate dqs_signals for i in 0..(data_width/8)-1 {
+      DQS[i]: inout ddr_strobe_signal(differential=true);
+      DQS_N[i]: inout ddr_strobe_signal(differential=true);
+    }
+    
+    generate address_signals for i in 0..address_width-1 {
+      A[i]: out ddr_address_signal;
+    }
+    
+    generate bank_signals for i in 0..bank_width-1 {
+      BA[i]: out ddr_bank_signal;
+    }
+    
+    // Clock and control
+    CLK: out ddr_clock(differential=true);
+    CLK_N: out ddr_clock(differential=true);
+    CKE: out ddr_control_signal;
+    RAS_N, CAS_N, WE_N: out ddr_control_signal;
+    CS_N: out ddr_control_signal;
+    ODT: out ddr_control_signal;
+    RESET_N: out ddr_control_signal;
+    
+    // Power
+    VDD: in power(1.5V);
+    VDDQ: in power(1.5V);
+    VSS: ground;
+  }
+  
+  electrical {
+    voltage_io = 1.5V;
+    impedance_dq = 50Ω ± 10%;
+    impedance_dqs = 100Ω ± 10%;
+    impedance_clock = 100Ω ± 10%;
+  }
+  
+  timing {
+    frequency_max = 800MHz;        // DDR3-1600
+    setup_time = 90ps;
+    hold_time = 90ps;
+  }
+}
+
+// QSPI Flash Interface
+interface QSPI {
+  signals {
+    CS: out spi_select;
+    SCK: out spi_clock;
+    IO0: inout qspi_data;          // MOSI in SPI mode
+    IO1: inout qspi_data;          // MISO in SPI mode  
+    IO2: inout qspi_data;          // WP in SPI mode
+    IO3: inout qspi_data;          // HOLD in SPI mode
+  }
+  
+  electrical {
+    voltage_levels = [1.8V, 3.3V];
+    max_frequency = 104MHz;
+  }
+  
+  protocol {
+    modes = [spi, dual_spi, quad_spi];
+    addressing = [3byte, 4byte];
+  }
+}
+```
+
+### 2.3 Expansion Bus Interfaces
+
+```cfl
+// GPIO Header Interface
+interface GPIO_Header_40Pin {
+  signals {
+    // Power rails
+    VCC_5V[1:2]: out power(5V);
+    VCC_3V3[1:2]: out power(3.3V);
+    GND[1:8]: ground;
+    
+    // GPIO pins with flexible assignment
+    GPIO[1:26]: inout general_purpose_io;
+    
+    // Dedicated protocol pins
+    I2C_SCL, I2C_SDA: inout i2c_signal;
+    SPI_MOSI, SPI_MISO, SPI_SCK, SPI_CS: inout spi_signal;
+    UART_TX, UART_RX: inout uart_signal;
+  }
+  
+  mechanical {
+    connector_type = "2x20 pin header";
+    pitch = 2.54mm;
+    pin_assignment = raspberry_pi_compatible;
+  }
+}
+
+// PCIe Interface (simplified)
+interface PCIe_x1 {
+  signals {
+    // Differential pairs
+    TX_P, TX_N: out pcie_diff_signal;
+    RX_P, RX_N: in pcie_diff_signal;
+    
+    // Reference clock
+    REFCLK_P, REFCLK_N: in pcie_clock(100MHz, differential=true);
+    
+    // Control signals
+    PERST_N: in reset_signal;
+    CLKREQ_N: out clock_request(optional);
+    WAKE_N: out wake_signal(optional);
+    
+    // Power
+    VCC: in power(3.3V);
+    GND: ground;
+  }
+  
+  electrical {
+    differential_impedance = 100Ω ± 10%;
+    data_rate = 2.5Gbps;           // PCIe Gen1
+  }
+}
+```
+
+## 3. Interface Usage in Circuit Flow
+
+### 3.1 Interface Declaration and Connection
+
+```cfl
+board MicrocontrollerSystem {
+  // Declare interface instances
+  interfaces {
+    main_i2c: I2C { voltage=3.3V, frequency=400kHz };
+    sensor_spi: SPI { voltage=3.3V, frequency=10MHz, mode=0 };
+    debug_uart: UART { voltage=3.3V, baud=115200 };
+    memory_bus: DDR3 { data_width=16, frequency=400MHz };
+    expansion: GPIO_Header_40Pin;
+  }
+  
+  components {
+    mcu: STM32H743 {
+      // MCU has built-in interface support
+      i2c1: I2C;
+      spi1: SPI;
+      uart1: UART;
+      ddr_controller: DDR3 { data_width=16 };
+    };
+    
+    sensor: BME280_I2C { i2c_address=0x76 };
+    flash: W25Q32_QSPI;
+    ddr_ram: MT41K128M16;
+  }
+  
+  // Connect interfaces directly
+  interface_connections {
+    // Simple interface-to-interface connection
+    mcu.i2c1 <=> main_i2c;
+    main_i2c <=> sensor.i2c;
+    
+    // SPI connection with multiple slaves
+    mcu.spi1 <=> sensor_spi;
+    sensor_spi.CS[0] -> flash.CS;
+    sensor_spi.{MOSI,MISO,SCK} <=> flash.{MOSI,MISO,SCK};
+    
+    // DDR interface connection
+    mcu.ddr_controller <=> memory_bus;
+    memory_bus <=> ddr_ram.ddr_interface;
+    
+    // GPIO header partial connection
+    expansion.I2C_SCL <=> main_i2c.SCL;
+    expansion.I2C_SDA <=> main_i2c.SDA;
+    expansion.VCC_3V3 <- VCC_3V3_RAIL;
+  }
+}
+```
+
+### 3.2 Interface Flow Specifications
+
+```cfl
+// Circuit flows using interfaces
+circuit_flows {
+  // Communication flow through I2C
+  sensor_data_flow:
+    mcu.i2c1 |> i2c_bus_flow |> [sensor.i2c, eeprom.i2c, rtc.i2c];
+  
+  // Memory access flow
+  memory_flow:
+    mcu.memory_controller |> ddr_interface_flow |> external_ddr |> 
+    data_storage_capacity(512MB);
+  
+  // Debug flow
+  debug_flow:
+    debug_probe |> swd_interface |> mcu.debug_port |>
+    firmware_download + real_time_debug;
+}
+```
+
+### 3.3 Automatic Signal Inference
+
+```cfl
+// Instead of manually connecting each signal:
+connections {
+  mcu.I2C1_SCL -> pullup_res1: Res(4.7kΩ).1 -> i2c_scl_net;
+  mcu.I2C1_SDA -> pullup_res2: Res(4.7kΩ).1 -> i2c_sda_net;
+  pullup_res1.2, pullup_res2.2 -> VCC_3V3;
+  i2c_scl_net -> sensor.SCL, eeprom.SCL;
+  i2c_sda_net -> sensor.SDA, eeprom.SDA;
+}
+
+// Use interface abstraction:
+interfaces {
+  main_i2c: I2C { 
+    voltage = 3.3V; 
+    pullups = 4.7kΩ;      // Automatically generates pullup resistors
+    devices = [sensor, eeprom];  // Automatically connects devices
+  };
+}
+
+// Tool automatically generates:
+// - Pullup resistors on SCL/SDA
+// - Proper net connections
+// - Multi-drop topology
+```
+
+## 4. Interface Constraint Propagation
+
+### 4.1 Electrical Constraint Checking
+
+```cfl
+interfaces {
+  high_speed_spi: SPI { 
+    voltage = 3.3V; 
+    frequency = 50MHz;  // High speed requirement
+  };
+}
+
+// Tool automatically enforces:
+constraints {
+  route_interface high_speed_spi {
+    impedance = 50Ω ± 10%;        // From SPI interface definition
+    max_length = 50mm;            // Calculated from frequency
+    layer_preference = surface;    // High-speed routing
+    ground_guard = required;       // EMI control
+  };
+}
+```
+
+### 4.2 Protocol Compatibility Checking
+
+```cfl
+components {
+  sensor: BME280 { i2c_address = 0x76; max_frequency = 1MHz };
+  eeprom: AT24C256 { i2c_address = 0x50; max_frequency = 400kHz };
+}
+
+interfaces {
+  shared_i2c: I2C { 
+    frequency = 400kHz;  // Limited by slowest device
+    devices = [sensor, eeprom];
+  };
+}
+
+// Tool validates:
+// - No address conflicts (0x76 ≠ 0x50) ✓
+// - Frequency compatibility (400kHz ≤ min(1MHz, 400kHz)) ✓
+// - Electrical compatibility (all 3.3V) ✓
+```
+
+## 5. Advanced Interface Features
+
+### 5.1 Interface Hierarchies and Variants
+
+```cfl
+// Base I2C interface
+interface I2C_Base {
+  signals { SCL: inout i2c_clock; SDA: inout i2c_data; }
+}
+
+// SMBus extends I2C with additional features
+interface SMBus extends I2C_Base {
+  signals {
+    ALERT: in smbus_alert(optional);
+    SMBCLK: out smbus_clock(optional);
+    SMBDATA: inout smbus_data(optional);
+  }
+  
+  protocol {
+    packet_error_checking = supported;
+    host_notify = supported;
+  }
+}
+
+// Fast-mode Plus I2C
+interface I2C_FMPlus extends I2C_Base {
+  electrical { max_frequency = 1MHz; }
+  timing { rise_time_max = 120ns; }
+}
+```
+
+### 5.2 Interface Templates and Generators
+
+```cfl
+// Template for multi-lane interfaces
+template MultiLane_Interface(lanes: integer) {
+  generate lane_signals for i in 0..lanes-1 {
+    TX[i]: out differential_signal;
+    RX[i]: in differential_signal;
+  }
+  
+  common_signals {
+    REFCLK: in reference_clock;
+    RESET: in reset_signal;
+  }
+}
+
+// PCIe using template
+interface PCIe_x4 = MultiLane_Interface(4) {
+  electrical {
+    differential_impedance = 100Ω ± 10%;
+    data_rate = 5Gbps;  // PCIe Gen2
+  }
+};
+
+interface PCIe_x8 = MultiLane_Interface(8) {
+  electrical {
+    differential_impedance = 100Ω ± 10%;
+    data_rate = 8Gbps;  // PCIe Gen3
+  }
+};
+```
+
+## 6. Interface Libraries and Standards
+
+### 6.1 Standard Interface Library
+
+```cfl
+// Import standard interfaces
+import std.interfaces.communication.*;  // I2C, SPI, UART, CAN, etc.
+import std.interfaces.memory.*;         // DDR, SRAM, Flash interfaces
+import std.interfaces.display.*;        // HDMI, DisplayPort, MIPI-DSI
+import std.interfaces.power.*;          // USB-PD, PoE, DC-DC control
+import std.interfaces.expansion.*;      // GPIO headers, card slots
+
+// Use in designs
+interfaces {
+  main_comm: I2C_400kHz;     // From standard library
+  storage: eMMC_8bit;        // Standard eMMC interface
+  display: MIPI_DSI_4lane;   // Standard display interface
+}
+```
+
+### 6.2 Custom Interface Definition
+
+```cfl
+// Define custom interfaces for specific applications
+interface Automotive_CAN extends CAN_Base {
+  electrical {
+    voltage_levels = 12V_automotive;
+    esd_protection = 15kV;
+    temperature_range = -40°C to +125°C;
+  }
+  
+  protocol {
+    baud_rates = [125kbps, 250kbps, 500kbps, 1Mbps];
+    error_handling = automotive_grade;
+  }
+  
+  safety {
+    iso26262_level = ASIL_D;
+    redundancy = required;
+  }
+}
+```
+
+## Key Benefits of Interface-First Design
+
+1. **Natural Abstraction**: Think in terms of buses, not individual signals
+2. **Automatic Signal Management**: Tool handles signal routing and constraints
+3. **Protocol Validation**: Automatic checking of electrical and protocol compatibility
+4. **Constraint Propagation**: Interface requirements automatically generate layout rules
+5. **Reusability**: Standard interfaces work across projects and teams
+6. **Scalability**: Easy to add lanes, change speeds, or modify protocols
+7. **Documentation**: Interfaces serve as clear design contracts
+
+This interface-first approach makes bus design as natural as board designers think about it, while providing the detailed control needed for successful implementation.

@@ -1,210 +1,144 @@
-// Audio Modules
-// BHDL Audio Modules
-
-// Import physical components from libraries
-import libraries.Passives.{Resistor, Capacitor};
-import libraries.ICs.{OpAmp};
-import libraries.Controls.{Potentiometer};
+// Audio Modules - BHDL v2.0
+// Reusable audio circuit modules
 
 // Tone Control Module
-module ToneControl {
-  pins {
-    IN: in signal;
-    OUT: out signal;
-    VCC: in power;
-    GND: ground;
-    BASS_CTRL: in analog;
-    TREBLE_CTRL: in analog;
-  }
-  
-  parameters {
-    type: enum {baxandall, james, lmc, parametric} = baxandall;
-    bass_control: required;      // External control input
-    treble_control: required;    // External control input 
-    bass_center: frequency = 100Hz;
-    treble_center: frequency = 10kHz;
-    bass_range: dB = ±12dB;
-    treble_range: dB = ±12dB;
-  }
-  
-  // Implementation - internal components and connections
-  components {
-    // Op-amp for active tone control
-    component OpAmp U1 {
-      type: audio;
-      channels: 1;
-    }
+module ToneControl(
+    type: string = "baxandall",
+    bass_center: frequency = 100Hz,
+    treble_center: frequency = 10kHz,
+    bass_range: string = "±12dB",
+    treble_range: string = "±12dB"
+) {
+    pin IN: signal in;
+    pin OUT: signal out;
+    pin VCC: power in;
+    pin GND: ground;
+    pin BASS_CTRL: signal in;    // Bass control input
+    pin TREBLE_CTRL: signal in;  // Treble control input
     
-    // Input coupling capacitor
-    component ElectrolyticCapacitor C_IN {
-      value: 10µF;
-      voltage: parameters.supply * 1.2;
-      type: bipolar;
-      low_esr: true;
-    }
-    
-    // Bass control network
-    component Resistor R_BASS1 {
-      value: 10kΩ;
-    }
-    
-    component Capacitor C_BASS1 {
-      value: calculate("1/(2*π*parameters.bass_center*10kΩ)");
-    }
-    
-    component Capacitor C_BASS2 {
-      value: calculate("1/(2*π*parameters.bass_center*100kΩ)");
-    }
-    
-    // Treble control network
-    component Resistor R_TREBLE1 {
-      value: 10kΩ;
-    }
-    
-    component Capacitor C_TREBLE1 {
-      value: calculate("1/(2*π*parameters.treble_center*10kΩ)");
-    }
-    
-    component Resistor R_TREBLE2 {
-      value: 10kΩ;
-    }
-    
-    // Feedback network
-    component Resistor R_FB {
-      value: 10kΩ;
-    }
-    
-    // Control potentiometers
-    component Potentiometer POT_BASS {
-      value: 100kΩ;
-      taper: linear;
-      control: parameters.bass_control;
-    }
-    
-    component Potentiometer POT_TREBLE {
-      value: 100kΩ;
-      taper: linear;
-      control: parameters.treble_control;
-    }
-  }
-  
-  // Internal connections
-  connections {
-    // Op-amp connections
-    IN -[C_IN]-> TONE_NETWORK;
-    TONE_NETWORK -> U1.IN_P;
-    U1.OUT -> OUT;
-    
-    // Power connections
-    VCC -> U1.VCC;
-    GND -> U1.GND;
-    
-    // Bass control network
-    TONE_NETWORK -[R_BASS1]-> BASS_POT_MID;
-    BASS_POT_MID -[C_BASS1]-> BASS_FILTER;
-    BASS_FILTER -[C_BASS2]-> GND;
-    
-    // Treble control network
-    TONE_NETWORK -[R_TREBLE1]-> TREBLE_POT_MID;
-    TONE_NETWORK -[C_TREBLE1]-> TREBLE_FILTER;
-    TREBLE_FILTER -[R_TREBLE2]-> GND;
-    
-    // Feedback network
-    OUT -[R_FB]-> U1.IN_N;
-    
-    // Potentiometer connections
-    BASS_FILTER -> POT_BASS.1;
-    POT_BASS.2 -> BASS_POT_MID;
-    POT_BASS.3 -> GND;
-    
-    TREBLE_FILTER -> POT_TREBLE.1;
-    POT_TREBLE.2 -> TREBLE_POT_MID;
-    POT_TREBLE.3 -> GND;
-  }
+    attribute module_type = "audio_tone_control";
+    attribute topology = type;
 }
 
-// Power Amplifier Module
-module PowerAmplifier {
-  pins {
-    IN: in signal;
-    OUT: out signal;
-    VCC: in power;
-    GND: ground;
-    MUTE: in digital = optional;
-  }
-  
-  parameters {
-    type: enum {class_a, class_ab, class_d} = class_ab;
-    channels: integer(1 to 8) = 1;
-    power: required;
-    thd: percentage = 0.1%;
-    snr: dB = 90dB;
-    supply: required;
-    protection: set {thermal, short_circuit, dc, clip} = {thermal, short_circuit};
-  }
-  
-  // Implementation would depend on the amplifier type
-  // This is simplified for the example
-  components {
-    // Output coupling capacitor
-    component ElectrolyticCapacitor C_OUT {
-      value: 470µF;
-      voltage: parameters.supply * 1.2;
-      type: bipolar;
-      low_esr: true;
-    }
+// Audio Preamplifier Module
+module AudioPreamp(gain: string = "20dB") {
+    pin IN: signal in;
+    pin OUT: signal out;
+    pin VCC: power in;
+    pin VEE: power in;
+    pin GND: ground;
     
-    // Power supply filtering
-    component Capacitor C_SUPPLY {
-      value: 100µF;
-      voltage: parameters.supply * 1.2;
-      type: electrolytic;
-    }
+    attribute module_type = "audio_preamp";
+    attribute voltage_gain = gain;
+    attribute input_impedance = "10kΩ";
+    attribute output_impedance = "100Ω";
+}
+
+// Microphone Preamplifier Module
+module MicPreamp(phantom_power: bool = false) {
+    pin MIC+: signal in;
+    pin MIC-: signal in;
+    pin OUT: signal out;
+    pin GAIN: signal in;
+    pin VCC: power in;
+    pin GND: ground;
+    pin PHANTOM: power out when phantom_power;
     
-    // Class selection
-    when (parameters.type == class_ab) {
-      // Components for Class AB implementation
-      // Simplified for example
-      component Transistor Q1 {
-        type: npn;
-        power: >parameters.power * 0.6;
-      }
-      
-      component Transistor Q2 {
-        type: pnp;
-        power: >parameters.power * 0.6;
-      }
-      
-      // Biasing network, etc.
-    }
+    attribute module_type = "mic_preamp";
+    attribute gain_range = "20dB-60dB";
+    attribute phantom_voltage = "48V" when phantom_power;
+}
+
+// Active Filter Module
+module ActiveFilter(
+    type: string = "lowpass",
+    frequency: frequency = 1kHz,
+    order: int = 2
+) {
+    pin IN: signal in;
+    pin OUT: signal out;
+    pin VCC: power in;
+    pin VEE: power in;
+    pin GND: ground;
     
-    when (parameters.type == class_d) {
-      // Components for Class D implementation
-    }
-  }
-  
-  // Connections would be based on amplifier type
-  connections {
-    // Simplified connections
-    VCC -> C_SUPPLY.1;
-    C_SUPPLY.2 -> GND;
+    attribute module_type = "active_filter";
+    attribute filter_type = type;
+    attribute cutoff_frequency = frequency;
+    attribute filter_order = order;
+    attribute topology = order <= 2 ? "Sallen-Key" : "Cascaded";
+}
+
+// Audio Mixer Module
+module AudioMixer(channels: int = 4) {
+    pin IN[1:channels]: signal in;
+    pin OUT: signal out;
+    pin LEVEL[1:channels]: signal in;  // Level controls
+    pin VCC: power in;
+    pin VEE: power in;
+    pin GND: ground;
     
-    when (parameters.type == class_ab) {
-      // Class AB specific connections
-      IN -> Q1.BASE;
-      VCC -> Q1.COLLECTOR;
-      Q1.EMITTER -> AMP_OUTPUT;
-      
-      IN -> Q2.BASE;
-      Q2.COLLECTOR -> GND;
-      Q2.EMITTER -> AMP_OUTPUT;
-    }
+    attribute module_type = "audio_mixer";
+    attribute channel_count = channels;
+    attribute topology = "active_summing";
+}
+
+// Headphone Amplifier Module
+module HeadphoneAmp(impedance: resistance = 32Ω) {
+    pin IN_L: signal in;
+    pin IN_R: signal in;
+    pin OUT_L: signal out;
+    pin OUT_R: signal out;
+    pin VOLUME: signal in;
+    pin VCC: power in;
+    pin GND: ground;
     
-    AMP_OUTPUT -[C_OUT]-> OUT;
-  }
-  
-  // Physical constraints
-  constraints {
-    copper_pour: under(this, size: min_pad_area * 4);
-  }
-} 
+    attribute module_type = "headphone_amp";
+    attribute output_impedance = "0.1Ω";
+    attribute load_impedance = impedance;
+    attribute output_power = impedance <= 32Ω ? "100mW" : "50mW";
+}
+
+// VU Meter Driver Module
+module VUMeterDriver(type: string = "LED") {
+    pin IN: signal in;
+    pin LED[1:10]: signal out when type == "LED";
+    pin METER+: signal out when type == "analog";
+    pin METER-: signal out when type == "analog";
+    pin VCC: power in;
+    pin GND: ground;
+    
+    attribute module_type = "vu_meter_driver";
+    attribute display_type = type;
+    attribute scale = "-20dB to +3dB";
+}
+
+// Audio Compressor Module
+module AudioCompressor(ratio: string = "4:1") {
+    pin IN: signal in;
+    pin OUT: signal out;
+    pin THRESHOLD: signal in;
+    pin ATTACK: signal in;
+    pin RELEASE: signal in;
+    pin VCC: power in;
+    pin VEE: power in;
+    pin GND: ground;
+    
+    attribute module_type = "audio_compressor";
+    attribute compression_ratio = ratio;
+    attribute threshold_range = "-40dB to 0dB";
+}
+
+// Crossover Network Module
+module CrossoverNetwork(frequency: frequency = 3kHz) {
+    pin IN: signal in;
+    pin LOW_OUT: signal out;   // Low frequency output
+    pin HIGH_OUT: signal out;  // High frequency output
+    pin VCC: power in;
+    pin VEE: power in;
+    pin GND: ground;
+    
+    attribute module_type = "crossover";
+    attribute crossover_frequency = frequency;
+    attribute order = "24dB/octave";
+    attribute topology = "Linkwitz-Riley";
+}

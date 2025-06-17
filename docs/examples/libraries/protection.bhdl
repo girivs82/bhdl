@@ -1,107 +1,142 @@
-// Protection Components Library
-library Protection {
-  version: "1.0.0";
-  author: "BHDL Team";
-  description: "Protection components for electronic circuits";
+// Protection Components Library - BHDL v2.0
+// Circuit protection components
 
-  // Fuse Component
-  component Fuse {
-    pins {
-      1: in;
-      2: out;
-    }
+// TVS Diode Module
+module TVSDiode(voltage: voltage) {
+    pin 1: signal inout;
+    pin 2: ground;
     
-    properties {
-      rating: required;
-      type: fast_blow;  // fast_blow, slow_blow, resettable
-      voltage: required;
-      breaking_capacity: 50A;
-    }
-  }
+    attribute component_class = "tvs_diode";
+    attribute breakdown_voltage = voltage;
+    attribute clamping_voltage = "120%";
+    attribute response_time = "1ns";
+    attribute power_rating = "600W";
+}
 
-  // Varistor Component
-  component Varistor {
-    pins {
-      1: passive;
-      2: passive;
-    }
+// Fuse Module
+module Fuse(current: current, type: string = "fast") {
+    pin 1: power inout;
+    pin 2: power inout;
     
-    properties {
-      voltage: required;
-      energy: required;
-      clamping_ratio: 1.6;
-      response_time: <25ns;
-    }
-  }
-  
-  // TVS Diode Component
-  component TVSDiode {
-    pins {
-      1: passive;
-      2: passive;
-    }
+    attribute component_class = "fuse";
+    attribute rating = current;
+    attribute type = type;
+    attribute voltage_rating = "250V";
+}
+
+// Resettable Fuse (PTC)
+module ResettableFuse(current: current) {
+    pin 1: power inout;
+    pin 2: power inout;
     
-    properties {
-      breakdown_voltage: required;
-      clamping_voltage: required;
-      peak_pulse_current: required;
-      direction: unidirectional;  // unidirectional, bidirectional
-    }
-  }
-  
-  // Diode Component
-  component Diode {
-    pins {
-      A: in;    // Anode
-      K: out;   // Cathode
-    }
+    attribute component_class = "ptc_fuse";
+    attribute hold_current = current;
+    attribute trip_current = "200%";
+    attribute reset_time = "10s";
+}
+
+// Varistor (MOV) Module
+module Varistor(voltage: voltage) {
+    pin 1: signal inout;
+    pin 2: signal inout;
     
-    properties {
-      voltage: required;
-      current: required;
-      forward_voltage: 0.7V;
-      reverse_recovery: 50ns;
-      type: standard;  // standard, fast, schottky, zener
-    }
-  }
-  
-  // Schottky Diode Component
-  component SchottkyDiode {
-    pins {
-      A: in;    // Anode
-      K: out;   // Cathode
-    }
+    attribute component_class = "varistor";
+    attribute voltage_rating = voltage;
+    attribute energy_rating = "10J";
+    attribute response_time = "25ns";
+}
+
+// Gas Discharge Tube
+module GDT(voltage: voltage) {
+    pin 1: signal inout;
+    pin 2: signal inout;
     
-    properties {
-      voltage: required;
-      current: required;
-      forward_voltage: 0.3V;
-      reverse_recovery: 10ns;
-    }
-  }
-  
-  // Current Limiter
-  component CurrentLimiter {
-    pins {
-      IN: in;
-      OUT: out;
-      GND: power_in;
-    }
+    attribute component_class = "gdt";
+    attribute dc_breakdown = voltage;
+    attribute impulse_breakdown = "150%";
+    attribute insulation_resistance = "10GΩ";
+}
+
+// Common Mode Choke
+module CommonModeChoke(inductance: inductance) {
+    pin 1: signal in;
+    pin 2: signal out;
+    pin 3: signal in;
+    pin 4: signal out;
     
-    properties {
-      current_limit: required;
-      trip_time: 10ms;
-      auto_reset: true;
-    }
-  }
-  
-  // Public exports
-  export {
-    Fuse,
-    Varistor,
-    TVSDiode,
-    Diode,
-    SchottkyDiode,
-    CurrentLimiter
-  }
-} 
+    attribute component_class = "common_mode_choke";
+    attribute inductance = inductance;
+    attribute impedance = "100Ω @ 100MHz";
+    attribute current_rating = "1A";
+}
+
+// Circuit Breaker Module
+module CircuitBreaker(current: current) {
+    pin LINE: power in;
+    pin LOAD: power out;
+    
+    attribute component_class = "circuit_breaker";
+    attribute rating = current;
+    attribute trip_curve = "C";
+    attribute poles = "1";
+}
+
+// Spark Gap Module
+module SparkGap(voltage: voltage) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+    
+    attribute component_class = "spark_gap";
+    attribute breakdown_voltage = voltage;
+    attribute arc_voltage = "25V";
+}
+
+// ESD Protection Module
+module ESDProtection() {
+    pin IO: signal inout;
+    pin VCC: power in;
+    pin GND: ground;
+    
+    attribute component_class = "esd_protection";
+    attribute clamping_voltage = "8V";
+    attribute capacitance = "0.5pF";
+    attribute iec_rating = "Level 4";
+}
+
+// Ferrite Bead Module
+module FerriteBead(impedance: resistance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+    
+    attribute component_class = "ferrite_bead";
+    attribute impedance = impedance;
+    attribute frequency = "100MHz";
+    attribute dc_resistance = "0.05Ω";
+    attribute current_rating = "3A";
+}
+
+// Crowbar Protection Module
+module CrowbarProtection(voltage: voltage) {
+    pin IN: power in;
+    pin OUT: power out;
+    pin GND: ground;
+    pin SENSE: signal in;
+    
+    attribute component_class = "crowbar";
+    attribute trigger_voltage = voltage;
+    attribute response_time = "1µs";
+}
+
+// Isolation Transformer Module
+module IsolationTransformer(ratio: string = "1:1") {
+    pin PRI_L: signal in;
+    pin PRI_N: signal in;
+    pin SEC_L: signal out;
+    pin SEC_N: signal out;
+    pin SHIELD: ground;
+    
+    attribute component_class = "isolation_transformer";
+    attribute turns_ratio = ratio;
+    attribute isolation_voltage = "3kV";
+    attribute leakage_inductance = "10µH";
+}

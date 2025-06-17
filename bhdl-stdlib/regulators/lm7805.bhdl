@@ -1,0 +1,56 @@
+// LM7805 Linear Voltage Regulator
+// 5V 1A output with various package options
+
+module LM7805(package: string = "TO-220") {
+    pin IN: power in;     // Input voltage (7-35V)
+    pin GND: ground;      // Ground
+    pin OUT: power out;   // Regulated 5V output @ 1A
+    
+    // Additional pins for enhanced versions
+    pin EN: signal in when package == "TO-220-5" or package == "TO-263-5";   // Enable pin
+    pin ADJ: signal in when package == "TO-220-5" or package == "TO-263-5";  // Adjust pin
+    
+    // Electrical specifications
+    attribute output_voltage = "5.0V";
+    attribute output_tolerance = "4%";  // ±4% typical
+    attribute max_input_voltage = "35V";
+    attribute min_input_voltage = "7V";  // 2V dropout
+    attribute dropout_voltage = "2.0V";
+    attribute max_output_current = "1A";
+    attribute quiescent_current = "5mA";
+    
+    // Thermal specifications
+    attribute thermal_resistance = 
+        package == "TO-220" ? "5°C/W" :
+        package == "TO-263" ? "3°C/W" :
+        package == "SOT-223" ? "15°C/W" :
+        "5°C/W";
+    
+    // Component database mapping
+    attribute component_class = "voltage_regulator";
+    attribute regulator_type = "linear";
+    attribute fixed_output = "true";
+    
+    // KiCad symbol mapping
+    attribute kicad_symbol = 
+        package == "TO-220-5" ? "Regulator_Linear:LM7805_TO220_5pin" :
+        "Regulator_Linear:LM7805_TO220";
+    
+    // Available packages
+    attribute packages = "TO-220,TO-220-5,TO-263,TO-263-5,SOT-223";
+    attribute default_package = "TO-220";
+    
+    // Thermal protection
+    attribute has_thermal_protection = "true";
+    attribute has_current_limiting = "true";
+    
+    // Recommended external components
+    attribute input_capacitor_min = "0.33µF";   // Minimum input capacitor
+    attribute output_capacitor_min = "0.1µF";   // Minimum output capacitor
+    attribute input_capacitor_rec = "10µF";     // Recommended for ripple rejection
+    attribute output_capacitor_rec = "1µF";     // Recommended for stability
+}
+
+// Common aliases
+module 7805 = LM7805;
+module L7805 = LM7805;

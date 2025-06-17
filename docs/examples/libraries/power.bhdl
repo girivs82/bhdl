@@ -1,147 +1,148 @@
-// Power Components Library
-library Power {
-  version: "1.0.0";
-  author: "BHDL Team";
-  description: "Power components for electronic circuits";
+// Power Components Library - BHDL v2.0
+// Power supply and regulation components
 
-  // Linear Regulator Component
-  component LinearRegulator {
-    pins {
-      IN: in power;
-      OUT: out power;
-      GND: power_in;
-    }
+// Linear Regulator Module
+module LinearRegulator(input_voltage: voltage, output_voltage: voltage, max_current: current = 1A) {
+    pin IN: power in;
+    pin OUT: power out;
+    pin GND: ground;
     
-    properties {
-      input: required;
-      output: required;
-      current: required;
-      dropout: required;
-      protection: {thermal};
-    }
-  }
+    attribute component_class = "linear_regulator";
+    attribute dropout_voltage = "2V";
+    attribute protection = "thermal,overcurrent";
+}
 
-  // LDO Regulator Component
-  component LDORegulator {
-    pins {
-      IN: in power;
-      OUT: out power;
-      GND: power_in;
-      EN: in digital;
-    }
+// LDO Regulator Module
+module LDORegulator(input_voltage: voltage, output_voltage: voltage, max_current: current = 500mA) {
+    pin IN: power in;
+    pin OUT: power out;
+    pin GND: ground;
+    pin EN: signal in;  // Enable pin
     
-    properties {
-      input: required;
-      output: required;
-      current: required;
-      dropout: <0.5V;
-      psrr: 60dB;
-      protection: {thermal, overcurrent};
-    }
-  }
-  
-  // Buck Converter Component
-  component BuckConverter {
-    pins {
-      VIN: in power;
-      SW: out power;
-      FB: in analog;
-      EN: in digital;
-      GND: power_in;
-      PG: out digital;
-    }
+    attribute component_class = "ldo_regulator";
+    attribute dropout_voltage = "200mV";
+    attribute quiescent_current = "50µA";
+}
+
+// 7805 5V Linear Regulator
+module LM7805() {
+    pin IN: power in;
+    pin OUT: power out;
+    pin GND: ground;
     
-    properties {
-      input: required;
-      output: required;
-      current: required;
-      switching_frequency: 600kHz;
-      efficiency: 85%;
-      features: {soft_start, current_limit, thermal_shutdown};
-    }
-  }
-  
-  // Boost Converter Component
-  component BoostConverter {
-    pins {
-      VIN: in power;
-      SW: out power;
-      FB: in analog;
-      EN: in digital;
-      GND: power_in;
-      PG: out digital;
-    }
+    attribute component_class = "linear_regulator";
+    attribute output_voltage = "5V";
+    attribute max_current = "1.5A";
+    attribute dropout_voltage = "2V";
+    attribute part_number = "LM7805";
+}
+
+// 3.3V LDO Regulator
+module LM1117_3V3() {
+    pin IN: power in;
+    pin OUT: power out;
+    pin GND: ground;
+    pin ADJ: signal in;  // Adjust pin (can be tied to ground for fixed version)
     
-    properties {
-      input: required;
-      output: required;
-      current: required;
-      switching_frequency: 1.2MHz;
-      efficiency: 85%;
-      features: {soft_start, current_limit, thermal_shutdown};
-    }
-  }
-  
-  // Transformer Component
-  component Transformer {
-    pins {
-      PRI_1: in power;
-      PRI_2: in power;
-      SEC_1: out power;
-      SEC_2: out power;
-    }
+    attribute component_class = "ldo_regulator";
+    attribute output_voltage = "3.3V";
+    attribute max_current = "800mA";
+    attribute dropout_voltage = "1.2V";
+    attribute part_number = "LM1117-3.3";
+}
+
+// Buck Converter Module
+module BuckConverter(input_voltage: voltage, output_voltage: voltage, max_current: current) {
+    pin VIN: power in;
+    pin VOUT: power out;
+    pin GND: ground;
+    pin EN: signal in;
+    pin FB: signal out;  // Feedback pin
+    pin SW: power inout; // Switch node
     
-    properties {
-      primary: required;
-      secondary: required;
-      power: required;
-      isolation: basic;  // basic, reinforced, double
-      turns_ratio: calculated;
-    }
-  }
-  
-  // Rectifier Component
-  component BridgeRectifier {
-    pins {
-      AC1: in power;
-      AC2: in power;
-      DC_POS: out power;
-      DC_NEG: out power;
-    }
+    attribute component_class = "buck_converter";
+    attribute switching_frequency = "500kHz";
+    attribute efficiency = "90%";
+}
+
+// Boost Converter Module
+module BoostConverter(input_voltage: voltage, output_voltage: voltage, max_current: current) {
+    pin VIN: power in;
+    pin VOUT: power out;
+    pin GND: ground;
+    pin EN: signal in;
+    pin FB: signal out;
+    pin SW: power inout;
     
-    properties {
-      voltage: required;
-      current: required;
-      forward_voltage: 1.4V;
-      type: standard;  // standard, schottky, fast
-    }
-  }
-  
-  // EMI Filter Component
-  component EMIFilter {
-    pins {
-      L_IN: in power;
-      N_IN: in power;
-      L_OUT: out power;
-      N_OUT: out power;
-    }
+    attribute component_class = "boost_converter";
+    attribute switching_frequency = "1MHz";
+    attribute efficiency = "85%";
+}
+
+// USB Power Input Module
+module USBPowerInput() {
+    pin VBUS: power out;
+    pin D+: signal inout;
+    pin D-: signal inout;
+    pin GND: ground;
+    pin SHIELD: ground;
     
-    properties {
-      mode: common_mode;  // common_mode, differential_mode, both
-      current: required;
-      attenuation: required;
-      frequency_range: 150kHz to 30MHz;
-    }
-  }
-  
-  // Public exports
-  export {
-    LinearRegulator,
-    LDORegulator,
-    BuckConverter,
-    BoostConverter,
-    Transformer,
-    BridgeRectifier,
-    EMIFilter
-  }
-} 
+    attribute component_class = "usb_connector";
+    attribute voltage = "5V";
+    attribute max_current = "500mA";
+    attribute connector_type = "USB-C";
+}
+
+// Barrel Jack Power Input
+module BarrelJack() {
+    pin CENTER: power in;
+    pin SLEEVE: ground;
+    pin SWITCH: signal out;  // Switch contact (optional)
+    
+    attribute component_class = "barrel_jack";
+    attribute diameter = "5.5mm";
+    attribute pin_diameter = "2.1mm";
+    attribute polarity = "center_positive";
+}
+
+// Battery Holder Module
+module BatteryHolder(chemistry: string = "LiPo", cells: int = 1) {
+    pin +: power out;
+    pin -: ground;
+    
+    attribute component_class = "battery_holder";
+    attribute voltage = "3.7V";  // Per cell for LiPo
+    attribute connector_type = "JST-PH";
+}
+
+// Power Switch Module
+module PowerSwitch() {
+    pin IN: power in;
+    pin OUT: power out;
+    
+    attribute component_class = "switch";
+    attribute type = "SPST";
+    attribute rating = "3A @ 12V";
+}
+
+// Fuse Module
+module Fuse(current: current) {
+    pin 1: power inout;
+    pin 2: power inout;
+    
+    attribute component_class = "fuse";
+    attribute type = "resettable";
+    attribute trip_current = current;
+    attribute hold_current = "70%";
+}
+
+// TVS Diode for protection
+module TVSDiode(voltage: voltage) {
+    pin 1: signal inout;
+    pin 2: ground;
+    
+    attribute component_class = "tvs_diode";
+    attribute breakdown_voltage = voltage;
+    attribute clamping_voltage = "120%";
+    attribute response_time = "1ns";
+}

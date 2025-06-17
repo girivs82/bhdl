@@ -1,0 +1,54 @@
+// Comprehensive BHDL v2.0 Test File with EDA-style units
+// Tests all seven core constructs with array pin access
+
+board PowerSupplyBoard {
+    // Power domains
+    power USB_5V = 5V @ 2A;
+    power VCC_3V3 = 3.3V @ 1A;
+    power VCC_1V8 = 1.8V @ 500mA;
+    ground GND;
+
+    // Interface declarations
+    main_i2c: I2C(voltage=3.3V, frequency=400k);
+    status_spi: SPI(voltage=3.3V, frequency=1M);
+    
+    // Flow specifications
+    power_flow: USB_5V |> protection |> regulation |> distribution;
+    
+    // Component instantiation with EDA units
+    USB_5V -> input_cap: Cap(100u).+ ;
+    input_cap.- -> GND;
+    
+    // Named component handle
+    USB_5V -> regulator: LinearReg(3.3V, 1A).IN;
+    regulator.GND -> GND;
+    regulator.OUT -> VCC_3V3;
+    
+    // Direct connections with EDA units
+    VCC_3V3 -> Res(4.7k).1 -> LED(red).A;
+    LED.K -> GND;
+    
+    // Generate constructs with array pin access
+    generate for i in 0..3 {
+        VCC_3V3 -> Res(10k).1 -> status_led[i]: LED(green).A;
+        status_led[i].K -> GND;
+    }
+    
+    // Array element pin access outside generate
+    status_led[0].K -> test_point1;
+    status_led[2].A -> test_point2;
+    
+    // Conditional logic
+    if (debug_mode) {
+        VCC_3V3 -> Res(1k).1 -> debug_led: LED(yellow).A;
+        debug_led.K -> GND;
+    }
+    
+    // Interface connections
+    main_i2c <-> [temp_sensor, eeprom];
+    
+    // Module instantiation
+    module PowerFilter(VCC_3V3, GND) {
+        flow: INPUT |> filtering |> OUTPUT;
+    }
+}

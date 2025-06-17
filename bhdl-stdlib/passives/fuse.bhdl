@@ -1,0 +1,28 @@
+// Fuse Component Module
+// Overcurrent protection device
+
+module Fuse(current: current) {
+    pin 1: signal inout;  // Terminal 1
+    pin 2: signal inout;  // Terminal 2
+    
+    // Electrical specifications
+    attribute current_rating = current;
+    attribute voltage_rating = "250V";  // Standard AC voltage rating
+    attribute breaking_capacity = "35A";  // Standard breaking capacity
+    attribute response_time = "fast";  // fast, slow, medium
+    
+    // Component metadata
+    attribute component_class = "fuse";
+    attribute protection_type = "overcurrent";
+    
+    // KiCad symbol mapping
+    attribute kicad_symbol = "Device:Fuse";
+    
+    // Available packages
+    attribute packages = "5x20mm,6.3x32mm,SMD_1206,SMD_1812";
+    attribute default_package = "5x20mm";
+    
+    // Safety ratings
+    attribute safety_standard = "IEC 60127";
+    attribute has_indicator = "false";
+}

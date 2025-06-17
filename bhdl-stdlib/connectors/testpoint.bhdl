@@ -1,0 +1,28 @@
+// Test Point Component Module
+// For measurement and debugging access
+
+module TestPoint(style: string = "pad") {
+    pin 1: signal inout;  // Single connection point
+    
+    // Metadata for component database
+    attribute component_class = "connector";
+    attribute connector_type = "test_point";
+    
+    // Physical characteristics based on style
+    attribute footprint = 
+        style == "pad" ? "TestPoint:TestPoint_Pad_D1.5mm" :
+        style == "hole" ? "TestPoint:TestPoint_THTPad_D1.5mm_Drill0.7mm" :
+        style == "loop" ? "TestPoint:TestPoint_Loop_D2.5mm" :
+        style == "pin" ? "TestPoint:TestPoint_Pin_D1.0mm" :
+        style == "keystone" ? "TestPoint:TestPoint_Keystone_5000-5004" :
+        "TestPoint:TestPoint_Pad_D1.5mm";
+    
+    // KiCad symbol mapping
+    attribute kicad_symbol = "Connector:TestPoint";
+    
+    // Color coding support
+    attribute available_colors = "red,black,white,yellow,blue";
+}
+
+// Shorter alias
+module TP = TestPoint;

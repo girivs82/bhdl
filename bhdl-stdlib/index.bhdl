@@ -1,0 +1,19 @@
+// BHDL Standard Library Index
+// Exports all standard components
+
+// Passive Components
+export * from "./passives/resistor.bhdl";
+export * from "./passives/capacitor.bhdl";
+export * from "./passives/led.bhdl";
+
+// Voltage Regulators
+export * from "./regulators/lm7805.bhdl";
+
+// Connectors and Test Points
+export * from "./connectors/testpoint.bhdl";
+
+// Future additions:
+// export * from "./passives/inductor.bhdl";
+// export * from "./logic/74xx_series.bhdl";
+// export * from "./amplifiers/opamps.bhdl";
+// export * from "./power/switching_regulators.bhdl";

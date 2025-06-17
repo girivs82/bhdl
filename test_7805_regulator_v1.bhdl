@@ -1,0 +1,64 @@
+// 7805 Linear Voltage Regulator Circuit - BHDL v1.0 Compatible
+// Input: 12V DC, Output: 5V DC @ 1A
+// Components: 7805 regulator, input/output capacitors
+
+board LinearRegulator7805 {
+    // Net declarations
+    nets {
+        net VIN: power;
+        net VOUT: power;
+        net GND: ground;
+        net reg_vin: power;
+        net reg_out: power;
+    }
+    
+    // Component declarations
+    components {
+        // Input filtering capacitor (electrolytic for bulk storage)
+        component Capacitor input_cap { 
+            parameter value = 330uF; 
+            parameter voltage_rating = 25V;
+        }
+        
+        // Main voltage regulator
+        component LM7805 U1;
+        
+        // Output filtering capacitor (ceramic for high frequency)
+        component Capacitor output_cap {
+            parameter value = 100nF;
+            parameter voltage_rating = 16V;
+        }
+        
+        // Power indicator LED with current limiting resistor
+        component Resistor led_resistor {
+            parameter value = 330Ohm;
+        }
+        
+        component LED power_led {
+            parameter color = green;
+        }
+    }
+    
+    // Connection declarations (v1.0 style)
+    connections {
+        // Input capacitor connections
+        connect VIN -> input_cap.plus;
+        connect input_cap.plus -> reg_vin;
+        connect input_cap.minus -> GND;
+        
+        // Regulator connections
+        connect reg_vin -> U1.IN;
+        connect U1.GND -> GND;
+        connect U1.OUT -> reg_out;
+        
+        // Output capacitor connections
+        connect reg_out -> output_cap.plus;
+        connect output_cap.plus -> VOUT;
+        connect output_cap.minus -> GND;
+        
+        // LED indicator connections
+        connect VOUT -> led_resistor.p1;
+        connect led_resistor.p2 -> power_led.A;
+        connect power_led.K -> GND;
+    }
+}

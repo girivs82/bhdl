@@ -1,0 +1,12 @@
+[package]
+name = "bhdl-common"
+version = "0.2.0"
+edition = "2021"
+authors = ["BHDL Team"]
+description = "Common types and utilities for the BHDL toolchain"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+
+[dev-dependencies]

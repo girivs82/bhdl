@@ -1,98 +1,175 @@
-// Audio Components
-// BHDL Standard Library - Audio Components
+// Audio Components Library - BHDL v2.0
+// Audio ICs and components
 
-// This library contains physical audio components (ICs, etc.)
-// For reusable subcircuits, see the modules/audio_modules.bhdl file (if it exists)
-
-// Assuming necessary base type imports
-// import StandardLibrary.Types.{...};
-
-// Audio IC Components
-
-// Audio Codec component
-component AudioCodec {
-  pins {
-    // Analog audio interface (Assume appropriate types like line_level, mic_level)
-    LINEIN_L: in signal; //(line_level);
-    LINEIN_R: in signal; //(line_level);
-    LINEOUT_L: out signal; //(line_level);
-    LINEOUT_R: out signal; //(line_level);
-    MIC_IN: in signal; //(mic_level);
-    HP_OUT_L: out signal; //(headphone_level?)
-    HP_OUT_R: out signal; //(headphone_level?)
-
-    // Digital interface (Assume types like cmos_3v3 or similar)
-    MCLK: in signal; // Should be domain: clock
-    BCLK: inout signal;
-    LRCLK: inout signal;
-    SDIN: in signal;
-    SDOUT: out signal;
-
-    // Control interface (Assume i2c_signal_3v3 or similar)
-    SCL: in signal;
-    SDA: inout signal;
-
-    // Power (Assume types like lv_digital_power, lv_analog_power)
-    VDD: in power;
-    AVDD: in power;
-    GND: ground;
-  }
-
-  properties {
-    resolution: enum {16, 24, 32} = 24; // Use enum for specific choices
-    sample_rate: frequency = 8kHz to 192kHz; // Standard range syntax
-    snr: real = 100dB; // Assuming dB handled
-    thd: percentage = 0.001pct; // Use pct
-  }
-
-  // Removed non-standard 'component_selection' block.
-
+// Audio Codec Module
+module AudioCodec(sample_rate: frequency = 48kHz) {
+    // Analog audio interface
+    pin LINEIN_L: signal in;
+    pin LINEIN_R: signal in;
+    pin LINEOUT_L: signal out;
+    pin LINEOUT_R: signal out;
+    pin MIC_IN: signal in;
+    pin HP_OUT_L: signal out;
+    pin HP_OUT_R: signal out;
+    
+    // Digital interface
+    pin MCLK: signal in;      // Master clock
+    pin BCLK: signal in;      // Bit clock
+    pin LRCLK: signal in;     // Left/Right clock
+    pin SDIN: signal in;      // Serial data in
+    pin SDOUT: signal out;    // Serial data out
+    
+    // Control interface (I2C)
+    pin SDA: signal inout;
+    pin SCL: signal in;
+    
+    // Power
+    pin AVDD: power in;       // Analog power
+    pin DVDD: power in;       // Digital power
+    pin AGND: ground;         // Analog ground
+    pin DGND: ground;         // Digital ground
+    
+    attribute component_class = "audio_codec";
+    attribute sample_rate = sample_rate;
+    attribute bit_depth = "24";
+    attribute interface = "I2S";
 }
 
-// Audio Amplifier IC component
-component AudioAmplifierIC {
-  pins {
-    // Assume appropriate signal types
-    IN_L: in signal;
-    IN_R: in signal;
-    OUT_L: out signal;
-    OUT_R: out signal;
-    MUTE: in signal; // Optional pin, type depends on logic level
-    STBY: in signal; // Optional pin
-    VCC: in power;
-    GND: ground;
-  }
-
-  properties {
-    channels: integer = 2; // Simplified range (1 to 8), tool validation
-    power_rating: power = required; // Clarified property name
-    type: enum {headphone, speaker, line} = speaker;
-    class: enum {ab, d} = ab;
-    thd: percentage = 0.1pct; // Use pct
-  }
-
-  // Removed non-standard 'component_selection' block.
-
+// Audio Amplifier Module
+module AudioAmplifier(power: power = 1W, channels: int = 2) {
+    pin IN_L: signal in;
+    pin IN_R: signal in when channels == 2;
+    pin OUT_L+: signal out;
+    pin OUT_L-: signal out;
+    pin OUT_R+: signal out when channels == 2;
+    pin OUT_R-: signal out when channels == 2;
+    pin SHUTDOWN: signal in;
+    pin MUTE: signal in;
+    pin VCC: power in;
+    pin GND: ground;
+    
+    attribute component_class = "audio_amplifier";
+    attribute output_power = power;
+    attribute thd = "0.1%";
+    attribute efficiency = "85%";
 }
 
-// Microphone Preamplifier IC component
-component MicPreampIC { // Renamed to clarify it's an IC component
-  pins {
-    // Assume mic_level input, line_level output?
-    IN: in signal;
-    OUT: out signal;
-    VCC: in power;
-    GND: ground;
-    GAIN_SEL: in signal; // Optional pin
-  }
+// Class D Audio Amplifier
+module TPA3116() {
+    pin INL+: signal in;
+    pin INL-: signal in;
+    pin INR+: signal in;
+    pin INR-: signal in;
+    pin OUTL+: signal out;
+    pin OUTL-: signal out;
+    pin OUTR+: signal out;
+    pin OUTR-: signal out;
+    pin PVDD: power in;
+    pin AVDD: power in;
+    pin GND: ground;
+    pin MUTE: signal in;
+    pin FAULT: signal out;
+    
+    attribute component_class = "audio_amplifier";
+    attribute part_number = "TPA3116D2";
+    attribute output_power = "50W";
+    attribute class = "D";
+    attribute supply_voltage = "4.5V-26V";
+}
 
-  properties {
-    gain: real_range = 20dB to 60dB; // Assuming dB handled, added _range suffix
-    noise: real = 2nV/sqrt(Hz); // Assuming complex unit handled
-    thd: percentage = 0.01pct; // Use pct
-    phantom_power: boolean = false;
-  }
+// Microphone Preamplifier
+module MicPreamp() {
+    pin MIC+: signal in;
+    pin MIC-: signal in;
+    pin OUT: signal out;
+    pin GAIN: signal in;
+    pin VCC: power in;
+    pin GND: ground;
+    
+    attribute component_class = "mic_preamp";
+    attribute gain_range = "20dB-60dB";
+    attribute phantom_power = "48V";
+    attribute noise = "-120dBu";
+}
 
-  // Removed non-standard 'component_selection' block.
+// Audio Jack Module
+module AudioJack3_5mm(type: string = "TRS") {
+    pin TIP: signal inout;
+    pin RING: signal inout when type == "TRS" or type == "TRRS";
+    pin RING2: signal inout when type == "TRRS";
+    pin SLEEVE: ground;
+    pin DETECT: signal out;  // Jack detection switch
+    
+    attribute component_class = "audio_connector";
+    attribute size = "3.5mm";
+    attribute contacts = type;
+}
 
-} 
+// XLR Connector
+module XLRConnector(gender: string = "female") {
+    pin 1: ground;         // Shield/Ground
+    pin 2: signal inout;   // Hot/Positive
+    pin 3: signal inout;   // Cold/Negative
+    
+    attribute component_class = "audio_connector";
+    attribute type = "XLR";
+    attribute gender = gender;
+}
+
+// Audio DAC Module
+module AudioDAC(bits: int = 24) {
+    pin DIN: signal in;    // Serial data
+    pin BCK: signal in;    // Bit clock
+    pin LRCK: signal in;   // L/R clock
+    pin MCLK: signal in;   // Master clock
+    pin AOUTL: signal out; // Analog out left
+    pin AOUTR: signal out; // Analog out right
+    pin VDD: power in;
+    pin GND: ground;
+    
+    attribute component_class = "audio_dac";
+    attribute resolution = bits;
+    attribute snr = "120dB";
+    attribute sample_rate = "192kHz";
+}
+
+// Audio ADC Module
+module AudioADC(bits: int = 24) {
+    pin AINL: signal in;   // Analog in left
+    pin AINR: signal in;   // Analog in right
+    pin DOUT: signal out;  // Serial data
+    pin BCK: signal in;    // Bit clock
+    pin LRCK: signal in;   // L/R clock
+    pin MCLK: signal in;   // Master clock
+    pin VDD: power in;
+    pin GND: ground;
+    
+    attribute component_class = "audio_adc";
+    attribute resolution = bits;
+    attribute snr = "110dB";
+    attribute sample_rate = "192kHz";
+}
+
+// Speaker Module
+module Speaker(impedance: resistance = 8Ω, power: power = 5W) {
+    pin +: signal in;
+    pin -: signal in;
+    
+    attribute component_class = "speaker";
+    attribute impedance = impedance;
+    attribute power_rating = power;
+    attribute frequency_range = "20Hz-20kHz";
+}
+
+// Audio Transformer
+module AudioTransformer(ratio: string = "1:1") {
+    pin PRI+: signal in;
+    pin PRI-: signal in;
+    pin SEC+: signal out;
+    pin SEC-: signal out;
+    
+    attribute component_class = "audio_transformer";
+    attribute turns_ratio = ratio;
+    attribute frequency_range = "20Hz-20kHz";
+    attribute isolation = "1500V";
+}

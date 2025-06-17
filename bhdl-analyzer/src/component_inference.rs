@@ -70,7 +70,7 @@ fn format_electrical_value(value: f64) -> String {
 }
 
 /// Circuit requirements for component inference
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct CircuitRequirements {
     /// Supply voltage
     pub supply_voltage: Option<f64>,
@@ -94,6 +94,7 @@ pub struct CircuitRequirements {
 #[derive(Debug, Clone)]
 pub struct ComponentSuggestion {
     pub component_type: String,
+    pub instance_name: Option<String>,  // Instance name from source (e.g., "D1", "U1")
     pub part_number: Option<String>,
     pub parameters: Vec<InferredParameter>,
     pub reasoning: String,
@@ -112,6 +113,8 @@ pub struct ComponentInferenceContext {
     pub warnings: Vec<String>,
     /// Design rules
     pub design_rules: DesignRules,
+    /// Module resolver for component libraries
+    pub module_resolver: Option<crate::component_library::ModuleResolver>,
 }
 
 /// Component type information for inference
@@ -134,6 +137,8 @@ pub enum ComponentCategory {
     Mechanical,   // Switches, relays
     Power,        // Regulators, converters
     Crystal,      // Crystals, oscillators
+    Protection,   // Fuses, TVS diodes, protection devices
+    PowerManagement, // Voltage regulators, DC-DC converters
 }
 
 /// Parameter constraints for inference
@@ -181,6 +186,9 @@ pub enum InferenceRuleType {
     DecouplingCapacitor,    // C based on current and ripple
     PullUpResistor,         // R based on logic levels and speed
     CrystalLoadCapacitor,   // C based on crystal specs
+    FuseFromMaxCurrent,     // I_fuse = I_max * 1.25
+    TVSFromSupplyVoltage,   // V_tvs = V_supply * 1.2
+    ElectrolyticFromRipple, // C = I_ripple / (f * V_ripple)
 }
 
 /// Design rules for component selection
@@ -213,10 +221,16 @@ impl ComponentInferenceContext {
             inferred_components: Vec::new(),
             warnings: Vec::new(),
             design_rules: DesignRules::default(),
+            module_resolver: None,
         };
         
         context.populate_component_database();
         context
+    }
+    
+    /// Set the module resolver
+    pub fn set_module_resolver(&mut self, resolver: crate::component_library::ModuleResolver) {
+        self.module_resolver = Some(resolver);
     }
     
     /// Populate the component database with standard components
@@ -320,6 +334,111 @@ impl ComponentInferenceContext {
             inference_rules: vec![],
         };
         self.component_db.insert("LED".to_string(), led_info);
+        
+        // Fuse
+        let fuse_info = ComponentTypeInfo {
+            name: "Fuse".to_string(),
+            category: ComponentCategory::Protection,
+            parameters: vec![
+                ParameterConstraint {
+                    name: "current_rating".to_string(),
+                    min_value: Some(0.1),
+                    max_value: Some(20.0),
+                    preferred_values: vec![0.5, 1.0, 2.0, 3.0, 5.0, 10.0],
+                    tolerance_options: vec![],
+                }
+            ],
+            electrical_model: None,
+            inference_rules: vec![
+                InferenceRule {
+                    rule_type: InferenceRuleType::FuseFromMaxCurrent,
+                    condition: "maximum circuit current known".to_string(),
+                    formula: "I_fuse = I_max * 1.25".to_string(),
+                    confidence: 0.9,
+                },
+            ],
+        };
+        self.component_db.insert("Fuse".to_string(), fuse_info);
+        
+        // TVS Diode
+        let tvs_info = ComponentTypeInfo {
+            name: "TVSDiode".to_string(),
+            category: ComponentCategory::Protection,
+            parameters: vec![
+                ParameterConstraint {
+                    name: "voltage".to_string(),
+                    min_value: Some(3.3),
+                    max_value: Some(600.0),
+                    preferred_values: vec![5.0, 12.0, 15.0, 24.0, 36.0, 48.0],
+                    tolerance_options: vec![5.0, 10.0],
+                }
+            ],
+            electrical_model: None,
+            inference_rules: vec![
+                InferenceRule {
+                    rule_type: InferenceRuleType::TVSFromSupplyVoltage,
+                    condition: "supply voltage known".to_string(),
+                    formula: "V_tvs = V_supply * 1.2".to_string(),
+                    confidence: 0.85,
+                },
+            ],
+        };
+        self.component_db.insert("TVSDiode".to_string(), tvs_info);
+        
+        // ElectrolyticCap (already handled by Cap, but add specific entry)
+        let electrolytic_info = ComponentTypeInfo {
+            name: "ElectrolyticCap".to_string(),
+            category: ComponentCategory::Passive,
+            parameters: vec![
+                ParameterConstraint {
+                    name: "value".to_string(),
+                    min_value: Some(0.1e-6),
+                    max_value: Some(10000e-6),
+                    preferred_values: vec![1e-6, 10e-6, 22e-6, 47e-6, 100e-6, 220e-6, 470e-6, 1000e-6],
+                    tolerance_options: vec![20.0],
+                },
+                ParameterConstraint {
+                    name: "voltage".to_string(),
+                    min_value: Some(6.3),
+                    max_value: Some(450.0),
+                    preferred_values: vec![6.3, 10.0, 16.0, 25.0, 35.0, 50.0, 63.0],
+                    tolerance_options: vec![],
+                }
+            ],
+            electrical_model: Some(ElectricalModel {
+                model_type: ModelType::Capacitor,
+                parameters: HashMap::new(),
+            }),
+            inference_rules: vec![
+                InferenceRule {
+                    rule_type: InferenceRuleType::ElectrolyticFromRipple,
+                    condition: "ripple current and voltage known".to_string(),
+                    formula: "C = I_ripple / (f * V_ripple)".to_string(),
+                    confidence: 0.8,
+                },
+            ],
+        };
+        self.component_db.insert("ElectrolyticCap".to_string(), electrolytic_info);
+        
+        // LM7805 Linear Regulator
+        let lm7805_info = ComponentTypeInfo {
+            name: "LM7805".to_string(),
+            category: ComponentCategory::PowerManagement,
+            parameters: vec![],  // No parameters needed for instantiation
+            electrical_model: None,
+            inference_rules: vec![],
+        };
+        self.component_db.insert("LM7805".to_string(), lm7805_info);
+        
+        // TestPoint
+        let testpoint_info = ComponentTypeInfo {
+            name: "TestPoint".to_string(),
+            category: ComponentCategory::Connector,
+            parameters: vec![],
+            electrical_model: None,
+            inference_rules: vec![],
+        };
+        self.component_db.insert("TestPoint".to_string(), testpoint_info);
     }
     
     /// Infer component parameters based on circuit context
@@ -329,17 +448,47 @@ impl ComponentInferenceContext {
         requirements: &CircuitRequirements,
         circuit_context: &CircuitContext,
     ) -> Option<ComponentSuggestion> {
-        let component_info = self.component_db.get(component_type)?;
-        
-        match component_type {
-            "Res" => self.infer_resistor_parameters(requirements, circuit_context),
-            "Cap" => self.infer_capacitor_parameters(requirements, circuit_context),
-            "LED" => self.infer_led_parameters(requirements, circuit_context),
-            _ => {
-                self.warnings.push(format!("No inference rules for component type: {}", component_type));
-                None
+        // First, try to resolve through component library if available
+        if let Some(resolver) = &mut self.module_resolver {
+            if let Ok(module) = resolver.resolve(component_type) {
+                return self.create_suggestion_from_module(component_type, &module, requirements, circuit_context);
             }
         }
+        
+        // Fallback to hardcoded inference if we have the component in our database
+        if let Some(component_info) = self.component_db.get(component_type).cloned() {
+            match component_type {
+                "Res" => return self.infer_resistor_parameters(requirements, circuit_context),
+                "Cap" => return self.infer_capacitor_parameters(requirements, circuit_context),
+                "LED" => return self.infer_led_parameters(requirements, circuit_context),
+                _ => {
+                    // For known components without specific inference, create generic suggestion
+                    return self.create_generic_suggestion(component_type, &component_info, requirements, circuit_context);
+                }
+            }
+        }
+        
+        // Check if this looks like an IC part number (alphanumeric, possibly with digits)
+        if component_type.chars().any(|c| c.is_digit(10)) || 
+           component_type.starts_with("LM") || 
+           component_type.starts_with("NE") ||
+           component_type.starts_with("TL") ||
+           component_type.starts_with("MAX") ||
+           component_type.starts_with("STM") {
+            // This is likely an IC - no inference needed, just pass through
+            return Some(ComponentSuggestion {
+                component_type: component_type.to_string(),
+                instance_name: None,
+                part_number: Some(component_type.to_string()),
+                parameters: vec![],
+                reasoning: "IC component - using exact part number".to_string(),
+                confidence: 1.0,
+                alternatives: vec![],
+            });
+        }
+        
+        // For unknown components, create a generic component suggestion
+        self.create_unknown_component_suggestion(component_type, requirements, circuit_context)
     }
     
     /// Infer resistor parameters
@@ -364,7 +513,7 @@ impl ComponentInferenceContext {
                     _ => 2.0,
                 };
                 
-                let if_target = 0.02; // 20mA typical
+                let if_target = 0.020; // 20m (20mA in EDA convention)
                 let resistance = (supply_v - vf) / if_target;
                 let resistance_standard = find_nearest_e_series_value(resistance, 12);
                 
@@ -432,6 +581,7 @@ impl ComponentInferenceContext {
         if !parameters.is_empty() {
             Some(ComponentSuggestion {
                 component_type: "Res".to_string(),
+                instance_name: None,
                 part_number: None,
                 parameters,
                 reasoning,
@@ -496,6 +646,7 @@ impl ComponentInferenceContext {
         if !parameters.is_empty() {
             Some(ComponentSuggestion {
                 component_type: "Cap".to_string(),
+                instance_name: None,
                 part_number: None,
                 parameters,
                 reasoning,
@@ -506,7 +657,26 @@ impl ComponentInferenceContext {
                 ],
             })
         } else {
-            None
+            // For generic capacitors without specific context, return a generic suggestion
+            parameters.push(InferredParameter {
+                name: "value".to_string(),
+                value: ParameterValue::Capacitance(100e-9), // Default 100nF
+                confidence: 0.5,
+                reasoning: "Generic capacitor - value may need adjustment".to_string(),
+            });
+            
+            Some(ComponentSuggestion {
+                component_type: "Cap".to_string(),
+                instance_name: None,
+                part_number: None,
+                parameters,
+                reasoning: "Generic capacitor".to_string(),
+                confidence: 0.5,
+                alternatives: vec![
+                    "Consider specific value based on circuit requirements".to_string(),
+                    "Use ceramic (X7R/X5R) for general purpose".to_string(),
+                ],
+            })
         }
     }
     
@@ -544,6 +714,7 @@ impl ComponentInferenceContext {
         
         Some(ComponentSuggestion {
             component_type: "LED".to_string(),
+            instance_name: None,
             part_number: None,
             parameters,
             reasoning: "LED color inference based on application".to_string(),
@@ -551,6 +722,75 @@ impl ComponentInferenceContext {
             alternatives: vec![
                 "Consider RGB LED for multiple states".to_string(),
                 "Use high-brightness LED for visibility".to_string(),
+            ],
+        })
+    }
+    
+    /// Create a generic suggestion for known components without specific inference
+    fn create_generic_suggestion(
+        &mut self,
+        component_type: &str,
+        component_info: &ComponentTypeInfo,
+        _requirements: &CircuitRequirements,
+        _circuit_context: &CircuitContext,
+    ) -> Option<ComponentSuggestion> {
+        let mut parameters = Vec::new();
+        
+        // Add default parameters from component info
+        for constraint in &component_info.parameters {
+            if let Some(default) = constraint.preferred_values.first() {
+                parameters.push(InferredParameter {
+                    name: constraint.name.clone(),
+                    value: match component_info.category {
+                        ComponentCategory::Passive => {
+                            match component_type {
+                                "Res" => ParameterValue::Resistance(*default),
+                                "Cap" => ParameterValue::Capacitance(*default),
+                                "Ind" => ParameterValue::Inductance(*default),
+                                _ => ParameterValue::Real(*default),
+                            }
+                        }
+                        _ => ParameterValue::Real(*default),
+                    },
+                    confidence: 0.5,
+                    reasoning: "Default value for component type".to_string(),
+                });
+            }
+        }
+        
+        Some(ComponentSuggestion {
+            component_type: component_type.to_string(),
+            instance_name: None,
+            part_number: None,
+            parameters,
+            reasoning: format!("Generic {} component", component_type),
+            confidence: 0.5,
+            alternatives: vec![],
+        })
+    }
+    
+    /// Create a suggestion for unknown components
+    fn create_unknown_component_suggestion(
+        &mut self,
+        component_type: &str,
+        _requirements: &CircuitRequirements,
+        _circuit_context: &CircuitContext,
+    ) -> Option<ComponentSuggestion> {
+        self.warnings.push(format!(
+            "Unknown component type '{}' - no inference rules available",
+            component_type
+        ));
+        
+        Some(ComponentSuggestion {
+            component_type: component_type.to_string(),
+            instance_name: None,
+            part_number: None,
+            parameters: vec![],
+            reasoning: format!("Unknown component type '{}'", component_type),
+            confidence: 0.1,
+            alternatives: vec![
+                "Check component library for module definition".to_string(),
+                "Verify component type name is correct".to_string(),
             ],
         })
     }
@@ -563,6 +803,58 @@ impl ComponentInferenceContext {
     /// Get all inferred components
     pub fn get_inferred_components(&self) -> &Vec<ComponentSuggestion> {
         &self.inferred_components
+    }
+    
+    /// Create a suggestion from a resolved component module
+    fn create_suggestion_from_module(
+        &mut self,
+        component_type: &str,
+        module: &crate::component_library::ComponentModule,
+        requirements: &CircuitRequirements,
+        circuit_context: &CircuitContext,
+    ) -> Option<ComponentSuggestion> {
+        let mut parameters = Vec::new();
+        
+        // Extract metadata-based parameters
+        if let Some(component_class) = &module.metadata.component_class {
+            parameters.push(InferredParameter {
+                name: "component_class".to_string(),
+                value: ParameterValue::String(component_class.clone()),
+                confidence: 1.0,
+                reasoning: "From component module definition".to_string(),
+            });
+        }
+        
+        // Add package information
+        if let Some(default_package) = &module.metadata.default_package {
+            parameters.push(InferredParameter {
+                name: "package".to_string(),
+                value: ParameterValue::String(default_package.clone()),
+                confidence: 0.9,
+                reasoning: "Default package from module".to_string(),
+            });
+        }
+        
+        // Add electrical specs
+        for (key, value) in &module.metadata.electrical_specs {
+            parameters.push(InferredParameter {
+                name: key.clone(),
+                value: ParameterValue::String(value.clone()),
+                confidence: 0.95,
+                reasoning: format!("Electrical spec from module: {}", key),
+            });
+        }
+        
+        // Create the suggestion
+        Some(ComponentSuggestion {
+            component_type: component_type.to_string(),
+            instance_name: None,
+            part_number: module.metadata.db_component_id.clone(),
+            parameters,
+            reasoning: format!("Resolved from component library module: {}", module.name),
+            confidence: 0.95,
+            alternatives: module.metadata.packages.clone(),
+        })
     }
     
     /// Generate BHDL code for inferred components

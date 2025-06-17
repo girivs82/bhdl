@@ -1,0 +1,18 @@
+// Standard Resistor Component Module
+// Supports both Res(10k) and Resistor(10k) instantiation
+
+module Res(value: resistance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+    
+    // Component metadata attributes
+    attribute component_class = "resistor";
+    attribute tolerance = "5%";
+    attribute power_rating = "0.25W";
+    attribute kicad_symbol = "Device:R";
+    attribute packages = "0603,0805,1206,THT";
+    attribute default_package = "0805";
+}
+
+// Alias for full name
+module Resistor = Res;

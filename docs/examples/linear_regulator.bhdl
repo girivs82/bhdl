@@ -1,0 +1,14 @@
+// Linear regulator circuit using BHDL v2.0 flow syntax
+
+// Power flow specification  
+power_flow: USB_5V |> protection |> regulation(5V) |> distribution |> loads;
+
+// Component instantiation using flow paradigm
+USB_5V -> regulator: LinearReg(5V, 1A).IN;
+regulator.OUT -> Cap(10µF).+ -> Cap(0.1µF).+ -> LED(red).A;
+LED.K -> GND;
+
+// Generate decoupling for power rails
+generate for rail in [USB_5V, regulator.OUT] {
+  rail -> Cap(100µF).+ -> Cap(0.1µF).+ -> loads;
+}

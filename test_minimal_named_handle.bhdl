@@ -1,0 +1,7 @@
+board TestNamedHandle {
+    power VIN = 12V @ 1A;
+    ground GND;
+    
+    // Simple named handle connection
+    VIN -> fuse: Fuse(1A).1;
+}

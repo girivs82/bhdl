@@ -1,0 +1,510 @@
+// STM32H7 Development Board - Layout Constraints
+// Layout Engineer: Mike Chen
+// Date: 2024-12-30
+// Version: 1.0
+
+import "../circuit/power_management.bhdl";
+import "../circuit/communication.bhdl";
+
+physical_implementation LayoutConstraints {
+  author = "Layout Engineering Team";
+  description = "Complete physical design constraints and guidelines";
+  
+  // Board specifications
+  board_specifications {
+    dimensions = 100mm x 80mm;
+    thickness = 1.6mm;
+    layer_count = 4;
+    material = "FR4";
+    finish = "HASL Lead-Free";
+    solder_mask = "Green";
+    silkscreen = "White";
+    
+    // Manufacturing constraints
+    min_trace_width = 0.1mm;
+    min_via_size = 0.2mm;
+    min_drill_size = 0.15mm;
+    min_spacing = 0.1mm;
+    
+    // Design rules
+    impedance_control = required;
+    blind_buried_vias = not_allowed;
+    microvias = not_allowed;
+  };
+  
+  // Layer stackup definition
+  layer_stackup {
+    total_thickness = 1.6mm;
+    
+    layer1: signal_routing {
+      thickness = 35µm;  // 1oz copper
+      description = "Top signal routing + components";
+      usage = [high_speed_signals, component_routing];
+    };
+    
+    layer2: ground_plane {
+      thickness = 35µm;  // 1oz copper
+      description = "Continuous ground plane";
+      coverage = 95%;  // Minimize splits
+      usage = [ground_reference, shielding];
+    };
+    
+    layer3: power_planes {
+      thickness = 35µm;  // 1oz copper
+      description = "Power distribution planes";
+      plane_allocation = {
+        VCC_3V3: 40%;
+        VCC_1V8_IO: 25%;
+        VCC_1V2_CORE: 20%;
+        VCC_DDR: 15%;
+      };
+    };
+    
+    layer4: signal_routing {
+      thickness = 35µm;  // 1oz copper
+      description = "Bottom signal routing + components";
+      usage = [power_routing, low_speed_signals];
+    };
+    
+    // Dielectric specifications
+    core_dielectric = {
+      material = "FR4";
+      thickness = 1.4mm;
+      dielectric_constant = 4.3 ± 0.1;
+      loss_tangent = 0.02;
+    };
+    
+    prepreg_dielectric = {
+      material = "FR4 Prepreg";
+      thickness = 0.1mm;
+      dielectric_constant = 4.2 ± 0.1;
+    };
+  };
+  
+  // Component placement strategy
+  component_placement {
+    // Primary component areas
+    mcu_area: {
+      component = CommunicationInterfaces.mcu;
+      location = center(50mm, 40mm);
+      orientation = 0°;
+      keepout_zone = 2mm;  // Around package
+      
+      placement_priority = highest;
+      description = "Central MCU placement for optimal routing";
+    };
+    
+    ddr_memory_area: {
+      component = CommunicationInterfaces.ddr_ram;
+      location = relative_to(mcu, distance=12mm, angle=90°);
+      orientation = 0°;
+      
+      constraints = {
+        max_distance_from_mcu = 15mm;
+        same_side_as_mcu = required;
+        trace_length_matching = critical;
+      };
+    };
+    
+    crystal_placement: {
+      components = [
+        CommunicationInterfaces.main_crystal,
+        CommunicationInterfaces.rtc_crystal
+      ];
+      
+      main_crystal: {
+        location = relative_to(mcu, distance=4mm, angle=180°);
+        keepout_zone = 3mm;  // EMI isolation
+        ground_guard = required;
+      };
+      
+      rtc_crystal: {
+        location = relative_to(mcu, distance=3mm, angle=270°);
+        keepout_zone = 2mm;
+        away_from_switching_circuits = true;
+      };
+    };
+    
+    power_management_area: {
+      components = PowerManagement.all_regulators;
+      location = edge(left, margin=8mm);
+      area = rectangle(25mm, 20mm);
+      
+      thermal_considerations = {
+        heat_spreader_area = required;
+        thermal_vias = enabled;
+        airflow_direction = horizontal;
+      };
+      
+      placement_rules = {
+        input_to_output_flow = left_to_right;
+        minimize_switching_loops = true;
+        separate_analog_digital = 5mm_min;
+      };
+    };
+    
+    connector_placement: {
+      usb_connector: {
+        location = edge(top, center);
+        orientation = 0°;
+        mechanical_support = required;
+      };
+      
+      debug_connector: {
+        location = edge(top, 20mm_from_left);
+        orientation = 0°;
+        access_clearance = 10mm;
+      };
+      
+      uart_header: {
+        location = edge(bottom, 25mm_from_left);
+        orientation = 180°;
+        silkscreen_labels = required;
+      };
+      
+      gpio_expansion: {
+        location = edge(right, center);
+        orientation = 270°;
+        pin1_indicator = required;
+        mechanical_alignment = critical;
+      };
+    };
+    
+    support_component_placement: {
+      // Decoupling capacitors near power pins
+      mcu_decoupling: {
+        location = surrounding(mcu, radius=3mm);
+        distribution = uniform_around_power_pins;
+        layer_preference = same_as_mcu;
+      };
+      
+      // Status LEDs visible area
+      status_leds: {
+        location = corner(top_right, margin=5mm);
+        arrangement = linear_row;
+        spacing = 2.54mm;
+      };
+      
+      // User buttons accessible
+      reset_button: {
+        location = edge(bottom, 60mm_from_left);
+        access_clearance = 5mm;
+        tactile_feedback = required;
+      };
+      
+      boot_switch: {
+        location = edge(bottom, 70mm_from_left);
+        access_clearance = 3mm;
+        position_labeling = required;
+      };
+    };
+  };
+  
+  // Routing constraints and guidelines
+  routing_constraints {
+    // High-speed DDR3 interface
+    ddr3_routing: {
+      signals = CommunicationInterfaces.ddr_interface.all_signals;
+      
+      electrical_constraints = {
+        impedance_single_ended = 50Ω ± 10%;
+        impedance_differential = 100Ω ± 10%;
+        max_crosstalk = -30dB;
+      };
+      
+      timing_constraints = {
+        // Address/Control signals
+        address_control_group = {
+          signals = [A[0:13], BA[0:2], RAS_N, CAS_N, WE_N, CS_N];
+          length_matching = ±0.5mm;
+          max_length = 50mm;
+          min_spacing = 0.15mm;
+        };
+        
+        // Data signals (per byte group)
+        data_byte_groups = {
+          byte0_group = {
+            signals = [DQ[0:7], DQS[0], DQS_N[0]];
+            length_matching = ±0.1mm;
+            intra_group_skew = ±25ps;
+          };
+          
+          byte1_group = {
+            signals = [DQ[8:15], DQS[1], DQS_N[1]];
+            length_matching = ±0.1mm;
+            intra_group_skew = ±25ps;
+          };
+        };
+        
+        // Clock signals (most critical)
+        clock_signals = {
+          signals = [CLK, CLK_N];
+          length_matching = ±0.05mm;
+          max_skew = 10ps;
+          route_as_differential = required;
+        };
+      };
+      
+      physical_constraints = {
+        layer_assignment = [layer1, layer4];
+        reference_plane = layer2;  // Ground plane
+        via_count_max = 2_per_signal;
+        
+        routing_topology = {
+          topology = point_to_point;  // MCU to DDR direct
+          stub_length_max = 0.2mm;
+          t_junction_avoid = true;
+        };
+        
+        crosstalk_mitigation = {
+          min_spacing_parallel = 3x_trace_width;
+          parallel_length_max = 5mm;
+          guard_traces = optional;
+        };
+      };
+    };
+    
+    // USB high-speed differential pairs
+    usb_routing: {
+      signals = [USB_DP, USB_DN];
+      
+      electrical_constraints = {
+        differential_impedance = 90Ω ± 15%;
+        common_mode_impedance = 25Ω to 50Ω;
+        max_return_loss = -10dB;
+      };
+      
+      physical_constraints = {
+        route_as_differential_pair = required;
+        length_matching = ±0.1mm;
+        spacing = 0.127mm ± 0.025mm;
+        layer_preference = layer1;
+        reference_plane = layer2;
+        
+        routing_rules = {
+          minimize_vias = true;
+          avoid_splits_in_reference = true;
+          coupling_coefficient = 0.1 to 0.2;
+          bend_radius_min = 3x_trace_width;
+        };
+      };
+    };
+    
+    // Crystal oscillator routing (ultra-sensitive)
+    crystal_routing: {
+      signals = [OSC_IN, OSC_OUT, RTC_OSC_IN, RTC_OSC_OUT];
+      
+      emi_constraints = {
+        trace_length_min = absolute_minimum;
+        guard_ring = required_around_crystal_area;
+        ground_plane_solid = required_underneath;
+        keepout_zone = 3mm_from_switching_circuits;
+      };
+      
+      physical_constraints = {
+        layer_preference = layer1;  // Surface layer
+        via_count = 0;  // Direct routing only
+        trace_width = 0.15mm;  // Minimize parasitic capacitance
+        
+        shielding = {
+          ground_guard_traces = both_sides;
+          ground_fill = around_traces;
+          via_stitching = 1mm_spacing;
+        };
+      };
+    };
+    
+    // Power distribution routing
+    power_routing: {
+      // Main power rails
+      high_current_rails = {
+        signals = [VCC_3V3, VCC_1V2_CORE];
+        
+        electrical_constraints = {
+          max_voltage_drop = 50mV;
+          max_current_density = 20A/mm²;
+          thermal_derating = 70°C_ambient;
+        };
+        
+        physical_constraints = {
+          min_trace_width = 0.5mm;
+          preferred_routing = power_planes;
+          via_size = 0.3mm;
+          via_count_min = 2_per_connection;
+          
+          thermal_management = {
+            thermal_vias = required_under_components;
+            via_spacing = 2mm_max;
+            thermal_relief = disabled_for_power;
+          };
+        };
+      };
+      
+      // Low current sensitive rails
+      sensitive_rails = {
+        signals = [VCC_ANALOG, VCC_DDR];
+        
+        noise_constraints = {
+          switching_noise_isolation = required;
+          separate_routing = from_digital_power;
+          filter_placement = at_load;
+        };
+        
+        physical_constraints = {
+          min_trace_width = 0.3mm;
+          layer_preference = layer3;  // Power plane
+          isolation_distance = 2mm_from_switching;
+        };
+      };
+    };
+    
+    // I2C and low-speed digital routing
+    low_speed_digital: {
+      signals = [I2C_SCL, I2C_SDA, SPI_signals, UART_signals];
+      
+      electrical_constraints = {
+        impedance = 50Ω ± 20%;  // Relaxed for low speed
+        max_crosstalk = -20dB;
+      };
+      
+      physical_constraints = {
+        layer_preference = [layer1, layer4];
+        trace_width = 0.15mm;
+        spacing = 0.15mm;
+        
+        routing_priority = low;  // Route after high-speed signals
+        length_matching = not_required;
+      };
+    };
+  };
+  
+  // Design for manufacturing (DFM) constraints
+  manufacturing_constraints {
+    assembly_considerations = {
+      component_orientation = {
+        polarized_components = consistent_orientation;
+        fine_pitch_components = fiducial_nearby;
+        bga_components = thermal_relief_required;
+      };
+      
+      pick_and_place = {
+        min_component_spacing = 0.5mm;
+        tooling_holes = required;
+        panel_edge_keepout = 2mm;
+      };
+      
+      soldering_profile = {
+        thermal_mass_balance = required;
+        large_ground_planes = thermal_relief;
+        mixed_technology = lead_free_compatible;
+      };
+    };
+    
+    test_and_debug = {
+      test_points = {
+        critical_power_rails = accessible_test_points;
+        high_speed_signals = optional_test_points;
+        test_point_size = 1mm_diameter;
+        test_point_spacing = 2.54mm_grid;
+      };
+      
+      debug_access = {
+        debug_connector = easily_accessible;
+        uart_header = labeled_clearly;
+        gpio_header = pin1_marked;
+      };
+    };
+    
+    mechanical_considerations = {
+      board_mounting = {
+        mounting_holes = 4x_M3_holes;
+        hole_locations = corners(5mm_from_edges);
+        hole_plating = required;
+      };
+      
+      connector_support = {
+        usb_connector = mechanical_anchor_required;
+        gpio_header = through_hole_mounting;
+        debug_connector = mechanical_retention;
+      };
+      
+      thermal_management = {
+        component_derating = 70°C_max_ambient;
+        airflow_path = unobstructed;
+        thermal_interface = optional_for_regulators;
+      };
+    };
+  };
+  
+  // EMC and signal integrity guidelines
+  emc_constraints {
+    electromagnetic_compatibility = {
+      ground_plane_integrity = {
+        continuous_ground = layer2;
+        via_stitching = 5mm_max_spacing;
+        return_path_continuity = required;
+      };
+      
+      power_distribution = {
+        decoupling_strategy = multi_layer_capacitors;
+        power_plane_capacitance = maximize;
+        switching_regulator_isolation = required;
+      };
+      
+      high_frequency_management = {
+        trace_length_control = lambda_over_10;
+        impedance_discontinuities = minimize;
+        via_optimization = minimize_count;
+      };
+    };
+    
+    radiated_emissions = {
+      clock_signal_management = {
+        crystal_shielding = ground_guard_required;
+        spread_spectrum = if_available;
+        rise_time_control = as_slow_as_possible;
+      };
+      
+      switching_power_supply = {
+        input_filter = pi_filter_required;
+        output_filter = lc_filter_recommended;
+        magnetic_component_orientation = minimize_coupling;
+      };
+    };
+    
+    conducted_emissions = {
+      power_line_filtering = {
+        common_mode_choke = required;
+        differential_filter = required;
+        safety_capacitor_limits = observe;
+      };
+      
+      io_filtering = {
+        high_speed_io = series_termination;
+        cable_connections = ferrite_beads;
+        esd_protection = all_external_connections;
+      };
+    };
+  };
+  
+  // Final layout validation requirements
+  validation_requirements {
+    design_rule_check = {
+      electrical_rules = all_nets_routed;
+      spacing_rules = manufacturing_compliant;
+      via_rules = aspect_ratio_compliant;
+    };
+    
+    signal_integrity_analysis = {
+      high_speed_signals = simulate_required;
+      power_integrity = dc_drop_analysis;
+      thermal_analysis = steady_state_simulation;
+    };
+    
+    electromagnetic_simulation = {
+      emi_pre_compliance = recommended;
+      antenna_coupling = minimize;
+      return_loss_analysis = critical_signals;
+    };
+  };
+}

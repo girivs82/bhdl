@@ -1,0 +1,4 @@
+board DebugTest {
+    power VCC = 5V @ 1A;
+    VCC -> Res(10000).1;
+}

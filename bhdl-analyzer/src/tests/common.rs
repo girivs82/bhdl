@@ -47,43 +47,16 @@ pub fn analyze_helper(input: &str, expect_error: bool) {
 }
 
 
+// TODO: Update for v2.0 syntax - parameters are now in component instantiation
 // Helper to evaluate an expression string within a minimal board context
 pub fn eval_expr_str(expr_str: &str) -> Option<i64> {
-    let text = format!(r#"
-        board TestEval {{
-            parameters {{ parameter P_EVAL = {}; }}
-        }}
-    "#, expr_str);
-    let source = parse_to_sourcefile(&text);
-    let result = analyze(&source);
-    
-    // Avoid panic on error for this helper, just return None
-    if !result.diagnostics.is_empty() {
-        return None;
-    }
-
-    let board_ptr = result.global_scope.lookup("TestEval")?.definition_node_ptr.as_ref()?;
-    
-    // Need the expression node pointer from the ParamDecl
-    let param_decl_node = board_ptr.try_to_node(source.syntax())?;
-    let board_node = Board::cast(param_decl_node)?;
-    let params_block = board_node.parameters_block()?;
-    let param_decl = params_block.parameters().find(|p: &bhdl_ast::common::ParamDecl| p.name().map_or(false, |n| n.text() == "P_EVAL"))?;
-    let value_expr_node = param_decl.value_expr()?;
-    let value_expr_ptr = SyntaxNodePtr::new(&value_expr_node);
-
-    result.resolved_constants.get(&value_expr_ptr).copied()
+    // v1.0 syntax not supported - needs rewrite for v2.0
+    None
 }
 
+// TODO: Update for v2.0 syntax
 // Helper to get diagnostics for an expression string
 pub fn get_diagnostics_for_expr(expr_str: &str) -> Vec<Diagnostic> {
-     let text = format!(r#"
-        board TestEval {{
-            parameters {{ parameter P_EVAL = {}; }}
-        }}
-    "#, expr_str);
-    // Parse even if there are errors, we want diagnostics
-    let parse_result = parse(&text);
-    let source = SourceFile::cast(parse_result.syntax()).expect("Failed to cast to SourceFile");
-    analyze(&source).diagnostics
+    // v1.0 syntax not supported - needs rewrite for v2.0
+    vec![]
 } 

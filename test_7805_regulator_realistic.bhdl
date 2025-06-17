@@ -1,0 +1,47 @@
+// Realistic 7805 Linear Regulator Circuit - BHDL v2.0
+// A complete 12V to 5V power supply with proper filtering and protection
+
+board PowerSupply_7805 {
+    // Power domains
+    power VIN = 12V @ 1A;      // Input voltage from DC adapter
+    power VCC = 5V @ 1A;       // Regulated output
+    ground GND;
+    
+    // Input protection and filtering
+    VIN -> fuse: Fuse(1A).1;
+    fuse.2 -> protected_vin: TVSDiode(15V).1;
+    protected_vin -> c_in1: ElectrolyticCap(100µF, 25V).+;
+    protected_vin -> c_in2: Cap(0.1µF).1;
+    
+    // Linear regulator circuit
+    protected_vin -> reg: LM7805().IN;
+    reg.GND -> GND;
+    reg.OUT -> VCC;
+    
+    // Output filtering
+    VCC -> c_out1: ElectrolyticCap(10µF, 10V).+;
+    VCC -> c_out2: Cap(0.1µF).1;
+    
+    // LED power indicator
+    VCC -> r_led: Res(330Ω).1;
+    r_led.2 -> led: LED(green).A;
+    led.K -> GND;
+    
+    // All grounds connected
+    c_in1.- -> GND;
+    c_in2.2 -> GND;
+    c_out1.- -> GND;
+    c_out2.2 -> GND;
+    protected_vin.2 -> GND;
+    
+    // Test points for measurement
+    protected_vin -> tp_vin: TestPoint().1;
+    VCC -> tp_vout: TestPoint().1;
+    GND -> tp_gnd: TestPoint().1;
+    
+    // Board metadata
+    attribute title = "7805 Linear Regulator Power Supply";
+    attribute version = "1.0";
+    attribute author = "BHDL Test Suite";
+    attribute description = "12V to 5V linear regulator with protection and filtering";
+}

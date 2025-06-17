@@ -16,6 +16,8 @@ mod lexer;
 mod syntax;
 mod error_recovery;
 mod tests;
+mod v2_fixes;
+mod v2_parsing;
 
 // Re-export key types
 // pub use crate::syntax::{BhdlLanguage, SyntaxKind};

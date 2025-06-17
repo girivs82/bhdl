@@ -1,0 +1,4 @@
+board UnicodeTest {
+    power VCC = 5V @ 1A;
+    VCC -> Res(10kΩ).1;
+}

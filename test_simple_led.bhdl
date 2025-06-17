@@ -1,0 +1,9 @@
+board SimpleLED {
+    power VCC = 12V @ 1A;
+    ground GND;
+    
+    // Simple LED circuit with resistor
+    VCC -> R1 -> LED1 -> GND;
+    R1: Res(value);
+    LED1: LED(red);
+}

@@ -1,0 +1,12 @@
+// Simple v2.0 test to verify basic constructs
+
+board SimpleTest {
+    // Test 1: Power declaration
+    power VCC = 5V @ 1A;
+    
+    // Test 2: Interface declaration
+    main_i2c: I2C(voltage=3.3V, frequency=400kHz);
+    
+    // Test 3: Simple connection
+    VCC -> Res(10k).1 -> LED(red).A;
+}

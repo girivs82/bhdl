@@ -1,9 +1,9 @@
 // Contains the main Netlist struct and its methods
-use crate::types::{ModuleId, InstanceId, NetId, PortId, PinId, ModuleKind, ConnectionPoint, Width, PortDirection};
+use crate::types::{ModuleId, InstanceId, NetId, PortId, PinId, PinInstanceId, ModuleKind, ConnectionPoint, Width, PortDirection, PinDirection, PinType, NetClass};
 use crate::definition::ModuleDefinition;
 use crate::instance::Instance;
 use crate::net::Net;
-use crate::portpin::{Port, Pin};
+use crate::portpin::{Port, Pin, PinInstance};
 use slotmap::SlotMap;
 use serde::{Serialize, Deserialize};
 
@@ -15,6 +15,7 @@ pub struct Netlist {
     pub nets: SlotMap<NetId, Net>,
     pub ports: SlotMap<PortId, Port>,
     pub pins: SlotMap<PinId, Pin>,
+    pub pin_instances: SlotMap<PinInstanceId, PinInstance>,
     
     pub top_level_module: Option<ModuleId>,
 }
@@ -52,9 +53,33 @@ impl Netlist {
 
     // Add a net to the netlist
     pub fn add_net(&mut self, name: Option<String>) -> NetId {
+        // Determine net class based on name
+        let net_class = if let Some(ref n) = name {
+            if n.contains("VCC") || n.contains("VDD") || n.contains("VIN") {
+                NetClass::Power(5.0) // Default voltage, should be updated
+            } else if n.contains("GND") || n.contains("VSS") {
+                NetClass::Ground
+            } else {
+                NetClass::Signal
+            }
+        } else {
+            NetClass::Signal
+        };
+        
         let net = Net {
             name,
             connections: Vec::new(),
+            net_class,
+        };
+        self.nets.insert(net)
+    }
+    
+    // Add a net with specific class
+    pub fn add_net_with_class(&mut self, name: Option<String>, net_class: NetClass) -> NetId {
+        let net = Net {
+            name,
+            connections: Vec::new(),
+            net_class,
         };
         self.nets.insert(net)
     }
@@ -87,6 +112,14 @@ impl Netlist {
                         return Err(format!("Pin {:?} does not exist", pin_id));
                     }
                 }
+                ConnectionPoint::PinInstance(pin_inst_id) => {
+                    if let Some(pin_inst) = self.pin_instances.get_mut(pin_inst_id) {
+                        // Update the pin instance's net reference
+                        pin_inst.net = Some(net_id);
+                    } else {
+                        return Err(format!("PinInstance {:?} does not exist", pin_inst_id));
+                    }
+                }
             }
             net.connections.push(point);
             Ok(())
@@ -117,22 +150,49 @@ impl Netlist {
     }
 
     // Add a pin globally and associate it with a module
-    pub fn add_pin(&mut self, module_id: ModuleId, name: String) -> Option<PinId> {
+    pub fn add_pin(&mut self, module_id: ModuleId, name: String, direction: PinDirection, pin_type: PinType) -> Option<PinId> {
          if let Some(module_def) = self.modules.get_mut(module_id) {
-            if !matches!(module_def.kind, ModuleKind::PhysicalComponent | ModuleKind::Interface) {
+            if !matches!(module_def.kind, ModuleKind::PhysicalComponent | ModuleKind::Interface | ModuleKind::Component) {
                 return None; 
             }
-            let pin = Pin {
+            let pin_id = self.pins.insert_with_key(|id| Pin {
+                id,
                 name,
+                direction,
+                pin_type,
                 module: module_id,
-                electrical_type: None,
-            };
-            let pin_id = self.pins.insert(pin);
+                description: None,
+            });
             module_def.pins.push(pin_id);
             Some(pin_id)
         } else {
             None // Module doesn't exist
         }
+    }
+    
+    // Create pin instances for a component instance
+    pub fn create_pin_instances(&mut self, instance_id: InstanceId) -> Result<Vec<PinInstanceId>, String> {
+        let instance = self.instances.get(instance_id)
+            .ok_or_else(|| format!("Instance {:?} does not exist", instance_id))?;
+        
+        let module_def = self.modules.get(instance.definition)
+            .ok_or_else(|| format!("Module {:?} does not exist", instance.definition))?;
+        
+        let mut pin_instance_ids = Vec::new();
+        
+        // Create a pin instance for each pin in the module definition
+        for &pin_id in &module_def.pins {
+            let pin_inst_id = self.pin_instances.insert_with_key(|id| PinInstance {
+                id,
+                pin_def: pin_id,
+                instance: instance_id,
+                net: None,
+                connection_name: None,
+            });
+            pin_instance_ids.push(pin_inst_id);
+        }
+        
+        Ok(pin_instance_ids)
     }
 
     // --- Getter methods ---
@@ -157,6 +217,16 @@ impl Netlist {
     // Get pin from global map
     pub fn get_pin(&self, pin_id: PinId) -> Option<&Pin> {
         self.pins.get(pin_id)
+    }
+    
+    // Get pin instance from global map
+    pub fn get_pin_instance(&self, pin_inst_id: PinInstanceId) -> Option<&PinInstance> {
+        self.pin_instances.get(pin_inst_id)
+    }
+    
+    // Get mutable pin instance
+    pub fn get_pin_instance_mut(&mut self, pin_inst_id: PinInstanceId) -> Option<&mut PinInstance> {
+        self.pin_instances.get_mut(pin_inst_id)
     }
 
     // --- Query methods ---
@@ -214,6 +284,55 @@ impl Netlist {
         } else {
             Err(format!("Net {:?} does not exist", net_id))
         }
+    }
+
+    // Find pin instance by instance and pin name
+    pub fn find_pin_instance(&self, instance_id: InstanceId, pin_name: &str) -> Option<PinInstanceId> {
+        // Get the module definition for this instance
+        let instance = self.instances.get(instance_id)?;
+        let module_def = self.modules.get(instance.definition)?;
+        
+        // Find the pin definition with the given name
+        for &pin_id in &module_def.pins {
+            if let Some(pin) = self.pins.get(pin_id) {
+                if pin.name == pin_name {
+                    // Find the corresponding pin instance
+                    for (pin_inst_id, pin_inst) in self.pin_instances.iter() {
+                        if pin_inst.instance == instance_id && pin_inst.pin_def == pin_id {
+                            return Some(pin_inst_id);
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+    
+    // Connect two pin instances together via a net
+    pub fn connect_pins(&mut self, pin_inst1: PinInstanceId, pin_inst2: PinInstanceId, net_name: Option<String>) -> Result<NetId, String> {
+        // Check if either pin is already connected
+        let net_id = if let Some(pin1) = self.pin_instances.get(pin_inst1) {
+            if let Some(existing_net) = pin1.net {
+                existing_net
+            } else if let Some(pin2) = self.pin_instances.get(pin_inst2) {
+                if let Some(existing_net) = pin2.net {
+                    existing_net
+                } else {
+                    // Create new net
+                    self.add_net(net_name)
+                }
+            } else {
+                return Err(format!("Pin instance {:?} not found", pin_inst2));
+            }
+        } else {
+            return Err(format!("Pin instance {:?} not found", pin_inst1));
+        };
+        
+        // Connect both pins to the net
+        self.connect(net_id, ConnectionPoint::PinInstance(pin_inst1))?;
+        self.connect(net_id, ConnectionPoint::PinInstance(pin_inst2))?;
+        
+        Ok(net_id)
     }
 
     // TODO: Add methods for associating instances/nets with parent modules, setting top_level_module, etc.

@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="435" height="238" viewBox="-170 -83 435 238" xmlns="http://www.w3.org/2000/svg">
+<defs><style type="text/css"><![CDATA[
+.component { fill: white; stroke: black; stroke-width: 1.5; }
+.component-text { font-family: Arial, sans-serif; font-size: 10px; text-anchor: middle; fill: black; }
+.pin { fill: none; stroke: red; stroke-width: 1; }
+.pin-label { font-family: Arial, sans-serif; font-size: 6px; fill: black; }
+.pin-number { font-family: Arial, sans-serif; font-size: 5px; fill: #666; }
+.pin-name { font-family: Arial, sans-serif; font-size: 6px; fill: black; }
+.net { fill: none; stroke: blue; stroke-width: 1.2; }
+.net-label { font-family: Arial, sans-serif; font-size: 8px; fill: blue; }
+.grid { stroke: #f0f0f0; stroke-width: 0.5; opacity: 0.5; }
+]]></style></defs>
+<line x1="-180" y1="-83" x2="-180" y2="155" class="grid"/>
+<line x1="-160" y1="-83" x2="-160" y2="155" class="grid"/>
+<line x1="-140" y1="-83" x2="-140" y2="155" class="grid"/>
+<line x1="-120" y1="-83" x2="-120" y2="155" class="grid"/>
+<line x1="-100" y1="-83" x2="-100" y2="155" class="grid"/>
+<line x1="-80" y1="-83" x2="-80" y2="155" class="grid"/>
+<line x1="-60" y1="-83" x2="-60" y2="155" class="grid"/>
+<line x1="-40" y1="-83" x2="-40" y2="155" class="grid"/>
+<line x1="-20" y1="-83" x2="-20" y2="155" class="grid"/>
+<line x1="0" y1="-83" x2="0" y2="155" class="grid"/>
+<line x1="20" y1="-83" x2="20" y2="155" class="grid"/>
+<line x1="40" y1="-83" x2="40" y2="155" class="grid"/>
+<line x1="60" y1="-83" x2="60" y2="155" class="grid"/>
+<line x1="80" y1="-83" x2="80" y2="155" class="grid"/>
+<line x1="100" y1="-83" x2="100" y2="155" class="grid"/>
+<line x1="120" y1="-83" x2="120" y2="155" class="grid"/>
+<line x1="140" y1="-83" x2="140" y2="155" class="grid"/>
+<line x1="160" y1="-83" x2="160" y2="155" class="grid"/>
+<line x1="180" y1="-83" x2="180" y2="155" class="grid"/>
+<line x1="200" y1="-83" x2="200" y2="155" class="grid"/>
+<line x1="220" y1="-83" x2="220" y2="155" class="grid"/>
+<line x1="240" y1="-83" x2="240" y2="155" class="grid"/>
+<line x1="260" y1="-83" x2="260" y2="155" class="grid"/>
+<line x1="-170" y1="-100" x2="265" y2="-100" class="grid"/>
+<line x1="-170" y1="-80" x2="265" y2="-80" class="grid"/>
+<line x1="-170" y1="-60" x2="265" y2="-60" class="grid"/>
+<line x1="-170" y1="-40" x2="265" y2="-40" class="grid"/>
+<line x1="-170" y1="-20" x2="265" y2="-20" class="grid"/>
+<line x1="-170" y1="0" x2="265" y2="0" class="grid"/>
+<line x1="-170" y1="20" x2="265" y2="20" class="grid"/>
+<line x1="-170" y1="40" x2="265" y2="40" class="grid"/>
+<line x1="-170" y1="60" x2="265" y2="60" class="grid"/>
+<line x1="-170" y1="80" x2="265" y2="80" class="grid"/>
+<line x1="-170" y1="100" x2="265" y2="100" class="grid"/>
+<line x1="-170" y1="120" x2="265" y2="120" class="grid"/>
+<line x1="-170" y1="140" x2="265" y2="140" class="grid"/>
+<g transform="translate(200, -25)">
+    <g>
+        <polygon points="-5,-8 5,0 -5,8" fill="white" stroke="black" stroke-width="1"/>
+        <line x1="5" y1="-8" x2="5" y2="8" stroke="black" stroke-width="2"/>
+        <line x1="-15" y1="0" x2="-5" y2="0" stroke="black" stroke-width="1"/>
+        <line x1="5" y1="0" x2="15" y2="0" stroke="black" stroke-width="1"/>
+        <!-- Light rays -->
+        <line x1="8" y1="-5" x2="12" y2="-9" stroke="orange" stroke-width="1"/>
+        <line x1="8" y1="-2" x2="12" y2="-6" stroke="orange" stroke-width="1"/>
+    </g></g>
+<text x="200" y="-5" class="component-text">R1</text>
+<circle cx="185" cy="-25" r="2" class="pin"/>
+<circle cx="215" cy="-25" r="2" class="pin"/>
+<g transform="translate(-100, 100)">
+    <g>
+        <rect x="-15" y="-5" width="30" height="10" fill="white" stroke="black" stroke-width="1"/>
+        <line x1="-20" y1="0" x2="-15" y2="0" stroke="black" stroke-width="1"/>
+        <line x1="15" y1="0" x2="20" y2="0" stroke="black" stroke-width="1"/>
+    </g></g>
+<text x="-100" y="117" class="component-text">LED1</text>
+<circle cx="-120" cy="100" r="2" class="pin"/>
+<text x="-145" y="100" class="pin-name">1</text>
+<circle cx="-80" cy="100" r="2" class="pin"/>
+<text x="-55" y="100" class="pin-name">2</text>
+<g transform="translate(0, 100)">
+    <g>
+        <rect x="-15" y="-5" width="30" height="10" fill="white" stroke="black" stroke-width="1"/>
+        <line x1="-20" y1="0" x2="-15" y2="0" stroke="black" stroke-width="1"/>
+        <line x1="15" y1="0" x2="20" y2="0" stroke="black" stroke-width="1"/>
+    </g></g>
+<text x="0" y="117" class="component-text">R2</text>
+<circle cx="-20" cy="100" r="2" class="pin"/>
+<text x="-28" y="100" class="pin-number">1</text>
+<circle cx="20" cy="100" r="2" class="pin"/>
+<text x="28" y="100" class="pin-number">2</text>
+</svg>

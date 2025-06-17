@@ -1,38 +1,180 @@
-// Integrated Circuits Library
-// BHDL Standard Library - ICs
+// Integrated Circuits Library - BHDL v2.0
+// Common IC components
 
-// General purpose operational amplifier component
-component OpAmp {
-  pins {
-    IN_P: in signal;    // Non-inverting input (Assumes generic signal type unless specified)
-    IN_N: in signal;    // Inverting input
-    OUT: out signal;    // Output
-    VCC: in power;      // Positive supply
-    GND: ground;        // Ground/negative supply
-    VEE: in power;      // Optional negative supply for dual supply op-amps (Presence determined by connection)
-  }
-
-  properties {
-    type: enum {general, audio, precision, high_speed, low_power} = general;
-    channels: integer = 1; // Simplified range, validation by tool (1 to 4)
-    gain_bandwidth: frequency = 1MHz;
-    slew_rate: real = 1V/us; // Use standard units (V/us or V/s)
-    input_impedance: resistance = 1MOhm; // Standard unit
-    output_current: current = 25mA;
-    input_offset: voltage = 1mV;
-    noise: real = 10nV/sqrt(Hz); // Assuming complex unit handled
-    cmrr: real = 90dB; // Assuming dB handled
-    psrr: real = 90dB; // Assuming dB handled
-    supply_voltage: voltage_range = 2.7Vdc to 5.5Vdc; // Use range syntax and Vdc
-  }
-
-  // Removed non-standard 'component_selection' block.
-  // Selection criteria belong to tooling or separate configuration.
-
-  // Removed non-standard 'implementation_requirements' block.
-  // Context components (like bypass caps) should be handled in modules or board design.
-
+// General purpose operational amplifier module
+module OpAmp(type: string = "general") {
+    pin IN_P: signal in;    // Non-inverting input
+    pin IN_N: signal in;    // Inverting input
+    pin OUT: signal out;    // Output
+    pin VCC: power in;      // Positive supply
+    pin VEE: power in;      // Negative supply (optional for single supply)
+    pin GND: ground;        // Ground
+    
+    attribute component_class = "opamp";
+    attribute channels = "1";
+    attribute gain_bandwidth = "1MHz";
+    attribute slew_rate = "1V/µs";
+    attribute input_impedance = "1MΩ";
+    attribute output_current = "25mA";
+    attribute input_offset = "1mV";
+    attribute cmrr = "90dB";
+    attribute psrr = "90dB";
 }
 
-// Add other common ICs here following the same principles...
-// e.g., VoltageRegulator, ADC, DAC, Microcontroller base types etc. 
+// LM358 Dual Op-Amp
+module LM358() {
+    pin 1OUT: signal out;    // Output A
+    pin 1IN-: signal in;     // Inverting input A
+    pin 1IN+: signal in;     // Non-inverting input A
+    pin 2IN+: signal in;     // Non-inverting input B
+    pin 2IN-: signal in;     // Inverting input B
+    pin 2OUT: signal out;    // Output B
+    pin VCC: power in;       // Positive supply
+    pin GND: ground;         // Ground
+    
+    attribute component_class = "opamp";
+    attribute part_number = "LM358";
+    attribute channels = "2";
+    attribute supply_voltage = "3V-32V";
+}
+
+// Microcontroller Module (Generic)
+module Microcontroller(family: string, pins: int) {
+    // Pin definitions would be specific to each MCU
+    // This is a template for MCU definitions
+    
+    attribute component_class = "microcontroller";
+    attribute core = "ARM";
+    attribute flash = "256KB";
+    attribute ram = "64KB";
+}
+
+// STM32F103 Microcontroller (simplified)
+module STM32F103() {
+    pin VDDA: power in;
+    pin VSSA: ground;
+    pin VDD[1:3]: power in;
+    pin VSS[1:3]: ground;
+    pin NRST: signal in;
+    pin BOOT0: signal in;
+    pin PA[0:15]: signal inout;
+    pin PB[0:15]: signal inout;
+    pin PC[0:15]: signal inout;
+    pin PD[0:2]: signal inout;
+    
+    attribute component_class = "microcontroller";
+    attribute part_number = "STM32F103C8T6";
+    attribute core = "ARM Cortex-M3";
+    attribute frequency = "72MHz";
+    attribute flash = "64KB";
+    attribute ram = "20KB";
+}
+
+// 555 Timer IC
+module NE555() {
+    pin GND: ground;
+    pin TRIG: signal in;
+    pin OUT: signal out;
+    pin RESET: signal in;
+    pin CTRL: signal in;
+    pin THRES: signal in;
+    pin DISCH: signal out;
+    pin VCC: power in;
+    
+    attribute component_class = "timer";
+    attribute part_number = "NE555";
+    attribute frequency_range = "0.001Hz-500kHz";
+}
+
+// Shift Register 74HC595
+module SN74HC595() {
+    pin OE: signal in;       // Output enable (active low)
+    pin RCLK: signal in;     // Register clock
+    pin SRCLK: signal in;    // Shift register clock
+    pin SRCLR: signal in;    // Shift register clear (active low)
+    pin SER: signal in;      // Serial data input
+    pin QA-QH: signal out;   // Parallel outputs
+    pin QH_: signal out;     // Serial data output
+    pin VCC: power in;
+    pin GND: ground;
+    
+    attribute component_class = "shift_register";
+    attribute part_number = "74HC595";
+    attribute bits = "8";
+    attribute type = "SIPO";  // Serial In, Parallel Out
+}
+
+// I2C EEPROM
+module EEPROM_I2C(size: string = "256Kbit") {
+    pin SDA: signal inout;
+    pin SCL: signal in;
+    pin WP: signal in;       // Write protect
+    pin A0: signal in;       // Address pin 0
+    pin A1: signal in;       // Address pin 1
+    pin A2: signal in;       // Address pin 2
+    pin VCC: power in;
+    pin GND: ground;
+    
+    attribute component_class = "memory";
+    attribute interface = "I2C";
+    attribute size = size;
+    attribute page_size = "64B";
+}
+
+// Crystal Oscillator Module
+module Oscillator(frequency: frequency) {
+    pin OUT: signal out;
+    pin EN: signal in;       // Enable (optional)
+    pin VCC: power in;
+    pin GND: ground;
+    
+    attribute component_class = "oscillator";
+    attribute frequency = frequency;
+    attribute stability = "50ppm";
+    attribute output_type = "CMOS";
+}
+
+// Voltage Reference IC
+module VoltageReference(voltage: voltage) {
+    pin OUT: signal out;
+    pin GND: ground;
+    pin VIN: power in;       // Some references need power
+    
+    attribute component_class = "voltage_reference";
+    attribute accuracy = "0.1%";
+    attribute temperature_drift = "50ppm/°C";
+}
+
+// ADC Module
+module ADC(bits: int = 12, channels: int = 8) {
+    pin VIN[0:channels-1]: signal in;
+    pin VREF: signal in;
+    pin CS: signal in;
+    pin SCLK: signal in;
+    pin DOUT: signal out;
+    pin DIN: signal in;
+    pin VCC: power in;
+    pin GND: ground;
+    
+    attribute component_class = "adc";
+    attribute resolution = bits;
+    attribute sampling_rate = "1MSPS";
+    attribute interface = "SPI";
+}
+
+// DAC Module  
+module DAC(bits: int = 12) {
+    pin VOUT: signal out;
+    pin VREF: signal in;
+    pin CS: signal in;
+    pin SCLK: signal in;
+    pin DIN: signal in;
+    pin LDAC: signal in;     // Load DAC register
+    pin VCC: power in;
+    pin GND: ground;
+    
+    attribute component_class = "dac";
+    attribute resolution = bits;
+    attribute settling_time = "10µs";
+    attribute interface = "SPI";
+}

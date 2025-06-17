@@ -98,7 +98,7 @@ pub use types::{*}; // Continue re-exporting everything from types
 
 pub use definition::ModuleDefinition;
 pub use instance::Instance;
-pub use portpin::{Port, Pin};
+pub use portpin::{Port, Pin, PinInstance};
 pub use net::Net;
 pub use netlist::Netlist;
 

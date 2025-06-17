@@ -4,7 +4,8 @@
 //! back to readable BHDL source code.
 
 use crate::flow::{FlowStmt, FlowExpr, FlowElement, ComponentInstantiation, GenerateStmt, ConditionalStmt, AssignStmt, ConditionalExpr};
-use crate::common::{ConnectionStmt, ParamAssign, PinRef, NetRef, IdentRef, Value, RangeExpr, BusSuffix};
+use crate::common::{ParamAssign, PinRef, NetRef, IdentRef, Value, RangeExpr, BusSuffix};
+use crate::v2_statements::ConnectionStmt;
 use crate::expr::{Expr, BinaryExpr, PrefixExpr, TernaryExpr, FunctionCallExpr, ComponentInstExpr, FlowExpr as ExprFlowExpr};
 use crate::items::{Board};
 use crate::{SyntaxKind, BhdlLanguage, SyntaxNode, HasName};
@@ -504,21 +505,15 @@ impl PrettyPrint for RangeExpr {
 
 impl PrettyPrint for ConnectionStmt {
     fn pretty_print(&self, ctx: &mut PrettyPrintContext, f: &mut dyn fmt::Write) -> fmt::Result {
-        ctx.write_text(f, "connect ")?;
-        
-        // Pretty print source and sink - this is simplified
-        // since we'd need to determine the actual node types
-        if let Some(source) = self.source() {
-            pretty_print_reference_node(&source, ctx, f)?;
+        // v2.0 connection statements are flow-based, not using connect keyword
+        if let Some(expr) = self.expr() {
+            // The expression contains the entire connection flow
+            // For now, just output the text
+            ctx.write_text(f, &expr.text().to_string())?;
+        } else {
+            // Fallback to raw text
+            ctx.write_text(f, &self.text())?;
         }
-        
-        ctx.write_text(f, " -> ")?;
-        
-        if let Some(sink) = self.sink() {
-            pretty_print_reference_node(&sink, ctx, f)?;
-        }
-        
-        ctx.write_text(f, ";")?;
         
         Ok(())
     }

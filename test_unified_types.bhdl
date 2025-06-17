@@ -1,0 +1,5 @@
+// Test unified component types with flow syntax
+board SimpleTest {
+    VCC -> Res(4.7kΩ).1 -> LED(red).A;
+    LED.K -> GND;
+}

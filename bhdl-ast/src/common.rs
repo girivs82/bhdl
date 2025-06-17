@@ -1,7 +1,7 @@
 use crate::{SyntaxKind, BhdlLanguage, SyntaxNode, SyntaxToken, HasName}; // Use SyntaxNode/Token
 use crate::expr::Expr;
 use rowan::ast::{AstNode, AstChildren};
-use crate::blocks::PinMapBlock; // Import PinMapBlock
+// v2.0 doesn't have PinMapBlock - it was used for v1.0 pin mapping
 use rowan::NodeOrToken; // Needed for SyntaxNodeExt
 // Removed import for TypeDef as it's not used here
 
@@ -152,19 +152,7 @@ impl PortDecl {
 }
 
 // --- Pin Declaration --- (within component pins { ... })
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct PinDecl(pub(crate) SyntaxNode<BhdlLanguage>); // Use SyntaxNode
-impl AstNode for PinDecl {
-    type Language = BhdlLanguage; // Added Language
-    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::PIN_DECL }
-    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } }
-    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
-}
-impl HasName for PinDecl {}
-impl PinDecl {
-    pub fn type_ref(&self) -> Option<TypeRef> { self.0.children().find_map(TypeRef::cast) }
-    pub fn bus_suffix(&self) -> Option<BusSuffix> { self.0.children().find_map(BusSuffix::cast) }
-}
+// v2.0 doesn't have PIN_DECL - pins are declared as PORT_DECL in modules
 
 // --- Net Declaration ---
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -220,34 +208,7 @@ impl ParamAssignBlock {
     }
 }
 
-// --- Connection Statement --- `connect source -> sink;`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ConnectionStmt(pub(crate) SyntaxNode<BhdlLanguage>); // Use SyntaxNode
-impl AstNode for ConnectionStmt {
-    type Language = BhdlLanguage; // Added Language
-    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::CONNECTION_STMT }
-    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } }
-    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
-}
-impl ConnectionStmt {
-    fn find_ref_node(node: &SyntaxNode<BhdlLanguage>, skip: usize) -> Option<SyntaxNode<BhdlLanguage>> {
-        node.children()
-            .filter(|n| {
-                PinRef::can_cast(n.kind()) || 
-                NetRef::can_cast(n.kind()) || 
-                IdentRef::can_cast(n.kind()) || 
-                SimpleIdentRef::can_cast(n.kind())
-            })
-            .nth(skip)
-    }
-
-    pub fn source(&self) -> Option<SyntaxNode<BhdlLanguage>> {
-        Self::find_ref_node(&self.0, 0)
-    }
-    pub fn sink(&self) -> Option<SyntaxNode<BhdlLanguage>> {
-        Self::find_ref_node(&self.0, 1)
-    }
-}
+// ConnectionStmt has been moved to v2_statements.rs for v2.0 support
 
 // --- Pin Reference --- `instance.pin` or `pin`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -317,30 +278,7 @@ impl SimpleIdentRef {
     pub fn name_token(&self) -> Option<SyntaxToken<BhdlLanguage>> { self.0.first_non_trivia_token() }
 }
 
-// --- Interface Instance --- (Inside interfaces block)
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct InterfaceInstance(pub(crate) SyntaxNode<BhdlLanguage>); // Use SyntaxNode
-impl AstNode for InterfaceInstance {
-    type Language = BhdlLanguage; // Added Language
-    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::INTERFACE_INSTANCE }
-    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } }
-    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
-}
-impl HasName for InterfaceInstance {}
-impl InterfaceInstance {
-    pub fn interface_type_name(&self) -> Option<SyntaxToken<BhdlLanguage>> {
-        self.0.children_with_tokens()
-            .filter_map(|e| e.into_token())
-            .filter(|t| t.kind() == SyntaxKind::IDENT)
-            .nth(1) // First IDENT is instance name, second is type name
-    }
-    pub fn pin_map_block(&self) -> Option<PinMapBlock> { // Assumes PinMapBlock defined elsewhere (e.g., blocks.rs)
-        self.0.children().find_map(PinMapBlock::cast)
-    }
-    pub fn param_assigns(&self) -> impl Iterator<Item = ParamAssign> {
-        self.0.children().filter_map(ParamAssign::cast)
-    }
-}
+// v2.0 doesn't have INTERFACE_INSTANCE - interfaces are instantiated like components
 
 // --- Component Type --- (Used in ComponentInst)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

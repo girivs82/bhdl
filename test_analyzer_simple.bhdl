@@ -1,0 +1,7 @@
+board SimpleTest {
+    power VCC = 5V @ 1A;
+    ground GND;
+    
+    VCC -> Res(10k).1 -> LED(red).A;
+    LED.K -> GND;
+}

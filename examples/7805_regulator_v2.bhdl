@@ -1,0 +1,37 @@
+// 7805 Linear Voltage Regulator Circuit
+// BHDL v2.0 flow-based syntax
+
+board PowerRegulator7805 {
+    // Power domains
+    power VIN = 12V @ 1A;      // Input voltage (7-35V range for 7805)
+    power VOUT = 5V @ 1A;       // Regulated output
+    ground GND;
+    
+    // Input section with protection and filtering
+    VIN -> input_cap: Cap(100u).+ ;      // Bulk storage capacitor
+    input_cap.- -> GND;
+    
+    VIN -> bypass_cap: Cap(100n).+ ;     // High-frequency bypass
+    bypass_cap.- -> GND;
+    
+    // Voltage regulator
+    VIN -> reg: LM7805().IN;
+    reg.GND -> GND;
+    reg.OUT -> VOUT;
+    
+    // Output section with filtering
+    VOUT -> output_cap: Cap(10u).+ ;     // Output ripple reduction
+    output_cap.- -> GND;
+    
+    VOUT -> output_bypass: Cap(100n).+ ; // High-frequency filtering
+    output_bypass.- -> GND;
+    
+    // LED power indicator
+    VOUT -> Res(330).1 -> power_led: LED(green).A;
+    power_led.K -> GND;
+    
+    // Test points for measurement
+    VIN -> tp_input: TestPoint();
+    VOUT -> tp_output: TestPoint();
+    GND -> tp_ground: TestPoint();
+}

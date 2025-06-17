@@ -1,7 +1,7 @@
 //! Visitor pattern for traversing BHDL AST nodes
 
 use crate::flow::{FlowStmt, FlowExpr, ComponentInstantiation, GenerateStmt, ConditionalStmt, AssignStmt};
-use crate::common::{ConnectionStmt};
+use crate::v2_statements::ConnectionStmt;
 use crate::expr::{Expr, BinaryExpr};
 use crate::items::{Board, Module, ComponentDef, InterfaceDef};
 use crate::{SyntaxNode, BhdlLanguage};
