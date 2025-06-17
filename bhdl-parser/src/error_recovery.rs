@@ -304,7 +304,7 @@ impl<'t> ErrorRecovery for Parser<'t> {
             SyntaxKind::GENERATE_KW | SyntaxKind::IF_KW => true,
             
             // v2.0 block starts
-            SyntaxKind::GENERATE_KW | SyntaxKind::CONSTRAIN_KW => true,
+            SyntaxKind::CONSTRAIN_KW => true,
             
             // Top-level item starts
             SyntaxKind::BOARD_KW | SyntaxKind::MODULE_KW | SyntaxKind::COMPONENT_KW 

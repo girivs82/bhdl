@@ -128,6 +128,7 @@ impl<'t> Parser<'t> {
             match self.peek() {
                 Some(SyntaxKind::R_BRACE) => break,
                 Some(SyntaxKind::PIN_KW) => self.parse_module_pin_decl(),
+                Some(SyntaxKind::CONST_KW) => self.parse_const_decl(),
                 Some(SyntaxKind::AT) => self.parse_module_metadata(),
                 Some(SyntaxKind::ATTRIBUTE_KW) => self.parse_attribute_decl(),
                 Some(_) => {
@@ -188,8 +189,8 @@ impl<'t> Parser<'t> {
         }
         
         // Parse direction for signal pins
-        if self.peek() == Some(SyntaxKind::INPUT_KW) ||
-           self.peek() == Some(SyntaxKind::OUTPUT_KW) ||
+        if self.peek() == Some(SyntaxKind::IN_KW) ||
+           self.peek() == Some(SyntaxKind::OUT_KW) ||
            self.peek() == Some(SyntaxKind::INOUT_KW) {
             self.bump();
         }
@@ -233,5 +234,24 @@ impl<'t> Parser<'t> {
         }
         
         self.expect(SyntaxKind::SEMI);
+    }
+
+    // Parse const declaration: const name: type = value;
+    fn parse_const_decl(&mut self) {
+        self.builder.start_node(SyntaxKind::PARAM_DECL.into());
+        self.expect(SyntaxKind::CONST_KW);
+        self.expect(SyntaxKind::IDENT); // Const name
+        self.expect(SyntaxKind::COLON);
+        
+        // Parse type reference
+        self.parse_type_ref();
+        
+        self.expect(SyntaxKind::EQ);
+        
+        // Parse initializer expression
+        self.parse_expression();
+        
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
     }
 }

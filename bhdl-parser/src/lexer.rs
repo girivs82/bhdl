@@ -254,9 +254,6 @@ fn keyword_or_ident_callback(lex: &mut Lexer<LexerToken>) -> KeywordOrIdent {
         "to" => SyntaxKind::TO_KW,
         "extends" => SyntaxKind::EXTENDS_KW,
         "as" => SyntaxKind::AS_KW,
-        "if" => SyntaxKind::IF_KW,
-        "else" => SyntaxKind::ELSE_KW,
-        "when" => SyntaxKind::WHEN_KW,
         "true" => SyntaxKind::TRUE_KW,
         "false" => SyntaxKind::FALSE_KW,
         // "pin_map" is NOT a keyword, parsed as IDENT
