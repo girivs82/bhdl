@@ -1,0 +1,73 @@
+// Standard Diode Component Module
+// Supports Diode(1N4148), Diode(1N4007), etc.
+
+import { DiodeParams, DIODE_1N4148, DIODE_1N4007 } from "../electrical_params.bhdl";
+
+module Diode(
+    part: string = "1N4148",
+    package: string = "auto"
+) {
+    pin A: signal in;   // Anode (+)
+    pin K: signal out;  // Cathode (-)
+    
+    // Get electrical parameters based on part number
+    const params: DiodeParams = 
+        part == "1N4148" ? DIODE_1N4148 :
+        part == "1N4007" ? DIODE_1N4007 :
+        part == "1N4001" ? { ...DIODE_1N4007, reverse_voltage: 50V } :
+        part == "1N4002" ? { ...DIODE_1N4007, reverse_voltage: 100V } :
+        part == "1N4003" ? { ...DIODE_1N4007, reverse_voltage: 200V } :
+        part == "1N4004" ? { ...DIODE_1N4007, reverse_voltage: 400V } :
+        part == "1N4005" ? { ...DIODE_1N4007, reverse_voltage: 600V } :
+        part == "1N4006" ? { ...DIODE_1N4007, reverse_voltage: 800V } :
+        part == "1N5819" ? { // Schottky diode
+            forward_voltage: 0.45V,
+            forward_current: 1A,
+            max_forward_current: 1A,
+            peak_forward_current: 25A,
+            reverse_voltage: 40V,
+            reverse_current: 10μA,
+            capacitance: 110pF,
+            recovery_time: null
+        } :
+        DIODE_1N4148;  // Default to 1N4148
+    
+    // Component metadata attributes
+    attribute component_class = "diode";
+    attribute part_number = part;
+    attribute forward_voltage = params.forward_voltage;
+    attribute forward_current = params.forward_current;
+    attribute max_forward_current = params.max_forward_current;
+    attribute peak_forward_current = params.peak_forward_current;
+    attribute reverse_voltage = params.reverse_voltage;
+    attribute reverse_current = params.reverse_current;
+    attribute capacitance = params.capacitance;
+    attribute recovery_time = params.recovery_time;
+    
+    // SPICE model parameters
+    attribute spice_model = "diode";
+    attribute spice_forward_voltage = params.forward_voltage;
+    attribute spice_saturation_current = 1e-12;  // Default Is
+    attribute spice_emission_coefficient = 1.0;   // Default n
+    attribute spice_max_current = params.max_forward_current;
+    
+    // KiCad symbol mapping
+    attribute kicad_symbol = "Device:D";
+    
+    // Package selection
+    attribute package = 
+        package == "auto" ? (
+            part.starts_with("1N4148") ? "Diode_SMD:D_SOD-123" :
+            part.starts_with("1N400") ? "Diode_THT:D_DO-41_SOD81_P10.16mm_Horizontal" :
+            part.starts_with("1N5819") ? "Diode_THT:D_DO-41_SOD81_P10.16mm_Horizontal" :
+            "Diode_SMD:D_SOD-123"
+        ) :
+        package == "SOD-123" ? "Diode_SMD:D_SOD-123" :
+        package == "SOD-323" ? "Diode_SMD:D_SOD-323" :
+        package == "DO-41" ? "Diode_THT:D_DO-41_SOD81_P10.16mm_Horizontal" :
+        package == "DO-35" ? "Diode_THT:D_DO-35_SOD27_P7.62mm_Horizontal" :
+        package == "SMA" ? "Diode_SMD:D_SMA" :
+        package == "SMB" ? "Diode_SMD:D_SMB" :
+        package == "SMC" ? "Diode_SMD:D_SMC" :
+        "Diode_SMD:D_SOD-123";
+}

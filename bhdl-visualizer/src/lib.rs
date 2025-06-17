@@ -10,12 +10,16 @@ pub mod types;
 pub mod pin_labeling;
 pub mod ascii_renderer;
 pub mod pattern_layout;
+pub mod semantic_layout;
+pub mod semantic_visualizer;
+pub mod manhattan_router;
 
 // Re-export main types
 pub use renderer::CircuitRenderer;
 pub use layout::{LayoutEngine, LayoutConfig, PlacementAlgorithm};
 pub use types::{Point, BoundingBox, Component, Net, CircuitLayout};
 pub use svg::SvgDocument;
+pub use semantic_visualizer::{SemanticVisualizer, generate_svg as generate_semantic_svg};
 
 use anyhow::Result;
 use bhdl_netlist::Netlist;
@@ -102,6 +106,15 @@ pub async fn render_circuit_debug_with_analysis(
     let svg_content = renderer.render_to_svg(&circuit_layout, components).await?;
     
     Ok(svg_content)
+}
+
+/// Render circuit using semantic-aware layout algorithms
+pub fn render_semantic_circuit(
+    netlist: Netlist,
+    components: Vec<DatabaseComponentInstance>,
+) -> Result<CircuitLayout> {
+    let visualizer = SemanticVisualizer::new(netlist, components);
+    visualizer.generate_layout()
 }
 
 #[cfg(test)]

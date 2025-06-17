@@ -50,7 +50,24 @@
       "Bash(RUST_BACKTRACE=1 cargo run -p bhdl-synthesizer --bin end_to_end_test 2 >& 1)",
       "Bash(RUST_BACKTRACE=1 cargo run -p bhdl-synthesizer --bin analyze_netlist_semantics 2 >& 1)",
       "Bash(cat:*)",
-      "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin analyze_netlist_semantics 2 >& 1)"
+      "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin analyze_netlist_semantics 2 >& 1)",
+      "Bash(./semantic_visualizer_demo)",
+      "Bash(RUST_LOG=debug cargo run --bin test_semantic_real 2 >& 1)",
+      "Bash(sqlite3:*)",
+      "Bash(./target/debug/test_semantic_real)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-components --bin clean_database -- --dry-run)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-components --bin clean_database)",
+      "Bash(RUST_LOG=debug cargo run --bin test_semantic_visualizer 2 >& 1)",
+      "Bash(RUST_LOG=info cargo run --bin test_semantic_visualizer 2 >& 1)",
+      "Bash(RUST_LOG=info cargo test -p bhdl-spice test_led_without_resistor -- --nocapture)",
+      "Bash(RUST_LOG=info cargo test -p bhdl-spice test_led_with_proper_resistor -- --nocapture)",
+      "Bash(chmod:*)",
+      "Bash(./target/debug/test_pipeline_7805)",
+      "Bash(./target/debug/test_net_assignment:*)",
+      "Bash(RUST_LOG=info ./target/debug/test_net_assignment 2 >& 1)",
+      "Bash(RUST_LOG=info ./target/debug/test_7805_realistic)",
+      "Bash(./target/debug/test_7805_realistic:*)",
+      "Bash(tree:*)"
     ],
     "deny": []
   }

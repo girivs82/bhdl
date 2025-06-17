@@ -22,3 +22,12 @@ bhdl-components/test_*.db
 # KiCad symbol cache
 kicad_symbol_cache/
 *.kicad_sym.cache
+# Test scratch directory
+tests/scratch/
+
+# Test outputs in root (should be in tests/)
+/*.svg
+/*.bhdl
+/test_*.rs
+/demo_*.rs
+/debug_*.rs

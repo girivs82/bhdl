@@ -26,6 +26,7 @@ petgraph = "0.6.4"
 rayon = "1.8.1"
 ordered-float = "2.10"
 slotmap = { version = "1", features = ["serde"] }
+serde = { version = "1.0", features = ["derive"] }
 
 [dev-dependencies]
 tempfile = "3.0"

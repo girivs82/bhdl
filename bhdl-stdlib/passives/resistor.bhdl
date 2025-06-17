@@ -1,17 +1,55 @@
 // Standard Resistor Component Module
 // Supports both Res(10k) and Resistor(10k) instantiation
 
-module Res(value: resistance) {
+import { ResistorParams, RESISTOR_0402_PARAMS, RESISTOR_0603_PARAMS, 
+         RESISTOR_0805_PARAMS, RESISTOR_1206_PARAMS } from "../electrical_params.bhdl";
+
+module Res(
+    value: resistance, 
+    tolerance: percentage = 5%, 
+    package: string = "0805"
+) {
     pin 1: signal inout;
     pin 2: signal inout;
     
+    // Get electrical parameters based on package
+    const params: ResistorParams = 
+        package == "0402" ? { ...RESISTOR_0402_PARAMS, resistance: value, tolerance: tolerance } :
+        package == "0603" ? { ...RESISTOR_0603_PARAMS, resistance: value, tolerance: tolerance } :
+        package == "0805" ? { ...RESISTOR_0805_PARAMS, resistance: value, tolerance: tolerance } :
+        package == "1206" ? { ...RESISTOR_1206_PARAMS, resistance: value, tolerance: tolerance } :
+        { // Default THT 1/4W resistor
+            resistance: value,
+            tolerance: tolerance,
+            power_rating: 250mW,
+            temp_coefficient: 200,
+            max_voltage: 250V
+        };
+    
     // Component metadata attributes
     attribute component_class = "resistor";
-    attribute tolerance = "5%";
-    attribute power_rating = "0.25W";
+    attribute resistance = params.resistance;
+    attribute tolerance = params.tolerance;
+    attribute power_rating = params.power_rating;
+    attribute temp_coefficient = params.temp_coefficient;
+    attribute max_voltage = params.max_voltage;
+    
+    // SPICE model parameters
+    attribute spice_model = "resistor";
+    attribute spice_resistance = params.resistance;
+    attribute spice_max_power = params.power_rating;
+    
+    // KiCad symbol and package mapping
     attribute kicad_symbol = "Device:R";
-    attribute packages = "0603,0805,1206,THT";
-    attribute default_package = "0805";
+    attribute packages = "0402,0603,0805,1206,THT";
+    attribute default_package = package;
+    attribute package = 
+        package == "0402" ? "Resistor_SMD:R_0402_1005Metric" :
+        package == "0603" ? "Resistor_SMD:R_0603_1608Metric" :
+        package == "0805" ? "Resistor_SMD:R_0805_2012Metric" :
+        package == "1206" ? "Resistor_SMD:R_1206_3216Metric" :
+        package == "THT" ? "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal" :
+        "Resistor_SMD:R_0805_2012Metric";
 }
 
 // Alias for full name

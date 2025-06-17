@@ -48,6 +48,10 @@ dirs = "5.0"
 name = "import_kicad_symbols"
 path = "src/bin/import_kicad_symbols.rs"
 
+[[bin]]
+name = "clean_database"
+path = "src/bin/clean_database.rs"
+
 [dev-dependencies]
 tempfile = "3.0"
 tokio-test = "0.4"

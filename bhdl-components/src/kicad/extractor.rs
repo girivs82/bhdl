@@ -16,6 +16,11 @@ impl KiCadExtractor {
 
     /// Extract a Component from a KiCad symbol
     pub fn extract_component(&self, symbol: &KiCadSymbol, svg_data: String) -> anyhow::Result<Component> {
+        // Validate SVG data
+        if !self.validate_svg_data(&svg_data) {
+            return Err(anyhow::anyhow!("Invalid or empty SVG data for symbol: {}", symbol.name));
+        }
+        
         let category = self.infer_component_category(symbol);
         let electrical_specs = self.extract_electrical_specs(symbol)?;
         let pins = self.extract_pins(symbol)?;
@@ -38,6 +43,39 @@ impl KiCadExtractor {
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         })
+    }
+    
+    /// Validate SVG data
+    fn validate_svg_data(&self, svg_data: &str) -> bool {
+        // Check if SVG data is not empty
+        if svg_data.trim().is_empty() {
+            return false;
+        }
+        
+        // Check for basic SVG structure
+        if !svg_data.contains("<svg") || !svg_data.contains("</svg>") {
+            return false;
+        }
+        
+        // Check for viewBox attribute
+        if !svg_data.contains("viewBox") {
+            return false;
+        }
+        
+        // Check minimum length (a valid SVG should be at least 100 characters)
+        if svg_data.len() < 100 {
+            return false;
+        }
+        
+        // Check for some actual content (not just empty SVG tags)
+        let has_content = svg_data.contains("<rect") || 
+                         svg_data.contains("<circle") || 
+                         svg_data.contains("<line") || 
+                         svg_data.contains("<polyline") || 
+                         svg_data.contains("<path") ||
+                         svg_data.contains("<text");
+        
+        has_content
     }
 
     /// Infer component category from symbol properties
@@ -398,6 +436,34 @@ impl Default for KiCadExtractor {
 mod tests {
     use super::*;
     use crate::kicad::parser::{KiCadSymbol, KiCadUnit, KiCadPin};
+
+    #[test]
+    fn test_svg_validation() {
+        let extractor = KiCadExtractor::new();
+        
+        // Valid SVG
+        let valid_svg = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+            <rect x="10" y="10" width="80" height="80" fill="blue"/>
+        </svg>"#;
+        assert!(extractor.validate_svg_data(valid_svg));
+        
+        // Empty SVG
+        assert!(!extractor.validate_svg_data(""));
+        assert!(!extractor.validate_svg_data("   "));
+        
+        // Invalid SVG (no closing tag)
+        assert!(!extractor.validate_svg_data("<svg viewBox=\"0 0 100 100\">"));
+        
+        // SVG without viewBox
+        assert!(!extractor.validate_svg_data("<svg><rect/></svg>"));
+        
+        // Too short SVG
+        assert!(!extractor.validate_svg_data("<svg viewBox=\"0 0 1 1\"></svg>"));
+        
+        // SVG without content
+        let empty_svg = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"></svg>"#;
+        assert!(!extractor.validate_svg_data(empty_svg));
+    }
 
     #[test]
     fn test_component_category_inference() {

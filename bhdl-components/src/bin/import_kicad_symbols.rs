@@ -116,8 +116,13 @@ async fn process_symbol(
     
     // Convert symbol to SVG
     debug!("Converting symbol {} to SVG", symbol.name);
-    let svg_data = svg_converter.convert_symbol_to_svg(symbol)
-        .context("Failed to convert symbol to SVG")?;
+    let svg_data = match svg_converter.convert_symbol_to_svg(symbol) {
+        Ok(svg) => svg,
+        Err(e) => {
+            warn!("Failed to convert symbol {} to SVG: {}", symbol.name, e);
+            return Err(anyhow::anyhow!("SVG conversion failed"));
+        }
+    };
 
     // Extract component data from KiCad symbol
     debug!("Extracting component data for {}", symbol.name);

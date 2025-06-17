@@ -98,20 +98,20 @@ impl PatternLayout for VoltageRegulatorLayout {
                 // Classify based on name and type
                 if module_name.contains("7805") || module_name.contains("7812") || 
                    module_name.contains("LM") || module_name.contains("regulator") {
-                    roles.regulators.push(*id);
+                    roles.regulators.push(id);
                 } else if name.starts_with("C") {
                     // Determine if input or output cap based on connections
-                    if is_connected_to_input(id, netlist, analysis) {
-                        roles.input_filters.push(*id);
+                    if is_connected_to_input(&id, netlist, analysis) {
+                        roles.input_filters.push(id);
                     } else {
-                        roles.output_filters.push(*id);
+                        roles.output_filters.push(id);
                     }
                 } else if name.starts_with("R") {
-                    roles.current_limiting.push(*id);
+                    roles.current_limiting.push(id);
                 } else if name.starts_with("D") || module_name.contains("LED") {
-                    roles.indicators.push(*id);
+                    roles.indicators.push(id);
                 } else {
-                    roles.generic.push(*id);
+                    roles.generic.push(id);
                 }
             }
         }
@@ -131,8 +131,8 @@ impl PatternLayout for VoltageRegulatorLayout {
         let center_y = 200.0;
         
         // 1. Input capacitors on the left (vertical)
-        for (i, &id) in roles.input_filters.iter().enumerate() {
-            positions.insert(id, Point {
+        for (i, id) in roles.input_filters.iter().enumerate() {
+            positions.insert(*id, Point {
                 x: x + i as f64 * 50.0,
                 y: center_y,
             });
@@ -140,15 +140,15 @@ impl PatternLayout for VoltageRegulatorLayout {
         x += roles.input_filters.len() as f64 * 50.0 + self.spacing;
         
         // 2. Regulator in the center
-        if let Some(&reg_id) = roles.regulators.first() {
-            positions.insert(reg_id, Point { x, y: center_y });
+        if let Some(reg_id) = roles.regulators.first() {
+            positions.insert(*reg_id, Point { x, y: center_y });
             x += 150.0; // Regulator width
         }
         x += self.spacing;
         
         // 3. Output capacitors (vertical)
-        for (i, &id) in roles.output_filters.iter().enumerate() {
-            positions.insert(id, Point {
+        for (i, id) in roles.output_filters.iter().enumerate() {
+            positions.insert(*id, Point {
                 x: x + i as f64 * 50.0,
                 y: center_y,
             });
@@ -156,12 +156,12 @@ impl PatternLayout for VoltageRegulatorLayout {
         x += roles.output_filters.len() as f64 * 50.0 + self.spacing;
         
         // 4. Current limiting resistor and LED (far right)
-        if let Some(&r_id) = roles.current_limiting.first() {
-            positions.insert(r_id, Point { x, y: center_y - 50.0 });
+        if let Some(r_id) = roles.current_limiting.first() {
+            positions.insert(*r_id, Point { x, y: center_y - 50.0 });
         }
         
-        if let Some(&led_id) = roles.indicators.first() {
-            positions.insert(led_id, Point { x, y: center_y + 50.0 });
+        if let Some(led_id) = roles.indicators.first() {
+            positions.insert(*led_id, Point { x, y: center_y + 50.0 });
         }
         
         positions
@@ -181,18 +181,18 @@ impl PatternLayout for VoltageRegulatorLayout {
         let mut orientations = HashMap::new();
         
         // All capacitors are vertical in voltage regulator circuits
-        for &id in roles.input_filters.iter().chain(roles.output_filters.iter()) {
-            orientations.insert(id, Orientation::Vertical);
+        for id in roles.input_filters.iter().chain(roles.output_filters.iter()) {
+            orientations.insert(*id, Orientation::Vertical);
         }
         
         // Resistors are vertical when in series with LEDs
-        for &id in &roles.current_limiting {
-            orientations.insert(id, Orientation::Vertical);
+        for id in &roles.current_limiting {
+            orientations.insert(*id, Orientation::Vertical);
         }
         
         // LEDs are vertical
-        for &id in &roles.indicators {
-            orientations.insert(id, Orientation::Vertical);
+        for id in &roles.indicators {
+            orientations.insert(*id, Orientation::Vertical);
         }
         
         orientations
@@ -295,7 +295,7 @@ impl PatternLayout for GenericLayout {
         let mut roles = ComponentRoles::default();
         // Put everything in generic category
         for id in netlist.instances.keys() {
-            roles.generic.push(*id);
+            roles.generic.push(id);
         }
         roles
     }

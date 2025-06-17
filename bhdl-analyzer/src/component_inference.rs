@@ -504,16 +504,49 @@ impl ComponentInferenceContext {
         // Check if this is for LED current limiting
         if context.has_led_in_series {
             if let (Some(supply_v), Some(led_color)) = (requirements.supply_voltage, &context.led_color) {
-                let vf = match led_color.as_str() {
-                    "red" => 2.0,
-                    "green" => 2.2,
-                    "blue" => 3.2,
-                    "yellow" => 2.1,
-                    "white" => 3.3,
-                    _ => 2.0,
+                // Try to get LED parameters from module resolver (stdlib)
+                let (vf, if_target) = if let Some(resolver) = &mut self.module_resolver {
+                    // Try to resolve LED module to get parameters
+                    if let Ok(led_module) = resolver.resolve("LED") {
+                        // Extract forward voltage and current from electrical specs
+                        let vf = led_module.metadata.electrical_specs.get(&format!("{}_forward_voltage", led_color))
+                            .and_then(|v| v.parse::<f64>().ok())
+                            .unwrap_or_else(|| match led_color.as_str() {
+                                "red" => 2.0,
+                                "green" => 2.2,
+                                "blue" => 3.2,
+                                "yellow" => 2.1,
+                                "white" => 3.3,
+                                _ => 2.0,
+                            });
+                        let if_target = led_module.metadata.electrical_specs.get(&format!("{}_forward_current", led_color))
+                            .and_then(|v| v.parse::<f64>().ok())
+                            .unwrap_or(0.020);
+                        (vf, if_target)
+                    } else {
+                        // Fallback to defaults if LED module not found
+                        let vf = match led_color.as_str() {
+                            "red" => 2.0,
+                            "green" => 2.2,
+                            "blue" => 3.2,
+                            "yellow" => 2.1,
+                            "white" => 3.3,
+                            _ => 2.0,
+                        };
+                        (vf, 0.020)
+                    }
+                } else {
+                    // No module resolver, use defaults
+                    let vf = match led_color.as_str() {
+                        "red" => 2.0,
+                        "green" => 2.2,
+                        "blue" => 3.2,
+                        "yellow" => 2.1,
+                        "white" => 3.3,
+                        _ => 2.0,
+                    };
+                    (vf, 0.020)
                 };
-                
-                let if_target = 0.020; // 20m (20mA in EDA convention)
                 let resistance = (supply_v - vf) / if_target;
                 let resistance_standard = find_nearest_e_series_value(resistance, 12);
                 
@@ -528,8 +561,17 @@ impl ComponentInferenceContext {
                 reasoning = format!("LED current limiting resistor");
                 confidence = 0.95;
                 
+                // Check if voltage drop is too small
+                let voltage_drop = supply_v - vf;
+                if voltage_drop < 0.5 {
+                    self.warnings.push(format!(
+                        "Very small voltage drop ({:.1}V) across current limiting resistor for {} LED. Consider using a higher supply voltage or different LED color.",
+                        voltage_drop, led_color
+                    ));
+                }
+                
                 // Calculate power dissipation
-                let power = (supply_v - vf) * if_target;
+                let power = voltage_drop * if_target;
                 if power > 0.25 * self.design_rules.power_derating_factor {
                     self.warnings.push(format!(
                         "High power dissipation ({:.2}W) in current limiting resistor. Consider higher power rating.",
