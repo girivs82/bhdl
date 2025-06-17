@@ -1,0 +1,142 @@
+Orthogonal Routing Test Report
+==============================
+
+Component Positions:
+  U3 at (0.0, 0.0)
+    Pin GND: (0.0, 30.0)
+    Pin OUT: (40.0, 0.0)
+    Pin IN: (-40.0, 0.0)
+  U2 at (-200.0, -30.0)
+    Pin 2: (-250.0, -30.0)
+    Pin pos: (-150.0, -30.0)
+    Pin 1: (-150.0, -30.0)
+    Pin neg: (-250.0, -30.0)
+  C1 at (200.0, -30.0)
+    Pin neg: (150.0, -30.0)
+    Pin 1: (250.0, -30.0)
+    Pin pos: (250.0, -30.0)
+    Pin 2: (150.0, -30.0)
+  LED1 at (350.0, -40.0)
+    Pin A: (365.0, -40.0)
+    Pin K: (335.0, -40.0)
+  U1 at (-300.0, 100.0)
+  D1 at (-150.0, 100.0)
+  U4 at (-300.0, 250.0)
+    Pin 1: (-300.0, 200.0)
+    Pin neg: (-300.0, 300.0)
+    Pin 2: (-300.0, 300.0)
+    Pin pos: (-300.0, 200.0)
+  C2 at (-150.0, 250.0)
+    Pin neg: (-150.0, 300.0)
+    Pin pos: (-150.0, 200.0)
+    Pin 2: (-150.0, 300.0)
+    Pin 1: (-150.0, 200.0)
+  U5 at (-300.0, 400.0)
+  U6 at (-150.0, 400.0)
+  U7 at (-300.0, 550.0)
+
+Net Routing:
+
+  Net 'VCC':
+    Connection points:
+    Routing segments:
+
+  Net 'VIN':
+    Connection points:
+    Routing segments:
+
+  Net 'reg':
+    Connection points:
+    Routing segments:
+
+  Net 'r_led':
+    Connection points:
+    Routing segments:
+
+  Net 'protected_vin':
+    Connection points:
+    Routing segments:
+
+  Net 'led':
+    Connection points:
+    Routing segments:
+
+  Net 'c_out1':
+    Connection points:
+    Routing segments:
+
+  Net 'tp_vin':
+    Connection points:
+    Routing segments:
+
+  Net 'c_out2':
+    Connection points:
+    Routing segments:
+
+  Net 'tp_gnd':
+    Connection points:
+    Routing segments:
+
+  Net 'LED(green).A':
+    Connection points:
+    Routing segments:
+
+  Net 'GND':
+    Connection points:
+    Routing segments:
+
+  Net 'fuse':
+    Connection points:
+    Routing segments:
+
+  Net 'tp_vout':
+    Connection points:
+    Routing segments:
+
+  Net 'TVSDiode(15V).1':
+    Connection points:
+    Routing segments:
+
+  Net 'c_in1':
+    Connection points:
+    Routing segments:
+
+  Net 'c_in2':
+    Connection points:
+    Routing segments:
+
+  Net 'Unnamed':
+    Connection points:
+    Routing segments:
+
+  Net 'Unnamed':
+    Connection points:
+    Routing segments:
+
+  Net 'Unnamed':
+    Connection points:
+    Routing segments:
+
+  Net 'Unnamed':
+    Connection points:
+    Routing segments:
+
+  Net 'Unnamed':
+    Connection points:
+    Routing segments:
+
+  Net 'Unnamed':
+    Connection points:
+    Routing segments:
+
+  Net 'Unnamed':
+    Connection points:
+    Routing segments:
+
+  Net 'Unnamed':
+    Connection points:
+    Routing segments:
+
+  Net 'Unnamed':
+    Connection points:
+    Routing segments:

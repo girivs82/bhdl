@@ -9,6 +9,8 @@ export * from "./passives/resistor.bhdl";
 export * from "./passives/capacitor.bhdl";
 export * from "./passives/led.bhdl";
 export * from "./passives/diode.bhdl";
+export * from "./passives/fuse.bhdl";
+export * from "./passives/tvs_diode.bhdl";
 
 // Voltage Regulators
 export * from "./regulators/lm7805.bhdl";

@@ -67,7 +67,12 @@
       "Bash(RUST_LOG=info ./target/debug/test_net_assignment 2 >& 1)",
       "Bash(RUST_LOG=info ./target/debug/test_7805_realistic)",
       "Bash(./target/debug/test_7805_realistic:*)",
-      "Bash(tree:*)"
+      "Bash(tree:*)",
+      "Bash(RUST_LOG=error cargo run --bin test_orthogonal_routing_pipeline 2>&1)",
+      "Bash(RUST_LOG=info cargo run --bin test_orthogonal_routing_pipeline 2 >& 1)",
+      "Bash(RUST_LOG=debug cargo run --bin test_orthogonal_routing_pipeline 2 >& 1)",
+      "Bash(RUST_LOG=warn cargo run --bin test_orthogonal_routing_pipeline 2 >& 1)",
+      "Bash(./test_import_parse)"
     ],
     "deny": []
   }

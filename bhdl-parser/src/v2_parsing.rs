@@ -109,31 +109,81 @@ impl<'t> Parser<'t> {
         self.builder.finish_node();
     }
     
-    /// Parse import statement: import path.to.module;
+    /// Parse import statement: 
+    /// - import path.to.module;
+    /// - import { Item1, Item2 } from "path/to/file.bhdl";
     pub(crate) fn parse_import_stmt(&mut self) {
         self.builder.start_node(SyntaxKind::IMPORT_STMT.into());
         self.expect(SyntaxKind::IMPORT_KW);
         
-        // Parse import path
-        self.builder.start_node(SyntaxKind::IMPORT_PATH.into());
-        self.expect(SyntaxKind::IDENT);
-        
-        while self.peek() == Some(SyntaxKind::DOT) {
-            self.bump();
-            self.expect(SyntaxKind::IDENT);
-        }
-        
-        self.builder.finish_node();
-        
-        // Optional alias
-        if self.peek() == Some(SyntaxKind::AS_KW) {
-            self.bump();
-            self.builder.start_node(SyntaxKind::ALIAS.into());
-            self.expect(SyntaxKind::IDENT);
+        // Check for destructuring import { ... } from "..."
+        if self.peek() == Some(SyntaxKind::L_BRACE) {
+            // Parse destructuring import
+            self.parse_import_destructuring();
+            
+            // Expect 'from' keyword
+            self.expect(SyntaxKind::FROM_KW);
+            
+            // Parse string literal path
+            self.builder.start_node(SyntaxKind::IMPORT_PATH.into());
+            self.expect(SyntaxKind::STRING);
             self.builder.finish_node();
+        } else {
+            // Parse simple import path
+            self.builder.start_node(SyntaxKind::IMPORT_PATH.into());
+            self.expect(SyntaxKind::IDENT);
+            
+            while self.peek() == Some(SyntaxKind::DOT) {
+                self.bump();
+                self.expect(SyntaxKind::IDENT);
+            }
+            
+            self.builder.finish_node();
+            
+            // Optional alias
+            if self.peek() == Some(SyntaxKind::AS_KW) {
+                self.bump();
+                self.builder.start_node(SyntaxKind::ALIAS.into());
+                self.expect(SyntaxKind::IDENT);
+                self.builder.finish_node();
+            }
         }
         
         self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+    
+    /// Parse import destructuring: { Item1, Item2, Item3 }
+    fn parse_import_destructuring(&mut self) {
+        self.builder.start_node(SyntaxKind::IMPORT_TARGET_GROUP.into());
+        self.expect(SyntaxKind::L_BRACE);
+        
+        // Parse comma-separated list of identifiers
+        loop {
+            self.skip_trivia();
+            
+            if self.peek() == Some(SyntaxKind::R_BRACE) {
+                break;
+            }
+            
+            self.builder.start_node(SyntaxKind::IMPORT_TARGET.into());
+            self.expect(SyntaxKind::IDENT);
+            self.builder.finish_node();
+            
+            // Check for comma
+            if self.peek() == Some(SyntaxKind::COMMA) {
+                self.bump();
+                // Allow trailing comma
+                if self.peek() == Some(SyntaxKind::R_BRACE) {
+                    break;
+                }
+            } else if self.peek() != Some(SyntaxKind::R_BRACE) {
+                self.error("Expected ',' or '}' in import list".to_string());
+                break;
+            }
+        }
+        
+        self.expect(SyntaxKind::R_BRACE);
         self.builder.finish_node();
     }
     

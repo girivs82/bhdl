@@ -215,6 +215,7 @@ fn keyword_or_ident_callback(lex: &mut Lexer<LexerToken>) -> KeywordOrIdent {
         "typedef" => SyntaxKind::TYPEDEF_KW,
         "import" => SyntaxKind::IMPORT_KW,
         "const" => SyntaxKind::CONST_KW,
+        "from" => SyntaxKind::FROM_KW,
 
         // Block Keywords (removed v1.0 block keywords)
         "layer_stackup" => SyntaxKind::LAYER_STACKUP_KW,

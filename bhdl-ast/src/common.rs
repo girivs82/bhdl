@@ -151,8 +151,31 @@ impl PortDecl {
     pub fn bus_suffix(&self) -> Option<BusSuffix> { self.0.children().find_map(BusSuffix::cast) }
 }
 
-// --- Pin Declaration --- (within component pins { ... })
-// v2.0 doesn't have PIN_DECL - pins are declared as PORT_DECL in modules
+// --- Pin Declaration --- (within modules)
+// v2.0 uses pin declarations in modules for physical component pins
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PinDecl(pub(crate) SyntaxNode<BhdlLanguage>);
+impl AstNode for PinDecl {
+    type Language = BhdlLanguage;
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::PIN_DECL }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { 
+        if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } 
+    }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+impl HasName for PinDecl {
+    // Override name() to handle both IDENT and NUMBER tokens for pin names
+    fn name(&self) -> Option<SyntaxToken<BhdlLanguage>> {
+        self.syntax()
+            .children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .find(|token| matches!(token.kind(), SyntaxKind::IDENT | SyntaxKind::NUMBER))
+    }
+}
+impl PinDecl {
+    pub fn type_ref(&self) -> Option<TypeRef> { self.0.children().find_map(TypeRef::cast) }
+    pub fn bus_suffix(&self) -> Option<BusSuffix> { self.0.children().find_map(BusSuffix::cast) }
+}
 
 // --- Net Declaration ---
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

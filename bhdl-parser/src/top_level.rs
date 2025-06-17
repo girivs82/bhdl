@@ -166,9 +166,16 @@ impl<'t> Parser<'t> {
 
     // Parse module pin declaration (v2.0 style)
     fn parse_module_pin_decl(&mut self) {
-        self.builder.start_node(SyntaxKind::PORT_DECL.into());
+        self.builder.start_node(SyntaxKind::PIN_DECL.into());
         self.expect(SyntaxKind::PIN_KW);
-        self.expect(SyntaxKind::IDENT); // Pin name
+        
+        // Pin name can be IDENT or NUMBER (e.g., "pin 1:", "pin VCC:")
+        if self.peek() == Some(SyntaxKind::IDENT) || self.peek() == Some(SyntaxKind::NUMBER) {
+            self.bump();
+        } else {
+            self.error("Expected pin name (identifier or number)".to_string());
+        }
+        
         self.expect(SyntaxKind::COLON);
         
         // Parse pin type (signal, power, ground)

@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="840" height="770" viewBox="-410 -130 840 770" xmlns="http://www.w3.org/2000/svg">
+<defs><style type="text/css"><![CDATA[
+.component { fill: white; stroke: black; stroke-width: 1.5; }
+.component-text { font-family: Arial, sans-serif; font-size: 10px; text-anchor: middle; fill: black; }
+.pin { fill: none; stroke: red; stroke-width: 1; }
+.pin-label { font-family: Arial, sans-serif; font-size: 6px; fill: black; }
+.pin-number { font-family: Arial, sans-serif; font-size: 5px; fill: #666; }
+.pin-name { font-family: Arial, sans-serif; font-size: 6px; fill: black; }
+.net { fill: none; stroke: blue; stroke-width: 1.2; }
+.net-label { font-family: Arial, sans-serif; font-size: 8px; fill: blue; }
+.grid { stroke: #f0f0f0; stroke-width: 0.5; opacity: 0.5; }
+]]></style></defs>
+<line x1="-450" y1="-130" x2="-450" y2="640" class="grid"/>
+<line x1="-400" y1="-130" x2="-400" y2="640" class="grid"/>
+<line x1="-350" y1="-130" x2="-350" y2="640" class="grid"/>
+<line x1="-300" y1="-130" x2="-300" y2="640" class="grid"/>
+<line x1="-250" y1="-130" x2="-250" y2="640" class="grid"/>
+<line x1="-200" y1="-130" x2="-200" y2="640" class="grid"/>
+<line x1="-150" y1="-130" x2="-150" y2="640" class="grid"/>
+<line x1="-100" y1="-130" x2="-100" y2="640" class="grid"/>
+<line x1="-50" y1="-130" x2="-50" y2="640" class="grid"/>
+<line x1="0" y1="-130" x2="0" y2="640" class="grid"/>
+<line x1="50" y1="-130" x2="50" y2="640" class="grid"/>
+<line x1="100" y1="-130" x2="100" y2="640" class="grid"/>
+<line x1="150" y1="-130" x2="150" y2="640" class="grid"/>
+<line x1="200" y1="-130" x2="200" y2="640" class="grid"/>
+<line x1="250" y1="-130" x2="250" y2="640" class="grid"/>
+<line x1="300" y1="-130" x2="300" y2="640" class="grid"/>
+<line x1="350" y1="-130" x2="350" y2="640" class="grid"/>
+<line x1="400" y1="-130" x2="400" y2="640" class="grid"/>
+<line x1="-410" y1="-150" x2="430" y2="-150" class="grid"/>
+<line x1="-410" y1="-100" x2="430" y2="-100" class="grid"/>
+<line x1="-410" y1="-50" x2="430" y2="-50" class="grid"/>
+<line x1="-410" y1="0" x2="430" y2="0" class="grid"/>
+<line x1="-410" y1="50" x2="430" y2="50" class="grid"/>
+<line x1="-410" y1="100" x2="430" y2="100" class="grid"/>
+<line x1="-410" y1="150" x2="430" y2="150" class="grid"/>
+<line x1="-410" y1="200" x2="430" y2="200" class="grid"/>
+<line x1="-410" y1="250" x2="430" y2="250" class="grid"/>
+<line x1="-410" y1="300" x2="430" y2="300" class="grid"/>
+<line x1="-410" y1="350" x2="430" y2="350" class="grid"/>
+<line x1="-410" y1="400" x2="430" y2="400" class="grid"/>
+<line x1="-410" y1="450" x2="430" y2="450" class="grid"/>
+<line x1="-410" y1="500" x2="430" y2="500" class="grid"/>
+<line x1="-410" y1="550" x2="430" y2="550" class="grid"/>
+<line x1="-410" y1="600" x2="430" y2="600" class="grid"/>
+<g transform="translate(0, 0) rotate(0)"><rect x="-80" y="-60" width="160" height="120" class="component"/>
+<text x="0" y="0" class="component-text">U3</text>
+<circle cx="0" cy="30" r="2" class="pin"/>
+<text x="5" y="30" class="pin-label">GND</text>
+<circle cx="40" cy="0" r="2" class="pin"/>
+<text x="45" y="0" class="pin-label">OUT</text>
+<circle cx="-40" cy="0" r="2" class="pin"/>
+<text x="-35" y="0" class="pin-label">IN</text>
+</g>
+<g transform="translate(-200, -30) rotate(90)"><rect x="-30" y="-50" width="60" height="100" class="component"/>
+<text x="0" y="0" class="component-text">U2</text>
+<circle cx="0" cy="50" r="2" class="pin"/>
+<text x="5" y="50" class="pin-label">2</text>
+<circle cx="0" cy="-50" r="2" class="pin"/>
+<text x="5" y="-50" class="pin-label">pos</text>
+<circle cx="0" cy="-50" r="2" class="pin"/>
+<text x="5" y="-50" class="pin-label">1</text>
+<circle cx="0" cy="50" r="2" class="pin"/>
+<text x="5" y="50" class="pin-label">neg</text>
+</g>
+<g transform="translate(200, -30) rotate(90)"><rect x="-30" y="-50" width="60" height="100" class="component"/>
+<text x="0" y="0" class="component-text">C1</text>
+<circle cx="0" cy="50" r="2" class="pin"/>
+<text x="5" y="50" class="pin-label">neg</text>
+<circle cx="0" cy="-50" r="2" class="pin"/>
+<text x="5" y="-50" class="pin-label">1</text>
+<circle cx="0" cy="-50" r="2" class="pin"/>
+<text x="5" y="-50" class="pin-label">pos</text>
+<circle cx="0" cy="50" r="2" class="pin"/>
+<text x="5" y="50" class="pin-label">2</text>
+</g>
+<g transform="translate(350, -40) rotate(90)"><rect x="-30" y="-30" width="60" height="60" class="component"/>
+<text x="0" y="0" class="component-text">LED1</text>
+<circle cx="0" cy="-15" r="2" class="pin"/>
+<text x="5" y="-15" class="pin-label">A</text>
+<circle cx="0" cy="15" r="2" class="pin"/>
+<text x="5" y="15" class="pin-label">K</text>
+</g>
+<g transform="translate(-300, 100) rotate(0)"><rect x="-60" y="-40" width="120" height="80" class="component"/>
+<text x="0" y="0" class="component-text">U1</text>
+</g>
+<g transform="translate(-150, 100) rotate(0)"><rect x="-60" y="-40" width="120" height="80" class="component"/>
+<text x="0" y="0" class="component-text">D1</text>
+</g>
+<g transform="translate(-300, 250) rotate(0)"><rect x="-30" y="-50" width="60" height="100" class="component"/>
+<text x="0" y="0" class="component-text">U4</text>
+<circle cx="0" cy="-50" r="2" class="pin"/>
+<text x="5" y="-50" class="pin-label">1</text>
+<circle cx="0" cy="50" r="2" class="pin"/>
+<text x="5" y="50" class="pin-label">neg</text>
+<circle cx="0" cy="50" r="2" class="pin"/>
+<text x="5" y="50" class="pin-label">2</text>
+<circle cx="0" cy="-50" r="2" class="pin"/>
+<text x="5" y="-50" class="pin-label">pos</text>
+</g>
+<g transform="translate(-150, 250) rotate(0)"><rect x="-30" y="-50" width="60" height="100" class="component"/>
+<text x="0" y="0" class="component-text">C2</text>
+<circle cx="0" cy="50" r="2" class="pin"/>
+<text x="5" y="50" class="pin-label">neg</text>
+<circle cx="0" cy="-50" r="2" class="pin"/>
+<text x="5" y="-50" class="pin-label">pos</text>
+<circle cx="0" cy="50" r="2" class="pin"/>
+<text x="5" y="50" class="pin-label">2</text>
+<circle cx="0" cy="-50" r="2" class="pin"/>
+<text x="5" y="-50" class="pin-label">1</text>
+</g>
+<g transform="translate(-300, 400) rotate(0)"><rect x="-60" y="-40" width="120" height="80" class="component"/>
+<text x="0" y="0" class="component-text">U5</text>
+</g>
+<g transform="translate(-150, 400) rotate(0)"><rect x="-60" y="-40" width="120" height="80" class="component"/>
+<text x="0" y="0" class="component-text">U6</text>
+</g>
+<g transform="translate(-300, 550) rotate(0)"><rect x="-60" y="-40" width="120" height="80" class="component"/>
+<text x="0" y="0" class="component-text">U7</text>
+</g>
+</svg>
