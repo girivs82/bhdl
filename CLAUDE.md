@@ -164,6 +164,26 @@ let output_path = "tests/outputs/svg/my_test_output.svg";
 
 See `tests/TESTING.md` for complete testing guidelines.
 
+### No Hardcoding Policy
+⚠️ **CRITICAL**: NEVER hardcode values in tests or implementation:
+1. **No hardcoded coordinates** - Use actual component positions from database or calculation
+2. **No hardcoded component parameters** - Use values from bhdl-stdlib or database
+3. **No mock data** - Use real circuits processed through the actual pipeline
+4. **No placeholder values** - Every value must come from authentic sources
+5. **Test with real data** - Process actual BHDL files through parser → analyzer → synthesizer → visualizer
+
+Example of what NOT to do:
+```rust
+// ❌ WRONG - Hardcoded positions
+let r1 = Component::new(id, Point::new(100.0, 100.0));
+r1.pins.insert("1", Point::new(-60.0, 0.0));
+
+// ✅ CORRECT - Use actual pipeline
+let netlist = synthesizer.generate_from_ast(&ast)?;
+let layout = semantic_visualizer.generate_layout(&netlist)?;
+// Positions come from actual layout algorithms and database
+```
+
 ### SVG Visualization Quality Control
 ⚠️ **CRITICAL**: After generating any SVG visualization, always:
 1. **Read and inspect the actual SVG content** - don't just assume it worked

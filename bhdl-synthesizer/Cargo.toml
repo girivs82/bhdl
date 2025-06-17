@@ -19,6 +19,7 @@ bhdl-ast = { path = "../bhdl-ast" }
 bhdl-parser = { path = "../bhdl-parser" }
 bhdl-components = { path = "../bhdl-components" }
 bhdl-common = { path = "../bhdl-common" }
+bhdl-stdlib = { path = "../bhdl-stdlib" }
 anyhow = "1.0"
 log = "0.4"
 env_logger = "0.11"

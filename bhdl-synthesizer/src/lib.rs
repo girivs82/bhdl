@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use log::{debug, info, warn};
 use bhdl_common::ComponentTypeMapper;
+use bhdl_stdlib::{StdlibReader, get_default_stdlib_path};
 
 // Component database mapping module  
 pub mod component_mapping;
@@ -80,6 +81,8 @@ pub struct NetlistGenerator {
     component_instances: Vec<DatabaseComponentInstance>,
     // Unified component type mapper
     type_mapper: ComponentTypeMapper,
+    // BHDL stdlib reader for component definitions
+    stdlib_reader: StdlibReader,
 }
 
 impl NetlistGenerator {
@@ -90,6 +93,12 @@ impl NetlistGenerator {
 
     /// Create a new netlist generator with custom configuration
     pub fn with_config(config: NetlistConfig) -> Self {
+        // Initialize stdlib reader and load all components
+        let mut stdlib_reader = StdlibReader::new(get_default_stdlib_path());
+        if let Err(e) = stdlib_reader.load_all_components() {
+            warn!("Failed to load stdlib components: {}", e);
+        }
+        
         Self {
             config,
             netlist: Netlist::new(),
@@ -100,6 +109,7 @@ impl NetlistGenerator {
             database_mapper: None, // Will be initialized async in generate_from_analysis
             component_instances: Vec::new(),
             type_mapper: ComponentTypeMapper::new(),
+            stdlib_reader,
         }
     }
 
@@ -746,32 +756,22 @@ impl NetlistGenerator {
         self.config.use_database_components && self.database_mapper.is_some()
     }
     
-    /// Add pins to a component module based on its type
+    /// Add pins to a component module based on its type using stdlib definitions
     fn add_pins_for_component(&mut self, _instance_name: &str, component_type: &str, module_id: ModuleId) -> Result<()> {
-        let component_lower = component_type.to_lowercase();
+        // Get pin definitions from the stdlib reader
+        let pin_definitions = self.stdlib_reader.get_component_pins(component_type);
         
-        // Determine pins based on component type
-        if component_lower.contains("resistor") || component_type == "Res" {
-            // Resistor has two passive pins
-            self.netlist.add_pin(module_id, "1".to_string(), PinDirection::Passive, PinType::Passive);
-            self.netlist.add_pin(module_id, "2".to_string(), PinDirection::Passive, PinType::Passive);
-        } else if component_lower.contains("capacitor") || component_type == "Cap" {
-            // Capacitor has pos and neg pins
-            self.netlist.add_pin(module_id, "pos".to_string(), PinDirection::Passive, PinType::Passive);
-            self.netlist.add_pin(module_id, "neg".to_string(), PinDirection::Passive, PinType::Passive);
-        } else if component_lower.contains("led") || component_type == "LED" {
-            // LED has anode and cathode
-            self.netlist.add_pin(module_id, "A".to_string(), PinDirection::In, PinType::Signal);
-            self.netlist.add_pin(module_id, "K".to_string(), PinDirection::Out, PinType::Signal);
-        } else if component_type == "LM7805" || component_type.starts_with("LM78") {
-            // Linear regulator pins
-            self.netlist.add_pin(module_id, "IN".to_string(), PinDirection::Power, PinType::Power);
-            self.netlist.add_pin(module_id, "GND".to_string(), PinDirection::Ground, PinType::Ground);
-            self.netlist.add_pin(module_id, "OUT".to_string(), PinDirection::Power, PinType::Power);
-        } else {
-            // Generic component - add at least two pins
-            self.netlist.add_pin(module_id, "1".to_string(), PinDirection::InOut, PinType::Signal);
-            self.netlist.add_pin(module_id, "2".to_string(), PinDirection::InOut, PinType::Signal);
+        debug!("Adding {} pins for component type '{}' to module", 
+               pin_definitions.len(), component_type);
+        
+        // Add each pin to the netlist module
+        for pin_def in pin_definitions {
+            self.netlist.add_pin(
+                module_id, 
+                pin_def.name.clone(), 
+                pin_def.direction, 
+                pin_def.pin_type
+            );
         }
         
         Ok(())

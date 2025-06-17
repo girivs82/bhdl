@@ -31,44 +31,121 @@ impl ManhattanRouter {
     
     /// Route between two points using Manhattan routing
     pub fn route(&self, start: Point, end: Point) -> Vec<RoutingSegment> {
-        // Snap points to grid
-        let start = self.snap_to_grid(start);
-        let end = self.snap_to_grid(end);
+        // For orthogonal routing, we need to create segments that:
+        // 1. Start exactly at the pin position
+        // 2. Move to a grid-aligned routing channel
+        // 3. Route along grid to destination channel
+        // 4. End exactly at the destination pin
         
-        // Simple L-shaped routing for now
-        // TODO: Implement proper A* pathfinding with obstacle avoidance
+        // Determine if pins are already aligned
+        let x_aligned = (start.x - end.x).abs() < f64::EPSILON;
+        let y_aligned = (start.y - end.y).abs() < f64::EPSILON;
         
-        let segments = if (start.x - end.x).abs() < f64::EPSILON {
-            // Vertical alignment - direct line
-            vec![RoutingSegment::line(start, end)]
-        } else if (start.y - end.y).abs() < f64::EPSILON {
-            // Horizontal alignment - direct line
+        if x_aligned || y_aligned {
+            // Direct connection possible
             vec![RoutingSegment::line(start, end)]
         } else {
-            // L-shaped routing
-            // Try horizontal-first then vertical
-            let corner1 = Point::new(end.x, start.y);
-            let path1 = vec![
-                RoutingSegment::line(start, corner1),
-                RoutingSegment::line(corner1, end),
-            ];
+            // Need orthogonal routing
+            // First, extend from pins to nearest grid line
+            let start_grid_x = self.nearest_grid_line(start.x);
+            let start_grid_y = self.nearest_grid_line(start.y);
+            let end_grid_x = self.nearest_grid_line(end.x);
+            let end_grid_y = self.nearest_grid_line(end.y);
             
-            // Try vertical-first then horizontal
-            let corner2 = Point::new(start.x, end.y);
-            let path2 = vec![
-                RoutingSegment::line(start, corner2),
-                RoutingSegment::line(corner2, end),
-            ];
+            // Determine routing strategy based on pin orientations
+            // For now, use simple L-shaped routing with grid alignment
+            let mut segments: Vec<RoutingSegment> = Vec::new();
             
-            // Choose path with fewer obstacle intersections
-            if self.path_intersects_obstacles(&path1) && !self.path_intersects_obstacles(&path2) {
-                path2
+            // Try horizontal-then-vertical routing
+            let h_first = self.route_horizontal_first(start, end, start_grid_y, end_grid_x);
+            
+            // Try vertical-then-horizontal routing  
+            let v_first = self.route_vertical_first(start, end, start_grid_x, end_grid_y);
+            
+            // Choose the path with fewer obstacles
+            if self.path_intersects_obstacles(&h_first) && !self.path_intersects_obstacles(&v_first) {
+                v_first
             } else {
-                path1
+                h_first
             }
-        };
+        }
+    }
+    
+    /// Route horizontal-first with proper pin connections
+    fn route_horizontal_first(&self, start: Point, end: Point, 
+                            start_grid_y: f64, end_grid_x: f64) -> Vec<RoutingSegment> {
+        let mut segments = Vec::new();
+        
+        // If start point is not on the grid Y, add a short stub to reach it
+        if (start.y - start_grid_y).abs() > 0.1 {
+            segments.push(RoutingSegment::line(start, Point::new(start.x, start_grid_y)));
+        }
+        
+        // Horizontal segment along grid
+        let corner = Point::new(end_grid_x, start_grid_y);
+        if (start.x - end_grid_x).abs() > 0.1 {
+            let h_start = if segments.is_empty() { start } else { Point::new(start.x, start_grid_y) };
+            segments.push(RoutingSegment::line(h_start, corner));
+        }
+        
+        // Vertical segment to reach end
+        if (corner.y - end.y).abs() > 0.1 {
+            segments.push(RoutingSegment::line(corner, Point::new(end_grid_x, end.y)));
+        }
+        
+        // Final stub to exact pin position if needed
+        if (end.x - end_grid_x).abs() > 0.1 {
+            let v_end = Point::new(end_grid_x, end.y);
+            segments.push(RoutingSegment::line(v_end, end));
+        }
+        
+        // Merge segments if they resulted in a direct line
+        if segments.is_empty() {
+            segments.push(RoutingSegment::line(start, end));
+        }
         
         segments
+    }
+    
+    /// Route vertical-first with proper pin connections
+    fn route_vertical_first(&self, start: Point, end: Point,
+                          start_grid_x: f64, end_grid_y: f64) -> Vec<RoutingSegment> {
+        let mut segments = Vec::new();
+        
+        // If start point is not on the grid X, add a short stub to reach it
+        if (start.x - start_grid_x).abs() > 0.1 {
+            segments.push(RoutingSegment::line(start, Point::new(start_grid_x, start.y)));
+        }
+        
+        // Vertical segment along grid
+        let corner = Point::new(start_grid_x, end_grid_y);
+        if (start.y - end_grid_y).abs() > 0.1 {
+            let v_start = if segments.is_empty() { start } else { Point::new(start_grid_x, start.y) };
+            segments.push(RoutingSegment::line(v_start, corner));
+        }
+        
+        // Horizontal segment to reach end
+        if (corner.x - end.x).abs() > 0.1 {
+            segments.push(RoutingSegment::line(corner, Point::new(end.x, end_grid_y)));
+        }
+        
+        // Final stub to exact pin position if needed
+        if (end.y - end_grid_y).abs() > 0.1 {
+            let h_end = Point::new(end.x, end_grid_y);
+            segments.push(RoutingSegment::line(h_end, end));
+        }
+        
+        // Merge segments if they resulted in a direct line
+        if segments.is_empty() {
+            segments.push(RoutingSegment::line(start, end));
+        }
+        
+        segments
+    }
+    
+    /// Find nearest grid line to a coordinate
+    fn nearest_grid_line(&self, coord: f64) -> f64 {
+        (coord / self.grid_spacing).round() * self.grid_spacing
     }
     
     /// Route multiple points (e.g., for buses or star topology)

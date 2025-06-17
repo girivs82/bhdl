@@ -142,6 +142,7 @@ pub enum SyntaxKind {
     // Items within Blocks
     PARAM_DECL,        // const param_name: type = value;
     PORT_DECL,         // port_name: direction type ...;
+    PIN_DECL,          // pin pin_name: type direction;
     COMPONENT_INST,    // Resistor R1 { ... }
     PARAM_ASSIGN_BLOCK,// The `(...)` or `{...}` part in component instantiation
     PARAM_ASSIGN,      // param_name = value (inside PARAM_ASSIGN_BLOCK)

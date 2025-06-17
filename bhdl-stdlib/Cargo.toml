@@ -1,0 +1,15 @@
+[package]
+name = "bhdl-stdlib"
+version = "0.1.0"
+edition = "2021"
+authors = ["BHDL Team"]
+description = "BHDL Standard Library - Component definitions and utilities"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+anyhow = "1.0"
+bhdl-parser = { path = "../bhdl-parser" }
+bhdl-ast = { path = "../bhdl-ast" }
+bhdl-netlist = { path = "../bhdl-netlist" }
+
+[dev-dependencies]

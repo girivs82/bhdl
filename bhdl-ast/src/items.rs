@@ -4,7 +4,7 @@
 use crate::{SyntaxKind, BhdlLanguage, SyntaxNode, SyntaxToken, HasName};
 use rowan::ast::{AstNode, AstChildren};
 use crate::blocks::{LayerStackupBlock, DefaultDesignRulesBlock, ConstrainBlock};
-use crate::common::{TypeRef, ParamAssign, ComponentInst, PortDecl, NetDecl};
+use crate::common::{TypeRef, ParamAssign, ComponentInst, PortDecl, PinDecl, NetDecl};
 use crate::v2_statements::ConnectionStmt;
 use crate::expr::Expr;
 use crate::v2_statements::{PowerDecl, GroundDecl, FlowStmt};
@@ -70,6 +70,11 @@ impl HasName for Module {}
 
 impl Module {
     // v2.0 modules have pins and metadata
+    pub fn pins(&self) -> impl Iterator<Item = PinDecl> {
+        self.0.children().filter_map(PinDecl::cast)
+    }
+    
+    // Keep ports() for compatibility with higher-level modules that might use ports
     pub fn ports(&self) -> impl Iterator<Item = PortDecl> {
         self.0.children().filter_map(PortDecl::cast)
     }
