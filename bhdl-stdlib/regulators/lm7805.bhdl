@@ -7,8 +7,8 @@ module LM7805(package: string = "TO-220") {
     pin OUT: power out;   // Regulated 5V output @ 1A
     
     // Additional pins for enhanced versions
-    pin EN: signal in when package == "TO-220-5" or package == "TO-263-5";   // Enable pin
-    pin ADJ: signal in when package == "TO-220-5" or package == "TO-263-5";  // Adjust pin
+    pin EN: signal in when package == "TO-220-5" || package == "TO-263-5";   // Enable pin
+    pin ADJ: signal in when package == "TO-220-5" || package == "TO-263-5";  // Adjust pin
     
     // Electrical specifications
     attribute output_voltage = "5.0V";
@@ -52,5 +52,5 @@ module LM7805(package: string = "TO-220") {
 }
 
 // Common aliases
-module 7805 = LM7805;
-module L7805 = LM7805;
+alias 7805 = LM7805;
+alias L7805 = LM7805;
