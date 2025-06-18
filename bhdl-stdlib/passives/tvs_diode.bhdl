@@ -1,16 +1,46 @@
 // TVS (Transient Voltage Suppressor) Diode Module
 // Provides overvoltage protection from transients and spikes
 
+import { TVSDiodeParams, TVS_15V } from "../electrical_params.bhdl";
+
 module TVSDiode(voltage: voltage) {
     pin 1: signal inout;  // Terminal 1 (bidirectional)
     pin 2: signal inout;  // Terminal 2 (bidirectional)
     
+    // Electrical parameters
+    const params: TVSDiodeParams = {
+        standoff_voltage: voltage,
+        breakdown_voltage: voltage * 1.11,  // Typical 11% above standoff
+        clamping_voltage: voltage * 1.63,   // Typical clamping ratio
+        peak_pulse_current: 600W / (voltage * 1.63),  // I = P/V
+        peak_pulse_power: 600W,
+        capacitance: 150pF * (15V / voltage),  // Capacitance scales inversely with voltage
+        response_time: 1ns,
+        impedance: {
+            dc_resistance: null,  // Very high when not conducting
+            output_impedance: null,
+            input_impedance: null,
+            can_source_current: false,
+            can_sink_current: true,  // Shunts current to ground during surge
+            max_source_current: null,
+            max_sink_current: 600W / (voltage * 1.63),
+            power_domain_isolation: false,
+            voltage_drop: voltage,  // Standoff voltage during normal operation
+            current_limiting: false,
+            transient_response: 1ns,
+            inrush_current: null
+        }
+    };
+    
     // Electrical specifications
-    attribute standoff_voltage = voltage;  // Normal operating voltage
-    attribute breakdown_voltage = voltage * 1.1;  // Voltage at which it starts conducting
-    attribute clamping_voltage = voltage * 1.4;   // Maximum voltage during surge
-    attribute peak_power = "600W";  // Standard for DO-214AA (SMC) package
-    attribute response_time = "< 1ns";
+    attribute standoff_voltage = params.standoff_voltage;
+    attribute breakdown_voltage = params.breakdown_voltage;
+    attribute clamping_voltage = params.clamping_voltage;
+    attribute peak_power = params.peak_pulse_power;
+    attribute response_time = params.response_time;
+    attribute capacitance = params.capacitance;
+    attribute can_sink_current = params.impedance.can_sink_current;
+    attribute max_sink_current = params.impedance.max_sink_current;
     
     // Component metadata
     attribute component_class = "tvs_diode";
@@ -31,5 +61,5 @@ module TVSDiode(voltage: voltage) {
 }
 
 // Common aliases
-module TVS = TVSDiode;
-module TransientSuppressor = TVSDiode;
+alias TVS = TVSDiode;
+alias TransientSuppressor = TVSDiode;

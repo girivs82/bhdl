@@ -15,6 +15,12 @@
 10. [Multi-File Team Workflow](#10-multi-file-team-workflow)
 11. [Standard Library](#11-standard-library)
 12. [Complete Working Example](#12-complete-working-example)
+13. [Advanced Power Sequencing](#13-advanced-power-sequencing)
+14. [Advanced Level Shifting](#14-advanced-level-shifting)
+15. [Team Workflow and Multi-File Support](#15-team-workflow-and-multi-file-support)
+16. [Language Reference](#16-language-reference)
+17. [Design Benefits and Advantages](#17-design-benefits-and-advantages)
+18. [Electrical Safety Analysis](#18-electrical-safety-analysis)
 
 ---
 
@@ -1281,5 +1287,116 @@ spi_level_shift(from_voltage, to_voltage, frequency_max, channels)
 - **Tool optimization** for routine implementations
 - **Manual override** available when needed
 - **Standard library** hides implementation complexity
+
+---
+
+## 18. Electrical Safety Analysis
+
+### 18.1 Overview
+
+BHDL includes comprehensive electrical safety analysis that automatically detects dangerous conditions in circuits. The system is:
+- **Data-driven**: Uses actual component specifications, not hardcoded values
+- **Analysis-based**: Checks real currents and voltages from DC analysis
+- **Generic**: Works for any component type (resistors, ICs, LEDs, etc.)
+- **Actionable**: Suggests specific fixes when violations are found
+
+### 18.2 Safety Checks
+
+The analyzer performs the following safety checks in Pass 8:
+
+```bhdl
+// Example: LED without current limiting - DANGEROUS!
+board UnsafeLED {
+    power VCC = 5V @ 500mA;
+    ground GND;
+    
+    VCC -> led1: LED(red).A;  // Will detect overcurrent!
+    led1.K -> GND;
+}
+```
+
+#### Current Limiting Check
+- Detects components exceeding their maximum current ratings
+- Applies derating factors (70% for conservative design)
+- Severity levels: Critical (>100%), Warning (>70%)
+
+#### Overvoltage Protection
+- Checks components against voltage ratings
+- Considers transients and supply variations
+- Suggests protection circuits (TVS diodes, regulators)
+
+#### Short Circuit Detection
+- Identifies low-resistance paths between power and ground
+- Detects abnormally high currents indicating shorts
+- Highest priority to prevent fire hazards
+
+### 18.3 Component Limits
+
+Component limits come from the component database or explicit declarations:
+
+```bhdl
+// Component with explicit limits
+module LED(color: string) {
+    pin A: signal in;
+    pin K: signal out;
+    
+    // Electrical limits
+    max_current = 30mA;
+    max_voltage = 3.3V;
+    max_power = 100mW;
+    forward_voltage = 2.0V @ 20mA;
+}
+```
+
+### 18.4 Safety Violations
+
+Violations are reported with:
+- **Severity**: Info, Warning, Error, Critical
+- **Location**: Specific components and nets
+- **Technical details**: Measured vs. allowed values
+- **User impact**: Plain language explanation
+- **Estimated damage**: Time to failure and cost
+
+Example output:
+```
+[CRITICAL] Current Limiting Check
+  LED 'D1' current 500.0mA exceeds absolute maximum 30.0mA
+  Technical: Measured: 0.500A, Max: 0.030A, Overcurrent ratio: 16.7x
+  Impact: Component will fail immediately
+  Damage: Overcurrent failure - 10ms to failure, $0.10 replacement cost
+```
+
+### 18.5 Automatic Fixes
+
+The system can suggest automatic fixes:
+
+```bhdl
+// Suggested fix for overcurrent LED
+CircuitModification::InsertComponent {
+    component_type: Resistor,
+    value: 180Ω,
+    location: between VCC and led1.A,
+    reason: "Add current limiting resistor for LED protection"
+}
+```
+
+### 18.6 Derating Policy
+
+Conservative derating factors ensure reliability:
+- **Voltage**: 80% of maximum rating
+- **Current**: 70% of maximum rating  
+- **Power**: 50% of maximum rating
+- **Temperature**: 80% of maximum range
+
+### 18.7 Integration with Toolchain
+
+Safety analysis runs automatically:
+1. Parser → AST → Analyzer (Passes 1-7)
+2. Synthesizer generates netlist
+3. DC analysis computes voltages/currents
+4. Safety analysis checks all components
+5. Violations reported as diagnostics
+
+No dangerous circuits pass through to PCB layout!
 
 This completes the comprehensive BHDL v2.0 specification. The language provides a complete framework for modern board design while maintaining simplicity through its seven core constructs and flow-based paradigm.

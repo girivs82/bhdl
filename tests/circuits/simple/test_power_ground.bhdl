@@ -1,0 +1,14 @@
+// Test circuit to verify Power and Ground component usage
+board TestPowerGround {
+    // Power declarations - these should create Power component instances internally
+    power VCC = 5V @ 1A;
+    power VIN = 12V @ 2A;
+    
+    // Ground declaration - this should create a Ground component instance internally
+    ground GND;
+    
+    // Simple circuit using power and ground
+    VCC -> Res(10k).1 -> LED(red).A;
+    LED.K -> Res(1k).1;
+    Res(1k).2 -> GND;
+}

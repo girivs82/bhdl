@@ -37,12 +37,16 @@ The toolchain follows a multi-stage pipeline:
    - Provides high-level wrappers around syntax nodes
    - Key types: `SourceFile`, `Board`, `Module`, `ComponentDef`
 
-3. **bhdl-analyzer**: Multi-pass semantic analysis (4 passes)
+3. **bhdl-analyzer**: Multi-pass semantic analysis (8 passes)
    - Pass 1: Build scopes and collect definitions
    - Pass 2: Resolve references and type checking  
    - Pass 3: Constant evaluation
    - Pass 4: Bounds checking and validation
-   - Outputs symbol tables and diagnostics
+   - Pass 5: Power domain analysis
+   - Pass 6: Component inference
+   - Pass 7: Netlist synthesis
+   - Pass 8: Electrical safety analysis (DC + safety checks)
+   - Outputs symbol tables, diagnostics, and netlist
 
 4. **bhdl-netlist**: Structural circuit representation
    - Core types: `Netlist`, `ModuleDefinition`, `Instance`, `Net`
@@ -137,9 +141,12 @@ cargo run -p bhdl-components --example kicad_integration
 ## Important Files
 
 - `docs/spec/BHDL_Complete_Specification.md` - **Complete and authoritative v2.0 specification** (all other specs consolidated here)
+- `docs/implementation/Electrical_Safety_Analysis_Implementation.md` - Safety analysis system documentation
 - `docs/examples/` - Example BHDL circuit files demonstrating v2.0 syntax
 - `test_7805_regulator_realistic.bhdl` - Realistic test circuit with net assignments
 - `bhdl-stdlib/electrical_params.bhdl` - Centralized component parameter library
+- `bhdl-spice/src/safety/` - Electrical safety analysis implementation
+- `bhdl-spice/src/bin/test_safety_with_dc.rs` - Complete safety analysis example
 - `bhdl-visualizer/src/symbols/` - Component symbol definitions
 - Various `*.svg` files in `bhdl-visualizer/` - Test visualization outputs
 
@@ -252,18 +259,25 @@ This ensures we build a robust, production-ready toolchain rather than a demo wi
    - Component inference through electrical analysis
    - Power domain propagation through components
 
-2. **Synthesizer Enhancement**: Full netlist generation with component intelligence
+2. **Electrical Safety Analysis System**: Generic safety checking for all components
+   - Data-driven analysis using actual component limits from models
+   - DC analysis integration for real current/voltage checking
+   - Multi-severity violation detection (Info/Warning/Error/Critical)
+   - Automatic fix suggestions (current limiting resistors, protection circuits)
+   - Derating factors for conservative design (70% current, 80% voltage)
+
+3. **Synthesizer Enhancement**: Full netlist generation with component intelligence
    - Net assignment with implicit handle creation (`protected_vin: TVSDiode(15V).1`)
    - Component database integration for real part selection
    - Reference designator auto-generation (R1, D1, C1, etc.)
    - Proper connection endpoint parsing
 
-3. **Specification Consolidation**: Single authoritative v2.0 specification
+4. **Specification Consolidation**: Single authoritative v2.0 specification
    - All spec documents consolidated into `BHDL_Complete_Specification.md`
    - Prevents documentation drift and maintains consistency
    - Complete language reference with all features documented
 
-4. **Parameter Library System**: Centralized component parameters in bhdl-stdlib
+5. **Parameter Library System**: Centralized component parameters in bhdl-stdlib
    - Removed hardcoded values from core logic (LED 30mA max current, etc.)
    - Manufacturer datasheet integration support
    - Accurate component inference using real electrical parameters
@@ -280,4 +294,5 @@ This ensures we build a robust, production-ready toolchain rather than a demo wi
 - `cargo run --bin end_to_end_test` - Run complete end-to-end test
 - `cargo run -p bhdl-components --example kicad_integration` - Set up component database
 - `cargo run -p bhdl-spice --bin nonlinear_analysis_test` - Test SPICE solver
+- `cargo run -p bhdl-spice --bin test_safety_with_dc` - Test electrical safety analysis with DC
 - `cargo test -p bhdl-analyzer` - Test component inference with new parameters

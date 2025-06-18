@@ -1,0 +1,10 @@
+// Safe LED circuit - with current limiting resistor
+board SafeLED {
+    power VCC = 5V @ 1A;
+    ground GND;
+    
+    // SAFE: LED with current limiting resistor
+    VCC -> R1: Res(220).1;
+    R1.2 -> D1: LED(red).A;
+    D1.K -> GND;
+}

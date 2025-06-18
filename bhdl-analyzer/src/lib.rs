@@ -218,6 +218,7 @@ pub fn analyze(source_file: &SourceFile) -> AnalysisResult {
         });
     }
 
+
     println!("Analysis finished. Found {} total diagnostics.", diagnostics.len());
 
     AnalysisResult {
@@ -228,8 +229,10 @@ pub fn analyze(source_file: &SourceFile) -> AnalysisResult {
         power_analysis: power_context, // Move ownership
         component_inference, // Move ownership
         power_sequencing, // Move ownership
+        netlist: None, // Move ownership
     }
 }
+
 
 /// Analyze components for inference based on circuit context
 fn analyze_components_for_inference(

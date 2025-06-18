@@ -1,15 +1,42 @@
 // Fuse Component Module
 // Overcurrent protection device
 
+import { FuseParams, FUSE_1A_250V } from "../electrical_params.bhdl";
+
 module Fuse(current: current) {
     pin 1: signal inout;  // Terminal 1
     pin 2: signal inout;  // Terminal 2
     
+    // Electrical parameters
+    const params: FuseParams = {
+        rated_current: current,
+        rated_voltage: 250V,
+        breaking_capacity: 35A,
+        melting_time: 5s,
+        cold_resistance: 0.1Ω * (1A / current),  // Resistance scales inversely with current rating
+        impedance: {
+            dc_resistance: 0.1Ω * (1A / current),
+            output_impedance: null,
+            input_impedance: null,
+            can_source_current: false,
+            can_sink_current: false,
+            max_source_current: null,
+            max_sink_current: null,
+            power_domain_isolation: false,
+            voltage_drop: null,  // I*R drop
+            current_limiting: true,  // Opens circuit on overcurrent
+            transient_response: null,
+            inrush_current: null
+        }
+    };
+    
     // Electrical specifications
-    attribute current_rating = current;
-    attribute voltage_rating = "250V";  // Standard AC voltage rating
-    attribute breaking_capacity = "35A";  // Standard breaking capacity
+    attribute current_rating = params.rated_current;
+    attribute voltage_rating = params.rated_voltage;
+    attribute breaking_capacity = params.breaking_capacity;
     attribute response_time = "fast";  // fast, slow, medium
+    attribute cold_resistance = params.cold_resistance;
+    attribute current_limiting = params.impedance.current_limiting;
     
     // Component metadata
     attribute component_class = "fuse";

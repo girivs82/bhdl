@@ -307,7 +307,7 @@ impl NetlistGenerator {
         if self.config.include_power_domains {
             let power_context = &analysis.power_analysis;
             
-            // Create nets for all power domains
+            // Create nets and component instances for all power domains
             for (domain_name, domain_info) in &power_context.domains {
                 // Determine the appropriate NetClass based on domain type
                 let net_class = if domain_name.contains("GND") || domain_info.voltage == 0.0 {
@@ -321,6 +321,78 @@ impl NetlistGenerator {
                 
                 debug!("Created power net '{}' with voltage {:?} and class {:?}", 
                        domain_name, domain_info.voltage, net_class);
+                
+                // NEW: Create component instances for power and ground
+                if domain_name.contains("GND") || domain_info.voltage == 0.0 {
+                    // Create Ground component instance
+                    let module_id = self.netlist.add_module(
+                        "Ground".to_string(),
+                        ModuleKind::PhysicalComponent
+                    );
+                    
+                    // Add GND pin to the module
+                    let pin_id = self.netlist.add_pin(
+                        module_id,
+                        "GND".to_string(),
+                        PinDirection::InOut,
+                        PinType::Ground
+                    ).ok_or_else(|| anyhow::anyhow!("Failed to add GND pin"))?;
+                    
+                    // Create instance
+                    let instance_id = self.netlist.add_instance(
+                        domain_name.clone(),
+                        module_id
+                    ).ok_or_else(|| anyhow::anyhow!("Failed to add Ground instance"))?;
+                    
+                    // Create pin instances for the ground component
+                    let pin_instances = self.netlist.create_pin_instances(instance_id)
+                        .map_err(|e| anyhow::anyhow!("Failed to create pin instances: {}", e))?;
+                    
+                    // Connect the first pin instance to the net
+                    if let Some(&pin_inst_id) = pin_instances.first() {
+                        self.netlist.connect(net_id, ConnectionPoint::PinInstance(pin_inst_id))
+                            .map_err(|e| anyhow::anyhow!("Failed to connect ground: {}", e))?;
+                    }
+                    
+                    self.ast_to_instance.insert(domain_name.clone(), instance_id);
+                    
+                    info!("Created Ground component instance '{}' connected to net", domain_name);
+                } else {
+                    // Create Power component instance
+                    let module_id = self.netlist.add_module(
+                        "Power".to_string(),
+                        ModuleKind::PhysicalComponent
+                    );
+                    
+                    // Add OUT pin to the module
+                    let pin_id = self.netlist.add_pin(
+                        module_id,
+                        "OUT".to_string(),
+                        PinDirection::Out,
+                        PinType::Power
+                    ).ok_or_else(|| anyhow::anyhow!("Failed to add OUT pin"))?;
+                    
+                    // Create instance
+                    let instance_id = self.netlist.add_instance(
+                        domain_name.clone(),
+                        module_id
+                    ).ok_or_else(|| anyhow::anyhow!("Failed to add Power instance"))?;
+                    
+                    // Create pin instances for the power component
+                    let pin_instances = self.netlist.create_pin_instances(instance_id)
+                        .map_err(|e| anyhow::anyhow!("Failed to create pin instances: {}", e))?;
+                    
+                    // Connect the first pin instance to the net
+                    if let Some(&pin_inst_id) = pin_instances.first() {
+                        self.netlist.connect(net_id, ConnectionPoint::PinInstance(pin_inst_id))
+                            .map_err(|e| anyhow::anyhow!("Failed to connect power: {}", e))?;
+                    }
+                    
+                    self.ast_to_instance.insert(domain_name.clone(), instance_id);
+                    
+                    info!("Created Power component instance '{}' ({}V @ {}A) connected to net", 
+                          domain_name, domain_info.voltage, domain_info.max_current);
+                }
             }
         }
         Ok(())
@@ -409,6 +481,11 @@ impl NetlistGenerator {
         // Parse the connection chain by splitting on -> but handle @NETNAME-> specially
         let parts = self.parse_connection_chain(&conn_text);
         
+        info!("  Parsed connection into {} parts:", parts.len());
+        for (i, part) in parts.iter().enumerate() {
+            info!("    Part {}: '{}'", i, part);
+        }
+        
         if parts.len() < 2 {
             warn!("Invalid connection format: {}", conn_text);
             return Ok(());
@@ -416,6 +493,22 @@ impl NetlistGenerator {
         
         // Track the net for this connection chain
         let mut current_net_id: Option<NetId> = None;
+        
+        // First pass: identify if we're connecting to an existing net
+        let mut target_net_name: Option<String> = None;
+        for part in &parts {
+            let endpoint = part.trim().trim_end_matches(';');
+            if let ConnectionEndpoint::Net(net_name) = self.parse_connection_endpoint(endpoint) {
+                target_net_name = Some(net_name);
+                break;
+            }
+        }
+        
+        // If we found a target net, use it as the current net
+        if let Some(net_name) = target_net_name {
+            current_net_id = Some(self.ensure_net_exists(&net_name));
+            info!("  Using existing net '{}' for connection", net_name);
+        }
         
         // Process each connection endpoint
         for (i, part) in parts.iter().enumerate() {
@@ -427,6 +520,7 @@ impl NetlistGenerator {
             match endpoint_info {
                 ConnectionEndpoint::Net(net_name) => {
                     // This is a simple net reference (VCC, GND, etc.)
+                    // Skip if we already set this as current net in the first pass
                     if current_net_id.is_none() {
                         current_net_id = Some(self.ensure_net_exists(&net_name));
                     }
@@ -543,6 +637,10 @@ impl NetlistGenerator {
                         );
                         
                         if let Some(inst_id) = new_inst_id {
+                            // Create pin instances for this component
+                            self.netlist.create_pin_instances(inst_id)
+                                .map_err(|e| anyhow::anyhow!("Failed to create pin instances: {}", e))?;
+                            
                             // Store mappings
                             self.ast_to_instance.insert(handle_name.to_string(), inst_id);
                             self.net_assignment_handles.insert(handle_name.to_string(), inst_id);

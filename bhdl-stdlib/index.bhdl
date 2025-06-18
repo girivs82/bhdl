@@ -18,6 +18,10 @@ export * from "./regulators/lm7805.bhdl";
 // Connectors and Test Points
 export * from "./connectors/testpoint.bhdl";
 
+// Power and Ground Components
+export * from "./power/power.bhdl";
+export * from "./power/ground.bhdl";
+
 // Future additions:
 // export * from "./passives/inductor.bhdl";
 // export * from "./logic/74xx_series.bhdl";

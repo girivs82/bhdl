@@ -1,0 +1,44 @@
+// Power component definition for BHDL power declarations
+// This is used internally when processing power declarations like:
+// power VCC = 5V @ 1A;
+
+import { PowerSourceParams, POWER_5V_1A } from "../electrical_params.bhdl";
+
+module Power(voltage: voltage, current: current) {
+    // Power output pin
+    pin OUT: power out;
+    
+    // Electrical parameters
+    const params: PowerSourceParams = {
+        nominal_voltage: voltage,
+        nominal_current: current,
+        max_current: current,
+        regulation: 2%,  // Typical for regulated supplies
+        ripple: voltage * 0.01,  // 1% of nominal
+        impedance: {
+            dc_resistance: 0.05Ω,  // 50mΩ typical
+            output_impedance: 0.05Ω,
+            input_impedance: null,
+            can_source_current: true,
+            can_sink_current: false,
+            max_source_current: current,
+            max_sink_current: null,
+            power_domain_isolation: false,
+            voltage_drop: null,
+            current_limiting: false,
+            transient_response: 10μs,
+            inrush_current: null
+        }
+    };
+    
+    // Component attributes
+    attribute component_class = "power_source";
+    attribute nominal_voltage = params.nominal_voltage;
+    attribute nominal_current = params.nominal_current;
+    attribute output_impedance = params.impedance.output_impedance;
+    attribute can_source_current = params.impedance.can_source_current;
+    attribute max_source_current = params.impedance.max_source_current;
+}
+
+// Alternative names
+alias PWR = Power;

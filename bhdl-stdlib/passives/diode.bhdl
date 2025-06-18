@@ -28,7 +28,21 @@ module Diode(
             reverse_voltage: 40V,
             reverse_current: 10μA,
             capacitance: 110pF,
-            recovery_time: null
+            recovery_time: null,
+            impedance: {
+                dc_resistance: null,
+                output_impedance: null,
+                input_impedance: null,
+                can_source_current: false,
+                can_sink_current: true,
+                max_source_current: null,
+                max_sink_current: 1A,
+                power_domain_isolation: false,
+                voltage_drop: 0.45V,
+                current_limiting: false,
+                transient_response: null,
+                inrush_current: null
+            }
         } :
         DIODE_1N4148;  // Default to 1N4148
     
@@ -43,6 +57,12 @@ module Diode(
     attribute reverse_current = params.reverse_current;
     attribute capacitance = params.capacitance;
     attribute recovery_time = params.recovery_time;
+    
+    // Impedance characteristics
+    attribute can_sink_current = params.impedance.can_sink_current;
+    attribute max_sink_current = params.impedance.max_sink_current;
+    attribute voltage_drop = params.impedance.voltage_drop;
+    attribute transient_response = params.impedance.transient_response;
     
     // SPICE model parameters
     attribute spice_model = "diode";
