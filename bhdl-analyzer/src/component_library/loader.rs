@@ -10,6 +10,8 @@ pub struct LibraryLoader;
 impl LibraryLoader {
     /// Load a component library from a directory
     pub fn load_library(path: &Path) -> Result<ComponentLibrary> {
+        println!("DEBUG: Loading library from {:?}", path);
+        
         // Load manifest
         let manifest_path = path.join("manifest.toml");
         let manifest = Self::load_manifest(&manifest_path)?;
@@ -25,9 +27,11 @@ impl LibraryLoader {
             manifest,
         };
         
+        println!("DEBUG: Loading modules recursively from {:?}", path);
         // Load all .bhdl files recursively
         Self::load_modules_recursive(path, &mut library)?;
         
+        println!("DEBUG: Library loaded with {} modules", library.modules.len());
         Ok(library)
     }
     
@@ -69,6 +73,7 @@ impl LibraryLoader {
     
     /// Load and parse a .bhdl module file
     fn load_module_file(path: &Path) -> Result<Vec<ComponentModule>> {
+        println!("DEBUG: Loading module file: {:?}", path);
         let content = fs::read_to_string(path)?;
         
         // Parse using BHDL parser
@@ -81,6 +86,7 @@ impl LibraryLoader {
         // Extract module definitions
         let modules = Self::extract_modules_from_ast(&parsed.syntax(), path)?;
         
+        println!("DEBUG: Extracted {} modules from {:?}", modules.len(), path.file_name());
         Ok(modules)
     }
     
@@ -89,6 +95,7 @@ impl LibraryLoader {
         syntax: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>,
         source_file: &Path,
     ) -> Result<Vec<ComponentModule>> {
+        println!("DEBUG: Extracting modules from AST for {:?}", source_file);
         let mut modules = Vec::new();
         
         // Get the source file AST
@@ -96,13 +103,23 @@ impl LibraryLoader {
             // TODO: Implement proper module extraction from AST
             // For now, use simplified extraction based on syntax patterns
             
+            let mut child_count = 0;
             for child in syntax.children() {
+                child_count += 1;
+                println!("DEBUG: Processing child {} of kind {:?}", child_count, child.kind());
                 if child.kind() == bhdl_parser::SyntaxKind::MODULE_DEF {
-                    if let Some(module) = Self::parse_module_definition(&child, source_file)? {
-                        modules.push(module);
+                    println!("DEBUG: Found MODULE_DEF, parsing...");
+                    match Self::parse_module_definition(&child, source_file) {
+                        Ok(Some(module)) => {
+                            println!("DEBUG: Successfully parsed module: {}", module.name);
+                            modules.push(module);
+                        }
+                        Ok(None) => println!("DEBUG: parse_module_definition returned None"),
+                        Err(e) => println!("DEBUG: Error parsing module: {:?}", e),
                     }
                 }
             }
+            println!("DEBUG: Processed {} children", child_count);
         }
         
         Ok(modules)

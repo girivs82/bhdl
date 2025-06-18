@@ -1,0 +1,31 @@
+board NetNamingE2E {
+    power VIN = 12V @ 1A;
+    power VCC = 5V @ 1A;
+    ground GND;
+    
+    // Test various net reference patterns
+    // Simple net references
+    VIN -> @INPUT_NET;
+    @INPUT_NET -> @FILTERED;
+    @FILTERED -> VCC;
+    
+    // Component connections with net references
+    @INPUT_NET -> r1: Res(4.7k).1;
+    r1.2 -> @VOLTAGE_DIV;
+    @VOLTAGE_DIV -> r2: Res(10k).1;
+    r2.2 -> GND;
+    
+    // Capacitor on voltage divider output
+    @VOLTAGE_DIV -> c1: Cap(100n).1;
+    c1.2 -> GND;
+    
+    // LED indicator
+    @FILTERED -> r_led: Res(330).1;
+    r_led.2 -> led: LED("green").A;
+    led.K -> GND;
+    
+    // Test points
+    @INPUT_NET -> tp1: TestPoint().1;
+    @VOLTAGE_DIV -> tp2: TestPoint().1;
+    @FILTERED -> tp3: TestPoint().1;
+}

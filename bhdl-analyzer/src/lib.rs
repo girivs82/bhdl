@@ -276,6 +276,26 @@ fn visit_node_for_component_inference(
                 // Determine circuit context
                 let mut circuit_context = CircuitContext::default();
                 
+                // Extract explicit parameters from the component instantiation
+                // Look for PARAM_ASSIGN_BLOCK which contains the parameters
+                let mut explicit_params = std::collections::HashMap::new();
+                if let Some(param_block) = node.children().find(|n| n.kind() == SyntaxKind::PARAM_ASSIGN_BLOCK) {
+                    // Extract parameters from the block
+                    for param_node in param_block.children() {
+                        if param_node.kind() == SyntaxKind::PARAM_ASSIGN {
+                            // For simple values like Res(330Ω), there's usually just a VALUE node
+                            if let Some(value_node) = param_node.children().find(|n| n.kind() == SyntaxKind::VALUE) {
+                                let value_text = value_node.text().to_string();
+                                explicit_params.insert("value".to_string(), value_text);
+                            }
+                        }
+                    }
+                }
+                
+                if !explicit_params.is_empty() {
+                    circuit_context.explicit_params = Some(explicit_params);
+                }
+                
                 // Check if this is near an LED by looking at the connection context
                 if let Some(connection_stmt) = node.ancestors().find(|n| n.kind() == SyntaxKind::CONNECTION_STMT) {
                     let connection_text = connection_stmt.to_string();

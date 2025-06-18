@@ -130,6 +130,7 @@ impl Symbol {
 pub struct SymbolTable {
     pub scope_name: Option<String>,
     symbols: HashMap<String, Symbol>,
+    nets: HashMap<String, Symbol>, // Separate namespace for nets
     pub children: Vec<SymbolTable>,
 }
 
@@ -139,15 +140,31 @@ impl SymbolTable {
     }
 
     pub fn insert(&mut self, symbol: Symbol) {
-        // Basic insertion, might need more sophisticated handling for duplicates/shadowing later
-        self.symbols.insert(symbol.name.clone(), symbol);
+        // Nets go in separate namespace, everything else in main symbols
+        if symbol.kind == SymbolKind::Net {
+            self.nets.insert(symbol.name.clone(), symbol);
+        } else {
+            self.symbols.insert(symbol.name.clone(), symbol);
+        }
     }
 
     pub fn lookup(&self, name: &str) -> Option<&Symbol> {
         self.symbols.get(name)
     }
+    
+    pub fn lookup_net(&self, name: &str) -> Option<&Symbol> {
+        self.nets.get(name)
+    }
 
     pub fn add_child_scope(&mut self, child_scope: SymbolTable) {
         self.children.push(child_scope);
+    }
+    
+    pub fn get_nets(&self) -> &HashMap<String, Symbol> {
+        &self.nets
+    }
+    
+    pub fn get_symbols(&self) -> &HashMap<String, Symbol> {
+        &self.symbols
     }
 } 

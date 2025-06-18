@@ -1,0 +1,22 @@
+board TestNetNamingWorking {
+    power VIN = 12V @ 1A;
+    power VCC = 5V @ 1A;
+    ground GND;
+    
+    // Use parentheses to disambiguate
+    (VIN @RAW->) fuse: Fuse(1A).1;
+    (fuse.2 @PROTECTED->) tvs: TVSDiode(15V).1;
+    tvs.2 -> GND;
+    
+    // Or use the syntax that already works
+    VIN -> @RAW;
+    @RAW -> fuse2: Fuse(1A).1;
+    fuse2.2 -> @PROTECTED;
+    @PROTECTED -> tvs2: TVSDiode(15V).1;
+    tvs2.2 -> GND;
+    
+    // Reference named nets
+    @PROTECTED -> bulk_cap: ElectrolyticCap(100µF, 25V).+;
+    @RAW -> test_point: TestPoint().1;
+    bulk_cap.- -> GND;
+}

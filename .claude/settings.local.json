@@ -72,7 +72,21 @@
       "Bash(RUST_LOG=info cargo run --bin test_orthogonal_routing_pipeline 2 >& 1)",
       "Bash(RUST_LOG=debug cargo run --bin test_orthogonal_routing_pipeline 2 >& 1)",
       "Bash(RUST_LOG=warn cargo run --bin test_orthogonal_routing_pipeline 2 >& 1)",
-      "Bash(./test_import_parse)"
+      "Bash(./test_import_parse)",
+      "Bash(RUST_LOG=info cargo run --bin test_orthogonal_routing)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-visualizer --bin test_orthogonal_routing)",
+      "Bash(timeout 10 cargo run:*)",
+      "Bash(RUST_LOG=debug timeout 10 cargo run -p bhdl-visualizer --bin test_orthogonal_routing 2 >& 1)",
+      "Bash(timeout 5 cargo run -p bhdl-visualizer --bin test_orthogonal_routing 2 >& 1)",
+      "Bash(./target/debug/check_components)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-components --bin import_kicad_symbols -- kicad_symbol_cache/Device.kicad_sym -d components.db 2 >& 1)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-components --bin import_kicad_symbols -- kicad_symbol_cache/Regulator_Linear.kicad_sym -d components.db 2 >& 1)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-components --bin import_kicad_symbols -- kicad_symbol_cache/Diode.kicad_sym -d components.db 2 >& 1)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-components --bin import_kicad_symbols -- kicad_symbol_cache/Connector.kicad_sym -d components.db 2 >& 1)",
+      "Bash(./target/debug/test_orthogonal_routing:*)",
+      "Bash(RUST_LOG=debug cargo run --bin test_orthogonal_routing 2 >& 1)",
+      "Bash(RUST_LOG=info cargo run -q -p bhdl-visualizer --bin test_simple_connections 2 >& 1)",
+      "Bash(RUST_LOG=info ./target/debug/test_simple_connections 2 > /dev/null)"
     ],
     "deny": []
   }

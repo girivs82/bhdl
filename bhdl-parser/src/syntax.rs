@@ -98,6 +98,8 @@ pub enum SyntaxKind {
     ELSE_KW,      // else
     WHEN_KW,      // when
     ALIAS_KW,     // alias
+    TYPE_KW,      // type
+    NULL_KW,      // null
 
     // Keywords for individual items  
     PIN_KW,       // pin
@@ -120,6 +122,9 @@ pub enum SyntaxKind {
     STRUCT_DEF,     // struct definition
     ENUM_DEF,       // enum definition
     INTERFACE_DEF,  // interface InterfaceName { ... }
+    TYPE_DEF,       // type TypeName = TypeExpression;
+    STRUCT_LITERAL, // { field1: value1, field2: value2 }
+    NULL_LITERAL,   // null
 
     // v2.0 Blocks (minimal)
     LAYER_STACKUP_BLOCK,
@@ -160,6 +165,7 @@ pub enum SyntaxKind {
     VALUE,             // Generic value node (number, string, bool, etc.)
     TYPE_REF,          // Reference to a type (e.g., cmos_3v3 or signal(cmos_3v3))
     TYPE_SPECIFIER,    // (specifier_name)
+    NULLABLE_TYPE,     // type?
     PIN_PROPERTIES,    // Pin properties
     PORT_DIRECTION,    // input, output, inout
     EXPRESSION,        // Generic expression node (might wrap others)

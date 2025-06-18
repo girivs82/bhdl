@@ -501,30 +501,76 @@ impl ComponentInferenceContext {
         let mut reasoning = String::new();
         let mut confidence = 0.8;
         
-        // Check if this is for LED current limiting
-        if context.has_led_in_series {
-            if let (Some(supply_v), Some(led_color)) = (requirements.supply_voltage, &context.led_color) {
-                // Try to get LED parameters from module resolver (stdlib)
-                let (vf, if_target) = if let Some(resolver) = &mut self.module_resolver {
-                    // Try to resolve LED module to get parameters
-                    if let Ok(led_module) = resolver.resolve("LED") {
-                        // Extract forward voltage and current from electrical specs
-                        let vf = led_module.metadata.electrical_specs.get(&format!("{}_forward_voltage", led_color))
-                            .and_then(|v| v.parse::<f64>().ok())
-                            .unwrap_or_else(|| match led_color.as_str() {
+        // First, check if parameters were explicitly provided
+        if let Some(explicit_params) = &context.explicit_params {
+            // Look for a resistance value in the explicit parameters
+            for (param_name, param_value) in explicit_params {
+                if param_name == "value" || param_name.is_empty() {
+                    // Parse the resistance value
+                    if let Ok(resistance) = parse_resistance_value(param_value) {
+                        parameters.push(InferredParameter {
+                            name: "value".to_string(),
+                            value: ParameterValue::Resistance(resistance),
+                            confidence: 1.0, // User explicitly specified this
+                            reasoning: format!("User specified: {}", param_value),
+                        });
+                        
+                        reasoning = "Explicit component instantiation".to_string();
+                        confidence = 1.0;
+                        
+                        // Calculate power dissipation if we have voltage/current info
+                        if let (Some(voltage), Some(current)) = (requirements.supply_voltage, requirements.required_current) {
+                            let power = voltage * current;
+                            if power > 0.25 * self.design_rules.power_derating_factor {
+                                self.warnings.push(format!(
+                                    "Power dissipation ({:.2}W) may exceed typical 1/4W rating for {}Ω resistor",
+                                    power, resistance
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // If no explicit parameters, try to infer based on context
+        if parameters.is_empty() {
+            // Check if this is for LED current limiting
+            if context.has_led_in_series {
+                if let (Some(supply_v), Some(led_color)) = (requirements.supply_voltage, &context.led_color) {
+                    // Try to get LED parameters from module resolver (stdlib)
+                    let (vf, if_target) = if let Some(resolver) = &mut self.module_resolver {
+                        // Try to resolve LED module to get parameters
+                        if let Ok(led_module) = resolver.resolve("LED") {
+                            // Extract forward voltage and current from electrical specs
+                            let vf = led_module.metadata.electrical_specs.get(&format!("{}_forward_voltage", led_color))
+                                .and_then(|v| v.parse::<f64>().ok())
+                                .unwrap_or_else(|| match led_color.as_str() {
+                                    "red" => 2.0,
+                                    "green" => 2.2,
+                                    "blue" => 3.2,
+                                    "yellow" => 2.1,
+                                    "white" => 3.3,
+                                    _ => 2.0,
+                                });
+                            let if_target = led_module.metadata.electrical_specs.get(&format!("{}_forward_current", led_color))
+                                .and_then(|v| v.parse::<f64>().ok())
+                                .unwrap_or(0.020);
+                            (vf, if_target)
+                        } else {
+                            // Fallback to defaults if LED module not found
+                            let vf = match led_color.as_str() {
                                 "red" => 2.0,
                                 "green" => 2.2,
                                 "blue" => 3.2,
                                 "yellow" => 2.1,
                                 "white" => 3.3,
                                 _ => 2.0,
-                            });
-                        let if_target = led_module.metadata.electrical_specs.get(&format!("{}_forward_current", led_color))
-                            .and_then(|v| v.parse::<f64>().ok())
-                            .unwrap_or(0.020);
-                        (vf, if_target)
+                            };
+                            (vf, 0.020)
+                        }
                     } else {
-                        // Fallback to defaults if LED module not found
+                        // No module resolver, use defaults
                         let vf = match led_color.as_str() {
                             "red" => 2.0,
                             "green" => 2.2,
@@ -534,108 +580,107 @@ impl ComponentInferenceContext {
                             _ => 2.0,
                         };
                         (vf, 0.020)
-                    }
-                } else {
-                    // No module resolver, use defaults
-                    let vf = match led_color.as_str() {
-                        "red" => 2.0,
-                        "green" => 2.2,
-                        "blue" => 3.2,
-                        "yellow" => 2.1,
-                        "white" => 3.3,
-                        _ => 2.0,
                     };
-                    (vf, 0.020)
-                };
-                let resistance = (supply_v - vf) / if_target;
+                    let resistance = (supply_v - vf) / if_target;
+                    let resistance_standard = find_nearest_e_series_value(resistance, 12);
+                    
+                    parameters.push(InferredParameter {
+                        name: "value".to_string(),
+                        value: ParameterValue::Resistance(resistance_standard),
+                        confidence: 0.95,
+                        reasoning: format!("Current limiting for {} LED: R = ({:.1}V - {:.1}V) / {:.3}A = {:.0}Ω", 
+                                         led_color, supply_v, vf, if_target, resistance),
+                    });
+                    
+                    reasoning = format!("LED current limiting resistor");
+                    confidence = 0.95;
+                    
+                    // Check if voltage drop is too small
+                    let voltage_drop = supply_v - vf;
+                    if voltage_drop < 0.5 {
+                        self.warnings.push(format!(
+                            "Very small voltage drop ({:.1}V) across current limiting resistor for {} LED. Consider using a higher supply voltage or different LED color.",
+                            voltage_drop, led_color
+                        ));
+                    }
+                    
+                    // Calculate power dissipation
+                    let power = voltage_drop * if_target;
+                    if power > 0.25 * self.design_rules.power_derating_factor {
+                        self.warnings.push(format!(
+                            "High power dissipation ({:.2}W) in current limiting resistor. Consider higher power rating.",
+                            power
+                        ));
+                    }
+                }
+            }
+            // Check if this is for pull-up
+            else if context.is_pullup {
+                if let Some(supply_v) = requirements.supply_voltage {
+                    // For pull-up resistors, typical values are 1k-100kΩ
+                    // Higher values for lower power, lower values for faster switching
+                    let resistance = if context.high_speed_signal {
+                        1000.0 // 1kΩ for high speed
+                    } else {
+                        10000.0 // 10kΩ for normal operation
+                    };
+                    
+                    let resistance_standard = find_nearest_e_series_value(resistance, 12);
+                    
+                    parameters.push(InferredParameter {
+                        name: "value".to_string(),
+                        value: ParameterValue::Resistance(resistance_standard),
+                        confidence: 0.8,
+                        reasoning: format!("Pull-up resistor for {}V logic", supply_v),
+                    });
+                    
+                    reasoning = "Digital pull-up resistor".to_string();
+                    confidence = 0.8;
+                }
+            }
+            // Ohm's law inference
+            else if let (Some(voltage), Some(current)) = (requirements.supply_voltage, requirements.required_current) {
+                let resistance = voltage / current;
                 let resistance_standard = find_nearest_e_series_value(resistance, 12);
                 
                 parameters.push(InferredParameter {
                     name: "value".to_string(),
                     value: ParameterValue::Resistance(resistance_standard),
-                    confidence: 0.95,
-                    reasoning: format!("Current limiting for {} LED: R = ({:.1}V - {:.1}V) / {:.3}A = {:.0}Ω", 
-                                     led_color, supply_v, vf, if_target, resistance),
+                    confidence: 0.9,
+                    reasoning: format!("Ohm's law: R = {:.1}V / {:.3}A = {:.0}Ω", voltage, current, resistance),
                 });
                 
-                reasoning = format!("LED current limiting resistor");
-                confidence = 0.95;
-                
-                // Check if voltage drop is too small
-                let voltage_drop = supply_v - vf;
-                if voltage_drop < 0.5 {
-                    self.warnings.push(format!(
-                        "Very small voltage drop ({:.1}V) across current limiting resistor for {} LED. Consider using a higher supply voltage or different LED color.",
-                        voltage_drop, led_color
-                    ));
-                }
-                
-                // Calculate power dissipation
-                let power = voltage_drop * if_target;
-                if power > 0.25 * self.design_rules.power_derating_factor {
-                    self.warnings.push(format!(
-                        "High power dissipation ({:.2}W) in current limiting resistor. Consider higher power rating.",
-                        power
-                    ));
-                }
+                reasoning = "Resistance from voltage and current requirements".to_string();
+                confidence = 0.9;
             }
-        }
-        // Check if this is for pull-up
-        else if context.is_pullup {
-            if let Some(supply_v) = requirements.supply_voltage {
-                // For pull-up resistors, typical values are 1k-100kΩ
-                // Higher values for lower power, lower values for faster switching
-                let resistance = if context.high_speed_signal {
-                    1000.0 // 1kΩ for high speed
-                } else {
-                    10000.0 // 10kΩ for normal operation
-                };
-                
-                let resistance_standard = find_nearest_e_series_value(resistance, 12);
-                
+            // Default case: no specific context, but still create a generic resistor
+            else {
+                // Return a generic resistor with default values
                 parameters.push(InferredParameter {
                     name: "value".to_string(),
-                    value: ParameterValue::Resistance(resistance_standard),
-                    confidence: 0.8,
-                    reasoning: format!("Pull-up resistor for {}V logic", supply_v),
+                    value: ParameterValue::Resistance(1000.0), // 1kΩ default
+                    confidence: 0.5,
+                    reasoning: "Default resistor value (no specific requirements)".to_string(),
                 });
                 
-                reasoning = "Digital pull-up resistor".to_string();
-                confidence = 0.8;
+                reasoning = "Generic resistor component".to_string();
+                confidence = 0.5;
             }
-        }
-        // Ohm's law inference
-        else if let (Some(voltage), Some(current)) = (requirements.supply_voltage, requirements.required_current) {
-            let resistance = voltage / current;
-            let resistance_standard = find_nearest_e_series_value(resistance, 12);
-            
-            parameters.push(InferredParameter {
-                name: "value".to_string(),
-                value: ParameterValue::Resistance(resistance_standard),
-                confidence: 0.9,
-                reasoning: format!("Ohm's law: R = {:.1}V / {:.3}A = {:.0}Ω", voltage, current, resistance),
-            });
-            
-            reasoning = "Resistance from voltage and current requirements".to_string();
-            confidence = 0.9;
         }
         
-        if !parameters.is_empty() {
-            Some(ComponentSuggestion {
-                component_type: "Res".to_string(),
-                instance_name: None,
-                part_number: None,
-                parameters,
-                reasoning,
-                confidence,
-                alternatives: vec![
-                    "Consider 1% tolerance for precision applications".to_string(),
-                    "Use 0.5W or higher power rating for safety".to_string(),
-                ],
-            })
-        } else {
-            None
-        }
+        // Always return a suggestion for resistors
+        Some(ComponentSuggestion {
+            component_type: "Res".to_string(),
+            instance_name: None,
+            part_number: None,
+            parameters,
+            reasoning,
+            confidence,
+            alternatives: vec![
+                "Consider 1% tolerance for precision applications".to_string(),
+                "Use 0.5W or higher power rating for safety".to_string(),
+            ],
+        })
     }
     
     /// Infer capacitor parameters  
@@ -940,6 +985,8 @@ pub struct CircuitContext {
     pub high_frequency: bool,
     pub is_status_indicator: bool,
     pub is_error_indicator: bool,
+    /// Explicit parameters from component instantiation (e.g., Res(330Ω) -> {"": "330Ω"})
+    pub explicit_params: Option<HashMap<String, String>>,
 }
 
 /// Generate E-series values (E12, E24, etc.)
@@ -976,6 +1023,71 @@ fn generate_capacitor_values() -> Vec<f64> {
     }
     
     values
+}
+
+/// Parse resistance value from string (handles units like kΩ, MΩ, etc.)
+fn parse_resistance_value(value_str: &str) -> Result<f64, String> {
+    parse_value_with_si_prefix(value_str)
+        .ok_or_else(|| format!("Invalid resistance value: {}", value_str))
+}
+
+/// Generic parser for values with SI prefixes
+/// Handles any numeric value followed by optional SI prefix and unit
+/// Examples: "330Ω", "4.7kΩ", "10MΩ", "100nF", "2.2µH"
+fn parse_value_with_si_prefix(value_str: &str) -> Option<f64> {
+    let value_str = value_str.trim();
+    if value_str.is_empty() {
+        return None;
+    }
+    
+    // Find where the numeric part ends
+    let mut num_end = 0;
+    let mut has_decimal = false;
+    
+    for (i, ch) in value_str.chars().enumerate() {
+        match ch {
+            '0'..='9' => num_end = i + ch.len_utf8(),
+            '.' if !has_decimal => {
+                has_decimal = true;
+                num_end = i + ch.len_utf8();
+            }
+            _ => break,
+        }
+    }
+    
+    if num_end == 0 {
+        return None;
+    }
+    
+    // Parse the numeric part
+    let num_part = &value_str[..num_end];
+    let mut value = num_part.parse::<f64>().ok()?;
+    
+    // Extract the rest (prefix + unit)
+    let suffix = &value_str[num_end..];
+    if !suffix.is_empty() {
+        // Get first character as potential SI prefix
+        let mut chars = suffix.chars();
+        if let Some(first_char) = chars.next() {
+            let multiplier = match first_char {
+                'G' => 1e9,
+                'M' => 1e6,
+                'k' => 1e3,
+                'm' => 1e-3,
+                'µ' | 'u' => 1e-6,
+                'n' => 1e-9,
+                'p' => 1e-12,
+                'f' => 1e-15,
+                _ => 1.0, // No recognized prefix, might be unit directly
+            };
+            
+            if multiplier != 1.0 {
+                value *= multiplier;
+            }
+        }
+    }
+    
+    Some(value)
 }
 
 /// Find the nearest E-series value
