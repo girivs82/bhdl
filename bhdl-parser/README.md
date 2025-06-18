@@ -95,6 +95,17 @@ The parser intelligently handles single-letter units that could conflict with id
 
 This is achieved through context-aware post-processing after lexing.
 
+### ASCII Alternatives
+
+The parser supports both Unicode and ASCII representations for all units:
+
+- `4.7kΩ` or `4.7kOhm` - Kiloohms
+- `10µF` or `10uF` - Microfarads  
+- `85°C` or `85degC` - Degrees Celsius
+- `100µs` or `100us` - Microseconds
+
+See `docs/unit_syntax_guide.md` for a complete reference of supported units and their ASCII alternatives.
+
 ## Error Handling
 
 The parser collects all errors rather than failing on the first one:
