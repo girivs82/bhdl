@@ -1,0 +1,11 @@
+board TestParserNetRefSpace {
+    power VIN = 12V @ 1A;
+    ground GND;
+    
+    // This should parse as a single connection statement
+    VIN @RAW-> Res(4.7k).1;
+    
+    // This currently works
+    VIN -> @RAW;
+    @RAW -> Res(4.7k).1;
+}

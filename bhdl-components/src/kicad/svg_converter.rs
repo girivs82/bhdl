@@ -16,11 +16,22 @@ pub struct KiCadSvgConverter {
 impl KiCadSvgConverter {
     pub fn new() -> Self {
         Self {
-            scale: 1.0, // 1:1 scale by default
-            default_stroke_width: 0.254, // KiCad default
+            scale: 0.1, // Convert mils to pixels: 1 mil = 0.1 pixels
+            default_stroke_width: 2.54, // 10 mils = 1 pixel for stroke width
         }
     }
 
+    /// Scale a coordinate from mils to pixels
+    fn scale_coord(&self, coord: f64) -> f64 {
+        coord * self.scale
+    }
+    
+    /// Scale a width/stroke from mils to pixels
+    fn scale_width(&self, width: f64) -> f64 {
+        // Ensure minimum visible stroke width
+        (width * self.scale).max(0.5)
+    }
+    
     /// Convert a KiCad symbol to SVG
     pub fn convert_symbol_to_svg(&self, symbol: &KiCadSymbol) -> anyhow::Result<String> {
         let mut svg = String::new();
@@ -33,13 +44,13 @@ impl KiCadSvgConverter {
                 bbox.x, bbox.y, bbox.width, bbox.height)?;
         writeln!(svg, r#"     xmlns:xlink="http://www.w3.org/1999/xlink">"#)?;
         
-        // Add CSS styles
+        // Add CSS styles (with scaled values)
         writeln!(svg, "  <defs>")?;
         writeln!(svg, "    <style type=\"text/css\"><![CDATA[")?;
-        writeln!(svg, "      .pin-line {{ stroke: #000; stroke-width: 0.254; fill: none; }}")?;
-        writeln!(svg, "      .symbol-line {{ stroke: #000; stroke-width: 0.254; fill: none; }}")?;
-        writeln!(svg, "      .symbol-text {{ font-family: monospace; font-size: 1.27px; fill: #000; }}")?;
-        writeln!(svg, "      .pin-text {{ font-family: monospace; font-size: 1.0px; fill: #000; }}")?;
+        writeln!(svg, "      .pin-line {{ stroke: #000; stroke-width: {}; fill: none; }}", self.scale_width(10.0))?;
+        writeln!(svg, "      .symbol-line {{ stroke: #000; stroke-width: {}; fill: none; }}", self.scale_width(10.0))?;
+        writeln!(svg, "      .symbol-text {{ font-family: monospace; font-size: {}px; fill: #000; }}", self.scale_coord(50.0))?;
+        writeln!(svg, "      .pin-text {{ font-family: monospace; font-size: {}px; fill: #000; }}", self.scale_coord(40.0))?;
         writeln!(svg, "    ]]></style>")?;
         writeln!(svg, "  </defs>")?;
         
@@ -59,12 +70,12 @@ impl KiCadSvgConverter {
         // Add symbol reference and value text
         if !symbol.reference.is_empty() {
             writeln!(svg, r#"  <text x="{}" y="{}" class="symbol-text" text-anchor="middle">{}</text>"#,
-                    bbox.x + bbox.width / 2.0, bbox.y - 1.27, symbol.reference)?;
+                    bbox.x + bbox.width / 2.0, bbox.y - self.scale_coord(50.0), symbol.reference)?;
         }
         
         if !symbol.value.is_empty() {
             writeln!(svg, r#"  <text x="{}" y="{}" class="symbol-text" text-anchor="middle">{}</text>"#,
-                    bbox.x + bbox.width / 2.0, bbox.y + bbox.height + 2.54, symbol.value)?;
+                    bbox.x + bbox.width / 2.0, bbox.y + bbox.height + self.scale_coord(100.0), symbol.value)?;
         }
         
         writeln!(svg, "</svg>")?;
@@ -99,19 +110,25 @@ impl KiCadSvgConverter {
             }
         }
         
-        // Add padding
-        let padding = 5.08; // 2 * 2.54mm
+        // Apply scaling to bounding box
+        min_x = self.scale_coord(min_x);
+        min_y = self.scale_coord(min_y);
+        max_x = self.scale_coord(max_x);
+        max_y = self.scale_coord(max_y);
+        
+        // Add padding (in pixels now)
+        let padding = 10.0; // 10 pixels padding
         min_x -= padding;
         min_y -= padding;
         max_x += padding;
         max_y += padding;
         
-        // Ensure minimum size
+        // Ensure minimum size (in pixels)
         if max_x <= min_x {
-            max_x = min_x + 10.16;
+            max_x = min_x + 50.0;
         }
         if max_y <= min_y {
-            max_y = min_y + 10.16;
+            max_y = min_y + 50.0;
         }
         
         BoundingBox {
@@ -126,28 +143,32 @@ impl KiCadSvgConverter {
     fn convert_graphic_to_svg(&self, svg: &mut String, graphic: &KiCadGraphic) -> anyhow::Result<()> {
         match graphic {
             KiCadGraphic::Rectangle { start_x, start_y, end_x, end_y, stroke_width, stroke_type, fill_type } => {
-                let x = start_x.min(*end_x);
-                let y = start_y.min(*end_y);
-                let width = (end_x - start_x).abs();
-                let height = (end_y - start_y).abs();
+                let x = self.scale_coord(start_x.min(*end_x));
+                let y = self.scale_coord(start_y.min(*end_y));
+                let width = self.scale_coord((end_x - start_x).abs());
+                let height = self.scale_coord((end_y - start_y).abs());
                 
                 let fill = if fill_type == "none" { "none" } else { "#f0f0f0" };
                 
                 writeln!(svg, "  <rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" stroke=\"#000\" stroke-width=\"{}\" fill=\"{}\"/>",
-                        x, y, width, height, stroke_width, fill)?;
+                        x, y, width, height, self.scale_width(*stroke_width), fill)?;
             }
             
             KiCadGraphic::Circle { center_x, center_y, radius, stroke_width, stroke_type, fill_type } => {
                 let fill = if fill_type == "none" { "none" } else { "#f0f0f0" };
                 
                 writeln!(svg, "  <circle cx=\"{}\" cy=\"{}\" r=\"{}\" stroke=\"#000\" stroke-width=\"{}\" fill=\"{}\"/>",
-                        center_x, center_y, radius, stroke_width, fill)?;
+                        self.scale_coord(*center_x), self.scale_coord(*center_y), 
+                        self.scale_coord(*radius), self.scale_width(*stroke_width), fill)?;
             }
             
             KiCadGraphic::Arc { start_x, start_y, mid_x, mid_y, end_x, end_y, stroke_width, stroke_type } => {
                 // For simplicity, draw as polyline for now
                 writeln!(svg, "  <polyline points=\"{},{} {},{} {},{}\" stroke=\"#000\" stroke-width=\"{}\" fill=\"none\"/>",
-                        start_x, start_y, mid_x, mid_y, end_x, end_y, stroke_width)?;
+                        self.scale_coord(*start_x), self.scale_coord(*start_y), 
+                        self.scale_coord(*mid_x), self.scale_coord(*mid_y), 
+                        self.scale_coord(*end_x), self.scale_coord(*end_y), 
+                        self.scale_width(*stroke_width))?;
             }
             
             KiCadGraphic::Polyline { points, stroke_width, stroke_type } => {
@@ -157,22 +178,22 @@ impl KiCadSvgConverter {
                         if i > 0 {
                             point_str.push(' ');
                         }
-                        write!(point_str, "{},{}", x, y)?;
+                        write!(point_str, "{},{}", self.scale_coord(*x), self.scale_coord(*y))?;
                     }
                     
                     writeln!(svg, "  <polyline points=\"{}\" stroke=\"#000\" stroke-width=\"{}\" fill=\"none\"/>",
-                            point_str, stroke_width)?;
+                            point_str, self.scale_width(*stroke_width))?;
                 }
             }
             
             KiCadGraphic::Text { text, x, y, angle, effects } => {
-                let font_size = effects.font_size;
+                let font_size = self.scale_coord(effects.font_size);
                 let weight = if effects.bold { "bold" } else { "normal" };
                 let style = if effects.italic { "italic" } else { "normal" };
                 let visibility = if effects.hide { "hidden" } else { "visible" };
                 
                 writeln!(svg, r#"  <text x="{}" y="{}" font-size="{}" font-weight="{}" font-style="{}" visibility="{}" class="symbol-text">{}</text>"#,
-                        x, y, font_size, weight, style, visibility, text)?;
+                        self.scale_coord(*x), self.scale_coord(*y), font_size, weight, style, visibility, text)?;
             }
         }
         
@@ -190,22 +211,23 @@ impl KiCadSvgConverter {
             _ => (pin.x + pin.length, pin.y),     // Default to right
         };
         
-        // Draw pin line
+        // Draw pin line (with scaled coordinates)
         writeln!(svg, r#"  <line x1="{}" y1="{}" x2="{}" y2="{}" class="pin-line"/>"#,
-                pin.x, pin.y, end_x, end_y)?;
+                self.scale_coord(pin.x), self.scale_coord(pin.y), 
+                self.scale_coord(end_x), self.scale_coord(end_y))?;
         
         // Add pin number
         if !pin.number.is_empty() {
             let (text_x, text_y) = self.calculate_pin_text_position(pin, true);
             writeln!(svg, r#"  <text x="{}" y="{}" class="pin-text" text-anchor="middle">{}</text>"#,
-                    text_x, text_y, pin.number)?;
+                    self.scale_coord(text_x), self.scale_coord(text_y), pin.number)?;
         }
         
         // Add pin name
         if !pin.name.is_empty() && pin.name != "~" {
             let (text_x, text_y) = self.calculate_pin_text_position(pin, false);
             writeln!(svg, r#"  <text x="{}" y="{}" class="pin-text" text-anchor="start">{}</text>"#,
-                    text_x, text_y, pin.name)?;
+                    self.scale_coord(text_x), self.scale_coord(text_y), pin.name)?;
         }
         
         Ok(())

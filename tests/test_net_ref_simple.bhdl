@@ -1,0 +1,8 @@
+board TestNetRef {
+    power VIN = 12V @ 1A;
+    ground GND;
+    
+    // Simple net reference test
+    @NETNAME -> GND;
+    VIN -> @NETNAME;
+}

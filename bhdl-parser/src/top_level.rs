@@ -16,6 +16,7 @@ impl<'t> Parser<'t> {
                 SyntaxKind::MODULE_KW => self.parse_module_def(),
                 SyntaxKind::ALIAS_KW => self.parse_alias_stmt(),
                 SyntaxKind::TYPEDEF_KW => self.parse_typedef_def(),
+                SyntaxKind::TYPE_KW => self.parse_type_def(),
                 SyntaxKind::IMPORT_KW => self.parse_import_stmt(),
                 SyntaxKind::INTERFACE_KW => self.parse_interface_def(),
                 _ => {
@@ -106,8 +107,9 @@ impl<'t> Parser<'t> {
                 Some(SyntaxKind::GROUND_KW) => self.parse_ground_decl(),
                 Some(SyntaxKind::GENERATE_KW) => self.parse_generate_block(),
                 Some(SyntaxKind::ATTRIBUTE_KW) => self.parse_attribute_decl(),
-                Some(SyntaxKind::IDENT) => {
+                Some(SyntaxKind::IDENT) | Some(SyntaxKind::AT) => {
                     // v2.0 connection or flow statement
+                    // Can start with IDENT or @ (for net references)
                     self.parse_connection_or_flow_stmt();
                 }
                 Some(_) => {
@@ -250,8 +252,16 @@ impl<'t> Parser<'t> {
         self.expect(SyntaxKind::IDENT); // Const name
         self.expect(SyntaxKind::COLON);
         
-        // Parse type reference
+        // Parse type reference (potentially nullable)
+        let checkpoint = self.builder.checkpoint();
         self.parse_type_ref();
+        
+        // Check for nullable type suffix
+        if self.peek() == Some(SyntaxKind::QUESTION) {
+            self.builder.start_node_at(checkpoint, SyntaxKind::NULLABLE_TYPE.into());
+            self.bump(); // Consume '?'
+            self.builder.finish_node();
+        }
         
         self.expect(SyntaxKind::EQ);
         
@@ -282,6 +292,104 @@ impl<'t> Parser<'t> {
         self.expect(SyntaxKind::EQ);
         self.expect(SyntaxKind::IDENT); // Target name
         self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+
+    // Parse type definition: type Name = TypeExpression;
+    fn parse_type_def(&mut self) {
+        self.builder.start_node(SyntaxKind::TYPE_DEF.into());
+        self.expect(SyntaxKind::TYPE_KW);
+        self.expect(SyntaxKind::IDENT); // Type name
+        self.expect(SyntaxKind::EQ);
+        
+        // Parse type expression (could be struct literal, identifier, nullable type, etc.)
+        self.parse_type_expression();
+        
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+
+    // Parse type expression (type references, struct literals, nullable types)
+    fn parse_type_expression(&mut self) {
+        self.parse_type_expression_with_depth(0);
+    }
+    
+    // Parse type expression with recursion depth tracking
+    fn parse_type_expression_with_depth(&mut self, depth: usize) {
+        // Prevent infinite recursion
+        if depth > 50 {
+            self.error("Type expression too deeply nested (max depth: 50)".to_string());
+            return;
+        }
+        
+        match self.peek() {
+            Some(SyntaxKind::L_BRACE) => {
+                // Struct literal: { field1: type1, field2: type2 }
+                self.parse_struct_literal_with_depth(depth + 1);
+            }
+            Some(SyntaxKind::IDENT) => {
+                // Type reference, possibly with nullable suffix
+                self.parse_type_ref();
+                
+                // Check for nullable type suffix
+                if self.peek() == Some(SyntaxKind::QUESTION) {
+                    self.builder.start_node(SyntaxKind::NULLABLE_TYPE.into());
+                    self.bump(); // Consume '?'
+                    self.builder.finish_node();
+                }
+            }
+            _ => {
+                self.error("Expected type expression".to_string());
+            }
+        }
+    }
+
+    // Parse struct literal: { field1: type1, field2: type2 }
+    fn parse_struct_literal(&mut self) {
+        self.parse_struct_literal_with_depth(0);
+    }
+    
+    fn parse_struct_literal_with_depth(&mut self, depth: usize) {
+        self.builder.start_node(SyntaxKind::STRUCT_LITERAL.into());
+        self.expect(SyntaxKind::L_BRACE);
+        
+        // Parse fields
+        let mut field_count = 0;
+        while self.peek() != Some(SyntaxKind::R_BRACE) && self.peek().is_some() {
+            self.skip_trivia();
+            
+            if self.peek() == Some(SyntaxKind::R_BRACE) {
+                break;
+            }
+            
+            field_count += 1;
+            if field_count > 100 {
+                self.error("Too many fields in struct literal (max: 100)".to_string());
+                break;
+            }
+            
+            // Field name
+            self.expect(SyntaxKind::IDENT);
+            self.expect(SyntaxKind::COLON);
+            
+            // Field type
+            self.parse_type_expression_with_depth(depth);
+            
+            // Check for comma
+            if self.peek() == Some(SyntaxKind::COMMA) {
+                self.bump();
+            } else if self.peek() != Some(SyntaxKind::R_BRACE) {
+                self.error("Expected ',' or '}'".to_string());
+                // Try to recover by looking for the next comma or brace
+                while self.peek().is_some() && 
+                      self.peek() != Some(SyntaxKind::COMMA) && 
+                      self.peek() != Some(SyntaxKind::R_BRACE) {
+                    self.bump_any();
+                }
+            }
+        }
+        
+        self.expect(SyntaxKind::R_BRACE);
         self.builder.finish_node();
     }
 }

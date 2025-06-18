@@ -39,3 +39,15 @@ path = "src/lib.rs"
 [[bin]]
 name = "test_ascii"
 path = "src/bin/test_ascii.rs"
+
+[[bin]]
+name = "test_orthogonal_routing"
+path = "src/bin/test_orthogonal_routing.rs"
+
+[[bin]]
+name = "test_simple_connections"
+path = "src/bin/test_simple_connections.rs"
+
+[[bin]]
+name = "test_connection_parsing"
+path = "src/bin/test_connection_parsing.rs"

@@ -19,6 +19,9 @@ mod tests;
 mod v2_fixes;
 mod v2_parsing;
 
+#[cfg(test)]
+mod test_net_ref;
+
 // Re-export key types
 // pub use crate::syntax::{BhdlLanguage, SyntaxKind};
 pub use crate::core::Parser;

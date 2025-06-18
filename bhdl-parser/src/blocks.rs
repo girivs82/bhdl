@@ -78,8 +78,9 @@ impl<'t> Parser<'t> {
                 Some(SyntaxKind::POWER_KW) => self.parse_power_decl(),
                 Some(SyntaxKind::GROUND_KW) => self.parse_ground_decl(),
                 Some(SyntaxKind::GENERATE_KW) => self.parse_generate_block(),
-                Some(SyntaxKind::IDENT) => {
+                Some(SyntaxKind::IDENT) | Some(SyntaxKind::AT) => {
                     // Could be a connection statement or flow statement
+                    // Can start with IDENT or @ (for net references)
                     self.parse_connection_or_flow_stmt();
                 }
                 Some(_) => {

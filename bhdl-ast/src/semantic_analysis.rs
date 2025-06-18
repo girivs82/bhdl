@@ -397,6 +397,7 @@ impl SemanticAnalyzer {
         match expr {
             Expr::Value(value) => self.infer_value_type(value),
             Expr::IdentRef(ident_ref) => self.infer_ident_type(ident_ref),
+            Expr::NetRef(_) => BhdlType::Net, // Net references are always nets
             Expr::BinaryExpr(binary_expr) => self.infer_binary_expr_type(binary_expr),
             Expr::PrefixExpr(prefix_expr) => self.infer_prefix_expr_type(prefix_expr),
             Expr::TernaryExpr(ternary_expr) => self.infer_ternary_expr_type(ternary_expr),

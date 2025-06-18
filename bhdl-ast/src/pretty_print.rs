@@ -295,6 +295,7 @@ impl PrettyPrint for Expr {
         match self {
             Expr::Value(value) => value.pretty_print(ctx, f),
             Expr::IdentRef(ident_ref) => ident_ref.pretty_print(ctx, f),
+            Expr::NetRef(net_ref) => net_ref.pretty_print(ctx, f),
             Expr::PrefixExpr(prefix_expr) => prefix_expr.pretty_print(ctx, f),
             Expr::BinaryExpr(binary_expr) => binary_expr.pretty_print(ctx, f),
             Expr::TernaryExpr(ternary_expr) => ternary_expr.pretty_print(ctx, f),
@@ -465,6 +466,17 @@ impl PrettyPrint for IdentRef {
     fn pretty_print(&self, ctx: &mut PrettyPrintContext, f: &mut dyn fmt::Write) -> fmt::Result {
         if let Some(token) = self.token() {
             ctx.write_text(f, &token.text())?;
+        }
+        Ok(())
+    }
+}
+
+impl PrettyPrint for NetRef {
+    fn pretty_print(&self, ctx: &mut PrettyPrintContext, f: &mut dyn fmt::Write) -> fmt::Result {
+        // Always print with @ prefix
+        ctx.write_text(f, "@")?;
+        if let Some(name) = self.name() {
+            ctx.write_text(f, &name)?;
         }
         Ok(())
     }
@@ -680,19 +692,6 @@ impl PrettyPrint for PinRef {
     }
 }
 
-impl PrettyPrint for NetRef {
-    fn pretty_print(&self, ctx: &mut PrettyPrintContext, f: &mut dyn fmt::Write) -> fmt::Result {
-        if let Some(name) = self.name_token() {
-            ctx.write_text(f, &name.text())?;
-        }
-        
-        if let Some(bus_suffix) = self.bus_suffix() {
-            bus_suffix.pretty_print(ctx, f)?;
-        }
-        
-        Ok(())
-    }
-}
 
 // Remove duplicate BusSuffix import
 

@@ -273,6 +273,18 @@ impl NetRef {
             .find(|tok| tok.kind() == SyntaxKind::IDENT)
     }
     pub fn bus_suffix(&self) -> Option<BusSuffix> { self.0.children().find_map(BusSuffix::cast) }
+    
+    /// Check if this net reference has the @ prefix (always true for valid NetRef)
+    pub fn has_at_prefix(&self) -> bool {
+        self.0.children_with_tokens()
+            .filter_map(|el| el.into_token())
+            .any(|tok| tok.kind() == SyntaxKind::AT)
+    }
+    
+    /// Get the net name without the @ prefix
+    pub fn name(&self) -> Option<String> {
+        self.name_token().map(|t| t.text().to_string())
+    }
 }
 
 // --- Identifier Reference --- (Used in expressions, etc.)

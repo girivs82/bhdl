@@ -1,5 +1,5 @@
 // bhdl-ast/src/expr.rs
-use crate::common::{Value, IdentRef}; // Import necessary leaf nodes
+use crate::common::{Value, IdentRef, NetRef}; // Import necessary leaf nodes
 use crate::{SyntaxKind, BhdlLanguage, SyntaxNode, SyntaxToken}; // Add SyntaxNode/Token
 use rowan::ast::AstNode;
 
@@ -7,6 +7,7 @@ use rowan::ast::AstNode;
 pub enum Expr {
     Value(Value),
     IdentRef(IdentRef),
+    NetRef(NetRef),
     PrefixExpr(PrefixExpr),
     BinaryExpr(BinaryExpr),
     TernaryExpr(TernaryExpr),
@@ -22,6 +23,7 @@ impl AstNode for Expr {
     fn can_cast(kind: SyntaxKind) -> bool {
         Value::can_cast(kind) ||
         IdentRef::can_cast(kind) ||
+        NetRef::can_cast(kind) ||
         PrefixExpr::can_cast(kind) ||
         BinaryExpr::can_cast(kind) ||
         TernaryExpr::can_cast(kind) ||
@@ -36,6 +38,9 @@ impl AstNode for Expr {
         }
         else if IdentRef::can_cast(syntax.kind()) { 
             Some(Expr::IdentRef(IdentRef::cast(syntax)?)) 
+        }
+        else if NetRef::can_cast(syntax.kind()) { 
+            Some(Expr::NetRef(NetRef::cast(syntax)?)) 
         }
         else if PrefixExpr::can_cast(syntax.kind()) { 
             Some(Expr::PrefixExpr(PrefixExpr::cast(syntax)?)) 
@@ -62,6 +67,7 @@ impl AstNode for Expr {
         match self {
             Expr::Value(n) => n.syntax(),
             Expr::IdentRef(n) => n.syntax(),
+            Expr::NetRef(n) => n.syntax(),
             Expr::PrefixExpr(n) => n.syntax(),
             Expr::BinaryExpr(n) => n.syntax(),
             Expr::TernaryExpr(n) => n.syntax(),

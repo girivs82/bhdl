@@ -457,21 +457,46 @@ impl LayoutEngine {
         let mut routed_nets = Vec::new();
         
         for (net_id, netlist_net) in &netlist.nets {
+            debug!("Routing net: {:?} ({:?})", netlist_net.name, net_id);
             let mut net = Net::new(net_id, netlist_net.name.clone());
             
             // Collect connection points for this net
             let mut connection_points = Vec::new();
             for connection in &netlist_net.connections {
                 if let bhdl_netlist::ConnectionPoint::InstancePin(instance_id, pin_id) = connection {
+                    debug!("  Connection: instance_id={:?}, pin_id={:?}", instance_id, pin_id);
+                    
                     if let Some(component) = layout.get_component_by_instance(*instance_id) {
+                        debug!("    Found component at ({}, {})", component.position.x, component.position.y);
+                        debug!("    Component pins available: {:?}", component.pins.keys().collect::<Vec<_>>());
+                        
                         if let Some(pin) = netlist.get_pin(*pin_id) {
+                            debug!("    Pin from netlist: name='{}', id={:?}", pin.name, pin.id);
+                            
                             if let Some(pin_pos) = component.get_pin_world_position(&pin.name) {
+                                debug!("    Found pin position: ({}, {})", pin_pos.x, pin_pos.y);
                                 connection_points.push(pin_pos);
+                            } else {
+                                debug!("    WARNING: Pin '{}' not found in component pins", pin.name);
+                                // Try alternative pin name lookups
+                                
+                                // Try pin number instead of name
+                                let pin_number = pin.name.clone(); // In case pin.name is actually the number
+                                if let Some(pin_pos) = component.get_pin_world_position(&pin_number) {
+                                    debug!("    Found pin by number: ({}, {})", pin_pos.x, pin_pos.y);
+                                    connection_points.push(pin_pos);
+                                }
                             }
+                        } else {
+                            debug!("    WARNING: Pin ID {:?} not found in netlist", pin_id);
                         }
+                    } else {
+                        debug!("    WARNING: Component for instance {:?} not found in layout", instance_id);
                     }
                 }
             }
+            
+            debug!("  Total connection points found: {}", connection_points.len());
             
             // Route between connection points
             if connection_points.len() >= 2 {
@@ -481,6 +506,8 @@ impl LayoutEngine {
                     RoutingAlgorithm::Smart => self.route_smart(&connection_points, layout),
                 };
                 
+                debug!("  Generated {} routing segments", routing_segments.len());
+                
                 for point in &connection_points {
                     net.add_connection_point(*point);
                 }
@@ -488,33 +515,112 @@ impl LayoutEngine {
                 for segment in routing_segments {
                     net.add_routing_segment(segment);
                 }
+            } else {
+                debug!("  Skipping net - insufficient connection points (need at least 2, found {})", connection_points.len());
             }
             
             routed_nets.push(net);
         }
         
+        debug!("Routing complete: {} nets routed", routed_nets.len());
         Ok(routed_nets)
     }
     
-    /// Manhattan (orthogonal) routing
+    /// Manhattan (orthogonal) routing with improved path planning
     fn route_manhattan(&self, points: &[Point]) -> Vec<RoutingSegment> {
         let mut segments = Vec::new();
         
-        for i in 1..points.len() {
-            let start = points[i - 1];
-            let end = points[i];
+        // For 2-point nets, use smart L-shaped routing
+        if points.len() == 2 {
+            let start = points[0];
+            let end = points[1];
             
-            // Create L-shaped routing (horizontal then vertical)
-            let intermediate = Point::new(end.x, start.y);
+            // Determine if we should go horizontal-first or vertical-first
+            let dx = (end.x - start.x).abs();
+            let dy = (end.y - start.y).abs();
             
-            // Horizontal segment
-            if (start.x - intermediate.x).abs() > 0.1 {
-                segments.push(RoutingSegment::line(start, intermediate));
+            // If points are already aligned, just draw a straight line
+            if dx < 0.1 {
+                // Vertical line
+                segments.push(RoutingSegment::line(start, end));
+            } else if dy < 0.1 {
+                // Horizontal line
+                segments.push(RoutingSegment::line(start, end));
+            } else {
+                // Need L-shaped routing
+                // Add small offset from pins to avoid overlapping with component
+                let pin_offset = 10.0;
+                
+                // Choose routing based on relative positions
+                if dx > dy * 1.5 {
+                    // Horizontal distance is significantly larger - go horizontal first
+                    let start_offset = if end.x > start.x {
+                        Point::new(start.x + pin_offset, start.y)
+                    } else {
+                        Point::new(start.x - pin_offset, start.y)
+                    };
+                    
+                    let intermediate = Point::new(end.x, start_offset.y);
+                    
+                    // Start to offset
+                    if (start_offset.x - start.x).abs() > 0.1 {
+                        segments.push(RoutingSegment::line(start, start_offset));
+                    }
+                    // Horizontal segment
+                    segments.push(RoutingSegment::line(start_offset, intermediate));
+                    // Vertical segment
+                    segments.push(RoutingSegment::line(intermediate, end));
+                } else {
+                    // Vertical distance is larger or similar - go vertical first
+                    let start_offset = if end.y > start.y {
+                        Point::new(start.x, start.y + pin_offset)
+                    } else {
+                        Point::new(start.x, start.y - pin_offset)
+                    };
+                    
+                    let intermediate = Point::new(start_offset.x, end.y);
+                    
+                    // Start to offset
+                    if (start_offset.y - start.y).abs() > 0.1 {
+                        segments.push(RoutingSegment::line(start, start_offset));
+                    }
+                    // Vertical segment
+                    segments.push(RoutingSegment::line(start_offset, intermediate));
+                    // Horizontal segment
+                    segments.push(RoutingSegment::line(intermediate, end));
+                }
             }
+        } else if points.len() > 2 {
+            // For multi-point nets, find a central routing channel
+            let center_x = points.iter().map(|p| p.x).sum::<f64>() / points.len() as f64;
+            let center_y = points.iter().map(|p| p.y).sum::<f64>() / points.len() as f64;
             
-            // Vertical segment
-            if (intermediate.y - end.y).abs() > 0.1 {
-                segments.push(RoutingSegment::line(intermediate, end));
+            // Route each point to the central channel
+            for point in points {
+                let dx = (center_x - point.x).abs();
+                let dy = (center_y - point.y).abs();
+                
+                if dx < 0.1 && dy < 0.1 {
+                    // Point is already at center
+                    continue;
+                }
+                
+                // Create path from point to center
+                if dx > dy {
+                    // Go horizontal first
+                    let intermediate = Point::new(center_x, point.y);
+                    segments.push(RoutingSegment::line(*point, intermediate));
+                    if dy > 0.1 {
+                        segments.push(RoutingSegment::line(intermediate, Point::new(center_x, center_y)));
+                    }
+                } else {
+                    // Go vertical first
+                    let intermediate = Point::new(point.x, center_y);
+                    segments.push(RoutingSegment::line(*point, intermediate));
+                    if dx > 0.1 {
+                        segments.push(RoutingSegment::line(intermediate, Point::new(center_x, center_y)));
+                    }
+                }
             }
         }
         

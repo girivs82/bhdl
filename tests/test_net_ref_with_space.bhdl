@@ -1,0 +1,13 @@
+board TestNetRefWithSpace {
+    power VIN = 12V @ 1A;
+    ground GND;
+    
+    // Test the VIN @RAW-> pattern specifically
+    VIN @RAW-> Res(4.7k).1;
+    @RAW -> led: LED("red").A;
+    led.K -> GND;
+    
+    // Also test with other power domains
+    VIN @PROTECTED-> TVSDiode(15V).1;
+    TVSDiode.2 -> GND;
+}

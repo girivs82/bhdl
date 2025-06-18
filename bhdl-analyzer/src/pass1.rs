@@ -5,7 +5,9 @@ use bhdl_parser::{SyntaxKind, BhdlLanguage};
 use bhdl_ast::{
     SourceFile, HasName,
     items::{Board, Module, ComponentDef, InterfaceDef, TypedefDef},
-    common::{ParamDecl, PortDecl, NetDecl, ComponentInst}, // Removed Value and PinDecl (v1.0)
+    common::{ParamDecl, PortDecl, NetDecl, ComponentInst, NetRef}, // Removed Value and PinDecl (v1.0)
+    v2_statements::ConnectionStmt,
+    expr::{Expr, BinaryExpr},
 };
 
 use crate::symbol_table::{Symbol, SymbolKind, SymbolTable, PortDirectionKind}; // Use crate:: for local module
@@ -243,32 +245,6 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                 }
             }
         }
-        SyntaxKind::PORT_DECL => { 
-             if let Some(decl) = PortDecl::cast(node.clone()) {
-               if let Some(name_token) = decl.name() {
-                   let (bus_high, bus_low) = decl.bus_suffix()
-                       .and_then(|suffix| suffix.range())
-                       .map(|range_expr| (
-                           range_expr.lhs().and_then(|v| parse_expr_as_i64(&v)),
-                           range_expr.rhs().and_then(|v| parse_expr_as_i64(&v))
-                       ))
-                       .unwrap_or((None, None));
-                   // Note: PinDecl doesn't have direction() method, 
-                   // direction would be inferred from context or parent
-                   let direction = None; // Placeholder - could be enhanced to look at context
-                   
-                   context.current_scope_mut().insert(Symbol::new_decl(
-                       name_token.text(), 
-                       SymbolKind::Pin,
-                       name_token.text_range(),
-                       node,
-                       bus_high, 
-                       bus_low,
-                       direction, 
-                   ));
-               }
-           }
-        }
         SyntaxKind::COMPONENT_INST => {
              if let Some(inst) = ComponentInst::cast(node.clone()) {
                 if let (Some(instance_name_token), Some(type_name_token)) = (inst.name(), inst.component_type_name()) {
@@ -305,6 +281,10 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                 } 
             }
         }
+        SyntaxKind::CONNECTION_STMT => {
+            // Process connections to create net symbols from @ syntax
+            visit_connection_for_nets(node, context);
+        }
         _ => {} 
      }
      
@@ -315,4 +295,53 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
      if scope_pushed_for_this_node { 
          context.pop_scope(); 
      }
+}
+
+// Helper function to process connections and create net symbols from @ syntax
+fn visit_connection_for_nets(node: &SyntaxNode<BhdlLanguage>, context: &mut Pass1Context) {
+    if let Some(conn_stmt) = ConnectionStmt::cast(node.clone()) {
+        if let Some(expr_node) = conn_stmt.expr() {
+            // Convert SyntaxNode to Expr
+            if let Some(expr) = Expr::cast(expr_node) {
+                // Traverse the expression tree looking for NET_REF nodes
+                visit_expr_for_nets(&expr, context);
+            }
+        }
+    }
+}
+
+// Recursively visit expressions to find NET_REF nodes and create net symbols
+fn visit_expr_for_nets(expr: &Expr, context: &mut Pass1Context) {
+    match expr {
+        Expr::NetRef(net_ref) => {
+            // Found a net reference - create a net symbol if it doesn't exist
+            if let Some(name) = net_ref.name() {
+                // Check if net already exists in this scope
+                if context.current_scope_mut().lookup_net(&name).is_none() {
+                    // Create a new net symbol
+                    let net_symbol = Symbol::new_decl(
+                        &name,
+                        SymbolKind::Net,
+                        net_ref.syntax().text_range(),
+                        net_ref.syntax(),
+                        None, // No bus bounds for now
+                        None,
+                        None, // No direction for nets
+                    );
+                    context.current_scope_mut().insert(net_symbol);
+                }
+            }
+        }
+        Expr::BinaryExpr(binary_expr) => {
+            // Process left and right sides of binary expressions
+            if let Some(lhs) = binary_expr.lhs() {
+                visit_expr_for_nets(&lhs, context);
+            }
+            if let Some(rhs) = binary_expr.rhs() {
+                visit_expr_for_nets(&rhs, context);
+            }
+        }
+        // Add other expression types as needed
+        _ => {}
+    }
 } 

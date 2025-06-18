@@ -76,6 +76,52 @@ impl<'t> Parser<'t> {
 
         // Loop for infix and ternary operators (Precedence Climbing)
         loop {
+            // Skip whitespace for peeking
+            self.skip_trivia();
+            
+            // Check for @NETNAME-> pattern
+            if self.peek() == Some(SyntaxKind::AT) {
+                // Look ahead to see if this is @NETNAME->
+                let mut lookahead = self.pos + 1;
+                while lookahead < self.tokens.len() && self.tokens[lookahead].0.is_trivia() {
+                    lookahead += 1;
+                }
+                
+                // Check for IDENT after @
+                if lookahead < self.tokens.len() && self.tokens[lookahead].0 == SyntaxKind::IDENT {
+                    lookahead += 1;
+                    while lookahead < self.tokens.len() && self.tokens[lookahead].0.is_trivia() {
+                        lookahead += 1;
+                    }
+                    
+                    // Check for -> after IDENT
+                    if lookahead < self.tokens.len() && self.tokens[lookahead].0 == SyntaxKind::ARROW {
+                        // This is @NETNAME-> pattern
+                        // Treat it as a binary operator with same precedence as ->
+                        let (l_bp, r_bp) = (2, 3); // Same as ARROW
+                        if l_bp < min_bp {
+                            break;
+                        }
+                        
+                        // Start BINARY_EXPR node
+                        self.builder.start_node_at(checkpoint, SyntaxKind::BINARY_EXPR.into());
+                        
+                        // Parse @NETNAME
+                        self.parse_net_ref();
+                        
+                        // Consume ->
+                        self.expect(SyntaxKind::ARROW);
+                        
+                        // Parse RHS
+                        self.parse_expr(r_bp);
+                        
+                        self.builder.finish_node(); // Finish BINARY_EXPR
+                        checkpoint = self.builder.checkpoint();
+                        continue;
+                    }
+                }
+            }
+            
             let current_op = match self.peek() {
                 Some(op) => op,
                 None => break, // End of input
@@ -167,6 +213,10 @@ impl<'t> Parser<'t> {
             Some(SyntaxKind::TRUE_KW) | Some(SyntaxKind::FALSE_KW) => {
                 // Can potentially wrap this in a LITERAL_EXPR node
                 self.parse_value(); // Handles literals and units
+            }
+            Some(SyntaxKind::AT) => {
+                // Net reference: @NETNAME
+                self.parse_net_ref();
             }
             Some(SyntaxKind::IDENT) => {
                 let checkpoint = self.builder.checkpoint(); // Checkpoint before IDENT
@@ -264,6 +314,16 @@ impl<'t> Parser<'t> {
                 // Array expression: [item1, item2, ...]
                 self.parse_array_expr();
             }
+            Some(SyntaxKind::L_BRACE) => {
+                // Struct literal: { field1: value1, field2: value2 }
+                self.parse_struct_literal_expr();
+            }
+            Some(SyntaxKind::NULL_KW) => {
+                // null literal
+                self.builder.start_node(SyntaxKind::NULL_LITERAL.into());
+                self.bump(); // Consume 'null'
+                self.builder.finish_node();
+            }
             _ => {
                 self.error(format!("Expected literal, identifier, or '(' for expression factor, found {:?}", self.peek())); // Use peek()
                 // Consume unexpected token for recovery?
@@ -293,6 +353,38 @@ impl<'t> Parser<'t> {
         }
 
         self.expect(SyntaxKind::R_PAREN);
+        self.builder.finish_node();
+    }
+
+    // Parse struct literal in expression context: { field1: value1, field2: value2 }
+    fn parse_struct_literal_expr(&mut self) {
+        self.builder.start_node(SyntaxKind::STRUCT_LITERAL.into());
+        self.expect(SyntaxKind::L_BRACE);
+        
+        // Parse fields
+        while self.peek() != Some(SyntaxKind::R_BRACE) && self.peek().is_some() {
+            self.skip_trivia();
+            
+            if self.peek() == Some(SyntaxKind::R_BRACE) {
+                break;
+            }
+            
+            // Field name
+            self.expect(SyntaxKind::IDENT);
+            self.expect(SyntaxKind::COLON);
+            
+            // Field value (expression)
+            self.parse_expr(0);
+            
+            // Check for comma
+            if self.peek() == Some(SyntaxKind::COMMA) {
+                self.bump();
+            } else if self.peek() != Some(SyntaxKind::R_BRACE) {
+                self.error("Expected ',' or '}'".to_string());
+            }
+        }
+        
+        self.expect(SyntaxKind::R_BRACE);
         self.builder.finish_node();
     }
 
@@ -355,6 +447,14 @@ impl<'t> Parser<'t> {
              // self.builder.finish_node();
         }
         self.builder.finish_node(); // Finish VALUE node
+    }
+
+    // Parse net reference: @NETNAME
+    fn parse_net_ref(&mut self) {
+        self.builder.start_node(SyntaxKind::NET_REF.into());
+        self.expect(SyntaxKind::AT);
+        self.expect(SyntaxKind::IDENT);
+        self.builder.finish_node();
     }
 
     // Helper function to determine if an IDENT(...) pattern is a component instantiation

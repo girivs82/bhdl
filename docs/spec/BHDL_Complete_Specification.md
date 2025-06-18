@@ -7,7 +7,7 @@
 3. [Core Language Constructs](#3-core-language-constructs)
 4. [Type System](#4-type-system)
 5. [Component System](#5-component-system)
-   - [Net Assignment with Implicit Handles](#55-net-assignment-with-implicit-handles)
+   - [Component Handles and Net Naming](#55-component-handles-and-net-naming)
 6. [Interface System](#6-interface-system)
 7. [Power Management](#7-power-management)
 8. [Level Shifting](#8-level-shifting)
@@ -27,6 +27,7 @@ BHDL (Board Hardware Description Language) is a domain-specific language for des
 ### 1.2 Key Innovations
 
 - **Circuit Flow Paradigm**: Express designs as power/signal flows rather than structural hierarchies
+- **Clear Net Disambiguation**: @ prefix clearly distinguishes nets from component handles
 - **Component Inference**: Automatic component instantiation from connection patterns
 - **Domain-Aware Signals**: Automatic level shifting and power domain management
 - **Unified Syntax**: Seven core constructs handle everything from simple LEDs to complex SoCs
@@ -77,14 +78,56 @@ power_flow: USB_5V |> regulation(3.3V) |> distribution |> loads;
 
 BHDL has exactly **7 core constructs** that compose to handle any complexity:
 
-### 3.1 Component Instantiation
+### 3.1 Component Instantiation and Net Naming
+
+#### Anonymous Nets
 ```bhdl
 // Universal pattern: source -> component(parameters) -> destination
-VCC -> Res(4.7kΩ).1 -> LED(red).A;
+VCC -> Res(4.7kΩ).1 -> LED(red).A;  // Creates anonymous nets
 USB_5V -> regulator: LinearReg(3.3V, 1A).IN;
 ```
 
-### 3.2 Flow Specification
+#### Named Nets with @ Syntax
+```bhdl
+// Named nets use @ prefix for creation and reference
+VCC @FILTERED-> r1: Res(4.7kΩ).1;      // Creates net @FILTERED
+@FILTERED -> c1: Cap(100nF).1;          // References net @FILTERED
+@FILTERED -> c2: Cap(10µF).1;           // Multiple connections to same net
+
+// Component handles (r1, c1, c2) are separate from net names
+r1.2 -> LED(red).A;  // r1 is component handle, not a net
+```
+
+### 3.2 Net Naming and References
+
+#### The @ Syntax for Nets
+
+BHDL v2.0 uses the `@` prefix to clearly distinguish nets from component handles:
+
+```bhdl
+// Anonymous nets (no explicit name)
+VCC -> r1: Res(10k).1;        // Creates anonymous net
+r1.2 -> led: LED(red).A;      // Another anonymous net
+
+// Named nets with @ syntax
+VCC @FILTERED-> r1: Res(10k).1;    // Creates net @FILTERED
+@FILTERED -> c1: Cap(100n).1;      // References net @FILTERED
+@FILTERED -> c2: Cap(10µ).1;       // Multiple connections to same net
+
+// Clear distinction
+r1.2 -> led.A;          // r1, led are component handles
+@FILTERED -> r1.1;      // FILTERED is a net
+fuse.2 -> @PROTECTED;   // fuse is component, PROTECTED is net
+```
+
+#### Key Rules:
+1. **Net Creation**: Use `@NAME->` to create a named net
+2. **Net Reference**: Always use `@NAME` when referencing a net
+3. **Component Handles**: Use `:` to create, no prefix to reference
+4. **Anonymous Nets**: Use `->` without `@NAME`
+5. **Disambiguation**: `@` always indicates a net, never a component
+
+### 3.3 Flow Specification
 ```bhdl
 // Universal flow operator |> for any domain
 power_flow: USB_5V |> protection |> regulation |> distribution;
@@ -92,7 +135,7 @@ signal_flow: INPUT |> amplify(10x) |> filter(1kHz) |> OUTPUT;
 data_flow: sensors |> i2c_bus |> mcu |> processing;
 ```
 
-### 3.3 Interface Declaration
+### 3.4 Interface Declaration
 ```bhdl
 // Bus interfaces as first-class objects
 main_i2c: I2C(voltage=3.3V, frequency=400kHz);
@@ -100,7 +143,7 @@ ddr_bus: DDR3(width=16bit, speed=800MHz);
 expansion: GPIO_Header(pins=40, pitch=2.54mm);
 ```
 
-### 3.4 Generate Constructs
+### 3.5 Generate Constructs
 ```bhdl
 // Universal repetition pattern
 generate for i in 0..7 {
@@ -113,7 +156,7 @@ generate for rail in [VCC_3V3, VCC_1V8] {
 }
 ```
 
-### 3.5 Conditional Logic
+### 3.6 Conditional Logic
 ```bhdl
 // Universal conditional construct
 if (condition) { actions } else { alternatives }
@@ -129,7 +172,7 @@ if (high_speed) {
 }
 ```
 
-### 3.6 Module Definition
+### 3.7 Module Definition
 ```bhdl
 // Reusable patterns
 module PowerSupply(input_voltage, output_voltage, current) {
@@ -145,7 +188,7 @@ module PowerSupply(input_voltage, output_voltage, current) {
 }
 ```
 
-### 3.7 Constraint Declaration
+### 3.8 Constraint Declaration
 ```bhdl
 // Physical and electrical constraints
 constrain component_placement {
@@ -296,44 +339,56 @@ current_sense.2 -> current_monitor.INPUT;
 current_sense.voltage_drop -> power_calculation;
 ```
 
-### 5.5 Net Assignment with Implicit Handles
+### 5.5 Component Handles and Net Naming
 
+#### Component Handles
 ```bhdl
-// Net assignment syntax creates both a net AND a component handle
-fuse.2 -> protected_vin: TVSDiode(15V).1;
+// Component handle syntax: name: Component(...).pin
+VCC -> r1: Res(10kΩ).1;  // Creates component with handle "r1"
+r1.2 -> led: LED(red).A;  // Reference component pins via handle
+led.K -> GND;
 
-// This creates:
-// 1. A net named "protected_vin"
-// 2. A TVSDiode instance with auto-generated refdes (e.g., D1)
-// 3. An implicit handle "protected_vin" that refers to the TVSDiode instance
+// Handles are ONLY component references, not net names
+```
 
-// The handle can be used to reference other pins:
-protected_vin.2 -> GND;  // References pin 2 of the TVSDiode
+#### Named Nets with @ Syntax
+```bhdl
+// Create and reference named nets with @ prefix
+VIN @RAW-> fuse: Fuse(1A).1;
+fuse.2 @PROTECTED-> tvs: TVSDiode(15V).1;
+tvs.2 -> GND;
 
-// When used without a pin, it refers to the net:
-protected_vin -> capacitor: Cap(100µF).+;  // Connects to the net
+// Reference named nets - ALWAYS with @
+@PROTECTED -> bulk_cap: ElectrolyticCap(100µF, 25V).+;
+@PROTECTED -> ceramic_cap: Cap(0.1µF).1;
+bulk_cap.- -> GND;
+ceramic_cap.2 -> GND;
 ```
 
 #### Key Points:
-- The pattern `net_name: Component(...).pin` creates a net with implicit handle
+- Component handles use `:` syntax and create ONLY component references
+- Named nets use `@` prefix for both creation (`@NAME->`) and reference (`@NAME`)
+- Anonymous nets are created by `->` without `@NAME`
+- Handles and nets are in separate namespaces - no ambiguity
 - Reference designators (R1, D1, C1) are auto-generated by the toolchain
-- The net name serves dual purpose: as a net and as a component handle
-- This eliminates the need to know auto-generated reference designators
 
 #### Examples:
 ```bhdl
-// Power supply with protection
-VIN -> fuse: Fuse(1A).1;
-fuse.2 -> protected_vin: TVSDiode(15V).1;
-protected_vin -> bulk_cap: ElectrolyticCap(100µF, 25V).+;
-protected_vin -> ceramic_cap: Cap(0.1µF).1;
+// Power supply with clear net/component distinction
+VIN @RAW-> fuse: Fuse(1A).1;           // @RAW is net, fuse is component
+fuse.2 @FUSED-> tvs: TVSDiode(15V).1;  // @FUSED is net, tvs is component
+@FUSED -> reg: LM7805.IN;              // Reference @FUSED net
+reg.OUT @5V-> c_out: Cap(100µF).+;    // Create @5V net
+reg.GND -> GND;
+c_out.- -> GND;
 
-// Ground connections using implicit handles
-protected_vin.2 -> GND;    // TVSDiode cathode
-bulk_cap.- -> GND;          // Electrolytic cap negative
-ceramic_cap.2 -> GND;       // Ceramic cap pin 2
-
-// The net "protected_vin" connects: fuse.2, TVSDiode.1, bulk_cap.+, ceramic_cap.1
+// Multiple connections to named net
+@5V -> r1: Res(330Ω).1;    // Power indicator
+r1.2 -> led: LED(green).A;
+led.K -> GND;
+@5V -> conn: Header_1x3.1;  // Power output
+GND -> conn.2;
+@5V -> conn.3;              // Second power pin
 ```
 
 ---
@@ -778,6 +833,7 @@ This example demonstrates all key BHDL v2.0 features in a real circuit:
 ```bhdl
 // Realistic 7805 Linear Regulator Circuit - BHDL v2.0
 // A complete 12V to 5V power supply with proper filtering and protection
+// Updated with explicit net naming using @ syntax
 
 board PowerSupply_7805 {
     // Power domains
@@ -785,41 +841,45 @@ board PowerSupply_7805 {
     power VCC = 5V @ 1A;       // Regulated output
     ground GND;
     
-    // Input protection and filtering
-    VIN -> fuse: Fuse(1A).1;
-    fuse.2 -> protected_vin: TVSDiode(15V).1;
-    protected_vin -> c_in1: ElectrolyticCap(100µF, 25V).+;
-    protected_vin -> c_in2: Cap(0.1µF).1;
+    // Input protection and filtering with named nets
+    VIN @RAW-> fuse: Fuse(1A).1;
+    fuse.2 @PROTECTED-> tvs: TVSDiode(15V).1;
+    tvs.2 -> GND;
     
-    // Linear regulator circuit
-    protected_vin -> reg: LM7805().IN;
-    reg.GND -> GND;
-    reg.OUT -> VCC;
-    
-    // Output filtering
-    VCC -> c_out1: ElectrolyticCap(10µF, 10V).+;
-    VCC -> c_out2: Cap(0.1µF).1;
-    
-    // LED power indicator
-    VCC -> r_led: Res(330Ω).1;
-    r_led.2 -> led: LED(green).A;
-    led.K -> GND;
-    
-    // All grounds connected using implicit handles
+    // Input filtering capacitors on protected net
+    @PROTECTED -> c_in1: ElectrolyticCap(100µF, 25V).+;
+    @PROTECTED -> c_in2: Cap(0.1µF).1;
     c_in1.- -> GND;
     c_in2.2 -> GND;
+    
+    // Linear regulator circuit
+    @PROTECTED -> reg: LM7805().IN;
+    reg.GND -> GND;
+    reg.OUT @5V-> c_out1: ElectrolyticCap(10µF, 10V).+;
+    
+    // Output filtering
+    @5V -> c_out2: Cap(0.1µF).1;
     c_out1.- -> GND;
     c_out2.2 -> GND;
-    protected_vin.2 -> GND;  // TVSDiode cathode via implicit handle
+    
+    // LED power indicator
+    @5V -> r_led: Res(330Ω).1;
+    r_led.2 @LED_DRIVE-> led: LED(green).A;
+    led.K -> GND;
     
     // Test points for measurement
-    protected_vin -> tp_vin: TestPoint().1;
-    VCC -> tp_vout: TestPoint().1;
+    @PROTECTED -> tp_vin: TestPoint().1;
+    @5V -> tp_vout: TestPoint().1;
     GND -> tp_gnd: TestPoint().1;
+    
+    // Output header
+    @5V -> conn: Header_1x3.1;   // Power out
+    GND -> conn.2;               // Ground
+    @5V -> conn.3;               // Second power pin
     
     // Board metadata
     attribute title = "7805 Linear Regulator Power Supply";
-    attribute version = "1.0";
+    attribute version = "2.0";
     attribute author = "BHDL Test Suite";
     attribute description = "12V to 5V linear regulator with protection and filtering";
 }
@@ -832,17 +892,23 @@ board PowerSupply_7805 {
    - `power VCC = 5V @ 1A` - Output power specification
    - `ground GND` - Ground reference
 
-2. **Net Assignment with Implicit Handles**
-   - `fuse.2 -> protected_vin: TVSDiode(15V).1` creates:
-     - A net named "protected_vin"
-     - A TVSDiode instance (auto-assigned D1)
-     - An implicit handle "protected_vin" for the TVSDiode
-   - `protected_vin.2 -> GND` uses the implicit handle
+2. **Component Handles and Named Nets (@)**
+   - Component handles: `fuse:`, `tvs:`, `reg:` create component references
+   - Named nets: `@RAW->`, `@PROTECTED->`, `@5V->` create explicit nets
+   - Net references: `@PROTECTED`, `@5V` always use @ prefix
+   - Clear distinction: `fuse` is component, `@PROTECTED` is net
 
 3. **Component Instantiation**
    - Direct instantiation: `Fuse(1A)`, `LM7805()`, `LED(green)`
    - Parameter specification: `ElectrolyticCap(100µF, 25V)`
    - Pin access: `.1`, `.2`, `.+`, `.-`, `.A`, `.K`
+
+4. **Net Organization**
+   - `@RAW` - Input after fuse
+   - `@PROTECTED` - After TVS diode protection
+   - `@5V` - Regulated output
+   - `@LED_DRIVE` - Current-limited LED drive
+   - Anonymous nets used where naming adds no value
 
 4. **Automatic Reference Designators**
    - The toolchain assigns: F1, D1, C1-C4, U1, R1, LED1, TP1-TP3

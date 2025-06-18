@@ -118,43 +118,66 @@ impl SymbolManager {
         // Extract viewBox or use default size
         let size = self.extract_svg_size(svg_data).unwrap_or(Point::new(40.0, 20.0));
         
-        // Map pins to positions based on pin definitions
+        // Map pins to positions based on pin definitions from KiCad
         let mut pin_positions = HashMap::new();
-        for (i, pin) in pins.iter().enumerate() {
-            let pin_name = pin.pin_name.as_ref()
-                .unwrap_or(&pin.pin_number)
-                .clone();
+        
+        // Use actual pin positions from KiCad if available
+        if pins.iter().any(|p| p.x_position != 0.0 || p.y_position != 0.0) {
+            // We have actual positions from KiCad - use them with proper scaling
+            // KiCad uses mils, we need pixels. Scale factor of 0.1 converts mils to pixels
+            const MILS_TO_PIXELS: f64 = 0.1;
             
-            // Simple pin positioning logic - distribute around perimeter
-            let pin_pos = match pins.len() {
-                2 => {
-                    // Two pins - left and right
-                    if i == 0 {
-                        Point::new(-size.x / 2.0, 0.0)
-                    } else {
-                        Point::new(size.x / 2.0, 0.0)
+            for pin in pins {
+                let pin_name = pin.pin_name.as_ref()
+                    .unwrap_or(&pin.pin_number)
+                    .clone();
+                
+                // Scale from mils to pixels
+                let pin_pos = Point::new(
+                    pin.x_position * MILS_TO_PIXELS,
+                    pin.y_position * MILS_TO_PIXELS
+                );
+                
+                pin_positions.insert(pin_name, pin_pos);
+            }
+        } else {
+            // Fallback to simple pin positioning logic if no positions available
+            for (i, pin) in pins.iter().enumerate() {
+                let pin_name = pin.pin_name.as_ref()
+                    .unwrap_or(&pin.pin_number)
+                    .clone();
+                
+                // Simple pin positioning logic - distribute around perimeter
+                let pin_pos = match pins.len() {
+                    2 => {
+                        // Two pins - left and right
+                        if i == 0 {
+                            Point::new(-size.x / 2.0, 0.0)
+                        } else {
+                            Point::new(size.x / 2.0, 0.0)
+                        }
                     }
-                }
-                3 => {
-                    // Three pins - common for TO-220 packages (like LM7805)
-                    match i {
-                        0 => Point::new(-size.x / 2.0, 0.0), // Input
-                        1 => Point::new(0.0, size.y / 2.0),  // Ground
-                        2 => Point::new(size.x / 2.0, 0.0),  // Output
-                        _ => Point::new(0.0, 0.0),
+                    3 => {
+                        // Three pins - common for TO-220 packages (like LM7805)
+                        match i {
+                            0 => Point::new(-size.x / 2.0, 0.0), // Input
+                            1 => Point::new(0.0, size.y / 2.0),  // Ground
+                            2 => Point::new(size.x / 2.0, 0.0),  // Output
+                            _ => Point::new(0.0, 0.0),
+                        }
                     }
-                }
-                _ => {
-                    // Distribute around perimeter
-                    let angle = 2.0 * std::f64::consts::PI * i as f64 / pins.len() as f64;
-                    Point::new(
-                        (size.x / 2.0) * angle.cos(),
-                        (size.y / 2.0) * angle.sin()
-                    )
-                }
-            };
-            
-            pin_positions.insert(pin_name, pin_pos);
+                    _ => {
+                        // Distribute around perimeter
+                        let angle = 2.0 * std::f64::consts::PI * i as f64 / pins.len() as f64;
+                        Point::new(
+                            (size.x / 2.0) * angle.cos(),
+                            (size.y / 2.0) * angle.sin()
+                        )
+                    }
+                };
+                
+                pin_positions.insert(pin_name, pin_pos);
+            }
         }
         
         Ok(ParsedSymbol {

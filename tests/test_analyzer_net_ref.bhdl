@@ -1,0 +1,20 @@
+board TestAnalyzerNetRef {
+    power VIN = 12V @ 1A;
+    power VCC = 5V @ 1A;
+    ground GND;
+    
+    // Test net references that work with current parser
+    @NETNAME -> GND;
+    VIN -> @NETNAME;
+    @NETNAME -> @ANOTHER_NET;
+    @ANOTHER_NET -> VCC;
+    
+    // Component with net references
+    @NETNAME -> r1: Res(10k).1;
+    r1.2 -> led: LED(red).A;
+    led.K -> GND;
+    
+    // Multiple references to same net
+    @NETNAME -> c1: Cap(100n).1;
+    c1.2 -> GND;
+}

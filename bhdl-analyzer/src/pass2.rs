@@ -27,21 +27,62 @@ pub(crate) fn resolve_node_type_info<'a>(
 ) -> Option<TypeResolutionResult> { 
     
     let resolution_result: TypeResolutionResult = match node.kind() {
-        SyntaxKind::NET_REF | SyntaxKind::SIMPLE_IDENT_REF | SyntaxKind::IDENT_REF => {
+        SyntaxKind::NET_REF => {
+            let net_ref = NetRef::cast(node.clone())?;
+            let ident_token = net_ref.name_token()?;
+            let name = ident_token.text();
+            // NetRef looks up in the net namespace
+            match context.lookup_net(name) {
+                None => Err(Diagnostic { 
+                    message: format!("Undefined net: @{}", name), 
+                    range: ident_token.text_range() 
+                }),
+                Some(symbol) => {
+                    if symbol.kind != SymbolKind::Net {
+                        return Some(Err(Diagnostic { 
+                            message: format!("Symbol '@{}' is not a net (found {:?})", name, symbol.kind), 
+                            range: ident_token.text_range() 
+                        }));
+                    }
+                    symbol.definition_node_ptr.as_ref()
+                        .and_then(|ptr| ptr.try_to_node(context.source_file_root))
+                        .and_then(|decl_node| {
+                            match decl_node.kind() {
+                                SyntaxKind::NET_DECL => NetDecl::cast(decl_node)?.type_ref(),
+                                _ => None, 
+                            }
+                        })
+                        .and_then(|type_ref| type_ref.name_token())
+                        .map(|type_name_token| {
+                            let base_type_name = type_name_token.text().to_string();
+                            let bounds = match (symbol.bus_high, symbol.bus_low) {
+                                (Some(h), Some(l)) => Some((h, l)),
+                                _ => None,
+                            };
+                            Ok(ResolvedTypeInfo { base_type_name, bounds })
+                        })
+                        .unwrap_or_else(|| {
+                            // For implicitly created nets, assume signal type
+                            Ok(ResolvedTypeInfo { base_type_name: "signal".to_string(), bounds: None })
+                        })
+                }
+            }
+        }
+        SyntaxKind::SIMPLE_IDENT_REF | SyntaxKind::IDENT_REF => {
             let ident_token = match node.kind() {
-                 SyntaxKind::NET_REF => NetRef::cast(node.clone())?.name_token()?,
                  SyntaxKind::SIMPLE_IDENT_REF => SimpleIdentRef::cast(node.clone())?.name_token()?,
                  SyntaxKind::IDENT_REF => IdentRef::cast(node.clone())?.token()?,
                  _ => return None, 
             };
             let name = ident_token.text();
+            // Regular identifiers look up in main symbol table (not nets)
             match context.lookup(name) {
                 None => Err(Diagnostic { 
                     message: format!("Undefined symbol: {}", name), 
                     range: ident_token.text_range() 
                 }),
                 Some(symbol) => {
-                    if symbol.kind != SymbolKind::Net && symbol.kind != SymbolKind::Pin {
+                    if symbol.kind != SymbolKind::Pin {
                         return Some(Err(Diagnostic { 
                             message: format!("Symbol '{}' is not a valid connection/assignment endpoint (found {:?})", name, symbol.kind), 
                             range: ident_token.text_range() 
@@ -51,7 +92,6 @@ pub(crate) fn resolve_node_type_info<'a>(
                         .and_then(|ptr| ptr.try_to_node(context.source_file_root))
                         .and_then(|decl_node| {
                             match decl_node.kind() {
-                                SyntaxKind::NET_DECL => NetDecl::cast(decl_node)?.type_ref(),
                                 SyntaxKind::PORT_DECL => PortDecl::cast(decl_node)?.type_ref(),
                                 // v2.0 doesn't have PIN_DECL - pins are PORT_DECL in modules
                                 _ => None, 
@@ -366,6 +406,16 @@ impl<'a> Pass2Context<'a> {
         }
         None 
     }
+    
+    // Lookup net by searching up the current scope stack
+    fn lookup_net(&self, name: &str) -> Option<&Symbol> {
+        for scope in self.current_scope_stack.iter().rev() {
+            if let Some(symbol) = scope.lookup_net(name) {
+                return Some(symbol);
+            }
+        }
+        None 
+    }
 
     // Lookup symbol only in the global scope (keep internal)
     fn lookup_global(&self, name: &str) -> Option<&Symbol> {
@@ -614,7 +664,7 @@ pub fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mu
 impl<'a> Pass2Context<'a> {
     fn lookup_symbol_for_ref_node(&self, node: &SyntaxNode<BhdlLanguage>) -> Option<&Symbol> {
          match node.kind() {
-            SyntaxKind::NET_REF => NetRef::cast(node.clone())?.name_token().and_then(|t| self.lookup(t.text())),
+            SyntaxKind::NET_REF => NetRef::cast(node.clone())?.name_token().and_then(|t| self.lookup_net(t.text())),
             SyntaxKind::SIMPLE_IDENT_REF => SimpleIdentRef::cast(node.clone())?.name_token().and_then(|t| self.lookup(t.text())),
             SyntaxKind::PIN_REF => {
                  let pin_ref = PinRef::cast(node.clone())?;
