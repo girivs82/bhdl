@@ -713,19 +713,29 @@ fn analyze_connection_power_domains(node: &SyntaxNode<BhdlLanguage>, context: &m
                         lhs_component.to_string()
                     };
                     
-                    // Propagate power domain
+                    // Propagate power domain based on electrical characteristics
                     if let Some(source_power) = context.domains.get(&source_domain).cloned() {
-                        if rhs_target != "GND" && !context.domains.contains_key(rhs_target) {
-                            let mut derived_domain = source_power.clone();
-                            derived_domain.name = rhs_target.to_string();
-                            println!("Power Analysis: Creating derived power domain '{}' from '{}'", rhs_target, source_domain);
-                            context.domains.insert(rhs_target.to_string(), derived_domain);
-                        }
-                        
-                        // Assign the component to its power source domain
-                        if rhs_target.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false) && rhs_target != "GND" {
-                            context.assign_component_domain(rhs_target.to_string(), source_domain.clone());
-                            println!("Power Analysis: Assigned component '{}' to power domain '{}'", rhs_target, source_domain);
+                        // Component instantiation (D1: LED(red).A) should NOT create a power domain
+                        // Only low-impedance power distribution components should propagate domains
+                        if rhs.contains(':') {
+                            // This is a component instantiation, just assign it to the source domain
+                            if rhs_target != "GND" {
+                                context.assign_component_domain(rhs_target.to_string(), source_domain.clone());
+                                println!("Power Analysis: Assigned component '{}' to power domain '{}'", rhs_target, source_domain);
+                            }
+                        } else if rhs_target != "GND" && !context.domains.contains_key(rhs_target) {
+                            // Only create derived domain for identifiers that could be power nets
+                            // In the future, check component impedance characteristics
+                            println!("Power Analysis: Checking if '{}' should be a power domain", rhs_target);
+                            
+                            // For now, only propagate if it looks like a power net name
+                            if rhs_target.contains("VCC") || rhs_target.contains("VDD") || 
+                               rhs_target.contains("PWR") || rhs_target.ends_with("V") {
+                                let mut derived_domain = source_power.clone();
+                                derived_domain.name = rhs_target.to_string();
+                                println!("Power Analysis: Creating derived power domain '{}' from '{}'", rhs_target, source_domain);
+                                context.domains.insert(rhs_target.to_string(), derived_domain);
+                            }
                         }
                     }
                 }
@@ -789,12 +799,20 @@ fn analyze_flow_power_domains(node: &SyntaxNode<BhdlLanguage>, context: &mut Pow
                         // the RHS only contains "fuse" and the colon+instantiation are siblings
                         let target_name = rhs_text.trim().to_string();
                         
-                        // Create derived power domain for the target
+                        // Only create derived power domain if target looks like a power net
+                        // Don't create domains for component handles (will be checked elsewhere)
                         if let Some(source_power) = context.domains.get(&lhs_text).cloned() {
-                            let mut derived_domain = source_power.clone();
-                            derived_domain.name = target_name.clone();
-                            println!("Power Analysis: Creating derived power domain '{}' from '{}'", target_name, lhs_text);
-                            context.domains.insert(target_name, derived_domain);
+                            // Check if target should be a power domain
+                            if target_name.contains("VCC") || target_name.contains("VDD") || 
+                               target_name.contains("PWR") || target_name.ends_with("V") ||
+                               target_name == "GND" {
+                                let mut derived_domain = source_power.clone();
+                                derived_domain.name = target_name.clone();
+                                println!("Power Analysis: Creating derived power domain '{}' from '{}'", target_name, lhs_text);
+                                context.domains.insert(target_name, derived_domain);
+                            } else {
+                                println!("Power Analysis: '{}' doesn't look like a power domain, skipping", target_name);
+                            }
                         }
                     }
                     
@@ -1031,8 +1049,16 @@ fn is_power_propagating_connection(source: &str, target: &str) -> bool {
         }
     }
     
-    // Always propagate to non-component identifiers (net names)
-    !target.contains('.')
+    // Only propagate to identifiers that look like power net names
+    // Don't propagate to arbitrary component handles
+    if !target.contains('.') {
+        // Check if target looks like a power net
+        target.contains("VCC") || target.contains("VDD") || 
+        target.contains("PWR") || target.ends_with("V") ||
+        target == "GND"
+    } else {
+        false
+    }
 }
 
 #[cfg(test)]

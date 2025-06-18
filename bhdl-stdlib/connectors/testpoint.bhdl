@@ -25,4 +25,4 @@ module TestPoint(style: string = "pad") {
 }
 
 // Shorter alias
-module TP = TestPoint;
+alias TP = TestPoint;

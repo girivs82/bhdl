@@ -26,7 +26,7 @@ module Cap(value: capacitance) {
 }
 
 // Alias for full name
-module Capacitor = Cap;
+alias Capacitor = Cap;
 
 // Polarized Capacitor Module
 module ElectrolyticCap(value: capacitance, voltage: voltage = 25V) {

@@ -6,6 +6,11 @@ use petgraph::visit::EdgeRef;
 use serde::{Serialize, Deserialize};
 use bhdl_netlist::{NetId, InstanceId, ConnectionPoint};
 
+// Type aliases for safety module
+pub type NodeId = NodeIndex;
+pub type ComponentId = EdgeIndex;
+pub type Component = Branch;
+
 /// Electrical node in the circuit
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Node {
@@ -20,7 +25,7 @@ pub struct Node {
 }
 
 /// Branch (component) connecting two nodes
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Branch {
     /// Component instance name
     pub name: String,
@@ -32,6 +37,63 @@ pub struct Branch {
     pub value: f64,
     /// Current through the branch (set by analysis)
     pub current: Option<f64>,
+    /// Connected nodes (for safety analysis)
+    pub nodes: Vec<NodeId>,
+    /// Electrical limits from component model
+    pub limits: Option<crate::components::ElectricalLimits>,
+}
+
+impl Branch {
+    /// Get component name
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    
+    /// Get component type
+    pub fn component_type(&self) -> &str {
+        &self.component_type
+    }
+    
+    /// Get component subtype (not implemented yet)
+    pub fn component_subtype(&self) -> Option<&str> {
+        None
+    }
+    
+    /// Get connected nodes
+    pub fn nodes(&self) -> &[NodeId] {
+        &self.nodes
+    }
+    
+    /// Get maximum current rating
+    pub fn max_current(&self) -> Option<f64> {
+        self.limits.as_ref()?.max_current
+    }
+    
+    /// Get maximum voltage rating
+    pub fn max_voltage(&self) -> Option<f64> {
+        self.limits.as_ref()?.max_voltage
+    }
+    
+    /// Get component resistance
+    pub fn resistance(&self) -> Option<f64> {
+        match self.component_type.as_str() {
+            "Resistor" => Some(self.value),
+            "LED" => Some(10.0), // Dynamic resistance approximation
+            _ => None,
+        }
+    }
+    
+    /// Get component cost estimate
+    pub fn cost(&self) -> Option<f64> {
+        // Would come from component database
+        None
+    }
+    
+    /// Get parameter value
+    pub fn get_parameter(&self, _param: &str) -> Option<f64> {
+        // Would come from component database
+        None
+    }
 }
 
 /// Circuit representation using a graph
@@ -103,6 +165,8 @@ impl Circuit {
             component_type,
             value,
             current: None,
+            nodes: vec![n1, n2],
+            limits: None,
         };
         
         let idx = self.graph.add_edge(n1, n2, branch);
@@ -164,6 +228,95 @@ impl Circuit {
         if let Some(b) = self.graph.edge_weight_mut(edge) {
             b.current = Some(current);
         }
+    }
+    
+    /// Set branch electrical limits (from component model)
+    pub fn set_branch_limits(&mut self, name: &str, limits: crate::components::ElectricalLimits) {
+        if let Some(&edge) = self.branch_map.get(name) {
+            if let Some(b) = self.graph.edge_weight_mut(edge) {
+                b.limits = Some(limits);
+            }
+        }
+    }
+    
+    // Safety analysis support methods
+    
+    /// Get all components (branches) in the circuit
+    pub fn components(&self) -> Vec<(ComponentId, &Component)> {
+        self.graph.edge_indices()
+            .filter_map(|edge| {
+                self.graph.edge_weight(edge)
+                    .map(|branch| (edge, branch))
+            })
+            .collect()
+    }
+    
+    /// Get a specific component by ID
+    pub fn get_component(&self, id: ComponentId) -> Option<&Component> {
+        self.graph.edge_weight(id)
+    }
+    
+    /// Get a specific node by ID
+    pub fn get_node_by_id(&self, id: NodeId) -> Option<&Node> {
+        self.graph.node_weight(id)
+    }
+    
+    /// Get all components connected to a node
+    pub fn get_components_at_node(&self, node: NodeId) -> Vec<ComponentId> {
+        self.graph.edges(node)
+            .map(|edge| edge.id())
+            .collect()
+    }
+    
+    /// Get power supply nodes
+    pub fn get_power_nodes(&self) -> Vec<NodeId> {
+        self.graph.node_indices()
+            .filter(|&idx| {
+                let node = &self.graph[idx];
+                node.name.to_lowercase().contains("vcc") ||
+                node.name.to_lowercase().contains("vdd") ||
+                node.name.to_lowercase().contains("vin") ||
+                node.name.to_lowercase().contains("power") ||
+                node.name.starts_with("V") && node.name.len() <= 3
+            })
+            .collect()
+    }
+    
+    /// Get ground nodes
+    pub fn get_ground_nodes(&self) -> Vec<NodeId> {
+        self.graph.node_indices()
+            .filter(|&idx| self.graph[idx].is_ground)
+            .collect()
+    }
+    
+    /// Check if a node is a supply node
+    pub fn is_supply_node(&self, node: NodeId) -> bool {
+        let node_data = &self.graph[node];
+        node_data.is_ground || self.get_power_nodes().contains(&node)
+    }
+    
+    /// Get supply voltage (simplified - assumes single supply)
+    pub fn get_supply_voltage(&self) -> Option<f64> {
+        // Look for voltage sources
+        for edge in self.graph.edge_indices() {
+            if let Some(branch) = self.graph.edge_weight(edge) {
+                if branch.component_type == "VoltageSource" {
+                    return Some(branch.value);
+                }
+            }
+        }
+        
+        // Default to 5V if no explicit source found
+        if !self.get_power_nodes().is_empty() {
+            Some(5.0)
+        } else {
+            None
+        }
+    }
+    
+    /// Get node name
+    pub fn get_node_name(&self, node: NodeId) -> Option<&str> {
+        self.graph.node_weight(node).map(|n| n.name.as_str())
     }
     
     /// Convert from BHDL netlist

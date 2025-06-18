@@ -10,13 +10,18 @@ pub mod analysis;
 pub mod nonlinear_analysis;
 pub mod inference;
 pub mod errors;
+pub mod safety;
 
-pub use circuit::{Circuit, Node, Branch};
-pub use components::{Component, ComponentModel, ElectricalLimits};
+pub use circuit::{Circuit, Node, Branch, NodeId, ComponentId, Component};
+pub use components::{ComponentModel, ElectricalLimits};
 pub use analysis::{DcAnalysis, AnalysisResult, NodeVoltages, BranchCurrents};
 pub use nonlinear_analysis::NonlinearDcAnalysis;
 pub use inference::{ComponentInference, ConstraintViolation, InferredComponent};
 pub use errors::{SpiceError, Result};
+pub use safety::{
+    SafetyAnalysisResult, SafetyViolation, Severity, CircuitModification,
+    engine::{SafetyAnalysisEngine, SafetyConfig},
+};
 
 /// Prelude module for convenient imports
 pub mod prelude {

@@ -11,6 +11,29 @@ type ElectricalLimits = {
     operating_temp_max: temperature?,  // Maximum operating temperature
 };
 
+// Power domain and impedance characteristics
+type ImpedanceCharacteristics = {
+    // Basic impedance properties
+    dc_resistance: resistance?,     // DC resistance (for resistive components)
+    output_impedance: resistance?,  // Output impedance for active components
+    input_impedance: resistance?,   // Input impedance for active components
+    
+    // Power sourcing/sinking capabilities
+    can_source_current: bool,      // Can provide current to other components
+    can_sink_current: bool,        // Can accept current from other components
+    max_source_current: current?,  // Maximum current it can provide
+    max_sink_current: current?,    // Maximum current it can accept
+    
+    // Power domain propagation
+    power_domain_isolation: bool,  // Does it isolate power domains (e.g., transformer)
+    voltage_drop: voltage?,        // Voltage drop across component (e.g., diode Vf)
+    current_limiting: bool,        // Does it limit current (e.g., fuse, resistor)
+    
+    // Dynamic properties
+    transient_response: time?,     // Response time to load changes
+    inrush_current: current?,      // Initial current spike (e.g., capacitors)
+};
+
 // LED electrical characteristics
 type LEDParams = {
     forward_voltage: voltage,      // Typical Vf at nominal current
@@ -21,6 +44,7 @@ type LEDParams = {
     wavelength: float?,            // Peak wavelength in nm
     luminous_intensity: float?,    // Brightness in mcd
     viewing_angle: float?,         // Viewing angle in degrees
+    impedance: ImpedanceCharacteristics?, // Impedance and power characteristics
 };
 
 // Standard LED parameters by color
@@ -100,6 +124,7 @@ type DiodeParams = {
     reverse_current: current,      // Reverse leakage current
     capacitance: capacitance?,     // Junction capacitance
     recovery_time: time?,          // Reverse recovery time
+    impedance: ImpedanceCharacteristics?, // Impedance and power characteristics
 };
 
 // Common diode parameters
@@ -132,6 +157,7 @@ type ResistorParams = {
     power_rating: power,
     temp_coefficient: float?,  // ppm/°C
     max_voltage: voltage?,
+    impedance: ImpedanceCharacteristics?, // Impedance and power characteristics
 };
 
 // Standard resistor power ratings
@@ -156,7 +182,21 @@ const RESISTOR_0805_PARAMS: ResistorParams = {
     tolerance: 5%,
     power_rating: 125mW,
     temp_coefficient: 100,
-    max_voltage: 150V
+    max_voltage: 150V,
+    impedance: {
+        dc_resistance: 0Ω,  // Will be set to actual resistance value
+        output_impedance: null,
+        input_impedance: null,
+        can_source_current: false,
+        can_sink_current: false,
+        max_source_current: null,
+        max_sink_current: null,
+        power_domain_isolation: false,
+        voltage_drop: null,  // Calculated as I*R
+        current_limiting: true,
+        transient_response: null,
+        inrush_current: null
+    }
 };
 
 const RESISTOR_1206_PARAMS: ResistorParams = {
@@ -176,6 +216,7 @@ type CapacitorParams = {
     ripple_current: current?,   // Max ripple current
     temp_coefficient: string?,  // NPO, X7R, etc.
     lifetime: time?,           // For electrolytics
+    impedance: ImpedanceCharacteristics?, // Impedance and power characteristics
 };
 
 // Linear regulator characteristics
@@ -189,16 +230,177 @@ type LinearRegulatorParams = {
     ripple_rejection: float,    // dB
     thermal_resistance: float,  // °C/W
     max_junction_temp: temperature,
+    impedance: ImpedanceCharacteristics?, // Impedance and power characteristics
+};
+
+// Power source characteristics
+type PowerSourceParams = {
+    nominal_voltage: voltage,
+    nominal_current: current,
+    max_current: current,
+    regulation: percentage?,     // Voltage regulation under load
+    ripple: voltage?,           // Peak-to-peak ripple voltage
+    impedance: ImpedanceCharacteristics?, // Impedance and power characteristics
+};
+
+// Ground characteristics
+type GroundParams = {
+    reference_voltage: voltage,  // Usually 0V
+    impedance: ImpedanceCharacteristics?, // Impedance and power characteristics
+};
+
+// Fuse characteristics
+type FuseParams = {
+    rated_current: current,      // Nominal current rating
+    rated_voltage: voltage,      // Maximum voltage rating
+    breaking_capacity: current,  // Maximum fault current it can interrupt
+    melting_time: time?,        // Time to blow at 200% rated current
+    cold_resistance: resistance, // Resistance when not blown
+    impedance: ImpedanceCharacteristics?, // Impedance and power characteristics
+};
+
+// TVS Diode characteristics
+type TVSDiodeParams = {
+    standoff_voltage: voltage,   // Maximum continuous voltage (VWM)
+    breakdown_voltage: voltage,  // Voltage at which it starts conducting (VBR)
+    clamping_voltage: voltage,   // Maximum voltage during surge (VC)
+    peak_pulse_current: current, // Maximum surge current (IPP)
+    peak_pulse_power: power,     // Maximum surge power
+    capacitance: capacitance?,   // Junction capacitance at VWM
+    response_time: time?,        // Time to clamp
+    impedance: ImpedanceCharacteristics?, // Impedance and power characteristics
+};
+
+// Standard power source parameters
+const POWER_5V_1A: PowerSourceParams = {
+    nominal_voltage: 5V,
+    nominal_current: 1A,
+    max_current: 1A,
+    regulation: 2%,
+    ripple: 50mV,
+    impedance: {
+        dc_resistance: 0.05Ω,  // 50mΩ output impedance
+        output_impedance: 0.05Ω,
+        input_impedance: null,
+        can_source_current: true,
+        can_sink_current: false,
+        max_source_current: 1A,
+        max_sink_current: null,
+        power_domain_isolation: false,
+        voltage_drop: null,
+        current_limiting: false,
+        transient_response: 10μs,
+        inrush_current: null
+    }
+};
+
+// Standard ground reference
+const GROUND_REF: GroundParams = {
+    reference_voltage: 0V,
+    impedance: {
+        dc_resistance: 0Ω,
+        output_impedance: null,
+        input_impedance: 0Ω,
+        can_source_current: false,
+        can_sink_current: true,
+        max_source_current: null,
+        max_sink_current: null,  // Unlimited in ideal case
+        power_domain_isolation: false,
+        voltage_drop: 0V,
+        current_limiting: false,
+        transient_response: null,
+        inrush_current: null
+    }
+};
+
+// Standard fuse parameters
+const FUSE_1A_250V: FuseParams = {
+    rated_current: 1A,
+    rated_voltage: 250V,
+    breaking_capacity: 35A,
+    melting_time: 5s,
+    cold_resistance: 0.1Ω,
+    impedance: {
+        dc_resistance: 0.1Ω,
+        output_impedance: null,
+        input_impedance: null,
+        can_source_current: false,
+        can_sink_current: false,
+        max_source_current: null,
+        max_sink_current: null,
+        power_domain_isolation: false,
+        voltage_drop: null,  // I*R drop
+        current_limiting: true,  // Opens circuit on overcurrent
+        transient_response: null,
+        inrush_current: null
+    }
+};
+
+// Standard TVS diode parameters
+const TVS_15V: TVSDiodeParams = {
+    standoff_voltage: 15V,
+    breakdown_voltage: 16.7V,
+    clamping_voltage: 24.4V,
+    peak_pulse_current: 41A,
+    peak_pulse_power: 1000W,
+    capacitance: 150pF,
+    response_time: 1ns,
+    impedance: {
+        dc_resistance: null,  // Very high when not conducting
+        output_impedance: null,
+        input_impedance: null,
+        can_source_current: false,
+        can_sink_current: true,  // Shunts current to ground during surge
+        max_source_current: null,
+        max_sink_current: 41A,
+        power_domain_isolation: false,
+        voltage_drop: 15V,  // Standoff voltage during normal operation
+        current_limiting: false,
+        transient_response: 1ns,
+        inrush_current: null
+    }
+};
+
+// Standard linear regulator parameters (LM7805)
+const LM7805_PARAMS: LinearRegulatorParams = {
+    output_voltage: 5V,
+    output_current: 1A,
+    dropout_voltage: 2V,
+    quiescent_current: 5mA,
+    line_regulation: 0.01%,
+    load_regulation: 0.1%,
+    ripple_rejection: 73,  // dB
+    thermal_resistance: 5,  // °C/W for TO-220
+    max_junction_temp: 125°C,
+    impedance: {
+        dc_resistance: null,
+        output_impedance: 0.03Ω,  // 30mΩ typical
+        input_impedance: null,
+        can_source_current: true,
+        can_sink_current: false,
+        max_source_current: 1A,
+        max_sink_current: null,
+        power_domain_isolation: true,  // Regulates input to output
+        voltage_drop: 2V,  // Dropout voltage
+        current_limiting: true,  // Has internal current limiting
+        transient_response: 5μs,
+        inrush_current: null
+    }
 };
 
 // Export all parameter types and constants
 export {
     ElectricalLimits,
+    ImpedanceCharacteristics,
     LEDParams, LED_PARAMS_RED, LED_PARAMS_GREEN, LED_PARAMS_BLUE, 
     LED_PARAMS_WHITE, LED_PARAMS_YELLOW, LED_PARAMS_IR,
     DiodeParams, DIODE_1N4148, DIODE_1N4007,
     ResistorParams, RESISTOR_0402_PARAMS, RESISTOR_0603_PARAMS,
     RESISTOR_0805_PARAMS, RESISTOR_1206_PARAMS,
     CapacitorParams,
-    LinearRegulatorParams
+    LinearRegulatorParams, LM7805_PARAMS,
+    PowerSourceParams, POWER_5V_1A,
+    GroundParams, GROUND_REF,
+    FuseParams, FUSE_1A_250V,
+    TVSDiodeParams, TVS_15V
 };

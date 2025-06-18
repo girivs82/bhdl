@@ -10,6 +10,7 @@ bhdl-parser = { path = "../bhdl-parser" }
 bhdl-ast = { path = "../bhdl-ast" }
 bhdl-netlist = { path = "../bhdl-netlist" }
 bhdl-spice = { path = "../bhdl-spice" }
+bhdl-components = { path = "../bhdl-components" }
 rowan = "0.15.15"
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"

@@ -1,0 +1,9 @@
+// Dangerous LED circuit - no current limiting resistor
+board DangerousLED {
+    power VCC = 5V @ 1A;
+    ground GND;
+    
+    // DANGEROUS: LED directly connected to 5V
+    VCC -> D1: LED(red).A;
+    D1.K -> GND;
+}

@@ -60,6 +60,10 @@ impl StdlibReader {
         // Load connectors
         self.load_component_file("connectors/testpoint.bhdl")?;
         
+        // Load power components
+        self.load_component_file("power/power.bhdl")?;
+        self.load_component_file("power/ground.bhdl")?;
+        
         Ok(())
     }
 
@@ -168,6 +172,8 @@ impl StdlibReader {
         match name {
             "Resistor" => self.component_cache.get("Res"),
             "Capacitor" => self.component_cache.get("Cap"),
+            "PWR" => self.component_cache.get("Power"),
+            "GND" => self.component_cache.get("Ground"),
             _ => None,
         }
     }

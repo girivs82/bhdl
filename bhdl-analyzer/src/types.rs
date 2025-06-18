@@ -76,6 +76,7 @@ pub struct AnalysisResult {
     pub power_analysis: PowerAnalysisContext,
     pub component_inference: ComponentInferenceContext,
     pub power_sequencing: PowerSequenceGenerator,
+    pub netlist: Option<bhdl_netlist::Netlist>,
 }
 
 impl Default for AnalysisResult {
@@ -88,6 +89,7 @@ impl Default for AnalysisResult {
             power_analysis: PowerAnalysisContext::new(),
             component_inference: ComponentInferenceContext::new(),
             power_sequencing: PowerSequenceGenerator::new(),
+            netlist: None,
         }
     }
 } 

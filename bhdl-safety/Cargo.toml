@@ -1,0 +1,21 @@
+[package]
+name = "bhdl-safety"
+version = "0.1.0"
+edition = "2021"
+description = "Electrical safety analysis for BHDL circuits"
+
+[dependencies]
+bhdl-netlist = { path = "../bhdl-netlist" }
+bhdl-spice = { path = "../bhdl-spice" }
+bhdl-components = { path = "../bhdl-components" }
+anyhow = "1.0"
+log = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+
+[dev-dependencies]
+env_logger = "0.11"
+tokio = { version = "1.0", features = ["full"] }
+bhdl-parser = { path = "../bhdl-parser" }
+bhdl-ast = { path = "../bhdl-ast" }
+bhdl-analyzer = { path = "../bhdl-analyzer" }
+bhdl-synthesizer = { path = "../bhdl-synthesizer" }

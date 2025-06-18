@@ -1,6 +1,8 @@
 // LM7805 Linear Voltage Regulator
 // 5V 1A output with various package options
 
+import { LinearRegulatorParams, LM7805_PARAMS } from "../electrical_params.bhdl";
+
 module LM7805(package: string = "TO-220") {
     pin IN: power in;     // Input voltage (7-35V)
     pin GND: ground;      // Ground
@@ -10,14 +12,26 @@ module LM7805(package: string = "TO-220") {
     pin EN: signal in when package == "TO-220-5" || package == "TO-263-5";   // Enable pin
     pin ADJ: signal in when package == "TO-220-5" || package == "TO-263-5";  // Adjust pin
     
+    // Electrical parameters
+    const params: LinearRegulatorParams = LM7805_PARAMS;
+    
     // Electrical specifications
-    attribute output_voltage = "5.0V";
+    attribute output_voltage = params.output_voltage;
     attribute output_tolerance = "4%";  // ±4% typical
     attribute max_input_voltage = "35V";
     attribute min_input_voltage = "7V";  // 2V dropout
-    attribute dropout_voltage = "2.0V";
-    attribute max_output_current = "1A";
-    attribute quiescent_current = "5mA";
+    attribute dropout_voltage = params.dropout_voltage;
+    attribute max_output_current = params.output_current;
+    attribute quiescent_current = params.quiescent_current;
+    
+    // Impedance characteristics
+    attribute output_impedance = params.impedance.output_impedance;
+    attribute can_source_current = params.impedance.can_source_current;
+    attribute max_source_current = params.impedance.max_source_current;
+    attribute power_domain_isolation = params.impedance.power_domain_isolation;
+    attribute voltage_drop = params.impedance.voltage_drop;
+    attribute current_limiting = params.impedance.current_limiting;
+    attribute transient_response = params.impedance.transient_response;
     
     // Thermal specifications
     attribute thermal_resistance = 

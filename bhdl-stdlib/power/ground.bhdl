@@ -1,0 +1,22 @@
+// Ground component definition for BHDL ground declarations
+// This is used internally when processing ground declarations like:
+// ground GND;
+
+import { GroundParams, GROUND_REF } from "../electrical_params.bhdl";
+
+module Ground() {
+    // Ground pin
+    pin GND: ground;
+    
+    // Electrical parameters
+    const params: GroundParams = GROUND_REF;
+    
+    // Component attributes
+    attribute component_class = "ground_reference";
+    attribute reference_voltage = params.reference_voltage;
+    attribute can_sink_current = params.impedance.can_sink_current;
+    attribute dc_resistance = params.impedance.dc_resistance;
+}
+
+// Alternative names
+alias GND = Ground;

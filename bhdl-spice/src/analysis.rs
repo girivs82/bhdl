@@ -26,6 +26,27 @@ pub struct AnalysisResult {
     pub iterations: usize,
 }
 
+impl AnalysisResult {
+    /// Get current through a specific component
+    pub fn get_component_current(&self, component_id: EdgeIndex) -> Option<&f64> {
+        self.branch_currents.get(&component_id)
+    }
+    
+    /// Get voltage across a component (difference between its two nodes)
+    pub fn get_component_voltage(&self, _component_id: EdgeIndex) -> Option<&f64> {
+        // This would need the circuit reference to get node endpoints
+        // For now, return None - would be implemented properly
+        None
+    }
+    
+    /// Get total supply current
+    pub fn get_supply_current(&self) -> Option<&f64> {
+        // Find current through voltage sources
+        // This is a simplified implementation
+        self.branch_currents.values().max_by(|a, b| a.abs().partial_cmp(&b.abs()).unwrap())
+    }
+}
+
 /// DC Analysis solver
 pub struct DcAnalysis {
     circuit: Circuit,
@@ -42,8 +63,19 @@ impl DcAnalysis {
         }
     }
     
+    /// Get a reference to the circuit (with limits set from models)
+    pub fn circuit(&self) -> &Circuit {
+        &self.circuit
+    }
+    
     /// Add component model
     pub fn add_model(&mut self, component_name: String, model: ComponentModel) {
+        // Also set the limits in the circuit
+        let limits = model.limits();
+        // Only set if we have actual limits (not DEFAULT_LIMITS)
+        if limits.max_voltage.is_some() || limits.max_current.is_some() || limits.max_power.is_some() {
+            self.circuit.set_branch_limits(&component_name, limits.clone());
+        }
         self.models.insert(component_name, model);
     }
     

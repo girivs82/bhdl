@@ -33,6 +33,12 @@ module LED(color: string = "red", size: string = "5mm") {
     attribute luminous_intensity = params.luminous_intensity;
     attribute viewing_angle = params.viewing_angle;
     
+    // Impedance characteristics
+    attribute can_sink_current = params.impedance.can_sink_current;
+    attribute max_sink_current = params.impedance.max_sink_current;
+    attribute voltage_drop = params.impedance.voltage_drop;
+    attribute transient_response = params.impedance.transient_response;
+    
     // SPICE model parameters
     attribute spice_model = "led";
     attribute spice_forward_voltage = params.forward_voltage;

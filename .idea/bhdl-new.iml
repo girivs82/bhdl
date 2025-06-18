@@ -23,6 +23,8 @@
       <sourceFolder url="file://$MODULE_DIR$/bhdl-stdlib/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/bhdl-synthesizer/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/bhdl-visualizer/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/bhdl-safety/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/bhdl-safety/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/bhdl-spice/examples" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/bhdl-visualizer/target" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
