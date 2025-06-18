@@ -152,6 +152,7 @@ pub enum SyntaxKind {
     COMPONENT_INST,    // Resistor R1 { ... }
     PARAM_ASSIGN_BLOCK,// The `(...)` or `{...}` part in component instantiation
     PARAM_ASSIGN,      // param_name = value (inside PARAM_ASSIGN_BLOCK)
+    PARAM_PLACEHOLDER, // Empty params () or placeholder (?) for SPICE generation
     COMPONENT_TYPE,    // Type name used in component instantiation
     NET_DECL,          // net net_name[range]: type;
     NET_TYPE,          // The type keyword used in net decl (SIGNAL_KW etc)

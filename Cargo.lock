@@ -190,10 +190,12 @@ dependencies = [
  "bhdl-spice",
  "bincode",
  "dirs",
+ "env_logger 0.10.2",
  "log",
  "md5",
  "rowan",
  "serde",
+ "tokio",
  "toml",
 ]
 

@@ -1,0 +1,57 @@
+board AnalyzerSpiceIntegration {
+    power VIN = 12V @ 2A;
+    power VCC_5V = 5V @ 1A;
+    power VCC_3V3 = 3.3V @ 500mA;
+    ground GND;
+    
+    // Test 1: LED without current limiting resistor (SPICE should detect)
+    VCC_5V @LED_DIRECT-> led1: LED("red").A;
+    led1.K -> GND;
+    
+    // Test 2: LED with proper current limiting
+    VCC_5V -> r_led: Res(220).1;
+    r_led.2 -> led2: LED("green").A;
+    led2.K -> GND;
+    
+    // Test 3: Voltage divider with analysis
+    VIN -> r1: Res(10k).1;
+    r1.2 @DIVIDED-> r2: Res(10k).1;
+    r2.2 -> GND;
+    
+    // Test 4: Protection circuit
+    VIN @PROTECTED-> tvs: TVSDiode(15V).1;
+    tvs.2 -> GND;
+    @PROTECTED -> fuse: Fuse(2A).1;
+    fuse.2 @FUSED-> downstream_circuit;
+    
+    // Test 5: Regulator circuit with decoupling
+    VIN -> reg: LM7805().IN;
+    reg.OUT @REG_OUT-> VCC_5V;
+    reg.GND -> GND;
+    
+    // Input decoupling
+    VIN -> c_in: Cap(10u).1;
+    c_in.2 -> GND;
+    
+    // Output decoupling (should be inferred as electrolytic)
+    @REG_OUT -> c_out: Cap(100u).1;
+    c_out.2 -> GND;
+    
+    // Test 6: Mixed voltage domains
+    VCC_5V -> r_pullup_5v: Res(4.7k).1;
+    r_pullup_5v.2 @I2C_SDA_5V-> i2c_device_5v: I2C_Device().SDA;
+    
+    VCC_3V3 -> r_pullup_3v3: Res(4.7k).1;
+    r_pullup_3v3.2 @I2C_SDA_3V3-> i2c_device_3v3: I2C_Device().SDA;
+    
+    // This should trigger level shifter inference
+    @I2C_SDA_5V <-> @I2C_SDA_3V3;
+}
+
+// Component definitions for testing
+module I2C_Device() {
+    pin SDA: signal inout;
+    pin SCL: signal inout;
+    pin VCC: power in;
+    pin GND: ground in;
+}

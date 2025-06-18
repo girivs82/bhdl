@@ -1,0 +1,35 @@
+board SpiceDualRoleDemo {
+    power VCC = 5V @ 500mA;
+    ground GND;
+    
+    // Example 1: Generative mode - SPICE calculates the resistor value
+    // User doesn't specify value, SPICE will calculate ~150Ω for 20mA
+    VCC -> r_auto: Res().1 -> led1: LED("red", 20mA).A;
+    led1.K -> GND;
+    
+    // Example 2: Advisory mode - SPICE validates the user's choice
+    // User specified 47Ω which is too low for safe operation
+    VCC -> r_manual_bad: Res(47).1 -> led2: LED("red", 20mA).A;
+    led2.K -> GND;
+    
+    // Example 3: Advisory mode - proper value
+    // User specified 220Ω which gives ~14mA (safe)
+    VCC -> r_manual_good: Res(220).1 -> led3: LED("green", 20mA).A;
+    led3.K -> GND;
+    
+    // Example 4: Constrained generative mode
+    // SPICE picks value but must use 1/4W resistor
+    VCC -> r_constrained: Res(?, rating=0.25W).1 -> led4: LED("blue", 20mA).A;
+    led4.K -> GND;
+    
+    // Example 5: Voltage divider with auto-calculation
+    // SPICE calculates both resistors for 3.3V output
+    VCC -> r_div1: Res().1 @DIV_OUT-> r_div2: Res().2;
+    r_div2.2 -> GND;
+    @DIV_OUT -> AnalogIn(3.3V);
+}
+
+// Helper module for voltage reference
+module AnalogIn(voltage: voltage) {
+    pin in: signal in;
+}

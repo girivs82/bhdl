@@ -511,43 +511,83 @@ impl<'t> Parser<'t> {
     }
 
     // Parses component parameters: (param1, param2, ...) where params can have units
+    // Also handles empty parameters () for generative mode and placeholder (?) syntax
     pub(crate) fn parse_component_parameters(&mut self) {
         self.builder.start_node(SyntaxKind::PARAM_ASSIGN_BLOCK.into());
         self.expect(SyntaxKind::L_PAREN);
 
-        // Parse comma-separated parameters until ')'
-        let mut first_param = true;
-        while self.peek() != Some(SyntaxKind::R_PAREN) && self.peek().is_some() {
-            if !first_param {
-                self.expect(SyntaxKind::COMMA);
-                // Handle potential trailing comma before ')'
-                if self.peek() == Some(SyntaxKind::R_PAREN) { break; }
-            }
-            first_param = false;
+        // Check for empty parameters - generative mode
+        if self.peek() == Some(SyntaxKind::R_PAREN) {
+            // Empty parameters - mark as placeholder for SPICE generation
+            self.builder.start_node(SyntaxKind::PARAM_PLACEHOLDER.into());
+            self.builder.finish_node();
+        } 
+        // Check for explicit placeholder: Res(?)
+        else if self.peek() == Some(SyntaxKind::QUESTION) {
+            self.builder.start_node(SyntaxKind::PARAM_PLACEHOLDER.into());
+            self.bump(); // Consume ?
             
-            // Parse parameter: can be named (name=value) or positional (value)
-            self.builder.start_node(SyntaxKind::PARAM_ASSIGN.into());
-            
-            // Check if it's a named parameter (IDENT = value)
-            if self.peek() == Some(SyntaxKind::IDENT) {
-                let checkpoint = self.builder.checkpoint();
-                self.bump(); // Consume IDENT
+            // Parse optional constraints: Res(?, tolerance=5%, power=0.25W)
+            if self.peek() == Some(SyntaxKind::COMMA) {
+                self.bump(); // Consume comma
                 
-                if self.peek() == Some(SyntaxKind::EQ) {
-                    // Named parameter
-                    self.bump(); // Consume '='
-                    self.parse_expr(0); // Parse value
-                } else {
-                    // Positional parameter - the IDENT we consumed is the value
-                    self.builder.start_node_at(checkpoint, SyntaxKind::IDENT_REF.into());
-                    self.builder.finish_node();
+                // Parse constraint parameters
+                while self.peek() != Some(SyntaxKind::R_PAREN) && self.peek().is_some() {
+                    self.builder.start_node(SyntaxKind::PARAM_ASSIGN.into());
+                    
+                    // Constraint name
+                    self.expect(SyntaxKind::IDENT);
+                    self.expect(SyntaxKind::EQ);
+                    
+                    // Constraint value
+                    self.parse_expr(0);
+                    
+                    self.builder.finish_node(); // Finish PARAM_ASSIGN
+                    
+                    // Check for more constraints
+                    if self.peek() == Some(SyntaxKind::COMMA) {
+                        self.bump();
+                    }
                 }
-            } else {
-                // Positional parameter - parse the value expression
-                self.parse_expr(0);
             }
             
-            self.builder.finish_node(); // Finish PARAM_ASSIGN
+            self.builder.finish_node(); // Finish PARAM_PLACEHOLDER
+        }
+        else {
+            // Normal parameters - parse comma-separated list
+            let mut first_param = true;
+            while self.peek() != Some(SyntaxKind::R_PAREN) && self.peek().is_some() {
+                if !first_param {
+                    self.expect(SyntaxKind::COMMA);
+                    // Handle potential trailing comma before ')'
+                    if self.peek() == Some(SyntaxKind::R_PAREN) { break; }
+                }
+                first_param = false;
+                
+                // Parse parameter: can be named (name=value) or positional (value)
+                self.builder.start_node(SyntaxKind::PARAM_ASSIGN.into());
+                
+                // Check if it's a named parameter (IDENT = value)
+                if self.peek() == Some(SyntaxKind::IDENT) {
+                    let checkpoint = self.builder.checkpoint();
+                    self.bump(); // Consume IDENT
+                    
+                    if self.peek() == Some(SyntaxKind::EQ) {
+                        // Named parameter
+                        self.bump(); // Consume '='
+                        self.parse_expr(0); // Parse value
+                    } else {
+                        // Positional parameter - the IDENT we consumed is the value
+                        self.builder.start_node_at(checkpoint, SyntaxKind::IDENT_REF.into());
+                        self.builder.finish_node();
+                    }
+                } else {
+                    // Positional parameter - parse the value expression
+                    self.parse_expr(0);
+                }
+                
+                self.builder.finish_node(); // Finish PARAM_ASSIGN
+            }
         }
 
         self.expect(SyntaxKind::R_PAREN);
