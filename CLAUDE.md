@@ -202,7 +202,7 @@ Common SVG issues to watch for:
 
 ## BHDL Version 2.0 Support
 
-✅ **CURRENT STATUS**: The parser now fully supports BHDL v2.0 flow-based syntax. All v1.0 syntax support has been removed.
+✅ **CURRENT STATUS**: The parser now fully supports BHDL v2.0 flow-based syntax including all complex features. All v1.0 syntax support has been removed.
 
 **Key v2.0 Features:**
 - Official spec: `docs/spec/BHDL_Complete_Specification.md` (v2.0)
@@ -213,10 +213,23 @@ Common SVG issues to watch for:
 - Power/ground declarations: `power VCC = 5V @ 1A;`
 - Module syntax with inline pins: `module Res(value: resistance) { pin 1: signal inout; ... }`
 
+**Complex Syntax Support (2025-06-18):**
+- ✅ Const declarations with type annotations: `const name: type = value;`
+- ✅ Smart unit tokenization: Units recognized only after numbers
+- ✅ Ternary operator: `condition ? true_expr : false_expr`
+- ✅ String comparisons: `color == "red"`
+- ✅ Logical operators: `||`, `&&`
+- ✅ Member access: `params.forward_voltage`
+- ✅ Conditional pins: `pin EN: signal in when condition;`
+- ✅ Module aliases: `alias 7805 = LM7805;`
+- ✅ Destructuring imports: `import { A, B } from "file.bhdl";`
+
 **Migration Notes:**
 - Old v1.0 examples moved to `docs/examples/old_syntax/` for reference
 - All library files updated to v2.0 syntax
 - Parser, AST, and analyzer only support v2.0 constructs
+- Use `alias` keyword instead of `module Name = Target;` for aliases
+- Use `||` instead of `or` for logical OR operations
 
 ## End-to-End Pipeline Development Policy
 
