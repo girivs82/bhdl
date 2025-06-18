@@ -109,6 +109,8 @@ pub struct ComponentInferenceContext {
     pub component_db: HashMap<String, ComponentTypeInfo>,
     /// Inference results
     pub inferred_components: Vec<ComponentSuggestion>,
+    /// Components needing SPICE resolution (placeholders)
+    pub unresolved_components: Vec<crate::spice_synthesis::UnresolvedComponent>,
     /// Inference warnings
     pub warnings: Vec<String>,
     /// Design rules
@@ -219,6 +221,7 @@ impl ComponentInferenceContext {
         let mut context = Self {
             component_db: HashMap::new(),
             inferred_components: Vec::new(),
+            unresolved_components: Vec::new(),
             warnings: Vec::new(),
             design_rules: DesignRules::default(),
             module_resolver: None,
@@ -887,9 +890,24 @@ impl ComponentInferenceContext {
         self.inferred_components.push(suggestion);
     }
     
+    /// Add an unresolved component for SPICE resolution
+    pub fn add_unresolved_component(&mut self, component: crate::spice_synthesis::UnresolvedComponent) {
+        self.unresolved_components.push(component);
+    }
+    
     /// Get all inferred components
     pub fn get_inferred_components(&self) -> &Vec<ComponentSuggestion> {
         &self.inferred_components
+    }
+    
+    /// Get all unresolved components
+    pub fn get_unresolved_components(&self) -> &Vec<crate::spice_synthesis::UnresolvedComponent> {
+        &self.unresolved_components
+    }
+    
+    /// Add a component suggestion (typically from SPICE resolution)
+    pub fn add_component_suggestion(&mut self, suggestion: ComponentSuggestion) {
+        self.inferred_components.push(suggestion);
     }
     
     /// Create a suggestion from a resolved component module

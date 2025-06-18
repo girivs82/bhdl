@@ -229,6 +229,41 @@ impl ParamAssignBlock {
     pub fn assignments(&self) -> impl Iterator<Item = ParamAssign> { 
         self.0.children().filter_map(ParamAssign::cast)
     }
+    
+    /// Check if this parameter block contains a placeholder for SPICE generation
+    pub fn has_placeholder(&self) -> bool {
+        self.0.children().any(|child| child.kind() == SyntaxKind::PARAM_PLACEHOLDER)
+    }
+    
+    /// Get the placeholder node if present
+    pub fn placeholder(&self) -> Option<ParamPlaceholder> {
+        self.0.children().find_map(ParamPlaceholder::cast)
+    }
+}
+
+// --- Parameter Placeholder --- Empty () or (?) for SPICE generation
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ParamPlaceholder(pub(crate) SyntaxNode<BhdlLanguage>);
+impl AstNode for ParamPlaceholder {
+    type Language = BhdlLanguage;
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::PARAM_PLACEHOLDER }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { 
+        if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } 
+    }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+impl ParamPlaceholder {
+    /// Check if this is an explicit placeholder (has ?)
+    pub fn is_explicit(&self) -> bool {
+        self.0.children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .any(|t| t.kind() == SyntaxKind::QUESTION)
+    }
+    
+    /// Get constraint assignments if present (for ?, constraint=value syntax)
+    pub fn constraints(&self) -> impl Iterator<Item = ParamAssign> {
+        self.0.children().filter_map(ParamAssign::cast)
+    }
 }
 
 // ConnectionStmt has been moved to v2_statements.rs for v2.0 support
