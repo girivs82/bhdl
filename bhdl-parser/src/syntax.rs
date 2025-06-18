@@ -97,6 +97,7 @@ pub enum SyntaxKind {
     IF_KW,        // if
     ELSE_KW,      // else
     WHEN_KW,      // when
+    ALIAS_KW,     // alias
 
     // Keywords for individual items  
     PIN_KW,       // pin

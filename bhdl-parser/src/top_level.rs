@@ -14,6 +14,7 @@ impl<'t> Parser<'t> {
             match kind {
                 SyntaxKind::BOARD_KW => self.parse_board_def(),
                 SyntaxKind::MODULE_KW => self.parse_module_def(),
+                SyntaxKind::ALIAS_KW => self.parse_alias_stmt(),
                 SyntaxKind::TYPEDEF_KW => self.parse_typedef_def(),
                 SyntaxKind::IMPORT_KW => self.parse_import_stmt(),
                 SyntaxKind::INTERFACE_KW => self.parse_interface_def(),
@@ -195,6 +196,12 @@ impl<'t> Parser<'t> {
             self.bump();
         }
         
+        // Parse optional 'when' clause for conditional pins
+        if self.peek() == Some(SyntaxKind::WHEN_KW) {
+            self.bump(); // Consume 'when'
+            self.parse_expression(); // Parse the condition
+        }
+        
         self.expect(SyntaxKind::SEMI);
         self.builder.finish_node();
     }
@@ -251,6 +258,29 @@ impl<'t> Parser<'t> {
         // Parse initializer expression
         self.parse_expression();
         
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+
+    // Parse alias statement: alias Name = Target;
+    fn parse_alias_stmt(&mut self) {
+        self.builder.start_node(SyntaxKind::ALIAS.into());
+        self.expect(SyntaxKind::ALIAS_KW);
+        
+        // Optional: alias module Name = Target;
+        if self.peek() == Some(SyntaxKind::MODULE_KW) {
+            self.bump(); // Consume 'module'
+        }
+        
+        // Alias name can be IDENT or NUMBER (e.g., "7805", "LM7805")
+        if self.peek() == Some(SyntaxKind::IDENT) || self.peek() == Some(SyntaxKind::NUMBER) {
+            self.bump();
+        } else {
+            self.error("Expected alias name (identifier or number)".to_string());
+        }
+        
+        self.expect(SyntaxKind::EQ);
+        self.expect(SyntaxKind::IDENT); // Target name
         self.expect(SyntaxKind::SEMI);
         self.builder.finish_node();
     }

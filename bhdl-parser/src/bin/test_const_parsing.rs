@@ -2,7 +2,8 @@ use bhdl_parser::parse;
 use std::fs;
 
 fn main() {
-    let content = fs::read_to_string("test_const_simple.bhdl").expect("Failed to read file");
+    let file = std::env::args().nth(1).unwrap_or_else(|| "test_led_parsing.bhdl".to_string());
+    let content = fs::read_to_string(&file).expect("Failed to read file");
     let parsed = parse(&content);
     
     println!("=== Parsing const declarations test ===");
