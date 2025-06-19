@@ -158,6 +158,10 @@ module Res(
     attribute spice_model = "resistor";
     attribute spice_resistance = params.resistance;
     attribute spice_max_power = params.power_rating;
+    attribute spice_temp_coeff1 = params.temp_coefficient;  // ppm/°C
+    attribute spice_temp_coeff2 = 0;  // ppm/°C²
+    attribute spice_noise_coeff = 1.0;  // Standard thermal noise
+    attribute spice_tnom = 27;  // Nominal temperature °C
     
     // KiCad symbol and package mapping
     attribute kicad_symbol = "Device:R";

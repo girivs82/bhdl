@@ -1,7 +1,29 @@
 // Standard Diode Component Module
 // Supports Diode(1N4148), Diode(1N4007), etc.
 
-import { DiodeParams, DIODE_1N4148, DIODE_1N4007 } from "../electrical_params.bhdl";
+import { ImpedanceCharacteristics } from "../types/electrical_types.bhdl";
+
+// Diode electrical characteristics
+type DiodeParams = {
+    forward_voltage: voltage,
+    forward_current: current,
+    max_forward_current: current,
+    peak_forward_current: current,
+    reverse_voltage: voltage,
+    reverse_current: current,
+    capacitance: capacitance?,
+    recovery_time: time?,
+    impedance: ImpedanceCharacteristics,
+    // SPICE parameters
+    is: float?,           // Saturation current
+    n: float?,            // Emission coefficient
+    rs: resistance?,      // Series resistance
+    cjo: capacitance?,    // Zero-bias junction capacitance
+    vj: voltage?,         // Junction potential
+    tt: time?,            // Transit time
+    bv: voltage?,         // Breakdown voltage
+    ibv: current?,        // Breakdown current
+};
 
 module Diode(
     part: string = "1N4148",
@@ -10,40 +32,120 @@ module Diode(
     pin A: signal in;   // Anode (+)
     pin K: signal out;  // Cathode (-)
     
+    // Define diode parameters locally
+    const DIODE_1N4148: DiodeParams = {
+        forward_voltage: 0.72V,
+        forward_current: 10mA,
+        max_forward_current: 300mA,
+        peak_forward_current: 2A,
+        reverse_voltage: 100V,
+        reverse_current: 25nA,
+        capacitance: 4pF,
+        recovery_time: 4ns,
+        // SPICE parameters
+        is: 2.682e-9,
+        n: 1.836,
+        rs: 0.5664,
+        cjo: 4e-12,
+        vj: 0.5,
+        tt: 11.54e-9,
+        bv: 100,
+        ibv: 100e-6,
+        impedance: {
+            dc_resistance: null,
+            output_impedance: 0.5664,
+            input_impedance: null,
+            can_source_current: false,
+            can_sink_current: true,
+            max_source_current: null,
+            max_sink_current: 300mA,
+            power_domain_isolation: false,
+            voltage_drop: 0.72V,
+            current_limiting: false,
+            transient_response: 4ns,
+            inrush_current: null
+        }
+    };
+    
+    const DIODE_1N4007: DiodeParams = {
+        forward_voltage: 1.1V,
+        forward_current: 1A,
+        max_forward_current: 1A,
+        peak_forward_current: 30A,
+        reverse_voltage: 1000V,
+        reverse_current: 5μA,
+        capacitance: 15pF,
+        recovery_time: 2μs,
+        // SPICE parameters
+        is: 14.11e-9,
+        n: 1.984,
+        rs: 33.89e-3,
+        cjo: 25.89e-12,
+        vj: 0.325,
+        tt: 4.308e-6,
+        bv: 1000,
+        ibv: 5e-6,
+        impedance: {
+            dc_resistance: null,
+            output_impedance: 33.89e-3,
+            input_impedance: null,
+            can_source_current: false,
+            can_sink_current: true,
+            max_source_current: null,
+            max_sink_current: 1A,
+            power_domain_isolation: false,
+            voltage_drop: 1.1V,
+            current_limiting: false,
+            transient_response: 2μs,
+            inrush_current: 30A
+        }
+    };
+    
+    const DIODE_1N5819: DiodeParams = {
+        forward_voltage: 0.45V,
+        forward_current: 1A,
+        max_forward_current: 1A,
+        peak_forward_current: 25A,
+        reverse_voltage: 40V,
+        reverse_current: 10μA,
+        capacitance: 110pF,
+        recovery_time: 10ns,
+        // SPICE parameters (Schottky)
+        is: 10e-6,
+        n: 1.0,
+        rs: 0.05,
+        cjo: 110e-12,
+        vj: 0.4,
+        tt: 10e-9,
+        bv: 40,
+        ibv: 10e-3,
+        impedance: {
+            dc_resistance: null,
+            output_impedance: 0.05,
+            input_impedance: null,
+            can_source_current: false,
+            can_sink_current: true,
+            max_source_current: null,
+            max_sink_current: 1A,
+            power_domain_isolation: false,
+            voltage_drop: 0.45V,
+            current_limiting: false,
+            transient_response: 10ns,
+            inrush_current: null
+        }
+    };
+    
     // Get electrical parameters based on part number
     const params: DiodeParams = 
         part == "1N4148" ? DIODE_1N4148 :
         part == "1N4007" ? DIODE_1N4007 :
-        part == "1N4001" ? { ...DIODE_1N4007, reverse_voltage: 50V } :
-        part == "1N4002" ? { ...DIODE_1N4007, reverse_voltage: 100V } :
-        part == "1N4003" ? { ...DIODE_1N4007, reverse_voltage: 200V } :
-        part == "1N4004" ? { ...DIODE_1N4007, reverse_voltage: 400V } :
-        part == "1N4005" ? { ...DIODE_1N4007, reverse_voltage: 600V } :
-        part == "1N4006" ? { ...DIODE_1N4007, reverse_voltage: 800V } :
-        part == "1N5819" ? { // Schottky diode
-            forward_voltage: 0.45V,
-            forward_current: 1A,
-            max_forward_current: 1A,
-            peak_forward_current: 25A,
-            reverse_voltage: 40V,
-            reverse_current: 10μA,
-            capacitance: 110pF,
-            recovery_time: null,
-            impedance: {
-                dc_resistance: null,
-                output_impedance: null,
-                input_impedance: null,
-                can_source_current: false,
-                can_sink_current: true,
-                max_source_current: null,
-                max_sink_current: 1A,
-                power_domain_isolation: false,
-                voltage_drop: 0.45V,
-                current_limiting: false,
-                transient_response: null,
-                inrush_current: null
-            }
-        } :
+        part == "1N4001" ? { ...DIODE_1N4007, reverse_voltage: 50V, bv: 50 } :
+        part == "1N4002" ? { ...DIODE_1N4007, reverse_voltage: 100V, bv: 100 } :
+        part == "1N4003" ? { ...DIODE_1N4007, reverse_voltage: 200V, bv: 200 } :
+        part == "1N4004" ? { ...DIODE_1N4007, reverse_voltage: 400V, bv: 400 } :
+        part == "1N4005" ? { ...DIODE_1N4007, reverse_voltage: 600V, bv: 600 } :
+        part == "1N4006" ? { ...DIODE_1N4007, reverse_voltage: 800V, bv: 800 } :
+        part == "1N5819" ? DIODE_1N5819 :
         DIODE_1N4148;  // Default to 1N4148
     
     // Component metadata attributes
@@ -66,10 +168,15 @@ module Diode(
     
     // SPICE model parameters
     attribute spice_model = "diode";
-    attribute spice_forward_voltage = params.forward_voltage;
-    attribute spice_saturation_current = 1e-12;  // Default Is
-    attribute spice_emission_coefficient = 1.0;   // Default n
-    attribute spice_max_current = params.max_forward_current;
+    attribute spice_is = params.is;
+    attribute spice_n = params.n;
+    attribute spice_rs = params.rs;
+    attribute spice_cjo = params.cjo;
+    attribute spice_vj = params.vj;
+    attribute spice_tt = params.tt;
+    attribute spice_bv = params.bv;
+    attribute spice_ibv = params.ibv;
+    attribute spice_tnom = 27;
     
     // KiCad symbol mapping
     attribute kicad_symbol = "Device:D";
