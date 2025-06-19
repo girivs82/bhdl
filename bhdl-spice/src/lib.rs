@@ -10,6 +10,7 @@ pub mod analysis;
 pub mod extended_analysis;
 pub mod nonlinear_analysis;
 pub mod inference;
+pub mod constraint_inference;
 pub mod errors;
 pub mod safety;
 pub mod models;
@@ -27,7 +28,8 @@ pub use extended_analysis::{
     SimulationEngine, AcAnalysisResult, TransientAnalysisResult, NoiseAnalysisResult,
 };
 pub use nonlinear_analysis::NonlinearDcAnalysis;
-pub use inference::{ComponentInference, ConstraintViolation, InferredComponent};
+pub use inference::{ComponentInference as LegacyComponentInference, ConstraintViolation};
+pub use constraint_inference::{ComponentInference, InferredComponent, ConstraintSolver};
 pub use errors::{SpiceError, Result};
 pub use safety::{
     SafetyAnalysisResult, SafetyViolation, Severity, CircuitModification,
