@@ -24,6 +24,8 @@ pub struct DiodeParams {
     pub bv: Option<f64>,
     /// Breakdown current (A)
     pub ibv: f64,
+    /// Breakdown knee exponent
+    pub nbv: f64,
     /// Energy gap (eV)
     pub eg: f64,
     /// Saturation current temperature exponent
@@ -48,6 +50,7 @@ impl Default for DiodeParams {
             m: 0.5,         // Square root junction
             bv: None,       // No breakdown
             ibv: 1e-3,      // 1 mA breakdown current
+            nbv: 3.0,       // Breakdown knee exponent
             eg: 1.11,       // Silicon bandgap
             xti: 3.0,       // Temperature exponent
             tnom: 27.0,     // Room temperature
@@ -198,10 +201,15 @@ impl DiodeModel {
         // Check for breakdown
         if let Some(bv) = self.params.bv {
             if vd_junction < -bv {
-                // Breakdown region: I = -IBV * exp(-(V+BV)/VT)
-                // Clamp the exponential to prevent numerical overflow
-                let exp_arg = clamp_exp(-(vd_junction + bv) / vt, 40.0);
-                let breakdown_current = -self.params.ibv * exp_arg.exp();
+                // More realistic breakdown model using a softer transition
+                // I = -IBV * [(V/BV)^m - 1] for V < -BV
+                // This gives a more gradual increase in reverse current
+                let v_ratio = vd_junction / -bv;
+                let m = self.params.nbv; // Breakdown exponent
+                
+                // For numerical stability, limit the ratio
+                let v_ratio_clamped = v_ratio.min(10.0);
+                let breakdown_current = -self.params.ibv * (v_ratio_clamped.powf(m) - 1.0);
                 return breakdown_current;
             }
         }
@@ -219,9 +227,15 @@ impl DiodeModel {
         // Check for breakdown
         if let Some(bv) = self.params.bv {
             if vd < -bv {
-                // Breakdown conductance
-                let exp_arg = clamp_exp(-(vd + bv) / vt, 40.0);
-                return self.params.ibv / vt * exp_arg.exp();
+                // Breakdown conductance: d/dV of breakdown current
+                let v_ratio = vd / -bv;
+                let m = self.params.nbv; // Same exponent as current calculation
+                
+                // Limit for numerical stability
+                let v_ratio_clamped = v_ratio.min(10.0);
+                
+                // g = d/dV[-IBV * (V/BV)^m] = IBV * m * (V/BV)^(m-1) / BV
+                return self.params.ibv * m * v_ratio_clamped.powf(m - 1.0) / bv;
             }
         }
         
