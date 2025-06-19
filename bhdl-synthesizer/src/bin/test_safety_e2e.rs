@@ -7,7 +7,7 @@ use std::fs;
 use anyhow::{Result, Context};
 use bhdl_parser::parse;
 use bhdl_ast::{SourceFile, AstNode};
-use bhdl_analyzer::{analyze, analyze_with_netlist};
+use bhdl_analyzer::analyze;
 use bhdl_synthesizer::{NetlistGenerator, NetlistConfig};
 
 #[tokio::main]
@@ -70,7 +70,6 @@ async fn test_file(file_path: &str) -> Result<()> {
         include_power_domains: true,
         include_component_inference: true,
         flatten_hierarchy: false,
-        use_database_components: false,
         database_path: None,
     };
     
@@ -97,57 +96,48 @@ async fn test_file(file_path: &str) -> Result<()> {
         }
     }
     
-    // Re-analyze with netlist for safety
+    // Run safety analysis using bhdl-safety crate
     println!("\n5. Running safety analysis...");
-    let final_analysis = analyze_with_netlist(&source_file, netlist, None);
+    let safety_analyzer = bhdl_safety::SafetyAnalyzer::default();
+    let safety_report = safety_analyzer.analyze(&netlist)?;
     
-    if let Some(ref safety) = final_analysis.safety_analysis {
-        println!("   ✓ Safety analysis complete");
-        println!("   - Violations: {}", safety.violations.len());
-        println!("   - Suggested fixes: {}", safety.suggested_fixes.len());
-        println!("   - Warnings: {}", safety.warnings.len());
-        
-        // Show violations
-        if !safety.violations.is_empty() {
-            println!("\n   Safety Violations:");
-            for (i, violation) in safety.violations.iter().enumerate() {
-                println!("   [{}] {:?} - {}", 
-                         i + 1, 
-                         violation.severity,
-                         violation.component);
-                println!("       Message: {}", violation.message);
-                println!("       Technical: {}", violation.technical_details);
-                
-                if let Some(fix) = safety.suggested_fixes.iter()
-                    .find(|f| f.violation_index == i) {
-                    println!("       Suggested fix: {}", fix.description);
-                }
-            }
-        } else if safety.warnings.is_empty() {
-            println!("   ✓ No safety violations detected!");
-        }
-        
-        // Show warnings
-        if !safety.warnings.is_empty() {
-            println!("\n   Warnings:");
-            for warning in &safety.warnings {
-                println!("   - {}", warning);
+    println!("   ✓ Safety analysis complete");
+    println!("   - Circuit status: {:?}", safety_report.circuit_status);
+    println!("   - Total violations: {}", safety_report.summary.total_violations);
+    
+    // Show violations
+    if !safety_report.violations.is_empty() {
+        println!("\n   Safety Violations:");
+        for (i, violation) in safety_report.violations.iter().enumerate() {
+            println!("   [{}] {} - {:?}", 
+                     i + 1, 
+                     violation.severity.as_str(),
+                     violation.violation_type);
+            println!("       Message: {}", violation.message);
+            
+            if let Some(fix) = &violation.suggested_fix {
+                println!("       Suggested fix: {}", fix);
             }
         }
     } else {
-        println!("   ⚠ Safety analysis was not performed");
+        println!("   ✓ No safety violations detected!");
+    }
+    
+    // Show component risks
+    if !safety_report.component_risks.is_empty() {
+        println!("\n   Component Risks:");
+        for (component, risk) in &safety_report.component_risks {
+            println!("     {} - Risk Level: {:?}", component, risk.risk_level);
+            for issue in &risk.issues {
+                println!("       • {}", issue);
+            }
+        }
     }
     
     // Summary
-    let safety_diagnostics = final_analysis.diagnostics.iter()
-        .filter(|d| d.message.contains("[CRITICAL]") || 
-                    d.message.contains("[ERROR]") || 
-                    d.message.contains("[WARNING]"))
-        .count();
-    
     println!("\n   Summary:");
-    println!("   - Total diagnostics: {}", final_analysis.diagnostics.len());
-    println!("   - Safety-related: {}", safety_diagnostics);
+    println!("   - Circuit Status: {:?}", safety_report.circuit_status);
+    println!("   - Risk Components: {}", safety_report.component_risks.len());
     
     Ok(())
 }

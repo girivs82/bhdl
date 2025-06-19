@@ -1,8 +1,17 @@
 // Standard Resistor Component Module
 // Supports both Res(10k) and Resistor(10k) instantiation
 
-import { ResistorParams, RESISTOR_0402_PARAMS, RESISTOR_0603_PARAMS, 
-         RESISTOR_0805_PARAMS, RESISTOR_1206_PARAMS } from "../electrical_params.bhdl";
+import { ImpedanceCharacteristics } from "../types/electrical_types.bhdl";
+
+// Resistor electrical characteristics
+type ResistorParams = {
+    resistance: resistance,
+    tolerance: percentage,
+    power_rating: power,
+    temp_coefficient: float?,  // ppm/°C
+    max_voltage: voltage?,
+    impedance: ImpedanceCharacteristics,
+};
 
 module Res(
     value: resistance, 
@@ -12,19 +21,125 @@ module Res(
     pin 1: signal inout;
     pin 2: signal inout;
     
+    // Package-specific power ratings and voltage limits
+    const RESISTOR_0402_PARAMS: ResistorParams = {
+        resistance: value,
+        tolerance: tolerance,
+        power_rating: 63mW,
+        temp_coefficient: 200,
+        max_voltage: 50V,
+        impedance: {
+            dc_resistance: value,
+            output_impedance: value,
+            input_impedance: value,
+            can_source_current: false,
+            can_sink_current: false,
+            max_source_current: null,
+            max_sink_current: null,
+            power_domain_isolation: false,
+            voltage_drop: null,  // V = I*R, depends on current
+            current_limiting: true,  // Resistors limit current by definition
+            transient_response: null,
+            inrush_current: null
+        }
+    };
+    
+    const RESISTOR_0603_PARAMS: ResistorParams = {
+        resistance: value,
+        tolerance: tolerance,
+        power_rating: 100mW,
+        temp_coefficient: 100,
+        max_voltage: 75V,
+        impedance: {
+            dc_resistance: value,
+            output_impedance: value,
+            input_impedance: value,
+            can_source_current: false,
+            can_sink_current: false,
+            max_source_current: null,
+            max_sink_current: null,
+            power_domain_isolation: false,
+            voltage_drop: null,
+            current_limiting: true,
+            transient_response: null,
+            inrush_current: null
+        }
+    };
+    
+    const RESISTOR_0805_PARAMS: ResistorParams = {
+        resistance: value,
+        tolerance: tolerance,
+        power_rating: 125mW,
+        temp_coefficient: 100,
+        max_voltage: 150V,
+        impedance: {
+            dc_resistance: value,
+            output_impedance: value,
+            input_impedance: value,
+            can_source_current: false,
+            can_sink_current: false,
+            max_source_current: null,
+            max_sink_current: null,
+            power_domain_isolation: false,
+            voltage_drop: null,
+            current_limiting: true,
+            transient_response: null,
+            inrush_current: null
+        }
+    };
+    
+    const RESISTOR_1206_PARAMS: ResistorParams = {
+        resistance: value,
+        tolerance: tolerance,
+        power_rating: 250mW,
+        temp_coefficient: 100,
+        max_voltage: 200V,
+        impedance: {
+            dc_resistance: value,
+            output_impedance: value,
+            input_impedance: value,
+            can_source_current: false,
+            can_sink_current: false,
+            max_source_current: null,
+            max_sink_current: null,
+            power_domain_isolation: false,
+            voltage_drop: null,
+            current_limiting: true,
+            transient_response: null,
+            inrush_current: null
+        }
+    };
+    
+    const THT_RESISTOR_PARAMS: ResistorParams = {
+        resistance: value,
+        tolerance: tolerance,
+        power_rating: 250mW,  // 1/4W standard
+        temp_coefficient: 200,
+        max_voltage: 250V,
+        impedance: {
+            dc_resistance: value,
+            output_impedance: value,
+            input_impedance: value,
+            can_source_current: false,
+            can_sink_current: false,
+            max_source_current: null,
+            max_sink_current: null,
+            power_domain_isolation: false,
+            voltage_drop: null,
+            current_limiting: true,
+            transient_response: null,
+            inrush_current: null
+        }
+    };
+    
     // Get electrical parameters based on package
     const params: ResistorParams = 
-        package == "0402" ? { ...RESISTOR_0402_PARAMS, resistance: value, tolerance: tolerance } :
-        package == "0603" ? { ...RESISTOR_0603_PARAMS, resistance: value, tolerance: tolerance } :
-        package == "0805" ? { ...RESISTOR_0805_PARAMS, resistance: value, tolerance: tolerance } :
-        package == "1206" ? { ...RESISTOR_1206_PARAMS, resistance: value, tolerance: tolerance } :
-        { // Default THT 1/4W resistor
-            resistance: value,
-            tolerance: tolerance,
-            power_rating: 250mW,
-            temp_coefficient: 200,
-            max_voltage: 250V
-        };
+        package == "0402" ? RESISTOR_0402_PARAMS :
+        package == "0603" ? RESISTOR_0603_PARAMS :
+        package == "0805" ? RESISTOR_0805_PARAMS :
+        package == "1206" ? RESISTOR_1206_PARAMS :
+        package == "THT" ? THT_RESISTOR_PARAMS :
+        RESISTOR_0805_PARAMS;  // Default to 0805
     
     // Component metadata attributes
     attribute component_class = "resistor";
@@ -33,6 +148,11 @@ module Res(
     attribute power_rating = params.power_rating;
     attribute temp_coefficient = params.temp_coefficient;
     attribute max_voltage = params.max_voltage;
+    
+    // Impedance characteristics
+    attribute dc_resistance = params.impedance.dc_resistance;
+    attribute current_limiting = params.impedance.current_limiting;
+    attribute power_domain_isolation = params.impedance.power_domain_isolation;
     
     // SPICE model parameters
     attribute spice_model = "resistor";

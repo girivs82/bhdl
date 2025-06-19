@@ -2,13 +2,23 @@
 // This is used internally when processing power declarations like:
 // power VCC = 5V @ 1A;
 
-import { PowerSourceParams, POWER_5V_1A } from "../electrical_params.bhdl";
+import { ImpedanceCharacteristics } from "../types/electrical_types.bhdl";
+
+// Power source characteristics
+type PowerSourceParams = {
+    nominal_voltage: voltage,
+    nominal_current: current,
+    max_current: current,
+    regulation: percentage?,     // Voltage regulation under load
+    ripple: voltage?,           // Peak-to-peak ripple voltage
+    impedance: ImpedanceCharacteristics,
+};
 
 module Power(voltage: voltage, current: current) {
     // Power output pin
     pin OUT: power out;
     
-    // Electrical parameters
+    // Create power source parameters dynamically based on input
     const params: PowerSourceParams = {
         nominal_voltage: voltage,
         nominal_current: current,
@@ -16,7 +26,7 @@ module Power(voltage: voltage, current: current) {
         regulation: 2%,  // Typical for regulated supplies
         ripple: voltage * 0.01,  // 1% of nominal
         impedance: {
-            dc_resistance: 0.05Ω,  // 50mΩ typical
+            dc_resistance: 0.05Ω,  // 50mΩ typical output impedance
             output_impedance: 0.05Ω,
             input_impedance: null,
             can_source_current: true,
@@ -25,7 +35,7 @@ module Power(voltage: voltage, current: current) {
             max_sink_current: null,
             power_domain_isolation: false,
             voltage_drop: null,
-            current_limiting: false,
+            current_limiting: false,  // Ideal source doesn't limit
             transient_response: 10μs,
             inrush_current: null
         }
@@ -35,10 +45,24 @@ module Power(voltage: voltage, current: current) {
     attribute component_class = "power_source";
     attribute nominal_voltage = params.nominal_voltage;
     attribute nominal_current = params.nominal_current;
+    attribute max_current = params.max_current;
+    attribute regulation = params.regulation;
+    attribute ripple = params.ripple;
+    
+    // Impedance characteristics - critical for power domain propagation
     attribute output_impedance = params.impedance.output_impedance;
     attribute can_source_current = params.impedance.can_source_current;
     attribute max_source_current = params.impedance.max_source_current;
+    attribute power_domain_isolation = params.impedance.power_domain_isolation;
+    attribute current_limiting = params.impedance.current_limiting;
+    
+    // SPICE model parameters
+    attribute spice_model = "voltage_source";
+    attribute spice_voltage = params.nominal_voltage;
+    attribute spice_series_resistance = params.impedance.output_impedance;
 }
 
 // Alternative names
 alias PWR = Power;
+alias VDD = Power;
+alias VCC = Power;

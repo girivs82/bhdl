@@ -1,0 +1,38 @@
+// BHDL Standard Library - Shared Electrical Types
+// This file defines common type structures used across components
+
+// Standard electrical limits for components
+type ElectricalLimits = {
+    max_voltage: voltage?,         // Maximum voltage rating
+    max_current: current?,         // Maximum current rating  
+    max_power: power?,            // Maximum power dissipation
+    min_voltage: voltage?,         // Minimum operating voltage
+    operating_temp_min: temperature?,  // Minimum operating temperature
+    operating_temp_max: temperature?,  // Maximum operating temperature
+};
+
+// Power domain and impedance characteristics
+type ImpedanceCharacteristics = {
+    // Basic impedance properties
+    dc_resistance: resistance?,     // DC resistance (for resistive components)
+    output_impedance: resistance?,  // Output impedance for active components
+    input_impedance: resistance?,   // Input impedance for active components
+    
+    // Power sourcing/sinking capabilities
+    can_source_current: bool,      // Can provide current to other components
+    can_sink_current: bool,        // Can accept current from other components
+    max_source_current: current?,  // Maximum current it can provide
+    max_sink_current: current?,    // Maximum current it can accept
+    
+    // Power domain propagation
+    power_domain_isolation: bool,  // Does it isolate power domains (e.g., transformer)
+    voltage_drop: voltage?,        // Voltage drop across component (e.g., diode Vf)
+    current_limiting: bool,        // Does it limit current (e.g., fuse, resistor)
+    
+    // Dynamic properties
+    transient_response: time?,     // Response time to load changes
+    inrush_current: current?,      // Initial current spike (e.g., capacitors)
+};
+
+// Export the types for use in other modules
+export { ElectricalLimits, ImpedanceCharacteristics };
