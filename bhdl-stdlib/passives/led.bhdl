@@ -1,17 +1,175 @@
 // Light Emitting Diode Component Module
 // Supports LED(red), LED(green, 3mm) style instantiation
 
-import { LEDParams, LED_PARAMS_RED, LED_PARAMS_GREEN, LED_PARAMS_BLUE, 
-         LED_PARAMS_WHITE, LED_PARAMS_YELLOW, LED_PARAMS_IR } from "../electrical_params.bhdl";
+import { ImpedanceCharacteristics } from "../types/electrical_types.bhdl";
+
+// LED-specific electrical characteristics type
+type LEDParams = {
+    forward_voltage: voltage,      // Typical Vf at nominal current
+    forward_current: current,      // Nominal operating current
+    max_current: current,          // Absolute maximum current
+    max_reverse_voltage: voltage,  // Maximum reverse voltage
+    dynamic_resistance: resistance, // Small signal resistance
+    wavelength: float?,            // Peak wavelength in nm
+    luminous_intensity: float?,    // Brightness in mcd
+    viewing_angle: float?,         // Viewing angle in degrees
+    impedance: ImpedanceCharacteristics, // Impedance and power characteristics
+};
 
 module LED(color: string = "red", size: string = "5mm") {
     pin A: signal in;   // Anode (+)
     pin K: signal out;  // Cathode (-)
     
-    // Metadata for component database
-    attribute component_class = "led";
-    attribute color = color;
-    attribute size = size;
+    // LED parameters by color - kept local to this module
+    const LED_PARAMS_RED: LEDParams = {
+        forward_voltage: 2.0V,
+        forward_current: 20mA,
+        max_current: 30mA,
+        max_reverse_voltage: 5V,
+        dynamic_resistance: 10Ω,
+        wavelength: 630,
+        luminous_intensity: 500,
+        viewing_angle: 30,
+        impedance: {
+            dc_resistance: null,  // Non-linear device
+            output_impedance: null,
+            input_impedance: null,
+            can_source_current: false,
+            can_sink_current: true,  // LEDs sink current
+            max_source_current: null,
+            max_sink_current: 30mA,
+            power_domain_isolation: false,
+            voltage_drop: 2.0V,  // Forward voltage drop
+            current_limiting: false,  // Does not limit current
+            transient_response: 100ns,
+            inrush_current: null
+        }
+    };
+    
+    const LED_PARAMS_GREEN: LEDParams = {
+        forward_voltage: 2.2V,
+        forward_current: 20mA,
+        max_current: 30mA,
+        max_reverse_voltage: 5V,
+        dynamic_resistance: 12Ω,
+        wavelength: 525,
+        luminous_intensity: 300,
+        viewing_angle: 30,
+        impedance: {
+            dc_resistance: null,
+            output_impedance: null,
+            input_impedance: null,
+            can_source_current: false,
+            can_sink_current: true,
+            max_source_current: null,
+            max_sink_current: 30mA,
+            power_domain_isolation: false,
+            voltage_drop: 2.2V,
+            current_limiting: false,
+            transient_response: 100ns,
+            inrush_current: null
+        }
+    };
+    
+    const LED_PARAMS_BLUE: LEDParams = {
+        forward_voltage: 3.2V,
+        forward_current: 20mA,
+        max_current: 30mA,
+        max_reverse_voltage: 5V,
+        dynamic_resistance: 15Ω,
+        wavelength: 470,
+        luminous_intensity: 200,
+        viewing_angle: 30,
+        impedance: {
+            dc_resistance: null,
+            output_impedance: null,
+            input_impedance: null,
+            can_source_current: false,
+            can_sink_current: true,
+            max_source_current: null,
+            max_sink_current: 30mA,
+            power_domain_isolation: false,
+            voltage_drop: 3.2V,
+            current_limiting: false,
+            transient_response: 100ns,
+            inrush_current: null
+        }
+    };
+    
+    const LED_PARAMS_WHITE: LEDParams = {
+        forward_voltage: 3.3V,
+        forward_current: 20mA,
+        max_current: 30mA,
+        max_reverse_voltage: 5V,
+        dynamic_resistance: 16Ω,
+        wavelength: null,  // White LEDs don't have single wavelength
+        luminous_intensity: 1000,
+        viewing_angle: 120,
+        impedance: {
+            dc_resistance: null,
+            output_impedance: null,
+            input_impedance: null,
+            can_source_current: false,
+            can_sink_current: true,
+            max_source_current: null,
+            max_sink_current: 30mA,
+            power_domain_isolation: false,
+            voltage_drop: 3.3V,
+            current_limiting: false,
+            transient_response: 100ns,
+            inrush_current: null
+        }
+    };
+    
+    const LED_PARAMS_YELLOW: LEDParams = {
+        forward_voltage: 2.1V,
+        forward_current: 20mA,
+        max_current: 30mA,
+        max_reverse_voltage: 5V,
+        dynamic_resistance: 11Ω,
+        wavelength: 590,
+        luminous_intensity: 400,
+        viewing_angle: 30,
+        impedance: {
+            dc_resistance: null,
+            output_impedance: null,
+            input_impedance: null,
+            can_source_current: false,
+            can_sink_current: true,
+            max_source_current: null,
+            max_sink_current: 30mA,
+            power_domain_isolation: false,
+            voltage_drop: 2.1V,
+            current_limiting: false,
+            transient_response: 100ns,
+            inrush_current: null
+        }
+    };
+    
+    const LED_PARAMS_IR: LEDParams = {
+        forward_voltage: 1.4V,
+        forward_current: 50mA,  // IR LEDs often use higher current
+        max_current: 100mA,
+        max_reverse_voltage: 5V,
+        dynamic_resistance: 5Ω,
+        wavelength: 940,
+        luminous_intensity: null,  // Not visible
+        viewing_angle: 20,
+        impedance: {
+            dc_resistance: null,
+            output_impedance: null,
+            input_impedance: null,
+            can_source_current: false,
+            can_sink_current: true,
+            max_source_current: null,
+            max_sink_current: 100mA,
+            power_domain_isolation: false,
+            voltage_drop: 1.4V,
+            current_limiting: false,
+            transient_response: 100ns,
+            inrush_current: null
+        }
+    };
     
     // Get electrical parameters based on color
     const params: LEDParams = 
@@ -22,6 +180,11 @@ module LED(color: string = "red", size: string = "5mm") {
         color == "white" ? LED_PARAMS_WHITE :
         color == "ir" ? LED_PARAMS_IR :
         LED_PARAMS_RED;  // Default to red
+    
+    // Metadata for component database
+    attribute component_class = "led";
+    attribute color = color;
+    attribute size = size;
     
     // Electrical characteristics from parameter structure
     attribute forward_voltage = params.forward_voltage;
@@ -38,6 +201,8 @@ module LED(color: string = "red", size: string = "5mm") {
     attribute max_sink_current = params.impedance.max_sink_current;
     attribute voltage_drop = params.impedance.voltage_drop;
     attribute transient_response = params.impedance.transient_response;
+    attribute power_domain_isolation = params.impedance.power_domain_isolation;
+    attribute current_limiting = params.impedance.current_limiting;
     
     // SPICE model parameters
     attribute spice_model = "led";

@@ -8,7 +8,7 @@
 
 use anyhow::Result;
 use bhdl_parser::parse;
-use bhdl_analyzer::{analyze, analyze_with_netlist};
+use bhdl_analyzer::analyze;
 use bhdl_synthesizer::NetlistGenerator;
 use bhdl_ast::SourceFile;
 use rowan::ast::AstNode;
@@ -57,7 +57,9 @@ board PowerLED {
     // Step 3: Synthesize netlist
     println!("Step 3: Synthesizing netlist...");
     let mut synthesizer = NetlistGenerator::new();
-    let netlist = synthesizer.generate_from_ast(&source_file)?;
+    let netlist = tokio::runtime::Runtime::new()?.block_on(
+        synthesizer.generate_from_ast_and_analysis(&source_file, &analysis_result)
+    )?;
     println!("✓ Netlist synthesized. Modules: {}, Instances: {}, Nets: {}", 
              netlist.modules.len(), netlist.instances.len(), netlist.nets.len());
     
@@ -71,51 +73,48 @@ board PowerLED {
     }
     println!();
     
-    // Step 4: Re-analyze with netlist for safety
-    println!("Step 4: Running analyzer with netlist for safety analysis...");
-    let final_result = analyze_with_netlist(&source_file, netlist, None);
+    // Step 4: Safety analysis using bhdl-safety
+    println!("Step 4: Running safety analysis...");
+    let safety_analyzer = bhdl_safety::SafetyAnalyzer::default();
+    let safety_report = safety_analyzer.analyze(&netlist)?;
     
     // Display results
-    println!("\n=== Analysis Results ===\n");
+    println!("\n=== Safety Analysis Results ===\n");
     
-    if let Some(ref safety) = final_result.safety_analysis {
-        println!("Safety Analysis Results:");
-        println!("  Violations: {}", safety.violations.len());
-        println!("  Suggested fixes: {}", safety.suggested_fixes.len());
-        println!("  Warnings: {}", safety.warnings.len());
-        
-        if !safety.violations.is_empty() {
+    println!("Circuit Status: {:?}", safety_report.circuit_status);
+    println!("Total Violations: {}", safety_report.summary.total_violations);
+    println!("  Critical: {}", safety_report.summary.critical_count);
+    println!("  Errors: {}", safety_report.summary.error_count);
+    println!("  Warnings: {}", safety_report.summary.warning_count);
+    
+    if !safety_report.violations.is_empty() {
             println!("\nSafety Violations:");
-            for (i, violation) in safety.violations.iter().enumerate() {
-                println!("\n  [{}] {:?} - {}", 
+            for (i, violation) in safety_report.violations.iter().enumerate() {
+                println!("\n  [{}] {} - {:?}", 
                          i + 1, 
-                         violation.severity,
-                         violation.component);
+                         violation.severity.as_str(),
+                         violation.violation_type);
                 println!("      Message: {}", violation.message);
-                println!("      Details: {}", violation.technical_details);
                 
                 // Show suggested fix if available
-                if let Some(fix) = safety.suggested_fixes.iter()
-                    .find(|f| f.violation_index == i) {
-                    println!("      Fix: {}", fix.description);
+                if let Some(fix) = &violation.suggested_fix {
+                    println!("      Fix: {}", fix);
                 }
             }
         }
-        
-        if !safety.warnings.is_empty() {
-            println!("\nSafety Warnings:");
-            for warning in &safety.warnings {
-                println!("  - {}", warning);
-            }
-        }
     } else {
-        println!("No safety analysis was performed (unexpected)");
+        println!("\n✓ No safety violations found!");
     }
     
-    // All diagnostics including safety
-    println!("\nAll Diagnostics: {}", final_result.diagnostics.len());
-    for diag in &final_result.diagnostics {
-        println!("  - {}", diag.message);
+    // Show component risks
+    if !safety_report.component_risks.is_empty() {
+        println!("\nComponent Risk Assessment:");
+        for (component, risk) in &safety_report.component_risks {
+            println!("  {} - Risk Level: {:?}", component, risk.risk_level);
+            for issue in &risk.issues {
+                println!("    • {}", issue);
+            }
+        }
     }
     
     // Test with protected LED

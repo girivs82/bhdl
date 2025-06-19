@@ -2,21 +2,54 @@
 // This is used internally when processing ground declarations like:
 // ground GND;
 
-import { GroundParams, GROUND_REF } from "../electrical_params.bhdl";
+import { ImpedanceCharacteristics } from "../types/electrical_types.bhdl";
+
+// Ground characteristics
+type GroundParams = {
+    reference_voltage: voltage,  // Usually 0V
+    impedance: ImpedanceCharacteristics,
+};
 
 module Ground() {
     // Ground pin
     pin GND: ground;
     
-    // Electrical parameters
-    const params: GroundParams = GROUND_REF;
+    // Ground reference parameters
+    const params: GroundParams = {
+        reference_voltage: 0V,
+        impedance: {
+            dc_resistance: 0Ω,
+            output_impedance: null,
+            input_impedance: 0Ω,
+            can_source_current: false,
+            can_sink_current: true,  // Ground sinks current
+            max_source_current: null,
+            max_sink_current: null,  // Unlimited in ideal case
+            power_domain_isolation: false,
+            voltage_drop: 0V,
+            current_limiting: false,
+            transient_response: null,
+            inrush_current: null
+        }
+    };
     
     // Component attributes
     attribute component_class = "ground_reference";
     attribute reference_voltage = params.reference_voltage;
-    attribute can_sink_current = params.impedance.can_sink_current;
+    
+    // Impedance characteristics
     attribute dc_resistance = params.impedance.dc_resistance;
+    attribute input_impedance = params.impedance.input_impedance;
+    attribute can_sink_current = params.impedance.can_sink_current;
+    attribute power_domain_isolation = params.impedance.power_domain_isolation;
+    
+    // SPICE model parameters
+    attribute spice_model = "ground";
+    attribute spice_voltage = params.reference_voltage;
 }
 
 // Alternative names
 alias GND = Ground;
+alias VSS = Ground;
+alias AGND = Ground;  // Analog ground
+alias DGND = Ground;  // Digital ground

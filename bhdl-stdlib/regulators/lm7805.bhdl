@@ -1,7 +1,7 @@
 // LM7805 Linear Voltage Regulator
 // 5V 1A output with various package options
 
-import { LinearRegulatorParams, LM7805_PARAMS } from "../electrical_params.bhdl";
+import { LinearRegulatorParams, LinearRegulatorBase } from "./linear_regulator_base.bhdl";
 
 module LM7805(package: string = "TO-220") {
     pin IN: power in;     // Input voltage (7-35V)
@@ -12,8 +12,35 @@ module LM7805(package: string = "TO-220") {
     pin EN: signal in when package == "TO-220-5" || package == "TO-263-5";   // Enable pin
     pin ADJ: signal in when package == "TO-220-5" || package == "TO-263-5";  // Adjust pin
     
-    // Electrical parameters
-    const params: LinearRegulatorParams = LM7805_PARAMS;
+    // LM7805-specific parameters
+    const LM7805_PARAMS: LinearRegulatorParams = {
+        output_voltage: 5V,
+        output_current: 1A,
+        dropout_voltage: 2V,
+        quiescent_current: 5mA,
+        line_regulation: 0.01%,
+        load_regulation: 0.1%,
+        ripple_rejection: 73,  // dB
+        thermal_resistance: 5,  // °C/W for TO-220
+        max_junction_temp: 125°C,
+        impedance: {
+            dc_resistance: null,
+            output_impedance: 0.03Ω,  // 30mΩ typical
+            input_impedance: null,
+            can_source_current: true,
+            can_sink_current: false,
+            max_source_current: 1A,
+            max_sink_current: null,
+            power_domain_isolation: true,  // Regulates input to output
+            voltage_drop: 2V,  // Dropout voltage
+            current_limiting: true,  // Has internal current limiting
+            transient_response: 5μs,
+            inrush_current: null
+        }
+    };
+    
+    // Use parameters
+    const params = LM7805_PARAMS;
     
     // Electrical specifications
     attribute output_voltage = params.output_voltage;
@@ -23,6 +50,9 @@ module LM7805(package: string = "TO-220") {
     attribute dropout_voltage = params.dropout_voltage;
     attribute max_output_current = params.output_current;
     attribute quiescent_current = params.quiescent_current;
+    attribute line_regulation = params.line_regulation;
+    attribute load_regulation = params.load_regulation;
+    attribute ripple_rejection = params.ripple_rejection;
     
     // Impedance characteristics
     attribute output_impedance = params.impedance.output_impedance;
@@ -33,17 +63,18 @@ module LM7805(package: string = "TO-220") {
     attribute current_limiting = params.impedance.current_limiting;
     attribute transient_response = params.impedance.transient_response;
     
-    // Thermal specifications
+    // Thermal specifications - package dependent
     attribute thermal_resistance = 
-        package == "TO-220" ? "5°C/W" :
-        package == "TO-263" ? "3°C/W" :
-        package == "SOT-223" ? "15°C/W" :
-        "5°C/W";
+        package == "TO-220" ? 5 :      // °C/W
+        package == "TO-263" ? 3 :
+        package == "SOT-223" ? 15 :
+        5;
+    attribute max_junction_temp = params.max_junction_temp;
     
     // Component database mapping
     attribute component_class = "voltage_regulator";
     attribute regulator_type = "linear";
-    attribute fixed_output = "true";
+    attribute fixed_output = true;
     
     // KiCad symbol mapping
     attribute kicad_symbol = 
@@ -54,17 +85,26 @@ module LM7805(package: string = "TO-220") {
     attribute packages = "TO-220,TO-220-5,TO-263,TO-263-5,SOT-223";
     attribute default_package = "TO-220";
     
-    // Thermal protection
-    attribute has_thermal_protection = "true";
-    attribute has_current_limiting = "true";
+    // Protection features
+    attribute has_thermal_protection = true;
+    attribute has_current_limiting = true;
+    attribute has_short_circuit_protection = true;
     
     // Recommended external components
     attribute input_capacitor_min = "0.33µF";   // Minimum input capacitor
     attribute output_capacitor_min = "0.1µF";   // Minimum output capacitor
     attribute input_capacitor_rec = "10µF";     // Recommended for ripple rejection
     attribute output_capacitor_rec = "1µF";     // Recommended for stability
+    
+    // SPICE model parameters
+    attribute spice_model = "voltage_regulator";
+    attribute spice_output_voltage = params.output_voltage;
+    attribute spice_dropout_voltage = params.dropout_voltage;
+    attribute spice_quiescent_current = params.quiescent_current;
 }
 
 // Common aliases
 alias 7805 = LM7805;
 alias L7805 = LM7805;
+alias UA7805 = LM7805;
+alias MC7805 = LM7805;

@@ -1,7 +1,10 @@
 // BHDL Standard Library Index
 // Exports all standard components
 
-// Electrical Parameters and Types
+// Shared Types
+export * from "./types/electrical_types.bhdl";
+
+// Electrical Parameters and Types (legacy - to be phased out)
 export * from "./electrical_params.bhdl";
 
 // Passive Components
@@ -13,6 +16,7 @@ export * from "./passives/fuse.bhdl";
 export * from "./passives/tvs_diode.bhdl";
 
 // Voltage Regulators
+export * from "./regulators/linear_regulator_base.bhdl";
 export * from "./regulators/lm7805.bhdl";
 
 // Connectors and Test Points

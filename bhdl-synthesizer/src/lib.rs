@@ -32,8 +32,6 @@ pub struct NetlistConfig {
     pub include_component_inference: bool,
     /// Flatten hierarchical designs to top-level
     pub flatten_hierarchy: bool,
-    /// Use database components instead of generic components
-    pub use_database_components: bool,
     /// Path to component database
     pub database_path: Option<String>,
 }
@@ -60,7 +58,6 @@ impl Default for NetlistConfig {
             include_power_domains: true,
             include_component_inference: true,
             flatten_hierarchy: false,
-            use_database_components: true,
             database_path: Some("/Users/girivs/src/bhdl-new/components.db".to_string()),
         }
     }
@@ -132,22 +129,20 @@ impl NetlistGenerator {
     async fn generate_from_ast_and_analysis_internal(&mut self, ast: Option<&SourceFile>, analysis: &AnalysisResult) -> Result<Netlist> {
         info!("Starting netlist generation from analysis results");
         
-        // Phase 0: Initialize database mapper if enabled
-        if self.config.use_database_components && self.database_mapper.is_none() {
+        // Phase 0: Initialize database mapper
+        if self.database_mapper.is_none() {
             self.initialize_database_mapper().await?;
         }
         
         // Phase 1: Extract board/module hierarchy from analysis
         self.extract_module_hierarchy(analysis)?;
         
-        // Phase 2: Generate instances and preserve semantic context (skip if using database components)
-        if !self.config.use_database_components {
-            self.generate_instances_with_semantics(analysis)?;
-        }
-        
-        // Phase 3: Generate database component instances if enabled
-        if self.config.use_database_components && self.database_mapper.is_some() {
+        // Phase 2: Generate database component instances if mapper is available
+        if self.database_mapper.is_some() {
             self.generate_database_component_instances(analysis).await?;
+        } else {
+            // Fallback to semantic instance generation if database unavailable
+            self.generate_instances_with_semantics(analysis)?;
         }
         
         // Phase 4: Extract connectivity and create nets
@@ -991,8 +986,9 @@ impl NetlistGenerator {
         // Now process all the collected component data
         for (instance_name, component_type, component_instance) in component_data {
             // Create netlist module for this database component
+            // IMPORTANT: Use BHDL type (e.g., "Res") not database name (e.g., "R")
             let module_id = self.netlist.add_module(
-                component_instance.component_name.clone(),
+                component_type.clone(),  // Use BHDL type instead of database component name
                 component_instance.get_module_kind()
             );
             
@@ -1009,8 +1005,8 @@ impl NetlistGenerator {
             self.netlist.create_pin_instances(netlist_instance_id)
                 .map_err(|e| anyhow::anyhow!("Failed to create pin instances: {}", e))?;
             
-            // Store mappings
-            self.ast_to_module.insert(component_instance.component_name.clone(), module_id);
+            // Store mappings - use BHDL type for module mapping
+            self.ast_to_module.insert(component_type.clone(), module_id);
             self.ast_to_instance.insert(component_instance.instance_name.clone(), netlist_instance_id);
             
             // Store component instance for reference
@@ -1047,7 +1043,7 @@ impl NetlistGenerator {
 
     /// Check if database component mapping is enabled and working
     pub fn is_database_enabled(&self) -> bool {
-        self.config.use_database_components && self.database_mapper.is_some()
+        self.database_mapper.is_some()
     }
     
     /// Add pins to a component module based on its type using stdlib definitions

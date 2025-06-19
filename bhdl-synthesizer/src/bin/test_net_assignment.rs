@@ -46,7 +46,6 @@ board NetAssignmentTest {
         include_power_domains: true,
         include_component_inference: true,
         flatten_hierarchy: false,
-        use_database_components: false,
         database_path: None,
     };
     

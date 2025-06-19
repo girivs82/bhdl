@@ -67,7 +67,6 @@ board TestNetNaming {
     // Generate netlist
     info!("Generating netlist with net naming support...");
     let config = NetlistConfig {
-        use_database_components: false, // Simplify for testing
         ..Default::default()
     };
     

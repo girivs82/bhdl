@@ -56,7 +56,21 @@ const LED_PARAMS_RED: LEDParams = {
     dynamic_resistance: 10Ω,
     wavelength: 630,
     luminous_intensity: 500,
-    viewing_angle: 30
+    viewing_angle: 30,
+    impedance: {
+        dc_resistance: null,  // Non-linear device
+        output_impedance: null,
+        input_impedance: null,
+        can_source_current: false,
+        can_sink_current: true,  // LEDs sink current
+        max_source_current: null,
+        max_sink_current: 30mA,
+        power_domain_isolation: false,
+        voltage_drop: 2.0V,  // Forward voltage drop
+        current_limiting: false,  // Does not limit current
+        transient_response: 100ns,
+        inrush_current: null
+    }
 };
 
 const LED_PARAMS_GREEN: LEDParams = {
@@ -67,7 +81,21 @@ const LED_PARAMS_GREEN: LEDParams = {
     dynamic_resistance: 12Ω,
     wavelength: 525,
     luminous_intensity: 300,
-    viewing_angle: 30
+    viewing_angle: 30,
+    impedance: {
+        dc_resistance: null,  // Non-linear device
+        output_impedance: null,
+        input_impedance: null,
+        can_source_current: false,
+        can_sink_current: true,  // LEDs sink current
+        max_source_current: null,
+        max_sink_current: 30mA,
+        power_domain_isolation: false,
+        voltage_drop: 2.2V,  // Forward voltage drop
+        current_limiting: false,  // Does not limit current
+        transient_response: 100ns,
+        inrush_current: null
+    }
 };
 
 const LED_PARAMS_BLUE: LEDParams = {
@@ -78,7 +106,21 @@ const LED_PARAMS_BLUE: LEDParams = {
     dynamic_resistance: 15Ω,
     wavelength: 470,
     luminous_intensity: 200,
-    viewing_angle: 30
+    viewing_angle: 30,
+    impedance: {
+        dc_resistance: null,  // Non-linear device
+        output_impedance: null,
+        input_impedance: null,
+        can_source_current: false,
+        can_sink_current: true,  // LEDs sink current
+        max_source_current: null,
+        max_sink_current: 30mA,
+        power_domain_isolation: false,
+        voltage_drop: 3.2V,  // Forward voltage drop
+        current_limiting: false,  // Does not limit current
+        transient_response: 100ns,
+        inrush_current: null
+    }
 };
 
 const LED_PARAMS_WHITE: LEDParams = {
@@ -89,7 +131,21 @@ const LED_PARAMS_WHITE: LEDParams = {
     dynamic_resistance: 16Ω,
     wavelength: null,  // White LEDs don't have single wavelength
     luminous_intensity: 1000,
-    viewing_angle: 120
+    viewing_angle: 120,
+    impedance: {
+        dc_resistance: null,  // Non-linear device
+        output_impedance: null,
+        input_impedance: null,
+        can_source_current: false,
+        can_sink_current: true,  // LEDs sink current
+        max_source_current: null,
+        max_sink_current: 30mA,
+        power_domain_isolation: false,
+        voltage_drop: 3.3V,  // Forward voltage drop
+        current_limiting: false,  // Does not limit current
+        transient_response: 100ns,
+        inrush_current: null
+    }
 };
 
 const LED_PARAMS_YELLOW: LEDParams = {
@@ -100,7 +156,21 @@ const LED_PARAMS_YELLOW: LEDParams = {
     dynamic_resistance: 11Ω,
     wavelength: 590,
     luminous_intensity: 400,
-    viewing_angle: 30
+    viewing_angle: 30,
+    impedance: {
+        dc_resistance: null,  // Non-linear device
+        output_impedance: null,
+        input_impedance: null,
+        can_source_current: false,
+        can_sink_current: true,  // LEDs sink current
+        max_source_current: null,
+        max_sink_current: 30mA,
+        power_domain_isolation: false,
+        voltage_drop: 2.1V,  // Forward voltage drop
+        current_limiting: false,  // Does not limit current
+        transient_response: 100ns,
+        inrush_current: null
+    }
 };
 
 const LED_PARAMS_IR: LEDParams = {
@@ -111,7 +181,21 @@ const LED_PARAMS_IR: LEDParams = {
     dynamic_resistance: 5Ω,
     wavelength: 940,
     luminous_intensity: null,  // Not visible
-    viewing_angle: 20
+    viewing_angle: 20,
+    impedance: {
+        dc_resistance: null,  // Non-linear device
+        output_impedance: null,
+        input_impedance: null,
+        can_source_current: false,
+        can_sink_current: true,  // LEDs sink current
+        max_source_current: null,
+        max_sink_current: 100mA,
+        power_domain_isolation: false,
+        voltage_drop: 1.4V,  // Forward voltage drop
+        current_limiting: false,  // Does not limit current
+        transient_response: 100ns,
+        inrush_current: null
+    }
 };
 
 // Diode electrical characteristics

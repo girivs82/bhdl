@@ -45,7 +45,6 @@ async fn main() -> Result<()> {
         include_power_domains: true,
         include_component_inference: true,
         flatten_hierarchy: false,
-        use_database_components: false, // Don't use database for this test
         database_path: None,
     };
     

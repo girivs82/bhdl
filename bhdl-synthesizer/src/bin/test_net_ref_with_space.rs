@@ -42,7 +42,6 @@ async fn main() -> Result<()> {
     
     // Generate netlist
     let config = NetlistConfig {
-        use_database_components: false,
         ..Default::default()
     };
     
