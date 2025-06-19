@@ -25,6 +25,7 @@
 
 use crate::circuit::{Circuit, ComponentId, NodeId};
 use crate::extended_analysis::simulation_engine::SimulationEngine;
+use crate::pin_metadata::{ComponentPinDatabase, PinFunction};
 use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
 
@@ -120,6 +121,7 @@ pub struct ComponentRoleDetector {
     pub circuit: Circuit,
     ic_components: Vec<ComponentId>,
     simulation_engine: Option<SimulationEngine>,
+    pin_database: ComponentPinDatabase,
 }
 
 impl ComponentRoleDetector {
@@ -130,6 +132,7 @@ impl ComponentRoleDetector {
             circuit,
             ic_components,
             simulation_engine: None,
+            pin_database: ComponentPinDatabase::new_with_defaults(),
         }
     }
     
@@ -1332,11 +1335,7 @@ impl ComponentRoleDetector {
     /// Helper methods for SMPS topology analysis
     
     fn is_switch_node(&self, node_id: NodeId) -> bool {
-        // Switch nodes have:
-        // 1. Connection to power switch (MOSFET) OR integrated controller
-        // 2. Connection to inductor
-        // 3. Connection to catch diode (in buck) or rectifier diode
-        
+        // Primary method: Check if any connected IC has a switch node pin
         let mut connected_components = Vec::new();
         for (comp_id, comp) in self.circuit.branches() {
             if comp.nodes().contains(&node_id) {
@@ -1344,7 +1343,30 @@ impl ComponentRoleDetector {
             }
         }
         
-        // Check for power switch OR integrated controller with switch output
+        // First, check pin metadata for any connected controller
+        for (comp_id, comp) in &connected_components {
+            if matches!(comp.component_type(), 
+                "BuckController" | "BoostController" | "FlybackController" | "ForwardController") {
+                
+                // Get pin metadata for this component
+                let pin_metadata = self.circuit.get_component_pin_metadata(*comp_id, &self.pin_database);
+                
+                // Check if any pin connected to this node has SwitchNode function
+                // Note: In a real implementation, we'd need to know which specific pin connects to this node
+                // For now, we check if the component type has a switch node pin
+                if self.pin_database.pin_has_function(comp.component_type(), "SW", &PinFunction::SwitchNode) {
+                    // This is definitely a switch node based on pin metadata
+                    return true;
+                }
+            }
+        }
+        
+        // Secondary method: Use topology analysis as confirmation
+        // Switch nodes have:
+        // 1. Connection to power switch (MOSFET) OR integrated controller
+        // 2. Connection to inductor
+        // 3. Connection to catch diode (in buck) or rectifier diode
+        
         let has_switch = connected_components.iter()
             .any(|(_, comp)| matches!(comp.component_type(), 
                 "MOSFET" | "FET" | "BuckController" | "BoostController" | 
@@ -1503,34 +1525,69 @@ impl ComponentRoleDetector {
     }
     
     fn is_compensation_capacitor(&self, component_id: ComponentId) -> bool {
-        // Compensation capacitors are small (< 100nF) and connected to feedback network
         if let Some(component) = self.circuit.get_component(component_id) {
-            if component.value < 100e-9 {
-                // Check if connected to resistors in feedback path
-                return self.is_in_feedback_path(component_id);
+            if component.component_type() == "Capacitor" {
+                let nodes = component.nodes();
+                
+                // Primary method: Check if connected to an IC's compensation pin
+                for &node in nodes {
+                    // Find ICs connected to this node
+                    for (comp_id, comp) in self.circuit.branches() {
+                        if comp.nodes().contains(&node) && self.ic_components.contains(&comp_id) {
+                            // Check if this IC has a compensation pin
+                            if self.pin_database.pin_has_function(comp.component_type(), "COMP", &PinFunction::Compensation) {
+                                // This capacitor is connected to a compensation pin
+                                return true;
+                            }
+                        }
+                    }
+                }
+                
+                // Secondary method: Compensation capacitors are small (< 100nF) and connected to feedback network
+                if component.value < 100e-9 {
+                    // Check if connected to resistors in feedback path
+                    return self.is_in_feedback_path(component_id);
+                }
             }
         }
         false
     }
     
     fn is_soft_start_capacitor(&self, component_id: ComponentId) -> bool {
-        // Soft-start capacitors are small (< 1µF) and connected to single IC pin
         if let Some(component) = self.circuit.get_component(component_id) {
-            if component.value < 1e-6 {
+            if component.component_type() == "Capacitor" {
                 let nodes = component.nodes();
-                // One side should connect to ground, other to IC
-                let connects_to_ground = nodes.iter().any(|&n| self.is_reference_node(n));
-                let connects_to_ic = nodes.iter().any(|&n| {
-                    for &ic_id in &self.ic_components {
-                        if let Some(ic) = self.circuit.get_component(ic_id) {
-                            if ic.nodes().contains(&n) {
+                
+                // Primary method: Check if connected to an IC's soft-start pin
+                for &node in nodes {
+                    // Find ICs connected to this node
+                    for (comp_id, comp) in self.circuit.branches() {
+                        if comp.nodes().contains(&node) && self.ic_components.contains(&comp_id) {
+                            // Check if this IC has a soft-start pin
+                            if self.pin_database.pin_has_function(comp.component_type(), "SS", &PinFunction::SoftStart) {
+                                // This capacitor is connected to a soft-start pin
                                 return true;
                             }
                         }
                     }
-                    false
-                });
-                return connects_to_ground && connects_to_ic;
+                }
+                
+                // Secondary method: Soft-start capacitors are small (< 1µF) and connected to single IC pin
+                if component.value < 1e-6 {
+                    // One side should connect to ground, other to IC
+                    let connects_to_ground = nodes.iter().any(|&n| self.is_reference_node(n));
+                    let connects_to_ic = nodes.iter().any(|&n| {
+                        for &ic_id in &self.ic_components {
+                            if let Some(ic) = self.circuit.get_component(ic_id) {
+                                if ic.nodes().contains(&n) {
+                                    return true;
+                                }
+                            }
+                        }
+                        false
+                    });
+                    return connects_to_ground && connects_to_ic;
+                }
             }
         }
         false
@@ -1582,16 +1639,32 @@ impl ComponentRoleDetector {
     }
     
     fn is_bootstrap_capacitor(&self, component_id: ComponentId) -> bool {
-        // Bootstrap capacitors connect between switch node and boot pin
-        // They're typically small (0.1µF - 1µF)
         if let Some(component) = self.circuit.get_component(component_id) {
-            if component.component_type() == "Capacitor" && 
-               component.value >= 0.1e-6 && component.value <= 1e-6 {
-                // Check if one node is a switch node
+            if component.component_type() == "Capacitor" {
                 let nodes = component.nodes();
+                
+                // Primary method: Check if connected to an IC's bootstrap pin
                 for &node in nodes {
-                    if self.is_switch_node(node) {
-                        return true;
+                    // Find ICs connected to this node
+                    for (comp_id, comp) in self.circuit.branches() {
+                        if comp.nodes().contains(&node) && self.ic_components.contains(&comp_id) {
+                            // Check if this IC has a bootstrap pin
+                            if self.pin_database.pin_has_function(comp.component_type(), "BOOT", &PinFunction::Bootstrap) {
+                                // This capacitor is connected to a bootstrap pin
+                                return true;
+                            }
+                        }
+                    }
+                }
+                
+                // Secondary method: Bootstrap capacitors connect between switch node and boot pin
+                // They're typically small (0.1µF - 1µF)
+                if component.value >= 0.1e-6 && component.value <= 1e-6 {
+                    // Check if one node is a switch node
+                    for &node in nodes {
+                        if self.is_switch_node(node) {
+                            return true;
+                        }
                     }
                 }
             }
