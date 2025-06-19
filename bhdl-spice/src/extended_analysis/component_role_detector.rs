@@ -392,15 +392,32 @@ impl ComponentRoleDetector {
         if comp_type == "Capacitor" {
             let cap_value = component.value;
             
+            // Special capacitor types first
+            if self.is_bootstrap_capacitor(component_id) {
+                return ComponentRole::Bootstrap;
+            }
+            
+            if self.is_soft_start_capacitor(component_id) {
+                return ComponentRole::SoftStart;
+            }
+            
+            if self.is_compensation_capacitor(component_id) {
+                return ComponentRole::Compensation;
+            }
+            
             // Primary classification: topology-based location analysis
             if connected_to_input {
                 // Any capacitor connected to IC input = input filtering
                 // (includes both large bulk caps and small bypass caps)
                 return ComponentRole::InputFilter;
             } else if connected_to_output {
-                // Any capacitor connected to IC output = output stabilization  
-                // (includes both stability caps and bypass caps)
-                return ComponentRole::OutputStabilization;
+                // Large capacitors (>= 10µF) on output = output stabilization
+                // Small capacitors (< 10µF) on output = decoupling
+                if cap_value >= 10e-6 {
+                    return ComponentRole::OutputStabilization;
+                } else {
+                    return ComponentRole::Decoupling;
+                }
             }
             
             // Secondary classification: analyze circuit pattern for unconnected caps
@@ -419,32 +436,40 @@ impl ComponentRoleDetector {
         }
         // Resistor classification based on location and regulation impact
         else if comp_type == "Resistor" {
+            let resistance = component.value;
+            
+            // Current sense: Very low resistance (< 1Ω)
+            if resistance < 1.0 {
+                return ComponentRole::Sense;
+            }
+            
+            // Check if it's part of a compensation network
+            if self.is_compensation_resistor(component_id) {
+                return ComponentRole::Compensation;
+            }
+            
             // Feedback network: High DC regulation change + feedback path
             if in_feedback_path && impact.dc_regulation_change.abs() > 10.0 {
                 return ComponentRole::FeedbackNetwork;
             }
             
-            // Load resistor: Significant load regulation change
-            if impact.load_regulation_change.abs() > 50.0 {
+            // Enable/UVLO divider: Connected to enable pin
+            if self.is_enable_divider_resistor(component_id) {
+                return ComponentRole::InputProtection; // UVLO is a protection feature
+            }
+            
+            // Feedback divider: Check for voltage divider pattern with specific ratios
+            if self.is_feedback_divider_resistor(component_id) {
+                return ComponentRole::FeedbackNetwork;
+            }
+            
+            // Load resistor: Low resistance or significant load regulation change
+            if resistance < 100.0 || impact.load_regulation_change.abs() > 50.0 {
                 return ComponentRole::Load;
             }
             
-            // Sensing resistor: Small resistance with voltage measurement
-            let resistance = component.value;
-            if resistance < 1.0 && (connected_to_input || connected_to_output) {
-                return ComponentRole::Sense;
-            }
-            
-            // Use topology analysis for resistor classification
-            if self.is_current_sense_resistor(component_id) {
-                ComponentRole::Sense
-            } else if in_feedback_path {
-                // Only classify as feedback if there's actual evidence of feedback function
-                ComponentRole::FeedbackNetwork
-            } else {
-                // Most resistors in power circuits are loads
-                ComponentRole::Load
-            }
+            // Default: Most other resistors in power circuits are loads
+            ComponentRole::Load
         }
         // Other component types - use topology analysis
         else {
@@ -488,8 +513,18 @@ impl ComponentRoleDetector {
                     }
                 },
                 "Transformer" => ComponentRole::Transformer,
-                "CommonModeChoke" => ComponentRole::EMIFiltering,
+                "CommonModeChoke" | "Ferrite" => ComponentRole::EMIFiltering, // Ferrite beads are EMI filters
                 "VoltageRegulator" | "OpAmp" | "Controller" => ComponentRole::Unknown, // ICs don't get classified
+                "SchottkyDiode" => {
+                    // Schottky diodes are often catch diodes in SMPS
+                    if self.is_catch_diode(component_id) {
+                        ComponentRole::CatchDiode
+                    } else if self.is_rectifier_diode(component_id) {
+                        ComponentRole::RectifierDiode
+                    } else {
+                        ComponentRole::Unknown
+                    }
+                },
                 _ => ComponentRole::Unknown,
             }
         }
@@ -1298,7 +1333,7 @@ impl ComponentRoleDetector {
     
     fn is_switch_node(&self, node_id: NodeId) -> bool {
         // Switch nodes have:
-        // 1. Connection to power switch (MOSFET)
+        // 1. Connection to power switch (MOSFET) OR integrated controller
         // 2. Connection to inductor
         // 3. Connection to catch diode (in buck) or rectifier diode
         
@@ -1309,8 +1344,11 @@ impl ComponentRoleDetector {
             }
         }
         
+        // Check for power switch OR integrated controller with switch output
         let has_switch = connected_components.iter()
-            .any(|(_, comp)| matches!(comp.component_type(), "MOSFET" | "FET"));
+            .any(|(_, comp)| matches!(comp.component_type(), 
+                "MOSFET" | "FET" | "BuckController" | "BoostController" | 
+                "FlybackController" | "ForwardController"));
         
         let has_inductor = connected_components.iter()
             .any(|(_, comp)| comp.component_type() == "Inductor");
@@ -1318,7 +1356,7 @@ impl ComponentRoleDetector {
         let has_diode = connected_components.iter()
             .any(|(_, comp)| matches!(comp.component_type(), "Diode" | "SchottkyDiode"));
         
-        // Classic switch node pattern
+        // Switch node pattern: controller/switch + inductor + diode
         has_switch && has_inductor && has_diode
     }
     
@@ -1438,6 +1476,122 @@ impl ComponentRoleDetector {
                         if comp.component_type() == "Resistor" && comp.value > 10000.0 {
                             return true; // High impedance suggests signal level
                         }
+                    }
+                }
+            }
+        }
+        false
+    }
+    
+    /// Additional helper methods for specific component detection
+    
+    fn is_compensation_resistor(&self, component_id: ComponentId) -> bool {
+        // Compensation resistors are typically in series with compensation capacitors
+        if let Some(component) = self.circuit.get_component(component_id) {
+            for &node in component.nodes() {
+                // Check if connected to small capacitors (< 100nF)
+                for (comp_id, comp) in self.circuit.branches() {
+                    if comp_id != component_id && comp.nodes().contains(&node) {
+                        if comp.component_type() == "Capacitor" && comp.value < 100e-9 {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+    
+    fn is_compensation_capacitor(&self, component_id: ComponentId) -> bool {
+        // Compensation capacitors are small (< 100nF) and connected to feedback network
+        if let Some(component) = self.circuit.get_component(component_id) {
+            if component.value < 100e-9 {
+                // Check if connected to resistors in feedback path
+                return self.is_in_feedback_path(component_id);
+            }
+        }
+        false
+    }
+    
+    fn is_soft_start_capacitor(&self, component_id: ComponentId) -> bool {
+        // Soft-start capacitors are small (< 1µF) and connected to single IC pin
+        if let Some(component) = self.circuit.get_component(component_id) {
+            if component.value < 1e-6 {
+                let nodes = component.nodes();
+                // One side should connect to ground, other to IC
+                let connects_to_ground = nodes.iter().any(|&n| self.is_reference_node(n));
+                let connects_to_ic = nodes.iter().any(|&n| {
+                    for &ic_id in &self.ic_components {
+                        if let Some(ic) = self.circuit.get_component(ic_id) {
+                            if ic.nodes().contains(&n) {
+                                return true;
+                            }
+                        }
+                    }
+                    false
+                });
+                return connects_to_ground && connects_to_ic;
+            }
+        }
+        false
+    }
+    
+    fn is_enable_divider_resistor(&self, component_id: ComponentId) -> bool {
+        // Enable divider resistors form a voltage divider at IC input
+        // Typically high values (10k-100k range)
+        if let Some(component) = self.circuit.get_component(component_id) {
+            if component.value >= 10000.0 && component.value <= 1e6 {
+                // Check if part of a divider connected to IC
+                for &node in component.nodes() {
+                    let mut resistor_count = 0;
+                    let mut connects_to_ic = false;
+                    
+                    for (comp_id, comp) in self.circuit.branches() {
+                        if comp.nodes().contains(&node) {
+                            if comp.component_type() == "Resistor" {
+                                resistor_count += 1;
+                            }
+                            if self.ic_components.contains(&comp_id) {
+                                connects_to_ic = true;
+                            }
+                        }
+                    }
+                    
+                    if resistor_count >= 2 && connects_to_ic {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+    
+    fn is_feedback_divider_resistor(&self, component_id: ComponentId) -> bool {
+        // Feedback divider resistors have specific characteristics:
+        // 1. Typically 1k-100k range
+        // 2. Form voltage divider from output to ground
+        // 3. Mid-point connects to IC feedback pin
+        if let Some(component) = self.circuit.get_component(component_id) {
+            if component.value >= 1000.0 && component.value <= 100000.0 {
+                // Check if it's part of a divider from output
+                return self.is_connected_to_ic_output(component_id) && 
+                       self.is_likely_feedback_divider(component_id, NodeId::new(0));
+            }
+        }
+        false
+    }
+    
+    fn is_bootstrap_capacitor(&self, component_id: ComponentId) -> bool {
+        // Bootstrap capacitors connect between switch node and boot pin
+        // They're typically small (0.1µF - 1µF)
+        if let Some(component) = self.circuit.get_component(component_id) {
+            if component.component_type() == "Capacitor" && 
+               component.value >= 0.1e-6 && component.value <= 1e-6 {
+                // Check if one node is a switch node
+                let nodes = component.nodes();
+                for &node in nodes {
+                    if self.is_switch_node(node) {
+                        return true;
                     }
                 }
             }

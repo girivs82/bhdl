@@ -1,0 +1,101 @@
+// Realistic 12V to 5V Buck Regulator with TPS54360 Controller
+// Output: 5V @ 3A max, switching at 500kHz
+
+board BuckRegulator12Vto5V {
+    power VIN = 12V @ 4A;
+    power VOUT = 5V @ 3A;
+    ground GND;
+
+    // Input EMI filtering and protection
+    VIN -> Ferrite(600ohm@100MHz).1 -> vin_filtered;
+    
+    // Input protection
+    vin_filtered -> Fuse(5A, fast).1 -> vin_fused;
+    vin_fused -> TVSDiode(SMAJ15A, 15V).1 -> GND;  // 15V clamp for 12V input
+    
+    // Input bulk capacitance
+    vin_fused -> Cap(220uF, 25V, electrolytic).1 -> GND;  // Bulk storage
+    vin_fused -> Cap(10uF, 25V, ceramic).1 -> GND;        // HF bypass
+    vin_fused -> Cap(0.1uF, 50V, ceramic).1 -> GND;       // VIN pin bypass
+    
+    // Buck controller - TPS54360 (60V, 3.5A)
+    module TPS54360 {
+        pin VIN: power in;
+        pin SW: power out;      // Switch node
+        pin BOOT: power in;     // Bootstrap cap
+        pin GND: ground in;
+        pin EN: signal in;      // Enable
+        pin FB: signal in;      // Feedback
+        pin SS: signal in;      // Soft-start
+        pin COMP: signal inout; // Compensation
+        pin PWRGD: signal out;  // Power good
+    }
+    
+    vin_fused -> TPS54360().VIN;
+    TPS54360().GND -> GND;
+    
+    // Enable with undervoltage lockout
+    vin_fused -> Res(100k, 0603).1 -> en_divider;
+    en_divider -> TPS54360().EN;
+    en_divider -> Res(10k, 0603).2 -> GND;  // Enable at ~10V
+    
+    // Bootstrap capacitor for high-side driver
+    TPS54360().SW -> Cap(0.1uF, 16V, ceramic).1 -> TPS54360().BOOT;
+    
+    // Power stage - synchronous buck with integrated FETs
+    switch_node: TPS54360().SW;
+    
+    // Catch diode for startup and protection (Schottky)
+    GND -> Diode(SS34, 40V, 3A).A -> switch_node;
+    
+    // Output inductor - critical component
+    switch_node -> Inductor(15uH, 4.7A, shielded).1 -> VOUT;
+    
+    // Output capacitance - mix of ceramics for low ESR
+    VOUT -> Cap(47uF, 10V, ceramic).1 -> GND;   // Primary output cap
+    VOUT -> Cap(47uF, 10V, ceramic).1 -> GND;   // Parallel for lower ESR
+    VOUT -> Cap(22uF, 10V, ceramic).1 -> GND;   // Additional filtering
+    VOUT -> Cap(10uF, 10V, ceramic).1 -> GND;   // HF bypass
+    VOUT -> Cap(0.1uF, 10V, ceramic).1 -> GND;  // Ultra HF bypass
+    
+    // Feedback network - sets output to 5V (Vref = 0.8V)
+    VOUT -> Res(10k, 0603, 1%).1 -> fb_node;
+    fb_node -> TPS54360().FB;
+    fb_node -> Res(1.87k, 0603, 1%).2 -> GND;  // 5V * 1.87k/(10k+1.87k) = 0.8V
+    
+    // Type II compensation network
+    fb_node -> Res(13.3k, 0603).1 -> comp_node;
+    comp_node -> TPS54360().COMP;
+    comp_node -> Cap(3.3nF, 50V, C0G).1 -> GND;
+    comp_node -> SeriesRC: Series {
+        Res(2.2k, 0603).1 -> Cap(22nF, 50V, X7R).1
+    } -> GND;
+    
+    // Soft-start - 5ms ramp
+    TPS54360().SS -> Cap(10nF, 10V, ceramic).1 -> GND;
+    
+    // Power good indicator LED
+    TPS54360().PWRGD -> Res(1k, 0603).1 -> LED(green, 0603).A -> GND;
+    
+    // Output current sensing (optional)
+    VOUT -> Res(0.01ohm, 2512, 1W, 1%).1 -> vout_sensed;
+    
+    // Output protection
+    vout_sensed -> TVSDiode(SMAJ5.0A, 5V).1 -> GND;
+    
+    // Test points
+    testpoint TP_VIN: vin_fused;
+    testpoint TP_SW: switch_node;
+    testpoint TP_VOUT: vout_sensed;
+    testpoint TP_FB: fb_node;
+    testpoint TP_COMP: comp_node;
+    testpoint TP_EN: en_divider;
+    
+    // Load connectors
+    vout_sensed -> Header_1x2().1;  // VOUT+
+    GND -> Header_1x2().2;          // VOUT-
+    
+    // Input connector
+    VIN -> Header_1x2().1;          // VIN+
+    GND -> Header_1x2().2;          // VIN-
+}
