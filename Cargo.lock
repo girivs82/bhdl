@@ -335,6 +335,7 @@ dependencies = [
  "bhdl-netlist",
  "bhdl-parser",
  "bhdl-safety",
+ "bhdl-spice",
  "bhdl-stdlib",
  "console",
  "env_logger 0.11.8",

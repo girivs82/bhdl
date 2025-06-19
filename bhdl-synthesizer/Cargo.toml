@@ -21,6 +21,7 @@ bhdl-components = { path = "../bhdl-components" }
 bhdl-common = { path = "../bhdl-common" }
 bhdl-stdlib = { path = "../bhdl-stdlib" }
 bhdl-safety = { path = "../bhdl-safety" }
+bhdl-spice = { path = "../bhdl-spice" }
 anyhow = "1.0"
 log = "0.4"
 env_logger = "0.11"
