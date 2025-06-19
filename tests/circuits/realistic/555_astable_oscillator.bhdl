@@ -1,0 +1,62 @@
+// 555 Timer Astable Oscillator Circuit
+// Generates a square wave output with adjustable frequency and duty cycle
+
+board Oscillator555 {
+    // Power supply
+    power VCC = 5V @ 100mA;
+    ground GND;
+    
+    // 555 Timer IC
+    component Timer555(NE555) {
+        attributes {
+            spice_model: "timer_555",
+            package: "DIP8",
+        }
+        pin 1: ground;     // GND
+        pin 2: signal in;  // TRIG
+        pin 3: signal out; // OUT
+        pin 4: signal in;  // RESET
+        pin 5: signal in;  // CTRL
+        pin 6: signal in;  // THRES
+        pin 7: signal out; // DISCH
+        pin 8: power;      // VCC
+    }
+    
+    // Create instance
+    instance U1 of Timer555;
+    
+    // Power connections
+    VCC -> U1.8;
+    GND -> U1.1;
+    
+    // Reset pin tied high
+    VCC -> U1.4;
+    
+    // Control voltage bypass capacitor
+    U1.5 -> Cap(10nF).1 -> GND;
+    
+    // Timing components for ~1kHz square wave
+    // Frequency = 1.44 / ((R1 + 2*R2) * C)
+    // With R1=1k, R2=10k, C=100nF: f ≈ 654 Hz
+    
+    // R1: Charge path resistor
+    timing_r1: VCC -> Res(1kΩ).1 -> U1.7;
+    
+    // R2: Charge/discharge resistor  
+    timing_r2: U1.7 -> Res(10kΩ).1 -> U1.6;
+    
+    // Connect threshold and trigger together
+    U1.6 -> U1.2;
+    
+    // Timing capacitor
+    timing_cap: U1.2 -> Cap(100nF).1 -> GND;
+    
+    // Output LED indicator
+    output_led: U1.3 -> Res(470Ω).1 -> LED(red).A -> GND;
+    
+    // Output test point
+    signal OUT = U1.3;
+    
+    // Decoupling capacitor
+    VCC -> Cap(100nF).1 -> GND;
+}

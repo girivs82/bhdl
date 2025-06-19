@@ -13,6 +13,8 @@ pub mod bjt;
 pub mod mosfet;
 pub mod opamp;
 pub mod voltage_regulator;
+pub mod behavioral_ic;
+pub mod timer_555;
 
 pub use resistor::{ResistorModel, ResistorParams};
 pub use capacitor::{CapacitorModel, CapacitorParams};
@@ -22,6 +24,8 @@ pub use bjt::{BjtModel, BjtParams, BjtType};
 pub use mosfet::{MosfetModel, MosfetParams, MosfetType};
 pub use opamp::{OpAmpModel, OpAmpParams};
 pub use voltage_regulator::{VoltageRegulatorModel, VoltageRegulatorParams, RegulatorType};
+pub use behavioral_ic::{BehavioralIcModel, IcType, IcModelBuilder};
+pub use timer_555::{Timer555Model, Timer555Builder};
 
 /// Temperature in Celsius (default: 27°C)
 pub const DEFAULT_TEMPERATURE: f64 = 27.0;
@@ -90,6 +94,10 @@ pub enum ModelType {
     VoltageRegulator,
     VoltageSource,
     CurrentSource,
+    BehavioralIc,
+    Comparator,
+    LogicGate,
+    VoltageReference,
 }
 
 /// Model level for complexity/accuracy tradeoff
