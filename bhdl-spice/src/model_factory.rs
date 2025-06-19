@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use crate::models::*;
 use crate::components::{ComponentModel, ComponentType};
+use crate::Circuit;
 
 /// Parse a value string that may contain units
 pub fn parse_value(value_str: &str) -> Option<f64> {
@@ -84,6 +85,8 @@ pub fn parse_value(value_str: &str) -> Option<f64> {
 pub struct SpiceModelFactory {
     /// Model library - maps model names to preset parameters
     model_library: HashMap<String, String>,
+    /// Subcircuit library
+    subcircuit_library: SubcircuitLibrary,
 }
 
 impl SpiceModelFactory {
@@ -91,10 +94,12 @@ impl SpiceModelFactory {
     pub fn new() -> Self {
         let mut factory = Self {
             model_library: HashMap::new(),
+            subcircuit_library: SubcircuitLibrary::new(),
         };
         
         // Register common models
         factory.register_common_models();
+        factory.register_common_subcircuits();
         factory
     }
     
@@ -121,6 +126,94 @@ impl SpiceModelFactory {
         self.model_library.insert("TL072".to_string(), "tl072".to_string());
         self.model_library.insert("LM358".to_string(), "lm358".to_string());
         self.model_library.insert("OP07".to_string(), "op07".to_string());
+    }
+    
+    /// Register common subcircuits
+    fn register_common_subcircuits(&mut self) {
+        // Add TL431 voltage reference as a subcircuit
+        self.create_tl431_subcircuit();
+        
+        // Add more subcircuits as needed
+        // self.create_lm317_subcircuit();
+        // self.create_bridge_rectifier_subcircuit();
+    }
+    
+    /// Create TL431 adjustable voltage reference subcircuit
+    fn create_tl431_subcircuit(&mut self) {
+        let mut internal = Circuit::new();
+        
+        // TL431 has three pins: K (cathode), A (anode), R (reference)
+        // Simplified model using ideal components
+        
+        // Internal nodes
+        let k_node = internal.add_node("K".to_string(), None);
+        let a_node = internal.add_node("A".to_string(), None);
+        let r_node = internal.add_node("R".to_string(), None);
+        let int_node = internal.add_node("INT".to_string(), None);
+        
+        // Reference voltage source (2.495V)
+        internal.add_branch(
+            "VREF".to_string(),
+            "R",
+            "A",
+            "VoltageSource".to_string(),
+            2.495,
+            None,
+        );
+        
+        // Error amplifier represented as voltage-controlled current source
+        // Simplified: IK = gm * (VR - VREF)
+        // For now, use a resistor as placeholder
+        internal.add_branch(
+            "ROUT".to_string(),
+            "K",
+            "INT",
+            "Resistor".to_string(),
+            100.0, // Dynamic resistance
+            None,
+        );
+        
+        // Minimum cathode current source
+        internal.add_branch(
+            "IMIN".to_string(),
+            "INT",
+            "A",
+            "CurrentSource".to_string(),
+            1e-3, // 1mA minimum
+            None,
+        );
+        
+        let pins = vec![
+            SubcircuitPin {
+                external_name: "K".to_string(),
+                internal_node: "K".to_string(),
+                pin_type: "cathode".to_string(),
+            },
+            SubcircuitPin {
+                external_name: "A".to_string(),
+                internal_node: "A".to_string(),
+                pin_type: "anode".to_string(),
+            },
+            SubcircuitPin {
+                external_name: "R".to_string(),
+                internal_node: "R".to_string(),
+                pin_type: "reference".to_string(),
+            },
+        ];
+        
+        let tl431 = SubcircuitDefinition {
+            name: "TL431".to_string(),
+            pins,
+            internal_circuit: internal,
+            parameters: HashMap::new(),
+            defaults: [
+                ("vref".to_string(), 2.495),
+                ("ika_min".to_string(), 1e-3),
+                ("rout".to_string(), 0.2),
+            ].iter().cloned().collect(),
+        };
+        
+        self.subcircuit_library.add_definition(tl431);
     }
     
     /// Create SPICE model from component specification
@@ -726,6 +819,33 @@ impl SpiceModelFactory {
             
             _ => None,
         }
+    }
+    
+    /// Create subcircuit instance
+    pub fn create_subcircuit(
+        &self,
+        instance_name: &str,
+        subcircuit_name: &str,
+    ) -> Option<Box<dyn SpiceModel>> {
+        match self.subcircuit_library.instantiate(instance_name, subcircuit_name) {
+            Ok(model) => Some(Box::new(model)),
+            Err(_) => None,
+        }
+    }
+    
+    /// Check if a name refers to a subcircuit
+    pub fn is_subcircuit(&self, name: &str) -> bool {
+        self.subcircuit_library.get_definition(name).is_some()
+    }
+    
+    /// Get subcircuit library for direct access
+    pub fn subcircuit_library(&self) -> &SubcircuitLibrary {
+        &self.subcircuit_library
+    }
+    
+    /// Add custom subcircuit definition
+    pub fn add_subcircuit(&mut self, definition: SubcircuitDefinition) {
+        self.subcircuit_library.add_definition(definition);
     }
 }
 
