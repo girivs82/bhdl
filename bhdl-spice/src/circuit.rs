@@ -39,8 +39,6 @@ pub struct Branch {
     pub current: Option<f64>,
     /// Connected nodes (for safety analysis)
     pub nodes: Vec<NodeId>,
-    /// Electrical limits from component model
-    pub limits: Option<crate::components::ElectricalLimits>,
 }
 
 impl Branch {
@@ -66,18 +64,21 @@ impl Branch {
     
     /// Get maximum current rating
     pub fn max_current(&self) -> Option<f64> {
-        self.limits.as_ref()?.max_current
+        // TODO: Get from model parameters or component database
+        None
     }
     
     /// Get maximum voltage rating
     pub fn max_voltage(&self) -> Option<f64> {
-        self.limits.as_ref()?.max_voltage
+        // TODO: Get from model parameters or component database
+        None
     }
     
     /// Get component resistance
     pub fn resistance(&self) -> Option<f64> {
+        // For resistors, return the value directly
         match self.component_type.as_str() {
-            "Resistor" => Some(self.value),
+            "Resistor" | "Res" => Some(self.value),
             "LED" => Some(10.0), // Dynamic resistance approximation
             _ => None,
         }
@@ -88,6 +89,7 @@ impl Branch {
         // Would come from component database
         None
     }
+    
     
     /// Get parameter value
     pub fn get_parameter(&self, param: &str) -> Option<f64> {
@@ -179,7 +181,6 @@ impl Circuit {
             value,
             current: None,
             nodes: vec![n1, n2],
-            limits: None,
         };
         
         let idx = self.graph.add_edge(n1, n2, branch);
@@ -243,14 +244,6 @@ impl Circuit {
         }
     }
     
-    /// Set branch electrical limits (from component model)
-    pub fn set_branch_limits(&mut self, name: &str, limits: crate::components::ElectricalLimits) {
-        if let Some(&edge) = self.branch_map.get(name) {
-            if let Some(b) = self.graph.edge_weight_mut(edge) {
-                b.limits = Some(limits);
-            }
-        }
-    }
     
     // Safety analysis support methods
     
@@ -358,6 +351,15 @@ impl Circuit {
                                     break;
                                 }
                             }
+                            ConnectionPoint::PinInstance(pin_inst_id) => {
+                                // Check if this pin instance belongs to our instance
+                                if let Some(pin_inst) = netlist.pin_instances.get(*pin_inst_id) {
+                                    if pin_inst.instance == instance_id {
+                                        connected_nets.push(net_id);
+                                        break;
+                                    }
+                                }
+                            }
                             _ => {}
                         }
                     }
@@ -373,7 +375,10 @@ impl Circuit {
                         .unwrap_or_else(|| "unknown".to_string());
                     
                     let component_type = module.name.clone();
-                    let value = 1.0; // Placeholder - would extract from parameters
+                    
+                    // TODO: Extract value from module parameters or instance overrides
+                    // For now, use a placeholder value
+                    let value = 1.0;
                     
                     circuit.add_branch(
                         instance.name.clone(),

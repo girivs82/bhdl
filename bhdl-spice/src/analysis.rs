@@ -72,10 +72,6 @@ impl DcAnalysis {
     pub fn add_model(&mut self, component_name: String, model: ComponentModel) {
         // Also set the limits in the circuit
         let limits = model.limits();
-        // Only set if we have actual limits (not DEFAULT_LIMITS)
-        if limits.max_voltage.is_some() || limits.max_current.is_some() || limits.max_power.is_some() {
-            self.circuit.set_branch_limits(&component_name, limits.clone());
-        }
         self.models.insert(component_name, model);
     }
     
@@ -191,10 +187,10 @@ impl DcAnalysis {
         
         // Collect branch data first to avoid borrowing issues
         let branches: Vec<_> = self.circuit.branches()
-            .map(|(idx, branch)| (idx, branch.name.clone(), branch.clone()))
+            .map(|(idx, branch)| (idx, branch.name.clone()))
             .collect();
         
-        for (edge_idx, branch_name, _branch) in branches {
+        for (edge_idx, branch_name) in branches {
             if let Some((n1, n2)) = self.circuit.branch_nodes(edge_idx) {
                 let v1 = node_voltages.get(&n1).copied().unwrap_or(0.0);
                 let v2 = node_voltages.get(&n2).copied().unwrap_or(0.0);

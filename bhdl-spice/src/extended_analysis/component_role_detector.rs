@@ -392,7 +392,7 @@ impl ComponentRoleDetector {
         }
         
         // Capacitor classification based on topology analysis (location matters more than size)
-        if comp_type == "Capacitor" {
+        if comp_type == "Capacitor" || comp_type == "Cap" {
             let cap_value = component.value;
             
             // Special capacitor types first
@@ -434,11 +434,20 @@ impl ComponentRoleDetector {
             } else if impact.phase_margin_change < -3.0 || impact.settling_time_change > 30.0 {
                 ComponentRole::OutputStabilization // Stability impact suggests output role
             } else {
-                ComponentRole::Decoupling // Default for unclear cases
+                // Simple heuristic: Check what other components are connected
+                // If connected to protection devices, likely input filter
+                // If connected to load, likely output filter
+                if self.is_connected_to_protection_device(component_id) {
+                    ComponentRole::InputFilter
+                } else if self.is_connected_to_load(component_id) {
+                    ComponentRole::OutputStabilization
+                } else {
+                    ComponentRole::Decoupling // Default for unclear cases
+                }
             }
         }
         // Resistor classification based on location and regulation impact
-        else if comp_type == "Resistor" {
+        else if comp_type == "Resistor" || comp_type == "Res" {
             let resistance = component.value;
             
             // Current sense: Very low resistance (< 1Ω)
@@ -508,6 +517,15 @@ impl ComponentRoleDetector {
                 },
                 "TVSDiode" => ComponentRole::InputProtection, // TVS always protection
                 "Fuse" | "PTC" => ComponentRole::InputProtection,
+                "LED" => {
+                    // LEDs are typically indicators or part of optocouplers
+                    // Check if it's connected to a current limiting resistor
+                    if self.has_series_resistor(component_id) {
+                        ComponentRole::Load // Power indicator LED
+                    } else {
+                        ComponentRole::Unknown
+                    }
+                },
                 "MOSFET" | "FET" => {
                     if self.is_power_switch(component_id) {
                         ComponentRole::PowerSwitch
@@ -538,12 +556,26 @@ impl ComponentRoleDetector {
     fn find_ic_components(circuit: &Circuit) -> Vec<ComponentId> {
         circuit.branches()
             .filter_map(|(id, component)| {
-                match component.component_type() {
+                // Check if component is an IC based on component type
+                let comp_type = component.component_type();
+                
+                // Check for IC component types
+                if matches!(comp_type, 
                     "VoltageRegulator" | "OpAmp" | "Comparator" | "ADC" | "DAC" |
                     "BuckController" | "BoostController" | "FlybackController" |
-                    "ForwardController" | "Controller" => Some(id),
-                    _ => None,
+                    "ForwardController" | "Controller" | "BehavioralIC"
+                ) {
+                    return Some(id);
                 }
+                
+                // For components like LM7805, we need to check if they're ICs
+                // This is a temporary solution until we have proper component classification
+                // TODO: Use component database or stdlib to properly classify components
+                if comp_type == "LM7805" || comp_type == "LM317" {
+                    return Some(id);
+                }
+                
+                None
             })
             .collect()
     }
@@ -1333,6 +1365,65 @@ impl ComponentRoleDetector {
     }
     
     /// Helper methods for SMPS topology analysis
+    
+    fn is_connected_to_protection_device(&self, component_id: ComponentId) -> bool {
+        // Check if this component shares a node with a protection device
+        if let Some(component) = self.circuit.get_component(component_id) {
+            for &node in component.nodes() {
+                for (comp_id, comp) in self.circuit.branches() {
+                    if comp_id != component_id && comp.nodes().contains(&node) {
+                        let comp_type = comp.component_type();
+                        if matches!(comp_type, "Fuse" | "TVSDiode" | "PTC" | "MOV") {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+    
+    fn is_connected_to_load(&self, component_id: ComponentId) -> bool {
+        // Check if this component shares a node with a load (LED, resistor)
+        if let Some(component) = self.circuit.get_component(component_id) {
+            for &node in component.nodes() {
+                for (comp_id, comp) in self.circuit.branches() {
+                    if comp_id != component_id && comp.nodes().contains(&node) {
+                        let comp_type = comp.component_type();
+                        if matches!(comp_type, "LED" | "Res" | "Resistor") {
+                            // Check if it's actually a load resistor (not too high value)
+                            if comp_type == "Res" || comp_type == "Resistor" {
+                                if comp.value < 10000.0 { // Less than 10k is likely a load
+                                    return true;
+                                }
+                            } else {
+                                return true; // LED is always a load
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+    
+    fn has_series_resistor(&self, component_id: ComponentId) -> bool {
+        // Check if this component has a resistor in series
+        if let Some(component) = self.circuit.get_component(component_id) {
+            for &node in component.nodes() {
+                // Check all components connected to this node
+                for (comp_id, comp) in self.circuit.branches() {
+                    if comp_id != component_id && comp.nodes().contains(&node) {
+                        if comp.component_type() == "Res" || comp.component_type() == "Resistor" {
+                            // Found a resistor connected to same node
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
     
     fn is_switch_node(&self, node_id: NodeId) -> bool {
         // Primary method: Check if any connected IC has a switch node pin
