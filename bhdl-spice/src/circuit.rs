@@ -217,6 +217,13 @@ impl Circuit {
             .map(|&idx| (idx, &self.graph[idx]))
     }
     
+    /// Get mutable branch by name
+    pub fn get_branch_mut(&mut self, name: &str) -> Option<(EdgeIndex, &mut Branch)> {
+        self.branch_map.get(name)
+            .copied()
+            .and_then(move |idx| self.graph.edge_weight_mut(idx).map(|branch| (idx, branch)))
+    }
+    
     /// Get ground node
     pub fn ground_node(&self) -> Option<(NodeIndex, &Node)> {
         self.ground_node
@@ -247,6 +254,18 @@ impl Circuit {
         if let Some(b) = self.graph.edge_weight_mut(edge) {
             b.current = Some(current);
         }
+    }
+    
+    /// Get branch current from analysis results
+    pub fn branch_current(&self, name: &str, result: &crate::AnalysisResult) -> crate::Result<f64> {
+        let (edge_idx, _) = self.get_branch(name)
+            .ok_or_else(|| crate::SpiceError::ComponentNotFound(name.to_string()))?;
+        
+        result.branch_currents.get(&edge_idx)
+            .copied()
+            .ok_or_else(|| crate::SpiceError::Other(anyhow::anyhow!(
+                "No current result for branch {}", name
+            )))
     }
     
     

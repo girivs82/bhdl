@@ -1,0 +1,86 @@
+// Complex power supply with constraint-based component selection
+// Tests SPICE dual-role syntax with real-world constraints
+
+board PowerSupplyWithConstraints {
+  metadata {
+    description = "12V to 5V/3.3V dual rail supply with constraints";
+    author = "BHDL Test Suite";
+    version = "1.0";
+  }
+  
+  // Power domains
+  power VIN = 12V @ 3A;        // Input power
+  power VCC_5V = 5V @ 2A;      // 5V rail  
+  power VCC_3V3 = 3.3V @ 1A;   // 3.3V rail
+  ground GND;
+  
+  // Input protection with constraint-based design
+  VIN @RAW_IN-> fuse: Fuse(?, current_trip=3.5A).1;
+  fuse.2 @FUSED-> tvs: TVSDiode(?, clamp_voltage<15V).1;
+  tvs.2 -> GND;
+  
+  // Input filtering with ripple constraint
+  @FUSED -> c_bulk: ElectrolyticCap(?, ripple_current>1A, voltage=25V).+;
+  @FUSED -> c_ceramic: Cap(?, esr<0.1Ω).1;
+  c_bulk.- -> GND;
+  c_ceramic.2 -> GND;
+  
+  // 5V switching regulator with efficiency constraint
+  @FUSED -> reg_5v: SwitchingReg(5V, ?, efficiency>85%).IN;
+  reg_5v.OUT @5V_RAW-> inductor_5v: Inductor(?, current_sat>2.5A).1;
+  inductor_5v.2 @5V_SWITCHED-> c_out_5v: Cap(?, ripple<50mV).+;
+  reg_5v.GND -> GND;
+  c_out_5v.- -> GND;
+  
+  // Feedback network with precise ratio
+  @5V_SWITCHED -> r_fb1: Res(?, ratio=4:1).1 -> @FB_5V -> r_fb2: Res(?).1 -> GND;
+  @FB_5V -> reg_5v.FB;
+  
+  // 3.3V LDO from 5V with thermal constraint  
+  @5V_SWITCHED -> reg_3v3: LinearReg(3.3V, ?, power_dissipation<2W).IN;
+  reg_3v3.OUT @3V3_OUT-> c_out_3v3: Cap(?, low_esr=true).+;
+  reg_3v3.GND -> GND;
+  c_out_3v3.- -> GND;
+  
+  // LED indicators with current constraints
+  @5V_SWITCHED -> r_led_5v: Res(?, current=10mA).1 -> led_5v: LED(green, Vf=2.2V).A;
+  @3V3_OUT -> r_led_3v3: Res(?, current=5mA).1 -> led_3v3: LED(yellow, Vf=2.0V).A;
+  led_5v.K -> GND;
+  led_3v3.K -> GND;
+  
+  // Load sharing resistors with power constraint
+  @5V_SWITCHED -> r_share1: Res(?, power=0.5W, current_share=50%).1 -> @5V_LOAD;
+  @5V_SWITCHED -> r_share2: Res(?, power=0.5W, current_share=50%).1 -> @5V_LOAD;
+  
+  // Output connectors
+  @5V_LOAD -> conn_5v: Header_1x2.1;
+  GND -> conn_5v.2;
+  
+  @3V3_OUT -> conn_3v3: Header_1x2.1;
+  GND -> conn_3v3.2;
+  
+  // Thermal monitoring with voltage divider
+  power VREF = 2.5V;  // Reference voltage
+  VREF -> r_therm1: Res(10kΩ).1 -> @TEMP_SENSE -> thermistor: NTC(?, temp_nominal=25°C).1 -> GND;
+  
+  // Decoupling capacitors with placement constraints
+  generate for rail in [@5V_SWITCHED, @3V3_OUT] {
+    rail -> Cap(0.1µF, ?, max_distance=5mm).1 -> GND;
+    rail -> Cap(1µF, ?, max_distance=10mm).1 -> GND;
+  }
+}
+
+// Test module for voltage divider calculations
+module VoltageDivider(v_in, v_out, load_current) {
+  pin IN: power in;
+  pin OUT: signal out;
+  pin GND: ground;
+  
+  // Let SPICE calculate both resistors for desired ratio
+  IN -> r1: Res(?, ratio=(v_in/v_out - 1):1).1 -> OUT -> r2: Res(?).1 -> GND;
+  
+  // Ensure divider current >> load current
+  constrain divider_stiffness {
+    (v_in / (r1.value + r2.value)) > 10 * load_current;
+  }
+}
