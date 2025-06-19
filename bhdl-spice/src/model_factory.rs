@@ -5,7 +5,7 @@ use crate::models::*;
 use crate::components::{ComponentModel, ComponentType};
 
 /// Parse a value string that may contain units
-fn parse_value(value_str: &str) -> Option<f64> {
+pub fn parse_value(value_str: &str) -> Option<f64> {
     // Remove any whitespace
     let value_str = value_str.trim();
     
@@ -34,7 +34,50 @@ fn parse_value(value_str: &str) -> Option<f64> {
         .take_while(|c| c.is_numeric() || *c == '.' || *c == '-' || *c == '+')
         .collect();
     
-    numeric_part.parse::<f64>().ok()
+    // Get the rest of the string (units)
+    let unit_part = &value_str[numeric_part.len()..];
+    
+    // Parse the numeric value
+    if let Ok(mut value) = numeric_part.parse::<f64>() {
+        // Apply unit multipliers
+        match unit_part.trim().to_lowercase().as_str() {
+            // SI prefixes
+            "t" | "tera" => value *= 1e12,
+            "g" | "giga" => value *= 1e9,
+            "meg" | "mega" => value *= 1e6,
+            "k" | "kilo" => value *= 1e3,
+            "m" | "milli" => value *= 1e-3,
+            "u" | "micro" | "μ" => value *= 1e-6,
+            "n" | "nano" => value *= 1e-9,
+            "p" | "pico" => value *= 1e-12,
+            "f" | "femto" => value *= 1e-15,
+            
+            // Common electrical units with prefixes
+            s if s.starts_with("k") && (s.ends_with("ω") || s.ends_with("ohm") || s.ends_with("r")) => value *= 1e3,
+            s if s.starts_with("m") && (s.ends_with("ω") || s.ends_with("ohm") || s.ends_with("r")) => value *= 1e-3,
+            s if s.starts_with("μ") && (s.ends_with("f") || s.ends_with("farad")) => value *= 1e-6,
+            s if s.starts_with("n") && (s.ends_with("f") || s.ends_with("farad")) => value *= 1e-9,
+            s if s.starts_with("p") && (s.ends_with("f") || s.ends_with("farad")) => value *= 1e-12,
+            s if s.starts_with("m") && (s.ends_with("h") || s.ends_with("henry")) => value *= 1e-3,
+            s if s.starts_with("μ") && (s.ends_with("h") || s.ends_with("henry")) => value *= 1e-6,
+            s if s.starts_with("n") && (s.ends_with("h") || s.ends_with("henry")) => value *= 1e-9,
+            s if s.starts_with("m") && (s.ends_with("a") || s.ends_with("amp")) => value *= 1e-3,
+            s if s.starts_with("μ") && (s.ends_with("a") || s.ends_with("amp")) => value *= 1e-6,
+            s if s.starts_with("n") && (s.ends_with("a") || s.ends_with("amp")) => value *= 1e-9,
+            s if s.starts_with("k") && (s.ends_with("v") || s.ends_with("volt")) => value *= 1e3,
+            s if s.starts_with("m") && (s.ends_with("v") || s.ends_with("volt")) => value *= 1e-3,
+            s if s.starts_with("μ") && (s.ends_with("v") || s.ends_with("volt")) => value *= 1e-6,
+            s if s.starts_with("m") && (s.ends_with("w") || s.ends_with("watt")) => value *= 1e-3,
+            s if s.starts_with("μ") && (s.ends_with("w") || s.ends_with("watt")) => value *= 1e-6,
+            
+            // No unit or unrecognized unit - return as is
+            _ => {}
+        }
+        
+        Some(value)
+    } else {
+        None
+    }
 }
 
 /// Factory for creating sophisticated SPICE models
