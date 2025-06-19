@@ -210,6 +210,14 @@ impl SpiceModelFactory {
                 )))
             }
             
+            ComponentType::VoltageRegulator => {
+                // Default voltage regulator - actual parameters will come from attributes
+                Some(Box::new(VoltageRegulatorModel::new(
+                    name.to_string(),
+                    VoltageRegulatorParams::default(),
+                )))
+            }
+            
             ComponentType::OpAmp => {
                 // Check for known models
                 if let Some(part) = part_number {
@@ -519,6 +527,75 @@ impl SpiceModelFactory {
                 }
                 
                 Some(Box::new(MosfetModel::new(name.to_string(), params)))
+            }
+            
+            "voltage_regulator" => {
+                // Create default parameters
+                let mut params = VoltageRegulatorParams::default();
+                
+                // Set type
+                params.reg_type = match attributes.get("spice_type").map(|s| s.as_str()) {
+                    Some("adjustable") => RegulatorType::Adjustable,
+                    _ => RegulatorType::Fixed,
+                };
+                
+                // Extract parameters
+                if let Some(vout) = attributes.get("spice_vout_nom").and_then(|v| parse_value(v)) {
+                    params.vout_nom = vout;
+                }
+                if let Some(vref) = attributes.get("spice_vref").and_then(|v| parse_value(v)) {
+                    params.vref = vref;
+                }
+                if let Some(dropout) = attributes.get("spice_dropout").and_then(|v| parse_value(v)) {
+                    params.dropout = dropout;
+                }
+                if let Some(iout_max) = attributes.get("spice_iout_max").and_then(|v| parse_value(v)) {
+                    params.iout_max = iout_max;
+                }
+                if let Some(iq) = attributes.get("spice_iq").and_then(|v| parse_value(v)) {
+                    params.iq = iq;
+                }
+                if let Some(iadj) = attributes.get("spice_iadj").and_then(|v| parse_value(v)) {
+                    params.iadj = iadj;
+                }
+                if let Some(iload_min) = attributes.get("spice_iload_min").and_then(|v| parse_value(v)) {
+                    params.iload_min = iload_min;
+                }
+                if let Some(load_reg) = attributes.get("spice_load_reg").and_then(|v| parse_value(v)) {
+                    params.load_reg = load_reg;
+                }
+                if let Some(line_reg) = attributes.get("spice_line_reg").and_then(|v| parse_value(v)) {
+                    params.line_reg = line_reg;
+                }
+                if let Some(rout) = attributes.get("spice_rout").and_then(|v| parse_value(v)) {
+                    params.rout = rout;
+                }
+                if let Some(psrr) = attributes.get("spice_psrr").and_then(|v| parse_value(v)) {
+                    params.psrr = psrr;
+                }
+                if let Some(tc) = attributes.get("spice_tc").and_then(|v| parse_value(v)) {
+                    params.tc = tc;
+                }
+                if let Some(ignd_ratio) = attributes.get("spice_ignd_ratio").and_then(|v| parse_value(v)) {
+                    params.ignd_ratio = ignd_ratio;
+                }
+                if let Some(vout_min) = attributes.get("spice_vout_min").and_then(|v| parse_value(v)) {
+                    params.vout_min = vout_min;
+                }
+                if let Some(vout_max) = attributes.get("spice_vout_max").and_then(|v| parse_value(v)) {
+                    params.vout_max = vout_max;
+                }
+                if let Some(vnoise) = attributes.get("spice_vnoise").and_then(|v| parse_value(v)) {
+                    params.vnoise = vnoise;
+                }
+                if let Some(rth) = attributes.get("spice_rth").and_then(|v| parse_value(v)) {
+                    params.rth = rth;
+                }
+                if let Some(tj_max) = attributes.get("spice_tj_max").and_then(|v| parse_value(v)) {
+                    params.tj_max = tj_max;
+                }
+                
+                Some(Box::new(VoltageRegulatorModel::new(name.to_string(), params)))
             }
             
             _ => None,

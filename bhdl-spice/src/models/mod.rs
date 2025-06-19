@@ -12,6 +12,7 @@ pub mod diode;
 pub mod bjt;
 pub mod mosfet;
 pub mod opamp;
+pub mod voltage_regulator;
 
 pub use resistor::{ResistorModel, ResistorParams};
 pub use capacitor::{CapacitorModel, CapacitorParams};
@@ -20,6 +21,7 @@ pub use diode::{DiodeModel, DiodeParams};
 pub use bjt::{BjtModel, BjtParams, BjtType};
 pub use mosfet::{MosfetModel, MosfetParams, MosfetType};
 pub use opamp::{OpAmpModel, OpAmpParams};
+pub use voltage_regulator::{VoltageRegulatorModel, VoltageRegulatorParams, RegulatorType};
 
 /// Temperature in Celsius (default: 27°C)
 pub const DEFAULT_TEMPERATURE: f64 = 27.0;
@@ -76,6 +78,7 @@ pub enum ModelType {
     BJT,
     MOSFET,
     OpAmp,
+    VoltageRegulator,
     VoltageSource,
     CurrentSource,
 }
