@@ -1,0 +1,70 @@
+// Realistic Buck Converter with Proper Compensation
+// 12V to 5V @ 3A with Type II compensation
+
+board BuckConverterStable {
+    // Power declarations
+    power VIN_12V = 12V @ 5A;
+    power VOUT_5V = 5V @ 3A;
+    ground GND;
+    
+    // Input filtering with damped LC
+    VIN_12V -> CIN_BULK(470uF, voltage=25V).1;
+    CIN_BULK.2 -> CIN_ESR(20mOhm).1 -> GND;
+    
+    // High frequency ceramic bypass
+    VIN_12V -> CIN_HF(10uF, voltage=25V, type="X7R").1;
+    CIN_HF.2 -> GND;
+    
+    // Buck controller IC (placeholder for real controller)
+    alias BuckController = Module {
+        pin VIN: power in;
+        pin SW: power out;
+        pin FB: signal in;
+        pin COMP: signal inout;
+        pin GND: ground in;
+    };
+    
+    // Controller connections
+    VIN_12V -> CTRL(BuckController).VIN;
+    CTRL.GND -> GND;
+    
+    // Power stage with realistic inductor
+    CTRL.SW -> L1(15uH, current=5A, dcr=8mOhm).1;
+    L1.2 -> VOUT_5V;
+    
+    // Output capacitor bank for low impedance
+    // Bulk electrolytic for energy storage
+    VOUT_5V -> COUT_BULK(220uF, voltage=10V, esr=50mOhm).1;
+    COUT_BULK.2 -> GND;
+    
+    // Mid-frequency ceramic
+    VOUT_5V -> COUT_MID(47uF, voltage=10V, type="X7R").1;
+    COUT_MID.2 -> GND;
+    
+    // High-frequency ceramic near load
+    VOUT_5V -> COUT_HF(10uF, voltage=10V, type="X7R").1;
+    COUT_HF.2 -> GND;
+    
+    // Feedback divider (5V -> 0.8V reference)
+    VOUT_5V -> RFB_TOP(52.3k, tolerance=1%).1;
+    RFB_TOP.2 -> CTRL.FB;
+    CTRL.FB -> RFB_BOT(10k, tolerance=1%).1;
+    RFB_BOT.2 -> GND;
+    
+    // Type II compensation network
+    // Zero at ~3kHz for phase boost
+    CTRL.FB -> RCOMP(22k).1;
+    RCOMP.2 -> CTRL.COMP;
+    
+    // Pole at origin for DC gain
+    CTRL.COMP -> CCOMP1(4.7nF, type="C0G").1;
+    CCOMP1.2 -> GND;
+    
+    // High frequency pole at ~150kHz
+    CTRL.COMP -> CCOMP2(47pF, type="C0G").1;
+    CCOMP2.2 -> CTRL.FB;
+    
+    // Load
+    VOUT_5V -> RLOAD(1.67, power=10W).1;
+    RLOAD.2 -> GND;
+}

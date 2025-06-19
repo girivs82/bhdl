@@ -295,6 +295,14 @@ This ensures we build a robust, production-ready toolchain rather than a demo wi
    - 100% accurate classification of input/output filtering capacitors
    - See `docs/implementation/Pin_Metadata_System.md` for details
 
+8. **Power Converter Stability Analysis**: Full AC-integrated stability analysis
+   - Loop stability with phase/gain margins from actual frequency response
+   - Input/output impedance measurement with control loop effects
+   - Resonance detection with Q factor and damping assessment
+   - Cascade stability analysis with Middlebrook criterion
+   - Automated recommendations for fixing stability issues
+   - See `docs/implementation/Stability_Analysis_Integration.md`
+
 ### Current Focus Areas
 - Component symbol scaling and visualization improvements
 - Orthogonal routing to proper pin positions
@@ -309,4 +317,5 @@ This ensures we build a robust, production-ready toolchain rather than a demo wi
 - `cargo run -p bhdl-spice --bin nonlinear_analysis_test` - Test SPICE solver
 - `cargo run -p bhdl-spice --bin test_safety_with_dc` - Test electrical safety analysis with DC
 - `cargo run -p bhdl-spice --bin test_component_role_detection` - Test topology-based role detection
+- `cargo run -p bhdl-spice --bin test_realistic_buck_stability` - Test buck converter stability analysis
 - `cargo test -p bhdl-analyzer` - Test component inference with new parameters

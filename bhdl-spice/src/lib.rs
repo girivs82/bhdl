@@ -15,6 +15,7 @@ pub mod safety;
 pub mod models;
 pub mod model_factory;
 pub mod pin_metadata;
+pub mod stability;
 
 pub use circuit::{Circuit, Node, Branch, NodeId, ComponentId, Component};
 pub use components::{ComponentModel, ElectricalLimits};
