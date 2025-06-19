@@ -34,6 +34,7 @@ impl Netlist {
             pins: Vec::new(),
             internal_instances: Vec::new(),
             internal_nets: Vec::new(),
+            attributes: std::collections::HashMap::new(),
         };
         self.modules.insert(module_def)
     }
@@ -44,6 +45,7 @@ impl Netlist {
             let instance = Instance {
                 name,
                 definition: module_id,
+                attributes: std::collections::HashMap::new(),
             };
             Some(self.instances.insert(instance))
         } else {

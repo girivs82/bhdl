@@ -72,12 +72,15 @@ impl ComponentModelExtractor {
         symbol_data: &HashMap<String, String>,
     ) -> Result<ExtractedModel> {
         debug!("Extracting model for '{}' from symbol table", symbol_name);
+        debug!("Symbol data: {:?}", symbol_data);
         
         // Determine component type from symbol data
         let component_type = self.determine_component_type(symbol_name, symbol_data)?;
+        debug!("Determined component type: {:?}", component_type);
         
         // Extract parameters based on type
         let parameters = self.extract_parameters(&component_type, symbol_data)?;
+        debug!("Extracted parameters: {:?}", parameters);
         
         // Extract attributes
         let attributes = self.extract_attributes(symbol_data);
@@ -329,8 +332,14 @@ impl ComponentModelExtractor {
                 }
             }
             ComponentType::Capacitor => {
-                if let Some(val) = data.get("value").and_then(|v| self.parse_value(v)) {
-                    parameters.insert("capacitance".to_string(), val);
+                if let Some(val_str) = data.get("value") {
+                    debug!("Parsing capacitor value: '{}'", val_str);
+                    if let Some(val) = self.parse_value(val_str) {
+                        debug!("Parsed capacitance: {}", val);
+                        parameters.insert("capacitance".to_string(), val);
+                    } else {
+                        warn!("Failed to parse capacitor value: '{}'", val_str);
+                    }
                 }
                 if let Some(v) = data.get("voltage").and_then(|v| self.parse_value(v)) {
                     parameters.insert("voltage_rating".to_string(), v);
@@ -397,6 +406,7 @@ impl ComponentModelExtractor {
     
     /// Parse numeric value with units
     fn parse_value(&self, value_str: &str) -> Option<f64> {
+        // Use the public parse_value function from model_factory
         crate::model_factory::parse_value(value_str)
     }
     

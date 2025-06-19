@@ -95,7 +95,9 @@ All commits are made through Claude Code with co-authorship noted in commit mess
   - Multi-domain safety (electrical + thermal)
   - Functional pin identification via electrical behavior
   - Dynamic component modeling based on operating conditions
-- **Claude**: Implemented Newton-Raphson solver, component models, analysis engine
+  - Behavioral IC modeling approach
+  - Component model extraction from multiple sources
+- **Claude**: Implemented Newton-Raphson solver, component models, analysis engine, behavioral IC framework, model extraction system, enhanced netlist converter
 
 ### Safety Analysis
 - **Human**: Defined safety requirements, derating factors, violation categories

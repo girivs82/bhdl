@@ -89,7 +89,13 @@
       "Bash(RUST_LOG=info ./target/debug/test_simple_connections 2 > /dev/null)",
       "Bash(RUST_LOG=info cargo run --bin test_synthesizer_debug 2 >& 1)",
       "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin test_7805_realistic 2 >& 1)",
-      "Bash(RUST_LOG=debug cargo run -p bhdl-synthesizer --bin test_7805_realistic 2 >& 1)"
+      "Bash(RUST_LOG=debug cargo run -p bhdl-synthesizer --bin test_7805_realistic 2 >& 1)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-spice --bin test_netlist_converter 2>&1)",
+      "Bash(RUST_LOG=debug cargo run -p bhdl-spice --bin test_netlist_converter 2 >& 1)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-spice --bin test_netlist_converter 2 >& 1)",
+      "Bash(/dev/null)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-spice --bin test_netlist_converter)",
+      "Bash(RUST_LOG=info target/debug/test_netlist_converter)"
     ],
     "deny": []
   }

@@ -654,7 +654,10 @@ impl SpiceModelFactory {
     ) -> Option<Box<dyn SpiceModel>> {
         match bhdl_type.to_lowercase().as_str() {
             "res" | "resistor" => {
-                let resistance = parameters.get("value").copied()?;
+                // Try both "value" and "resistance" keys
+                let resistance = parameters.get("value")
+                    .or_else(|| parameters.get("resistance"))
+                    .copied()?;
                 Some(Box::new(ResistorModel::from_value(
                     name,
                     resistance,
@@ -663,8 +666,13 @@ impl SpiceModelFactory {
             }
             
             "cap" | "capacitor" => {
-                let capacitance = parameters.get("value").copied()?;
-                let voltage = parameters.get("voltage").copied().unwrap_or(50.0);
+                // Try both "value" and "capacitance" keys
+                let capacitance = parameters.get("value")
+                    .or_else(|| parameters.get("capacitance"))
+                    .copied()?;
+                let voltage = parameters.get("voltage")
+                    .or_else(|| parameters.get("voltage_rating"))
+                    .copied().unwrap_or(50.0);
                 Some(Box::new(CapacitorModel::from_value(
                     name,
                     capacitance,
@@ -674,8 +682,13 @@ impl SpiceModelFactory {
             }
             
             "ind" | "inductor" => {
-                let inductance = parameters.get("value").copied()?;
-                let current = parameters.get("current").copied().unwrap_or(1.0);
+                // Try both "value" and "inductance" keys
+                let inductance = parameters.get("value")
+                    .or_else(|| parameters.get("inductance"))
+                    .copied()?;
+                let current = parameters.get("current")
+                    .or_else(|| parameters.get("current_rating"))
+                    .copied().unwrap_or(1.0);
                 Some(Box::new(InductorModel::from_value(
                     name,
                     inductance,
