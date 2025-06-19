@@ -74,6 +74,7 @@ impl DiodeParams {
             m: 0.333,
             bv: Some(100.0),
             ibv: 100e-6,
+            nbv: 3.0,  // Typical for small signal diodes
             ..Default::default()
         }
     }
@@ -90,6 +91,7 @@ impl DiodeParams {
             m: 0.3554,
             bv: Some(1000.0),
             ibv: 5e-6,
+            nbv: 4.0,  // Typical for power rectifiers
             ..Default::default()
         }
     }
@@ -103,6 +105,7 @@ impl DiodeParams {
             vj: 2.0,  // Red LED forward voltage
             bv: Some(5.0),
             ibv: 10e-6,
+            nbv: 2.0,  // Softer breakdown for LEDs
             ..Default::default()
         }
     }
@@ -116,6 +119,7 @@ impl DiodeParams {
             vj: 2.2,  // Green LED forward voltage
             bv: Some(5.0),
             ibv: 10e-6,
+            nbv: 2.0,  // Softer breakdown for LEDs
             ..Default::default()
         }
     }
@@ -129,6 +133,7 @@ impl DiodeParams {
             vj: 3.2,  // Blue LED forward voltage
             bv: Some(5.0),
             ibv: 10e-6,
+            nbv: 2.0,  // Softer breakdown for LEDs
             ..Default::default()
         }
     }
@@ -142,6 +147,7 @@ impl DiodeParams {
             vj: 0.3,  // Lower forward voltage
             cjo: 50e-12,
             m: 0.4,
+            nbv: 2.5,  // Schottky has softer breakdown
             ..Default::default()
         }
     }

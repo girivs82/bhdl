@@ -290,6 +290,9 @@ impl SpiceModelFactory {
                 if let Some(ibv) = attributes.get("spice_ibv").and_then(|v| parse_value(v)) {
                     params.ibv = ibv;
                 }
+                if let Some(nbv) = attributes.get("spice_nbv").and_then(|v| parse_value(v)) {
+                    params.nbv = nbv;
+                }
                 
                 // Check if it's an LED
                 if let Some(led_type) = attributes.get("spice_type") {
