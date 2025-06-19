@@ -204,11 +204,18 @@ module LED(color: string = "red", size: string = "5mm") {
     attribute power_domain_isolation = params.impedance.power_domain_isolation;
     attribute current_limiting = params.impedance.current_limiting;
     
-    // SPICE model parameters
-    attribute spice_model = "led";
-    attribute spice_forward_voltage = params.forward_voltage;
-    attribute spice_dynamic_resistance = params.dynamic_resistance;
-    attribute spice_max_current = params.max_current;
+    // SPICE model parameters (LED as special diode)
+    attribute spice_model = "diode";
+    attribute spice_type = "led";
+    attribute spice_is = params.forward_current / exp(params.forward_voltage / (2.0 * 0.026));  // Shockley equation
+    attribute spice_n = 2.0;  // Emission coefficient for LEDs
+    attribute spice_rs = params.dynamic_resistance;
+    attribute spice_cjo = 10e-12;  // Junction capacitance
+    attribute spice_vj = params.forward_voltage;
+    attribute spice_tt = params.impedance.transient_response;
+    attribute spice_bv = params.max_reverse_voltage;
+    attribute spice_ibv = 10e-6;  // Breakdown current
+    attribute spice_tnom = 27;  // Nominal temperature
     
     // KiCad symbol mapping
     attribute kicad_symbol = "Device:LED";

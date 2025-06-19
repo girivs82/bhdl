@@ -11,6 +11,8 @@ pub mod nonlinear_analysis;
 pub mod inference;
 pub mod errors;
 pub mod safety;
+pub mod models;
+pub mod model_factory;
 
 pub use circuit::{Circuit, Node, Branch, NodeId, ComponentId, Component};
 pub use components::{ComponentModel, ElectricalLimits};
@@ -22,6 +24,8 @@ pub use safety::{
     SafetyAnalysisResult, SafetyViolation, Severity, CircuitModification,
     engine::{SafetyAnalysisEngine, SafetyConfig},
 };
+pub use models::{SpiceModel, ModelType};
+pub use model_factory::SpiceModelFactory;
 
 /// Prelude module for convenient imports
 pub mod prelude {
