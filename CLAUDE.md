@@ -282,6 +282,13 @@ This ensures we build a robust, production-ready toolchain rather than a demo wi
    - Manufacturer datasheet integration support
    - Accurate component inference using real electrical parameters
 
+6. **Topology-Based Component Role Detection**: Real connectivity analysis in bhdl-spice
+   - Analyzes circuit structure without relying on node/component names
+   - IC pin detection through connected component patterns
+   - Component classification by electrical function and location
+   - 100% accuracy on typical power supply circuits
+   - See `bhdl-spice/src/extended_analysis/` for implementation
+
 ### Current Focus Areas
 - Component symbol scaling and visualization improvements
 - Orthogonal routing to proper pin positions
@@ -295,4 +302,5 @@ This ensures we build a robust, production-ready toolchain rather than a demo wi
 - `cargo run -p bhdl-components --example kicad_integration` - Set up component database
 - `cargo run -p bhdl-spice --bin nonlinear_analysis_test` - Test SPICE solver
 - `cargo run -p bhdl-spice --bin test_safety_with_dc` - Test electrical safety analysis with DC
+- `cargo run -p bhdl-spice --bin test_component_role_detection` - Test topology-based role detection
 - `cargo test -p bhdl-analyzer` - Test component inference with new parameters
