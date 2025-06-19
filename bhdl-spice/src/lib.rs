@@ -14,6 +14,7 @@ pub mod errors;
 pub mod safety;
 pub mod models;
 pub mod model_factory;
+pub mod model_extractor;
 pub mod pin_metadata;
 pub mod stability;
 
@@ -33,6 +34,7 @@ pub use safety::{
 };
 pub use models::{SpiceModel, ModelType};
 pub use model_factory::SpiceModelFactory;
+pub use model_extractor::{ComponentModelExtractor, ExtractedModel, ModelSource};
 
 /// Prelude module for convenient imports
 pub mod prelude {
