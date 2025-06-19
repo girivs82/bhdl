@@ -8,6 +8,7 @@
 4. [Type System](#4-type-system)
 5. [Component System](#5-component-system)
    - [Component Handles and Net Naming](#55-component-handles-and-net-naming)
+   - [Dual-Role Component Syntax](#56-dual-role-component-syntax)
 6. [Interface System](#6-interface-system)
 7. [Power Management](#7-power-management)
 8. [Level Shifting](#8-level-shifting)
@@ -396,6 +397,90 @@ led.K -> GND;
 GND -> conn.2;
 @5V -> conn.3;              // Second power pin
 ```
+
+### 5.6 Dual-Role Component Syntax
+
+BHDL supports a revolutionary dual-role syntax where component parameters can serve as both **values** and **constraints**, with the toolchain using electrical simulation to determine appropriate values when constraints are specified.
+
+#### Value Specification (Traditional)
+```bhdl
+// Direct value specification - traditional approach
+VCC -> Res(4.7kΩ).1 -> LED(red).A;     // Explicit 4.7kΩ value
+VCC -> Res(330Ω).1 -> LED(green).A;    // Explicit 330Ω value
+```
+
+#### Constraint Specification (Revolutionary)
+```bhdl
+// Constraint-based specification - BHDL innovation
+VCC -> Res(?, current=20mA).1 -> LED(red).A;    // Infer resistance for 20mA
+VCC -> Res(?, power=0.5W).1 -> load;            // Infer value within power rating
+VCC -> Cap(?, ripple<50mV).1 -> load;           // Infer capacitance for ripple spec
+```
+
+#### Mixed Specification
+```bhdl
+// Combine explicit values with constraints
+VCC -> Res(10kΩ, power=0.5W).1 -> load;         // 10kΩ with power validation
+VCC -> Cap(100µF, voltage=25V).+ -> load;       // 100µF rated for 25V
+```
+
+#### How It Works
+
+1. **Value Mode**: When numeric values are provided, they're used directly
+2. **Constraint Mode**: When `?` is used, SPICE simulation determines the value
+3. **Validation Mode**: When both are provided, SPICE validates the choice
+4. **Safety Analysis**: All modes undergo electrical safety verification
+
+#### Examples
+
+```bhdl
+// LED current limiting - let SPICE calculate resistance
+power VCC = 5V;
+VCC -> r1: Res(?, current=20mA).1 -> led: LED(red, Vf=2.0V).A;
+led.K -> GND;
+// SPICE calculates: R = (5V - 2.0V) / 20mA = 150Ω
+
+// Power dissipation constraint
+high_current_path -> Res(?, power=2W, tolerance=5%).1 -> load;
+// SPICE selects appropriate value within 2W rating
+
+// Filtering capacitor selection
+noisy_rail -> Cap(?, ripple<100mV, esr<0.1Ω).+ -> clean_rail;
+// SPICE determines capacitance for ripple requirement
+
+// Voltage divider with ratio constraint
+VIN -> R1: Res(?, ratio=2:1).1 -> @VOUT -> R2: Res(?).1 -> GND;
+// SPICE calculates R1 and R2 to achieve 2:1 ratio
+```
+
+#### Advanced Constraint Types
+
+```bhdl
+// Thermal constraints
+power_path -> Res(?, temperature_rise<10°C).1 -> load;
+
+// Frequency response constraints
+signal -> Cap(?, cutoff_freq=1kHz).1 -> filtered_signal;
+
+// Impedance matching
+source -> Res(?, impedance_match=50Ω).1 -> transmission_line;
+
+// Current sharing in parallel paths
+VCC -> [
+  Res(?, current_share=50%).1,
+  Res(?, current_share=50%).1
+] -> load;
+```
+
+#### Benefits
+
+1. **Design Intent Capture**: Express what you want, not just what you calculated
+2. **Automatic Optimization**: SPICE finds optimal component values
+3. **Safety Verification**: All solutions verified for electrical safety
+4. **Design Space Exploration**: Quickly evaluate different constraints
+5. **Documentation**: Constraints document design requirements inline
+
+This dual-role syntax represents a paradigm shift in hardware description, moving from prescriptive component selection to constraint-based design with automatic optimization and verification.
 
 ---
 
