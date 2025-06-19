@@ -1,0 +1,41 @@
+board LinearLDO {
+    power VIN = 12V @ 500mA;
+    power VCC = 3.3V @ 300mA;
+    ground GND;
+
+    // Input protection and filtering
+    vin_protection: TVSDiode(18V).1 <- VIN;
+    vin_protection.2 -> protected_vin;
+    
+    // Input filtering - bulk and ceramic
+    protected_vin -> Cap(100uF, 25V).1 -> GND;
+    protected_vin -> Cap(1uF, ceramic).1 -> GND;
+    
+    // LDO regulator (e.g., AMS1117-3.3)
+    module LDO_3V3 {
+        pin VIN: power in;
+        pin VOUT: power out;
+        pin ADJ: signal in;
+        pin GND: ground in;
+    }
+    
+    protected_vin -> LDO_3V3().VIN;
+    LDO_3V3().VOUT -> VCC;
+    LDO_3V3().GND -> GND;
+    
+    // Feedback network for adjustable LDO
+    VCC -> Res(10k).1 -> fb_node;
+    fb_node -> LDO_3V3().ADJ;
+    fb_node -> Res(22k).2 -> GND;
+    
+    // Output capacitor for stability
+    VCC -> Cap(22uF, tantalum).1 -> GND;
+    VCC -> Cap(0.1uF, ceramic).1 -> GND;
+    
+    // Load indicators
+    VCC -> Res(1k).1 -> LED(green).A;
+    LED().K -> GND;
+    
+    // Test load
+    VCC -> Res(11ohm).1 -> GND; // 300mA load at 3.3V
+}

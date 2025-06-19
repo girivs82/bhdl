@@ -1,0 +1,106 @@
+board ForwardConverter {
+    power VIN = 48V @ 5A;      // Telecom input
+    power VOUT = 3.3V @ 20A;   // High current low voltage output
+    ground GND;
+
+    // Input EMI filter
+    VIN -> CommonModeChoke(10mH).1 -> filtered_vin;
+    GND -> CommonModeChoke().2 -> GND;
+    filtered_vin -> Cap(4.7uF, X2).1 -> GND;
+    
+    // Input protection
+    filtered_vin -> Fuse(10A).1 -> protected_vin;
+    protected_vin -> TVSDiode(60V).1 -> GND;
+    
+    // Input bulk capacitors
+    protected_vin -> Cap(470uF, 63V).1 -> GND;
+    protected_vin -> Cap(10uF, ceramic).1 -> GND;
+    
+    // Forward controller
+    module ForwardController {
+        pin VIN: power in;
+        pin DRV_HI: signal out;
+        pin DRV_LO: signal out;
+        pin CS: signal in;
+        pin FB: signal in;
+        pin SS: signal in;
+        pin GND: ground in;
+    }
+    
+    protected_vin -> ForwardController().VIN;
+    ForwardController().GND -> GND;
+    
+    // Half-bridge driver
+    ForwardController().DRV_HI -> MOSFET(100V, 20A).G;
+    MOSFET().D -> protected_vin;
+    MOSFET().S -> switch_node;
+    
+    ForwardController().DRV_LO -> MOSFET(100V, 20A).G;
+    MOSFET().D -> switch_node;
+    MOSFET().S -> GND;
+    
+    // Forward transformer
+    module ForwardTransformer {
+        pin PRI_DOT: power in;
+        pin PRI: power in;
+        pin SEC_DOT: power out;
+        pin SEC_CT: power out;    // Center tap
+        pin SEC: power out;
+    }
+    
+    switch_node -> ForwardTransformer().PRI_DOT;
+    ForwardTransformer().PRI -> GND;
+    
+    // Synchronous rectification
+    ForwardTransformer().SEC_DOT -> MOSFET(30V, 60A).D;
+    MOSFET().S -> rect_out;
+    MOSFET().G -> SyncRectController().DRV1;
+    
+    ForwardTransformer().SEC -> MOSFET(30V, 60A).D;
+    MOSFET().S -> rect_out;
+    MOSFET().G -> SyncRectController().DRV2;
+    
+    ForwardTransformer().SEC_CT -> GND;
+    
+    // Output inductor
+    rect_out -> Inductor(1uH, 25A).1 -> VOUT;
+    
+    // Output capacitors - lots for low ripple
+    VOUT -> Cap(1000uF, 6.3V, polymer).1 -> GND;
+    VOUT -> Cap(1000uF, 6.3V, polymer).1 -> GND;
+    VOUT -> Cap(1000uF, 6.3V, polymer).1 -> GND;
+    VOUT -> Cap(47uF, ceramic).1 -> GND;
+    VOUT -> Cap(10uF, ceramic).1 -> GND;
+    VOUT -> Cap(1uF, ceramic).1 -> GND;
+    
+    // Current sense transformer
+    module CurrentSenseXfmr {
+        pin PRI_IN: power in;
+        pin PRI_OUT: power out;
+        pin SEC_P: signal out;
+        pin SEC_N: signal out;
+    }
+    
+    switch_node -> CurrentSenseXfmr().PRI_IN;
+    CurrentSenseXfmr().PRI_OUT -> ForwardTransformer().PRI_DOT;
+    CurrentSenseXfmr().SEC_P -> current_sense;
+    CurrentSenseXfmr().SEC_N -> GND;
+    current_sense -> Res(10ohm).1 -> GND;
+    current_sense -> ForwardController().CS;
+    
+    // Voltage feedback with compensation
+    VOUT -> Res(10k, 0.1%).1 -> fb_node;
+    fb_node -> ForwardController().FB;
+    fb_node -> Res(1k, 0.1%).2 -> GND;
+    
+    // Type III compensation
+    fb_node -> Res(10k).1 -> comp_node;
+    comp_node -> Cap(1nF).1 -> GND;
+    comp_node -> Res(22k).1 -> Cap(100pF).1 -> ForwardController().FB;
+    
+    // Soft start
+    ForwardController().SS -> Cap(100nF).1 -> GND;
+    
+    // Load
+    VOUT -> Res(0.165ohm, 100W).1 -> GND; // 20A at 3.3V
+}

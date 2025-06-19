@@ -1,0 +1,57 @@
+board BuckConverter {
+    power VIN = 24V @ 2A;
+    power VOUT = 5V @ 3A;
+    ground GND;
+
+    // Input protection and filtering
+    VIN -> Fuse(3A).1 -> protected_vin;
+    protected_vin -> TVSDiode(30V).1 -> GND;
+    
+    // Input capacitors - bulk storage
+    protected_vin -> Cap(220uF, 35V, electrolytic).1 -> GND;
+    protected_vin -> Cap(10uF, 35V, ceramic).1 -> GND;
+    protected_vin -> Cap(0.1uF, ceramic).1 -> GND;
+    
+    // Buck controller IC (e.g., LM2596)
+    module BuckController {
+        pin VIN: power in;
+        pin SW: power out;      // Switch node
+        pin FB: signal in;      // Feedback
+        pin EN: signal in;      // Enable
+        pin GND: ground in;
+    }
+    
+    protected_vin -> BuckController().VIN;
+    BuckController().GND -> GND;
+    protected_vin -> BuckController().EN; // Always enabled
+    
+    // Power stage components
+    BuckController().SW -> sw_node;
+    
+    // Catch diode (Schottky for efficiency)
+    sw_node -> Diode(schottky, 40V, 5A).A;
+    Diode().K -> GND;
+    
+    // Power inductor
+    sw_node -> Inductor(33uH, 5A).1 -> VOUT;
+    
+    // Output capacitors - bulk and ceramic
+    VOUT -> Cap(470uF, 10V, electrolytic).1 -> GND;
+    VOUT -> Cap(220uF, 10V, electrolytic).1 -> GND;
+    VOUT -> Cap(10uF, ceramic).1 -> GND;
+    VOUT -> Cap(0.1uF, ceramic).1 -> GND;
+    
+    // Feedback divider network
+    VOUT -> Res(10k, 1%).1 -> fb_node;
+    fb_node -> BuckController().FB;
+    fb_node -> Res(3.3k, 1%).2 -> GND;
+    
+    // Soft-start capacitor
+    BuckController().SS -> Cap(10nF).1 -> GND;
+    
+    // Bootstrap capacitor for high-side drive
+    BuckController().BOOT -> Cap(0.1uF, ceramic).1 -> sw_node;
+    
+    // Output load
+    VOUT -> Res(1.67ohm, 5W).1 -> GND; // 3A load at 5V
+}
