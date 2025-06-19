@@ -29,7 +29,7 @@ use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
 
 /// Functional role of a component in relation to an IC
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Eq, Hash)]
 pub enum ComponentRole {
     /// Input filtering - reduces input voltage ripple/noise
     InputFilter,
@@ -51,6 +51,24 @@ pub enum ComponentRole {
     Load,
     /// Sense - voltage/current sensing for control
     Sense,
+    /// Power stage inductor - energy storage in SMPS
+    PowerInductor,
+    /// Catch/freewheeling diode - current path during switch-off
+    CatchDiode,
+    /// Rectifier diode - AC to DC or output rectification
+    RectifierDiode,
+    /// Snubber network - voltage spike suppression
+    Snubber,
+    /// Compensation network - loop stability control
+    Compensation,
+    /// Bootstrap - high-side gate drive power
+    Bootstrap,
+    /// Soft-start - controlled startup
+    SoftStart,
+    /// Transformer - isolation and voltage conversion
+    Transformer,
+    /// Switch/MOSFET - main power switching element
+    PowerSwitch,
     /// Unknown - role could not be determined
     Unknown,
 }
@@ -432,24 +450,46 @@ impl ComponentRoleDetector {
         else {
             match comp_type {
                 "Inductor" => {
-                    if self.is_power_inductor(component_id) {
+                    // Analyze inductor's role in the circuit
+                    if self.is_power_stage_inductor(component_id) {
+                        ComponentRole::PowerInductor
+                    } else if self.is_emi_filter_inductor(component_id) {
                         ComponentRole::EMIFiltering
                     } else {
-                        ComponentRole::EMIFiltering // Default for inductors
+                        // Check if it's in a compensation network
+                        if self.is_small_signal_inductor(component_id) {
+                            ComponentRole::Compensation
+                        } else {
+                            ComponentRole::PowerInductor // Default for inductors in power circuits
+                        }
                     }
                 },
-                "Diode" | "TVSDiode" => {
-                    // Use topology to determine protection type
-                    if connected_to_input {
+                "Diode" => {
+                    // Analyze diode's role based on connections and circuit patterns
+                    if self.is_catch_diode(component_id) {
+                        ComponentRole::CatchDiode
+                    } else if self.is_rectifier_diode(component_id) {
+                        ComponentRole::RectifierDiode
+                    } else if connected_to_input {
                         ComponentRole::InputProtection
                     } else if connected_to_output {
                         ComponentRole::OutputProtection
                     } else {
-                        ComponentRole::InputProtection // Default
+                        ComponentRole::RectifierDiode // Default for power circuits
                     }
                 },
+                "TVSDiode" => ComponentRole::InputProtection, // TVS always protection
                 "Fuse" | "PTC" => ComponentRole::InputProtection,
-                "VoltageRegulator" | "OpAmp" => ComponentRole::Unknown, // ICs don't get classified
+                "MOSFET" | "FET" => {
+                    if self.is_power_switch(component_id) {
+                        ComponentRole::PowerSwitch
+                    } else {
+                        ComponentRole::Unknown
+                    }
+                },
+                "Transformer" => ComponentRole::Transformer,
+                "CommonModeChoke" => ComponentRole::EMIFiltering,
+                "VoltageRegulator" | "OpAmp" | "Controller" => ComponentRole::Unknown, // ICs don't get classified
                 _ => ComponentRole::Unknown,
             }
         }
@@ -461,7 +501,9 @@ impl ComponentRoleDetector {
         circuit.branches()
             .filter_map(|(id, component)| {
                 match component.component_type() {
-                    "VoltageRegulator" | "OpAmp" | "Comparator" | "ADC" | "DAC" => Some(id),
+                    "VoltageRegulator" | "OpAmp" | "Comparator" | "ADC" | "DAC" |
+                    "BuckController" | "BoostController" | "FlybackController" |
+                    "ForwardController" | "Controller" => Some(id),
                     _ => None,
                 }
             })
@@ -1089,6 +1131,318 @@ impl ComponentRoleDetector {
         
         // Fallback: just check connections if no voltage info
         has_many_connections && has_multiple_capacitors
+    }
+    
+    /// SMPS-specific component detection methods
+    
+    /// Determine if inductor is in main power stage of a switching converter
+    fn is_power_stage_inductor(&self, component_id: ComponentId) -> bool {
+        if let Some(component) = self.circuit.get_component(component_id) {
+            if component.component_type() != "Inductor" {
+                return false;
+            }
+            
+            // Power inductors are typically:
+            // 1. In the µH to low mH range (1µH - 10mH)
+            let value = component.value;
+            if value < 1e-6 || value > 10e-3 {
+                return false; 
+            }
+            
+            // 2. Connected to a switch node (high dV/dt)
+            let nodes = component.nodes();
+            for &node in nodes {
+                if self.is_switch_node(node) {
+                    return true;
+                }
+            }
+            
+            // 3. Connected between input and output in boost topology
+            // or between switch node and output in buck topology
+            let has_power_connections = self.has_power_stage_connections(component_id);
+            if has_power_connections {
+                return true;
+            }
+        }
+        false
+    }
+    
+    /// Determine if diode is a catch/freewheeling diode in SMPS
+    fn is_catch_diode(&self, component_id: ComponentId) -> bool {
+        if let Some(component) = self.circuit.get_component(component_id) {
+            if !matches!(component.component_type(), "Diode" | "SchottkyDiode") {
+                return false;
+            }
+            
+            let nodes = component.nodes();
+            if nodes.len() < 2 {
+                return false;
+            }
+            
+            // Catch diode connects switch node to ground/reference
+            let connects_to_switch = nodes.iter().any(|&node| self.is_switch_node(node));
+            let connects_to_ground = nodes.iter().any(|&node| self.is_reference_node(node));
+            
+            // In buck converter: cathode to switch node, anode to ground
+            // Provides current path when main switch is off
+            connects_to_switch && connects_to_ground
+        } else {
+            false
+        }
+    }
+    
+    /// Determine if diode is a rectifier diode (AC-DC or output rectification)
+    fn is_rectifier_diode(&self, component_id: ComponentId) -> bool {
+        if let Some(component) = self.circuit.get_component(component_id) {
+            if !matches!(component.component_type(), "Diode" | "SchottkyDiode" | "FastDiode") {
+                return false;
+            }
+            
+            let nodes = component.nodes();
+            
+            // Rectifier diodes typically:
+            // 1. Connect transformer secondary to output
+            let connects_to_transformer = self.connects_to_transformer(component_id);
+            
+            // 2. Or connect switch node to output in boost/flyback
+            let connects_to_output = nodes.iter()
+                .any(|&node| self.is_output_node(node));
+            
+            // 3. Not a catch diode (which connects to ground)
+            let is_catch = self.is_catch_diode(component_id);
+            
+            (connects_to_transformer || connects_to_output) && !is_catch
+        } else {
+            false
+        }
+    }
+    
+    /// Determine if component is a power switch (MOSFET/transistor)
+    fn is_power_switch(&self, component_id: ComponentId) -> bool {
+        if let Some(component) = self.circuit.get_component(component_id) {
+            if !matches!(component.component_type(), "MOSFET" | "FET" | "BJT" | "IGBT") {
+                return false;
+            }
+            
+            // Power switches typically:
+            // 1. Connect to main power rail or transformer primary
+            // 2. Create a switch node with high dV/dt
+            // 3. Are driven by a controller/driver IC
+            
+            let nodes = component.nodes();
+            let connects_to_power = nodes.iter()
+                .any(|&node| self.is_power_rail(node));
+            
+            let driven_by_controller = self.is_driven_by_controller(component_id);
+            
+            connects_to_power || driven_by_controller
+        } else {
+            false
+        }
+    }
+    
+    /// Determine if inductor is used for EMI filtering (common mode choke, etc)
+    fn is_emi_filter_inductor(&self, component_id: ComponentId) -> bool {
+        if let Some(component) = self.circuit.get_component(component_id) {
+            // EMI filter inductors include common mode chokes
+            if matches!(component.component_type(), "CommonModeChoke" | "EMIFilter") {
+                return true;
+            }
+            
+            if component.component_type() != "Inductor" {
+                return false;
+            }
+            
+            // EMI inductors are typically:
+            // 1. Connected at circuit input (before main power stage)
+            // 2. Larger values (>100µH) for differential mode
+            // 3. Paired with X/Y capacitors
+            
+            let value = component.value;
+            let is_large_value = value > 100e-6;
+            
+            let at_input = self.is_at_circuit_input(component_id);
+            let has_emi_caps = self.has_associated_emi_capacitors(component_id);
+            
+            is_large_value && (at_input || has_emi_caps)
+        } else {
+            false
+        }
+    }
+    
+    /// Determine if inductor is small-signal (compensation, etc)
+    fn is_small_signal_inductor(&self, component_id: ComponentId) -> bool {
+        if let Some(component) = self.circuit.get_component(component_id) {
+            if component.component_type() != "Inductor" {
+                return false;
+            }
+            
+            // Small signal inductors are typically:
+            // 1. Very small values (<1µH)
+            // 2. In feedback/compensation networks
+            // 3. Not carrying main power
+            
+            let value = component.value;
+            let is_small_value = value < 1e-6;
+            
+            let in_feedback = self.is_in_feedback_path(component_id);
+            let low_current = self.has_low_current(component_id);
+            
+            is_small_value || (in_feedback && low_current)
+        } else {
+            false
+        }
+    }
+    
+    /// Helper methods for SMPS topology analysis
+    
+    fn is_switch_node(&self, node_id: NodeId) -> bool {
+        // Switch nodes have:
+        // 1. Connection to power switch (MOSFET)
+        // 2. Connection to inductor
+        // 3. Connection to catch diode (in buck) or rectifier diode
+        
+        let mut connected_components = Vec::new();
+        for (comp_id, comp) in self.circuit.branches() {
+            if comp.nodes().contains(&node_id) {
+                connected_components.push((comp_id, comp));
+            }
+        }
+        
+        let has_switch = connected_components.iter()
+            .any(|(_, comp)| matches!(comp.component_type(), "MOSFET" | "FET"));
+        
+        let has_inductor = connected_components.iter()
+            .any(|(_, comp)| comp.component_type() == "Inductor");
+        
+        let has_diode = connected_components.iter()
+            .any(|(_, comp)| matches!(comp.component_type(), "Diode" | "SchottkyDiode"));
+        
+        // Classic switch node pattern
+        has_switch && has_inductor && has_diode
+    }
+    
+    fn has_power_stage_connections(&self, component_id: ComponentId) -> bool {
+        // Check if component is connected in a way that suggests power stage
+        if let Some(component) = self.circuit.get_component(component_id) {
+            let nodes = component.nodes();
+            
+            // Check for connection patterns typical of power inductors
+            let connects_to_switch = nodes.iter().any(|&node| self.is_switch_node(node));
+            let connects_to_output = nodes.iter().any(|&node| self.is_output_node(node));
+            
+            connects_to_switch || connects_to_output
+        } else {
+            false
+        }
+    }
+    
+    fn connects_to_transformer(&self, component_id: ComponentId) -> bool {
+        if let Some(component) = self.circuit.get_component(component_id) {
+            let nodes = component.nodes();
+            
+            // Check if any connected component is a transformer
+            for &node in nodes {
+                for (comp_id, comp) in self.circuit.branches() {
+                    if comp_id != component_id && comp.nodes().contains(&node) {
+                        if matches!(comp.component_type(), "Transformer" | "FlybackTransformer" | "ForwardTransformer") {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+    
+    fn is_output_node(&self, node_id: NodeId) -> bool {
+        // Output nodes typically have:
+        // 1. Multiple output capacitors
+        // 2. Load connections
+        // 3. Feedback divider connections
+        
+        let mut capacitor_count = 0;
+        let mut has_load = false;
+        
+        for (comp_id, comp) in self.circuit.branches() {
+            if comp.nodes().contains(&node_id) {
+                if comp.component_type() == "Capacitor" {
+                    capacitor_count += 1;
+                }
+                if self.is_load_component(comp_id) {
+                    has_load = true;
+                }
+            }
+        }
+        
+        capacitor_count >= 2 && has_load
+    }
+    
+    fn is_driven_by_controller(&self, component_id: ComponentId) -> bool {
+        if let Some(component) = self.circuit.get_component(component_id) {
+            // Check if any node connects to a controller/driver output
+            for &node in component.nodes() {
+                for &ic_id in &self.ic_components {
+                    if let Some(ic) = self.circuit.get_component(ic_id) {
+                        if matches!(ic.component_type(), 
+                            "BuckController" | "BoostController" | "FlybackController" | 
+                            "ForwardController" | "Controller" | "GateDriver") {
+                            if ic.nodes().contains(&node) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+    
+    fn is_at_circuit_input(&self, component_id: ComponentId) -> bool {
+        // Check if component is at the very input of the circuit
+        if let Some(component) = self.circuit.get_component(component_id) {
+            for &node in component.nodes() {
+                // Input nodes have voltage sources or are named like inputs
+                for (comp_id, comp) in self.circuit.branches() {
+                    if comp.nodes().contains(&node) && self.is_voltage_source(comp_id) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+    
+    fn has_associated_emi_capacitors(&self, component_id: ComponentId) -> bool {
+        // Check if inductor has X/Y safety capacitors nearby
+        if let Some(component) = self.circuit.get_component(component_id) {
+            for &node in component.nodes() {
+                for (_, comp) in self.circuit.branches() {
+                    if comp.nodes().contains(&node) && comp.component_type() == "Capacitor" {
+                        // Check if it's an X/Y cap (would need component parameters)
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+    
+    fn has_low_current(&self, component_id: ComponentId) -> bool {
+        // Check if component carries low current (signal level)
+        if let Some(component) = self.circuit.get_component(component_id) {
+            // Simple heuristic: check if connected to high-value resistors
+            for &node in component.nodes() {
+                for (comp_id, comp) in self.circuit.branches() {
+                    if comp_id != component_id && comp.nodes().contains(&node) {
+                        if comp.component_type() == "Resistor" && comp.value > 10000.0 {
+                            return true; // High impedance suggests signal level
+                        }
+                    }
+                }
+            }
+        }
+        false
     }
 }
 

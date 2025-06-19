@@ -1,0 +1,53 @@
+board BoostConverter {
+    power VIN = 3.7V @ 3A;    // Li-ion battery input
+    power VOUT = 12V @ 0.8A;  // Boosted output
+    ground GND;
+
+    // Input filtering
+    VIN -> Cap(100uF, 10V, electrolytic).1 -> GND;
+    VIN -> Cap(10uF, ceramic).1 -> GND;
+    
+    // Boost controller (e.g., TPS61088)
+    module BoostController {
+        pin VIN: power in;
+        pin SW: power inout;    // Switch node
+        pin VOUT: power in;     // Output sense
+        pin FB: signal in;      // Feedback
+        pin COMP: signal out;   // Compensation
+        pin GND: ground in;
+    }
+    
+    VIN -> BoostController().VIN;
+    BoostController().GND -> GND;
+    
+    // Power inductor (input side)
+    VIN -> Inductor(4.7uH, 5A).1 -> sw_node;
+    sw_node -> BoostController().SW;
+    
+    // Rectifier diode (Schottky)
+    sw_node -> Diode(schottky, 20V, 3A).A -> VOUT;
+    
+    // Output capacitors
+    VOUT -> Cap(47uF, 16V, ceramic).1 -> GND;
+    VOUT -> Cap(47uF, 16V, ceramic).1 -> GND;
+    VOUT -> Cap(0.1uF, ceramic).1 -> GND;
+    
+    // Feedback divider
+    VOUT -> Res(100k, 1%).1 -> fb_node;
+    fb_node -> BoostController().FB;
+    fb_node -> Res(10k, 1%).2 -> GND;
+    
+    // Compensation network
+    BoostController().COMP -> comp_node;
+    comp_node -> Res(10k).1 -> Cap(220pF).1 -> GND;
+    comp_node -> Cap(22nF).1 -> fb_node;
+    
+    // Input current sense resistor
+    GND -> Res(0.02ohm, 1W).1 -> BoostController().ISENSE;
+    
+    // Output voltage sensing
+    VOUT -> BoostController().VOUT;
+    
+    // Load
+    VOUT -> Res(15ohm, 10W).1 -> GND; // 0.8A at 12V
+}

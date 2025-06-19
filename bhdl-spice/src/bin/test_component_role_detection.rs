@@ -179,6 +179,15 @@ fn get_role_description(role: &ComponentRole) -> &'static str {
         ComponentRole::ThermalProtection => "Provides temperature sensing and limiting",
         ComponentRole::Load => "Represents the circuit being powered",
         ComponentRole::Sense => "Provides voltage or current sensing for control",
+        ComponentRole::PowerInductor => "Stores energy in switch-mode power supply",
+        ComponentRole::CatchDiode => "Provides current path during switch-off time",
+        ComponentRole::RectifierDiode => "Converts AC to DC or rectifies output",
+        ComponentRole::Snubber => "Suppresses voltage spikes during switching",
+        ComponentRole::Compensation => "Controls feedback loop stability",
+        ComponentRole::Bootstrap => "Provides power for high-side gate drive",
+        ComponentRole::SoftStart => "Controls startup ramp rate",
+        ComponentRole::Transformer => "Provides isolation and voltage conversion",
+        ComponentRole::PowerSwitch => "Main switching element in SMPS",
         ComponentRole::Unknown => "Role could not be determined from simulation",
     }
 }
@@ -195,6 +204,15 @@ fn get_role_icon(role: &ComponentRole) -> &'static str {
         ComponentRole::ThermalProtection => "🌡️",
         ComponentRole::Load => "⚡",
         ComponentRole::Sense => "👁️",
+        ComponentRole::PowerInductor => "🔷",
+        ComponentRole::CatchDiode => "⬇️",
+        ComponentRole::RectifierDiode => "➡️",
+        ComponentRole::Snubber => "💢",
+        ComponentRole::Compensation => "📊",
+        ComponentRole::Bootstrap => "🔺",
+        ComponentRole::SoftStart => "📈",
+        ComponentRole::Transformer => "🔀",
+        ComponentRole::PowerSwitch => "🔲",
         ComponentRole::Unknown => "❓",
     }
 }

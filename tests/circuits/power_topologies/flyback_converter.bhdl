@@ -1,0 +1,114 @@
+board FlybackConverter {
+    power AC_LINE = 120VAC @ 500mA;
+    power VDC_MAIN = 170VDC @ 200mA;  // Rectified mains
+    power VOUT_12V = 12V @ 2A;
+    power VOUT_5V = 5V @ 1A;
+    ground GND;
+    ground GND_ISO;  // Isolated ground
+
+    // AC input protection
+    AC_LINE -> Fuse(1A).1 -> fused_line;
+    fused_line -> MOV(275V).1 -> AC_NEUTRAL;
+    
+    // Bridge rectifier
+    module BridgeRect {
+        pin AC1: power in;
+        pin AC2: power in;
+        pin DC_POS: power out;
+        pin DC_NEG: power out;
+    }
+    
+    fused_line -> BridgeRect().AC1;
+    AC_NEUTRAL -> BridgeRect().AC2;
+    BridgeRect().DC_POS -> VDC_MAIN;
+    BridgeRect().DC_NEG -> GND;
+    
+    // Bulk storage capacitor
+    VDC_MAIN -> Cap(100uF, 200V, electrolytic).1 -> GND;
+    
+    // Flyback controller (e.g., UC3844)
+    module FlybackController {
+        pin VCC: power in;
+        pin GATE: signal out;
+        pin CS: signal in;      // Current sense
+        pin FB: signal in;      // Feedback
+        pin GND: ground in;
+    }
+    
+    // Startup circuit
+    VDC_MAIN -> Res(100k, 2W).1 -> vcc_startup;
+    vcc_startup -> FlybackController().VCC;
+    vcc_startup -> Cap(47uF, 35V).1 -> GND;
+    
+    // Primary side switching
+    FlybackController().GATE -> gate_drive;
+    gate_drive -> Res(10ohm).1 -> MOSFET(600V, 4A).G;
+    MOSFET().D -> transformer_primary;
+    MOSFET().S -> current_sense;
+    current_sense -> Res(0.5ohm, 2W).1 -> GND;
+    current_sense -> FlybackController().CS;
+    
+    // Transformer (flyback)
+    module FlybackTransformer {
+        pin PRI_DOT: power in;    // Primary dot end
+        pin PRI: power in;        // Primary other end
+        pin SEC1_DOT: power out;  // 12V secondary dot
+        pin SEC1: power out;      // 12V secondary
+        pin SEC2_DOT: power out;  // 5V secondary dot
+        pin SEC2: power out;      // 5V secondary
+        pin AUX_DOT: power out;   // Auxiliary winding
+        pin AUX: power out;
+    }
+    
+    VDC_MAIN -> FlybackTransformer().PRI_DOT;
+    transformer_primary -> FlybackTransformer().PRI;
+    
+    // Secondary rectification - 12V output
+    FlybackTransformer().SEC1_DOT -> Diode(ultrafast, 60V).A -> VOUT_12V;
+    FlybackTransformer().SEC1 -> GND_ISO;
+    
+    // 12V output filtering
+    VOUT_12V -> Cap(1000uF, 16V).1 -> GND_ISO;
+    VOUT_12V -> Cap(0.1uF, ceramic).1 -> GND_ISO;
+    
+    // Secondary rectification - 5V output
+    FlybackTransformer().SEC2_DOT -> Diode(schottky, 30V).A -> VOUT_5V;
+    FlybackTransformer().SEC2 -> GND_ISO;
+    
+    // 5V output filtering
+    VOUT_5V -> Cap(1000uF, 10V).1 -> GND_ISO;
+    VOUT_5V -> Cap(0.1uF, ceramic).1 -> GND_ISO;
+    
+    // Auxiliary supply for controller
+    FlybackTransformer().AUX_DOT -> Diode(1N4148).A -> vcc_aux;
+    FlybackTransformer().AUX -> GND;
+    vcc_aux -> FlybackController().VCC;
+    vcc_aux -> Cap(100uF, 35V).1 -> GND;
+    
+    // Feedback via optocoupler
+    module Optocoupler {
+        pin LED_A: signal in;
+        pin LED_K: signal in;
+        pin C: signal out;
+        pin E: signal out;
+    }
+    
+    // TL431 precision reference on secondary
+    VOUT_12V -> Res(10k).1 -> tl431_ref;
+    tl431_ref -> TL431().REF;
+    tl431_ref -> Res(10k).2 -> GND_ISO;
+    TL431().K -> Optocoupler().LED_A;
+    TL431().A -> GND_ISO;
+    VOUT_12V -> Res(1k).1 -> Optocoupler().LED_A;
+    Optocoupler().LED_K -> GND_ISO;
+    
+    // Primary side feedback
+    vcc_startup -> Res(10k).1 -> Optocoupler().C;
+    Optocoupler().E -> FlybackController().FB;
+    FlybackController().FB -> Cap(1nF).1 -> GND;
+    
+    // Snubber circuit
+    transformer_primary -> Res(100k, 2W).1 -> snubber;
+    snubber -> Cap(2.2nF, 1kV).1 -> VDC_MAIN;
+    snubber -> Diode(ultrafast, 600V).A -> VDC_MAIN;
+}
