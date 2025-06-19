@@ -11,6 +11,7 @@ pub mod extended_analysis;
 pub mod nonlinear_analysis;
 pub mod inference;
 pub mod constraint_inference;
+pub mod validation;
 pub mod errors;
 pub mod safety;
 pub mod models;
@@ -30,6 +31,7 @@ pub use extended_analysis::{
 pub use nonlinear_analysis::NonlinearDcAnalysis;
 pub use inference::{ComponentInference as LegacyComponentInference, ConstraintViolation};
 pub use constraint_inference::{ComponentInference, InferredComponent, ConstraintSolver};
+pub use validation::{ValidationEngine, ValidationResult, ValidationReport};
 pub use errors::{SpiceError, Result};
 pub use safety::{
     SafetyAnalysisResult, SafetyViolation, Severity, CircuitModification,
