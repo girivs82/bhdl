@@ -206,6 +206,11 @@ impl Circuit {
             .map(|&idx| (idx, &self.graph[idx]))
     }
     
+    /// Get node by ID
+    pub fn get_node_by_id(&self, node_id: NodeIndex) -> Option<&Node> {
+        self.graph.node_weight(node_id)
+    }
+    
     /// Get branch by name
     pub fn get_branch(&self, name: &str) -> Option<(EdgeIndex, &Branch)> {
         self.branch_map.get(name)
@@ -262,10 +267,6 @@ impl Circuit {
         self.graph.edge_weight(id)
     }
     
-    /// Get a specific node by ID
-    pub fn get_node_by_id(&self, id: NodeId) -> Option<&Node> {
-        self.graph.node_weight(id)
-    }
     
     /// Get all components connected to a node
     pub fn get_components_at_node(&self, node: NodeId) -> Vec<ComponentId> {
