@@ -190,13 +190,17 @@ module VReg78xx(voltage: voltage = 5V, package: string = "TO-220") {
                           voltage == 9V ? "7809" :
                           voltage == 12V ? "7812" : "78xx";
     
-    // Electrical characteristics
+    // Safety parameters for analysis
     attribute vout_nominal = params.vout_nominal;
-    attribute vin_min = params.vin_min;
-    attribute vin_max = params.vin_max;
     attribute dropout = params.dropout;
+    attribute vin_max = params.vin_max;
     attribute iout_max = params.iout_max;
-    attribute quiescent_current = params.iq;
+    attribute iq = params.iq;
+    attribute power_max = params.power_max;
+    attribute tj_max = params.tj_max;
+    attribute rth_ja = params.rth_ja;
+    
+    // Already defined above in safety parameters
     
     // SPICE model parameters - all parameters provided explicitly
     attribute spice_model = "voltage_regulator";

@@ -3,10 +3,12 @@
 mod current_limiting;
 mod overvoltage;
 mod short_circuit;
+mod ic_safety;
 
 pub use current_limiting::CurrentLimitingRule;
 pub use overvoltage::OvervoltageRule;
 pub use short_circuit::ShortCircuitRule;
+pub use ic_safety::{check_voltage_regulator_safety, calculate_thermal_derating, suggest_heatsink};
 
 // Utility functions shared by rules
 
