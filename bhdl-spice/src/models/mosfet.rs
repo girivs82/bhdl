@@ -90,9 +90,9 @@ impl MosfetParams {
             mos_type: MosfetType::NMOS,
             level: 1,
             vto: 3.8,
-            kp: 20.85,
+            kp: 20.85e-6,  // A/V² (power MOSFET)
             lambda: 0.001,
-            w: 0.68,
+            w: 0.68e-3,  // m
             l: 2e-6,
             rd: 0.044,
             rs: 0.0,
@@ -108,9 +108,9 @@ impl MosfetParams {
             mos_type: MosfetType::NMOS,
             level: 1,
             vto: 1.8,
-            kp: 0.2133,
+            kp: 0.2133e-3,  // A/V² (small signal)
             lambda: 0.0264,
-            w: 0.035,
+            w: 0.035e-3,  // m
             l: 2.5e-6,
             rd: 1.387,
             rs: 0.0,
@@ -126,9 +126,9 @@ impl MosfetParams {
             mos_type: MosfetType::PMOS,
             level: 1,
             vto: -3.2,
-            kp: 0.195,
+            kp: 0.195e-3,  // A/V² (small signal)
             lambda: 0.008,
-            w: 0.19,
+            w: 0.19e-3,  // m
             l: 2e-6,
             rd: 5.0,
             rs: 0.0,

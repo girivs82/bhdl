@@ -258,6 +258,7 @@ impl SpiceModel for OpAmpModel {
         params.insert("vcm_max".to_string(), self.params.vcm_max);
         params.insert("vcm_min".to_string(), self.params.vcm_min);
         params.insert("iq".to_string(), self.params.iq);
+        params.insert("sr".to_string(), self.params.slew_rate * 1e6);  // Also provide as V/s
         params
     }
     
