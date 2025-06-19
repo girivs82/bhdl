@@ -28,6 +28,8 @@ use crate::extended_analysis::simulation_engine::SimulationEngine;
 use crate::pin_metadata::{ComponentPinDatabase, PinFunction};
 use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
+use bhdl_netlist::{Netlist, InstanceId};
+use bhdl_netlist::types::{PinDirection, PinType};
 
 /// Functional role of a component in relation to an IC
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Eq, Hash)]
@@ -122,6 +124,9 @@ pub struct ComponentRoleDetector {
     ic_components: Vec<ComponentId>,
     simulation_engine: Option<SimulationEngine>,
     pin_database: ComponentPinDatabase,
+    instance_to_component: HashMap<InstanceId, ComponentId>,
+    // Map from ComponentId to connected IC pins (IC ComponentId, pin name, pin direction)
+    component_to_ic_pins: HashMap<ComponentId, Vec<(ComponentId, String, PinDirection, PinType)>>,
 }
 
 impl ComponentRoleDetector {
@@ -133,7 +138,72 @@ impl ComponentRoleDetector {
             ic_components,
             simulation_engine: None,
             pin_database: ComponentPinDatabase::new_with_defaults(),
+            instance_to_component: HashMap::new(),
+            component_to_ic_pins: HashMap::new(),
         }
+    }
+    
+    /// Create a new detector with netlist information for pin metadata access
+    pub fn with_netlist(circuit: Circuit, netlist: &Netlist, instance_to_component: HashMap<InstanceId, ComponentId>) -> Self {
+        let ic_components = Self::find_ic_components(&circuit);
+        
+        // Extract IC pin connection information from the netlist
+        let component_to_ic_pins = Self::extract_ic_connections(&circuit, netlist, &instance_to_component, &ic_components);
+        
+        Self {
+            circuit,
+            ic_components,
+            simulation_engine: None,
+            pin_database: ComponentPinDatabase::new_with_defaults(),
+            instance_to_component,
+            component_to_ic_pins,
+        }
+    }
+    
+    /// Extract connections between components and IC pins from the netlist
+    fn extract_ic_connections(
+        _circuit: &Circuit,
+        netlist: &Netlist,
+        instance_to_component: &HashMap<InstanceId, ComponentId>,
+        ic_components: &[ComponentId],
+    ) -> HashMap<ComponentId, Vec<(ComponentId, String, PinDirection, PinType)>> {
+        let mut connections = HashMap::new();
+        
+        // For each net, find components that connect to IC pins
+        for (_net_id, net) in &netlist.nets {
+            let mut components_on_net = Vec::new();
+            let mut ic_pins_on_net = Vec::new();
+            
+            // Collect all components and IC pins on this net
+            for conn in &net.connections {
+                if let bhdl_netlist::ConnectionPoint::PinInstance(pin_inst_id) = conn {
+                    if let Some(pin_inst) = netlist.pin_instances.get(*pin_inst_id) {
+                        if let Some(&comp_id) = instance_to_component.get(&pin_inst.instance) {
+                            if ic_components.contains(&comp_id) {
+                                // This is an IC pin
+                                if let Some(pin) = netlist.pins.get(pin_inst.pin_def) {
+                                    ic_pins_on_net.push((comp_id, pin.name.clone(), pin.direction, pin.pin_type));
+                                }
+                            } else {
+                                // This is a regular component
+                                components_on_net.push(comp_id);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Now connect each component to all IC pins on the same net
+            for comp_id in components_on_net {
+                for ic_pin_info in &ic_pins_on_net {
+                    connections.entry(comp_id)
+                        .or_insert_with(Vec::new)
+                        .push(ic_pin_info.clone());
+                }
+            }
+        }
+        
+        connections
     }
     
     /// Initialize the simulation engine for real analysis
@@ -158,9 +228,6 @@ impl ComponentRoleDetector {
     
     /// Detect component roles relative to a specific IC
     pub fn detect_roles_for_ic(&self, ic_id: ComponentId) -> HashMap<ComponentId, ComponentRole> {
-        println!("Detecting component roles for IC: {:?}", ic_id);
-        
-        
         // Step 1: Measure baseline performance
         let baseline = self.measure_circuit_performance();
         
@@ -178,9 +245,6 @@ impl ComponentRoleDetector {
             
             let impact = self.measure_component_impact(component_id, &baseline);
             let role = self.classify_role_from_impact(&impact, component_id);
-            
-            println!("Component {:?}: {:?} (severity: {:.3})", 
-                     component_id, role, impact.severity);
             
             roles.insert(component_id, role);
         }
@@ -791,7 +855,19 @@ impl ComponentRoleDetector {
     }
     
     fn is_connected_to_ic_input(&self, component_id: ComponentId) -> bool {
-        // Analyze circuit topology to determine if component connects to IC input
+        // First try to use extracted pin connection information
+        if let Some(ic_pins) = self.component_to_ic_pins.get(&component_id) {
+            for (_ic_id, pin_name, pin_direction, pin_type) in ic_pins {
+                // Check if this is a power input pin
+                if *pin_direction == PinDirection::Power && 
+                   *pin_type == PinType::Power &&
+                   pin_name.to_uppercase() == "IN" {
+                    return true;
+                }
+            }
+        }
+        
+        // Fallback to topology analysis
         if let Some(component) = self.circuit.get_component(component_id) {
             let component_nodes = component.nodes();
             
@@ -820,7 +896,19 @@ impl ComponentRoleDetector {
     }
     
     fn is_connected_to_ic_output(&self, component_id: ComponentId) -> bool {
-        // Analyze circuit topology to determine if component connects to IC output
+        // First try to use extracted pin connection information
+        if let Some(ic_pins) = self.component_to_ic_pins.get(&component_id) {
+            for (_ic_id, pin_name, pin_direction, pin_type) in ic_pins {
+                // Check if this is a power output pin
+                if *pin_direction == PinDirection::Power && 
+                   *pin_type == PinType::Power &&
+                   pin_name.to_uppercase() == "OUT" {
+                    return true;
+                }
+            }
+        }
+        
+        // Fallback to topology analysis
         if let Some(component) = self.circuit.get_component(component_id) {
             let component_nodes = component.nodes();
             

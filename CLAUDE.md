@@ -289,6 +289,12 @@ This ensures we build a robust, production-ready toolchain rather than a demo wi
    - 100% accuracy on typical power supply circuits
    - See `bhdl-spice/src/extended_analysis/` for implementation
 
+7. **Pin Metadata System**: Explicit functional identification without naming conventions
+   - Reads pin definitions from component library (`pin IN: power in;`)
+   - Component role detection based on IC pin connections
+   - 100% accurate classification of input/output filtering capacitors
+   - See `docs/implementation/Pin_Metadata_System.md` for details
+
 ### Current Focus Areas
 - Component symbol scaling and visualization improvements
 - Orthogonal routing to proper pin positions

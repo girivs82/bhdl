@@ -7,12 +7,13 @@ use std::path::Path;
 use bhdl_parser::parse;
 use bhdl_analyzer::{analyze, types::AnalysisResult};
 use bhdl_synthesizer::NetlistGenerator;
-use bhdl_netlist::Netlist;
+use bhdl_netlist::{Netlist, InstanceId};
 use bhdl_ast::{SourceFile, AstNode};
 use anyhow;
+use std::collections::HashMap;
 
 // SPICE imports
-use bhdl_spice::circuit::Circuit;
+use bhdl_spice::circuit::{Circuit, ComponentId};
 use bhdl_spice::extended_analysis::{ComponentRoleDetector, ComponentRole};
 
 #[tokio::main]
@@ -70,34 +71,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("  Instances: {}", netlist.instances.len());
     println!("  Nets: {}", netlist.nets.len());
     
-    // Debug: Show some instances
-    println!("\nDebug - First 5 instances:");
-    for (i, (id, instance)) in netlist.instances.iter().enumerate() {
-        if i >= 5 { break; }
-        println!("  {:?}: {} (module: {:?})", id, instance.name, instance.definition);
-    }
     
     println!("✅ Synthesis complete\n");
     
     // Step 4: Convert netlist to SPICE circuit
     println!("Step 4: Converting to SPICE circuit...");
-    let circuit = convert_netlist_to_circuit(&netlist, &analysis_result)?;
+    let (circuit, instance_to_component) = convert_netlist_to_circuit(&netlist, &analysis_result)?;
     
     println!("Circuit statistics:");
     println!("  Nodes: {}", circuit.nodes().count());
     println!("  Components: {}", circuit.branches().count());
     
-    // Debug: Show components
-    println!("\nDEBUG: Circuit components:");
-    for (comp_id, component) in circuit.branches() {
-        println!("  {:?}: {} ({})", comp_id, component.name(), component.component_type());
-    }
     
     println!("✅ Conversion complete\n");
     
-    // Step 5: Run component role detection
+    // Step 5: Run component role detection with netlist information
     println!("Step 5: Detecting component roles...");
-    let mut detector = ComponentRoleDetector::new(circuit);
+    let mut detector = ComponentRoleDetector::with_netlist(circuit, &netlist, instance_to_component);
     
     // Initialize simulation engine
     match detector.initialize_simulation() {
@@ -111,7 +101,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Detect all component roles
     let roles = detector.detect_all_roles();
     
-    println!("\nDEBUG: Detected {} component roles", roles.len());
     
     // Step 6: Display results organized by role
     println!("\n📊 Component Role Analysis Results");
@@ -171,9 +160,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn convert_netlist_to_circuit(netlist: &Netlist, analysis_result: &AnalysisResult) -> Result<Circuit, Box<dyn Error>> {
+fn convert_netlist_to_circuit(netlist: &Netlist, analysis_result: &AnalysisResult) -> Result<(Circuit, HashMap<InstanceId, ComponentId>), Box<dyn Error>> {
     // Create a custom circuit with proper component values
     let mut circuit = Circuit::new();
+    let mut instance_to_component = HashMap::new();
     
     // First, add all nets as nodes
     for (net_id, net) in &netlist.nets {
@@ -214,7 +204,7 @@ fn convert_netlist_to_circuit(netlist: &Netlist, analysis_result: &AnalysisResul
                 // Extract proper value from analysis results
                 let value = extract_component_value(&instance.name, &module.name, &analysis_result);
                 
-                circuit.add_branch(
+                let comp_id = circuit.add_branch(
                     instance.name.clone(),
                     &node1,
                     &node2,
@@ -222,13 +212,14 @@ fn convert_netlist_to_circuit(netlist: &Netlist, analysis_result: &AnalysisResul
                     value,
                     Some(instance_id),
                 );
+                
+                instance_to_component.insert(instance_id, comp_id);
             }
         }
     }
     
-    println!("\nDEBUG: Created circuit with {} components", circuit.branches().count());
     
-    Ok(circuit)
+    Ok((circuit, instance_to_component))
 }
 
 fn extract_component_value(instance_name: &str, component_type: &str, analysis_result: &AnalysisResult) -> f64 {
