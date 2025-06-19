@@ -15,6 +15,7 @@ pub mod opamp;
 pub mod voltage_regulator;
 pub mod behavioral_ic;
 pub mod timer_555;
+pub mod subcircuit;
 
 pub use resistor::{ResistorModel, ResistorParams};
 pub use capacitor::{CapacitorModel, CapacitorParams};
@@ -26,6 +27,7 @@ pub use opamp::{OpAmpModel, OpAmpParams};
 pub use voltage_regulator::{VoltageRegulatorModel, VoltageRegulatorParams, RegulatorType};
 pub use behavioral_ic::{BehavioralIcModel, IcType, IcModelBuilder};
 pub use timer_555::{Timer555Model, Timer555Builder};
+pub use subcircuit::{SubcircuitModel, SubcircuitDefinition, SubcircuitPin, SubcircuitLibrary};
 
 /// Temperature in Celsius (default: 27°C)
 pub const DEFAULT_TEMPERATURE: f64 = 27.0;
@@ -98,6 +100,7 @@ pub enum ModelType {
     Comparator,
     LogicGate,
     VoltageReference,
+    Subcircuit,
 }
 
 /// Model level for complexity/accuracy tradeoff
