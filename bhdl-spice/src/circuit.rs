@@ -326,73 +326,11 @@ impl Circuit {
         self.graph.node_weight(node).map(|n| n.name.as_str())
     }
     
-    /// Convert from BHDL netlist
+    /// Convert from BHDL netlist (basic version - use from_netlist_with_models for better results)
     pub fn from_netlist(netlist: &bhdl_netlist::Netlist) -> crate::Result<Self> {
-        let mut circuit = Self::new();
-        
-        // Add all nets as nodes
-        for (net_id, net) in &netlist.nets {
-            let name = net.name.clone().unwrap_or_else(|| format!("net_{:?}", net_id));
-            circuit.add_node(name, Some(net_id));
-        }
-        
-        // Add components as branches
-        // This is simplified - we find nets that connect to each instance
-        for (instance_id, instance) in &netlist.instances {
-            if let Some(module) = netlist.modules.get(instance.definition) {
-                // Find nets connected to this instance
-                let mut connected_nets = Vec::new();
-                for (net_id, net) in &netlist.nets {
-                    for conn_point in &net.connections {
-                        match conn_point {
-                            ConnectionPoint::InstancePort(inst_id, _) |
-                            ConnectionPoint::InstancePin(inst_id, _) => {
-                                if *inst_id == instance_id {
-                                    connected_nets.push(net_id);
-                                    break;
-                                }
-                            }
-                            ConnectionPoint::PinInstance(pin_inst_id) => {
-                                // Check if this pin instance belongs to our instance
-                                if let Some(pin_inst) = netlist.pin_instances.get(*pin_inst_id) {
-                                    if pin_inst.instance == instance_id {
-                                        connected_nets.push(net_id);
-                                        break;
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                
-                // For 2-pin components, use first two connected nets
-                if connected_nets.len() >= 2 {
-                    let node1 = netlist.nets.get(connected_nets[0])
-                        .and_then(|n| n.name.clone())
-                        .unwrap_or_else(|| "unknown".to_string());
-                    let node2 = netlist.nets.get(connected_nets[1])
-                        .and_then(|n| n.name.clone())
-                        .unwrap_or_else(|| "unknown".to_string());
-                    
-                    let component_type = module.name.clone();
-                    
-                    // TODO: Extract value from module parameters or instance overrides
-                    // For now, use a placeholder value
-                    let value = 1.0;
-                    
-                    circuit.add_branch(
-                        instance.name.clone(),
-                        &node1,
-                        &node2,
-                        component_type,
-                        value,
-                        Some(instance_id),
-                    );
-                }
-            }
-        }
-        
-        Ok(circuit)
+        // Use the enhanced converter
+        crate::netlist_converter::NetlistToSpiceConverter::new()
+            .convert(netlist)
+            .map_err(|e| crate::SpiceError::Other(e))
     }
 }

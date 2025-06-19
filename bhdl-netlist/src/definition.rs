@@ -3,6 +3,7 @@ use crate::types::{ModuleKind, PortId, PinId, InstanceId, NetId};
 // Removed Port/Pin imports as they are not stored here directly anymore
  // Keep for potential future use with params?
 use serde::{Serialize, Deserialize};
+use std::collections::HashMap;
 
 // Represents a definition of a module/component/interface/board
 #[derive(Debug, Serialize, Deserialize)]
@@ -16,4 +17,5 @@ pub struct ModuleDefinition {
     pub internal_instances: Vec<InstanceId>,
     pub internal_nets: Vec<NetId>,
     // Add properties like parameters, source location, etc. later
+    pub attributes: HashMap<String, String>, // Module-level attributes
 } 
