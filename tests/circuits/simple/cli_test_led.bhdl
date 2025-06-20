@@ -3,8 +3,6 @@ board SimpleLED {
     power VCC = 5V @ 100mA;
     ground GND;
     
-    // LED with current limiting resistor
-    VCC -> R1: Res(330).1;
-    R1.2 -> D1: LED(red).A;
-    D1.K -> GND;
+    VCC -> R1: Res(330Ω).1 -> LED1: LED(red).A;
+    LED1.K -> GND;
 }
