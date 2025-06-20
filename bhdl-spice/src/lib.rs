@@ -18,7 +18,7 @@ pub mod models;
 pub mod model_factory;
 pub mod model_extractor;
 pub mod netlist_converter;
-pub mod pin_metadata;
+// pub mod pin_metadata; // Removed - using unified bhdl_common::pin_metadata instead
 pub mod pin_metadata_integration;
 pub mod stability;
 pub mod component_registry;

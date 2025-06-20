@@ -303,11 +303,19 @@ This ensures we build a robust, production-ready toolchain rather than a demo wi
    - Automated recommendations for fixing stability issues
    - See `docs/implementation/Stability_Analysis_Integration.md`
 
+9. **Unified Data Model**: Complete elimination of lossy conversions
+   - Netlist augmented with AnalysisData instead of complex conversions
+   - Single authoritative PinMetadata structure in bhdl-common
+   - Symbol table made public in analyzer for proper data extraction
+   - All component-specific data flows from stdlib (no hardcoding)
+   - See `docs/implementation/Unified_Data_Model.md` for details
+
 ### Current Focus Areas
 - Component symbol scaling and visualization improvements
 - Orthogonal routing to proper pin positions
 - Capacitor symbols using parallel plates from database
 - Additional manufacturer datasheet values in stdlib
+- Parser support for keyword-value pairs in component instantiation
 
 ### Test Commands
 - `cargo run -p bhdl-synthesizer --bin test_7805_realistic` - Test net assignment handling

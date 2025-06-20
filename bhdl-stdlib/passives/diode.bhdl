@@ -30,8 +30,16 @@ module Diode(
     part: string = "1N4148",
     package: string = "auto"
 ) {
-    pin A: signal in;   // Anode (+)
-    pin K: signal out;  // Cathode (-)
+    pin A: signal in @metadata(
+        function="Anode",
+        description="Positive terminal (Anode)",
+        electrical_type="passive"
+    );   // Anode (+)
+    pin K: signal out @metadata(
+        function="Cathode",
+        description="Negative terminal (Cathode)",
+        electrical_type="passive"
+    );  // Cathode (-)
     
     // Define diode parameters locally
     const DIODE_1N4148: DiodeParams = {

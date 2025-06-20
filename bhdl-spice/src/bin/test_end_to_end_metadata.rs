@@ -10,7 +10,8 @@ use bhdl_synthesizer::Synthesizer;
 use bhdl_spice::{Circuit, ComponentRoleDetector, NetlistToSpiceConverter};
 use bhdl_spice::pin_metadata_integration::{extract_pin_metadata_from_analysis, update_pin_database_from_ast};
 
-fn main() {
+#[tokio::main]
+async fn main() {
     println!("=== End-to-End Pin Metadata Test ===\n");
     
     // Step 1: Parse BHDL file
@@ -62,7 +63,7 @@ fn main() {
     // Step 3: Synthesize netlist
     println!("\n3. Synthesizing netlist...");
     let mut synthesizer = Synthesizer::new();
-    let synthesis_result = synthesizer.synthesize(&source_file, &analysis_result);
+    let synthesis_result = synthesizer.synthesize(&source_file, &analysis_result).await;
     
     match synthesis_result {
         Ok(netlist) => {
@@ -97,7 +98,6 @@ fn main() {
                         circuit.clone(),
                         &netlist,
                         instance_mapping.clone(),
-                        &analysis_result
                     );
                     let roles_with_metadata = detector_with_metadata.detect_all_roles();
                     print_roles(&roles_with_metadata, &circuit);

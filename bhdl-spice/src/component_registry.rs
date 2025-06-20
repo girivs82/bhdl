@@ -107,6 +107,7 @@ impl ComponentRegistry {
             "mosfet" | "fet" => Some(ComponentType::MOSFET),
             "opamp" | "op_amp" => Some(ComponentType::OpAmp),
             "voltage_regulator" => Some(ComponentType::VoltageRegulator),
+            "switching_regulator" => Some(ComponentType::VoltageRegulator), // Buck/boost regulators
             "power_source" => Some(ComponentType::VoltageSource),
             "ground" => Some(ComponentType::Other("ground".to_string())),
             "test_point" => Some(ComponentType::Other("test_point".to_string())),
@@ -244,6 +245,25 @@ impl ComponentRegistry {
         });
         self.register_module("LM7805", "voltage_regulator");
         self.register_module("LM317", "voltage_regulator");
+        
+        // Switching regulators
+        self.register_class("switching_regulator", ComponentMetadata {
+            component_class: "switching_regulator".to_string(),
+            spice_model: "subcircuit".to_string(),
+            default_parameters: HashMap::from([
+                ("switching_frequency".to_string(), 150e3), // 150kHz
+                ("efficiency".to_string(), 0.85),
+            ]),
+            pin_info: PinInfo {
+                count: 5, // VIN, GND, SW, FB, EN typical
+                pin_types: vec!["power_in".to_string(), "ground".to_string(), 
+                               "power_out".to_string(), "control".to_string(), "control".to_string()],
+            },
+        });
+        self.register_module("LM2596", "switching_regulator");
+        self.register_module("LM2575", "switching_regulator");
+        self.register_module("MP1584", "switching_regulator");
+        self.register_module("TPS54360", "switching_regulator");
         
         // Test Point / Connector
         self.register_class("test_point", ComponentMetadata {

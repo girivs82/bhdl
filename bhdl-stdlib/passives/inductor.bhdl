@@ -23,8 +23,16 @@ module Ind(
     core: string = "ferrite",
     package: string = "auto"
 ) {
-    pin 1: signal inout;
-    pin 2: signal inout;
+    pin 1: signal inout @metadata(
+        function="Terminal",
+        description="First terminal of inductor",
+        electrical_type="passive"
+    );
+    pin 2: signal inout @metadata(
+        function="Terminal",
+        description="Second terminal of inductor",
+        electrical_type="passive"
+    );
     
     // Ferrite core parameters
     const FERRITE_PARAMS: InductorParams = {

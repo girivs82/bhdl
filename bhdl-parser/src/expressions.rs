@@ -249,9 +249,10 @@ impl<'t> Parser<'t> {
                             }
                             self.builder.finish_node();
                         } else {
-                            // Function Call: Wrap IDENT in FUNCTION_CALL_EXPR
+                            // Function Call or Component Instantiation: Wrap IDENT in FUNCTION_CALL_EXPR
                             self.builder.start_node_at(checkpoint, SyntaxKind::FUNCTION_CALL_EXPR.into());
-                            self.parse_argument_list(); // Consumes (...) including parens
+                            // Use parse_param_list_expr to support named parameters for component instantiation
+                            self.parse_param_list_expr(); // Consumes (...) including parens with named parameter support
                             self.builder.finish_node();
                         }
                     }
@@ -352,6 +353,38 @@ impl<'t> Parser<'t> {
             self.parse_expr(0); // Parse argument expression
         }
 
+        self.expect(SyntaxKind::R_PAREN);
+        self.builder.finish_node();
+    }
+    
+    // Parse parameter list with support for named parameters: (10k, voltage=25V, "0805")
+    pub(crate) fn parse_param_list_expr(&mut self) {
+        self.builder.start_node(SyntaxKind::PARAM_LIST.into());
+        self.expect(SyntaxKind::L_PAREN);
+        
+        while self.peek() != Some(SyntaxKind::R_PAREN) && self.peek().is_some() {
+            // Could be named or positional parameter
+            if self.peek_nth(1) == Some(SyntaxKind::EQ) {
+                // Named parameter
+                self.builder.start_node(SyntaxKind::PARAM_ASSIGN.into());
+                self.expect(SyntaxKind::IDENT);
+                self.expect(SyntaxKind::EQ);
+                self.parse_expr(0);
+                self.builder.finish_node();
+            } else {
+                // Positional parameter
+                self.parse_expr(0);
+            }
+            
+            // Check for comma
+            if self.peek() == Some(SyntaxKind::COMMA) {
+                self.bump();
+            } else if self.peek() != Some(SyntaxKind::R_PAREN) {
+                self.error("Expected ',' or ')' in parameter list".to_string());
+                break;
+            }
+        }
+        
         self.expect(SyntaxKind::R_PAREN);
         self.builder.finish_node();
     }

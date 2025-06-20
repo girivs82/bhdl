@@ -16,7 +16,11 @@ type PowerSourceParams = {
 
 module Power(voltage: voltage, current: current) {
     // Power output pin
-    pin OUT: power out;
+    pin OUT: power out @metadata(
+        function="PowerOut",
+        description="Power supply output",
+        electrical_type="power_source"
+    );
     
     // Create power source parameters dynamically based on input
     const params: PowerSourceParams = {

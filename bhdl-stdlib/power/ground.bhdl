@@ -12,7 +12,11 @@ type GroundParams = {
 
 module Ground() {
     // Ground pin
-    pin GND: ground;
+    pin GND: ground @metadata(
+        function="Ground",
+        description="Ground reference",
+        electrical_type="ground"
+    );
     
     // Ground reference parameters
     const params: GroundParams = {

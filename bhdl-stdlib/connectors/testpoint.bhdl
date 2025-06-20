@@ -2,7 +2,11 @@
 // For measurement and debugging access
 
 module TestPoint(style: string = "pad") {
-    pin 1: signal inout;  // Single connection point
+    pin 1: signal inout @metadata(
+        function="TestPoint",
+        description="Test point for measurement",
+        electrical_type="passive"
+    );  // Single connection point
     
     // Metadata for component database
     attribute component_class = "connector";

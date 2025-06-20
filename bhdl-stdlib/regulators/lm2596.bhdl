@@ -1,0 +1,124 @@
+// LM2596 Simple Switcher Buck Regulator
+// 3A Step-Down Voltage Regulator with adjustable output
+
+import { ImpedanceCharacteristics } from "../types/electrical_types.bhdl";
+
+// Buck regulator parameters
+type BuckRegulatorParams = {
+    output_voltage: voltage?,      // Adjustable version has no fixed output
+    output_current: current,
+    input_voltage_min: voltage,
+    input_voltage_max: voltage,
+    switching_frequency: frequency,
+    efficiency: percentage,
+    dropout_voltage: voltage,
+    quiescent_current: current,
+    impedance: ImpedanceCharacteristics,
+};
+
+module LM2596(fixed_voltage: voltage? = null) {
+    pin VIN: power in @metadata(
+        function="PowerIn",
+        description="Input voltage (4.5V-40V)",
+        electrical_type="power_input",
+        voltage_range="4.5V-40V"
+    );
+    pin GND: ground @metadata(
+        function="Ground",
+        description="Ground reference",
+        electrical_type="ground"
+    );
+    pin SW: power out @metadata(
+        function="SwitchNode",
+        description="Switch output to inductor",
+        electrical_type="power_output",
+        max_current="3A",
+        switching="true"
+    );
+    pin FB: signal in @metadata(
+        function="Feedback",
+        description="Feedback input (1.23V reference)",
+        electrical_type="control_input",
+        voltage="1.23V"
+    );
+    pin EN: signal in @metadata(
+        function="Enable",
+        description="Enable input (active low)",
+        electrical_type="control_input",
+        active="low"
+    );
+    
+    // Buck regulator parameters
+    const BUCK_PARAMS: BuckRegulatorParams = {
+        output_voltage: fixed_voltage,
+        output_current: 3A,
+        input_voltage_min: 4.5V,
+        input_voltage_max: 40V,
+        switching_frequency: 150kHz,
+        efficiency: 85%,
+        dropout_voltage: 1V,
+        quiescent_current: 5mA,
+        impedance: {
+            dc_resistance: null,
+            output_impedance: 0.1Ω,
+            input_impedance: null,
+            can_source_current: true,
+            can_sink_current: false,
+            max_source_current: 3A,
+            max_sink_current: null,
+            power_domain_isolation: true,
+            voltage_drop: 1V,
+            current_limiting: true,
+            transient_response: 50μs,
+            inrush_current: null
+        }
+    };
+    
+    // Component attributes
+    attribute component_class = "voltage_regulator";
+    attribute regulator_type = "switching_buck";
+    attribute topology = "buck";
+    attribute fixed_output = fixed_voltage != null;
+    
+    // Electrical specifications
+    attribute output_voltage = fixed_voltage;
+    attribute output_current = BUCK_PARAMS.output_current;
+    attribute input_voltage_min = BUCK_PARAMS.input_voltage_min;
+    attribute input_voltage_max = BUCK_PARAMS.input_voltage_max;
+    attribute switching_frequency = BUCK_PARAMS.switching_frequency;
+    attribute efficiency = BUCK_PARAMS.efficiency;
+    attribute dropout_voltage = BUCK_PARAMS.dropout_voltage;
+    
+    // Impedance characteristics
+    attribute output_impedance = BUCK_PARAMS.impedance.output_impedance;
+    attribute can_source_current = BUCK_PARAMS.impedance.can_source_current;
+    attribute max_source_current = BUCK_PARAMS.impedance.max_source_current;
+    attribute power_domain_isolation = BUCK_PARAMS.impedance.power_domain_isolation;
+    attribute current_limiting = BUCK_PARAMS.impedance.current_limiting;
+    
+    // Protection features
+    attribute has_thermal_protection = true;
+    attribute has_current_limiting = true;
+    attribute has_undervoltage_lockout = true;
+    
+    // External component requirements
+    attribute inductor_value_min = "22μH";
+    attribute inductor_value_rec = "33μH";
+    attribute input_capacitor_min = "100μF";
+    attribute output_capacitor_min = "220μF";
+    attribute catch_diode_required = true;
+    attribute diode_type = "Schottky";
+    attribute diode_current_rating = "3A";
+    
+    // SPICE model parameters
+    attribute spice_model = "switching_regulator";
+    attribute spice_topology = "buck";
+    attribute spice_switching_frequency = BUCK_PARAMS.switching_frequency;
+    attribute spice_duty_cycle = "variable";  // Adjusted by control loop
+}
+
+// Fixed voltage versions
+alias LM2596_3V3 = LM2596(3.3V);
+alias LM2596_5V = LM2596(5V);
+alias LM2596_12V = LM2596(12V);
+alias LM2596_ADJ = LM2596();  // Adjustable version

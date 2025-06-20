@@ -30,3 +30,4 @@ approx = "0.5"  # For floating point comparisons in tests
 bhdl-parser = { path = "../bhdl-parser" }
 bhdl-ast = { path = "../bhdl-ast" }
 bhdl-synthesizer = { path = "../bhdl-synthesizer" }
+tokio = { version = "1.0", features = ["full"] }

@@ -17,8 +17,16 @@ type CapacitorParams = {
 };
 
 module Cap(value: capacitance, voltage: voltage = 50V, type: string = "auto") {
-    pin 1: signal inout;  // Terminal 1 (non-polarized)
-    pin 2: signal inout;  // Terminal 2 (non-polarized)
+    pin 1: signal inout @metadata(
+        function="Terminal",
+        description="First terminal (positive for polarized)",
+        electrical_type="passive"
+    );  // Terminal 1 (non-polarized)
+    pin 2: signal inout @metadata(
+        function="Terminal",
+        description="Second terminal (negative for polarized)",
+        electrical_type="passive"
+    );  // Terminal 2 (non-polarized)
     
     // Determine capacitor type
     const cap_type = type == "auto" ? 
