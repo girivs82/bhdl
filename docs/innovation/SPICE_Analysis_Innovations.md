@@ -118,6 +118,39 @@ let vf = n * vt * (current / is).ln();
 - Input pins: High impedance, minimal current
 - Output pins: Can source/sink significant current
 
+### 9. Unified Data Structure Architecture
+
+**Traditional**: Multiple incompatible data structures requiring lossy conversions
+
+**BHDL Innovation**:
+- Single netlist augmented with analysis-specific data
+- No conversion between netlist → circuit → analysis results
+- Component registry for data-driven type determination
+- Extensible structure supports future analysis types
+
+**Implementation**:
+```rust
+// Netlist remains structural truth
+// Analysis augments without modifying
+pub struct AnalysisData {
+    pub instance_analysis: HashMap<String, InstanceAnalysisData>,
+}
+
+pub struct InstanceAnalysisData {
+    pub spice_type: Option<String>,
+    pub component_role: Option<String>,
+    pub electrical_params: Option<ElectricalParams>,
+    pub safety_info: Option<SafetyInfo>,
+    pub extensions: HashMap<String, serde_json::Value>,
+}
+```
+
+**Benefits**:
+- Eliminates conversion errors
+- Maintains single source of truth
+- Supports incremental analysis
+- Clean separation of concerns
+
 ## Implementation Philosophy
 
 ### "Simulate First, Validate Second"
