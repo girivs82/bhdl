@@ -1,0 +1,312 @@
+// Real-world example: Multi-rail power supply with shared modules
+// Shows how scoped parameters solve actual design challenges
+
+// Generic adjustable regulator module
+module AdjustableRegulator {
+    pin VIN: power in;
+    pin VOUT: power out;
+    pin EN: digital in;
+    pin PGOOD: digital out;
+    
+    // Controller chip (same for all voltages)
+    controller: TPS54620 {
+        VIN -> .PVIN;
+        .EN -> EN;
+        .PGOOD -> PGOOD;
+        .SW -> switch_node;
+        .FB -> feedback_point;
+        .COMP -> comp_point;
+    }
+    
+    // Power stage
+    L1: Inductor(10uH) {
+        switch_node -> .1;
+        VOUT -> .2;
+    }
+    
+    // Feedback network - THE KEY PART
+    feedback: VoltageDivider {
+        VOUT -> .TOP;
+        .TAP -> feedback_point;
+        .BOT -> GND;
+        
+        // These determine output voltage!
+        @param r_top: resistance = 10k;
+        @param r_bottom: resistance = 10k;  // Default: 0.8V ref -> 1.6V out
+    }
+    
+    // Compensation network
+    comp: CompensationNetwork {
+        feedback_point -> .IN;
+        .OUT -> comp_point;
+        
+        @param r_comp = 10k;
+        @param c_comp = 100pF;
+        @param c_hf = 10pF;
+    }
+    
+    // Output capacitors
+    output_caps: OutputCapBank {
+        VOUT -> .IN;
+        .GND -> GND;
+        
+        @param num_caps = 3;
+        @param cap_value = 100uF;
+        @param cap_voltage = 16V;
+    }
+}
+
+// Voltage divider submodule
+module VoltageDivider {
+    pin TOP: signal in;
+    pin TAP: signal out;
+    pin BOT: signal in;
+    
+    @param r_top: resistance = 10k;
+    @param r_bottom: resistance = 10k;
+    
+    R_TOP: Res(r_top, tolerance=1%) {
+        TOP -> .1;
+        TAP -> .2;
+    }
+    
+    R_BOT: Res(r_bottom, tolerance=1%) {
+        TAP -> .1;
+        BOT -> .2;
+    }
+}
+
+// Output capacitor bank
+module OutputCapBank {
+    pin IN: power in;
+    pin GND: ground;
+    
+    @param num_caps: int = 2;
+    @param cap_value: capacitance = 100uF;
+    @param cap_voltage: voltage = 16V;
+    
+    generate for i in 0..num_caps {
+        C[i]: Cap(cap_value, cap_voltage) {
+            IN -> .1;
+            GND -> .2;
+        }
+    }
+}
+
+// Compensation network module
+module CompensationNetwork {
+    pin IN: signal in;
+    pin OUT: signal out;
+    
+    @param r_comp: resistance = 10k;
+    @param c_comp: capacitance = 100pF;
+    @param c_hf: capacitance = 10pF;
+    
+    // Type II compensation
+    R: Res(r_comp) {
+        IN -> .1;
+        OUT -> .2;
+    }
+    
+    C1: Cap(c_comp) {
+        IN -> .1;
+        c_node -> .2;
+    }
+    
+    C2: Cap(c_hf) {
+        c_node -> .1;
+        OUT -> .2;
+    }
+}
+
+// Main board using scoped parameters
+board MultiRailPowerSupply {
+    power VIN = 12V @ 20A;
+    ground GND;
+    
+    // 5V rail - High current
+    reg_5v: AdjustableRegulator {
+        VIN -> .VIN;
+        .VOUT -> V5V_BUS;
+        
+        // Scoped parameter overrides
+        @params {
+            // Set output voltage via feedback
+            feedback.r_top = 10k;
+            feedback.r_bottom = 1.91k;  // 0.8V * (10k + 1.91k) / 1.91k = 5V
+            
+            // Beef up output caps for high current
+            output_caps.num_caps = 5;
+            output_caps.cap_value = 220uF;
+            
+            // Adjust compensation for heavy load
+            comp.r_comp = 8.2k;
+            comp.c_comp = 220pF;
+        }
+    }
+    
+    // 3.3V rail - General purpose
+    reg_3v3: AdjustableRegulator {
+        VIN -> .VIN;
+        .VOUT -> V3V3_BUS;
+        
+        @params {
+            feedback.r_top = 10k;
+            feedback.r_bottom = 3.16k;  // For 3.3V output
+            
+            // Standard output caps
+            output_caps.num_caps = 3;
+            output_caps.cap_value = 100uF;
+        }
+    }
+    
+    // 1.8V rail - Low noise for analog
+    reg_1v8: AdjustableRegulator {
+        VIN -> .VIN;
+        .VOUT -> V1V8_ANALOG;
+        
+        @params {
+            feedback.r_top = 10k;
+            feedback.r_bottom = 8.06k;  // For 1.8V output
+            
+            // Extra filtering for analog
+            output_caps.num_caps = 4;
+            output_caps.cap_value = 47uF;
+            output_caps.cap_voltage = 6.3V;  // Can use lower voltage
+            
+            // Slower compensation for stability
+            comp.r_comp = 15k;
+            comp.c_comp = 470pF;
+            comp.c_hf = 22pF;
+        }
+    }
+    
+    // 1.2V rail - High current for FPGA core
+    reg_1v2: AdjustableRegulator {
+        V5V_BUS -> .VIN;  // Fed from 5V for efficiency
+        .VOUT -> V1V2_CORE;
+        
+        @params {
+            feedback.r_top = 10k;
+            feedback.r_bottom = 20k;  // For 1.2V output
+            
+            // Maximum output caps for FPGA transients
+            output_caps.num_caps = 8;
+            output_caps.cap_value = 330uF;
+            output_caps.cap_voltage = 6.3V;
+            
+            // Fast compensation for transient response
+            comp.r_comp = 4.7k;
+            comp.c_comp = 100pF;
+            comp.c_hf = 4.7pF;
+        }
+    }
+    
+    // 2.5V rail - Special voltage for specific IC
+    reg_2v5: AdjustableRegulator {
+        V5V_BUS -> .VIN;
+        .VOUT -> V2V5_SPECIAL;
+        
+        @params {
+            // Calculate for non-standard voltage
+            feedback.r_top = 10k;
+            feedback.r_bottom = 4.7k;  // 0.8V * (10k + 4.7k) / 4.7k = 2.5V
+            
+            // Moderate filtering
+            output_caps.num_caps = 2;
+            output_caps.cap_value = 100uF;
+        }
+    }
+    
+    // Enable sequencing
+    sequencer: PowerSequencer {
+        .EN_IN -> SYSTEM_ENABLE;
+        .EN[0] -> reg_5v.EN;
+        .EN[1] -> reg_3v3.EN;
+        .EN[2] -> reg_1v8.EN;
+        .EN[3] -> reg_1v2.EN;
+        .EN[4] -> reg_2v5.EN;
+        
+        @params {
+            delays = [0ms, 10ms, 20ms, 30ms, 40ms];
+        }
+    }
+}
+
+// Example showing array parameter overrides
+board HighDensityLEDMatrix {
+    power VIN = 24V;
+    ground GND;
+    
+    // LED driver with 16 channels
+    driver: MultiChannelLEDDriver {
+        @param channels = 16;
+        @param default_current = 350mA;
+        
+        // Override specific channels for different LED colors
+        @params {
+            // Red LEDs need less current
+            channel[0].max_current = 250mA;
+            channel[1].max_current = 250mA;
+            channel[2].max_current = 250mA;
+            channel[3].max_current = 250mA;
+            
+            // White LEDs at default 350mA
+            // channels[4..11] use default
+            
+            // Blue LEDs can handle more
+            channel[12].max_current = 400mA;
+            channel[13].max_current = 400mA;
+            channel[14].max_current = 400mA;
+            channel[15].max_current = 400mA;
+            
+            // All channels use same switching frequency
+            channel[*].controller.fsw = 2MHz;
+            
+            // But different thermal limits
+            channel[0..3].thermal.max_temp = 80C;   // Red runs cooler
+            channel[4..11].thermal.max_temp = 85C;  // White standard
+            channel[12..15].thermal.max_temp = 90C; // Blue runs hotter
+        }
+    }
+}
+
+// Example with computed parameter propagation
+board AdaptivePowerSystem {
+    // System-wide parameters
+    attribute input_voltage = 48V;
+    attribute efficiency_mode = "high";  // or "balanced" or "size"
+    
+    // Main converter
+    main_conv: IsolatedDCDC {
+        @param vin = input_voltage;
+        @param topology = (input_voltage > 36V) ? "forward" : "flyback";
+        
+        // Propagate efficiency choice
+        @params when (efficiency_mode == "high") {
+            transformer.core_material = "N97";  // Low loss
+            rectifier.type = "synchronous";
+            controller.fsw = 100kHz;  // Lower freq for efficiency
+        }
+        
+        @params when (efficiency_mode == "size") {
+            transformer.core_material = "N87";  // Smaller
+            rectifier.type = "schottky";
+            controller.fsw = 500kHz;  // Higher freq for size
+        }
+    }
+    
+    // Point-of-load converters inherit settings
+    generate for i in 0..4 {
+        pol[i]: BuckConverter {
+            main_conv.VOUT -> .VIN;
+            
+            // Inherit efficiency mode
+            @param controller.mode = efficiency_mode;
+            
+            // But override per channel
+            @param vout = [3.3V, 2.5V, 1.8V, 1.2V][i];
+            @param feedback.r_bottom = [3.16k, 4.7k, 8.06k, 20k][i];
+        }
+    }
+}

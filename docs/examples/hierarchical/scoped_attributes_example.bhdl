@@ -1,0 +1,309 @@
+// Scoped attributes example using existing 'attribute' keyword
+// No new syntax needed!
+
+module AdjustableRegulator {
+    pin VIN: power in;
+    pin VOUT: power out;
+    pin EN: digital in;
+    
+    // Module-level attributes (traditional usage)
+    attribute description = "Configurable voltage regulator";
+    attribute manufacturer = "TI";
+    
+    controller: TPS54620 {
+        VIN -> .PVIN;
+        .SW -> switch_node;
+        .FB -> feedback_point;
+        .EN -> EN;
+    }
+    
+    // Power inductor
+    inductor: PowerInductor {
+        switch_node -> .1;
+        VOUT -> .2;
+        
+        // Default attributes
+        attribute value = 10uH;
+        attribute isat = 5A;
+        attribute dcr = 10mOhm;
+    }
+    
+    // Feedback divider - the key to voltage setting
+    feedback: VoltageDivider {
+        VOUT -> .top;
+        .tap -> feedback_point;
+        .bottom -> GND;
+        
+        // These determine output voltage
+        attribute r_top = 10k;
+        attribute r_bottom = 10k;  // Default gives ~1.6V
+        attribute tolerance = 1%;   // Precision resistors
+    }
+    
+    // Compensation
+    comp: CompensationNetwork {
+        feedback_point -> .fb;
+        .comp -> controller.COMP;
+        
+        attribute type = "type2";
+        attribute r1 = 10k;
+        attribute c1 = 100pF;
+        attribute c2 = 10pF;
+    }
+    
+    // Output capacitors
+    output_caps: CapacitorBank {
+        VOUT -> .positive;
+        GND -> .negative;
+        
+        attribute count = 3;
+        attribute value = 100uF;
+        attribute voltage_rating = 16V;
+        attribute type = "MLCC";
+    }
+}
+
+// Submodule definitions
+module VoltageDivider {
+    pin top: signal in;
+    pin tap: signal out;
+    pin bottom: signal in;
+    
+    attribute r_top = 10k;
+    attribute r_bottom = 10k;
+    attribute tolerance = 1%;
+    
+    R_TOP: Res(r_top, tolerance) {
+        top -> .1;
+        tap -> .2;
+    }
+    
+    R_BOTTOM: Res(r_bottom, tolerance) {
+        tap -> .1;
+        bottom -> .2;
+    }
+}
+
+module CapacitorBank {
+    pin positive: power in;
+    pin negative: ground;
+    
+    attribute count = 2;
+    attribute value = 100uF;
+    attribute voltage_rating = 16V;
+    attribute type = "MLCC";
+    
+    generate for i in 0..count {
+        C[i]: Cap(value, voltage_rating, type) {
+            positive -> .1;
+            negative -> .2;
+        }
+    }
+}
+
+// Main board using scoped attributes
+board MultiRailPowerSupply {
+    power VIN = 12V @ 30A;
+    ground GND;
+    
+    // System-level configuration
+    attribute ambient_temp = 50C;
+    attribute efficiency_target = 0.9;
+    
+    // 5V rail - High current general purpose
+    reg_5v: AdjustableRegulator {
+        VIN -> .VIN;
+        .VOUT -> RAIL_5V;
+        
+        // Override nested attributes for 5V output
+        attribute feedback.r_top = 10k;
+        attribute feedback.r_bottom = 1.91k;  // 0.8V * (10k+1.91k)/1.91k = 5V
+        
+        // Beef up the output stage
+        attribute inductor.value = 4.7uH;     // Lower inductance
+        attribute inductor.isat = 15A;        // Higher current
+        
+        attribute output_caps.count = 5;      // More capacitors
+        attribute output_caps.value = 220uF;  // Larger value
+        
+        // Adjust compensation for heavy load
+        attribute comp.type = "type3";        // More sophisticated
+        attribute comp.r1 = 8.2k;
+        attribute comp.c1 = 220pF;
+        attribute comp.c2 = 22pF;
+    }
+    
+    // 3.3V rail - Digital logic
+    reg_3v3: AdjustableRegulator {
+        VIN -> .VIN;
+        .VOUT -> RAIL_3V3;
+        
+        attribute feedback.r_top = 10k;
+        attribute feedback.r_bottom = 3.16k;  // For 3.3V
+        
+        // Standard configuration
+        attribute output_caps.count = 3;
+        attribute output_caps.value = 100uF;
+    }
+    
+    // 1.8V rail - Low noise for analog
+    reg_1v8: AdjustableRegulator {
+        RAIL_5V -> .VIN;  // Cascade from 5V
+        .VOUT -> RAIL_1V8_ANALOG;
+        
+        attribute feedback.r_top = 10k;
+        attribute feedback.r_bottom = 8.06k;  // For 1.8V
+        
+        // Optimize for low noise
+        attribute inductor.value = 22uH;      // Higher inductance
+        attribute inductor.dcr = 5mOhm;       // Lower DCR
+        
+        attribute output_caps.count = 6;      // More filtering
+        attribute output_caps.value = 47uF;   // Mix of values
+        attribute output_caps.type = "polymer"; // Low ESR
+        
+        // Gentle compensation
+        attribute comp.r1 = 15k;
+        attribute comp.c1 = 470pF;
+    }
+    
+    // 1.0V rail - CPU core voltage
+    reg_1v0: AdjustableRegulator {
+        RAIL_5V -> .VIN;
+        .VOUT -> RAIL_1V0_CORE;
+        
+        attribute feedback.r_top = 10k;
+        attribute feedback.r_bottom = 40k;    // For 1.0V (0.8V ref)
+        
+        // Extreme current capability
+        attribute inductor.value = 1.5uH;     // Very low
+        attribute inductor.isat = 40A;        // Very high
+        attribute inductor.dcr = 2mOhm;       // Ultra-low
+        
+        attribute output_caps.count = 12;     // Maximum
+        attribute output_caps.value = 470uF;  // Large
+        attribute output_caps.voltage_rating = 6.3V;  // Can be lower
+        
+        // Fast transient response
+        attribute comp.type = "type3";
+        attribute comp.r1 = 3.3k;
+        attribute comp.c1 = 100pF;
+        attribute comp.c2 = 4.7pF;
+    }
+}
+
+// Example with array attributes
+module LEDDriverBank(channels: int = 8) {
+    pin VIN: power in;
+    pin EN: digital in;
+    
+    generate for i in 0..channels {
+        driver[i]: LEDDriver {
+            VIN -> .VIN;
+            EN -> .EN;
+            
+            // Default current
+            attribute max_current = 350mA;
+            attribute pwm_freq = 1kHz;
+        }
+    }
+}
+
+board RGBLEDPanel {
+    bank: LEDDriverBank(channels=12) {
+        VIN_24V -> .VIN;
+        
+        // Configure red channels (lower current)
+        attribute driver[0].max_current = 250mA;
+        attribute driver[1].max_current = 250mA;
+        attribute driver[2].max_current = 250mA;
+        attribute driver[3].max_current = 250mA;
+        
+        // Green channels (standard)
+        // driver[4..7] use default 350mA
+        
+        // Blue channels (higher current)
+        attribute driver[8].max_current = 400mA;
+        attribute driver[9].max_current = 400mA;
+        attribute driver[10].max_current = 400mA;
+        attribute driver[11].max_current = 400mA;
+        
+        // All channels use high frequency for no flicker
+        attribute driver[*].pwm_freq = 20kHz;
+    }
+}
+
+// Computed attributes example
+board AdaptivePowerSystem {
+    // Configuration
+    attribute input_voltage = 48V;
+    attribute low_power_mode = false;
+    
+    main_converter: DCDCConverter {
+        VIN_48V -> .VIN;
+        
+        // Computed nested attributes
+        attribute transformer.turns_ratio = input_voltage / 12V;
+        attribute controller.frequency = low_power_mode ? 50kHz : 200kHz;
+        attribute controller.dead_time = 500ns / (controller.frequency / 100kHz);
+        
+        // Conditional configuration
+        attribute rectifier.type = (input_voltage > 36V) ? "synchronous" : "diode";
+        attribute snubber.enabled = (controller.frequency > 150kHz);
+    }
+    
+    // Point-of-load converters with inherited settings
+    generate for i in 0..4 {
+        pol[i]: BuckModule {
+            main_converter.VOUT -> .VIN;
+            
+            // Each POL gets different voltage
+            attribute vout_target = [3.3V, 2.5V, 1.8V, 1.2V][i];
+            
+            // Compute feedback resistor
+            attribute feedback.r_bottom = 10k * 0.8V / vout_target;
+            
+            // Inherit system mode
+            attribute controller.light_load_mode = low_power_mode ? "burst" : "forced_pwm";
+        }
+    }
+}
+
+// Real-world example: USB-C PD power supply
+board USBCPowerDelivery {
+    // PD controller with configurable profiles
+    pd_controller: PDController {
+        attribute profile[0].voltage = 5V;
+        attribute profile[0].current = 3A;
+        
+        attribute profile[1].voltage = 9V;
+        attribute profile[1].current = 3A;
+        
+        attribute profile[2].voltage = 15V;
+        attribute profile[2].current = 3A;
+        
+        attribute profile[3].voltage = 20V;
+        attribute profile[3].current = 5A;
+        
+        // Configure protection per profile
+        attribute profile[*].ovp_threshold = profile[*].voltage * 1.2;
+        attribute profile[*].ocp_threshold = profile[*].current * 1.25;
+    }
+    
+    // Configurable buck-boost for each profile
+    converter: BuckBoostConverter {
+        attribute output.min_voltage = 5V;
+        attribute output.max_voltage = 20V;
+        
+        // Optimize components for voltage range
+        attribute inductor.value = 4.7uH;
+        attribute inductor.isat = 8A;
+        
+        attribute switch.voltage_rating = 30V;  // 1.5x margin
+        attribute switch.rds_on = 10mOhm;
+        
+        // Output caps scale with max current
+        attribute output_caps.total_capacitance = 1000uF;
+        attribute output_caps.voltage_rating = 25V;
+    }
+}

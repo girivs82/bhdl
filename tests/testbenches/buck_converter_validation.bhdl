@@ -1,0 +1,231 @@
+// Example testbench for buck converter validation
+// This demonstrates the proposed BHDL simulation syntax
+
+// Import the circuit to test
+import "../circuits/realistic/buck_converter_simple.bhdl";
+
+// Testbench for validating buck converter performance
+testbench BuckConverterValidation for SimpleBuckConverter {
+    // Transient simulation settings
+    simulation {
+        type: transient;
+        duration: 5ms;          // Total simulation time
+        timestep: 100ns;        // Time resolution
+        temperature: 25°C;      // Ambient temperature
+        
+        // Initial conditions
+        initial {
+            // Start with capacitors discharged
+            voltage(C1) = 0V;
+            voltage(C2) = 0V;
+            current(L1) = 0A;
+        }
+    }
+    
+    // Input stimulus definition
+    stimulus {
+        // Power supply ramp-up
+        @0ms: VIN = 0V;
+        @100µs: VIN = ramp_to(12V, 100µs);  // Soft start
+        
+        // Load current steps to test transient response
+        @1ms: load(VOUT) = 0.5A;   // Light load
+        @2ms: load(VOUT) = 1.5A;   // Heavy load step
+        @3ms: load(VOUT) = 0.5A;   // Return to light load
+        
+        // Input voltage variations
+        @4ms: VIN = 10V;           // Test line regulation
+        @4.5ms: VIN = 12V;         // Return to nominal
+    }
+    
+    // Key measurements
+    measure {
+        // Inductor current (critical for buck converter)
+        IL: current(L1);
+        IL_PEAK: max(current(L1));
+        IL_RIPPLE: peak_to_peak(current(L1)) after 500µs;
+        
+        // Output voltage regulation
+        VOUT_MEAN: mean(voltage(VOUT)) after 500µs;
+        VOUT_RIPPLE: peak_to_peak(voltage(VOUT)) after 500µs;
+        VOUT_SETTLING: settling_time(voltage(VOUT), 3.3V, tolerance=2%);
+        
+        // Load regulation
+        LOAD_REG: (voltage(VOUT)@1.5ms - voltage(VOUT)@2.5ms) / voltage(VOUT)@1.5ms * 100%;
+        
+        // Line regulation
+        LINE_REG: (voltage(VOUT)@3.5ms - voltage(VOUT)@4.2ms) / voltage(VOUT)@3.5ms * 100%;
+        
+        // Efficiency at different loads
+        EFF_LIGHT: power(VOUT) / power(VIN) * 100% @ 1.5ms;
+        EFF_HEAVY: power(VOUT) / power(VIN) * 100% @ 2.5ms;
+        
+        // Component stress
+        MOSFET_VDS_MAX: max(voltage(Q1.D) - voltage(Q1.S));
+        DIODE_CURRENT_MAX: max(current(D1));
+    }
+    
+    // Design validation assertions
+    assert {
+        // Output voltage regulation
+        "Output voltage within ±5%" : 
+            voltage(VOUT) in range(3.135V, 3.465V) after 1ms;
+        
+        // Inductor current limits
+        "Inductor current below saturation" : 
+            current(L1) < 4A always;
+        
+        // No inductor current reversal (CCM operation)
+        "Continuous conduction mode" : 
+            current(L1) > -0.1A after 1ms;
+        
+        // Component stress limits
+        "MOSFET Vds within SOA" : 
+            MOSFET_VDS_MAX < 20V;
+            
+        "Diode current rating" : 
+            DIODE_CURRENT_MAX < 3A;
+        
+        // Performance requirements
+        "Efficiency above 85% at full load" : 
+            EFF_HEAVY > 85%;
+            
+        "Output ripple below 50mV" : 
+            VOUT_RIPPLE < 50mV after settling;
+            
+        "Load regulation within 2%" : 
+            abs(LOAD_REG) < 2%;
+    }
+    
+    // Waveform plotting
+    plot {
+        // Main waveform showing key signals
+        waveform("buck_transient_response.svg") {
+            subplot(3, 1, 1) {
+                voltage(VIN) style="blue,solid";
+                voltage(VOUT) style="red,solid";
+                3.3V style="red,dashed";  // Reference
+                title: "Input and Output Voltages";
+                ylabel: "Voltage (V)";
+                grid: true;
+            }
+            
+            subplot(3, 1, 2) {
+                current(L1) style="green,solid";
+                mean(current(L1)) style="green,dashed" window=100µs;
+                title: "Inductor Current";
+                ylabel: "Current (A)";
+                grid: true;
+            }
+            
+            subplot(3, 1, 3) {
+                load(VOUT) style="orange,solid";
+                title: "Load Current";
+                ylabel: "Current (A)";
+                xlabel: "Time (ms)";
+                grid: true;
+            }
+        }
+        
+        // Detailed ripple analysis
+        waveform("output_ripple_detail.svg") {
+            voltage(VOUT) - VOUT_MEAN;
+            title: "Output Voltage Ripple";
+            ylabel: "Ripple (mV)";
+            xlabel: "Time (ms)";
+            xlim: [2ms, 2.1ms];  // Zoom in on steady state
+            grid: true;
+        }
+        
+        // Efficiency vs load curve (from parameter sweep)
+        xy("efficiency_curve.svg") {
+            x: [0.1A, 0.5A, 1.0A, 1.5A, 2.0A];
+            y: [calculate_efficiency_at_load(load) for load in x];
+            style: "blue,circle,solid";
+            title: "Buck Converter Efficiency";
+            xlabel: "Load Current (A)";
+            ylabel: "Efficiency (%)";
+            grid: true;
+        }
+    }
+    
+    // Generate detailed report
+    report {
+        format: "html";
+        template: "buck_converter_report.html";
+        
+        sections {
+            summary: {
+                "Design": "12V to 3.3V Buck Converter",
+                "Load Range": "0.1A to 2A",
+                "Switching Frequency": "Calculated from L and C values"
+            }
+            
+            performance: {
+                "Efficiency @ 0.5A": EFF_LIGHT,
+                "Efficiency @ 1.5A": EFF_HEAVY,
+                "Output Ripple": VOUT_RIPPLE,
+                "Load Regulation": LOAD_REG,
+                "Line Regulation": LINE_REG,
+                "Settling Time": VOUT_SETTLING
+            }
+            
+            component_stress: {
+                "Max Inductor Current": IL_PEAK,
+                "Inductor Current Ripple": IL_RIPPLE,
+                "Max MOSFET Vds": MOSFET_VDS_MAX,
+                "Max Diode Current": DIODE_CURRENT_MAX
+            }
+            
+            pass_fail: assertions;  // Include all assertion results
+        }
+    }
+}
+
+// Additional AC analysis testbench for stability
+testbench BuckStabilityAnalysis for SimpleBuckConverter {
+    simulation {
+        type: ac;
+        start: 10Hz;
+        stop: 1MHz;
+        points: 200;
+        scale: logarithmic;
+        
+        // Operating point for small signal analysis
+        operating_point {
+            VIN = 12V;
+            load(VOUT) = 1A;
+        }
+    }
+    
+    // Inject small signal at feedback point
+    stimulus {
+        ac_source(FB_NODE, amplitude=10mV);
+    }
+    
+    measure {
+        // Open loop gain
+        LOOP_GAIN: magnitude(VOUT/FB_NODE);
+        LOOP_PHASE: phase(VOUT/FB_NODE);
+        
+        // Stability margins
+        PM: phase_margin();
+        GM: gain_margin();
+        FCO: crossover_frequency();
+    }
+    
+    assert {
+        "Adequate phase margin": PM > 45°;
+        "Adequate gain margin": GM > 10dB;
+        "Reasonable crossover frequency": FCO in range(10kHz, 100kHz);
+    }
+    
+    plot {
+        bode("buck_loop_response.svg") {
+            magnitude: 20*log10(LOOP_GAIN);
+            phase: LOOP_PHASE;
+            title: "Buck Converter Loop Response";
+            mark_margins: true;  // Show PM and GM on plot
+        }
+    }
+}
