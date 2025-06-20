@@ -27,6 +27,8 @@ pub struct NetlistToSpiceConverter {
     instance_models: HashMap<InstanceId, Box<dyn SpiceModel>>,
     /// Symbol table data from analyzer (if available)
     symbol_table: HashMap<String, HashMap<String, String>>,
+    /// Component registry for type lookup
+    component_registry: crate::component_registry::ComponentRegistry,
 }
 
 impl NetlistToSpiceConverter {
@@ -37,6 +39,7 @@ impl NetlistToSpiceConverter {
             model_factory: SpiceModelFactory::new(),
             instance_models: HashMap::new(),
             symbol_table: HashMap::new(),
+            component_registry: crate::component_registry::ComponentRegistry::new(),
         }
     }
     
@@ -113,7 +116,7 @@ impl NetlistToSpiceConverter {
         
         // Handle different component types
         match module.kind {
-            ModuleKind::PhysicalComponent => {
+            ModuleKind::PhysicalComponent | ModuleKind::Component => {
                 self.add_physical_component(
                     circuit,
                     netlist,
@@ -123,7 +126,24 @@ impl NetlistToSpiceConverter {
                     extracted_model,
                 )?;
             }
-            ModuleKind::Module | ModuleKind::Component => {
+            ModuleKind::Interface => {
+                // Interfaces might represent connectors or test points
+                if module.name.to_lowercase().contains("test") || 
+                   module.name.to_lowercase().contains("point") ||
+                   module.name.to_lowercase().contains("connector") {
+                    self.add_physical_component(
+                        circuit,
+                        netlist,
+                        &instance.name,
+                        instance_id,
+                        &connected_nets,
+                        extracted_model,
+                    )?;
+                } else {
+                    debug!("Skipping interface module: {}", instance.name);
+                }
+            }
+            ModuleKind::Module => {
                 // For now, skip logical modules
                 debug!("Skipping logical module: {}", instance.name);
             }
@@ -159,27 +179,27 @@ impl NetlistToSpiceConverter {
             }
         }
         
-        // Extract from module information
-        let mut module_attrs = HashMap::new();
-        module_attrs.insert("component_type".to_string(), self.infer_component_type(&module.name));
+        // Build extraction data from module and instance attributes
+        let mut extraction_data = HashMap::new();
         
-        // Add module parameters
+        // Add instance name
+        extraction_data.insert("name".to_string(), instance_name.to_string());
+        
+        // Add module name for registry lookup
+        extraction_data.insert("type".to_string(), module.name.clone());
+        
+        // Add instance attributes (these override module attributes)
+        for (key, value) in attributes {
+            extraction_data.insert(key.clone(), value.clone());
+        }
+        
+        // Add module attributes
         for (key, value) in &module.attributes {
-            module_attrs.insert(key.clone(), value.clone());
+            extraction_data.insert(key.clone(), value.clone());
         }
         
-        // Try to extract value from module name (e.g., "Res_10k")
-        if let Some(value) = self.extract_value_from_name(&module.name) {
-            module_attrs.insert("value".to_string(), value);
-        }
-        
-        self.model_extractor.extract_from_symbol_table(instance_name, &module_attrs)
-            .or_else(|_| {
-                // Last resort: context inference
-                let connections = vec![]; // TODO: Get actual connections
-                let nearby = vec![]; // TODO: Get nearby components
-                self.model_extractor.infer_from_context(instance_name, &connections, &nearby)
-            })
+        // Try to extract from the combined data
+        self.model_extractor.extract_from_data(extraction_data)
     }
     
     /// Get nets connected to an instance

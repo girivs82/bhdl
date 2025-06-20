@@ -12,17 +12,17 @@ board USBPoweredDevice {
     VIN -> fuse: Fuse(2A).1;
     
     // 2. Net assignment with implicit handles
-    fuse.2 -> protected_vin: TVSDiode(15V).1;
-    protected_vin.2 -> GND;
+    fuse.2 -> @protected_vin -> TVSDiode(15V).1;
+    TVSDiode(15V).2 -> GND;
     
     // 3. Power regulation flow
-    power_flow: protected_vin |> 
+    power_flow: @protected_vin |> 
                 regulation(5V) |> 
                 filtering |> 
                 distribution;
     
     // 4. Component with multiple pin references
-    protected_vin -> reg_5v: LM7805().IN;
+    @protected_vin -> reg_5v: LM7805().IN;
     reg_5v.GND -> GND;
     reg_5v.OUT -> VCC;
     
@@ -72,7 +72,7 @@ board USBPoweredDevice {
     usb.GND -> GND;
     
     // 13. Test points using net references
-    protected_vin -> tp1: TestPoint().1;
+    @protected_vin -> tp1: TestPoint().1;
     VCC -> tp2: TestPoint().1;
     VCC_3V3 -> tp3: TestPoint().1;
     

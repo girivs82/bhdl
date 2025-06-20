@@ -11,9 +11,19 @@ use anyhow::{Result, Context};
 use log::{debug, info, warn};
 
 use crate::{
-    models::*,
+    models::{
+        SpiceModel, ModelType,
+        resistor::{ResistorModel, ResistorParams},
+        capacitor::{CapacitorModel, CapacitorParams},
+        inductor::{InductorModel, InductorParams},
+        diode::{DiodeModel, DiodeParams},
+        bjt::{BjtModel, BjtParams},
+        mosfet::{MosfetModel, MosfetParams},
+        opamp::{OpAmpModel, OpAmpParams},
+    },
     model_factory::SpiceModelFactory,
     components::{ComponentModel, ComponentType},
+    component_registry::ComponentRegistry,
 };
 
 /// Sources for component model data
@@ -52,6 +62,8 @@ pub struct ExtractedModel {
 pub struct ComponentModelExtractor {
     /// SPICE model factory
     model_factory: SpiceModelFactory,
+    /// Component registry for type mappings
+    component_registry: ComponentRegistry,
     /// Cached models
     model_cache: HashMap<String, ExtractedModel>,
 }
@@ -61,8 +73,92 @@ impl ComponentModelExtractor {
     pub fn new() -> Self {
         Self {
             model_factory: SpiceModelFactory::new(),
+            component_registry: ComponentRegistry::new(),
             model_cache: HashMap::new(),
         }
+    }
+    
+    /// Extract model from data map (simplified entry point)
+    pub fn extract_from_data(&mut self, mut data: HashMap<String, String>) -> Result<ExtractedModel> {
+        let name = data.get("name").cloned()
+            .or_else(|| data.get("instance_name").cloned())
+            .unwrap_or_else(|| "unknown".to_string());
+        
+        let module_type = data.get("type").cloned()
+            .or_else(|| data.get("module_type").cloned())
+            .ok_or_else(|| anyhow::anyhow!("No module type specified"))?;
+        
+        debug!("Extracting model for '{}' of type '{}'", name, module_type);
+        
+        // Get component type from registry
+        let component_type = self.component_registry.get_component_type(&module_type, &data)
+            .ok_or_else(|| anyhow::anyhow!("Unknown component type: {}", module_type))?;
+        
+        // Get default parameters from registry
+        let mut parameters = HashMap::new();
+        
+        // Use registry's default parameters as base
+        if let Some(spice_model) = self.component_registry.get_spice_model(
+            &self.component_registry.get_component_class(&module_type, &data)
+                .unwrap_or_else(|| module_type.clone())
+        ) {
+            // Get default parameters based on SPICE model type
+            match spice_model {
+                "resistor" => {
+                    parameters.insert("resistance".to_string(), 1000.0); // 1kΩ default
+                }
+                "capacitor" => {
+                    parameters.insert("capacitance".to_string(), 1e-9); // 1nF default
+                }
+                "inductor" => {
+                    parameters.insert("inductance".to_string(), 1e-6); // 1µH default
+                }
+                "diode" | "led" => {
+                    parameters.insert("forward_voltage".to_string(), 0.7); // 0.7V default
+                    if spice_model == "led" {
+                        parameters.insert("forward_voltage".to_string(), 2.0); // 2V for LED
+                    }
+                }
+                "voltage_source" => {
+                    parameters.insert("voltage".to_string(), 5.0); // 5V default
+                }
+                _ => {}
+            }
+        }
+        
+        // Override with any specified values from data
+        for (key, value) in &data {
+            if let Some(num_value) = self.parse_value(value) {
+                // Map common attribute names to parameter names
+                match key.as_str() {
+                    "value" => {
+                        // Determine which parameter to set based on component type
+                        match &component_type {
+                            ComponentType::Resistor => parameters.insert("resistance".to_string(), num_value),
+                            ComponentType::Capacitor => parameters.insert("capacitance".to_string(), num_value),
+                            ComponentType::Inductor => parameters.insert("inductance".to_string(), num_value),
+                            _ => None,
+                        };
+                    }
+                    "resistance" | "r" => { parameters.insert("resistance".to_string(), num_value); }
+                    "capacitance" | "c" => { parameters.insert("capacitance".to_string(), num_value); }
+                    "inductance" | "l" => { parameters.insert("inductance".to_string(), num_value); }
+                    "voltage" | "v" => { parameters.insert("voltage".to_string(), num_value); }
+                    "current" | "i" => { parameters.insert("current".to_string(), num_value); }
+                    "power" | "p" => { parameters.insert("power_rating".to_string(), num_value); }
+                    _ => {}
+                }
+            }
+        }
+        
+        Ok(ExtractedModel {
+            name,
+            source: ModelSource::Stdlib,
+            component_type,
+            parameters,
+            attributes: data,
+            confidence: 0.9,
+        })
     }
     
     /// Extract model from symbol table entry
@@ -246,14 +342,81 @@ impl ComponentModelExtractor {
     pub fn create_spice_model(&self, extracted: &ExtractedModel) -> Result<Box<dyn SpiceModel>> {
         info!("Creating SPICE model for '{}' ({:?})", extracted.name, extracted.component_type);
         
-        // Use model factory with extracted parameters
-        let model = self.model_factory.create_from_attributes(
-            &extracted.name,
-            &extracted.attributes,
-        ).or_else(|| {
-            // Fallback to creating from type and parameters
-            self.create_model_from_type(&extracted.name, &extracted.component_type, &extracted.parameters)
-        }).ok_or_else(|| anyhow::anyhow!("Failed to create SPICE model for {}", extracted.name))?;
+        // Create simple models based on component type and parameters
+        
+        let model: Box<dyn SpiceModel> = match &extracted.component_type {
+            ComponentType::Resistor => {
+                let resistance = extracted.parameters.get("resistance").copied().unwrap_or(1000.0);
+                Box::new(ResistorModel::from_value(&extracted.name, resistance, "generic"))
+            }
+            ComponentType::Capacitor => {
+                let capacitance = extracted.parameters.get("capacitance").copied().unwrap_or(1e-9);
+                Box::new(CapacitorModel::from_value(&extracted.name, capacitance, "generic", 50.0))
+            }
+            ComponentType::Inductor => {
+                let inductance = extracted.parameters.get("inductance").copied().unwrap_or(1e-6);
+                Box::new(InductorModel::from_value(&extracted.name, inductance, "generic", 1.0))
+            }
+            ComponentType::Diode => {
+                let vf = extracted.parameters.get("forward_voltage").copied().unwrap_or(0.7);
+                let mut params = DiodeParams::default();
+                params.vj = vf;
+                Box::new(DiodeModel::new(extracted.name.clone(), params))
+            }
+            ComponentType::LED => {
+                let vf = extracted.parameters.get("forward_voltage").copied().unwrap_or(2.0);
+                let mut params = DiodeParams::default();
+                params.vj = vf;
+                params.is = 1e-12; // Typical LED saturation current
+                Box::new(DiodeModel::new(extracted.name.clone(), params))
+            }
+            ComponentType::VoltageSource => {
+                // For now, model as very low resistance
+                // TODO: Implement proper voltage source model
+                Box::new(ResistorModel::from_value(&extracted.name, 0.001, "voltage_source"))
+            }
+            ComponentType::CurrentSource => {
+                // For now, model as very high resistance  
+                // TODO: Implement proper current source model
+                Box::new(ResistorModel::from_value(&extracted.name, 1e9, "current_source"))
+            }
+            ComponentType::VoltageRegulator => {
+                // For now, model as low resistance to simulate regulated output
+                // TODO: Use proper voltage regulator model
+                Box::new(ResistorModel::from_value(&extracted.name, 0.1, "voltage_regulator"))
+            }
+            ComponentType::BJT => {
+                // Create simple BJT model
+                let mut params = BjtParams::default();
+                params.bf = extracted.parameters.get("beta").copied().unwrap_or(100.0);
+                Box::new(BjtModel::new(extracted.name.clone(), params))
+            }
+            ComponentType::MOSFET => {
+                // Create simple MOSFET model
+                let mut params = MosfetParams::default();
+                params.vto = extracted.parameters.get("vth").copied().unwrap_or(2.0);
+                Box::new(MosfetModel::new(extracted.name.clone(), params))
+            }
+            ComponentType::OpAmp => {
+                // Create simple op-amp model with default parameters
+                Box::new(OpAmpModel::new(extracted.name.clone(), OpAmpParams::default()))
+            }
+            ComponentType::Other(type_name) => {
+                match type_name.as_str() {
+                    "ground" => {
+                        // Ground is modeled as very low resistance to a reference
+                        Box::new(ResistorModel::from_value(&extracted.name, 0.001, "ground"))
+                    }
+                    "test_point" => {
+                        // Test point is a high impedance resistor
+                        Box::new(ResistorModel::from_value(&extracted.name, 1e9, "probe"))
+                    }
+                    _ => {
+                        return Err(anyhow::anyhow!("Unsupported component type: {}", type_name));
+                    }
+                }
+            }
+        };
         
         Ok(model)
     }
@@ -264,54 +427,28 @@ impl ComponentModelExtractor {
         name: &str,
         data: &HashMap<String, String>,
     ) -> Result<ComponentType> {
-        // Check explicit type attribute
-        if let Some(type_str) = data.get("component_type") {
-            return self.parse_component_type(type_str);
-        }
-        
-        // Infer from name patterns
-        let lower_name = name.to_lowercase();
-        if lower_name.starts_with('r') || lower_name.contains("res") {
-            Ok(ComponentType::Resistor)
-        } else if lower_name.starts_with('c') || lower_name.contains("cap") {
-            Ok(ComponentType::Capacitor)
-        } else if lower_name.starts_with('l') || lower_name.contains("ind") {
-            Ok(ComponentType::Inductor)
-        } else if lower_name.starts_with('d') {
-            if lower_name.contains("led") {
-                Ok(ComponentType::LED)
-            } else {
-                Ok(ComponentType::Diode)
-            }
-        } else if lower_name.starts_with('q') {
-            Ok(ComponentType::BJT)
-        } else if lower_name.starts_with('m') {
-            Ok(ComponentType::MOSFET)
-        } else if lower_name.starts_with('u') {
-            if lower_name.contains("reg") {
-                Ok(ComponentType::VoltageRegulator)
-            } else {
-                Ok(ComponentType::OpAmp)
-            }
+        // Use component registry to determine type
+        if let Some(component_type) = self.component_registry.get_component_type(name, data) {
+            Ok(component_type)
         } else {
-            Err(anyhow::anyhow!("Cannot determine component type for '{}'", name))
+            // Check explicit type attribute
+            if let Some(type_str) = data.get("component_type") {
+                self.parse_component_type(type_str)
+            } else {
+                Err(anyhow::anyhow!("Cannot determine component type for '{}' - not in registry", name))
+            }
         }
     }
     
     /// Parse component type from string
     fn parse_component_type(&self, type_str: &str) -> Result<ComponentType> {
-        match type_str.to_lowercase().as_str() {
-            "resistor" | "res" => Ok(ComponentType::Resistor),
-            "capacitor" | "cap" => Ok(ComponentType::Capacitor),
-            "inductor" | "ind" => Ok(ComponentType::Inductor),
-            "diode" => Ok(ComponentType::Diode),
-            "led" => Ok(ComponentType::LED),
-            "bjt" | "transistor" => Ok(ComponentType::BJT),
-            "mosfet" | "fet" => Ok(ComponentType::MOSFET),
-            "opamp" | "op-amp" => Ok(ComponentType::OpAmp),
-            "voltage_regulator" | "regulator" => Ok(ComponentType::VoltageRegulator),
-            _ => Err(anyhow::anyhow!("Unknown component type: {}", type_str))
-        }
+        // Create a dummy attributes map with component_type
+        let mut attrs = HashMap::new();
+        attrs.insert("component_type".to_string(), type_str.to_string());
+        
+        // Use registry to parse
+        self.component_registry.get_component_type(type_str, &attrs)
+            .ok_or_else(|| anyhow::anyhow!("Unknown component type: {}", type_str))
     }
     
     /// Extract parameters based on component type

@@ -1,0 +1,156 @@
+{
+  "module_definitions": {},
+  "symbol_data": {},
+  "instance_analysis": {
+    "U10": {
+      "spice_type": "diode",
+      "electrical_params": {
+        "value": null,
+        "tolerance": null,
+        "power_rating": null,
+        "voltage_rating": null,
+        "current_rating": null
+      }
+    },
+    "tp_vout": {
+      "spice_type": "test_point",
+      "electrical_params": {
+        "value": null,
+        "tolerance": null,
+        "power_rating": null,
+        "voltage_rating": null,
+        "current_rating": null
+      }
+    },
+    "U3": {
+      "spice_type": "capacitor",
+      "electrical_params": {
+        "value": null,
+        "tolerance": null,
+        "power_rating": null,
+        "voltage_rating": null,
+        "current_rating": null
+      }
+    },
+    "R8": {
+      "spice_type": "resistor",
+      "electrical_params": {
+        "value": null,
+        "tolerance": null,
+        "power_rating": null,
+        "voltage_rating": null,
+        "current_rating": null
+      }
+    },
+    "VCC": {
+      "spice_type": "voltage_source",
+      "electrical_params": {
+        "value": null,
+        "tolerance": null,
+        "power_rating": null,
+        "voltage_rating": null,
+        "current_rating": null
+      }
+    },
+    "U2": {
+      "spice_type": "diode",
+      "electrical_params": {
+        "value": null,
+        "tolerance": null,
+        "power_rating": null,
+        "voltage_rating": null,
+        "current_rating": null
+      }
+    },
+    "tp_gnd": {
+      "spice_type": "test_point",
+      "electrical_params": {
+        "value": null,
+        "tolerance": null,
+        "power_rating": null,
+        "voltage_rating": null,
+        "current_rating": null
+      }
+    },
+    "VIN": {
+      "spice_type": "voltage_source",
+      "electrical_params": {
+        "value": null,
+        "tolerance": null,
+        "power_rating": null,
+        "voltage_rating": null,
+        "current_rating": null
+      }
+    },
+    "C7": {
+      "spice_type": "capacitor",
+      "electrical_params": {
+        "value": null,
+        "tolerance": null,
+        "power_rating": null,
+        "voltage_rating": null,
+        "current_rating": null
+      }
+    },
+    "U6": {
+      "spice_type": "capacitor",
+      "electrical_params": {
+        "value": null,
+        "tolerance": null,
+        "power_rating": null,
+        "voltage_rating": null,
+        "current_rating": null
+      }
+    },
+    "reg": {
+      "spice_type": "voltage_regulator",
+      "electrical_params": {
+        "value": null,
+        "tolerance": null,
+        "power_rating": null,
+        "voltage_rating": null,
+        "current_rating": null
+      }
+    },
+    "C4": {
+      "spice_type": "capacitor",
+      "electrical_params": {
+        "value": null,
+        "tolerance": null,
+        "power_rating": null,
+        "voltage_rating": null,
+        "current_rating": null
+      }
+    },
+    "LED9": {
+      "spice_type": "led",
+      "electrical_params": {
+        "value": null,
+        "tolerance": null,
+        "power_rating": null,
+        "voltage_rating": null,
+        "current_rating": null
+      }
+    },
+    "GND": {
+      "spice_type": "ground",
+      "electrical_params": {
+        "value": null,
+        "tolerance": null,
+        "power_rating": null,
+        "voltage_rating": null,
+        "current_rating": null
+      }
+    },
+    "tp_vin": {
+      "spice_type": "test_point",
+      "electrical_params": {
+        "value": null,
+        "tolerance": null,
+        "power_rating": null,
+        "voltage_rating": null,
+        "current_rating": null
+      }
+    }
+  }
+}

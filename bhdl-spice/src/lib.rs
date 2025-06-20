@@ -21,6 +21,11 @@ pub mod netlist_converter;
 pub mod pin_metadata;
 pub mod pin_metadata_integration;
 pub mod stability;
+pub mod component_registry;
+pub mod analysis_augmenter;
+
+#[cfg(test)]
+mod test_unified;
 
 pub use circuit::{Circuit, Node, Branch, NodeId, ComponentId, Component};
 pub use components::{ComponentModel, ElectricalLimits};
@@ -42,6 +47,7 @@ pub use models::{SpiceModel, ModelType};
 pub use model_factory::SpiceModelFactory;
 pub use model_extractor::{ComponentModelExtractor, ExtractedModel, ModelSource};
 pub use netlist_converter::NetlistToSpiceConverter;
+pub use analysis_augmenter::SpiceAnalysisAugmenter;
 
 /// Prelude module for convenient imports
 pub mod prelude {

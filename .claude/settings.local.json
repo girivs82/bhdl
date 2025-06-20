@@ -95,7 +95,12 @@
       "Bash(RUST_LOG=info cargo run -p bhdl-spice --bin test_netlist_converter 2 >& 1)",
       "Bash(/dev/null)",
       "Bash(RUST_LOG=info cargo run -p bhdl-spice --bin test_netlist_converter)",
-      "Bash(RUST_LOG=info target/debug/test_netlist_converter)"
+      "Bash(RUST_LOG=info target/debug/test_netlist_converter)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-spice --bin test_validation 2 >& 1)",
+      "Bash(./target/debug/test_pin_metadata)",
+      "Bash(./target/debug/bhdl-cli docs/examples/buck_converter_with_metadata.bhdl parse)",
+      "Bash(./target/debug/bhdl-cli:*)",
+      "Bash(jq:*)"
     ],
     "deny": []
   }
