@@ -1,0 +1,391 @@
+// Example: Closed-loop behavioral simulation of USB-C PD negotiation with buck converter
+
+import "behavioral/buck_converter.bhdl";
+import "behavioral/usb_pd_controller.bhdl";
+
+// Real-world example: USB-C power delivery with dynamic voltage adjustment
+board USBCPowerAdapter {
+    // USB-C connector with PD
+    connector: USBC_Receptacle {
+        behavioral {
+            // PD negotiation state machine
+            pd_controller: USBPDController {
+                supported_profiles: [
+                    { voltage: 5V, current: 3A },    // 15W
+                    { voltage: 9V, current: 3A },    // 27W  
+                    { voltage: 15V, current: 3A },   // 45W
+                    { voltage: 20V, current: 3.25A } // 65W
+                ];
+            }
+        }
+    }
+    
+    // Programmable buck converter
+    converter: BuckConverterProgrammable {
+        vin_range: 20V to 24V;  // From AC adapter
+        vout_range: 5V to 20V;  // USB PD output range
+        iout_max: 3.25A;
+        
+        behavioral {
+            // Feedback control with I2C programming
+            on i2c_write(VOUT_SET, value) {
+                target_voltage = decode_voltage(value);
+                initiate_voltage_transition();
+            }
+        }
+    }
+    
+    // System controller (MCU)
+    mcu: STM32G0_USB_PD {
+        behavioral {
+            // Main control loop
+            state_machine {
+                IDLE: {
+                    // Monitor CC pins for device attachment
+                    if (cc_pins.attached) {
+                        start_pd_negotiation();
+                        -> NEGOTIATING;
+                    }
+                }
+                
+                NEGOTIATING: {
+                    // USB PD communication
+                    send_source_capabilities();
+                    
+                    on receive_request(profile) {
+                        if (validate_request(profile)) {
+                            accept_request();
+                            target_voltage = profile.voltage;
+                            target_current = profile.current;
+                            -> TRANSITIONING;
+                        } else {
+                            reject_request();
+                            -> IDLE;
+                        }
+                    }
+                    
+                    timeout(100ms) -> IDLE;
+                }
+                
+                TRANSITIONING: {
+                    // Program buck converter
+                    i2c_write(converter.VOUT_SET, encode_voltage(target_voltage));
+                    
+                    // Monitor output
+                    continuously {
+                        actual_voltage = adc_read(VOUT_SENSE);
+                        if (abs(actual_voltage - target_voltage) < 0.1V) {
+                            voltage_stable_time += dt;
+                        } else {
+                            voltage_stable_time = 0;
+                        }
+                    }
+                    
+                    // Voltage stable for 10ms
+                    when (voltage_stable_time > 10ms) {
+                        send_ps_ready();
+                        -> POWER_DELIVERY;
+                    }
+                    
+                    // Timeout protection
+                    timeout(500ms) {
+                        send_hard_reset();
+                        -> IDLE;
+                    }
+                }
+                
+                POWER_DELIVERY: {
+                    // Active power delivery
+                    continuously {
+                        // Monitor current
+                        current = adc_read(CURRENT_SENSE);
+                        
+                        // Overcurrent protection
+                        if (current > target_current * 1.1) {
+                            ocp_timer += dt;
+                            if (ocp_timer > 10ms) {
+                                -> FAULT;
+                            }
+                        } else {
+                            ocp_timer = 0;
+                        }
+                        
+                        // Monitor for disconnect
+                        if (!cc_pins.attached) {
+                            -> SHUTDOWN;
+                        }
+                    }
+                    
+                    // Handle new negotiation requests
+                    on receive_request(new_profile) {
+                        -> NEGOTIATING;
+                    }
+                }
+                
+                FAULT: {
+                    // Fault handling
+                    disable_output();
+                    send_hard_reset();
+                    log_fault(OVERCURRENT);
+                    
+                    // Wait before retry
+                    after(1s) -> IDLE;
+                }
+                
+                SHUTDOWN: {
+                    // Graceful shutdown
+                    ramp_down_voltage();
+                    when (output_voltage < 0.5V) {
+                        disable_converter();
+                        -> IDLE;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Testbench simulating real USB PD negotiation scenarios
+testbench USBPDNegotiation for USBCPowerAdapter {
+    // Device behavior models
+    device_models {
+        // Laptop requesting 65W
+        laptop: USBPDDevice {
+            power_request: 65W;
+            preferred_voltage: 20V;
+            
+            behavior {
+                on source_capabilities(caps) {
+                    // Find best match
+                    best_profile = select_optimal_profile(caps, power_request);
+                    send_request(best_profile);
+                }
+            }
+        }
+        
+        // Phone requesting 27W  
+        phone: USBPDDevice {
+            power_request: 27W;
+            preferred_voltage: 9V;
+            
+            behavior {
+                // Includes PPS (Programmable Power Supply) negotiation
+                supports_pps: true;
+                on source_capabilities(caps) {
+                    if (caps.has_pps) {
+                        request_pps(9V, 3A);
+                    } else {
+                        request_fixed(9V, 3A);
+                    }
+                }
+            }
+        }
+    }
+    
+    // Test scenarios
+    scenario laptop_connection {
+        @0ms: {
+            // Connect laptop
+            cc_pins = laptop.connect();
+            log("Laptop connected, starting PD negotiation");
+        }
+        
+        // Laptop negotiation sequence
+        @5ms: laptop.send_capabilities_request();
+        
+        // Measure negotiation timing
+        measure {
+            NEGOTIATION_TIME: time_between(
+                laptop.connect(),
+                mcu.state == POWER_DELIVERY
+            );
+            
+            VOLTAGE_TRANSITION_TIME: time_between(
+                mcu.send_accept(),
+                abs(vout - 20V) < 0.1V
+            );
+            
+            VOLTAGE_OVERSHOOT: max(vout) - 20V during transition;
+        }
+        
+        // Verify PD compliance
+        assert {
+            "PD negotiation time": NEGOTIATION_TIME < 300ms;
+            "Voltage transition": VOLTAGE_TRANSITION_TIME < 500ms;
+            "Voltage overshoot": VOLTAGE_OVERSHOOT < 0.5V;
+            "PS_Ready sent": mcu.ps_ready_sent == true;
+        }
+    }
+    
+    scenario hot_swap {
+        // Start with laptop connected at 20V
+        initial: laptop connected at 20V/3.25A;
+        
+        @0ms: {
+            log("Disconnecting laptop");
+            laptop.disconnect();
+        }
+        
+        @10ms: {
+            log("Connecting phone");
+            phone.connect();
+        }
+        
+        measure {
+            VOUT_AFTER_DISCONNECT: vout @ 5ms;
+            PHONE_NEGOTIATION_TIME: time_to(vout == 9V);
+        }
+        
+        assert {
+            "Safe voltage after disconnect": VOUT_AFTER_DISCONNECT < 5.5V;
+            "Phone negotiation": PHONE_NEGOTIATION_TIME < 300ms;
+        }
+    }
+    
+    scenario overcurrent_protection {
+        initial: laptop connected at 20V/3.25A;
+        
+        @100ms: {
+            // Simulate short circuit
+            load_current = ramp_to(5A, 1ms);
+        }
+        
+        measure {
+            OCP_RESPONSE_TIME: time_to(mcu.state == FAULT);
+            PEAK_CURRENT: max(current);
+        }
+        
+        assert {
+            "OCP triggers": mcu.state == FAULT;
+            "OCP response time": OCP_RESPONSE_TIME < 15ms;
+            "Current limited": PEAK_CURRENT < 4A;
+        }
+    }
+    
+    // Comprehensive waveforms
+    plot {
+        pd_negotiation_waveform {
+            subplot(4, 1, 1) {
+                cc_pins.voltage annotate with pd_messages;
+                title: "USB PD Communication";
+            }
+            
+            subplot(4, 1, 2) {
+                vout style="red";
+                target_voltage style="blue,dashed";
+                title: "Output Voltage";
+            }
+            
+            subplot(4, 1, 3) {
+                current;
+                current_limit style="red,dashed";
+                title: "Output Current";
+            }
+            
+            subplot(4, 1, 4) {
+                mcu.state as staircase;
+                title: "Controller State";
+            }
+        }
+    }
+}
+
+// Another example: Closed-loop battery charger with temperature compensation
+testbench BatteryChargerThermal for LithiumCharger {
+    // Battery model with temperature
+    battery_model {
+        // State of charge affects voltage
+        voltage = 3.0 + 1.2 * soc;  // 3.0V empty, 4.2V full
+        
+        // Internal resistance varies with temperature
+        r_internal = 50mΩ * (1 + 0.02 * (temp - 25°C));
+        
+        // Charge acceptance varies with temperature
+        if (temp < 0°C) {
+            max_charge_rate = 0;  // No charging below 0°C
+        } else if (temp < 10°C) {
+            max_charge_rate = 0.1C;  // Slow charge when cold
+        } else if (temp < 45°C) {
+            max_charge_rate = 1C;  // Normal charge
+        } else {
+            max_charge_rate = 0;  // No charging when hot
+        }
+    }
+    
+    // Environmental chamber
+    environment {
+        temperature = profile {
+            @0min: 25°C;
+            @10min: -5°C;  // Cold
+            @20min: 25°C;  // Return to normal
+            @30min: 50°C;  // Hot
+        };
+    }
+    
+    measure {
+        CHARGE_CURRENT: current(battery);
+        BATTERY_VOLTAGE: voltage(battery);
+        CHARGE_TIME: time_to(soc == 0.95);
+        THERMAL_VIOLATIONS: count(temp_protection_triggered);
+    }
+    
+    plot {
+        thermal_charging {
+            subplot(3, 1, 1) {
+                temperature style="red";
+                title: "Temperature Profile";
+            }
+            
+            subplot(3, 1, 2) {
+                CHARGE_CURRENT;
+                max_charge_rate * battery_capacity style="green,dashed";
+                title: "Charge Current vs Temperature";
+            }
+            
+            subplot(3, 1, 3) {
+                soc * 100 style="blue";
+                title: "State of Charge (%)";
+            }
+        }
+    }
+}
+
+// Motor control with real feedback
+testbench MotorPositionControl for ServoSystem {
+    // Mechanical model
+    motor_dynamics {
+        // Electrical
+        v_motor = pwm_voltage - back_emf;
+        i_motor = v_motor / (r_winding + s * l_winding);
+        
+        // Mechanical
+        torque = kt * i_motor - friction * velocity;
+        acceleration = torque / inertia;
+        velocity = integrate(acceleration);
+        position = integrate(velocity);
+        
+        // Back EMF
+        back_emf = ke * velocity;
+        
+        // Encoder feedback
+        encoder_counts = position / (2π) * encoder_resolution;
+    }
+    
+    // Test position control
+    scenario position_tracking {
+        target_profile {
+            @0ms: 0°;
+            @100ms: 90°;    // Step
+            @500ms: 90°;    // Hold
+            @600ms: -45°;   // Reverse
+            @1000ms: 0°;    // Return
+        }
+        
+        measure {
+            POSITION_ERROR: target_position - actual_position;
+            SETTLING_TIME: time_to_settle(POSITION_ERROR, 0, tolerance=1°);
+            OVERSHOOT: max(actual_position) - target when target == 90°;
+            POWER_CONSUMPTION: average(v_supply * i_supply);
+        }
+    }
+}

@@ -1,0 +1,430 @@
+// Pure BHDL Behavioral Buck Converter - Full Realistic Example
+// This shows what language constructs we'd need for behavioral modeling
+
+import "../stdlib/passives/capacitor.bhdl";
+import "../stdlib/passives/inductor.bhdl";
+
+// Behavioral buck converter model with all realistic effects
+module BuckConverterBehavioral(
+    vin_nom: voltage = 12V,
+    vout_target: voltage = 3.3V,
+    iout_max: current = 2A,
+    fsw: frequency = 500kHz,
+    l_value: inductance = 4.7µH,
+    cout_value: capacitance = 100µF,
+    cout_esr: resistance = 20mΩ
+) {
+    // Interface pins
+    pin VIN: power in;
+    pin VOUT: power out;
+    pin GND: ground;
+    pin ENABLE: digital in;
+    pin PGOOD: digital out @ open_drain;
+    pin FREQ_SET: analog in optional;  // External frequency setting
+    
+    // State variables (new construct needed)
+    state {
+        // Controller state
+        mode: enum = OFF;  // OFF, SOFT_START, REGULATION, HICCUP, FAULT
+        soft_start_timer: time = 0s;
+        hiccup_timer: time = 0s;
+        
+        // Electrical state
+        inductor_current: current = 0A;
+        vout_actual: voltage = 0V;
+        vin_actual: voltage = 0V;
+        
+        // Control variables
+        duty_cycle: ratio = 0;
+        vref_internal: voltage = 0V;
+        error_integral: voltage = 0V;
+        
+        // Protection
+        overcurrent_count: integer = 0;
+        thermal_shutdown: boolean = false;
+        
+        // Internal nodes
+        switch_node: voltage = 0V;
+        junction_temp: temperature = 25°C;
+    }
+    
+    // Constants for control
+    const KP = 0.1;          // Proportional gain
+    const KI = 0.01;         // Integral gain  
+    const KD = 0.001;        // Derivative gain
+    const SOFT_START_TIME = 10ms;
+    const CURRENT_LIMIT = iout_max * 1.5;
+    const THERMAL_LIMIT = 150°C;
+    
+    // Continuous behavior (new construct needed)
+    continuous {
+        // Read inputs
+        vin_actual = VIN.voltage;
+        
+        // State machine logic
+        match mode {
+            OFF => {
+                duty_cycle = 0;
+                vref_internal = 0V;
+                error_integral = 0V;
+                PGOOD = low;
+                
+                if (ENABLE == high && vin_actual > 4.5V) {
+                    mode = SOFT_START;
+                    soft_start_timer = 0s;
+                }
+            }
+            
+            SOFT_START => {
+                // Ramp reference voltage
+                vref_internal = vout_target * (soft_start_timer / SOFT_START_TIME);
+                vref_internal = min(vref_internal, vout_target);
+                
+                // PID control
+                let error = vref_internal - vout_actual;
+                error_integral = error_integral + error * dt;
+                let derivative = (error - previous(error)) / dt;
+                
+                duty_cycle = KP * error + KI * error_integral + KD * derivative;
+                duty_cycle = clamp(duty_cycle, 0, 0.9);
+                
+                // Update timer
+                soft_start_timer = soft_start_timer + dt;
+                
+                // Transition conditions
+                if (inductor_current > CURRENT_LIMIT) {
+                    overcurrent_count = overcurrent_count + 1;
+                    if (overcurrent_count > 10) {
+                        mode = HICCUP;
+                        hiccup_timer = 0s;
+                    }
+                } else {
+                    overcurrent_count = 0;
+                }
+                
+                if (vout_actual > 0.9 * vout_target) {
+                    mode = REGULATION;
+                }
+            }
+            
+            REGULATION => {
+                // Full PID control
+                let error = vout_target - vout_actual;
+                error_integral = error_integral + error * dt;
+                error_integral = clamp(error_integral, -1V, 1V);  // Anti-windup
+                let derivative = (error - previous(error)) / dt;
+                
+                duty_cycle = KP * error + KI * error_integral + KD * derivative;
+                duty_cycle = clamp(duty_cycle, 0, (vin_actual - vout_target) / vin_actual);
+                
+                // Power good signal with hysteresis
+                if (vout_actual > 0.95 * vout_target && vout_actual < 1.05 * vout_target) {
+                    PGOOD = high_z;  // Release open drain
+                } else if (vout_actual < 0.9 * vout_target || vout_actual > 1.1 * vout_target) {
+                    PGOOD = low;
+                }
+                
+                // Protection monitoring
+                if (inductor_current > CURRENT_LIMIT) {
+                    overcurrent_count = overcurrent_count + 1;
+                    if (overcurrent_count > 10) {
+                        mode = HICCUP;
+                        hiccup_timer = 0s;
+                    }
+                } else {
+                    overcurrent_count = max(0, overcurrent_count - 1);
+                }
+                
+                if (junction_temp > THERMAL_LIMIT) {
+                    mode = FAULT;
+                    thermal_shutdown = true;
+                }
+            }
+            
+            HICCUP => {
+                // Overcurrent protection mode
+                duty_cycle = 0;
+                PGOOD = low;
+                hiccup_timer = hiccup_timer + dt;
+                
+                if (hiccup_timer > 100ms) {
+                    if (ENABLE == high) {
+                        mode = SOFT_START;
+                        soft_start_timer = 0s;
+                        overcurrent_count = 0;
+                    } else {
+                        mode = OFF;
+                    }
+                }
+            }
+            
+            FAULT => {
+                // Latched fault state
+                duty_cycle = 0;
+                PGOOD = low;
+                
+                if (ENABLE == low) {
+                    mode = OFF;
+                    thermal_shutdown = false;
+                }
+            }
+        }
+        
+        // Electrical model
+        // Switch node voltage (simplified synchronous rectifier)
+        switch_node = duty_cycle * vin_actual;
+        
+        // Inductor current dynamics
+        let v_inductor = switch_node - vout_actual;
+        let di_dt = v_inductor / l_value;
+        inductor_current = inductor_current + di_dt * dt;
+        inductor_current = max(0A, inductor_current);  // DCM clamp
+        
+        // Output voltage dynamics (including ESR)
+        let i_capacitor = inductor_current - (vout_actual / load_resistance());
+        let dv_dt = i_capacitor / cout_value;
+        vout_actual = vout_actual + dv_dt * dt;
+        
+        // ESR voltage drop
+        let v_esr = i_capacitor * cout_esr;
+        VOUT.voltage = vout_actual + v_esr;
+        
+        // Power loss and thermal model
+        let p_switch = inductor_current * inductor_current * 0.05Ω;  // Rds_on
+        let p_inductor = inductor_current * inductor_current * 0.02Ω;  // DCR
+        let p_total = p_switch + p_inductor;
+        
+        let temp_rise = p_total * 40°C/W;  // Thermal resistance
+        junction_temp = ambient_temp() + temp_rise;
+        
+        // Switching frequency (with optional external control)
+        let fsw_actual = if (pin_connected(FREQ_SET)) {
+            map_voltage_to_frequency(FREQ_SET.voltage)
+        } else {
+            fsw * (1 + 0.002 * (junction_temp - 25°C))  // Temp coefficient
+        };
+    }
+    
+    // Helper functions (new construct needed)
+    functions {
+        fn load_resistance() -> resistance {
+            // Estimate from output current
+            if (VOUT.current > 0.01A) {
+                return VOUT.voltage / VOUT.current;
+            } else {
+                return 1kΩ;  // No load
+            }
+        }
+        
+        fn map_voltage_to_frequency(v: voltage) -> frequency {
+            // 0-2V maps to 100kHz-1MHz
+            return 100kHz + (v / 2V) * 900kHz;
+        }
+        
+        fn ambient_temp() -> temperature {
+            // Could be parameter or external input
+            return 25°C;
+        }
+    }
+    
+    // Monitoring outputs (for testbench access)
+    monitor {
+        export mode as "controller_state";
+        export duty_cycle as "duty_cycle";
+        export inductor_current as "inductor_current";
+        export junction_temp as "junction_temperature";
+        export switch_node as "switch_node_voltage";
+        export overcurrent_count as "oc_counter";
+    }
+}
+
+// Testbench showing comprehensive behavioral testing
+testbench BuckBehavioralValidation for BuckConverterBehavioral {
+    // Test configuration
+    config {
+        timestep: 100ns;
+        duration: 20ms;
+        save_waveforms: true;
+    }
+    
+    // Load model (behavioral)
+    load_model {
+        // Dynamic load with different impedances
+        resistance: parameter = 3.3Ω;  // Default 1A load
+        
+        behavior {
+            VOUT.current = VOUT.voltage / resistance;
+        }
+    }
+    
+    // Comprehensive test scenarios
+    scenario startup_and_regulation {
+        // Initial conditions
+        @0ms: {
+            VIN = 12V;
+            ENABLE = low;
+            ambient_temp = 25°C;
+        }
+        
+        // Enable and startup
+        @1ms: {
+            ENABLE = high;
+            log("Enabling buck converter");
+        }
+        
+        // Load transients
+        @5ms: {
+            load_model.resistance = 6.6Ω;  // 0.5A load
+            log("Light load: 0.5A");
+        }
+        
+        @10ms: {
+            load_model.resistance = 2.2Ω;  // 1.5A load  
+            log("Heavy load: 1.5A");
+        }
+        
+        @15ms: {
+            load_model.resistance = 3.3Ω;  // Back to 1A
+            log("Normal load: 1A");
+        }
+    }
+    
+    // Measurements
+    measure {
+        // Startup characteristics
+        SOFT_START_TIME: time_while(buck.mode == SOFT_START);
+        VOUT_RISE_TIME: time_to_reach(VOUT, 3.3V * 0.9);
+        STARTUP_OVERSHOOT: max(VOUT) - 3.3V during [0ms, 5ms];
+        
+        // Regulation quality
+        VOUT_STEADY_STATE: mean(VOUT) during [6ms, 9ms];
+        VOUT_RIPPLE: peak_to_peak(VOUT) during [6ms, 9ms];
+        LOAD_REGULATION: (VOUT@9ms - VOUT@11ms) / VOUT@9ms * 100%;
+        
+        // Inductor current
+        IL_PEAK: max(buck.inductor_current);
+        IL_VALLEY: min(buck.inductor_current) during [6ms, 20ms];
+        IL_RIPPLE: IL_PEAK - IL_VALLEY;
+        IL_AVG: mean(buck.inductor_current) during [11ms, 14ms];
+        
+        // Efficiency estimation
+        PIN: mean(VIN.voltage * VIN.current) during [11ms, 14ms];
+        POUT: mean(VOUT.voltage * VOUT.current) during [11ms, 14ms];
+        EFFICIENCY: POUT / PIN * 100%;
+        
+        // Thermal
+        MAX_TEMP: max(buck.junction_temp);
+        TEMP_RISE: MAX_TEMP - 25°C;
+        
+        // Control loop
+        DUTY_CYCLE_SS: buck.duty_cycle @ 2ms;  // During soft start
+        DUTY_CYCLE_LIGHT: mean(buck.duty_cycle) during [6ms, 9ms];
+        DUTY_CYCLE_HEAVY: mean(buck.duty_cycle) during [11ms, 14ms];
+    }
+    
+    // Assertions
+    assert {
+        // Startup
+        "Soft start time correct": SOFT_START_TIME in range(9ms, 11ms);
+        "No startup overshoot": STARTUP_OVERSHOOT < 100mV;
+        "Rise time acceptable": VOUT_RISE_TIME < 12ms;
+        
+        // Regulation
+        "Output voltage accurate": VOUT_STEADY_STATE in range(3.27V, 3.33V);
+        "Low ripple": VOUT_RIPPLE < 50mV;
+        "Load regulation": abs(LOAD_REGULATION) < 2%;
+        
+        // Current
+        "No DCM at light load": IL_VALLEY > 0A;
+        "Current limit not hit": IL_PEAK < buck.CURRENT_LIMIT;
+        "Reasonable ripple": IL_RIPPLE < 0.6A;
+        
+        // Efficiency
+        "Good efficiency at 1.5A": EFFICIENCY > 85%;
+        
+        // Thermal
+        "Temperature safe": MAX_TEMP < 100°C;
+        
+        // Control
+        "Duty cycle reasonable": DUTY_CYCLE_HEAVY < 0.35;  // 3.3V/12V + margin
+        "PGOOD asserted": buck.PGOOD == high_z @ 15ms;
+    }
+    
+    // Waveform outputs
+    plot {
+        startup_waveforms {
+            subplot(3, 1, 1) {
+                VOUT style="red,thick";
+                3.3V style="red,dashed";
+                buck.vref_internal style="blue,thin";
+                title: "Output Voltage Startup";
+                ylabel: "Voltage (V)";
+                xlim: [0ms, 5ms];
+            }
+            
+            subplot(3, 1, 2) {
+                buck.inductor_current style="green";
+                title: "Inductor Current";
+                ylabel: "Current (A)";
+            }
+            
+            subplot(3, 1, 3) {
+                buck.duty_cycle * 100 style="orange";
+                title: "Duty Cycle (%)";
+                ylabel: "Duty (%)";
+                xlabel: "Time (ms)";
+            }
+        }
+        
+        regulation_detail {
+            subplot(2, 1, 1) {
+                VOUT - 3.3V style="red";  // Error from nominal
+                title: "Output Voltage Error";
+                ylabel: "Error (mV)";
+                xlim: [4ms, 16ms];
+                ylim: [-100mV, 100mV];
+            }
+            
+            subplot(2, 1, 2) {
+                buck.mode as staircase annotate;
+                title: "Controller State";
+                ylabel: "State";
+                xlabel: "Time (ms)";
+            }
+        }
+    }
+    
+    // Test fault conditions
+    scenario overcurrent_protection {
+        initial: VIN = 12V, ENABLE = high, steady_state;
+        
+        @0ms: {
+            load_model.resistance = 1.5Ω;  // 2.2A load, over limit
+            log("Applying overcurrent condition");
+        }
+        
+        measure {
+            TIME_TO_HICCUP: time_to(buck.mode == HICCUP);
+            RECOVERY_TIME: time_to(buck.mode == REGULATION) after hiccup;
+        }
+        
+        assert {
+            "OCP triggers": buck.mode == HICCUP within 1ms;
+            "Auto-recovery works": buck.mode == REGULATION within 150ms;
+        }
+    }
+    
+    // Thermal shutdown test
+    scenario thermal_shutdown {
+        initial: normal_operation;
+        
+        @0ms: {
+            ambient_temp = ramp_to(130°C, 100ms);
+        }
+        
+        assert {
+            "Thermal shutdown": buck.mode == FAULT when buck.junction_temp > 150°C;
+            "Latched until disabled": buck.mode remains FAULT until ENABLE = low;
+        }
+    }
+}

@@ -1,0 +1,176 @@
+// Example BHDL board using the behavioral buck controller
+
+board BuckConverterDemo {
+    power VIN_12V = 12V @ 3A;
+    ground GND;
+    
+    // Input filtering
+    C1: Cap(100uF, 25V) {
+        VIN_12V -> .1;
+        GND -> .2;
+    }
+    
+    // Buck converter module with behavioral controller
+    buck: BuckConverter {
+        VIN_12V -> .VIN;
+        GND -> .GND;
+    }
+    
+    // Load
+    load: Resistor(3.3) {  // 1A load at 3.3V
+        buck.VOUT -> .1;
+        GND -> .2;
+    }
+    
+    // Enable control
+    enable_sw: Switch {
+        VIN_12V -> .1;
+        enable_net -> .2;
+    }
+    
+    enable_net -> buck.ENABLE;
+    enable_net -> Res(10k).1 -> GND;  // Pull-down
+}
+
+module BuckConverter {
+    pin VIN: power in;
+    pin GND: ground;
+    pin VOUT: power out;
+    pin ENABLE: digital in;
+    
+    // Configuration attributes
+    attribute vout_target = 3.3V;
+    attribute switching_freq = 500kHz;
+    attribute inductor_value = 10uH;
+    attribute cout_value = 100uF;
+    
+    // Behavioral controller
+    controller: BuckController {
+        VIN -> .VIN;
+        ENABLE -> .ENABLE;
+        fb_divided -> .FB;
+        current_sense -> .I_SENSE;
+        
+        // Link to Rust behavioral model
+        @behavioral(
+            model="buck_controller",
+            endpoint="local",
+            params={
+                vout_target: vout_target,
+                switching_freq: switching_freq,
+                current_limit: 2A,
+                kp: 0.1,
+                ki: 10.0
+            }
+        )
+    }
+    
+    // Power stage
+    Q1: MOSFET(IRLZ44N) {
+        VIN -> .D;
+        sw_node -> .S;
+        controller.PWM -> .G;
+    }
+    
+    D1: Diode(1N5822) {
+        GND -> .A;
+        sw_node -> .K;
+    }
+    
+    L1: Inductor(inductor_value) {
+        sw_node -> .1;
+        vout_raw -> .2;
+    }
+    
+    // Current sensing (simplified)
+    R_sense: Resistor(0.05) {  // 50mΩ sense resistor
+        vout_raw -> .1;
+        VOUT -> .2;
+    }
+    
+    // Current sense amplifier gain = 20
+    signal current_sense = (vout_raw - VOUT) * 20;
+    
+    // Output capacitor
+    C_out: Cap(cout_value, 10V) {
+        VOUT -> .1;
+        GND -> .2;
+    }
+    
+    // Feedback divider
+    R_fb1: Resistor(10k) {
+        VOUT -> .1;
+        fb_divided -> .2;
+    }
+    
+    R_fb2: Resistor(10k) {
+        fb_divided -> .1;
+        GND -> .2;
+    }
+    
+    // Status LED
+    led_pgood: LED(green) {
+        VIN -> .A;
+        led_cathode -> .K;
+    }
+    
+    R_led: Resistor(1k) {
+        led_cathode -> .1;
+        pgood_drive -> .2;
+    }
+    
+    // PGOOD drives LED (active high from controller)
+    signal pgood_drive = if (controller.PGOOD) { GND } else { VIN };
+}
+
+// The behavioral controller module
+module BuckController {
+    pin VIN: analog in;
+    pin ENABLE: digital in;
+    pin FB: analog in;
+    pin I_SENSE: analog in;
+    pin PWM: digital out;
+    pin PGOOD: digital out;
+    
+    // This decorator tells BHDL to use the external Rust model
+    @behavioral(
+        model="buck_controller",
+        endpoint="local"
+    )
+}
+
+// Testbench for the buck converter
+testbench BuckValidation for BuckConverterDemo {
+    // Test sequence
+    stimulus {
+        @0ms: enable_sw = open;      // Start disabled
+        @1ms: enable_sw = closed;     // Enable converter
+        @15ms: load = 1.65;          // Increase load to 2A
+        @25ms: load = 6.6;           // Decrease load to 0.5A
+        @35ms: enable_sw = open;     // Disable
+    }
+    
+    // Measurements
+    measure {
+        VOUT_AVG: mean(buck.VOUT) @ [12ms:14ms];
+        VOUT_RIPPLE: max(buck.VOUT) - min(buck.VOUT) @ [12ms:14ms];
+        SOFT_START_TIME: time_to_reach(buck.VOUT, 3.2V);
+        EFFICIENCY: mean(buck.VOUT * current(load)) / mean(VIN_12V * current(buck.VIN));
+    }
+    
+    // Assertions
+    assert {
+        VOUT_AVG > 3.2V && VOUT_AVG < 3.4V: "Output voltage regulation";
+        VOUT_RIPPLE < 50mV: "Output ripple specification";
+        SOFT_START_TIME < 12ms: "Soft-start time requirement";
+        EFFICIENCY > 0.85: "Efficiency target";
+    }
+    
+    // Waveform outputs
+    plot {
+        "Output Voltage": buck.VOUT;
+        "PWM Duty": controller.PWM;
+        "Inductor Current": current(L1);
+        "Power Good": controller.PGOOD;
+    }
+}

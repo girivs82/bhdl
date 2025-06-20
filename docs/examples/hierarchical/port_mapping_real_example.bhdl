@@ -1,0 +1,364 @@
+// Real-world port mapping example: MCU to multiple peripherals
+// Shows how port mapping modules solve pin conflict and routing issues
+
+// Generic MCU with multiplexed pins
+module MCU_STM32F4 {
+    // Power
+    pin VDD: power in;
+    pin VSS: ground;
+    
+    // Port A - Multiple functions per pin
+    pin PA0: signal inout;  // TIM2_CH1/UART4_TX/ADC0
+    pin PA1: signal inout;  // TIM2_CH2/UART4_RX/ADC1
+    pin PA2: signal inout;  // TIM2_CH3/USART2_TX/ADC2
+    pin PA3: signal inout;  // TIM2_CH4/USART2_RX/ADC3
+    pin PA4: signal inout;  // SPI1_NSS/DAC1
+    pin PA5: signal inout;  // SPI1_SCK/DAC2
+    pin PA6: signal inout;  // SPI1_MISO/TIM3_CH1
+    pin PA7: signal inout;  // SPI1_MOSI/TIM3_CH2
+    
+    // Port B - More multiplexed functions
+    pin PB6: signal inout;  // I2C1_SCL/USART1_TX
+    pin PB7: signal inout;  // I2C1_SDA/USART1_RX
+    pin PB8: signal inout;  // I2C1_SCL/CAN_RX/TIM4_CH3
+    pin PB9: signal inout;  // I2C1_SDA/CAN_TX/TIM4_CH4
+    
+    // And many more pins...
+}
+
+// Port mapping for Debug/Programming interface
+module DebugPortMapper {
+    // SWD interface pins
+    pin SWDIO: signal inout;
+    pin SWCLK: signal in;
+    pin NRST: signal in;
+    
+    // UART console pins
+    pin UART_TX: signal out;
+    pin UART_RX: signal in;
+    
+    // MCU side - specific pin mapping
+    pin MCU_PA13: signal inout;  // SWDIO
+    pin MCU_PA14: signal inout;  // SWCLK
+    pin MCU_NRST: signal in;     // NRST
+    pin MCU_PA2: signal inout;   // USART2_TX
+    pin MCU_PA3: signal inout;   // USART2_RX
+    
+    // Map debug interface
+    SWDIO <-> MCU_PA13;
+    SWCLK -> MCU_PA14;
+    NRST -> MCU_NRST;
+    
+    // Map console UART
+    UART_TX -> MCU_PA3;  // Note: TX->RX swap for console
+    MCU_PA2 -> UART_RX;  // RX->TX swap
+}
+
+// Port mapping for sensor interfaces
+module SensorPortMapper {
+    // High-level sensor interfaces
+    pin I2C_SDA: signal inout;
+    pin I2C_SCL: signal out;
+    pin SPI_MOSI: signal out;
+    pin SPI_MISO: signal in;
+    pin SPI_SCK: signal out;
+    pin SPI_CS_ACCEL: signal out;
+    pin SPI_CS_GYRO: signal out;
+    pin ANALOG_TEMP: signal in;
+    pin ANALOG_LIGHT: signal in;
+    
+    // MCU side - managing pin conflicts
+    pin MCU_PB6: signal inout;   // I2C1_SCL
+    pin MCU_PB7: signal inout;   // I2C1_SDA
+    pin MCU_PA5: signal inout;   // SPI1_SCK
+    pin MCU_PA6: signal inout;   // SPI1_MISO
+    pin MCU_PA7: signal inout;   // SPI1_MOSI
+    pin MCU_PA4: signal inout;   // GPIO for CS
+    pin MCU_PC0: signal inout;   // GPIO for CS
+    pin MCU_PA0: signal inout;   // ADC0
+    pin MCU_PA1: signal inout;   // ADC1
+    
+    // I2C mapping with pull-ups
+    I2C_SDA <-> MCU_PB7;
+    I2C_SCL -> MCU_PB6;
+    
+    VCC -> R1: Res(4.7k).1 -> I2C_SDA;
+    VCC -> R2: Res(4.7k).1 -> I2C_SCL;
+    
+    // SPI mapping
+    SPI_MOSI -> MCU_PA7;
+    MCU_PA6 -> SPI_MISO;
+    SPI_SCK -> MCU_PA5;
+    SPI_CS_ACCEL -> MCU_PA4;
+    SPI_CS_GYRO -> MCU_PC0;
+    
+    // Analog inputs (no conflict)
+    MCU_PA0 -> ANALOG_TEMP;
+    MCU_PA1 -> ANALOG_LIGHT;
+}
+
+// Flexible expansion connector mapping
+module ExpansionPortMapper(
+    mode: string = "gpio"  // "gpio", "spi", "i2c", "mixed"
+) {
+    // 20-pin expansion header
+    pin EXP[20]: signal inout;
+    
+    // MCU pins available for expansion
+    pin MCU_PC[8]: signal inout;  // PC0-PC7
+    pin MCU_PD[4]: signal inout;  // PD0-PD3
+    
+    // Standard pinout (like RPi header)
+    VCC_3V3 -> EXP[1];   // 3.3V Power
+    VCC_5V  -> EXP[2];   // 5V Power
+    GND     -> EXP[6];   // Ground
+    GND     -> EXP[9];   // Ground
+    GND     -> EXP[14];  // Ground
+    GND     -> EXP[20];  // Ground
+    
+    when (mode == "gpio") {
+        // Simple GPIO mapping
+        MCU_PC[0] <-> EXP[3];
+        MCU_PC[1] <-> EXP[5];
+        MCU_PC[2] <-> EXP[7];
+        MCU_PC[3] <-> EXP[8];
+        MCU_PC[4] <-> EXP[10];
+        MCU_PC[5] <-> EXP[11];
+        MCU_PC[6] <-> EXP[12];
+        MCU_PC[7] <-> EXP[13];
+        MCU_PD[0] <-> EXP[15];
+        MCU_PD[1] <-> EXP[16];
+        MCU_PD[2] <-> EXP[18];
+        MCU_PD[3] <-> EXP[19];
+    }
+    
+    when (mode == "spi") {
+        // SPI on expansion
+        MCU_PC[0] -> EXP[19];   // MOSI
+        EXP[21] -> MCU_PC[1];   // MISO  
+        MCU_PC[2] -> EXP[23];   // SCK
+        MCU_PC[3] -> EXP[24];   // CS0
+        MCU_PC[4] -> EXP[26];   // CS1
+        
+        // Remaining as GPIO
+        MCU_PC[5] <-> EXP[3];
+        MCU_PC[6] <-> EXP[5];
+        MCU_PC[7] <-> EXP[7];
+    }
+    
+    when (mode == "i2c") {
+        // I2C on expansion
+        MCU_PC[0] <-> EXP[3];   // SDA
+        MCU_PC[1] -> EXP[5];    // SCL
+        
+        // Pull-ups for I2C
+        EXP[1] -> R_SDA: Res(4.7k).1 -> EXP[3];
+        EXP[1] -> R_SCL: Res(4.7k).1 -> EXP[5];
+        
+        // Rest as GPIO
+        generate for i in 2..8 {
+            MCU_PC[i] <-> EXP[i*2+3];
+        }
+    }
+}
+
+// Complex example: Multi-protocol communication module
+module CommunicationHub {
+    // External interfaces
+    pin USB_DP: signal inout;
+    pin USB_DM: signal inout;
+    pin ETH_TX_P: signal out;
+    pin ETH_TX_N: signal out;
+    pin ETH_RX_P: signal in;
+    pin ETH_RX_N: signal in;
+    pin CAN_H: signal inout;
+    pin CAN_L: signal inout;
+    pin RS485_A: signal inout;
+    pin RS485_B: signal inout;
+    
+    // MCU interface - limited pins!
+    pin MCU_USB_DP: signal inout;
+    pin MCU_USB_DM: signal inout;
+    pin MCU_RMII[8]: signal inout;  // Ethernet RMII
+    pin MCU_CAN_TX: signal out;
+    pin MCU_CAN_RX: signal in;
+    pin MCU_UART_TX: signal out;
+    pin MCU_UART_RX: signal in;
+    pin MCU_UART_DE: signal out;  // RS485 direction
+    
+    // USB passthrough with ESD protection
+    usb_protection: USBProtection {
+        USB_DP <-> .DP_EXT;
+        USB_DM <-> .DM_EXT;
+        .DP_MCU <-> MCU_USB_DP;
+        .DM_MCU <-> MCU_USB_DM;
+    }
+    
+    // Ethernet PHY with RMII interface
+    eth_phy: LAN8720A {
+        // RMII to MCU
+        MCU_RMII[0] -> .TXD0;
+        MCU_RMII[1] -> .TXD1;
+        MCU_RMII[2] -> .TX_EN;
+        .RXD0 -> MCU_RMII[3];
+        .RXD1 -> MCU_RMII[4];
+        .CRS_DV -> MCU_RMII[5];
+        .RX_ER -> MCU_RMII[6];
+        MCU_RMII[7] <-> .MDIO;
+        
+        // Ethernet magnetics
+        .TXP -> mag: EthernetMagnetics().TXP_PHY;
+        .TXN -> mag.TXN_PHY;
+        mag.TXP_LINE -> ETH_TX_P;
+        mag.TXN_LINE -> ETH_TX_N;
+        
+        ETH_RX_P -> mag.RXP_LINE;
+        ETH_RX_N -> mag.RXN_LINE;
+        mag.RXP_PHY -> .RXP;
+        mag.RXN_PHY -> .RXN;
+    }
+    
+    // CAN transceiver
+    can_xcvr: MCP2551 {
+        MCU_CAN_TX -> .TXD;
+        .RXD -> MCU_CAN_RX;
+        .CANH <-> CAN_H;
+        .CANL <-> CAN_L;
+        
+        // Termination
+        attribute has_termination = true;
+        when (has_termination) {
+            CAN_H -> R_TERM: Res(120).1;
+            R_TERM.2 -> CAN_L;
+        }
+    }
+    
+    // RS485 transceiver with auto-direction
+    rs485_xcvr: MAX13487 {
+        MCU_UART_TX -> .DI;
+        .RO -> MCU_UART_RX;
+        MCU_UART_DE -> .DE;
+        MCU_UART_DE -> .RE_;  // RE is active low
+        
+        .A <-> RS485_A;
+        .B <-> RS485_B;
+        
+        // Termination and bias
+        VCC -> R_BIAS_UP: Res(680).1 -> RS485_A;
+        RS485_A -> R_TERM: Res(120).1 -> RS485_B;
+        RS485_B -> R_BIAS_DN: Res(680).1 -> GND;
+    }
+}
+
+// Board-level integration showing port mapping value
+board IoTGateway {
+    // Main MCU
+    mcu: MCU_STM32F4 {
+        VCC_3V3 -> .VDD;
+        GND -> .VSS;
+    }
+    
+    // Debug interface mapping
+    debug_ports: DebugPortMapper {
+        // MCU connections
+        mcu.PA13 <-> .MCU_PA13;
+        mcu.PA14 <-> .MCU_PA14;
+        mcu.NRST <-> .MCU_NRST;
+        mcu.PA2 <-> .MCU_PA2;
+        mcu.PA3 <-> .MCU_PA3;
+        
+        // Debug connector
+        debug_conn: TagConnect_TC2030 {
+            .SWDIO <-> debug_ports.SWDIO;
+            .SWCLK <- debug_ports.SWCLK;
+            .NRST <- debug_ports.NRST;
+            .TXD <- debug_ports.UART_TX;
+            .RXD -> debug_ports.UART_RX;
+            .GND -> GND;
+        }
+    }
+    
+    // Sensor interface mapping
+    sensors: SensorPortMapper {
+        // MCU connections
+        mcu.PB6 <-> .MCU_PB6;
+        mcu.PB7 <-> .MCU_PB7;
+        mcu.PA5 <-> .MCU_PA5;
+        mcu.PA6 <-> .MCU_PA6;
+        mcu.PA7 <-> .MCU_PA7;
+        mcu.PA4 <-> .MCU_PA4;
+        mcu.PC0 <-> .MCU_PC0;
+        mcu.PA0 <-> .MCU_PA0;
+        mcu.PA1 <-> .MCU_PA1;
+        
+        // I2C sensors
+        temp_sensor: BME280 {
+            sensors.I2C_SDA <-> .SDA;
+            sensors.I2C_SCL -> .SCL;
+            VCC_3V3 -> .VDD;
+            GND -> .GND;
+        }
+        
+        // SPI sensors
+        accel: LIS3DH {
+            sensors.SPI_MOSI -> .SDA;
+            .SDO -> sensors.SPI_MISO;
+            sensors.SPI_SCK -> .SCL;
+            sensors.SPI_CS_ACCEL -> .CS;
+            VCC_3V3 -> .VDD;
+            GND -> .GND;
+        }
+    }
+    
+    // Flexible expansion mapping
+    expansion: ExpansionPortMapper(mode="mixed") {
+        // MCU connections
+        mcu.PC[0..7] <-> .MCU_PC[0..7];
+        mcu.PD[0..3] <-> .MCU_PD[0..3];
+        
+        // Physical connector
+        exp_header: PinHeader_2x10 {
+            expansion.EXP[0..19] <-> .PIN[1..20];
+        }
+    }
+    
+    // Communication interfaces
+    comms: CommunicationHub {
+        // Limited MCU pins mapped to multiple protocols
+        mcu.PA11 <-> .MCU_USB_DP;
+        mcu.PA12 <-> .MCU_USB_DM;
+        
+        // Ethernet RMII (8 pins)
+        mcu.PB[11..18] <-> .MCU_RMII[0..7];
+        
+        // CAN (2 pins)
+        mcu.PB8 -> .MCU_CAN_RX;
+        mcu.PB9 <- .MCU_CAN_TX;
+        
+        // RS485 (3 pins)
+        mcu.PA9 <- .MCU_UART_TX;
+        mcu.PA10 -> .MCU_UART_RX;
+        mcu.PA8 <- .MCU_UART_DE;
+        
+        // External connectors
+        usb_conn: USB_TypeC {
+            comms.USB_DP <-> .DP1;
+            comms.USB_DM <-> .DM1;
+        }
+        
+        rj45: RJ45_WithMagnetics {
+            comms.ETH_TX_P -> .TX+;
+            comms.ETH_TX_N -> .TX-;
+            .RX+ -> comms.ETH_RX_P;
+            .RX- -> comms.ETH_RX_N;
+        }
+    }
+}
+
+// Benefits demonstrated:
+// 1. Clear separation of logical functions from physical pins
+// 2. Reusable mapping modules for common configurations  
+// 3. Conflict resolution when multiple functions need same pins
+// 4. Easy to change MCU without rewiring everything
+// 5. Support for different board configurations/modes
+// 6. Protocol-specific requirements (pull-ups, termination) in mapper

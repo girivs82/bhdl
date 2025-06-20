@@ -1,0 +1,328 @@
+// Comparison: Before and After Parameterized Hierarchical Modules
+
+// ============================================================
+// BEFORE: Without parameterization (current BHDL)
+// ============================================================
+
+// Need separate modules for each configuration
+module BuckConverter_3V3 {
+    pin VIN: power in;
+    pin VOUT: power out;
+    
+    // Hardcoded for 3.3V
+    // ... 50 lines of code ...
+}
+
+module BuckConverter_5V0 {
+    pin VIN: power in;
+    pin VOUT: power out;
+    
+    // Hardcoded for 5V (mostly duplicate code!)
+    // ... 50 lines of code ...
+}
+
+module BuckConverter_1V2_HighCurrent {
+    pin VIN: power in;
+    pin VOUT: power out;
+    
+    // Hardcoded for 1.2V with parallel FETs
+    // ... 80 lines of code ...
+}
+
+// Usage requires different module types
+board PowerSupply_Old {
+    buck1: BuckConverter_3V3 { ... }
+    buck2: BuckConverter_5V0 { ... }
+    buck3: BuckConverter_1V2_HighCurrent { ... }
+    
+    // What if we need 1.8V? Write another module!
+}
+
+// ============================================================
+// AFTER: With parameterized hierarchical modules
+// ============================================================
+
+// One flexible module handles all cases
+module BuckConverter(
+    vout: voltage = 3.3V,
+    imax: current = 2A,
+    fsw: frequency = 500kHz,
+    sync_rect: bool = true
+) {
+    pin VIN: power in;
+    pin VOUT: power out;
+    pin EN: digital in;
+    
+    // Component values computed from parameters
+    attribute vin_nom = 12V;  // Could also be a parameter
+    attribute ripple_current = 0.3 * imax;
+    attribute inductor = (vin_nom - vout) * vout / (vin_nom * fsw * ripple_current);
+    attribute cout_min = ripple_current / (8 * fsw * 0.02 * vout);  // 2% ripple
+    
+    // Controller with feedback network
+    controller: BuckController {
+        VIN -> .VCC;
+        .FB -> feedback;
+        .COMP -> compensation;
+        .EN -> EN;
+        .DRV_HIGH -> high_drive;
+        .DRV_LOW -> low_drive;
+    }
+    
+    // High-side switch (scaled for current)
+    when (imax <= 3A) {
+        Q_high: MOSFET(BSC060N10NS5) {  // 100V, 6mΩ
+            VIN -> .D;
+            switch_node -> .S;
+            high_drive -> .G;
+        }
+    } else when (imax <= 6A) {
+        Q_high: MOSFET(BSC030N08NS5) {  // 80V, 3mΩ
+            VIN -> .D;
+            switch_node -> .S;
+            high_drive -> .G;
+        }
+    } else {
+        // Parallel FETs for very high current
+        generate for i in 0..2 {
+            Q_high[i]: MOSFET(BSC030N08NS5) {
+                VIN -> .D;
+                switch_node -> .S;
+                high_drive -> .G;
+            }
+        }
+    }
+    
+    // Synchronous rectification or diode
+    when (sync_rect) {
+        Q_low: MOSFET(BSC060N10NS5) {
+            GND -> .S;
+            switch_node -> .D;
+            low_drive -> .G;
+        }
+    } else {
+        D1: SchottkyDiode(SS54) {
+            GND -> .A;
+            switch_node -> .K;
+        }
+    }
+    
+    // Power inductor
+    L1: Inductor(inductor, isat=imax*1.3) {
+        switch_node -> .1;
+        vout_raw -> .2;
+    }
+    
+    // Output capacitors (scale with current)
+    attribute num_caps = ceil(imax / 5A);  // One 100µF cap per 5A
+    generate for i in 0..num_caps {
+        C_out[i]: Cap(100uF, voltage=vout*2) {
+            vout_raw -> .1;
+            GND -> .2;
+        }
+    }
+    
+    // Current sense (if high current)
+    when (imax > 5A) {
+        R_sense: Resistor(0.002, power=imax*imax*0.002) {
+            vout_raw -> .1;
+            VOUT -> .2;
+        }
+        
+        current_amp: CurrentSenseAmp {
+            vout_raw -> .IN_P;
+            VOUT -> .IN_N;
+            .OUT -> controller.ISENSE;
+        }
+    } else {
+        vout_raw -> VOUT;  // Direct connection
+    }
+    
+    // Feedback divider (computed for desired vout)
+    attribute r_top = 10k;
+    attribute r_bot = r_top * 0.8V / (vout - 0.8V);  // 0.8V reference
+    
+    R_fb_top: Resistor(r_top, tolerance=1%) {
+        VOUT -> .1;
+        feedback -> .2;
+    }
+    
+    R_fb_bot: Resistor(r_bot, tolerance=1%) {
+        feedback -> .1;
+        GND -> .2;
+    }
+    
+    // Compensation network (type III for current mode)
+    compensation_network: TypeIIICompensation(
+        fp1 = fsw/10,
+        fz1 = fsw/100,
+        fz2 = fsw/50,
+        fp2 = fsw/2
+    ) {
+        feedback -> .IN;
+        .OUT -> compensation;
+        .GND -> GND;
+    }
+}
+
+// Submodule for compensation (also parameterized!)
+module TypeIIICompensation(
+    fp1: frequency,
+    fz1: frequency, 
+    fz2: frequency,
+    fp2: frequency
+) {
+    pin IN: signal in;
+    pin OUT: signal out;
+    pin GND: ground;
+    
+    // Calculate component values
+    attribute R1 = 10k;
+    attribute C1 = 1 / (2 * π * fp1 * R1);
+    attribute C2 = 1 / (2 * π * fz1 * R1);
+    attribute R2 = 1 / (2 * π * fz2 * C2);
+    attribute C3 = 1 / (2 * π * fp2 * R2);
+    
+    // Build network
+    IN -> R1: Resistor(R1).1;
+    R1.2 -> comp_node;
+    
+    comp_node -> C1: Cap(C1).1 -> OUT;
+    
+    comp_node -> C2: Cap(C2).1;
+    C2.2 -> R2: Resistor(R2).1;
+    R2.2 -> OUT;
+    
+    R2.2 -> C3: Cap(C3).1 -> GND;
+}
+
+// Usage is clean and flexible
+board PowerSupply_New {
+    power VIN = 24V @ 10A;
+    ground GND;
+    
+    // Each buck uses same module with different parameters
+    buck_12v: BuckConverter(vout=12V, imax=8A) {
+        VIN -> .VIN;
+        .VOUT -> V12V_BUS;
+    }
+    
+    buck_5v: BuckConverter(vout=5V, imax=5A) {
+        V12V_BUS -> .VIN;  // Cascaded from 12V
+        .VOUT -> V5V_BUS;
+    }
+    
+    buck_3v3: BuckConverter(vout=3.3V, imax=3A) {
+        V12V_BUS -> .VIN;
+        .VOUT -> V3V3_BUS;
+    }
+    
+    buck_1v2: BuckConverter(
+        vout=1.2V, 
+        imax=15A,      // High current!
+        fsw=300kHz,    // Lower frequency for efficiency
+        sync_rect=true
+    ) {
+        V12V_BUS -> .VIN;
+        .VOUT -> V1V2_CORE;
+    }
+    
+    // Can easily add more rails
+    buck_1v8: BuckConverter(vout=1.8V) {
+        V5V_BUS -> .VIN;
+        .VOUT -> V1V8_IO;
+    }
+    
+    // Or different topologies
+    ldo_analog: LDO_Module(vout=3.3V, noise="ultra_low") {
+        V5V_BUS -> .VIN;
+        .VOUT -> V3V3_ANALOG;
+    }
+}
+
+// ============================================================
+// BENEFITS OF PARAMETERIZATION
+// ============================================================
+
+// 1. CODE REUSE
+//    - One BuckConverter module instead of many
+//    - 200 lines instead of 1000+ lines
+
+// 2. CONSISTENCY
+//    - All bucks use same proven design
+//    - Updates propagate to all instances
+
+// 3. FLEXIBILITY
+//    - Any voltage/current combination
+//    - Easy to experiment with parameters
+
+// 4. INTELLIGENCE
+//    - Component selection based on requirements
+//    - Automatic scaling (parallel FETs, capacitors)
+
+// 5. CORRECTNESS
+//    - Computed values ensure proper operation
+//    - Constraints prevent invalid configurations
+
+// 6. HIERARCHY
+//    - Compensation network is its own module
+//    - Can nest arbitrarily deep
+
+// Example: Multi-phase converter using generates
+module MultiphaseBuck(
+    vout: voltage = 1.0V,
+    imax: current = 100A,
+    phases: int = 4
+) {
+    pin VIN: power in;
+    pin VOUT: power out;
+    pin EN: digital in;
+    
+    // Current per phase
+    attribute phase_current = imax / phases;
+    
+    // Phase shift for ripple cancellation
+    attribute phase_shift = 360deg / phases;
+    
+    // Generate parallel phases
+    generate for i in 0..phases {
+        phase[i]: BuckConverter(
+            vout = vout,
+            imax = phase_current,
+            fsw = 500kHz
+        ) {
+            VIN -> .VIN;
+            .VOUT -> VOUT;  // All connected to output
+            .EN -> EN;
+            
+            // Phase synchronization
+            when (i > 0) {
+                phase[0].SYNC_OUT -> .SYNC_IN;
+                .PHASE_OFFSET = i * phase_shift;
+            }
+        }
+    }
+    
+    // Current balancing controller
+    balancer: CurrentBalance(phases=phases) {
+        generate for i in 0..phases {
+            phase[i].ISENSE -> .SENSE[i];
+            .BALANCE[i] -> phase[i].IREF;
+        }
+    }
+}
+
+// Using the multiphase converter
+board HighPowerCPU {
+    // Single line creates 4-phase 100A converter!
+    vcore_supply: MultiphaseBuck(vout=0.9V, imax=120A, phases=6) {
+        VIN_12V -> .VIN;
+        .VOUT -> CPU_VCORE;
+    }
+    
+    // Different config for GPU
+    vgpu_supply: MultiphaseBuck(vout=1.1V, imax=80A, phases=4) {
+        VIN_12V -> .VIN;
+        .VOUT -> GPU_VCORE;
+    }
+}

@@ -1,0 +1,286 @@
+// Example: USB Charging System with Hierarchical Modules
+// Shows the power of modular, reusable design
+
+// Reusable USB protection module
+module USBProtection {
+    pin VBUS_IN: power in;
+    pin VBUS_OUT: power out;
+    pin D_P, D_N: signal inout;
+    pin GND: ground;
+    
+    // Overvoltage protection
+    tvs1: TVSDiode(6.8V) {
+        VBUS_IN -> .1;
+        GND -> .2;
+    }
+    
+    // ESD protection on data lines
+    tvs2: TVSDiodeArray(USB_ESD) {
+        D_P -> .1;
+        D_N -> .2;
+        GND -> .3;
+    }
+    
+    // Inrush current limiting
+    R_inrush: Res(10, 1W) {
+        VBUS_IN -> .1;
+        vbus_fused -> .2;
+    }
+    
+    // Polyfuse for overcurrent
+    F1: PolyFuse(1.5A) {
+        vbus_fused -> .1;
+        VBUS_OUT -> .2;
+    }
+    
+    // Input filtering
+    C1: Cap(10uF, 16V, X7R) {
+        VBUS_OUT -> .1;
+        GND -> .2;
+    }
+}
+
+// Battery charger module
+module BatteryCharger {
+    pin VIN: power in;
+    pin VBAT: power out;
+    pin STAT: digital out;
+    pin PROG: analog in;
+    pin GND: ground;
+    
+    // Charge controller IC
+    U1: MCP73831 {
+        VIN -> .VDD;
+        .VBAT -> VBAT;
+        .STAT -> STAT;
+        .PROG -> PROG;
+        .VSS -> GND;
+    }
+    
+    // Programming resistor (500mA charge current)
+    R_prog: Res(2k) {
+        PROG -> .1;
+        GND -> .2;
+    }
+    
+    // Status LED
+    led: LED(red) {
+        VIN -> .A;
+        led_cathode -> .K;
+    }
+    
+    R_led: Res(1k) {
+        led_cathode -> .1;
+        STAT -> .2;  // LED on when charging
+    }
+    
+    // Output capacitor
+    C_out: Cap(10uF, 10V) {
+        VBAT -> .1;
+        GND -> .2;
+    }
+}
+
+// Power path management
+module PowerPath {
+    pin VUSB: power in;
+    pin VBAT: power in;
+    pin VSYS: power out;
+    pin USB_PRESENT: digital out;
+    pin GND: ground;
+    
+    // USB detection
+    R_detect1: Res(100k) {
+        VUSB -> .1;
+        usb_detect -> .2;
+    }
+    
+    R_detect2: Res(100k) {
+        usb_detect -> .1;
+        GND -> .2;
+    }
+    
+    signal usb_present = (usb_detect > 2.5V);
+    USB_PRESENT = usb_present;
+    
+    // Ideal diode controllers
+    U1: LTC4412 {
+        VUSB -> .VIN;
+        .GATE -> Q1.G;
+        .SENSE -> VSYS;
+        .GND -> GND;
+        .CTL -> usb_detect;  // Prioritize USB when present
+    }
+    
+    Q1: MOSFET(Si4435DY) {
+        VUSB -> .S;
+        VSYS -> .D;
+    }
+    
+    U2: LTC4412 {
+        VBAT -> .VIN;
+        .GATE -> Q2.G;
+        .SENSE -> VSYS;
+        .GND -> GND;
+        .CTL -> GND;  // Always enabled
+    }
+    
+    Q2: MOSFET(Si4435DY) {
+        VBAT -> .S;
+        VSYS -> .D;
+    }
+    
+    // System output capacitor
+    C_sys: Cap(100uF, 10V) {
+        VSYS -> .1;
+        GND -> .2;
+    }
+}
+
+// Main system regulator module
+module SystemRegulator {
+    pin VIN: power in;
+    pin V3V3: power out;
+    pin V1V8: power out;
+    pin EN: digital in;
+    pin PGOOD: digital out;
+    pin GND: ground;
+    
+    // 3.3V buck converter
+    buck_3v3: BuckConverter(vout=3.3V) {
+        VIN -> .VIN;
+        .VOUT -> V3V3;
+        .EN -> EN;
+        .GND -> GND;
+    }
+    
+    // 1.8V LDO from 3.3V
+    ldo_1v8: LDO(AMS1117-1.8) {
+        V3V3 -> .VIN;
+        .VOUT -> V1V8;
+        .GND -> GND;
+    }
+    
+    // Power good detection
+    signal pg_3v3 = (V3V3 > 3.1V);
+    signal pg_1v8 = (V1V8 > 1.7V);
+    PGOOD = pg_3v3 && pg_1v8;
+    
+    // Decoupling
+    V3V3 -> Cap(10uF).1 -> GND;
+    V3V3 -> Cap(100nF).1 -> GND;
+    V1V8 -> Cap(10uF).1 -> GND;
+    V1V8 -> Cap(100nF).1 -> GND;
+}
+
+// Top-level USB charger board
+board USBChargerSystem {
+    // External connections
+    power USB_VBUS = 5V @ 2A;
+    power BATTERY = 3.7V @ 2000mAh;
+    ground GND;
+    
+    // USB input protection
+    usb_protection: USBProtection {
+        USB_VBUS -> .VBUS_IN;
+        .VBUS_OUT -> protected_vbus;
+        USB_D_P -> .D_P;
+        USB_D_N -> .D_N;
+        .GND -> GND;
+    }
+    
+    // Battery charging
+    charger: BatteryCharger {
+        protected_vbus -> .VIN;
+        .VBAT -> BATTERY;
+        .STAT -> charge_status;
+        .GND -> GND;
+    }
+    
+    // Power path management
+    power_path: PowerPath {
+        protected_vbus -> .VUSB;
+        BATTERY -> .VBAT;
+        .VSYS -> system_power;
+        .USB_PRESENT -> usb_detected;
+        .GND -> GND;
+    }
+    
+    // System regulators
+    regulators: SystemRegulator {
+        system_power -> .VIN;
+        .V3V3 -> V3V3_SYSTEM;
+        .V1V8 -> V1V8_SYSTEM;
+        .EN -> system_enable;
+        .PGOOD -> power_good;
+        .GND -> GND;
+    }
+    
+    // Status indicators
+    led_module: StatusLEDs {
+        charge_status -> .CHARGE;
+        usb_detected -> .USB;
+        power_good -> .POWER;
+        .VDD -> V3V3_SYSTEM;
+        .GND -> GND;
+    }
+    
+    // Test points
+    system_power -> TP1: TestPoint();
+    V3V3_SYSTEM -> TP2: TestPoint();
+    V1V8_SYSTEM -> TP3: TestPoint();
+    
+    // System enable (pull-up)
+    V3V3_SYSTEM -> R_en: Res(10k).1;
+    R_en.2 -> system_enable;
+    system_enable -> SW1: Switch().1;
+    SW1.2 -> GND;
+}
+
+// Status LED module (reusable)
+module StatusLEDs {
+    pin CHARGE, USB, POWER: digital in;
+    pin VDD: power in;
+    pin GND: ground;
+    
+    // Charge status LED (red)
+    led_charge: LEDWithResistor(red, 1k) {
+        VDD -> .A;
+        .K_OUT -> charge_drive;
+        .GND -> GND;
+    }
+    signal charge_drive = CHARGE ? GND : open;
+    
+    // USB present LED (green)  
+    led_usb: LEDWithResistor(green, 1k) {
+        VDD -> .A;
+        .K_OUT -> usb_drive;
+        .GND -> GND;
+    }
+    signal usb_drive = USB ? GND : open;
+    
+    // Power good LED (blue)
+    led_power: LEDWithResistor(blue, 1k) {
+        VDD -> .A;
+        .K_OUT -> power_drive;
+        .GND -> GND;
+    }
+    signal power_drive = POWER ? GND : open;
+}
+
+// Reusable LED with resistor module
+module LEDWithResistor(color: string, r_value: resistance) {
+    pin A: power in;
+    pin K_OUT: signal out;
+    pin GND: ground;
+    
+    led: LED(color) {
+        A -> .A;
+        .K -> led_k;
+    }
+    
+    R: Res(r_value) {
+        led_k -> .1;
+        K_OUT -> .2;
+    }
+}

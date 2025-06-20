@@ -1,0 +1,79 @@
+// BHDL Buck Converter with Python PLI Behavioral Model
+// This shows the BHDL side when using external behavioral models
+
+import "../stdlib/passives/capacitor.bhdl";
+import "../stdlib/passives/inductor.bhdl";
+
+// Buck converter with external behavioral model
+module BuckConverterWithPLI(
+    vin_nom: voltage = 12V,
+    vout_target: voltage = 3.3V,
+    iout_max: current = 2A
+) {
+    // Simple BHDL interface - just the pins
+    pin VIN: power in;
+    pin VOUT: power out;
+    pin GND: ground;
+    pin ENABLE: digital in;
+    pin PGOOD: digital out @ open_drain;
+    pin FREQ_SET: analog in optional;
+    
+    // Link to external Python model
+    @external("buck_controller.py")
+    @class("BuckControllerBehavioral")
+    @interface("bhdl.pli.v1")
+    @parameters({
+        "vin_nom": vin_nom,
+        "vout_target": vout_target,
+        "iout_max": iout_max,
+        "fsw": 500kHz,
+        "l_value": 4.7µH,
+        "cout_value": 100µF,
+        "cout_esr": 20mΩ
+    })
+}
+
+// Testbench using PLI model
+testbench BuckPLIValidation for BuckConverterWithPLI {
+    // Link to test harness
+    cosim {
+        // Python test environment
+        harness: "python:buck_test_harness.py";
+        
+        // Configure PLI connection
+        interface: "tcp://localhost:5555";  // Or pipes, shared memory
+        sync_mode: "lockstep";  // Or "async" for performance
+        timestep: 100ns;
+    }
+    
+    // BHDL-side stimulus (can be overridden by Python)
+    stimulus {
+        @0ms: VIN = 12V;
+        @1ms: ENABLE = high;
+    }
+    
+    // BHDL-side measurements (augmented by Python)
+    measure {
+        // Basic electrical measurements
+        VOUT_MEAN: mean(VOUT);
+        VOUT_RIPPLE: peak_to_peak(VOUT);
+        IIN_MEAN: mean(VIN.current);
+    }
+    
+    // Python can add more complex measurements via PLI
+    
+    // Simple BHDL assertions
+    assert {
+        "Output in range": VOUT in range(3.2V, 3.4V) after 5ms;
+        "PGOOD asserted": PGOOD == high_z after 10ms;
+    }
+    
+    // Python can add complex assertions via PLI
+    
+    // Waveform request (Python provides the data)
+    plot {
+        request: ["controller_state", "duty_cycle", "inductor_current"];
+        format: "svg";
+        output: "buck_pli_waveforms.svg";
+    }
+}
