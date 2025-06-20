@@ -1,0 +1,10 @@
+// Simple LED circuit for CLI testing
+board SimpleLED {
+    power VCC = 5V @ 100mA;
+    ground GND;
+    
+    // LED with current limiting resistor
+    VCC -> R1: Res(330).1;
+    R1.2 -> D1: LED(red).A;
+    D1.K -> GND;
+}

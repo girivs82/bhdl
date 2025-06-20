@@ -18,6 +18,7 @@ pub mod attribute_extraction;
 pub mod spice_extraction;
 pub mod spice_integration;
 pub mod spice_synthesis;
+pub mod analysis_data_conversion;
 
 // Use items needed directly in the analyze function
 use types::{AnalysisResult, ResolvedConstants};
@@ -241,7 +242,7 @@ fn analyze_components_for_inference(
     power_context: &PowerAnalysisContext,
 ) {
     use bhdl_ast::SyntaxKind;
-    use component_inference::{CircuitRequirements, CircuitContext};
+    use component_inference::CircuitContext;
 
     // Walk through the syntax tree looking for component instantiations
     visit_node_for_component_inference(syntax, component_inference, power_context);
@@ -254,12 +255,12 @@ fn visit_node_for_component_inference(
     power_context: &PowerAnalysisContext,
 ) {
     use bhdl_ast::SyntaxKind;
-    use component_inference::{CircuitRequirements, CircuitContext};
+    use component_inference::CircuitContext;
 
     match node.kind() {
-        SyntaxKind::FLOW_EXPR => {
+        bhdl_ast::SyntaxKind::FLOW_EXPR => {
             // Process flow expressions which contain inline component instantiations in v2.0
-            use bhdl_ast::flow::{FlowExpr, FlowElement, ComponentInstantiation};
+            use bhdl_ast::flow::{FlowExpr, FlowElement};
             
             if let Some(flow_expr) = FlowExpr::cast(node.clone()) {
                 // Process each element in the flow expression
@@ -270,7 +271,7 @@ fn visit_node_for_component_inference(
                 }
             }
         }
-        SyntaxKind::CONNECTION_STMT => {
+        bhdl_ast::SyntaxKind::CONNECTION_STMT => {
             // Process connection statements which may contain inline component instantiations
             // e.g., VCC -> R1(10k).1 -> LED1(red).A -> GND;
             let _stmt_text = node.to_string();
@@ -282,7 +283,7 @@ fn visit_node_for_component_inference(
             // Don't recursively call visit_node_for_component_inference here
             // The normal traversal will handle visiting child nodes
         }
-        SyntaxKind::COMPONENT_INST => {
+        bhdl_ast::SyntaxKind::COMPONENT_INST => {
             // Handle ComponentInst from common module (not flow module)
             use bhdl_ast::ComponentInst;
             
@@ -338,7 +339,7 @@ fn visit_node_for_component_inference(
                 };
                 
                 // Create requirements based on context and actual power domain
-                let requirements = CircuitRequirements {
+                let requirements = component_inference::CircuitRequirements {
                     supply_voltage,
                     load_current: None,
                     required_current: None,
@@ -355,12 +356,12 @@ fn visit_node_for_component_inference(
                 // Extract explicit parameters from the component instantiation
                 // Look for PARAM_ASSIGN_BLOCK which contains the parameters
                 let mut explicit_params = std::collections::HashMap::new();
-                if let Some(param_block) = node.children().find(|n| n.kind() == SyntaxKind::PARAM_ASSIGN_BLOCK) {
+                if let Some(param_block) = node.children().find(|n| n.kind() == bhdl_ast::SyntaxKind::PARAM_ASSIGN_BLOCK) {
                     // Extract parameters from the block
                     for param_node in param_block.children() {
                         if param_node.kind() == SyntaxKind::PARAM_ASSIGN {
                             // For simple values like Res(330Ω), there's usually just a VALUE node
-                            if let Some(value_node) = param_node.children().find(|n| n.kind() == SyntaxKind::VALUE) {
+                            if let Some(value_node) = param_node.children().find(|n| n.kind() == bhdl_ast::SyntaxKind::VALUE) {
                                 let value_text = value_node.text().to_string();
                                 explicit_params.insert("value".to_string(), value_text);
                             }
@@ -373,7 +374,7 @@ fn visit_node_for_component_inference(
                 }
                 
                 // Check if this is near an LED by looking at the connection context
-                if let Some(connection_stmt) = node.ancestors().find(|n| n.kind() == SyntaxKind::CONNECTION_STMT) {
+                if let Some(connection_stmt) = node.ancestors().find(|n| n.kind() == bhdl_ast::SyntaxKind::CONNECTION_STMT) {
                     let connection_text = connection_stmt.to_string();
                     if connection_text.contains("LED") {
                         circuit_context.has_led_in_series = true;
@@ -400,7 +401,7 @@ fn visit_node_for_component_inference(
                 if component_type == "Cap" || component_type == "ElectrolyticCap" {
                     // Check if this component is connected to any power domain
                     // by looking at the connection context in the parent nodes
-                    if let Some(connection_stmt) = node.ancestors().find(|n| n.kind() == SyntaxKind::CONNECTION_STMT) {
+                    if let Some(connection_stmt) = node.ancestors().find(|n| n.kind() == bhdl_ast::SyntaxKind::CONNECTION_STMT) {
                         // Extract connected net names from the connection
                         let connection_text = connection_stmt.to_string();
                         
@@ -548,7 +549,7 @@ fn process_component_instantiation_v2(
         });
     
     // Create requirements
-    let requirements = CircuitRequirements {
+    let requirements = component_inference::CircuitRequirements {
         supply_voltage,
         load_current: None,
         required_current: None,
@@ -784,7 +785,7 @@ fn process_component_inst_common(
         .or(Some(5.0)); // Default to 5V
     
     // Create requirements
-    let requirements = CircuitRequirements {
+    let requirements = component_inference::CircuitRequirements {
         supply_voltage,
         load_current: None,
         required_current: None,
@@ -993,7 +994,6 @@ fn extract_instance_name_from_context(node: &rowan::SyntaxNode<bhdl_parser::Bhdl
 
 /// Helper function to extract component instance name from COMPONENT_INST node
 fn get_component_instance_name(node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>) -> Option<String> {
-    use bhdl_ast::SyntaxKind;
     
     // Look for the instance name in the AST structure
     // Format is typically: ComponentType(params).pin or ComponentType(params)
@@ -1004,7 +1004,7 @@ fn get_component_instance_name(node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguag
     node.children_with_tokens()
         .find_map(|child| {
             if let rowan::NodeOrToken::Token(token) = child {
-                if token.kind() == SyntaxKind::IDENT {
+                if token.kind() == bhdl_ast::SyntaxKind::IDENT {
                     Some(format!("{}_{}", token.text(), node.index()))
                 } else {
                     None

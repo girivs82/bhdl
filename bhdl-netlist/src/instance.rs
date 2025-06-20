@@ -10,4 +10,8 @@ pub struct Instance {
     pub definition: ModuleId, // ID of the ModuleDefinition being instantiated
     // Add parameter overrides, placement info, etc. later
     pub attributes: HashMap<String, String>, // Component attributes (value, power, etc.)
+    
+    // Analysis data is stored separately in AnalysisData.instance_analysis
+    // This avoids circular dependencies and keeps the netlist pure structural data
+    // The instance name is used as the key to look up analysis results
 } 

@@ -30,7 +30,7 @@ use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
 use bhdl_netlist::{Netlist, InstanceId};
 use bhdl_netlist::types::{PinDirection, PinType};
-use bhdl_analyzer::AnalysisResult;
+// use bhdl_analyzer::AnalysisResult; // Removed to avoid cyclic dependency
 
 /// Functional role of a component in relation to an IC
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Eq, Hash)]
@@ -170,7 +170,7 @@ impl ComponentRoleDetector {
         circuit: Circuit, 
         netlist: &Netlist, 
         instance_to_component: HashMap<InstanceId, ComponentId>,
-        analysis_result: &AnalysisResult,
+        analysis_result: &bhdl_common::AnalysisData,
     ) -> Self {
         let ic_components = Self::find_ic_components(&circuit);
         
@@ -204,7 +204,7 @@ impl ComponentRoleDetector {
         netlist: &Netlist,
         instance_to_component: &HashMap<InstanceId, ComponentId>,
         ic_components: &[ComponentId],
-    ) -> HashMap<ComponentId, Vec<(ComponentId, String, PinDirection, PinType)>> {
+    ) -> HashMap<ComponentId, Vec<(ComponentId, String, PinDirection, PinType, Option<PinFunction>)>> {
         let mut connections = HashMap::new();
         
         // For each net, find components that connect to IC pins
@@ -250,15 +250,15 @@ impl ComponentRoleDetector {
         netlist: &Netlist,
         instance_to_component: &HashMap<InstanceId, ComponentId>,
         ic_components: &[ComponentId],
-        analysis_result: &AnalysisResult,
+        analysis_result: &bhdl_common::AnalysisData,
     ) -> HashMap<ComponentId, Vec<(ComponentId, String, PinDirection, PinType, Option<PinFunction>)>> {
         let mut connections = HashMap::new();
         
         // Build a map from instance ID to module type
         let mut instance_to_module_type = HashMap::new();
         for (instance_id, instance) in &netlist.instances {
-            if let Some(module) = netlist.modules.get(&instance.module) {
-                instance_to_module_type.insert(*instance_id, module.name.clone());
+            if let Some(module) = netlist.modules.get(instance.definition) {
+                instance_to_module_type.insert(instance_id, module.name.clone());
             }
         }
         
@@ -307,24 +307,40 @@ impl ComponentRoleDetector {
     }
     
     /// Extract pin metadata from analysis result
-    fn extract_ast_pin_metadata(analysis_result: &AnalysisResult) -> HashMap<(String, String), PinFunction> {
+    fn extract_ast_pin_metadata(analysis_result: &bhdl_common::AnalysisData) -> HashMap<(String, String), PinFunction> {
         let mut metadata = HashMap::new();
         
         // Extract module definitions from analysis result
-        if let Some(modules) = &analysis_result.module_definitions {
-            for (module_name, module_def) in modules {
-                // Extract pin metadata from module definition
-                if let Some(pins) = &module_def.pins {
-                    for (pin_name, pin_info) in pins {
-                        if let Some(func) = Self::parse_pin_function(pin_info) {
-                            metadata.insert((module_name.clone(), pin_name.clone()), func);
-                        }
+        for (module_name, module_def) in &analysis_result.module_definitions {
+            // Extract pin metadata from module definition
+            for (pin_name, pin_metadata) in &module_def.pins.pins {
+                if let Some(func_str) = &pin_metadata.function {
+                    if let Some(func) = bhdl_common::PinFunction::from_str(func_str) {
+                        // Convert from common to local PinFunction
+                        let local_func = Self::convert_common_pin_function(func);
+                        metadata.insert((module_name.clone(), pin_name.clone()), local_func);
                     }
                 }
             }
         }
         
         metadata
+    }
+    
+    /// Convert common pin function to local enum
+    fn convert_common_pin_function(common: bhdl_common::PinFunction) -> PinFunction {
+        match common {
+            bhdl_common::PinFunction::PowerInput => PinFunction::PowerIn,
+            bhdl_common::PinFunction::PowerOutput => PinFunction::PowerOut,
+            bhdl_common::PinFunction::SwitchNode => PinFunction::SwitchNode,
+            bhdl_common::PinFunction::FeedbackInput => PinFunction::Feedback,
+            bhdl_common::PinFunction::Compensation => PinFunction::Compensation,
+            bhdl_common::PinFunction::Enable => PinFunction::Enable,
+            bhdl_common::PinFunction::CurrentSense => PinFunction::CurrentSense,
+            bhdl_common::PinFunction::Ground => PinFunction::Ground,
+            bhdl_common::PinFunction::Bypass => PinFunction::Bypass,
+            _ => PinFunction::Unknown,
+        }
     }
     
     /// Parse pin function from pin metadata
@@ -358,12 +374,12 @@ impl ComponentRoleDetector {
     }
     
     /// Look up pin function from analysis result
-    fn lookup_pin_function(module_type: &str, pin_name: &str, analysis_result: &AnalysisResult) -> Option<PinFunction> {
-        if let Some(modules) = &analysis_result.module_definitions {
-            if let Some(module_def) = modules.get(module_type) {
-                if let Some(pins) = &module_def.pins {
-                    if let Some(pin_info) = pins.get(pin_name) {
-                        return Self::parse_pin_function(pin_info);
+    fn lookup_pin_function(module_type: &str, pin_name: &str, analysis_result: &bhdl_common::AnalysisData) -> Option<PinFunction> {
+        if let Some(module_def) = analysis_result.module_definitions.get(module_type) {
+            if let Some(pin_metadata) = module_def.pins.pins.get(pin_name) {
+                if let Some(func_str) = &pin_metadata.function {
+                    if let Some(func) = bhdl_common::PinFunction::from_str(func_str) {
+                        return Some(Self::convert_common_pin_function(func));
                     }
                 }
             }

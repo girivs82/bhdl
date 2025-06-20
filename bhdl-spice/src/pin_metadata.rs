@@ -34,6 +34,8 @@ pub enum PinFunction {
     VoltageReference,
     /// Ground/reference
     Ground,
+    /// Bypass/decoupling connection
+    Bypass,
     /// General signal pin
     Signal,
     /// Passive component terminal

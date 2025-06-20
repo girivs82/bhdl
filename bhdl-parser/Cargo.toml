@@ -12,4 +12,5 @@ smol_str = "0.2.1"
 num-derive = "0.4.2"
 num-traits = "0.2.19"
 
-[dev-dependencies] 
+[dev-dependencies]
+bhdl-ast = { path = "../bhdl-ast" }

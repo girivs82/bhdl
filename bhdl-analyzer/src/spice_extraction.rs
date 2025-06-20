@@ -1,11 +1,12 @@
 //! SPICE parameter extraction from BHDL component attributes
 
 use std::collections::HashMap;
-use bhdl_ast::{Module, ComponentDef};
-use bhdl_spice::{ComponentModel, ElectricalLimits};
+use bhdl_ast::Module;
 use crate::attribute_extraction::extract_module_attributes;
 
 /// Extract SPICE model parameters from module attributes
+// Commented out to avoid cyclic dependency with bhdl_spice
+/*
 pub fn extract_spice_model_from_module(module: &Module) -> Option<ComponentModel> {
     let attrs = extract_module_attributes(module);
     let spice_model = attrs.get("spice_model")?;
@@ -21,7 +22,11 @@ pub fn extract_spice_model_from_module(module: &Module) -> Option<ComponentModel
     }
 }
 
+*/
+
 /// Extract SPICE model from component instance parameters
+// Commented out to avoid cyclic dependency with bhdl_spice
+/*
 pub fn extract_spice_model_from_params(component_type: &str, params: &HashMap<String, String>) -> Option<ComponentModel> {
     match component_type {
         "Res" | "Resistor" => extract_resistor_from_params(params),
@@ -331,6 +336,38 @@ fn extract_inductor_model(attrs: &HashMap<String, String>) -> Option<ComponentMo
         dcr,
         limits,
     })
+}
+*/
+
+/// Parse a value with units (e.g., "10mA" -> 0.01)
+/// This function is kept as it's useful for other parts of the analyzer
+pub fn parse_unit_value(value: &str) -> Option<f64> {
+    // Extract number and unit parts
+    let (num_str, unit_str) = value
+        .char_indices()
+        .find(|(_, c)| c.is_alphabetic())
+        .map(|(idx, _)| value.split_at(idx))
+        .unwrap_or((value, ""));
+    
+    let mut number: f64 = num_str.parse().ok()?;
+    
+    // Apply unit multiplier
+    match unit_str {
+        "T" => number *= 1e12,
+        "G" => number *= 1e9,
+        "M" | "MEG" => number *= 1e6,
+        "k" | "K" => number *= 1e3,
+        "m" => number *= 1e-3,
+        "u" | "μ" => number *= 1e-6,
+        "n" => number *= 1e-9,
+        "p" => number *= 1e-12,
+        "f" => number *= 1e-15,
+        // Unit suffixes (ignore for now)
+        "V" | "A" | "W" | "F" | "H" | "Ω" | "ohm" | "Hz" | "s" => {},
+        _ => {},
+    }
+    
+    Some(number)
 }
 
 #[cfg(test)]

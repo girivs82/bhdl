@@ -1,7 +1,7 @@
 [package]
 name = "bhdl-cli"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
 bhdl-parser = { path = "../bhdl-parser" }
@@ -10,8 +10,20 @@ bhdl-analyzer = { path = "../bhdl-analyzer" }
 bhdl-synthesizer = { path = "../bhdl-synthesizer" }
 bhdl-netlist = { path = "../bhdl-netlist" }
 bhdl-visualizer = { path = "../bhdl-visualizer" }
-rowan = "0.15"
-tokio = { version = "1.35", features = ["rt", "macros"] }
+bhdl-spice = { path = "../bhdl-spice" }
+bhdl-components = { path = "../bhdl-components" }
+bhdl-common = { path = "../bhdl-common" }
+
+# CLI dependencies
+clap = { version = "4.0", features = ["derive"] }
+anyhow = "1.0"
+log = "0.4"
+env_logger = "0.10"
+serde_json = "1.0"
+colored = "2.0"
+
+# Async runtime
+tokio = { version = "1.35", features = ["rt", "macros", "fs"] }
 
 [[bin]]
 name = "test_analyzer"

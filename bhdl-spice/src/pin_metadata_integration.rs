@@ -5,49 +5,44 @@
 //! role inference based on explicit functional declarations.
 
 use std::collections::HashMap;
-use bhdl_netlist::{Netlist, InstanceId, ModuleId, PinDefId};
-use bhdl_analyzer::AnalysisResult;
-use crate::pin_metadata::{PinFunction, PinMetadata, PinElectricalData};
+use bhdl_netlist::{Netlist, InstanceId};
+use bhdl_common::{PinMetadata, PinFunction, AnalysisData};
 use crate::circuit::ComponentId;
 
 /// Pin metadata extracted from BHDL AST and analyzer results
 #[derive(Debug, Clone)]
 pub struct ExtractedPinMetadata {
     /// Map from (module_name, pin_name) to pin metadata
-    pub module_pins: HashMap<(String, String), PinMetadata>,
+    pub module_pins: HashMap<(String, String), crate::pin_metadata::PinMetadata>,
     /// Map from instance ID to its module type
     pub instance_types: HashMap<InstanceId, String>,
 }
 
 /// Extract pin metadata from analysis results and netlist
 pub fn extract_pin_metadata_from_analysis(
-    analysis: &AnalysisResult,
+    analysis: &AnalysisData,
     netlist: &Netlist,
 ) -> ExtractedPinMetadata {
     let mut module_pins = HashMap::new();
     let mut instance_types = HashMap::new();
     
     // Extract module definitions from analysis result
-    if let Some(modules) = &analysis.module_definitions {
-        for (module_name, module_def) in modules {
-            // Extract pin metadata from module definition
-            if let Some(pins) = &module_def.pins {
-                for (pin_name, pin_info) in pins {
-                    // Convert AST pin metadata to SPICE pin metadata
-                    let metadata = convert_ast_pin_metadata(pin_info);
-                    module_pins.insert(
-                        (module_name.clone(), pin_name.clone()),
-                        metadata
-                    );
-                }
-            }
+    for (module_name, module_def) in &analysis.module_definitions {
+        // Extract pin metadata from module definition
+        for (pin_name, pin_metadata) in &module_def.pins.pins {
+            // Convert common pin metadata to SPICE pin metadata
+            let metadata = convert_bhdl_common_pin_metadata(pin_metadata);
+            module_pins.insert(
+                (module_name.clone(), pin_name.clone()),
+                metadata
+            );
         }
     }
     
     // Map instances to their module types
     for (instance_id, instance) in &netlist.instances {
-        if let Some(module) = netlist.modules.get(&instance.module) {
-            instance_types.insert(*instance_id, module.name.clone());
+        if let Some(module) = netlist.modules.get(instance.definition) {
+            instance_types.insert(instance_id, module.name.clone());
         }
     }
     
@@ -57,37 +52,109 @@ pub fn extract_pin_metadata_from_analysis(
     }
 }
 
+/// Convert bhdl_common PinMetadata to SPICE pin metadata format
+fn convert_bhdl_common_pin_metadata(common_metadata: &bhdl_common::PinMetadata) -> crate::pin_metadata::PinMetadata {
+    // Extract function from common metadata
+    let function = if let Some(func_str) = &common_metadata.function {
+        if let Some(func) = bhdl_common::PinFunction::from_str(func_str) {
+            match func {
+                bhdl_common::PinFunction::PowerInput => crate::pin_metadata::PinFunction::PowerIn,
+                bhdl_common::PinFunction::PowerOutput => crate::pin_metadata::PinFunction::PowerOut,
+                bhdl_common::PinFunction::SwitchNode => crate::pin_metadata::PinFunction::SwitchNode,
+                bhdl_common::PinFunction::FeedbackInput => crate::pin_metadata::PinFunction::Feedback,
+                bhdl_common::PinFunction::Compensation => crate::pin_metadata::PinFunction::Compensation,
+                bhdl_common::PinFunction::Enable => crate::pin_metadata::PinFunction::Enable,
+                bhdl_common::PinFunction::CurrentSense => crate::pin_metadata::PinFunction::CurrentSense,
+                bhdl_common::PinFunction::Ground => crate::pin_metadata::PinFunction::Ground,
+                bhdl_common::PinFunction::Bypass => crate::pin_metadata::PinFunction::Bypass,
+                _ => crate::pin_metadata::PinFunction::Unknown,
+            }
+        } else {
+            crate::pin_metadata::PinFunction::Unknown
+        }
+    } else {
+        crate::pin_metadata::PinFunction::Unknown
+    };
+    
+    // Extract electrical characteristics
+    let electrical = extract_electrical_data_from_common(common_metadata);
+    
+    // Get description from extra metadata
+    let description = common_metadata.extra.get("description").cloned();
+    
+    crate::pin_metadata::PinMetadata {
+        function,
+        electrical,
+        description,
+    }
+}
+
+/// Extract electrical data from common pin metadata
+fn extract_electrical_data_from_common(metadata: &bhdl_common::PinMetadata) -> crate::pin_metadata::PinElectricalData {
+    let mut electrical = crate::pin_metadata::PinElectricalData::default();
+    
+    // Parse voltage range if specified
+    if let Some(max_voltage) = &metadata.max_voltage {
+        if let Ok(voltage) = parse_voltage(max_voltage) {
+            electrical.voltage_range = Some((0.0, voltage));
+        }
+    }
+    
+    // Parse impedance if specified
+    if let Some(impedance_str) = metadata.extra.get("impedance") {
+        if let Ok(impedance) = parse_impedance(impedance_str) {
+            electrical.impedance = Some(impedance);
+        }
+    }
+    
+    // Parse slew rate for switch nodes
+    if let Some(slew_rate) = &metadata.slew_rate {
+        if slew_rate == "fast" {
+            electrical.dv_dt_rating = Some(100.0); // 100V/µs for fast switching
+        }
+    }
+    
+    // Parse drive strength as max current
+    if let Some(drive_strength) = metadata.extra.get("drive_strength") {
+        if let Ok(current) = parse_current(drive_strength) {
+            electrical.max_current = Some(current);
+        }
+    }
+    
+    electrical
+}
+
 /// Convert AST pin metadata to SPICE pin metadata format
-fn convert_ast_pin_metadata(pin_info: &HashMap<String, String>) -> PinMetadata {
+fn convert_ast_pin_metadata(pin_info: &HashMap<String, String>) -> crate::pin_metadata::PinMetadata {
     // Extract function from metadata
     let function = if let Some(func_str) = pin_info.get("function") {
         match func_str.as_str() {
-            "PowerIn" => PinFunction::PowerIn,
-            "PowerOut" => PinFunction::PowerOut,
-            "SwitchNode" => PinFunction::SwitchNode,
-            "Bootstrap" => PinFunction::Bootstrap,
-            "Feedback" => PinFunction::Feedback,
-            "Compensation" => PinFunction::Compensation,
-            "SoftStart" => PinFunction::SoftStart,
-            "Enable" => PinFunction::Enable,
-            "CurrentSense" => PinFunction::CurrentSense,
-            "Ground" => PinFunction::Ground,
-            "Signal" => PinFunction::Signal,
-            _ => PinFunction::Unknown,
+            "PowerIn" => crate::pin_metadata::PinFunction::PowerIn,
+            "PowerOut" => crate::pin_metadata::PinFunction::PowerOut,
+            "SwitchNode" => crate::pin_metadata::PinFunction::SwitchNode,
+            "Bootstrap" => crate::pin_metadata::PinFunction::Bootstrap,
+            "Feedback" => crate::pin_metadata::PinFunction::Feedback,
+            "Compensation" => crate::pin_metadata::PinFunction::Compensation,
+            "SoftStart" => crate::pin_metadata::PinFunction::SoftStart,
+            "Enable" => crate::pin_metadata::PinFunction::Enable,
+            "CurrentSense" => crate::pin_metadata::PinFunction::CurrentSense,
+            "Ground" => crate::pin_metadata::PinFunction::Ground,
+            "Signal" => crate::pin_metadata::PinFunction::Signal,
+            _ => crate::pin_metadata::PinFunction::Unknown,
         }
     } else {
         // Infer from pin type if no explicit function
         match pin_info.get("type").map(|s| s.as_str()) {
             Some("power") => {
                 match pin_info.get("direction").map(|s| s.as_str()) {
-                    Some("in") => PinFunction::PowerIn,
-                    Some("out") => PinFunction::PowerOut,
-                    _ => PinFunction::Unknown,
+                    Some("in") => crate::pin_metadata::PinFunction::PowerIn,
+                    Some("out") => crate::pin_metadata::PinFunction::PowerOut,
+                    _ => crate::pin_metadata::PinFunction::Unknown,
                 }
             },
-            Some("ground") => PinFunction::Ground,
-            Some("signal") => PinFunction::Signal,
-            _ => PinFunction::Unknown,
+            Some("ground") => crate::pin_metadata::PinFunction::Ground,
+            Some("signal") => crate::pin_metadata::PinFunction::Signal,
+            _ => crate::pin_metadata::PinFunction::Unknown,
         }
     };
     
@@ -97,7 +164,7 @@ fn convert_ast_pin_metadata(pin_info: &HashMap<String, String>) -> PinMetadata {
     // Get description
     let description = pin_info.get("description").cloned();
     
-    PinMetadata {
+    crate::pin_metadata::PinMetadata {
         function,
         electrical,
         description,
@@ -105,8 +172,8 @@ fn convert_ast_pin_metadata(pin_info: &HashMap<String, String>) -> PinMetadata {
 }
 
 /// Extract electrical data from pin metadata
-fn extract_electrical_data(pin_info: &HashMap<String, String>) -> PinElectricalData {
-    let mut electrical = PinElectricalData::default();
+fn extract_electrical_data(pin_info: &HashMap<String, String>) -> crate::pin_metadata::PinElectricalData {
+    let mut electrical = crate::pin_metadata::PinElectricalData::default();
     
     // Parse voltage range if specified
     if let Some(max_voltage) = pin_info.get("max_voltage") {
@@ -205,7 +272,7 @@ pub fn get_component_pin_function(
     pin_name: &str,
     instance_to_component: &HashMap<InstanceId, ComponentId>,
     extracted: &ExtractedPinMetadata,
-) -> Option<PinFunction> {
+) -> Option<crate::pin_metadata::PinFunction> {
     // Find the instance ID for this component
     let instance_id = instance_to_component.iter()
         .find(|(_, &comp_id)| comp_id == component_id)
