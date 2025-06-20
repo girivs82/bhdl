@@ -13,6 +13,14 @@ BHDL (Board Hardware Description Language) enables hardware designers to express
 - **Multi-level abstraction**: From high-level system architecture to detailed component connections
 - **Team workflow**: Support for concurrent development by system architects, board designers, and layout engineers
 
+## Advanced Analysis Capabilities
+
+- **SPICE-based electrical validation**: Newton-Raphson DC analysis for accurate circuit simulation
+- **Intelligent safety analysis**: Component derating, current limiting, and protection recommendations
+- **Component role detection**: Topology-based identification without naming conventions
+- **Stability analysis**: Loop stability, impedance measurement, and resonance detection
+- **Unified data architecture**: Single netlist augmented with analysis results (no lossy conversions)
+
 ## Repository Structure
 
 - **`/bhdl-*`**: Rust crates implementing the BHDL toolchain
@@ -79,4 +87,14 @@ board PowerSupply {
 
 ## Status
 
-BHDL v2.0 is under active development. The parser supports the flow-based syntax, and the analysis/synthesis pipeline is functional. Visualization improvements are ongoing. 
+BHDL v2.0 is under active development with the following components functional:
+
+- ✅ **Parser**: Full v2.0 flow-based syntax support
+- ✅ **Analyzer**: 8-pass semantic analysis including electrical safety
+- ✅ **Synthesizer**: Netlist generation with component database integration
+- ✅ **SPICE Engine**: Nonlinear DC analysis with component models
+- ✅ **Safety Analysis**: Data-driven validation with fix recommendations
+- ✅ **Role Detection**: Pin metadata-based component classification
+- ✅ **Stability Analysis**: AC-integrated power converter validation
+- 🚧 **Visualizer**: Layout generation (component scaling improvements ongoing)
+- 🚧 **CLI**: Basic commands (full integration in progress) 
