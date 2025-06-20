@@ -6,6 +6,7 @@ use crate::net::Net;
 use crate::portpin::{Port, Pin, PinInstance};
 use slotmap::SlotMap;
 use serde::{Serialize, Deserialize};
+use bhdl_common::analysis_interface::AnalysisData;
 
 // Main Netlist Structure
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -18,6 +19,11 @@ pub struct Netlist {
     pub pin_instances: SlotMap<PinInstanceId, PinInstance>,
     
     pub top_level_module: Option<ModuleId>,
+    
+    /// Analysis data augmentation for unified model approach
+    /// This allows analysis results to flow through the pipeline without conversion
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub analysis_data: Option<AnalysisData>,
 }
 
 impl Netlist {
@@ -335,6 +341,29 @@ impl Netlist {
         self.connect(net_id, ConnectionPoint::PinInstance(pin_inst2))?;
         
         Ok(net_id)
+    }
+
+    /// Set analysis data for the netlist
+    pub fn set_analysis_data(&mut self, analysis_data: AnalysisData) {
+        self.analysis_data = Some(analysis_data);
+    }
+    
+    /// Get reference to analysis data
+    pub fn get_analysis_data(&self) -> Option<&AnalysisData> {
+        self.analysis_data.as_ref()
+    }
+    
+    /// Get mutable reference to analysis data
+    pub fn get_analysis_data_mut(&mut self) -> Option<&mut AnalysisData> {
+        self.analysis_data.as_mut()
+    }
+    
+    /// Initialize empty analysis data if none exists
+    pub fn ensure_analysis_data(&mut self) -> &mut AnalysisData {
+        if self.analysis_data.is_none() {
+            self.analysis_data = Some(AnalysisData::new());
+        }
+        self.analysis_data.as_mut().unwrap()
     }
 
     // TODO: Add methods for associating instances/nets with parent modules, setting top_level_module, etc.

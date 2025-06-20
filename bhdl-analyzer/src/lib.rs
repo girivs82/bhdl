@@ -5,7 +5,7 @@ use rowan::ast::AstNode; // For source_file.syntax()
 // Declare modules
 pub mod types;
 mod helpers;
-mod symbol_table;
+pub mod symbol_table;
 mod pass1;
 mod pass2;
 mod pass3;

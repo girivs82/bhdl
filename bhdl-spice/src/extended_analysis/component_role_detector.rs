@@ -25,12 +25,67 @@
 
 use crate::circuit::{Circuit, ComponentId, NodeId};
 use crate::extended_analysis::simulation_engine::SimulationEngine;
-use crate::pin_metadata::{ComponentPinDatabase, PinFunction};
+use bhdl_common::pin_metadata::{PinFunction, PinMetadata, PinElectricalData, PinDirection as CommonPinDirection, PinType as CommonPinType};
 use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
 use bhdl_netlist::{Netlist, InstanceId};
 use bhdl_netlist::types::{PinDirection, PinType};
 // use bhdl_analyzer::AnalysisResult; // Removed to avoid cyclic dependency
+
+/// Simple component pin database using unified metadata structures
+#[derive(Debug, Clone, Default)]
+pub struct ComponentPinDatabase {
+    /// Map from component type to pin metadata
+    /// Key format: "ComponentType:PinName"
+    metadata: HashMap<String, PinMetadata>,
+}
+
+impl ComponentPinDatabase {
+    /// Create a new empty pin database
+    /// Pin metadata should flow from stdlib components through the unified model
+    pub fn new() -> Self {
+        Self::default()
+    }
+    
+    /// Create with defaults for backwards compatibility
+    /// TODO: Remove this once all tests use the unified model
+    pub fn new_with_defaults() -> Self {
+        Self::default()
+    }
+    
+    /// Add pin metadata for a component
+    pub fn add_pin_metadata(&mut self, component_type: &str, pin_name: &str, metadata: PinMetadata) {
+        let key = format!("{}:{}", component_type, pin_name);
+        self.metadata.insert(key, metadata);
+    }
+    
+    /// Get pin metadata for a component pin
+    pub fn get_pin_metadata(&self, component_type: &str, pin_name: &str) -> Option<&PinMetadata> {
+        let key = format!("{}:{}", component_type, pin_name);
+        self.metadata.get(&key)
+    }
+    
+    /// Populate database from analysis data (unified model)
+    pub fn populate_from_analysis_data(&mut self, analysis_data: &bhdl_common::analysis_interface::AnalysisData) {
+        // Extract pin metadata from module definitions
+        for (module_name, module_info) in &analysis_data.module_definitions {
+            for (pin_name, pin_metadata) in &module_info.pins.pins {
+                self.add_pin_metadata(module_name, pin_name, pin_metadata.clone());
+            }
+        }
+    }
+    
+    /// Check if a component pin has a specific function
+    pub fn pin_has_function(&self, component_type: &str, pin_name: &str, function: &PinFunction) -> bool {
+        let key = format!("{}:{}", component_type, pin_name);
+        if let Some(metadata) = self.metadata.get(&key) {
+            if let Some(pin_func) = &metadata.function {
+                return pin_func == function;
+            }
+        }
+        false
+    }
+}
 
 /// Functional role of a component in relation to an IC
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Eq, Hash)]
@@ -165,34 +220,50 @@ impl ComponentRoleDetector {
         }
     }
     
-    /// Create a new detector with netlist and AST metadata
+    /// Create a new detector with netlist and AST metadata from unified model
     pub fn with_ast_metadata(
         circuit: Circuit, 
         netlist: &Netlist, 
         instance_to_component: HashMap<InstanceId, ComponentId>,
-        analysis_result: &bhdl_common::AnalysisData,
     ) -> Self {
         let ic_components = Self::find_ic_components(&circuit);
         
+        // Get analysis data from the netlist (unified model approach)
+        let analysis_data = netlist.get_analysis_data();
+        
         // Extract IC pin connection information from the netlist
-        let component_to_ic_pins = Self::extract_ic_connections_with_metadata(
-            &circuit, netlist, &instance_to_component, &ic_components, analysis_result
-        );
+        let component_to_ic_pins = if let Some(analysis_result) = analysis_data {
+            Self::extract_ic_connections_with_metadata(
+                &circuit, netlist, &instance_to_component, &ic_components, analysis_result
+            )
+        } else {
+            Self::extract_ic_connections(&circuit, netlist, &instance_to_component, &ic_components)
+        };
         
         // Extract pin metadata from analysis result
-        let ast_pin_metadata = Self::extract_ast_pin_metadata(analysis_result);
+        let ast_pin_metadata = if let Some(analysis_result) = analysis_data {
+            Self::extract_ast_pin_metadata(analysis_result)
+        } else {
+            HashMap::new()
+        };
+        
+        // Create pin database and populate from analysis data if available
+        let mut pin_database = ComponentPinDatabase::new();
+        if let Some(analysis_data) = analysis_data {
+            pin_database.populate_from_analysis_data(analysis_data);
+        }
         
         let mut detector = Self {
             circuit,
             ic_components,
             simulation_engine: None,
-            pin_database: ComponentPinDatabase::new_with_defaults(),
+            pin_database,
             instance_to_component,
             component_to_ic_pins,
             ast_pin_metadata,
         };
         
-        // Update pin database with AST metadata
+        // Also update pin database with AST metadata
         detector.update_pin_database_from_ast();
         
         detector
@@ -314,12 +385,8 @@ impl ComponentRoleDetector {
         for (module_name, module_def) in &analysis_result.module_definitions {
             // Extract pin metadata from module definition
             for (pin_name, pin_metadata) in &module_def.pins.pins {
-                if let Some(func_str) = &pin_metadata.function {
-                    if let Some(func) = bhdl_common::PinFunction::from_str(func_str) {
-                        // Convert from common to local PinFunction
-                        let local_func = Self::convert_common_pin_function(func);
-                        metadata.insert((module_name.clone(), pin_name.clone()), local_func);
-                    }
+                if let Some(func) = &pin_metadata.function {
+                    metadata.insert((module_name.clone(), pin_name.clone()), func.clone());
                 }
             }
         }
@@ -327,32 +394,17 @@ impl ComponentRoleDetector {
         metadata
     }
     
-    /// Convert common pin function to local enum
-    fn convert_common_pin_function(common: bhdl_common::PinFunction) -> PinFunction {
-        match common {
-            bhdl_common::PinFunction::PowerInput => PinFunction::PowerIn,
-            bhdl_common::PinFunction::PowerOutput => PinFunction::PowerOut,
-            bhdl_common::PinFunction::SwitchNode => PinFunction::SwitchNode,
-            bhdl_common::PinFunction::FeedbackInput => PinFunction::Feedback,
-            bhdl_common::PinFunction::Compensation => PinFunction::Compensation,
-            bhdl_common::PinFunction::Enable => PinFunction::Enable,
-            bhdl_common::PinFunction::CurrentSense => PinFunction::CurrentSense,
-            bhdl_common::PinFunction::Ground => PinFunction::Ground,
-            bhdl_common::PinFunction::Bypass => PinFunction::Bypass,
-            _ => PinFunction::Unknown,
-        }
-    }
     
     /// Parse pin function from pin metadata
     fn parse_pin_function(pin_info: &HashMap<String, String>) -> Option<PinFunction> {
         // First check explicit function metadata
         if let Some(func_str) = pin_info.get("function") {
             return match func_str.as_str() {
-                "PowerIn" => Some(PinFunction::PowerIn),
-                "PowerOut" => Some(PinFunction::PowerOut),
+                "PowerInput" | "PowerIn" => Some(PinFunction::PowerInput),
+                "PowerOutput" | "PowerOut" => Some(PinFunction::PowerOutput),
                 "SwitchNode" => Some(PinFunction::SwitchNode),
                 "Bootstrap" => Some(PinFunction::Bootstrap),
-                "Feedback" => Some(PinFunction::Feedback),
+                "FeedbackInput" | "Feedback" => Some(PinFunction::FeedbackInput),
                 "Compensation" => Some(PinFunction::Compensation),
                 "SoftStart" => Some(PinFunction::SoftStart),
                 "Enable" => Some(PinFunction::Enable),
@@ -365,8 +417,8 @@ impl ComponentRoleDetector {
         
         // Fall back to inferring from pin type
         match (pin_info.get("type"), pin_info.get("direction")) {
-            (Some(typ), Some(dir)) if typ == "power" && dir == "in" => Some(PinFunction::PowerIn),
-            (Some(typ), Some(dir)) if typ == "power" && dir == "out" => Some(PinFunction::PowerOut),
+            (Some(typ), Some(dir)) if typ == "power" && dir == "in" => Some(PinFunction::PowerInput),
+            (Some(typ), Some(dir)) if typ == "power" && dir == "out" => Some(PinFunction::PowerOutput),
             (Some(typ), _) if typ == "ground" => Some(PinFunction::Ground),
             (Some(typ), _) if typ == "signal" => Some(PinFunction::Signal),
             _ => None,
@@ -377,11 +429,7 @@ impl ComponentRoleDetector {
     fn lookup_pin_function(module_type: &str, pin_name: &str, analysis_result: &bhdl_common::AnalysisData) -> Option<PinFunction> {
         if let Some(module_def) = analysis_result.module_definitions.get(module_type) {
             if let Some(pin_metadata) = module_def.pins.pins.get(pin_name) {
-                if let Some(func_str) = &pin_metadata.function {
-                    if let Some(func) = bhdl_common::PinFunction::from_str(func_str) {
-                        return Some(Self::convert_common_pin_function(func));
-                    }
-                }
+                return pin_metadata.function.clone();
             }
         }
         None
@@ -391,15 +439,20 @@ impl ComponentRoleDetector {
     fn update_pin_database_from_ast(&mut self) {
         for ((module_type, pin_name), function) in &self.ast_pin_metadata {
             // Add to pin database with default electrical data
-            self.pin_database.add_pin_metadata(
-                module_type,
-                pin_name,
-                crate::pin_metadata::PinMetadata {
-                    function: function.clone(),
-                    electrical: Default::default(),
-                    description: None,
-                }
-            );
+            let metadata = PinMetadata {
+                direction: CommonPinDirection::Bidirectional,
+                pin_type: match function {
+                    PinFunction::PowerInput | PinFunction::PowerOutput => CommonPinType::Power,
+                    PinFunction::Ground => CommonPinType::Ground,
+                    _ => CommonPinType::Signal,
+                },
+                function: Some(function.clone()),
+                electrical: PinElectricalData::default(),
+                electrical_specs: HashMap::new(),
+                documentation: None,
+            };
+            
+            self.pin_database.add_pin_metadata(module_type, pin_name, metadata);
         }
     }
     
@@ -1057,7 +1110,7 @@ impl ComponentRoleDetector {
             for (_ic_id, pin_name, pin_direction, pin_type, pin_function) in ic_pins {
                 // Check pin function first (most reliable)
                 if let Some(func) = pin_function {
-                    if *func == PinFunction::PowerIn {
+                    if *func == PinFunction::PowerInput {
                         return true;
                     }
                 }
@@ -1105,7 +1158,7 @@ impl ComponentRoleDetector {
             for (_ic_id, pin_name, pin_direction, pin_type, pin_function) in ic_pins {
                 // Check pin function first (most reliable)
                 if let Some(func) = pin_function {
-                    if *func == PinFunction::PowerOut {
+                    if *func == PinFunction::PowerOutput {
                         return true;
                     }
                 }

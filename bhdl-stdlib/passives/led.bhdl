@@ -17,8 +17,16 @@ type LEDParams = {
 };
 
 module LED(color: string = "red", size: string = "5mm") {
-    pin A: signal in;   // Anode (+)
-    pin K: signal out;  // Cathode (-)
+    pin A: signal in @metadata(
+        function="Anode",
+        description="Positive terminal (Anode)",
+        electrical_type="passive"
+    );   // Anode (+)
+    pin K: signal out @metadata(
+        function="Cathode",
+        description="Negative terminal (Cathode)",
+        electrical_type="passive"
+    );  // Cathode (-)
     
     // LED parameters by color - kept local to this module
     const LED_PARAMS_RED: LEDParams = {

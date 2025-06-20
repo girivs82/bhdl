@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use log::{debug, info, warn};
 use bhdl_common::ComponentTypeMapper;
+use bhdl_common::pin_metadata::{ModulePinMetadata, PinMetadata, PinDirection as CommonPinDirection, PinType as CommonPinType};
 use bhdl_stdlib::{StdlibReader, get_default_stdlib_path};
 
 // Component database mapping module  
@@ -166,6 +167,9 @@ impl NetlistGenerator {
         if self.config.include_component_inference {
             self.include_component_inference_info(analysis)?;
         }
+        
+        // Phase 8: Populate analysis data in netlist (unified model)
+        self.populate_analysis_data(analysis)?;
 
         info!("Netlist generation complete: {} modules, {} instances, {} nets, {} database components", 
               self.netlist.modules.len(), 
@@ -1046,6 +1050,202 @@ impl NetlistGenerator {
         self.database_mapper.is_some()
     }
     
+    /// Populate analysis data in the netlist for unified model approach
+    /// This allows metadata to flow through to SPICE without conversion
+    fn populate_analysis_data(&mut self, analysis: &AnalysisResult) -> Result<()> {
+        use bhdl_common::analysis_interface::{AnalysisData, ModuleDefinitionInfo, SymbolInfo, SymbolType};
+        use bhdl_analyzer::symbol_table::{SymbolKind, PortDirectionKind};
+        
+        info!("Populating analysis data in netlist for unified model");
+        
+        let mut analysis_data = AnalysisData::new();
+        
+        // Extract symbol information from global scope
+        let global_symbols = analysis.global_scope.get_symbols();
+        let global_nets = analysis.global_scope.get_nets();
+        
+        debug!("Extracting symbols from global scope: {} symbols, {} nets", 
+               global_symbols.len(), global_nets.len());
+        
+        // Convert analyzer symbols to common symbol format
+        for (name, symbol) in global_symbols {
+            let symbol_type = match symbol.kind {
+                SymbolKind::Module => SymbolType::Module,
+                SymbolKind::Instance => SymbolType::Instance,
+                SymbolKind::Component => SymbolType::Module, // Components are module definitions
+                SymbolKind::Board => SymbolType::Module,     // Boards are top-level modules
+                SymbolKind::Parameter => SymbolType::Constant,
+                _ => continue, // Skip other symbol types for now
+            };
+            
+            let symbol_info = SymbolInfo {
+                symbol_type,
+                module_type: symbol.instance_type_name.clone(),
+                parameters: HashMap::new(), // TODO: Extract parameter information
+            };
+            
+            analysis_data.symbol_data.insert(name.clone(), symbol_info);
+            
+            // If this is a module definition, create module definition info
+            if matches!(symbol.kind, SymbolKind::Module | SymbolKind::Component | SymbolKind::Board) {
+                let module_info = ModuleDefinitionInfo {
+                    name: name.clone(),
+                    pins: self.extract_module_pins(name, analysis)?,
+                    parameters: HashMap::new(), // TODO: Extract parameters from definition
+                };
+                
+                analysis_data.module_definitions.insert(name.clone(), module_info);
+            }
+        }
+        
+        // Add net symbols to symbol data
+        for (name, symbol) in global_nets {
+            let symbol_info = SymbolInfo {
+                symbol_type: SymbolType::Net,
+                module_type: None,
+                parameters: HashMap::new(),
+            };
+            
+            analysis_data.symbol_data.insert(name.clone(), symbol_info);
+        }
+        
+        // Extract symbols from definition scopes (modules, components, etc.)
+        for (node_ptr, scope) in &analysis.definition_scopes {
+            debug!("Processing definition scope for node: {:?}", node_ptr);
+            
+            // Get the scope name to identify the module
+            if let Some(scope_name) = &scope.scope_name {
+                let scope_symbols = scope.get_symbols();
+                let scope_nets = scope.get_nets();
+                
+                debug!("Definition scope '{}': {} symbols, {} nets", 
+                       scope_name, scope_symbols.len(), scope_nets.len());
+                
+                // Create module definition with pins from this scope
+                let module_info = ModuleDefinitionInfo {
+                    name: scope_name.clone(),
+                    pins: self.extract_pins_from_scope(scope)?,
+                    parameters: HashMap::new(), // TODO: Extract parameters
+                };
+                
+                analysis_data.module_definitions.insert(scope_name.clone(), module_info);
+                
+                // Add scope symbols to global symbol data with qualified names
+                for (name, symbol) in scope_symbols {
+                    let qualified_name = format!("{}::{}", scope_name, name);
+                    let symbol_type = match symbol.kind {
+                        SymbolKind::Instance => SymbolType::Instance,
+                        SymbolKind::Parameter => SymbolType::Constant,
+                        SymbolKind::Pin => continue, // Pins are handled separately in module definitions
+                        _ => continue,
+                    };
+                    
+                    let symbol_info = SymbolInfo {
+                        symbol_type,
+                        module_type: symbol.instance_type_name.clone(),
+                        parameters: HashMap::new(),
+                    };
+                    
+                    analysis_data.symbol_data.insert(qualified_name, symbol_info);
+                }
+            }
+        }
+        
+        // Set the analysis data in the netlist
+        self.netlist.set_analysis_data(analysis_data);
+        
+        info!("Analysis data populated: {} module definitions, {} symbol entries", 
+              self.netlist.get_analysis_data().unwrap().module_definitions.len(),
+              self.netlist.get_analysis_data().unwrap().symbol_data.len());
+        
+        Ok(())
+    }
+    
+    /// Extract module pin information for a module from analysis results
+    fn extract_module_pins(&self, module_name: &str, analysis: &AnalysisResult) -> Result<ModulePinMetadata> {
+        // Look for the module in definition scopes
+        for (_, scope) in &analysis.definition_scopes {
+            if scope.scope_name.as_deref() == Some(module_name) {
+                return self.extract_pins_from_scope(scope);
+            }
+        }
+        
+        // If not found in definition scopes, create empty pin metadata
+        Ok(ModulePinMetadata::new())
+    }
+    
+    /// Extract pin metadata from a symbol table scope
+    fn extract_pins_from_scope(&self, scope: &bhdl_analyzer::symbol_table::SymbolTable) -> Result<ModulePinMetadata> {
+        use bhdl_analyzer::symbol_table::{SymbolKind, PortDirectionKind};
+        
+        let mut pin_metadata = ModulePinMetadata::new();
+        
+        // Look for pin symbols in the scope
+        for (name, symbol) in scope.get_symbols() {
+            if symbol.kind == SymbolKind::Pin {
+                let direction = match symbol.direction {
+                    Some(PortDirectionKind::In) => CommonPinDirection::Input,
+                    Some(PortDirectionKind::Out) => CommonPinDirection::Output,
+                    Some(PortDirectionKind::InOut) => CommonPinDirection::Bidirectional,
+                    None => CommonPinDirection::Bidirectional, // Default if not specified
+                };
+                
+                // Infer pin type from name and direction (simplified heuristic)
+                let pin_type = self.infer_pin_type(name, direction);
+                
+                let pin_info = PinMetadata {
+                    direction,
+                    pin_type,
+                    function: None, // Will be populated from stdlib definitions
+                    electrical: bhdl_common::pin_metadata::PinElectricalData::default(),
+                    electrical_specs: HashMap::new(),
+                    documentation: None,
+                };
+                
+                pin_metadata.add_pin(name.clone(), pin_info);
+            }
+        }
+        
+        Ok(pin_metadata)
+    }
+    
+    /// Infer pin type from name and direction using simple heuristics
+    fn infer_pin_type(&self, pin_name: &str, direction: CommonPinDirection) -> CommonPinType {
+        
+        let name_lower = pin_name.to_lowercase();
+        
+        // Power pins
+        if name_lower.contains("vcc") || name_lower.contains("vdd") || 
+           name_lower.contains("vin") || name_lower.contains("vout") ||
+           name_lower == "out" && direction == CommonPinDirection::Output {
+            return CommonPinType::Power;
+        }
+        
+        // Ground pins
+        if name_lower.contains("gnd") || name_lower.contains("vss") ||
+           name_lower.contains("ground") {
+            return CommonPinType::Ground;
+        }
+        
+        // Clock pins
+        if name_lower.contains("clk") || name_lower.contains("clock") {
+            return CommonPinType::Clock;
+        }
+        
+        // Reset pins
+        if name_lower.contains("rst") || name_lower.contains("reset") {
+            return CommonPinType::Reset;
+        }
+        
+        // Enable pins
+        if name_lower.contains("en") || name_lower.contains("enable") {
+            return CommonPinType::Enable;
+        }
+        
+        // Default to signal
+        CommonPinType::Signal
+    }
+    
     /// Add pins to a component module based on its type using stdlib definitions
     fn add_pins_for_component(&mut self, _instance_name: &str, component_type: &str, module_id: ModuleId) -> Result<()> {
         // Get pin definitions from the stdlib reader
@@ -1065,6 +1265,12 @@ impl NetlistGenerator {
         }
         
         Ok(())
+    }
+    
+    /// Backwards compatibility method for synthesizing from AST and analysis
+    /// This matches the expected interface from existing test code
+    pub async fn synthesize(&mut self, ast: &SourceFile, analysis: &AnalysisResult) -> Result<Netlist> {
+        self.generate_from_ast_and_analysis(ast, analysis).await
     }
 }
 
@@ -1119,6 +1325,10 @@ pub async fn generate_netlist_with_config(
     info!("Successfully generated custom netlist");
     Ok(netlist)
 }
+
+/// Compatibility alias for NetlistGenerator
+/// This provides backwards compatibility for existing code
+pub type Synthesizer = NetlistGenerator;
 
 #[cfg(test)]
 mod tests {

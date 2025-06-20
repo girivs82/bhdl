@@ -276,7 +276,7 @@ impl<'t> Parser<'t> {
     }
     
     /// Peek at the nth token (0 = current)
-    fn peek_nth(&self, n: usize) -> Option<SyntaxKind> {
+    pub(crate) fn peek_nth(&self, n: usize) -> Option<SyntaxKind> {
         let mut pos = self.pos + n;
         while pos < self.tokens.len() && self.tokens[pos].0.is_trivia() {
             pos += 1;

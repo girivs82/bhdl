@@ -4,13 +4,36 @@
 import { LinearRegulatorParams, LinearRegulatorBase } from "./linear_regulator_base.bhdl";
 
 module LM7805(package: string = "TO-220") {
-    pin IN: power in;     // Input voltage (7-35V)
-    pin GND: ground;      // Ground
-    pin OUT: power out;   // Regulated 5V output @ 1A
+    pin IN: power in @metadata(
+        function="PowerIn",
+        description="Input voltage (7-35V)",
+        electrical_type="power_input",
+        voltage_range="7V-35V"
+    );     // Input voltage (7-35V)
+    pin GND: ground @metadata(
+        function="Ground",
+        description="Ground reference",
+        electrical_type="ground"
+    );      // Ground
+    pin OUT: power out @metadata(
+        function="PowerOut",
+        description="Regulated 5V output @ 1A",
+        electrical_type="power_output",
+        voltage="5V",
+        current="1A"
+    );   // Regulated 5V output @ 1A
     
     // Additional pins for enhanced versions
-    pin EN: signal in when package == "TO-220-5" || package == "TO-263-5";   // Enable pin
-    pin ADJ: signal in when package == "TO-220-5" || package == "TO-263-5";  // Adjust pin
+    pin EN: signal in when package == "TO-220-5" || package == "TO-263-5" @metadata(
+        function="Enable",
+        description="Enable input",
+        electrical_type="control_input"
+    );   // Enable pin
+    pin ADJ: signal in when package == "TO-220-5" || package == "TO-263-5" @metadata(
+        function="Adjust",
+        description="Output voltage adjust",
+        electrical_type="control_input"
+    );  // Adjust pin
     
     // LM7805-specific parameters
     const LM7805_PARAMS: LinearRegulatorParams = {

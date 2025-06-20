@@ -1,37 +1,32 @@
-//! Shared pin metadata types used by both analyzer and SPICE
+//! Shared pin metadata types used across the entire BHDL toolchain
+//! 
+//! This module provides the authoritative pin metadata structures that enable 
+//! component role detection and electrical analysis without relying on naming conventions.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Pin metadata that can be attached to component pins
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PinMetadata {
-    /// Functional role of the pin
-    pub function: Option<String>,
-    /// Maximum voltage rating
-    pub max_voltage: Option<String>,
-    /// Maximum current rating  
-    pub max_current: Option<String>,
-    /// Slew rate characteristic
-    pub slew_rate: Option<String>,
-    /// Additional key-value metadata
-    pub extra: HashMap<String, String>,
-}
-
-impl Default for PinMetadata {
-    fn default() -> Self {
-        Self {
-            function: None,
-            max_voltage: None,
-            max_current: None,
-            slew_rate: None,
-            extra: HashMap::new(),
-        }
-    }
-}
-
-/// Pin function enumeration for known pin types
+/// Pin direction for netlist pins
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum PinDirection {
+    Input,
+    Output,
+    Bidirectional,
+}
+
+/// Pin type for semantic classification
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum PinType {
+    Signal,
+    Power,
+    Ground,
+    Clock,
+    Reset,
+    Enable,
+}
+
+/// Pin function types for components
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PinFunction {
     // Power-related
     PowerInput,
@@ -45,28 +40,98 @@ pub enum PinFunction {
     Enable,
     Shutdown,
     
+    // Bootstrap and compensation
+    Bootstrap,
+    SoftStart,
+    Compensation,
+    
     // Feedback/Sensing
     FeedbackInput,
     CurrentSense,
     VoltageSense,
     
-    // Communication
+    // Communication/Digital
     DataInput,
     DataOutput,
     Clock,
     ChipSelect,
+    Reset,
     
     // Analog
     AnalogInput,
     AnalogOutput,
-    Bypass,
-    Compensation,
+    ErrorAmplifierOut,
     
-    // Generic
+    // Passive and generic
+    Bypass,
+    Signal,
+    Passive,
     Input,
     Output,
     Bidirectional,
+    
+    // Unknown/unspecified function
+    Unknown,
 }
+
+/// Electrical characteristics of a pin
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PinElectricalData {
+    /// Voltage range (min, max) in volts
+    pub voltage_range: Option<(f64, f64)>,
+    /// Current rating in amperes
+    pub max_current: Option<f64>,
+    /// Impedance in ohms (for inputs)
+    pub impedance: Option<f64>,
+    /// dV/dt rating in V/µs (for switch nodes)
+    pub dv_dt_rating: Option<f64>,
+    /// Frequency characteristics in Hz
+    pub frequency_range: Option<(f64, f64)>,
+}
+
+impl Default for PinElectricalData {
+    fn default() -> Self {
+        Self {
+            voltage_range: None,
+            max_current: None,
+            impedance: None,
+            dv_dt_rating: None,
+            frequency_range: None,
+        }
+    }
+}
+
+/// Comprehensive pin metadata structure
+/// This is the authoritative pin metadata structure used throughout the BHDL toolchain
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PinMetadata {
+    /// Logical direction of the pin
+    pub direction: PinDirection,
+    /// Semantic type of the pin
+    pub pin_type: PinType,
+    /// Functional role of the pin
+    pub function: Option<PinFunction>,
+    /// Electrical characteristics
+    pub electrical: PinElectricalData,
+    /// Additional electrical specifications as key-value pairs
+    pub electrical_specs: HashMap<String, String>,
+    /// Documentation/description
+    pub documentation: Option<String>,
+}
+
+impl Default for PinMetadata {
+    fn default() -> Self {
+        Self {
+            direction: PinDirection::Bidirectional,
+            pin_type: PinType::Signal,
+            function: None,
+            electrical: PinElectricalData::default(),
+            electrical_specs: HashMap::new(),
+            documentation: None,
+        }
+    }
+}
+
 
 impl PinFunction {
     /// Parse a pin function from a string

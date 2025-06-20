@@ -110,12 +110,11 @@ impl SpiceAnalysisAugmenter {
             }
         }
         
-        // Create role detector with AST metadata
+        // Create role detector with AST metadata from unified model
         let detector = ComponentRoleDetector::with_ast_metadata(
             circuit,
             netlist,
             instance_mapping,
-            analysis_data,
         );
         
         // Detect all component roles

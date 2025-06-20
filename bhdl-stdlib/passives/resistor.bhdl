@@ -18,8 +18,16 @@ module Res(
     tolerance: percentage = 5%, 
     package: string = "0805"
 ) {
-    pin 1: signal inout;
-    pin 2: signal inout;
+    pin 1: signal inout @metadata(
+        function="Terminal",
+        description="First terminal of resistor",
+        electrical_type="passive"
+    );
+    pin 2: signal inout @metadata(
+        function="Terminal", 
+        description="Second terminal of resistor",
+        electrical_type="passive"
+    );
     
     // Package-specific power ratings and voltage limits
     const RESISTOR_0402_PARAMS: ResistorParams = {
