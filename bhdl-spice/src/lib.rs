@@ -19,6 +19,7 @@ pub mod model_factory;
 pub mod model_extractor;
 pub mod netlist_converter;
 pub mod pin_metadata;
+pub mod pin_metadata_integration;
 pub mod stability;
 
 pub use circuit::{Circuit, Node, Branch, NodeId, ComponentId, Component};
