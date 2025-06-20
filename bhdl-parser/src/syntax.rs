@@ -160,6 +160,8 @@ pub enum SyntaxKind {
     ASSIGN_STMT,       // assign NetRef = Expression;
     NET_REF,           // Reference to a net name
     PIN_REF,           // instance.pin[range] or net_name[range]
+    PIN_METADATA,      // Pin metadata annotation @metadata(...)
+    METADATA_PAIR,     // Key-value pair in metadata
     CONSTRAINT_TARGET, // Node for the target(s) in constrain()
     BUS_SUFFIX,        // [index] or [high:low]
     RANGE_EXPR,        // start to end

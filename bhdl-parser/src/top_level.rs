@@ -204,10 +204,63 @@ impl<'t> Parser<'t> {
             self.parse_expression(); // Parse the condition
         }
         
+        // Parse optional @metadata annotation
+        if self.peek() == Some(SyntaxKind::AT) {
+            self.parse_pin_metadata();
+        }
+        
         self.expect(SyntaxKind::SEMI);
         self.builder.finish_node();
     }
 
+    // Parse pin metadata annotation: @metadata(key=value, ...)
+    fn parse_pin_metadata(&mut self) {
+        self.builder.start_node(SyntaxKind::PIN_METADATA.into());
+        self.expect(SyntaxKind::AT);
+        
+        // Expect 'metadata' keyword
+        if self.peek() == Some(SyntaxKind::IDENT) {
+            let text = self.tokens[self.pos].1.clone();
+            if text == "metadata" {
+                self.bump();
+            } else {
+                self.error("Expected 'metadata' after @".to_string());
+            }
+        }
+        
+        // Parse parameter list
+        self.expect(SyntaxKind::L_PAREN);
+        
+        // Parse key-value pairs
+        while self.peek() != Some(SyntaxKind::R_PAREN) && self.peek().is_some() {
+            self.builder.start_node(SyntaxKind::METADATA_PAIR.into());
+            
+            // Key
+            self.expect(SyntaxKind::IDENT);
+            self.expect(SyntaxKind::EQ);
+            
+            // Value (could be string or identifier)
+            if self.peek() == Some(SyntaxKind::STRING) {
+                self.bump();
+            } else {
+                self.parse_expression();
+            }
+            
+            self.builder.finish_node();
+            
+            // Check for comma
+            if self.peek() == Some(SyntaxKind::COMMA) {
+                self.bump();
+            } else if self.peek() != Some(SyntaxKind::R_PAREN) {
+                self.error("Expected ',' or ')' in metadata".to_string());
+                break;
+            }
+        }
+        
+        self.expect(SyntaxKind::R_PAREN);
+        self.builder.finish_node();
+    }
+    
     // Parse module metadata (@attributes)
     fn parse_module_metadata(&mut self) {
         self.expect(SyntaxKind::AT);

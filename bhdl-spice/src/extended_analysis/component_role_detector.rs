@@ -30,6 +30,7 @@ use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
 use bhdl_netlist::{Netlist, InstanceId};
 use bhdl_netlist::types::{PinDirection, PinType};
+use bhdl_analyzer::AnalysisResult;
 
 /// Functional role of a component in relation to an IC
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Eq, Hash)]
@@ -123,10 +124,12 @@ pub struct ComponentRoleDetector {
     pub circuit: Circuit,
     ic_components: Vec<ComponentId>,
     simulation_engine: Option<SimulationEngine>,
-    pin_database: ComponentPinDatabase,
+    pub pin_database: ComponentPinDatabase,
     instance_to_component: HashMap<InstanceId, ComponentId>,
-    // Map from ComponentId to connected IC pins (IC ComponentId, pin name, pin direction)
-    component_to_ic_pins: HashMap<ComponentId, Vec<(ComponentId, String, PinDirection, PinType)>>,
+    // Map from ComponentId to connected IC pins (IC ComponentId, pin name, pin direction, pin type, optional pin function)
+    component_to_ic_pins: HashMap<ComponentId, Vec<(ComponentId, String, PinDirection, PinType, Option<PinFunction>)>>,
+    // Map from (module_type, pin_name) to PinFunction from AST metadata
+    ast_pin_metadata: HashMap<(String, String), PinFunction>,
 }
 
 impl ComponentRoleDetector {
@@ -140,6 +143,7 @@ impl ComponentRoleDetector {
             pin_database: ComponentPinDatabase::new_with_defaults(),
             instance_to_component: HashMap::new(),
             component_to_ic_pins: HashMap::new(),
+            ast_pin_metadata: HashMap::new(),
         }
     }
     
@@ -157,7 +161,41 @@ impl ComponentRoleDetector {
             pin_database: ComponentPinDatabase::new_with_defaults(),
             instance_to_component,
             component_to_ic_pins,
+            ast_pin_metadata: HashMap::new(),
         }
+    }
+    
+    /// Create a new detector with netlist and AST metadata
+    pub fn with_ast_metadata(
+        circuit: Circuit, 
+        netlist: &Netlist, 
+        instance_to_component: HashMap<InstanceId, ComponentId>,
+        analysis_result: &AnalysisResult,
+    ) -> Self {
+        let ic_components = Self::find_ic_components(&circuit);
+        
+        // Extract IC pin connection information from the netlist
+        let component_to_ic_pins = Self::extract_ic_connections_with_metadata(
+            &circuit, netlist, &instance_to_component, &ic_components, analysis_result
+        );
+        
+        // Extract pin metadata from analysis result
+        let ast_pin_metadata = Self::extract_ast_pin_metadata(analysis_result);
+        
+        let mut detector = Self {
+            circuit,
+            ic_components,
+            simulation_engine: None,
+            pin_database: ComponentPinDatabase::new_with_defaults(),
+            instance_to_component,
+            component_to_ic_pins,
+            ast_pin_metadata,
+        };
+        
+        // Update pin database with AST metadata
+        detector.update_pin_database_from_ast();
+        
+        detector
     }
     
     /// Extract connections between components and IC pins from the netlist
@@ -182,7 +220,7 @@ impl ComponentRoleDetector {
                             if ic_components.contains(&comp_id) {
                                 // This is an IC pin
                                 if let Some(pin) = netlist.pins.get(pin_inst.pin_def) {
-                                    ic_pins_on_net.push((comp_id, pin.name.clone(), pin.direction, pin.pin_type));
+                                    ic_pins_on_net.push((comp_id, pin.name.clone(), pin.direction, pin.pin_type, None));
                                 }
                             } else {
                                 // This is a regular component
@@ -204,6 +242,149 @@ impl ComponentRoleDetector {
         }
         
         connections
+    }
+    
+    /// Extract connections with metadata from AST
+    fn extract_ic_connections_with_metadata(
+        circuit: &Circuit,
+        netlist: &Netlist,
+        instance_to_component: &HashMap<InstanceId, ComponentId>,
+        ic_components: &[ComponentId],
+        analysis_result: &AnalysisResult,
+    ) -> HashMap<ComponentId, Vec<(ComponentId, String, PinDirection, PinType, Option<PinFunction>)>> {
+        let mut connections = HashMap::new();
+        
+        // Build a map from instance ID to module type
+        let mut instance_to_module_type = HashMap::new();
+        for (instance_id, instance) in &netlist.instances {
+            if let Some(module) = netlist.modules.get(&instance.module) {
+                instance_to_module_type.insert(*instance_id, module.name.clone());
+            }
+        }
+        
+        // For each net, find components that connect to IC pins
+        for (_net_id, net) in &netlist.nets {
+            let mut components_on_net = Vec::new();
+            let mut ic_pins_on_net = Vec::new();
+            
+            // Collect all components and IC pins on this net
+            for conn in &net.connections {
+                if let bhdl_netlist::ConnectionPoint::PinInstance(pin_inst_id) = conn {
+                    if let Some(pin_inst) = netlist.pin_instances.get(*pin_inst_id) {
+                        if let Some(&comp_id) = instance_to_component.get(&pin_inst.instance) {
+                            if ic_components.contains(&comp_id) {
+                                // This is an IC pin
+                                if let Some(pin) = netlist.pins.get(pin_inst.pin_def) {
+                                    // Look up pin function from AST metadata
+                                    let pin_function = if let Some(module_type) = instance_to_module_type.get(&pin_inst.instance) {
+                                        Self::lookup_pin_function(module_type, &pin.name, analysis_result)
+                                    } else {
+                                        None
+                                    };
+                                    
+                                    ic_pins_on_net.push((comp_id, pin.name.clone(), pin.direction, pin.pin_type, pin_function));
+                                }
+                            } else {
+                                // This is a regular component
+                                components_on_net.push(comp_id);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Now connect each component to all IC pins on the same net
+            for comp_id in components_on_net {
+                for ic_pin_info in &ic_pins_on_net {
+                    connections.entry(comp_id)
+                        .or_insert_with(Vec::new)
+                        .push(ic_pin_info.clone());
+                }
+            }
+        }
+        
+        connections
+    }
+    
+    /// Extract pin metadata from analysis result
+    fn extract_ast_pin_metadata(analysis_result: &AnalysisResult) -> HashMap<(String, String), PinFunction> {
+        let mut metadata = HashMap::new();
+        
+        // Extract module definitions from analysis result
+        if let Some(modules) = &analysis_result.module_definitions {
+            for (module_name, module_def) in modules {
+                // Extract pin metadata from module definition
+                if let Some(pins) = &module_def.pins {
+                    for (pin_name, pin_info) in pins {
+                        if let Some(func) = Self::parse_pin_function(pin_info) {
+                            metadata.insert((module_name.clone(), pin_name.clone()), func);
+                        }
+                    }
+                }
+            }
+        }
+        
+        metadata
+    }
+    
+    /// Parse pin function from pin metadata
+    fn parse_pin_function(pin_info: &HashMap<String, String>) -> Option<PinFunction> {
+        // First check explicit function metadata
+        if let Some(func_str) = pin_info.get("function") {
+            return match func_str.as_str() {
+                "PowerIn" => Some(PinFunction::PowerIn),
+                "PowerOut" => Some(PinFunction::PowerOut),
+                "SwitchNode" => Some(PinFunction::SwitchNode),
+                "Bootstrap" => Some(PinFunction::Bootstrap),
+                "Feedback" => Some(PinFunction::Feedback),
+                "Compensation" => Some(PinFunction::Compensation),
+                "SoftStart" => Some(PinFunction::SoftStart),
+                "Enable" => Some(PinFunction::Enable),
+                "CurrentSense" => Some(PinFunction::CurrentSense),
+                "Ground" => Some(PinFunction::Ground),
+                "Signal" => Some(PinFunction::Signal),
+                _ => None,
+            };
+        }
+        
+        // Fall back to inferring from pin type
+        match (pin_info.get("type"), pin_info.get("direction")) {
+            (Some(typ), Some(dir)) if typ == "power" && dir == "in" => Some(PinFunction::PowerIn),
+            (Some(typ), Some(dir)) if typ == "power" && dir == "out" => Some(PinFunction::PowerOut),
+            (Some(typ), _) if typ == "ground" => Some(PinFunction::Ground),
+            (Some(typ), _) if typ == "signal" => Some(PinFunction::Signal),
+            _ => None,
+        }
+    }
+    
+    /// Look up pin function from analysis result
+    fn lookup_pin_function(module_type: &str, pin_name: &str, analysis_result: &AnalysisResult) -> Option<PinFunction> {
+        if let Some(modules) = &analysis_result.module_definitions {
+            if let Some(module_def) = modules.get(module_type) {
+                if let Some(pins) = &module_def.pins {
+                    if let Some(pin_info) = pins.get(pin_name) {
+                        return Self::parse_pin_function(pin_info);
+                    }
+                }
+            }
+        }
+        None
+    }
+    
+    /// Update pin database with AST metadata
+    fn update_pin_database_from_ast(&mut self) {
+        for ((module_type, pin_name), function) in &self.ast_pin_metadata {
+            // Add to pin database with default electrical data
+            self.pin_database.add_pin_metadata(
+                module_type,
+                pin_name,
+                crate::pin_metadata::PinMetadata {
+                    function: function.clone(),
+                    electrical: Default::default(),
+                    description: None,
+                }
+            );
+        }
     }
     
     /// Initialize the simulation engine for real analysis
@@ -855,10 +1036,17 @@ impl ComponentRoleDetector {
     }
     
     fn is_connected_to_ic_input(&self, component_id: ComponentId) -> bool {
-        // First try to use extracted pin connection information
+        // First try to use extracted pin connection information with metadata
         if let Some(ic_pins) = self.component_to_ic_pins.get(&component_id) {
-            for (_ic_id, pin_name, pin_direction, pin_type) in ic_pins {
-                // Check if this is a power input pin
+            for (_ic_id, pin_name, pin_direction, pin_type, pin_function) in ic_pins {
+                // Check pin function first (most reliable)
+                if let Some(func) = pin_function {
+                    if *func == PinFunction::PowerIn {
+                        return true;
+                    }
+                }
+                
+                // Fall back to pin direction/type
                 if *pin_direction == PinDirection::Power && 
                    *pin_type == PinType::Power &&
                    pin_name.to_uppercase() == "IN" {
@@ -896,10 +1084,17 @@ impl ComponentRoleDetector {
     }
     
     fn is_connected_to_ic_output(&self, component_id: ComponentId) -> bool {
-        // First try to use extracted pin connection information
+        // First try to use extracted pin connection information with metadata
         if let Some(ic_pins) = self.component_to_ic_pins.get(&component_id) {
-            for (_ic_id, pin_name, pin_direction, pin_type) in ic_pins {
-                // Check if this is a power output pin
+            for (_ic_id, pin_name, pin_direction, pin_type, pin_function) in ic_pins {
+                // Check pin function first (most reliable)
+                if let Some(func) = pin_function {
+                    if *func == PinFunction::PowerOut {
+                        return true;
+                    }
+                }
+                
+                // Fall back to pin direction/type
                 if *pin_direction == PinDirection::Power && 
                    *pin_type == PinType::Power &&
                    pin_name.to_uppercase() == "OUT" {
@@ -1514,7 +1709,7 @@ impl ComponentRoleDetector {
     }
     
     fn is_switch_node(&self, node_id: NodeId) -> bool {
-        // Primary method: Check if any connected IC has a switch node pin
+        // Primary method: Check if any connected IC has a switch node pin with metadata
         let mut connected_components = Vec::new();
         for (comp_id, comp) in self.circuit.branches() {
             if comp.nodes().contains(&node_id) {
@@ -1522,20 +1717,34 @@ impl ComponentRoleDetector {
             }
         }
         
-        // First, check pin metadata for any connected controller
+        // First, check pin metadata for any connected IC
         for (comp_id, comp) in &connected_components {
-            if matches!(comp.component_type(), 
-                "BuckController" | "BoostController" | "FlybackController" | "ForwardController") {
+            if self.ic_components.contains(comp_id) {
+                // Check if this IC has any connections with SwitchNode function
+                // that connect to components on this node
+                for (other_comp_id, _) in &connected_components {
+                    if other_comp_id != comp_id {
+                        if let Some(ic_pins) = self.component_to_ic_pins.get(other_comp_id) {
+                            for (ic_id, _pin_name, _pin_dir, _pin_type, pin_function) in ic_pins {
+                                if ic_id == comp_id {
+                                    if let Some(func) = pin_function {
+                                        if *func == PinFunction::SwitchNode {
+                                            return true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 
-                // Get pin metadata for this component
-                let pin_metadata = self.circuit.get_component_pin_metadata(*comp_id, &self.pin_database);
-                
-                // Check if any pin connected to this node has SwitchNode function
-                // Note: In a real implementation, we'd need to know which specific pin connects to this node
-                // For now, we check if the component type has a switch node pin
-                if self.pin_database.pin_has_function(comp.component_type(), "SW", &PinFunction::SwitchNode) {
-                    // This is definitely a switch node based on pin metadata
-                    return true;
+                // Also check the pin database
+                if matches!(comp.component_type(), 
+                    "BuckController" | "BoostController" | "FlybackController" | "ForwardController") {
+                    if self.pin_database.pin_has_function(comp.component_type(), "SW", &PinFunction::SwitchNode) {
+                        // This is definitely a switch node based on pin metadata
+                        return true;
+                    }
                 }
             }
         }

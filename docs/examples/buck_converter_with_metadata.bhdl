@@ -1,0 +1,168 @@
+// Buck converter with explicit pin metadata for component role detection
+// This example shows how pin metadata improves SPICE analysis
+
+board BuckConverterBoard {
+    // Input power supply
+    power VIN = 12V @ 2A;
+    ground GND;
+    
+    // Buck controller with comprehensive pin metadata
+    U1: BuckController() {
+        .VIN -> @VIN;
+        .SW -> @switch_node;
+        .GND -> @GND;
+        .FB -> @feedback_point;
+        .COMP -> @comp_net;
+        .EN -> @VIN;  // Always enabled
+    }
+    
+    // Power stage components
+    L1: Inductor(10uH) {
+        .1 -> @switch_node;
+        .2 -> @VOUT;
+    }
+    
+    D1: SchottkyDiode(SS34) {
+        .K -> @switch_node;
+        .A -> @GND;
+    }
+    
+    // Input filtering
+    C1: Cap(100uF, voltage=25V) {
+        .1 -> @VIN;
+        .2 -> @GND;
+    }
+    
+    // Output filtering
+    C2: Cap(220uF, voltage=10V) {
+        .1 -> @VOUT;
+        .2 -> @GND;
+    }
+    
+    // Feedback network
+    R1: Res(10k, tolerance=1%) {
+        .1 -> @VOUT;
+        .2 -> @feedback_point;
+    }
+    
+    R2: Res(2.2k, tolerance=1%) {
+        .1 -> @feedback_point;
+        .2 -> @GND;
+    }
+    
+    // Compensation network
+    R3: Res(15k) {
+        .1 -> @feedback_point;
+        .2 -> @comp_net;
+    }
+    
+    C3: Cap(10nF, type="C0G") {
+        .1 -> @comp_net;
+        .2 -> @GND;
+    }
+    
+    // Load for testing
+    Rload: Res(10) {
+        .1 -> @VOUT;
+        .2 -> @GND;
+    }
+}
+
+// Buck controller module with detailed pin metadata
+module BuckController() {
+    // Power input with metadata
+    pin VIN: power in @metadata(
+        function="PowerIn",
+        voltage_range="4.5V-40V",
+        max_current="100mA"
+    );
+    
+    // Switch node output with high dV/dt
+    pin SW: power out @metadata(
+        function="SwitchNode",
+        max_voltage="42V",
+        max_current="3A",
+        slew_rate="fast",
+        dv_dt="100V/us"
+    );
+    
+    // Feedback input
+    pin FB: signal in @metadata(
+        function="Feedback", 
+        voltage_range="0V-5V",
+        impedance="high",
+        threshold="0.8V"
+    );
+    
+    // Compensation pin
+    pin COMP: signal out @metadata(
+        function="Compensation",
+        voltage_range="0V-3.3V",
+        impedance="10kohm"
+    );
+    
+    // Enable input
+    pin EN: signal in @metadata(
+        function="Enable",
+        voltage_range="0V-40V",
+        threshold="1.2V",
+        active="high"
+    );
+    
+    // Ground reference
+    pin GND: ground @metadata(
+        function="Ground"
+    );
+}
+
+// Additional SMPS controller examples with pin metadata
+
+module BoostController() {
+    pin VIN: power in @metadata(function="PowerIn");
+    pin SW: power inout @metadata(
+        function="SwitchNode",
+        max_voltage="60V",
+        dv_dt="50V/us"
+    );
+    pin BST: power @metadata(
+        function="Bootstrap",
+        description="Bootstrap capacitor connection"
+    );
+    pin FB: signal in @metadata(function="Feedback");
+    pin SS: signal @metadata(
+        function="SoftStart",
+        description="Soft-start timing capacitor"
+    );
+    pin GND: ground @metadata(function="Ground");
+}
+
+module FlybackController() {
+    pin VIN: power in @metadata(function="PowerIn");
+    pin GATE: signal out @metadata(
+        function="GateDriver",
+        drive_strength="2A",
+        voltage_range="0V-15V"
+    );
+    pin CS: signal in @metadata(
+        function="CurrentSense",
+        sensitivity="100mV/A",
+        max_voltage="1V"
+    );
+    pin FB: signal in @metadata(function="Feedback");
+    pin COMP: signal out @metadata(function="Compensation");
+    pin GND: ground @metadata(function="Ground");
+}
+
+// Linear regulator with pin metadata
+module LM7805() {
+    pin IN: power in @metadata(
+        function="PowerIn",
+        voltage_range="7V-35V"
+    );
+    pin OUT: power out @metadata(
+        function="PowerOut",
+        voltage="5V",
+        max_current="1.5A"
+    );
+    pin GND: ground @metadata(function="Ground");
+}

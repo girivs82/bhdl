@@ -41,7 +41,7 @@ pub trait HasName: AstNode<Language = BhdlLanguage> {
 pub use source_file::SourceFile;
 pub use items::{Board, Module, ComponentDef, InterfaceDef, TypedefDef, TypedefBase, ParamList};
 pub use blocks::{LayerStackupBlock, DefaultDesignRulesBlock, ConstrainBlock, GenerateBlock, ForLoopGenerate, IfGenerate, LayerDef};
-pub use common::{ParamAssign, PortDecl, PinDecl, NetDecl, TypeRef, BusSuffix, RangeExpr, Value, ComponentInst, PinRef, NetRef, IdentRef, SimpleIdentRef, ComponentType, PortDirection, ParamDecl, ParamAssignBlock, ParamPlaceholder};
+pub use common::{ParamAssign, PortDecl, PinDecl, NetDecl, TypeRef, BusSuffix, RangeExpr, Value, ComponentInst, PinRef, NetRef, IdentRef, SimpleIdentRef, ComponentType, PortDirection, ParamDecl, ParamAssignBlock, ParamPlaceholder, PinMetadata, MetadataPair};
 pub use expr::{Expr, PrefixExpr, BinaryExpr, TernaryExpr, FunctionCallExpr, ArgumentList, FlowExpr as ExprFlowExpr, ComponentInstExpr};
 pub use flow::{FlowStmt, FlowExpr, FlowElement, ComponentInstantiation, GenerateStmt, ConditionalStmt, ConditionalExpr, AssignStmt};
 pub use visitor::{AstVisitor, ConstructCounter, ComponentTypeCollector};

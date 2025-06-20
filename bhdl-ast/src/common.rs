@@ -175,6 +175,7 @@ impl HasName for PinDecl {
 impl PinDecl {
     pub fn type_ref(&self) -> Option<TypeRef> { self.0.children().find_map(TypeRef::cast) }
     pub fn bus_suffix(&self) -> Option<BusSuffix> { self.0.children().find_map(BusSuffix::cast) }
+    pub fn metadata(&self) -> Option<PinMetadata> { self.0.children().find_map(PinMetadata::cast) }
 }
 
 // --- Net Declaration ---
@@ -263,6 +264,69 @@ impl ParamPlaceholder {
     /// Get constraint assignments if present (for ?, constraint=value syntax)
     pub fn constraints(&self) -> impl Iterator<Item = ParamAssign> {
         self.0.children().filter_map(ParamAssign::cast)
+    }
+}
+
+// --- Pin Metadata --- @metadata(key=value, ...)
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PinMetadata(pub(crate) SyntaxNode<BhdlLanguage>);
+impl AstNode for PinMetadata {
+    type Language = BhdlLanguage;
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::PIN_METADATA }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { 
+        if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } 
+    }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+impl PinMetadata {
+    /// Get all metadata pairs
+    pub fn pairs(&self) -> impl Iterator<Item = MetadataPair> {
+        self.0.children().filter_map(MetadataPair::cast)
+    }
+    
+    /// Get a specific metadata value by key
+    pub fn get(&self, key: &str) -> Option<String> {
+        self.pairs()
+            .find(|pair| pair.key().map(|k| k.text() == key).unwrap_or(false))
+            .and_then(|pair| pair.value())
+    }
+}
+
+// --- Metadata Pair --- key=value
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MetadataPair(pub(crate) SyntaxNode<BhdlLanguage>);
+impl AstNode for MetadataPair {
+    type Language = BhdlLanguage;
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::METADATA_PAIR }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { 
+        if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } 
+    }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+impl MetadataPair {
+    /// Get the key identifier
+    pub fn key(&self) -> Option<SyntaxToken<BhdlLanguage>> {
+        self.0.children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .find(|t| t.kind() == SyntaxKind::IDENT)
+    }
+    
+    /// Get the value as a string
+    pub fn value(&self) -> Option<String> {
+        // First check for a STRING token
+        if let Some(string_token) = self.0.children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .find(|t| t.kind() == SyntaxKind::STRING)
+        {
+            // Remove quotes from string
+            let text = string_token.text();
+            return Some(text.trim_matches('"').to_string());
+        }
+        
+        // Otherwise get the expression text after the '='
+        self.0.children()
+            .find_map(Expr::cast)
+            .map(|expr| expr.syntax().text().to_string())
     }
 }
 
