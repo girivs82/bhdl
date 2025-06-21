@@ -35,6 +35,8 @@ pub enum SyntaxKind {
     MINUS,   // -
     STAR,    // *
     SLASH,   // /
+    PLUS_EQ,  // +=
+    MINUS_EQ, // -=
     PERCENT, // %
     AMPERSAND, // &
     PIPE,    // |
@@ -212,6 +214,8 @@ pub enum SyntaxKind {
     MODULE_INST,       // Module instantiation within a module
     PORT_MAPPING,      // Single port mapping: PIN <- signal;
     ATTRIBUTE_DECL,    // Attribute declaration: attribute name = expression;
+    WHEN_BLOCK,        // When block for behavioral conditions
+    ATTRIBUTE_ASSIGNMENT, // Attribute assignment in when blocks
     SCOPED_ATTRIBUTE,  // Scoped attribute: attribute path.to.attr = value;
     ATTRIBUTE_PATH,    // Attribute path: path.to.attribute
     LEFT_ARROW,        // <- (new arrow for consistent port mapping)

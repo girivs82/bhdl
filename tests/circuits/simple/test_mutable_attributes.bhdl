@@ -1,0 +1,36 @@
+// Test mutable attribute detection in when blocks
+board test_mutable_attributes {
+    // Static attributes
+    attribute threshold = 2.5;
+    attribute sample_period = 100;
+    
+    // Attributes that will be mutated
+    attribute counter = 0;
+    attribute accumulator = 0;
+    attribute state = 0;
+    
+    // Power and ground
+    power VCC = 5V @ 1A;
+    ground GND;
+    
+    // When blocks that modify attributes
+    when (VCC > threshold) {
+        attribute counter = counter + 1;
+        attribute state = 1;
+    }
+    
+    when (VCC < threshold) {
+        attribute counter = counter - 1;
+        attribute state = 0;
+    }
+    
+    // Nested when block
+    when (counter > 10) {
+        attribute accumulator += counter;
+        
+        when (accumulator > 100) {
+            attribute accumulator = 0;
+            attribute counter = 0;
+        }
+    }
+}

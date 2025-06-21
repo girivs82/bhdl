@@ -118,9 +118,22 @@ impl AttributeAnalyzer {
     
     /// Analyze when blocks to find mutable attributes
     fn analyze_when_blocks(&mut self, root: &SyntaxNode<BhdlLanguage>) {
-        // TODO: Parse when blocks and find attribute assignments
-        // For now, we'll just mark attributes that appear on the LHS of assignments
-        // This requires parsing when block statements
+        use bhdl_ast::behavioral::{find_when_blocks, find_mutable_attributes};
+        
+        // Find all attributes modified in when blocks
+        let mutable_attrs = find_mutable_attributes(root);
+        
+        // Mark these attributes as mutable
+        for attr_name in mutable_attrs {
+            self.mutable_attributes.insert(attr_name.clone());
+            
+            // Update the attribute info if it exists
+            if let Some(info) = self.attributes.get_mut(&attr_name) {
+                info.is_mutable = true;
+                info.dependencies.is_mutable = true;
+                info.attribute_type = AttributeType::Mutable;
+            }
+        }
     }
     
     /// Build the dependency graph from collected attributes

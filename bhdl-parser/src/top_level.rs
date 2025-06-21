@@ -113,6 +113,7 @@ impl<'t> Parser<'t> {
                 Some(SyntaxKind::GROUND_KW) => self.parse_ground_decl(),
                 Some(SyntaxKind::GENERATE_KW) => self.parse_generate_block(),
                 Some(SyntaxKind::ATTRIBUTE_KW) => self.parse_attribute_decl(),
+                Some(SyntaxKind::WHEN_KW) => self.parse_when_block(),
                 Some(SyntaxKind::IDENT) => {
                     // Check if this is a module/component instantiation or connection
                     use crate::v2_fixes::NamedDeclarationType;
@@ -326,6 +327,75 @@ impl<'t> Parser<'t> {
         self.builder.finish_node();
     }
 
+    // Parse when block: when (condition) { statements }
+    fn parse_when_block(&mut self) {
+        self.builder.start_node(SyntaxKind::WHEN_BLOCK.into());
+        self.expect(SyntaxKind::WHEN_KW);
+        self.expect(SyntaxKind::L_PAREN);
+        self.parse_expression(); // Parse the condition
+        self.expect(SyntaxKind::R_PAREN);
+        self.expect(SyntaxKind::L_BRACE);
+        
+        // Parse when block body
+        self.parse_when_block_body();
+        
+        self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+    
+    // Parse when block body
+    fn parse_when_block_body(&mut self) {
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) => break,
+                Some(SyntaxKind::ATTRIBUTE_KW) => {
+                    // Attribute assignment: attribute name = expression;
+                    self.parse_attribute_assignment();
+                }
+                Some(SyntaxKind::WHEN_KW) => {
+                    // Nested when block
+                    self.parse_when_block();
+                }
+                Some(_) => {
+                    self.error("Unexpected token in when block".to_string());
+                    self.bump_any();
+                }
+                None => {
+                    self.error("Unexpected end of file in when block".to_string());
+                    break;
+                }
+            }
+        }
+    }
+    
+    // Parse attribute assignment: attribute name = expression;
+    fn parse_attribute_assignment(&mut self) {
+        self.builder.start_node(SyntaxKind::ATTRIBUTE_ASSIGNMENT.into());
+        self.expect(SyntaxKind::ATTRIBUTE_KW);
+        self.expect(SyntaxKind::IDENT); // Attribute name
+        
+        // Check for assignment operator
+        match self.peek() {
+            Some(SyntaxKind::EQ) => {
+                self.bump(); // =
+            }
+            Some(SyntaxKind::PLUS_EQ) => {
+                self.bump(); // +=
+            }
+            Some(SyntaxKind::MINUS_EQ) => {
+                self.bump(); // -=
+            }
+            _ => {
+                self.error("Expected assignment operator (=, +=, or -=)".to_string());
+            }
+        }
+        
+        self.parse_expression(); // Attribute value
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+    
     // Parse interface signal: signal name: direction optional?;
     fn parse_interface_signal(&mut self) {
         self.builder.start_node(SyntaxKind::INTERFACE_SIGNAL.into());
