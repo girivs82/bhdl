@@ -21,6 +21,9 @@ pub mod hierarchical_connectivity;
 // Module variant management
 pub mod module_variants;
 
+// Hierarchical reference designator generation
+pub mod hierarchical_refdes;
+
 // Re-export key types
 pub use bhdl_analyzer::types::AnalysisResult;
 pub use bhdl_netlist::{Netlist, ModuleId, InstanceId, NetId, PortId, PinId, PinInstanceId, PinInstance};

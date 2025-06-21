@@ -20,7 +20,9 @@ use crate::helpers::parse_expr_as_i64; // Use helper from local module
 struct Pass1Context {
     current_scope_stack: Vec<SymbolTable>,
     definition_nodes: HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>,
-    current_definition_node: Option<SyntaxNodePtr<BhdlLanguage>>, 
+    current_definition_node: Option<SyntaxNodePtr<BhdlLanguage>>,
+    // Stack to track definition nodes for nested scopes
+    definition_node_stack: Vec<Option<SyntaxNodePtr<BhdlLanguage>>>,
 }
 
 impl Pass1Context {
@@ -29,6 +31,7 @@ impl Pass1Context {
             current_scope_stack: vec![SymbolTable::default()], 
             definition_nodes: HashMap::new(),
             current_definition_node: None,
+            definition_node_stack: Vec::new(),
         }
     }
     
@@ -43,6 +46,8 @@ impl Pass1Context {
     fn push_scope(&mut self, def_node_ptr: SyntaxNodePtr<BhdlLanguage>) { 
         let new_scope = SymbolTable::default();
         self.current_scope_stack.push(new_scope);
+        // Save the current definition node to the stack before updating
+        self.definition_node_stack.push(self.current_definition_node.clone());
         self.current_definition_node = Some(def_node_ptr); 
     }
     
@@ -54,13 +59,8 @@ impl Pass1Context {
             } else {
                  println!("Error: Popped scope without a current definition node.");
             }
-              if let Some(parent_scope) = self.current_scope_stack.last() {
-                 self.current_definition_node = self.definition_nodes.iter()
-                    .find(|(_, scope)| *scope == parent_scope) 
-                    .map(|(ptr, _)| ptr.clone());
-              } else {
-                  self.current_definition_node = None; 
-              }
+            // Restore the previous definition node from the stack
+            self.current_definition_node = self.definition_node_stack.pop().flatten();
         }
     }
 }
@@ -84,6 +84,55 @@ pub fn populate_global_scope_and_build_definition_scopes(source_file: &SourceFil
     });
     context.global_scope_mut().insert(Symbol {
         name: "power".to_string(),
+        kind: SymbolKind::Typedef,
+        span: dummy_range,
+        instance_type_name: None,
+        definition_node_ptr: None,
+        bus_high: None, 
+        bus_low: None,
+        direction: None, 
+        parameter_overrides: None,
+    });
+    
+    // Add common electrical types
+    context.global_scope_mut().insert(Symbol {
+        name: "frequency".to_string(),
+        kind: SymbolKind::Typedef,
+        span: dummy_range,
+        instance_type_name: None,
+        definition_node_ptr: None,
+        bus_high: None, 
+        bus_low: None,
+        direction: None, 
+        parameter_overrides: None,
+    });
+    
+    context.global_scope_mut().insert(Symbol {
+        name: "voltage".to_string(),
+        kind: SymbolKind::Typedef,
+        span: dummy_range,
+        instance_type_name: None,
+        definition_node_ptr: None,
+        bus_high: None, 
+        bus_low: None,
+        direction: None, 
+        parameter_overrides: None,
+    });
+    
+    context.global_scope_mut().insert(Symbol {
+        name: "resistance".to_string(),
+        kind: SymbolKind::Typedef,
+        span: dummy_range,
+        instance_type_name: None,
+        definition_node_ptr: None,
+        bus_high: None, 
+        bus_low: None,
+        direction: None, 
+        parameter_overrides: None,
+    });
+    
+    context.global_scope_mut().insert(Symbol {
+        name: "percentage".to_string(),
         kind: SymbolKind::Typedef,
         span: dummy_range,
         instance_type_name: None,

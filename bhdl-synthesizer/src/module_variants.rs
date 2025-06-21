@@ -249,4 +249,9 @@ impl ModuleVariantManager {
     pub fn get_variants(&self) -> &HashMap<ModuleVariantKey, ModuleId> {
         &self.variants
     }
+    
+    /// Find module definition by name
+    pub fn find_module_definition(&self, module_name: &str) -> Option<&bhdl_ast::Module> {
+        self.module_definitions.get(module_name)
+    }
 }

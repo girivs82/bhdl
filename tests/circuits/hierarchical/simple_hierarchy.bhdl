@@ -1,0 +1,29 @@
+// Simple hierarchical module test
+
+module SimplePWM(frequency: frequency = 100kHz) {
+    pin VCC: power in;
+    pin OUT: signal out;
+}
+
+module SimpleRegulator {
+    pin VIN: power in;
+    pin VOUT: power out;
+    
+    // Simple module instance
+    pwm1: SimplePWM(frequency=500kHz) {
+        VCC <- VIN;
+        OUT -> switch_node;
+    }
+    
+    // Connection
+    switch_node -> VOUT;
+}
+
+board SimpleBoard {
+    power VDD = 5V;
+    
+    reg1: SimpleRegulator {
+        VIN <- VDD;
+        VOUT -> output;
+    }
+}

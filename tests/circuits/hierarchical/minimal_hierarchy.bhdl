@@ -1,0 +1,26 @@
+// Minimal hierarchical module test
+
+module SimplePWM {
+    pin VCC: power in;
+    pin OUT: signal out;
+}
+
+module SimpleRegulator {
+    pin VIN: power in;
+    pin VOUT: power out;
+    
+    // Simple module instance
+    pwm1: SimplePWM {
+        VCC <- VIN;
+        OUT -> VOUT;
+    }
+}
+
+board SimpleBoard {
+    power VDD = 5V;
+    
+    reg1: SimpleRegulator {
+        VIN <- VDD;
+        VOUT -> rail_out;
+    }
+}

@@ -126,6 +126,23 @@ impl<'t> Parser<'t> {
         }
     }
 
+    /// Expect an identifier, but also accept certain keywords that can be used as identifiers in this context
+    pub(crate) fn expect_ident_or_contextual_keyword(&mut self) {
+        match self.peek() {
+            Some(SyntaxKind::IDENT) => self.bump(),
+            // Keywords that can be used as identifiers in certain contexts
+            Some(SyntaxKind::OUTPUT_KW) |
+            Some(SyntaxKind::INPUT_KW) |
+            Some(SyntaxKind::SIGNAL_KW) |
+            Some(SyntaxKind::POWER_KW) |
+            Some(SyntaxKind::GROUND_KW) |
+            Some(SyntaxKind::CLOCK_KW) => self.bump(),
+            _ => {
+                self.error(format!("Expected identifier, found {:?}", self.peek()));
+            }
+        }
+    }
+    
     /// Records a parse error.
     pub(crate) fn error(&mut self, message: String) {
         self.errors.push(ParseError { message });
