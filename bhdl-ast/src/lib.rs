@@ -25,6 +25,7 @@ pub mod semantic_analysis; // Semantic analysis and type checking
 pub mod constraint_resolver; // Constraint resolution and validation
 pub mod v2_statements; // v2.0 statement AST nodes
 pub mod v2_board; // v2.0 board extensions
+pub mod hierarchical; // Hierarchical module support
 
 // Core HasName trait (defined here)
 pub trait HasName: AstNode<Language = BhdlLanguage> {
@@ -39,11 +40,12 @@ pub trait HasName: AstNode<Language = BhdlLanguage> {
 
 // Consolidated Re-exports
 pub use source_file::SourceFile;
-pub use items::{Board, Module, ComponentDef, InterfaceDef, TypedefDef, TypedefBase, ParamList};
+pub use items::{Board, Module, ComponentDef, InterfaceDef, TypedefDef, TypedefBase, ParamList, ModuleParam};
 pub use blocks::{LayerStackupBlock, DefaultDesignRulesBlock, ConstrainBlock, GenerateBlock, ForLoopGenerate, IfGenerate, LayerDef};
 pub use common::{ParamAssign, PortDecl, PinDecl, NetDecl, TypeRef, BusSuffix, RangeExpr, Value, ComponentInst, PinRef, NetRef, IdentRef, SimpleIdentRef, ComponentType, PortDirection, ParamDecl, ParamAssignBlock, ParamPlaceholder, PinMetadata, MetadataPair};
 pub use expr::{Expr, PrefixExpr, BinaryExpr, TernaryExpr, FunctionCallExpr, ArgumentList, FlowExpr as ExprFlowExpr, ComponentInstExpr};
 pub use flow::{FlowStmt, FlowExpr, FlowElement, ComponentInstantiation, GenerateStmt, ConditionalStmt, ConditionalExpr, AssignStmt};
+pub use hierarchical::{ModuleInst, PortMapping, PortPinRef, ConnectionTarget, ScopedAttribute, AttributePath};
 pub use visitor::{AstVisitor, ConstructCounter, ComponentTypeCollector};
 pub use pretty_print::{PrettyPrint, PrettyPrintConfig, PrettyPrintContext};
 pub use validation::{ValidationError, ValidationReport, ValidationContext, Validator, ParameterDef, VariableInfo, validate_board, validate_expression, is_valid_board};

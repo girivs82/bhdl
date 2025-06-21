@@ -201,6 +201,13 @@ pub enum SyntaxKind {
     CONNECTION_LHS,    // Wrapper node for LHS refs
     CONNECTION_RHS,    // Wrapper node for RHS refs
 
+    // Hierarchical module support
+    MODULE_INST,       // Module instantiation within a module
+    PORT_MAPPING,      // Single port mapping: PIN <- signal;
+    SCOPED_ATTRIBUTE,  // Scoped attribute: attribute path.to.attr = value;
+    ATTRIBUTE_PATH,    // Attribute path: path.to.attribute
+    LEFT_ARROW,        // <- (new arrow for consistent port mapping)
+
     // ERROR must be the last variant for the assertion in kind_from_raw
     ERROR = 65534, // Represents a parsing error node
 }

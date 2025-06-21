@@ -363,8 +363,12 @@ impl<'t> Parser<'t> {
         self.expect(SyntaxKind::L_PAREN);
         
         while self.peek() != Some(SyntaxKind::R_PAREN) && self.peek().is_some() {
-            // Could be named or positional parameter
-            if self.peek_nth(1) == Some(SyntaxKind::EQ) {
+            self.skip_trivia();
+            
+            // Check if this is a named parameter by looking ahead
+            let is_named_param = self.is_named_parameter();
+            
+            if is_named_param {
                 // Named parameter
                 self.builder.start_node(SyntaxKind::PARAM_ASSIGN.into());
                 self.expect(SyntaxKind::IDENT);
@@ -387,6 +391,21 @@ impl<'t> Parser<'t> {
         
         self.expect(SyntaxKind::R_PAREN);
         self.builder.finish_node();
+    }
+    
+    // Helper to check if the next tokens form a named parameter (IDENT = ...)
+    fn is_named_parameter(&self) -> bool {
+        if self.peek() != Some(SyntaxKind::IDENT) {
+            return false;
+        }
+        
+        // Look past the identifier for an equals sign
+        let mut pos = self.pos + 1;
+        while pos < self.tokens.len() && self.tokens[pos].0.is_trivia() {
+            pos += 1;
+        }
+        
+        pos < self.tokens.len() && self.tokens[pos].0 == SyntaxKind::EQ
     }
 
     // Parse struct literal in expression context: { field1: value1, field2: value2 }

@@ -191,6 +191,7 @@ pub enum LexerToken {
     String,
 
     #[token("->")] Arrow,
+    #[token("<-")] LeftArrow,   // Left arrow for port mapping
     #[token("<->")] BiArrow,   // Bidirectional connection
     #[token("|>")] FlowOp,     // Flow operator
     #[token("<=>")] InterfaceOp, // Interface connection

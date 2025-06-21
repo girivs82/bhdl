@@ -46,15 +46,47 @@ impl<'t> Parser<'t> {
         // Now determine the type based on what follows
         if pos < self.tokens.len() {
             match self.tokens[pos].0 {
-                // Interface instance: name: TypeName(params)
+                // Module/Component/Interface instance: name: TypeName(params) or name: TypeName { ... }
                 SyntaxKind::IDENT => {
-                    // Look ahead for parentheses (interface with params)
+                    // Look ahead for what follows the type name
                     let mut next_pos = pos + 1;
                     while next_pos < self.tokens.len() && self.tokens[next_pos].0.is_trivia() {
                         next_pos += 1;
                     }
-                    if next_pos < self.tokens.len() && self.tokens[next_pos].0 == SyntaxKind::L_PAREN {
-                        return NamedDeclarationType::InterfaceInstance;
+                    if next_pos < self.tokens.len() {
+                        match self.tokens[next_pos].0 {
+                            SyntaxKind::L_PAREN => {
+                                // Could be interface or component - look further
+                                let mut after_paren = next_pos + 1;
+                                let mut paren_depth = 1;
+                                while after_paren < self.tokens.len() && paren_depth > 0 {
+                                    match self.tokens[after_paren].0 {
+                                        SyntaxKind::L_PAREN => paren_depth += 1,
+                                        SyntaxKind::R_PAREN => paren_depth -= 1,
+                                        _ => {}
+                                    }
+                                    after_paren += 1;
+                                }
+                                // Skip trivia after closing paren
+                                while after_paren < self.tokens.len() && self.tokens[after_paren].0.is_trivia() {
+                                    after_paren += 1;
+                                }
+                                // Check what follows the parentheses
+                                if after_paren < self.tokens.len() {
+                                    match self.tokens[after_paren].0 {
+                                        SyntaxKind::L_BRACE => return NamedDeclarationType::ModuleInstance,
+                                        SyntaxKind::SEMI => return NamedDeclarationType::ComponentInstance,
+                                        _ => return NamedDeclarationType::InterfaceInstance,
+                                    }
+                                }
+                                return NamedDeclarationType::InterfaceInstance;
+                            }
+                            SyntaxKind::L_BRACE => {
+                                // Module instance without params
+                                return NamedDeclarationType::ModuleInstance;
+                            }
+                            _ => {}
+                        }
                     }
                     // Otherwise it's a flow statement
                     return NamedDeclarationType::FlowStatement;
@@ -158,4 +190,6 @@ pub(crate) enum NamedDeclarationType {
     None,
     FlowStatement,
     InterfaceInstance,
+    ModuleInstance,
+    ComponentInstance,
 }
