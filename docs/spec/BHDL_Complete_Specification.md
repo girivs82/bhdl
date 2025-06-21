@@ -695,55 +695,222 @@ This dual-role syntax represents a paradigm shift in hardware description, movin
 
 ## 6. Interface System
 
-### 6.1 Standard Bus Interfaces
+### 6.1 Interface Definition
+
+Interfaces define standardized communication protocols with signals, requirements, and perspectives.
 
 ```bhdl
-// Pre-defined interface types
-interface_types {
-  I2C(voltage, frequency, pullups);
-  SPI(voltage, frequency, mode);
-  UART(voltage, baud_rate, flow_control);
-  DDR3(width, speed, voltage);
-  USB2(speed, power_delivery);
-  PCIe(lanes, generation);
-  GPIO_Header(pins, pitch, assignment);
+// Basic interface definition
+interface I2C {
+    signal SDA: inout;  // Bidirectional data
+    signal SCL: out;    // Clock (master drives)
+}
+
+// Parameterized interface with defaults
+interface SPI(width: int = 8, frequency: frequency = 1MHz) {
+    signal MOSI: out;
+    signal MISO: in;
+    signal SCK: out;
+    signal CS: out optional;  // Optional chip select
+}
+
+// Interface with requirements
+interface USB2 {
+    signal DP: inout;
+    signal DM: inout;
+    signal VBUS: power in;
+    signal GND: ground;
+    
+    // Electrical requirements
+    require pullup(DP, 1.5kΩ);
+    require termination(DP, 27Ω);
+    require termination(DM, 27Ω);
 }
 ```
 
-### 6.2 Interface Usage
+### 6.2 Interface Perspectives
+
+Perspectives define different signal directions for master/slave or DTE/DCE modes.
 
 ```bhdl
-// Declare interface instances
-interfaces {
-  main_i2c: I2C(voltage=3.3V, frequency=400kHz);
-  high_speed_spi: SPI(voltage=1.8V, frequency=50MHz);
-  memory_bus: DDR3(width=16bit, speed=800MHz);
-}
-
-// Connect components to interfaces
-main_i2c <-> [mcu.i2c1, temp_sensor, humidity_sensor];
-memory_bus <-> [mcu.ddr_controller, ddr_ram];
-
-// Cross-domain interfaces (automatic level shifting)
-cross_i2c: I2C(from=3.3V, to=1.8V);
-mcu.i2c1 <-> cross_i2c <-> low_voltage_sensors;
-```
-
-### 6.3 Interface Generation
-
-```bhdl
-// Generate repetitive interface connections
-generate ddr_connections {
-  for byte in 0..1 {
-    for bit in 0..7 {
-      mcu.DDR_DQ[byte*8 + bit] <-> ddr_ram.DQ[byte*8 + bit];
+interface UART(baudrate: int = 9600) {
+    signal TX: out;  // Default: DTE perspective
+    signal RX: in;
+    signal RTS: out optional;
+    signal CTS: in optional;
+    
+    // DCE perspective (modem side)
+    perspective dce {
+        signal TX: in;   // Swapped for DCE
+        signal RX: out;
+        signal RTS: in optional;
+        signal CTS: out optional;
     }
-    mcu.DDR_DQS[byte] <-> ddr_ram.DQS[byte];
-  }
-  
-  for i in 0..13 {
-    mcu.DDR_A[i] -> ddr_ram.A[i];
-  }
+}
+
+interface SPI(width: int = 8) {
+    signal MOSI: out;  // Master Out, Slave In
+    signal MISO: in;   // Master In, Slave Out
+    signal SCK: out;   // Master drives clock
+    signal CS: out optional;
+    
+    perspective slave {
+        signal MOSI: in;   // Slave receives
+        signal MISO: out;  // Slave transmits
+        signal SCK: in;    // Slave receives clock
+        signal CS: in optional;
+    }
+}
+```
+
+### 6.3 Interface Instantiation
+
+```bhdl
+board Example {
+    power VCC = 3.3V @ 1A;
+    ground GND;
+    
+    // Basic instantiation
+    i2c_bus: I2C;
+    
+    // With parameter overrides
+    spi_bus: SPI(width=16, frequency=10MHz);
+    
+    // With explicit perspective
+    uart_dte: UART(mode="dte", baudrate=115200);
+    uart_dce: UART(mode="dce", baudrate=115200);
+    
+    // Direct instantiation in connections
+    sensor: I2CSensor;
+    sensor.i2c <=> I2C();  // Anonymous interface
+}
+```
+
+### 6.4 Interface Connections
+
+```bhdl
+// Pin-to-interface connections
+module MCU {
+    interface I2C i2c;
+    interface SPI spi_master;
+    pin VDD: power in;
+    pin GND: ground;
+}
+
+board System {
+    mcu: MCU;
+    i2c_bus: I2C;
+    
+    // Connect MCU's I2C to bus (merges all signals)
+    mcu.i2c <=> i2c_bus;
+    
+    // Direct signal access
+    VCC -> Res(4.7kΩ).1 -> i2c_bus.SDA;
+    VCC -> Res(4.7kΩ).1 -> i2c_bus.SCL;
+}
+
+// Interface-to-interface connections
+spi_master: SPI(mode="master");
+spi_slave: SPI(mode="slave");
+
+// Connect master to slave (signal mapping handled automatically)
+spi_master <=> spi_slave;
+
+// Multiple devices on same interface
+i2c_bus <=> [sensor1.i2c, sensor2.i2c, eeprom.i2c];
+```
+
+### 6.5 Interface Requirements
+
+```bhdl
+interface I2C {
+    signal SDA: inout;
+    signal SCL: out;
+    
+    // Pullup requirements
+    require pullup(SDA, 4.7kΩ);
+    require pullup(SCL, 4.7kΩ);
+}
+
+interface LVDS {
+    signal P: out;
+    signal N: out;
+    
+    // Differential termination
+    require termination(P, N, 100Ω);
+}
+
+interface CAN {
+    signal CANH: inout;
+    signal CANL: inout;
+    
+    // Bus termination at endpoints
+    require termination(CANH, CANL, 120Ω) when is_endpoint;
+}
+```
+
+### 6.6 Advanced Interface Features
+
+```bhdl
+// Nested interfaces
+interface RMII {
+    signal TX_CLK: out;
+    signal TX_EN: out;
+    signal TXD[2]: out;
+    
+    // Management interface
+    interface MDIO mdio;
+}
+
+// Interface arrays
+module AudioCodec {
+    interface I2S[4] channels;  // 4 I2S interfaces
+    pin VDD: power in;
+    pin GND: ground;
+}
+
+// Conditional signals
+interface FlexibleSPI {
+    signal MOSI: out;
+    signal MISO: in;
+    signal SCK: out;
+    signal CS: out when !single_device;
+    signal WP: out when flash_mode;
+    signal HOLD: out when flash_mode;
+}
+
+// Interface with timing constraints
+interface DDR3 {
+    signal CK: out;
+    signal DQS: inout;
+    signal DQ[8]: inout;
+    
+    constrain timing {
+        setup(DQ, DQS) >= 0.5ns;
+        hold(DQ, DQS) >= 0.5ns;
+        skew(CK, DQS) <= 0.2ns;
+    }
+}
+```
+
+### 6.7 Interface Generation
+
+```bhdl
+// Generate interface connections
+board MultiSensor {
+    i2c_bus: I2C;
+    
+    generate for i in 0..7 {
+        sensor[i]: TempSensor;
+        sensor[i].i2c <=> i2c_bus;
+        sensor[i].ADDR -> (i & 0x07);  // Address pins
+    }
+}
+
+// Generate chained interfaces
+uart_chain[4]: UART;
+generate for i in 0..3 {
+    uart_chain[i].TX -> uart_chain[i+1].RX;
 }
 ```
 
@@ -1519,11 +1686,17 @@ if else when generate for in module constrain
 // Declarations  
 board system circuit interface power_domain
 
+// Interface-specific
+interface signal perspective require
+
 // Types
 signal power ground voltage current
 
 // Modifiers
-input output inout extends implements
+input output inout optional extends implements
+
+// Interface directions
+in out inout
 ```
 
 ### 16.4 Built-in Functions
