@@ -1,5 +1,5 @@
 // bhdl-ast/src/expr.rs
-use crate::common::{Value, IdentRef, NetRef}; // Import necessary leaf nodes
+use crate::common::{Value, IdentRef, NetRef, PinRef}; // Import necessary leaf nodes
 use crate::{SyntaxKind, BhdlLanguage, SyntaxNode, SyntaxToken}; // Add SyntaxNode/Token
 use rowan::ast::AstNode;
 
@@ -8,6 +8,7 @@ pub enum Expr {
     Value(Value),
     IdentRef(IdentRef),
     NetRef(NetRef),
+    PinRef(PinRef),  // Add pin references for behavioral modeling
     PrefixExpr(PrefixExpr),
     BinaryExpr(BinaryExpr),
     TernaryExpr(TernaryExpr),
@@ -15,6 +16,10 @@ pub enum Expr {
     // Add flow-specific expressions
     FlowExpr(FlowExpr),
     ComponentInstExpr(ComponentInstExpr),
+    // For simple identifiers (like attribute references)
+    Ident(SyntaxNode<BhdlLanguage>),
+    // For literal values
+    Literal(SyntaxNode<BhdlLanguage>),
 }
 
 impl AstNode for Expr {
@@ -24,43 +29,45 @@ impl AstNode for Expr {
         Value::can_cast(kind) ||
         IdentRef::can_cast(kind) ||
         NetRef::can_cast(kind) ||
+        PinRef::can_cast(kind) ||
         PrefixExpr::can_cast(kind) ||
         BinaryExpr::can_cast(kind) ||
         TernaryExpr::can_cast(kind) ||
         FunctionCallExpr::can_cast(kind) ||
         FlowExpr::can_cast(kind) ||
-        ComponentInstExpr::can_cast(kind)
+        ComponentInstExpr::can_cast(kind) ||
+        kind == SyntaxKind::IDENT ||
+        matches!(kind, SyntaxKind::NUMBER | SyntaxKind::STRING)
     }
 
     fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> {
-        if Value::can_cast(syntax.kind()) { 
-            Some(Expr::Value(Value::cast(syntax)?)) 
+        match syntax.kind() {
+            _ if Value::can_cast(syntax.kind()) => 
+                Some(Expr::Value(Value::cast(syntax.clone())?)),
+            _ if IdentRef::can_cast(syntax.kind()) => 
+                Some(Expr::IdentRef(IdentRef::cast(syntax.clone())?)),
+            _ if NetRef::can_cast(syntax.kind()) => 
+                Some(Expr::NetRef(NetRef::cast(syntax.clone())?)),
+            _ if PinRef::can_cast(syntax.kind()) => 
+                Some(Expr::PinRef(PinRef::cast(syntax.clone())?)),
+            _ if PrefixExpr::can_cast(syntax.kind()) => 
+                Some(Expr::PrefixExpr(PrefixExpr::cast(syntax.clone())?)),
+            _ if BinaryExpr::can_cast(syntax.kind()) => 
+                Some(Expr::BinaryExpr(BinaryExpr::cast(syntax.clone())?)),
+            _ if TernaryExpr::can_cast(syntax.kind()) => 
+                Some(Expr::TernaryExpr(TernaryExpr::cast(syntax.clone())?)),
+            _ if FunctionCallExpr::can_cast(syntax.kind()) => 
+                Some(Expr::FunctionCallExpr(FunctionCallExpr::cast(syntax.clone())?)),
+            _ if FlowExpr::can_cast(syntax.kind()) => 
+                Some(Expr::FlowExpr(FlowExpr::cast(syntax.clone())?)),
+            _ if ComponentInstExpr::can_cast(syntax.kind()) => 
+                Some(Expr::ComponentInstExpr(ComponentInstExpr::cast(syntax.clone())?)),
+            SyntaxKind::IDENT => 
+                Some(Expr::Ident(syntax)),
+            SyntaxKind::NUMBER | SyntaxKind::STRING => 
+                Some(Expr::Literal(syntax)),
+            _ => None
         }
-        else if IdentRef::can_cast(syntax.kind()) { 
-            Some(Expr::IdentRef(IdentRef::cast(syntax)?)) 
-        }
-        else if NetRef::can_cast(syntax.kind()) { 
-            Some(Expr::NetRef(NetRef::cast(syntax)?)) 
-        }
-        else if PrefixExpr::can_cast(syntax.kind()) { 
-            Some(Expr::PrefixExpr(PrefixExpr::cast(syntax)?)) 
-        }
-        else if BinaryExpr::can_cast(syntax.kind()) { 
-            Some(Expr::BinaryExpr(BinaryExpr::cast(syntax)?)) 
-        }
-        else if TernaryExpr::can_cast(syntax.kind()) { 
-            Some(Expr::TernaryExpr(TernaryExpr::cast(syntax)?)) 
-        }
-        else if FunctionCallExpr::can_cast(syntax.kind()) { 
-            Some(Expr::FunctionCallExpr(FunctionCallExpr::cast(syntax)?)) 
-        }
-        else if FlowExpr::can_cast(syntax.kind()) { 
-            Some(Expr::FlowExpr(FlowExpr::cast(syntax)?)) 
-        }
-        else if ComponentInstExpr::can_cast(syntax.kind()) { 
-            Some(Expr::ComponentInstExpr(ComponentInstExpr::cast(syntax)?)) 
-        }
-        else { None }
     }
 
     fn syntax(&self) -> &SyntaxNode<BhdlLanguage> {
@@ -68,12 +75,15 @@ impl AstNode for Expr {
             Expr::Value(n) => n.syntax(),
             Expr::IdentRef(n) => n.syntax(),
             Expr::NetRef(n) => n.syntax(),
+            Expr::PinRef(n) => n.syntax(),
             Expr::PrefixExpr(n) => n.syntax(),
             Expr::BinaryExpr(n) => n.syntax(),
             Expr::TernaryExpr(n) => n.syntax(),
             Expr::FunctionCallExpr(n) => n.syntax(),
             Expr::FlowExpr(n) => n.syntax(),
             Expr::ComponentInstExpr(n) => n.syntax(),
+            Expr::Ident(n) => n,
+            Expr::Literal(n) => n,
         }
     }
 }

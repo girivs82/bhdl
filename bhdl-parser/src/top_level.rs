@@ -317,11 +317,13 @@ impl<'t> Parser<'t> {
 
     // Parse attribute declaration
     fn parse_attribute_decl(&mut self) {
+        self.builder.start_node(SyntaxKind::ATTRIBUTE_DECL.into());
         self.expect(SyntaxKind::ATTRIBUTE_KW);
         self.expect(SyntaxKind::IDENT); // Attribute name
         self.expect(SyntaxKind::EQ);
-        self.parse_expression(); // Attribute value
+        self.parse_expression(); // Attribute value (supports expressions)
         self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
     }
 
     // Parse interface signal: signal name: direction optional?;
