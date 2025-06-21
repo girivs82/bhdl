@@ -12,6 +12,7 @@
 pub mod engine;
 pub mod circuit;
 pub mod evaluation;
+pub mod propagation;
 pub mod error;
 
 pub use engine::{SimulationEngine, SimulationState, SimulationConfig};

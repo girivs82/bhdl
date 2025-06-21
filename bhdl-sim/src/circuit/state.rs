@@ -102,7 +102,7 @@ impl Default for PinValue {
 }
 
 /// Digital drive strength
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DriveStrength {
     None,
     Weak,
