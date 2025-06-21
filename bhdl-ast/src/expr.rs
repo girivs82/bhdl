@@ -100,6 +100,7 @@ impl AstNode for PrefixExpr {
 }
 impl PrefixExpr {
     pub fn op(&self) -> Option<SyntaxKind> { self.0.first_token().map(|t| t.kind()) }
+    pub fn op_token(&self) -> Option<SyntaxToken<BhdlLanguage>> { self.0.first_token() }
     pub fn expr(&self) -> Option<Expr> { self.0.children().find_map(Expr::cast) }
 }
 
@@ -129,6 +130,24 @@ impl BinaryExpr {
                 )
             })
         }).map(|t| t.kind())
+    }
+    pub fn op_token(&self) -> Option<SyntaxToken<BhdlLanguage>> {
+        self.0.children_with_tokens().find_map(|node_or_token| {
+            node_or_token.into_token().filter(|token| {
+                // Include all binary operators
+                matches!(token.kind(), 
+                    SyntaxKind::PLUS | SyntaxKind::MINUS | SyntaxKind::STAR | SyntaxKind::SLASH | 
+                    SyntaxKind::PERCENT | SyntaxKind::AMPERSAND | SyntaxKind::PIPE | SyntaxKind::CARET | 
+                    SyntaxKind::EQEQ | SyntaxKind::NEQ |
+                    SyntaxKind::L_ANGLE | SyntaxKind::LTEQ |
+                    SyntaxKind::R_ANGLE | SyntaxKind::GTEQ |
+                    SyntaxKind::AMPAMP | SyntaxKind::PIPEPIPE |
+                    // Flow operators
+                    SyntaxKind::ARROW | SyntaxKind::BI_ARROW | 
+                    SyntaxKind::FLOW_OP | SyntaxKind::INTERFACE_OP
+                )
+            })
+        })
     }
     pub fn rhs(&self) -> Option<Expr> {
         // Find the second Expr child
@@ -195,15 +214,18 @@ impl FunctionCallExpr {
             .find(|t| t.kind() == SyntaxKind::IDENT)
     }
     
+    pub fn name(&self) -> Option<SyntaxToken<BhdlLanguage>> {
+        self.function_name()
+    }
+    
     pub fn argument_list(&self) -> Option<ArgumentList> {
         self.0.children().find_map(ArgumentList::cast)
     }
     
     pub fn arguments(&self) -> impl Iterator<Item = Expr> {
         self.argument_list()
-            .map(|list| list.arguments())
             .into_iter()
-            .flatten()
+            .flat_map(|list| list.arguments())
     }
 }
 

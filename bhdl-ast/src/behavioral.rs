@@ -105,6 +105,20 @@ impl AttributeAssignment {
         None
     }
     
+    /// Alias for attribute_name for consistency
+    pub fn name(&self) -> Option<SyntaxToken<BhdlLanguage>> {
+        self.attribute_name()
+    }
+    
+    /// Get the assignment operator token
+    pub fn op_token(&self) -> Option<SyntaxToken<BhdlLanguage>> {
+        self.0.children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .find(|t| matches!(t.kind(), 
+                SyntaxKind::EQ | SyntaxKind::PLUS_EQ | SyntaxKind::MINUS_EQ
+            ))
+    }
+    
     /// Get the value expression being assigned
     pub fn value(&self) -> Option<Expr> {
         self.0.children().find_map(Expr::cast)
