@@ -109,7 +109,15 @@
       "Bash(RUST_LOG=debug cargo run -p bhdl-synthesizer --bin test_interface_synthesis_runner 2 >& 1)",
       "Bash(RUST_LOG=bhdl_synthesizer=debug cargo run -p bhdl-synthesizer --bin test_interface_synthesis_runner 2 >& 1)",
       "Bash(RUST_LOG=info,bhdl_synthesizer::interface_synthesis=debug cargo run -p bhdl-synthesizer --bin test_interface_synthesis_runner 2 >& 1)",
-      "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin test_interface_debug 2 >& 1)"
+      "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin test_interface_debug 2 >& 1)",
+      "Bash(./test_interface_connections)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin test_pin_interface_runner 2 >& 1)",
+      "Bash(RUST_BACKTRACE=1 cargo run -p bhdl-synthesizer --bin test_pin_interface_runner 2 >& 1)",
+      "Bash(RUST_LOG=info,bhdl_synthesizer::hierarchical_connectivity=debug cargo run -p bhdl-synthesizer --bin test_pin_interface_runner 2 >& 1)",
+      "Bash(RUST_LOG=info,bhdl_synthesizer::interface_synthesis=debug cargo run -p bhdl-synthesizer --bin test_pin_interface_runner 2>&1)",
+      "Bash(RUST_BACKTRACE=1 cargo test --test test_interface_pin_connections -p bhdl-synthesizer -- --nocapture 2 >& 1)",
+      "Bash(./target/debug/deps/test_interface_pin_connections-*)",
+      "Bash(--test-threads=1 test_pin_to_interface_connection)"
     ],
     "deny": []
   }

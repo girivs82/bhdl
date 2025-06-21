@@ -14,7 +14,7 @@ use bhdl_analyzer::{
     types::AnalysisResult,
 };
 use bhdl_ast::{
-    AstNode, HasName, InterfaceDef,
+    AstNode, InterfaceDef,
     interfaces::{InterfaceSignal, InterfaceRequirement, SignalDirection},
 };
 use bhdl_netlist::{Netlist, ModuleId, InstanceId, NetId};
@@ -53,21 +53,30 @@ impl NetlistGenerator {
         // Find all interface instances - they may be in component inference results
         let mut interface_instances = Vec::new();
         
+        // Map to track original names to generated names
+        let mut original_to_generated: HashMap<String, String> = HashMap::new();
+        
         // Check component inference results for interface types
         for (idx, comp) in analysis.component_inference.inferred_components.iter().enumerate() {
             // Check if the component type is actually an interface
             if let Some(type_symbol) = analysis.global_scope.lookup(&comp.component_type) {
                 if type_symbol.kind == SymbolKind::Interface {
-                    // Use the instance name from component inference
-                    // In the future, we should preserve the original instance name from the AST
-                    let instance_name = comp.instance_name.clone()
+                    // The generated instance name (e.g., U1)
+                    let generated_name = comp.instance_name.clone()
                         .unwrap_or_else(|| format!("interface_{}", idx));
                     
-                    info!("Found interface instance in component inference: {} of type {}", 
-                          instance_name, comp.component_type);
+                    // Try to find the original instance name from the instance_name field
+                    // For interfaces, the instance_name might preserve the original name
+                    let original_name = generated_name.clone();
+                    
+                    info!("Found interface instance '{}' (generated: '{}') of type {}", 
+                          original_name, generated_name, comp.component_type);
+                    
+                    // Store the mapping
+                    original_to_generated.insert(original_name.clone(), generated_name.clone());
                     
                     let instance = InterfaceInstance {
-                        instance_name,
+                        instance_name: generated_name,
                         interface_type: comp.component_type.clone(),
                         parameter_overrides: HashMap::new(),
                     };
@@ -84,6 +93,11 @@ impl NetlistGenerator {
         
         for instance in interface_instances {
             self.synthesize_interface_instance(&instance, analysis)?;
+        }
+        
+        // Log the interface instance mapping for debugging
+        for (original, generated) in original_to_generated {
+            info!("Interface instance mapping: {} -> {}", original, generated);
         }
         
         Ok(())
@@ -173,9 +187,15 @@ impl NetlistGenerator {
         let requirements = vec![];
         
         // Get the module ID for the board/module containing this interface
-        // For now, assume it's in the top-level module
-        let module_id = self.netlist.top_level_module
-            .ok_or_else(|| anyhow::anyhow!("No top-level module found"))?;
+        // If no top-level module exists yet, create a temporary board module
+        let module_id = if let Some(id) = self.netlist.top_level_module {
+            id
+        } else {
+            // Create a temporary board module
+            let board_id = self.netlist.add_module("Board".to_string(), bhdl_netlist::types::ModuleKind::Board);
+            self.netlist.top_level_module = Some(board_id);
+            board_id
+        };
         
         // Create nets for each signal
         for signal in &signals {

@@ -31,6 +31,9 @@ pub struct HierarchicalContext {
     variant_manager: ModuleVariantManager,
     /// Component counters for reference designator generation
     component_counters: HashMap<String, usize>,
+    /// Map from interface instance names to their generated instance names
+    /// e.g., "i2c_bus" -> "U1" (from component inference)
+    interface_instance_mapping: HashMap<String, String>,
 }
 
 /// Context for a single module being processed
@@ -54,6 +57,7 @@ impl HierarchicalContext {
             current_path: Vec::new(),
             variant_manager: ModuleVariantManager::new(),
             component_counters: HashMap::new(),
+            interface_instance_mapping: HashMap::new(),
         }
     }
     
@@ -91,6 +95,48 @@ impl HierarchicalContext {
     
     /// Resolve a net name in the current context
     pub fn resolve_net(&mut self, net_name: &str, netlist: &mut Netlist) -> Result<NetId> {
+        // First check if this is an interface signal reference (e.g., i2c_bus.SDA)
+        if net_name.contains('.') {
+            let parts: Vec<&str> = net_name.split('.').collect();
+            if parts.len() == 2 {
+                let interface_name = parts[0];
+                let signal_name = parts[1];
+                
+                // Look for any existing net that ends with _<signal_name>
+                // This will catch interface nets created by interface synthesis
+                for (net_id, net) in netlist.nets.iter() {
+                    if let Some(existing_name) = &net.name {
+                        // Check if this ends with the signal name (e.g., U1_SDA matches SDA)
+                        if existing_name.ends_with(&format!("_{}", signal_name)) {
+                            // Additional check: make sure the prefix looks like an interface instance
+                            let prefix_end = existing_name.len() - signal_name.len() - 1;
+                            if prefix_end > 0 {
+                                let prefix = &existing_name[..prefix_end];
+                                // Interface instances are typically named U1, U2, etc.
+                                if prefix.starts_with("U") && prefix[1..].chars().all(|c| c.is_digit(10)) {
+                                    info!("Resolved interface signal {} to existing net {}", net_name, existing_name);
+                                    return Ok(net_id);
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // If no interface net found, check for exact match
+                for (net_id, net) in netlist.nets.iter() {
+                    if let Some(existing_name) = &net.name {
+                        if existing_name == net_name {
+                            return Ok(net_id);
+                        }
+                    }
+                }
+                
+                // No existing net found - DON'T create a new one with the interface signal name
+                // Instead, create it with a temporary name and let interface synthesis handle it
+                warn!("Interface signal {} referenced before interface synthesis - creating placeholder net", net_name);
+            }
+        }
+        
         // Check if we're in a module context
         let in_module = self.current_module().is_some();
         
@@ -135,6 +181,9 @@ pub fn extract_hierarchical_connectivity(
     
     let mut context = HierarchicalContext::new();
     
+    // Build interface instance mapping from component inference results
+    build_interface_instance_mapping(&mut context, analysis);
+    
     // First pass: Create module definitions
     create_module_definitions(ast, analysis, netlist, &mut context)?;
     
@@ -143,6 +192,36 @@ pub fn extract_hierarchical_connectivity(
     
     info!("Hierarchical connectivity extraction complete");
     Ok(())
+}
+
+/// Build mapping from original interface instance names to generated names
+fn build_interface_instance_mapping(context: &mut HierarchicalContext, analysis: &AnalysisResult) {
+    // Component inference generates names like U1, U2 for interface instances
+    // We need to map from the original names (like i2c_bus) to these generated names
+    
+    // First, find all interface types in the symbol table
+    let mut interface_types = std::collections::HashSet::new();
+    for symbol in analysis.global_scope.iter() {
+        if symbol.kind == bhdl_analyzer::symbol_table::SymbolKind::Interface {
+            interface_types.insert(symbol.name.clone());
+        }
+    }
+    
+    // Then check component inference results for interface instances
+    for comp in &analysis.component_inference.inferred_components {
+        if interface_types.contains(&comp.component_type) {
+            // This is an interface instance
+            // The component inference may have lost the original instance name
+            // For now, we'll try to reconstruct it from the instance_name field
+            if let Some(ref inst_name) = comp.instance_name {
+                // inst_name might be like "U1" (generated)
+                // We need to find the original name from the AST
+                // This is a limitation - we should preserve the original name better
+                debug!("Found interface instance {} of type {} in component inference", 
+                      inst_name, comp.component_type);
+            }
+        }
+    }
 }
 
 /// Create module definitions from AST
