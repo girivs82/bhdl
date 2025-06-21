@@ -107,9 +107,25 @@ impl<'t> Parser<'t> {
                 Some(SyntaxKind::GROUND_KW) => self.parse_ground_decl(),
                 Some(SyntaxKind::GENERATE_KW) => self.parse_generate_block(),
                 Some(SyntaxKind::ATTRIBUTE_KW) => self.parse_attribute_decl(),
-                Some(SyntaxKind::IDENT) | Some(SyntaxKind::AT) => {
-                    // v2.0 connection or flow statement
-                    // Can start with IDENT or @ (for net references)
+                Some(SyntaxKind::IDENT) => {
+                    // Check if this is a module/component instantiation or connection
+                    use crate::v2_fixes::NamedDeclarationType;
+                    
+                    match self.is_v2_named_declaration() {
+                        NamedDeclarationType::ModuleInstance => {
+                            self.parse_module_instance();
+                        }
+                        NamedDeclarationType::ComponentInstance => {
+                            self.parse_component_instance();
+                        }
+                        _ => {
+                            // Connection or flow statement
+                            self.parse_connection_or_flow_stmt();
+                        }
+                    }
+                }
+                Some(SyntaxKind::AT) => {
+                    // Net reference in connection
                     self.parse_connection_or_flow_stmt();
                 }
                 Some(_) => {
@@ -134,6 +150,13 @@ impl<'t> Parser<'t> {
                 Some(SyntaxKind::CONST_KW) => self.parse_const_decl(),
                 Some(SyntaxKind::AT) => self.parse_module_metadata(),
                 Some(SyntaxKind::ATTRIBUTE_KW) => self.parse_attribute_decl(),
+                Some(SyntaxKind::GENERATE_KW) => self.parse_generate_block(),
+                Some(SyntaxKind::IDENT) => {
+                    // Check if this is a module instantiation or connection
+                    // Module instantiation: instance_name: ModuleType(params) { ... }
+                    // Connection: signal -> other_signal;
+                    self.parse_module_item();
+                }
                 Some(_) => {
                     self.error("Unexpected token in module definition".to_string());
                     self.bump_any();
@@ -359,6 +382,170 @@ impl<'t> Parser<'t> {
         self.parse_type_expression();
         
         self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+
+    // Parse module item (could be instance declaration or connection)
+    fn parse_module_item(&mut self) {
+        use crate::v2_fixes::NamedDeclarationType;
+        
+        // Look ahead to determine what kind of item this is
+        match self.is_v2_named_declaration() {
+            NamedDeclarationType::ModuleInstance => {
+                self.parse_module_instance();
+            }
+            NamedDeclarationType::ComponentInstance => {
+                self.parse_component_instance();
+            }
+            _ => {
+                // Assume it's a connection statement
+                self.parse_v2_connection_expr();
+            }
+        }
+    }
+    
+    // Parse module instance: instance_name: ModuleType(params) { port mappings }
+    fn parse_module_instance(&mut self) {
+        self.builder.start_node(SyntaxKind::MODULE_INST.into());
+        self.expect(SyntaxKind::IDENT); // Instance name
+        self.expect(SyntaxKind::COLON);
+        self.expect(SyntaxKind::IDENT); // Module type
+        
+        // Optional parameters
+        if self.peek() == Some(SyntaxKind::L_PAREN) {
+            self.parse_param_list_expr();
+        }
+        
+        // Port mapping block
+        self.expect(SyntaxKind::L_BRACE);
+        self.parse_port_mapping_block();
+        self.expect(SyntaxKind::R_BRACE);
+        
+        self.builder.finish_node();
+    }
+    
+    // Parse component instance: instance_name: ComponentType(params);
+    fn parse_component_instance(&mut self) {
+        self.builder.start_node(SyntaxKind::COMPONENT_INST.into());
+        self.expect(SyntaxKind::IDENT); // Instance name
+        self.expect(SyntaxKind::COLON);
+        self.expect(SyntaxKind::IDENT); // Component type
+        
+        // Parameters
+        if self.peek() == Some(SyntaxKind::L_PAREN) {
+            self.parse_param_list_expr();
+        }
+        
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+    
+    // Parse port mapping block for module instances
+    fn parse_port_mapping_block(&mut self) {
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) => break,
+                Some(SyntaxKind::ATTRIBUTE_KW) => {
+                    // Scoped attribute setting
+                    self.parse_scoped_attribute();
+                }
+                Some(SyntaxKind::IDENT) => {
+                    // Port mapping: PIN <- signal or PIN -> signal
+                    self.parse_port_mapping();
+                }
+                Some(_) => {
+                    self.error("Unexpected token in port mapping block".to_string());
+                    self.bump_any();
+                }
+                None => {
+                    self.error("Unexpected end of file in port mapping block".to_string());
+                    break;
+                }
+            }
+        }
+    }
+    
+    // Parse single port mapping: PIN <- signal; or PIN -> signal;
+    fn parse_port_mapping(&mut self) {
+        self.builder.start_node(SyntaxKind::PORT_MAPPING.into());
+        
+        // Left side: module pin (could be array access)
+        self.parse_pin_reference();
+        
+        // Connection operator
+        match self.peek() {
+            Some(SyntaxKind::LEFT_ARROW) => self.bump(),    // <-
+            Some(SyntaxKind::ARROW) => self.bump(),         // ->
+            Some(SyntaxKind::BI_ARROW) => self.bump(),      // <->
+            _ => self.error("Expected connection operator (<-, ->, <->)".to_string()),
+        }
+        
+        // Right side: signal or qualified pin reference
+        self.parse_connection_target();
+        
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+    
+    // Parse pin reference (could include array indexing)
+    fn parse_pin_reference(&mut self) {
+        self.builder.start_node(SyntaxKind::PIN_REF.into());
+        self.expect(SyntaxKind::IDENT); // Pin name
+        
+        // Optional array indexing
+        if self.peek() == Some(SyntaxKind::L_BRACKET) {
+            self.parse_bus_suffix();
+        }
+        
+        self.builder.finish_node();
+    }
+    
+    // Parse connection target (signal or instance.pin)
+    fn parse_connection_target(&mut self) {
+        self.builder.start_node(SyntaxKind::CONNECTION_TARGET.into());
+        
+        // Could be qualified (instance.pin) or simple signal name
+        self.expect(SyntaxKind::IDENT);
+        
+        if self.peek() == Some(SyntaxKind::DOT) {
+            self.bump(); // Consume dot
+            self.expect(SyntaxKind::IDENT); // Pin name
+        }
+        
+        // Optional array indexing
+        if self.peek() == Some(SyntaxKind::L_BRACKET) {
+            self.parse_bus_suffix();
+        }
+        
+        self.builder.finish_node();
+    }
+    
+    // Parse scoped attribute: attribute path.to.attr = value;
+    fn parse_scoped_attribute(&mut self) {
+        self.builder.start_node(SyntaxKind::SCOPED_ATTRIBUTE.into());
+        self.expect(SyntaxKind::ATTRIBUTE_KW);
+        
+        // Parse attribute path (could be nested)
+        self.parse_attribute_path();
+        
+        self.expect(SyntaxKind::EQ);
+        self.parse_expression();
+        self.expect(SyntaxKind::SEMI);
+        
+        self.builder.finish_node();
+    }
+    
+    // Parse attribute path: simple or nested.path.to.attr
+    fn parse_attribute_path(&mut self) {
+        self.builder.start_node(SyntaxKind::ATTRIBUTE_PATH.into());
+        self.expect(SyntaxKind::IDENT);
+        
+        while self.peek() == Some(SyntaxKind::DOT) {
+            self.bump(); // Consume dot
+            self.expect(SyntaxKind::IDENT);
+        }
+        
         self.builder.finish_node();
     }
 

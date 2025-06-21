@@ -193,6 +193,8 @@ impl<'t> Parser<'t> {
         self.expect(SyntaxKind::L_PAREN);
         
         while self.peek() != Some(SyntaxKind::R_PAREN) && self.peek().is_some() {
+            self.skip_trivia();
+            
             // Parameter name
             self.expect(SyntaxKind::IDENT);
             self.expect(SyntaxKind::COLON);
