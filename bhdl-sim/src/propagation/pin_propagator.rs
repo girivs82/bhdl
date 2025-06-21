@@ -115,7 +115,7 @@ impl PinPropagator {
     /// Collect pins that have changed
     fn collect_changed_pins(&mut self, circuit_state: &CircuitState) {
         for pin_path in circuit_state.changed_pins() {
-            if let Some(value) = circuit_state.get_pin(pin_path) {
+            if let Some(_value) = circuit_state.get_pin(pin_path) {
                 // Find the net this pin connects to
                 // TODO: This requires net connectivity information
                 // For now, create a placeholder event
