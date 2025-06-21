@@ -31,6 +31,15 @@ pub struct AttributeInfo {
     pub decl: AttributeDecl,
 }
 
+/// Information about a when block
+#[derive(Debug, Clone)]
+pub struct WhenBlockInfo {
+    /// Condition expression
+    pub condition: String,
+    /// Assignments in the when block
+    pub assignments: HashMap<String, String>,
+}
+
 /// Analyzes attribute dependencies in a syntax tree
 pub struct AttributeAnalyzer {
     attributes: HashMap<String, AttributeInfo>,
