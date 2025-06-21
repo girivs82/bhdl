@@ -1,0 +1,24 @@
+// Test behavioral attributes with expression support
+board test_behavioral_attributes {
+    // Static attributes (literal values)
+    attribute frequency = 1000;
+    attribute delay = 10;
+    
+    // Expression attributes
+    attribute rising_time = delay * 0.9;
+    attribute falling_time = delay * 1.1;
+    
+    // Complex expressions  
+    attribute duty_cycle = (rising_time / (rising_time + falling_time)) * 100;
+    
+    // Component declarations
+    power VCC = 5V @ 1A;
+    ground GND;
+    
+    // Simple oscillator circuit
+    VCC -> R1.1;
+    R1: Res(10k);
+    R1.2 -> C1.1;
+    C1: Cap(100nF);
+    C1.2 -> GND;
+}

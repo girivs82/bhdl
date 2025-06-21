@@ -9,6 +9,7 @@ use crate::v2_statements::ConnectionStmt;
 use crate::expr::Expr;
 use crate::v2_statements::{PowerDecl, GroundDecl, FlowStmt};
 use crate::hierarchical::{ModuleInst, ScopedAttribute};
+use crate::attributes::AttributeDecl;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Board(pub(crate) SyntaxNode<BhdlLanguage>);
@@ -62,6 +63,11 @@ impl Board {
     pub fn constrain_block(&self) -> Option<ConstrainBlock> {
         self.0.children().find_map(ConstrainBlock::cast)
     }
+    
+    // Board metadata (attributes)
+    pub fn attributes(&self) -> impl Iterator<Item = AttributeDecl> {
+        self.0.children().filter_map(AttributeDecl::cast)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -107,10 +113,8 @@ impl Module {
     }
     
     // Module metadata (attributes)
-    pub fn attributes(&self) -> impl Iterator<Item = SyntaxToken<BhdlLanguage>> {
-        self.0.children_with_tokens()
-            .filter_map(|it| it.into_token())
-            .filter(|token| token.kind() == SyntaxKind::AT)
+    pub fn attributes(&self) -> impl Iterator<Item = AttributeDecl> {
+        self.0.children().filter_map(AttributeDecl::cast)
     }
 }
 

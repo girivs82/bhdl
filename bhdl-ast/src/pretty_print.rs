@@ -296,6 +296,7 @@ impl PrettyPrint for Expr {
             Expr::Value(value) => value.pretty_print(ctx, f),
             Expr::IdentRef(ident_ref) => ident_ref.pretty_print(ctx, f),
             Expr::NetRef(net_ref) => net_ref.pretty_print(ctx, f),
+            Expr::PinRef(pin_ref) => pin_ref.pretty_print(ctx, f),
             Expr::PrefixExpr(prefix_expr) => prefix_expr.pretty_print(ctx, f),
             Expr::BinaryExpr(binary_expr) => binary_expr.pretty_print(ctx, f),
             Expr::TernaryExpr(ternary_expr) => ternary_expr.pretty_print(ctx, f),
@@ -305,6 +306,8 @@ impl PrettyPrint for Expr {
                 flow_expr.pretty_print(ctx, f)
             }
             Expr::ComponentInstExpr(comp_inst) => comp_inst.pretty_print(ctx, f),
+            Expr::Ident(node) => ctx.write_text(f, &node.text().to_string()),
+            Expr::Literal(node) => ctx.write_text(f, &node.text().to_string()),
         }
     }
 }

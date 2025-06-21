@@ -211,6 +211,7 @@ pub enum SyntaxKind {
     // Hierarchical module support
     MODULE_INST,       // Module instantiation within a module
     PORT_MAPPING,      // Single port mapping: PIN <- signal;
+    ATTRIBUTE_DECL,    // Attribute declaration: attribute name = expression;
     SCOPED_ATTRIBUTE,  // Scoped attribute: attribute path.to.attr = value;
     ATTRIBUTE_PATH,    // Attribute path: path.to.attribute
     LEFT_ARROW,        // <- (new arrow for consistent port mapping)

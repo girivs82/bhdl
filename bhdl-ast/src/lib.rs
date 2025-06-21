@@ -27,6 +27,7 @@ pub mod v2_statements; // v2.0 statement AST nodes
 pub mod v2_board; // v2.0 board extensions
 pub mod hierarchical; // Hierarchical module support
 pub mod interfaces; // Interface-specific AST nodes
+pub mod attributes; // Behavioral modeling attribute support
 
 // Core HasName trait (defined here)
 pub trait HasName: AstNode<Language = BhdlLanguage> {
@@ -48,6 +49,7 @@ pub use expr::{Expr, PrefixExpr, BinaryExpr, TernaryExpr, FunctionCallExpr, Argu
 pub use flow::{FlowStmt, FlowExpr, FlowElement, ComponentInstantiation, GenerateStmt, ConditionalStmt, ConditionalExpr, AssignStmt};
 pub use hierarchical::{ModuleInst, PortMapping, PortPinRef, ConnectionTarget, ScopedAttribute, AttributePath};
 pub use visitor::{AstVisitor, ConstructCounter, ComponentTypeCollector};
+pub use attributes::{AttributeDecl, AttributeType, AttributeDependency};
 pub use pretty_print::{PrettyPrint, PrettyPrintConfig, PrettyPrintContext};
 pub use validation::{ValidationError, ValidationReport, ValidationContext, Validator, ParameterDef, VariableInfo, validate_board, validate_expression, is_valid_board};
 pub use transform::{TransformResult, TransformError, Transformer, TransformContext, CompositeTransformer, create_default_transform_pipeline, transform_board, apply_variable_substitutions, unroll_generate_statements, flatten_flow_expressions};

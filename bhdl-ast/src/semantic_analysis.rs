@@ -118,6 +118,8 @@ pub enum BhdlType {
     Net,
     /// Pin reference type
     Pin,
+    /// Signal type (for behavioral modeling)
+    Signal,
     /// Unknown/inferred type
     Unknown,
     /// Error type (for error recovery)
@@ -185,6 +187,7 @@ impl std::fmt::Display for BhdlType {
             BhdlType::ComponentInstance(comp_type) => write!(f, "{}", comp_type),
             BhdlType::Net => write!(f, "net"),
             BhdlType::Pin => write!(f, "pin"),
+            BhdlType::Signal => write!(f, "signal"),
             BhdlType::Unknown => write!(f, "unknown"),
             BhdlType::Error => write!(f, "error"),
         }
@@ -398,12 +401,26 @@ impl SemanticAnalyzer {
             Expr::Value(value) => self.infer_value_type(value),
             Expr::IdentRef(ident_ref) => self.infer_ident_type(ident_ref),
             Expr::NetRef(_) => BhdlType::Net, // Net references are always nets
+            Expr::PinRef(_) => BhdlType::Signal, // Pin references are signals
             Expr::BinaryExpr(binary_expr) => self.infer_binary_expr_type(binary_expr),
             Expr::PrefixExpr(prefix_expr) => self.infer_prefix_expr_type(prefix_expr),
             Expr::TernaryExpr(ternary_expr) => self.infer_ternary_expr_type(ternary_expr),
             Expr::FunctionCallExpr(_) => BhdlType::Unknown, // Function calls need more context
             Expr::ComponentInstExpr(comp_inst_expr) => self.infer_component_inst_type(comp_inst_expr),
             Expr::FlowExpr(_) => BhdlType::Net, // Flow expressions result in net connections
+            Expr::Ident(_) => BhdlType::Unknown, // Need context to determine identifier type
+            Expr::Literal(node) => {
+                // Infer type from literal token
+                if let Some(token) = node.first_token() {
+                    match token.kind() {
+                        SyntaxKind::NUMBER => BhdlType::Real,
+                        SyntaxKind::STRING => BhdlType::String,
+                        _ => BhdlType::Unknown,
+                    }
+                } else {
+                    BhdlType::Unknown
+                }
+            }
         }
     }
     
