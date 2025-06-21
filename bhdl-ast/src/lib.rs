@@ -26,6 +26,7 @@ pub mod constraint_resolver; // Constraint resolution and validation
 pub mod v2_statements; // v2.0 statement AST nodes
 pub mod v2_board; // v2.0 board extensions
 pub mod hierarchical; // Hierarchical module support
+pub mod interfaces; // Interface-specific AST nodes
 
 // Core HasName trait (defined here)
 pub trait HasName: AstNode<Language = BhdlLanguage> {
@@ -39,10 +40,10 @@ pub trait HasName: AstNode<Language = BhdlLanguage> {
 }
 
 // Consolidated Re-exports
-pub use source_file::SourceFile;
+pub use source_file::{SourceFile, Item};
 pub use items::{Board, Module, ComponentDef, InterfaceDef, TypedefDef, TypedefBase, ParamList, ModuleParam};
 pub use blocks::{LayerStackupBlock, DefaultDesignRulesBlock, ConstrainBlock, GenerateBlock, ForLoopGenerate, IfGenerate, LayerDef};
-pub use common::{ParamAssign, PortDecl, PinDecl, NetDecl, TypeRef, BusSuffix, RangeExpr, Value, ComponentInst, PinRef, NetRef, IdentRef, SimpleIdentRef, ComponentType, PortDirection, ParamDecl, ParamAssignBlock, ParamPlaceholder, PinMetadata, MetadataPair};
+pub use common::{Ident, ParamAssign, PortDecl, PinDecl, NetDecl, TypeRef, BusSuffix, RangeExpr, Value, ComponentInst, PinRef, NetRef, IdentRef, SimpleIdentRef, ComponentType, PortDirection, ParamDecl, ParamAssignBlock, ParamPlaceholder, PinMetadata, MetadataPair};
 pub use expr::{Expr, PrefixExpr, BinaryExpr, TernaryExpr, FunctionCallExpr, ArgumentList, FlowExpr as ExprFlowExpr, ComponentInstExpr};
 pub use flow::{FlowStmt, FlowExpr, FlowElement, ComponentInstantiation, GenerateStmt, ConditionalStmt, ConditionalExpr, AssignStmt};
 pub use hierarchical::{ModuleInst, PortMapping, PortPinRef, ConnectionTarget, ScopedAttribute, AttributePath};
@@ -55,6 +56,7 @@ pub use semantic_analysis::{SemanticAnalyzer, SemanticContext, SemanticError, Bh
 pub use constraint_resolver::{ConstraintResolver, Constraint, ConstraintType, ConstraintRule, ConstraintSeverity, ConstraintContext, ConstraintViolation, ConstraintResult, ComparisonOp, resolve_board_constraints, board_satisfies_constraints, is_standard_resistor_value};
 pub use v2_statements::{Statement, PowerDecl, GroundDecl, ConnectionStmt, FlowStmt as V2FlowStmt, GenerateStmt as V2GenerateStmt, ConditionalStmt as V2ConditionalStmt};
 pub use v2_board::{BoardV2Ext, BoardBody, BoardBodyExt};
+pub use interfaces::{InterfaceSignal, InterfaceRequirement, InterfacePerspective, InterfaceInst, SignalDirection};
 
 // Add tests module
 #[cfg(test)]

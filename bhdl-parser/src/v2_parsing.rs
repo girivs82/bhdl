@@ -195,6 +195,9 @@ impl<'t> Parser<'t> {
         while self.peek() != Some(SyntaxKind::R_PAREN) && self.peek().is_some() {
             self.skip_trivia();
             
+            // Start a node for each parameter
+            self.builder.start_node(SyntaxKind::PARAM_DECL.into());
+            
             // Parameter name
             self.expect(SyntaxKind::IDENT);
             self.expect(SyntaxKind::COLON);
@@ -207,6 +210,9 @@ impl<'t> Parser<'t> {
                 self.bump();
                 self.parse_expr(0);
             }
+            
+            // Finish the parameter node
+            self.builder.finish_node();
             
             // Check for comma
             if self.peek() == Some(SyntaxKind::COMMA) {

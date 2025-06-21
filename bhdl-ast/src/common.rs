@@ -29,6 +29,18 @@ impl SyntaxNodeExt for SyntaxNode<BhdlLanguage> {
 
 // --- Common AST Node Structures ---
 
+// --- Identifier --- (Simple identifier wrapper for names)
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Ident(pub(crate) SyntaxNode<BhdlLanguage>);
+impl AstNode for Ident {
+    type Language = BhdlLanguage;
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::IDENT }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { 
+        if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } 
+    }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+
 // --- Parameter Declaration --- (within parameter block, no keyword)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ParamDecl(pub(crate) SyntaxNode<BhdlLanguage>); // This struct might be redundant if only ParamAssign exists
