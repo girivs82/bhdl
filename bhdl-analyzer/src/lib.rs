@@ -6,6 +6,7 @@ use rowan::ast::AstNode; // For source_file.syntax()
 pub mod types;
 mod helpers;
 pub mod symbol_table;
+pub mod hierarchical_symbol_table;
 mod pass1;
 mod pass2;
 mod pass3;

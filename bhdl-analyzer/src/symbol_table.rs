@@ -147,6 +147,11 @@ impl SymbolTable {
             self.symbols.insert(symbol.name.clone(), symbol);
         }
     }
+    
+    /// Iterator over all symbols (both regular and nets)
+    pub fn iter(&self) -> impl Iterator<Item = &Symbol> {
+        self.symbols.values().chain(self.nets.values())
+    }
 
     pub fn lookup(&self, name: &str) -> Option<&Symbol> {
         self.symbols.get(name)

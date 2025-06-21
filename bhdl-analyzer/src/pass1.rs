@@ -6,6 +6,7 @@ use bhdl_ast::{
     SourceFile, HasName,
     items::{Board, Module, ComponentDef, InterfaceDef, TypedefDef},
     common::{ParamDecl, PortDecl, NetDecl, ComponentInst, NetRef}, // Removed Value and PinDecl (v1.0)
+    hierarchical::ModuleInst,
     v2_statements::ConnectionStmt,
     expr::{Expr, BinaryExpr},
 };
@@ -278,6 +279,52 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                     }
                     context.current_scope_mut().insert(instance_symbol);
                     return; 
+                } 
+            }
+        }
+        SyntaxKind::MODULE_INST => {
+            if let Some(inst) = ModuleInst::cast(node.clone()) {
+                if let (Some(instance_name_token), Some(type_name_token)) = (inst.name(), inst.module_type()) {
+                    let instance_name = instance_name_token.text().to_string();
+                    let type_name = type_name_token.text().to_string();
+                    let mut instance_symbol = Symbol::new_instance(
+                        &instance_name, 
+                        instance_name_token.text_range(),
+                        &type_name, 
+                        node,
+                    );
+                    
+                    // Handle parameter overrides
+                    let mut overrides_map = HashMap::new();
+                    if let Some(param_list) = inst.param_list() {
+                        // Process module parameters (both positional and named)
+                        for param_assign in param_list.params() {
+                            if let Some(param_name_token) = param_assign.name() {
+                                let value_expr_node = param_assign.syntax().children_with_tokens()
+                                    .skip_while(|e| e.kind() != SyntaxKind::EQ) 
+                                    .skip(1) 
+                                    .filter_map(|e| e.into_node()) 
+                                    .find(|n| !matches!(n.kind(), SyntaxKind::WHITESPACE | SyntaxKind::SEMI)); 
+                                if let Some(value_expr) = value_expr_node {
+                                    overrides_map.insert(
+                                        param_name_token.text().to_string(),
+                                        SyntaxNodePtr::new(&value_expr)
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    
+                    if !overrides_map.is_empty() {
+                        instance_symbol.parameter_overrides = Some(overrides_map);
+                    }
+                    
+                    context.current_scope_mut().insert(instance_symbol);
+                    
+                    // Push a new scope for the module instance body (port mappings)
+                    context.push_scope(SyntaxNodePtr::new(node));
+                    context.current_scope_mut().set_scope_name(format!("{}::{}", instance_name, type_name));
+                    scope_pushed_for_this_node = true;
                 } 
             }
         }
