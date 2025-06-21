@@ -444,7 +444,11 @@ impl AstNode for IdentRef {
     fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
 }
 impl IdentRef {
-    pub fn token(&self) -> Option<SyntaxToken<BhdlLanguage>> { self.0.first_token() }
+    pub fn token(&self) -> Option<SyntaxToken<BhdlLanguage>> { 
+        self.0.children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .find(|t| t.kind() == SyntaxKind::IDENT)
+    }
 }
 
 // --- Simple Identifier Reference --- (Used where only a simple name is allowed, e.g., LHS of assign?)
