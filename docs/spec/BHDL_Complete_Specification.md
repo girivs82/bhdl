@@ -180,20 +180,229 @@ if (high_speed) {
 ```
 
 ### 3.7 Module Definition
+
+Modules enable hierarchical design and code reuse by encapsulating functionality into reusable components with well-defined interfaces.
+
+#### Basic Module Syntax
 ```bhdl
-// Reusable patterns
-module PowerSupply(input_voltage, output_voltage, current) {
-  flow: INPUT |> regulation(output_voltage) |> filtering |> OUTPUT;
-  
-  implementation {
-    if (switching_preferred) {
-      regulator = SwitchingReg(efficiency_min=85%);
-    } else {
-      regulator = LinearReg(dropout_max=1.2V);
-    }
-  }
+// Module with parameters and pins
+module RC_Filter(R_value: resistance = 1kΩ, C_value: capacitance = 100nF) {
+    // Pin declarations with types and directions
+    pin IN: signal in;      // Input signal pin
+    pin OUT: signal out;    // Output signal pin  
+    pin GND: ground in;     // Ground reference
+    
+    // Internal connections
+    IN -> Res(R_value).1;
+    Res(R_value).2 -> OUT;
+    OUT -> Cap(C_value).1;
+    Cap(C_value).2 -> GND;
+}
+
+// Simple module without parameters
+module PowerIndicator() {
+    pin VCC: power in;
+    pin GND: ground in;
+    
+    // Status LED with current limiting
+    VCC -> Res(1kΩ).1 -> LED(green).A;
+    LED(green).K -> GND;
 }
 ```
+
+#### Module Instantiation
+```bhdl
+board AudioAmplifier {
+    power VCC_12V = 12V @ 2A;
+    ground GND;
+    
+    // Instance with custom parameters
+    input_filter: RC_Filter(R_value=10kΩ, C_value=47nF) {
+        IN <- audio_input;
+        OUT -> amplifier_input;
+        GND <- GND;
+    }
+    
+    // Instance with default parameters
+    output_filter: RC_Filter() {
+        IN <- amplifier_output;
+        OUT -> speaker_output;
+        GND <- GND;
+    }
+    
+    // Multiple instances create unique components
+    power_indicator: PowerIndicator() {
+        VCC <- VCC_12V;
+        GND <- GND;
+    }
+}
+```
+
+#### Hierarchical Reference Designators
+Components within module instances receive hierarchical names:
+```bhdl
+// In the above example, components are named:
+// - input_filter.R1 (10kΩ resistor)
+// - input_filter.C1 (47nF capacitor)
+// - output_filter.R1 (1kΩ resistor - default)
+// - output_filter.C1 (100nF capacitor - default)
+// - power_indicator.R1 (1kΩ resistor)
+// - power_indicator.D1 (green LED)
+```
+
+#### Module Pin Types
+```bhdl
+module ComplexInterface() {
+    // Power pins
+    pin VCC: power in;          // Power input
+    pin VOUT: power out;        // Power output
+    pin GND: ground in;         // Ground reference
+    
+    // Signal pins  
+    pin CLK: signal in;         // Input signal
+    pin DATA: signal inout;     // Bidirectional signal
+    pin STATUS: signal out;     // Output signal
+    
+    // Protocol-specific pins
+    pin SDA: signal(i2c) inout; // I2C data
+    pin SCL: signal(i2c) in;    // I2C clock
+}
+```
+
+#### Parameterized Modules
+```bhdl
+// Parameters with types and constraints
+module VoltageRegulator(
+    Vin: voltage,                    // Required parameter
+    Vout: voltage,                   // Required parameter
+    Imax: current = 1A,              // Optional with default
+    topology: string = "linear"      // String parameter
+) {
+    pin IN: power in;
+    pin OUT: power out;
+    pin GND: ground in;
+    pin EN: signal in when topology == "switching";  // Conditional pin
+    
+    // Implementation based on parameters
+    generate if (topology == "linear") {
+        IN -> LinearReg(Vout, Imax).IN;
+        LinearReg(Vout, Imax).OUT -> OUT;
+        LinearReg(Vout, Imax).GND -> GND;
+    } else if (topology == "switching") {
+        IN -> BuckConverter(Vin, Vout, Imax).VIN;
+        BuckConverter(Vin, Vout, Imax).VOUT -> OUT;
+        BuckConverter(Vin, Vout, Imax).GND -> GND;
+        EN -> BuckConverter(Vin, Vout, Imax).EN;
+    }
+}
+```
+
+#### Module Arrays and Generate
+```bhdl
+module LEDArray(count: int = 8) {
+    pin VCC: power in;
+    pin GND: ground in;
+    pin[count] CTRL: signal in;  // Pin array
+    
+    // Generate multiple components
+    generate for i in 0..count {
+        CTRL[i] -> Res(330Ω).1 -> LED(red).A;
+        LED(red).K -> GND;
+    }
+}
+
+// Usage
+board LEDPanel {
+    power VCC_5V = 5V @ 500mA;
+    ground GND;
+    
+    // Creates 16 LEDs with individual control
+    display: LEDArray(count=16) {
+        VCC <- VCC_5V;
+        GND <- GND;
+        CTRL <- gpio_bus[0..15];
+    }
+}
+```
+
+#### Module Composition
+```bhdl
+// Modules can instantiate other modules
+module PowerManagement() {
+    pin VIN: power in;
+    pin VOUT_3V3: power out;
+    pin VOUT_1V8: power out;
+    pin GND: ground in;
+    
+    // First stage: 12V to 5V
+    stage1: VoltageRegulator(Vin=12V, Vout=5V, Imax=2A) {
+        IN <- VIN;
+        OUT -> intermediate_5V;
+        GND <- GND;
+    }
+    
+    // Second stage: 5V to 3.3V
+    stage2: VoltageRegulator(Vin=5V, Vout=3.3V) {
+        IN <- intermediate_5V;
+        OUT -> VOUT_3V3;
+        GND <- GND;
+    }
+    
+    // Third stage: 5V to 1.8V
+    stage3: VoltageRegulator(Vin=5V, Vout=1.8V) {
+        IN <- intermediate_5V;
+        OUT -> VOUT_1V8;
+        GND <- GND;
+    }
+}
+```
+
+#### Module Variants and Deduplication
+The BHDL toolchain automatically deduplicates module instances with identical parameters:
+```bhdl
+// These create a single module definition
+filter1: RC_Filter(1kΩ, 100nF) { ... }
+filter2: RC_Filter(1kΩ, 100nF) { ... }  // Reuses same module
+
+// This creates a new variant
+filter3: RC_Filter(10kΩ, 10nF) { ... }  // New module variant
+```
+
+#### Module Imports and Multi-File Support
+```bhdl
+// Import all public modules from a file
+import "common/filters.bhdl";
+import "power/regulators.bhdl";
+
+// Import specific modules (destructuring)
+import { RC_Filter, LC_Filter } from "common/filters.bhdl";
+import { LinearReg, BuckConverter } from "power/regulators.bhdl";
+
+// Relative imports
+import "../shared/connectors.bhdl";
+import "./local_modules.bhdl";
+```
+
+#### Module Aliases
+```bhdl
+// Create shorter names for frequently used modules
+alias LDO = LinearDropoutRegulator;
+alias Buck = BuckConverter;
+alias TVS = TransientVoltageSuppressor;
+
+// Usage
+reg1: LDO(3.3V) { ... }      // Same as LinearDropoutRegulator
+conv1: Buck(12V, 5V) { ... } // Same as BuckConverter
+```
+
+#### Best Practices
+1. **Clear Interfaces**: Define all pins with explicit types and directions
+2. **Meaningful Parameters**: Use typed parameters with sensible defaults
+3. **Hierarchical Organization**: Build complex systems from simple modules
+4. **Consistent Naming**: Use descriptive names for modules and instances
+5. **Documentation**: Add comments explaining module purpose and usage
+6. **File Organization**: Group related modules in separate files
+7. **Namespace Management**: Use clear import paths to avoid conflicts
 
 ### 3.8 Constraint Declaration
 ```bhdl
