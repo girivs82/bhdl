@@ -25,7 +25,6 @@ pub mod builtin_variables;
 pub mod expression_evaluator;
 
 // Use items needed directly in the analyze function
-use types::{AnalysisResult, ResolvedConstants};
 use pass1::populate_global_scope_and_build_definition_scopes;
 use pass2::{visit_node_pass2_references, Pass2Context};
 use pass3::{visit_node_pass3_const_eval, Pass3Context};
@@ -34,6 +33,9 @@ use power_analysis::{analyze_power_domains, PowerAnalysisContext};
 use component_inference::ComponentInferenceContext;
 use power_sequencing::PowerSequenceGenerator;
 use attribute_analysis::AttributeAnalyzer;
+
+// Re-export key types for public use
+pub use types::{AnalysisResult, Diagnostic, ResolvedConstants};
 
 // Main analysis function
 pub fn analyze(source_file: &SourceFile) -> AnalysisResult {
