@@ -1,0 +1,157 @@
+// Simple I2C interface example to validate design
+
+// Basic I2C interface definition
+interface I2C {
+    // Bidirectional signals
+    signal SDA: inout;
+    signal SCL: inout;
+    
+    // Electrical requirements
+    require pullup(SDA, 4.7kΩ);
+    require pullup(SCL, 4.7kΩ);
+    require open_drain(SDA);
+    require open_drain(SCL);
+}
+
+// Parameterized SPI interface
+interface SPI(frequency: frequency = 1MHz, mode: int = 0) {
+    // Master-perspective signals
+    signal MOSI: out;   // Master Out, Slave In
+    signal MISO: in;    // Master In, Slave Out
+    signal SCK: out;    // Serial Clock
+    signal CS: out;     // Chip Select
+    
+    // Constraints
+    constrain SCK.frequency <= frequency;
+    constrain SCK.phase = (mode & 0x1);
+    constrain SCK.polarity = ((mode >> 1) & 0x1);
+}
+
+// Example board using interfaces
+board InterfaceDemo {
+    power VCC_3V3 = 3.3V @ 100mA;
+    power VCC_1V8 = 1.8V @ 50mA;
+    ground GND;
+    
+    // I2C bus instance (generates nets + pullup resistors)
+    main_i2c: I2C();
+    sensor_i2c: I2C();
+    
+    // SPI bus instance
+    flash_spi: SPI(frequency=50MHz, mode=3);
+    
+    // Microcontroller with multiple interfaces
+    mcu: STM32F4() {
+        VDD <- VCC_3V3;
+        VSS <- GND;
+        
+        // I2C1 connection to main bus
+        I2C1_SDA <-> main_i2c.SDA;
+        I2C1_SCL <-> main_i2c.SCL;
+        
+        // SPI1 connection
+        SPI1_MOSI -> flash_spi.MOSI;
+        SPI1_MISO <- flash_spi.MISO;
+        SPI1_SCK -> flash_spi.SCK;
+        SPI1_CS -> flash_spi.CS;
+    }
+    
+    // I2C EEPROM on main bus
+    eeprom: AT24C256() {
+        VCC <- VCC_3V3;
+        GND <- GND;
+        SDA <-> main_i2c.SDA;
+        SCL <-> main_i2c.SCL;
+        A0 <- GND;  // Address pin
+        A1 <- GND;
+        A2 <- GND;
+    }
+    
+    // Level shifter between I2C buses
+    level_shifter: TXS0108E() {
+        VCCA <- VCC_3V3;
+        VCCB <- VCC_1V8;
+        GND <- GND;
+        OE <- VCC_3V3;  // Always enabled
+        
+        A1 <-> main_i2c.SDA;
+        B1 <-> sensor_i2c.SDA;
+        A2 <-> main_i2c.SCL;
+        B2 <-> sensor_i2c.SCL;
+    }
+    
+    // 1.8V I2C sensor
+    sensor: BME280() {
+        VDD <- VCC_1V8;
+        GND <- GND;
+        SDA <-> sensor_i2c.SDA;
+        SCL <-> sensor_i2c.SCL;
+        CSB <- VCC_1V8;  // I2C mode
+    }
+    
+    // SPI Flash using interface (consistent with master)
+    flash: W25Q128() {
+        VCC <- VCC_3V3;
+        GND <- GND;
+        SPI <=> flash_spi;  // Clean interface connection as slave
+        WP <- VCC_3V3;      // Write protect disabled
+        HOLD <- VCC_3V3;    // Hold disabled
+    }
+}
+
+// More advanced interface with optional signals
+interface UART_Full {
+    // Core signals
+    signal TX: out;
+    signal RX: in;
+    
+    // Flow control (optional)
+    signal RTS: out optional;
+    signal CTS: in optional;
+    
+    // Modem control (optional)
+    signal DTR: out optional;
+    signal DSR: in optional;
+    signal DCD: in optional;
+    signal RI: in optional;
+}
+
+// Interface-to-interface connection example
+board UARTBridge {
+    power VCC = 3.3V @ 50mA;
+    ground GND;
+    
+    // Two UART interfaces
+    uart1: UART_Full();
+    uart2: UART_Full();
+    
+    // MCU with two UARTs
+    mcu: STM32L0() {
+        VDD <- VCC;
+        VSS <- GND;
+        
+        // UART1 - Full featured
+        UART1_TX -> uart1.TX;
+        UART1_RX <- uart1.RX;
+        UART1_RTS -> uart1.RTS;
+        UART1_CTS <- uart1.CTS;
+        
+        // UART2 - Basic (no flow control)
+        UART2_TX -> uart2.TX;
+        UART2_RX <- uart2.RX;
+    }
+    
+    // USB-to-UART bridge
+    usb_uart: FT232R() {
+        VCC <- VCC;
+        GND <- GND;
+        
+        TXD -> uart1.RX;   // Cross-connected
+        RXD <- uart1.TX;
+        RTS -> uart1.CTS;
+        CTS <- uart1.RTS;
+    }
+    
+    // Direct UART connection (future syntax)
+    // uart1 <=> level_shift(3.3V, 1.8V) <=> uart2;
+}
