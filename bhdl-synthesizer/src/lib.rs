@@ -151,10 +151,9 @@ impl NetlistGenerator {
             }
         }
         
-        // Phase 1: Extract board/module hierarchy from analysis (only for flat synthesis)
-        if self.config.flatten_hierarchy {
-            self.extract_module_hierarchy(analysis)?;
-        }
+        // Phase 1: Extract board/module hierarchy from analysis
+        // Always extract to ensure top-level module is created
+        self.extract_module_hierarchy(analysis)?;
         
         // Phase 2: Generate database component instances if mapper is available
         if self.database_mapper.is_some() {
@@ -163,6 +162,10 @@ impl NetlistGenerator {
             // Fallback to semantic instance generation if database unavailable
             self.generate_instances_with_semantics(analysis)?;
         }
+        
+        // Phase 3: Synthesize interface instances BEFORE connectivity extraction
+        // This ensures interface signal nets exist before connections are processed
+        self.synthesize_interfaces(analysis)?;
         
         // Phase 4: Extract connectivity and create nets
         if let Some(ast) = ast {
@@ -185,9 +188,6 @@ impl NetlistGenerator {
         if self.config.include_component_inference {
             self.include_component_inference_info(analysis)?;
         }
-        
-        // Phase 7.5: Synthesize interface instances
-        self.synthesize_interfaces(analysis)?;
         
         // Phase 8: Populate analysis data in netlist (unified model)
         self.populate_analysis_data(analysis)?;
@@ -603,7 +603,44 @@ impl NetlistGenerator {
                 }
                 ConnectionEndpoint::Pin(instance_name, pin_name) => {
                     // This is a component pin reference (C1.pos, U1.IN, fuse.2, etc.)
-                    // First check if this is a net assignment handle
+                    // or an interface signal reference (i2c_bus.SDA)
+                    
+                    // First check if this might be an interface signal reference
+                    // The pattern instance_name.pin_name might be an interface signal
+                    // Check the analysis result to see if instance_name is an interface
+                    let mut is_interface_signal = false;
+                    
+                    // Look for any net that ends with _<signal_name> and starts with a valid instance prefix
+                    let mut found_interface_net = false;
+                    for (net_id, net) in self.netlist.nets.iter() {
+                        if let Some(net_name) = &net.name {
+                            // Check if this net ends with our signal name
+                            if net_name.ends_with(&format!("_{}", pin_name)) {
+                                // Extract the prefix before _<signal>
+                                let prefix_end = net_name.len() - pin_name.len() - 1;
+                                if prefix_end > 0 {
+                                    let prefix = &net_name[..prefix_end];
+                                    // Check if this prefix matches a known instance (like U1, U2, etc.)
+                                    // Interface instances are typically generated with U<number> names
+                                    if prefix.starts_with("U") && prefix[1..].chars().all(|c| c.is_digit(10)) {
+                                        // This looks like an interface signal net
+                                        info!("    Found interface signal net: {} for {}.{}", net_name, instance_name, pin_name);
+                                        current_net_id = Some(net_id);
+                                        found_interface_net = true;
+                                        is_interface_signal = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    if found_interface_net {
+                        // We've already set the current_net_id, continue to next endpoint
+                        continue;
+                    }
+                    
+                    // Not an interface signal, check for regular component pin
                     let instance_id = if let Some(&handle_id) = self.net_assignment_handles.get(&instance_name) {
                         info!("    Found net assignment handle '{}' -> instance {:?}", instance_name, handle_id);
                         Some(handle_id)
