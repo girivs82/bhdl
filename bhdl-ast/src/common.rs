@@ -128,6 +128,26 @@ impl AstNode for Value {
     fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
 }
 
+impl Value {
+    pub fn int_token(&self) -> Option<SyntaxToken<BhdlLanguage>> {
+        self.0.children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .find(|token| token.kind() == SyntaxKind::NUMBER && !token.text().contains('.'))
+    }
+    
+    pub fn float_token(&self) -> Option<SyntaxToken<BhdlLanguage>> {
+        self.0.children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .find(|token| token.kind() == SyntaxKind::NUMBER && token.text().contains('.'))
+    }
+    
+    pub fn number_token(&self) -> Option<SyntaxToken<BhdlLanguage>> {
+        self.0.children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .find(|token| token.kind() == SyntaxKind::NUMBER)
+    }
+}
+
 // --- Parameter Assignment --- `param_name = value`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ParamAssign(pub(crate) SyntaxNode<BhdlLanguage>); // Use SyntaxNode

@@ -68,6 +68,16 @@ impl Board {
     pub fn attributes(&self) -> impl Iterator<Item = AttributeDecl> {
         self.0.children().filter_map(AttributeDecl::cast)
     }
+    
+    // Alias for consistency with test code
+    pub fn attribute_decls(&self) -> impl Iterator<Item = AttributeDecl> {
+        self.attributes()
+    }
+    
+    // Behavioral modeling: when blocks
+    pub fn when_blocks(&self) -> impl Iterator<Item = crate::behavioral::WhenBlock> {
+        self.0.children().filter_map(crate::behavioral::WhenBlock::cast)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

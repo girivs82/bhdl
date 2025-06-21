@@ -22,6 +22,7 @@ pub mod spice_synthesis;
 pub mod analysis_data_conversion;
 pub mod attribute_analysis;
 pub mod builtin_variables;
+pub mod expression_evaluator;
 
 // Use items needed directly in the analyze function
 use types::{AnalysisResult, ResolvedConstants};

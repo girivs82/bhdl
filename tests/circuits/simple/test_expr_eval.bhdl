@@ -1,0 +1,20 @@
+// Simple expression evaluation test
+board test_expr_eval {
+    // Test basic arithmetic
+    attribute a = 5;
+    attribute b = 3;
+    attribute sum = a + b;
+    attribute product = a * b;
+    
+    // Test built-in variables
+    attribute time_step = dt * 1000;
+    attribute circle_area = pi * 10 * 10;
+    
+    // Power and ground
+    power VCC = 5V @ 1A;
+    ground GND;
+    
+    VCC -> R1.1;
+    R1: Res(10k);
+    R1.2 -> GND;
+}

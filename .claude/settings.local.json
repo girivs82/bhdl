@@ -122,7 +122,8 @@
       "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin test_complete_interface_chain 2 >& 1)",
       "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin test_parameterized_interface_runner 2 >& 1)",
       "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin test_perspective_interface_runner 2 >& 1)",
-      "Bash(RUST_LOG=info,bhdl_synthesizer::interface_synthesis=debug cargo run -p bhdl-synthesizer --bin test_perspective_interface_runner 2 >& 1)"
+      "Bash(RUST_LOG=info,bhdl_synthesizer::interface_synthesis=debug cargo run -p bhdl-synthesizer --bin test_perspective_interface_runner 2 >& 1)",
+      "Bash(./target/debug/test_expression_evaluator:*)"
     ],
     "deny": []
   }
