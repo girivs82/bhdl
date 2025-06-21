@@ -506,11 +506,12 @@ impl<'t> Parser<'t> {
         self.builder.start_node(SyntaxKind::CONNECTION_TARGET.into());
         
         // Could be qualified (instance.pin) or simple signal name
-        self.expect(SyntaxKind::IDENT);
+        // Allow keywords like "output" to be used as signal names
+        self.expect_ident_or_contextual_keyword();
         
         if self.peek() == Some(SyntaxKind::DOT) {
             self.bump(); // Consume dot
-            self.expect(SyntaxKind::IDENT); // Pin name
+            self.expect_ident_or_contextual_keyword(); // Pin name
         }
         
         // Optional array indexing

@@ -1,0 +1,98 @@
+// PWM-based voltage regulator with hierarchical module design
+// Demonstrates module parameters, nested instances, and port mapping
+
+module PWMController(frequency: frequency = 100kHz, duty_cycle: percentage = 50%) {
+    pin VCC: power in;
+    pin GND: ground in;
+    pin OUT: signal out;
+    pin EN: signal in;
+    pin FEEDBACK: signal in;
+    
+    // Internal oscillator frequency would be derived from module parameter
+    // Duty cycle controlled by feedback loop
+}
+
+module PowerRegulator(vin_nominal: voltage, vout: voltage = 3.3V) {
+    pin VIN: power in;
+    pin VOUT: power out;
+    pin GND: ground in;
+    pin EN: signal in;
+    
+    // Calculate switching frequency based on input/output voltages
+    const switching_freq: frequency = 500kHz;
+    
+    // PWM controller instance with parameter override
+    pwm: PWMController(frequency=switching_freq, duty_cycle=75%) {
+        VCC <- VIN;
+        GND <- GND;
+        OUT -> switch_node;
+        EN <- EN;
+        FEEDBACK <- feedback_node;
+    }
+    
+    // Power switching components
+    q1: MOSFET(Vds_max=30V, Id_max=5A);
+    l1: Inductor(10uH, Isat=3A);
+    c1: Capacitor(100uF, voltage=16V);
+    d1: SchottkyDiode(Vf=0.3V, If_max=3A);
+    
+    // Feedback network
+    r_top: Resistor(10k);
+    r_bottom: Resistor(4.7k);
+    
+    // Power path connections
+    VIN -> q1.D;
+    switch_node -> q1.S;
+    pwm.OUT -> q1.G;
+    
+    switch_node -> l1.1;
+    l1.2 -> VOUT;
+    
+    // Freewheeling diode
+    GND -> d1.A;
+    switch_node -> d1.K;
+    
+    // Output capacitor
+    VOUT -> c1.+;
+    GND -> c1.-;
+    
+    // Feedback divider
+    VOUT -> r_top.1;
+    feedback_node: r_top.2 -> r_bottom.1;
+    GND -> r_bottom.2;
+}
+
+board DualRailPowerSupply {
+    power VIN_12V = 12V @ 5A;
+    ground GND;
+    
+    // 5V rail regulator
+    reg_5v: PowerRegulator(vin_nominal=12V, vout=5V) {
+        VIN <- VIN_12V;
+        VOUT -> RAIL_5V;
+        GND <- GND;
+        EN <- enable_5v;
+        
+        // Override PWM frequency for 5V operation
+        attribute pwm.frequency = 600kHz;
+    }
+    
+    // 3.3V rail regulator
+    reg_3v3: PowerRegulator(vin_nominal=12V, vout=3.3V) {
+        VIN <- VIN_12V;
+        VOUT -> RAIL_3V3;
+        GND <- GND;
+        EN <- enable_3v3;
+    }
+    
+    // Enable control
+    enable_5v: PullupResistor(10k) -> VIN_12V;
+    enable_3v3: PullupResistor(10k) -> VIN_12V;
+    
+    // Output connectors
+    j1: PowerConnector(pins=3) {
+        1 <- RAIL_5V;
+        2 <- RAIL_3V3;
+        3 <- GND;
+    }
+}
