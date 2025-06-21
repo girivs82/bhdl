@@ -9,6 +9,7 @@ use bhdl_ast::{
     hierarchical::ModuleInst,
     v2_statements::ConnectionStmt,
     expr::{Expr, BinaryExpr},
+    interfaces::{InterfaceSignal, InterfaceRequirement, InterfaceInst, SignalDirection},
 };
 
 use crate::symbol_table::{Symbol, SymbolKind, SymbolTable, PortDirectionKind}; // Use crate:: for local module
@@ -133,6 +134,18 @@ pub fn populate_global_scope_and_build_definition_scopes(source_file: &SourceFil
     
     context.global_scope_mut().insert(Symbol {
         name: "percentage".to_string(),
+        kind: SymbolKind::Typedef,
+        span: dummy_range,
+        instance_type_name: None,
+        definition_node_ptr: None,
+        bus_high: None, 
+        bus_low: None,
+        direction: None, 
+        parameter_overrides: None,
+    });
+    
+    context.global_scope_mut().insert(Symbol {
+        name: "int".to_string(),
         kind: SymbolKind::Typedef,
         span: dummy_range,
         instance_type_name: None,
@@ -295,11 +308,55 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                 }
             }
         }
+        SyntaxKind::INTERFACE_SIGNAL => {
+            if let Some(signal) = InterfaceSignal::cast(node.clone()) {
+                if let Some(name_token) = signal.name() {
+                    let direction = signal.direction().map(|d| match d {
+                        SignalDirection::In => PortDirectionKind::In,
+                        SignalDirection::Out => PortDirectionKind::Out,
+                        SignalDirection::InOut => PortDirectionKind::InOut,
+                    });
+                    
+                    context.current_scope_mut().insert(Symbol::new_decl(
+                        name_token.text(),
+                        SymbolKind::Pin, // Interface signals are like pins
+                        name_token.text_range(),
+                        node,
+                        None, // No bus bounds for now
+                        None,
+                        direction,
+                    ));
+                }
+            }
+        }
+        SyntaxKind::INTERFACE_REQUIREMENT => {
+            // Interface requirements don't create symbols, they are just constraints
+            // Could be handled in a separate pass for validation
+        }
+        SyntaxKind::INTERFACE_INST => {
+            if let Some(inst) = InterfaceInst::cast(node.clone()) {
+                if let Some(name_token) = inst.name() {
+                    context.current_scope_mut().insert(Symbol::new_definition(
+                        name_token.text(),
+                        SymbolKind::Instance,
+                        name_token.text_range(),
+                        &SyntaxNodePtr::new(node),
+                    ));
+                }
+            }
+        }
         SyntaxKind::COMPONENT_INST => {
              if let Some(inst) = ComponentInst::cast(node.clone()) {
                 if let (Some(instance_name_token), Some(type_name_token)) = (inst.name(), inst.component_type_name()) {
                     let instance_name = instance_name_token.text().to_string();
                     let type_name = type_name_token.text().to_string();
+                    
+                    // Check if this is actually an interface instance by looking up the type
+                    let is_interface = context.global_scope_mut()
+                        .lookup(&type_name)
+                        .map(|sym| sym.kind == SymbolKind::Interface)
+                        .unwrap_or(false);
+                    
                     let mut instance_symbol = Symbol::new_instance(
                         &instance_name, 
                         instance_name_token.text_range(),

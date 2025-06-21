@@ -7,6 +7,7 @@ use bhdl_ast::{HasName,
     // Removed: SourceFile, Board, Module, ComponentDef, InterfaceDef
     // items::{Board, Module, ComponentDef, InterfaceDef}, // For scope handling - REMOVED
     common::{NetDecl, PinRef, PortDecl, ComponentInst, TypeRef, SimpleIdentRef, IdentRef, NetRef, ParamAssign}, // Removed PinDecl (v1.0)
+    interfaces::InterfaceInst,
 };
 
 use crate::symbol_table::{Symbol, SymbolKind, SymbolTable, PortDirectionKind};
@@ -513,7 +514,54 @@ pub fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mu
                             );
                         }
                         Some(symbol) => {
-                            if !symbol.kind.is_component_type_kind() {
+                            // Check if this is an interface instance
+                            if symbol.kind == SymbolKind::Interface {
+                                // Handle as interface instance
+                                if let Some(def_node_ptr) = &symbol.definition_node_ptr {
+                                    if let Some(interface_scope) = context.definition_scopes.get(def_node_ptr) {
+                                        // Check for PARAM_LIST (interface instances) or PARAM_ASSIGN_BLOCK (components)
+                                        if let Some(param_list) = inst.param_list() {
+                                            // Handle PARAM_LIST for interface instances
+                                            for param_assign in param_list.params() {
+                                                if let Some(param_name_token) = param_assign.name() {
+                                                    let param_name = param_name_token.text();
+                                                    match interface_scope.lookup(param_name) {
+                                                        None => {
+                                                            context.add_diagnostic(
+                                                                format!("Unknown parameter '{}' for interface type '{}'", param_name, type_name),
+                                                                param_name_token.text_range()
+                                                            );
+                                                        }
+                                                        Some(param_symbol) => {
+                                                            if param_symbol.kind != SymbolKind::Parameter {
+                                                                context.add_diagnostic(
+                                                                    format!("Symbol '{}' in interface type '{}' is not a parameter (found {:?})", param_name, type_name, param_symbol.kind),
+                                                                    param_name_token.text_range()
+                                                                );
+                                                            }
+                                                        }
+                                                    }
+                                                    
+                                                    // Visit parameter value expression
+                                                    let value_expr_node = param_assign.syntax().children_with_tokens()
+                                                        .skip_while(|e| e.kind() != SyntaxKind::EQ)
+                                                        .skip(1) // Skip '=' itself
+                                                        .filter_map(|e| e.into_node()) // Get subsequent nodes
+                                                        .find(|n| !matches!(n.kind(), SyntaxKind::WHITESPACE | SyntaxKind::SEMI)); // Find the first non-whitespace/semicolon node
+                                                    
+                                                    if let Some(value_expr) = value_expr_node {
+                                                        visit_node_pass2_references(&value_expr, context);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        context.add_diagnostic(format!("Internal Error: Scope not found for interface '{}'", type_name), type_name_token.text_range());
+                                    }
+                                } else {
+                                    context.add_diagnostic(format!("Internal Error: Symbol for interface '{}' missing definition pointer", type_name), type_name_token.text_range());
+                                }
+                            } else if !symbol.kind.is_component_type_kind() {
                                 context.add_diagnostic(
                                     format!("Symbol '{}' is not a valid component type (found {:?})", type_name, symbol.kind),
                                     type_name_token.text_range(),
@@ -568,6 +616,67 @@ pub fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mu
             } // Recurse into children (param assigns handled above)
             // Do not recurse into component body { ... } here
             // recurse_children = false; // This seems wrong, need to visit param assigns
+        }
+        SyntaxKind::INTERFACE_INST => {
+            if let Some(inst) = InterfaceInst::cast(node.clone()) {
+                if let Some(type_name_token) = inst.interface_type() {
+                    let type_name = type_name_token.text();
+                    match context.lookup_global(type_name) {
+                        None => {
+                            context.add_diagnostic(
+                                format!("Undefined interface type: {}", type_name),
+                                type_name_token.text_range(),
+                            );
+                        }
+                        Some(symbol) => {
+                            if symbol.kind != SymbolKind::Interface {
+                                context.add_diagnostic(
+                                    format!("Symbol '{}' is not an interface (found {:?})", type_name, symbol.kind),
+                                    type_name_token.text_range(),
+                                );
+                            } else {
+                                // Check interface parameters if present
+                                if let Some(def_node_ptr) = &symbol.definition_node_ptr {
+                                    if let Some(interface_scope) = context.definition_scopes.get(def_node_ptr) {
+                                        if let Some(params) = inst.params() {
+                                            for param in params.params() {
+                                                if let Some(param_name_token) = param.name() {
+                                                    let param_name = param_name_token.text();
+                                                    match interface_scope.lookup(param_name) {
+                                                        None => {
+                                                            context.add_diagnostic(
+                                                                format!("Unknown parameter '{}' for interface type '{}'", param_name, type_name),
+                                                                param_name_token.text_range()
+                                                            );
+                                                        }
+                                                        Some(param_symbol) => {
+                                                            if param_symbol.kind != SymbolKind::Parameter {
+                                                                context.add_diagnostic(
+                                                                    format!("Symbol '{}' in interface type '{}' is not a parameter (found {:?})", param_name, type_name, param_symbol.kind),
+                                                                    param_name_token.text_range()
+                                                                );
+                                                            }
+                                                        }
+                                                    }
+                                                    
+                                                    // Visit parameter value expression
+                                                    if let Some(value_expr) = param.value() {
+                                                        visit_node_pass2_references(value_expr.syntax(), context);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        context.add_diagnostic(format!("Internal Error: Scope not found for interface '{}'", type_name), type_name_token.text_range());
+                                    }
+                                } else {
+                                    context.add_diagnostic(format!("Internal Error: Symbol for interface '{}' missing definition pointer", type_name), type_name_token.text_range());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
         SyntaxKind::ASSIGN_STMT => {
             let eq_token_idx = node.children_with_tokens().position(|e| e.kind() == SyntaxKind::EQ);
