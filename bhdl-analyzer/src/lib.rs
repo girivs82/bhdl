@@ -20,6 +20,7 @@ pub mod spice_extraction;
 pub mod spice_integration;
 pub mod spice_synthesis;
 pub mod analysis_data_conversion;
+pub mod attribute_analysis;
 
 // Use items needed directly in the analyze function
 use types::{AnalysisResult, ResolvedConstants};
@@ -30,6 +31,7 @@ use pass4::{visit_node_pass4_bounds_checks, Pass4Context};
 use power_analysis::{analyze_power_domains, PowerAnalysisContext};
 use component_inference::ComponentInferenceContext;
 use power_sequencing::PowerSequenceGenerator;
+use attribute_analysis::AttributeAnalyzer;
 
 // Main analysis function
 pub fn analyze(source_file: &SourceFile) -> AnalysisResult {
@@ -187,6 +189,23 @@ pub fn analyze(source_file: &SourceFile) -> AnalysisResult {
     let sequencing_warnings = power_sequencing.warnings.len();
     println!("Analyzer: Pass 7 complete. Startup steps: {}, Shutdown steps: {}, Warnings: {}", 
              startup_steps, shutdown_steps, sequencing_warnings);
+    
+    // Pass 8: Attribute Analysis
+    println!("Analyzer: Starting Pass 8 - Attribute Analysis...");
+    let mut attribute_analyzer = AttributeAnalyzer::new();
+    let attribute_analysis = attribute_analyzer.analyze(source_file.syntax());
+    let attribute_count = attribute_analysis.attributes.len();
+    let circular_deps_count = attribute_analysis.circular_dependencies.len();
+    println!("Analyzer: Pass 8 complete. Attributes found: {}, Circular dependencies: {}", 
+             attribute_count, circular_deps_count);
+    
+    // Add diagnostics for circular attribute dependencies
+    for cycle in &attribute_analysis.circular_dependencies {
+        diagnostics.push(types::Diagnostic {
+            message: format!("Circular attribute dependency: {}", cycle.join(" -> ")),
+            range: rowan::TextRange::empty(rowan::TextSize::from(0)),
+        });
+    }
 
     // Convert power analysis errors to diagnostics
     for error in &power_context.errors {
@@ -232,6 +251,7 @@ pub fn analyze(source_file: &SourceFile) -> AnalysisResult {
         component_inference, // Move ownership
         power_sequencing, // Move ownership
         netlist: None, // Move ownership
+        attribute_analysis, // Move ownership
     }
 }
 
