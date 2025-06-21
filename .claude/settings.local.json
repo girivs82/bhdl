@@ -100,7 +100,9 @@
       "Bash(./target/debug/test_pin_metadata)",
       "Bash(./target/debug/bhdl-cli docs/examples/buck_converter_with_metadata.bhdl parse)",
       "Bash(./target/debug/bhdl-cli:*)",
-      "Bash(jq:*)"
+      "Bash(jq:*)",
+      "Bash(./target/debug/test_parse_module_params)",
+      "Bash(./target/debug/test_simple_hierarchy)"
     ],
     "deny": []
   }
