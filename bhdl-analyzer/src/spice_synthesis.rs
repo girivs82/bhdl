@@ -403,6 +403,7 @@ impl ResolutionReport {
                 reasoning: res.reasoning.clone(),
                 confidence: 0.95,
                 alternatives: vec![],
+                parameter_overrides: HashMap::new(),
             }
         }).collect()
     }

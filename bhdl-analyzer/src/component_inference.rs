@@ -100,6 +100,8 @@ pub struct ComponentSuggestion {
     pub reasoning: String,
     pub confidence: f64,
     pub alternatives: Vec<String>,
+    /// Parameter overrides from the AST (e.g., perspective="slave")
+    pub parameter_overrides: HashMap<String, String>,
 }
 
 /// Component inference context
@@ -487,6 +489,7 @@ impl ComponentInferenceContext {
                 reasoning: "IC component - using exact part number".to_string(),
                 confidence: 1.0,
                 alternatives: vec![],
+                parameter_overrides: HashMap::new(),
             });
         }
         
@@ -683,6 +686,7 @@ impl ComponentInferenceContext {
                 "Consider 1% tolerance for precision applications".to_string(),
                 "Use 0.5W or higher power rating for safety".to_string(),
             ],
+            parameter_overrides: HashMap::new(),
         })
     }
     
@@ -745,6 +749,7 @@ impl ComponentInferenceContext {
                     "Consider ceramic (X7R) for decoupling".to_string(),
                     "Use electrolytic for bulk capacitance".to_string(),
                 ],
+                parameter_overrides: HashMap::new(),
             })
         } else {
             // For generic capacitors without specific context, return a generic suggestion
@@ -766,6 +771,7 @@ impl ComponentInferenceContext {
                     "Consider specific value based on circuit requirements".to_string(),
                     "Use ceramic (X7R/X5R) for general purpose".to_string(),
                 ],
+                parameter_overrides: HashMap::new(),
             })
         }
     }
@@ -813,6 +819,7 @@ impl ComponentInferenceContext {
                 "Consider RGB LED for multiple states".to_string(),
                 "Use high-brightness LED for visibility".to_string(),
             ],
+            parameter_overrides: HashMap::new(),
         })
     }
     
@@ -856,6 +863,7 @@ impl ComponentInferenceContext {
             reasoning: format!("Generic {} component", component_type),
             confidence: 0.5,
             alternatives: vec![],
+                parameter_overrides: HashMap::new(),
         })
     }
     
@@ -882,6 +890,7 @@ impl ComponentInferenceContext {
                 "Check component library for module definition".to_string(),
                 "Verify component type name is correct".to_string(),
             ],
+            parameter_overrides: HashMap::new(),
         })
     }
     
@@ -959,6 +968,7 @@ impl ComponentInferenceContext {
             reasoning: format!("Resolved from component library module: {}", module.name),
             confidence: 0.95,
             alternatives: module.metadata.packages.clone(),
+            parameter_overrides: HashMap::new(),
         })
     }
     

@@ -1,0 +1,142 @@
+// Interface error test cases
+// Tests error handling and edge cases for interfaces
+
+// Test 1: Missing interface type
+board TestInterfaceMissing {
+    power VCC = 3.3V @ 1A;
+    ground GND;
+    
+    // This should fail - NonExistentInterface doesn't exist
+    bad_interface: NonExistentInterface;
+}
+
+// Test 2: Interface with conflicting perspectives
+interface BadSPI {
+    signal MOSI: out;
+    signal MISO: in;
+    
+    perspective master {
+        // Same as default - should be OK
+        signal MOSI: out;
+        signal MISO: in;
+    }
+    
+    perspective slave {
+        signal MOSI: in;
+        signal MISO: out;
+    }
+}
+
+// Test 3: Invalid perspective name
+board TestBadPerspective {
+    power VCC = 3.3V @ 1A;
+    ground GND;
+    
+    // This should fail - "invalid" is not a valid perspective
+    spi: SPI(mode="invalid");
+}
+
+// Test 4: Interface with circular reference
+interface Circular1 {
+    signal DATA: out;
+    interface Circular2 nested;
+}
+
+interface Circular2 {
+    signal DATA: in;
+    interface Circular1 nested; // Circular reference
+}
+
+// Test 5: Interface parameter type mismatch
+board TestParamTypeMismatch {
+    power VCC = 3.3V @ 1A;
+    ground GND;
+    
+    // This should warn - width expects int, not string
+    spi: SPI(width="eight");
+}
+
+// Test 6: Interface signal name conflicts
+interface ConflictingSPI {
+    signal DATA: out;
+    signal DATA: in; // Duplicate signal name
+}
+
+// Test 7: Invalid interface requirement
+interface BadRequirement {
+    signal SDA: inout;
+    signal SCL: out;
+    
+    // Invalid requirement syntax
+    require invalid_requirement;
+    require pullup(SDA); // Missing resistance value
+}
+
+// Test 8: Interface connection to non-interface
+board TestBadConnection {
+    power VCC = 3.3V @ 1A;
+    ground GND;
+    
+    i2c: I2C;
+    res: Res(10kΩ);
+    
+    // This should fail - can't use <=> with non-interface
+    i2c <=> res;
+}
+
+// Test 9: Interface perspective in wrong context
+module TestModule {
+    pin VDD: power in;
+    pin GND: ground;
+    
+    // This should fail - perspective only valid in interface definitions
+    perspective master {
+        pin DATA: signal out;
+    }
+}
+
+// Test 10: Optional signal without proper handling
+interface OptionalInterface {
+    signal REQ: out;
+    signal ACK: in optional;
+    signal DATA: out when ACK; // Conditional on optional signal
+}
+
+// Test edge cases that should work
+board TestInterfaceEdgeCases {
+    power VCC = 3.3V @ 1A;
+    ground GND;
+    
+    // Empty interface (should be allowed)
+    interface EmptyInterface {
+        // No signals
+    }
+    
+    empty: EmptyInterface;
+    
+    // Interface with only optional signals
+    interface AllOptional {
+        signal A: out optional;
+        signal B: in optional;
+    }
+    
+    opt: AllOptional;
+    
+    // Nested interface instantiation
+    interface Nested {
+        signal DATA: out;
+        interface I2C i2c_nested;
+    }
+    
+    nested: Nested;
+    
+    // Multiple perspectives on same interface type
+    spi_master1: SPI(mode="master");
+    spi_master2: SPI(mode="master");
+    spi_slave1: SPI(mode="slave");
+    spi_slave2: SPI(mode="slave");
+    
+    // Chain of interface connections
+    spi_master1 <=> spi_slave1;
+    spi_master2 <=> spi_slave2;
+}

@@ -45,6 +45,14 @@ pub struct InterfaceRequirementInfo {
     pub arguments: Vec<String>,
 }
 
+/// Resolved interface parameter value
+#[derive(Debug, Clone)]
+pub struct InterfaceParameter {
+    pub name: String,
+    pub value: String,
+    pub parameter_type: String,
+}
+
 impl NetlistGenerator {
     /// Synthesize all interface instances in the design
     pub fn synthesize_interfaces(&mut self, analysis: &AnalysisResult) -> Result<()> {
@@ -59,29 +67,35 @@ impl NetlistGenerator {
         // Check component inference results for interface types
         for (idx, comp) in analysis.component_inference.inferred_components.iter().enumerate() {
             // Check if the component type is actually an interface
-            if let Some(type_symbol) = analysis.global_scope.lookup(&comp.component_type) {
-                if type_symbol.kind == SymbolKind::Interface {
-                    // The generated instance name (e.g., U1)
-                    let generated_name = comp.instance_name.clone()
-                        .unwrap_or_else(|| format!("interface_{}", idx));
-                    
-                    // Try to find the original instance name from the instance_name field
-                    // For interfaces, the instance_name might preserve the original name
-                    let original_name = generated_name.clone();
-                    
-                    info!("Found interface instance '{}' (generated: '{}') of type {}", 
-                          original_name, generated_name, comp.component_type);
-                    
-                    // Store the mapping
-                    original_to_generated.insert(original_name.clone(), generated_name.clone());
-                    
-                    let instance = InterfaceInstance {
-                        instance_name: generated_name,
-                        interface_type: comp.component_type.clone(),
-                        parameter_overrides: HashMap::new(),
-                    };
-                    interface_instances.push(instance);
-                }
+            let is_interface = if let Some(type_symbol) = analysis.global_scope.lookup(&comp.component_type) {
+                type_symbol.kind == SymbolKind::Interface
+            } else {
+                // Check if it's a hardcoded interface type
+                self.is_hardcoded_interface_type(&comp.component_type)
+            };
+            
+            if is_interface {
+                // The generated instance name (e.g., U1)
+                let generated_name = comp.instance_name.clone()
+                    .unwrap_or_else(|| format!("interface_{}", idx));
+                
+                // Try to find the original instance name from the instance_name field
+                // For interfaces, the instance_name might preserve the original name
+                let original_name = generated_name.clone();
+                
+                info!("Found interface instance '{}' (generated: '{}') of type {}", 
+                      original_name, generated_name, comp.component_type);
+                
+                // Store the mapping
+                original_to_generated.insert(original_name.clone(), generated_name.clone());
+                
+                // Use parameter overrides from component inference
+                let instance = InterfaceInstance {
+                    instance_name: generated_name,
+                    interface_type: comp.component_type.clone(),
+                    parameter_overrides: comp.parameter_overrides.clone(),
+                };
+                interface_instances.push(instance);
             }
         }
         
@@ -153,37 +167,23 @@ impl NetlistGenerator {
         info!("Synthesizing interface instance: {} (type: {})", 
               instance.instance_name, instance.interface_type);
         
-        // For now, use hardcoded interface definitions until we can access the AST
-        let signals = match instance.interface_type.as_str() {
-            "I2C" => vec![
-                InterfaceSignalInfo {
-                    name: "SDA".to_string(),
-                    direction: SignalDirection::InOut,
-                    is_optional: false,
-                },
-                InterfaceSignalInfo {
-                    name: "SCL".to_string(),
-                    direction: SignalDirection::Out,
-                    is_optional: false,
-                },
-            ],
-            "UART" => vec![
-                InterfaceSignalInfo {
-                    name: "TX".to_string(),
-                    direction: SignalDirection::Out,
-                    is_optional: false,
-                },
-                InterfaceSignalInfo {
-                    name: "RX".to_string(),
-                    direction: SignalDirection::In,
-                    is_optional: false,
-                },
-            ],
-            _ => {
-                warn!("Unknown interface type: {}", instance.interface_type);
-                vec![]
-            }
+        // Resolve interface parameters
+        let resolved_params = self.resolve_interface_parameters(instance, analysis)?;
+        
+        info!("Interface parameters: {:?}", resolved_params);
+        
+        // Check if a perspective is specified in the instance name or parameters
+        let perspective = self.extract_perspective_from_instance(instance);
+        
+        // Get interface definition from analysis or use built-in interfaces
+        let signals = if let Ok(interface_def) = self.get_interface_definition(&instance.interface_type, analysis) {
+            // Use interface definition from AST
+            self.extract_interface_signals_with_perspective(&interface_def, perspective.as_deref())
+        } else {
+            // Fall back to hardcoded interface definitions with perspective support
+            self.get_hardcoded_interface_signals(&instance.interface_type, &resolved_params, perspective.as_deref())
         };
+        
         let requirements = vec![];
         
         // Get the module ID for the board/module containing this interface
@@ -220,30 +220,212 @@ impl NetlistGenerator {
         Ok(())
     }
     
+    /// Resolve interface parameters by combining defaults with overrides
+    fn resolve_interface_parameters(
+        &self,
+        instance: &InterfaceInstance,
+        _analysis: &AnalysisResult
+    ) -> Result<Vec<InterfaceParameter>> {
+        let mut resolved_params = Vec::new();
+        
+        // First, add default parameters based on interface type
+        match instance.interface_type.as_str() {
+            "SPI" => {
+                // Default SPI parameters
+                resolved_params.push(InterfaceParameter {
+                    name: "width".to_string(),
+                    value: "8".to_string(),
+                    parameter_type: "int".to_string(),
+                });
+                resolved_params.push(InterfaceParameter {
+                    name: "frequency".to_string(),
+                    value: "1MHz".to_string(),
+                    parameter_type: "frequency".to_string(),
+                });
+                resolved_params.push(InterfaceParameter {
+                    name: "mode".to_string(),
+                    value: "master".to_string(),
+                    parameter_type: "string".to_string(),
+                });
+            },
+            "UART" => {
+                resolved_params.push(InterfaceParameter {
+                    name: "baudrate".to_string(),
+                    value: "9600".to_string(),
+                    parameter_type: "int".to_string(),
+                });
+                resolved_params.push(InterfaceParameter {
+                    name: "mode".to_string(),
+                    value: "dte".to_string(), // Default to DTE (Data Terminal Equipment)
+                    parameter_type: "string".to_string(),
+                });
+            },
+            _ => {
+                // No default parameters for unknown interfaces
+            }
+        }
+        
+        
+        // Override with instance-specific parameters
+        for (param_name, param_value) in &instance.parameter_overrides {
+            if let Some(param) = resolved_params.iter_mut().find(|p| p.name == *param_name) {
+                param.value = param_value.clone();
+            } else {
+                // Add new parameter if not in defaults
+                resolved_params.push(InterfaceParameter {
+                    name: param_name.clone(),
+                    value: param_value.clone(),
+                    parameter_type: "unknown".to_string(),
+                });
+            }
+        }
+        
+        Ok(resolved_params)
+    }
+    
     /// Get the interface definition from the analysis result
     fn get_interface_definition(
         &self,
         interface_type: &str,
-        analysis: &AnalysisResult
+        _analysis: &AnalysisResult
     ) -> Result<InterfaceDef> {
-        // Look up the interface in the global scope
-        let interface_symbol = analysis.global_scope.lookup(interface_type)
-            .ok_or_else(|| anyhow::anyhow!("Interface type '{}' not found", interface_type))?;
-        
-        // Get the definition node
-        let def_node_ptr = interface_symbol.definition_node_ptr.as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Interface '{}' has no definition node", interface_type))?;
-        
-        // Get the actual syntax node from the source file
-        // This is a bit tricky - we need access to the source file root
-        // For now, we'll return an error - this needs to be improved
+        // For now, we can't easily access the AST from here
+        // This would require storing a reference to the AST in the synthesizer
+        // TODO: Implement proper AST access for interface definitions
         Err(anyhow::anyhow!("Cannot access interface definition AST - need source file reference"))
+    }
+    
+    /// Check if a component type is a hardcoded interface type
+    fn is_hardcoded_interface_type(&self, component_type: &str) -> bool {
+        matches!(component_type, "SPI" | "I2C" | "UART" | "USB" | "CAN" | "Ethernet")
+    }
+    
+    /// Extract perspective from interface instance
+    fn extract_perspective_from_instance(&self, instance: &InterfaceInstance) -> Option<String> {
+        // Check for "mode" parameter (since "perspective" is a keyword)
+        instance.parameter_overrides.get("mode").cloned()
+            .or_else(|| instance.parameter_overrides.get("perspective").cloned())
+    }
+    
+    /// Get hardcoded interface signals with perspective support
+    fn get_hardcoded_interface_signals(
+        &self, 
+        interface_type: &str, 
+        resolved_params: &[InterfaceParameter],
+        perspective: Option<&str>
+    ) -> Vec<InterfaceSignalInfo> {
+        match interface_type {
+            "I2C" => vec![
+                InterfaceSignalInfo {
+                    name: "SDA".to_string(),
+                    direction: SignalDirection::InOut, // Always bidirectional for I2C
+                    is_optional: false,
+                },
+                InterfaceSignalInfo {
+                    name: "SCL".to_string(),
+                    direction: if perspective == Some("slave") { 
+                        SignalDirection::In 
+                    } else { 
+                        SignalDirection::Out // Default to master
+                    },
+                    is_optional: false,
+                },
+            ],
+            "SPI" => {
+                // Use parameters to determine interface signals
+                let _width = resolved_params.iter()
+                    .find(|p| p.name == "width")
+                    .map(|p| p.value.parse::<i32>().unwrap_or(8))
+                    .unwrap_or(8);
+                
+                info!("Creating SPI interface with perspective={:?}", perspective);
+                
+                // SPI signal directions depend on master/slave perspective
+                let is_slave = perspective == Some("slave");
+                
+                vec![
+                    InterfaceSignalInfo {
+                        name: "MOSI".to_string(),
+                        direction: if is_slave { SignalDirection::In } else { SignalDirection::Out },
+                        is_optional: false,
+                    },
+                    InterfaceSignalInfo {
+                        name: "MISO".to_string(),
+                        direction: if is_slave { SignalDirection::Out } else { SignalDirection::In },
+                        is_optional: false,
+                    },
+                    InterfaceSignalInfo {
+                        name: "SCK".to_string(),
+                        direction: if is_slave { SignalDirection::In } else { SignalDirection::Out },
+                        is_optional: false,
+                    },
+                    InterfaceSignalInfo {
+                        name: "CS".to_string(),
+                        direction: if is_slave { SignalDirection::In } else { SignalDirection::Out },
+                        is_optional: true,
+                    },
+                ]
+            },
+            "UART" => {
+                let is_dce = perspective == Some("dce"); // Data Circuit-terminating Equipment (modem)
+                
+                vec![
+                    InterfaceSignalInfo {
+                        name: "TX".to_string(),
+                        direction: if is_dce { SignalDirection::In } else { SignalDirection::Out },
+                        is_optional: false,
+                    },
+                    InterfaceSignalInfo {
+                        name: "RX".to_string(),
+                        direction: if is_dce { SignalDirection::Out } else { SignalDirection::In },
+                        is_optional: false,
+                    },
+                ]
+            },
+            _ => {
+                warn!("Unknown interface type: {}", interface_type);
+                vec![]
+            }
+        }
     }
     
     /// Extract signals from an interface definition
     fn extract_interface_signals(&self, interface_def: &InterfaceDef) -> Vec<InterfaceSignalInfo> {
+        // Use default perspective
+        self.extract_interface_signals_with_perspective(interface_def, None)
+    }
+    
+    /// Extract signals from an interface definition with perspective support
+    fn extract_interface_signals_with_perspective(
+        &self, 
+        interface_def: &InterfaceDef, 
+        perspective: Option<&str>
+    ) -> Vec<InterfaceSignalInfo> {
         let mut signals = Vec::new();
         
+        // First, try to find a specific perspective block
+        if let Some(perspective_name) = perspective {
+            for perspective_block in interface_def.perspectives() {
+                if let Some(name) = perspective_block.name() {
+                    if name.text() == perspective_name {
+                        // Use signals from this perspective
+                        for signal in perspective_block.signals() {
+                            if let Some(name) = signal.name() {
+                                let info = InterfaceSignalInfo {
+                                    name: name.text().to_string(),
+                                    direction: signal.direction().unwrap_or(SignalDirection::InOut),
+                                    is_optional: signal.is_optional(),
+                                };
+                                signals.push(info);
+                            }
+                        }
+                        return signals;
+                    }
+                }
+            }
+        }
+        
+        // Fallback to default signals if no perspective found
         for signal in interface_def.signals() {
             if let Some(name) = signal.name() {
                 let info = InterfaceSignalInfo {

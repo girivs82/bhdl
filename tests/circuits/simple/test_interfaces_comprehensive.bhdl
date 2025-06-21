@@ -1,0 +1,180 @@
+// Comprehensive interface test suite
+// Tests all interface features in BHDL v2.0
+
+// Basic interface definition
+interface I2C {
+    signal SDA: inout;
+    signal SCL: out;
+}
+
+// Parameterized interface with default values
+interface SPI(width: int = 8, frequency: frequency = 1MHz) {
+    signal MOSI: out;
+    signal MISO: in;
+    signal SCK: out;
+    signal CS: out optional;
+    
+    // Perspective support
+    perspective slave {
+        signal MOSI: in;
+        signal MISO: out;
+        signal SCK: in;
+        signal CS: in optional;
+    }
+}
+
+// Interface with requirements
+interface USB2 {
+    signal DP: inout;
+    signal DM: inout;
+    signal VBUS: power in;
+    signal GND: ground;
+    
+    require pullup(DP, 1.5kΩ);
+    require termination(DP, 27Ω);
+    require termination(DM, 27Ω);
+}
+
+// Complex interface with nested interfaces
+interface RGMII {
+    signal TX_CLK: out;
+    signal TX_CTL: out;
+    signal TXD[4]: out;
+    
+    signal RX_CLK: in;
+    signal RX_CTL: in;
+    signal RXD[4]: in;
+    
+    // Timing constraints
+    constrain timing {
+        setup(TXD, TX_CLK) >= 1.5ns;
+        hold(TXD, TX_CLK) >= 0.5ns;
+    }
+}
+
+// Module using interfaces
+module MCU {
+    pin RESET: signal in;
+    pin VDD: power in;
+    pin GND: ground;
+    
+    // Interface pins
+    interface I2C i2c;
+    interface SPI(width=16) spi_master;
+    interface USB2 usb;
+}
+
+// Test board with all interface features
+board InterfaceTestBoard {
+    power VCC = 3.3V @ 1A;
+    power USB_5V = 5V @ 500mA;
+    ground GND;
+    
+    // 1. Basic interface instantiation
+    i2c_bus: I2C;
+    
+    // 2. Parameterized interface with overrides
+    spi_bus: SPI(width=16, frequency=10MHz);
+    
+    // 3. Interface with explicit perspective
+    spi_master: SPI(mode="master");
+    spi_slave: SPI(mode="slave");
+    
+    // 4. Interface with requirements
+    usb_host: USB2;
+    
+    // 5. Component with interface pins
+    mcu: MCU;
+    
+    // 6. Pin-to-interface connections
+    // Connect MCU's I2C interface to the I2C bus
+    mcu.i2c <=> i2c_bus;
+    
+    // 7. Interface-to-interface connections
+    // Connect SPI master to slave
+    spi_master <=> spi_slave;
+    
+    // 8. Direct signal access
+    VCC -> Res(4.7kΩ).1 -> i2c_bus.SDA;
+    VCC -> Res(4.7kΩ).1 -> i2c_bus.SCL;
+    
+    // 9. USB connections with power
+    USB_5V -> usb_host.VBUS;
+    
+    // 10. Complex routing
+    mcu.spi_master.MOSI -> spi_bus.MOSI;
+    spi_bus.MISO -> mcu.spi_master.MISO;
+    mcu.spi_master.SCK -> spi_bus.SCK;
+    mcu.spi_master.CS -> spi_bus.CS;
+    
+    // 11. Generate with interfaces
+    generate for i in 0..3 {
+        sensor[i]: I2CSensor;
+        sensor[i].i2c <=> i2c_bus;
+    }
+}
+
+// Test module with interface
+module I2CSensor {
+    interface I2C i2c;
+    pin VDD: power in;
+    pin GND: ground;
+}
+
+// Test interface inheritance/composition
+interface I2S {
+    signal BCLK: out;
+    signal LRCLK: out;
+    signal DIN: in;
+    signal DOUT: out;
+    
+    perspective slave {
+        signal BCLK: in;
+        signal LRCLK: in;
+        signal DIN: out;
+        signal DOUT: in;
+    }
+}
+
+// Advanced test board with interface arrays
+board AdvancedInterfaceTest {
+    power VCC = 3.3V @ 2A;
+    ground GND;
+    
+    // Interface arrays
+    audio_channels[4]: I2S;
+    
+    // Codec with multiple I2S interfaces
+    codec: AudioCodec;
+    
+    // Connect all channels to codec
+    generate for i in 0..3 {
+        codec.i2s[i] <=> audio_channels[i];
+    }
+    
+    // Chained interfaces
+    uart_chain[3]: UART;
+    generate for i in 0..2 {
+        uart_chain[i].TX -> uart_chain[i+1].RX;
+    }
+}
+
+module AudioCodec {
+    interface I2S[4] i2s;
+    pin VDD: power in;
+    pin GND: ground;
+}
+
+interface UART(baudrate: int = 9600) {
+    signal TX: out;
+    signal RX: in;
+    signal RTS: out optional;
+    signal CTS: in optional;
+    
+    perspective dce {
+        signal TX: in;
+        signal RX: out;
+        signal RTS: in optional;
+        signal CTS: out optional;
+    }
+}

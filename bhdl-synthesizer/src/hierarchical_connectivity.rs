@@ -478,30 +478,45 @@ fn process_connection_in_module(
     // Extract connection endpoints from the binary expression
     if let Some(expr_node) = conn_stmt.expr() {
         if let Some(binary_expr) = BinaryExpr::cast(expr_node) {
-        // Get left and right sides of the connection
-        let left_text = binary_expr.lhs()
-            .map(|e| e.syntax().text().to_string().trim().to_string())
-            .unwrap_or_default();
-        let right_text = binary_expr.rhs()
-            .map(|e| e.syntax().text().to_string().trim().to_string())
-            .unwrap_or_default();
-        
-        if left_text.is_empty() || right_text.is_empty() {
-            warn!("Connection statement has empty endpoints");
-            return Ok(());
-        }
-        
-        // For now, create nets for both endpoints if they don't exist
-        let left_net = context.resolve_net(&left_text, netlist)?;
-        let right_net = context.resolve_net(&right_text, netlist)?;
-        
-        // If they're different nets, we should merge them
-        // For now, just log it
-        if left_net != right_net {
-            debug!("Connection creates alias between nets {} and {}", left_text, right_text);
-        }
-        
-        debug!("Processed connection: {} -> {}", left_text, right_text);
+            // Get left and right sides of the connection
+            let left_text = binary_expr.lhs()
+                .map(|e| e.syntax().text().to_string().trim().to_string())
+                .unwrap_or_default();
+            let right_text = binary_expr.rhs()
+                .map(|e| e.syntax().text().to_string().trim().to_string())
+                .unwrap_or_default();
+            
+            if left_text.is_empty() || right_text.is_empty() {
+                warn!("Connection statement has empty endpoints");
+                return Ok(());
+            }
+            
+            // Check what type of connection this is by looking at the operator
+            let operator = get_binary_operator(&binary_expr);
+            
+            match operator.as_str() {
+                "<=>" => {
+                    // Interface-to-interface connection
+                    info!("Processing interface-to-interface connection: {} <=> {}", left_text, right_text);
+                    process_interface_to_interface_connection(&left_text, &right_text, netlist, context)?;
+                }
+                "->" | "<->" => {
+                    // Regular pin-to-pin or net connections
+                    let left_net = context.resolve_net(&left_text, netlist)?;
+                    let right_net = context.resolve_net(&right_text, netlist)?;
+                    
+                    // If they're different nets, we should merge them
+                    if left_net != right_net {
+                        debug!("Connection creates alias between nets {} and {}", left_text, right_text);
+                        // TODO: Implement net merging
+                    }
+                    
+                    debug!("Processed connection: {} {} {}", left_text, operator, right_text);
+                }
+                _ => {
+                    warn!("Unknown connection operator: {}", operator);
+                }
+            }
         }
     }
     
@@ -668,6 +683,108 @@ fn add_component_pins(
             netlist.add_pin(module_id, "2".to_string(), PinDirection::InOut, PinType::Signal);
         }
     }
+    
+    Ok(())
+}
+
+/// Get the binary operator from a binary expression
+fn get_binary_operator(binary_expr: &BinaryExpr) -> String {
+    // Look for the operator token in the binary expression
+    for token in binary_expr.syntax().children_with_tokens() {
+        if let Some(token) = token.as_token() {
+            match token.kind() {
+                SyntaxKind::ARROW => return "->".to_string(),
+                SyntaxKind::BI_ARROW => return "<->".to_string(),
+                SyntaxKind::INTERFACE_OP => return "<=>".to_string(),
+                SyntaxKind::LEFT_ARROW => return "<-".to_string(),
+                _ => continue,
+            }
+        }
+    }
+    "unknown".to_string()
+}
+
+/// Process interface-to-interface connection (A <=> B)
+/// This merges the signal nets from both interfaces
+fn process_interface_to_interface_connection(
+    left_interface: &str,
+    right_interface: &str, 
+    netlist: &mut Netlist,
+    context: &mut HierarchicalContext,
+) -> Result<()> {
+    info!("Merging interface signals between {} and {}", left_interface, right_interface);
+    
+    // Find interface signal nets for both interfaces
+    let mut left_nets = Vec::new();
+    let mut right_nets = Vec::new();
+    
+    for (net_id, net) in netlist.nets.iter() {
+        if let Some(net_name) = &net.name {
+            // Check if this net belongs to the left interface
+            if net_name.starts_with("U") && net_name.contains("_") {
+                // Extract signal name (everything after _)
+                if let Some(underscore_pos) = net_name.rfind('_') {
+                    let signal_name = &net_name[underscore_pos + 1..];
+                    let instance_prefix = &net_name[..underscore_pos];
+                    
+                    // We need to map the original interface names to the generated names
+                    // For now, collect all interface nets and match by signal name
+                    left_nets.push((net_id, signal_name.to_string(), net_name.clone()));
+                }
+            }
+        }
+    }
+    
+    // Copy the vector to avoid borrow issues
+    right_nets = left_nets.clone();
+    
+    // Group nets by signal name
+    let mut signal_groups: std::collections::HashMap<String, Vec<(NetId, String)>> = std::collections::HashMap::new();
+    
+    for (net_id, signal_name, net_name) in &left_nets {
+        signal_groups.entry(signal_name.clone())
+            .or_insert_with(Vec::new)
+            .push((*net_id, net_name.clone()));
+    }
+    
+    // For each signal, merge the nets if there are multiple
+    for (signal_name, nets) in signal_groups {
+        if nets.len() > 1 {
+            info!("Merging {} nets for signal {}", nets.len(), signal_name);
+            
+            // Use the first net as the target and merge others into it
+            let target_net_id = nets[0].0;
+            
+            for i in 1..nets.len() {
+                let source_net_id = nets[i].0;
+                merge_nets(target_net_id, source_net_id, netlist)?;
+            }
+        }
+    }
+    
+    Ok(())
+}
+
+/// Merge two nets - move all connections from source to target and remove source
+fn merge_nets(target_net_id: NetId, source_net_id: NetId, netlist: &mut Netlist) -> Result<()> {
+    // Get the connections from the source net
+    let source_connections = if let Some(source_net) = netlist.nets.get(source_net_id) {
+        source_net.connections.clone()
+    } else {
+        return Ok(());
+    };
+    
+    // Move connections to target net
+    if let Some(target_net) = netlist.nets.get_mut(target_net_id) {
+        for connection in source_connections {
+            if !target_net.connections.contains(&connection) {
+                target_net.connections.push(connection);
+            }
+        }
+    }
+    
+    // Remove the source net
+    netlist.nets.remove(source_net_id);
     
     Ok(())
 }

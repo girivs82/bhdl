@@ -480,6 +480,7 @@ fn process_component_instantiation_v2(
     
     // Extract parameters from the instantiation
     let mut extracted_params = Vec::new();
+    let mut parameter_overrides = std::collections::HashMap::new();
     if !has_placeholder {
         println!("DEBUG: Extracting normal parameters for {}", component_type);
         // Only extract normal parameters if there's no placeholder
@@ -491,6 +492,9 @@ fn process_component_instantiation_v2(
                     .unwrap_or_else(|| String::new());
                     
                 let param_value = value.syntax().text().to_string();
+                
+                // Store in parameter_overrides for interfaces
+                parameter_overrides.insert(param_name.clone(), param_value.clone().trim_matches('"').to_string());
                 
                 // Parse parameter value based on name or content
                 let parsed_value = if param_name == "package" {
@@ -675,6 +679,9 @@ fn process_component_instantiation_v2(
             // Set the instance name
             suggestion.instance_name = Some(instance_name.clone());
             
+            // Add parameter overrides for interfaces
+            suggestion.parameter_overrides = parameter_overrides.clone();
+            
             // Add user-specified parameters to the suggestion
             for param in extracted_params {
                 // Don't duplicate parameters that were already inferred
@@ -727,8 +734,33 @@ fn process_component_inst_common(
     
     // Extract normal parameters if not a placeholder
     let mut extracted_params = Vec::new();
+    let mut parameter_overrides = std::collections::HashMap::new();
+    
     if !has_placeholder {
-        if let Some(param_block) = comp_inst.param_assign_block() {
+        // First check for param_list (used by interfaces)
+        if let Some(param_list) = comp_inst.param_list() {
+            println!("DEBUG: Extracting parameters from param list for {}", component_type);
+            for param in param_list.params() {
+                if let (Some(name), Some(value)) = (param.name(), param.value()) {
+                    let param_name = name.text().to_string();
+                    let param_value = value.syntax().text().to_string().trim_matches('"').to_string();
+                    println!("DEBUG: Found param '{}' = '{}'", param_name, param_value);
+                    
+                    // Store in parameter_overrides for interfaces
+                    parameter_overrides.insert(param_name.clone(), param_value.clone());
+                    
+                    // Also create InferredParameter for compatibility
+                    extracted_params.push(InferredParameter {
+                        name: param_name,
+                        value: ParameterValue::String(param_value),
+                        confidence: 1.0,
+                        reasoning: "User-specified parameter".to_string(),
+                    });
+                }
+            }
+        }
+        // Then check for param_assign_block (used by components)
+        else if let Some(param_block) = comp_inst.param_assign_block() {
             println!("DEBUG: Extracting parameters from param block for {}", component_type);
             for param_assign in param_block.assignments() {
                 if let Some(value) = param_assign.value() {
@@ -898,6 +930,9 @@ fn process_component_inst_common(
             &component_type, &requirements, &circuit_context
         ) {
             suggestion.instance_name = Some(instance_name.clone());
+            
+            // Add parameter overrides for interfaces
+            suggestion.parameter_overrides = parameter_overrides.clone();
             
             // Add user-specified parameters
             for param in extracted_params {
