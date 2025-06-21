@@ -222,7 +222,7 @@ impl<'t> Parser<'t> {
     }
     
     /// Parse parameter list for instantiation: (10k, "0805")
-    fn parse_param_list(&mut self) {
+    pub(crate) fn parse_param_list(&mut self) {
         self.builder.start_node(SyntaxKind::PARAM_LIST.into());
         self.expect(SyntaxKind::L_PAREN);
         
