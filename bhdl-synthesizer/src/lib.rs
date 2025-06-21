@@ -12,6 +12,7 @@ use bhdl_common::ComponentTypeMapper;
 use bhdl_common::pin_metadata::{ModulePinMetadata, PinMetadata, PinDirection as CommonPinDirection, PinType as CommonPinType};
 use bhdl_stdlib::{StdlibReader, get_default_stdlib_path};
 
+
 // Component database mapping module  
 pub mod component_mapping;
 
@@ -23,6 +24,9 @@ pub mod module_variants;
 
 // Hierarchical reference designator generation
 pub mod hierarchical_refdes;
+
+// Interface synthesis
+pub mod interface_synthesis;
 
 // Re-export key types
 pub use bhdl_analyzer::types::AnalysisResult;
@@ -182,6 +186,9 @@ impl NetlistGenerator {
             self.include_component_inference_info(analysis)?;
         }
         
+        // Phase 7.5: Synthesize interface instances
+        self.synthesize_interfaces(analysis)?;
+        
         // Phase 8: Populate analysis data in netlist (unified model)
         self.populate_analysis_data(analysis)?;
 
@@ -252,46 +259,58 @@ impl NetlistGenerator {
             // Create instances based on inferred components
             for component_suggestion in &component_context.inferred_components {
                 let component_type = &component_suggestion.component_type;
-                let module_kind = self.map_component_type_to_module_kind(component_type);
                 
-                // Generate proper reference designator
-                let instance_name = if let Some(ref name) = component_suggestion.instance_name {
-                    name.clone()
+                // Check if this is an interface type
+                if self.is_interface_type(component_type, analysis) {
+                    // Process as interface instance
+                    let instance_name = component_suggestion.instance_name.as_ref()
+                        .unwrap_or(&component_type).clone();
+                    
+                    self.process_interface_instance(&instance_name, component_type, analysis)?;
+                    debug!("Processed interface instance '{}' of type '{}'", instance_name, component_type);
                 } else {
-                    // Generate proper reference designator using unified type mapper
-                    let refdes_prefix = self.type_mapper.get_refdes_prefix(component_type);
+                    // Normal component processing
+                    let module_kind = self.map_component_type_to_module_kind(component_type);
                     
-                    // Increment count for this component type
-                    let count = component_counts.entry(refdes_prefix.clone()).or_insert(0);
-                    *count += 1;
+                    // Generate proper reference designator
+                    let instance_name = if let Some(ref name) = component_suggestion.instance_name {
+                        name.clone()
+                    } else {
+                        // Generate proper reference designator using unified type mapper
+                        let refdes_prefix = self.type_mapper.get_refdes_prefix(component_type);
+                        
+                        // Increment count for this component type
+                        let count = component_counts.entry(refdes_prefix.clone()).or_insert(0);
+                        *count += 1;
+                        
+                        format!("{}{}", refdes_prefix, count)
+                    };
                     
-                    format!("{}{}", refdes_prefix, count)
-                };
-                
-                // Create module definition for this component type
-                let module_id = self.netlist.add_module(
-                    component_type.clone(),
-                    module_kind
-                );
-                
-                // Add pins to the module based on component type
-                self.add_pins_for_component(&instance_name, component_type, module_id)?;
-                
-                // Create instance of this component
-                let instance_id = self.netlist.add_instance(
-                    instance_name.clone(),
-                    module_id
-                ).expect("Failed to add instance");
-                
-                // Create pin instances for this component instance
-                self.netlist.create_pin_instances(instance_id)
-                    .map_err(|e| anyhow::anyhow!("Failed to create pin instances: {}", e))?;
-                
-                self.ast_to_module.insert(component_type.clone(), module_id);
-                self.ast_to_instance.insert(instance_name.clone(), instance_id);
-                
-                debug!("Created instance '{}' of type '{}' with semantic kind {:?}", 
-                       instance_name, component_type, module_kind);
+                    // Create module definition for this component type
+                    let module_id = self.netlist.add_module(
+                        component_type.clone(),
+                        module_kind
+                    );
+                    
+                    // Add pins to the module based on component type
+                    self.add_pins_for_component(&instance_name, component_type, module_id)?;
+                    
+                    // Create instance of this component
+                    let instance_id = self.netlist.add_instance(
+                        instance_name.clone(),
+                        module_id
+                    ).expect("Failed to add instance");
+                    
+                    // Create pin instances for this component instance
+                    self.netlist.create_pin_instances(instance_id)
+                        .map_err(|e| anyhow::anyhow!("Failed to create pin instances: {}", e))?;
+                    
+                    self.ast_to_module.insert(component_type.clone(), module_id);
+                    self.ast_to_instance.insert(instance_name.clone(), instance_id);
+                    
+                    debug!("Created instance '{}' of type '{}' with semantic kind {:?}", 
+                           instance_name, component_type, module_kind);
+                }
             }
         }
 
@@ -1322,6 +1341,58 @@ impl NetlistGenerator {
     /// This matches the expected interface from existing test code
     pub async fn synthesize(&mut self, ast: &SourceFile, analysis: &AnalysisResult) -> Result<Netlist> {
         self.generate_from_ast_and_analysis(ast, analysis).await
+    }
+    
+    /// Check if a component type is actually an interface
+    pub fn is_interface_type(&self, component_type: &str, analysis: &AnalysisResult) -> bool {
+        if let Some(symbol) = analysis.global_scope.lookup(component_type) {
+            symbol.kind == bhdl_analyzer::symbol_table::SymbolKind::Interface
+        } else {
+            false
+        }
+    }
+    
+    /// Process an interface instance during component synthesis
+    pub fn process_interface_instance(
+        &mut self,
+        instance_name: &str,
+        interface_type: &str,
+        analysis: &AnalysisResult
+    ) -> Result<()> {
+        debug!("Processing interface instance {} of type {}", instance_name, interface_type);
+        
+        // For now, just create the nets
+        // In the future, we need to get the interface definition and create all signals
+        
+        // Create basic I2C interface nets as an example
+        if interface_type == "I2C" {
+            let sda_net_name = format!("{}_SDA", instance_name);
+            let scl_net_name = format!("{}_SCL", instance_name);
+            
+            let sda_net_id = self.netlist.add_net(Some(sda_net_name.clone()));
+            let scl_net_id = self.netlist.add_net(Some(scl_net_name.clone()));
+            
+            self.ast_to_net.insert(sda_net_name, sda_net_id);
+            self.ast_to_net.insert(scl_net_name, scl_net_id);
+            
+            info!("Created I2C interface nets for {}", instance_name);
+        }
+        
+        // Create basic UART interface nets
+        if interface_type == "UART" {
+            let tx_net_name = format!("{}_TX", instance_name);
+            let rx_net_name = format!("{}_RX", instance_name);
+            
+            let tx_net_id = self.netlist.add_net(Some(tx_net_name.clone()));
+            let rx_net_id = self.netlist.add_net(Some(rx_net_name.clone()));
+            
+            self.ast_to_net.insert(tx_net_name, tx_net_id);
+            self.ast_to_net.insert(rx_net_name, rx_net_id);
+            
+            info!("Created UART interface nets for {}", instance_name);
+        }
+        
+        Ok(())
     }
 }
 

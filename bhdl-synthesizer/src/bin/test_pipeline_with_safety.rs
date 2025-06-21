@@ -88,18 +88,17 @@ board PowerLED {
     println!("  Warnings: {}", safety_report.summary.warning_count);
     
     if !safety_report.violations.is_empty() {
-            println!("\nSafety Violations:");
-            for (i, violation) in safety_report.violations.iter().enumerate() {
-                println!("\n  [{}] {} - {:?}", 
-                         i + 1, 
-                         violation.severity.as_str(),
-                         violation.violation_type);
-                println!("      Message: {}", violation.message);
-                
-                // Show suggested fix if available
-                if let Some(fix) = &violation.suggested_fix {
-                    println!("      Fix: {}", fix);
-                }
+        println!("\nSafety Violations:");
+        for (i, violation) in safety_report.violations.iter().enumerate() {
+            println!("\n  [{}] {} - {:?}", 
+                     i + 1, 
+                     violation.severity.as_str(),
+                     violation.violation_type);
+            println!("      Message: {}", violation.message);
+            
+            // Show suggested fix if available
+            if let Some(fix) = &violation.suggested_fix {
+                println!("      Fix: {}", fix);
             }
         }
     } else {
