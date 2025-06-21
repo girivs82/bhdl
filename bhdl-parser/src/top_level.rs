@@ -124,6 +124,10 @@ impl<'t> Parser<'t> {
                         NamedDeclarationType::ComponentInstance => {
                             self.parse_component_instance();
                         }
+                        NamedDeclarationType::InterfaceInstance => {
+                            // Parse as component instance for now - analyzer will differentiate
+                            self.parse_component_instance();
+                        }
                         _ => {
                             // Connection or flow statement
                             self.parse_connection_or_flow_stmt();

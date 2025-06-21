@@ -26,6 +26,7 @@
       <sourceFolder url="file://$MODULE_DIR$/bhdl-safety/examples" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/bhdl-safety/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/bhdl-spice/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/bhdl-analyzer/tests" isTestSource="true" />
       <excludeFolder url="file://$MODULE_DIR$/bhdl-visualizer/target" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
