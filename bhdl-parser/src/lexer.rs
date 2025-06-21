@@ -265,6 +265,9 @@ fn keyword_or_ident_callback(lex: &mut Lexer<LexerToken>) -> KeywordOrIdent {
         "null" => SyntaxKind::NULL_KW,
         "true" => SyntaxKind::TRUE_KW,
         "false" => SyntaxKind::FALSE_KW,
+        "require" => SyntaxKind::REQUIRE_KW,
+        "optional" => SyntaxKind::OPTIONAL_KW,
+        "perspective" => SyntaxKind::PERSPECTIVE_KW,
         // "pin_map" is NOT a keyword, parsed as IDENT
 
         // Default to IDENT if not a keyword

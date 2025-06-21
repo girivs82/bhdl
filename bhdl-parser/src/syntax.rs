@@ -100,6 +100,9 @@ pub enum SyntaxKind {
     ALIAS_KW,     // alias
     TYPE_KW,      // type
     NULL_KW,      // null
+    REQUIRE_KW,   // require (for interface requirements)
+    OPTIONAL_KW,  // optional (for optional interface signals)
+    PERSPECTIVE_KW, // perspective (for interface perspectives)
 
     // Keywords for individual items  
     PIN_KW,       // pin
@@ -122,6 +125,10 @@ pub enum SyntaxKind {
     STRUCT_DEF,     // struct definition
     ENUM_DEF,       // enum definition
     INTERFACE_DEF,  // interface InterfaceName { ... }
+    INTERFACE_SIGNAL,    // signal name: direction optional?;
+    INTERFACE_REQUIREMENT, // require pullup(SDA, 4.7k);
+    INTERFACE_PERSPECTIVE, // perspective master { ... }
+    INTERFACE_INST,      // instance: InterfaceName();
     TYPE_DEF,       // type TypeName = TypeExpression;
     STRUCT_LITERAL, // { field1: value1, field2: value2 }
     NULL_LITERAL,   // null

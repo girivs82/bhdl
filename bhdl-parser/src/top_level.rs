@@ -68,6 +68,12 @@ impl<'t> Parser<'t> {
         self.builder.start_node(SyntaxKind::INTERFACE_DEF.into());
         self.expect(SyntaxKind::INTERFACE_KW);
         self.expect(SyntaxKind::IDENT); // Interface name
+        
+        // Optional parameter list (same as modules)
+        if self.peek() == Some(SyntaxKind::L_PAREN) {
+            self.parse_module_parameters();
+        }
+        
         self.expect(SyntaxKind::L_BRACE);
 
         // Parse interface contents
@@ -175,9 +181,21 @@ impl<'t> Parser<'t> {
             self.skip_trivia();
             match self.peek() {
                 Some(SyntaxKind::R_BRACE) => break,
-                Some(SyntaxKind::IDENT) => {
+                Some(SyntaxKind::SIGNAL_KW) => {
                     // Interface signal declarations
                     self.parse_interface_signal();
+                }
+                Some(SyntaxKind::REQUIRE_KW) => {
+                    // Interface requirements
+                    self.parse_interface_requirement();
+                }
+                Some(SyntaxKind::PERSPECTIVE_KW) => {
+                    // Interface perspectives
+                    self.parse_interface_perspective();
+                }
+                Some(SyntaxKind::INTERFACE_KW) => {
+                    // Nested interface (hierarchical)
+                    self.parse_interface_def();
                 }
                 Some(_) => {
                     self.error("Unexpected token in interface definition".to_string());
@@ -302,23 +320,74 @@ impl<'t> Parser<'t> {
         self.expect(SyntaxKind::SEMI);
     }
 
-    // Parse interface signal
+    // Parse interface signal: signal name: direction optional?;
     fn parse_interface_signal(&mut self) {
+        self.builder.start_node(SyntaxKind::INTERFACE_SIGNAL.into());
+        
+        self.expect(SyntaxKind::SIGNAL_KW);
         self.expect(SyntaxKind::IDENT); // Signal name
         self.expect(SyntaxKind::COLON);
         
-        // Parse signal type and direction
-        if self.peek() == Some(SyntaxKind::SIGNAL_KW) {
+        // Parse signal direction (in, out, inout)
+        if self.peek() == Some(SyntaxKind::IN_KW) ||
+           self.peek() == Some(SyntaxKind::OUT_KW) ||
+           self.peek() == Some(SyntaxKind::INOUT_KW) {
             self.bump();
+        } else {
+            self.error("Expected signal direction (in, out, inout)".to_string());
         }
         
-        if self.peek() == Some(SyntaxKind::INPUT_KW) ||
-           self.peek() == Some(SyntaxKind::OUTPUT_KW) ||
-           self.peek() == Some(SyntaxKind::INOUT_KW) {
+        // Optional 'optional' keyword
+        if self.peek() == Some(SyntaxKind::OPTIONAL_KW) {
             self.bump();
         }
         
         self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+    
+    // Parse interface requirement: require pullup(SDA, 4.7k);
+    fn parse_interface_requirement(&mut self) {
+        self.builder.start_node(SyntaxKind::INTERFACE_REQUIREMENT.into());
+        
+        self.expect(SyntaxKind::REQUIRE_KW);
+        
+        // Parse requirement type (identifier like pullup, termination, etc.)
+        self.expect(SyntaxKind::IDENT);
+        
+        // Parse arguments if present
+        if self.peek() == Some(SyntaxKind::L_PAREN) {
+            self.parse_argument_list();
+        }
+        
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+    
+    // Parse interface perspective: perspective master { ... }
+    fn parse_interface_perspective(&mut self) {
+        self.builder.start_node(SyntaxKind::INTERFACE_PERSPECTIVE.into());
+        
+        self.expect(SyntaxKind::PERSPECTIVE_KW);
+        self.expect(SyntaxKind::IDENT); // Perspective name (master, slave, etc.)
+        
+        self.expect(SyntaxKind::L_BRACE);
+        
+        // Parse perspective contents (signals with different directions)
+        while self.peek() != Some(SyntaxKind::R_BRACE) && self.peek().is_some() {
+            self.skip_trivia();
+            if self.peek() == Some(SyntaxKind::SIGNAL_KW) {
+                self.parse_interface_signal();
+            } else if self.peek() == Some(SyntaxKind::R_BRACE) {
+                break;
+            } else {
+                self.error("Expected signal declaration in perspective".to_string());
+                self.bump_any();
+            }
+        }
+        
+        self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
     }
 
     // Parse const declaration: const name: type = value;
