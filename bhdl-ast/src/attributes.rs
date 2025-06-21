@@ -119,9 +119,9 @@ fn collect_attribute_references(expr: &Expr) -> Vec<String> {
     
     match expr {
         Expr::Ident(node) => {
-            // Simple identifier that's not a pin reference
+            // Simple identifier that's not a pin reference or built-in
             let text = node.text().to_string().trim().to_string();
-            if !text.is_empty() && !text.contains('.') && text != "dt" {
+            if !text.is_empty() && !text.contains('.') && !is_builtin_variable(&text) {
                 refs.push(text);
             }
         },
@@ -129,7 +129,7 @@ fn collect_attribute_references(expr: &Expr) -> Vec<String> {
             // IdentRef nodes represent identifier references
             if let Some(token) = ident_ref.token() {
                 let text = token.text().to_string().trim().to_string();
-                if !text.is_empty() && !text.contains('.') && text != "dt" {
+                if !text.is_empty() && !text.contains('.') && !is_builtin_variable(&text) {
                     refs.push(text);
                 }
             }
@@ -184,4 +184,9 @@ pub struct AttributeDependency {
     pub depends_on: Vec<String>,
     pub pin_refs: Vec<String>,
     pub is_mutable: bool,
+}
+
+/// Check if a name is a built-in variable that should be excluded from dependencies
+fn is_builtin_variable(name: &str) -> bool {
+    matches!(name, "dt" | "t" | "pi" | "e")
 }

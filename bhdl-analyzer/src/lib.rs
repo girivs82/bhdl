@@ -21,6 +21,7 @@ pub mod spice_integration;
 pub mod spice_synthesis;
 pub mod analysis_data_conversion;
 pub mod attribute_analysis;
+pub mod builtin_variables;
 
 // Use items needed directly in the analyze function
 use types::{AnalysisResult, ResolvedConstants};
@@ -48,9 +49,12 @@ pub fn analyze(source_file: &SourceFile) -> AnalysisResult {
              global_scope.children.len(), // Assuming SymbolTable has a len() method or similar -> USE children.len()
              definition_scopes.len());
 
+    // Create built-in variable manager for behavioral modeling
+    let builtin_manager = builtin_variables::BuiltinVariableManager::new();
+    
     // Pass 2: Reference Checks
     println!("Analyzer: Starting Pass 2 - References & Basic Types...");
-    let mut pass2_context = Pass2Context::new(&global_scope, &definition_scopes, source_file.syntax(), &mut diagnostics);
+    let mut pass2_context = Pass2Context::new(&global_scope, &definition_scopes, source_file.syntax(), &mut diagnostics, &builtin_manager);
     visit_node_pass2_references(source_file.syntax(), &mut pass2_context);
     println!("Analyzer: Pass 2 complete. Diagnostics found so far: {}", diagnostics.len());
 

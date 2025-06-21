@@ -12,6 +12,7 @@ use bhdl_ast::{HasName,
 
 use crate::symbol_table::{Symbol, SymbolKind, SymbolTable, PortDirectionKind};
 use crate::types::{ResolvedTypeInfo, Diagnostic}; // Need ResolvedTypeInfo, Diagnostic - Removed ResolvedConstants
+use crate::builtin_variables::{BuiltinVariableManager, is_dependency_excluded};
 
 // --- Pass 2: Check References --- 
 
@@ -76,6 +77,22 @@ pub(crate) fn resolve_node_type_info<'a>(
                  _ => return None, 
             };
             let name = ident_token.text();
+            
+            // Check if it's a built-in variable first
+            if context.builtin_manager.is_builtin(name) {
+                if let Some(builtin) = context.builtin_manager.get_builtin(name) {
+                    // Built-in variables have known types
+                    return Some(Ok(ResolvedTypeInfo { 
+                        base_type_name: match &builtin.var_type {
+                            bhdl_ast::semantic_analysis::BhdlType::Real => "real",
+                            bhdl_ast::semantic_analysis::BhdlType::Integer => "integer",
+                            _ => "real", // Default to real for built-ins
+                        }.to_string(), 
+                        bounds: None 
+                    }));
+                }
+            }
+            
             // Regular identifiers look up in main symbol table (not nets)
             match context.lookup(name) {
                 None => Err(Diagnostic { 
@@ -374,6 +391,7 @@ pub(crate) struct Pass2Context<'a> {
     definition_scopes: &'a HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>,
     diagnostics: &'a mut Vec<Diagnostic>,
     source_file_root: &'a SyntaxNode<BhdlLanguage>, // Added root node reference
+    pub(crate) builtin_manager: &'a BuiltinVariableManager, // Added for built-in variable support
 }
 
 impl<'a> Pass2Context<'a> {
@@ -382,7 +400,8 @@ impl<'a> Pass2Context<'a> {
         global_scope: &'a SymbolTable, 
         def_scopes: &'a HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>, 
         source_file_root: &'a SyntaxNode<BhdlLanguage>, // Added parameter
-        diagnostics: &'a mut Vec<Diagnostic> // Added parameter
+        diagnostics: &'a mut Vec<Diagnostic>, // Added parameter
+        builtin_manager: &'a BuiltinVariableManager, // Added parameter for built-in variables
     ) -> Self {
         Self {
             global_scope,
@@ -390,6 +409,7 @@ impl<'a> Pass2Context<'a> {
             definition_scopes: def_scopes,
             diagnostics, // Assign passed-in mutable reference
             source_file_root, // Store reference
+            builtin_manager, // Store built-in variable manager
         }
     }
 

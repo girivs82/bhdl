@@ -1,0 +1,18 @@
+// Test built-in variable 'dt' support
+board test_builtin_dt {
+    // Use dt in an expression attribute
+    attribute sample_time = dt * 1000; // Convert to milliseconds
+    attribute time_constant = 10 * dt;
+    
+    // Use built-in constants
+    attribute two_pi = 2 * pi;
+    attribute euler_squared = e * e;
+    
+    // Components
+    power VCC = 5V @ 1A;
+    ground GND;
+    
+    VCC -> R1.1;
+    R1: Res(10k);
+    R1.2 -> GND;
+}
