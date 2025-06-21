@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use rowan::{TextRange};
 use rowan::ast::SyntaxNodePtr;
 use bhdl_parser::BhdlLanguage; // Needed for SyntaxNodePtr
@@ -6,6 +6,7 @@ use crate::symbol_table::SymbolTable; // Use crate:: to refer to local module
 use crate::power_analysis::PowerAnalysisContext;
 use crate::component_inference::ComponentInferenceContext;
 use crate::power_sequencing::PowerSequenceGenerator;
+use crate::attribute_analysis::AttributeAnalysisResult;
 
 // Represents resolved type information for checking
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,6 +78,7 @@ pub struct AnalysisResult {
     pub component_inference: ComponentInferenceContext,
     pub power_sequencing: PowerSequenceGenerator,
     pub netlist: Option<bhdl_netlist::Netlist>,
+    pub attribute_analysis: AttributeAnalysisResult,
 }
 
 impl Default for AnalysisResult {
@@ -90,6 +92,13 @@ impl Default for AnalysisResult {
             component_inference: ComponentInferenceContext::new(),
             power_sequencing: PowerSequenceGenerator::new(),
             netlist: None,
+            attribute_analysis: AttributeAnalysisResult {
+                attributes: HashMap::new(),
+                dependencies: HashMap::new(),
+                evaluation_order: Vec::new(),
+                circular_dependencies: Vec::new(),
+                mutable_attributes: HashSet::new(),
+            },
         }
     }
 } 
