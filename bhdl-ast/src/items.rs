@@ -142,6 +142,28 @@ impl AstNode for InterfaceDef {
 
 impl HasName for InterfaceDef {}
 
+impl InterfaceDef {
+    pub fn params(&self) -> Option<ParamList> {
+        self.0.children().find_map(ParamList::cast)
+    }
+    
+    pub fn signals(&self) -> impl Iterator<Item = crate::interfaces::InterfaceSignal> {
+        self.0.children().filter_map(crate::interfaces::InterfaceSignal::cast)
+    }
+    
+    pub fn requirements(&self) -> impl Iterator<Item = crate::interfaces::InterfaceRequirement> {
+        self.0.children().filter_map(crate::interfaces::InterfaceRequirement::cast)
+    }
+    
+    pub fn perspectives(&self) -> impl Iterator<Item = crate::interfaces::InterfacePerspective> {
+        self.0.children().filter_map(crate::interfaces::InterfacePerspective::cast)
+    }
+    
+    pub fn nested_interfaces(&self) -> impl Iterator<Item = InterfaceDef> {
+        self.0.children().filter_map(InterfaceDef::cast)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TypedefDef(pub(crate) SyntaxNode<BhdlLanguage>);
 
@@ -213,13 +235,10 @@ pub struct ModuleParam(pub(crate) SyntaxNode<BhdlLanguage>);
 impl AstNode for ModuleParam {
     type Language = BhdlLanguage;
     fn can_cast(kind: SyntaxKind) -> bool { 
-        // Module params are parsed as part of PARAM_LIST
-        false // Will be determined by context
+        kind == SyntaxKind::PARAM_DECL
     }
     fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { 
-        // Check if this is a parameter with type annotation
-        if syntax.children_with_tokens()
-            .any(|e| e.as_token().map(|t| t.kind() == SyntaxKind::COLON).unwrap_or(false)) {
+        if Self::can_cast(syntax.kind()) {
             Some(Self(syntax))
         } else {
             None
