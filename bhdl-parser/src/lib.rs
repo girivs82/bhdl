@@ -177,6 +177,8 @@ fn map_token(token: LexerToken) -> SyntaxKind {
         LexerToken::GtEq => SyntaxKind::GTEQ,
         LexerToken::AmpAmp => SyntaxKind::AMPAMP,
         LexerToken::PipePipe => SyntaxKind::PIPEPIPE,
+        LexerToken::PlusEq => SyntaxKind::PLUS_EQ,
+        LexerToken::MinusEq => SyntaxKind::MINUS_EQ,
         LexerToken::LShift => SyntaxKind::LSHIFT,
         LexerToken::RShift => SyntaxKind::RSHIFT,
         // Resistance units (Unicode and ASCII)

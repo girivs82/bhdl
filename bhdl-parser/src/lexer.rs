@@ -197,6 +197,8 @@ pub enum LexerToken {
     #[token("<=>")] InterfaceOp, // Interface connection
     #[token("==")] EqEq,
     #[token("!=")] Neq,
+    #[token("+=")] PlusEq,
+    #[token("-=")] MinusEq,
     #[token("<=")] LtEq,
     #[token(">=")] GtEq,
     #[token("&&")] AmpAmp,

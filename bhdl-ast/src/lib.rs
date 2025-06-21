@@ -28,6 +28,7 @@ pub mod v2_board; // v2.0 board extensions
 pub mod hierarchical; // Hierarchical module support
 pub mod interfaces; // Interface-specific AST nodes
 pub mod attributes; // Behavioral modeling attribute support
+pub mod behavioral; // When blocks and behavioral statements
 
 // Core HasName trait (defined here)
 pub trait HasName: AstNode<Language = BhdlLanguage> {

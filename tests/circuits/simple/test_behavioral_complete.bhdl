@@ -1,0 +1,47 @@
+// Complete behavioral modeling test with all features
+board test_behavioral_complete {
+    // Static configuration attributes
+    attribute vcc_nominal = 5.0;
+    attribute threshold_high = 3.3;
+    attribute threshold_low = 1.7;
+    
+    // Expression attributes
+    attribute hysteresis = threshold_high - threshold_low;
+    attribute midpoint = (threshold_high + threshold_low) / 2;
+    
+    // Mutable state attributes
+    attribute voltage_level = 0;
+    attribute edge_count = 0;
+    attribute time_high = 0;
+    attribute time_low = 0;
+    attribute duty_cycle = 0;
+    
+    // Power and ground
+    power VCC = 5V @ 1A;
+    ground GND;
+    
+    // Components
+    VCC -> R1.1;
+    R1: Res(10k);
+    R1.2 -> C1.1;
+    C1: Cap(100nF);
+    C1.2 -> GND;
+    
+    // Behavioral modeling with when blocks
+    when (voltage_level > threshold_high) {
+        attribute time_high += 1;
+        attribute edge_count = edge_count + 1;
+    }
+    
+    when (voltage_level < threshold_low) {
+        attribute time_low += 1;
+    }
+    
+    // Calculate duty cycle periodically
+    when (edge_count > 100) {
+        attribute duty_cycle = (time_high * 100) / (time_high + time_low);
+        attribute edge_count = 0;
+        attribute time_high = 0;
+        attribute time_low = 0;
+    }
+}
