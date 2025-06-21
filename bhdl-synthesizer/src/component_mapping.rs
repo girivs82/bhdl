@@ -419,7 +419,7 @@ mod tests {
         assert!(result.is_ok());
         
         let mapper = result.unwrap();
-        let stats = mapper.get_stats();
+        let stats = mapper.get_stats().await;
         
         // Should have 0 mappings since database is empty
         assert_eq!(stats.component_mappings, 0);

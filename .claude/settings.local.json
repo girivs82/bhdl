@@ -103,7 +103,13 @@
       "Bash(jq:*)",
       "Bash(./target/debug/test_parse_module_params)",
       "Bash(./target/debug/test_simple_hierarchy)",
-      "Bash(RUST_LOG=debug cargo run -p bhdl-synthesizer --bin test_hierarchical_synthesis 2 >& 1)"
+      "Bash(RUST_LOG=debug cargo run -p bhdl-synthesizer --bin test_hierarchical_synthesis 2 >& 1)",
+      "Bash(RUST_BACKTRACE=1 cargo test --test test_interface_synthesis -p bhdl-synthesizer -- --nocapture 2 >& 1)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin test_interface_synthesis_runner 2 >& 1)",
+      "Bash(RUST_LOG=debug cargo run -p bhdl-synthesizer --bin test_interface_synthesis_runner 2 >& 1)",
+      "Bash(RUST_LOG=bhdl_synthesizer=debug cargo run -p bhdl-synthesizer --bin test_interface_synthesis_runner 2 >& 1)",
+      "Bash(RUST_LOG=info,bhdl_synthesizer::interface_synthesis=debug cargo run -p bhdl-synthesizer --bin test_interface_synthesis_runner 2 >& 1)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin test_interface_debug 2 >& 1)"
     ],
     "deny": []
   }

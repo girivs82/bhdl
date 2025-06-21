@@ -8,9 +8,9 @@ description = "BHDL synthesizer - converts semantic analysis to netlists with pr
 name = "end_to_end_test"
 path = "src/bin/end_to_end_test.rs"
 
-[[bin]]
-name = "test_unified_svg"
-path = "../test_unified_svg.rs"
+# [[bin]]
+# name = "test_unified_svg"
+# path = "../test_unified_svg.rs"
 
 [dependencies]
 bhdl-analyzer = { path = "../bhdl-analyzer" }
@@ -28,3 +28,7 @@ env_logger = "0.11"
 console = "0.15"
 rowan = "0.15"
 tokio = { version = "1.0", features = ["sync", "time", "macros", "rt-multi-thread"] }
+futures-util = "0.3"
+
+[dev-dependencies]
+tempfile = "3.0"
