@@ -6,7 +6,7 @@ use thiserror::Error;
 pub type SimulationResult<T> = Result<T, SimulationError>;
 
 /// Main error type for simulation operations
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum SimulationError {
     #[error("Circuit loading failed: {0}")]
     LoadError(String),
@@ -39,13 +39,13 @@ pub enum SimulationError {
     CommunicationError(String),
     
     #[error("IO error: {0}")]
-    IoError(#[from] std::io::Error),
+    IoError(String),
     
     // #[error("Analysis error: {0}")]
     // AnalysisError(#[from] bhdl_analyzer::AnalysisError),
     
     #[error("Other error: {0}")]
-    Other(#[from] anyhow::Error),
+    Other(String),
 }
 
 /// Breakpoint types for debugging
