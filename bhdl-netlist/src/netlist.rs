@@ -160,7 +160,7 @@ impl Netlist {
     // Add a pin globally and associate it with a module
     pub fn add_pin(&mut self, module_id: ModuleId, name: String, direction: PinDirection, pin_type: PinType) -> Option<PinId> {
          if let Some(module_def) = self.modules.get_mut(module_id) {
-            if !matches!(module_def.kind, ModuleKind::PhysicalComponent | ModuleKind::Interface | ModuleKind::Component) {
+            if !matches!(module_def.kind, ModuleKind::PhysicalComponent | ModuleKind::Interface | ModuleKind::Component | ModuleKind::Module) {
                 return None; 
             }
             let pin_id = self.pins.insert_with_key(|id| Pin {

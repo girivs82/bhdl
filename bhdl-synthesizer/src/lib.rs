@@ -15,6 +15,12 @@ use bhdl_stdlib::{StdlibReader, get_default_stdlib_path};
 // Component database mapping module  
 pub mod component_mapping;
 
+// Hierarchical connectivity extraction
+pub mod hierarchical_connectivity;
+
+// Module variant management
+pub mod module_variants;
+
 // Re-export key types
 pub use bhdl_analyzer::types::AnalysisResult;
 pub use bhdl_netlist::{Netlist, ModuleId, InstanceId, NetId, PortId, PinId, PinInstanceId, PinInstance};
@@ -130,13 +136,18 @@ impl NetlistGenerator {
     async fn generate_from_ast_and_analysis_internal(&mut self, ast: Option<&SourceFile>, analysis: &AnalysisResult) -> Result<Netlist> {
         info!("Starting netlist generation from analysis results");
         
-        // Phase 0: Initialize database mapper
-        if self.database_mapper.is_none() {
-            self.initialize_database_mapper().await?;
+        // Phase 0: Initialize database mapper if needed
+        if self.database_mapper.is_none() && self.config.include_component_inference && self.config.database_path.is_some() {
+            if let Err(e) = self.initialize_database_mapper().await {
+                warn!("Failed to initialize database mapper: {}", e);
+                // Continue without database mapper - will use fallback
+            }
         }
         
-        // Phase 1: Extract board/module hierarchy from analysis
-        self.extract_module_hierarchy(analysis)?;
+        // Phase 1: Extract board/module hierarchy from analysis (only for flat synthesis)
+        if self.config.flatten_hierarchy {
+            self.extract_module_hierarchy(analysis)?;
+        }
         
         // Phase 2: Generate database component instances if mapper is available
         if self.database_mapper.is_some() {
@@ -181,19 +192,46 @@ impl NetlistGenerator {
     }
 
     /// Extract module hierarchy from analysis results
-    fn extract_module_hierarchy(&mut self, _analysis: &AnalysisResult) -> Result<()> {
+    fn extract_module_hierarchy(&mut self, analysis: &AnalysisResult) -> Result<()> {
         debug!("Extracting module hierarchy from analysis");
         
-        // TODO: Traverse the global scope and definition scopes to extract modules
-        // For now, create a basic top-level module
-        let top_module_id = self.netlist.add_module(
-            "top_level".to_string(), 
-            ModuleKind::Board
-        );
-        self.netlist.top_level_module = Some(top_module_id);
-        self.ast_to_module.insert("top_level".to_string(), top_module_id);
+        // Use flat extraction for now if hierarchy is to be flattened
+        if self.config.flatten_hierarchy {
+            // Create a basic top-level module for flat designs
+            let top_module_id = self.netlist.add_module(
+                "top_level".to_string(), 
+                ModuleKind::Board
+            );
+            self.netlist.top_level_module = Some(top_module_id);
+            self.ast_to_module.insert("top_level".to_string(), top_module_id);
+            debug!("Created top-level module for flat design: {:?}", top_module_id);
+        } else {
+            // Extract module definitions from global scope
+            for symbol in analysis.global_scope.iter() {
+                if matches!(symbol.kind, bhdl_analyzer::symbol_table::SymbolKind::Module | 
+                                       bhdl_analyzer::symbol_table::SymbolKind::Board) {
+                    let module_kind = if matches!(symbol.kind, bhdl_analyzer::symbol_table::SymbolKind::Board) {
+                        ModuleKind::Board
+                    } else {
+                        ModuleKind::Module
+                    };
+                    
+                    let module_id = self.netlist.add_module(
+                        symbol.name.clone(),
+                        module_kind
+                    );
+                    
+                    self.ast_to_module.insert(symbol.name.clone(), module_id);
+                    
+                    if module_kind == ModuleKind::Board {
+                        self.netlist.top_level_module = Some(module_id);
+                    }
+                    
+                    debug!("Created module '{}' with kind {:?}", symbol.name, module_kind);
+                }
+            }
+        }
 
-        debug!("Created top-level module: {:?}", top_module_id);
         Ok(())
     }
 
@@ -280,14 +318,24 @@ impl NetlistGenerator {
         
         info!("Extracting connectivity from AST");
         
-        // First create power nets
-        self.create_power_nets(analysis)?;
+        if !self.config.flatten_hierarchy {
+            // Use hierarchical connectivity extraction
+            info!("Using hierarchical connectivity extraction");
+            hierarchical_connectivity::extract_hierarchical_connectivity(ast, analysis, &mut self.netlist)?;
+        } else {
+            // Use flat extraction for backward compatibility
+            info!("Using flat connectivity extraction");
+            
+            // First create power nets
+            self.create_power_nets(analysis)?;
+            
+            // Now traverse the AST to find all connection statements
+            let mut connection_count = 0;
+            self.visit_connections_in_ast(ast.syntax(), &mut connection_count)?;
+            
+            info!("Extracted {} connections from AST", connection_count);
+        }
         
-        // Now traverse the AST to find all connection statements
-        let mut connection_count = 0;
-        self.visit_connections_in_ast(ast.syntax(), &mut connection_count)?;
-        
-        info!("Extracted {} connections from AST", connection_count);
         Ok(())
     }
     
