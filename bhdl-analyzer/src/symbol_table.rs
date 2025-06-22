@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use rowan::{TextRange, ast::SyntaxNodePtr};
 use bhdl_parser::BhdlLanguage;
+use crate::net_attributes::NetAttribute;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PortDirectionKind {
@@ -57,6 +58,8 @@ pub struct Symbol {
     pub bus_low: Option<i64>,
     pub direction: Option<PortDirectionKind>,
     pub parameter_overrides: Option<HashMap<String, SyntaxNodePtr<BhdlLanguage>>>,
+    /// Attributes for nets (power domains, etc.)
+    pub net_attributes: Option<NetAttribute>,
     // pub definition_span: Option<TextRange>, // TODO: Add span info from CST node
     // pub documentation: Option<String>, // TODO
 }
@@ -79,6 +82,7 @@ impl Symbol {
             bus_low: None,
             direction: None,
             parameter_overrides: None,
+            net_attributes: None,
         }
     }
 
@@ -102,6 +106,7 @@ impl Symbol {
             bus_low,
             direction, // Store the direction
             parameter_overrides: None,
+            net_attributes: None,
         }
     }
 
@@ -122,6 +127,7 @@ impl Symbol {
             bus_low: None,
             direction: None,
             parameter_overrides: None,
+            net_attributes: None,
         }
     }
 }

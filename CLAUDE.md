@@ -258,6 +258,28 @@ This ensures we build a robust, production-ready toolchain rather than a demo wi
 ## Current Pipeline Status
 
 ### Recent Major Advances
+
+10. **Complete Intent and Flow System**: Full implementation of design intent framework
+   - Parser support for `for` keyword on flow statements and net declarations
+   - Flow tracking system that identifies components in signal paths
+   - Intent resolution with simulation mode determination
+   - Hierarchical intent propagation through module instances
+   - Standard library of intent functions (delay, analog, digital, etc.)
+   - See `docs/implementation/Intent_and_Flow_System.md` for details
+
+11. **Consistent Net Reference Syntax**: All nets require @ prefix
+   - Power and ground domains must use @ prefix (@VCC, @GND)
+   - Bare identifiers that are nets produce clear error messages
+   - Implicit net creation only in flow contexts (middle of chains)
+   - Complete validation in Pass 2 with proper diagnostics
+
+12. **Power Domains as Net Attributes**: Unified representation
+   - Power domains stored as nets with NetAttribute metadata
+   - Visible in symbol table like regular nets
+   - Supports voltage, current, tolerance, and control properties
+   - Electrical unit conversion (mA→A, mV→V, kΩ→Ω, etc.)
+
+### Recent Major Advances (Previous)
 1. **Complete SPICE Analysis Integration**: Implemented Newton-Raphson nonlinear solver
    - Accurate LED forward voltage modeling (2.0V drop)
    - Diode Shockley equation implementation
@@ -374,11 +396,13 @@ net measure: @protected -> filter -> adc
 - **Safety**: automotive_safety(), industrial_control(), medical_safety()
 
 ### Intent Implementation Status:
-- [ ] Parser support for `for` keyword
-- [ ] Stdlib intent function framework
-- [ ] Flow tracking engine
-- [ ] Tool integration
-- [ ] Documentation and examples
+- [x] Parser support for `for` keyword on flow statements
+- [x] Stdlib intent function framework with standard intents
+- [x] Flow tracking engine with component identification
+- [x] Hierarchical intent propagation through modules
+- [x] Net syntax consistency with @ prefix requirement
+- [ ] Tool integration (partial - simulation coordinator ready)
+- [x] Documentation and examples
 
 ### Key Principle: "One Flow, One Intent"
 Intent applies to entire signal flow paths, not individual nets. When a net branches, each branch can have its own intent. This captures design purpose explicitly and enables intelligent tool automation.

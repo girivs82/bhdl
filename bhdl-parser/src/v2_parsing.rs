@@ -74,6 +74,11 @@ impl<'t> Parser<'t> {
         // The expression parser handles binary operators and named handles internally
         self.parse_expr(0);
         
+        // Check for optional intent clause
+        if self.has_intent_clause() {
+            self.parse_intent_clause();
+        }
+        
         self.expect(SyntaxKind::SEMI);
         self.builder.finish_node();
     }
@@ -88,6 +93,11 @@ impl<'t> Parser<'t> {
         self.builder.start_node(SyntaxKind::FLOW_EXPR.into());
         self.parse_expr(0);
         self.builder.finish_node();
+        
+        // Check for optional intent clause
+        if self.has_intent_clause() {
+            self.parse_intent_clause();
+        }
         
         self.expect(SyntaxKind::SEMI);
         self.builder.finish_node();
