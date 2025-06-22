@@ -57,7 +57,7 @@ pub use transform::{TransformResult, TransformError, Transformer, TransformConte
 pub use symbol_table::{SymbolTable, Symbol, SymbolKind, SymbolError, Scope, ScopeKind, ScopeId, SourceLocation, SymbolTableBuilder, build_symbol_table, validate_symbol_references};
 pub use semantic_analysis::{SemanticAnalyzer, SemanticContext, SemanticError, BhdlType, UnitType, ComponentTypeInfo, ParameterInfo, PinInfo, PinDirection, InterfaceInfo, analyze_board_semantics, is_semantically_valid, get_expression_type};
 pub use constraint_resolver::{ConstraintResolver, Constraint, ConstraintType, ConstraintRule, ConstraintSeverity, ConstraintContext, ConstraintViolation, ConstraintResult, ComparisonOp, resolve_board_constraints, board_satisfies_constraints, is_standard_resistor_value};
-pub use v2_statements::{Statement, PowerDecl, GroundDecl, ConnectionStmt, FlowStmt as V2FlowStmt, GenerateStmt as V2GenerateStmt, ConditionalStmt as V2ConditionalStmt};
+pub use v2_statements::{Statement, PowerDecl, GroundDecl, ConnectionStmt, FlowStmt as V2FlowStmt, GenerateStmt as V2GenerateStmt, ConditionalStmt as V2ConditionalStmt, NetFlowStmt, IntentClause, IntentCall, IntentParams};
 pub use v2_board::{BoardV2Ext, BoardBody, BoardBodyExt};
 pub use interfaces::{InterfaceSignal, InterfaceRequirement, InterfacePerspective, InterfaceInst, SignalDirection};
 

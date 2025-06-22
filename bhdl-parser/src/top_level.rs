@@ -111,6 +111,7 @@ impl<'t> Parser<'t> {
                 Some(SyntaxKind::R_BRACE) => break,
                 Some(SyntaxKind::POWER_KW) => self.parse_power_decl(),
                 Some(SyntaxKind::GROUND_KW) => self.parse_ground_decl(),
+                Some(SyntaxKind::NET_KW) => self.parse_net_flow_stmt(),
                 Some(SyntaxKind::GENERATE_KW) => self.parse_generate_block(),
                 Some(SyntaxKind::ATTRIBUTE_KW) => self.parse_attribute_decl(),
                 Some(SyntaxKind::WHEN_KW) => self.parse_when_block(),

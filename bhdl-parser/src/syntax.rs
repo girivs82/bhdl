@@ -219,6 +219,13 @@ pub enum SyntaxKind {
     SCOPED_ATTRIBUTE,  // Scoped attribute: attribute path.to.attr = value;
     ATTRIBUTE_PATH,    // Attribute path: path.to.attribute
     LEFT_ARROW,        // <- (new arrow for consistent port mapping)
+    
+    // Intent system nodes
+    INTENT_CLAUSE,     // for intent_name(params)
+    INTENT_CALL,       // intent_name(params)
+    INTENT_PARAMS,     // (param1, param2: value, ...)
+    INTENT_NAMED_PARAM,// name: value in intent parameters
+    NET_FLOW_STMT,     // net name: flow_expr for intent;
 
     // ERROR must be the last variant for the assertion in kind_from_raw
     ERROR = 65534, // Represents a parsing error node
@@ -237,8 +244,11 @@ impl Language for BhdlLanguage {
     type Kind = SyntaxKind;
 
     fn kind_from_raw(raw: rowan::SyntaxKind) -> Self::Kind {
-        assert!(raw.0 < SyntaxKind::ERROR as u16);
-        unsafe { std::mem::transmute::<u16, SyntaxKind>(raw.0) }
+        if raw.0 >= SyntaxKind::ERROR as u16 {
+            SyntaxKind::ERROR
+        } else {
+            unsafe { std::mem::transmute::<u16, SyntaxKind>(raw.0) }
+        }
     }
 
     fn kind_to_raw(kind: Self::Kind) -> rowan::SyntaxKind {

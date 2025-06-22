@@ -11,6 +11,8 @@ use bhdl_parser::parse;
 use bhdl_ast::{SourceFile, AstNode, Module, PinDecl, HasName};
 use bhdl_netlist::types::{PinDirection, PinType};
 
+pub mod intents;
+
 /// Represents a pin definition extracted from a BHDL module
 #[derive(Debug, Clone)]
 pub struct StdlibPinDefinition {

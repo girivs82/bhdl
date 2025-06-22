@@ -23,6 +23,7 @@ pub mod analysis_data_conversion;
 pub mod attribute_analysis;
 pub mod builtin_variables;
 pub mod expression_evaluator;
+pub mod flow_tracking;
 
 // Use items needed directly in the analyze function
 use pass1::populate_global_scope_and_build_definition_scopes;
@@ -33,6 +34,9 @@ use power_analysis::{analyze_power_domains, PowerAnalysisContext};
 use component_inference::ComponentInferenceContext;
 use power_sequencing::PowerSequenceGenerator;
 use attribute_analysis::AttributeAnalyzer;
+use flow_tracking::FlowTracker;
+use bhdl_common::IntentRegistry;
+use bhdl_stdlib::intents as stdlib_intents;
 
 // Re-export key types for public use
 pub use types::{AnalysisResult, Diagnostic, ResolvedConstants};
@@ -214,6 +218,32 @@ pub fn analyze(source_file: &SourceFile) -> AnalysisResult {
         });
     }
 
+    // Pass 9: Flow Tracking and Intent Resolution
+    println!("Analyzer: Starting Pass 9 - Flow Tracking and Intent Resolution...");
+    let mut intent_registry = IntentRegistry::new();
+    stdlib_intents::register_stdlib_intents(&mut intent_registry);
+    let mut flow_tracker = FlowTracker::new(intent_registry);
+    
+    // Process boards to find flow paths with intents
+    let mut flow_tracker_opt = None;
+    for item in source_file.items() {
+        if let Some(board) = bhdl_ast::Board::cast(item.syntax().clone()) {
+            let flow_diagnostics = flow_tracker.analyze_board(&board, &global_scope);
+            diagnostics.extend(flow_diagnostics);
+            flow_tracker_opt = Some(flow_tracker);
+            break; // Process first board only for now
+        }
+    }
+    
+    if let Some(ref tracker) = flow_tracker_opt {
+        let flow_paths_count = tracker.get_flow_paths().len();
+        let required_sim_mode = tracker.get_required_sim_mode();
+        println!("Analyzer: Pass 9 complete. Flow paths tracked: {}, Required simulation mode: {:?}", 
+                 flow_paths_count, required_sim_mode);
+    } else {
+        println!("Analyzer: Pass 9 complete. No boards found to track flows.");
+    }
+
     // Convert power analysis errors to diagnostics
     for error in &power_context.errors {
         diagnostics.push(types::Diagnostic {
@@ -259,6 +289,7 @@ pub fn analyze(source_file: &SourceFile) -> AnalysisResult {
         power_sequencing, // Move ownership
         netlist: None, // Move ownership
         attribute_analysis, // Move ownership
+        flow_tracker: flow_tracker_opt, // Move ownership
     }
 }
 
