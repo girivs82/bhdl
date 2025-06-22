@@ -41,6 +41,9 @@ pub enum SimulationError {
     #[error("IO error: {0}")]
     IoError(String),
     
+    #[error("Probe error: {0}")]
+    ProbeError(String),
+    
     // #[error("Analysis error: {0}")]
     // AnalysisError(#[from] bhdl_analyzer::AnalysisError),
     

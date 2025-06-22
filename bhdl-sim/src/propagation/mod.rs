@@ -14,3 +14,6 @@ pub use signal_integrity::{SignalIntegrityChecker, IntegrityViolation};
 pub use drive_strength::{DriveStrengthResolver, DriveConflict};
 pub use impedance::{ImpedanceCalculator, ImpedanceMismatch};
 pub use delay_model::{DelayModel, PropagationDelay};
+
+// Re-export common types from circuit module
+pub use crate::circuit::{LogicLevel, DriveStrength};

@@ -101,6 +101,52 @@ impl Default for PinValue {
     }
 }
 
+impl PinValue {
+    /// Create a digital pin value
+    pub fn digital(level: LogicLevel) -> Self {
+        let voltage = match level {
+            LogicLevel::High => 5.0,
+            LogicLevel::Low => 0.0,
+            LogicLevel::Unknown => 2.5,
+            LogicLevel::HighZ => 0.0,
+        };
+        
+        let drive = match level {
+            LogicLevel::HighZ => DriveStrength::None,
+            _ => DriveStrength::Strong,
+        };
+        
+        Self {
+            voltage,
+            current: 0.0,
+            impedance: if level == LogicLevel::HighZ { 1e9 } else { 50.0 },
+            drive_strength: drive,
+            logic_level: Some(level),
+        }
+    }
+    
+    /// Create an analog pin value
+    pub fn analog(voltage: f64) -> Self {
+        Self {
+            voltage,
+            current: 0.0,
+            impedance: 50.0,
+            drive_strength: DriveStrength::Strong,
+            logic_level: None,
+        }
+    }
+    
+    /// Check if this is a digital pin
+    pub fn is_digital(&self) -> bool {
+        self.logic_level.is_some()
+    }
+    
+    /// Check if this is an analog pin
+    pub fn is_analog(&self) -> bool {
+        self.logic_level.is_none()
+    }
+}
+
 /// Digital drive strength
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DriveStrength {
