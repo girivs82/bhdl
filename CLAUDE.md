@@ -141,10 +141,13 @@ cargo run -p bhdl-components --example kicad_integration
 ## Important Files
 
 - `docs/spec/BHDL_Complete_Specification.md` - **Complete and authoritative v2.0 specification** (all other specs consolidated here)
+- `docs/proposals/Simulation_Architecture_Proposal.md` - **Intent system design** (flow-based design intent)
+- `docs/implementation/Intent_System_Implementation_Plan.md` - Detailed implementation plan for intent system
 - `docs/implementation/Electrical_Safety_Analysis_Implementation.md` - Safety analysis system documentation
 - `docs/examples/` - Example BHDL circuit files demonstrating v2.0 syntax
 - `test_7805_regulator_realistic.bhdl` - Realistic test circuit with net assignments
 - `bhdl-stdlib/electrical_params.bhdl` - Centralized component parameter library
+- `bhdl-stdlib/src/intents/` - Intent function library (to be implemented)
 - `bhdl-spice/src/safety/` - Electrical safety analysis implementation
 - `bhdl-spice/src/bin/test_safety_with_dc.rs` - Complete safety analysis example
 - `bhdl-visualizer/src/symbols/` - Component symbol definitions
@@ -210,6 +213,8 @@ Common SVG issues to watch for:
 ## BHDL Version 2.0 Support
 
 ✅ **CURRENT STATUS**: The parser now fully supports BHDL v2.0 flow-based syntax including all complex features. All v1.0 syntax support has been removed.
+
+🚧 **NEXT MAJOR FEATURE**: Flow-based intent system using `for` keyword to capture design intent.
 
 **Key v2.0 Features:**
 - Official spec: `docs/spec/BHDL_Complete_Specification.md` (v2.0)
@@ -310,7 +315,21 @@ This ensures we build a robust, production-ready toolchain rather than a demo wi
    - All component-specific data flows from stdlib (no hardcoding)
    - See `docs/implementation/Unified_Data_Model.md` for details
 
+10. **Flow-Based Intent System**: Revolutionary design intent capture (PLANNED)
+   - Single `for` keyword attaches intent to signal flows
+   - Intent applies to entire flow path (multiple nets/pins), not individual nets
+   - All intent logic in stdlib (38+ standard functions)
+   - Different branches can have different intents
+   - Maps to simulation strategies (PureDigital, DigitalWithTiming, MixedSignal, AnalogRequired)
+   - See `docs/proposals/Simulation_Architecture_Proposal.md` for complete design
+   - See `docs/implementation/Intent_System_Implementation_Plan.md` for implementation details
+
 ### Current Focus Areas
+- **Intent System Implementation** (HIGH PRIORITY)
+  - Add `for` keyword to parser
+  - Implement stdlib intent functions
+  - Build flow tracking engine
+  - Integrate with simulation tools
 - Component symbol scaling and visualization improvements
 - Orthogonal routing to proper pin positions
 - Capacitor symbols using parallel plates from database
@@ -327,3 +346,39 @@ This ensures we build a robust, production-ready toolchain rather than a demo wi
 - `cargo run -p bhdl-spice --bin test_component_role_detection` - Test topology-based role detection
 - `cargo run -p bhdl-spice --bin test_realistic_buck_stability` - Test buck converter stability analysis
 - `cargo test -p bhdl-analyzer` - Test component inference with new parameters
+
+## Intent System Quick Reference
+
+The intent system allows designers to declare the purpose of signal flows:
+
+```bhdl
+// Intent applies to entire flow path
+net protection: sensor -> tvs: TVSDiode(6V).cathode -> tvs.anode -> r: Res(1k).1 -> r.2 -> @protected
+    for input_protection(overvoltage: 6V, current_limit: 5mA);
+
+// Different intents on branches
+net monitor: @protected -> buf: Buffer().A -> buf.Y -> status_out
+    for fault_detection(response: 10ns);
+    
+net measure: @protected -> filter -> adc
+    for precision_measurement(accuracy: 0.1%);
+```
+
+### Key Intent Categories:
+- **Timing**: delay(), pulse_stretch(), debounce(), stable_for()
+- **Signal Processing**: noise_filtering(), anti_alias(), fast_response()
+- **Protection**: input_protection(), overvoltage_clamp(), glitch_immunity()
+- **Power/Analog**: signal_amplification(), level_shifting(), current_limiting()
+- **Digital**: signal_buffering(), output_buffering(), signal_distribution()
+- **Measurement**: precision_measurement(), data_logging(), control_loop()
+- **Safety**: automotive_safety(), industrial_control(), medical_safety()
+
+### Intent Implementation Status:
+- [ ] Parser support for `for` keyword
+- [ ] Stdlib intent function framework
+- [ ] Flow tracking engine
+- [ ] Tool integration
+- [ ] Documentation and examples
+
+### Key Principle: "One Flow, One Intent"
+Intent applies to entire signal flow paths, not individual nets. When a net branches, each branch can have its own intent. This captures design purpose explicitly and enables intelligent tool automation.
