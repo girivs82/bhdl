@@ -21,6 +21,12 @@ impl CircuitLoader {
         }
     }
     
+    /// Load from netlist only (for testing)
+    pub fn load_from_netlist(netlist: &Netlist) -> SimulationResult<CircuitState> {
+        let topology = Self::create_topology_from_netlist(netlist)?;
+        Ok(CircuitState::new(topology))
+    }
+    
     /// Load the circuit into simulation state
     pub fn load_circuit(&self) -> SimulationResult<CircuitState> {
         // Create topology
@@ -135,6 +141,40 @@ impl CircuitLoader {
         Ok(())
     }
     
+    /// Create topology from netlist only
+    fn create_topology_from_netlist(netlist: &Netlist) -> SimulationResult<CircuitTopology> {
+        let mut instance_modules = HashMap::new();
+        let mut net_connections = HashMap::new();
+        
+        // Build instance to module mapping
+        for (instance_id, instance) in &netlist.instances {
+            if let Some(module) = netlist.modules.get(instance.definition) {
+                instance_modules.insert(instance_id, module.name.clone());
+            }
+        }
+        
+        // Build net connectivity
+        for (net_id, net) in &netlist.nets {
+            let connections = net.connections.iter().filter_map(|conn| {
+                match conn {
+                    bhdl_netlist::ConnectionPoint::InstancePort(inst_id, _) => {
+                        Some(ConnectionPoint {
+                            instance: *inst_id,
+                            pin: String::new(), // TODO: Get actual pin name
+                        })
+                    }
+                    _ => None
+                }
+            }).collect();
+            
+            net_connections.insert(net_id, connections);
+        }
+        
+        Ok(CircuitTopology {
+            instance_modules,
+            net_connections,
+        })
+    }
 }
 
 #[cfg(test)]

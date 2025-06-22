@@ -3,6 +3,7 @@
 pub mod collector;
 pub mod stats;
 pub mod report;
+pub mod simple;
 
 pub use collector::{MetricsCollector, MetricType, MetricValue};
 pub use stats::{SimulationStats, ComponentStats, NetStats, PerformanceStats};

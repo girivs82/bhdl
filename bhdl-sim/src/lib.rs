@@ -17,9 +17,14 @@ pub mod behavioral;
 pub mod output;
 pub mod debug;
 pub mod metrics;
+pub mod events;
+pub mod checkpoint;
+pub mod time;
 pub mod error;
 
-pub use engine::{SimulationEngine, SimulationState, SimulationConfig};
+// Re-export from modules
+pub use crate::engine::SimulationEngine;
+pub use engine::{SimulationState, SimulationConfig};
 pub use circuit::{CircuitState, CircuitLoader};
 pub use error::{SimulationError, SimulationResult};
 

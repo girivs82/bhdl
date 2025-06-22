@@ -4,6 +4,12 @@ pub mod waveform;
 pub mod vcd;
 pub mod probe;
 pub mod formats;
+pub mod simple;
+
+// Export simple version
+pub mod manager {
+    pub use super::simple::Manager;
+}
 
 pub use waveform::{WaveformCapture, SignalTrace, TimePoint};
 pub use vcd::{VcdWriter, VcdConfig};
