@@ -725,54 +725,94 @@ net processed: raw_input
     for signal_conditioning;      // Unifying intent
 ```
 
-### Custom Domain-Specific Intents
+### Hierarchical Intent Propagation
 
-Users and organizations can create their own intent libraries:
+Intent flows naturally through the design hierarchy, avoiding repetition:
 
 ```bhdl
-// In automotive-intents/safety.bhdl
+// Board-level intent applies to everything inside
+board AutomotiveECU for automotive_safety(ASIL::D) {
+    // All modules, nets, and components inherit ASIL-D requirements
+    
+    module PowerSupply(vin: power) -> (vout: power) {
+        // Inherits ASIL-D from board
+        // No need to repeat on every net
+        
+        net input_protection: vin -> tvs -> bulk_cap -> reg.in;
+        // Automatically checked against ASIL-D requirements
+    }
+    
+    module SensorInterface for sensor_acquisition(precision: 16bit) {
+        // Module adds its own intent on top of inherited ASIL-D
+        // Both intents apply to contents
+        
+        net filtered: sensor -> amp -> filter -> adc;
+        // Gets both ASIL-D and 16-bit precision requirements
+    }
+    
+    // Can override for specific nets if needed
+    net debug_led: gpio -> led
+        for debugging_only;  // Explicitly opts out of ASIL-D
+}
+
+// Modules can declare required intent for instantiation
+module CriticalSensor() for requires(automotive_safety(ASIL::C+)) {
+    // This module can only be instantiated in ASIL-C or higher context
+}
+
+// Intent inheritance rules in stdlib
 intent automotive_safety(level: ASIL) {
-    // Automotive-specific safety requirements
+    // This intent propagates to all children
+    propagation = Propagation::Inherit;
+    
+    // Can't be overridden with lower safety level
+    override_rule = Override::OnlyStricter;
+    
+    // Requirements apply to entire subtree
     match level {
         ASIL::D => {
             simulation_mode = SimMode::AnalogRequired;
-            require redundancy_check(components) 
-                else "ASIL-D requires redundant paths";
-            require thermal_derating(0.7) 
+            require all_children.have_redundancy()
+                else "ASIL-D requires redundancy in all paths";
+            require all_components.thermal_derating(0.7)
                 else "ASIL-D requires 30% derating";
-        }
-        ASIL::B => {
-            simulation_mode = SimMode::MixedSignal;
-            require thermal_derating(0.8);
         }
     }
 }
+```
 
-// In rf-intents/matching.bhdl
-intent impedance_match(z_source: impedance, z_load: impedance) {
-    simulation_mode = SimMode::AnalogRequired;  // Always analog for RF
-    
-    // Calculate matching network requirements
-    let match_type = calculate_match_type(z_source, z_load);
-    synthesis_hint = match match_type {
-        MatchType::L => SynthHint::LMatch,
-        MatchType::Pi => SynthHint::PiMatch,
-        MatchType::T => SynthHint::TMatch,
-    };
-    
-    // Validate achievable with given components
-    require can_achieve_match(components, z_source, z_load)
-        else format!("Cannot match {}Ω to {}Ω with given components", 
-                    z_source, z_load);
+### Intent Composition and Conflicts
+
+```bhdl
+// In stdlib/intent_rules.bhdl
+rule intent_composition {
+    // When multiple intents apply, compose them
+    when [safety_intent, timing_intent, power_intent] {
+        // Take most conservative simulation mode
+        simulation_mode = max(
+            safety_intent.simulation_mode,
+            timing_intent.simulation_mode,
+            power_intent.simulation_mode
+        );
+        
+        // Combine all requirements
+        requirements = union(
+            safety_intent.requirements,
+            timing_intent.requirements,
+            power_intent.requirements
+        );
+    }
 }
 
-// Usage in user code remains clean
-board AutomotiveECU {
-    net sensor_input: sensor -> protection -> adc
-        for automotive_safety(ASIL::D);
+// Module with multiple inherited intents
+module MedicalSensor() 
+    inherits parent.safety_intent,
+    inherits parent.emc_intent,
+    for biocompatible(ISO_10993) {
     
-    net antenna: rf_in -> matching_network -> lna.in  
-        for impedance_match(50, 200);
+    // All three intents apply to contents
+    net patient_contact: electrode -> protection -> amp;
+    // Checked against safety + EMC + biocompatibility
 }
 ```
 
@@ -812,17 +852,51 @@ impl IntentEvaluator {
     }
 }
 
-// Classification becomes straightforward
+// Classification with hierarchical intent
 impl MixedSimulation {
     pub fn classify_net(&self, net: &Net) -> SimulationStrategy {
-        if let Some(intent) = net.intent {
-            // Use stdlib-defined intent result
-            let result = self.evaluator.evaluate(&intent.name, &intent.args)?;
-            SimulationStrategy::from(result.simulation_mode)
-        } else {
+        // Collect all applicable intents (own + inherited)
+        let intents = self.collect_intents(net);
+        
+        if intents.is_empty() {
             // Conservative fallback for structural descriptions
-            self.classify_structural(net)
+            return self.classify_structural(net);
         }
+        
+        // Evaluate and compose all intents
+        let mut combined_mode = SimMode::PureDigital;
+        for intent in intents {
+            let result = self.evaluator.evaluate(&intent.name, &intent.args)?;
+            // Take most conservative mode
+            combined_mode = combined_mode.max(result.simulation_mode);
+        }
+        
+        SimulationStrategy::from(combined_mode)
+    }
+    
+    fn collect_intents(&self, net: &Net) -> Vec<Intent> {
+        let mut intents = vec![];
+        
+        // Net's own intent
+        if let Some(intent) = &net.intent {
+            intents.push(intent.clone());
+        }
+        
+        // Module's intent
+        if let Some(module_intent) = &net.parent_module.intent {
+            if module_intent.propagates_to_children() {
+                intents.push(module_intent.clone());
+            }
+        }
+        
+        // Board's intent
+        if let Some(board_intent) = &net.parent_board.intent {
+            if board_intent.propagates_to_children() {
+                intents.push(board_intent.clone());
+            }
+        }
+        
+        intents
     }
 }
 ```
@@ -837,7 +911,16 @@ impl MixedSimulation {
 6. **Validation**: Intent can check structural requirements
 7. **Optimization**: Intent-specific synthesis strategies
 
-The key insight: Intent becomes a programmable abstraction layer between user code and tool decisions.
+### Advantages of Hierarchical Intent
+
+1. **DRY Principle**: Specify intent once at appropriate level
+2. **Consistency**: Entire subsystems follow same requirements
+3. **Override Control**: Explicit rules for when overrides allowed
+4. **Composition**: Multiple intents can apply and compose
+5. **Context Awareness**: Modules can require specific contexts
+6. **Gradual Refinement**: Add specificity only where needed
+
+The key insight: Intent becomes a programmable abstraction layer between user code and tool decisions, with natural hierarchical flow matching hardware design patterns.
 
 ## Proposed Architecture
 
