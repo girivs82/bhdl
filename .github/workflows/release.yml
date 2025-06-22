@@ -1,0 +1,123 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: BHDL ${{ github.ref }}
+          draft: true
+          prerelease: false
+          body: |
+            # BHDL Release ${{ github.ref }}
+            
+            ## What's Changed
+            <!-- Add release notes here -->
+            
+            ## Installation
+            
+            Download the appropriate binary for your platform below.
+            
+            ### Linux/macOS
+            ```bash
+            chmod +x bhdl-cli-*
+            sudo mv bhdl-cli-* /usr/local/bin/bhdl
+            ```
+            
+            ### Windows
+            Add the executable to your PATH.
+            
+            ## Verification
+            
+            All binaries include SHA256 checksums for verification.
+
+  build-release:
+    name: Build Release
+    needs: create-release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary_name: bhdl-cli
+            asset_name: bhdl-cli-linux-amd64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            binary_name: bhdl-cli
+            asset_name: bhdl-cli-linux-musl-amd64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            binary_name: bhdl-cli
+            asset_name: bhdl-cli-darwin-amd64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary_name: bhdl-cli
+            asset_name: bhdl-cli-darwin-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary_name: bhdl-cli.exe
+            asset_name: bhdl-cli-windows-amd64.exe
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      
+      - name: Install dependencies (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+      
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} -p bhdl-cli
+      
+      - name: Create checksum
+        shell: bash
+        run: |
+          cd target/${{ matrix.target }}/release
+          sha256sum ${{ matrix.binary_name }} > ${{ matrix.asset_name }}.sha256
+      
+      - name: Upload binary
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./target/${{ matrix.target }}/release/${{ matrix.binary_name }}
+          asset_name: ${{ matrix.asset_name }}
+          asset_content_type: application/octet-stream
+      
+      - name: Upload checksum
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./target/${{ matrix.target }}/release/${{ matrix.asset_name }}.sha256
+          asset_name: ${{ matrix.asset_name }}.sha256
+          asset_content_type: text/plain
