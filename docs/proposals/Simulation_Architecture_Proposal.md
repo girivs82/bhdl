@@ -4,6 +4,12 @@
 
 This proposal addresses the relationship between `bhdl-spice` and `bhdl-sim`, two simulation-related crates in the BHDL toolchain. While both deal with circuit simulation, they serve fundamentally different purposes and use different approaches. This document proposes maintaining them as separate, specialized tools while creating integration points to leverage their complementary strengths.
 
+Key challenges addressed include:
+- Nebulous analog/digital boundaries (e.g., MOSFETs in active region)
+- Digital I/O level validation (VIH, VIL requirements)
+- Hysteresis effects from Schmitt triggers or diode-resistor networks
+- Voltage compatibility between different logic families
+
 ## Current State Analysis
 
 ### bhdl-spice: Electrical Analysis Engine
@@ -88,6 +94,27 @@ The distinction between analog and digital regions is often nebulous and context
    - MOSFETs not fully switching (active region operation)
    - Logic gates with slow transitions (non-ideal switching)
    - Analog effects in "digital" circuits (ground bounce, crosstalk)
+
+### Digital I/O Level Validation
+
+Digital simulations typically use simple HIGH/LOW abstractions, missing critical voltage level requirements:
+
+1. **Input Threshold Violations**: 
+   - VIH (Input High Voltage) - minimum voltage for logic HIGH
+   - VIL (Input Low Voltage) - maximum voltage for logic LOW
+   - Undefined region between VIL and VIH where behavior is unpredictable
+   - Different logic families have different thresholds (TTL, CMOS, LVTTL, etc.)
+
+2. **Hysteresis Effects**:
+   - Schmitt trigger inputs with different rising/falling thresholds
+   - Diode-resistor networks creating voltage-dependent behavior
+   - State-dependent input thresholds that digital models miss
+
+3. **Real-World Examples**:
+   - 3.3V logic driving 5V inputs may not meet VIH requirements
+   - Slow rise times through undefined region causing oscillations
+   - Pull-up resistors too weak to guarantee VIH under load
+   - Noise margins violated by ground bounce or supply droop
 
 ## Integration Opportunities
 
@@ -252,6 +279,139 @@ impl AdaptiveSimulation {
         }
         
         Ok(adjustments)
+    }
+}
+```
+
+### 6. I/O Level Validation System
+
+**Problem**: Digital simulations cannot validate voltage levels against logic family specifications.
+
+**Solution**: Hybrid validation using SPICE for voltage level checks:
+
+#### Logic Family Specifications:
+```rust
+pub struct LogicFamily {
+    pub name: String,
+    pub vdd: f64,
+    pub vih_min: f64,  // Minimum input high voltage
+    pub vil_max: f64,  // Maximum input low voltage
+    pub voh_min: f64,  // Minimum output high voltage
+    pub vol_max: f64,  // Maximum output low voltage
+    pub hysteresis: Option<Hysteresis>,
+}
+
+pub struct Hysteresis {
+    pub vt_rising: f64,   // Rising threshold
+    pub vt_falling: f64,  // Falling threshold
+}
+
+// Example: 3.3V CMOS
+let cmos_3v3 = LogicFamily {
+    name: "CMOS_3.3V".to_string(),
+    vdd: 3.3,
+    vih_min: 2.0,     // 0.7 * VDD
+    vil_max: 0.8,     // 0.3 * VDD
+    voh_min: 2.4,
+    vol_max: 0.4,
+    hysteresis: None,
+};
+```
+
+#### Validation During Simulation:
+```rust
+// Check digital signal against I/O specifications
+pub fn validate_io_levels(
+    spice: &SpiceEngine,
+    behavioral: &BehavioralEngine,
+    interface: &InterfacePoint,
+) -> ValidationResult {
+    // Get actual voltage from SPICE
+    let voltage = spice.get_node_voltage(&interface.node)?;
+    
+    // Get expected logic level from behavioral
+    let expected_state = behavioral.get_pin_state(&interface.pin)?;
+    
+    // Check against logic family specs
+    let logic_family = interface.get_logic_family();
+    
+    match expected_state {
+        LogicState::High => {
+            if voltage < logic_family.vih_min {
+                return ValidationResult::Violation {
+                    severity: Severity::Error,
+                    message: format!(
+                        "Input voltage {:.2}V below VIH_min {:.2}V for {}",
+                        voltage, logic_family.vih_min, logic_family.name
+                    ),
+                    suggestion: "Check drive strength, pull-up resistor value, or logic level translation",
+                };
+            }
+        }
+        LogicState::Low => {
+            if voltage > logic_family.vil_max {
+                return ValidationResult::Violation {
+                    severity: Severity::Error,
+                    message: format!(
+                        "Input voltage {:.2}V above VIL_max {:.2}V for {}",
+                        voltage, logic_family.vil_max, logic_family.name
+                    ),
+                    suggestion: "Check pull-down strength or noise coupling",
+                };
+            }
+        }
+        LogicState::Undefined => {
+            // Voltage in undefined region
+            return ValidationResult::Warning {
+                message: format!(
+                    "Voltage {:.2}V in undefined region ({:.2}V - {:.2}V)",
+                    voltage, logic_family.vil_max, logic_family.vih_min
+                ),
+            };
+        }
+    }
+    
+    ValidationResult::Pass
+}
+```
+
+#### Hysteresis Detection:
+```rust
+// Detect and model hysteresis effects
+pub fn detect_hysteresis(
+    circuit: &Circuit,
+    node: &NodeId,
+) -> Option<HysteresisModel> {
+    // Check for Schmitt trigger components
+    if let Some(schmitt) = circuit.find_schmitt_trigger_on_node(node) {
+        return Some(HysteresisModel::SchmittTrigger(schmitt.get_thresholds()));
+    }
+    
+    // Check for diode-resistor feedback
+    if let Some(feedback) = circuit.find_feedback_network(node) {
+        if feedback.contains_diode() {
+            // Analyze feedback network for hysteresis
+            let model = analyze_diode_feedback(&feedback)?;
+            return Some(HysteresisModel::DiodeNetwork(model));
+        }
+    }
+    
+    None
+}
+
+// Apply hysteresis in mixed simulation
+impl MixedSimulation {
+    pub fn process_hysteretic_input(&mut self, input: &Input) -> Result<()> {
+        let voltage = self.spice.get_voltage(&input.node)?;
+        let previous_state = self.behavioral.get_state(&input.pin)?;
+        
+        let new_state = match &input.hysteresis {
+            Some(hyst) => hyst.evaluate(voltage, previous_state),
+            None => LogicFamily::evaluate_simple(voltage),
+        };
+        
+        self.behavioral.set_state(&input.pin, new_state)?;
+        Ok(())
     }
 }
 ```
@@ -433,6 +593,8 @@ let digital_waveforms = mixed_sim.get_digital_waveforms();
 3. **Usability**: Clear when to use which tool
 4. **Maintainability**: Clean interfaces, good test coverage
 5. **Adoption**: Users successfully combine both tools
+6. **Accuracy**: Catches I/O level violations and operating region issues
+7. **Coverage**: Detects hysteresis effects and voltage compatibility problems
 
 ## Conclusion
 
@@ -576,3 +738,31 @@ This approach ensures:
 2. **Performance**: Only use expensive analog modeling when necessary
 3. **Visibility**: Users are informed when components behave unexpectedly
 4. **Adaptability**: Simulation adjusts to actual circuit conditions
+
+### Real-World I/O Level Challenge Example
+
+Consider a common scenario: 3.3V microcontroller interfacing with 5V logic:
+
+```rust
+// Problematic circuit that digital simulation would miss
+// MCU (3.3V CMOS) -> Pull-up to 5V -> 5V TTL Input
+
+// Digital simulation sees: HIGH -> HIGH (seems fine)
+// Reality: 3.3V < 4.0V (TTL VIH_min) - FAILURE!
+
+// Mixed simulation detects the issue:
+let validation = mixed_sim.validate_interface("MCU_OUT", "TTL_IN")?;
+// Error: Output voltage 3.3V below VIH_min 4.0V for 5V_TTL
+// Suggestion: Add level shifter or use open-drain with 5V pull-up
+
+// Another subtle case: Weak pull-up with capacitive load
+// Digital simulation: Works fine
+// Reality: Rise time too slow, undefined region causes glitches
+
+// With hysteresis network (diode + resistor feedback):
+let hysteresis_model = mixed_sim.detect_hysteresis("BUTTON_INPUT")?;
+// Detected: Diode network creating 0.7V hysteresis window
+// Digital model updated to include state-dependent thresholds
+```
+
+This demonstrates why pure digital simulation is insufficient for real-world circuits.
