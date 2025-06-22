@@ -15,6 +15,8 @@ pub mod evaluation;
 pub mod propagation;
 pub mod behavioral;
 pub mod output;
+pub mod debug;
+pub mod metrics;
 pub mod error;
 
 pub use engine::{SimulationEngine, SimulationState, SimulationConfig};
