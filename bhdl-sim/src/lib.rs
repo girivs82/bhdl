@@ -24,6 +24,7 @@ pub mod checkpoint;
 pub mod time;
 pub mod error;
 pub mod coordinator;
+pub mod integration;
 
 // Re-export from modules
 pub use crate::engine::SimulationEngine;

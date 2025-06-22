@@ -56,8 +56,11 @@ pub enum SimulationError {
     #[error("Event not found: {0}")]
     EventNotFound(u64),
     
-    // #[error("Analysis error: {0}")]
-    // AnalysisError(#[from] bhdl_analyzer::AnalysisError),
+    #[error("Engine error: {0}")]
+    EngineError(String),
+    
+    #[error("Analysis error: {0}")]
+    AnalysisError(String),
     
     #[error("Other error: {0}")]
     Other(String),
