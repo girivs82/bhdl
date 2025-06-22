@@ -10,6 +10,8 @@ Key challenges addressed include:
 - Hysteresis effects from Schmitt triggers or diode-resistor networks
 - Voltage compatibility between different logic families
 
+The proposal introduces an intent-based classification approach leveraging BHDL's high-level abstractions to capture design intent (e.g., `combined_net: Q1_OUT | Q2_OUT`, `delayed_net: inverted_net after 3ms`), enabling intelligent simulation mode selection based on what the designer intended rather than trying to automatically detect boundaries.
+
 ## Current State Analysis
 
 ### bhdl-spice: Electrical Analysis Engine
@@ -479,6 +481,99 @@ impl MixedSimulation {
 4. **User Guidance**: Let users override classifications based on their knowledge
 5. **Performance Trade-offs**: Make accuracy vs. speed choices explicit
 
+### Intent-Based Classification: The BHDL Advantage
+
+BHDL's higher abstraction level provides a unique opportunity to capture design intent, enabling intelligent simulation mode selection:
+
+```bhdl
+// Current BHDL: Structure without intent
+net combined: OC_OUT1.OUT -> OC_OUT2.OUT -> R1(4.7k).1;
+net delayed: combined -> R3(1k).1 -> C1(100pF).1 -> DIG_IN.IN;
+
+// Future BHDL: Structure with intent
+net combined: OC_OUT1.OUT | OC_OUT2.OUT;  // Wired-OR intent
+net inverted: ~combined;                   // Digital inversion intent
+net delayed: inverted after 3ms;          // Timing delay intent
+
+// Even more explicit intent
+net bus_ready: device1.ready & device2.ready;  // Digital AND
+net bus_request: req1 | req2 | req3;          // Digital OR
+net debounced: button_in stable_for 20ms;     // Debouncing intent
+```
+
+This intent information enables intelligent classification:
+
+```rust
+impl IntentBasedClassifier {
+    pub fn classify_from_bhdl(&self, net: &NetDeclaration) -> SimulationStrategy {
+        match &net.intent {
+            NetIntent::WiredOr { drivers } => {
+                // We know it's meant as digital, but needs analog for pull-ups
+                SimulationStrategy::DigitalWithAnalogValidation {
+                    validate_rise_time: true,
+                    check_voltage_levels: true,
+                }
+            }
+            NetIntent::DigitalInversion => {
+                // Pure digital unless connected to analog regions
+                SimulationStrategy::DigitalPreferred
+            }
+            NetIntent::TimingDelay { delay } => {
+                if delay > &Duration::from_micros(1) {
+                    // Large delays likely use RC networks
+                    SimulationStrategy::AnalogRequired
+                } else {
+                    // Small delays might be gate propagation
+                    SimulationStrategy::DigitalWithTiming
+                }
+            }
+            NetIntent::Debounce { stable_time } => {
+                // Definitely needs analog for RC filtering
+                SimulationStrategy::AnalogRequired
+            }
+            NetIntent::AnalogFilter { .. } => {
+                // Explicitly analog
+                SimulationStrategy::FullAnalog
+            }
+        }
+    }
+}
+```
+
+### BHDL Language Extensions for Intent
+
+Proposed syntax extensions to capture design intent:
+
+```bhdl
+// Combinational logic intent
+net decoded: select match {
+    2'b00 => out1,
+    2'b01 => out2,
+    2'b10 => out3,
+    2'b11 => out4,
+};
+
+// Timing intent
+net synchronized: async_signal clocked_by sys_clk;
+net delayed_enable: enable after setup_time;
+
+// Analog intent
+net filtered: noisy_input through low_pass(cutoff: 1kHz);
+net averaged: sensor_reading moving_average(window: 10ms);
+
+// Mixed-signal boundaries
+interface ADC_Input {
+    analog vref: voltage;
+    analog vin: voltage range 0..vref;
+    digital[12] dout: logic;
+    
+    behavior sample_rate: 1MHz;
+    behavior resolution: 12 bits;
+}
+```
+
+This approach leverages BHDL's raison d'être - increasing abstraction level - to solve the boundary problem elegantly.
+
 ## Proposed Architecture
 
 ### Option 1: Keep Separate (Recommended)
@@ -607,6 +702,14 @@ Create `bhdl-mixed-sim` with:
 - Neighbor effect propagation
 - Performance impact mitigation
 
+#### Phase 5: BHDL Intent Extensions (4-6 weeks)
+- Design and implement intent syntax extensions
+- Add operators: `|` (wired-OR), `&` (wired-AND), `~` (inversion)
+- Add timing constructs: `after`, `stable_for`, `clocked_by`
+- Add analog constructs: `through`, `moving_average`
+- Update parser and AST to capture intent
+- Implement intent-based classification engine
+
 ### Example API
 
 ```rust
@@ -680,6 +783,8 @@ The proposed adaptive boundary system ensures that components like MOSFETs opera
 
 However, as demonstrated by the open-collector/RC network example, many real circuits have no clean analog/digital boundaries. The signal path classification approach provides a more pragmatic solution, accepting that boundaries are fluid and context-dependent rather than fixed and automatic.
 
+Most importantly, BHDL's fundamental advantage - raising the abstraction level - provides the key to solving this problem. By capturing design intent in the language itself (e.g., `wired_or`, `after 3ms`, `stable_for 20ms`), we enable intelligent simulation mode selection based on what the designer intended, not what we can infer from the structure. This is a profound insight that aligns perfectly with BHDL's core philosophy.
+
 ## Next Steps
 
 1. Review and approve this proposal
@@ -688,6 +793,8 @@ However, as demonstrated by the open-collector/RC network example, many real cir
 4. Implement basic DC initialization bridge
 5. Create example mixed-signal circuits
 6. Document best practices for using both tools
+7. Design BHDL language extensions for capturing design intent
+8. Implement intent-based classification system
 
 ## Appendix: Technical Details
 
