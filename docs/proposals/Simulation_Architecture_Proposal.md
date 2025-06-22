@@ -574,6 +574,84 @@ interface ADC_Input {
 
 This approach leverages BHDL's raison d'être - increasing abstraction level - to solve the boundary problem elegantly.
 
+### The Abstraction vs. Control Trade-off
+
+However, this intent-based approach introduces a fundamental tension: users may deliberately choose low-level descriptions to maintain precise control over component inference. Consider:
+
+```bhdl
+// High-level intent (designer gives up control)
+net delayed: signal after 3ms;
+// Synthesizer might infer: RC network, buffer chain, or dedicated delay line
+
+// Low-level explicit (designer maintains control)
+net rc_delayed: signal -> R(10k).1 -> C(300pF).1 -> buffer.in;
+// Designer specifies exact implementation
+
+// The challenge: How do we classify this explicit low-level circuit?
+// - We know the structure (R, C, buffer)
+// - We don't know the intent (delay? filter? debounce?)
+// - Simulation requirements depend on missing intent
+```
+
+This creates a dilemma:
+1. **With intent**: Clear simulation strategy, but less control over synthesis
+2. **Without intent**: Full control, but ambiguous simulation requirements
+
+### Hybrid Solution: Optional Intent Annotations
+
+BHDL could support both approaches through optional intent annotations:
+
+```bhdl
+// Explicit structure with intent annotation
+net delayed: signal -> R(10k).1 -> C(300pF).1 -> buffer.in
+    @intent(delay: 3ms);
+
+// Pure structure (no intent)
+net rc_net: signal -> R(10k).1 -> C(300pF).1 -> buffer.in;
+// Conservative simulation: assume analog requirements
+
+// High-level with synthesis hints
+net filtered: noisy_signal through low_pass(1kHz)
+    @impl_hint(order: 2, type: "Sallen-Key");
+```
+
+This allows users to:
+- Use high-level abstractions when appropriate
+- Drop to low-level for precise control
+- Optionally annotate low-level circuits with intent
+- Provide synthesis hints without losing abstraction benefits
+
+### Classification Strategy for Mixed Abstraction Levels
+
+```rust
+impl MixedAbstractionClassifier {
+    pub fn classify(&self, net: &Net) -> SimulationStrategy {
+        match (net.has_intent(), net.is_structural()) {
+            (true, _) => {
+                // Intent provided: use it for classification
+                self.classify_by_intent(&net.intent)
+            }
+            (false, true) => {
+                // Pure structural: conservative approach
+                if net.has_analog_components() {
+                    SimulationStrategy::AnalogRequired
+                } else if net.has_timing_elements() {
+                    SimulationStrategy::DigitalWithAnalogValidation
+                } else {
+                    SimulationStrategy::DigitalPreferred
+                }
+            }
+            (false, false) => {
+                // High-level without explicit intent: infer carefully
+                self.infer_intent_from_context(net)
+            }
+        }
+    }
+}
+```
+
+The key insight: BHDL must support both paradigms, not force users into one or the other.
+
 ## Proposed Architecture
 
 ### Option 1: Keep Separate (Recommended)
@@ -756,6 +834,8 @@ let digital_waveforms = mixed_sim.get_digital_waveforms();
 | No clean boundaries in many circuits | Signal path classification approach |
 | Complex analog effects in "digital" circuits | Accept graduated accuracy levels |
 | User confusion about simulation modes | Clear documentation of trade-offs |
+| Intent vs. control trade-off | Support both paradigms with optional annotations |
+| Conservative simulation for low-level designs | Performance impact accepted for correctness |
 
 ## Success Metrics
 
@@ -784,6 +864,8 @@ The proposed adaptive boundary system ensures that components like MOSFETs opera
 However, as demonstrated by the open-collector/RC network example, many real circuits have no clean analog/digital boundaries. The signal path classification approach provides a more pragmatic solution, accepting that boundaries are fluid and context-dependent rather than fixed and automatic.
 
 Most importantly, BHDL's fundamental advantage - raising the abstraction level - provides the key to solving this problem. By capturing design intent in the language itself (e.g., `wired_or`, `after 3ms`, `stable_for 20ms`), we enable intelligent simulation mode selection based on what the designer intended, not what we can infer from the structure. This is a profound insight that aligns perfectly with BHDL's core philosophy.
+
+However, we must respect that users sometimes need low-level control over exact component inference, which conflicts with high-level intent abstractions. The solution is to support both paradigms: allow optional intent annotations on structural descriptions, use conservative simulation strategies when intent is absent, and let users choose their abstraction level based on their specific needs. This flexibility ensures BHDL remains useful for both high-level system design and precise low-level implementation.
 
 ## Next Steps
 
