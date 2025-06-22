@@ -30,6 +30,21 @@ This publication discloses a novel method for automatically determining the func
    }
    ```
 
+### Relevant Prior Art
+
+#### Circuit Analysis Methods
+- **SPICE AC Analysis**: Nagel, L. W., "SPICE2: A Computer Program to Simulate Semiconductor Circuits", Memorandum No. ERL-M520, University of California, Berkeley, May 1975
+- **Frequency Domain Analysis**: Vladimirescu, A., "The SPICE Book", John Wiley & Sons, 1994
+- **Network Analysis**: Desoer, C. A. and Kuh, E. S., "Basic Circuit Theory", McGraw-Hill, 1969
+
+#### Component Classification
+- **Design Patterns**: Horowitz, P. and Hill, W., "The Art of Electronics", 3rd Edition, Cambridge University Press, 2015
+- **Circuit Topology**: Gray, P. R., Hurst, P. J., Lewis, S. H., and Meyer, R. G., "Analysis and Design of Analog Integrated Circuits", 5th Edition, Wiley, 2009
+
+#### Machine Learning in EDA
+- **Feature Extraction**: Rutenbar, R. A., "Design Automation for Analog: The Next Generation of Tool Challenges", Proceedings of ICCAD, 2006
+- **Pattern Recognition**: De Bernardinis, F., et al., "Support Vector Machines for Analog Circuit Performance Representation", Proceedings of DAC, 2003
+
 ### Limitations of Prior Art
 
 - **Naming Dependence**: Fails when components have generic names (C1, C2)

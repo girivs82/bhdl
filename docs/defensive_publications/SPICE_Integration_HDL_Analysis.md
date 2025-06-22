@@ -17,12 +17,29 @@ This publication discloses a novel method of integrating SPICE-like electrical s
 4. Manually verify results
 5. Iterate if issues found
 
+### Relevant Prior Art in Circuit Analysis
+
+#### SPICE and Circuit Simulation
+- **SPICE Origins**: Nagel, L. W. and Pederson, D. O., "SPICE (Simulation Program with Integrated Circuit Emphasis)", Memorandum No. ERL-M382, University of California, Berkeley, April 1973
+- **SPICE2**: Nagel, L. W., "SPICE2: A Computer Program to Simulate Semiconductor Circuits", Memorandum No. ERL-M520, University of California, Berkeley, May 1975
+- **Modified Nodal Analysis**: Ho, C. W., Ruehli, A. E., and Brennan, P. A., "The Modified Nodal Approach to Network Analysis", IEEE Transactions on Circuits and Systems, vol. 22, no. 6, pp. 504-509, June 1975
+
+#### Numerical Methods
+- **Newton-Raphson Method**: Burden, R. L. and Faires, J. D., "Numerical Analysis", 9th Edition, Brooks/Cole, 2010
+- **Circuit Applications**: Chua, L. O. and Lin, P. M., "Computer-Aided Analysis of Electronic Circuits: Algorithms and Computational Techniques", Prentice-Hall, 1975
+- **Convergence Techniques**: Vlach, J. and Singhal, K., "Computer Methods for Circuit Analysis and Design", Van Nostrand Reinhold, 1983
+
+#### Mixed-Signal Simulation
+- **Verilog-AMS**: "Verilog-AMS Language Reference Manual", Version 2.4, Accellera Systems Initiative, 2014
+- **VHDL-AMS**: IEEE Std 1076.1-2017, "IEEE Standard for VHDL Analog and Mixed-Signal Extensions"
+
 ### Limitations of Prior Art
 - **Disconnected Flow**: Simulation results don't inform language analysis
 - **Late Error Detection**: Electrical violations found after design complete
 - **Manual Verification**: Engineers must interpret simulation results
 - **No Inference**: Component values must be explicitly specified
 - **Naming Dependence**: Component roles identified by naming conventions
+- **Post-Design Analysis**: All prior art treats simulation as a separate, post-design step
 
 ## Innovation Details
 
