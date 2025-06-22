@@ -1,4 +1,8 @@
-# BHDL: Board Hardware Description Language
+# BHDL - Board Hardware Description Language
+
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE-APACHE)
+[![CI](https://github.com/[USERNAME]/bhdl/workflows/CI/badge.svg)](https://github.com/[USERNAME]/bhdl/actions)
+[![Documentation](https://img.shields.io/badge/docs-latest-brightgreen.svg)](docs/)
 
 A domain-specific language for describing electronic circuit boards using a natural flow-based syntax.
 
