@@ -47,7 +47,7 @@ pub struct SimPartition {
 }
 
 /// Interface between different simulation domains
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DomainInterface {
     /// Source partition ID
     pub source_partition: usize,
@@ -317,9 +317,17 @@ impl SimulationCoordinator {
     
     /// Run coordinated simulation
     pub fn simulate(&self, context: &SimulationContext) -> Result<CoordinatedSimulationResult, SimulationError> {
-        // This will coordinate between different simulation engines
-        // For now, return a placeholder
-        todo!("Implement coordinated simulation execution")
+        use crate::integration::SimulationExecutor;
+        
+        // Create simulation executor with our partitions and interfaces
+        let mut executor = SimulationExecutor::new(
+            &self.partitions,
+            self.interfaces.clone(),
+            &self.netlist
+        )?;
+        
+        // Execute the coordinated simulation
+        executor.execute(context)
     }
 }
 

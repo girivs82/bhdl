@@ -124,7 +124,13 @@
       "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin test_perspective_interface_runner 2 >& 1)",
       "Bash(RUST_LOG=info,bhdl_synthesizer::interface_synthesis=debug cargo run -p bhdl-synthesizer --bin test_perspective_interface_runner 2 >& 1)",
       "Bash(./target/debug/test_expression_evaluator:*)",
-      "Bash(./target/debug/test_intent_parsing:*)"
+      "Bash(./target/debug/test_intent_parsing:*)",
+      "Bash(./target/debug/test_coordinator 2>&1)",
+      "Bash(./target/debug/test_coordinator_simple 2>&1)",
+      "Bash(./target/debug/test_coordinator_simple)",
+      "Bash(./target/debug/test_coordinator_mock)",
+      "Bash(./target/debug/test_integration)",
+      "Bash(./target/debug/test_coordination_demo)"
     ],
     "deny": []
   }
