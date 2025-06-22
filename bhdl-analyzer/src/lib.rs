@@ -7,6 +7,7 @@ pub mod types;
 mod helpers;
 pub mod symbol_table;
 pub mod hierarchical_symbol_table;
+pub mod net_attributes;
 mod pass1;
 mod pass2;
 mod pass3;
@@ -99,7 +100,7 @@ pub fn analyze(source_file: &SourceFile) -> AnalysisResult {
 
     // Pass 5: Power Analysis
     println!("Analyzer: Starting Pass 5 - Power Analysis...");
-    let power_context = analyze_power_domains(source_file.syntax());
+    let power_context = analyze_power_domains(source_file.syntax(), &global_scope, &definition_scopes);
     let power_errors_count = power_context.errors.len();
     let power_warnings_count = power_context.warnings.len();
     println!("Analyzer: Pass 5 complete. Power domains analyzed: {}, Level shifters: {}, Errors: {}, Warnings: {}", 
@@ -235,7 +236,10 @@ pub fn analyze(source_file: &SourceFile) -> AnalysisResult {
         }
     }
     
-    if let Some(ref tracker) = flow_tracker_opt {
+    if let Some(ref mut tracker) = flow_tracker_opt {
+        // Propagate intents hierarchically through module instances
+        tracker.propagate_hierarchical_intents(&global_scope, &definition_scopes);
+        
         let flow_paths_count = tracker.get_flow_paths().len();
         let required_sim_mode = tracker.get_required_sim_mode();
         println!("Analyzer: Pass 9 complete. Flow paths tracked: {}, Required simulation mode: {:?}", 

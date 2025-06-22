@@ -191,6 +191,21 @@ impl FlowTracker {
                     }
                 }
             }
+            bhdl_ast::SyntaxKind::MODULE_INST => {
+                // Module instance - track as a component for hierarchical propagation
+                if let Some(instance_name) = node.children_with_tokens()
+                    .filter_map(|e| e.into_token())
+                    .find(|t| t.kind() == bhdl_ast::SyntaxKind::IDENT)
+                {
+                    let module_instance = instance_name.text().to_string();
+                    if let Some(flow_path) = self.flow_paths.iter_mut().find(|f| f.id == flow_id) {
+                        if !flow_path.components.contains(&module_instance) {
+                            flow_path.components.push(module_instance.clone());
+                            self.component_to_flows.entry(module_instance).or_default().push(flow_id);
+                        }
+                    }
+                }
+            }
             _ => {
                 // Continue traversing children
                 for child in node.children() {
@@ -327,6 +342,63 @@ impl FlowTracker {
             .map(|result| result.sim_mode)
             .max()
             .unwrap_or(SimMode::PureDigital)
+    }
+    
+    /// Propagate intents hierarchically through module instances
+    pub fn propagate_hierarchical_intents(&mut self, symbol_table: &SymbolTable, definition_scopes: &std::collections::HashMap<rowan::ast::SyntaxNodePtr<bhdl_parser::BhdlLanguage>, SymbolTable>) {
+        use crate::symbol_table::SymbolKind;
+        
+        // Find all module instances that are part of flows with intents
+        let mut module_intents: Vec<(String, IntentCall)> = Vec::new();
+        
+        for flow in &self.flow_paths {
+            if let Some(ref intent) = flow.intent {
+                // Check each component to see if it's a module instance
+                for component in &flow.components {
+                    // Look up the component in the symbol table
+                    if let Some(symbol) = symbol_table.lookup(component) {
+                        if symbol.kind == SymbolKind::Instance {
+                            // This is a module instance - propagate the intent
+                            module_intents.push((component.clone(), intent.clone()));
+                        }
+                    }
+                    
+                    // Also check in definition scopes
+                    for (_, scope) in definition_scopes {
+                        if let Some(symbol) = scope.lookup(component) {
+                            if symbol.kind == SymbolKind::Instance {
+                                module_intents.push((component.clone(), intent.clone()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Create new flow paths for module internal components
+        for (module_instance, intent) in module_intents {
+            let flow_id = self.next_flow_id;
+            self.next_flow_id += 1;
+            
+            let mut flow_path = FlowPath {
+                id: flow_id,
+                nets: vec![format!("{}._internal", module_instance)],
+                components: Vec::new(),
+                intent: Some(intent.clone()),
+                intent_result: None,
+            };
+            
+            // Resolve the intent
+            if let Ok(result) = self.intent_registry.resolve(&intent) {
+                flow_path.intent_result = Some(result);
+            }
+            
+            self.flow_paths.push(flow_path);
+            
+            // Note: In a full implementation, we would traverse the module's internal
+            // structure to find all components and propagate the intent to them.
+            // For now, this demonstrates the concept.
+        }
     }
 }
 

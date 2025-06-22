@@ -510,9 +510,58 @@ impl PowerAnalysisContext {
     }
 }
 
-/// Perform power analysis on a syntax tree
-pub fn analyze_power_domains(syntax: &SyntaxNode<BhdlLanguage>) -> PowerAnalysisContext {
+/// Load power domains from symbol table
+fn load_power_domains_from_symbols(context: &mut PowerAnalysisContext, symbol_table: &crate::symbol_table::SymbolTable) {
+    use crate::symbol_table::SymbolKind;
+    use crate::net_attributes::NetAttribute;
+    
+    // Check all nets in the symbol table
+    for (name, symbol) in symbol_table.get_nets() {
+        if symbol.kind == SymbolKind::Net {
+            if let Some(net_attr) = &symbol.net_attributes {
+                match net_attr {
+                    NetAttribute::PowerDomain { voltage, max_current, tolerance, controllable, enable_signal, startup_delay_ms, sequence_priority, dependencies } => {
+                        let mut domain = PowerDomain::new(name.clone(), *voltage);
+                        domain.max_current = *max_current;
+                        domain.tolerance = *tolerance;
+                        domain.controllable = *controllable;
+                        domain.enable_signal = enable_signal.clone();
+                        domain.startup_delay_ms = *startup_delay_ms;
+                        domain.sequence_priority = *sequence_priority;
+                        domain.dependencies = dependencies.clone();
+                        context.add_domain(domain);
+                    }
+                    NetAttribute::GroundDomain => {
+                        let domain = PowerDomain::new(name.clone(), 0.0);
+                        context.add_domain(domain);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    
+    // Recursively check child scopes
+    for child in &symbol_table.children {
+        load_power_domains_from_symbols(context, child);
+    }
+}
+
+/// Perform power analysis on a syntax tree with symbol table
+pub fn analyze_power_domains(
+    syntax: &SyntaxNode<BhdlLanguage>, 
+    global_scope: &crate::symbol_table::SymbolTable,
+    definition_scopes: &std::collections::HashMap<rowan::ast::SyntaxNodePtr<BhdlLanguage>, crate::symbol_table::SymbolTable>
+) -> PowerAnalysisContext {
     let mut context = PowerAnalysisContext::new();
+    
+    // Load power domains from symbol table (global scope)
+    load_power_domains_from_symbols(&mut context, global_scope);
+    
+    // Load power domains from definition scopes (board scopes)
+    for (_, scope) in definition_scopes {
+        load_power_domains_from_symbols(&mut context, scope);
+    }
     
     // First pass: identify power domains and initial connections
     visit_node_for_power_analysis(syntax, &mut context);
@@ -531,12 +580,7 @@ pub fn analyze_power_domains(syntax: &SyntaxNode<BhdlLanguage>) -> PowerAnalysis
 /// Visit nodes in the syntax tree for power analysis
 fn visit_node_for_power_analysis(node: &SyntaxNode<BhdlLanguage>, context: &mut PowerAnalysisContext) {
     match node.kind() {
-        SyntaxKind::POWER_DECL => {
-            analyze_power_declaration(node, context);
-        }
-        SyntaxKind::GROUND_DECL => {
-            analyze_ground_declaration(node, context);
-        }
+        // Power and ground declarations are now loaded from symbol table
         SyntaxKind::COMPONENT_INST => {
             analyze_component_power_requirements(node, context);
         }
@@ -686,26 +730,44 @@ fn analyze_connection_power_domains(node: &SyntaxNode<BhdlLanguage>, context: &m
                 let lhs = lhs_full.trim_end_matches(';').trim();
                 let rhs = rhs_full.trim_end_matches(';').trim();
                 
-                // Extract component name from LHS (handle pin references)
-                let lhs_component = if let Some(dot_pos) = lhs.find('.') {
-                    lhs[..dot_pos].trim()
+                // Extract component name from LHS (handle pin references and @ prefix)
+                let (lhs_component, lhs_is_net) = if lhs.starts_with('@') {
+                    // This is a net reference
+                    let name = lhs[1..].trim();
+                    if let Some(dot_pos) = name.find('.') {
+                        (name[..dot_pos].trim(), true)
+                    } else {
+                        (name, true)
+                    }
+                } else if let Some(dot_pos) = lhs.find('.') {
+                    (lhs[..dot_pos].trim(), false)
                 } else {
-                    lhs
+                    (lhs, false)
                 };
                 
-                // Extract target identifier from RHS (handle named handles)
-                let rhs_target = if let Some(colon_pos) = rhs.find(':') {
-                    rhs[..colon_pos].trim()
+                // Extract target identifier from RHS (handle named handles and @ prefix)
+                let (rhs_target, rhs_is_net) = if rhs.starts_with('@') {
+                    // This is a net reference
+                    let name = rhs[1..].trim();
+                    if let Some(dot_pos) = name.find('.') {
+                        (name[..dot_pos].trim(), true)
+                    } else {
+                        (name, true)
+                    }
+                } else if let Some(colon_pos) = rhs.find(':') {
+                    (rhs[..colon_pos].trim(), false)
                 } else if let Some(dot_pos) = rhs.find('.') {
-                    rhs[..dot_pos].trim()
+                    (rhs[..dot_pos].trim(), false)
                 } else {
-                    rhs
+                    (rhs, false)
                 };
                 
-                println!("Power Analysis: Processing connection '{}' -> '{}'", lhs_component, rhs_target);
+                println!("Power Analysis: Processing connection '{}{}' -> '{}{}'", 
+                    if lhs_is_net { "@" } else { "" }, lhs_component,
+                    if rhs_is_net { "@" } else { "" }, rhs_target);
                 
-                // Check if LHS is a power domain or component connected to power
-                if context.domains.contains_key(lhs_component) {
+                // Check if LHS is a power domain (only if it has @ prefix)
+                if lhs_is_net && context.domains.contains_key(lhs_component) {
                     // Get the source domain - could be the component itself or its assigned domain
                     let source_domain = if let Some(assigned_domain) = context.component_domains.get(lhs_component) {
                         assigned_domain.clone()
@@ -723,10 +785,10 @@ fn analyze_connection_power_domains(node: &SyntaxNode<BhdlLanguage>, context: &m
                                 context.assign_component_domain(rhs_target.to_string(), source_domain.clone());
                                 println!("Power Analysis: Assigned component '{}' to power domain '{}'", rhs_target, source_domain);
                             }
-                        } else if rhs_target != "GND" && !context.domains.contains_key(rhs_target) {
-                            // Only create derived domain for identifiers that could be power nets
+                        } else if rhs_is_net && rhs_target != "GND" && !context.domains.contains_key(rhs_target) {
+                            // Only create derived domain for @ net references that could be power nets
                             // In the future, check component impedance characteristics
-                            println!("Power Analysis: Checking if '{}' should be a power domain", rhs_target);
+                            println!("Power Analysis: Checking if '@{}' should be a power domain", rhs_target);
                             
                             // For now, only propagate if it looks like a power net name
                             if rhs_target.contains("VCC") || rhs_target.contains("VDD") || 
@@ -767,7 +829,9 @@ fn analyze_flow_power_domains(node: &SyntaxNode<BhdlLanguage>, context: &mut Pow
                 FlowElement::Identifier(ident) => {
                     let source_name = ident.text().to_string();
                     
-                    // Check if this is a power domain
+                    // Check if this is a power domain (only if it has @ prefix)
+                    // Note: FlowElement::Identifier doesn't include @ in the text
+                    // So we need to check the actual syntax
                     if context.domains.contains_key(&source_name) {
                         // This is a power flow! Propagate the domain through passive components
                         propagate_power_domain_through_flow(&elements, &source_name, context);
@@ -789,9 +853,13 @@ fn analyze_flow_power_domains(node: &SyntaxNode<BhdlLanguage>, context: &mut Pow
                     
                     println!("Power Analysis: Processing connection '{}' -> '{}'", lhs_text, rhs_text);
                     
-                    // Case 1: Direct power domain connections (VIN -> something)
-                    if context.domains.contains_key(&lhs_text) {
-                        println!("Power Analysis: Found power connection from domain '{}'", lhs_text);
+                    // Case 1: Direct power domain connections (@VIN -> something)
+                    // Only process if LHS has @ prefix
+                    let lhs_is_net_ref = lhs_text.starts_with('@');
+                    let lhs_net_name = if lhs_is_net_ref { &lhs_text[1..] } else { &lhs_text };
+                    
+                    if lhs_is_net_ref && context.domains.contains_key(lhs_net_name) {
+                        println!("Power Analysis: Found power connection from domain '@{}'", lhs_net_name);
                         println!("Power Analysis: RHS text = '{}'", rhs_text);
                         
                         // Extract the target identifier from RHS
@@ -801,7 +869,7 @@ fn analyze_flow_power_domains(node: &SyntaxNode<BhdlLanguage>, context: &mut Pow
                         
                         // Only create derived power domain if target looks like a power net
                         // Don't create domains for component handles (will be checked elsewhere)
-                        if let Some(source_power) = context.domains.get(&lhs_text).cloned() {
+                        if let Some(source_power) = context.domains.get(lhs_net_name).cloned() {
                             // Check if target should be a power domain
                             if target_name.contains("VCC") || target_name.contains("VDD") || 
                                target_name.contains("PWR") || target_name.ends_with("V") ||

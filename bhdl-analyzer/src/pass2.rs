@@ -95,10 +95,12 @@ pub(crate) fn resolve_node_type_info<'a>(
             
             // Regular identifiers look up in main symbol table (not nets)
             match context.lookup(name) {
-                None => Err(Diagnostic { 
-                    message: format!("Undefined symbol: {}", name), 
-                    range: ident_token.text_range() 
-                }),
+                None => {
+                    Err(Diagnostic { 
+                        message: format!("Undefined symbol: {}", name), 
+                        range: ident_token.text_range() 
+                    })
+                },
                 Some(symbol) => {
                     if symbol.kind != SymbolKind::Pin {
                         return Some(Err(Diagnostic { 
@@ -480,7 +482,10 @@ pub fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mu
     match node.kind() {
         SyntaxKind::NET_REF => {
             // Attempt resolution to add diagnostics for undefined/wrong kind
-            let _ = resolve_node_type_info(context, node, false); 
+            let result = resolve_node_type_info(context, node, false);
+            if let Some(Err(diag)) = result {
+                context.diagnostics.push(diag);
+            }
             recurse_children = false; // Suffix handled within resolve_node_type_info
         }
         SyntaxKind::SIMPLE_IDENT_REF => {
@@ -491,10 +496,32 @@ pub fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mu
         }
         SyntaxKind::IDENT_REF => {
             // This is complex: IDENT_REF can be a parameter, net, or pin depending on context.
-            // Pass 3 handles parameter evaluation.
-            // Pass 2 type checking (via resolve_expression_type_info) handles usage in expressions.
-            // Let resolve_expression_type_info handle diagnostics for IDENT_REF usage.
-            // No direct check needed here, allow recursion.
+            // In connection context, bare identifiers should be resolved
+            if let Some(ident_ref) = IdentRef::cast(node.clone()) {
+                if let Some(token) = ident_ref.token() {
+                    let name = token.text();
+                    // Check if this is a valid symbol
+                    match context.lookup(name) {
+                        None => {
+                            // Check if it's a net (power/ground) - those need @ prefix
+                            if let Some(_net_symbol) = context.lookup_net(name) {
+                                context.add_diagnostic(
+                                    format!("Net '{}' must be referenced with @ prefix: @{}", name, name),
+                                    token.text_range(),
+                                );
+                            } else {
+                                context.add_diagnostic(
+                                    format!("Undefined symbol: {}", name),
+                                    token.text_range(),
+                                );
+                            }
+                        }
+                        Some(_) => {
+                            // Symbol exists in regular namespace
+                        }
+                    }
+                }
+            }
         }
         SyntaxKind::TYPE_REF => {
             if let Some(type_ref) = TypeRef::cast(node.clone()) {
@@ -762,18 +789,15 @@ pub fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mu
             if let Some(v2_conn) = bhdl_ast::v2_statements::ConnectionStmt::cast(node.clone()) {
                 // v2.0 connection statement - validate flow expressions
                 if let Some(_flow_expr) = v2_conn.expr() {
-                    // For now, just check that the flow expression exists
-                    // TODO: Implement full v2.0 flow validation
-                    // This would involve:
-                    // - Traversing BINARY_EXPR nodes
-                    // - Resolving component instantiations
-                    // - Checking type compatibility along the flow
+                    // Allow recursion to check IDENT_REF nodes inside connections
+                    // The child nodes will be validated for proper symbol resolution
                 }
             } else {
                 // This shouldn't happen with v2.0 only support
                 context.add_diagnostic("Invalid connection statement format".to_string(), node.text_range());
             }
-            recurse_children = false; 
+            // Allow recursion to validate identifiers in connections
+            recurse_children = true; 
         }
         _ => {}
     }

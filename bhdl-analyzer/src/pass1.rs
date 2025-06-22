@@ -10,10 +10,12 @@ use bhdl_ast::{
     v2_statements::ConnectionStmt,
     expr::{Expr, BinaryExpr},
     interfaces::{InterfaceSignal, InterfaceRequirement, InterfaceInst, SignalDirection},
+    PowerDecl, GroundDecl,
 };
 
 use crate::symbol_table::{Symbol, SymbolKind, SymbolTable, PortDirectionKind}; // Use crate:: for local module
 use crate::helpers::parse_expr_as_i64; // Use helper from local module
+use crate::net_attributes::NetAttribute;
 
 // --- Pass 1: Build Global Scope & Definition Scopes Map --- 
 
@@ -82,6 +84,7 @@ pub fn populate_global_scope_and_build_definition_scopes(source_file: &SourceFil
         bus_low: None,
         direction: None, 
         parameter_overrides: None,
+        net_attributes: None,
     });
     context.global_scope_mut().insert(Symbol {
         name: "power".to_string(),
@@ -93,6 +96,7 @@ pub fn populate_global_scope_and_build_definition_scopes(source_file: &SourceFil
         bus_low: None,
         direction: None, 
         parameter_overrides: None,
+        net_attributes: None,
     });
     
     // Add common electrical types
@@ -106,6 +110,7 @@ pub fn populate_global_scope_and_build_definition_scopes(source_file: &SourceFil
         bus_low: None,
         direction: None, 
         parameter_overrides: None,
+        net_attributes: None,
     });
     
     context.global_scope_mut().insert(Symbol {
@@ -118,6 +123,7 @@ pub fn populate_global_scope_and_build_definition_scopes(source_file: &SourceFil
         bus_low: None,
         direction: None, 
         parameter_overrides: None,
+        net_attributes: None,
     });
     
     context.global_scope_mut().insert(Symbol {
@@ -130,6 +136,7 @@ pub fn populate_global_scope_and_build_definition_scopes(source_file: &SourceFil
         bus_low: None,
         direction: None, 
         parameter_overrides: None,
+        net_attributes: None,
     });
     
     context.global_scope_mut().insert(Symbol {
@@ -142,6 +149,7 @@ pub fn populate_global_scope_and_build_definition_scopes(source_file: &SourceFil
         bus_low: None,
         direction: None, 
         parameter_overrides: None,
+        net_attributes: None,
     });
     
     context.global_scope_mut().insert(Symbol {
@@ -154,6 +162,7 @@ pub fn populate_global_scope_and_build_definition_scopes(source_file: &SourceFil
         bus_low: None,
         direction: None, 
         parameter_overrides: None,
+        net_attributes: None,
     });
 
     visit_node_pass1_recursive(&source_file.syntax(), &mut context);
@@ -438,6 +447,62 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
             // Process connections to create net symbols from @ syntax
             visit_connection_for_nets(node, context);
         }
+        SyntaxKind::POWER_DECL => {
+            // Create net symbol for power declaration with attributes
+            if let Some(power_decl) = PowerDecl::cast(node.clone()) {
+                if let Some(name_token) = power_decl.name() {
+                    let name = name_token.text();
+                    
+                    // Parse voltage and current values
+                    let voltage = power_decl.voltage()
+                        .and_then(|v| parse_electrical_value_str(&v))
+                        .unwrap_or(0.0);
+                    
+                    let current = power_decl.current()
+                        .and_then(|c| parse_electrical_value_str(&c))
+                        .unwrap_or(1.0);
+                    
+                    // Power domains are nets with special attributes
+                    let mut power_symbol = Symbol::new_decl(
+                        name,
+                        SymbolKind::Net,
+                        name_token.text_range(),
+                        node,
+                        None, // No bus bounds
+                        None,
+                        None, // No direction for nets
+                    );
+                    
+                    // Add power domain attributes
+                    power_symbol.net_attributes = Some(NetAttribute::new_power_domain(voltage, current));
+                    
+                    context.current_scope_mut().insert(power_symbol);
+                }
+            }
+        }
+        SyntaxKind::GROUND_DECL => {
+            // Create net symbol for ground declaration with attributes
+            if let Some(ground_decl) = GroundDecl::cast(node.clone()) {
+                if let Some(name_token) = ground_decl.name() {
+                    let name = name_token.text();
+                    // Ground is a net with 0V
+                    let mut ground_symbol = Symbol::new_decl(
+                        name,
+                        SymbolKind::Net,
+                        name_token.text_range(),
+                        node,
+                        None, // No bus bounds
+                        None,
+                        None, // No direction for nets
+                    );
+                    
+                    // Add ground domain attributes
+                    ground_symbol.net_attributes = Some(NetAttribute::new_ground_domain());
+                    
+                    context.current_scope_mut().insert(ground_symbol);
+                }
+            }
+        }
         _ => {} 
      }
      
@@ -450,51 +515,112 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
      }
 }
 
+// Helper function to parse electrical value from string
+fn parse_electrical_value_str(value_str: &str) -> Option<f64> {
+    // Handle common electrical units with multipliers
+    let (num_str, unit) = if let Some(pos) = value_str.find(|c: char| c.is_alphabetic() || c == 'Ω') {
+        (&value_str[..pos], &value_str[pos..])
+    } else {
+        (value_str, "")
+    };
+    
+    let base_value = num_str.parse::<f64>().ok()?;
+    
+    // Apply unit multipliers
+    let multiplier = match unit {
+        // Current units
+        "mA" => 0.001,
+        "uA" | "μA" => 0.000001,
+        "A" => 1.0,
+        // Voltage units  
+        "mV" => 0.001,
+        "uV" | "μV" => 0.000001,
+        "V" => 1.0,
+        "kV" => 1000.0,
+        // Resistance units
+        "mΩ" | "mohm" => 0.001,
+        "Ω" | "ohm" => 1.0,
+        "kΩ" | "kohm" => 1000.0,
+        "MΩ" | "Mohm" => 1_000_000.0,
+        // Capacitance units
+        "pF" => 1e-12,
+        "nF" => 1e-9,
+        "uF" | "μF" => 1e-6,
+        "mF" => 1e-3,
+        "F" => 1.0,
+        // Default: no unit
+        _ => 1.0,
+    };
+    
+    Some(base_value * multiplier)
+}
+
 // Helper function to process connections and create net symbols from @ syntax
 fn visit_connection_for_nets(node: &SyntaxNode<BhdlLanguage>, context: &mut Pass1Context) {
     if let Some(conn_stmt) = ConnectionStmt::cast(node.clone()) {
         if let Some(expr_node) = conn_stmt.expr() {
-            // Convert SyntaxNode to Expr
-            if let Some(expr) = Expr::cast(expr_node) {
-                // Traverse the expression tree looking for NET_REF nodes
-                visit_expr_for_nets(&expr, context);
+            // Collect all net references in the connection
+            let net_refs = collect_net_refs_in_flow(&expr_node);
+            // Check if the CONNECTION_STMT itself has multiple binary expr children
+            let binary_exprs: Vec<_> = node.children()
+                .filter(|n| n.kind() == SyntaxKind::BINARY_EXPR)
+                .collect();
+            
+            if binary_exprs.len() >= 2 {
+                // The pattern for implicit net creation: first binary expr ends with @net
+                // and there's another binary expr following (meaning @net is in the middle)
+                if let Some(first_binary) = BinaryExpr::cast(binary_exprs[0].clone()) {
+                    if first_binary.op() == Some(SyntaxKind::ARROW) {
+                        if let Some(rhs) = first_binary.rhs() {
+                            if let Some(Expr::NetRef(net_ref)) = Expr::cast(rhs.syntax().clone()) {
+                                if let Some(name) = net_ref.name() {
+                                    if context.current_scope_mut().lookup_net(&name).is_none() {
+                                        let net_symbol = Symbol::new_decl(
+                                            &name,
+                                            SymbolKind::Net,
+                                            net_ref.syntax().text_range(),
+                                            net_ref.syntax(),
+                                            None,
+                                            None,
+                                            None,
+                                        );
+                                        context.current_scope_mut().insert(net_symbol);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
+            
+            // Note: We don't create implicit nets for standalone @ references
+            // Those will be checked in pass2 and produce errors if undefined
         }
     }
 }
 
-// Recursively visit expressions to find NET_REF nodes and create net symbols
-fn visit_expr_for_nets(expr: &Expr, context: &mut Pass1Context) {
-    match expr {
-        Expr::NetRef(net_ref) => {
-            // Found a net reference - create a net symbol if it doesn't exist
+// Collect all net references in a flow expression
+fn collect_net_refs_in_flow(node: &SyntaxNode<BhdlLanguage>) -> Vec<(String, TextRange)> {
+    let mut net_refs = Vec::new();
+    collect_net_refs_recursive(node, &mut net_refs);
+    net_refs
+}
+
+// Recursively collect net references
+fn collect_net_refs_recursive(node: &SyntaxNode<BhdlLanguage>, net_refs: &mut Vec<(String, TextRange)>) {
+    if node.kind() == SyntaxKind::NET_REF {
+        if let Some(net_ref) = NetRef::cast(node.clone()) {
             if let Some(name) = net_ref.name() {
-                // Check if net already exists in this scope
-                if context.current_scope_mut().lookup_net(&name).is_none() {
-                    // Create a new net symbol
-                    let net_symbol = Symbol::new_decl(
-                        &name,
-                        SymbolKind::Net,
-                        net_ref.syntax().text_range(),
-                        net_ref.syntax(),
-                        None, // No bus bounds for now
-                        None,
-                        None, // No direction for nets
-                    );
-                    context.current_scope_mut().insert(net_symbol);
-                }
+                net_refs.push((name, node.text_range()));
             }
         }
-        Expr::BinaryExpr(binary_expr) => {
-            // Process left and right sides of binary expressions
-            if let Some(lhs) = binary_expr.lhs() {
-                visit_expr_for_nets(&lhs, context);
-            }
-            if let Some(rhs) = binary_expr.rhs() {
-                visit_expr_for_nets(&rhs, context);
-            }
-        }
-        // Add other expression types as needed
-        _ => {}
     }
-} 
+    
+    // Recurse into children
+    for child in node.children() {
+        collect_net_refs_recursive(&child, net_refs);
+    }
+}
+
+
+ 

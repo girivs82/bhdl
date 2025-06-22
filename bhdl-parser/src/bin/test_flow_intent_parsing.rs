@@ -82,9 +82,9 @@ board TestBoard {
     println!("2. Modify parse_v2_connection_expr() to check for intent clause before semicolon");
     println!("3. Update flow expression parsing to handle @ syntax with intent");
     println!("\nExample implementation:");
-    println!(r#"
+    println!("
 // In parse_flow_stmt():
-pub(crate) fn parse_flow_stmt(&mut self) {
+pub(crate) fn parse_flow_stmt(&mut self) {{
     self.builder.start_node(SyntaxKind::FLOW_STMT.into());
     self.expect(SyntaxKind::IDENT); // Flow name
     self.expect(SyntaxKind::COLON);
@@ -95,28 +95,28 @@ pub(crate) fn parse_flow_stmt(&mut self) {
     self.builder.finish_node();
     
     // NEW: Check for optional intent clause
-    if self.has_intent_clause() {
+    if self.has_intent_clause() {{
         self.parse_intent_clause();
-    }
+    }}
     
     self.expect(SyntaxKind::SEMI);
     self.builder.finish_node();
-}
+}}
 
 // In parse_v2_connection_expr():
-pub(crate) fn parse_v2_connection_expr(&mut self) {
+pub(crate) fn parse_v2_connection_expr(&mut self) {{
     self.builder.start_node(SyntaxKind::CONNECTION_STMT.into());
     self.parse_expr(0);
     
     // NEW: Check for optional intent clause
-    if self.has_intent_clause() {
+    if self.has_intent_clause() {{
         self.parse_intent_clause();
-    }
+    }}
     
     self.expect(SyntaxKind::SEMI);
     self.builder.finish_node();
-}
-"#);
+}}
+");
 }
 
 fn find_intent_nodes(node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>, depth: usize) {
