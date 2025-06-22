@@ -781,26 +781,100 @@ intent automotive_safety(level: ASIL) {
 }
 ```
 
+### Subnet Intent: Fine-Grained Control
+
+Complex nets often contain multiple functional regions requiring different treatment:
+
+```bhdl
+// Single net with multiple functional regions
+net complex_signal: input -> mosfet_inv -> rc_delay -> diode_hyst -> output;
+
+// Problem: Different parts need different simulation strategies
+// Solution: Subnet intents
+
+net complex_signal: 
+    input -> mosfet_inv for digital_inverter
+    -> rc_delay for timing_delay(5ms) 
+    -> diode_hyst for hysteresis(0.7V)
+    -> output;
+
+// Alternative syntax for clarity
+net complex_signal: input -> output {
+    subnet inverter: input -> mosfet_inv 
+        for digital_inverter;
+        
+    subnet delay: mosfet_inv -> rc_delay 
+        for timing_delay(5ms);
+        
+    subnet schmitt: rc_delay -> diode_hyst 
+        for hysteresis(0.7V);
+}
+
+// Subnet with component groups
+net sensor_path: sensor -> adc {
+    subnet frontend: sensor -> (R1, C1, R2, C2) -> amp
+        for anti_alias(cutoff: 1kHz);
+        
+    subnet amplification: amp -> (R3, R4) -> buffer  
+        for gain_stage(10);
+        
+    subnet protection: buffer -> (D1, D2) -> adc
+        for overvoltage_clamp(3.3V);
+}
+```
+
+### Subnet Intent Implementation
+
+```bhdl
+// In stdlib/intents/subnet.bhdl
+intent digital_inverter() {
+    simulation_mode = SimMode::MixedSignal;
+    
+    // Check MOSFET operating region
+    require mosfet.check_switching_behavior()
+        else "Inverter MOSFET not operating as switch";
+}
+
+intent timing_delay(delay: duration) {
+    // RC delays always need analog
+    simulation_mode = SimMode::AnalogRequired;
+    
+    // Validate RC time constant matches intent
+    let tau = calculate_rc_constant(components);
+    require abs(tau - delay) < 0.1 * delay
+        else format!("RC constant {}s doesn't match intended delay {}s", tau, delay);
+}
+
+intent hysteresis(threshold: voltage) {
+    simulation_mode = SimMode::AnalogRequired;
+    
+    // Validate diode creates intended hysteresis
+    require has_feedback_path(components)
+        else "Hysteresis requires feedback path";
+}
+```
+
 ### Intent Composition and Conflicts
 
 ```bhdl
 // In stdlib/intent_rules.bhdl
-rule intent_composition {
-    // When multiple intents apply, compose them
-    when [safety_intent, timing_intent, power_intent] {
-        // Take most conservative simulation mode
-        simulation_mode = max(
-            safety_intent.simulation_mode,
-            timing_intent.simulation_mode,
-            power_intent.simulation_mode
+rule subnet_boundary_handling {
+    // At subnet boundaries, use most conservative mode
+    when subnet_a.connects_to(subnet_b) {
+        boundary_mode = max(
+            subnet_a.simulation_mode,
+            subnet_b.simulation_mode
         );
         
-        // Combine all requirements
-        requirements = union(
-            safety_intent.requirements,
-            timing_intent.requirements,
-            power_intent.requirements
-        );
+        // Add interface checking if modes differ
+        if subnet_a.simulation_mode != subnet_b.simulation_mode {
+            add_validation(InterfaceCheck {
+                from: subnet_a,
+                to: subnet_b,
+                check_levels: true,
+                check_timing: true,
+            });
+        }
     }
 }
 
@@ -852,15 +926,22 @@ impl IntentEvaluator {
     }
 }
 
-// Classification with hierarchical intent
+// Classification with hierarchical and subnet intent
 impl MixedSimulation {
-    pub fn classify_net(&self, net: &Net) -> SimulationStrategy {
-        // Collect all applicable intents (own + inherited)
+    pub fn classify_net(&self, net: &Net) -> NetSimulationStrategy {
+        // Check if net has subnets with different intents
+        if let Some(subnets) = &net.subnets {
+            return self.classify_net_with_subnets(net, subnets);
+        }
+        
+        // Simple net - collect all applicable intents (own + inherited)
         let intents = self.collect_intents(net);
         
         if intents.is_empty() {
             // Conservative fallback for structural descriptions
-            return self.classify_structural(net);
+            return NetSimulationStrategy::Uniform(
+                self.classify_structural(net)
+            );
         }
         
         // Evaluate and compose all intents
@@ -871,7 +952,35 @@ impl MixedSimulation {
             combined_mode = combined_mode.max(result.simulation_mode);
         }
         
-        SimulationStrategy::from(combined_mode)
+        NetSimulationStrategy::Uniform(
+            SimulationStrategy::from(combined_mode)
+        )
+    }
+    
+    fn classify_net_with_subnets(
+        &self, 
+        net: &Net, 
+        subnets: &[Subnet]
+    ) -> NetSimulationStrategy {
+        let mut subnet_strategies = Vec::new();
+        
+        for subnet in subnets {
+            // Each subnet can have its own intent
+            let subnet_intents = self.collect_intents_for_subnet(net, subnet);
+            let subnet_mode = self.evaluate_intents(subnet_intents);
+            
+            subnet_strategies.push(SubnetStrategy {
+                subnet_id: subnet.id.clone(),
+                components: subnet.components.clone(),
+                strategy: SimulationStrategy::from(subnet_mode),
+                boundary_checks: Vec::new(),
+            });
+        }
+        
+        // Add boundary checks between subnets with different modes
+        self.add_boundary_checks(&mut subnet_strategies);
+        
+        NetSimulationStrategy::Mixed(subnet_strategies)
     }
     
     fn collect_intents(&self, net: &Net) -> Vec<Intent> {
@@ -920,7 +1029,16 @@ impl MixedSimulation {
 5. **Context Awareness**: Modules can require specific contexts
 6. **Gradual Refinement**: Add specificity only where needed
 
-The key insight: Intent becomes a programmable abstraction layer between user code and tool decisions, with natural hierarchical flow matching hardware design patterns.
+### Advantages of Subnet Intent
+
+1. **Fine-Grained Control**: Different intents for different parts of same net
+2. **Accurate Modeling**: Each functional region gets appropriate simulation
+3. **Boundary Awareness**: Automatic checks at subnet interfaces
+4. **Clear Documentation**: Subnet names document functional regions
+5. **Validation Precision**: Intent validation per functional block
+6. **Optimal Performance**: Only use expensive models where needed
+
+The key insight: Intent becomes a programmable abstraction layer between user code and tool decisions, with natural hierarchical flow matching hardware design patterns and fine-grained control for complex nets.
 
 ## Proposed Architecture
 
