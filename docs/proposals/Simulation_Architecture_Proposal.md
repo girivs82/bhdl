@@ -629,29 +629,60 @@ This creates a dilemma:
 1. **With intent**: Clear simulation strategy, but less control over synthesis
 2. **Without intent**: Full control, but ambiguous simulation requirements
 
-### Unified Intent System: A First-Class Language Feature
+### Unified Intent System: Stdlib-Based Extensibility
 
-Rather than optional annotations, BHDL should integrate intent as a first-class language feature that flows naturally across all abstraction levels:
+BHDL uses a single keyword `for` with intent functions defined in stdlib, providing unlimited extensibility without language bloat:
 
 ```bhdl
-// Intent as natural language extension, not annotation
+// User code - clean and simple
 net delayed: signal -> R(10k).1 -> C(300pF).1 -> buffer.in
-    for delay(3ms);  // Intent is part of the statement
+    for delay(3ms);
 
-// Intent clarifies purpose and guides tools
 net rc_net: signal -> R(10k).1 -> C(300pF).1 -> buffer.in
-    for debounce(button, 20ms);  // Clear purpose, optimal simulation
+    for debounce(button, 20ms);
 
-// High-level with implementation guidance
-net filtered: noisy_signal through low_pass(1kHz)
-    preferring butterworth(order: 2);  // Natural synthesis guidance
+net filtered: noisy_signal -> RC_Filter(1kHz)
+    for anti_alias(before: adc);
+```
 
-// Intent chains for complex behaviors
-net stable_digital: analog_sensor 
-    through low_pass(10Hz)           // Anti-aliasing
-    then comparator(threshold: 2.5V)  // Digitization
-    then debounce(10ms)              // Clean edges
-    for level_detection;             // Overall intent
+The magic happens in stdlib intent definitions:
+
+```bhdl
+// In bhdl-stdlib/intents/timing.bhdl
+intent delay(time: duration) {
+    // Map to core simulation strategies
+    simulation_mode = match time {
+        t if t < 1us => SimMode::DigitalWithTiming,
+        t if t < 1ms => SimMode::MixedSignal,
+        _ => SimMode::AnalogRequired,
+    };
+    
+    // Synthesis hints based on delay magnitude
+    synthesis_hint = match time {
+        t if t < 100ns => SynthHint::BufferChain,
+        t if t < 10us => SynthHint::RCNetwork,
+        _ => SynthHint::ActiveDelay,
+    };
+    
+    // Validation rules
+    require components.has_timing_element() 
+        else "Delay intent requires RC network or delay element";
+}
+
+// In bhdl-stdlib/intents/filtering.bhdl  
+intent anti_alias(before: component, cutoff: frequency = auto) {
+    // Calculate required cutoff if auto
+    if cutoff == auto {
+        cutoff = before.sample_rate / 2.5;  // Nyquist with margin
+    }
+    
+    // Always needs analog simulation for filters
+    simulation_mode = SimMode::AnalogRequired;
+    
+    // Validate filter effectiveness
+    require actual_cutoff < before.sample_rate / 2
+        else "Anti-alias filter insufficient for ADC sample rate";
+}
 ```
 
 ### Intent as Documentation
@@ -692,48 +723,121 @@ net processed: raw_input
     -> R(10k).1 -> C(100nF).1   // Explicit filter
     then shaped_to rectangle      // Abstract shaping
     for signal_conditioning;      // Unifying intent
+```
 
-// Intent inheritance for hierarchical design
-module InputConditioner(signal: analog) {
-    inherits parent.intent;  // Gets intent from instantiation context
+### Custom Domain-Specific Intents
+
+Users and organizations can create their own intent libraries:
+
+```bhdl
+// In automotive-intents/safety.bhdl
+intent automotive_safety(level: ASIL) {
+    // Automotive-specific safety requirements
+    match level {
+        ASIL::D => {
+            simulation_mode = SimMode::AnalogRequired;
+            require redundancy_check(components) 
+                else "ASIL-D requires redundant paths";
+            require thermal_derating(0.7) 
+                else "ASIL-D requires 30% derating";
+        }
+        ASIL::B => {
+            simulation_mode = SimMode::MixedSignal;
+            require thermal_derating(0.8);
+        }
+    }
+}
+
+// In rf-intents/matching.bhdl
+intent impedance_match(z_source: impedance, z_load: impedance) {
+    simulation_mode = SimMode::AnalogRequired;  // Always analog for RF
     
-    net filtered: signal through RC_filter 
-        for parent.intent.filtering;
+    // Calculate matching network requirements
+    let match_type = calculate_match_type(z_source, z_load);
+    synthesis_hint = match match_type {
+        MatchType::L => SynthHint::LMatch,
+        MatchType::Pi => SynthHint::PiMatch,
+        MatchType::T => SynthHint::TMatch,
+    };
+    
+    // Validate achievable with given components
+    require can_achieve_match(components, z_source, z_load)
+        else format!("Cannot match {}Ω to {}Ω with given components", 
+                    z_source, z_load);
+}
+
+// Usage in user code remains clean
+board AutomotiveECU {
+    net sensor_input: sensor -> protection -> adc
+        for automotive_safety(ASIL::D);
+    
+    net antenna: rf_in -> matching_network -> lna.in  
+        for impedance_match(50, 200);
 }
 ```
 
 This unified approach ensures intent feels like a natural part of BHDL rather than a bolted-on annotation system.
 
-### Classification Strategy for Mixed Abstraction Levels
+### Core Integration Architecture
+
+The stdlib intent system integrates cleanly with the core simulation engine:
 
 ```rust
-impl MixedAbstractionClassifier {
-    pub fn classify(&self, net: &Net) -> SimulationStrategy {
-        match (net.has_intent(), net.is_structural()) {
-            (true, _) => {
-                // Intent provided: use it for classification
-                self.classify_by_intent(&net.intent)
-            }
-            (false, true) => {
-                // Pure structural: conservative approach
-                if net.has_analog_components() {
-                    SimulationStrategy::AnalogRequired
-                } else if net.has_timing_elements() {
-                    SimulationStrategy::DigitalWithAnalogValidation
-                } else {
-                    SimulationStrategy::DigitalPreferred
-                }
-            }
-            (false, false) => {
-                // High-level without explicit intent: infer carefully
-                self.infer_intent_from_context(net)
-            }
+// Core defines the enum of simulation strategies
+#[derive(Clone, Copy)]
+pub enum SimMode {
+    PureDigital,
+    DigitalWithTiming,
+    MixedSignal,
+    AnalogRequired,
+}
+
+// Stdlib intent returns structured data
+pub struct IntentResult {
+    pub simulation_mode: SimMode,
+    pub synthesis_hint: Option<SynthHint>,
+    pub validation_rules: Vec<ValidationRule>,
+    pub documentation: String,
+}
+
+// Intent functions are evaluated at compile time
+impl IntentEvaluator {
+    pub fn evaluate(&self, intent_name: &str, args: &[Value]) -> IntentResult {
+        // Load intent definition from stdlib
+        let intent_def = self.stdlib.get_intent(intent_name)?;
+        
+        // Execute intent logic with provided arguments
+        let context = IntentContext::new(self.circuit, args);
+        intent_def.execute(context)
+    }
+}
+
+// Classification becomes straightforward
+impl MixedSimulation {
+    pub fn classify_net(&self, net: &Net) -> SimulationStrategy {
+        if let Some(intent) = net.intent {
+            // Use stdlib-defined intent result
+            let result = self.evaluator.evaluate(&intent.name, &intent.args)?;
+            SimulationStrategy::from(result.simulation_mode)
+        } else {
+            // Conservative fallback for structural descriptions
+            self.classify_structural(net)
         }
     }
 }
 ```
 
-The key insight: BHDL must support both paradigms, not force users into one or the other.
+### Advantages of Stdlib-Based Intents
+
+1. **Extensibility**: New intents added without core changes
+2. **Conditional Logic**: Complex rules in BHDL, not hardcoded
+3. **Domain-Specific**: Users can create custom intent libraries
+4. **Versioning**: Intent definitions can evolve with the library
+5. **Documentation**: Intent code is self-documenting
+6. **Validation**: Intent can check structural requirements
+7. **Optimization**: Intent-specific synthesis strategies
+
+The key insight: Intent becomes a programmable abstraction layer between user code and tool decisions.
 
 ## Proposed Architecture
 
@@ -863,15 +967,15 @@ Create `bhdl-mixed-sim` with:
 - Neighbor effect propagation
 - Performance impact mitigation
 
-#### Phase 5: BHDL Intent-First Language Design (6-8 weeks)
-- Design unified intent system as core language feature
-- Implement `for` clauses on all declarations (nets, modules, interfaces)
-- Add natural language constructs: `through`, `then`, `meeting`, `preferring`
-- Create intent inheritance system for hierarchical design
-- Extend parser and AST to treat intent as first-class
-- Build intent-aware classification and validation engine
-- Develop intent compatibility checking for interfaces
-- Create documentation generation from intent declarations
+#### Phase 5: Stdlib-Based Intent System (4-5 weeks)
+- Add single `for` keyword to language syntax
+- Design intent function DSL for stdlib
+- Create core SimMode enum and IntentResult structure
+- Implement intent evaluator that loads from stdlib
+- Build standard intent library (timing, filtering, safety)
+- Add intent validation and requirement checking
+- Enable custom domain-specific intent libraries
+- Generate documentation from intent definitions
 
 ### Example API
 
