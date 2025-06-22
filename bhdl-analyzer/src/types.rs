@@ -7,6 +7,7 @@ use crate::power_analysis::PowerAnalysisContext;
 use crate::component_inference::ComponentInferenceContext;
 use crate::power_sequencing::PowerSequenceGenerator;
 use crate::attribute_analysis::AttributeAnalysisResult;
+use crate::flow_tracking::FlowTracker;
 
 // Represents resolved type information for checking
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,7 +69,6 @@ impl SourceLocation {
 }
 
 // Analysis results including scopes and diagnostics
-#[derive(Debug)]
 pub struct AnalysisResult {
     pub global_scope: SymbolTable,
     pub definition_scopes: HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>,
@@ -79,6 +79,7 @@ pub struct AnalysisResult {
     pub power_sequencing: PowerSequenceGenerator,
     pub netlist: Option<bhdl_netlist::Netlist>,
     pub attribute_analysis: AttributeAnalysisResult,
+    pub flow_tracker: Option<FlowTracker>,
 }
 
 impl Default for AnalysisResult {
@@ -99,6 +100,7 @@ impl Default for AnalysisResult {
                 circular_dependencies: Vec::new(),
                 mutable_attributes: HashSet::new(),
             },
+            flow_tracker: None,
         }
     }
 } 

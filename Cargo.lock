@@ -195,6 +195,7 @@ dependencies = [
  "bhdl-components",
  "bhdl-netlist",
  "bhdl-parser",
+ "bhdl-stdlib",
  "bincode",
  "dirs",
  "env_logger 0.10.2",
@@ -367,6 +368,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bhdl-ast",
+ "bhdl-common",
  "bhdl-netlist",
  "bhdl-parser",
 ]

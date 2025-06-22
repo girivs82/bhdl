@@ -295,4 +295,23 @@ impl<'t> Parser<'t> {
             None
         }
     }
+    
+    /// Parse net flow statement: net name: flow_expr for intent;
+    pub(crate) fn parse_net_flow_stmt(&mut self) {
+        self.builder.start_node(SyntaxKind::NET_FLOW_STMT.into());
+        self.expect(SyntaxKind::NET_KW);
+        self.expect(SyntaxKind::IDENT); // Net name
+        self.expect(SyntaxKind::COLON);
+        
+        // Parse the flow expression
+        self.parse_expr(0);
+        
+        // Check for optional intent clause
+        if self.has_intent_clause() {
+            self.parse_intent_clause();
+        }
+        
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
 }

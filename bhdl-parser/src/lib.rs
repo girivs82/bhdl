@@ -18,6 +18,7 @@ mod error_recovery;
 mod tests;
 mod v2_fixes;
 mod v2_parsing;
+mod intent;
 
 #[cfg(test)]
 mod test_net_ref;
