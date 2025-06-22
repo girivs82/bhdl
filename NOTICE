@@ -1,0 +1,58 @@
+BHDL - Board Hardware Description Language
+Copyright 2024 [Your Name]
+
+This product includes software developed with AI assistance.
+
+## AI Assistance Disclosure
+
+This project was developed through collaboration between human developers and
+AI assistance (Claude by Anthropic). The human developer provided:
+- Overall system architecture and design
+- Language specification and syntax design  
+- Technical requirements and feature specifications
+- Domain expertise and validation
+- Testing scenarios and quality assurance
+
+The AI assistant provided:
+- Implementation of specifications in Rust
+- Algorithm development based on requirements
+- Documentation generation
+- Code structure and organization
+- Bug fixes and optimizations
+
+This collaborative approach is similar to working with a development team where
+different members contribute different expertise. The human developer maintains
+creative control, direction, and validation of all work.
+
+## Third-Party Components
+
+This software includes components from the following open source projects:
+
+- rowan (https://github.com/rust-analyzer/rowan) - Apache-2.0 OR MIT
+- nalgebra (https://nalgebra.org/) - Apache-2.0
+- petgraph (https://github.com/petgraph/petgraph) - Apache-2.0 OR MIT
+- tokio (https://tokio.rs/) - MIT
+- Various other Rust crates under MIT and/or Apache-2.0 licenses
+
+For a complete list of dependencies and their licenses, see Cargo.toml files
+throughout the project.
+
+## Patent Notice
+
+To the extent that any patents may read on the techniques implemented in this
+software, the copyright holder grants users a perpetual, worldwide, non-exclusive,
+no-charge, royalty-free, irrevocable patent license to any patent claims
+necessarily infringed by using this software.
+
+## Defensive Publication Notice
+
+The novel techniques implemented in this software, including but not limited to:
+- Flow-based circuit description syntax
+- Intent-based simulation strategy selection
+- Multi-pass semantic analysis for hardware
+- Electrical safety analysis through simulation
+- Component inference from electrical constraints
+
+Have been publicly disclosed through this open source release and associated
+documentation to establish prior art and prevent proprietary claims on these
+innovations.

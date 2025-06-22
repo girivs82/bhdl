@@ -36,6 +36,22 @@ This publication discloses a novel hardware description language specifically de
    - Version control unfriendly
    - Difficult to parameterize or generate
 
+### Relevant Prior Art
+
+#### Hardware Description Languages
+- **Verilog**: Thomas, D. E. and Moorby, P. R., "The Verilog Hardware Description Language", 5th Edition, Springer, 2002
+- **VHDL**: IEEE Std 1076-2019, "IEEE Standard for VHDL Language Reference Manual"
+- **SystemVerilog**: IEEE Std 1800-2017, "IEEE Standard for SystemVerilog"
+
+#### Board-Level Description
+- **EDIF**: Electronic Design Interchange Format Version 2.0.0, Electronic Industries Association, 1987
+- **Verilog-A**: "Verilog-A Language Reference Manual", Version 1.0, Open Verilog International, 1996
+- **PSPICE**: Tuinenga, P. W., "SPICE: A Guide to Circuit Simulation and Analysis Using PSpice", Prentice Hall, 1995
+
+#### Dataflow Languages
+- **Lucid**: Wadge, W. W. and Ashcroft, E. A., "Lucid, the Dataflow Programming Language", Academic Press, 1985
+- **Signal Flow Graphs**: Mason, S. J., "Feedback Theory - Some Properties of Signal Flow Graphs", Proceedings of the IRE, vol. 41, no. 9, pp. 1144-1156, Sept. 1953
+
 ### Limitations of Prior Art
 
 - **Wrong Abstraction Level**: Chip HDLs focus on logic, not board-level connections

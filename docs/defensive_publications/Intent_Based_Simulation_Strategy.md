@@ -8,6 +8,23 @@
 
 This publication discloses a novel method for automatically selecting simulation strategies (digital, analog, or mixed-signal) based on explicitly declared design intent rather than attempting to automatically detect analog/digital boundaries. The system uses a flow-based intent declaration that applies to entire signal paths.
 
+## Background and Prior Art
+
+### Relevant Prior Art
+
+#### Mixed-Signal Simulation
+- **Verilog-AMS**: "Verilog-AMS Language Reference Manual", Version 2.4, Accellera Systems Initiative, 2014
+- **VHDL-AMS**: IEEE Std 1076.1-2017, "IEEE Standard for VHDL Analog and Mixed-Signal Extensions"
+- **Mixed-Signal Methodology**: Kundert, K. S., "The Designer's Guide to Verilog-AMS", Springer, 2004
+
+#### Simulation Strategies
+- **Event-Driven Simulation**: Frohlich, N., "System-Level Design Methodology for Mixed-Signal System-on-Chip", Proceedings of DATE, 2000
+- **Continuous-Time Simulation**: Breems, L. and Huijsing, J., "Continuous-Time Sigma Delta Modulation for A/D Conversion in Radio Receivers", Springer, 2001
+
+#### Design Intent
+- **Assertion-Based Design**: Foster, H., Krolnik, A., and Lacey, D., "Assertion-Based Design", 2nd Edition, Springer, 2005
+- **Property Specification Language**: IEEE Std 1850-2010, "IEEE Standard for Property Specification Language (PSL)"
+
 ## Problem Statement
 
 Traditional mixed-signal simulation requires:
@@ -19,6 +36,7 @@ These approaches fail because:
 - Analog/digital boundaries are context-dependent
 - Components like MOSFETs can operate in multiple modes
 - No clean boundaries exist in many real circuits
+- Prior art focuses on automatic detection rather than designer intent
 
 ## Innovation
 
