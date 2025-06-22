@@ -11,6 +11,9 @@ bhdl-ast = { path = "../bhdl-ast" }
 bhdl-analyzer = { path = "../bhdl-analyzer" }
 bhdl-netlist = { path = "../bhdl-netlist" }
 bhdl-common = { path = "../bhdl-common" }
+bhdl-stdlib = { path = "../bhdl-stdlib" }
+bhdl-synthesizer = { path = "../bhdl-synthesizer" }
+bhdl-parser = { path = "../bhdl-parser" }
 
 # Core dependencies
 anyhow = "1.0"

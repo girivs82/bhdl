@@ -82,9 +82,8 @@ impl FlowTracker {
                             let flow_id = self.create_flow_path(net_name_str.clone(), intent_call);
                             
                             // Trace the flow to find all connected components and nets
-                            if let Some(flow_expr) = net_flow.flow_expr() {
-                                self.trace_flow_expr(&flow_expr, flow_id, symbol_table, &mut diagnostics);
-                            }
+                            // The flow expression is stored as children of NET_FLOW_STMT
+                            self.trace_net_flow_contents(&net_flow, flow_id, symbol_table, &mut diagnostics);
                         }
                     }
                 }
@@ -130,42 +129,72 @@ impl FlowTracker {
         flow_id
     }
 
-    /// Trace a flow expression to find all connected components
-    fn trace_flow_expr(
+    /// Trace the contents of a NET_FLOW_STMT to find all connected components
+    fn trace_net_flow_contents(
         &mut self,
-        expr: &bhdl_ast::flow::FlowExpr,
+        net_flow: &NetFlowStmt,
         flow_id: usize,
         _symbol_table: &SymbolTable,
         _diagnostics: &mut Vec<Diagnostic>,
     ) {
-        use bhdl_ast::flow::{FlowElement};
-        
-        // Process each element in the flow expression
-        for element in expr.elements() {
-            match element {
-                FlowElement::ComponentInstantiation(comp_inst) => {
-                    // Add component to flow
-                    if let Some(comp_type) = comp_inst.component_type() {
-                        let comp_name_str = comp_type.text().to_string();
-                        if let Some(flow_path) = self.flow_paths.iter_mut().find(|f| f.id == flow_id) {
-                            flow_path.components.push(comp_name_str.clone());
-                            self.component_to_flows.entry(comp_name_str).or_default().push(flow_id);
-                        }
-                    }
-                }
-                FlowElement::Identifier(ident_token) => {
-                    // This could be a net name or component name
-                    let name_str = ident_token.text().to_string();
+        // Walk through the syntax tree of the net flow statement
+        self.trace_syntax_node(net_flow.syntax(), flow_id);
+    }
+    
+    /// Recursively trace a syntax node to find components and nets
+    fn trace_syntax_node(
+        &mut self,
+        node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>,
+        flow_id: usize,
+    ) {
+        match node.kind() {
+            bhdl_ast::SyntaxKind::COMPONENT_INST => {
+                // Extract component type
+                if let Some(ident_token) = node.children_with_tokens()
+                    .filter_map(|e| e.into_token())
+                    .find(|t| t.kind() == bhdl_ast::SyntaxKind::IDENT)
+                {
+                    let comp_type = ident_token.text().to_string();
                     if let Some(flow_path) = self.flow_paths.iter_mut().find(|f| f.id == flow_id) {
-                        // Assume it's a net for now (could enhance with symbol table lookup)
-                        if !flow_path.nets.contains(&name_str) {
-                            flow_path.nets.push(name_str.clone());
-                            self.net_to_flows.entry(name_str).or_default().push(flow_id);
+                        flow_path.components.push(comp_type.clone());
+                        self.component_to_flows.entry(comp_type).or_default().push(flow_id);
+                    }
+                }
+            }
+            bhdl_ast::SyntaxKind::IDENT_REF => {
+                // This is a reference to a net or signal
+                if let Some(ident_token) = node.children_with_tokens()
+                    .filter_map(|e| e.into_token())
+                    .find(|t| t.kind() == bhdl_ast::SyntaxKind::IDENT)
+                {
+                    let net_name = ident_token.text().to_string();
+                    if let Some(flow_path) = self.flow_paths.iter_mut().find(|f| f.id == flow_id) {
+                        if !flow_path.nets.contains(&net_name) {
+                            flow_path.nets.push(net_name.clone());
+                            self.net_to_flows.entry(net_name).or_default().push(flow_id);
                         }
                     }
                 }
-                _ => {
-                    // Handle other flow element types as needed
+            }
+            bhdl_ast::SyntaxKind::PIN_REF => {
+                // Pin reference like SW1.1 or MCU.GPIO1
+                if let Some(comp_ident) = node.children_with_tokens()
+                    .filter_map(|e| e.into_token())
+                    .find(|t| t.kind() == bhdl_ast::SyntaxKind::IDENT)
+                {
+                    let comp_name = comp_ident.text().to_string();
+                    if let Some(flow_path) = self.flow_paths.iter_mut().find(|f| f.id == flow_id) {
+                        if !flow_path.components.contains(&comp_name) {
+                            flow_path.components.push(comp_name.clone());
+                            self.component_to_flows.entry(comp_name).or_default().push(flow_id);
+                        }
+                    }
+                }
+            }
+            _ => {
+                // Continue traversing children
+                for child in node.children() {
+                    self.trace_syntax_node(&child, flow_id);
                 }
             }
         }

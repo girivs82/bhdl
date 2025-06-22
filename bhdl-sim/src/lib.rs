@@ -8,6 +8,8 @@
 //! - Conditional behavior through when blocks
 //! - Signal propagation and event detection
 //! - Waveform capture and analysis
+//! - Intent-based simulation mode selection
+//! - Unified coordination between digital and analog domains
 
 pub mod engine;
 pub mod circuit;
@@ -21,12 +23,17 @@ pub mod events;
 pub mod checkpoint;
 pub mod time;
 pub mod error;
+pub mod coordinator;
 
 // Re-export from modules
 pub use crate::engine::SimulationEngine;
 pub use engine::{SimulationState, SimulationConfig};
 pub use circuit::{CircuitState, CircuitLoader};
 pub use error::{SimulationError, SimulationResult};
+pub use coordinator::{
+    SimulationCoordinator, SimPartition, DomainInterface, InterfaceType,
+    SimulationContext, CoordinatedSimulationResult
+};
 
 // Re-export commonly used types
 pub use engine::control::{Command, Response};
