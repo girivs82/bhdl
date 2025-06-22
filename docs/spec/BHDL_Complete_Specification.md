@@ -90,14 +90,14 @@ BHDL has exactly **7 core constructs** that compose to handle any complexity:
 #### Anonymous Nets
 ```bhdl
 // Universal pattern: source -> component(parameters) -> destination
-VCC -> Res(4.7kΩ).1 -> LED(red).A;  // Creates anonymous nets
-USB_5V -> regulator: LinearReg(3.3V, 1A).IN;
+@VCC -> Res(4.7kΩ).1 -> LED(red).A;  // Creates anonymous nets
+@USB_5V -> regulator: LinearReg(3.3V, 1A).IN;
 ```
 
 #### Named Nets with @ Syntax
 ```bhdl
 // Named nets use @ prefix for creation and reference
-VCC @FILTERED-> r1: Res(4.7kΩ).1;      // Creates net @FILTERED
+@VCC @FILTERED-> r1: Res(4.7kΩ).1;      // Creates net @FILTERED
 @FILTERED -> c1: Cap(100nF).1;          // References net @FILTERED
 @FILTERED -> c2: Cap(10µF).1;           // Multiple connections to same net
 
@@ -113,11 +113,11 @@ BHDL v2.0 uses the `@` prefix to clearly distinguish nets from component handles
 
 ```bhdl
 // Anonymous nets (no explicit name)
-VCC -> r1: Res(10k).1;        // Creates anonymous net
+@VCC -> r1: Res(10k).1;        // Creates anonymous net
 r1.2 -> led: LED(red).A;      // Another anonymous net
 
 // Named nets with @ syntax
-VCC @FILTERED-> r1: Res(10k).1;    // Creates net @FILTERED
+@VCC @FILTERED-> r1: Res(10k).1;    // Creates net @FILTERED
 @FILTERED -> c1: Cap(100n).1;      // References net @FILTERED
 @FILTERED -> c2: Cap(10µ).1;       // Multiple connections to same net
 
@@ -129,10 +129,11 @@ fuse.2 -> @PROTECTED;   // fuse is component, PROTECTED is net
 
 #### Key Rules:
 1. **Net Creation**: Use `@NAME->` to create a named net
-2. **Net Reference**: Always use `@NAME` when referencing a net
-3. **Component Handles**: Use `:` to create, no prefix to reference
+2. **Net Reference**: Always use `@NAME` when referencing a net (including power/ground)
+3. **Component Handles**: Use `:` exclusively for component handles, no prefix to reference
 4. **Anonymous Nets**: Use `->` without `@NAME`
 5. **Disambiguation**: `@` always indicates a net, never a component
+6. **Power/Ground**: Declared with keywords but referenced with `@` (e.g., `@VCC`, `@GND`)
 
 ### 3.3 Flow Specification
 ```bhdl
@@ -232,8 +233,8 @@ board AudioAmplifier {
     
     // Multiple instances create unique components
     power_indicator: PowerIndicator() {
-        VCC <- VCC_12V;
-        GND <- GND;
+        VCC <- @VCC_12V;
+        GND <- @GND;
     }
 }
 ```
@@ -318,8 +319,8 @@ board LEDPanel {
     
     // Creates 16 LEDs with individual control
     display: LEDArray(count=16) {
-        VCC <- VCC_5V;
-        GND <- GND;
+        VCC <- @VCC_5V;
+        GND <- @GND;
         CTRL <- gpio_bus[0..15];
     }
 }
@@ -519,8 +520,8 @@ electrical_units {
 
 ```bhdl
 // Natural component instantiation - no pre-declaration needed
-VCC -> Res(4.7kΩ).1 -> LED(red, 20mA).A;
-LED.K -> GND;
+@VCC -> Res(4.7kΩ).1 -> LED(red, 20mA).A;
+LED.K -> @GND;
 
 // Tool automatically creates:
 // R1: Resistor(value=4.7kΩ, tolerance=5%, power=0.25W)
@@ -541,16 +542,16 @@ components {
 
 ```bhdl
 // Common component shortcuts
-VCC -> pullup_bank(4.7kΩ) -> [SCL, SDA];  // I2C pullups
-VCC -> decoupling(10µF + 0.1µF) -> mcu.VDD;  // Power decoupling
-INPUT -> lowpass_filter(1kHz) -> OUTPUT;  // RC filter
+@VCC -> pullup_bank(4.7kΩ) -> [@SCL, @SDA];  // I2C pullups
+@VCC -> decoupling(10µF + 0.1µF) -> mcu.VDD;  // Power decoupling
+@INPUT -> lowpass_filter(1kHz) -> @OUTPUT;  // RC filter
 ```
 
 ### 5.4 Component Handles
 
 ```bhdl
 // Explicit handles for multiple references
-VCC -> current_sense: Res(0.1Ω).1 -> VOUT;
+@VCC -> current_sense: Res(0.1Ω).1 -> @VOUT;
 current_sense.2 -> current_monitor.INPUT;
 current_sense.voltage_drop -> power_calculation;
 ```
@@ -560,9 +561,9 @@ current_sense.voltage_drop -> power_calculation;
 #### Component Handles
 ```bhdl
 // Component handle syntax: name: Component(...).pin
-VCC -> r1: Res(10kΩ).1;  // Creates component with handle "r1"
+@VCC -> r1: Res(10kΩ).1;  // Creates component with handle "r1"
 r1.2 -> led: LED(red).A;  // Reference component pins via handle
-led.K -> GND;
+led.K -> @GND;
 
 // Handles are ONLY component references, not net names
 ```
@@ -570,15 +571,15 @@ led.K -> GND;
 #### Named Nets with @ Syntax
 ```bhdl
 // Create and reference named nets with @ prefix
-VIN @RAW-> fuse: Fuse(1A).1;
+@VIN @RAW-> fuse: Fuse(1A).1;
 fuse.2 @PROTECTED-> tvs: TVSDiode(15V).1;
-tvs.2 -> GND;
+tvs.2 -> @GND;
 
 // Reference named nets - ALWAYS with @
 @PROTECTED -> bulk_cap: ElectrolyticCap(100µF, 25V).+;
 @PROTECTED -> ceramic_cap: Cap(0.1µF).1;
-bulk_cap.- -> GND;
-ceramic_cap.2 -> GND;
+bulk_cap.- -> @GND;
+ceramic_cap.2 -> @GND;
 ```
 
 #### Key Points:
@@ -591,19 +592,19 @@ ceramic_cap.2 -> GND;
 #### Examples:
 ```bhdl
 // Power supply with clear net/component distinction
-VIN @RAW-> fuse: Fuse(1A).1;           // @RAW is net, fuse is component
+@VIN @RAW-> fuse: Fuse(1A).1;           // @RAW is net, fuse is component
 fuse.2 @FUSED-> tvs: TVSDiode(15V).1;  // @FUSED is net, tvs is component
 @FUSED -> reg: LM7805.IN;              // Reference @FUSED net
 reg.OUT @5V-> c_out: Cap(100µF).+;    // Create @5V net
-reg.GND -> GND;
-c_out.- -> GND;
+reg.GND -> @GND;
+c_out.- -> @GND;
 
 // Multiple connections to named net
 @5V -> r1: Res(330Ω).1;    // Power indicator
 r1.2 -> led: LED(green).A;
-led.K -> GND;
+led.K -> @GND;
 @5V -> conn: Header_1x3.1;  // Power output
-GND -> conn.2;
+@GND -> conn.2;
 @5V -> conn.3;              // Second power pin
 ```
 
@@ -614,23 +615,23 @@ BHDL supports a revolutionary dual-role syntax where component parameters can se
 #### Value Specification (Traditional)
 ```bhdl
 // Direct value specification - traditional approach
-VCC -> Res(4.7kΩ).1 -> LED(red).A;     // Explicit 4.7kΩ value
-VCC -> Res(330Ω).1 -> LED(green).A;    // Explicit 330Ω value
+@VCC -> Res(4.7kΩ).1 -> LED(red).A;     // Explicit 4.7kΩ value
+@VCC -> Res(330Ω).1 -> LED(green).A;    // Explicit 330Ω value
 ```
 
 #### Constraint Specification (Revolutionary)
 ```bhdl
 // Constraint-based specification - BHDL innovation
-VCC -> Res(?, current=20mA).1 -> LED(red).A;    // Infer resistance for 20mA
-VCC -> Res(?, power=0.5W).1 -> load;            // Infer value within power rating
-VCC -> Cap(?, ripple<50mV).1 -> load;           // Infer capacitance for ripple spec
+@VCC -> Res(?, current=20mA).1 -> LED(red).A;    // Infer resistance for 20mA
+@VCC -> Res(?, power=0.5W).1 -> load;            // Infer value within power rating
+@VCC -> Cap(?, ripple<50mV).1 -> load;           // Infer capacitance for ripple spec
 ```
 
 #### Mixed Specification
 ```bhdl
 // Combine explicit values with constraints
-VCC -> Res(10kΩ, power=0.5W).1 -> load;         // 10kΩ with power validation
-VCC -> Cap(100µF, voltage=25V).+ -> load;       // 100µF rated for 25V
+@VCC -> Res(10kΩ, power=0.5W).1 -> load;         // 10kΩ with power validation
+@VCC -> Cap(100µF, voltage=25V).+ -> load;       // 100µF rated for 25V
 ```
 
 #### How It Works
@@ -645,8 +646,8 @@ VCC -> Cap(100µF, voltage=25V).+ -> load;       // 100µF rated for 25V
 ```bhdl
 // LED current limiting - let SPICE calculate resistance
 power VCC = 5V;
-VCC -> r1: Res(?, current=20mA).1 -> led: LED(red, Vf=2.0V).A;
-led.K -> GND;
+@VCC -> r1: Res(?, current=20mA).1 -> led: LED(red, Vf=2.0V).A;
+led.K -> @GND;
 // SPICE calculates: R = (5V - 2.0V) / 20mA = 150Ω
 
 // Power dissipation constraint
@@ -658,7 +659,7 @@ noisy_rail -> Cap(?, ripple<100mV, esr<0.1Ω).+ -> clean_rail;
 // SPICE determines capacitance for ripple requirement
 
 // Voltage divider with ratio constraint
-VIN -> R1: Res(?, ratio=2:1).1 -> @VOUT -> R2: Res(?).1 -> GND;
+@VIN -> R1: Res(?, ratio=2:1).1 -> @VOUT -> R2: Res(?).1 -> @GND;
 // SPICE calculates R1 and R2 to achieve 2:1 ratio
 ```
 
@@ -675,7 +676,7 @@ signal -> Cap(?, cutoff_freq=1kHz).1 -> filtered_signal;
 source -> Res(?, impedance_match=50Ω).1 -> transmission_line;
 
 // Current sharing in parallel paths
-VCC -> [
+@VCC -> [
   Res(?, current_share=50%).1,
   Res(?, current_share=50%).1
 ] -> load;
@@ -805,8 +806,8 @@ board System {
     mcu.i2c <=> i2c_bus;
     
     // Direct signal access
-    VCC -> Res(4.7kΩ).1 -> i2c_bus.SDA;
-    VCC -> Res(4.7kΩ).1 -> i2c_bus.SCL;
+    @VCC -> Res(4.7kΩ).1 -> i2c_bus.SDA;
+    @VCC -> Res(4.7kΩ).1 -> i2c_bus.SCL;
 }
 
 // Interface-to-interface connections
@@ -918,7 +919,25 @@ generate for i in 0..3 {
 
 ## 7. Power Management
 
-### 7.1 Power Domain Declaration
+### 7.1 Power and Ground Declaration
+
+Power and ground nets are declared using keywords but referenced with @ prefix:
+
+```bhdl
+// Declaration: use keywords without @
+board Example {
+    power VCC = 5V @ 1A;        // Declare power net
+    power VCC_3V3 = 3.3V @ 500mA;
+    ground GND;                 // Declare ground net
+    
+    // Reference: always use @ prefix
+    @VCC -> Res(10k).1;         // Reference power net
+    @VCC_3V3 -> mcu.VDD;        // Reference power net
+    led.K -> @GND;              // Reference ground net
+}
+```
+
+### 7.2 Power Domain Declaration
 
 ```bhdl
 power_domains {
@@ -942,7 +961,7 @@ power_domains {
 }
 ```
 
-### 7.2 Power Flow Specification
+### 7.3 Power Flow Specification
 
 ```bhdl
 // Declarative power flow
@@ -960,7 +979,7 @@ power_flows {
 }
 ```
 
-### 7.3 Power Sequencing
+### 7.4 Power Sequencing
 
 ```bhdl
 // Simple power sequencing using flow + conditionals
@@ -978,7 +997,7 @@ power_sequence {
 }
 ```
 
-### 7.4 Low-Power Modes
+### 7.5 Low-Power Modes
 
 ```bhdl
 // Power state management
@@ -1309,39 +1328,39 @@ board PowerSupply_7805 {
     ground GND;
     
     // Input protection and filtering with named nets
-    VIN @RAW-> fuse: Fuse(1A).1;
+    @VIN @RAW-> fuse: Fuse(1A).1;
     fuse.2 @PROTECTED-> tvs: TVSDiode(15V).1;
-    tvs.2 -> GND;
+    tvs.2 -> @GND;
     
     // Input filtering capacitors on protected net
     @PROTECTED -> c_in1: ElectrolyticCap(100µF, 25V).+;
     @PROTECTED -> c_in2: Cap(0.1µF).1;
-    c_in1.- -> GND;
-    c_in2.2 -> GND;
+    c_in1.- -> @GND;
+    c_in2.2 -> @GND;
     
     // Linear regulator circuit
     @PROTECTED -> reg: LM7805().IN;
-    reg.GND -> GND;
+    reg.GND -> @GND;
     reg.OUT @5V-> c_out1: ElectrolyticCap(10µF, 10V).+;
     
     // Output filtering
     @5V -> c_out2: Cap(0.1µF).1;
-    c_out1.- -> GND;
-    c_out2.2 -> GND;
+    c_out1.- -> @GND;
+    c_out2.2 -> @GND;
     
     // LED power indicator
     @5V -> r_led: Res(330Ω).1;
     r_led.2 @LED_DRIVE-> led: LED(green).A;
-    led.K -> GND;
+    led.K -> @GND;
     
     // Test points for measurement
     @PROTECTED -> tp_vin: TestPoint().1;
     @5V -> tp_vout: TestPoint().1;
-    GND -> tp_gnd: TestPoint().1;
+    @GND -> tp_gnd: TestPoint().1;
     
     // Output header
     @5V -> conn: Header_1x3.1;   // Power out
-    GND -> conn.2;               // Ground
+    @GND -> conn.2;               // Ground
     @5V -> conn.3;               // Second power pin
     
     // Board metadata
@@ -1362,7 +1381,7 @@ board PowerSupply_7805 {
 2. **Component Handles and Named Nets (@)**
    - Component handles: `fuse:`, `tvs:`, `reg:` create component references
    - Named nets: `@RAW->`, `@PROTECTED->`, `@5V->` create explicit nets
-   - Net references: `@PROTECTED`, `@5V` always use @ prefix
+   - Net references: `@PROTECTED`, `@5V`, `@VCC`, `@GND` always use @ prefix
    - Clear distinction: `fuse` is component, `@PROTECTED` is net
 
 3. **Component Instantiation**
@@ -1396,7 +1415,7 @@ board PowerSupply_7805 {
 power_up_sequence {
   // Stage-based sequencing with timing control
   stage1: {
-    USB_5V.enable();
+    @USB_5V.enable();
     wait_for USB_5V.power_good(timeout=100ms);
     delay(10ms);
   };
@@ -1623,25 +1642,25 @@ system_spec STM32H7_System {
 
 ```bhdl
 // Decoupling capacitor patterns
-mcu.VDD <- standard_decoupling <- VCC;  // Uses 10µF + 0.1µF default
-mcu.VDDA <- low_noise_decoupling <- VCC;  // Uses 10µF + 1µF + 0.1µF + 10nF
+mcu.VDD <- standard_decoupling <- @VCC;  // Uses 10µF + 0.1µF default
+mcu.VDDA <- low_noise_decoupling <- @VCC;  // Uses 10µF + 1µF + 0.1µF + 10nF
 
 // Location-aware decoupling
 mcu.VDD <- local_decoupling(0.1µF within 2mm) + 
-           bulk_decoupling(10µF within 10mm) <- VCC;
+           bulk_decoupling(10µF within 10mm) <- @VCC;
 
 // Pull-up/pull-down resistor banks
-i2c_bus.SCL, i2c_bus.SDA <- pullup_bank(4.7kΩ) <- VCC;
-gpio_inputs[0:7] <- pulldown_bank(10kΩ) <- GND;
+i2c_bus.SCL, i2c_bus.SDA <- pullup_bank(4.7kΩ) <- @VCC;
+gpio_inputs[0:7] <- pulldown_bank(10kΩ) <- @GND;
 
 // LED indicator arrays
-status_pins[0:3] -> led_array(colors=[red,green,blue,yellow], current=2mA) -> GND;
+status_pins[0:3] -> led_array(colors=[red,green,blue,yellow], current=2mA) -> @GND;
 
 // Crystal oscillator with load caps
 mcu.OSC_IN, mcu.OSC_OUT <-> crystal_circuit(25MHz, load=18pF);
 
 // Voltage divider shortcuts
-vref_2v5 <- voltage_divider(5V, ratio=0.5, accuracy=1%) <- VCC;
+vref_2v5 <- voltage_divider(5V, ratio=0.5, accuracy=1%) <- @VCC;
 
 // Filter patterns
 audio_in -> lowpass_filter(cutoff=20kHz, order=2) -> preamp_in;
@@ -1777,8 +1796,8 @@ board UnsafeLED {
     power VCC = 5V @ 500mA;
     ground GND;
     
-    VCC -> led1: LED(red).A;  // Will detect overcurrent!
-    led1.K -> GND;
+    @VCC -> led1: LED(red).A;  // Will detect overcurrent!
+    led1.K -> @GND;
 }
 ```
 
@@ -1842,7 +1861,7 @@ The system can suggest automatic fixes:
 CircuitModification::InsertComponent {
     component_type: Resistor,
     value: 180Ω,
-    location: between VCC and led1.A,
+    location: between @VCC and led1.A,
     reason: "Add current limiting resistor for LED protection"
 }
 ```
