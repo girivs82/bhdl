@@ -5,6 +5,12 @@ pub mod analog_model;
 pub mod digital_model;
 pub mod mixed_signal;
 pub mod model_library;
+pub mod simple;
+
+// Export simple version
+pub mod processor {
+    pub use super::simple::Processor;
+}
 
 pub use component_model::{BehavioralModel, ModelType, ModelPort};
 pub use analog_model::{AnalogBehavior, AnalogState};

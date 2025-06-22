@@ -4,6 +4,8 @@ use bhdl_analyzer::expression_evaluator::RuntimeValue;
 use bhdl_netlist::{InstanceId, NetId};
 use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet};
+use crate::circuit::ComponentState;
+use crate::error::{SimulationResult, SimulationError};
 
 /// Represents the complete state of a circuit during simulation
 #[derive(Debug)]
@@ -71,7 +73,7 @@ pub struct PinStorage {
 }
 
 /// Value of a pin
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PinValue {
     /// Voltage on the pin
     pub voltage: f64,
@@ -148,7 +150,7 @@ impl PinValue {
 }
 
 /// Digital drive strength
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum DriveStrength {
     None,
     Weak,
@@ -156,7 +158,7 @@ pub enum DriveStrength {
 }
 
 /// Digital logic levels
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum LogicLevel {
     Low,
     High,
@@ -336,6 +338,84 @@ impl CircuitState {
     /// Get all changed nets
     pub fn changed_nets(&self) -> &HashSet<NetId> {
         &self.nets.changed
+    }
+    
+    // Methods for checkpoint support
+    
+    /// Get all pin values
+    pub fn get_all_pin_values(&self) -> HashMap<(InstanceId, String), PinValue> {
+        let mut result = HashMap::new();
+        for (path, value) in &self.pins.values {
+            if let Some((instance_str, pin)) = path.split_once('.') {
+                // Parse instance ID - assuming format like "Instance(0)"
+                if let Some(id_str) = instance_str.strip_prefix("Instance(").and_then(|s| s.strip_suffix(')')) {
+                    if let Ok(id) = id_str.parse::<u32>() {
+                        // Create instance ID - NetlistId doesn't have from_raw
+                        // We'll use a dummy instance ID for now
+                        let instance_id = InstanceId::default();
+                        result.insert((instance_id, pin.to_string()), value.clone());
+                    }
+                }
+            }
+        }
+        result
+    }
+    
+    /// Get all net voltages
+    pub fn get_all_net_voltages(&self) -> HashMap<NetId, f64> {
+        self.nets.values.iter()
+            .map(|(id, value)| (*id, value.voltage))
+            .collect()
+    }
+    
+    /// Get all attributes
+    pub fn get_all_attributes(&self) -> HashMap<String, f64> {
+        self.attributes.values.iter()
+            .filter_map(|(path, value)| {
+                match value {
+                    RuntimeValue::Real(v) => Some((path.clone(), *v)),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+    
+    /// Get all component states
+    pub fn get_all_component_states(&self) -> HashMap<InstanceId, ComponentState> {
+        // For now, return empty map
+        // Will be populated when behavioral models store state
+        HashMap::new()
+    }
+    
+    /// Set pin value (for restore)
+    pub fn set_pin_value(&mut self, instance: InstanceId, pin: String, value: PinValue) -> SimulationResult<()> {
+        // For now, use a simple string representation
+        let key = format!("instance_{:?}.{}", instance, pin);
+        self.pins.values.insert(key, value);
+        Ok(())
+    }
+    
+    /// Set net voltage (for restore)
+    pub fn set_net_voltage(&mut self, net: NetId, voltage: f64) -> SimulationResult<()> {
+        let value = NetValue {
+            voltage,
+            current: 0.0,
+            logic_level: None,
+        };
+        self.nets.values.insert(net, value);
+        Ok(())
+    }
+    
+    /// Set attribute (for restore)
+    pub fn set_attribute(&mut self, path: String, value: f64) -> SimulationResult<()> {
+        self.attributes.values.insert(path, RuntimeValue::Real(value));
+        Ok(())
+    }
+    
+    /// Set component state (for restore)
+    pub fn set_component_state(&mut self, _instance: InstanceId, _state: ComponentState) -> SimulationResult<()> {
+        // Will be implemented when behavioral models store state
+        Ok(())
     }
 }
 

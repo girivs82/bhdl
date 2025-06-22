@@ -187,7 +187,7 @@ mod tests {
             mutable_attributes: std::collections::HashSet::new(),
         };
         
-        let mut evaluator = SimulationAttributeEvaluator::new(attr_analysis);
+        let evaluator = SimulationAttributeEvaluator::new(attr_analysis);
         
         let topology = CircuitTopology {
             instance_modules: HashMap::new(),
@@ -201,7 +201,7 @@ mod tests {
         circuit_state.update_attribute("test_attr", RuntimeValue::Real(5.0));
         
         // Evaluation should preserve static values
-        let sim_context = SimulationEvaluationContext::new(&circuit_state, &time_manager);
+        let _sim_context = SimulationEvaluationContext::new(&circuit_state, &time_manager);
         
         // Note: This test is limited because we need actual attribute info
         // Full testing will be done once expression parsing is implemented

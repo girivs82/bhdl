@@ -1,6 +1,7 @@
 //! Time management for simulation
 
 use crate::error::{SimulationError, SimulationResult};
+use crate::time::TimeStep;
 
 /// Manages simulation time progression
 #[derive(Debug, Clone)]
@@ -25,6 +26,9 @@ pub struct TimeManager {
     
     /// Total number of time steps taken
     step_count: usize,
+    
+    /// Step history for checkpointing
+    step_history: Vec<f64>,
 }
 
 impl TimeManager {
@@ -38,6 +42,7 @@ impl TimeManager {
             adaptive: false,
             last_time_step: time_step,
             step_count: 0,
+            step_history: Vec::new(),
         }
     }
     
@@ -88,6 +93,12 @@ impl TimeManager {
         
         self.current_time += dt;
         self.step_count += 1;
+        self.step_history.push(dt);
+        
+        // Keep history bounded
+        if self.step_history.len() > 1000 {
+            self.step_history.remove(0);
+        }
         
         // Check for numerical overflow
         if !self.current_time.is_finite() {
@@ -139,6 +150,22 @@ impl TimeManager {
         }
         self.current_time = time;
         Ok(())
+    }
+    
+    /// Get current time step as TimeStep object
+    pub fn current_step(&self) -> TimeStep {
+        TimeStep::new(self.time_step(), self.step_count as u64)
+    }
+    
+    /// Set time step (for restore)
+    pub fn set_step(&mut self, step: TimeStep) {
+        self.last_time_step = step.value();
+        self.step_count = step.number() as usize;
+    }
+    
+    /// Get step history
+    pub fn step_history(&self) -> &[f64] {
+        &self.step_history
     }
 }
 

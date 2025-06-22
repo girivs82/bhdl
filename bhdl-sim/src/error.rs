@@ -47,6 +47,15 @@ pub enum SimulationError {
     #[error("Debug error: {0}")]
     DebugError(String),
     
+    #[error("Event queue full (max size: {0})")]
+    EventQueueFull(usize),
+    
+    #[error("Invalid event time: {event_time} < current time {current_time}")]
+    InvalidEventTime { event_time: f64, current_time: f64 },
+    
+    #[error("Event not found: {0}")]
+    EventNotFound(u64),
+    
     // #[error("Analysis error: {0}")]
     // AnalysisError(#[from] bhdl_analyzer::AnalysisError),
     
