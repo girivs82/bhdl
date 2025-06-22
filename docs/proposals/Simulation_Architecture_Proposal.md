@@ -416,6 +416,69 @@ impl MixedSimulation {
 }
 ```
 
+### Alternative Approach: Signal Path Classification
+
+Given the impossibility of clean boundaries, a more practical approach:
+
+```rust
+pub enum SignalPathComplexity {
+    SimpleDigital,      // Pure logic gates, no analog effects
+    DigitalWithTiming,  // Digital with critical timing requirements
+    MixedSignal,        // Analog effects affect digital behavior
+    AnalogRequired,     // Cannot be abstracted to digital
+}
+
+impl MixedSimulation {
+    pub fn classify_signal_paths(&self) -> HashMap<PathId, SignalPathComplexity> {
+        let mut classifications = HashMap::new();
+        
+        for path in self.enumerate_paths() {
+            let complexity = match path {
+                _ if path.has_rc_networks() => SignalPathComplexity::AnalogRequired,
+                _ if path.has_open_collector() => SignalPathComplexity::MixedSignal,
+                _ if path.has_multiple_drivers() => SignalPathComplexity::MixedSignal,
+                _ if path.crosses_voltage_domains() => SignalPathComplexity::MixedSignal,
+                _ if path.has_timing_constraints() => SignalPathComplexity::DigitalWithTiming,
+                _ => SignalPathComplexity::SimpleDigital,
+            };
+            classifications.insert(path.id, complexity);
+        }
+        
+        classifications
+    }
+    
+    pub fn simulation_strategy(&self, path: &Path) -> SimulationMode {
+        // Instead of boundaries, use graduated accuracy levels
+        match self.classify_path(path) {
+            SignalPathComplexity::SimpleDigital => {
+                SimulationMode::PureDigital
+            }
+            SignalPathComplexity::DigitalWithTiming => {
+                SimulationMode::DigitalWithAnalogValidation {
+                    check_interval: 100, // Check every 100 events
+                }
+            }
+            SignalPathComplexity::MixedSignal => {
+                SimulationMode::ContinuousAnalog {
+                    digital_abstractions: true, // Use where safe
+                }
+            }
+            SignalPathComplexity::AnalogRequired => {
+                SimulationMode::FullAnalog
+            }
+        }
+    }
+}
+```
+
+### Pragmatic Mixed Simulation Guidelines
+
+1. **Accept There Are No Clean Boundaries**: Stop trying to partition into analog/digital regions
+2. **Use Path-Based Analysis**: Classify signal paths by complexity, not components
+3. **Graduated Accuracy**: Apply analog modeling where needed, not everywhere
+4. **User Guidance**: Let users override classifications based on their knowledge
+5. **Performance Trade-offs**: Make accuracy vs. speed choices explicit
+
 ## Proposed Architecture
 
 ### Option 1: Keep Separate (Recommended)
@@ -511,6 +574,8 @@ Create a simulation framework with pluggable engines:
 2. **Create `bhdl-mixed-sim` as an optional integration layer**
 3. **Standardize shared data structures in `bhdl-common`**
 4. **Implement adaptive boundary detection to handle nebulous analog/digital regions**
+5. **Use signal path classification instead of component-based boundaries**
+6. **Provide user controls to override automatic classification**
 
 ### Implementation Plan
 
@@ -585,6 +650,9 @@ let digital_waveforms = mixed_sim.get_digital_waveforms();
 | Boundary detection overhead | Intelligent monitoring intervals, caching |
 | False positives in region detection | Hysteresis and confidence thresholds |
 | Model switching discontinuities | Smooth transitions, state preservation |
+| No clean boundaries in many circuits | Signal path classification approach |
+| Complex analog effects in "digital" circuits | Accept graduated accuracy levels |
+| User confusion about simulation modes | Clear documentation of trade-offs |
 
 ## Success Metrics
 
@@ -609,6 +677,8 @@ Keeping `bhdl-spice` and `bhdl-sim` as separate, specialized tools while providi
 This approach recognizes that electrical analysis and behavioral simulation are fundamentally different problems that benefit from different approaches, while still allowing users to leverage both when needed. Critically, it addresses the reality that the analog/digital boundary is often context-dependent and dynamic, requiring intelligent detection and adaptation to ensure accurate simulation results.
 
 The proposed adaptive boundary system ensures that components like MOSFETs operating as digital inverters but exhibiting analog behavior (active region operation) are properly detected and modeled with appropriate fidelity, preventing silent accuracy loss in simulations.
+
+However, as demonstrated by the open-collector/RC network example, many real circuits have no clean analog/digital boundaries. The signal path classification approach provides a more pragmatic solution, accepting that boundaries are fluid and context-dependent rather than fixed and automatic.
 
 ## Next Steps
 
@@ -766,3 +836,52 @@ let hysteresis_model = mixed_sim.detect_hysteresis("BUTTON_INPUT")?;
 ```
 
 This demonstrates why pure digital simulation is insufficient for real-world circuits.
+
+### The Boundary Definition Challenge
+
+Consider this seemingly "digital" circuit that defies clean boundary definition:
+
+```rust
+// Two open-collector outputs with different pull-ups, RC delay, then digital input
+// Where exactly is the analog/digital boundary?
+
+// Component chain:
+// OC_Output_1 ----+---- R1(4.7k) ---- VCC
+//                 |
+// OC_Output_2 ----+---- R2(10k) ----- VCC  
+//                 |
+//                 +---- R3(1k) ---- C1(100pF) ---- Digital_Input
+//
+// This "digital" circuit has multiple analog effects:
+// 1. Wired-OR with asymmetric rise/fall times due to different pull-ups
+// 2. RC delay network for setup time (analog time constant)
+// 3. Voltage levels depend on which outputs are pulling low
+// 4. Capacitor charging curve affects timing
+// 5. Digital input threshold crossing time varies with temperature
+
+// Attempting to find the boundary:
+let boundary_analysis = mixed_sim.analyze_boundary(&circuit)?;
+// Result: No clean boundary exists!
+// - Open collectors: Need analog to model pull-up currents
+// - RC network: Fundamentally analog behavior
+// - Digital input: Needs analog to validate timing
+
+// The entire signal path requires analog accuracy:
+match mixed_sim.classify_network(&signal_path) {
+    NetworkType::PureDigital => unreachable!(),
+    NetworkType::PureAnalog => {
+        // Even "digital" pins need analog modeling here
+    }
+    NetworkType::Hybrid => {
+        // No clean separation possible
+        // Must model entire path with analog accuracy
+    }
+}
+
+// Worse: The boundary shifts with operating conditions
+// - Fast edges: More digital-like behavior  
+// - Slow edges: Analog effects dominate
+// - Multiple drivers: Complex current sharing
+```
+
+This example shows why automatic boundary detection is fundamentally flawed for many real circuits.
