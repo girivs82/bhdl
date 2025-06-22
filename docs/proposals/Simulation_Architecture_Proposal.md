@@ -540,37 +540,69 @@ impl IntentBasedClassifier {
 }
 ```
 
-### BHDL Language Extensions for Intent
+### BHDL Language Design: Intent-First Philosophy
 
-Proposed syntax extensions to capture design intent:
+The intent system should permeate the entire language design:
 
 ```bhdl
-// Combinational logic intent
-net decoded: select match {
-    2'b00 => out1,
-    2'b01 => out2,
-    2'b10 => out3,
-    2'b11 => out4,
-};
-
-// Timing intent
-net synchronized: async_signal clocked_by sys_clk;
-net delayed_enable: enable after setup_time;
-
-// Analog intent
-net filtered: noisy_input through low_pass(cutoff: 1kHz);
-net averaged: sensor_reading moving_average(window: 10ms);
-
-// Mixed-signal boundaries
-interface ADC_Input {
-    analog vref: voltage;
-    analog vin: voltage range 0..vref;
-    digital[12] dout: logic;
+// Intent-driven module definition
+module PowerSupply(vin: power) -> (vout: power) 
+    for regulation(5V, 1A, ripple < 50mV) {
     
-    behavior sample_rate: 1MHz;
-    behavior resolution: 12 bits;
+    // Component selection guided by module intent
+    const reg = Regulator()
+        meeting parent.intent.regulation;
+    
+    // Connections with purpose
+    vin -> reg.in through protection 
+        for reverse_polarity, overvoltage(max: 30V);
+    
+    reg.out -> vout through filtering
+        for parent.intent.ripple;
+}
+
+// Intent-aware interfaces
+interface I2C for communication(400kHz, multi_master) {
+    net sda: bidir with pull_up(4.7k)
+        for open_drain signaling;
+    net scl: output with pull_up(4.7k)  
+        for clock(max: parent.intent.frequency);
+        
+    // Intent validates electrical characteristics
+    assert sda.rise_time < 1000ns for "I2C spec compliance";
+}
+
+// Behavioral contracts with intent
+behavior DebounceButton for user_input(reliable) {
+    param bounce_time = 20ms;
+    
+    net stable: input stable_for bounce_time
+        for debounce(mechanical_switch);
+        
+    // Intent drives both simulation and synthesis
+    when input changes {
+        wait for bounce_time ensuring no_glitches;
+        output <= input;
+    }
+}
+
+// System-level intent composition  
+board IoController for industrial_control(reliable, EMI_resistant) {
+    // Board-level intent flows down to all components
+    all_components inherit board.intent.EMI_resistant;
+    
+    // Power domains with intent
+    power_domain analog for sensor_interfaces {
+        intent: low_noise(< 1mV), isolated;
+    }
+    
+    power_domain digital for processing {
+        intent: efficiency(> 85%), fast_transient;
+    }
 }
 ```
+
+This philosophy makes intent intrinsic to BHDL, not an add-on feature.
 
 This approach leverages BHDL's raison d'être - increasing abstraction level - to solve the boundary problem elegantly.
 
@@ -597,29 +629,80 @@ This creates a dilemma:
 1. **With intent**: Clear simulation strategy, but less control over synthesis
 2. **Without intent**: Full control, but ambiguous simulation requirements
 
-### Hybrid Solution: Optional Intent Annotations
+### Unified Intent System: A First-Class Language Feature
 
-BHDL could support both approaches through optional intent annotations:
+Rather than optional annotations, BHDL should integrate intent as a first-class language feature that flows naturally across all abstraction levels:
 
 ```bhdl
-// Explicit structure with intent annotation
+// Intent as natural language extension, not annotation
 net delayed: signal -> R(10k).1 -> C(300pF).1 -> buffer.in
-    @intent(delay: 3ms);
+    for delay(3ms);  // Intent is part of the statement
 
-// Pure structure (no intent)
-net rc_net: signal -> R(10k).1 -> C(300pF).1 -> buffer.in;
-// Conservative simulation: assume analog requirements
+// Intent clarifies purpose and guides tools
+net rc_net: signal -> R(10k).1 -> C(300pF).1 -> buffer.in
+    for debounce(button, 20ms);  // Clear purpose, optimal simulation
 
-// High-level with synthesis hints
+// High-level with implementation guidance
 net filtered: noisy_signal through low_pass(1kHz)
-    @impl_hint(order: 2, type: "Sallen-Key");
+    preferring butterworth(order: 2);  // Natural synthesis guidance
+
+// Intent chains for complex behaviors
+net stable_digital: analog_sensor 
+    through low_pass(10Hz)           // Anti-aliasing
+    then comparator(threshold: 2.5V)  // Digitization
+    then debounce(10ms)              // Clean edges
+    for level_detection;             // Overall intent
 ```
 
-This allows users to:
-- Use high-level abstractions when appropriate
-- Drop to low-level for precise control
-- Optionally annotate low-level circuits with intent
-- Provide synthesis hints without losing abstraction benefits
+### Intent as Documentation
+
+Intent declarations serve triple duty:
+1. **Guide simulation strategy** - Choosing appropriate models
+2. **Inform synthesis** - Selecting optimal implementations  
+3. **Document design** - Explaining "why" not just "what"
+
+```bhdl
+// Without intent: What does this RC network do?
+net mystery: sensor -> R(47k).1 -> C(10nF).1 -> adc.in;
+
+// With intent: Immediately clear to any designer
+net filtered: sensor -> R(47k).1 -> C(10nF).1 -> adc.in
+    for anti_alias(cutoff: 340Hz, before: adc);
+
+// Intent helps future maintainers understand constraints
+net power_good: vcc -> R(10k).1 -> C(1uF).1 -> comparator.in
+    for startup_delay(100ms, ensuring: "capacitor charged before enable");
+```
+
+### Seamless Flow Across Abstractions
+
+The intent system unifies all abstraction levels:
+
+```bhdl
+// Structural with intent
+net timed: trigger -> R(1M).1 -> C(1uF).1 -> gate.in
+    for pulse_stretch(1s);
+
+// Behavioral with same intent vocabulary  
+net timed: trigger stretched_to 1s -> gate.in
+    for pulse_stretch(1s);
+
+// Mixed abstraction, consistent intent
+net processed: raw_input 
+    -> R(10k).1 -> C(100nF).1   // Explicit filter
+    then shaped_to rectangle      // Abstract shaping
+    for signal_conditioning;      // Unifying intent
+
+// Intent inheritance for hierarchical design
+module InputConditioner(signal: analog) {
+    inherits parent.intent;  // Gets intent from instantiation context
+    
+    net filtered: signal through RC_filter 
+        for parent.intent.filtering;
+}
+```
+
+This unified approach ensures intent feels like a natural part of BHDL rather than a bolted-on annotation system.
 
 ### Classification Strategy for Mixed Abstraction Levels
 
@@ -780,13 +863,15 @@ Create `bhdl-mixed-sim` with:
 - Neighbor effect propagation
 - Performance impact mitigation
 
-#### Phase 5: BHDL Intent Extensions (4-6 weeks)
-- Design and implement intent syntax extensions
-- Add operators: `|` (wired-OR), `&` (wired-AND), `~` (inversion)
-- Add timing constructs: `after`, `stable_for`, `clocked_by`
-- Add analog constructs: `through`, `moving_average`
-- Update parser and AST to capture intent
-- Implement intent-based classification engine
+#### Phase 5: BHDL Intent-First Language Design (6-8 weeks)
+- Design unified intent system as core language feature
+- Implement `for` clauses on all declarations (nets, modules, interfaces)
+- Add natural language constructs: `through`, `then`, `meeting`, `preferring`
+- Create intent inheritance system for hierarchical design
+- Extend parser and AST to treat intent as first-class
+- Build intent-aware classification and validation engine
+- Develop intent compatibility checking for interfaces
+- Create documentation generation from intent declarations
 
 ### Example API
 
@@ -819,6 +904,16 @@ let digital_waveforms = mixed_sim.get_digital_waveforms();
 4. **Testing Isolation**: Easier to test numerical stability vs. behavioral correctness
 5. **Performance**: No overhead when using only one engine
 6. **Adaptive Accuracy**: Can dynamically adjust modeling fidelity based on circuit behavior
+
+## Benefits of Intent-First Design
+
+1. **Self-Documenting Code**: Intent declarations explain the "why" behind circuit structures
+2. **Optimal Tool Decisions**: Simulation and synthesis tools make informed choices
+3. **Design Review Efficiency**: Engineers immediately understand circuit purpose
+4. **Maintenance Clarity**: Future modifications guided by original intent
+5. **Cross-Team Communication**: Intent serves as a common language
+6. **Verification Alignment**: Test requirements derived from stated intent
+7. **Natural Abstraction Flow**: Same intent vocabulary works at all levels
 
 ## Risks and Mitigation
 
