@@ -44,6 +44,9 @@ pub enum SimulationError {
     #[error("Probe error: {0}")]
     ProbeError(String),
     
+    #[error("Debug error: {0}")]
+    DebugError(String),
+    
     // #[error("Analysis error: {0}")]
     // AnalysisError(#[from] bhdl_analyzer::AnalysisError),
     
