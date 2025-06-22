@@ -130,7 +130,8 @@
       "Bash(./target/debug/test_coordinator_simple)",
       "Bash(./target/debug/test_coordinator_mock)",
       "Bash(./target/debug/test_integration)",
-      "Bash(./target/debug/test_coordination_demo)"
+      "Bash(./target/debug/test_coordination_demo)",
+      "Bash(./target/debug/test_intent_validation_simple)"
     ],
     "deny": []
   }
