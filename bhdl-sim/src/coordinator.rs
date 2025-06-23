@@ -8,6 +8,7 @@ use bhdl_netlist::{Netlist, NetId, InstanceId, ConnectionPoint};
 use bhdl_common::{SimMode, IntentResult};
 use bhdl_analyzer::flow_tracking::FlowTracker;
 use crate::error::SimulationError;
+use crate::integration::synchronizer::{MixedSignalSynchronizer, SyncStrategy};
 
 /// Context for simulation execution
 pub struct SimulationContext {

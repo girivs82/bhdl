@@ -3,14 +3,19 @@
 
 use crate::circuit::state::CircuitState;
 use crate::engine::time::TimeManager;
-use crate::error::SimulationResult;
+use crate::error::{SimulationResult, SimulationError};
 use crate::evaluation::context::SimulationEvaluationContext;
+use crate::evaluation::expression_parser::ExpressionParser;
 use bhdl_analyzer::attribute_analysis::WhenBlockInfo;
+use bhdl_analyzer::expression_evaluator::{ExpressionEvaluator, RuntimeValue};
 
 /// Processes when blocks during simulation
 pub struct WhenBlockProcessor {
     /// When blocks from attribute analysis
     when_blocks: Vec<WhenBlockInfo>,
+    
+    /// Expression parser
+    expression_parser: ExpressionParser,
     
     /// Performance metrics
     metrics: WhenProcessorMetrics,
@@ -30,6 +35,7 @@ impl WhenBlockProcessor {
     pub fn new(when_blocks: Vec<WhenBlockInfo>) -> Self {
         Self {
             when_blocks,
+            expression_parser: ExpressionParser::new(),
             metrics: WhenProcessorMetrics::default(),
         }
     }
@@ -52,21 +58,44 @@ impl WhenBlockProcessor {
         for when_block in &self.when_blocks {
             self.metrics.total_evaluations += 1;
             
-            // Evaluate the condition
-            let condition_result = self.evaluate_condition(
-                &when_block.condition,
-                &eval_context,
-            )?;
+            // Evaluate the condition (need to handle mutability)
+            let condition_result = {
+                // Parse the condition expression
+                let expr = self.expression_parser.parse(&when_block.condition)?;
+                
+                // Evaluate the expression
+                let result = ExpressionEvaluator::evaluate(&expr, &eval_context)
+                    .map_err(|e| SimulationError::EvaluationError(format!("Condition evaluation failed: {}", e)))?;
+                
+                // Convert to boolean
+                result.to_bool()
+                    .map_err(|e| SimulationError::EvaluationError(format!("Condition must evaluate to boolean: {}", e)))?
+            };
             
             if condition_result {
                 self.metrics.conditions_true += 1;
                 
                 // Process assignments in the when block
-                for (attr_name, _expr) in &when_block.assignments {
-                    // TODO: Evaluate the assignment expression
-                    // For now, we'll skip actual evaluation
-                    result.updated_attributes.insert(attr_name.clone());
-                    self.metrics.attributes_updated += 1;
+                for (attr_name, expr_text) in &when_block.assignments {
+                    // Parse and evaluate the assignment expression
+                    match self.expression_parser.parse(expr_text) {
+                        Ok(expr) => {
+                            match ExpressionEvaluator::evaluate(&expr, &eval_context) {
+                                Ok(value) => {
+                                    // Update the attribute in circuit state
+                                    circuit_state.update_attribute(attr_name, value);
+                                    result.updated_attributes.insert(attr_name.clone());
+                                    self.metrics.attributes_updated += 1;
+                                }
+                                Err(e) => {
+                                    result.errors.push(format!("Failed to evaluate expression for {}: {}", attr_name, e));
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            result.errors.push(format!("Failed to parse expression for {}: {}", attr_name, e));
+                        }
+                    }
                 }
             }
         }
@@ -78,13 +107,20 @@ impl WhenBlockProcessor {
     
     /// Evaluate a when block condition
     fn evaluate_condition(
-        &self,
-        _condition: &str,
-        _context: &bhdl_analyzer::expression_evaluator::EvaluationContext,
+        &mut self,
+        condition: &str,
+        context: &bhdl_analyzer::expression_evaluator::EvaluationContext,
     ) -> SimulationResult<bool> {
-        // TODO: Parse and evaluate the condition expression
-        // For now, return false
-        Ok(false)
+        // Parse the condition expression
+        let expr = self.expression_parser.parse(condition)?;
+        
+        // Evaluate the expression
+        let result = ExpressionEvaluator::evaluate(&expr, context)
+            .map_err(|e| SimulationError::EvaluationError(format!("Condition evaluation failed: {}", e)))?;
+        
+        // Convert to boolean
+        result.to_bool()
+            .map_err(|e| SimulationError::EvaluationError(format!("Condition must evaluate to boolean: {}", e)))
     }
     
     /// Get processing metrics

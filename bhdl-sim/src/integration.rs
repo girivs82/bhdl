@@ -3,6 +3,10 @@
 //! This module provides adapters and execution logic for running different
 //! simulation engines based on the partition's simulation mode.
 
+pub mod converters;
+pub mod adapters;
+pub mod synchronizer;
+
 use std::collections::HashMap;
 use bhdl_netlist::{Netlist, NetId, InstanceId};
 use bhdl_common::SimMode;
@@ -10,6 +14,8 @@ use bhdl_common::SimMode;
 use crate::engine::SimulationEngine;
 use crate::coordinator::{SimPartition, DomainInterface, InterfaceType, SimulationContext, CoordinatedSimulationResult};
 use crate::error::{SimulationError, SimulationResult};
+use self::adapters::{EngineAdapter as EngineAdapterTrait, SpiceAdapter};
+use self::synchronizer::{MixedSignalSynchronizer, SyncStrategy, SyncConfig};
 
 /// Simulation engine adapter that wraps different engine types
 pub enum EngineAdapter {
@@ -53,10 +59,10 @@ pub struct MixedSignalAdapter {
 
 /// Adapter for analog SPICE simulation
 pub struct AnalogAdapter {
-    /// Placeholder for SPICE circuit
-    pub circuit_name: String,
-    /// Simulation parameters
-    pub parameters: HashMap<String, f64>,
+    /// The actual SPICE adapter
+    pub spice_adapter: SpiceAdapter,
+    /// Partition information
+    pub partition_id: usize,
 }
 
 /// Digital event in event-driven simulation
@@ -135,6 +141,10 @@ pub struct SimulationExecutor {
     global_time: f64,
     /// Synchronization points
     sync_points: Vec<f64>,
+    /// Mixed-signal synchronizer
+    synchronizer: Option<MixedSignalSynchronizer>,
+    /// Last synchronization time
+    last_sync_time: f64,
 }
 
 impl SimulationExecutor {
@@ -148,11 +158,31 @@ impl SimulationExecutor {
             adapters.insert(partition.id, adapter);
         }
         
+        // Check if we need mixed-signal synchronization
+        let needs_sync = partitions.iter().any(|p| matches!(p.mode, SimMode::MixedSignal | SimMode::AnalogRequired));
+        
+        let synchronizer = if needs_sync {
+            // Collect interface nets
+            let interface_nets: Vec<NetId> = interfaces.iter()
+                .flat_map(|iface| &iface.interface_nets)
+                .cloned()
+                .collect();
+            
+            Some(MixedSignalSynchronizer::new(
+                SyncStrategy::Adaptive,
+                interface_nets
+            ))
+        } else {
+            None
+        };
+        
         Ok(Self {
             adapters,
             interfaces,
             global_time: 0.0,
             sync_points: Vec::new(),
+            synchronizer,
+            last_sync_time: 0.0,
         })
     }
     
@@ -183,10 +213,13 @@ impl SimulationExecutor {
                 }))
             }
             SimMode::AnalogRequired => {
-                let circuit_name = format!("analog_circuit_{}", partition.id);
+                let mut spice_adapter = SpiceAdapter::new();
+                // Initialize with partition's instances and nets
+                spice_adapter.initialize(netlist, &partition.instances, &partition.nets)?;
+                
                 Ok(EngineAdapter::Analog(AnalogAdapter {
-                    circuit_name,
-                    parameters: HashMap::new(),
+                    spice_adapter,
+                    partition_id: partition.id,
                 }))
             }
         }
@@ -224,22 +257,59 @@ impl SimulationExecutor {
         
         // Main simulation loop
         while current_time < end_time {
+            // Check if synchronization is needed
+            let needs_sync = if let Some(ref mut sync) = self.synchronizer {
+                sync.needs_sync(current_time, self.last_sync_time)
+            } else {
+                false
+            };
+            
+            if needs_sync {
+                // Collect values before borrowing synchronizer mutably
+                let analog_values = self.collect_analog_values();
+                let digital_values = self.collect_digital_values();
+                
+                // Perform synchronization
+                if let Some(ref mut sync) = self.synchronizer {
+                    let sync_result = sync.synchronize(current_time, &analog_values, &digital_values)?;
+                    
+                    if context.debug {
+                        println!("Synchronization at t={}: {} nets updated in {:.3}ms",
+                                current_time, sync_result.nets_updated.len(), 
+                                sync_result.sync_time * 1000.0);
+                    }
+                    
+                    self.last_sync_time = current_time;
+                    
+                    // Clear past events
+                    sync.clear_past_events(current_time);
+                }
+            }
+            
             // Execute each partition for this time step
             let adapter_keys: Vec<_> = self.adapters.keys().cloned().collect();
             for partition_id in adapter_keys {
                 if let Some(adapter) = self.adapters.get_mut(&partition_id) {
                     match adapter {
                         EngineAdapter::Digital(_) => {
-                            println!("Executing digital simulation for partition {}", partition_id);
+                            if context.debug {
+                                println!("Executing digital simulation for partition {}", partition_id);
+                            }
                         }
                         EngineAdapter::DigitalTimed(_) => {
-                            println!("Executing timed digital simulation for partition {}", partition_id);
+                            if context.debug {
+                                println!("Executing timed digital simulation for partition {}", partition_id);
+                            }
                         }
                         EngineAdapter::MixedSignal(_) => {
-                            println!("Executing mixed-signal simulation for partition {}", partition_id);
+                            if context.debug {
+                                println!("Executing mixed-signal simulation for partition {}", partition_id);
+                            }
                         }
                         EngineAdapter::Analog(_) => {
-                            println!("Executing analog simulation for partition {}", partition_id);
+                            if context.debug {
+                                println!("Executing analog simulation for partition {}", partition_id);
+                            }
                         }
                     }
                     event_count += 1;
@@ -252,9 +322,23 @@ impl SimulationExecutor {
                 self.process_domain_interface(interface, current_time)?;
             }
             
+            // Register any new events with synchronizer
+            if let Some(ref mut sync) = self.synchronizer {
+                // In a real implementation, we'd extract events from the adapters
+                // For now, just demonstrate the API
+                // sync.add_digital_event(current_time + time_step);
+            }
+            
             // Advance time
             current_time += time_step;
             self.global_time = current_time;
+        }
+        
+        // Print final synchronization metrics
+        if let Some(ref sync) = self.synchronizer {
+            if context.debug {
+                println!("\n{}", sync.metrics());
+            }
         }
         
         println!("Simulation completed. Processed {} events", event_count);
@@ -288,6 +372,31 @@ impl SimulationExecutor {
         }
         
         Ok(())
+    }
+    
+    /// Collect analog values from adapters
+    fn collect_analog_values(&self) -> HashMap<NetId, f64> {
+        let mut values = HashMap::new();
+        
+        // Collect from analog adapters
+        for adapter in self.adapters.values() {
+            if let EngineAdapter::Analog(analog_adapter) = adapter {
+                let adapter_values = analog_adapter.spice_adapter.get_net_values();
+                values.extend(adapter_values);
+            }
+        }
+        
+        values
+    }
+    
+    /// Collect digital values from adapters
+    fn collect_digital_values(&self) -> HashMap<NetId, bool> {
+        let values = HashMap::new();
+        
+        // In a real implementation, we'd extract digital net states
+        // For now, return empty map
+        
+        values
     }
 }
 

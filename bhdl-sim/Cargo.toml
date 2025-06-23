@@ -24,6 +24,7 @@ tracing = "0.1"
 # Data structures
 indexmap = "2.0"
 slotmap = "1.0"
+ordered-float = "4.0"
 
 # Async/concurrency
 tokio = { version = "1.0", features = ["full"] }

@@ -109,7 +109,7 @@ impl CheckpointManager {
         let circuit_state = CircuitState {
             pin_values: engine.circuit_state.get_all_pin_values(),
             net_voltages: engine.circuit_state.get_all_net_voltages(),
-            attributes: engine.circuit_state.get_all_attributes(),
+            attributes: engine.circuit_state.get_all_attributes_f64(),
         };
         
         // Get component states

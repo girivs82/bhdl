@@ -6,6 +6,7 @@ pub mod evaluator;
 pub mod when_processor;
 pub mod error_recovery;
 pub mod simple;
+pub mod expression_parser;
 
 pub use scheduler::{EvaluationScheduler, AttributeId, DependencyChange};
 pub use context::SimulationEvaluationContext;

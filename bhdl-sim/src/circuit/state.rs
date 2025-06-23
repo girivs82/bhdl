@@ -368,8 +368,15 @@ impl CircuitState {
             .collect()
     }
     
-    /// Get all attributes
-    pub fn get_all_attributes(&self) -> HashMap<String, f64> {
+    /// Get all attributes as runtime values
+    pub fn get_all_attributes(&self) -> HashMap<String, RuntimeValue> {
+        self.attributes.values.iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+    
+    /// Get all attributes as f64 values (for compatibility)
+    pub fn get_all_attributes_f64(&self) -> HashMap<String, f64> {
         self.attributes.values.iter()
             .filter_map(|(path, value)| {
                 match value {
@@ -377,6 +384,13 @@ impl CircuitState {
                     _ => None,
                 }
             })
+            .collect()
+    }
+    
+    /// Get all pins
+    pub fn get_all_pins(&self) -> Vec<(String, PinValue)> {
+        self.pins.values.iter()
+            .map(|(name, value)| (name.clone(), value.clone()))
             .collect()
     }
     

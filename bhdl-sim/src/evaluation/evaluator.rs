@@ -5,8 +5,9 @@ use crate::circuit::state::CircuitState;
 use crate::engine::time::TimeManager;
 use crate::error::{SimulationError, SimulationResult};
 use crate::evaluation::scheduler::AttributeId;
+use crate::evaluation::expression_parser::ExpressionParser;
 use bhdl_analyzer::{
-    expression_evaluator::RuntimeValue,
+    expression_evaluator::{RuntimeValue, ExpressionEvaluator},
     attribute_analysis::AttributeAnalysisResult,
 };
 use bhdl_ast::expr::Expr;
@@ -17,8 +18,11 @@ pub struct SimulationAttributeEvaluator {
     /// Attribute analysis from the analyzer
     attribute_analysis: AttributeAnalysisResult,
     
-    /// Cached parsed expressions
-    expression_cache: HashMap<String, Expr>,
+    /// Expression parser
+    expression_parser: ExpressionParser,
+    
+    /// Map from attribute name to expression text (needs to be provided during construction)
+    expression_texts: HashMap<String, String>,
     
     /// Performance metrics
     metrics: EvaluationMetrics,
@@ -37,7 +41,18 @@ impl SimulationAttributeEvaluator {
     pub fn new(attribute_analysis: AttributeAnalysisResult) -> Self {
         Self {
             attribute_analysis,
-            expression_cache: HashMap::new(),
+            expression_parser: ExpressionParser::new(),
+            expression_texts: HashMap::new(),
+            metrics: EvaluationMetrics::default(),
+        }
+    }
+    
+    /// Create with expression texts
+    pub fn with_expressions(attribute_analysis: AttributeAnalysisResult, expression_texts: HashMap<String, String>) -> Self {
+        Self {
+            attribute_analysis,
+            expression_parser: ExpressionParser::new(),
+            expression_texts,
             metrics: EvaluationMetrics::default(),
         }
     }
@@ -76,7 +91,7 @@ impl SimulationAttributeEvaluator {
         &mut self,
         attr_name: &str,
         circuit_state: &CircuitState,
-        _time_manager: &TimeManager,
+        time_manager: &TimeManager,
     ) -> SimulationResult<(AttributeUpdateResult, RuntimeValue)> {
         let start = std::time::Instant::now();
         
@@ -89,12 +104,28 @@ impl SimulationAttributeEvaluator {
         // Check if it's an expression attribute
         let new_value = match &attr_info.attribute_type {
             bhdl_ast::attributes::AttributeType::Expression(_dependencies) => {
-                // For now, we need to get the actual expression from the AST
-                // This is a limitation - we'd need the actual expression text or AST node
-                // For now, just return the current value
-                circuit_state.get_attribute(attr_name)
-                    .cloned()
-                    .unwrap_or(RuntimeValue::Real(0.0))
+                // Get expression text
+                if let Some(expr_text) = self.expression_texts.get(attr_name) {
+                    // Parse the expression
+                    let expr = self.expression_parser.parse(expr_text)?;
+                    
+                    // Create evaluation context
+                    let sim_context = crate::evaluation::context::SimulationEvaluationContext::new(
+                        circuit_state,
+                        time_manager,
+                    );
+                    let sim_ctx = sim_context.create_sim_context();
+                    let eval_context = sim_context.build_context_with_sim(&sim_ctx);
+                    
+                    // Evaluate the expression
+                    ExpressionEvaluator::evaluate(&expr, &eval_context)
+                        .map_err(|e| SimulationError::EvaluationError(format!("Expression evaluation failed: {}", e)))?
+                } else {
+                    // No expression text available, return current value
+                    circuit_state.get_attribute(attr_name)
+                        .cloned()
+                        .unwrap_or(RuntimeValue::Real(0.0))
+                }
             }
             bhdl_ast::attributes::AttributeType::Static(_value) => {
                 // Static attributes don't need evaluation
@@ -129,23 +160,6 @@ impl SimulationAttributeEvaluator {
         Ok((result, new_value))
     }
     
-    /// Get or parse an expression from cache
-    fn get_or_parse_expression(
-        &mut self,
-        attr_name: &str,
-        _expr_node: &str,
-    ) -> SimulationResult<Expr> {
-        if let Some(expr) = self.expression_cache.get(attr_name) {
-            self.metrics.cache_hits += 1;
-            return Ok(expr.clone());
-        }
-        
-        // TODO: Parse the expression from the AST node
-        // For now, return an error as we need the actual AST node
-        Err(SimulationError::EvaluationError(
-            "Expression parsing not yet implemented".to_string()
-        ))
-    }
     
     /// Get evaluation metrics
     pub fn metrics(&self) -> &EvaluationMetrics {

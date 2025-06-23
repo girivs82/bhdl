@@ -334,6 +334,7 @@ dependencies = [
  "flate2",
  "indexmap",
  "insta",
+ "ordered-float 4.6.0",
  "pretty_assertions",
  "serde",
  "serde_json",
