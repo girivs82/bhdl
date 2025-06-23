@@ -167,6 +167,30 @@ impl TimeManager {
     pub fn step_history(&self) -> &[f64] {
         &self.step_history
     }
+    
+    /// Advance time by a specific amount
+    pub fn advance_by(&mut self, delta: f64) -> SimulationResult<()> {
+        if delta < 0.0 {
+            return Err(SimulationError::TimeError(
+                "Cannot advance by negative time".to_string()
+            ));
+        }
+        if !delta.is_finite() {
+            return Err(SimulationError::TimeError(
+                "Time delta must be finite".to_string()
+            ));
+        }
+        self.current_time += delta;
+        self.step_count += 1;
+        self.step_history.push(delta);
+        
+        // Keep history bounded
+        if self.step_history.len() > 1000 {
+            self.step_history.remove(0);
+        }
+        
+        Ok(())
+    }
 }
 
 #[cfg(test)]

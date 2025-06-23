@@ -53,22 +53,17 @@ impl<'a> SimulationEvaluationContext<'a> {
     
     /// Collect all attributes as runtime values
     fn collect_attributes(&self) -> HashMap<String, RuntimeValue> {
-        let attributes = HashMap::new();
-        
-        // Get all attributes from circuit state
-        // Note: We need to iterate through all known attributes
-        // This is a simplified version - in real implementation we'd track all attribute names
-        
-        attributes
+        self.circuit_state.get_all_attributes()
     }
     
     /// Collect all pin values as runtime values
     fn collect_pins(&self) -> HashMap<String, RuntimeValue> {
-        let pins = HashMap::new();
+        let mut pins = HashMap::new();
         
         // Get all pins from circuit state
-        // Convert PinValue to RuntimeValue
-        // Note: This is simplified - real implementation would iterate all pins
+        for (pin_name, pin_value) in self.circuit_state.get_all_pins() {
+            pins.insert(pin_name, Self::pin_to_runtime_value(&pin_value));
+        }
         
         pins
     }
