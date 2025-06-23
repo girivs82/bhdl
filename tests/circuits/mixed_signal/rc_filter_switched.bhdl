@@ -1,0 +1,72 @@
+// Switched RC filter with mixed analog/digital control
+// Demonstrates mixed-signal simulation capabilities
+
+board SwitchedRCFilter {
+    // Power supplies
+    power VCC = 5V @ 100mA;
+    ground GND;
+    
+    // Analog switch with digital control
+    module AnalogSwitch(ron: resistance = 10Ω, roff: resistance = 10MΩ) {
+        pin ctrl: signal in;
+        pin in: signal inout;
+        pin out: signal inout;
+        
+        // Behavioral model
+        attribute resistance = ctrl ? ron : roff;
+    }
+    
+    // Input signal source
+    module SignalSource(frequency: frequency = 1kHz, amplitude: voltage = 2.5V) {
+        pin out: signal out;
+        
+        // Behavioral sine wave generator
+        attribute output_voltage = amplitude * sin(2 * pi * frequency * t) + 2.5V;
+    }
+    
+    // RC filter implementation
+    @VIN: SignalSource(1kHz, 1V).out -> SW1.in;
+    
+    // Switch controlled by digital signal  
+    SW1: AnalogSwitch(5Ω, 100MΩ);
+    
+    // RC filter components
+    SW1.out -> R1.1;
+    R1: Res(10kΩ);
+    R1.2 -> C1.1;
+    @VOUT: R1.2;
+    
+    C1: Cap(100nF);
+    C1.2 -> @GND;
+    
+    // Output buffer with behavioral model
+    module Buffer(gain: real = 1.0) {
+        pin in: signal in;
+        pin out: signal out;
+        
+        attribute input_voltage = in;
+        attribute output_voltage = gain * input_voltage;
+    }
+    
+    @VOUT -> BUF1.in;
+    BUF1: Buffer(0.9); // Slight attenuation
+    @BUFFERED_OUT: BUF1.out;
+    
+    // Digital control logic with timing
+    module TimingController(period: time = 100µs, duty: real = 0.5) {
+        pin enable: signal out;
+        
+        attribute counter = (t % period);
+        
+        when counter < (duty * period) {
+            enable = 1;
+        }
+        
+        when counter >= (duty * period) {
+            enable = 0;
+        }
+    }
+    
+    CTRL: TimingController(50µs, 0.75);
+    CTRL.enable -> SW1.ctrl where trace_length < 20mm;  // Direct connection
+}

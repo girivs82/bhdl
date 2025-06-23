@@ -1,0 +1,207 @@
+// Test circuit demonstrating connection constraint syntax
+// Tests both 'where' and 'with' keywords with various constraints
+
+board ConnectionConstraintTest {
+    power VCC = 5V @ 1A;
+    power VCC_3V3 = 3.3V @ 500mA;
+    ground GND;
+    
+    // Test 1: Individual connection constraints with 'where'
+    module TestIndividualConstraints {
+        // Length constraints
+        U1: MCU().XTAL_OUT -> XTAL.1 where trace_length < 10mm;
+        XTAL.2 -> U1.XTAL_IN where trace_length < 10mm, no_vias;
+        
+        // Impedance constraints
+        U2: Transceiver().TX -> J1: Connector().TX where impedance = 50Ω;
+        J1.RX -> U2.RX where impedance = 50Ω, matched_length;
+        
+        // Current and width constraints
+        @VCC -> Q1: MOSFET().drain where current_rating >= 2A, trace_width >= 1mm;
+        Q1.source -> R_SENSE.1 where trace_width >= 1mm;
+        R_SENSE: Res(0.1Ω, power=1W);
+        R_SENSE.2 -> @GND where trace_width >= 2mm, thermal_vias >= 4;
+        
+        // Special routing constraints
+        U3: OpAmp().out -> U4: ADC().in where shielded, guard_ring;
+        SENSOR.out -> U3.in_p where differential(U3.in_n), spacing = 0.15mm;
+    }
+    
+    // Test 2: Grouped constraints with 'with'
+    module TestGroupedConstraints {
+        // Simple routing group
+        with routing(impedance = 50Ω, layer = "top") {
+            U5: FPGA().IO[0] -> U6: RAM().A[0];
+            U5.IO[1] -> U6.A[1];
+            U5.IO[2] -> U6.A[2];
+            U5.IO[3] -> U6.A[3];
+        }
+        
+        // Power distribution group
+        with power(min_width = 0.5mm, max_drop = 50mV) {
+            @VCC_3V3 -> U7: Sensor().VDD where bypass = C1;
+            @VCC_3V3 -> U8: Amplifier().VCC where bypass = C2;
+            @VCC_3V3 -> U9: Filter().V+ where bypass = C3;
+        }
+        
+        // Differential routing
+        with routing(differential = true, impedance = 100Ω) {
+            U10: PHY().TX_P -> RJ45.TX_P;
+            U10.TX_N -> RJ45.TX_N;
+            RJ45.RX_P -> U10.RX_P;
+            RJ45.RX_N -> U10.RX_N;
+        }
+    }
+    
+    // Test 3: Nested groups
+    module TestNestedGroups {
+        with routing(reference_plane = "ground", layer = "inner") {
+            // High-speed signals
+            with impedance(50Ω ± 5%) {
+                CPU.CLK -> RAM.CLK where length = 45mm ± 0.5mm;
+                CPU.CS -> RAM.CS;
+            }
+            
+            // Ultra high-speed with tighter tolerance
+            with impedance(50Ω ± 2%) {
+                with matched_length(tolerance = 0.1mm) {
+                    CPU.DQ[0] -> RAM.DQ[0];
+                    CPU.DQ[1] -> RAM.DQ[1];
+                }
+            }
+        }
+    }
+    
+    // Test 4: Complex constraints
+    module TestComplexConstraints {
+        // Multiple constraints on single connection
+        PSU.out -> LOAD.in where {
+            current_rating >= 5A,
+            trace_width >= 3mm,
+            max_length = 100mm,
+            layer = "bottom",
+            copper_weight = "2oz"
+        };
+        
+        // Conditional routing based on frequency
+        with routing(frequency > 1GHz) {
+            impedance = 50Ω ± 2%;
+            dielectric = "Rogers4350";
+            via_stubs = "back_drilled";
+        } apply {
+            RF_IC.out -> ANTENNA.feed;
+        }
+    }
+    
+    // Test 5: Thermal constraints
+    module TestThermalConstraints {
+        // Power components with thermal requirements
+        @VCC -> Q2: PowerTransistor().collector where {
+            current_rating = 10A,
+            thermal_relief = true,
+            copper_pour = "solid"
+        };
+        
+        Q2.emitter -> R_LOAD.1 where thermal_vias >= 9;
+        R_LOAD: Res(1Ω, power=10W);
+        R_LOAD.2 -> @GND where copper_area >= 100mm²;
+    }
+    
+    // Test 6: Mixed nets and pin-to-pin
+    module TestMixedConnections {
+        // Power uses nets (equipotential)
+        @VCC -> U11.VDD;
+        @VCC -> U12.VDD;
+        @VCC -> U13.VDD;
+        
+        // But analog path uses pin-to-pin
+        INPUT_BNC.signal -> R_IN.1;
+        R_IN: Res(50Ω);
+        R_IN.2 -> C_DC.1;
+        C_DC: Cap(100nF);
+        C_DC.2 -> AMP.input where trace_length < 25mm;
+        
+        // Feedback is definitely pin-to-pin
+        AMP.output -> R_FB.1;
+        R_FB: Res(10kΩ);
+        R_FB.2 -> C_FB.1;
+        C_FB: Cap(22pF);
+        C_FB.2 -> AMP.inv_input where trace_length < 15mm;
+    }
+    
+    // Test 7: Generate with constraints
+    module TestGenerateConstraints {
+        // Generate with individual where clauses
+        generate for i in 0..7 {
+            MCU.GPIO[i] -> LED[i].anode where current_limit = 20mA;
+            LED[i].cathode -> R_LED[i].1;
+            R_LED[i]: Res(330Ω);
+            R_LED[i].2 -> @GND;
+        }
+        
+        // Generate inside with block
+        with routing(matched_length, layer = "top") {
+            generate for bit in 0..15 {
+                FPGA.DATA[bit] -> BUFFER.D[bit];
+            }
+        }
+    }
+}
+
+// Module definitions for testing
+module MCU() {
+    pin XTAL_OUT: signal out;
+    pin XTAL_IN: signal in;
+}
+
+module Transceiver() {
+    pin TX: signal out;
+    pin RX: signal in;
+}
+
+module Connector() {
+    pin TX: signal;
+    pin RX: signal;
+}
+
+module MOSFET() {
+    pin gate: signal in;
+    pin drain: power;
+    pin source: power;
+}
+
+module OpAmp() {
+    pin in_p: signal in;
+    pin in_n: signal in;
+    pin out: signal out;
+}
+
+module ADC() {
+    pin in: signal in;
+}
+
+module FPGA() {
+    pin IO[0..31]: signal inout;
+    pin CLK: clock in;
+    pin DATA[0..15]: signal out;
+}
+
+module RAM() {
+    pin A[0..15]: signal in;
+    pin DQ[0..7]: signal inout;
+    pin CLK: clock in;
+    pin CS: signal in;
+}
+
+module PHY() {
+    pin TX_P: signal out;
+    pin TX_N: signal out;
+    pin RX_P: signal in;
+    pin RX_N: signal in;
+}
+
+module PowerTransistor() {
+    pin collector: power in;
+    pin base: signal in;
+    pin emitter: power out;
+}
