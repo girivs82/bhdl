@@ -1,0 +1,128 @@
+// Buck converter with topology-aware connections and physical constraints
+// Demonstrates pin-to-pin connections and constraint syntax
+
+board BuckConverterBoard {
+    // Input power supply
+    power VIN = 12V @ 2A;
+    ground GND;
+    
+    // Buck controller
+    @VIN -> U1: BuckController().VIN;
+    U1.GND -> @GND;
+    U1.EN -> @VIN;  // Always enabled
+    
+    // Switch node - critical high dV/dt net
+    U1.SW -> L1: Inductor(10uH).1 where trace_width >= 2mm, length < 15mm;
+    
+    // Power path with explicit topology
+    L1.2 -> C_OUT1.1;  // First output cap (closest to inductor)
+    
+    // Feedback taps at first capacitor for best response
+    C_OUT1.1 -> R1.1 where trace_length < 10mm;  // Critical feedback path
+    R1: Res(10k, tolerance=1%);
+    R1.2 -> R2.1;
+    R2: Res(2.2k, tolerance=1%);
+    R2.2 -> @GND;
+    R1.2 -> U1.FB where trace_length < 20mm, no_vias;
+    
+    // Compensation network
+    R1.2 -> R3.1;
+    R3: Res(15k);
+    R3.2 -> C3.1;
+    C3: Cap(10nF, type="C0G");
+    C3.2 -> @GND;
+    R3.2 -> U1.COMP;
+    
+    // Bulk output capacitance (further from inductor)
+    C_OUT1.1 -> C_OUT2.1 where trace_width >= 1.5mm;
+    C_OUT1: Cap(100uF, voltage=10V, esr < 50mΩ);
+    C_OUT2: Cap(220uF, voltage=10V);
+    C_OUT1.2 -> @GND;
+    C_OUT2.2 -> @GND;
+    
+    // Freewheeling diode with short path
+    L1.1 -> D1: SchottkyDiode(SS34).K where trace_length < 10mm;
+    D1.A -> @GND where trace_width >= 2mm;
+    
+    // Input filtering with star ground
+    @VIN -> C_IN1.1 where trace_width >= 2mm;
+    C_IN1: Cap(100uF, voltage=25V);
+    C_IN1.2 -> @GND;
+    
+    // High-frequency bypass right at controller
+    @VIN -> C_IN2.1 where trace_length < 5mm;
+    C_IN2: Cap(1uF, type="X7R");
+    C_IN2.2 -> U1.GND_PIN where trace_length < 5mm;  // Kelvin ground
+    U1.GND_PIN -> @GND;
+    
+    // Output connector
+    C_OUT2.1 -> J1: PowerConnector().VOUT;
+    J1.GND -> @GND;
+    
+    // Define output power at connector
+    power VOUT = 3.3V @ 1A;
+    @VOUT: J1.VOUT;
+    
+    // Test load
+    @VOUT -> Rload: Res(10Ω).1;
+    Rload.2 -> @GND;
+}
+
+// Group critical high-speed switching paths
+with routing(layer = "top", copper_weight = "2oz") {
+    // Switch node connections need careful layout
+    U1.SW -> L1.1;
+    L1.1 -> D1.K;
+    
+    // Keep these paths short and wide
+    with trace_width >= 3mm {
+        D1.A -> @GND;
+        C_OUT1.2 -> @GND;
+    }
+}
+
+// Group sensitive analog signals
+with routing(shielded = true, away_from = "switch_node") {
+    // Feedback and compensation signals
+    C_OUT1.1 -> R1.1;
+    R1.2 -> U1.FB;
+    R3.2 -> U1.COMP;
+}
+
+// Matched ground returns for input caps
+with routing(star_ground = true) {
+    C_IN1.2 -> @GND;
+    C_IN2.2 -> U1.GND_PIN;
+    U1.GND -> @GND;
+}
+
+// Buck controller module
+module BuckController() {
+    pin VIN: power in;
+    pin SW: power out;  // Switch node
+    pin FB: signal in;  // Feedback
+    pin COMP: signal out;  // Compensation
+    pin EN: signal in;  // Enable
+    pin GND: ground;
+    pin GND_PIN: ground;  // Separate pin for kelvin connection
+}
+
+// Supporting modules
+module SchottkyDiode(model: string) {
+    pin A: signal;
+    pin K: signal;
+}
+
+module Inductor(inductance: inductance) {
+    pin 1: signal;
+    pin 2: signal;
+    
+    // Physical parameters that affect layout
+    attribute dc_resistance = 15mΩ;
+    attribute saturation_current = 3A;
+}
+
+module PowerConnector() {
+    pin VOUT: power out;
+    pin GND: ground;
+}

@@ -1,0 +1,224 @@
+// Example demonstrating connection constraint syntax in BHDL v2.0
+// This file shows best practices for physical layout constraints
+
+import "../passives/resistor.bhdl";
+import "../passives/capacitor.bhdl";
+import "../actives/opamp.bhdl";
+
+// Example 1: Simple constraints on individual connections
+module AnalogFrontEnd() {
+    pin INPUT: signal in;
+    pin OUTPUT: signal out;
+    pin VCC: power in;
+    pin VEE: power in;
+    pin GND: ground;
+    
+    // Input protection with short traces
+    INPUT -> R1: Res(1kΩ).1 where trace_length < 10mm;
+    R1.2 -> U1: OpAmp().IN_P where shielded, guard_ring;
+    
+    // Feedback with controlled impedance
+    U1.OUT -> R2: Res(10kΩ).1 where trace_width = 0.2mm;
+    R2.2 -> U1.IN_N where trace_length < 15mm;
+    
+    // Power bypassing with minimal inductance
+    VCC -> C1: Cap(0.1µF).1 where trace_length < 5mm, vias = 2;
+    C1.2 -> U1.VCC where trace_length < 5mm;
+    
+    U1.OUT -> OUTPUT;
+}
+
+// Example 2: Grouped connections with shared constraints
+module HighSpeedADC() {
+    pin AIN_P: signal in;
+    pin AIN_N: signal in;
+    pin D[0..7]: signal out;
+    pin CLK: clock in;
+    pin VDD: power in;
+    pin GND: ground;
+    
+    // Differential input with matched routing
+    with routing(differential = true, impedance = 100Ω, matched_length) {
+        AIN_P -> ADC: ADC_IC().IN_P;
+        AIN_N -> ADC.IN_N;
+    }
+    
+    // Digital outputs with controlled impedance
+    with routing(impedance = 50Ω ± 10%, layer = "top") {
+        generate for i in 0..7 {
+            ADC.D[i] -> D[i] where length < 30mm;
+        }
+    }
+    
+    // Clock input with specific requirements
+    CLK -> ADC.CLK where impedance = 50Ω, length = 25mm ± 1mm;
+}
+
+// Example 3: Power distribution network
+module PowerDistribution() {
+    power VIN = 12V @ 5A;
+    power VCC_3V3 = 3.3V @ 3A;
+    power VCC_1V8 = 1.8V @ 2A;
+    ground GND;
+    
+    // Main power path with current handling
+    @VIN -> SW1: PowerSwitch().IN where current_rating >= 5A, trace_width >= 3mm;
+    
+    // Distributed regulators with star topology
+    with power(topology = "star", max_voltage_drop = 50mV) {
+        SW1.OUT -> REG1: VoltageRegulator(3.3V).VIN where trace_length < 50mm;
+        SW1.OUT -> REG2: VoltageRegulator(1.8V).VIN where trace_length < 50mm;
+    }
+    
+    // Decoupling network
+    with routing(via_count <= 2, pour_connect = true) {
+        REG1.VOUT -> C1: Cap(100µF).1 where distance < 10mm;
+        REG1.VOUT -> C2: Cap(10µF).1 where distance < 15mm;
+        REG1.VOUT -> C3: Cap(1µF).1 where distance < 20mm;
+        
+        C1.2 -> @GND;
+        C2.2 -> @GND;
+        C3.2 -> @GND;
+    }
+}
+
+// Example 4: RF circuit with impedance control
+module RFAmplifier() {
+    pin RF_IN: signal in;
+    pin RF_OUT: signal out;
+    pin VDD: power in;
+    pin GND: ground;
+    
+    // 50Ω impedance throughout RF path
+    with routing(impedance = 50Ω ± 2%, layer = "top", reference = "ground_plane") {
+        RF_IN -> C_IN: Cap(100pF).1;
+        C_IN.2 -> U1: RFAmp().IN;
+        U1.OUT -> C_OUT: Cap(100pF).1;
+        C_OUT.2 -> RF_OUT;
+        
+        // Matching network with tight tolerance
+        with tolerance(5%) {
+            U1.IN -> L1: Inductor(10nH).1 where Q >= 30;
+            L1.2 -> C_MATCH: Cap(5pF).1;
+            C_MATCH.2 -> @GND;
+        }
+    }
+}
+
+// Example 5: Mixed signal with separate domains
+module MixedSignalSystem() {
+    // Analog section with quiet ground
+    module AnalogSection {
+        with routing(ground_domain = "AGND", away_from = "digital_signals") {
+            SENSOR.out -> AMP.in where shielded;
+            AMP.out -> FILTER.in where guard_trace = "AGND";
+            FILTER.out -> ADC.analog_in;
+        }
+    }
+    
+    // Digital section with different constraints
+    module DigitalSection {
+        with routing(ground_domain = "DGND", edge_rate < 1ns) {
+            MCU.SPI_CLK -> ADC.SPI_CLK where length < 50mm;
+            MCU.SPI_MOSI -> ADC.SPI_MOSI where length_match(SPI_CLK);
+            ADC.SPI_MISO -> MCU.SPI_MISO where length_match(SPI_CLK);
+        }
+    }
+    
+    // Ground connection at single point
+    @AGND -> FERRITE: Bead(100Ω @ 100MHz).1;
+    FERRITE.2 -> @DGND where at_location = "under_ADC";
+}
+
+// Example 6: Nested constraint groups
+module MemoryInterface() {
+    with routing(layer = "inner", reference_plane = "solid") {
+        // Address bus group
+        with group("address", impedance = 40Ω ± 10%) {
+            generate for i in 0..15 {
+                CPU.A[i] -> MEM.A[i];
+            }
+        }
+        
+        // Data bus with tighter constraints
+        with group("data", impedance = 50Ω ± 5%, matched_length = true) {
+            generate for i in 0..31 {
+                CPU.D[i] -> MEM.D[i];
+            }
+            
+            // Byte lane strobes
+            generate for lane in 0..3 {
+                with differential(100Ω) {
+                    CPU.DQS[lane]_P -> MEM.DQS[lane]_P;
+                    CPU.DQS[lane]_N -> MEM.DQS[lane]_N;
+                }
+            }
+        }
+    }
+}
+
+// Example 7: Thermal management constraints
+module PowerAmplifier() {
+    // High power transistor with thermal considerations
+    @VCC -> Q1: PowerTransistor().collector where current_rating >= 10A;
+    Q1.emitter -> R_SENSE: Res(0.1Ω, power = 5W).1 where thermal_relief;
+    R_SENSE.2 -> @GND where trace_width >= 5mm, thermal_vias >= 9;
+    
+    // Heat spreading
+    with thermal(max_temp_rise = 20°C) {
+        Q1.thermal_pad -> @PCB_HEATSINK where area >= 25mm²;
+        R_SENSE.body -> @PCB_HEATSINK where copper_weight = "2oz";
+    }
+}
+
+// Supporting module definitions
+module OpAmp() {
+    pin IN_P: signal in;
+    pin IN_N: signal in;
+    pin OUT: signal out;
+    pin VCC: power in;
+    pin VEE: power in;
+}
+
+module ADC_IC() {
+    pin IN_P: signal in;
+    pin IN_N: signal in;
+    pin D[0..7]: signal out;
+    pin CLK: clock in;
+}
+
+module PowerSwitch() {
+    pin IN: power in;
+    pin OUT: power out;
+    pin EN: signal in;
+}
+
+module VoltageRegulator(vout: voltage) {
+    pin VIN: power in;
+    pin VOUT: power out;
+    pin GND: ground;
+}
+
+module RFAmp() {
+    pin IN: signal in;
+    pin OUT: signal out;
+}
+
+module Inductor(value: inductance) {
+    pin 1: signal;
+    pin 2: signal;
+    
+    attribute Q: real;
+}
+
+module Bead(impedance: impedance @ frequency) {
+    pin 1: signal;
+    pin 2: signal;
+}
+
+module PowerTransistor() {
+    pin collector: power;
+    pin base: signal in;
+    pin emitter: power;
+    pin thermal_pad: thermal;
+}

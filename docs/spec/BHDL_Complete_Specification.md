@@ -5,6 +5,7 @@
 1. [Introduction](#1-introduction)
 2. [Design Philosophy](#2-design-philosophy)
 3. [Core Language Constructs](#3-core-language-constructs)
+   - [Connection Syntax and Physical Constraints](#33-connection-syntax-and-physical-constraints)
 4. [Type System](#4-type-system)
 5. [Component System](#5-component-system)
    - [Component Handles and Net Naming](#55-component-handles-and-net-naming)
@@ -135,7 +136,133 @@ fuse.2 -> @PROTECTED;   // fuse is component, PROTECTED is net
 5. **Disambiguation**: `@` always indicates a net, never a component
 6. **Power/Ground**: Declared with keywords but referenced with `@` (e.g., `@VCC`, `@GND`)
 
-### 3.3 Flow Specification
+### 3.3 Connection Syntax and Physical Constraints
+
+#### Basic Connections
+BHDL v2.0 supports two connection paradigms: net-based and pin-to-pin connections.
+
+```bhdl
+// Net-based connections (for logical equivalence)
+@VCC -> U1.VDD;
+@VCC -> U2.VDD;
+@GND -> C1.2;
+
+// Pin-to-pin connections (preserves physical topology)
+L1.2 -> C1.1;          // Inductor output to capacitor
+C1.1 -> FB_DIV.top;    // Feedback taps at C1, not elsewhere
+C1.1 -> C2.1;          // Bulk cap further downstream
+```
+
+#### Connection Constraints with 'where'
+Use the `where` keyword to specify physical constraints on individual connections:
+
+```bhdl
+// Trace length constraints
+C1.1 -> FB.top where trace_length < 10mm;
+XTAL.out -> MCU.OSC_IN where length = 15mm ± 0.5mm, no_vias;
+
+// Impedance control
+TX.out -> RX.in where impedance = 50Ω, matched_length;
+CPU.CLK -> RAM.CLK where impedance = 50Ω, max_vias = 2;
+
+// Current and power constraints
+@VCC -> MOTOR.power where current_rating >= 5A, trace_width >= 2mm;
+L1.2 -> C1.1 where current_rating = 3A;
+
+// Special routing requirements
+OPAMP.out -> ADC.in where shielded, guard_ring;
+SENSOR.out -> AMP.in where differential(AMP.in_n), spacing = 0.2mm;
+```
+
+#### Connection Groups with 'with'
+Use the `with` keyword to apply shared constraints to multiple connections:
+
+```bhdl
+// Matched impedance group
+with routing(impedance = 50Ω, matched_length) {
+    CPU.D0 -> RAM.D0;
+    CPU.D1 -> RAM.D1;
+    CPU.D2 -> RAM.D2;
+    CPU.D3 -> RAM.D3;
+}
+
+// Differential pairs
+with routing(differential = true, impedance = 100Ω) {
+    PHY.TX_P -> CONN.TX_P;
+    PHY.TX_N -> CONN.TX_N;
+}
+
+// Power distribution
+with power(min_width = 1mm, max_voltage_drop = 50mV) {
+    @VCC -> U1.VDD where bypass = C1;
+    @VCC -> U2.VDD where bypass = C2;
+    @VCC -> U3.VDD where bypass = C3;
+}
+
+// High-speed buses
+with routing(impedance = 50Ω ± 5%, matched_length = true) {
+    // DDR3 data lines
+    generate for i in 0..15 {
+        CPU.DDR_D[i] -> RAM.D[i];
+    }
+}
+```
+
+#### Nested Groups
+Groups can be nested for hierarchical constraint application:
+
+```bhdl
+with routing(layer = "top", reference = "ground_plane") {
+    // All connections in this block are on top layer
+    
+    with impedance(50Ω ± 10%) {
+        // These also have impedance control
+        CPU.ADDR[0] -> RAM.A0;
+        CPU.ADDR[1] -> RAM.A1;
+    }
+    
+    with power(width >= 0.5mm) {
+        // Power connections on top layer
+        @VCC -> U1.VDD;
+        @VCC -> U2.VDD;
+    }
+}
+```
+
+#### Topology-Aware Connections
+Pin-to-pin connections naturally express circuit topology, critical for analog circuits:
+
+```bhdl
+// Buck converter with feedback tap point
+module BuckConverter {
+    // Power path with explicit topology
+    L1.2 -> C1.1;              // Inductor to first cap
+    C1.1 -> R_TOP.1;           // Feedback divider taps HERE
+    R_TOP.2 -> R_BOT.1;        // Divider middle
+    R_BOT.2 -> @GND;           
+    R_TOP.2 -> CONTROLLER.FB;  // Feedback to controller
+    
+    // Bulk capacitance further away
+    C1.1 -> C2.1 where trace_width >= 2mm;
+    C2.1 -> C3.1;
+    C3.1 -> OUTPUT_CONN.1;
+}
+
+// Op-amp with gain-setting resistors
+OPAMP.out -> R1.1;
+R1.2 -> C1.1;              // Compensation cap
+C1.1 -> R2.1;              
+R2.1 -> OPAMP.inv;         // Feedback path
+R2.2 -> @GND;
+```
+
+#### Best Practices
+1. **Use nets for**: Power/ground distribution, multi-drop digital signals, true equipotential nodes
+2. **Use pin-to-pin for**: Analog signal paths, feedback networks, topology-critical connections
+3. **Apply constraints**: Close to the source of the requirement
+4. **Group related connections**: For maintainability and consistency
+
+### 3.4 Flow Specification
 ```bhdl
 // Universal flow operator |> for any domain
 power_flow: USB_5V |> protection |> regulation |> distribution;
@@ -143,7 +270,7 @@ signal_flow: INPUT |> amplify(10x) |> filter(1kHz) |> OUTPUT;
 data_flow: sensors |> i2c_bus |> mcu |> processing;
 ```
 
-### 3.4 Interface Declaration
+### 3.5 Interface Declaration
 ```bhdl
 // Bus interfaces as first-class objects
 main_i2c: I2C(voltage=3.3V, frequency=400kHz);

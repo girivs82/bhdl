@@ -68,9 +68,9 @@ The core innovation is using flow operators to express signal paths:
 
 ```bhdl
 // Traditional netlist approach (prior art)
-NET VCC R1.1
-NET N1 R1.2 LED1.A
-NET GND LED1.K
+net VCC R1.1
+net N1 R1.2 LED1.A
+net GND LED1.K
 
 // Novel flow-based approach
 net led_circuit: VCC -> R1(1k).1 -> R1.2 -> LED1(red).A -> LED1.K -> GND
