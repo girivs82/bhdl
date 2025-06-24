@@ -1,0 +1,13 @@
+// Simple 7805 voltage regulator test for CLI pipeline
+
+board VoltageRegulator {
+    // Power domains
+    power VIN = 12V @ 500mA;
+    power VOUT = 5V @ 400mA;
+    ground GND;
+    
+    // Simple regulator circuit with minimal components
+    @VIN -> U1: LM7805().IN;
+    U1.GND -> @GND;
+    U1.OUT -> @VOUT;
+}

@@ -325,13 +325,26 @@ fn visit_node_for_component_inference(
             // Process flow expressions which contain inline component instantiations in v2.0
             use bhdl_ast::flow::{FlowExpr, FlowElement};
             
+            println!("DEBUG: Found FLOW_EXPR node");
             if let Some(flow_expr) = FlowExpr::cast(node.clone()) {
+                println!("DEBUG: Successfully cast to FlowExpr");
                 // Process each element in the flow expression
                 for element in flow_expr.elements() {
-                    if let FlowElement::ComponentInstantiation(comp_inst) = element {
-                        process_component_instantiation_v2(&comp_inst, component_inference, power_context);
+                    match &element {
+                        FlowElement::ComponentInstantiation(comp_inst) => {
+                            println!("DEBUG: Found ComponentInstantiation in flow");
+                            process_component_instantiation_v2(&comp_inst, component_inference, power_context);
+                        }
+                        FlowElement::Identifier(token) => {
+                            println!("DEBUG: Found Identifier in flow: {}", token.text());
+                        }
+                        FlowElement::ConditionalExpr(_) => {
+                            println!("DEBUG: Found ConditionalExpr in flow");
+                        }
                     }
                 }
+            } else {
+                println!("DEBUG: Failed to cast FLOW_EXPR to FlowExpr");
             }
         }
         bhdl_ast::SyntaxKind::CONNECTION_STMT => {
@@ -347,6 +360,46 @@ fn visit_node_for_component_inference(
             // The normal traversal will handle visiting child nodes
         }
         bhdl_ast::SyntaxKind::COMPONENT_INST => {
+            // Check if this COMPONENT_INST is inside a CONNECTION_STMT
+            // These are v2.0 inline instantiations like Res(10k).1
+            let mut current = node.clone();
+            let mut in_connection = false;
+            while let Some(parent) = current.parent() {
+                if parent.kind() == bhdl_ast::SyntaxKind::CONNECTION_STMT {
+                    in_connection = true;
+                    break;
+                }
+                current = parent;
+            }
+            
+            if in_connection {
+                // This is a v2.0 inline instantiation - extract component type directly
+                // For Res(10k).1, the first IDENT token is "Res"
+                let component_type = node.children_with_tokens()
+                    .find_map(|child| {
+                        if let rowan::NodeOrToken::Token(token) = child {
+                            if token.kind() == bhdl_ast::SyntaxKind::IDENT {
+                                Some(token.text().to_string())
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    });
+                
+                if let Some(component_type) = component_type {
+                    println!("DEBUG: Processing inline component: {}", component_type);
+                    
+                    // Process as v2.0 inline instantiation
+                    use bhdl_ast::flow::ComponentInstantiation;
+                    if let Some(comp_inst) = ComponentInstantiation::cast(node.clone()) {
+                        process_component_instantiation_v2(&comp_inst, component_inference, power_context);
+                        return;
+                    }
+                }
+            }
+            
             // Handle ComponentInst from common module (not flow module)
             use bhdl_ast::ComponentInst;
             

@@ -7,6 +7,7 @@ pub mod component_types;
 pub mod pin_metadata;
 pub mod analysis_interface;
 pub mod intent;
+pub mod expression_evaluator;
 
 pub use component_types::{ComponentType, ComponentTypeMapper};
 pub use pin_metadata::{PinMetadata, PinFunction, ModulePinMetadata};
@@ -20,3 +21,4 @@ pub use intent::{
     IntentFunction, IntentRegistry, SynthesisHint, ValidationRule,
     ToolScope, ParamMetadata, ParamType
 };
+pub use expression_evaluator::{ExpressionEvaluator, Value};

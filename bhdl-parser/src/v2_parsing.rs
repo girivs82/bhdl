@@ -67,12 +67,18 @@ impl<'t> Parser<'t> {
     }
     
     /// Parse v2.0 connection expression: VIN -> reg: LM7805().IN;
+    /// Now also supports: C1.1 -> FB.top where trace_length < 10mm;
     pub(crate) fn parse_v2_connection_expr(&mut self) {
         self.builder.start_node(SyntaxKind::CONNECTION_STMT.into());
         
         // Parse the connection expression directly without wrapping in BINARY_EXPR
         // The expression parser handles binary operators and named handles internally
         self.parse_expr(0);
+        
+        // Check for optional where clause for connection constraints
+        if self.peek() == Some(SyntaxKind::WHERE_KW) {
+            self.parse_connection_constraint();
+        }
         
         // Check for optional intent clause
         if self.has_intent_clause() {
@@ -322,6 +328,68 @@ impl<'t> Parser<'t> {
         }
         
         self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+    
+    /// Parse connection constraint: where trace_length < 10mm, impedance = 50Ω
+    pub(crate) fn parse_connection_constraint(&mut self) {
+        self.builder.start_node(SyntaxKind::CONNECTION_CONSTRAINT.into());
+        self.expect(SyntaxKind::WHERE_KW);
+        
+        self.builder.start_node(SyntaxKind::CONSTRAINT_LIST.into());
+        
+        // Parse first constraint
+        self.parse_constraint_item();
+        
+        // Parse additional constraints separated by commas
+        while self.peek() == Some(SyntaxKind::COMMA) {
+            self.bump();
+            self.parse_constraint_item();
+        }
+        
+        self.builder.finish_node(); // CONSTRAINT_LIST
+        self.builder.finish_node(); // CONNECTION_CONSTRAINT
+    }
+    
+    /// Parse individual constraint: trace_length < 10mm
+    fn parse_constraint_item(&mut self) {
+        self.builder.start_node(SyntaxKind::CONSTRAINT_ITEM.into());
+        
+        // Parse constraint expression (could be comparison, assignment, or simple identifier)
+        self.parse_expr(0);
+        
+        self.builder.finish_node();
+    }
+    
+    /// Parse with block: with routing(impedance = 50Ω) { connections }
+    pub(crate) fn parse_with_block(&mut self) {
+        self.builder.start_node(SyntaxKind::WITH_BLOCK.into());
+        self.expect(SyntaxKind::WITH_KW);
+        
+        // Parse the constraint type (e.g., routing, power)
+        self.expect(SyntaxKind::IDENT);
+        
+        // Parse optional parameters
+        if self.peek() == Some(SyntaxKind::L_PAREN) {
+            self.parse_param_list();
+        }
+        
+        // Parse the block
+        self.expect(SyntaxKind::L_BRACE);
+        
+        // Parse connections or nested with blocks
+        while self.peek() != Some(SyntaxKind::R_BRACE) && self.peek().is_some() {
+            if self.peek() == Some(SyntaxKind::WITH_KW) {
+                self.parse_with_block();
+            } else if self.peek() == Some(SyntaxKind::GENERATE_KW) {
+                self.parse_generate_block();
+            } else {
+                // Regular connection
+                self.parse_connection_or_flow_stmt();
+            }
+        }
+        
+        self.expect(SyntaxKind::R_BRACE);
         self.builder.finish_node();
     }
 }
