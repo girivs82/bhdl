@@ -105,6 +105,8 @@ pub enum SyntaxKind {
     REQUIRE_KW,   // require (for interface requirements)
     OPTIONAL_KW,  // optional (for optional interface signals)
     PERSPECTIVE_KW, // perspective (for interface perspectives)
+    WHERE_KW,     // where (for connection constraints)
+    WITH_KW,      // with (for grouped constraints)
 
     // Keywords for individual items  
     PIN_KW,       // pin
@@ -166,6 +168,10 @@ pub enum SyntaxKind {
     NET_DECL,          // net net_name[range]: type;
     NET_TYPE,          // The type keyword used in net decl (SIGNAL_KW etc)
     CONNECTION_STMT,   // PinRef -> PinRef; OR NetRef -> PinRef; OR PinRef -> NetRef; OR AssignStmt
+    CONNECTION_CONSTRAINT, // where trace_length < 10mm, impedance = 50Ω
+    CONSTRAINT_LIST,   // List of constraints after where
+    CONSTRAINT_ITEM,   // Individual constraint (e.g., trace_length < 10mm)
+    WITH_BLOCK,        // with routing(...) { connections }
     ASSIGN_STMT,       // assign NetRef = Expression;
     NET_REF,           // Reference to a net name
     PIN_REF,           // instance.pin[range] or net_name[range]

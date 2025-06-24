@@ -326,8 +326,34 @@ pub fn visit_node_pass3_const_eval(node: &SyntaxNode<BhdlLanguage>, context: &mu
         }
         SyntaxKind::PARAM_ASSIGN => {
              // Evaluate the override value expression
-             if let Some(expr_node) = ParamAssign::cast(node.clone()).and_then(|pa| pa.value()) {
-                evaluate_const_expr_as_i64(expr_node.syntax(), context); 
+             if let Some(param_assign) = ParamAssign::cast(node.clone()) {
+                if let Some(expr_node) = param_assign.value() {
+                    // Only evaluate as constant if it's not a simple identifier that could be a string value
+                    // For example, LED(red) has "red" as an IDENT_REF but it's a color value, not a constant
+                    match expr_node.syntax().kind() {
+                        SyntaxKind::IDENT_REF => {
+                            // Check if this is likely a string parameter value (e.g., color names)
+                            if let Some(ident_ref) = IdentRef::cast(expr_node.syntax().clone()) {
+                                if let Some(token) = ident_ref.token() {
+                                    let text = token.text();
+                                    // Common string parameter values that shouldn't be evaluated as constants
+                                    if matches!(text.as_ref(), "red" | "green" | "blue" | "yellow" | "white" | "black" | 
+                                               "orange" | "amber" | "IR" | "UV" | "SMD" | "TH" | "DIP" | "SOIC" | 
+                                               "QFN" | "BGA" | "TO220" | "0402" | "0603" | "0805" | "1206") {
+                                        // Skip constant evaluation for these string values
+                                        // Just return without evaluating
+                                    } else {
+                                        // Not a known string value, evaluate as constant
+                                        evaluate_const_expr_as_i64(expr_node.syntax(), context);
+                                    }
+                                }
+                            }
+                        }
+                        _ => {
+                            evaluate_const_expr_as_i64(expr_node.syntax(), context);
+                        }
+                    }
+                }
              }
         }
         SyntaxKind::BUS_SUFFIX => {

@@ -8,6 +8,7 @@ use bhdl_ast::{HasName,
     // items::{Board, Module, ComponentDef, InterfaceDef}, // For scope handling - REMOVED
     common::{NetDecl, PinRef, PortDecl, ComponentInst, TypeRef, SimpleIdentRef, IdentRef, NetRef, ParamAssign}, // Removed PinDecl (v1.0)
     interfaces::InterfaceInst,
+    flow::{FlowExpr, FlowElement},
 };
 
 use crate::symbol_table::{Symbol, SymbolKind, SymbolTable, PortDirectionKind};
@@ -500,24 +501,84 @@ pub fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mu
             if let Some(ident_ref) = IdentRef::cast(node.clone()) {
                 if let Some(token) = ident_ref.token() {
                     let name = token.text();
-                    // Check if this is a valid symbol
-                    match context.lookup(name) {
-                        None => {
-                            // Check if it's a net (power/ground) - those need @ prefix
-                            if let Some(_net_symbol) = context.lookup_net(name) {
-                                context.add_diagnostic(
-                                    format!("Net '{}' must be referenced with @ prefix: @{}", name, name),
-                                    token.text_range(),
-                                );
-                            } else {
-                                context.add_diagnostic(
-                                    format!("Undefined symbol: {}", name),
-                                    token.text_range(),
-                                );
+                    
+                    // Check if this is part of an instance creation pattern (name: ComponentType)
+                    // or if we're in a flow/connection context where identifiers might be created inline
+                    let mut current = node.clone();
+                    let mut in_flow_or_connection = false;
+                    
+                    // Walk up the tree to see if we're in a FLOW_EXPR or CONNECTION_STMT
+                    while let Some(parent) = current.parent() {
+                        match parent.kind() {
+                            SyntaxKind::FLOW_EXPR | SyntaxKind::CONNECTION_STMT => {
+                                in_flow_or_connection = true;
+                                break;
                             }
+                            _ => current = parent,
                         }
-                        Some(_) => {
-                            // Symbol exists in regular namespace
+                    }
+                    
+                    // In flow/connection context, identifiers might be instance names being created
+                    let is_instance_creation = if in_flow_or_connection {
+                        // In flow context, check if this identifier is followed by a colon
+                        node.parent()
+                            .map(|parent| {
+                                let mut found_self = false;
+                                let mut found_colon = false;
+                                for sibling in parent.children_with_tokens() {
+                                    if let Some(sibling_node) = sibling.as_node() {
+                                        if std::ptr::eq(sibling_node, node) {
+                                            found_self = true;
+                                            continue;
+                                        }
+                                    }
+                                    if found_self {
+                                        if let Some(sibling_token) = sibling.as_token() {
+                                            match sibling_token.kind() {
+                                                SyntaxKind::WHITESPACE | SyntaxKind::COMMENT => continue,
+                                                SyntaxKind::COLON => {
+                                                    found_colon = true;
+                                                    break;
+                                                }
+                                                _ => break,
+                                            }
+                                        }
+                                    }
+                                }
+                                found_colon
+                            })
+                            .unwrap_or(false)
+                    } else {
+                        false
+                    };
+                    
+                    if is_instance_creation || in_flow_or_connection {
+                        // This is either:
+                        // 1. An instance name being created (followed by colon)
+                        // 2. A reference to an instance created earlier in the same flow
+                        // 3. An intermediate net name in a flow
+                        // In all cases, skip validation for now
+                        // TODO: In a future pass, validate that instance references match created instances
+                    } else {
+                        // Check if this is a valid symbol
+                        match context.lookup(name) {
+                            None => {
+                                // Check if it's a net (power/ground) - those need @ prefix
+                                if let Some(_net_symbol) = context.lookup_net(name) {
+                                    context.add_diagnostic(
+                                        format!("Net '{}' must be referenced with @ prefix: @{}", name, name),
+                                        token.text_range(),
+                                    );
+                                } else {
+                                    context.add_diagnostic(
+                                        format!("Undefined symbol: {}", name),
+                                        token.text_range(),
+                                    );
+                                }
+                            }
+                            Some(_) => {
+                                // Symbol exists in regular namespace
+                            }
                         }
                     }
                 }
@@ -798,6 +859,54 @@ pub fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mu
             }
             // Allow recursion to validate identifiers in connections
             recurse_children = true; 
+        }
+        SyntaxKind::FLOW_EXPR => {
+            // Handle flow expressions which contain inline component instantiations
+            // Component instantiations in flow syntax (e.g., Res(10k).1) are valid and
+            // should not generate undefined symbol errors
+            
+            if let Some(flow_expr) = FlowExpr::cast(node.clone()) {
+                // Process each element in the flow expression
+                for element in flow_expr.elements() {
+                    match element {
+                        FlowElement::ComponentInstantiation(comp_inst) => {
+                            // Check if the component type exists
+                            if let Some(type_name_token) = comp_inst.component_type() {
+                                let type_name = type_name_token.text();
+                                match context.lookup_global(type_name) {
+                                    None => {
+                                        context.add_diagnostic(
+                                            format!("Undefined component type: {}", type_name),
+                                            type_name_token.text_range(),
+                                        );
+                                    }
+                                    Some(symbol) => {
+                                        if !matches!(symbol.kind, SymbolKind::Component | SymbolKind::Module) {
+                                            context.add_diagnostic(
+                                                format!("Symbol '{}' is not a component or module type (found {:?})", type_name, symbol.kind),
+                                                type_name_token.text_range(),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            // Parameters are handled by recursion
+                        }
+                        FlowElement::Identifier(token) => {
+                            // Check if identifier is a valid net reference
+                            let name = token.text();
+                            // In flow context, identifiers could be intermediate net names
+                            // These don't need to be predefined
+                        }
+                        FlowElement::ConditionalExpr(_) => {
+                            // Handled by recursion
+                        }
+                    }
+                }
+            }
+            
+            // Still recurse to handle nested expressions within parameters
+            recurse_children = true;
         }
         _ => {}
     }
