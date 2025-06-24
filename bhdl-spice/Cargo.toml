@@ -19,15 +19,21 @@ petgraph = "0.6"  # For circuit graph representation
 # BHDL dependencies
 bhdl-netlist = { path = "../bhdl-netlist" }
 bhdl-common = { path = "../bhdl-common" }
+bhdl-stdlib = { path = "../bhdl-stdlib" }
+bhdl-parser = { path = "../bhdl-parser" }
+bhdl-ast = { path = "../bhdl-ast" }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
+# Parallelization
+rayon = "1.7"
+parking_lot = "0.12"
+num_cpus = "1.16"
+
 [dev-dependencies]
 env_logger = "0.10"
 approx = "0.5"  # For floating point comparisons in tests
-bhdl-parser = { path = "../bhdl-parser" }
-bhdl-ast = { path = "../bhdl-ast" }
 bhdl-synthesizer = { path = "../bhdl-synthesizer" }
 tokio = { version = "1.0", features = ["full"] }

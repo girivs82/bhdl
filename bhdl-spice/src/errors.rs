@@ -24,6 +24,12 @@ pub enum SpiceError {
     #[error("Convergence failed after {0} iterations")]
     ConvergenceFailed(usize),
     
+    #[error("Empty circuit - no components to analyze")]
+    EmptyCircuit,
+    
+    #[error("Analysis failed: {0}")]
+    AnalysisFailed(String),
+    
     #[error("Voltage constraint violation: {component} node {node} = {voltage}V exceeds limit {limit}V")]
     VoltageViolation {
         component: String,

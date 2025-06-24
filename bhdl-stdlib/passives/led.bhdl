@@ -213,7 +213,7 @@ module LED(color: string = "red", size: string = "5mm") {
     attribute current_limiting = params.impedance.current_limiting;
     
     // SPICE model parameters (LED as special diode)
-    attribute spice_model = "diode";
+    attribute spice_model = "equation_based";
     attribute spice_type = "led";
     attribute spice_is = params.forward_current / exp(params.forward_voltage / (2.0 * 0.026));  // Shockley equation
     attribute spice_n = 2.0;  // Emission coefficient for LEDs
@@ -224,6 +224,22 @@ module LED(color: string = "red", size: string = "5mm") {
     attribute spice_bv = params.max_reverse_voltage;
     attribute spice_ibv = 10e-6;  // Breakdown current
     attribute spice_tnom = 27;  // Nominal temperature
+    
+    // Physical constants and model parameters for equations
+    attribute spice_vt = 0.026;  // Thermal voltage at room temperature (V)
+    attribute spice_vf = params.forward_voltage;
+    attribute spice_if = params.forward_current;
+    
+    // SPICE equations for simulation (using expressions!)
+    // Current equation: Shockley diode equation with ideality factor
+    attribute spice_equation_i = v_diff > 0.1 ? 
+        spice_is * (exp(min(v_diff / (spice_n * spice_vt), 35.0)) - 1.0) :
+        v_diff > -0.1 ? 1e-9 * v_diff : -spice_is;
+    
+    // Derivative: dI/dV = Is/(n*Vt) * exp(V/(n*Vt))
+    attribute spice_equation_di_dv = v_diff > 0.1 ?
+        min(max(spice_is / (spice_n * spice_vt) * exp(min(v_diff / (spice_n * spice_vt), 35.0)), 1e-12), 1000.0) :
+        v_diff > -0.1 ? 1e-9 : 1e-12;
     
     // KiCad symbol mapping
     attribute kicad_symbol = "Device:LED";

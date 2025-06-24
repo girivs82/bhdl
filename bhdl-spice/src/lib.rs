@@ -9,6 +9,9 @@ pub mod components;
 pub mod analysis;
 pub mod extended_analysis;
 pub mod nonlinear_analysis;
+pub mod adaptive_solver;
+pub mod runtime_models;
+pub mod equation_engine;
 pub mod inference;
 pub mod constraint_inference;
 pub mod validation;
@@ -23,6 +26,7 @@ pub mod pin_metadata_integration;
 pub mod stability;
 pub mod component_registry;
 pub mod analysis_augmenter;
+pub mod perturbation;
 
 #[cfg(test)]
 mod test_unified;
@@ -35,6 +39,7 @@ pub use extended_analysis::{
     SimulationEngine, AcAnalysisResult, TransientAnalysisResult, NoiseAnalysisResult,
 };
 pub use nonlinear_analysis::NonlinearDcAnalysis;
+pub use adaptive_solver::{AdaptiveCircuitSolver, AdaptivePIDController, CircuitType};
 pub use inference::{ComponentInference as LegacyComponentInference, ConstraintViolation};
 pub use constraint_inference::{ComponentInference, InferredComponent, ConstraintSolver};
 pub use validation::{ValidationEngine, ValidationResult, ValidationReport};
@@ -54,7 +59,7 @@ pub mod prelude {
     pub use crate::{
         Circuit, Node, Branch,
         Component, ComponentModel, ElectricalLimits,
-        DcAnalysis, NonlinearDcAnalysis, AnalysisResult,
+        DcAnalysis, NonlinearDcAnalysis, AdaptiveCircuitSolver, AnalysisResult,
         ComponentRoleDetector, ComponentRole,
         ComponentInference, ConstraintViolation,
         SpiceError, Result,

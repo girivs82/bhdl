@@ -115,6 +115,7 @@ impl<'t> Parser<'t> {
                 Some(SyntaxKind::GENERATE_KW) => self.parse_generate_block(),
                 Some(SyntaxKind::ATTRIBUTE_KW) => self.parse_attribute_decl(),
                 Some(SyntaxKind::WHEN_KW) => self.parse_when_block(),
+                Some(SyntaxKind::WITH_KW) => self.parse_with_block(),
                 Some(SyntaxKind::IDENT) => {
                     // Check if this is a module/component instantiation or connection
                     use crate::v2_fixes::NamedDeclarationType;
@@ -163,6 +164,7 @@ impl<'t> Parser<'t> {
                 Some(SyntaxKind::AT) => self.parse_module_metadata(),
                 Some(SyntaxKind::ATTRIBUTE_KW) => self.parse_attribute_decl(),
                 Some(SyntaxKind::GENERATE_KW) => self.parse_generate_block(),
+                Some(SyntaxKind::WITH_KW) => self.parse_with_block(),
                 Some(SyntaxKind::IDENT) => {
                     // Check if this is a module instantiation or connection
                     // Module instantiation: instance_name: ModuleType(params) { ... }

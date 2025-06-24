@@ -1,0 +1,13 @@
+Wave Solver Generality Analysis
+==============================
+
+Current Approach Limitations:
+- Works only for series circuits
+- Cannot handle parallel branches properly
+- Cannot handle mesh/bridge topologies
+
+Required for General Solution:
+- True 2-port S-parameter approach
+- Wave splitting/combining at junctions
+- Integration with nodal analysis
+- Impedance-based reflection coefficients

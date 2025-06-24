@@ -1,0 +1,4 @@
+branch,impedance_ohm,current_mA,reflection_coeff
+R,100.0,5.75,0.970
+L,62.8,9.15,0.953
+C,1.6,361.30,0.020
