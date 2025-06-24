@@ -8,7 +8,8 @@ use std::path::Path;
 use std::fs;
 use anyhow::{Result, Context};
 use bhdl_parser::parse;
-use bhdl_ast::{SourceFile, AstNode, Module, PinDecl, HasName};
+use bhdl_ast::{SourceFile, AstNode, Module, PinDecl, HasName, AttributeDecl};
+use bhdl_ast::expr::Expr;
 use bhdl_netlist::types::{PinDirection, PinType};
 
 pub mod intents;
@@ -101,7 +102,19 @@ impl StdlibReader {
     fn extract_component_definition(&self, module: &Module) -> Option<StdlibComponentDefinition> {
         let module_name = module.name()?.text().to_string();
         let mut pins = Vec::new();
-        let attributes = HashMap::new();
+        let mut attributes = HashMap::new();
+        
+        // Extract attributes from the module
+        for attr in module.attributes() {
+            if let Some(name) = attr.name() {
+                let attr_name = name.text().to_string();
+                if let Some(value) = attr.value() {
+                    // Convert the expression to a string representation
+                    let attr_value = self.expr_to_string(&value);
+                    attributes.insert(attr_name, attr_value);
+                }
+            }
+        }
         
         // Now we can properly use the AST to get pins
         for pin in module.pins() {
@@ -153,6 +166,12 @@ impl StdlibReader {
             // Default for passive components
             Some((PinDirection::Passive, PinType::Passive))
         }
+    }
+    
+    /// Convert an expression AST node to a string representation
+    fn expr_to_string(&self, expr: &Expr) -> String {
+        // For now, just use the syntax text - this preserves the original source
+        expr.syntax().text().to_string()
     }
 
     /// Get component definition by name

@@ -171,6 +171,11 @@ module Res(
     attribute spice_noise_coeff = 1.0;  // Standard thermal noise
     attribute spice_tnom = 27;  // Nominal temperature °C
     
+    // SPICE equations for simulation (expressions, not strings!)
+    attribute spice_equation_i = v_diff / spice_resistance;
+    attribute spice_equation_di_dv = 1 / spice_resistance;
+    attribute spice_equation_power = v_diff * v_diff / spice_resistance;
+    
     // KiCad symbol and package mapping
     attribute kicad_symbol = "Device:R";
     attribute packages = "0402,0603,0805,1206,THT";

@@ -10,6 +10,7 @@ use bhdl_stdlib::{StdlibReader, StdlibComponentDefinition};
 use bhdl_common::{ExpressionEvaluator, Value};
 
 use crate::{ComponentModel, SpiceError};
+use crate::equation_engine::EquationEngine;
 
 /// Context for model execution - provides access to circuit state and stamping
 pub struct ModelExecutionContext<'a> {
@@ -65,6 +66,8 @@ pub struct RuntimeModelEngine {
     expression_evaluator: ExpressionEvaluator,
     /// Cache of loaded module contents
     module_content_cache: HashMap<String, String>,
+    /// Equation engine for evaluating stdlib-defined equations
+    equation_engine: EquationEngine,
 }
 
 impl RuntimeModelEngine {
@@ -82,6 +85,7 @@ impl RuntimeModelEngine {
             attribute_cache: HashMap::new(),
             expression_evaluator: ExpressionEvaluator::new(),
             module_content_cache: HashMap::new(),
+            equation_engine: EquationEngine::new(),
         })
     }
     
@@ -107,6 +111,11 @@ impl RuntimeModelEngine {
         component_def: &StdlibComponentDefinition,
         ctx: &mut ModelExecutionContext,
     ) -> Result<()> {
+        // First check if component has equation-based model
+        if component_def.attributes.contains_key("spice_equation_i") {
+            return self.execute_equation_based_model(component_def, ctx);
+        }
+        
         // Load the module if not already loaded
         // Check for 'params' which is what the attributes reference
         if !self.expression_evaluator.has_symbol("params") {
@@ -538,6 +547,94 @@ impl RuntimeModelEngine {
     /// Get component definition from stdlib by name
     pub fn get_stdlib_component(&self, name: &str) -> Option<&StdlibComponentDefinition> {
         self.stdlib_reader.get_component(name)
+    }
+    
+    /// Execute equation-based model from stdlib attributes
+    fn execute_equation_based_model(
+        &mut self,
+        component_def: &StdlibComponentDefinition,
+        ctx: &mut ModelExecutionContext,
+    ) -> Result<()> {
+        // Note: In the current implementation, attributes are stored as strings
+        // even if they were parsed from expressions. The stdlib reader extracts
+        // the text representation of the expression.
+        // TODO: In future, we could store the parsed AST directly in attributes
+        
+        // Parse equations from attributes
+        if let Some(i_eq) = component_def.attributes.get("spice_equation_i") {
+            // The attribute value contains the expression text
+            self.equation_engine.parse_equation("i", i_eq.trim())?;
+        } else {
+            return Err(anyhow::anyhow!("Component {} has no spice_equation_i", component_def.module_name));
+        }
+        
+        if let Some(di_dv_eq) = component_def.attributes.get("spice_equation_di_dv") {
+            self.equation_engine.parse_equation("di_dv", di_dv_eq.trim())?;
+        } else {
+            return Err(anyhow::anyhow!("Component {} has no spice_equation_di_dv", component_def.module_name));
+        }
+        
+        // Build variable bindings
+        let mut vars = HashMap::new();
+        vars.insert("v_diff".to_string(), ctx.v_diff);
+        vars.insert("v1".to_string(), ctx.get_v1());
+        vars.insert("v2".to_string(), ctx.get_v2());
+        
+        // Add all component attributes as variables
+        for (key, value) in &component_def.attributes {
+            // Try to parse as numeric value
+            if let Ok(num_val) = self.parse_numeric_value(value) {
+                vars.insert(key.clone(), num_val);
+            }
+        }
+        
+        // Evaluate equations
+        let current = self.equation_engine.evaluate("i", &vars)?;
+        let conductance = self.equation_engine.evaluate("di_dv", &vars)?;
+        
+        // Stamp into circuit matrix
+        ctx.stamp_linear_element(conductance, current);
+        
+        Ok(())
+    }
+    
+    /// Parse numeric value from attribute string (handles units)
+    fn parse_numeric_value(&self, value_str: &str) -> Result<f64> {
+        let trimmed = value_str.trim().trim_matches('"');
+        
+        // Try direct parse first
+        if let Ok(val) = trimmed.parse::<f64>() {
+            return Ok(val);
+        }
+        
+        // Try to parse with units
+        // Find where the unit starts
+        let mut numeric_end = trimmed.len();
+        for (i, ch) in trimmed.char_indices() {
+            if ch.is_alphabetic() || ch == '°' || ch == 'Ω' || ch == 'µ' {
+                numeric_end = i;
+                break;
+            }
+        }
+        
+        let numeric_part = &trimmed[..numeric_end];
+        let unit_part = &trimmed[numeric_end..];
+        
+        let base_value = numeric_part.parse::<f64>()?;
+        
+        // Apply unit multiplier
+        let multiplier = match unit_part {
+            "p" | "pF" | "pH" | "pA" | "pV" | "pW" => 1e-12,
+            "n" | "nF" | "nH" | "nA" | "nV" | "nW" | "ns" => 1e-9,
+            "u" | "µ" | "uF" | "µF" | "uH" | "µH" | "uA" | "µA" | "uV" | "µV" | "us" | "µs" => 1e-6,
+            "m" | "mF" | "mH" | "mA" | "mV" | "mW" | "ms" | "mΩ" => 1e-3,
+            "k" | "kΩ" | "kHz" | "kV" | "kA" | "kW" => 1e3,
+            "M" | "MΩ" | "MHz" | "MV" | "MA" | "MW" => 1e6,
+            "G" | "GΩ" | "GHz" | "GV" | "GA" | "GW" => 1e9,
+            _ => 1.0,
+        };
+        
+        Ok(base_value * multiplier)
     }
     
     /// Parse resistance value from component attributes

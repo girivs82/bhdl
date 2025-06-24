@@ -1,0 +1,5 @@
+method,complexity,accuracy,use_case
+Euler,Low,High,Basic RLC circuits
+Trapezoidal,Low,Very High,General circuits
+Wave Digital,High,High,Transmission lines/filters
+SPICE (Newton),Medium,Very High,Nonlinear circuits
