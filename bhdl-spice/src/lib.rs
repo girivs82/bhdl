@@ -6,12 +6,18 @@
 
 pub mod circuit;
 pub mod components;
+pub mod components_v2;
 pub mod analysis;
 pub mod extended_analysis;
 pub mod nonlinear_analysis;
 pub mod adaptive_solver;
 pub mod runtime_models;
 pub mod equation_engine;
+pub mod glacier_solver;
+pub mod log_transform_solver;
+pub mod scaled_solver;
+pub mod multi_region_solver;
+pub mod manifold_solver;
 pub mod inference;
 pub mod constraint_inference;
 pub mod validation;
@@ -27,6 +33,29 @@ pub mod stability;
 pub mod component_registry;
 pub mod analysis_augmenter;
 pub mod perturbation;
+pub mod fault_injection;
+pub mod intelligent_engine;
+pub mod accurate_models;
+pub mod enhanced_glacier_solver;
+pub mod glacier_transient;
+pub mod unified_glacier_solver;
+pub mod generic_glacier_solver;
+pub mod spice_equation_system;
+pub mod glacier_dc_solver;
+pub mod transient_models;
+pub mod maestro_orchestrator;
+pub mod topology;
+pub mod strategies;
+pub mod integrated_glacier_solver;
+pub mod stdlib_model_loader;
+
+// Production GLACIER+MAESTRO implementation
+pub mod glacier_production;
+pub mod maestro_production;
+
+// GPU acceleration (optional feature)
+#[cfg(feature = "gpu")]
+pub mod glacier_gpu;
 
 #[cfg(test)]
 mod test_unified;
@@ -40,6 +69,8 @@ pub use extended_analysis::{
 };
 pub use nonlinear_analysis::NonlinearDcAnalysis;
 pub use adaptive_solver::{AdaptiveCircuitSolver, AdaptivePIDController, CircuitType};
+pub use glacier_solver::{GlacierSolver, TransientResult};
+pub use multi_region_solver::{MultiRegionSolver, RegionSolution};
 pub use inference::{ComponentInference as LegacyComponentInference, ConstraintViolation};
 pub use constraint_inference::{ComponentInference, InferredComponent, ConstraintSolver};
 pub use validation::{ValidationEngine, ValidationResult, ValidationReport};
@@ -53,6 +84,26 @@ pub use model_factory::SpiceModelFactory;
 pub use model_extractor::{ComponentModelExtractor, ExtractedModel, ModelSource};
 pub use netlist_converter::NetlistToSpiceConverter;
 pub use analysis_augmenter::SpiceAnalysisAugmenter;
+pub use fault_injection::{FaultInjector, FaultSpec, FaultType, detect_overcurrent};
+pub use glacier_dc_solver::{GlacierDcSolver, DcAnalysisResult, DcAnalysisBuilder};
+pub use integrated_glacier_solver::{IntegratedGlacierSolver, SolverMode, IntegratedSolverConfig};
+pub use maestro_orchestrator::{MaestroOrchestrator, solve_with_maestro};
+
+// Production GLACIER+MAESTRO
+pub use glacier_production::{
+    GlacierSolver as ProductionGlacierSolver,
+    Solution as GlacierSolution,
+    Variable as GlacierVariable,
+    VariableType,
+    Region,
+    IbisTable,
+};
+pub use maestro_production::{
+    MaestroOrchestrator as ProductionMaestroOrchestrator,
+    CircuitPattern,
+    SolvingStrategy,
+    solve_with_glacier_maestro,
+};
 
 /// Prelude module for convenient imports
 pub mod prelude {
