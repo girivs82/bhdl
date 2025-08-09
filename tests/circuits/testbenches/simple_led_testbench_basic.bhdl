@@ -1,0 +1,38 @@
+// Simple LED circuit with basic testbench
+
+board SimpleLEDBoard {
+    power VCC = 5V @ 100mA;
+    ground GND;
+    
+    // Simple LED circuit  
+    @VCC -> R1: Res(330).1 -> R1.2 -> LED1: LED(red).A;
+    LED1.K -> @GND;
+}
+
+// Basic testbench for the LED circuit
+testbench TB_SimpleLED for SimpleLEDBoard {
+    simulation {
+        duration: 100us;
+        timestep: 10us;
+        solver: spice;
+        temperature: 25;
+    }
+    
+    scope "main" {
+        signals: @VCC, @GND, R1.current;
+        capture: continuous;
+    }
+    
+    stimulus {
+        @VCC: ramp(from: 0V, to: 5V, duration: 1ms);
+    }
+    
+    verify {
+        assert R1.current < 20mA always
+            message "Current too high";
+    }
+    
+    measure {
+        avg_current = R1.current;
+    }
+}

@@ -1,0 +1,14 @@
+// Series LED circuit that should have multiple DC operating points
+board SeriesLEDs {
+    power VDD = 9V @ 500mA;
+    ground GND;
+    
+    // Series LEDs with current limiting resistor
+    VDD -> R1 -> led1_anode;
+    net led1_anode: LED1.A -> LED1.K -> led2_anode;
+    net led2_anode: LED2.A -> LED2.K -> GND;
+    
+    R1: Res(150Ω);
+    LED1: LED(red);
+    LED2: LED(green);
+}

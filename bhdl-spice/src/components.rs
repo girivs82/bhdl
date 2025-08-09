@@ -86,6 +86,10 @@ pub enum ComponentModel {
         forward_voltage: f64,     // Typical Vf
         forward_current: f64,     // Nominal If
         dynamic_resistance: f64,  // Small signal resistance
+        // SPICE model parameters for accurate exponential modeling
+        saturation_current: Option<f64>,    // Is - reverse saturation current (A)
+        emission_coefficient: Option<f64>,  // n - ideality factor (dimensionless)
+        thermal_voltage: Option<f64>,       // Vt - thermal voltage (V)
         limits: ElectricalLimits,
     },
     
@@ -215,10 +219,27 @@ impl Component {
             name,
             component_type: ComponentType::LED,
             model: ComponentModel::LED {
-                color,
+                color: color.clone(),
                 forward_voltage: vf,
                 forward_current: if_nom,
                 dynamic_resistance: 10.0,  // Typical value
+                // Use realistic SPICE parameters based on color (calculated from datasheet)
+                saturation_current: Some(match color.as_str() {
+                    "red" | "yellow" => 3.96e-19,    // Calculated from Vf=2V @ 20mA
+                    "green" => 2.5e-19,              // Slightly lower for higher Vf  
+                    "blue" | "white" => 1.5e-19,     // Lower Is for higher Vf
+                    "ir" => 5e-19,                   // Higher Is for lower Vf
+                    _ => 3.96e-19,                   // Default realistic value
+                }),
+                emission_coefficient: Some(match color.as_str() {
+                    "red" => 2.0,
+                    "yellow" => 1.9,
+                    "green" => 1.8,
+                    "blue" | "white" => 1.6,
+                    "ir" => 1.5,
+                    _ => 2.0,  // Default
+                }),
+                thermal_voltage: Some(0.026),  // 26mV at room temperature
                 limits: ElectricalLimits {
                     max_current: Some(0.030),  // 30mA typical absolute max
                     max_power: Some(0.1),      // 100mW typical

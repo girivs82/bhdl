@@ -70,6 +70,7 @@ enum TokenKind {
     Gt, Lt, Gte, Lte, Eq, Neq,
     AndAnd, OrOr, Not,
     If, Else, Let, Semicolon,
+    Question, Colon, Comma,
     Eof,
 }
 
@@ -251,6 +252,18 @@ impl Tokenizer {
                     bail!("Single '|' not allowed, use '||' for logical OR")
                 }
             }
+            Some('?') => {
+                self.advance();
+                Ok(Token { kind: TokenKind::Question, text: "?".to_string() })
+            }
+            Some(':') => {
+                self.advance();
+                Ok(Token { kind: TokenKind::Colon, text: ":".to_string() })
+            }
+            Some(',') => {
+                self.advance();
+                Ok(Token { kind: TokenKind::Comma, text: ",".to_string() })
+            }
             Some(ch) => bail!("Unexpected character: {}", ch),
             None => Ok(Token { kind: TokenKind::Eof, text: String::new() }),
         }
@@ -300,7 +313,7 @@ impl Parser {
         self.parse_conditional()
     }
     
-    /// Parse conditional expression: if cond { then } else { else }
+    /// Parse conditional expression: if cond { then } else { else } or cond ? then : else
     fn parse_conditional(&mut self) -> Result<EquationAst> {
         if self.peek().kind == TokenKind::If {
             self.advance(); // consume 'if'
@@ -325,8 +338,27 @@ impl Parser {
             let body = Box::new(self.parse_expr()?);
             Ok(EquationAst::Let { name, value, body })
         } else {
-            self.parse_or()
+            self.parse_ternary()
         }
+    }
+    
+    /// Parse ternary operator: cond ? then : else
+    fn parse_ternary(&mut self) -> Result<EquationAst> {
+        let mut expr = self.parse_or()?;
+        
+        if self.peek().kind == TokenKind::Question {
+            self.advance(); // consume '?'
+            let then_expr = Box::new(self.parse_ternary()?);
+            self.expect(TokenKind::Colon)?;
+            let else_expr = Box::new(self.parse_ternary()?);
+            expr = EquationAst::Conditional {
+                condition: Box::new(expr),
+                then_expr,
+                else_expr,
+            };
+        }
+        
+        Ok(expr)
     }
     
     /// Parse logical OR
@@ -474,16 +506,24 @@ impl Parser {
                     // Function call
                     self.advance(); // consume '('
                     let mut args = Vec::new();
-                    while self.peek().kind != TokenKind::RParen && self.peek().kind != TokenKind::Eof {
+                    
+                    // Handle empty argument list
+                    if self.peek().kind == TokenKind::RParen {
+                        self.advance();
+                        return Ok(EquationAst::FunctionCall { name, args });
+                    }
+                    
+                    // Parse arguments
+                    loop {
                         args.push(self.parse_expr()?);
-                        if self.peek().kind == TokenKind::RParen {
+                        
+                        if self.peek().kind == TokenKind::Comma {
+                            self.advance(); // consume ','
+                        } else {
                             break;
                         }
-                        // Expect comma between args (simplified - just skip any non-rparen)
-                        if self.peek().kind != TokenKind::RParen {
-                            self.advance();
-                        }
                     }
+                    
                     self.expect(TokenKind::RParen)?;
                     Ok(EquationAst::FunctionCall { name, args })
                 } else {

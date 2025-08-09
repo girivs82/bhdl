@@ -134,6 +134,11 @@ impl AdaptiveCircuitSolver {
         self.models.insert(name, model);
     }
     
+    /// Get mutable reference to component model
+    pub fn get_model_mut(&mut self, name: &str) -> Option<&mut ComponentModel> {
+        self.models.get_mut(name)
+    }
+    
     /// Set convergence parameters
     pub fn set_convergence(&mut self, max_iterations: usize, tolerance: f64) {
         self.max_iterations = max_iterations;
@@ -161,9 +166,9 @@ impl AdaptiveCircuitSolver {
         }
     }
     
-    /// Perform adaptive DC analysis
+    /// Perform adaptive DC analysis with source ramping
     pub fn analyze(&mut self) -> Result<AnalysisResult> {
-        info!("Starting adaptive logarithmic gradient DC analysis");
+        info!("Starting adaptive logarithmic gradient DC analysis with source ramping");
         
         // Detect circuit type for optimal configuration
         let circuit_type = self.detect_circuit_type();
@@ -182,14 +187,19 @@ impl AdaptiveCircuitSolver {
         
         let num_nodes = node_list.len();
         
-        // Find voltage sources
-        let voltage_sources: Vec<EdgeIndex> = self.circuit.branches()
-            .filter(|(_, branch)| {
+        // Find voltage sources and store their original values
+        let voltage_sources: Vec<(EdgeIndex, f64)> = self.circuit.branches()
+            .filter_map(|(idx, branch)| {
                 self.models.get(&branch.name)
-                    .map(|m| matches!(m, ComponentModel::VoltageSource { .. }))
-                    .unwrap_or(false)
+                    .and_then(|m| match m {
+                        ComponentModel::VoltageSource { voltage, .. } => Some((idx, *voltage)),
+                        _ => None
+                    })
             })
-            .map(|(idx, _)| idx)
+            .collect();
+        
+        let voltage_source_indices: Vec<EdgeIndex> = voltage_sources.iter()
+            .map(|(idx, _)| *idx)
             .collect();
         
         let num_vsources = voltage_sources.len();
@@ -199,11 +209,8 @@ impl AdaptiveCircuitSolver {
             return Err(SpiceError::EmptyCircuit);
         }
         
-        // Initial guess - small perturbation to help convergence
+        // Initial guess - zeros for ramping
         let mut x = DVector::zeros(matrix_size);
-        for i in 0..num_nodes {
-            x[i] = 0.01; // Small initial voltage to avoid singularities
-        }
         
         // Reset PID controllers
         self.phase1_pid.reset();
@@ -211,101 +218,139 @@ impl AdaptiveCircuitSolver {
         self.current_phase = 1;
         self.convergence_history.clear();
         
-        // Two-Phase Adaptive Convergence Loop
-        let mut iteration = 0;
-        let mut converged = false;
-        let mut max_change = f64::INFINITY;
+        // SOURCE RAMPING IMPLEMENTATION
+        let mut ramp_factor = 0.0;
+        let mut ramp_rate = 0.1; // Start with moderate rate
+        let mut total_iterations = 0;
         
-        while iteration < self.max_iterations && !converged {
-            let old_x = x.clone();
-            
-            // Build Jacobian matrix and residual vector
-            let (jacobian, residual) = self.build_system_matrices(
-                &x, &node_list, ground_idx, &voltage_sources
-            )?;
-            
-            // Calculate convergence error
-            max_change = residual.norm();
-            self.convergence_history.push(max_change);
-            
-            // Debug output for first few iterations
-            if iteration < 5 {
-                println!("Iteration {}: residual_norm = {:.6e}", iteration, max_change);
-                if matrix_size <= 4 {  // Only for small matrices
-                    println!("  Jacobian:\n{}", jacobian);
-                    println!("  Residual: {}", residual.transpose());
-                    println!("  Solution x: {}", x.transpose());
+        // Track gradient for adaptation
+        let mut last_current: f64 = 1e-15;
+        let mut last_voltage: f64 = 0.0;
+        let mut log_gradient: f64 = 20.0; // Default gradient
+        
+        println!("Starting source ramping from 0% to 100%...");
+        
+        while ramp_factor < 1.0 {
+            // Update voltage sources to ramped values
+            for (idx, original_voltage) in &voltage_sources {
+                if let Some(branch) = self.circuit.branches().find(|(i, _)| i == idx) {
+                    if let Some(model) = self.models.get_mut(&branch.1.name) {
+                        if let ComponentModel::VoltageSource { voltage, .. } = model {
+                            *voltage = original_voltage * ramp_factor;
+                        }
+                    }
                 }
             }
             
-            // Calculate logarithmic gradient for adaptive control
-            let log_gradient = self.calculate_logarithmic_gradient(&x, &node_list);
+            // Solve at current ramp factor
+            let (converged, iterations, error) = self.solve_at_ramp(
+                &mut x, &node_list, ground_idx, &voltage_source_indices, &mut total_iterations
+            )?;
             
-            // Calculate ramp factor for phase switching
-            let ramp_factor = if max_change > 0.0 && self.convergence_history.len() > 5 {
-                let initial_error = self.convergence_history[0];
-                1.0 - (max_change / initial_error)
-            } else {
-                0.0
-            };
-            
-            // Phase switching logic
-            if self.current_phase == 1 && ramp_factor > self.phase_switch_threshold && max_change < 1e-10 {
-                info!("Switching to Phase 2 (precision) at iteration {}", iteration);
-                self.current_phase = 2;
-                self.phase2_pid.reset();
+            if converged {
+                // Calculate log gradient from circuit (works for linear and nonlinear)
+                log_gradient = self.calculate_logarithmic_gradient(&x, &node_list);
+                
+                // Phase switching logic
+                if self.current_phase == 1 && ramp_factor > 0.9 && error < 1e-10 {
+                    println!("  → Switching to precision phase at ramp={:.3}", ramp_factor);
+                    self.current_phase = 2;
+                    self.phase2_pid = AdaptivePIDController::new(1.0, 0.2, 0.02);
+                    ramp_rate = 0.02; // Slow down for precision
+                }
+                
+                // Adapt PID gains based on log gradient
+                let current_pid = if self.current_phase == 1 {
+                    &mut self.phase1_pid
+                } else {
+                    &mut self.phase2_pid
+                };
+                current_pid.compute(error, log_gradient);
+                
+                // Use PID to control ramp rate
+                let target_error = if self.current_phase == 1 { 1e-11 } else { 1e-15 };
+                let error_ratio = (error / target_error).ln().max(-10.0).min(10.0);
+                let control_signal = current_pid.compute(error_ratio, log_gradient);
+                
+                // Convert PID output to rate multiplier
+                let rate_multiplier = (-control_signal * 0.1).exp();
+                ramp_rate *= rate_multiplier;
+                
+                // Bounds on ramp rate
+                let (min_rate, max_rate) = if self.current_phase == 1 {
+                    (1e-4, 0.2)
+                } else {
+                    let min = if log_gradient < 5.0 { 1e-5 } else { 1e-6 };
+                    let max = if log_gradient > 50.0 { 0.05 } else { 0.1 };
+                    (min, max)
+                };
+                ramp_rate = ramp_rate.max(min_rate).min(max_rate);
+                
+                // Exit conditions
+                if error < 1e-16 && ramp_factor > 0.999 {
+                    println!("  → Ultra-precision achieved! error={:.2e}", error);
+                    ramp_factor = 1.0;
+                    break;
+                }
+            } else if !converged {
+                // Failed to converge, reduce rate
+                ramp_rate *= 0.5;
+                println!("  → Convergence failed at ramp={:.3}, reducing rate to {:.6}", ramp_factor, ramp_rate);
             }
             
-            // Check convergence
-            if max_change < self.tolerance {
-                converged = true;
+            // Update ramp factor
+            let old_ramp = ramp_factor;
+            ramp_factor += ramp_rate;
+            ramp_factor = ramp_factor.min(1.0);
+            
+            // Force minimum progress to prevent infinite loops
+            if (ramp_factor - old_ramp) < 1e-6 && ramp_factor < 0.99 {
+                println!("  → Forcing minimum progress: rate too small");
+                ramp_factor = old_ramp + 0.001; // Force minimum step
+            }
+            
+            // Progress output
+            if (ramp_factor * 100.0) as i32 % 10 == 0 || ramp_factor > 0.99 {
+                println!("  Ramp {:.1}%: error={:.2e}, rate={:.4}", 
+                         ramp_factor * 100.0, error, ramp_rate);
+            }
+        }
+        
+        // Final solve at 100%
+        for (idx, original_voltage) in &voltage_sources {
+            if let Some(branch) = self.circuit.branches().find(|(i, _)| i == idx) {
+                if let Some(model) = self.models.get_mut(&branch.1.name) {
+                    if let ComponentModel::VoltageSource { voltage, .. } = model {
+                        *voltage = *original_voltage;
+                    }
+                }
+            }
+        }
+        
+        let (converged, iterations, final_error) = self.solve_at_ramp(
+            &mut x, &node_list, ground_idx, &voltage_source_indices, &mut total_iterations
+        )?;
+        
+        // Final convergence push for precision
+        println!("  → Final convergence push...");
+        let mut best_error = final_error;
+        for pass in 0..20 {
+            let (converged, iters, error) = self.solve_at_ramp(
+                &mut x, &node_list, ground_idx, &voltage_source_indices, &mut total_iterations
+            )?;
+            if error < best_error {
+                best_error = error;
+            }
+            if error < 1e-16 || (pass > 10 && error < 1e-15) {
                 break;
             }
-            
-            // Solve system: J * dx = -residual
-            let dx = jacobian.lu().solve(&(-&residual))
-                .ok_or_else(|| SpiceError::SingularMatrix)?;
-            
-            // Adaptive PID control for step size
-            let current_pid = if self.current_phase == 1 {
-                &mut self.phase1_pid
-            } else {
-                &mut self.phase2_pid
-            };
-            
-            let control_signal = current_pid.compute(max_change, log_gradient);
-            
-            // Improved step size calculation
-            let step_size = if max_change > 1.0 {
-                // Large errors: use controlled step
-                0.1 + 0.9 * (1.0 / (1.0 + control_signal.abs()))
-            } else {
-                // Small errors: near full Newton step
-                0.8 + 0.2 * (1.0 / (1.0 + control_signal.abs()))
-            };
-            
-            // Apply controlled update
-            x = &old_x + &(step_size * dx);
-            
-            // Apply voltage limiting to prevent numerical issues
-            for i in 0..num_nodes {
-                x[i] = x[i].clamp(-100.0, 100.0);
-            }
-            
-            // Debug output
-            if iteration % 50 == 0 || iteration < 10 {
-                debug!("Iteration {}: Phase {}, Error = {:.3e}, LogGrad = {:.2}, StepSize = {:.3}", 
-                       iteration, self.current_phase, max_change, log_gradient, step_size);
-            }
-            
-            iteration += 1;
         }
         
         if !converged {
-            return Err(SpiceError::ConvergenceFailed(iteration));
+            return Err(SpiceError::ConvergenceFailed(total_iterations));
         }
         
-        info!("Converged in {} iterations (Phase 1→2 transition)", iteration);
+        info!("Converged with source ramping in {} total iterations", total_iterations);
         
         // Extract results
         let mut node_voltages = NodeVoltages::new();
@@ -321,7 +366,7 @@ impl AdaptiveCircuitSolver {
             .map(|i| x[i])
             .collect();
         let branch_currents = self.calculate_branch_currents(
-            &node_voltages, &voltage_sources, &vsource_currents
+            &node_voltages, &voltage_source_indices, &vsource_currents
         )?;
         
         // Calculate total power
@@ -331,8 +376,59 @@ impl AdaptiveCircuitSolver {
             node_voltages,
             branch_currents,
             total_power,
-            iterations: iteration,
+            iterations: total_iterations,
         })
+    }
+    
+    /// Solve at a specific ramp factor
+    fn solve_at_ramp(
+        &mut self,
+        x: &mut DVector<f64>,
+        node_list: &[NodeIndex],
+        ground_idx: NodeIndex,
+        voltage_sources: &[EdgeIndex],
+        total_iterations: &mut usize,
+    ) -> Result<(bool, usize, f64)> {
+        let mut iteration = 0;
+        let mut converged = false;
+        let mut max_change = f64::INFINITY;
+        let max_inner_iterations = 50;
+        
+        while iteration < max_inner_iterations && !converged {
+            let old_x = x.clone();
+            
+            // Build Jacobian matrix and residual vector
+            let (jacobian, residual) = self.build_system_matrices(
+                x, node_list, ground_idx, voltage_sources
+            )?;
+            
+            // Calculate convergence error
+            max_change = residual.norm();
+            
+            // Check convergence
+            if max_change < self.tolerance {
+                converged = true;
+                break;
+            }
+            
+            // Solve system: J * dx = -residual
+            let dx = jacobian.lu().solve(&(-&residual))
+                .ok_or_else(|| SpiceError::SingularMatrix)?;
+            
+            // Apply damping
+            let damping = if iteration < 5 { 0.6 } else { 0.8 };
+            *x = &old_x + &(damping * dx);
+            
+            // Apply voltage limiting
+            for i in 0..node_list.len() {
+                x[i] = x[i].clamp(-100.0, 100.0);
+            }
+            
+            iteration += 1;
+            *total_iterations += 1;
+        }
+        
+        Ok((converged, iteration, max_change))
     }
     
     /// Detect circuit type for optimal solver configuration
@@ -509,12 +605,22 @@ impl AdaptiveCircuitSolver {
             v_diff,
         };
         
-        // Execute model through runtime engine
-        self.model_engine.execute_component_model(component_name, &mut ctx)
-            .map_err(|e| SpiceError::AnalysisFailed(format!("Model execution failed: {}", e)))
+        // Always use the runtime model engine for consistency
+        // Pass the component model if we have one for parameter extraction
+        if let Some(model) = self.models.get(component_name) {
+            // Store the model parameters in the context for the runtime engine to use
+            // For now, we'll just execute through the runtime engine
+            self.model_engine.execute_component_model_with_params(component_name, model, &mut ctx)
+                .map_err(|e| SpiceError::AnalysisFailed(format!("Model execution failed: {}", e)))
+        } else {
+            // No model found - try runtime engine with component name
+            self.model_engine.execute_component_model(component_name, &mut ctx)
+                .map_err(|e| SpiceError::AnalysisFailed(format!("Model execution failed: {}", e)))
+        }
     }
     
     /// Stamp linear element (conductance) into matrices
+    /// For Newton-Raphson: current is the Norton equivalent current source
     fn stamp_linear_element(
         &self,
         jacobian: &mut DMatrix<f64>,
@@ -527,11 +633,11 @@ impl AdaptiveCircuitSolver {
         // Stamp conductance in Jacobian
         if let Some(i1) = n1_idx {
             jacobian[(i1, i1)] += conductance;
-            residual[i1] += current;
+            residual[i1] -= current;  // Note: negative for correct MNA formulation
         }
         if let Some(i2) = n2_idx {
             jacobian[(i2, i2)] += conductance;
-            residual[i2] -= current;
+            residual[i2] += current;  // Note: positive for correct MNA formulation
         }
         if let (Some(i1), Some(i2)) = (n1_idx, n2_idx) {
             jacobian[(i1, i2)] -= conductance;
@@ -666,11 +772,27 @@ impl AdaptiveCircuitSolver {
                                 0.0
                             }
                         },
-                        ComponentModel::LED { forward_voltage, dynamic_resistance, .. } => {
-                            if v_diff > forward_voltage * 0.7 {
-                                (v_diff - forward_voltage) / dynamic_resistance
+                        ComponentModel::LED { forward_voltage, forward_current, .. } => {
+                            // Use the same shifted exponential model for consistency
+                            let vt = 0.026;
+                            let vf = forward_voltage;
+                            
+                            // Calculate realistic saturation current
+                            let test_v = 0.1_f64; // 100mV above threshold
+                            let v_norm_test = test_v / vt;
+                            let is = forward_current / (v_norm_test.exp() - 1.0);
+                            
+                            let effective_v = v_diff - vf;
+                            
+                            if effective_v <= 0.0 {
+                                -is
                             } else {
-                                v_diff * 1e-12
+                                let v_norm = effective_v / vt;
+                                if v_norm > 50.0 {
+                                    is * (50.0_f64.exp() - 1.0)
+                                } else {
+                                    is * (v_norm.exp() - 1.0)
+                                }
                             }
                         },
                         ComponentModel::Diode { saturation_current, emission_coefficient, .. } => {

@@ -1,0 +1,55 @@
+// Simple LED circuit with testbench
+
+board SimpleLEDBoard {
+    power VCC = 5V @ 100mA;
+    ground GND;
+    
+    // Simple LED circuit
+    @VCC -> R1: Resistor(330Ω).1 -> R1.2 -> LED1: LED(red).anode;
+    LED1.cathode -> @GND;
+}
+
+// Testbench for the LED circuit
+testbench TB_SimpleLED for SimpleLEDBoard {
+    simulation {
+        duration: 10ms;
+        timestep: 10us;
+        solver: spice;
+        temperature: 25;
+    }
+    
+    scope "power_supply" {
+        signals: @VCC, @GND;
+        capture: continuous;
+    }
+    
+    scope "led_circuit" {
+        signals: R1.current, LED1.voltage, LED1.current;
+        capture: on_change(0.1mA);
+    }
+    
+    stimulus {
+        // Ramp VCC from 0 to 5V over 1ms
+        @VCC: ramp(from: 0V, to: 5V, duration: 1ms);
+    }
+    
+    verify {
+        // Check LED forward voltage is reasonable
+        assert LED1.voltage in range(1.8V, 2.2V) after 2ms
+            message "LED forward voltage out of expected range";
+            
+        // Check current limiting
+        assert R1.current < 20mA always
+            message "Current exceeds safe limit for LED";
+            
+        // Check power dissipation
+        assert R1.power < 100mW always
+            message "Resistor power dissipation too high";
+    }
+    
+    measure {
+        led_current = average(LED1.current);
+        power_consumption = @VCC * average(R1.current);
+        led_forward_voltage = average(LED1.voltage) when R1.current > 5mA;
+    }
+}

@@ -1,6 +1,7 @@
 use crate::{SyntaxKind, BhdlLanguage, SyntaxNode, SyntaxToken};
 use rowan::ast::AstNode;
 use crate::items::{Board, Module, ComponentDef, InterfaceDef, TypedefDef};
+use crate::testbench::TestbenchDef;
 
 // Add definitions for top-level items later
 // use crate::definitions::TopLevelItem;
@@ -45,6 +46,11 @@ impl SourceFile {
         self.0.children().filter_map(Module::cast)
     }
 
+    /// Returns an iterator over testbenches in the file.
+    pub fn testbenches(&self) -> impl Iterator<Item = TestbenchDef> {
+        self.0.children().filter_map(TestbenchDef::cast)
+    }
+
     // Add more specific accessors as needed
 }
 
@@ -56,6 +62,7 @@ pub enum Item {
     ComponentDef(ComponentDef),
     InterfaceDef(InterfaceDef),
     TypedefDef(TypedefDef),
+    TestbenchDef(TestbenchDef),
     // Add others like StructDef, EnumDef
 }
 
@@ -64,7 +71,7 @@ impl AstNode for Item {
 
     fn can_cast(kind: SyntaxKind) -> bool {
         Board::can_cast(kind) || Module::can_cast(kind) || ComponentDef::can_cast(kind) ||
-        InterfaceDef::can_cast(kind) || TypedefDef::can_cast(kind)
+        InterfaceDef::can_cast(kind) || TypedefDef::can_cast(kind) || TestbenchDef::can_cast(kind)
     }
 
     fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> {
@@ -73,6 +80,7 @@ impl AstNode for Item {
         else if ComponentDef::can_cast(syntax.kind()) { Some(Item::ComponentDef(ComponentDef::cast(syntax)?)) }
         else if InterfaceDef::can_cast(syntax.kind()) { Some(Item::InterfaceDef(InterfaceDef::cast(syntax)?)) }
         else if TypedefDef::can_cast(syntax.kind()) { Some(Item::TypedefDef(TypedefDef::cast(syntax)?)) }
+        else if TestbenchDef::can_cast(syntax.kind()) { Some(Item::TestbenchDef(TestbenchDef::cast(syntax)?)) }
         else { None }
     }
 
@@ -83,6 +91,7 @@ impl AstNode for Item {
             Item::ComponentDef(i) => i.syntax(),
             Item::InterfaceDef(i) => i.syntax(),
             Item::TypedefDef(i) => i.syntax(),
+            Item::TestbenchDef(i) => i.syntax(),
         }
     }
 } 

@@ -57,6 +57,9 @@ impl StdlibReader {
         self.load_component_file("passives/fuse.bhdl")?;
         self.load_component_file("passives/tvs_diode.bhdl")?;
         
+        // Load active components
+        self.load_component_file("actives/custom_diode.bhdl")?;
+        
         // Load regulators
         self.load_component_file("regulators/lm7805.bhdl")?;
         

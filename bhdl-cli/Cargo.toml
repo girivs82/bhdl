@@ -13,6 +13,8 @@ bhdl-visualizer = { path = "../bhdl-visualizer" }
 bhdl-spice = { path = "../bhdl-spice" }
 bhdl-components = { path = "../bhdl-components" }
 bhdl-common = { path = "../bhdl-common" }
+bhdl-testbench = { path = "../bhdl-testbench" }
+bhdl-sim = { path = "../bhdl-sim" }
 
 # CLI dependencies
 clap = { version = "4.0", features = ["derive"] }

@@ -1,0 +1,8 @@
+// Simple LED test circuit for end-to-end pipeline test
+board SimpleRedLED {
+    power VDD = 5V @ 1A;
+    ground GND;
+    
+    // Simple LED circuit with current limiting resistor
+    VDD -> R1: Res(220Ω).1 -> R1.2 -> D1: LED(red).A -> D1.K -> GND;
+}

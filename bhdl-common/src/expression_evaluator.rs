@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use anyhow::{Result, Context as _};
 use bhdl_parser::parse;
-use bhdl_ast::{SourceFile, AstNode, Module, AttributeDecl, HasName};
+use bhdl_ast::{SourceFile, AstNode, Module, HasName};
 use bhdl_ast::expr::Expr;
 
 /// Represents a value in the expression evaluator

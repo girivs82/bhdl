@@ -29,6 +29,7 @@ pub mod hierarchical; // Hierarchical module support
 pub mod interfaces; // Interface-specific AST nodes
 pub mod attributes; // Behavioral modeling attribute support
 pub mod behavioral; // When blocks and behavioral statements
+pub mod testbench; // Testbench AST nodes
 
 // Core HasName trait (defined here)
 pub trait HasName: AstNode<Language = BhdlLanguage> {
@@ -60,6 +61,8 @@ pub use constraint_resolver::{ConstraintResolver, Constraint, ConstraintType, Co
 pub use v2_statements::{Statement, PowerDecl, GroundDecl, ConnectionStmt, FlowStmt as V2FlowStmt, GenerateStmt as V2GenerateStmt, ConditionalStmt as V2ConditionalStmt, NetFlowStmt, IntentClause, IntentCall, IntentParams};
 pub use v2_board::{BoardV2Ext, BoardBody, BoardBodyExt};
 pub use interfaces::{InterfaceSignal, InterfaceRequirement, InterfacePerspective, InterfaceInst, SignalDirection};
+pub use testbench::{TestbenchDef, SimulationBlock, ScopeDef, StimulusBlock, VerifyBlock, MeasureBlock, 
+                    SignalRef, CaptureMode, StimulusAssign, WaveformExpr, Assertion, Measurement, TimeSpec};
 
 // Add tests module
 #[cfg(test)]

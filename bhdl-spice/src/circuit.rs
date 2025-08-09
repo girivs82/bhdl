@@ -115,7 +115,7 @@ impl Branch {
 #[derive(Clone)]
 pub struct Circuit {
     /// Graph where nodes are electrical nodes and edges are components
-    graph: Graph<Node, Branch>,
+    pub graph: Graph<Node, Branch>,
     /// Map from node names to graph indices
     node_map: HashMap<String, NodeIndex>,
     /// Map from component names to edge indices
@@ -141,7 +141,7 @@ impl Circuit {
             return idx;
         }
         
-        let is_ground = name.to_lowercase() == "gnd" || name.to_lowercase() == "ground";
+        let is_ground = name == "0" || name.to_lowercase() == "gnd" || name.to_lowercase() == "ground";
         let node = Node {
             name: name.clone(),
             net_id,
@@ -249,10 +249,25 @@ impl Circuit {
         }
     }
     
+    /// Modify branch value and type (for fault injection)
+    pub fn modify_branch(&mut self, edge_idx: EdgeIndex, new_value: f64, new_type: String) {
+        if let Some(branch) = self.graph.edge_weight_mut(edge_idx) {
+            branch.value = new_value;
+            branch.component_type = new_type;
+        }
+    }
+    
     /// Set branch current (from analysis results)
-    pub fn set_branch_current(&mut self, edge: EdgeIndex, current: f64) {
-        if let Some(b) = self.graph.edge_weight_mut(edge) {
-            b.current = Some(current);
+    pub fn set_branch_current(&mut self, edge_idx: EdgeIndex, current: f64) {
+        if let Some(branch) = self.graph.edge_weight_mut(edge_idx) {
+            branch.current = Some(current);
+        }
+    }
+    
+    /// Set branch current by name
+    pub fn set_branch_current_by_name(&mut self, name: &str, current: f64) {
+        if let Some(&edge_idx) = self.branch_map.get(name) {
+            self.set_branch_current(edge_idx, current);
         }
     }
     
@@ -351,5 +366,19 @@ impl Circuit {
         crate::netlist_converter::NetlistToSpiceConverter::new()
             .convert(netlist)
             .map_err(|e| crate::SpiceError::Other(e))
+    }
+    
+    /// Update a component's model (for progressive solving strategies)
+    pub fn update_component_model(&mut self, name: &str, model: crate::ComponentModel) {
+        // This would need to be implemented based on how models are stored
+        // For now, this is a placeholder
+        // In practice, the model would be stored separately and referenced
+    }
+    
+    /// Get a component's model
+    pub fn get_component_model(&self, name: &str) -> Option<crate::ComponentModel> {
+        // This would need to be implemented based on how models are stored
+        // For now, return None
+        None
     }
 }

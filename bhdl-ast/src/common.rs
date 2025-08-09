@@ -238,9 +238,12 @@ impl AstNode for ComponentInst {
 impl HasName for ComponentInst {}
 impl ComponentInst {
     pub fn component_type_name(&self) -> Option<SyntaxToken<BhdlLanguage>> { // Changed return type
-        // Find the IDENT token after the colon
+        // In flow syntax (e.g., Res(330).1), the component type is the first IDENT
+        // In assignment syntax (e.g., R1: Res(330)), it's the IDENT after the colon
+        
+        // First, try to find an IDENT after a colon (assignment syntax)
         let mut after_colon = false;
-        self.0.children_with_tokens()
+        let colon_ident = self.0.children_with_tokens()
             .filter_map(|e| e.into_token())
             .find(|t| {
                 if t.kind() == SyntaxKind::COLON {
@@ -251,7 +254,17 @@ impl ComponentInst {
                 } else {
                     false
                 }
-            })
+            });
+            
+        // If found, return it
+        if colon_ident.is_some() {
+            return colon_ident;
+        }
+        
+        // Otherwise, return the first IDENT token (flow syntax)
+        self.0.children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .find(|t| t.kind() == SyntaxKind::IDENT)
     }
     // Reimplement name() using HasName trait default
     // pub fn name(&self) -> Option<SyntaxToken<BhdlLanguage>> { ... }

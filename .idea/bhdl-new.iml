@@ -30,6 +30,7 @@
       <sourceFolder url="file://$MODULE_DIR$/bhdl-sim/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/bhdl-sim/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/bhdl-stdlib/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/bhdl-testbench/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/bhdl-visualizer/target" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
