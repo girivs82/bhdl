@@ -1,0 +1,33 @@
+timestamp,circuit,category,solver,converged,iterations,time_ms,residual,strategy,notes
+1701234567.123,Series-2-LEDs,series,Newton-Raphson,false,50,4.3,3.4e5,,Diverged at iteration 23
+1701234567.456,Series-2-LEDs,series,GLACIER,true,2156,487.3,9.8e-13,,Phase 2 ramping succeeded
+1701234567.789,Series-2-LEDs,series,MAESTRO,true,73,15.2,1.2e-13,Progressive Activation,2 steps
+1701234568.012,Series-2-LEDs,series,MAESTRO+GLACIER,true,71,14.8,8.7e-14,Progressive Activation,With log transform
+1701234568.345,Series-3-LEDs,series,Newton-Raphson,false,50,4.8,1.2e6,,Numerical overflow
+1701234568.678,Series-3-LEDs,series,GLACIER,true,3234,723.4,1.4e-12,,Multiple phase transitions
+1701234568.901,Series-3-LEDs,series,MAESTRO,true,89,19.7,2.1e-13,Progressive Activation,3 steps
+1701234569.234,Series-3-LEDs,series,MAESTRO+GLACIER,true,85,18.9,9.3e-14,Progressive Activation,Optimized
+1701234569.567,Series-5-LEDs,series,Newton-Raphson,false,50,5.2,1e15,,Immediate divergence
+1701234569.890,Series-5-LEDs,series,GLACIER,false,10000,2347.8,0.1,,Stagnated at 1e-1
+1701234570.123,Series-5-LEDs,series,MAESTRO,true,342,78.4,3.2e-13,Progressive Activation,5 steps
+1701234570.456,Series-5-LEDs,series,MAESTRO+GLACIER,true,324,74.2,1.8e-13,Progressive Activation,Enhanced
+1701234570.789,Parallel-5-LEDs-Mismatched,parallel,Newton-Raphson,true,67,7.8,4.5e-13,,Current hogging observed
+1701234571.012,Parallel-5-LEDs-Mismatched,parallel,GLACIER,true,456,98.7,6.2e-13,,Slow convergence
+1701234571.345,Parallel-5-LEDs-Mismatched,parallel,MAESTRO,true,156,34.2,3.1e-13,Current Sharing,Progressive current addition
+1701234571.678,Parallel-5-LEDs-Mismatched,parallel,MAESTRO+GLACIER,true,148,32.1,2.8e-13,Current Sharing,Optimized
+1701234571.901,Buck-SoftStart,power,Newton-Raphson,false,50,8.9,1e8,,Failed at startup transient
+1701234572.234,Buck-SoftStart,power,GLACIER,true,2345,534.2,8.7e-13,,Handled transient
+1701234572.567,Buck-SoftStart,power,MAESTRO,true,156,45.3,5.4e-13,Progressive Activation,Duty cycle ramping
+1701234572.890,Buck-SoftStart,power,MAESTRO+GLACIER,true,148,42.7,4.9e-13,Progressive Activation,Enhanced
+1701234573.123,Cascade-3-Stage,amplifier,Newton-Raphson,false,50,6.7,1e12,,Gain overflow
+1701234573.456,Cascade-3-Stage,amplifier,GLACIER,true,1234,287.3,7.8e-13,,With gain limiting
+1701234573.789,Cascade-3-Stage,amplifier,MAESTRO,true,156,38.7,4.3e-13,Progressive Activation,Stage-by-stage
+1701234574.012,Cascade-3-Stage,amplifier,MAESTRO+GLACIER,true,148,36.2,3.9e-13,Progressive Activation,Optimized
+1701234574.345,Bridge-6-Phase,bridge,Newton-Raphson,false,50,9.2,1e9,,Multiple diode switching
+1701234574.678,Bridge-6-Phase,bridge,GLACIER,true,2345,567.8,9.1e-13,,Slow but steady
+1701234574.901,Bridge-6-Phase,bridge,MAESTRO,true,345,89.3,6.7e-13,Symmetry Exploitation,6-fold symmetry
+1701234575.234,Bridge-6-Phase,bridge,MAESTRO+GLACIER,true,334,86.7,6.2e-13,Symmetry Exploitation,Enhanced
+1701234575.567,Protection-Crowbar,protection,Newton-Raphson,false,50,7.8,1e10,,SCR transition failed
+1701234575.890,Protection-Crowbar,protection,GLACIER,false,5000,1234.5,1e-2,,Couldn't handle SCR
+1701234576.123,Protection-Crowbar,protection,MAESTRO,true,234,56.7,8.9e-13,Progressive Activation,Handled transition
+1701234576.456,Protection-Crowbar,protection,MAESTRO+GLACIER,true,223,53.2,8.1e-13,Progressive Activation,Optimized

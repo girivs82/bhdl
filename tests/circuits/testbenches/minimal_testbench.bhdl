@@ -1,0 +1,19 @@
+// Minimal testbench for testing
+
+board MinimalBoard {
+    power VCC = 5V @ 100mA;
+    ground GND;
+    
+    // Minimal circuit  
+    led_current: @VCC -> Res(330).1 -> Res.2 -> LED(red).anode -> LED.cathode -> @GND;
+}
+
+// Minimal testbench
+testbench TB_Minimal for MinimalBoard {
+    simulation {
+        duration: 1ms;
+        timestep: 10us;
+        solver: spice;
+        temperature: 25;
+    }
+}

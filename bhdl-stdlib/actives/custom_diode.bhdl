@@ -1,0 +1,38 @@
+// Custom Diode Component - Example of equation-based model
+// Demonstrates how users can define their own component models
+
+module CustomDiode() {
+    pin A: signal in @metadata(
+        function="Anode",
+        description="Positive terminal (Anode)",
+        electrical_type="diode_anode"
+    );
+    pin K: signal out @metadata(
+        function="Cathode",
+        description="Negative terminal (Cathode)", 
+        electrical_type="diode_cathode"
+    );
+    
+    // Component classification
+    attribute component_class = "diode";
+    
+    // Define custom model parameters
+    attribute spice_model = "equation_based";
+    attribute spice_is = 1e-14;     // Saturation current (A)
+    attribute spice_n = 1.5;        // Ideality factor
+    attribute spice_vt = 0.026;     // Thermal voltage at room temp (V)
+    
+    // Define behavior with expressions
+    attribute spice_equation_i = v_diff > 0 ?
+        spice_is * (exp(min(v_diff / (spice_n * spice_vt), 40)) - 1) :
+        -spice_is;
+        
+    attribute spice_equation_di_dv = v_diff > 0 ?
+        spice_is / (spice_n * spice_vt) * exp(min(v_diff / (spice_n * spice_vt), 40)) :
+        1e-12;
+    
+    // Optional: Power dissipation equation
+    attribute spice_equation_power = v_diff * (v_diff > 0 ?
+        spice_is * (exp(min(v_diff / (spice_n * spice_vt), 40)) - 1) :
+        -spice_is);
+}

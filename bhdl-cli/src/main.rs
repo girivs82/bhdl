@@ -23,6 +23,7 @@ use bhdl_synthesizer::NetlistGenerator;
 use bhdl_visualizer::{render_circuit_with_analysis};
 use bhdl_spice::{ComponentRoleDetector, NetlistToSpiceConverter, SpiceAnalysisAugmenter};
 use bhdl_common::AnalysisData;
+use bhdl_testbench::{TestbenchRunner, WaveformFormat};
 
 #[derive(Parser)]
 #[command(name = "bhdl")]
@@ -115,6 +116,25 @@ enum Commands {
         #[arg(long)]
         no_spice: bool,
     },
+    
+    /// Run simulation with testbench
+    Simulate {
+        /// Testbench file
+        #[arg(short, long)]
+        testbench: PathBuf,
+        
+        /// Output directory for simulation results
+        #[arg(short, long, default_value = "./sim_results")]
+        output: PathBuf,
+        
+        /// Waveform format (vcd, csv, json)
+        #[arg(short, long, default_value = "vcd")]
+        format: String,
+        
+        /// Show real-time progress
+        #[arg(long)]
+        verbose: bool,
+    },
 }
 
 #[tokio::main]
@@ -180,6 +200,10 @@ async fn main() -> Result<()> {
         
         Some(Commands::Pipeline { output_dir, no_viz, no_spice }) => {
             run_pipeline(&source_file, &cli.input, output_dir, no_viz, no_spice).await?;
+        }
+        
+        Some(Commands::Simulate { testbench, output, format, verbose: _verbose }) => {
+            run_simulation(&source_file, testbench, output, &format).await?;
         }
     }
     
@@ -498,6 +522,134 @@ async fn run_pipeline(source_file: &SourceFile, _input_path: &PathBuf, output_di
     
     println!("\n{}", "✓ Pipeline complete!".green().bold());
     println!("  All outputs saved to: {}", output_dir.display());
+    
+    Ok(())
+}
+
+async fn run_simulation(source_file: &SourceFile, testbench_path: PathBuf, output_dir: PathBuf, format: &str) -> Result<()> {
+    println!("{}", "Running BHDL simulation...".bold());
+    
+    // Create output directory
+    fs::create_dir_all(&output_dir)?;
+    
+    // Step 1: Run analysis on circuit
+    println!("\n{}", "1. Analyzing circuit".blue().bold());
+    let analysis = analyze(source_file);
+    
+    if !analysis.diagnostics.is_empty() {
+        eprintln!("{}", "Warning: Circuit has diagnostics".yellow());
+        for diag in &analysis.diagnostics {
+            eprintln!("  • {}", diag.message);
+        }
+    }
+    
+    // Step 2: Synthesize netlist
+    println!("\n{}", "2. Synthesizing netlist".blue().bold());
+    let mut generator = NetlistGenerator::new();
+    let netlist = generator.generate_from_ast_and_analysis(source_file, &analysis).await?;
+    println!("  ✓ Netlist generated: {} instances, {} nets", 
+        netlist.instances.len(), netlist.nets.len());
+    
+    // Step 3: Parse testbench
+    println!("\n{}", "3. Loading testbench".blue().bold());
+    let testbench_content = fs::read_to_string(&testbench_path)
+        .with_context(|| format!("Failed to read testbench: {}", testbench_path.display()))?;
+    
+    // Parse the testbench
+    let parse_result = bhdl_parser::parse(&testbench_content);
+    if !parse_result.errors().is_empty() {
+        for error in parse_result.errors() {
+            eprintln!("Parse error: {:?}", error);
+        }
+        anyhow::bail!("Failed to parse testbench due to errors");
+    }
+    
+    // Convert to AST
+    let ast = bhdl_ast::SourceFile::cast(parse_result.syntax())
+        .ok_or_else(|| anyhow::anyhow!("Failed to get SourceFile from parse result"))?;
+    
+    // Find the testbench definition
+    let testbench_def = ast.testbenches()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("No testbench found in file"))?;
+    
+    // Compile testbench to runtime structure
+    let testbench = bhdl_testbench::compiler::compile_testbench(&testbench_def)?;
+    
+    println!("  ✓ Testbench loaded: {}", testbench.name);
+    println!("    Duration: {}ms", testbench.simulation_config.duration.value);
+    println!("    Timestep: {}µs", testbench.simulation_config.timestep.value);
+    
+    // Step 4: Run simulation
+    println!("\n{}", "4. Running simulation".blue().bold());
+    
+    // Get flow tracker if using behavioral simulation
+    use bhdl_testbench::testbench::SolverType;
+    let flow_tracker = if matches!(testbench.simulation_config.solver_type, 
+                                  SolverType::Behavioral | SolverType::MixedSignal { .. }) {
+        // TODO: Get flow tracker from analyzer
+        None
+    } else {
+        None
+    };
+    
+    let mut runner = TestbenchRunner::new(testbench, netlist, flow_tracker)?;
+    
+    // Set up waveform output
+    let waveform_format = match format {
+        "vcd" => WaveformFormat::VCD,
+        "csv" => WaveformFormat::CSV,
+        "json" => WaveformFormat::JSON,
+        _ => {
+            eprintln!("Unknown waveform format: {}, using VCD", format);
+            WaveformFormat::VCD
+        }
+    };
+    
+    let waveform_path = output_dir.join(format!("simulation.{}", format));
+    runner.add_waveform_output(waveform_format, &waveform_path)?;
+    
+    // Run simulation
+    let results = runner.run()?;
+    
+    // Step 5: Report results
+    println!("\n{}", "5. Simulation Results".blue().bold());
+    
+    if results.passed {
+        println!("{}", "  ✓ All assertions passed".green());
+    } else {
+        println!("{}", format!("  ✗ {} assertions failed", results.violations.len()).red());
+        for violation in &results.violations {
+            println!("    • {} @ {:.3}ms: {}", 
+                violation.assertion_name,
+                violation.time * 1000.0,
+                violation.message
+            );
+        }
+    }
+    
+    if !results.measurements.is_empty() {
+        println!("\n  Measurements:");
+        for (name, value) in &results.measurements {
+            println!("    {}: {:.3}", name, value);
+        }
+    }
+    
+    println!("\n  Waveform saved to: {}", waveform_path.display());
+    println!("  Simulation time: {:.3}ms", results.simulation_time * 1000.0);
+    
+    // Save results summary
+    let summary_path = output_dir.join("simulation_summary.json");
+    let summary = serde_json::json!({
+        "passed": results.passed,
+        "violations": results.violations.len(),
+        "measurements": results.measurements,
+        "simulation_time_ms": results.simulation_time * 1000.0,
+        "waveform_file": waveform_path.file_name().unwrap().to_str().unwrap()
+    });
+    
+    fs::write(&summary_path, serde_json::to_string_pretty(&summary)?)?;
+    println!("  Summary saved to: {}", summary_path.display());
     
     Ok(())
 }

@@ -37,6 +37,18 @@ impl<'t> Parser<'t> {
             }
         }
     }
+    
+    /// Returns the text of the current token, skipping trivia.
+    pub(crate) fn peek_text(&self) -> Option<SmolStr> {
+        let mut temp_pos = self.pos;
+        loop {
+            match self.tokens.get(temp_pos) {
+                Some((kind, text)) if kind.is_trivia() => temp_pos += 1,
+                Some((_, text)) => return Some(text.clone()),
+                None => return None,
+            }
+        }
+    }
 
     /// Returns the kind of the current token *without* skipping trivia.
     #[allow(dead_code)] // May not be used after refactor

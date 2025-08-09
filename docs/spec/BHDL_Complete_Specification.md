@@ -4,25 +4,27 @@
 ### Table of Contents
 1. [Introduction](#1-introduction)
 2. [Design Philosophy](#2-design-philosophy)
-3. [Core Language Constructs](#3-core-language-constructs)
-   - [Connection Syntax and Physical Constraints](#33-connection-syntax-and-physical-constraints)
-4. [Type System](#4-type-system)
-5. [Component System](#5-component-system)
-   - [Component Handles and Net Naming](#55-component-handles-and-net-naming)
-   - [Dual-Role Component Syntax](#56-dual-role-component-syntax)
-6. [Interface System](#6-interface-system)
-7. [Power Management](#7-power-management)
-8. [Level Shifting](#8-level-shifting)
-9. [Physical Constraints](#9-physical-constraints)
-10. [Multi-File Team Workflow](#10-multi-file-team-workflow)
-11. [Standard Library](#11-standard-library)
-12. [Complete Working Example](#12-complete-working-example)
-13. [Advanced Power Sequencing](#13-advanced-power-sequencing)
-14. [Advanced Level Shifting](#14-advanced-level-shifting)
-15. [Team Workflow and Multi-File Support](#15-team-workflow-and-multi-file-support)
-16. [Language Reference](#16-language-reference)
-17. [Design Benefits and Advantages](#17-design-benefits-and-advantages)
-18. [Electrical Safety Analysis](#18-electrical-safety-analysis)
+3. [Hello World Example](#3-hello-world-example)
+4. [Complete Working Example](#4-complete-working-example)
+5. [Core Language Constructs](#5-core-language-constructs)
+   - [Connection Syntax and Physical Constraints](#53-connection-syntax-and-physical-constraints)
+6. [Type System](#6-type-system)
+7. [Component System](#7-component-system)
+   - [Component Handles and Net Naming](#75-component-handles-and-net-naming)
+   - [Dual-Role Component Syntax](#76-dual-role-component-syntax)
+8. [Interface System](#8-interface-system)
+9. [Power Management](#9-power-management)
+10. [Level Shifting](#10-level-shifting)
+11. [Physical Constraints](#11-physical-constraints)
+12. [Toolchain and Integration](#12-toolchain-and-integration)
+13. [Multi-File Team Workflow](#13-multi-file-team-workflow)
+14. [Standard Library](#14-standard-library)
+15. [Advanced Power Sequencing](#15-advanced-power-sequencing)
+16. [Advanced Level Shifting](#16-advanced-level-shifting)
+17. [Language Reference](#17-language-reference)
+18. [Design Benefits and Advantages](#18-design-benefits-and-advantages)
+19. [Electrical Safety Analysis](#19-electrical-safety-analysis)
+20. [Formal Grammar](#20-formal-grammar)
 
 ---
 
@@ -82,7 +84,163 @@ power_flow: USB_5V |> regulation(3.3V) |> distribution |> loads;
 
 ---
 
-## 3. Core Language Constructs
+## 3. Hello World Example
+
+### 3.1 Minimal Blinking LED Circuit
+
+Before diving into the full specification, let's see BHDL in action with the simplest possible circuit: a blinking LED.
+
+```bhdl
+// Hello World: Blinking LED - 5 lines of BHDL
+board BlinkingLED {
+    power VCC = 5V @ 100mA;           // Power source
+    ground GND;                       // Ground reference
+    
+    @VCC -> Res(330Ω).1 -> LED(red).A;  // Current-limited LED
+    LED.K -> @GND;                    // LED cathode to ground
+}
+```
+
+**What this does:**
+- Creates a simple circuit with a 5V power supply
+- Connects a current-limiting resistor (330Ω) in series with a red LED
+- The toolchain automatically assigns reference designators (R1, D1)
+- Safety analysis ensures the LED won't be damaged
+
+**Key concepts demonstrated:**
+1. **Power domains**: `power VCC = 5V @ 100mA` declares a 5V rail with 100mA capacity
+2. **Component instantiation**: `Res(330Ω)` creates a 330-ohm resistor
+3. **Net naming**: `@VCC` and `@GND` reference power and ground nets
+4. **Component handles**: `LED` becomes a handle to reference the LED's pins
+5. **Pin connections**: `.A` (anode) and `.K` (cathode) access LED pins
+
+### 3.2 Adding a Microcontroller
+
+Let's expand to show GPIO control:
+
+```bhdl
+board MCU_LED {
+    power VCC = 3.3V @ 500mA;
+    ground GND;
+    
+    // Microcontroller
+    mcu: STM32F103 {
+        VDD <- @VCC;
+        GND <- @GND;
+    }
+    
+    // GPIO-controlled LED
+    mcu.PA0 -> Res(1kΩ).1 -> LED(blue).A;
+    LED.K -> @GND;
+}
+```
+
+**New concepts:**
+- **Component handles**: `mcu:` creates a named reference to the microcontroller
+- **Pin mapping**: `mcu.PA0` accesses specific GPIO pins
+- **Power connections**: `VDD <- @VCC` connects power (note the `<-` direction)
+
+This 8-line example shows how BHDL naturally scales from simple to complex circuits while maintaining the same core syntax patterns.
+
+---
+
+## 4. Complete Working Example
+
+### 4.1 Realistic 7805 Linear Regulator Circuit
+
+This example demonstrates key BHDL v2.0 features in a practical circuit that many engineers will recognize:
+
+```bhdl
+// Realistic 7805 Linear Regulator Circuit - BHDL v2.0
+// A complete 12V to 5V power supply with proper filtering and protection
+
+board PowerSupply_7805 {
+    // Power domains
+    power VIN = 12V @ 1A;      // Input voltage from DC adapter
+    power VCC = 5V @ 1A;       // Regulated output
+    ground GND;
+    
+    // Input protection and filtering with named nets
+    @VIN @RAW-> fuse: Fuse(1A).1;
+    fuse.2 @PROTECTED-> tvs: TVSDiode(15V).1;
+    tvs.2 -> @GND;
+    
+    // Input filtering capacitors on protected net
+    @PROTECTED -> c_in1: ElectrolyticCap(100µF, 25V).+;
+    @PROTECTED -> c_in2: Cap(0.1µF).1;
+    c_in1.- -> @GND;
+    c_in2.2 -> @GND;
+    
+    // Linear regulator circuit
+    @PROTECTED -> reg: LM7805().IN;
+    reg.GND -> @GND;
+    reg.OUT @5V-> c_out1: ElectrolyticCap(10µF, 10V).+;
+    
+    // Output filtering
+    @5V -> c_out2: Cap(0.1µF).1;
+    c_out1.- -> @GND;
+    c_out2.2 -> @GND;
+    
+    // LED power indicator
+    @5V -> r_led: Res(330Ω).1;
+    r_led.2 @LED_DRIVE-> led: LED(green).A;
+    led.K -> @GND;
+    
+    // Test points for measurement
+    @PROTECTED -> tp_vin: TestPoint().1;
+    @5V -> tp_vout: TestPoint().1;
+    @GND -> tp_gnd: TestPoint().1;
+    
+    // Output header
+    @5V -> conn: Header_1x3.1;   // Power out
+    @GND -> conn.2;               // Ground
+    @5V -> conn.3;               // Second power pin
+    
+    // Board metadata
+    attribute title = "7805 Linear Regulator Power Supply";
+    attribute version = "2.0";
+    attribute author = "BHDL Test Suite";
+    attribute description = "12V to 5V linear regulator with protection and filtering";
+}
+```
+
+**Key Features Demonstrated:**
+
+1. **Power Domain Declaration**
+   - `power VIN = 12V @ 1A` - Input power specification with current rating
+   - `power VCC = 5V @ 1A` - Output power specification
+   - `ground GND` - Ground reference declaration
+
+2. **Component Handles and Named Nets (@)**
+   - Component handles: `fuse:`, `tvs:`, `reg:` create component references
+   - Named nets: `@RAW->`, `@PROTECTED->`, `@5V->` create explicit nets
+   - Net references: `@PROTECTED`, `@5V`, `@VCC`, `@GND` always use @ prefix
+   - Clear distinction: `fuse` is component handle, `@PROTECTED` is net name
+
+3. **Component Instantiation**
+   - Direct instantiation: `Fuse(1A)`, `LM7805()`, `LED(green)`
+   - Parameter specification: `ElectrolyticCap(100µF, 25V)`
+   - Pin access: `.1`, `.2`, `.+`, `.-`, `.A`, `.K`
+
+4. **Net Organization**
+   - `@RAW` - Input after fuse protection
+   - `@PROTECTED` - After TVS diode protection  
+   - `@5V` - Regulated output rail
+   - `@LED_DRIVE` - Current-limited LED drive signal
+   - Anonymous nets used where explicit naming adds no value
+
+5. **Automatic Reference Designators**
+   - The toolchain automatically assigns: F1, D1, C1-C4, U1, R1, LED1, TP1-TP3
+   - Users work with meaningful semantic names via handles
+
+6. **Board Metadata**
+   - Attributes provide documentation and tool processing information
+
+This example bridges from simple LED circuits to real-world power supply design, showing how BHDL scales naturally while maintaining readability.
+
+---
+
+## 5. Core Language Constructs
 
 BHDL has exactly **7 core constructs** that compose to handle any complexity:
 
@@ -173,6 +331,37 @@ L1.2 -> C1.1 where current_rating = 3A;
 OPAMP.out -> ADC.in where shielded, guard_ring;
 SENSOR.out -> AMP.in where differential(AMP.in_n), spacing = 0.2mm;
 ```
+
+#### Constraint Resolution Policy
+
+When multiple constraints apply to the same connection, BHDL follows a priority-based resolution:
+
+1. **Most Specific Wins**: Direct `where` clauses override broader `with` blocks
+2. **Additive Constraints**: Non-conflicting constraints are combined
+3. **Error on Conflicts**: Contradictory constraints generate compilation errors
+
+```bhdl
+// Example: Constraint resolution
+with routing(impedance = 90Ω) {
+    // This generates an ERROR - conflicting impedance values
+    USB_DP -> CONN.DP where impedance = 50Ω;  // Conflicts with 90Ω above
+}
+
+// Correct approach: Specify which constraint to use
+with routing(default_impedance = 90Ω) {
+    USB_DP -> CONN.DP where impedance = 50Ω;  // Explicit override
+    USB_DM -> CONN.DM;  // Uses default 90Ω
+}
+
+// Additive constraints work fine
+CPU.CLK -> RAM.CLK where impedance = 50Ω, max_vias = 2, length_match = true;
+```
+
+**Resolution Rules:**
+- **Compatible**: Different constraint types are combined
+- **Conflicting**: Same constraint type with different values causes error
+- **Override**: Use `override` keyword to explicitly replace inherited constraints
+- **Inheritance**: Child modules inherit parent constraints unless overridden
 
 #### Connection Groups with 'with'
 Use the `with` keyword to apply shared constraints to multiple connections:
@@ -279,6 +468,7 @@ expansion: GPIO_Header(pins=40, pitch=2.54mm);
 ```
 
 ### 3.5 Generate Constructs
+
 ```bhdl
 // Universal repetition pattern
 generate for i in 0..7 {
@@ -289,6 +479,41 @@ generate for i in 0..7 {
 generate for rail in [VCC_3V3, VCC_1V8] {
   rail -> Cap(10µF).+ -> Cap(0.1µF).+ -> load;
 }
+
+// Array shortcut for simple fan-out patterns
+@VCC -> Res(330Ω)[8] -> LED(red)[8].A;   // Creates 8 identical resistor-LED pairs
+LED[all].K -> @GND;                      // Connect all LED cathodes
+
+// Parameterized arrays  
+@VCC -> Res(values=[1kΩ, 2kΩ, 4kΩ])[3] -> loads[3];
+
+// Named array elements
+generate for i in 0..3 {
+  gpio_bank[i]: GPIO_Expander(channels=8) {
+    VCC <- @VCC_3V3;
+    GND <- @GND;
+  }
+}
+```
+
+#### Array Syntax Benefits
+
+The array shortcut syntax provides concise notation for common patterns:
+
+```bhdl
+// Traditional generate (verbose but explicit)
+generate for i in 0..7 {
+  @VCC -> r[i]: Res(330Ω).1 -> led[i]: LED(red).A;
+  led[i].K -> @GND;
+}
+
+// Array shortcut (concise for identical elements)  
+@VCC -> Res(330Ω)[8] -> LED(red)[8].A -> @GND;
+
+// Mixed approach (flexibility when needed)
+@VCC -> Res(330Ω)[4] -> LED(red)[4].A;     // First 4 LEDs red
+@VCC -> Res(680Ω)[4] -> LED(blue)[4].A;    // Next 4 LEDs blue, different resistance
+LED[all].K -> @GND;                        // All cathodes to ground
 ```
 
 ### 3.6 Conditional Logic
@@ -506,6 +731,284 @@ import "power/regulators.bhdl";
 import { RC_Filter, LC_Filter } from "common/filters.bhdl";
 import { LinearReg, BuckConverter } from "power/regulators.bhdl";
 
+#### Parameter Override Semantics
+
+Module parameters can be overridden during instantiation with specific precedence rules:
+
+```bhdl
+// Module definition with parameters
+module VoltageRegulator(
+    input_voltage: voltage = 12V,          // Required parameter
+    output_voltage: voltage = 5V,          // Required parameter  
+    max_current: current = 1A,             // Optional with default
+    efficiency: percentage = 85%,          // Optional with default
+    topology: string = "linear"            // String parameter with default
+) {
+    pin VIN: power in;
+    pin VOUT: power out;
+    pin GND: ground in;
+    pin EN: signal in when topology == "switching";
+    
+    // Parameter usage in implementation
+    generate if (topology == "linear") {
+        VIN -> LinearReg(output_voltage, max_current).VIN;
+    } else if (topology == "switching") {
+        VIN -> BuckConverter(input_voltage, output_voltage, max_current).VIN;
+    }
+}
+
+// Parameter override during instantiation
+board PowerSystem {
+    power VIN_12V = 12V @ 2A;
+    ground GND;
+    
+    // Override specific parameters
+    main_regulator: VoltageRegulator(
+        output_voltage = 3.3V,              // Override default 5V
+        max_current = 1.5A,                 // Override default 1A
+        topology = "switching"              // Override default "linear"
+        // input_voltage uses default 12V
+        // efficiency uses default 85%
+    ) {
+        VIN <- @VIN_12V;
+        VOUT -> @VCC_3V3;
+        GND <- @GND;
+        EN <- power_enable_signal;          // Conditional pin available due to topology override
+    }
+    
+    // Use all default parameters
+    auxiliary_regulator: VoltageRegulator() {
+        VIN <- @VIN_12V;
+        VOUT -> @VCC_5V;  // Uses default 5V output
+        GND <- @GND;
+        // No EN pin since topology defaults to "linear"
+    }
+}
+```
+
+**Parameter Override Rules:**
+
+1. **Positional vs Named Parameters:**
+```bhdl
+// Both syntaxes are valid
+regulator1: VoltageRegulator(12V, 3.3V, 2A);           // Positional
+regulator2: VoltageRegulator(                          // Named (preferred)
+    input_voltage = 12V,
+    output_voltage = 3.3V, 
+    max_current = 2A
+);
+
+// Mixed positional and named (positional must come first)
+regulator3: VoltageRegulator(12V, output_voltage=3.3V, max_current=2A);
+```
+
+2. **Type Checking:**
+```bhdl
+// Type mismatches generate errors
+bad_regulator: VoltageRegulator(
+    input_voltage = "12V",          // ERROR: string literal, expected voltage type
+    output_voltage = 3.3,           // ERROR: raw number, expected voltage type
+    max_current = 2000mA,           // OK: current type with units
+    topology = switching            // ERROR: unquoted identifier, expected string
+);
+
+// Correct typing
+good_regulator: VoltageRegulator(
+    input_voltage = 12V,            // voltage type
+    output_voltage = 3.3V,          // voltage type  
+    max_current = 2A,               // current type
+    topology = "switching"          // string type
+);
+```
+
+3. **Default Parameter Resolution:**
+   - Unspecified parameters use their default values
+   - Defaults are evaluated in the module's context
+   - Defaults can reference other parameters
+
+```bhdl
+module SmartRegulator(
+    input_voltage: voltage,                     // Required, no default
+    output_voltage: voltage = input_voltage / 2, // Default references input_voltage
+    ripple_spec: voltage = output_voltage * 0.01 // Default is 1% of output
+) {
+    // Implementation uses calculated defaults
+}
+
+// Usage
+smart_reg: SmartRegulator(input_voltage = 12V);
+// Automatically calculates: output_voltage = 6V, ripple_spec = 60mV
+```
+
+4. **Parameter Scope and Visibility:**
+```bhdl
+module OuterModule(outer_param: voltage = 5V) {
+    // Parameter is visible throughout module scope
+    
+    inner_module: InnerModule(
+        param1 = outer_param,               // Reference outer module parameter
+        param2 = outer_param * 0.5          // Computed from outer parameter
+    );
+    
+    // Parameters affect conditional compilation
+    generate if (outer_param > 3.3V) {
+        high_voltage_protection: TvsProtection();
+    }
+}
+```
+
+#### Net Attribute System
+
+Net attributes provide metadata for electrical analysis and physical constraints:
+
+```bhdl
+// Net attributes specify electrical and physical properties
+board AttributeExample {
+    power VCC = 5V @ 1A;
+    ground GND;
+    
+    // Nets with electrical attributes
+    @VCC @FILTERED_POWER-> input_filter: Cap(100µF).+ {
+        // Net attributes for @FILTERED_POWER
+        attribute impedance = 0.1Ω @ 100kHz;
+        attribute current_rating = 1.5A;
+        attribute ripple_spec = 50mVpp;
+        attribute safety_class = SELV;      // Safety Extra Low Voltage
+    };
+    
+    input_filter.- -> @GND;
+    
+    // High-frequency nets with SI attributes
+    @FILTERED_POWER -> regulator: BuckConverter().VIN;
+    regulator.SW @SWITCHING_NODE-> inductor: Ind(10µH).1 {
+        // Switching net attributes
+        attribute frequency = 500kHz;
+        attribute voltage_swing = 0V to 5V;
+        attribute slew_rate = 100V/µs;
+        attribute emi_class = CISPR22_ClassB;
+        attribute routing_priority = high;   // Layout priority
+    };
+    
+    inductor.2 @REGULATED_OUT-> output_cap: Cap(22µF).+ {
+        // Output net attributes
+        attribute voltage_tolerance = 3.3V ± 3%;
+        attribute load_regulation = ±1%;
+        attribute transient_response = 50µs;
+    };
+    
+    output_cap.- -> @GND;
+}
+```
+
+**Attribute Categories:**
+
+1. **Electrical Attributes:**
+```bhdl
+// Power net attributes
+@VCC_3V3 {
+    attribute voltage_nominal = 3.3V;
+    attribute voltage_tolerance = ±5%;
+    attribute current_capacity = 2A;
+    attribute ripple_max = 100mVpp;
+    attribute efficiency_min = 85%;
+}
+
+// Signal net attributes  
+@CLOCK_100MHZ {
+    attribute frequency = 100MHz;
+    attribute duty_cycle = 50% ± 2%;
+    attribute jitter_max = 100ps;
+    attribute rise_time = 1ns;
+    attribute fall_time = 1ns;
+}
+
+// Analog net attributes
+@ANALOG_SIGNAL {
+    attribute signal_range = -2.5V to +2.5V;
+    attribute bandwidth = 1MHz;
+    attribute snr_min = 60dB;
+    attribute thd_max = 0.1%;
+}
+```
+
+2. **Physical/Routing Attributes:**
+```bhdl
+// High-speed differential pair
+@USB_DP, @USB_DM {
+    attribute impedance_differential = 90Ω ± 10%;
+    attribute length_match = ±0.1mm;
+    attribute via_count_max = 2;
+    attribute layer_preference = [1, 4];  // Top and bottom layers
+    attribute guard_traces = required;
+}
+
+// Power distribution attributes
+@VCC_POWER_PLANE {
+    attribute plane_layer = 3;
+    attribute copper_weight = 2oz;
+    attribute thermal_vias = enabled;
+    attribute current_density_max = 20A/mm²;
+}
+```
+
+3. **Safety and Compliance Attributes:**
+```bhdl
+// Safety critical nets
+@SAFETY_INTERLOCK {
+    attribute safety_integrity = SIL2;
+    attribute redundancy = dual_channel;
+    attribute diagnostic_coverage = 95%;
+    attribute mtbf_min = 100000h;
+}
+
+// EMC compliance attributes
+@SWITCHING_SIGNALS {
+    attribute emc_class = CISPR22_ClassB;
+    attribute radiated_limit = 40dBµV/m @ 30MHz;
+    attribute conducted_limit = 60dBµV @ 150kHz;
+}
+```
+
+**Attribute Inheritance and Propagation:**
+
+```bhdl
+// Attributes propagate through connections
+@VCC_CLEAN {
+    attribute ripple_max = 10mVpp;
+    attribute noise_floor = -80dBV;
+} -> precision_amplifier.VCC;
+// precision_amplifier.VCC inherits ripple and noise specifications
+
+// Attribute conflicts are resolved by precedence
+with routing(impedance = 50Ω) {
+    // Global impedance specification
+    
+    data_bus -> cpu.DATA where impedance = 75Ω;  // Local override wins
+    address_bus -> cpu.ADDR;                     // Uses global 50Ω
+}
+```
+
+**Attribute Validation:**
+
+The analyzer validates attribute consistency and electrical feasibility:
+
+```bhdl
+// Validation example
+@POWER_RAIL {
+    attribute voltage_nominal = 3.3V;
+    attribute current_capacity = 1A;
+    attribute wire_gauge = 30AWG;           // WARNING: Insufficient for 1A
+    attribute voltage_drop_max = 50mV;      // OK: Realistic specification
+}
+
+// Analyzer checks:
+// - Wire gauge supports current capacity
+// - Voltage drop is achievable with given resistance
+// - Temperature rise within limits
+// - Component ratings exceed operating conditions
+```
+
+This attribute system enables sophisticated electrical analysis while maintaining design intent throughout the toolchain.
 // Relative imports
 import "../shared/connectors.bhdl";
 import "./local_modules.bhdl";
@@ -608,36 +1111,118 @@ ddr_signal: signal {
 };
 ```
 
-### 4.4 Units and Physical Values
+### 6.4 Units and Physical Values
+
+BHDL supports electrical units in both Unicode and ASCII formats for maximum compatibility:
 
 ```bhdl
-// Comprehensive unit system with automatic conversion
+// Unicode format (preferred for readability)
 electrical_units {
   // Voltage
-  3.3Vdc, 230Vac, 120Vrms
+  3.3V, 5V, 12V, 230Vac, 120Vrms, 100mV, 50µV, 1kV
   
-  // Current  
-  100mA, 2A, 50µA
+  // Current
+  100mA, 2A, 50µA, 10nA, 5kA
   
   // Resistance
-  4.7kΩ, 1MΩ, 0.1Ω
+  4.7kΩ, 1MΩ, 0.1Ω, 100mΩ, 1GΩ
   
   // Capacitance
-  10µF, 100nF, 1pF
+  10µF, 100nF, 1pF, 470µF, 1mF
+  
+  // Inductance
+  1mH, 100µH, 10nH, 1H
   
   // Frequency
-  16MHz, 400kHz, 50Hz
+  16MHz, 400kHz, 50Hz, 1GHz
   
   // Time
-  10ns, 1µs, 100ms
+  10ns, 1µs, 100ms, 1s, 10ps
   
   // Temperature
-  85°C, -40°C
+  85°C, -40°C, 25°C, 150°C
+  
+  // Power
+  0.25W, 100mW, 1kW, 50µW
   
   // Percentages
-  5%, 85%
+  5%, 85%, 0.1%
+}
+
+// ASCII format (for legacy tool compatibility)
+electrical_units_ascii {
+  // Voltage
+  3.3V, 5V, 12V, 230Vac, 120Vrms, 100mV, 50uV, 1kV
+  
+  // Current
+  100mA, 2A, 50uA, 10nA, 5kA
+  
+  // Resistance
+  4.7kohm, 1Mohm, 0.1ohm, 100mohm, 1Gohm
+  
+  // Capacitance
+  10uF, 100nF, 1pF, 470uF, 1mF
+  
+  // Inductance
+  1mH, 100uH, 10nH, 1H
+  
+  // Frequency
+  16MHz, 400kHz, 50Hz, 1GHz
+  
+  // Time
+  10ns, 1us, 100ms, 1s, 10ps
+  
+  // Temperature
+  85degC, -40degC, 25degC, 150degC
+  
+  // Power
+  0.25W, 100mW, 1kW, 50uW
+  
+  // Percentages
+  5pct, 85pct, 0.1pct
 }
 ```
+
+#### Complete Unit System
+
+The implementation supports comprehensive electrical unit parsing with standard SI prefixes:
+
+**Multiplier Prefixes:**
+- **Giga (G)**: 10⁹ (e.g., `1GΩ`, `1GHz`)
+- **Mega (M)**: 10⁶ (e.g., `1MΩ`, `10MHz`)
+- **Kilo (k)**: 10³ (e.g., `4.7kΩ`, `400kHz`)
+- **Base unit**: 10⁰ (e.g., `1Ω`, `50Hz`)
+- **Milli (m)**: 10⁻³ (e.g., `100mA`, `10mV`)
+- **Micro (µ/u)**: 10⁻⁶ (e.g., `100µF`, `50µA`)
+- **Nano (n)**: 10⁻⁹ (e.g., `100nF`, `10nA`)
+- **Pico (p)**: 10⁻¹² (e.g., `10pF`, `100ps`)
+
+**Voltage Types:**
+- **DC**: `5V`, `3.3V` (default assumption)
+- **AC**: `230Vac`, `120Vac` (RMS values)
+- **RMS**: `120Vrms` (explicit RMS designation)
+- **Peak-to-peak**: `10Vpp` (for signal analysis)
+
+#### Unit Equivalence Table
+
+| Electrical Quantity | Unicode | ASCII | Example |
+|---------------------|---------|-------|---------|
+| Resistance | `Ω`, `kΩ`, `MΩ` | `Ohm`, `kOhm`, `MOhm` | `4.7kΩ` = `4.7kOhm` |
+| Capacitance | `µF`, `nF`, `pF` | `uF`, `nF`, `pF` | `10µF` = `10uF` |
+| Current | `µA`, `mA`, `A` | `uA`, `mA`, `A` | `50µA` = `50uA` |
+| Voltage | `µV`, `mV`, `V` | `uV`, `mV`, `V` | `100µV` = `100uV` |
+| Time | `µs`, `ns`, `ps` | `us`, `ns`, `ps` | `1µs` = `1us` |
+| Temperature | `°C` | `degC` | `25°C` = `25degC` |
+| Percentage | `%` | `pct` | `5%` = `5pct` |
+
+#### Typing Unicode Characters
+
+**Quick reference for common symbols:**
+- **Ω (Ohm)**: Alt+234 (Windows), Option+Z (Mac), Compose+O+M (Linux)
+- **µ (Micro)**: Alt+230 (Windows), Option+M (Mac), Compose+m+u (Linux)  
+- **° (Degree)**: Alt+248 (Windows), Option+Shift+8 (Mac), Compose+0+0 (Linux)
+
+The parser automatically recognizes both formats, allowing mixed usage within the same file if needed.
 
 ---
 
@@ -734,6 +1319,114 @@ led.K -> @GND;
 @GND -> conn.2;
 @5V -> conn.3;              // Second power pin
 ```
+#### Enhanced Pin Reference Syntax
+
+BHDL supports multiple pin reference formats for different component types:
+
+```bhdl
+// Numbered pins (for passives and simple components)
+@VCC -> r1: Res(10kΩ).1;        // Pin 1 of resistor
+r1.2 -> led: LED(red).A;        // Pin 2 of resistor to LED anode
+
+// Named pins (for complex components)
+mcu: STM32F103 {
+    VDD <- @VCC_3V3;            // Power pin by name
+    GND <- @GND;                // Ground pin by name
+    PA0 -> gpio_output;         // GPIO pin by name
+    UART1_TX -> serial_out;     // Peripheral pin by function
+}
+
+// Mixed pin access on same component
+connector: USB_TypeC {
+    VBUS -> @USB_5V;            // Named power pin
+    1 -> usb_dp;                // Numbered differential pair
+    2 -> usb_dm;                // Numbered differential pair
+    GND -> @GND;                // Named ground pins
+}
+
+// Special pin designations
+cap: ElectrolyticCap(100µF, 25V) {
+    + -> @VCC;                  // Positive terminal
+    - -> @GND;                  // Negative terminal
+}
+
+// Array/bus pin access
+ddr_ram: DDR3_SODIMM {
+    DQ[0..7] -> cpu.DDR_DQ[0..7];   // Bus range connection
+    A[0] -> cpu.DDR_A0;             // Individual address line
+    A[1..15] -> cpu.DDR_A[1..15];   // Address bus subset
+}
+```
+
+#### Component Handle Creation Details
+
+Component handles provide persistent references for complex component interactions:
+
+```bhdl
+// Handle creation during instantiation
+board PowerSupply {
+    power VIN = 12V @ 2A;
+    ground GND;
+    
+    // Create handles with : syntax
+    @VIN -> fuse: Fuse(2A).1;                    // fuse is handle
+    fuse.2 -> regulator: LM7805().IN;            // regulator is handle
+    regulator.OUT -> output_cap: Cap(100µF).+;   // output_cap is handle
+    regulator.GND -> @GND;
+    output_cap.- -> @GND;
+    
+    // Use handles for multiple connections
+    regulator.OUT -> power_led: LED(green).A;    // LED from same regulator output
+    power_led.K -> led_resistor: Res(330Ω).1;   // Current limiting resistor
+    led_resistor.2 -> @GND;
+    
+    // Handles enable component property access
+    regulator.thermal_shutdown -> thermal_monitor.input;
+    regulator.enable <- power_on_switch.output;
+}
+```
+
+**Handle Naming Rules:**
+- Must start with letter or underscore: `reg1`, `_internal`, `powerStage`
+- Can contain letters, numbers, underscores: `uart_debug`, `sensor2`, `ADC_ch0`  
+- Case sensitive: `led1` and `LED1` are different handles
+- No limit on length: `high_precision_voltage_reference` is valid
+
+**Handle Scope:**
+- Handles are scoped to their containing board or module
+- Handles can be referenced throughout their scope
+- Module instances create hierarchical handle namespaces
+
+```bhdl
+// Handle scoping example
+module PowerModule() {
+    pin VIN: power in;
+    pin VOUT: power out;
+    pin GND: ground in;
+    
+    // Local handles within module
+    VIN -> input_filter: Cap(10µF).+;
+    input_filter.- -> GND;
+    input_filter.+ -> regulator: LinearReg(3.3V).IN;
+    regulator.OUT -> VOUT;
+    regulator.GND -> GND;
+}
+
+board MainBoard {
+    power VCC_12V = 12V @ 1A;
+    ground GND;
+    
+    // Module instance creates handle namespace
+    power_module: PowerModule() {
+        VIN <- @VCC_12V;
+        VOUT -> @VCC_3V3;
+        GND <- @GND;
+    }
+    
+    // Access module internal handles (if exposed)
+    // power_module.regulator.thermal_pad -> thermal_via;
+}
+```
 
 ### 5.6 Dual-Role Component Syntax
 
@@ -818,6 +1511,57 @@ source -> Res(?, impedance_match=50Ω).1 -> transmission_line;
 5. **Documentation**: Constraints document design requirements inline
 
 This dual-role syntax represents a paradigm shift in hardware description, moving from prescriptive component selection to constraint-based design with automatic optimization and verification.
+
+#### Placeholder Parameters for Synthesis
+
+Components may use placeholder parameters when exact values should be determined by synthesis tools based on circuit analysis:
+
+```bhdl
+// Placeholder syntax with constraints
+board AutoResistorSelection {
+    power VCC = 5V @ 1A;
+    ground GND;
+    
+    // Placeholder with power and tolerance constraints
+    @VCC -> r1: Res(<?rating: 0.5W, tolerance: 5%>) -> led1: LED(red) -> @GND;
+    
+    // Multiple constraint types
+    filter_cap: Cap(<?voltage: 25V, temperature: -55C to +105C>) {
+        + <- noisy_rail;
+        - <- @GND;
+    }
+}
+```
+
+**Placeholder Syntax Rules:**
+- Placeholders use `<?...>` syntax around constraint specifications
+- Constraints are specified as `name: value` pairs within placeholders
+- Multiple constraints are separated by commas
+- Synthesis tools resolve placeholder values based on circuit analysis and constraints
+- Common constraint types:
+  - `rating`: power rating (e.g., `0.25W`, `0.5W`, `2W`)
+  - `tolerance`: value tolerance (e.g., `1%`, `5%`, `10%`)
+  - `voltage`: voltage rating (e.g., `25V`, `50V`, `100V`)
+  - `temperature`: operating temperature range (e.g., `-40C to +85C`)
+  - `package`: physical package constraint (e.g., `"0805"`, `"1206"`, `"SOT23"`)
+
+**Resolution Process:**
+1. Circuit analysis determines electrical requirements (current, voltage, power)
+2. Constraints filter available components from component database
+3. Synthesis selects optimal component meeting all requirements
+4. Safety analysis validates the selection
+
+**Example with LED Current Limiting:**
+```bhdl
+// Let SPICE determine optimal resistance for 20mA LED current
+@VCC -> r_led: Res(<?rating: 0.25W, tolerance: 5%>) {
+    constraint current_limit = 20mA;  // Target LED current
+    constraint led_forward_voltage = 2.0V;  // LED specification
+} -> led: LED(red) -> @GND;
+
+// Synthesis calculates: R = (5V - 2.0V) / 20mA = 150Ω
+// Then selects 150Ω ±5%, 0.25W resistor from component database
+```
 
 ---
 
@@ -1066,26 +1810,321 @@ board Example {
 
 ### 7.2 Power Domain Declaration
 
+Power domains can be declared using either the simple keyword syntax or advanced block syntax:
+
+#### Simple Power Domain Syntax
 ```bhdl
+// Basic power domain declarations
+board Example {
+    // Simple power domains with voltage and current
+    power VCC = 5V @ 1A;           // 5V rail, 1A capacity
+    power VCC_3V3 = 3.3V @ 500mA;  // 3.3V rail, 500mA capacity
+    power USB_5V = 5V @ 2A;        // USB power input
+    
+    // Ground domains
+    ground GND;                    // Main ground reference
+    ground CHASSIS_GND;            // Chassis/shield ground
+    ground ANALOG_GND;             // Separate analog ground
+}
+```
+
+#### Advanced Power Domain Block Syntax
+```bhdl
+// Advanced power domain declarations with detailed specifications
 power_domains {
   USB_5V: input_power {
-    voltage = 5V ± 5%;
-    current_max = 2A;
-    source = USB_CONNECTOR.VBUS;
+    voltage = 5V ± 5%;              // Voltage with tolerance
+    current_max = 2A;               // Maximum current capacity
+    source = USB_CONNECTOR.VBUS;    // Physical connection source
+    protection = [overvoltage, overcurrent, reverse_polarity];
   };
   
   VCC_3V3: regulated_power {
-    voltage = 3.3V ± 3%;
-    current_max = 1A;
-    efficiency_min = 85%;
+    voltage = 3.3V ± 3%;            // Tight regulation tolerance
+    current_max = 1A;               // Current capacity
+    efficiency_min = 85%;           // Efficiency requirement
+    ripple_max = 100mVpp;           // Ripple specification
+    startup_time = 50ms;            // Power-up time
+    dependencies = [USB_5V];        // Must come after USB_5V
   };
   
   VCC_1V8_CORE: core_power {
-    voltage = 1.8V ± 2%;
-    current_max = 2A;
-    ripple_max = 50mVpp;
+    voltage = 1.8V ± 2%;            // Core voltage precision
+    current_max = 2A;               // High current for processor
+    ripple_max = 50mVpp;            // Low ripple for sensitive circuits
+    load_regulation = ±1%;          // Load regulation spec
+    sequence_priority = 3;          // Power-up sequence order
+    dependencies = [VCC_3V3];       // Derive from 3.3V rail
   };
 }
+
+// Ground domains with detailed specifications
+ground_domains {
+  GND: digital_ground {
+    impedance_max = 1mΩ;           // Maximum ground impedance
+    connection_type = star_point;   // Star grounding topology
+  };
+  
+  ANALOG_GND: analog_ground {
+    isolation_from = [GND];         // Isolated from digital ground
+    connection_point = single_point; // Single-point connection
+    noise_floor = -80dBV;          // Noise specification
+  };
+  
+### 7.6 Intent Attachment to Flow Connections
+
+BHDL allows attaching intent functions to specific flow connections to guide synthesis and analysis:
+
+#### Basic Intent Attachment Syntax
+
+```bhdl
+// Intent attachment using 'for' keyword
+board SignalProcessing {
+    power VCC = 5V @ 1A;
+    ground GND;
+    
+    // Intent attached to entire signal path
+    analog_input -> amplifier.IN for low_noise(max_ripple=1mV);
+    amplifier.OUT -> adc.IN for timing(setup_time=10ns);
+    
+    // Multiple intents on same connection
+    sensitive_signal -> protection_circuit for [
+        input_protection(overvoltage=5.5V),
+        esd_protection(class=HBM_2kV)
+    ];
+    
+    // Intent with parameters
+    clock_source -> cpu.CLK for timing(
+        frequency=100MHz,
+        jitter<1ps,
+        duty_cycle=50% ± 2%
+    );
+}
+```
+
+#### Intent Propagation Through Components
+
+Intents propagate through component instances and affect the entire signal path:
+
+```bhdl
+// Intent propagation example
+board MotorController {
+    power VCC_12V = 12V @ 5A;
+    ground GND;
+    
+    // Intent attached to flow affects entire path
+    @VCC_12V -> motor_driver.VIN 
+        -> motor_driver.OUT 
+        -> motor.POWER 
+        for high_current(rating=5A, protection=overcurrent);
+    
+    // Intent affects component selection and routing
+    sensor.OUTPUT -> amplifier.IN 
+        -> adc.IN 
+        -> cpu.ADC_CH0 
+        for low_noise(max_ripple=100µV);
+}
+```
+
+#### Hierarchical Intent Inheritance
+
+Intents are inherited through module boundaries and can be overridden:
+
+```bhdl
+// Module with intent specification
+module SensorInterface() {
+    pin SENSOR_IN: signal in;
+    pin DIGITAL_OUT: signal out;
+    pin VCC: power in;
+    pin GND: ground in;
+    
+    // Internal signal path with intent
+    SENSOR_IN -> amplifier: OpAmp().IN for low_noise(max_ripple=10µV);
+    amplifier.OUT -> adc: ADC().IN for precision(bits=16);
+    adc.OUT -> DIGITAL_OUT;
+}
+
+board MainSystem {
+    power VCC_ANALOG = 5V @ 100mA;
+    ground ANALOG_GND;
+    
+    // Module instance inherits and extends intents
+    sensor_if: SensorInterface() {
+        VCC <- @VCC_ANALOG;
+        GND <- @ANALOG_GND;
+        SENSOR_IN <- temperature_sensor.OUT for [
+            // These intents combine with module's internal intents
+            temperature_compensation(range=-40C to +85C),
+            calibration(points=3)
+        ];
+    }
+    
+    sensor_if.DIGITAL_OUT -> cpu.SPI_MISO;
+}
+```
+
+#### Available Intent Functions
+
+**Timing Intents:**
+```bhdl
+// Signal timing requirements
+clock_path for timing(
+    frequency=100MHz,
+    jitter<500ps,
+    duty_cycle=50% ± 1%,
+    rise_time<2ns,
+    fall_time<2ns
+);
+
+// Setup and hold timing
+data_path for timing(
+    setup_time=5ns,
+    hold_time=2ns,
+    propagation_delay<10ns
+);
+
+// Debouncing for mechanical inputs
+switch_input for debounce(
+    time=20ms,
+    method=rc_filter
+);
+```
+
+**Protection Intents:**
+```bhdl
+// Input protection
+external_input for input_protection(
+    overvoltage=5.5V,
+    current_limit=100mA,
+    esd_class=HBM_2kV
+);
+
+// Overcurrent protection
+power_path for protection(
+    overcurrent_limit=2A,
+    thermal_shutdown=85C,
+    short_circuit_protection=enabled
+);
+
+// EMI/EMC protection
+switching_signal for emc_protection(
+    frequency_limit=30MHz,
+    rise_time_limit=5ns,
+    filtering=ferrite_bead
+);
+```
+
+**Signal Processing Intents:**
+```bhdl
+// Anti-aliasing filter
+analog_input for anti_alias(
+    before=adc_component,
+    cutoff=1kHz,
+    order=2,
+    type=butterworth
+);
+
+// Low-noise requirements
+sensitive_analog for low_noise(
+    max_ripple=100µV,
+    bandwidth=1kHz,
+    snr>60dB,
+    grounding=star_point
+);
+
+// Signal conditioning
+sensor_output for signal_conditioning(
+    gain=10x,
+    offset_compensation=enabled,
+    linearization=polynomial_3rd_order
+);
+```
+
+#### Intent Resolution and Analysis
+
+The toolchain uses intents to determine simulation requirements and synthesis hints:
+
+```bhdl
+// Intent analysis results
+sensor_path for low_noise(max_ripple=1µV);
+// Results in:
+// - sim_mode: AnalogRequired (needs detailed noise analysis)
+// - synthesis_hints: ["Use low-noise op-amps", "Star grounding", "Shielding recommended"]
+// - validation_rules: ["Signal ripple must be < 1µV", "SNR > 80dB"]
+
+high_speed_data for timing(frequency=1GHz);
+// Results in:
+// - sim_mode: DigitalWithTiming (needs timing simulation)
+// - synthesis_hints: ["Differential signaling", "Impedance control", "Length matching"]
+// - validation_rules: ["Rise time < 100ps", "Impedance = 50Ω ± 10%"]
+```
+
+#### Intent Conflict Resolution
+
+When multiple intents apply to the same signal path, BHDL uses priority rules:
+
+```bhdl
+// Intent priority resolution
+board ConflictExample {
+    // Global intent for all connections in this board
+    with intent(default_protection=overvoltage_5V5) {
+        
+        // Specific intent overrides global intent
+        sensitive_input -> amplifier.IN for [
+            input_protection(overvoltage=3V6),  // Overrides global 5.5V
+            low_noise(max_ripple=10µV)          // Additional requirement
+        ];
+        
+        // Global intent applies here (no override)
+        digital_input -> buffer.IN;  // Uses overvoltage_5V5 protection
+    }
+}
+```
+
+**Priority Rules:**
+1. **Most Specific**: Direct intent attachment overrides broader scopes
+2. **Additive**: Non-conflicting intents are combined
+3. **Error on Conflict**: Contradictory intents generate compilation errors
+4. **Inheritance**: Child modules inherit parent intents unless overridden
+
+This intent system enables design intent capture and guides both synthesis and analysis phases of the toolchain.
+  CHASSIS_GND: safety_ground {
+    connection = earth_ground;      // Earth ground connection
+    isolation_voltage = 1500V;     // Safety isolation rating
+  };
+}
+```
+
+#### Power Domain Features
+
+**Domain Types:**
+- `input_power`: External power sources (USB, barrel jack, battery)
+- `regulated_power`: Regulated supplies (linear or switching regulators)
+- `core_power`: Processor/FPGA core voltages
+- `memory_power`: Memory interface voltages (DDR, SRAM)
+- `analog_power`: Clean power for analog circuits
+- `backup_power`: Battery backup or supercap domains
+
+**Common Properties:**
+- `voltage`: Nominal voltage with optional tolerance (e.g., `3.3V ± 5%`)
+- `current_max`: Maximum current capacity
+- `ripple_max`: Maximum allowable ripple voltage
+- `efficiency_min`: Minimum power conversion efficiency
+- `startup_time`: Time to reach stable output
+- `shutdown_time`: Time to discharge when disabled
+- `dependencies`: Other domains that must be stable first
+- `sequence_priority`: Numeric priority for power sequencing (1=first)
+
+**Protection Features:**
+```bhdl
+// Protection specifications in power domains
+protection = [
+    overvoltage(threshold=5.5V, action=shutdown),
+    overcurrent(limit=2.1A, action=current_limit),
+    reverse_polarity(protection=schottky_diode),
+    thermal_shutdown(threshold=85C),
+    undervoltage_lockout(threshold=4.5V)
+];
 ```
 
 ### 7.3 Power Flow Specification
@@ -1269,7 +2308,241 @@ constrain stackup {
 
 ---
 
-## 10. Multi-File Team Workflow
+## 12. Toolchain and Integration
+
+### 12.1 Toolchain Overview
+
+The BHDL toolchain provides seamless integration with existing EDA workflows while offering advanced analysis capabilities:
+
+```
+BHDL Source (.bhdl)
+       ↓
+┌─────────────────┐
+│ BHDL Compiler   │ ← Parse, analyze, synthesize
+└─────────────────┘
+       ↓
+┌─────────────────┐
+│ Circuit Analysis│ ← DC analysis, safety checks, optimization
+└─────────────────┘
+       ↓
+┌─────────────────┐  
+│ Netlist Export  │ ← Generate industry-standard outputs
+└─────────────────┘
+       ↓
+┌─────────────────┐
+│ EDA Tool Import │ ← Altium, KiCad, Cadence, etc.
+└─────────────────┘
+```
+
+### 12.2 Import/Export Capabilities
+
+#### Netlist Export
+```bash
+# Export to industry standard formats
+bhdl export --format kicad_netlist project.bhdl
+bhdl export --format altium_netlist project.bhdl  
+bhdl export --format spice_netlist project.bhdl
+bhdl export --format cadence_netlist project.bhdl
+
+# Include component library references
+bhdl export --format kicad_netlist --with-library project.bhdl
+```
+
+#### Component Library Integration
+```bash
+# Import existing component libraries
+bhdl import --library kicad_symbols /path/to/library.kicad_sym
+bhdl import --library altium_lib /path/to/library.IntLib
+
+# Export BHDL component definitions  
+bhdl export --library kicad_symbols --output symbols.kicad_sym
+```
+
+#### Schematic Import (Experimental)
+```bash
+# Import existing schematics for conversion
+bhdl import --schematic kicad /path/to/schematic.kicad_sch
+bhdl import --schematic altium /path/to/schematic.SchDoc
+```
+
+### 12.3 Constraint Export
+
+Physical constraints defined in BHDL are exported to appropriate EDA tool formats:
+
+```bhdl
+// BHDL constraints
+constrain routing {
+  route ddr_signals {
+    impedance = 50Ω ± 10%;
+    length_match = ±0.1mm;
+    via_count_max = 2;
+  };
+}
+```
+
+**Exports to:**
+- **KiCad**: PCB rules (`.kicad_dru`) and constraint classes
+- **Altium**: Design rules and room definitions  
+- **Cadence**: Physical constraint sets
+- **Mentor Graphics**: Constraint manager files
+
+### 12.4 Debugging and Visualization
+
+#### Net Connectivity Viewer
+```bash
+# Interactive net tracing
+bhdl debug --trace-net @VCC_3V3 project.bhdl
+bhdl debug --component-connections U1 project.bhdl
+
+# Generate connectivity reports  
+bhdl analyze --connectivity --output connectivity_report.html
+```
+
+#### Circuit Visualization
+```bash
+# Generate schematic-style diagrams
+bhdl visualize --schematic --output schematic.svg project.bhdl
+
+# Generate block diagrams
+bhdl visualize --block-diagram --output blocks.svg project.bhdl
+
+# Power flow visualization
+bhdl visualize --power-flow --output power.svg project.bhdl
+```
+
+### 12.5 Quick Start Guide
+
+#### 1. Installation
+```bash
+# Install BHDL toolchain
+curl -sSL https://get.bhdl.dev | sh
+# or
+cargo install bhdl-cli
+```
+
+#### 2. Create Your First Project
+```bash
+# Create new project
+bhdl new my_project
+cd my_project
+
+# Edit main board file
+vim src/main_board.bhdl
+```
+
+#### 3. Build and Export
+```bash
+# Analyze design  
+bhdl build --analyze
+
+# Export to KiCad
+bhdl export --format kicad_netlist --output build/netlist.net
+
+# Export constraints
+bhdl export --format kicad_rules --output build/rules.kicad_dru
+```
+
+#### 4. Import to EDA Tool
+- **KiCad**: File → Import → Netlist, then load `build/netlist.net`
+- **Altium**: Design → Import → Netlist, select `build/netlist.net`
+- **Cadence**: Import → Netlist, specify format and file
+
+### 12.6 Error Analysis and Safety Checks
+
+```bash
+# Run comprehensive safety analysis
+bhdl check --safety project.bhdl
+
+# Check for electrical violations
+bhdl check --electrical project.bhdl  
+
+# Verify power integrity
+bhdl check --power project.bhdl
+
+# Generate safety report
+bhdl analyze --safety --output safety_report.html
+```
+
+#### Sample Error Output
+```
+[ERROR] Safety Analysis Failed
+  Location: src/power.bhdl:15:8
+  Component: LED 'D1' 
+  Issue: Current limiting violation
+  Details: LED current 500mA exceeds maximum 30mA (16.7x overcurrent)
+  Suggestion: Add 180Ω resistor between @VCC and LED.A
+  Auto-fix: bhdl fix --safety --component D1
+
+[WARNING] Power Analysis  
+  Location: src/main.bhdl:22:4
+  Net: @VCC_3V3
+  Issue: Supply current approaching limit
+  Details: Total load 0.95A, supply rated 1.0A (95% utilization)
+  Suggestion: Verify supply margins or increase capacity
+```
+
+### 12.7 IDE Integration
+
+#### VS Code Extension
+- Syntax highlighting and IntelliSense
+- Real-time error checking
+- Component library browser
+- Interactive debugging
+
+#### Language Server Protocol (LSP)
+```bash
+# Enable LSP for any editor
+bhdl lsp --stdio
+```
+
+**Supported editors:** VS Code, Vim/Neovim, Emacs, Sublime Text, IntelliJ
+
+### 12.8 Incremental Adoption Strategy
+
+1. **Start Small**: Begin with simple circuits (LED, regulators)
+2. **Library Building**: Convert existing component libraries to BHDL format  
+3. **Power Circuits**: Leverage automatic analysis for power supplies
+4. **Complex Designs**: Gradually adopt for larger, multi-board systems
+5. **Team Workflow**: Implement multi-file collaboration features
+
+### 12.9 Tool Compatibility Matrix
+
+| EDA Tool | Netlist Import | Constraint Import | Library Import | Status |
+|----------|----------------|-------------------|----------------|---------|
+| KiCad 6+ | ✅ Full | ✅ PCB Rules | ✅ Symbols | Stable |
+| Altium Designer | ✅ Full | ✅ Design Rules | ✅ Libraries | Stable |
+| Cadence Allegro | ✅ Full | ✅ Constraint Sets | 🔄 Planned | Beta |
+| Mentor Graphics | ✅ Basic | 🔄 Planned | 🔄 Planned | Alpha |
+| Eagle | ✅ Basic | ❌ Limited | ❌ Limited | Legacy |
+
+**Legend:** ✅ Supported, 🔄 In Development, ❌ Not Supported
+
+### 12.10 Implementation Status
+
+BHDL's advanced features are built on substantial existing infrastructure:
+
+#### ✅ **Production Ready**
+- **Component Database**: Full KiCad import/export with 10,000+ components
+- **SPICE Analysis**: GLACIER solver with GPU acceleration  
+- **Component Synthesis**: Two-stage synthesis with supplier integration
+- **Safety Analysis**: Electrical limits checking with auto-fix suggestions
+- **Multi-file Projects**: Full import/export system
+
+#### 🔄 **Integration Phase**  
+- **Dual-Role Syntax**: Parser and SPICE integration (constraint inference implemented)
+- **Automatic Level Shifting**: Component database queries (level shifter components available)
+- **Advanced Constraints**: Constraint resolution engine (individual components working)
+
+#### 📋 **Roadmap**
+- **IDE Extensions**: VS Code language server  
+- **Advanced Visualization**: Interactive circuit diagrams
+- **Cloud Component Libraries**: Distributed component databases
+
+The core technical capabilities exist and are proven in production use - the focus is now on integration and user experience polish.
+
+---
+
+## 13. Multi-File Team Workflow
 
 ### 10.1 File Structure
 
@@ -1395,45 +2668,359 @@ physical_implementation Layout_Constraints {
 
 ---
 
-## 11. Standard Library
+## 11. Standard Library and Custom Libraries
 
-### 11.1 Component Library
+### 11.1 BHDL Standard Library (bhdl-stdlib)
 
-```bhdl
-// std.components.*
-Resistor(value, tolerance=5%, power=0.25W, package=auto);
-Capacitor(value, voltage, dielectric="X7R", package=auto);
-Inductor(value, current, dcr, package=auto);
+The BHDL standard library provides a comprehensive collection of component definitions, electrical models, and design patterns. It serves as both a reference implementation and a practical component library.
 
-LED(color, current=20mA, package="0805");
-Diode(type, voltage, current, package=auto);
+#### Library Structure
 
-OpAmp(part_number, package=auto);
-Comparator(part_number, package=auto);
-LinearRegulator(output_voltage, current, package=auto);
+```
+bhdl-stdlib/
+├── index.bhdl                  # Main library index
+├── manifest.toml               # Library metadata
+├── types/
+│   └── electrical_types.bhdl   # Shared type definitions
+├── passives/                   # Passive components
+│   ├── resistor.bhdl
+│   ├── capacitor.bhdl
+│   ├── inductor.bhdl
+│   ├── led.bhdl
+│   └── diode.bhdl
+├── regulators/                 # Voltage regulators
+│   ├── linear_regulator_base.bhdl
+│   └── lm7805.bhdl
+├── power/                      # Power system components
+│   ├── power.bhdl
+│   └── ground.bhdl
+├── connectors/
+│   └── testpoint.bhdl
+├── behavioral/                 # Behavioral models
+│   └── buck_converter.bhdl
+└── src/                       # Rust interface
+    ├── lib.rs
+    └── intents/               # Intent system
+        ├── timing.rs
+        ├── protection.rs
+        └── signal_processing.rs
 ```
 
-### 11.2 Interface Library
+#### Component Library Examples
 
 ```bhdl
-// std.interfaces.*
-I2C(voltage, frequency=400kHz, pullups=4.7kΩ);
-SPI(voltage, frequency=1MHz, mode=0);
-UART(voltage, baud=115200, flow_control=false);
-USB2(speed=full_speed, power=100mA);
-DDR3(width=16bit, speed=800MHz, voltage=1.5V);
+// Import standard library components
+import "bhdl-stdlib/passives/resistor.bhdl";
+import "bhdl-stdlib/passives/capacitor.bhdl";
+import "bhdl-stdlib/regulators/lm7805.bhdl";
+
+board ExampleCircuit {
+    power VIN = 12V @ 1A;
+    power VCC = 5V @ 500mA;
+    ground GND;
+    
+    // Use stdlib components
+    @VIN -> reg: LM7805() {
+        IN <- @VIN;
+        OUT -> @VCC;
+        GND <- @GND;
+    }
+    
+    // Standard passive components with full electrical models
+    @VCC -> res: Res(330Ω, tolerance=1%, package="0805").1;
+    res.2 -> led: LED(red).A;
+    led.K -> @GND;
+    
+    // Decoupling with SPICE parameters
+    @VCC -> cap: Cap(100µF, voltage=25V, type="electrolytic").+;
+    cap.- -> @GND;
+}
 ```
 
-### 11.3 Pattern Library
+#### Electrical Type System
+
+The stdlib provides comprehensive electrical type definitions:
 
 ```bhdl
-// std.patterns.*
-voltage_divider(input, output, ratio, accuracy=5%);
-rc_filter(input, output, cutoff_frequency);
-crystal_oscillator(frequency, load_capacitance);
-power_on_reset(delay, threshold);
-linear_regulator_circuit(input_v, output_v, current);
+// Shared electrical characteristics
+type ElectricalLimits = {
+    max_voltage: voltage?,
+    max_current: current?,
+    max_power: power?,
+    operating_temp_min: temperature?,
+    operating_temp_max: temperature?,
+};
+
+type ImpedanceCharacteristics = {
+    dc_resistance: resistance?,
+    output_impedance: resistance?,
+    input_impedance: resistance?,
+    can_source_current: bool,
+    can_sink_current: bool,
+    max_source_current: current?,
+    max_sink_current: current?,
+    voltage_drop: voltage?,
+    current_limiting: bool,
+    transient_response: time?,
+};
 ```
+
+### 11.2 Intent System
+
+The intent system allows designers to specify functional requirements that guide synthesis and validation:
+
+#### Available Intent Functions
+
+```bhdl
+// Timing intents
+signal_path |> delay(10ns);                    // Specify signal delay
+switch_input |> debounce(time=20ms);           // Switch debouncing
+
+// Protection intents  
+input_signal |> input_protection(             // Comprehensive protection
+    overvoltage=5.5V, 
+    current_limit=100mA
+);
+sensitive_line |> overvoltage_protection(3.6V); // Simple voltage clamping
+
+// Signal processing intents
+analog_input |> anti_alias(                   // Anti-aliasing filter
+    before=adc_component,
+    cutoff=1kHz
+);
+audio_path |> low_noise(max_ripple=1mV);      // Low-noise requirements
+```
+
+#### Intent Resolution
+
+Intents automatically configure simulation and synthesis:
+
+```bhdl
+// Intent drives simulation mode and synthesis hints
+sensor_output |> low_noise(max_ripple=100µV);
+
+// This intent results in:
+// - sim_mode: AnalogRequired (needs careful noise analysis)
+// - synthesis_hints: ["Use low-noise components", "Consider shielding", "Star grounding"]
+// - validation_rules: ["Signal ripple must be < 100µV"]
+```
+
+#### Custom Intent Functions
+
+Define domain-specific intents:
+
+```bhdl
+// Custom intent for motor control
+intent motor_protection(motor_component, max_current: current) -> IntentResult {
+    return IntentResult {
+        sim_mode: AnalogRequired,
+        synthesis_hints: [
+            format!("Current sense resistor for {}A", max_current),
+            "Overcurrent shutdown circuit",
+            "Thermal monitoring"
+        ],
+        validation_rules: [
+            ValidationRule {
+                condition: "has_current_sensing",
+                error_message: "Motor protection requires current sensing"
+            }
+        ]
+    };
+}
+
+// Usage
+drive_motor |> motor_protection(max_current=5A);
+```
+
+### 11.3 Creating Custom Component Libraries
+
+#### Library Structure
+
+Create custom libraries with the same structure as bhdl-stdlib:
+
+```
+my-custom-lib/
+├── manifest.toml               # Library metadata
+├── index.bhdl                 # Export definitions
+├── components/
+│   ├── custom_amplifiers.bhdl
+│   ├── sensors.bhdl
+│   └── power_modules.bhdl
+├── types/
+│   └── custom_types.bhdl
+└── src/                       # Optional Rust interface
+    └── lib.rs
+```
+
+#### Library Manifest
+
+```toml
+# manifest.toml
+[library]
+name = "my-custom-lib"
+version = "1.0.0"
+authors = ["Your Team"]
+description = "Custom component library for specific project"
+
+[components]
+categories = ["amplifiers", "sensors", "power"]
+
+[compatibility]
+bhdl-version = ">=2.0.0"
+
+[dependencies]
+bhdl-stdlib = "1.0.0"
+```
+
+#### Component Definition Example
+
+```bhdl
+// components/custom_amplifiers.bhdl
+import "../types/custom_types.bhdl";
+
+module HighPrecisionOpAmp(
+    gain: float = 1.0,
+    bandwidth: frequency = 1MHz,
+    offset: voltage = 1mV
+) {
+    pin VIN_P: signal in @metadata(
+        function="NonInvertingInput",
+        description="Non-inverting input pin",
+        electrical_type="analog_input"
+    );
+    pin VIN_N: signal in @metadata(
+        function="InvertingInput", 
+        description="Inverting input pin",
+        electrical_type="analog_input"
+    );
+    pin VOUT: signal out @metadata(
+        function="Output",
+        description="Amplifier output",
+        electrical_type="analog_output"
+    );
+    pin VCC: power in;
+    pin VEE: power in;
+    
+    // Custom electrical model
+    attribute component_class = "operational_amplifier";
+    attribute open_loop_gain = 120; // dB
+    attribute bandwidth = bandwidth;
+    attribute input_offset_voltage = offset;
+    attribute slew_rate = 10V/µs;
+    attribute supply_current = 2mA;
+    
+    // SPICE behavioral model
+    attribute spice_model = "opamp_behavioral";
+    attribute spice_gain = gain;
+    attribute spice_bandwidth = bandwidth;
+    attribute spice_offset = offset;
+    
+    // Custom validation rules
+    intent high_precision() -> IntentResult {
+        return IntentResult {
+            sim_mode: AnalogRequired,
+            synthesis_hints: [
+                "Low-noise power supply required",
+                "Guard rings recommended",
+                "Thermal management needed"
+            ],
+            validation_rules: [
+                ValidationRule {
+                    condition: "supply_ripple < 1mV",
+                    error_message: "High precision requires clean power"
+                }
+            ]
+        };
+    }
+}
+```
+
+#### Library Integration
+
+```bhdl
+// Using custom libraries
+import "my-custom-lib/components/custom_amplifiers.bhdl";
+import "bhdl-stdlib/passives/resistor.bhdl";
+
+board PrecisionInstrument {
+    power VCC = 15V @ 100mA;
+    power VEE = -15V @ 100mA;
+    ground GND;
+    
+    // Use custom component with intent
+    input_buffer: HighPrecisionOpAmp(gain=2.0, offset=100µV) {
+        VIN_P <- sensor_input;
+        VIN_N <- feedback_node;
+        VOUT -> output_stage;
+        VCC <- @VCC;
+        VEE <- @VEE;
+    } |> high_precision();
+    
+    // Standard feedback network
+    output_stage -> Res(20kΩ).1 -> feedback_node;
+    feedback_node -> Res(10kΩ).1 -> @GND;
+}
+```
+
+### 11.4 Library Management
+
+#### CLI Commands
+
+```bash
+# List available libraries
+bhdl library list
+
+# Install a library
+bhdl library install my-custom-lib@1.0.0
+
+# Create new library template
+bhdl library create --name my-lib --template basic
+
+# Validate library
+bhdl library validate my-custom-lib/
+
+# Publish library
+bhdl library publish my-custom-lib/
+```
+
+#### Version Management
+
+```bhdl
+// Specify library versions
+import "bhdl-stdlib@1.0.0/passives/resistor.bhdl";
+import "my-custom-lib@>=1.2.0/sensors.bhdl";
+
+// Library-specific configurations
+library "my-custom-lib" {
+    config temperature_units = "celsius";
+    config default_packages = ["0805", "1206"];
+}
+```
+
+### 11.5 Standard Library Components Reference
+
+#### Passive Components
+- `Res(value, tolerance=5%, package="0805")` - Resistors with SPICE models
+- `Cap(value, voltage=50V, type="auto")` - Capacitors (ceramic/electrolytic)
+- `Ind(value, current=1A, core="ferrite")` - Inductors with core models
+- `LED(color, current=20mA)` - LEDs with electrical characteristics
+- `Diode(type="silicon", voltage=600V)` - General-purpose diodes
+
+#### Active Components
+- `LM7805()` - 5V linear regulator with thermal model
+- `LinearRegulatorBase(output_voltage, max_current)` - Generic regulator template
+
+#### Infrastructure
+- `Power(voltage, current)` - Power source modeling
+- `Ground()` - Ground reference with impedance characteristics
+- `TestPoint(style="pad")` - Test points for debugging
+
+#### Pattern Library
+- `voltage_divider(ratio, accuracy=5%)` - Resistor divider networks
+- `rc_filter(cutoff_frequency, order=1)` - RC filter synthesis
+- `power_on_reset(delay, threshold)` - Reset circuit generation
+
+This comprehensive library system enables both standardized design patterns and project-specific customization while maintaining electrical accuracy and design intent capture.
 
 ---
 
@@ -1811,16 +3398,54 @@ usb_connector.DP, usb_connector.DN <- esd_protection(type=TVS, clamp=5.5V);
 6. **Module Definition**: `module Name(params) { implementation }`
 7. **Constraint Declaration**: `constrain { placement, routing, timing }`
 
-### 16.2 Operators
+### 17.2 Operators
 
 ```bhdl
-->    // Unidirectional connection
+// Connection Operators
+->    // Unidirectional connection (pin-to-pin)
 <->   // Bidirectional connection  
 <=>   // Interface connection
-|>    // Flow operator
+|>    // Flow operator (power/signal flows)
+
+// Alternative ASCII Art Syntax (optional)
+----> // Long arrow for emphasis
+<---> // Long bidirectional  
+<===> // Long interface connection
+|===> // Flow with emphasis
+
+// Grouping and Structure
 []    // Grouping/arrays
 {}    // Code blocks
 ()    // Parameters
+
+// Arithmetic and Logic
++, -, *, /, %     // Standard arithmetic
+==, !=, <, >, <=, >= // Comparison
+&&, ||, !         // Logic
+
+// Special
+.     // Pin access
+@     // Net reference
+:     // Component handle
+```
+
+#### Operator Visual Distinctions
+
+To address visual similarity concerns, BHDL supports alternative syntax:
+
+```bhdl
+// Standard syntax
+@VCC -> resistor.1 -> LED.A;
+interface1 <=> interface2;
+power |> regulation |> loads;
+
+// Alternative with visual emphasis (optional)
+@VCC ----> resistor.1 ----> LED.A;
+interface1 <====> interface2;  
+power |====> regulation |====> loads;
+
+// Mixed usage is allowed
+@VCC -> R1.1 ----> LED.A;  // Emphasize important connections
 ```
 
 ### 16.3 Keywords
@@ -2012,4 +3637,456 @@ Safety analysis runs automatically:
 
 No dangerous circuits pass through to PCB layout!
 
-This completes the comprehensive BHDL v2.0 specification. The language provides a complete framework for modern board design while maintaining simplicity through its seven core constructs and flow-based paradigm.
+---
+
+## 20. Formal Grammar
+
+### 20.1 EBNF Grammar
+
+The complete BHDL v2.0 grammar in Extended Backus-Naur Form (EBNF):
+
+```ebnf
+(* BHDL v2.0 Formal Grammar *)
+
+(* Top-level constructs *)
+bhdl_file = { import_statement | board_definition | module_definition | 
+              system_definition | circuit_definition | interface_definition |
+              constrain_statement } ;
+
+(* Import statements *)
+import_statement = "import" string_literal |
+                   "import" "{" identifier_list "}" "from" string_literal ;
+
+(* Board definition *)
+board_definition = "board" identifier "{" board_body "}" ;
+board_body = { power_declaration | ground_declaration | connection_statement |
+               component_instantiation | attribute_statement | 
+               constrain_statement | generate_statement | if_statement } ;
+
+(* Module definition *)
+module_definition = "module" identifier [ parameter_list ] "{" module_body "}" ;
+module_body = { pin_declaration | connection_statement | component_instantiation |
+                generate_statement | if_statement | module_instantiation } ;
+
+(* Parameter list *)
+parameter_list = "(" [ parameter { "," parameter } ] ")" ;
+parameter = identifier ":" type_specification [ "=" default_value ] ;
+
+(* Pin declaration *)
+pin_declaration = "pin" identifier ":" pin_type ;
+pin_type = ( "signal" | "power" | "ground" ) [ pin_direction ] [ pin_attributes ] ;
+pin_direction = "in" | "out" | "inout" ;
+
+(* Power and ground declarations *)
+power_declaration = "power" identifier "=" voltage_spec [ "@" current_spec ] ;
+ground_declaration = "ground" identifier ;
+
+(* Connection statements *)
+connection_statement = connection_source connection_operator connection_target 
+                      [ where_clause ] ;
+connection_source = net_reference | component_pin | flow_expression ;
+connection_target = net_reference | component_pin | flow_expression ;
+connection_operator = "->" | "<->" | "<=>" | "|>" ;
+
+(* Net references *)
+net_reference = "@" identifier [ "@" identifier ] ;
+
+(* Component instantiation *)
+component_instantiation = [ identifier ":" ] component_type [ parameter_list ] 
+                         [ pin_specification ] ;
+component_type = identifier ;
+pin_specification = "{" { pin_connection } "}" ;
+pin_connection = pin_name ( "<-" | "->" ) ( net_reference | component_pin ) ;
+
+(* Component pin reference *)
+component_pin = identifier "." ( identifier | number ) ;
+
+(* Flow expressions *)
+flow_expression = flow_element { "|>" flow_element } ;
+flow_element = identifier | function_call | flow_group ;
+flow_group = "(" flow_expression ")" ;
+
+(* Generate statements *)
+generate_statement = "generate" "for" identifier "in" range_expression 
+                    "{" { statement } "}" ;
+range_expression = expression ".." expression ;
+
+(* Conditional statements *)
+if_statement = "if" "(" expression ")" "{" { statement } "}" 
+              [ "else" "{" { statement } "}" ] ;
+
+(* Constraint statements *)
+constrain_statement = "constrain" constraint_type "{" { constraint_rule } "}" ;
+constraint_type = "placement" | "routing" | "timing" | "power" ;
+constraint_rule = identifier "{" { constraint_property } "}" ;
+
+(* Where clauses *)
+where_clause = "where" constraint_property_list ;
+constraint_property_list = constraint_property { "," constraint_property } ;
+constraint_property = identifier ( "=" | "<" | ">" | "<=" | ">=" ) expression ;
+
+(* With blocks *)
+with_statement = "with" constraint_type "(" constraint_property_list ")" 
+                "{" { statement } "}" ;
+
+(* Interface definitions *)
+interface_definition = "interface" identifier [ parameter_list ] 
+                      "{" { interface_element } "}" ;
+interface_element = signal_declaration | require_statement | perspective_definition ;
+signal_declaration = "signal" identifier ":" signal_type ;
+require_statement = "require" requirement_expression ;
+perspective_definition = "perspective" identifier "{" { signal_declaration } "}" ;
+
+(* Expressions *)
+expression = logical_or_expression ;
+logical_or_expression = logical_and_expression { "||" logical_and_expression } ;
+logical_and_expression = equality_expression { "&&" equality_expression } ;
+equality_expression = relational_expression { ( "==" | "!=" ) relational_expression } ;
+relational_expression = additive_expression { ( "<" | ">" | "<=" | ">=" ) additive_expression } ;
+additive_expression = multiplicative_expression { ( "+" | "-" ) multiplicative_expression } ;
+multiplicative_expression = unary_expression { ( "*" | "/" | "%" ) unary_expression } ;
+unary_expression = [ ( "+" | "-" | "!" ) ] primary_expression ;
+primary_expression = identifier | number | string_literal | 
+                    electrical_value | "(" expression ")" | function_call ;
+
+(* Function calls *)
+function_call = identifier "(" [ argument_list ] ")" ;
+argument_list = expression { "," expression } ;
+
+(* Electrical values *)
+electrical_value = number electrical_unit ;
+electrical_unit = voltage_unit | current_unit | resistance_unit | 
+                 capacitance_unit | inductance_unit | frequency_unit |
+                 time_unit | temperature_unit | power_unit | percentage_unit ;
+
+(* Units - Unicode and ASCII variants *)
+voltage_unit = "V" | "mV" | "kV" | "µV" | "uV" | "nV" |
+               "Vdc" | "Vac" | "Vrms" | "Vpp" ;
+current_unit = "A" | "mA" | "µA" | "uA" | "nA" ;
+resistance_unit = "Ω" | "Ohm" | "kΩ" | "kOhm" | "MΩ" | "MOhm" | 
+                  "mΩ" | "mOhm" ;
+capacitance_unit = "F" | "µF" | "uF" | "nF" | "pF" ;
+inductance_unit = "H" | "mH" | "µH" | "uH" | "nH" ;
+frequency_unit = "Hz" | "kHz" | "MHz" | "GHz" ;
+time_unit = "s" | "ms" | "µs" | "us" | "ns" | "ps" ;
+temperature_unit = "°C" | "degC" | "K" ;
+power_unit = "W" | "mW" | "µW" | "uW" | "nW" | "kW" | "MW" ;
+percentage_unit = "%" | "pct" ;
+
+(* Lexical elements *)
+identifier = letter { letter | digit | "_" } ;
+number = [ sign ] ( integer | real ) ;
+integer = digit { digit } ;
+real = digit { digit } "." digit { digit } [ exponent ] ;
+exponent = ( "e" | "E" ) [ sign ] digit { digit } ;
+sign = "+" | "-" ;
+string_literal = '"' { character } '"' ;
+letter = "a" .. "z" | "A" .. "Z" ;
+digit = "0" .. "9" ;
+character = ? any character except '"' ? ;
+
+(* Keywords *)
+keywords = "board" | "module" | "system" | "circuit" | "interface" |
+          "power" | "ground" | "signal" | "pin" | "import" | "from" |
+          "generate" | "for" | "in" | "if" | "else" | "when" |
+          "constrain" | "where" | "with" | "require" | "perspective" |
+          "attribute" | "alias" | "type" | "null" ;
+
+(* Comments *)
+single_line_comment = "//" { ? any character except newline ? } newline ;
+multi_line_comment = "/*" { ? any character ? } "*/" ;
+```
+
+### 20.2 Operator Precedence
+
+From highest to lowest precedence:
+
+1. **Pin access**: `.` (left-to-right)
+2. **Function calls**: `()` (left-to-right)  
+3. **Unary operators**: `+`, `-`, `!` (right-to-left)
+4. **Multiplicative**: `*`, `/`, `%` (left-to-right)
+5. **Additive**: `+`, `-` (left-to-right)
+6. **Relational**: `<`, `>`, `<=`, `>=` (left-to-right)
+7. **Equality**: `==`, `!=` (left-to-right)
+8. **Logical AND**: `&&` (left-to-right)
+9. **Logical OR**: `||` (left-to-right)
+10. **Connection**: `->`, `<->`, `<=>` (left-to-right)
+11. **Flow**: `|>` (left-to-right)
+
+### 20.3 Reserved Words
+
+Complete list of reserved words in BHDL v2.0:
+
+```
+Keywords:
+  alias, attribute, board, circuit, constrain, else, for, from,
+  generate, ground, if, import, in, interface, module, null,
+  out, inout, perspective, pin, power, require, signal, system,
+  type, when, where, with
+
+Electrical Units (reserved when following numbers):
+  A, F, H, Hz, K, Ohm, V, W, degC, mA, mF, mH, mOhm, mV, mW,
+  nA, nF, nH, nV, nW, pF, pct, ps, uA, uF, uH, us, uV, uW,
+  kOhm, kHz, kV, kW, MHz, MOhm, MV, MW, GHz, GOhm, GV, GW
+
+Boolean Literals:
+  true, false
+
+Special Constants:
+  auto, default
+```
+
+### 20.4 Grammar Notes
+
+1. **Whitespace**: Spaces, tabs, newlines, and comments are ignored except within string literals
+2. **Case Sensitivity**: All identifiers and keywords are case-sensitive
+3. **Statement Termination**: Semicolons are optional but recommended for clarity
+4. **Block Structure**: Braces `{}` define scope and group statements
+5. **String Escaping**: Standard C-style escape sequences in string literals
+6. **Unicode Support**: Full Unicode support in identifiers and string literals
+7. **Comment Nesting**: Multi-line comments do not nest
+
+---
+
+## 21. Future Language Extensions
+
+### 21.1 Planned Block Types
+
+The following block types are planned for future BHDL versions to address real-world board design requirements. The syntax follows the existing `block_name { ... }` pattern, with intelligence implemented in the appropriate analyzer crates.
+
+#### 21.1.1 Mechanical and Physical Constraints
+
+```bhdl
+mechanical {
+    max_component_height = 5mm;        // Low-profile requirement
+    keepout_area = rectangle(10mm, 10mm) at (50mm, 25mm);  // Screw hole
+    connector_edge_clearance = 2mm;    // Board edge access requirements
+    board_outline = rectangle(100mm, 80mm);
+    mounting_holes = [
+        circle(3mm) at (5mm, 5mm),
+        circle(3mm) at (95mm, 75mm)
+    ];
+}
+
+// Component placement with mechanical awareness
+place connector at edge(top, clearance=2mm);
+place heat_sink oriented_for airflow(direction=front_to_back);
+```
+
+#### 21.1.2 Thermal Management
+
+```bhdl
+thermal {
+    ambient_temperature = 25°C;
+    max_junction_temperature = 85°C;
+    airflow_direction = bottom_to_top;
+    airflow_velocity = 2m/s;
+    
+    heat_sources: [switching_regulator, cpu, power_amplifier];
+    heat_sinks: copper_pour(area=100mm²) under switching_regulator;
+    thermal_vias: array(3x3, spacing=2mm) under cpu;
+}
+
+// Thermal-aware placement constraints
+place high_power_components away_from temperature_sensitive;
+place thermal_sensitive_components near thermal_mass;
+```
+
+#### 21.1.3 EMI/EMC Design Rules
+
+```bhdl
+emc {
+    target_class = "FCC_Class_B";
+    frequency_range = 30MHz to 1GHz;
+    
+    // Automatic EMI mitigation strategies
+    switching_signals require guard_traces;
+    clock_frequencies above 10MHz require spread_spectrum;
+    crystal_oscillators require guard_rings;
+    power_planes require stitching_vias(spacing=10mm);
+}
+
+// EMI-aware design directives
+sensitive_circuit |> shield(type=copper_pour, tie_to=@CHASSIS_GND);
+power_input |> emi_filter(common_mode + differential_mode);
+high_speed_signals require differential_pairs(impedance=100Ω);
+```
+
+#### 21.1.4 Manufacturing and Assembly
+
+```bhdl
+manufacturing {
+    fab_house = "JLCPCB";
+    pcb_thickness = 1.6mm;
+    min_trace_width = 0.1mm;           // Fab capability limits
+    min_via_size = 0.2mm;              // Drill capability
+    min_component_spacing = 0.5mm;      // Pick-and-place constraints
+    solder_paste_coverage = 80%;        // Assembly yield requirements
+    
+    assembly_sequence {
+        place [R1, R2, C1] before U1;      // Small parts first
+        U1 requires reflow_profile(lead_free);
+        CONN1 requires wave_solder;         // Through-hole after SMT
+    }
+}
+
+// Design for manufacturing validation
+drc manufacturing {
+    check min_trace_spacing;
+    check component_courtyard_overlap;
+    check solder_mask_clearance;
+}
+```
+
+#### 21.1.5 Test and Debug Infrastructure
+
+```bhdl
+test_strategy {
+    boundary_scan on [CPU, RAM, FLASH];      // JTAG chain definition
+    in_circuit_test via test_points;         // ICT access points
+    functional_test via debug_header;        // Runtime testing access
+    
+    coverage_requirements {
+        power_rails = 100%;           // All power must be testable
+        critical_signals = 95%;       // Key signals accessible
+        digital_io = 80%;             // Most I/O brought out
+    }
+}
+
+debug_access {
+    jtag_chain: CPU.JTAG -> FPGA.JTAG -> @DEBUG_HEADER;
+    serial_console: CPU.UART0 -> @CONSOLE_HEADER;
+    scope_points: [@CLK_CPU, @VCC_CORE] -> test_points;
+    
+    // Programming interfaces
+    swd_interface: CPU.SWDIO, CPU.SWCLK -> @PROG_HEADER;
+}
+```
+
+#### 21.1.6 Advanced Power Integrity
+
+```bhdl
+power_integrity {
+    target_impedance(@VCC_CORE) < 1mΩ @ 100MHz;
+    target_impedance(@VCC_DDR) < 5mΩ @ 400MHz;
+    
+    decoupling_strategy = [
+        bulk: 100µF near regulator,
+        mid: 10µF per power_island(spacing<20mm),
+        high_freq: 0.1µF per IC(distance<5mm),
+        ultra_high: 1nF for switching_freq > 100MHz
+    ];
+    
+    plane_resonance_damping via target_impedance_profile;
+    via_inductance_modeling = enabled;
+}
+
+// Power delivery network optimization
+pdn_analysis {
+    switching_current_profile = sawtooth(10A, 100MHz);
+    acceptable_ripple = 50mV;
+    transient_response < 10µs;
+}
+```
+
+#### 21.1.7 Supply Chain and Sourcing
+
+```bhdl
+sourcing {
+    preferred_suppliers = [digikey, mouser, lcsc, arrow];
+    avoid_single_source = true;
+    target_bom_cost < $25;
+    lifecycle_status = active_production;
+    lead_time_max = 12_weeks;
+    
+    // Automatic alternative part suggestions
+    enable_part_substitution for passive_components;
+    require_approval for active_component_changes;
+}
+
+// Component selection with business constraints
+components {
+    R1: Res(4.7kΩ) {
+        suppliers: minimum 2;
+        cost_target: < $0.01;
+        availability: > 10k_units;
+        alternative_parts: ["RC0603FR-074K7L", "ERJ-3EKF4701V"];
+    }
+}
+```
+
+#### 21.1.8 Design Change Management
+
+```bhdl
+design_history {
+    baseline_revision = "Rev_A";
+    current_revision = "Rev_B";
+    
+    change_log = [
+        change("ECO-001") {
+            description = "Increase LED brightness per customer request";
+            modified: R1.value from 1kΩ to 2kΩ;
+            impact: current_increases_by(2x);
+            approval: [electrical_lead, program_manager];
+            effective_date = "2024-12-15";
+        }
+    ];
+}
+
+// Version-aware component specifications
+R1: Res(value = if (revision >= "Rev_B") { 2kΩ } else { 1kΩ });
+```
+
+### 21.2 Proposed Operators
+
+#### 21.2.1 Test Access Operators
+
+The following operators would provide implicit test and debug access without requiring explicit component instantiation during the sketch phase:
+
+```bhdl
+// Test point operator: "make this signal testable"
+@VCC_5V ->? tp_5v;                    // Auto-insert test point
+critical_clock ->? scope_clk;         // Auto-insert scope access point
+
+// Debug breakout operator: "bring this to a connector"
+cpu.UART_TX =>? debug_console;        // Route to debug header
+cpu.SWD_interface =>? prog_header;    // Programming interface
+
+// Measurement operator: "I need to measure this"
+switching_node ->@ current_sense;     // Insert current sensing
+regulator_output ->@ voltage_monitor; // Insert voltage monitoring
+```
+
+**Implementation Note:** These operators would be syntactic sugar that expands to explicit test point instantiation and routing during the synthesis phase.
+
+### 21.3 Implementation Timeline
+
+#### Phase 1: Core Infrastructure (Next 6 months)
+- `mechanical` block parser and basic DRC integration
+- `test_strategy` block with test point auto-insertion
+- Enhanced `thermal` block with temperature-aware placement
+
+#### Phase 2: Manufacturing Integration (6-12 months)
+- `manufacturing` block with DFM rule checking
+- `sourcing` block with component database integration
+- Advanced `power_integrity` analysis
+
+#### Phase 3: Advanced Features (12-18 months)
+- `emc` block with EMI simulation integration
+- `design_history` with version control integration
+- Test access operators (`->?`, `=>?`, `->@`)
+
+#### Phase 4: Ecosystem Integration (18+ months)
+- Full CAD tool integration for all block types
+- Automated design rule checking across all domains
+- Supply chain integration with real-time availability
+
+### 21.4 Backward Compatibility
+
+All future extensions will maintain backward compatibility with existing BHDL v2.0 syntax. New block types and operators will be additive enhancements that do not break existing designs.
+
+Designs that don't use the new constructs will continue to work exactly as before, while designs that adopt them will gain additional analysis and optimization capabilities.
+
+---
+
+This completes the comprehensive BHDL v2.0 specification with roadmap for future enhancements. The language provides a complete framework for modern board design while maintaining simplicity through its seven core constructs and flow-based paradigm, with a clear path for addressing real-world production requirements.

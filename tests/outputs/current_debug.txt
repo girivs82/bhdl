@@ -1,0 +1,20 @@
+Issue: LED circuit has 0A current despite correct parameters
+
+Circuit:
+  VCC (5V) -> R1 (330Ω) -> LED1 (red, 2V forward) -> GND
+
+Parameters confirmed:
+  - Resistor: 330Ω (correct in SPICE)
+  - LED: 2V forward voltage (correct in model)
+  - Voltage: 5V (correct)
+
+Problem found:
+  - LED1.K is not connected to GND net
+  - GND net has 0 connections
+  - LED1.K connects to an unnamed net instead
+  
+Root cause:
+  The hierarchical connectivity extraction doesn't properly handle the connection:
+    LED1.K -> @GND
+  
+  It creates an unnamed net for LED1.K instead of connecting it to the GND net.

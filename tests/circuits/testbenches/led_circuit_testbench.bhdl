@@ -1,0 +1,131 @@
+// LED circuit with testbench for comprehensive simulation
+board LEDCircuitWithProtection {
+    power VDD = 5V @ 1A;
+    ground GND;
+    
+    // Input protection and LED circuit
+    net input_signal;
+    net protected_signal;
+    
+    // Protection circuit
+    input_signal -> D1: TVSDiode(6V).cathode -> D1.anode -> GND;
+    input_signal -> R1: Res(100Ω).1 -> R1.2 -> protected_signal;
+    
+    // LED driver circuit
+    protected_signal -> Q1: NPN().base;
+    VDD -> R2: Res(220Ω).1 -> R2.2 -> LED1: LED(red).A -> LED1.K -> Q1.collector;
+    Q1.emitter -> GND;
+    
+    // Current monitoring
+    net current_sense;
+    Q1.emitter -> R3: Res(10Ω).1 -> R3.2 -> current_sense -> GND;
+}
+
+// Testbench for LED circuit
+testbench TestLEDCircuit for LEDCircuitWithProtection {
+    // Test 1: Normal operation with ramp input
+    test "normal_operation" {
+        // Ramp input from 0V to 5V over 10ms
+        stimulus input_signal = ramp(0V, 5V, 10ms);
+        
+        // Simulate for 15ms with 100us timestep
+        simulate(15ms, 100us);
+        
+        // Assertions for normal operation
+        assert V(protected_signal) <= 5.1V @ always;  // Protection should limit voltage
+        assert I(LED1) >= 15mA @ t=12ms;             // LED should be on at end
+        assert V(current_sense) <= 0.2V @ always;     // Current limit check
+        
+        // Measure steady-state values
+        measure led_current = I(LED1) @ t=12ms;
+        measure transistor_vce = V(Q1.collector) - V(Q1.emitter) @ t=12ms;
+    }
+    
+    // Test 2: Overvoltage protection test
+    test "overvoltage_protection" {
+        // Apply sudden 12V spike
+        stimulus input_signal = step(0V, 12V) @ t=1ms;
+        
+        simulate(5ms, 10us);
+        
+        // Protection assertions
+        assert V(protected_signal) <= 6.5V @ always;  // TVS should clamp
+        assert I(D1) > 0mA @ t=2ms;                   // TVS should conduct
+        expect V(input_signal) - V(protected_signal) >= 5V @ t=2ms; // Voltage drop across R1
+        
+        measure tvs_current = I(D1) @ t=2ms;
+        measure clamped_voltage = V(protected_signal) @ t=2ms;
+    }
+    
+    // Test 3: PWM dimming test
+    test "pwm_dimming" {
+        // 1kHz PWM with 50% duty cycle
+        stimulus input_signal = pulse(0V, 5V, period=1ms, duty=50%);
+        
+        simulate(10ms, 10us);
+        
+        // Average current should be ~50% of full current
+        assert avg(I(LED1)) >= 7mA @ interval(5ms, 10ms);
+        assert avg(I(LED1)) <= 10mA @ interval(5ms, 10ms);
+        
+        measure avg_led_current = avg(I(LED1)) @ interval(8ms, 10ms);
+        measure peak_led_current = max(I(LED1)) @ interval(8ms, 10ms);
+    }
+    
+    // Test 4: Thermal derating simulation
+    test "thermal_behavior" {
+        // Constant 5V input
+        stimulus input_signal = 5V;
+        
+        // Enable thermal simulation
+        simulate(100ms, 1ms) with thermal;
+        
+        // Temperature-dependent assertions
+        assert T(LED1) <= 85°C @ always;              // Max junction temp
+        assert P(LED1) <= 60mW @ always;              // Max power dissipation
+        
+        // Efficiency check
+        expect efficiency = P(LED1) / P(VDD) >= 0.7 @ t=50ms;
+        
+        measure junction_temp = T(LED1) @ t=90ms;
+        measure total_power = P(VDD) @ t=90ms;
+    }
+    
+    // Test 5: Transient response
+    test "transient_response" {
+        // Fast rising edge
+        stimulus input_signal = step(0V, 5V) @ t=1ms with rise_time=10ns;
+        
+        simulate(3ms, 1ns);
+        
+        // Timing assertions
+        assert rise_time(I(LED1), 10%, 90%) <= 1us;   // LED turn-on time
+        assert V(Q1.collector) >= 0V @ always;         // No negative spikes
+        
+        measure led_rise_time = rise_time(I(LED1), 10%, 90%);
+        measure overshoot = max(I(LED1)) / steady_state(I(LED1)) - 1;
+    }
+}
+
+// Simulation configuration
+simulate_config {
+    // Global simulation parameters
+    temperature = 25°C;
+    tolerance = 0.1%;
+    
+    // Model parameters
+    models {
+        NPN: {
+            beta = 100,
+            vbe_on = 0.7V,
+            vce_sat = 0.2V
+        }
+    }
+    
+    // Output configuration
+    output {
+        format = "csv";
+        save_all_voltages = true;
+        save_all_currents = true;
+    }
+}

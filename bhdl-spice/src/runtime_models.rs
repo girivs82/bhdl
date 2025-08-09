@@ -9,7 +9,7 @@ use anyhow::{Result, Context};
 use bhdl_stdlib::{StdlibReader, StdlibComponentDefinition};
 use bhdl_common::{ExpressionEvaluator, Value};
 
-use crate::{ComponentModel, SpiceError};
+use crate::ComponentModel;
 use crate::equation_engine::EquationEngine;
 
 /// Context for model execution - provides access to circuit state and stamping
@@ -39,20 +39,33 @@ impl<'a> ModelExecutionContext<'a> {
     }
     
     /// Stamp linear element (conductance + current) into system matrices
+    /// For Newton-Raphson: current is the Norton equivalent current source
     pub fn stamp_linear_element(&mut self, conductance: f64, current: f64) {
         // Stamp conductance in Jacobian
         if let Some(i1) = self.n1_idx {
             self.jacobian[(i1, i1)] += conductance;
-            self.residual[i1] += current;
+            self.residual[i1] -= current;  // Note: negative for correct MNA formulation
         }
         if let Some(i2) = self.n2_idx {
             self.jacobian[(i2, i2)] += conductance;
-            self.residual[i2] -= current;
+            self.residual[i2] += current;  // Note: positive for correct MNA formulation
         }
         if let (Some(i1), Some(i2)) = (self.n1_idx, self.n2_idx) {
             self.jacobian[(i1, i2)] -= conductance;
             self.jacobian[(i2, i1)] -= conductance;
         }
+    }
+    
+    /// Stamp nonlinear element using companion model approach
+    /// For a nonlinear element, we use the companion model:
+    /// i = g*v + i_eq where g = di/dv at operating point and i_eq = i - g*v
+    pub fn stamp_nonlinear_element(&mut self, di_dv: f64, i_actual: f64) {
+        // Calculate equivalent current source value
+        // i_eq = i_actual - di_dv * v_diff
+        let i_eq = i_actual - di_dv * self.v_diff;
+        
+        // Stamp as linear element with current source
+        self.stamp_linear_element(di_dv, i_eq);
     }
 }
 
@@ -105,6 +118,58 @@ impl RuntimeModelEngine {
         }
     }
     
+    /// Execute component model with provided parameters (from ComponentModel enum)
+    pub fn execute_component_model_with_params(
+        &mut self,
+        component_name: &str,
+        model: &ComponentModel,
+        ctx: &mut ModelExecutionContext,
+    ) -> Result<()> {
+        // For now, delegate to the appropriate model execution based on type
+        match model {
+            ComponentModel::Resistor { resistance, .. } => {
+                self.execute_resistor_model(*resistance, ctx)
+            }
+            ComponentModel::LED { forward_voltage, forward_current, saturation_current, emission_coefficient, thermal_voltage, .. } => {
+                self.execute_led_model_with_params(*forward_voltage, *forward_current, *saturation_current, *emission_coefficient, *thermal_voltage, ctx)
+            }
+            ComponentModel::Diode { saturation_current, emission_coefficient, .. } => {
+                let is = saturation_current.unwrap_or(1e-12);
+                let n = emission_coefficient.unwrap_or(1.0);
+                self.execute_diode_model(is, n, ctx)
+            }
+            ComponentModel::Capacitor { capacitance, .. } => {
+                // For DC analysis, capacitors are open circuits
+                let r_open = 1e12; // 1TΩ
+                let g = 1.0 / r_open;
+                ctx.stamp_linear_element(g, 0.0);
+                Ok(())
+            }
+            ComponentModel::Inductor { inductance, .. } => {
+                // For DC analysis, inductors are short circuits
+                let r_short = 1e-3; // 1mΩ
+                let g = 1.0 / r_short;
+                ctx.stamp_linear_element(g, 0.0);
+                Ok(())
+            }
+            ComponentModel::CurrentSource { current, .. } => {
+                self.execute_current_source_model(*current, ctx)
+            }
+            ComponentModel::VoltageRegulator { output_voltage, dropout_voltage, quiescent_current, .. } => {
+                self.execute_voltage_regulator_model(
+                    *output_voltage,
+                    *dropout_voltage,
+                    *quiescent_current,
+                    ctx
+                )
+            }
+            _ => {
+                // For other models, try stdlib lookup
+                self.execute_component_model(component_name, ctx)
+            }
+        }
+    }
+    
     /// Execute component model based on stdlib component definition
     fn execute_stdlib_model(
         &mut self,
@@ -145,43 +210,83 @@ impl RuntimeModelEngine {
     /// Execute resistor model - simple linear
     fn execute_resistor_model(&self, resistance: f64, ctx: &mut ModelExecutionContext) -> Result<()> {
         let g = 1.0 / resistance;
-        let i = g * ctx.v_diff;
-        ctx.stamp_linear_element(g, i);
+        // For a linear resistor, Norton current = 0 (i = g*v, so i_norton = i - g*v = 0)
+        ctx.stamp_linear_element(g, 0.0);
         Ok(())
     }
     
-    /// Execute LED model - exponential diode equation
-    fn execute_led_model(&self, forward_voltage: f64, forward_current: f64, ctx: &mut ModelExecutionContext) -> Result<()> {
-        let vt = 0.026; // Thermal voltage at room temperature
-        let n = 2.0;    // Higher ideality factor for LEDs
+    /// Execute LED model with SPICE parameters from stdlib
+    /// Pure Shockley equation: I = Is * (exp(V/(n*Vt)) - 1)
+    fn execute_led_model_with_params(
+        &self, 
+        forward_voltage: f64, 
+        forward_current: f64,
+        saturation_current: Option<f64>,
+        emission_coefficient: Option<f64>,
+        thermal_voltage: Option<f64>,
+        ctx: &mut ModelExecutionContext
+    ) -> Result<()> {
+        // Use stdlib parameters with realistic defaults if not provided
+        let vt = thermal_voltage.unwrap_or(0.026);     // 26mV at room temperature
+        let n = emission_coefficient.unwrap_or(2.0);   // Typical LED emission coefficient
+        let is = saturation_current.unwrap_or(3.96e-19);  // Realistic saturation current (Vf=2V @ 20mA)
         
-        // Calculate saturation current from forward voltage and current
-        let exp_term_nominal = (forward_voltage / (n * vt)).min(35.0).exp();
-        let is = forward_current / (exp_term_nominal - 1.0);
+        // Pure Shockley equation - no voltage shifting
+        let v = ctx.v_diff;
         
-        if ctx.v_diff > 0.1 {
-            // Forward biased - exponential behavior
-            let exp_arg = (ctx.v_diff / (n * vt)).min(35.0);
-            let exp_term = exp_arg.exp();
-            let i = is * (exp_term - 1.0);
-            let di_dv = (is / (n * vt)) * exp_term;
-            
-            // Limit conductance to prevent numerical issues
-            let di_dv_limited = di_dv.min(1000.0).max(1e-12);
-            ctx.stamp_linear_element(di_dv_limited, i);
-        } else if ctx.v_diff > -0.1 {
-            // Near zero bias - small linear conductance
-            let g = 1e-9;
-            let i = g * ctx.v_diff;
-            ctx.stamp_linear_element(g, i);
+        // Calculate current and conductance using same limits as diode model
+        const MAX_EXP: f64 = 50.0;
+        const MIN_G: f64 = 1e-14;
+        let v_norm = v / (n * vt);
+        
+        let i_actual = if v_norm > MAX_EXP {
+            // Limit exponential to prevent overflow
+            let i_max = is * (MAX_EXP.exp() - 1.0);
+            let g_max = (is / (n * vt)) * MAX_EXP.exp();
+            i_max + g_max * (v - MAX_EXP * n * vt)
+        } else if v_norm < -5.0 {
+            // Deep reverse bias
+            -is
         } else {
-            // Reverse biased - very small leakage current
-            let i = -is;
-            let di_dv = 1e-12;
-            ctx.stamp_linear_element(di_dv, i);
+            // Normal exponential region
+            is * (v_norm.exp() - 1.0)
+        };
+        
+        let di_dv = if v_norm > MAX_EXP {
+            (is / (n * vt)) * MAX_EXP.exp()
+        } else if v_norm < -5.0 {
+            MIN_G
+        } else {
+            ((is / (n * vt)) * v_norm.exp()).max(MIN_G)
+        };
+        
+        // Debug: print LED voltage on first few calls
+        static mut DEBUG_COUNT: usize = 0;
+        unsafe {
+            if DEBUG_COUNT < 10 {
+                eprintln!("LED stamp: V={:.3}V, I={:.2e}A, g={:.2e}S, Is={:.2e}A", 
+                         v, i_actual, di_dv, is);
+                DEBUG_COUNT += 1;
+            }
         }
         
+        // Use the nonlinear stamping method which handles Norton conversion correctly
+        ctx.stamp_nonlinear_element(di_dv, i_actual);
+        
         Ok(())
+    }
+    
+    /// Execute LED model - compatibility wrapper for backward compatibility
+    fn execute_led_model(&self, forward_voltage: f64, forward_current: f64, ctx: &mut ModelExecutionContext) -> Result<()> {
+        // Use defaults for SPICE parameters
+        self.execute_led_model_with_params(
+            forward_voltage, 
+            forward_current, 
+            Some(3.96e-19),  // Default saturation current - realistic value
+            Some(2.0),    // Default emission coefficient
+            Some(0.026),  // Default thermal voltage
+            ctx
+        )
     }
     
     /// Execute diode model - Shockley equation
@@ -190,16 +295,34 @@ impl RuntimeModelEngine {
         let n = emission_coefficient;
         let is = saturation_current;
         
-        if ctx.v_diff > 0.0 {
-            let exp_term = (ctx.v_diff / (n * vt)).min(40.0).exp();
-            let i = is * (exp_term - 1.0);
-            let di_dv = (is / (n * vt)) * exp_term;
-            ctx.stamp_linear_element(di_dv, i);
+        // Calculate current and conductance using same limits as reference
+        const MAX_EXP: f64 = 50.0;
+        const MIN_G: f64 = 1e-14;
+        let v_norm = ctx.v_diff / (n * vt);
+        
+        let i_actual = if v_norm > MAX_EXP {
+            // Limit exponential to prevent overflow
+            let i_max = is * (MAX_EXP.exp() - 1.0);
+            let g_max = (is / (n * vt)) * MAX_EXP.exp();
+            i_max + g_max * (ctx.v_diff - MAX_EXP * n * vt)
+        } else if v_norm < -5.0 {
+            // Deep reverse bias
+            -is
         } else {
-            let i = -is;
-            let di_dv = 1e-12;
-            ctx.stamp_linear_element(di_dv, i);
-        }
+            // Normal exponential region
+            is * (v_norm.exp() - 1.0)
+        };
+        
+        let di_dv = if v_norm > MAX_EXP {
+            (is / (n * vt)) * MAX_EXP.exp()
+        } else if v_norm < -5.0 {
+            MIN_G
+        } else {
+            ((is / (n * vt)) * v_norm.exp()).max(MIN_G)
+        };
+        
+        // Use nonlinear stamping
+        ctx.stamp_nonlinear_element(di_dv, i_actual);
         
         Ok(())
     }
@@ -279,8 +402,8 @@ impl RuntimeModelEngine {
         let resistance = self.parse_resistance_value(component_def)?;
         
         let g = 1.0 / resistance;
-        let i = g * ctx.v_diff;
-        ctx.stamp_linear_element(g, i);
+        // For a linear resistor, Norton current = 0 (i = g*v, so i_norton = i - g*v = 0)
+        ctx.stamp_linear_element(g, 0.0);
         Ok(())
     }
     
@@ -311,39 +434,8 @@ impl RuntimeModelEngine {
         let forward_voltage = self.parse_voltage_value(component_def, "spice_vj")?;
         let forward_current = self.parse_current_value(component_def, "forward_current")?;
         
-        // Use the same exponential model as before, but driven by stdlib data
-        let vt = 0.026; // Thermal voltage at room temperature
-        let n = component_def.attributes.get("spice_n")
-            .and_then(|s| s.parse::<f64>().ok())
-            .unwrap_or(2.0); // Higher ideality factor for LEDs
-        
-        // Calculate saturation current from forward voltage and current
-        let exp_term_nominal = (forward_voltage / (n * vt)).min(35.0).exp();
-        let is = forward_current / (exp_term_nominal - 1.0);
-        
-        if ctx.v_diff > 0.1 {
-            // Forward biased - exponential behavior
-            let exp_arg = (ctx.v_diff / (n * vt)).min(35.0);
-            let exp_term = exp_arg.exp();
-            let i = is * (exp_term - 1.0);
-            let di_dv = (is / (n * vt)) * exp_term;
-            
-            // Limit conductance to prevent numerical issues
-            let di_dv_limited = di_dv.min(1000.0).max(1e-12);
-            ctx.stamp_linear_element(di_dv_limited, i);
-        } else if ctx.v_diff > -0.1 {
-            // Near zero bias - small linear conductance
-            let g = 1e-9;
-            let i = g * ctx.v_diff;
-            ctx.stamp_linear_element(g, i);
-        } else {
-            // Reverse biased - very small leakage current
-            let i = -is;
-            let di_dv = 1e-12;
-            ctx.stamp_linear_element(di_dv, i);
-        }
-        
-        Ok(())
+        // Use the same shifted exponential model as the hardcoded version
+        self.execute_led_model_with_params(forward_voltage, forward_current, None, None, None, ctx)
     }
     
     /// Execute generic diode model based on stdlib attributes
@@ -456,8 +548,8 @@ impl RuntimeModelEngine {
         // Use a very high resistance to approximate this
         let r_open = 1e12; // 1TΩ - effectively open circuit
         let g = 1.0 / r_open;
-        let i = g * ctx.v_diff;
-        ctx.stamp_linear_element(g, i);
+        // For a linear element, Norton current = 0
+        ctx.stamp_linear_element(g, 0.0);
         Ok(())
     }
     
@@ -496,8 +588,8 @@ impl RuntimeModelEngine {
                 // Resistor (R1, R2, etc.) - use default 1kΩ
                 let resistance = 1000.0;
                 let g = 1.0 / resistance;
-                let i = g * ctx.v_diff;
-                ctx.stamp_linear_element(g, i);
+                // For a linear resistor, Norton current = 0
+                ctx.stamp_linear_element(g, 0.0);
                 Ok(())
             },
             'D' => {
@@ -518,8 +610,8 @@ impl RuntimeModelEngine {
                 // Capacitor (C1, C2, etc.) - open circuit in DC
                 let r_open = 1e12; // 1TΩ
                 let g = 1.0 / r_open;
-                let i = g * ctx.v_diff;
-                ctx.stamp_linear_element(g, i);
+                // For a linear element, Norton current = 0
+                ctx.stamp_linear_element(g, 0.0);
                 Ok(())
             },
             _ => {
@@ -539,8 +631,8 @@ impl RuntimeModelEngine {
         eprintln!("Warning: Unknown component type '{}', using default high resistance model", component_name);
         let resistance = 1e9; // 1GΩ default
         let g = 1.0 / resistance;
-        let i = g * ctx.v_diff;
-        ctx.stamp_linear_element(g, i);
+        // For a linear element, Norton current = 0
+        ctx.stamp_linear_element(g, 0.0);
         Ok(())
     }
     

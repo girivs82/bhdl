@@ -1,0 +1,144 @@
+// Comprehensive testbench for 7805 voltage regulator
+// Tests regulation, load response, and thermal behavior
+
+testbench TB_VoltageRegulator for PowerSupplyBoard {
+    simulation {
+        duration: 20ms;
+        timestep: 1us;
+        solver: adaptive;
+        temperature: 25C;
+    }
+    
+    // Monitor all critical signals
+    scope "regulation" {
+        signals: @VIN, @VOUT, U1.GND, C1.voltage, C2.voltage;
+        trigger: @VIN > 6V;
+        capture: continuous;
+    }
+    
+    scope "load_response" {
+        signals: @VOUT, @ILOAD, U1.junction_temp;
+        capture: on_change(threshold: 10mV);
+    }
+    
+    scope "ripple_analysis" {
+        signals: @VOUT;
+        capture: windowed {
+            windows: [
+                (start: 5ms, stop: 5.1ms),   // Light load
+                (start: 10ms, stop: 10.1ms), // Heavy load
+                (start: 15ms, stop: 15.1ms)  // After transient
+            ];
+        };
+    }
+    
+    // Complex stimulus pattern
+    stimulus {
+        // Input voltage with ripple
+        @VIN: 12V + sine(amplitude: 0.5V, frequency: 120Hz);
+        
+        // Variable load current
+        @ILOAD: steps([
+            (time: 0ms, value: 10mA),    // No load
+            (time: 5ms, value: 100mA),   // Light load
+            (time: 8ms, value: 500mA),   // Medium load
+            (time: 12ms, value: 1A),     // Full load
+            (time: 15ms, value: 100mA),  // Back to light
+            (time: 18ms, value: 1.2A)    // Overload
+        ]);
+        
+        // Temperature sweep
+        ambient_temp: ramp(from: 25C, to: 85C, duration: 20ms);
+    }
+    
+    // Comprehensive verification
+    verify {
+        // Output regulation
+        assert @VOUT in range(4.95V, 5.05V) after 2ms
+            message "Output voltage out of regulation";
+            
+        // Dropout voltage
+        assert (@VIN - @VOUT) > 2V when @ILOAD > 100mA
+            message "Insufficient dropout voltage";
+            
+        // Thermal protection
+        assert U1.junction_temp < 125C always
+            message "Junction temperature exceeds maximum";
+            
+        // Transient response
+        assert settling_time(@VOUT, 1%) < 100us after load_change
+            message "Poor transient response";
+            
+        // Input capacitor sizing
+        assert C1.ripple_current < C1.max_ripple_current always
+            message "Input capacitor ripple current exceeded";
+    }
+    
+    // Detailed measurements
+    measure {
+        // Regulation metrics
+        line_regulation = (@VOUT[@VIN=8V] - @VOUT[@VIN=12V]) / 4V * 100%;
+        load_regulation = (@VOUT[@ILOAD=10mA] - @VOUT[@ILOAD=1A]) / @VOUT * 100%;
+        
+        // Efficiency
+        efficiency = (@VOUT * @ILOAD) / (@VIN * @IIN) * 100%;
+        power_dissipation = (@VIN - @VOUT) * @ILOAD;
+        
+        // Ripple and noise
+        output_ripple = peak_to_peak(@VOUT, window: 100us);
+        psrr = 20 * log10(peak_to_peak(@VIN) / peak_to_peak(@VOUT));
+        
+        // Thermal
+        thermal_resistance = (U1.junction_temp - ambient_temp) / power_dissipation;
+        
+        // Transient metrics
+        overshoot = max((@VOUT - 5V) / 5V * 100%);
+        undershoot = max((5V - @VOUT) / 5V * 100%);
+    }
+    
+    // Multi-corner analysis
+    corners {
+        // Component tolerances
+        vary C1.capacitance: gaussian(mean: 100uF, sigma: 20%);
+        vary C2.capacitance: gaussian(mean: 10uF, sigma: 10%);
+        vary U1.output_voltage: uniform(min: 4.9V, max: 5.1V);
+        
+        // Environmental
+        temperature: [-40C, 25C, 85C];
+        
+        // Verify across all corners
+        verify {
+            assert @VOUT in range(4.85V, 5.15V) always;
+            assert efficiency > 40% when @ILOAD > 100mA;
+        }
+    }
+    
+    // Generate reports
+    output vcd {
+        file: "vreg_simulation.vcd";
+        hierarchy: full;
+    }
+    
+    output csv {
+        file: "vreg_measurements.csv";
+        data: [
+            simulation.time,
+            @VIN, @VOUT, @ILOAD,
+            efficiency, power_dissipation,
+            U1.junction_temp
+        ];
+    }
+    
+    output report {
+        format: markdown;
+        file: "vreg_report.md";
+        
+        sections: [
+            summary,
+            measurements,
+            violations,
+            waveforms(scope: "regulation"),
+            corner_analysis
+        ];
+    }
+}

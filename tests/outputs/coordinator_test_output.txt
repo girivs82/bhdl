@@ -1,0 +1,1737 @@
+=== Simple Coordinator Test ===
+Starting analysis...
+Building global scope and definition scopes map (Pass 1)...
+Completed Pass 1.
+Analyzer: Pass 1 complete. Global symbols: 0, Definition scopes: 1
+Analyzer: Starting Pass 2 - References & Basic Types...
+Analyzer: Pass 2 complete. Diagnostics found so far: 6
+Analyzer: Starting Pass 3 - Constant Evaluation...
+Pass3 Visit: SOURCE_FILE ('
+board SimpleLEDBoard {
+    power VCC = 5V @ 100mA;
+    ground GND;
+    
+    @VCC -> R1: Res(330).1 -> R1.2 -> LED1: LED(red).A;
+    LED1.K -> @GND;
+}
+
+testbench TB_SimpleLED for SimpleLEDBoard {
+    simulation {
+        duration: 100us;
+        timestep: 10us;
+        solver: spice;
+        temperature: 25;
+    }
+    
+    scope "main" {
+        signals: @VCC, @GND, R1.current;
+        capture: continuous;
+    }
+    
+    stimulus {
+        @VCC: 5V;
+    }
+    
+    measure {
+        avg_current = R1.current;
+    }
+}')
+Pass3 Visit: BOARD_DEF ('
+board SimpleLEDBoard {
+    power VCC = 5V @ 100mA;
+    ground GND;
+    
+    @VCC -> R1: Res(330).1 -> R1.2 -> LED1: LED(red).A;
+    LED1.K -> @GND;
+}')
+Pass3 Visit: POWER_DECL ('power VCC = 5V @ 100mA;')
+Pass3 Visit: GROUND_DECL ('ground GND;')
+Pass3 Visit: CONNECTION_STMT ('@VCC -> R1: Res(330).1 -> R1.2 -> LED1: LED(red).A;')
+Pass3 Visit: BINARY_EXPR ('@VCC -> R1: Res(330).1 ')
+Pass3 Visit: NET_REF ('@VCC')
+Pass3 Visit: IDENT_REF (' R1')
+Pass3 Visit: COMPONENT_INST (' Res(330).1')
+Pass3 Visit: PARAM_ASSIGN_BLOCK ('(330)')
+Pass3 Visit: PARAM_ASSIGN ('330')
+Pass3 DEBUG: Storing SyntaxNodePtr { kind: VALUE, range: 93..96 } -> 330 for node '330' (VALUE)
+Pass3 Visit: VALUE ('330')
+Pass3 Visit: BINARY_EXPR ('-> R1.2 ')
+Pass3 Visit: PIN_REF (' R1.2')
+Pass3 Visit: BINARY_EXPR ('-> LED1: LED(red).A')
+Pass3 Visit: IDENT_REF (' LED1')
+Pass3 Visit: COMPONENT_INST (' LED(red).A')
+Pass3 Visit: PARAM_ASSIGN_BLOCK ('(red)')
+Pass3 Visit: PARAM_ASSIGN ('red')
+Pass3 Visit: IDENT_REF ('red')
+Pass3 Visit: CONNECTION_STMT ('LED1.K -> @GND;')
+Pass3 Visit: BINARY_EXPR ('LED1.K -> @GND')
+Pass3 Visit: PIN_REF ('LED1.K')
+Pass3 Visit: NET_REF (' @GND')
+Pass3 Visit: TESTBENCH_DEF ('
+
+testbench TB_SimpleLED for SimpleLEDBoard {
+    simulation {
+        duration: 100us;
+        timestep: 10us;
+        solver: spice;
+        temperature: 25;
+    }
+    
+    scope "main" {
+        signals: @VCC, @GND, R1.current;
+        capture: continuous;
+    }
+    
+    stimulus {
+        @VCC: 5V;
+    }
+    
+    measure {
+        avg_current = R1.current;
+    }
+}')
+Pass3 Visit: SIMULATION_BLOCK ('
+    simulation {
+        duration: 100us;
+        timestep: 10us;
+        solver: spice;
+        temperature: 25;
+    }')
+Pass3 Visit: TIME_SPEC (' 100us')
+Pass3 Visit: TIME_SPEC (' 10us')
+Pass3 Visit: SCOPE_DEF ('
+    
+    scope "main" {
+        signals: @VCC, @GND, R1.current;
+        capture: continuous;
+    }')
+Pass3 Visit: NET_REF (' @VCC')
+Pass3 Visit: NET_REF (' @GND')
+Pass3 Visit: NET_REF (' R1.current')
+Pass3 Visit: CAPTURE_MODE ('
+        capture: continuous;')
+Pass3 Visit: STIMULUS_BLOCK ('
+    
+    stimulus {
+        @VCC: 5V;
+    }')
+Pass3 Visit: STIMULUS_ASSIGN ('
+        @VCC: 5V;')
+Pass3 Visit: NET_REF ('
+        @VCC')
+Pass3 Visit: WAVEFORM_EXPR (' 5V')
+Pass3 Visit: VALUE (' 5V')
+Pass3 Visit: MEASURE_BLOCK ('
+    
+    measure {
+        avg_current = R1.current;
+    }')
+Pass3 Visit: MEASUREMENT ('
+        avg_current = R1.current;')
+Pass3 Visit: PIN_REF (' R1.current')
+Analyzer: Pass 3 complete. Constants evaluated: 1, Diagnostics added in pass: 0
+Analyzer: Starting Pass 4 - Bounds Checks...
+Analyzer: Pass 4 complete. Diagnostics added in pass: 0
+Analyzer: Starting Pass 5 - Power Analysis...
+Power Analysis: Processing connection '@VCC' -> 'R1'
+Power Analysis: Assigned component 'R1' to power domain 'VCC'
+Power Analysis: Processing connection 'R1: Res(330)' -> 'R1'
+Power Analysis: Processing connection 'R1' -> 'LED1'
+Power Analysis: Processing connection '@VCC' -> 'R1'
+Power Analysis: Found power connection from domain '@VCC'
+Power Analysis: RHS text = 'R1'
+Power Analysis: 'R1' doesn't look like a power domain, skipping
+Power Analysis: Processing connection 'LED1' -> '@GND'
+Power Analysis: Processing connection 'LED1.K' -> '@GND'
+Power Analysis: Component 'LED1' not found in power domains (LHS: 'LED1.K')
+Power Analysis: Found 2 connections to analyze
+Power Analysis: Domain propagation completed in 1 iterations
+Analyzer: Pass 5 complete. Power domains analyzed: 2, Level shifters: 0, Errors: 0, Warnings: 0
+Analyzer: Starting Pass 6 - Component Inference...
+Analyzer: Component library resolver initialized
+DEBUG: Available power domains for component inference:
+  - VCC: 5V @ 0.1A
+  - GND: 0V @ 1A
+DEBUG: Component domain assignments:
+  - R1 -> VCC
+DEBUG: process_connection_for_components called for: @VCC -> R1: Res(330).1 -> R1.2 -> LED1: LED(red).A;
+DEBUG: Processing inline component: Res
+DEBUG: Extracting normal parameters for Res
+DEBUG: extract_instance_name_from_context called for node:  Res(330).1
+DEBUG: Extracted instance name from context: R1
+DEBUG: Extracted instance name from context: Some("R1")
+DEBUG: Processing v2.0 component instantiation: R1 (type: Res) with 1 parameters
+DEBUG: Component Res has 1 extracted parameters
+DEBUG: Adding param 'value' = '330'
+DEBUG: Loading library from "bhdl-stdlib"
+DEBUG: Loading modules recursively from "bhdl-stdlib"
+DEBUG: Loading module file: "bhdl-stdlib/power/ground.bhdl"
+DEBUG: Loading module file: "bhdl-stdlib/power/power.bhdl"
+DEBUG: Loading module file: "bhdl-stdlib/connectors/testpoint.bhdl"
+DEBUG: Extracting modules from AST for "bhdl-stdlib/connectors/testpoint.bhdl"
+DEBUG: Processing child 1 of kind MODULE_DEF
+DEBUG: Found MODULE_DEF, parsing...
+DEBUG: Successfully parsed module: TestPoint
+DEBUG: Processing child 2 of kind ALIAS
+DEBUG: Processed 2 children
+DEBUG: Extracted 1 modules from Some("testpoint.bhdl")
+DEBUG: Loading module file: "bhdl-stdlib/electrical_params.bhdl"
+DEBUG: Loading module file: "bhdl-stdlib/passives/tvs_diode.bhdl"
+DEBUG: Loading module file: "bhdl-stdlib/passives/inductor.bhdl"
+DEBUG: Loading module file: "bhdl-stdlib/passives/fuse.bhdl"
+DEBUG: Loading module file: "bhdl-stdlib/passives/resistor.bhdl"
+DEBUG: Loading module file: "bhdl-stdlib/passives/capacitor.bhdl"
+DEBUG: Loading module file: "bhdl-stdlib/passives/diode.bhdl"
+DEBUG: Loading module file: "bhdl-stdlib/passives/led.bhdl"
+DEBUG: Loading module file: "bhdl-stdlib/types/electrical_types.bhdl"
+DEBUG: Loading module file: "bhdl-stdlib/behavioral/buck_converter.bhdl"
+DEBUG: Loading module file: "bhdl-stdlib/actives/custom_diode.bhdl"
+DEBUG: Loading module file: "bhdl-stdlib/actives/mosfet.bhdl"
+DEBUG: Loading module file: "bhdl-stdlib/actives/bjt.bhdl"
+DEBUG: Loading module file: "bhdl-stdlib/actives/opamp.bhdl"
+DEBUG: Loading module file: "bhdl-stdlib/examples/connection_constraints_example.bhdl"
+DEBUG: Loading module file: "bhdl-stdlib/ics/voltage_regulator.bhdl"
+DEBUG: Loading module file: "bhdl-stdlib/regulators/linear_regulator_base.bhdl"
+DEBUG: Loading module file: "bhdl-stdlib/regulators/lm2596.bhdl"
+DEBUG: Loading module file: "bhdl-stdlib/regulators/lm7805.bhdl"
+DEBUG: Library loaded with 1 modules
+DEBUG: Processing inline component: LED
+DEBUG: Extracting normal parameters for LED
+DEBUG: extract_instance_name_from_context called for node:  LED(red).A
+DEBUG: Extracted instance name from context: LED1
+DEBUG: Extracted instance name from context: Some("LED1")
+DEBUG: Processing v2.0 component instantiation: LED1 (type: LED) with 1 parameters
+DEBUG: Component LED has 1 extracted parameters
+DEBUG: Adding param 'color' = 'red'
+DEBUG: process_connection_for_components called for: LED1.K -> @GND;
+Analyzer: Pass 6 complete. Components inferred: 2, Warnings: 0
+Analyzer: Starting Pass 6.5 - SPICE Synthesis...
+Analyzer: No components need SPICE resolution
+Analyzer: Starting Pass 7 - Power Sequencing...
+Analyzer: Pass 7 complete. Startup steps: 0, Shutdown steps: 0, Warnings: 0
+Analyzer: Starting Pass 8 - Attribute Analysis...
+Analyzer: Pass 8 complete. Attributes found: 0, Circular dependencies: 0
+Analyzer: Starting Pass 9 - Flow Tracking and Intent Resolution...
+Analyzer: Pass 9 complete. Flow paths tracked: 0, Required simulation mode: PureDigital
+Analysis finished. Found 6 total diagnostics.
+Analysis complete
+Netlist: 2 instances, 3 nets
+Testbench compiled successfully
+Creating TestbenchRunner with SPICE solver...
+Processing 2 instances
+  Instance: R1 (type: ModuleId(2v1))
+    Module found: Res
+    Connections found: 2
+    Processing as two-terminal component
+  Instance: LED1 (type: ModuleId(3v1))
+    Module found: LED
+    Connections found: 2
+    Processing as two-terminal component
+=== SPICE Circuit Debug ===
+Netlist nets: 3
+  Net NetId(1v1): VCC - connections: 3
+    -> PinInstance: R1.1
+    -> PinInstance: R1.2
+    -> PinInstance: LED1.A
+  Net NetId(2v1): unnamed - connections: 1
+    -> PinInstance: LED1.K
+  Net NetId(3v1): GND - connections: 0
+Circuit nodes: 3
+  Node NodeIndex(0): 0 (ground: true)
+  Node NodeIndex(1): VCC (ground: false)
+  Node NodeIndex(2): net_NetId(2v1) (ground: false)
+Circuit branches: 2
+  Branch EdgeIndex(0): R1 - Type: Resistor, Value: 1000
+  Branch EdgeIndex(1): LED1 - Type: LED, Value: 0
+DEBUG: Processing power analysis with 2 domains
+  Domain: VCC - Voltage: 5V @ 0.1A
+  Domain: GND - Voltage: 0V @ 1A
+  Added VoltageSource branch: V0 (VCC -> 0) = 5V
+Circuit branches after voltage sources: 3
+  Branch EdgeIndex(0): R1 - Type: Resistor, Value: 1000
+  Branch EdgeIndex(1): LED1 - Type: LED, Value: 0
+  Branch EdgeIndex(2): V0 - Type: VoltageSource, Value: 5
+Adding component models to solver...
+  Added VoltageSource model: V0 = 5V
+DEBUG: Instance 'R1' attributes: {}
+  Added component model: R1 (Res)
+DEBUG: Instance 'LED1' attributes: {}
+  Added component model: LED1 (LED)
+Set convergence: 100 iterations, 1e-6 tolerance
+✓ TestbenchRunner created successfully
+✓ SPICE solver should be set up with component models
+Running simulation...
+Simulation step 1 at time 0.000000s
+=== Signal Mapping Debug ===
+  Net("@VCC") -> Voltage("VCC")
+  Net("GND") -> Voltage("0")
+  Net("@GND") -> Voltage("0")
+  Current("R1") -> Current("R1")
+  Current("LED1") -> Current("LED1")
+  Net("VCC") -> Voltage("VCC")
+Running SPICE analysis...Iteration 0: residual_norm = 4.990000e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                   ┐
+  │     0     0 -4.99 │
+  └                   ┘
+
+
+  Solution x: 
+  ┌                ┐
+  │ 0.01 0.01    0 │
+  └                ┘
+
+
+Iteration 1: residual_norm = 4.303905e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                                 ┐
+  │ -0.0000000000006860945971283105 -0.0000000000006854091879401336              -4.303905402872033 │
+  └                                                                                                 ┘
+
+
+  Solution x: 
+  ┌                                                                                                 ┐
+  │              0.6960945971281038              0.6954091879401637 -0.0000000000013715037850684442 │
+  └                                                                                                 ┘
+
+
+Iteration 2: residual_norm = 3.699722e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                              ┐
+  │ -0.000000000001193963911081527 -0.000000000001192867261756936            -3.6997219334641724 │
+  └                                                                                              ┘
+
+
+  Solution x: 
+  ┌                                                                                              ┐
+  │             1.3002780665360665             1.2990851992743095 -0.000000000002386831172838463 │
+  └                                                                                              ┘
+
+
+Iteration 3: residual_norm = 3.175232e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                                 ┐
+  │ -0.0000000000015491916934945855 -0.0000000000015478954820014046              -3.175232335415059 │
+  └                                                                                                 ┘
+
+
+  Solution x: 
+  ┌                                                                                           ┐
+  │            1.8247676645852509            1.8232197691032495 -0.00000000000309708717549599 │
+  └                                                                                           ┘
+
+
+Iteration 4: residual_norm = 2.720931e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                                 ┐
+  │ -0.0000000000017818401135832038 -0.0000000000017804967583896494              -2.720930784024652 │
+  └                                                                                                 ┘
+
+
+  Solution x: 
+  ┌                                                                                              ┐
+  │              2.279069215975704             2.2772887192173146 -0.000000000003562336871972853 │
+  └                                                                                              ┘
+
+
+ SUCCESS
+=== SPICE Analysis Results ===
+Node voltages: 3 entries
+  Node net_NetId(2v1) (idx NodeIndex(2)): 5.000000V
+  Node 0 (idx NodeIndex(0)): 0.000000V
+  Node VCC (idx NodeIndex(1)): 5.000000V
+Branch currents: 3 entries
+  Branch R1 (idx EdgeIndex(0)): 0.000000A
+  Branch V0 (idx EdgeIndex(2)): -0.000000A
+  Branch LED1 (idx EdgeIndex(1)): 0.000000A
+  Mapping voltage: Net("GND") = 0.000000V
+  Mapping voltage: Net("@VCC") = 5.000000V
+  Mapping current: Current("R1") = 0.000000A
+  Mapping current: Current("LED1") = 0.000000A
+Signal values extracted: 4 entries
+=== WaveformCapture::capture at time 0.000000 ===
+Values provided: 5 entries
+  Net("@VCC") = 5.000000
+  Current("LED1") = 0.000000
+  Current("R1") = 0.000000
+  Net("GND") = 0.000000
+  Net("\n        @VCC") = 5.000000
+Simulation step 2 at time 0.000010s
+Running SPICE analysis...Iteration 0: residual_norm = 4.990000e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                   ┐
+  │     0     0 -4.99 │
+  └                   ┘
+
+
+  Solution x: 
+  ┌                ┐
+  │ 0.01 0.01    0 │
+  └                ┘
+
+
+Iteration 1: residual_norm = 4.303905e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                                 ┐
+  │ -0.0000000000006860945971283105 -0.0000000000006854091879401336              -4.303905402872033 │
+  └                                                                                                 ┘
+
+
+  Solution x: 
+  ┌                                                                                                 ┐
+  │              0.6960945971281038              0.6954091879401637 -0.0000000000013715037850684442 │
+  └                                                                                                 ┘
+
+
+Iteration 2: residual_norm = 3.699722e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                              ┐
+  │ -0.000000000001193963911081527 -0.000000000001192867261756936            -3.6997219334641724 │
+  └                                                                                              ┘
+
+
+  Solution x: 
+  ┌                                                                                              ┐
+  │             1.3002780665360665             1.2990851992743095 -0.000000000002386831172838463 │
+  └                                                                                              ┘
+
+
+Iteration 3: residual_norm = 3.175232e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                                 ┐
+  │ -0.0000000000015491916934945855 -0.0000000000015478954820014046              -3.175232335415059 │
+  └                                                                                                 ┘
+
+
+  Solution x: 
+  ┌                                                                                           ┐
+  │            1.8247676645852509            1.8232197691032495 -0.00000000000309708717549599 │
+  └                                                                                           ┘
+
+
+Iteration 4: residual_norm = 2.720931e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                                 ┐
+  │ -0.0000000000017818401135832038 -0.0000000000017804967583896494              -2.720930784024652 │
+  └                                                                                                 ┘
+
+
+  Solution x: 
+  ┌                                                                                              ┐
+  │              2.279069215975704             2.2772887192173146 -0.000000000003562336871972853 │
+  └                                                                                              ┘
+
+
+ SUCCESS
+=== SPICE Analysis Results ===
+Node voltages: 3 entries
+  Node 0 (idx NodeIndex(0)): 0.000000V
+  Node net_NetId(2v1) (idx NodeIndex(2)): 5.000000V
+  Node VCC (idx NodeIndex(1)): 5.000000V
+Branch currents: 3 entries
+  Branch V0 (idx EdgeIndex(2)): -0.000000A
+  Branch R1 (idx EdgeIndex(0)): 0.000000A
+  Branch LED1 (idx EdgeIndex(1)): 0.000000A
+  Mapping voltage: Net("GND") = 0.000000V
+  Mapping voltage: Net("@VCC") = 5.000000V
+  Mapping current: Current("R1") = 0.000000A
+  Mapping current: Current("LED1") = 0.000000A
+Signal values extracted: 4 entries
+=== WaveformCapture::capture at time 0.000010 ===
+Values provided: 5 entries
+  Net("@VCC") = 5.000000
+  Current("LED1") = 0.000000
+  Current("R1") = 0.000000
+  Net("GND") = 0.000000
+  Net("\n        @VCC") = 5.000000
+Simulation step 3 at time 0.000020s
+Running SPICE analysis...Iteration 0: residual_norm = 4.990000e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                   ┐
+  │     0     0 -4.99 │
+  └                   ┘
+
+
+  Solution x: 
+  ┌                ┐
+  │ 0.01 0.01    0 │
+  └                ┘
+
+
+Iteration 1: residual_norm = 4.303905e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                                 ┐
+  │ -0.0000000000006860945971283105 -0.0000000000006854091879401336              -4.303905402872033 │
+  └                                                                                                 ┘
+
+
+  Solution x: 
+  ┌                                                                                                 ┐
+  │              0.6960945971281038              0.6954091879401637 -0.0000000000013715037850684442 │
+  └                                                                                                 ┘
+
+
+Iteration 2: residual_norm = 3.699722e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                              ┐
+  │ -0.000000000001193963911081527 -0.000000000001192867261756936            -3.6997219334641724 │
+  └                                                                                              ┘
+
+
+  Solution x: 
+  ┌                                                                                              ┐
+  │             1.3002780665360665             1.2990851992743095 -0.000000000002386831172838463 │
+  └                                                                                              ┘
+
+
+Iteration 3: residual_norm = 3.175232e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                                 ┐
+  │ -0.0000000000015491916934945855 -0.0000000000015478954820014046              -3.175232335415059 │
+  └                                                                                                 ┘
+
+
+  Solution x: 
+  ┌                                                                                           ┐
+  │            1.8247676645852509            1.8232197691032495 -0.00000000000309708717549599 │
+  └                                                                                           ┘
+
+
+Iteration 4: residual_norm = 2.720931e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                                 ┐
+  │ -0.0000000000017818401135832038 -0.0000000000017804967583896494              -2.720930784024652 │
+  └                                                                                                 ┘
+
+
+  Solution x: 
+  ┌                                                                                              ┐
+  │              2.279069215975704             2.2772887192173146 -0.000000000003562336871972853 │
+  └                                                                                              ┘
+
+
+ SUCCESS
+=== SPICE Analysis Results ===
+Node voltages: 3 entries
+  Node net_NetId(2v1) (idx NodeIndex(2)): 5.000000V
+  Node VCC (idx NodeIndex(1)): 5.000000V
+  Node 0 (idx NodeIndex(0)): 0.000000V
+Branch currents: 3 entries
+  Branch R1 (idx EdgeIndex(0)): 0.000000A
+  Branch LED1 (idx EdgeIndex(1)): 0.000000A
+  Branch V0 (idx EdgeIndex(2)): -0.000000A
+  Mapping voltage: Net("@VCC") = 5.000000V
+  Mapping voltage: Net("GND") = 0.000000V
+  Mapping current: Current("R1") = 0.000000A
+  Mapping current: Current("LED1") = 0.000000A
+Signal values extracted: 4 entries
+=== WaveformCapture::capture at time 0.000020 ===
+Values provided: 5 entries
+  Net("@VCC") = 5.000000
+  Current("LED1") = 0.000000
+  Current("R1") = 0.000000
+  Net("GND") = 0.000000
+  Net("\n        @VCC") = 5.000000
+Simulation step 4 at time 0.000030s
+Running SPICE analysis...Iteration 0: residual_norm = 4.990000e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                   ┐
+  │     0     0 -4.99 │
+  └                   ┘
+
+
+  Solution x: 
+  ┌                ┐
+  │ 0.01 0.01    0 │
+  └                ┘
+
+
+Iteration 1: residual_norm = 4.303905e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                                 ┐
+  │ -0.0000000000006860945971283105 -0.0000000000006854091879401336              -4.303905402872033 │
+  └                                                                                                 ┘
+
+
+  Solution x: 
+  ┌                                                                                                 ┐
+  │              0.6960945971281038              0.6954091879401637 -0.0000000000013715037850684442 │
+  └                                                                                                 ┘
+
+
+Iteration 2: residual_norm = 3.699722e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                              ┐
+  │ -0.000000000001193963911081527 -0.000000000001192867261756936            -3.6997219334641724 │
+  └                                                                                              ┘
+
+
+  Solution x: 
+  ┌                                                                                              ┐
+  │             1.3002780665360665             1.2990851992743095 -0.000000000002386831172838463 │
+  └                                                                                              ┘
+
+
+Iteration 3: residual_norm = 3.175232e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                                 ┐
+  │ -0.0000000000015491916934945855 -0.0000000000015478954820014046              -3.175232335415059 │
+  └                                                                                                 ┘
+
+
+  Solution x: 
+  ┌                                                                                           ┐
+  │            1.8247676645852509            1.8232197691032495 -0.00000000000309708717549599 │
+  └                                                                                           ┘
+
+
+Iteration 4: residual_norm = 2.720931e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                                 ┐
+  │ -0.0000000000017818401135832038 -0.0000000000017804967583896494              -2.720930784024652 │
+  └                                                                                                 ┘
+
+
+  Solution x: 
+  ┌                                                                                              ┐
+  │              2.279069215975704             2.2772887192173146 -0.000000000003562336871972853 │
+  └                                                                                              ┘
+
+
+ SUCCESS
+=== SPICE Analysis Results ===
+Node voltages: 3 entries
+  Node 0 (idx NodeIndex(0)): 0.000000V
+  Node net_NetId(2v1) (idx NodeIndex(2)): 5.000000V
+  Node VCC (idx NodeIndex(1)): 5.000000V
+Branch currents: 3 entries
+  Branch V0 (idx EdgeIndex(2)): -0.000000A
+  Branch R1 (idx EdgeIndex(0)): 0.000000A
+  Branch LED1 (idx EdgeIndex(1)): 0.000000A
+  Mapping voltage: Net("GND") = 0.000000V
+  Mapping voltage: Net("@VCC") = 5.000000V
+  Mapping current: Current("R1") = 0.000000A
+  Mapping current: Current("LED1") = 0.000000A
+Signal values extracted: 4 entries
+=== WaveformCapture::capture at time 0.000030 ===
+Values provided: 5 entries
+  Net("@VCC") = 5.000000
+  Current("LED1") = 0.000000
+  Current("R1") = 0.000000
+  Net("GND") = 0.000000
+  Net("\n        @VCC") = 5.000000
+Simulation step 5 at time 0.000040s
+Running SPICE analysis...Iteration 0: residual_norm = 4.990000e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                   ┐
+  │     0     0 -4.99 │
+  └                   ┘
+
+
+  Solution x: 
+  ┌                ┐
+  │ 0.01 0.01    0 │
+  └                ┘
+
+
+Iteration 1: residual_norm = 4.303905e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                                 ┐
+  │ -0.0000000000006860945971283105 -0.0000000000006854091879401336              -4.303905402872033 │
+  └                                                                                                 ┘
+
+
+  Solution x: 
+  ┌                                                                                                 ┐
+  │              0.6960945971281038              0.6954091879401637 -0.0000000000013715037850684442 │
+  └                                                                                                 ┘
+
+
+Iteration 2: residual_norm = 3.699722e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                              ┐
+  │ -0.000000000001193963911081527 -0.000000000001192867261756936            -3.6997219334641724 │
+  └                                                                                              ┘
+
+
+  Solution x: 
+  ┌                                                                                              ┐
+  │             1.3002780665360665             1.2990851992743095 -0.000000000002386831172838463 │
+  └                                                                                              ┘
+
+
+Iteration 3: residual_norm = 3.175232e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                                 ┐
+  │ -0.0000000000015491916934945855 -0.0000000000015478954820014046              -3.175232335415059 │
+  └                                                                                                 ┘
+
+
+  Solution x: 
+  ┌                                                                                           ┐
+  │            1.8247676645852509            1.8232197691032495 -0.00000000000309708717549599 │
+  └                                                                                           ┘
+
+
+Iteration 4: residual_norm = 2.720931e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                                 ┐
+  │ -0.0000000000017818401135832038 -0.0000000000017804967583896494              -2.720930784024652 │
+  └                                                                                                 ┘
+
+
+  Solution x: 
+  ┌                                                                                              ┐
+  │              2.279069215975704             2.2772887192173146 -0.000000000003562336871972853 │
+  └                                                                                              ┘
+
+
+ SUCCESS
+=== SPICE Analysis Results ===
+Node voltages: 3 entries
+  Node VCC (idx NodeIndex(1)): 5.000000V
+  Node net_NetId(2v1) (idx NodeIndex(2)): 5.000000V
+  Node 0 (idx NodeIndex(0)): 0.000000V
+Branch currents: 3 entries
+  Branch R1 (idx EdgeIndex(0)): 0.000000A
+  Branch LED1 (idx EdgeIndex(1)): 0.000000A
+  Branch V0 (idx EdgeIndex(2)): -0.000000A
+  Mapping voltage: Net("@VCC") = 5.000000V
+  Mapping voltage: Net("GND") = 0.000000V
+  Mapping current: Current("R1") = 0.000000A
+  Mapping current: Current("LED1") = 0.000000A
+Signal values extracted: 4 entries
+=== WaveformCapture::capture at time 0.000040 ===
+Values provided: 5 entries
+  Net("@VCC") = 5.000000
+  Current("LED1") = 0.000000
+  Current("R1") = 0.000000
+  Net("GND") = 0.000000
+  Net("\n        @VCC") = 5.000000
+Simulation step 6 at time 0.000050s
+Running SPICE analysis...Iteration 0: residual_norm = 4.990000e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                   ┐
+  │     0     0 -4.99 │
+  └                   ┘
+
+
+  Solution x: 
+  ┌                ┐
+  │ 0.01 0.01    0 │
+  └                ┘
+
+
+Iteration 1: residual_norm = 4.303905e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                                 ┐
+  │ -0.0000000000006860945971283105 -0.0000000000006854091879401336              -4.303905402872033 │
+  └                                                                                                 ┘
+
+
+  Solution x: 
+  ┌                                                                                                 ┐
+  │              0.6960945971281038              0.6954091879401637 -0.0000000000013715037850684442 │
+  └                                                                                                 ┘
+
+
+Iteration 2: residual_norm = 3.699722e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                              ┐
+  │ -0.000000000001193963911081527 -0.000000000001192867261756936            -3.6997219334641724 │
+  └                                                                                              ┘
+
+
+  Solution x: 
+  ┌                                                                                              ┐
+  │             1.3002780665360665             1.2990851992743095 -0.000000000002386831172838463 │
+  └                                                                                              ┘
+
+
+Iteration 3: residual_norm = 3.175232e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                                 ┐
+  │ -0.0000000000015491916934945855 -0.0000000000015478954820014046              -3.175232335415059 │
+  └                                                                                                 ┘
+
+
+  Solution x: 
+  ┌                                                                                           ┐
+  │            1.8247676645852509            1.8232197691032495 -0.00000000000309708717549599 │
+  └                                                                                           ┘
+
+
+Iteration 4: residual_norm = 2.720931e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                                 ┐
+  │ -0.0000000000017818401135832038 -0.0000000000017804967583896494              -2.720930784024652 │
+  └                                                                                                 ┘
+
+
+  Solution x: 
+  ┌                                                                                              ┐
+  │              2.279069215975704             2.2772887192173146 -0.000000000003562336871972853 │
+  └                                                                                              ┘
+
+
+ SUCCESS
+=== SPICE Analysis Results ===
+Node voltages: 3 entries
+  Node 0 (idx NodeIndex(0)): 0.000000V
+  Node net_NetId(2v1) (idx NodeIndex(2)): 5.000000V
+  Node VCC (idx NodeIndex(1)): 5.000000V
+Branch currents: 3 entries
+  Branch V0 (idx EdgeIndex(2)): -0.000000A
+  Branch LED1 (idx EdgeIndex(1)): 0.000000A
+  Branch R1 (idx EdgeIndex(0)): 0.000000A
+  Mapping voltage: Net("GND") = 0.000000V
+  Mapping voltage: Net("@VCC") = 5.000000V
+  Mapping current: Current("LED1") = 0.000000A
+  Mapping current: Current("R1") = 0.000000A
+Signal values extracted: 4 entries
+=== WaveformCapture::capture at time 0.000050 ===
+Values provided: 5 entries
+  Net("@VCC") = 5.000000
+  Current("LED1") = 0.000000
+  Current("R1") = 0.000000
+  Net("GND") = 0.000000
+  Net("\n        @VCC") = 5.000000
+Simulation step 7 at time 0.000060s
+Running SPICE analysis...Iteration 0: residual_norm = 4.990000e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                   ┐
+  │     0     0 -4.99 │
+  └                   ┘
+
+
+  Solution x: 
+  ┌                ┐
+  │ 0.01 0.01    0 │
+  └                ┘
+
+
+Iteration 1: residual_norm = 4.303905e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                                 ┐
+  │ -0.0000000000006860945971283105 -0.0000000000006854091879401336              -4.303905402872033 │
+  └                                                                                                 ┘
+
+
+  Solution x: 
+  ┌                                                                                                 ┐
+  │              0.6960945971281038              0.6954091879401637 -0.0000000000013715037850684442 │
+  └                                                                                                 ┘
+
+
+Iteration 2: residual_norm = 3.699722e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                              ┐
+  │ -0.000000000001193963911081527 -0.000000000001192867261756936            -3.6997219334641724 │
+  └                                                                                              ┘
+
+
+  Solution x: 
+  ┌                                                                                              ┐
+  │             1.3002780665360665             1.2990851992743095 -0.000000000002386831172838463 │
+  └                                                                                              ┘
+
+
+Iteration 3: residual_norm = 3.175232e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                                 ┐
+  │ -0.0000000000015491916934945855 -0.0000000000015478954820014046              -3.175232335415059 │
+  └                                                                                                 ┘
+
+
+  Solution x: 
+  ┌                                                                                           ┐
+  │            1.8247676645852509            1.8232197691032495 -0.00000000000309708717549599 │
+  └                                                                                           ┘
+
+
+Iteration 4: residual_norm = 2.720931e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                                 ┐
+  │ -0.0000000000017818401135832038 -0.0000000000017804967583896494              -2.720930784024652 │
+  └                                                                                                 ┘
+
+
+  Solution x: 
+  ┌                                                                                              ┐
+  │              2.279069215975704             2.2772887192173146 -0.000000000003562336871972853 │
+  └                                                                                              ┘
+
+
+ SUCCESS
+=== SPICE Analysis Results ===
+Node voltages: 3 entries
+  Node net_NetId(2v1) (idx NodeIndex(2)): 5.000000V
+  Node 0 (idx NodeIndex(0)): 0.000000V
+  Node VCC (idx NodeIndex(1)): 5.000000V
+Branch currents: 3 entries
+  Branch LED1 (idx EdgeIndex(1)): 0.000000A
+  Branch R1 (idx EdgeIndex(0)): 0.000000A
+  Branch V0 (idx EdgeIndex(2)): -0.000000A
+  Mapping voltage: Net("GND") = 0.000000V
+  Mapping voltage: Net("@VCC") = 5.000000V
+  Mapping current: Current("LED1") = 0.000000A
+  Mapping current: Current("R1") = 0.000000A
+Signal values extracted: 4 entries
+=== WaveformCapture::capture at time 0.000060 ===
+Values provided: 5 entries
+  Net("@VCC") = 5.000000
+  Current("LED1") = 0.000000
+  Current("R1") = 0.000000
+  Net("GND") = 0.000000
+  Net("\n        @VCC") = 5.000000
+Simulation step 8 at time 0.000070s
+Running SPICE analysis...Iteration 0: residual_norm = 4.990000e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                   ┐
+  │     0     0 -4.99 │
+  └                   ┘
+
+
+  Solution x: 
+  ┌                ┐
+  │ 0.01 0.01    0 │
+  └                ┘
+
+
+Iteration 1: residual_norm = 4.303905e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                                 ┐
+  │ -0.0000000000006860945971283105 -0.0000000000006854091879401336              -4.303905402872033 │
+  └                                                                                                 ┘
+
+
+  Solution x: 
+  ┌                                                                                                 ┐
+  │              0.6960945971281038              0.6954091879401637 -0.0000000000013715037850684442 │
+  └                                                                                                 ┘
+
+
+Iteration 2: residual_norm = 3.699722e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                              ┐
+  │ -0.000000000001193963911081527 -0.000000000001192867261756936            -3.6997219334641724 │
+  └                                                                                              ┘
+
+
+  Solution x: 
+  ┌                                                                                              ┐
+  │             1.3002780665360665             1.2990851992743095 -0.000000000002386831172838463 │
+  └                                                                                              ┘
+
+
+Iteration 3: residual_norm = 3.175232e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                                 ┐
+  │ -0.0000000000015491916934945855 -0.0000000000015478954820014046              -3.175232335415059 │
+  └                                                                                                 ┘
+
+
+  Solution x: 
+  ┌                                                                                           ┐
+  │            1.8247676645852509            1.8232197691032495 -0.00000000000309708717549599 │
+  └                                                                                           ┘
+
+
+Iteration 4: residual_norm = 2.720931e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                                 ┐
+  │ -0.0000000000017818401135832038 -0.0000000000017804967583896494              -2.720930784024652 │
+  └                                                                                                 ┘
+
+
+  Solution x: 
+  ┌                                                                                              ┐
+  │              2.279069215975704             2.2772887192173146 -0.000000000003562336871972853 │
+  └                                                                                              ┘
+
+
+ SUCCESS
+=== SPICE Analysis Results ===
+Node voltages: 3 entries
+  Node net_NetId(2v1) (idx NodeIndex(2)): 5.000000V
+  Node 0 (idx NodeIndex(0)): 0.000000V
+  Node VCC (idx NodeIndex(1)): 5.000000V
+Branch currents: 3 entries
+  Branch R1 (idx EdgeIndex(0)): 0.000000A
+  Branch LED1 (idx EdgeIndex(1)): 0.000000A
+  Branch V0 (idx EdgeIndex(2)): -0.000000A
+  Mapping voltage: Net("GND") = 0.000000V
+  Mapping voltage: Net("@VCC") = 5.000000V
+  Mapping current: Current("R1") = 0.000000A
+  Mapping current: Current("LED1") = 0.000000A
+Signal values extracted: 4 entries
+=== WaveformCapture::capture at time 0.000070 ===
+Values provided: 5 entries
+  Net("@VCC") = 5.000000
+  Current("LED1") = 0.000000
+  Current("R1") = 0.000000
+  Net("GND") = 0.000000
+  Net("\n        @VCC") = 5.000000
+Simulation step 9 at time 0.000080s
+Running SPICE analysis...Iteration 0: residual_norm = 4.990000e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                   ┐
+  │     0     0 -4.99 │
+  └                   ┘
+
+
+  Solution x: 
+  ┌                ┐
+  │ 0.01 0.01    0 │
+  └                ┘
+
+
+Iteration 1: residual_norm = 4.303905e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                                 ┐
+  │ -0.0000000000006860945971283105 -0.0000000000006854091879401336              -4.303905402872033 │
+  └                                                                                                 ┘
+
+
+  Solution x: 
+  ┌                                                                                                 ┐
+  │              0.6960945971281038              0.6954091879401637 -0.0000000000013715037850684442 │
+  └                                                                                                 ┘
+
+
+Iteration 2: residual_norm = 3.699722e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                              ┐
+  │ -0.000000000001193963911081527 -0.000000000001192867261756936            -3.6997219334641724 │
+  └                                                                                              ┘
+
+
+  Solution x: 
+  ┌                                                                                              ┐
+  │             1.3002780665360665             1.2990851992743095 -0.000000000002386831172838463 │
+  └                                                                                              ┘
+
+
+Iteration 3: residual_norm = 3.175232e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                                 ┐
+  │ -0.0000000000015491916934945855 -0.0000000000015478954820014046              -3.175232335415059 │
+  └                                                                                                 ┘
+
+
+  Solution x: 
+  ┌                                                                                           ┐
+  │            1.8247676645852509            1.8232197691032495 -0.00000000000309708717549599 │
+  └                                                                                           ┘
+
+
+Iteration 4: residual_norm = 2.720931e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                                 ┐
+  │ -0.0000000000017818401135832038 -0.0000000000017804967583896494              -2.720930784024652 │
+  └                                                                                                 ┘
+
+
+  Solution x: 
+  ┌                                                                                              ┐
+  │              2.279069215975704             2.2772887192173146 -0.000000000003562336871972853 │
+  └                                                                                              ┘
+
+
+ SUCCESS
+=== SPICE Analysis Results ===
+Node voltages: 3 entries
+  Node VCC (idx NodeIndex(1)): 5.000000V
+  Node net_NetId(2v1) (idx NodeIndex(2)): 5.000000V
+  Node 0 (idx NodeIndex(0)): 0.000000V
+Branch currents: 3 entries
+  Branch LED1 (idx EdgeIndex(1)): 0.000000A
+  Branch V0 (idx EdgeIndex(2)): -0.000000A
+  Branch R1 (idx EdgeIndex(0)): 0.000000A
+  Mapping voltage: Net("@VCC") = 5.000000V
+  Mapping voltage: Net("GND") = 0.000000V
+  Mapping current: Current("LED1") = 0.000000A
+  Mapping current: Current("R1") = 0.000000A
+Signal values extracted: 4 entries
+=== WaveformCapture::capture at time 0.000080 ===
+Values provided: 5 entries
+  Net("@VCC") = 5.000000
+  Current("LED1") = 0.000000
+  Current("R1") = 0.000000
+  Net("GND") = 0.000000
+  Net("\n        @VCC") = 5.000000
+Simulation step 10 at time 0.000090s
+Running SPICE analysis...Iteration 0: residual_norm = 4.990000e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                   ┐
+  │     0     0 -4.99 │
+  └                   ┘
+
+
+  Solution x: 
+  ┌                ┐
+  │ 0.01 0.01    0 │
+  └                ┘
+
+
+Iteration 1: residual_norm = 4.303905e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                                 ┐
+  │ -0.0000000000006860945971283105 -0.0000000000006854091879401336              -4.303905402872033 │
+  └                                                                                                 ┘
+
+
+  Solution x: 
+  ┌                                                                                                 ┐
+  │              0.6960945971281038              0.6954091879401637 -0.0000000000013715037850684442 │
+  └                                                                                                 ┘
+
+
+Iteration 2: residual_norm = 3.699722e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                              ┐
+  │ -0.000000000001193963911081527 -0.000000000001192867261756936            -3.6997219334641724 │
+  └                                                                                              ┘
+
+
+  Solution x: 
+  ┌                                                                                              ┐
+  │             1.3002780665360665             1.2990851992743095 -0.000000000002386831172838463 │
+  └                                                                                              ┘
+
+
+Iteration 3: residual_norm = 3.175232e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                                 ┐
+  │ -0.0000000000015491916934945855 -0.0000000000015478954820014046              -3.175232335415059 │
+  └                                                                                                 ┘
+
+
+  Solution x: 
+  ┌                                                                                           ┐
+  │            1.8247676645852509            1.8232197691032495 -0.00000000000309708717549599 │
+  └                                                                                           ┘
+
+
+Iteration 4: residual_norm = 2.720931e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                                 ┐
+  │ -0.0000000000017818401135832038 -0.0000000000017804967583896494              -2.720930784024652 │
+  └                                                                                                 ┘
+
+
+  Solution x: 
+  ┌                                                                                              ┐
+  │              2.279069215975704             2.2772887192173146 -0.000000000003562336871972853 │
+  └                                                                                              ┘
+
+
+ SUCCESS
+=== SPICE Analysis Results ===
+Node voltages: 3 entries
+  Node VCC (idx NodeIndex(1)): 5.000000V
+  Node 0 (idx NodeIndex(0)): 0.000000V
+  Node net_NetId(2v1) (idx NodeIndex(2)): 5.000000V
+Branch currents: 3 entries
+  Branch LED1 (idx EdgeIndex(1)): 0.000000A
+  Branch R1 (idx EdgeIndex(0)): 0.000000A
+  Branch V0 (idx EdgeIndex(2)): -0.000000A
+  Mapping voltage: Net("@VCC") = 5.000000V
+  Mapping voltage: Net("GND") = 0.000000V
+  Mapping current: Current("LED1") = 0.000000A
+  Mapping current: Current("R1") = 0.000000A
+Signal values extracted: 4 entries
+=== WaveformCapture::capture at time 0.000090 ===
+Values provided: 5 entries
+  Net("@VCC") = 5.000000
+  Current("LED1") = 0.000000
+  Current("R1") = 0.000000
+  Net("GND") = 0.000000
+  Net("\n        @VCC") = 5.000000
+Running SPICE analysis...Iteration 0: residual_norm = 4.990000e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                   ┐
+  │     0     0 -4.99 │
+  └                   ┘
+
+
+  Solution x: 
+  ┌                ┐
+  │ 0.01 0.01    0 │
+  └                ┘
+
+
+Iteration 1: residual_norm = 4.303905e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                                 ┐
+  │ -0.0000000000006860945971283105 -0.0000000000006854091879401336              -4.303905402872033 │
+  └                                                                                                 ┘
+
+
+  Solution x: 
+  ┌                                                                                                 ┐
+  │              0.6960945971281038              0.6954091879401637 -0.0000000000013715037850684442 │
+  └                                                                                                 ┘
+
+
+Iteration 2: residual_norm = 3.699722e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                              ┐
+  │ -0.000000000001193963911081527 -0.000000000001192867261756936            -3.6997219334641724 │
+  └                                                                                              ┘
+
+
+  Solution x: 
+  ┌                                                                                              ┐
+  │             1.3002780665360665             1.2990851992743095 -0.000000000002386831172838463 │
+  └                                                                                              ┘
+
+
+Iteration 3: residual_norm = 3.175232e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                                 ┐
+  │ -0.0000000000015491916934945855 -0.0000000000015478954820014046              -3.175232335415059 │
+  └                                                                                                 ┘
+
+
+  Solution x: 
+  ┌                                                                                           ┐
+  │            1.8247676645852509            1.8232197691032495 -0.00000000000309708717549599 │
+  └                                                                                           ┘
+
+
+Iteration 4: residual_norm = 2.720931e0
+  Jacobian:
+
+  ┌                                                                                     ┐
+  │ 0.0000000010010000000000002                -0.000000001                           1 │
+  │                -0.000000001 0.0000000010010000000000002                           0 │
+  │                           1                           0                         0.1 │
+  └                                                                                     ┘
+
+
+  Residual: 
+  ┌                                                                                                 ┐
+  │ -0.0000000000017818401135832038 -0.0000000000017804967583896494              -2.720930784024652 │
+  └                                                                                                 ┘
+
+
+  Solution x: 
+  ┌                                                                                              ┐
+  │              2.279069215975704             2.2772887192173146 -0.000000000003562336871972853 │
+  └                                                                                              ┘
+
+
+ SUCCESS
+=== SPICE Analysis Results ===
+Node voltages: 3 entries
+  Node 0 (idx NodeIndex(0)): 0.000000V
+  Node net_NetId(2v1) (idx NodeIndex(2)): 5.000000V
+  Node VCC (idx NodeIndex(1)): 5.000000V
+Branch currents: 3 entries
+  Branch R1 (idx EdgeIndex(0)): 0.000000A
+  Branch LED1 (idx EdgeIndex(1)): 0.000000A
+  Branch V0 (idx EdgeIndex(2)): -0.000000A
+  Mapping voltage: Net("GND") = 0.000000V
+  Mapping voltage: Net("@VCC") = 5.000000V
+  Mapping current: Current("R1") = 0.000000A
+  Mapping current: Current("LED1") = 0.000000A
+Signal values extracted: 4 entries
+=== WaveformCapture::capture at time 0.000100 ===
+Values provided: 5 entries
+  Net("@VCC") = 5.000000
+  Current("LED1") = 0.000000
+  Current("R1") = 0.000000
+  Net("GND") = 0.000000
+  Net("\n        @VCC") = 5.000000
+=== Simulation Results ===
+Passed: true
+Violations: 0
+Measurements: {"avg_current": 0.0}
+Simulation time: 0.000100s

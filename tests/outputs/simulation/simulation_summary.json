@@ -1,0 +1,9 @@
+{
+  "measurements": {
+    "avg_current": 0.0
+  },
+  "passed": true,
+  "simulation_time_ms": 10.0,
+  "violations": 0,
+  "waveform_file": "simulation.vcd"
+}

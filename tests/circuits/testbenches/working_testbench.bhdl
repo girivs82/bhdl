@@ -1,0 +1,26 @@
+// Working testbench - using proven syntax from other tests
+
+board WorkingLEDBoard {
+    power VCC = 5V @ 100mA;
+    ground GND;
+    
+    // LED circuit using proven connection syntax
+    @VCC -> R1: Res(330).1;
+    R1.2 -> LED1: LED(red).anode;
+    LED1.cathode -> @GND;
+}
+
+// Simple testbench
+testbench TB_Working for WorkingLEDBoard {
+    simulation {
+        duration: 1ms;
+        timestep: 10us; 
+        solver: spice;
+        temperature: 25;
+    }
+    
+    scope "main" {
+        signals: @VCC, @GND;
+        capture: continuous;
+    }
+}

@@ -144,7 +144,7 @@ impl MaestroOrchestrator {
     }
     
     /// Detect circuit patterns (Algorithm 4 from paper)
-    fn detect_patterns(&self) -> Vec<CircuitPattern> {
+    pub fn detect_patterns(&self) -> Vec<CircuitPattern> {
         let mut patterns = Vec::new();
         
         // Build circuit graph

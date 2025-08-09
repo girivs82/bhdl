@@ -19,9 +19,10 @@ impl<'t> Parser<'t> {
                 SyntaxKind::TYPE_KW => self.parse_type_def(),
                 SyntaxKind::IMPORT_KW => self.parse_import_stmt(),
                 SyntaxKind::INTERFACE_KW => self.parse_interface_def(),
+                SyntaxKind::TESTBENCH_KW => self.parse_testbench(),
                 _ => {
                     // Handle unexpected tokens at the top level
-                    self.error(format!("Expected a top-level item (e.g., 'board', 'module', 'interface', etc.), found {:?}", kind));
+                    self.error(format!("Expected a top-level item (e.g., 'board', 'module', 'interface', 'testbench', etc.), found {:?}", kind));
                     self.bump_any(); // Consume the unexpected token
                 }
             }

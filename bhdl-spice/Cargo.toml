@@ -22,6 +22,7 @@ bhdl-common = { path = "../bhdl-common" }
 bhdl-stdlib = { path = "../bhdl-stdlib" }
 bhdl-parser = { path = "../bhdl-parser" }
 bhdl-ast = { path = "../bhdl-ast" }
+bhdl-analyzer = { path = "../bhdl-analyzer" }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -32,8 +33,24 @@ rayon = "1.7"
 parking_lot = "0.12"
 num_cpus = "1.16"
 
+# GPU/Parallel computing dependencies
+wgpu = { version = "0.19", optional = true }
+bytemuck = { version = "1.14", features = ["derive"], optional = true }
+futures = { version = "0.3", optional = true }
+pollster = { version = "0.3", optional = true }
+chrono = { version = "0.4.41", default-features = false }
+
+# For binaries
+tokio = { version = "1.0", features = ["full"] }
+env_logger = { version = "0.10", optional = true }
+
 [dev-dependencies]
 env_logger = "0.10"
 approx = "0.5"  # For floating point comparisons in tests
 bhdl-synthesizer = { path = "../bhdl-synthesizer" }
 tokio = { version = "1.0", features = ["full"] }
+criterion = "0.5"
+
+[features]
+default = []
+gpu = ["wgpu", "bytemuck", "futures", "pollster"]

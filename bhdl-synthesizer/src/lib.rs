@@ -30,6 +30,7 @@ pub mod interface_synthesis;
 
 // Re-export key types
 pub use bhdl_analyzer::types::AnalysisResult;
+pub use bhdl_analyzer::component_inference::ParameterValue;
 pub use bhdl_netlist::{Netlist, ModuleId, InstanceId, NetId, PortId, PinId, PinInstanceId, PinInstance};
 pub use bhdl_netlist::types::{ModuleKind, PortDirection, PinDirection, PinType, ConnectionPoint, Unit, Quantity, NetClass};
 pub use bhdl_ast::{SourceFile, Board, Module, ComponentDef};
@@ -145,9 +146,13 @@ impl NetlistGenerator {
         
         // Phase 0: Initialize database mapper if needed
         if self.database_mapper.is_none() && self.config.include_component_inference && self.config.database_path.is_some() {
+            println!("DEBUG: Attempting to initialize database mapper");
             if let Err(e) = self.initialize_database_mapper().await {
                 warn!("Failed to initialize database mapper: {}", e);
+                println!("DEBUG: Database mapper initialization failed: {}", e);
                 // Continue without database mapper - will use fallback
+            } else {
+                println!("DEBUG: Database mapper initialized successfully");
             }
         }
         
@@ -157,9 +162,11 @@ impl NetlistGenerator {
         
         // Phase 2: Generate database component instances if mapper is available
         if self.database_mapper.is_some() {
+            println!("DEBUG: Using database component mapper for instance generation");
             self.generate_database_component_instances(analysis).await?;
         } else {
             // Fallback to semantic instance generation if database unavailable
+            println!("DEBUG: Using semantic instance generation (no database mapper)");
             self.generate_instances_with_semantics(analysis)?;
         }
         
@@ -305,6 +312,10 @@ impl NetlistGenerator {
                     self.netlist.create_pin_instances(instance_id)
                         .map_err(|e| anyhow::anyhow!("Failed to create pin instances: {}", e))?;
                     
+                    // Transfer component parameters from analyzer to instance attributes
+                    println!("DEBUG: Calling populate_instance_attributes for instance '{}' (id: {:?})", instance_name, instance_id);
+                    populate_instance_attributes(&mut self.netlist, instance_id, &instance_name, analysis);
+                    
                     self.ast_to_module.insert(component_type.clone(), module_id);
                     self.ast_to_instance.insert(instance_name.clone(), instance_id);
                     
@@ -340,6 +351,9 @@ impl NetlistGenerator {
         
         info!("Extracting connectivity from AST");
         
+        // Always create power nets first - they're needed by both extraction methods
+        self.create_power_nets(analysis)?;
+        
         if !self.config.flatten_hierarchy {
             // Use hierarchical connectivity extraction
             info!("Using hierarchical connectivity extraction");
@@ -348,12 +362,9 @@ impl NetlistGenerator {
             // Use flat extraction for backward compatibility
             info!("Using flat connectivity extraction");
             
-            // First create power nets
-            self.create_power_nets(analysis)?;
-            
             // Now traverse the AST to find all connection statements
             let mut connection_count = 0;
-            self.visit_connections_in_ast(ast.syntax(), &mut connection_count)?;
+            self.visit_connections_in_ast(ast.syntax(), &mut connection_count, analysis)?;
             
             info!("Extracted {} connections from AST", connection_count);
         }
@@ -468,7 +479,7 @@ impl NetlistGenerator {
     }
     
     /// Visit all connection statements in the AST
-    fn visit_connections_in_ast(&mut self, node: &bhdl_ast::SyntaxNode<bhdl_ast::BhdlLanguage>, count: &mut usize) -> Result<()> {
+    fn visit_connections_in_ast(&mut self, node: &bhdl_ast::SyntaxNode<bhdl_ast::BhdlLanguage>, count: &mut usize, analysis: &AnalysisResult) -> Result<()> {
         use bhdl_ast::{SyntaxKind, AstNode, ConnectionStmt};
         
         // Check if this is a connection statement
@@ -477,14 +488,14 @@ impl NetlistGenerator {
                 // First pass: identify and map component handles
                 self.identify_component_handles(&conn_stmt)?;
                 // Second pass: process connections
-                self.process_connection_statement(&conn_stmt)?;
+                self.process_connection_statement(&conn_stmt, analysis)?;
                 *count += 1;
             }
         }
         
         // Recursively visit children
         for child in node.children() {
-            self.visit_connections_in_ast(&child, count)?;
+            self.visit_connections_in_ast(&child, count, analysis)?;
         }
         
         Ok(())
@@ -533,7 +544,7 @@ impl NetlistGenerator {
     }
     
     /// Process a single connection statement
-    fn process_connection_statement(&mut self, conn: &bhdl_ast::ConnectionStmt) -> Result<()> {
+    fn process_connection_statement(&mut self, conn: &bhdl_ast::ConnectionStmt, analysis: &AnalysisResult) -> Result<()> {
         use bhdl_ast::AstNode;
         // Parse the connection to extract the flow of connections
         // Example: VIN -> C1: Cap(100uF, 25V).pos -> U1: LM7805(package="TO-220").IN;
@@ -746,6 +757,9 @@ impl NetlistGenerator {
                             // Create pin instances for this component
                             self.netlist.create_pin_instances(inst_id)
                                 .map_err(|e| anyhow::anyhow!("Failed to create pin instances: {}", e))?;
+                            
+                            // Transfer component parameters from analyzer to instance attributes
+                            self.populate_instance_attributes(inst_id, &handle_name, analysis);
                             
                             // Store mappings
                             self.ast_to_instance.insert(handle_name.to_string(), inst_id);
@@ -1116,6 +1130,10 @@ impl NetlistGenerator {
             self.netlist.create_pin_instances(netlist_instance_id)
                 .map_err(|e| anyhow::anyhow!("Failed to create pin instances: {}", e))?;
             
+            // Transfer component parameters from analyzer to instance attributes
+            println!("DEBUG: Calling populate_instance_attributes for database instance '{}' (id: {:?})", instance_name, netlist_instance_id);
+            populate_instance_attributes(&mut self.netlist, netlist_instance_id, &instance_name, analysis);
+            
             // Store mappings - use BHDL type for module mapping
             self.ast_to_module.insert(component_type.clone(), module_id);
             self.ast_to_instance.insert(component_instance.instance_name.clone(), netlist_instance_id);
@@ -1431,6 +1449,11 @@ impl NetlistGenerator {
         
         Ok(())
     }
+
+    /// Transfer component parameters from analyzer to netlist instance attributes
+    pub fn populate_instance_attributes(&mut self, instance_id: InstanceId, handle_name: &str, analysis: &AnalysisResult) {
+        populate_instance_attributes(&mut self.netlist, instance_id, handle_name, analysis);
+    }
 }
 
 impl Default for NetlistGenerator {
@@ -1483,6 +1506,62 @@ pub async fn generate_netlist_with_config(
 
     info!("Successfully generated custom netlist");
     Ok(netlist)
+}
+
+/// Transfer component parameters from analyzer to netlist instance attributes
+pub fn populate_instance_attributes(
+    netlist: &mut Netlist,
+    instance_id: InstanceId, 
+    handle_name: &str, 
+    analysis: &AnalysisResult
+) {
+    println!("DEBUG: populate_instance_attributes called!");
+    println!("DEBUG: Transferring parameters for instance {:?} (handle: {})", instance_id, handle_name);
+    
+    let inference_components = analysis.component_inference.get_inferred_components();
+    println!("DEBUG: Total inferred components: {}", inference_components.len());
+    
+    for (idx, component) in inference_components.iter().enumerate() {
+        println!("DEBUG: Component {}: type={}, instance_name={:?}, params={}",
+                 idx, component.component_type, component.instance_name, component.parameters.len());
+    }
+    
+    // Look up the component in the analyzer's component inference data
+    for component in inference_components {
+        if let Some(instance_name) = &component.instance_name {
+            if instance_name == handle_name {
+                println!("DEBUG: Found inference data for handle '{}', component type: {}", handle_name, component.component_type);
+                
+                // Extract parameters from the component suggestion
+                for param in &component.parameters {
+                    let param_value = match &param.value {
+                        ParameterValue::Resistance(r) => r.to_string(),
+                        ParameterValue::Capacitance(c) => c.to_string(),
+                        ParameterValue::Voltage(v) => v.to_string(),
+                        ParameterValue::Current(i) => i.to_string(),
+                        ParameterValue::String(s) => s.clone(),
+                        ParameterValue::Real(r) => r.to_string(),
+                        ParameterValue::Integer(i) => i.to_string(),
+                        _ => continue, // Skip unsupported parameter types
+                    };
+                    
+                    println!("DEBUG: Setting parameter '{}' = '{}' for instance {:?}", param.name, param_value, instance_id);
+                    
+                    // Store the parameter in the netlist instance attributes
+                    if let Some(instance) = netlist.instances.get_mut(instance_id) {
+                        instance.attributes.insert(param.name.clone(), param_value);
+                        println!("DEBUG: Successfully stored parameter in netlist instance");
+                    } else {
+                        println!("DEBUG: Failed to find instance {:?} in netlist", instance_id);
+                    }
+                }
+                
+                return; // Found the component, we're done
+            }
+        }
+    }
+    
+    println!("DEBUG: No component inference data found for handle '{}' (instance {:?})", handle_name, instance_id);
 }
 
 /// Compatibility alias for NetlistGenerator

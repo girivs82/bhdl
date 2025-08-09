@@ -1,0 +1,52 @@
+// Simple testbench for LED blink circuit
+// Demonstrates basic simulation features
+
+testbench TB_LEDBlink for LEDBlinkBoard {
+    // Simulation setup
+    simulation {
+        duration: 100ms;
+        timestep: 10us;
+        solver: adaptive;
+        temperature: 25C;
+    }
+    
+    // Capture LED state and current
+    scope "led_activity" {
+        signals: LED1.A, LED1.K, LED1.current;
+        capture: continuous;
+    }
+    
+    // Capture power consumption
+    scope "power_analysis" {
+        signals: @VCC, @VCC.current, R1.power;
+        capture: periodic(interval: 1ms);
+    }
+    
+    // Apply power
+    stimulus {
+        @VCC: constant(3.3V);
+    }
+    
+    // Verify LED behavior
+    verify {
+        // LED should have proper forward voltage when on
+        assert LED1.voltage in range(1.8V, 2.2V) when LED1.current > 1mA
+            message "LED forward voltage out of spec";
+            
+        // Current should be limited
+        assert LED1.current < 30mA always
+            message "LED overcurrent condition";
+            
+        // Check power consumption
+        assert @VCC.current < 50mA always
+            message "Excessive power consumption";
+    }
+    
+    // Measure key parameters
+    measure {
+        avg_led_current = average(LED1.current);
+        led_on_time = time_above(LED1.current, 1mA);
+        total_energy = integral(@VCC * @VCC.current);
+        peak_power = max(@VCC * @VCC.current);
+    }
+}

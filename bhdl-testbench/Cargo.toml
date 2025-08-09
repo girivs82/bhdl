@@ -1,0 +1,48 @@
+[package]
+name = "bhdl-testbench"
+version = "0.1.0"
+edition = "2021"
+authors = ["BHDL Contributors"]
+description = "Testbench framework for BHDL with waveform capture and verification"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+# Core dependencies
+anyhow = "1.0"
+thiserror = "1.0"
+log = "0.4"
+rowan = "0.15.15"
+tokio = { version = "1.0", features = ["full"] }
+
+# BHDL dependencies
+bhdl-ast = { path = "../bhdl-ast" }
+bhdl-parser = { path = "../bhdl-parser" }
+bhdl-netlist = { path = "../bhdl-netlist" }
+bhdl-spice = { path = "../bhdl-spice" }
+bhdl-sim = { path = "../bhdl-sim" }
+bhdl-analyzer = { path = "../bhdl-analyzer" }
+bhdl-synthesizer = { path = "../bhdl-synthesizer" }
+bhdl-common = { path = "../bhdl-common" }
+bhdl-stdlib = { path = "../bhdl-stdlib" }
+
+# Data structures
+indexmap = "2.0"
+petgraph = "0.6"
+
+# Time handling
+chrono = "0.4"
+
+# File formats
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# For VCD output
+vcd = "0.6"
+
+# Math
+num-traits = "0.2"
+
+[dev-dependencies]
+tempfile = "3.8"
+approx = "0.5"
+

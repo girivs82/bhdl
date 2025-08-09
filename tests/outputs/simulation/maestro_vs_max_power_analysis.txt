@@ -1,0 +1,6 @@
+=== MAESTRO vs MAX POWER SELECTION ANALYSIS ===
+
+Circuit: 3 LEDs in series with 9V supply
+
+All Solutions:
+  Solution 1: Power=0.181W, Current=4.5mA, Score=0.20

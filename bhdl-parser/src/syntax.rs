@@ -107,6 +107,27 @@ pub enum SyntaxKind {
     PERSPECTIVE_KW, // perspective (for interface perspectives)
     WHERE_KW,     // where (for connection constraints)
     WITH_KW,      // with (for grouped constraints)
+    
+    // Testbench keywords
+    TESTBENCH_KW,    // testbench
+    SIMULATION_KW,   // simulation
+    SCOPE_KW,        // scope
+    STIMULUS_KW,     // stimulus
+    VERIFY_KW,       // verify
+    ASSERT_KW,       // assert
+    MEASURE_KW,      // measure
+    AFTER_KW,        // after
+    ALWAYS_KW,       // always
+    CAPTURE_KW,      // capture
+    TRIGGER_KW,      // trigger
+    CONTINUOUS_KW,   // continuous
+    ON_CHANGE_KW,    // on_change
+    PERIODIC_KW,     // periodic
+    SIGNALS_KW,      // signals
+    DURATION_KW,     // duration
+    TIMESTEP_KW,     // timestep
+    SOLVER_KW,       // solver
+    TEMPERATURE_KW,  // temperature
 
     // Keywords for individual items  
     PIN_KW,       // pin
@@ -136,6 +157,20 @@ pub enum SyntaxKind {
     TYPE_DEF,       // type TypeName = TypeExpression;
     STRUCT_LITERAL, // { field1: value1, field2: value2 }
     NULL_LITERAL,   // null
+    
+    // Testbench nodes
+    TESTBENCH_DEF,       // testbench Name for Board { ... }
+    SIMULATION_BLOCK,    // simulation { ... }
+    SCOPE_DEF,          // scope "name" { ... }
+    STIMULUS_BLOCK,     // stimulus { ... }
+    VERIFY_BLOCK,       // verify { ... }
+    MEASURE_BLOCK,      // measure { ... }
+    ASSERTION,          // assert condition message;
+    MEASUREMENT,        // name = expression;
+    STIMULUS_ASSIGN,    // @signal: waveform;
+    WAVEFORM_EXPR,      // ramp(...), sine(...), etc.
+    CAPTURE_MODE,       // continuous, on_change(...), etc.
+    TIME_SPEC,          // 10ms, 1us, etc.
 
     // v2.0 Blocks (minimal)
     LAYER_STACKUP_BLOCK,

@@ -40,9 +40,8 @@ pub fn lex_ident_or_kw(lex: &mut Lexer<LexerToken>) -> KeywordOrIdent {
         "trireg" => SyntaxKind::TRIREG_KW,
         "uwire" => SyntaxKind::UWIRE_KW,
         "import" => SyntaxKind::IMPORT_KW,
-        "from" => SyntaxKind::FROM_KW,
+        // "from", "as", "to" are contextual - will be IDENT
         "as" => SyntaxKind::AS_KW,
-        "to" => SyntaxKind::TO_KW,
         "layer" => SyntaxKind::LAYER_KW,
         "extends" => SyntaxKind::EXTENDS_KW,
         "constrain" => SyntaxKind::CONSTRAIN_KW,
@@ -225,7 +224,6 @@ fn keyword_or_ident_callback(lex: &mut Lexer<LexerToken>) -> KeywordOrIdent {
         "enum" => SyntaxKind::ENUM_KW,
         "import" => SyntaxKind::IMPORT_KW,
         "const" => SyntaxKind::CONST_KW,
-        "from" => SyntaxKind::FROM_KW,
 
         // Block Keywords (removed v1.0 block keywords)
         "layer_stackup" => SyntaxKind::LAYER_STACKUP_KW,
@@ -261,7 +259,7 @@ fn keyword_or_ident_callback(lex: &mut Lexer<LexerToken>) -> KeywordOrIdent {
         "uwire" => SyntaxKind::UWIRE_KW,
         "generate" => SyntaxKind::GENERATE_KW,
         "for" => SyntaxKind::FOR_KW,
-        "to" => SyntaxKind::TO_KW,
+        // "to" is contextual - will be IDENT
         "extends" => SyntaxKind::EXTENDS_KW,
         "as" => SyntaxKind::AS_KW,
         "alias" => SyntaxKind::ALIAS_KW,
@@ -275,6 +273,13 @@ fn keyword_or_ident_callback(lex: &mut Lexer<LexerToken>) -> KeywordOrIdent {
         "where" => SyntaxKind::WHERE_KW,
         "with" => SyntaxKind::WITH_KW,
         // "pin_map" is NOT a keyword, parsed as IDENT
+        
+        // Testbench keywords - only top-level keywords are global
+        "testbench" => SyntaxKind::TESTBENCH_KW,
+        // The following are contextual and will be treated as IDENT
+        // "simulation", "scope", "stimulus", "verify", "assert", "measure"
+        // "after", "always", "capture", "trigger", "continuous", "on_change"
+        // "periodic", "signals", "duration", "timestep", "solver", "temperature"
 
         // Default to IDENT if not a keyword
         _ => SyntaxKind::IDENT,
