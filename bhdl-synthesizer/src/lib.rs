@@ -11,6 +11,8 @@ use log::{debug, info, warn};
 use bhdl_common::ComponentTypeMapper;
 use bhdl_common::pin_metadata::{ModulePinMetadata, PinMetadata, PinDirection as CommonPinDirection, PinType as CommonPinType};
 use bhdl_stdlib::{StdlibReader, get_default_stdlib_path};
+use crate::import_loader::ImportLoader;
+use crate::import_preprocessor::ImportPreprocessor;
 
 
 // Component database mapping module  
@@ -34,12 +36,18 @@ pub mod passive_component_calculator;
 // Package selection engine  
 pub mod package_selector;
 
+// Import loader for handling BHDL imports
+pub mod import_loader;
+
+// Import preprocessor for pre-processing imports before analysis
+pub mod import_preprocessor;
+
 // Re-export key types
 pub use bhdl_analyzer::types::AnalysisResult;
 pub use bhdl_analyzer::component_inference::ParameterValue;
 pub use bhdl_netlist::{Netlist, ModuleId, InstanceId, NetId, PortId, PinId, PinInstanceId, PinInstance};
 pub use bhdl_netlist::types::{ModuleKind, PortDirection, PinDirection, PinType, ConnectionPoint, Unit, Quantity, NetClass};
-pub use bhdl_ast::{SourceFile, Board, Module, ComponentDef};
+pub use bhdl_ast::{SourceFile, Board, Module, ComponentDef, HasName, AstNode, PinDecl};
 pub use component_mapping::{DatabaseComponentMapper, DatabaseComponentInstance, DatabaseMapperStats};
 
 /// Configuration for netlist generation
@@ -103,6 +111,10 @@ pub struct NetlistGenerator {
     type_mapper: ComponentTypeMapper,
     // BHDL stdlib reader for component definitions
     stdlib_reader: StdlibReader,
+    // Import loader for processing BHDL imports (legacy)
+    import_loader: ImportLoader,
+    // Import preprocessor for pre-processed imports
+    import_preprocessor: Option<ImportPreprocessor>,
 }
 
 impl NetlistGenerator {
@@ -113,11 +125,11 @@ impl NetlistGenerator {
 
     /// Create a new netlist generator with custom configuration
     pub fn with_config(config: NetlistConfig) -> Self {
-        // Initialize stdlib reader and load all components
-        let mut stdlib_reader = StdlibReader::new(get_default_stdlib_path());
-        if let Err(e) = stdlib_reader.load_all_components() {
-            warn!("Failed to load stdlib components: {}", e);
-        }
+        // Initialize stdlib reader - don't load all components by default
+        let stdlib_reader = StdlibReader::new(get_default_stdlib_path());
+        
+        // Initialize import loader with current directory as base
+        let import_loader = ImportLoader::new(".");
         
         Self {
             config,
@@ -130,7 +142,14 @@ impl NetlistGenerator {
             component_instances: Vec::new(),
             type_mapper: ComponentTypeMapper::new(),
             stdlib_reader,
+            import_loader,
+            import_preprocessor: None,
         }
+    }
+
+    /// Set the import preprocessor for this generator
+    pub fn set_import_preprocessor(&mut self, preprocessor: ImportPreprocessor) {
+        self.import_preprocessor = Some(preprocessor);
     }
 
     /// Generate netlist from analysis results (backwards compatibility)
@@ -150,7 +169,15 @@ impl NetlistGenerator {
     async fn generate_from_ast_and_analysis_internal(&mut self, ast: Option<&SourceFile>, analysis: &AnalysisResult) -> Result<Netlist> {
         info!("Starting netlist generation from analysis results");
         
-        // Phase 0: Initialize database mapper if needed
+        // Phase 0a: Process imports if AST is available
+        if let Some(ast) = ast {
+            info!("Processing imports from source file");
+            if let Err(e) = self.import_loader.process_imports(ast) {
+                warn!("Failed to process some imports: {}", e);
+            }
+        }
+        
+        // Phase 0b: Initialize database mapper if needed
         if self.database_mapper.is_none() && self.config.include_component_inference && self.config.database_path.is_some() {
             println!("DEBUG: Attempting to initialize database mapper");
             if let Err(e) = self.initialize_database_mapper().await {
@@ -270,8 +297,10 @@ impl NetlistGenerator {
             let component_context = &analysis.component_inference;
             
             // Create instances based on inferred components
+            debug!("Processing {} inferred components", component_context.inferred_components.len());
             for component_suggestion in &component_context.inferred_components {
                 let component_type = &component_suggestion.component_type;
+                debug!("Processing inferred component: {}", component_type);
                 
                 // Check if this is an interface type
                 if self.is_interface_type(component_type, analysis) {
@@ -306,6 +335,7 @@ impl NetlistGenerator {
                     );
                     
                     // Add pins to the module based on component type
+                    debug!("About to call add_pins_for_component for {} ({})", instance_name, component_type);
                     self.add_pins_for_component(&instance_name, component_type, module_id)?;
                     
                     // Create instance of this component
@@ -363,7 +393,7 @@ impl NetlistGenerator {
         if !self.config.flatten_hierarchy {
             // Use hierarchical connectivity extraction
             info!("Using hierarchical connectivity extraction");
-            hierarchical_connectivity::extract_hierarchical_connectivity(ast, analysis, &mut self.netlist)?;
+            hierarchical_connectivity::extract_hierarchical_connectivity(ast, analysis, &mut self.netlist, self.import_preprocessor.as_ref())?;
         } else {
             // Use flat extraction for backward compatibility
             info!("Using flat connectivity extraction");
@@ -1378,15 +1408,125 @@ impl NetlistGenerator {
     }
     
     /// Add pins to a component module based on its type using stdlib definitions
-    fn add_pins_for_component(&mut self, _instance_name: &str, component_type: &str, module_id: ModuleId) -> Result<()> {
-        // Get pin definitions from the stdlib reader
-        let pin_definitions = self.stdlib_reader.get_component_pins(component_type);
+    fn add_pins_for_component(&mut self, instance_name: &str, component_type: &str, module_id: ModuleId) -> Result<()> {
+        debug!("add_pins_for_component called for component_type: {} (from lib.rs)", component_type);
+        debug!("import_preprocessor is_some: {}", self.import_preprocessor.is_some());
+        
+        // First check if this component was imported via preprocessor
+        let (pin_definitions, has_virtual_pins) = if let Some(ref preprocessor) = self.import_preprocessor {
+            if let Some(module) = preprocessor.get_imported_module(component_type) {
+                println!("SYNTHESIZER: Using preprocessed imported module definition for '{}'", component_type);
+                
+                // Extract pins from the imported module
+                let mut pins = Vec::new();
+                for pin in module.pins() {
+                    if let Some(name) = pin.name() {
+                        let pin_text = pin.syntax().text().to_string();
+                        let is_virtual = pin_text.contains("virtual");
+                        
+                        // Parse direction and type from pin declaration
+                        let (direction, pin_type) = if pin_text.contains("power in") {
+                            (bhdl_netlist::types::PinDirection::Power, bhdl_netlist::types::PinType::Power)
+                        } else if pin_text.contains("power out") {
+                            (bhdl_netlist::types::PinDirection::Power, bhdl_netlist::types::PinType::Power)
+                        } else if pin_text.contains("ground") {
+                            (bhdl_netlist::types::PinDirection::Ground, bhdl_netlist::types::PinType::Ground)
+                        } else if pin_text.contains("signal in") {
+                            (bhdl_netlist::types::PinDirection::In, bhdl_netlist::types::PinType::Signal)
+                        } else if pin_text.contains("signal out") {
+                            (bhdl_netlist::types::PinDirection::Out, bhdl_netlist::types::PinType::Signal)
+                        } else if pin_text.contains("signal inout") {
+                            (bhdl_netlist::types::PinDirection::InOut, bhdl_netlist::types::PinType::Signal)
+                        } else {
+                            (bhdl_netlist::types::PinDirection::Passive, bhdl_netlist::types::PinType::Passive)
+                        };
+                        
+                        pins.push(bhdl_stdlib::StdlibPinDefinition {
+                            name: name.text().to_string(),
+                            direction,
+                            pin_type,
+                            is_virtual,
+                        });
+                    }
+                }
+                
+                let has_virtual = pins.iter().any(|p| p.is_virtual);
+                (pins, has_virtual)
+            } else {
+                // Fallback to stdlib reader when no preprocessor
+                println!("SYNTHESIZER: Using stdlib fallback for '{}' (no preprocessor)", component_type);
+                let pin_definitions = self.stdlib_reader.get_component_pins(component_type);
+                let has_virtual = pin_definitions.iter().any(|p| p.is_virtual);
+                (pin_definitions, has_virtual)
+            }
+        } else if let Some(module) = self.import_loader.get_module(component_type) {
+            // Legacy path: check import_loader if no preprocessor
+            println!("SYNTHESIZER: Using legacy import_loader for '{}'", component_type);
+            
+            // Extract pins from the imported module
+            let mut pins = Vec::new();
+            for pin in module.pins() {
+                if let Some(name) = pin.name() {
+                    let pin_text = pin.syntax().text().to_string();
+                    let is_virtual = pin_text.contains("virtual");
+                    
+                    // Parse direction and type from pin declaration
+                    let (direction, pin_type) = if pin_text.contains("power in") {
+                        (bhdl_netlist::types::PinDirection::Power, bhdl_netlist::types::PinType::Power)
+                    } else if pin_text.contains("power out") {
+                        (bhdl_netlist::types::PinDirection::Power, bhdl_netlist::types::PinType::Power)
+                    } else if pin_text.contains("ground") {
+                        (bhdl_netlist::types::PinDirection::Ground, bhdl_netlist::types::PinType::Ground)
+                    } else if pin_text.contains("signal in") {
+                        (bhdl_netlist::types::PinDirection::In, bhdl_netlist::types::PinType::Signal)
+                    } else if pin_text.contains("signal out") {
+                        (bhdl_netlist::types::PinDirection::Out, bhdl_netlist::types::PinType::Signal)
+                    } else if pin_text.contains("signal inout") {
+                        (bhdl_netlist::types::PinDirection::InOut, bhdl_netlist::types::PinType::Signal)
+                    } else {
+                        (bhdl_netlist::types::PinDirection::Passive, bhdl_netlist::types::PinType::Passive)
+                    };
+                    
+                    pins.push(bhdl_stdlib::StdlibPinDefinition {
+                        name: name.text().to_string(),
+                        direction,
+                        pin_type,
+                        is_virtual,
+                    });
+                }
+            }
+            
+            let has_virtual = pins.iter().any(|p| p.is_virtual);
+            (pins, has_virtual)
+        } else {
+            // Final fallback to stdlib reader
+            println!("SYNTHESIZER: Using stdlib fallback for '{}'", component_type);
+            let pin_definitions = self.stdlib_reader.get_component_pins(component_type);
+            let has_virtual = pin_definitions.iter().any(|p| p.is_virtual);
+            (pin_definitions, has_virtual)
+        };
         
         debug!("Adding {} pins for component type '{}' to module", 
                pin_definitions.len(), component_type);
         
+        if has_virtual_pins {
+            info!("Component '{}' has virtual pins that need expansion", component_type);
+            // TODO: Call virtual pin expansion logic here
+            // For now, we'll add all pins including virtual ones
+            // In a complete implementation, virtual pins would trigger component generation
+        }
+        
         // Add each pin to the netlist module
         for pin_def in pin_definitions {
+            if pin_def.is_virtual {
+                debug!("  Adding VIRTUAL pin '{}' to {}", pin_def.name, component_type);
+                // In a full implementation, we would:
+                // 1. Look up the expansion rules for this virtual pin
+                // 2. Generate the required components
+                // 3. Create the connections
+                // For now, we still add the pin but mark it for expansion
+            }
+            
             self.netlist.add_pin(
                 module_id, 
                 pin_def.name.clone(), 

@@ -234,18 +234,15 @@ impl<'t> Parser<'t> {
         
         self.expect(SyntaxKind::COLON);
         
-        // Check for optional 'virtual' keyword
-        if self.peek() == Some(SyntaxKind::VIRTUAL_KW) {
-            self.bump(); // Consume 'virtual'
-        }
-        
-        // Parse pin type (signal, power, ground)
+        // Parse pin type (signal, power, ground, switch, feedback)
         if self.peek() == Some(SyntaxKind::SIGNAL_KW) ||
            self.peek() == Some(SyntaxKind::POWER_KW) ||
-           self.peek() == Some(SyntaxKind::GROUND_KW) {
+           self.peek() == Some(SyntaxKind::GROUND_KW) ||
+           self.peek() == Some(SyntaxKind::SWITCH_KW) ||
+           self.peek() == Some(SyntaxKind::FEEDBACK_KW) {
             self.bump();
         } else {
-            self.error("Expected pin type (signal, power, ground)".to_string());
+            self.error("Expected pin type (signal, power, ground, switch, feedback)".to_string());
         }
         
         // Parse direction for signal pins
@@ -253,6 +250,11 @@ impl<'t> Parser<'t> {
            self.peek() == Some(SyntaxKind::OUT_KW) ||
            self.peek() == Some(SyntaxKind::INOUT_KW) {
             self.bump();
+        }
+        
+        // Check for optional 'virtual' keyword (after direction)
+        if self.peek() == Some(SyntaxKind::VIRTUAL_KW) {
+            self.bump(); // Consume 'virtual'
         }
         
         // Parse optional 'when' clause for conditional pins
@@ -264,6 +266,11 @@ impl<'t> Parser<'t> {
         // Parse optional @metadata annotation
         if self.peek() == Some(SyntaxKind::AT) {
             self.parse_pin_metadata();
+        }
+        
+        // Parse optional pin attribute block { ... }
+        if self.peek() == Some(SyntaxKind::L_BRACE) {
+            self.parse_pin_attribute_block();
         }
         
         self.expect(SyntaxKind::SEMI);
@@ -315,6 +322,41 @@ impl<'t> Parser<'t> {
         }
         
         self.expect(SyntaxKind::R_PAREN);
+        self.builder.finish_node();
+    }
+    
+    // Parse pin attribute block: { key: value, key: value, ... }
+    fn parse_pin_attribute_block(&mut self) {
+        self.builder.start_node(SyntaxKind::PIN_PROPERTIES.into());
+        self.expect(SyntaxKind::L_BRACE);
+        
+        while self.peek() != Some(SyntaxKind::R_BRACE) && self.peek().is_some() {
+            self.skip_trivia();
+            
+            if self.peek() == Some(SyntaxKind::R_BRACE) {
+                break;
+            }
+            
+            // Parse attribute name
+            if self.peek() == Some(SyntaxKind::IDENT) {
+                self.bump(); // Consume attribute name
+                
+                self.expect(SyntaxKind::COLON);
+                
+                // Parse attribute value (expression)
+                self.parse_expression();
+                
+                // Optional comma
+                if self.peek() == Some(SyntaxKind::COMMA) {
+                    self.bump();
+                }
+            } else {
+                self.error("Expected attribute name in pin attribute block".to_string());
+                self.bump_any();
+            }
+        }
+        
+        self.expect(SyntaxKind::R_BRACE);
         self.builder.finish_node();
     }
     

@@ -214,6 +214,7 @@ pub fn extract_hierarchical_connectivity(
     ast: &bhdl_ast::SourceFile,
     analysis: &AnalysisResult,
     netlist: &mut Netlist,
+    import_preprocessor: Option<&crate::import_preprocessor::ImportPreprocessor>,
 ) -> Result<()> {
     println!("=== STARTING hierarchical connectivity extraction from AST ===");
     info!("=== STARTING hierarchical connectivity extraction from AST ===");
@@ -226,12 +227,12 @@ pub fn extract_hierarchical_connectivity(
     // First pass: Create module definitions
     println!("=== Phase 1: Creating module definitions ===");
     info!("=== Phase 1: Creating module definitions ===");
-    create_module_definitions(ast, analysis, netlist, &mut context)?;
+    create_module_definitions(ast, analysis, netlist, &mut context, import_preprocessor)?;
     
     // Second pass: Process module instances and connections
     println!("=== Phase 2: Processing module hierarchy ===");
     info!("=== Phase 2: Processing module hierarchy ===");
-    process_module_hierarchy(ast, analysis, netlist, &mut context)?;
+    process_module_hierarchy(ast, analysis, netlist, &mut context, import_preprocessor)?;
     
     println!("=== COMPLETED hierarchical connectivity extraction ===");
     info!("=== COMPLETED hierarchical connectivity extraction ===");
@@ -274,6 +275,7 @@ fn create_module_definitions(
     _analysis: &AnalysisResult,
     netlist: &mut Netlist,
     context: &mut HierarchicalContext,
+    _import_preprocessor: Option<&crate::import_preprocessor::ImportPreprocessor>,
 ) -> Result<()> {
     use bhdl_ast::source_file::Item;
     use bhdl_netlist::types::ModuleKind;
@@ -319,6 +321,7 @@ fn process_module_hierarchy(
     analysis: &AnalysisResult,
     netlist: &mut Netlist,
     context: &mut HierarchicalContext,
+    import_preprocessor: Option<&crate::import_preprocessor::ImportPreprocessor>,
 ) -> Result<()> {
     use bhdl_ast::source_file::Item;
     
@@ -331,7 +334,7 @@ fn process_module_hierarchy(
                     let module_name = name.text().to_string();
                     if let Some(&module_id) = context.module_name_to_id.get(&module_name) {
                         context.push_module(module_name, module_id);
-                        process_module_body(&module, analysis, netlist, context)?;
+                        process_module_body(&module, analysis, netlist, context, import_preprocessor)?;
                         context.pop_module();
                     }
                 }
@@ -342,7 +345,7 @@ fn process_module_hierarchy(
                     if let Some(&_module_id) = context.module_name_to_id.get(&board_name) {
                         // Don't push board as module context - boards use global nets
                         debug!("Processing board {} at top level", board_name);
-                        process_board_body(&board, analysis, netlist, context)?;
+                        process_board_body(&board, analysis, netlist, context, import_preprocessor)?;
                     }
                 }
             }
@@ -359,10 +362,11 @@ fn process_module_body(
     analysis: &AnalysisResult,
     netlist: &mut Netlist,
     context: &mut HierarchicalContext,
+    import_preprocessor: Option<&crate::import_preprocessor::ImportPreprocessor>,
 ) -> Result<()> {
     // Process module instances
     for module_inst in module.module_instances() {
-        process_module_instance(&module_inst, netlist, context, analysis)?;
+        process_module_instance(&module_inst, netlist, context, analysis, import_preprocessor)?;
     }
     
     // Process connections and extract component instances
@@ -374,13 +378,13 @@ fn process_module_body(
                     process_connection_in_module(&conn_stmt, netlist, context)?;
                     
                     // Extract and create component instances from the connection
-                    extract_component_instances_from_connection(&conn_stmt, netlist, context, analysis)?;
+                    extract_component_instances_from_connection(&conn_stmt, netlist, context, analysis, import_preprocessor)?;
                 }
             }
             SyntaxKind::NET_FLOW_STMT => {
                 // Handle net flow statements
                 debug!("Found NET_FLOW_STMT in module");
-                process_net_flow_statement(&child, netlist, context, analysis)?;
+                process_net_flow_statement(&child, netlist, context, analysis, import_preprocessor)?;
             }
             _ => {}
         }
@@ -395,12 +399,13 @@ fn process_board_body(
     analysis: &AnalysisResult,
     netlist: &mut Netlist,
     context: &mut HierarchicalContext,
+    import_preprocessor: Option<&crate::import_preprocessor::ImportPreprocessor>,
 ) -> Result<()> {
     info!("=== Processing board body ===");
     
     // Process module instances
     for module_inst in board.module_instances() {
-        process_module_instance(&module_inst, netlist, context, analysis)?;
+        process_module_instance(&module_inst, netlist, context, analysis, import_preprocessor)?;
     }
     
     // Process connections and extract component instances
@@ -412,20 +417,28 @@ fn process_board_body(
         info!("Board child kind: {:?}, text preview: '{}'", child.kind(), 
               child.text().to_string().chars().take(50).collect::<String>());
         match child.kind() {
+            SyntaxKind::COMPONENT_INST => {
+                // Process component instances directly
+                if let Some(comp_inst) = bhdl_ast::common::ComponentInst::cast(child) {
+                    println!("Processing COMPONENT_INST: {}", comp_inst.syntax().text());
+                    info!("Processing COMPONENT_INST: {}", comp_inst.syntax().text());
+                    create_component_instance(&comp_inst, netlist, context, analysis, import_preprocessor)?;
+                }
+            }
             SyntaxKind::CONNECTION_STMT => {
                 if let Some(conn_stmt) = ConnectionStmt::cast(child) {
                     // Process the connection
                     process_connection_in_module(&conn_stmt, netlist, context)?;
                     
                     // Extract and create component instances from the connection
-                    extract_component_instances_from_connection(&conn_stmt, netlist, context, analysis)?;
+                    extract_component_instances_from_connection(&conn_stmt, netlist, context, analysis, import_preprocessor)?;
                 }
             }
             SyntaxKind::NET_FLOW_STMT => {
                 // Handle net flow statements like: net led_circuit: @VCC -> R1: Res(330).1 -> ...
                 println!("Found NET_FLOW_STMT in board - processing it!");
                 info!("Found NET_FLOW_STMT in board");
-                process_net_flow_statement(&child, netlist, context, analysis)?;
+                process_net_flow_statement(&child, netlist, context, analysis, import_preprocessor)?;
             }
             _ => {}
         }
@@ -440,6 +453,7 @@ fn process_module_instance(
     netlist: &mut Netlist,
     context: &mut HierarchicalContext,
     analysis: &AnalysisResult,
+    import_preprocessor: Option<&crate::import_preprocessor::ImportPreprocessor>,
 ) -> Result<()> {
     let instance_name = module_inst.name()
         .map(|t| t.text().to_string())
@@ -495,7 +509,7 @@ fn process_module_instance(
             .unwrap()
             .clone();
         
-        process_module_body(&module_def, analysis, netlist, context)?;
+        process_module_body(&module_def, analysis, netlist, context, import_preprocessor)?;
         
         // Pop the instance context
         context.pop_module();
@@ -683,11 +697,12 @@ fn extract_component_instances_from_connection(
     netlist: &mut Netlist,
     context: &mut HierarchicalContext,
     analysis: &AnalysisResult,
+    import_preprocessor: Option<&crate::import_preprocessor::ImportPreprocessor>,
 ) -> Result<()> {
     // Extract the connection expression
     if let Some(expr_node) = conn_stmt.expr() {
         // Walk the expression tree to find component instantiations
-        extract_components_from_node(&expr_node, netlist, context, analysis)?;
+        extract_components_from_node(&expr_node, netlist, context, analysis, import_preprocessor)?;
     }
     
     Ok(())
@@ -699,19 +714,20 @@ fn extract_components_from_node(
     netlist: &mut Netlist,
     context: &mut HierarchicalContext,
     analysis: &AnalysisResult,
+    import_preprocessor: Option<&crate::import_preprocessor::ImportPreprocessor>,
 ) -> Result<()> {
     use bhdl_ast::SyntaxKind;
     
     // Check if this node is a component instantiation
     if node.kind() == SyntaxKind::COMPONENT_INST {
         if let Some(comp_inst) = bhdl_ast::common::ComponentInst::cast(node.clone()) {
-            create_component_instance(&comp_inst, netlist, context, analysis)?;
+            create_component_instance(&comp_inst, netlist, context, analysis, import_preprocessor)?;
         }
     }
     
     // Recursively process children
     for child in node.children() {
-        extract_components_from_node(&child, netlist, context, analysis)?;
+        extract_components_from_node(&child, netlist, context, analysis, import_preprocessor)?;
     }
     
     Ok(())
@@ -723,6 +739,7 @@ fn create_component_instance(
     netlist: &mut Netlist,
     context: &mut HierarchicalContext,
     analysis: &AnalysisResult,
+    import_preprocessor: Option<&crate::import_preprocessor::ImportPreprocessor>,
 ) -> Result<()> {
     use bhdl_netlist::ModuleKind;
     
@@ -772,7 +789,7 @@ fn create_component_instance(
     }
     
     // Create or get the component module
-    let module_id = get_or_create_component_module(&component_type, netlist)?;
+    let module_id = get_or_create_component_module(&component_type, netlist, import_preprocessor)?;
     
     // Create the instance
     let instance_id = netlist.add_instance(instance_name.clone(), module_id)
@@ -794,21 +811,26 @@ fn create_component_instance(
 fn get_or_create_component_module(
     component_type: &str,
     netlist: &mut Netlist,
+    import_preprocessor: Option<&crate::import_preprocessor::ImportPreprocessor>,
 ) -> Result<ModuleId> {
     use bhdl_netlist::ModuleKind;
+    
+    debug!("get_or_create_component_module called for: {}", component_type);
     
     // Check if module already exists
     for (module_id, module) in &netlist.modules {
         if module.name == component_type && module.kind == ModuleKind::PhysicalComponent {
+            debug!("Found existing module for {}: {:?}", component_type, module_id);
             return Ok(module_id);
         }
     }
     
     // Create new component module
+    debug!("Creating new module for: {}", component_type);
     let module_id = netlist.add_module(component_type.to_string(), ModuleKind::PhysicalComponent);
     
     // Add standard pins based on component type
-    add_component_pins(component_type, module_id, netlist)?;
+    add_component_pins(component_type, module_id, netlist, import_preprocessor)?;
     
     Ok(module_id)
 }
@@ -818,9 +840,54 @@ fn add_component_pins(
     component_type: &str,
     module_id: ModuleId,
     netlist: &mut Netlist,
+    import_preprocessor: Option<&crate::import_preprocessor::ImportPreprocessor>,
 ) -> Result<()> {
     use bhdl_netlist::{PinDirection, PinType, PortDirection};
     
+    debug!("add_component_pins called for component_type: {}", component_type);
+    debug!("import_preprocessor is_some: {}", import_preprocessor.is_some());
+    
+    // First check if this component is in the imported modules
+    if let Some(preprocessor) = import_preprocessor {
+        debug!("Checking preprocessor for component: {}", component_type);
+        if let Some(module_ast) = preprocessor.get_imported_module(component_type) {
+            debug!("Adding pins for imported component: {}", component_type);
+            
+            // Extract pins from the imported module definition
+            let pins: Vec<_> = module_ast.pins().collect();
+            debug!("Total pins found in {}: {}", component_type, pins.len());
+            for pin in pins {
+                if let Some(pin_name) = pin.name() {
+                    let pin_name_str = pin_name.text().to_string();
+                    debug!("Adding pin '{}' for imported component '{}'", pin_name_str, component_type);
+                    
+                    // Convert pin direction from AST to netlist types
+                    let direction_str = pin.direction().map(|t| t.text().to_string());
+                    let (pin_direction, port_direction) = match direction_str.as_deref() {
+                        Some("in") => (PinDirection::In, PortDirection::Input),
+                        Some("out") => (PinDirection::Out, PortDirection::Output),
+                        Some("inout") => (PinDirection::InOut, PortDirection::InOut),
+                        _ => (PinDirection::InOut, PortDirection::InOut), // Default fallback
+                    };
+                    
+                    // Convert pin type from AST to netlist types
+                    let pin_type_str = pin.pin_type().map(|t| t.text().to_string());
+                    let pin_type = match pin_type_str.as_deref() {
+                        Some("power") => PinType::Power,
+                        Some("ground") => PinType::Ground,
+                        Some("signal") => PinType::Signal,
+                        _ => PinType::Signal, // Default fallback
+                    };
+                    
+                    netlist.add_port(module_id, pin_name_str.clone(), port_direction, None);
+                    netlist.add_pin(module_id, pin_name_str, pin_direction, pin_type);
+                }
+            }
+            return Ok(());
+        }
+    }
+    
+    // Fallback to hardcoded patterns for standard components
     match component_type.to_lowercase().as_str() {
         "res" | "resistor" => {
             // Add two passive pins
@@ -844,6 +911,7 @@ fn add_component_pins(
             netlist.add_pin(module_id, "K".to_string(), PinDirection::Out, PinType::Signal);
         }
         _ => {
+            debug!("Using default pins for unknown component type: {}", component_type);
             // Default: add two generic pins
             netlist.add_port(module_id, "1".to_string(), PortDirection::InOut, None);
             netlist.add_port(module_id, "2".to_string(), PortDirection::InOut, None);
@@ -1012,6 +1080,7 @@ fn process_net_flow_statement(
     netlist: &mut Netlist,
     context: &mut HierarchicalContext,
     analysis: &AnalysisResult,
+    import_preprocessor: Option<&crate::import_preprocessor::ImportPreprocessor>,
 ) -> Result<()> {
     println!("=== Processing NET_FLOW_STMT ===");
     info!("Processing NET_FLOW_STMT");
@@ -1161,7 +1230,8 @@ fn process_net_flow_statement(
                             endpoint,
                             netlist,
                             context,
-                            analysis
+                            analysis,
+                            import_preprocessor
                         )?;
                         
                         println!("  Created instance {:?} for {}", inst_id, instance_name);
@@ -1281,6 +1351,7 @@ fn create_inline_component_instance(
     netlist: &mut Netlist,
     context: &mut HierarchicalContext,
     analysis: &AnalysisResult,
+    import_preprocessor: Option<&crate::import_preprocessor::ImportPreprocessor>,
 ) -> Result<InstanceId> {
     // Check if instance already exists
     if let Some(inst_id) = find_instance_by_name(netlist, instance_name) {
@@ -1289,7 +1360,7 @@ fn create_inline_component_instance(
     }
     
     // Create or get the component module
-    let module_id = get_or_create_component_module(component_type, netlist)?;
+    let module_id = get_or_create_component_module(component_type, netlist, import_preprocessor)?;
     
     // Create the instance
     let instance_id = netlist.add_instance(instance_name.to_string(), module_id)

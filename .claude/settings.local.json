@@ -280,7 +280,14 @@
       "Bash(RUST_LOG=info cargo run -p bhdl-spice --bin test_maestro_quick_verify 2 >& 1)",
       "Bash(./target/debug/test_satisfies_simple:*)",
       "Bash(./target/debug/test_complete_safety)",
-      "Bash(timeout 5 cargo run -p bhdl-synthesizer --bin end_to_end_test)"
+      "Bash(timeout 5 cargo run -p bhdl-synthesizer --bin end_to_end_test)",
+      "Bash(timeout 60 cargo run -p bhdl-synthesizer --bin test_virtual_pin_synthesis)",
+      "Bash(timeout 120 cargo run -p bhdl-synthesizer --bin test_virtual_pin_synthesis_simple)",
+      "Bash(timeout 60 cargo build:*)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin test_virtual_pin_inline)",
+      "Read(//Users/girivs/src/**)",
+      "Bash(RUST_LOG=debug cargo run -p bhdl-synthesizer --bin test_import_preprocessing)",
+      "Bash(./test_pin_parsing)"
     ],
     "deny": []
   }

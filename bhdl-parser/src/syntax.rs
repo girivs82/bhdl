@@ -85,6 +85,8 @@ pub enum SyntaxKind {
     UWIRE_KW,      // uwire
     POWER_KW,      // power (base type)
     GROUND_KW,     // ground (base type)
+    SWITCH_KW,     // switch (pin type for switching nodes)
+    FEEDBACK_KW,   // feedback (pin type for feedback signals)
     CLOCK_KW,      // clock
     FUNCTIONS_KW,   // functions
     TRUE_KW,

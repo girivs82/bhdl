@@ -276,3 +276,95 @@ impl ModuleParam {
         self.0.children().find_map(Expr::cast)
     }
 }
+
+/// Represents an import statement
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ImportStmt(SyntaxNode<BhdlLanguage>);
+
+impl AstNode for ImportStmt {
+    type Language = BhdlLanguage;
+
+    fn can_cast(kind: SyntaxKind) -> bool {
+        kind == SyntaxKind::IMPORT_STMT
+    }
+
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> {
+        if Self::can_cast(syntax.kind()) {
+            Some(Self(syntax))
+        } else {
+            None
+        }
+    }
+
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> {
+        &self.0
+    }
+}
+
+impl ImportStmt {
+    /// Get the path of the import (e.g., "../../../bhdl-stdlib/components/power/TPS54331.bhdl")
+    pub fn path(&self) -> Option<String> {
+        // Look for IMPORT_PATH node first
+        for child in self.0.children() {
+            if child.kind() == SyntaxKind::IMPORT_PATH {
+                // Check if it contains a STRING token (destructuring imports)
+                if let Some(string_token) = child.children_with_tokens()
+                    .filter_map(|e| e.into_token())
+                    .find(|t| t.kind() == SyntaxKind::STRING)
+                {
+                    let text = string_token.text();
+                    return Some(text.trim_matches('"').to_string());
+                }
+            }
+        }
+        
+        // Fallback: look for STRING anywhere in the import (for compatibility)
+        self.0.descendants()
+            .filter(|n| n.kind() == SyntaxKind::STRING)
+            .next()
+            .and_then(|n| n.first_token())
+            .map(|t| {
+                let text = t.text();
+                // Remove quotes from string literal
+                text.trim_matches('"').to_string()
+            })
+    }
+    
+    /// Get the imported names for destructuring imports { Name1, Name2 }
+    pub fn imported_names(&self) -> Vec<String> {
+        let mut names = Vec::new();
+        
+        // Look for IMPORT_TARGET_GROUP
+        for child in self.0.children() {
+            if child.kind() == SyntaxKind::IMPORT_TARGET_GROUP {
+                // Look for IMPORT_TARGET nodes within the group
+                for target in child.children() {
+                    if target.kind() == SyntaxKind::IMPORT_TARGET {
+                        // Get the IDENT from the target
+                        if let Some(ident) = target.children_with_tokens()
+                            .filter_map(|e| e.into_token())
+                            .find(|t| t.kind() == SyntaxKind::IDENT)
+                        {
+                            names.push(ident.text().to_string());
+                        }
+                    }
+                }
+                
+                // Also collect direct IDENTs (for backwards compatibility)
+                for token in child.children_with_tokens() {
+                    if let Some(t) = token.into_token() {
+                        if t.kind() == SyntaxKind::IDENT {
+                            // Only add if not already in the list
+                            let text = t.text().to_string();
+                            if !names.contains(&text) {
+                                names.push(text);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        names
+    }
+}
