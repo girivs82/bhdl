@@ -5,7 +5,7 @@ use bhdl_parser::{SyntaxKind, BhdlLanguage};
 use bhdl_ast::{
     SourceFile, HasName,
     items::{Board, Module, ComponentDef, InterfaceDef, TypedefDef},
-    common::{ParamDecl, PortDecl, NetDecl, ComponentInst, NetRef}, // Removed Value and PinDecl (v1.0)
+    common::{ParamDecl, PortDecl, NetDecl, ComponentInst, NetRef, PinDecl}, // Added PinDecl for v2.0
     hierarchical::ModuleInst,
     v2_statements::ConnectionStmt,
     expr::{Expr, BinaryExpr},
@@ -293,6 +293,45 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                    ));
                }
            }
+        }
+        SyntaxKind::PIN_DECL => { 
+            if let Some(decl) = PinDecl::cast(node.clone()) {
+                if let Some(name_token) = decl.name() {
+                    let (bus_high, bus_low) = decl.bus_suffix()
+                        .and_then(|suffix| suffix.range())
+                        .map(|range_expr| (
+                            range_expr.lhs().and_then(|v| parse_expr_as_i64(&v)),
+                            range_expr.rhs().and_then(|v| parse_expr_as_i64(&v))
+                        ))
+                        .unwrap_or((None, None));
+                    
+                    // Get pin direction from AST
+                    let direction = decl.direction()
+                        .map(|token| match token.kind() {
+                            SyntaxKind::IN_KW => PortDirectionKind::In,
+                            SyntaxKind::OUT_KW => PortDirectionKind::Out,
+                            SyntaxKind::INOUT_KW => PortDirectionKind::InOut,
+                            _ => PortDirectionKind::In, // Default
+                        });
+                    
+                    // Check if this is a virtual pin
+                    let symbol_kind = if decl.is_virtual() {
+                        SymbolKind::VirtualPin
+                    } else {
+                        SymbolKind::Pin
+                    };
+                    
+                    context.current_scope_mut().insert(Symbol::new_decl(
+                        name_token.text(), 
+                        symbol_kind,
+                        name_token.text_range(), 
+                        node,
+                        bus_high, 
+                        bus_low,
+                        direction, 
+                    ));
+                }
+            }
         }
         SyntaxKind::NET_DECL => { 
             if let Some(decl) = NetDecl::cast(node.clone()) {

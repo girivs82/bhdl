@@ -1,0 +1,192 @@
+// SAFETY ENGINEER DOMAIN - Phase 1: System-Level Safety Analysis
+// File: phase1_safety/system_safety_analysis.bhdl
+// Author: Safety Engineer
+// Created: Day 1, before board design exists
+// Purpose: Define safety goals, hazards, and functional requirements
+
+system_safety AutomotivePowerSystemSafety {
+    // Project context
+    application_context {
+        domain: automotive;
+        system: body_control_module;
+        environment: under_hood;
+        temperature_range: -40C..85C;
+        asil_target: ASIL_B;
+        standard: ISO_26262_2018;
+    }
+    
+    // Functional decomposition - no implementation details
+    functional_blocks {
+        battery_interface: PowerInput {
+            voltage_nominal: 12V;
+            voltage_range: 9V..16V;           // Normal battery variation
+            transient_tolerance: 6V..24V;     // Jump start, load dump events
+            max_continuous_current: 5A;
+            source_impedance: 50mΩ;           // Battery + wiring resistance
+            
+            // What needs to be provided (not how)
+            protection_functions: [
+                reverse_polarity_protection,
+                overvoltage_transient_protection,
+                undervoltage_monitoring
+            ];
+        }
+        
+        primary_regulation: VoltageRegulation {
+            input_source: battery_interface;
+            output_voltage: 5V ± 2%;          // ±100mV tolerance for ECU
+            max_output_current: 3A;
+            efficiency_target: >80%;          // Thermal constraint
+            
+            // Performance requirements
+            load_regulation: <1%;             // Output variation with load
+            line_regulation: <0.5%;          // Output variation with input
+            output_ripple: <50mV_rms;        // Noise requirement
+            
+            // Dynamic response
+            load_transient_response: <100µs;  // Settling time
+            startup_time: <10ms;             // Power-on to regulation
+        }
+        
+        critical_load_interface: PowerOutput {
+            input_source: primary_regulation;
+            load_types: [safety_ecu, sensor_power, actuator_drivers];
+            power_interruption_tolerance: 1ms; // Before safe shutdown required
+            voltage_tolerance: 5V ± 3%;       // ECU operating range
+        }
+    }
+    
+    // Hazard Analysis and Risk Assessment (HARA)
+    hazard_analysis {
+        H1: hazard {
+            id: "H_PSU_001";
+            description: "Loss of power to safety-critical ECU functions";
+            
+            // Hazard assessment
+            potential_causes: [
+                "Power supply component failure",
+                "Input voltage loss",
+                "Thermal shutdown",
+                "Protection circuit activation"
+            ];
+            
+            hazardous_event: "Safety system unavailable when needed";
+            operational_situation: "Normal vehicle operation";
+            
+            // ASIL determination
+            severity: S2;           // Moderate injury potential
+            exposure: E4;           // Very high (continuous driving)
+            controllability: C2;     // Normally controllable by driver
+            asil: ASIL_B;          // S2 × E4 × C2 = ASIL B
+        }
+        
+        H2: hazard {
+            id: "H_PSU_002";
+            description: "Overvoltage damage to safety-critical ECU";
+            
+            potential_causes: [
+                "Regulation failure",
+                "Feedback circuit malfunction", 
+                "Component parameter drift"
+            ];
+            
+            hazardous_event: "ECU malfunction due to electrical damage";
+            operational_situation: "Normal operation or transient conditions";
+            
+            severity: S2;
+            exposure: E4;
+            controllability: C2;
+            asil: ASIL_B;
+        }
+    }
+    
+    // Safety Goals derived from HARA
+    safety_goals {
+        SG1: safety_goal {
+            id: "SG_PSU_001";
+            description: "Prevent loss of power to safety-critical systems";
+            derived_from: H_PSU_001;
+            asil: ASIL_B;
+            safe_state: "Controlled shutdown with fault indication";
+            fault_tolerant_time_interval: 100ms; // Time to reach safe state
+        }
+        
+        SG2: safety_goal {
+            id: "SG_PSU_002"; 
+            description: "Prevent overvoltage damage to downstream systems";
+            derived_from: H_PSU_002;
+            asil: ASIL_B;
+            safe_state: "Power cutoff with fault isolation";
+            fault_tolerant_time_interval: 10µs; // Before damage occurs
+        }
+    }
+    
+    // Functional Safety Requirements - abstract, measurable
+    functional_safety_requirements {
+        FSR1: safety_function {
+            id: "FSR_PSU_001";
+            description: "Power supply output monitoring and fault detection";
+            implements: SG1;
+            asil: ASIL_B;
+            
+            // Allocated to functional blocks (not specific components)
+            primary_safety_mechanism {
+                allocated_to: primary_regulation;
+                function: continuous_output_monitoring;
+                
+                // Abstract requirements - tool will validate
+                detection_coverage: ≥90%;        // ASIL B SPFM requirement
+                detection_time: ≤100µs;          // Response requirement
+                fault_indication: required;      // Must provide fault signal
+            }
+            
+            latent_safety_mechanism {
+                allocated_to: primary_regulation;
+                function: periodic_self_diagnosis;
+                
+                diagnostic_coverage: ≥60%;       // ASIL B LFM requirement
+                test_interval: ≤100ms;           // Latent fault detection time
+                self_test_duration: ≤10ms;       // System availability
+            }
+        }
+        
+        FSR2: safety_function {
+            id: "FSR_PSU_002";
+            description: "Overvoltage protection";  
+            implements: SG2;
+            asil: ASIL_B;
+            
+            primary_safety_mechanism {
+                allocated_to: primary_regulation;
+                function: overvoltage_detection_and_cutoff;
+                
+                detection_threshold: 5.5V;       // 10% overvoltage limit
+                detection_accuracy: ±2%;         // Threshold precision
+                response_time: ≤10µs;           // Before damage occurs
+                protection_action: immediate_shutdown;
+            }
+        }
+    }
+    
+    // System-level safety architecture decisions
+    safety_architecture {
+        fault_detection: centralized_monitoring;     // Single monitor vs distributed
+        diagnostic_approach: built_in_self_test;     // BIST vs external test
+        fault_response: fail_safe_shutdown;          // Fail-safe vs fail-operational
+        redundancy_strategy: single_channel_with_diagnostics; // ASIL B appropriate
+    }
+    
+    // Safety validation criteria
+    validation_criteria {
+        spfm_target: ≥90%;      // Single Point Fault Metric for ASIL B
+        lfm_target: ≥60%;       // Latent Fault Metric for ASIL B  
+        pmhf_target: ≤100FIT;   // Probabilistic Metric for Hardware Failures
+        
+        verification_methods: [
+            failure_mode_analysis,
+            safety_analysis,
+            hardware_verification,
+            integration_testing
+        ];
+    }
+}

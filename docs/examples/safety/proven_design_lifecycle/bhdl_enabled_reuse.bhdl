@@ -1,0 +1,418 @@
+// ═══════════════════════════════════════════════════════════════════
+// MODERN BHDL-ENABLED PROVEN DESIGN REUSE
+// Showing how BHDL synthesizer revolutionizes design reuse
+// No manual copying - just import and instantiate!
+// ═══════════════════════════════════════════════════════════════════
+
+import stdlib.attributes.*;
+import proven_designs.*;  // Library of proven BHDL modules
+
+// ───────────────────────────────────────────────────────────────────
+// THE PROVEN DESIGN LIBRARY (BHDL Modules, not schematics!)
+// ───────────────────────────────────────────────────────────────────
+
+// This lives in proven_designs/power_supplies.bhdl
+module SoC_Core_Power_Proven(
+    target_voltage: voltage = 0.85V,
+    max_current: current = 15A
+) {
+    // Pin definitions
+    pin VIN: power in;           // 5V input
+    pin GND: ground inout;        // Ground reference
+    pin VOUT: power out;          // Regulated output
+    pin PGOOD: signal out;        // Power good signal
+    pin ENABLE: signal in;        // Enable control
+    pin FAULT_N: signal out;      // Fault indication
+    
+    // Metadata about this proven design
+    attributes {
+        proven_since: "2019-06-15";
+        field_units: 3_200_000;
+        field_failures: 12;
+        dppm: 3.75;
+        validation_reports: ["TR-2019-0142", "TR-2019-0143", "TR-2019-0144"];
+        asil_rating: ASIL_D;
+        
+        // Achieved safety metrics
+        safety_metrics: {
+            spfm: 94.2%;
+            lfm: 72.1%;
+            pmhf: 8.3FIT;
+        }
+        
+        // Operating envelope (validated range)
+        validated_envelope: {
+            input_voltage: 4.5V..5.5V;
+            output_current: 0A..15A;
+            ambient_temp: -40°C..85°C;
+            efficiency: 88%..92%;
+        }
+    }
+    
+    // The actual proven implementation
+    implementation {
+        // Input filtering
+        VIN -> c_in: CeramicCap(2x10µF, 10V, X7R) -> GND;
+        
+        // Main regulator with proven configuration
+        VIN -> u1: TPS54360 {
+            // This exact configuration is proven!
+            for voltage_regulation(target_voltage, max_current);
+            
+            // Proven compensation network
+            compensation: {
+                r_comp: 10kΩ;
+                c_comp1: 22nF;
+                c_comp2: 2.2nF;
+                r_comp2: 2.2kΩ;
+            }
+            
+            // Proven feedback network for target voltage
+            feedback: {
+                r_top: 1.24kΩ ± 0.1%;
+                r_bottom: 20kΩ ± 0.1%;
+                // Vout = 0.8V * (1 + r_top/r_bottom)
+            }
+        };
+        
+        // Proven inductor selection
+        u1.SW -> l1: Inductor(1.5µH, 20A, DCR: 1.8mΩ) {
+            part_number: "744325150";  // Wurth, no substitutes
+        };
+        
+        // Proven output capacitor bank
+        l1.out -> VOUT;
+        VOUT -> c_out: CeramicCap(4x47µF + 22µF, 6.3V, X5R) -> GND;
+        
+        // Monitoring (proven to meet ASIL D)
+        VOUT -> monitor: VoltageMonitor {
+            undervoltage: target_voltage - 20mV;
+            overvoltage: target_voltage + 20mV;
+            response_time: ≤10µs;
+        } -> PGOOD;
+        
+        // OVP protection (proven implementation)
+        VOUT -> ovp: OvervoltageProtection {
+            threshold: target_voltage + 50mV;
+            action: crowbar;
+            response_time: ≤5µs;
+        } -> FAULT_N;
+        
+        // Enable control
+        ENABLE -> u1.EN;
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────
+// SCENARIO 1: FIRST TIME USING BHDL PROVEN DESIGN
+// ───────────────────────────────────────────────────────────────────
+
+board ADAS_ECU_Using_BHDL {
+    
+    // Import the proven module - no copy/paste!
+    import proven_designs.SoC_Core_Power_Proven;
+    
+    // Check if we can use it
+    requirements_check {
+        need: "0.85V @ 12A for SoC";
+        proven_provides: "0.85V @ 15A";
+        decision: "Perfect match - use as-is!";
+    }
+    
+    // Just instantiate it! BHDL synthesizer handles everything
+    soc_power: SoC_Core_Power_Proven() {
+        // All defaults match our needs!
+        // Synthesizer will generate:
+        // - Netlist with all connections
+        // - BOM with exact proven parts
+        // - Placement constraints
+        // - Validation requirements
+    };
+    
+    // Connect to rest of system
+    power_connections {
+        @12V_IN -> reg_5v: Buck_5V_Proven() -> @5V_INT;
+        @5V_INT -> soc_power.VIN;
+        @GND -> soc_power.GND;
+        soc_power.VOUT -> @SoC_CORE_0V85;
+        soc_power.PGOOD -> mcu.GPIO_PGOOD_CORE;
+        mcu.GPIO_EN_CORE -> soc_power.ENABLE;
+        soc_power.FAULT_N -> mcu.GPIO_FAULT_CORE;
+    }
+    
+    // BHDL automatically inherits all safety validation!
+    satisfies {
+        REQ_SoC_PWR_001: via soc_power inherits proven_validation;
+        REQ_SoC_PWR_002: via soc_power inherits proven_validation;
+        
+        // Synthesizer extracts these from module attributes
+        inherited_metrics: soc_power.attributes.safety_metrics;
+        inherited_reports: soc_power.attributes.validation_reports;
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────
+// SCENARIO 2: CUSTOMIZING PROVEN DESIGN WITH BHDL
+// ───────────────────────────────────────────────────────────────────
+
+board Custom_Voltage_ECU {
+    
+    // Need different voltage? Just parameterize!
+    gpu_power: SoC_Core_Power_Proven(
+        target_voltage: 1.0V,  // Different voltage
+        max_current: 10A       // Different current
+    ) {
+        // BHDL synthesizer automatically:
+        // - Recalculates feedback resistors
+        // - Adjusts compensation if needed
+        // - Validates against proven envelope
+        // - Flags what needs revalidation
+    };
+    
+    // Synthesizer produces validation delta report
+    validation_needed {
+        inherited: [
+            "Topology validation",
+            "Protection schemes",
+            "Basic functionality"
+        ];
+        
+        needs_retest: [
+            "Output voltage accuracy (1.0V)",
+            "Efficiency at new operating point",
+            "Thermal at 10A load"
+        ];
+        
+        // Automatically generated by comparing to proven envelope
+        estimated_effort: "1 week delta validation";
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────
+// SCENARIO 3: HANDLING OBSOLESCENCE WITH BHDL
+// ───────────────────────────────────────────────────────────────────
+
+// When TPS54360 goes obsolete, update the module
+module SoC_Core_Power_Proven_v2(
+    target_voltage: voltage = 0.85V,
+    max_current: current = 15A
+) {
+    // Same interface - key to compatibility!
+    pin VIN: power in;
+    pin GND: ground inout;
+    pin VOUT: power out;
+    pin PGOOD: signal out;
+    pin ENABLE: signal in;
+    pin FAULT_N: signal out;
+    
+    attributes {
+        // Version tracking
+        version: 2;
+        replaces: SoC_Core_Power_Proven;
+        change_reason: "TPS54360 obsolescence";
+        
+        // What changed
+        changes: {
+            u1: "TPS54360 -> RT6150A";
+            r_comp: "10kΩ -> 12kΩ";
+            c_comp1: "22nF -> 27nF";
+        }
+        
+        // Compatibility info
+        compatibility: {
+            pin_compatible: true;
+            performance: "Improved (+2% efficiency)";
+            validation_delta: "6 weeks";
+        }
+        
+        // Updated metrics (after delta validation)
+        safety_metrics: {
+            spfm: 94.5%;  // Slightly better
+            lfm: 72.1%;
+            pmhf: 8.1FIT;  // Improved
+        }
+    }
+    
+    implementation {
+        // Nearly identical, just different part
+        VIN -> u1: RT6150A {  // New part!
+            for voltage_regulation(target_voltage, max_current);
+            
+            // Updated compensation
+            compensation: {
+                r_comp: 12kΩ;   // Changed
+                c_comp1: 27nF;   // Changed
+                c_comp2: 2.2nF;
+                r_comp2: 2.2kΩ;
+            }
+        };
+        
+        // Everything else identical...
+    }
+}
+
+// Existing designs just update the import!
+board ADAS_ECU_Updated {
+    // Change one line to get new version
+    soc_power: SoC_Core_Power_Proven_v2() {
+        // Interface unchanged - just works!
+    };
+    
+    // Or use alias for zero code change
+    alias SoC_Core_Power_Proven = SoC_Core_Power_Proven_v2;
+}
+
+// ───────────────────────────────────────────────────────────────────
+// THE BHDL ADVANTAGE: Smart Synthesis
+// ───────────────────────────────────────────────────────────────────
+
+synthesis_benefits {
+    
+    traditional_reuse {
+        process: [
+            "Find schematic files",
+            "Copy schematic pages",
+            "Update reference designators",
+            "Copy layout sections",
+            "Update placement",
+            "Verify connections",
+            "Update BOM manually",
+            "Hope nothing was missed"
+        ];
+        
+        error_prone: true;
+        time_consuming: true;
+        version_control: "Difficult";
+    }
+    
+    bhdl_reuse {
+        process: [
+            "Import proven module",
+            "Instantiate with parameters",
+            "Connect pins",
+            "Run synthesizer"
+        ];
+        
+        automatic: [
+            "Netlist generation",
+            "BOM generation with exact parts",
+            "Validation inheritance",
+            "Change tracking",
+            "Version management",
+            "Safety metric propagation"
+        ];
+        
+        error_prone: false;  // Synthesizer validates everything
+        time_consuming: false;  // Minutes vs days
+        version_control: "Git-native";
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────
+// ADVANCED: Compositional Proven Designs
+// ───────────────────────────────────────────────────────────────────
+
+// Build bigger proven designs from smaller ones
+module Complete_SoC_Power_Proven() {
+    // Compose from proven building blocks
+    
+    // Pre-regulation
+    prereg: Buck_5V_Proven(input: 12V, output: 5V @ 25A);
+    
+    // Core supplies
+    core: SoC_Core_Power_Proven(0.85V, 15A);
+    gpu: SoC_Core_Power_Proven(1.0V, 10A);
+    
+    // I/O supplies  
+    io_3v3: LDO_3V3_Proven(input: prereg.out, current: 2A);
+    io_1v8: LDO_1V8_Proven(input: prereg.out, current: 3A);
+    
+    // Memory supplies
+    ddr_vdd: Buck_1V2_Proven(input: prereg.out, current: 5A);
+    ddr_vtt: LDO_0V6_Proven(input: ddr_vdd.out, current: 2A);
+    
+    // Sequencing controller (proven!)
+    sequencer: PowerSequencer_Proven() {
+        sequence: [io_3v3, io_1v8, core, gpu, ddr_vdd, ddr_vtt];
+        timing: 5ms_per_step;
+    };
+    
+    // All proven, all validated, all reusable!
+    attributes {
+        total_validation_inheritance: [
+            "7 proven power modules",
+            "1 proven sequencer",
+            "All ASIL D validated",
+            "Zero new validation needed"
+        ];
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────
+// THE FUTURE: AI-Assisted Proven Design Selection
+// ───────────────────────────────────────────────────────────────────
+
+// BHDL compiler could automatically suggest proven designs
+compiler_assistance {
+    
+    // When you write:
+    user_writes: "need: PowerSupply for voltage_regulation(0.85V, 12A);";
+    
+    // Compiler suggests:
+    compiler_suggests: [
+        "Found proven design: SoC_Core_Power_Proven",
+        "  - Provides: 0.85V @ 15A (3A margin)",
+        "  - Field proven: 3.2M units, 3.75 DPPM",
+        "  - Safety: ASIL D validated",
+        "  - Import with: 'import proven_designs.SoC_Core_Power_Proven;'"
+    ];
+    
+    // Or even better - automatic import
+    auto_complete: {
+        from: "PowerSupply for voltage_regulation(0.85V, 12A)";
+        to: "SoC_Core_Power_Proven()  // Auto-imported, ASIL D proven";
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// KEY INSIGHTS: BHDL Transforms Proven Design Reuse
+// ═══════════════════════════════════════════════════════════════════
+
+/*
+BHDL MAKES PROVEN DESIGNS FIRST-CLASS CITIZENS:
+
+1. MODULES NOT SCHEMATICS
+   - Proven designs are BHDL modules, not file copies
+   - Parameterizable for flexibility
+   - Version controlled with Git
+   - Synthesizer handles all details
+
+2. AUTOMATIC VALIDATION INHERITANCE
+   - Safety metrics in module attributes
+   - Synthesizer propagates validation
+   - Automatic delta analysis
+   - Clear change tracking
+
+3. ZERO COPY-PASTE ERRORS
+   - Import and instantiate
+   - Synthesizer generates everything
+   - Guaranteed consistency
+   - No manual BOM updates
+
+4. INTELLIGENT ASSISTANCE
+   - Compiler suggests proven designs
+   - Automatic parameter calculation
+   - Validation gap analysis
+   - Change impact assessment
+
+5. COMPOSABILITY
+   - Build complex from simple
+   - Each piece proven
+   - Interfaces guaranteed
+   - System-level validation inheritance
+
+This is the REAL POWER of BHDL - turning proven
+designs from manual copy-paste artifacts into
+intelligent, reusable, parameterizable modules
+that carry their validation with them!
+*/

@@ -1,0 +1,352 @@
+// ═══════════════════════════════════════════════════════════════════
+// PHASE 2: BCM POWER SUPPLY BOARD DESIGN
+// Author: Hardware Design Engineer
+// Date: Project Day 5-20 (in parallel with safety refinement)
+// Implements: Requirements from power_subsystem_safety.bhdl
+// ═══════════════════════════════════════════════════════════════════
+
+import stdlib.attributes.*;
+import stdlib.safety.*;
+import automotive.protection.*;
+import automotive.power.*;
+
+// The hardware designer creates the actual implementation
+board BCM_Power_Supply {
+    
+    // ───────────────────────────────────────────────────────────────
+    // POWER DECLARATIONS
+    // ───────────────────────────────────────────────────────────────
+    
+    power KL30 = 12V @ 30A;        // Battery permanent
+    power KL15 = 12V @ 1A;         // Ignition switched
+    ground GND;
+    
+    // Internal power rails
+    power VDD_5V = 5V @ 500mA;     // CAN/LIN transceivers
+    power VDD_3V3 = 3.3V @ 300mA;  // MCU supply
+    power V_12V_SW = 12V @ 25A;    // Switched 12V for outputs
+    
+    // ───────────────────────────────────────────────────────────────
+    // INPUT PROTECTION (Automotive environment)
+    // ───────────────────────────────────────────────────────────────
+    
+    input_protection: Module {
+        // Reverse polarity protection using P-channel MOSFET
+        @KL30 -> d1: SchottkyDiode(STPS20M100S) {
+            // Body diode conducts initially
+            voltage_drop: 0.5V;
+            current_rating: 20A;
+        }.cathode;
+        
+        d1.anode -> q1: PMOSFET(IPD90P04P4) {
+            // Smart FET with built-in protection
+            rdson: 9mΩ;
+            vgs_max: -20V;
+            id_max: 90A;
+        }.source;
+        
+        // Gate control circuit
+        q1.gate -> r1: Res(100kΩ).1;
+        r1.2 -> @KL30;  // Pull-up to keep off initially
+        
+        q1.gate -> z1: ZenerDiode(12V).cathode;
+        z1.anode -> q1.source;  // Clamp Vgs to -12V
+        
+        // TVS for transient protection
+        q1.drain @VBAT_PROTECTED -> tvs1: TVSDiode(SMBJ28CA) {
+            // Bidirectional, 28V standoff
+            breakdown: 31V;
+            clamping: 45V @ 100A;
+            
+            for transient_protection(load_dump: 40V);
+        }.1;
+        tvs1.2 -> @GND;
+        
+        // Input filter
+        @VBAT_PROTECTED -> l1: Inductor(10µH, 30A, DCR: 2mΩ).1;
+        l1.2 @VBAT_FILTERED -> c_bulk: ElecCap(1000µF, 50V).+;
+        c_bulk.- -> @GND;
+        
+        // Add ceramic caps for HF filtering
+        @VBAT_FILTERED -> c_hf: CeramicCap(10µF, 50V, X7R) -> @GND;
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // 3.3V MCU SUPPLY (ASIL B Critical)
+    // ───────────────────────────────────────────────────────────────
+    
+    mcu_power_supply: Module {
+        // Using proven automotive buck converter
+        @VBAT_FILTERED -> u1: TPS54360B {
+            // Automotive qualified, ASIL B capable
+            
+            for voltage_regulation(3.3V, 3A) {
+                switching_frequency: 500kHz;
+                soft_start: 5ms;
+            };
+            
+            // Enable control from supervisor
+            enable: @PWR_ENABLE_3V3;
+            
+            // Power good output
+            power_good: @PGOOD_3V3;
+        };
+        
+        // Output to MCU rail
+        u1.out -> @VDD_3V3;
+        
+        // ═══════════════════════════════════════════════════════════
+        // SAFETY MECHANISM: Voltage Monitoring (ASIL B)
+        // ═══════════════════════════════════════════════════════════
+        
+        voltage_monitor: Module {
+            @VDD_3V3 -> u2: TPS3808G33 {
+                // Voltage supervisor with watchdog
+                
+                threshold_voltage: 3.0V;  // -9% threshold
+                threshold_accuracy: ±1.5%;
+                
+                reset_delay: 10ms;
+                
+                // Satisfies TSR_PWR_MCU_001
+                satisfies {
+                    TSR_PWR_MCU_001: {
+                        undervoltage_detection: 3.0V;
+                        detection_time: 10µs;
+                        coverage: 99%;
+                    }
+                }
+            };
+            
+            // Reset output to MCU
+            u2.RESET_N -> @MCU_RESET_N;
+            
+            // Manual reset capability
+            u2.MR -> sw1: TactSwitch().1;
+            sw1.2 -> @GND;
+            
+            // Watchdog input from MCU
+            @MCU_WDI -> u2.WDI;
+        }
+        
+        // ═══════════════════════════════════════════════════════════
+        // SAFETY MECHANISM: Overvoltage Protection
+        // ═══════════════════════════════════════════════════════════
+        
+        overvoltage_protection: Module {
+            @VDD_3V3 -> r2: Res(10kΩ).1;
+            r2.2 -> comp1: Comparator(TLV3201) {
+                threshold: 3.6V;
+                response_time: 40ns;
+            }.in_plus;
+            
+            // Reference voltage
+            vref: VoltageReference(REF3033) {
+                output: 3.3V;
+                accuracy: ±0.2%;
+            }.out -> r3: Res(12kΩ).1;
+            r3.2 -> comp1.in_minus;
+            
+            // Shutdown path
+            comp1.out -> @OVP_FAULT;
+            @OVP_FAULT -> u1.shutdown;  // Kills buck converter
+            
+            satisfies {
+                TSR_PWR_MCU_001.overvoltage_shutdown: {
+                    threshold: 3.6V;
+                    response: "Shutdown converter";
+                }
+            }
+        }
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // 5V CAN/LIN SUPPLY (ASIL A)
+    // ───────────────────────────────────────────────────────────────
+    
+    can_power_supply: Module {
+        @VBAT_FILTERED -> u3: LT8640 {
+            // Silent Switcher for low EMI
+            
+            for voltage_regulation(5V, 5A) {
+                switching_frequency: 2MHz;
+                spread_spectrum: enabled;
+            };
+            
+            // Always on for CAN wake
+            enable: @KL30;  // Direct battery connection
+        };
+        
+        u3.out -> @VDD_5V;
+        
+        // Simple monitoring (ASIL A)
+        @VDD_5V -> u4: VoltageDetector(MAX809) {
+            threshold: 4.65V;  // -7% threshold
+        };
+        u4.RESET_N -> @PGOOD_5V;
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // HIGH-SIDE DRIVERS (ASIL B for brake lights)
+    // ───────────────────────────────────────────────────────────────
+    
+    output_drivers: Module {
+        // Smart high-side switches with diagnostics
+        
+        brake_light_driver: Module {
+            @V_12V_SW -> u5: VN5E010AH {
+                // ST intelligent power switch
+                channel_current: 10A;
+                
+                features: [
+                    "Open load detection",
+                    "Short circuit protection",
+                    "Thermal shutdown",
+                    "Diagnostic feedback"
+                ];
+                
+                // Control from MCU
+                input: @MCU_BRAKE_CTRL;
+                
+                // Diagnostic feedback
+                status: @BRAKE_DIAG;
+                
+                // Output to brake lights
+                output: @BRAKE_LIGHT_OUT;
+                
+                satisfies {
+                    TSR_PWR_DRV_001: {
+                        diagnostic_capability: [
+                            "Open load detection",
+                            "Short circuit detection",
+                            "Overtemperature detection"
+                        ];
+                        diagnostic_timing: 50ms;
+                    }
+                    
+                    TSR_PWR_DRV_002: {
+                        overcurrent_protection: {
+                            threshold: "15A (1.5x nominal)";
+                            response_time: 5µs;
+                        }
+                    }
+                }
+            };
+            
+            // Pull-down for defined state
+            u5.input -> r4: Res(10kΩ) -> @GND;
+            
+            // Status LED
+            u5.status -> r5: Res(1kΩ).1;
+            r5.2 -> led1: LED(red).anode;
+            led1.cathode -> @GND;
+        }
+        
+        turn_signal_drivers: Module {
+            // Left turn signal
+            @V_12V_SW -> u6: VN5E010AH {
+                input: @MCU_TURN_LEFT;
+                output: @TURN_LEFT_OUT;
+                status: @TURN_LEFT_DIAG;
+            };
+            
+            // Right turn signal
+            @V_12V_SW -> u7: VN5E010AH {
+                input: @MCU_TURN_RIGHT;
+                output: @TURN_RIGHT_OUT;
+                status: @TURN_RIGHT_DIAG;
+            };
+        }
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // POWER SEQUENCING CONTROLLER
+    // ───────────────────────────────────────────────────────────────
+    
+    sequencing: Module {
+        // Simple sequencer using delays
+        
+        @KL15 -> u8: PowerSequencer(MAX16050) {
+            // Configurable sequencing IC
+            
+            sequence: [
+                {rail: @VDD_5V, delay: 0ms},      // First - CAN
+                {rail: @VDD_3V3, delay: 10ms},    // Then MCU
+                {rail: @V_12V_SW, delay: 50ms}    // Finally outputs
+            ];
+            
+            fault_behavior: "Shutdown all on any fault";
+            
+            satisfies {
+                TSR_PWR_SYS_001: {
+                    sequence_order: "5V -> 3.3V -> 12V_SW";
+                    total_time: 60ms;
+                }
+            }
+        };
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // SAFETY VALIDATION DECLARATIONS
+    // ───────────────────────────────────────────────────────────────
+    
+    safety_validation {
+        // Declare what requirements are satisfied
+        
+        satisfies {
+            // MCU power requirements
+            TSR_PWR_MCU_001: via voltage_monitor;
+            TSR_PWR_MCU_002: via input_protection;
+            TSR_PWR_MCU_003: via voltage_monitor.u2;
+            
+            // Driver requirements
+            TSR_PWR_DRV_001: via output_drivers;
+            TSR_PWR_DRV_002: via output_drivers;
+            
+            // System requirements
+            TSR_PWR_SYS_001: via sequencing;
+            TSR_PWR_SYS_002: {
+                // Sleep mode not shown but would use
+                // VBAT_SWITCHED and wake circuit
+                planned: "Wake circuit design pending";
+            }
+        }
+        
+        // Coverage analysis
+        diagnostic_coverage {
+            voltage_monitoring: 99%;
+            output_diagnostics: 95%;
+            overall_spfm: 92%;  // Exceeds ASIL B requirement
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// KEY ASPECTS OF THE IMPLEMENTATION
+// ═══════════════════════════════════════════════════════════════════
+
+/*
+The hardware designer has:
+
+1. CHOSEN SPECIFIC COMPONENTS
+   - TPS54360B for MCU supply (ASIL B capable)
+   - VN5E010AH smart switches (with diagnostics)
+   - TPS3808G33 supervisor (meets monitoring requirement)
+
+2. IMPLEMENTED SAFETY MECHANISMS
+   - Voltage monitoring via supervisor IC
+   - OVP via comparator and shutdown
+   - Diagnostic feedback from smart switches
+
+3. DECLARED COMPLIANCE
+   - Each requirement satisfied by specific implementation
+   - Coverage percentages calculated
+   - Validation plan implied
+
+The BHDL synthesizer can now:
+- Generate the netlist
+- Create the BOM
+- Track safety requirement coverage
+- Generate validation test cases
+- Calculate safety metrics
+*/

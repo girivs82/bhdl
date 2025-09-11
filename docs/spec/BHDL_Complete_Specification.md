@@ -1563,6 +1563,557 @@ board AutoResistorSelection {
 // Then selects 150Ω ±5%, 0.25W resistor from component database
 ```
 
+### 5.7 Virtual Pins and Synthesis Expansion
+
+Virtual pins are a powerful synthesis feature that allows components to declare output pins that don't physically exist on the IC but represent the connection point after required external components are added. This enables clean, intuitive component interfaces while ensuring correct circuit synthesis.
+
+#### 5.7.1 Virtual Pin Declaration
+
+```bhdl
+module TPS54331(vout: voltage = 3.3V, iout: current = 2A) {
+    // Physical pins - these exist on the actual IC
+    pin VIN: power in;
+    pin SW: switch out;         // Switch node output
+    pin GND: ground inout;
+    pin FB: feedback in;
+    pin EN: enable in;
+    
+    // Virtual pin - represents the regulated output after external components
+    pin VOUT: virtual power out;
+}
+```
+
+#### 5.7.2 Virtual Pin Expansion Rules
+
+Components define how their virtual pins expand into actual circuit paths:
+
+```bhdl
+module TPS54331(vout: voltage = 3.3V, iout: current = 2A) {
+    // Pin declarations (as above)
+    
+    // Define how VOUT virtual pin expands
+    @virtual_expansion(VOUT) {
+        // Path from physical pin to virtual pin
+        path: SW -> [external_fet] -> [inductor] -> [output_cap] -> VOUT
+        
+        components: {
+            external_fet: {
+                type: NFET,
+                params: {
+                    vds_max: VIN * 1.5,      // Voltage derating
+                    id_max: iout * 1.5       // Current derating
+                },
+                connections: {
+                    SW -> gate,
+                    drain -> VIN,
+                    source -> next           // 'next' links to next component
+                },
+                intent: power_switching(     // Intent for synthesized component
+                    topology: buck,
+                    frequency: 300kHz,
+                    efficiency_target: 0.9
+                )
+            },
+            inductor: {
+                type: Inductor,
+                params: {
+                    value: calc_buck_inductor(VIN, vout, iout, 300kHz),
+                    current_rating: iout * 1.3
+                },
+                connections: {
+                    prev -> 1,               // 'prev' links from previous component
+                    2 -> next
+                },
+                intent: energy_storage(      // Intent for energy storage
+                    ripple_current: iout * 0.3,
+                    switching_freq: 300kHz
+                )
+            },
+            output_cap: {
+                type: Capacitor,
+                params: {
+                    value: 22uF,
+                    type: ceramic,
+                    voltage: vout * 1.5
+                },
+                connections: {
+                    prev -> pos,
+                    neg -> GND,
+                    pos -> VOUT              // Virtual pin appears here
+                },
+                intent: output_filtering(    // Intent for output filtering
+                    ripple_voltage: 20mV,
+                    load_transient: 100mA/us
+                )
+            }
+        }
+    }
+    
+    // Additional synthesis rules for feedback, compensation, etc.
+    @synthesis_rule(feedback) {
+        when: connected(FB),
+        create: {
+            R_top: Resistor((vout/0.8 - 1) * 10k, 1%),
+            R_bot: Resistor(10k, 1%)
+        },
+        connect: [
+            VOUT -> R_top.1,
+            R_top.2 -> FB,
+            R_top.2 -> R_bot.1,
+            R_bot.2 -> GND
+        ]
+    }
+}
+```
+
+#### 5.7.3 Using Components with Virtual Pins
+
+From the user's perspective, virtual pins behave exactly like physical pins:
+
+```bhdl
+board PowerSupply {
+    power VIN = 12V @ 3A;
+    ground GND;
+    
+    // Instantiate buck controller
+    U1: TPS54331(vout=5V, iout=2A);
+    
+    // Connect to physical pins
+    VIN -> U1.VIN;
+    U1.GND -> GND;
+    U1.EN -> VIN;  // Always enabled
+    
+    // Connect to virtual pin - user gets clean interface!
+    U1.VOUT -> @5V_RAIL;
+    
+    // Use the output normally
+    @5V_RAIL -> Load.VIN;
+}
+```
+
+The synthesizer automatically expands this to:
+
+```bhdl
+// After synthesis (generated automatically):
+VIN -> U1.VIN;
+U1.SW -> Q1: NFET(30V, 5A).gate;
+VIN -> Q1.drain;
+Q1.source -> L1: Inductor(4.7uH, 3A).1;
+L1.2 -> C1: Cap(22uF, ceramic).pos;
+C1.neg -> GND;
+L1.2 -> @5V_RAIL;  // Virtual pin VOUT maps here
+
+// Feedback network (from synthesis_rule)
+@5V_RAIL -> R1: Res(52.5k, 1%).1;
+R1.2 -> U1.FB;
+R1.2 -> R2: Res(10k, 1%).1;
+R2.2 -> GND;
+```
+
+#### 5.7.4 Virtual Pin Benefits
+
+1. **Clean Interfaces**: Users see simple, logical connections (U1.VOUT) instead of complex intermediate components
+2. **Guaranteed Correctness**: Synthesis ensures all required components are added
+3. **Reusability**: Same component definition works for all instances
+4. **Self-Documenting**: Virtual pins clearly show what the component provides
+5. **Flexibility**: Different component variants can have different expansion rules
+
+#### 5.7.5 Multiple Virtual Pins
+
+Components can declare multiple virtual pins for multi-output converters:
+
+```bhdl
+module TPS54240(vout1: voltage = 5V, vout2: voltage = 3.3V) {
+    // Physical pins
+    pin VIN: power in;
+    pin SW1: switch out;
+    pin SW2: switch out;
+    pin GND: ground inout;
+    
+    // Two virtual outputs
+    pin VOUT1: virtual power out;
+    pin VOUT2: virtual power out;
+    
+    @virtual_expansion(VOUT1) {
+        path: SW1 -> [inductor] -> [output_cap] -> VOUT1
+        // ... component specifications
+    }
+    
+    @virtual_expansion(VOUT2) {
+        path: SW2 -> [inductor] -> [output_cap] -> VOUT2
+        // ... component specifications
+    }
+}
+
+// User code remains simple:
+U1: TPS54240();
+U1.VOUT1 -> @5V;
+U1.VOUT2 -> @3V3;
+```
+
+#### 5.7.6 Conditional Virtual Pins
+
+Virtual pins can be conditional based on component configuration:
+
+```bhdl
+module BuckController(fixed_output: bool = false, vout: voltage = 3.3V) {
+    pin VIN: power in;
+    pin SW: switch out;
+    pin GND: ground inout;
+    pin FB: feedback in when !fixed_output;  // Only present if adjustable
+    
+    // Virtual output always present
+    pin VOUT: virtual power out;
+    
+    @virtual_expansion(VOUT) {
+        // Expansion adapts based on configuration
+        path: SW -> [inductor] -> [output_cap] -> VOUT
+        // ...
+    }
+    
+    @synthesis_rule(feedback) {
+        when: !fixed_output && connected(FB),
+        // Add feedback network only for adjustable versions
+    }
+}
+```
+
+#### 5.7.7 Synthesis Rules with Virtual Pins
+
+Components can reference their virtual pins in synthesis rules:
+
+```bhdl
+@synthesis_rule(input_protection) {
+    when: VIN > 24V,
+    create: TVSDiode(VIN * 1.2),
+    connect: [VIN -> tvs.cathode, tvs.anode -> GND]
+}
+
+@synthesis_rule(output_sensing) {
+    when: requires_remote_sense,
+    connect: [VOUT -> SENSE+, GND -> SENSE-]  // VOUT is virtual pin
+}
+```
+
+### 5.8 Synthesizer Intent Generation
+
+The synthesizer automatically generates intent information for all components it creates or modifies during synthesis. This ensures that synthesized circuits are rich with semantic information about the purpose and function of each component, enabling better simulation, validation, and optimization.
+
+#### 5.8.1 Intent in Virtual Pin Expansion
+
+When expanding virtual pins, the synthesizer adds intent to each created component:
+
+```bhdl
+module TPS54331(vout: voltage = 3.3V, iout: current = 2A) {
+    pin VOUT: virtual power out;
+    
+    @virtual_expansion(VOUT) {
+        path: SW -> [external_fet] -> [inductor] -> [output_cap] -> VOUT
+        
+        components: {
+            external_fet: {
+                type: NFET,
+                params: { vds_max: VIN * 1.5, id_max: iout * 1.5 },
+                // Synthesizer adds intent for power switching
+                intent: power_switching(
+                    topology: buck,
+                    frequency: 300kHz,
+                    efficiency_target: 0.9,
+                    switching_loss: 200mW
+                )
+            },
+            inductor: {
+                type: Inductor,
+                params: { value: calc_buck_inductor(VIN, vout, iout, 300kHz) },
+                // Synthesizer knows this is for energy storage
+                intent: energy_storage(
+                    ripple_current: iout * 0.3,
+                    switching_freq: 300kHz,
+                    core_loss_budget: 200mW
+                )
+            },
+            output_cap: {
+                type: Capacitor,
+                params: { value: 22uF, type: ceramic },
+                // Synthesizer adds output filtering intent
+                intent: output_filtering(
+                    ripple_voltage: 20mV,
+                    load_transient: 100mA/us,
+                    esr_requirement: 10mOhm
+                )
+            }
+        }
+    }
+}
+```
+
+#### 5.8.2 Intent in Synthesis Rules
+
+Synthesis rules specify intent for component groups they create:
+
+```bhdl
+@synthesis_rule(feedback_network) {
+    when: connected(FB),
+    create: {
+        R_top: Resistor((vout/0.8 - 1) * 10k, 1%),
+        R_bot: Resistor(10k, 1%)
+    },
+    connect: [
+        VOUT -> R_top.1,
+        R_top.2 -> FB,
+        R_top.2 -> R_bot.1,
+        R_bot.2 -> GND
+    ],
+    // Intent for the entire feedback network
+    intent: voltage_regulation(
+        setpoint: vout,
+        accuracy: 1%,
+        temp_stability: 50ppm/C,
+        bandwidth: 10kHz,
+        phase_margin: 60deg
+    )
+}
+
+@synthesis_rule(input_protection) {
+    when: VIN > 24V || transient_spec > 100V,
+    create: {
+        tvs: TVSDiode(VIN * 1.2),
+        series_r: Resistor(10R, pulse_rated)
+    },
+    connect: [
+        VIN -> series_r.1,
+        series_r.2 -> tvs.cathode,
+        tvs.anode -> GND
+    ],
+    // Protection intent with specifications
+    intent: overvoltage_protection(
+        clamp_voltage: VIN * 1.2,
+        response_time: 1ns,
+        energy_rating: 10J,
+        protection_standard: "IEC61000-4-2"
+    )
+}
+```
+
+#### 5.8.3 Intent Inference for User Components
+
+When users specify components without intent, the synthesizer infers intent based on topology and context:
+
+```bhdl
+// User writes:
+U1.SW -> L1: Inductor(4.7uH).1 -> @VOUT;
+
+// Synthesizer infers and adds:
+U1.SW -> L1: Inductor(4.7uH).1 -> @VOUT
+    for energy_storage(
+        topology: buck,
+        switching_freq: 300kHz,  // Detected from U1
+        ripple_current: 0.6A,     // Calculated from topology
+        saturation_margin: 1.3    // Safety factor
+    );
+```
+
+#### 5.8.4 Complete Synthesis with Intent
+
+A fully synthesized circuit includes intent for every component:
+
+```bhdl
+// User input (minimal):
+board PowerSupply {
+    power VIN = 12V @ 3A;
+    ground GND;
+    
+    VIN -> U1: TPS54331(vout=5V).VIN;
+    U1.GND -> GND;
+    U1.VOUT -> @5V_RAIL;
+}
+
+// After synthesis with intent generation:
+board PowerSupply {
+    power VIN = 12V @ 3A;
+    ground GND;
+    
+    // Input decoupling with intent
+    net input_filter: VIN -> C_in: Cap(10uF, ceramic).pos
+        for input_decoupling(
+            switching_freq: 300kHz,
+            source_impedance: 0.1R,
+            ripple_current: 2A
+        );
+    C_in.neg -> GND;
+    
+    // Main converter
+    VIN -> U1: TPS54331(vout=5V).VIN;
+    U1.GND -> GND;
+    
+    // Power switching path with intent
+    net switching: U1.SW -> Q1: NFET(30V, 5A).gate
+        for power_switching(
+            topology: buck,
+            frequency: 300kHz,
+            duty_cycle: 0.42,
+            switching_loss: 250mW
+        );
+    VIN -> Q1.drain;
+    
+    // Energy storage with calculated intent
+    net energy: Q1.source -> L1: Inductor(4.7uH).1
+        for energy_storage(
+            ripple_current: 0.6A,
+            dc_current: 2A,
+            inductance_tolerance: 20%,
+            saturation_current: 3A
+        );
+    
+    // Output filtering with performance intent
+    net output: L1.2 -> C_out: Cap(22uF).pos -> @5V_RAIL
+        for output_filtering(
+            ripple_voltage: 20mV,
+            load_step_response: 10us,
+            esr_max: 10mOhm
+        );
+    C_out.neg -> GND;
+    
+    // Feedback network with control intent
+    net feedback: @5V_RAIL -> R_top: Res(52.5k, 1%).1 -> @FB
+        for voltage_sensing(
+            divider_ratio: 6.25,
+            accuracy: 1%,
+            bandwidth: 100kHz
+        );
+    @FB -> R_bot: Res(10k, 1%).1 -> GND;
+    @FB -> U1.FB
+        for control_feedback(
+            loop_type: voltage_mode,
+            crossover_freq: 10kHz,
+            phase_margin: 60deg
+        );
+    
+    // Bootstrap circuit with intent
+    net bootstrap: U1.BOOT -> C_boot: Cap(100nF, ceramic).1
+        for gate_drive_bootstrap(
+            charge_time: 100ns,
+            hold_time: 10us
+        );
+    C_boot.2 -> U1.SW;
+}
+```
+
+#### 5.8.5 Intent Categories for Synthesis
+
+The synthesizer uses these standard intent categories:
+
+```bhdl
+// Power Conversion
+intent power_switching(topology, frequency, efficiency_target, switching_loss)
+intent energy_storage(ripple_current, switching_freq, core_loss_budget)
+intent power_rectification(forward_drop, reverse_recovery, power_dissipation)
+
+// Filtering
+intent input_filtering(noise_freq, attenuation, source_impedance)
+intent output_filtering(ripple_voltage, load_transient, esr_requirement)
+intent emi_filtering(frequency_range, attenuation, compliance_standard)
+
+// Protection
+intent overvoltage_protection(clamp_voltage, response_time, energy_rating)
+intent overcurrent_protection(trip_current, response_time, reset_type)
+intent reverse_polarity_protection(voltage_drop, current_rating)
+intent esd_protection(level, standard, capacitance)
+
+// Control & Sensing
+intent voltage_regulation(setpoint, accuracy, bandwidth, stability_margin)
+intent current_sensing(range, accuracy, bandwidth, isolation)
+intent temperature_monitoring(range, accuracy, thermal_constant)
+
+// Compensation
+intent loop_compensation(type, crossover_freq, phase_margin, gain_margin)
+intent frequency_compensation(poles, zeros, bandwidth)
+
+// Decoupling & Bypassing
+intent power_decoupling(frequency_range, target_impedance, current_slew_rate)
+intent high_frequency_bypass(resonant_freq, q_factor, placement_critical)
+
+// Signal Conditioning
+intent signal_buffering(impedance_in, impedance_out, bandwidth)
+intent level_shifting(voltage_from, voltage_to, propagation_delay)
+intent signal_filtering(filter_type, cutoff_freq, rolloff)
+```
+
+#### 5.8.6 Intent Determination Algorithm
+
+The synthesizer determines intent through multiple analysis layers:
+
+```bhdl
+// 1. Topology Analysis
+if component in buck_topology.energy_path:
+    intent = energy_storage(calculated_parameters)
+
+// 2. Electrical Function Analysis
+if component.type == Capacitor && connected_to_power:
+    if frequency_analysis shows switching_noise:
+        intent = input_decoupling(detected_frequency)
+    else:
+        intent = bulk_storage(hold_time_requirement)
+
+// 3. Connection Pattern Analysis
+if component between high_voltage and sensitive_node:
+    intent = protection(voltage_limit, response_time)
+
+// 4. Control Loop Analysis
+if component in feedback_path:
+    intent = control_feedback(loop_characteristics)
+```
+
+#### 5.8.7 Benefits of Synthesizer Intent Generation
+
+1. **Simulation Optimization**: Simulators can use appropriate models based on intent
+2. **Validation**: Verify synthesized components meet their intended purpose
+3. **Documentation**: Generated circuits are self-documenting
+4. **Optimization**: Choose optimal components based on intent requirements
+5. **Fault Analysis**: Understand impact when components fail
+6. **Layout Generation**: Intent guides critical placement and routing
+7. **BOM Selection**: Select real parts that meet intent specifications
+8. **Design Review**: Intent makes design decisions explicit and reviewable
+
+#### 5.8.8 Intent Verification
+
+The synthesizer can verify that components meet their intent requirements:
+
+```bhdl
+// After synthesis, verify intent is satisfied
+verify inductor L1 {
+    intent: energy_storage(ripple_current: 0.6A, saturation_margin: 1.3)
+    actual: {
+        ripple_current: calculate_ripple(L1.value, frequency, voltage)
+        saturation_current: L1.isat_rating
+    }
+    assert: actual.ripple_current <= 0.6A
+    assert: actual.saturation_current >= dc_current * 1.3
+}
+```
+
+#### 5.8.9 Intent-Driven Optimization
+
+The synthesizer can optimize component selection based on intent:
+
+```bhdl
+// Synthesizer selects optimal component for intent
+optimize C_out for output_filtering {
+    requirements: {
+        ripple_voltage: 20mV
+        load_transient: 100mA/us
+        cost: minimize
+    }
+    
+    // Synthesizer evaluates options:
+    option1: Cap(22uF, ceramic, X7R) // Good ripple, moderate transient
+    option2: Cap(47uF, ceramic, X5R) // Better transient, higher cost
+    option3: Cap(100uF, aluminum)    // Poor high-freq, low cost
+    
+    selected: option1 // Meets requirements at lowest cost
+}
+```
+
 ---
 
 ## 6. Interface System
@@ -3464,7 +4015,7 @@ interface signal perspective require
 signal power ground voltage current
 
 // Modifiers
-input output inout optional extends implements
+input output inout optional virtual extends implements
 
 // Interface directions
 in out inout
@@ -3673,7 +4224,7 @@ parameter_list = "(" [ parameter { "," parameter } ] ")" ;
 parameter = identifier ":" type_specification [ "=" default_value ] ;
 
 (* Pin declaration *)
-pin_declaration = "pin" identifier ":" pin_type ;
+pin_declaration = "pin" identifier ":" ["virtual"] pin_type pin_direction [when_clause] ";" ;
 pin_type = ( "signal" | "power" | "ground" ) [ pin_direction ] [ pin_attributes ] ;
 pin_direction = "in" | "out" | "inout" ;
 

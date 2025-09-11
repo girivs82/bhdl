@@ -5,11 +5,11 @@
 //! the entire flow path, not just the individual net.
 
 use std::collections::HashMap;
-use bhdl_ast::{Board, Statement, AstNode};
+use bhdl_ast::{Board, Statement, AstNode, Module};
 use bhdl_ast::BoardV2Ext;
 use bhdl_ast::v2_statements::NetFlowStmt;
 use bhdl_common::{IntentCall, IntentRegistry, IntentResult, SimMode};
-use crate::symbol_table::SymbolTable;
+use crate::symbol_table::{SymbolTable, SymbolKind};
 use crate::types::Diagnostic;
 
 /// Represents a flow path in the circuit
@@ -108,6 +108,98 @@ impl FlowTracker {
         }
         
         diagnostics
+    }
+
+    /// Analyze virtual pins in modules and create flows for intent-driven expansion
+    pub fn analyze_virtual_pins(
+        &mut self, 
+        symbol_table: &SymbolTable, 
+        definition_scopes: &HashMap<rowan::ast::SyntaxNodePtr<bhdl_parser::BhdlLanguage>, SymbolTable>
+    ) -> Vec<Diagnostic> {
+        let mut diagnostics = Vec::new();
+        
+        // Iterate through all module scopes to find virtual pins
+        for (module_node_ptr, module_scope) in definition_scopes {
+            // Check each symbol in the module scope
+            for (pin_name, symbol) in module_scope.get_symbols() {
+                if symbol.kind == SymbolKind::VirtualPin {
+                    // Create a default intent for this virtual pin based on its characteristics
+                    let default_intent = self.create_default_virtual_pin_intent(pin_name, symbol);
+                    
+                    // Create a flow path for this virtual pin
+                    let flow_id = self.create_virtual_pin_flow_path(pin_name.clone(), default_intent);
+                    
+                    println!("FlowTracker: Created flow path {} for virtual pin '{}' with default intent", 
+                             flow_id, pin_name);
+                }
+            }
+        }
+        
+        diagnostics
+    }
+    
+    /// Create a default intent for a virtual pin based on its characteristics
+    fn create_default_virtual_pin_intent(&self, pin_name: &str, symbol: &crate::symbol_table::Symbol) -> IntentCall {
+        use bhdl_common::{IntentParam, IntentValue};
+        
+        // Determine the default intent based on pin type and direction
+        let (intent_name, params) = match (&symbol.direction, pin_name.to_lowercase().as_str()) {
+            // Power output pins get power management intent
+            (Some(crate::symbol_table::PortDirectionKind::Out), name) if name.contains("vout") || name.contains("power") => {
+                ("power_output_protection", vec![
+                    IntentParam::Named("voltage".to_string(), IntentValue::String("3.3V".to_string())),
+                    IntentParam::Named("current".to_string(), IntentValue::String("500mA".to_string())),
+                ])
+            }
+            // Signal output pins get output protection
+            (Some(crate::symbol_table::PortDirectionKind::Out), _) => {
+                ("signal_output_protection", vec![
+                    IntentParam::Named("drive_strength".to_string(), IntentValue::String("standard".to_string())),
+                    IntentParam::Named("current_limit".to_string(), IntentValue::String("20mA".to_string())),
+                ])
+            }
+            // Bidirectional pins get bidirectional protection
+            (Some(crate::symbol_table::PortDirectionKind::InOut), _) => {
+                ("bidirectional_protection", vec![
+                    IntentParam::Named("max_voltage".to_string(), IntentValue::String("5V".to_string())),
+                    IntentParam::Named("protection_type".to_string(), IntentValue::String("tvs".to_string())),
+                ])
+            }
+            // Ground pins get ground protection
+            (_, name) if name.contains("gnd") || name.contains("ground") => {
+                ("ground_protection", vec![
+                    IntentParam::Named("filter_type".to_string(), IntentValue::String("ferrite_bead".to_string())),
+                ])
+            }
+            // Default fallback
+            _ => {
+                ("general_protection", vec![])
+            }
+        };
+        
+        IntentCall {
+            name: intent_name.to_string(),
+            params,
+        }
+    }
+    
+    /// Create a flow path for a virtual pin
+    fn create_virtual_pin_flow_path(&mut self, pin_name: String, intent: IntentCall) -> usize {
+        let flow_id = self.next_flow_id;
+        self.next_flow_id += 1;
+        
+        let flow_path = FlowPath {
+            id: flow_id,
+            nets: vec![format!("{}_virtual", pin_name)], // Virtual pin creates a virtual net
+            components: Vec::new(), // Will be filled by synthesis
+            intent: Some(intent),
+            intent_result: None,
+        };
+        
+        self.flow_paths.push(flow_path);
+        // Note: We don't add to net_to_flows for virtual pins since they don't exist yet
+        
+        flow_id
     }
 
     /// Create a new flow path

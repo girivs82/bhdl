@@ -1,0 +1,150 @@
+// GENERATED REQUIREMENTS FOR BOARD DESIGNER
+// File: phase1_safety/safety_requirements.bhdl  
+// Generated from: system_safety_analysis.bhdl
+// Target: Board Designer
+// Purpose: Translate safety functions into implementable requirements
+
+// These requirements are automatically generated from the safety analysis
+// Board designer implements these without needing to understand safety details
+
+requirements {
+    // Power Supply Output Monitoring Requirement
+    REQ_PSU_001: requirement {
+        id: "REQ_PSU_001";
+        source: "FSR_PSU_001.primary_safety_mechanism";
+        description: "Primary regulator shall continuously monitor output voltage with fault indication";
+        
+        // What board designer needs to implement
+        functional_interface {
+            fault_output: active_low_signal_to_mcu;  // Signal polarity and destination
+            monitoring_range: 0V..6V;                // Voltage range to monitor
+        }
+        
+        // Measurable constraints board designer can verify
+        performance_constraints {
+            detection_time: ≤100µs;                  // From fault to signal assertion
+            accuracy: ±1%;                           // Monitoring accuracy
+            continuous_operation: required;          // Always monitoring (not sampled)
+        }
+        
+        // Implementation guidance (not requirements)
+        guidance {
+            typical_solutions: [voltage_supervisor, monitoring_IC, ADC_with_comparator];
+            test_method: "Apply out-of-range voltage, measure response time";
+        }
+    }
+    
+    // Self-Test Capability Requirement  
+    REQ_PSU_002: requirement {
+        id: "REQ_PSU_002";
+        source: "FSR_PSU_001.latent_safety_mechanism";
+        description: "Primary regulator shall provide self-test capability with result indication";
+        
+        functional_interface {
+            test_result: digital_signal_to_mcu;      // Test pass/fail indication
+            test_trigger: automatic_or_external;     // How test is initiated
+        }
+        
+        performance_constraints {
+            test_interval: ≤100ms;                   // How often test occurs
+            test_duration: ≤10ms;                    // Test execution time
+            result_indication: immediate;            // Result available when test completes
+        }
+        
+        guidance {
+            typical_solutions: [built_in_self_test, external_test_injection];
+            test_method: "Verify test executes within interval and indicates pass/fail";
+        }
+    }
+    
+    // Overvoltage Protection Requirement
+    REQ_PSU_003: requirement {
+        id: "REQ_PSU_003"; 
+        source: "FSR_PSU_002.primary_safety_mechanism";
+        description: "Primary regulator shall detect and respond to overvoltage conditions";
+        
+        functional_interface {
+            protection_action: immediate_output_shutdown; // What happens on overvoltage
+            recovery_method: manual_reset_or_power_cycle; // How to recover
+        }
+        
+        performance_constraints {
+            overvoltage_threshold: 5.5V ± 2%;        // Trip point
+            response_time: ≤10µs;                     // Shutdown delay
+            threshold_accuracy: ±2%;                  // Threshold precision
+        }
+        
+        guidance {
+            typical_solutions: [overvoltage_crowbar, shutdown_regulator, protection_IC];
+            test_method: "Slowly increase voltage, measure shutdown point and timing";
+        }
+    }
+    
+    // Power Supply Performance Requirements
+    REQ_PSU_004: requirement {
+        id: "REQ_PSU_004";
+        source: "primary_regulation functional block";
+        description: "Provide regulated 5V power meeting performance specifications";
+        
+        electrical_specifications {
+            output_voltage: 5.0V ± 2%;               // ±100mV regulation
+            max_output_current: 3A;                   // Current capability
+            output_ripple: ≤50mV_rms;               // Noise specification
+            load_regulation: ≤1%;                    // Regulation vs load
+            line_regulation: ≤0.5%;                 // Regulation vs input voltage
+        }
+        
+        dynamic_specifications {
+            startup_time: ≤10ms;                     // Power-on to regulation
+            load_transient_response: ≤100µs;         // Load step settling
+            efficiency: ≥80%;                        // Power conversion efficiency
+        }
+        
+        guidance {
+            input_range: 9V..16V;                    // Operating input range
+            transient_immunity: 6V..24V;             // Survival range
+            typical_solutions: [linear_regulator, switching_regulator];
+        }
+    }
+    
+    // Input Protection Requirements
+    REQ_PSU_005: requirement {
+        id: "REQ_PSU_005";
+        source: "battery_interface functional block";
+        description: "Provide input protection for automotive electrical environment";
+        
+        protection_requirements {
+            reverse_polarity: required;              // Protect against wrong battery connection
+            overvoltage_transients: up_to_24V;      // Load dump protection
+            overcurrent_protection: 7.5A_max;       // Current limiting/fusing
+        }
+        
+        guidance {
+            transient_standard: "ISO 16750-2";      // Automotive electrical standard
+            typical_solutions: [fuse_and_TVS, protection_IC, discrete_protection];
+        }
+    }
+}
+
+// Integration requirements - how everything connects together
+integration_requirements {
+    INTEGRATION_001: requirement {
+        description: "Power supply fault signals shall connect to system MCU";
+        
+        signal_connections {
+            power_fault: mcu.interrupt_pin;          // Immediate response capability
+            test_result: mcu.gpio_pin;               // Periodic monitoring
+            power_good: mcu.gpio_pin;                // System status indication
+        }
+        
+        electrical_interface {
+            logic_family: compatible_with_mcu;       // Board designer chooses levels
+            signal_integrity: sufficient_drive;      // Board designer calculates
+        }
+        
+        guidance {
+            consider: "Signal routing, pull-up resistors, EMC filtering";
+            test_method: "Verify signal connectivity and logic levels";
+        }
+    }
+}

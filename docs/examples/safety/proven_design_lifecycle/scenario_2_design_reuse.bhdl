@@ -1,0 +1,308 @@
+// ═══════════════════════════════════════════════════════════════════
+// SCENARIO 2: REUSING PROVEN DESIGN (Library Available)
+// Project: ADAS ECU Gen 2
+// Date: 2020 Q2 (1 year later)
+// Status: Proven design available in library from Gen 1
+// ═══════════════════════════════════════════════════════════════════
+
+import stdlib.attributes.*;
+import proven_designs.SoC_Core_Power_v1;  // Available from library!
+
+// ───────────────────────────────────────────────────────────────────
+// PHASE 1: SAFETY REQUIREMENTS (Similar to Gen 1)
+// ───────────────────────────────────────────────────────────────────
+
+safety_requirements ADAS_Gen2_SoC_Power_Requirements {
+    // Almost identical to Gen 1 requirements
+    
+    REQ_SoC_PWR_001: SafetyRequirement {
+        description: "Provide stable 0.85V for SoC core";
+        voltage: 0.85V ± 2%;
+        current: 12A_max;  // Slightly lower - new SoC more efficient
+        asil: ASIL_D;
+        
+        monitoring: {
+            undervoltage_threshold: 0.83V;
+            overvoltage_threshold: 0.87V;
+            response_time: ≤20µs;
+        }
+    }
+    
+    REQ_SoC_PWR_002: SafetyRequirement {
+        description: "Protect against overvoltage";
+        protection_threshold: 0.90V;
+        response_time: ≤5µs;
+        asil: ASIL_D;
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────
+// PHASE 2: BOARD DESIGN (Reusing proven design!)
+// ───────────────────────────────────────────────────────────────────
+
+board ADAS_ECU_Gen2_Reuse {
+    
+    // Designer's notes - MUCH simpler!
+    design_notes {
+        "Gen 2 design using proven SoC power from Gen 1";
+        "Requirements match proven design capabilities";
+        "Can copy exact implementation";
+    }
+    
+    // Reuse decision (minimal work!)
+    reuse_analysis {
+        requirement_check: {
+            voltage: "0.85V ± 2% ✓ (matches exactly)";
+            current: "12A < 15A capacity ✓ (has margin)";
+            asil: "ASIL_D ✓ (already validated)";
+            temperature: "-40°C to 85°C ✓ (matches)";
+        }
+        
+        decision: "FULL REUSE - All requirements within proven envelope";
+        
+        time_saved: "6 months validation avoided";
+        cost_saved: "$180,000 engineering + lab costs";
+    }
+    
+    // Direct import of proven design - EXACT COPY
+    soc_core_power: import SoC_Core_Power_v1 {
+        // Literally copy the entire proven circuit
+        
+        instance: proven_designs.SoC_Core_Power_v1;
+        
+        // No changes needed - works as-is!
+        modifications: none;
+        
+        // Use exact same:
+        // - Schematic (copy page)
+        // - Layout (copy 70mm x 40mm section)  
+        // - BOM (exact components)
+        // - Placement (proven thermal design)
+        // - Routing (proven EMC performance)
+    }
+    
+    // Safety declaration - inherit everything!
+    satisfies {
+        REQ_SoC_PWR_001: via proven_designs.SoC_Core_Power_v1;
+        REQ_SoC_PWR_002: via proven_designs.SoC_Core_Power_v1;
+        
+        // All safety validation inherited
+        safety_evidence: "TR-2019-0142 through TR-2019-0146";
+        asil_achievement: ASIL_D;
+        
+        // Metrics already proven
+        spfm: 94.2%;  // From Gen 1 validation
+        lfm: 72.1%;   // From Gen 1 validation
+        pmhf: 8.3FIT; // From Gen 1 validation
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────
+// VALIDATION PHASE (Minimal - only integration testing!)
+// ───────────────────────────────────────────────────────────────────
+
+validation_campaign Gen2_Validation {
+    
+    // Only need to validate integration, not the design itself
+    integration_tests {
+        pcb_verification: {
+            description: "Verify correct copy of layout";
+            method: "Gerber comparison tool";
+            result: "100% match to proven design";
+            time: 1_hour;
+        }
+        
+        first_article_inspection: {
+            description: "Verify BOM and assembly";
+            samples: 5;
+            result: "All components match specification";
+            time: 1_day;
+        }
+        
+        functional_checkout: {
+            description: "Basic power-on test";
+            tests: [
+                "Output voltage: 0.85V ✓",
+                "Ripple: 7mVpp ✓",
+                "Efficiency at 10A: 91% ✓"
+            ];
+            time: 4_hours;
+        }
+        
+        system_integration: {
+            description: "Verify with new SoC";
+            tests: [
+                "Power sequencing correct",
+                "SoC boots successfully",
+                "Runs at full load"
+            ];
+            time: 2_days;
+        }
+    }
+    
+    // No need for:
+    // - Thermal cycling (already done)
+    // - EMC testing (already passed)
+    // - Reliability testing (already proven)
+    // - Safety validation (inherited)
+    // - Environmental testing (already done)
+    
+    total_validation_effort {
+        calendar_time: 1_week;  // vs 6 months!
+        engineering_hours: 40;   // vs 960 hours!
+        test_equipment_time: 20_hours;  // vs 2000 hours!
+        external_lab_cost: $0;   // vs $45,000!
+        
+        // 99% reduction in validation effort!
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────
+// PRODUCTION RELEASE (Fast!)
+// ───────────────────────────────────────────────────────────────────
+
+production_release Gen2 {
+    release_date: "2020-07-01";  // Only 2 weeks after design start!
+    
+    confidence_level: "Very High";
+    
+    rationale: {
+        "Design proven in 1.5M units";
+        "Field failure rate known (3.75 DPPM)";
+        "All corner cases already discovered";
+        "Manufacturing process proven";
+    }
+    
+    risk_assessment: {
+        technical_risk: "None - exact reuse";
+        schedule_risk: "None - no validation needed";
+        cost_risk: "None - BOM already optimized";
+        quality_risk: "None - field proven";
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// OUTCOME COMPARISON: First Design vs Reuse
+// ═══════════════════════════════════════════════════════════════════
+
+reuse_benefits {
+    
+    time_savings {
+        gen1_first_design: 6_months;
+        gen2_reuse: 2_weeks;
+        
+        time_saved: "5.5 months";
+        percentage: "96% reduction";
+    }
+    
+    cost_savings {
+        gen1_total_cost: $180_000;
+        gen2_total_cost: $3_000;  // Just integration testing
+        
+        money_saved: $177_000;
+        percentage: "98% reduction";
+    }
+    
+    risk_reduction {
+        gen1_risks: [
+            "Will design work?",
+            "EMC compliance?",
+            "Thermal issues?",
+            "Stability problems?",
+            "Component tolerances?"
+        ];
+        
+        gen2_risks: [
+            "None - all proven"
+        ];
+    }
+    
+    quality_improvement {
+        gen1_iterations: 3;  // Had to fix EMC, thermal, stability
+        gen2_iterations: 1;  // Right first time
+        
+        gen1_field_issues: "Unknown at release";
+        gen2_field_issues: "Known - 3.75 DPPM";
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// SCENARIO 2B: What if requirements slightly change?
+// ═══════════════════════════════════════════════════════════════════
+
+alternative_scenario Gen2_Modified_Requirements {
+    
+    new_requirement: "Need 0.9V instead of 0.85V for new SoC variant";
+    
+    can_reuse_mostly: true;
+    
+    changes_needed: {
+        // Only feedback resistors change!
+        r_fb_top: "1.24k → 1.5k";  // Simple calculation
+        r_fb_bot: "20k → 20k";     // No change
+        
+        everything_else: "Identical to proven design";
+    }
+    
+    validation_needed: {
+        // Still much less than starting from scratch
+        output_voltage_verification: 2_hours;
+        load_regulation_test: 4_hours;
+        thermal_retest: 1_day;  // Slightly different power
+        
+        can_skip: [
+            "EMC testing (topology unchanged)",
+            "Reliability (same components)",
+            "Most safety tests (same protection)"
+        ];
+        
+        total_time: 1_week;
+        total_cost: $5_000;
+    }
+    
+    still_huge_savings: "95% reduction vs new design";
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// KEY INSIGHTS - PROVEN DESIGN REUSE
+// ═══════════════════════════════════════════════════════════════════
+
+/*
+DRAMATIC DIFFERENCE:
+
+FIRST DESIGN (Scenario 1):
+- 6 months calendar time
+- 960 engineering hours  
+- $180,000 total cost
+- Multiple iterations
+- Unknown field performance
+- High risk
+
+REUSE (Scenario 2):
+- 2 weeks calendar time
+- 40 engineering hours
+- $3,000 total cost
+- Right first time
+- Known field performance  
+- Zero risk
+
+ACTUAL VALUE OF PROVEN DESIGNS:
+- Not just "reference designs" or "app notes"
+- Real, validated, production designs
+- Complete package (schematic + layout + BOM)
+- Safety validation inherited
+- Field performance data available
+
+WHY THIS WORKS IN PRACTICE:
+1. Requirements often similar across projects
+2. Power supplies are fairly standard
+3. SoCs have common voltage rails
+4. Safety requirements don't change much
+5. Once proven, can trust completely
+
+THE LIBRARY GROWS:
+- Each new "first design" adds to library
+- Over time, most designs become reuse
+- 10 years → hundreds of proven designs
+- New engineers inherit decades of validation
+*/

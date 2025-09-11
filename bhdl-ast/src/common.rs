@@ -208,6 +208,30 @@ impl PinDecl {
     pub fn type_ref(&self) -> Option<TypeRef> { self.0.children().find_map(TypeRef::cast) }
     pub fn bus_suffix(&self) -> Option<BusSuffix> { self.0.children().find_map(BusSuffix::cast) }
     pub fn metadata(&self) -> Option<PinMetadata> { self.0.children().find_map(PinMetadata::cast) }
+    
+    /// Check if this pin is declared as virtual
+    pub fn is_virtual(&self) -> bool {
+        self.0
+            .children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .any(|token| token.kind() == SyntaxKind::VIRTUAL_KW)
+    }
+    
+    /// Get the pin direction (in, out, inout)
+    pub fn direction(&self) -> Option<SyntaxToken<BhdlLanguage>> {
+        self.0
+            .children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .find(|token| matches!(token.kind(), SyntaxKind::IN_KW | SyntaxKind::OUT_KW | SyntaxKind::INOUT_KW))
+    }
+    
+    /// Get the pin type (signal, power, ground)
+    pub fn pin_type(&self) -> Option<SyntaxToken<BhdlLanguage>> {
+        self.0
+            .children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .find(|token| matches!(token.kind(), SyntaxKind::SIGNAL_KW | SyntaxKind::POWER_KW | SyntaxKind::GROUND_KW))
+    }
 }
 
 // --- Net Declaration ---

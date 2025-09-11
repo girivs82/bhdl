@@ -28,6 +28,12 @@ pub mod hierarchical_refdes;
 // Interface synthesis
 pub mod interface_synthesis;
 
+// Passive component calculation engine
+pub mod passive_component_calculator;
+
+// Package selection engine  
+pub mod package_selector;
+
 // Re-export key types
 pub use bhdl_analyzer::types::AnalysisResult;
 pub use bhdl_analyzer::component_inference::ParameterValue;

@@ -1,0 +1,242 @@
+// ═══════════════════════════════════════════════════════════════════
+// GENERATED REQUIREMENT TEMPLATES
+// Generated from: system_safety_analysis.bhdl
+// Status: Templates requiring safety engineer completion
+// ═══════════════════════════════════════════════════════════════════
+
+import stdlib.attributes.*;
+
+// Tool-generated templates based on safety analysis patterns
+namespace safety_requirements {
+    
+    // ───────────────────────────────────────────────────────────────
+    // MONITORING REQUIREMENTS (Pattern detected from FSR1)
+    // ───────────────────────────────────────────────────────────────
+    
+    requirement_template REQ_MON_001 {
+        source: "FSR1 - Monitor MCU supply voltage";
+        asil: ASIL_B;  // Inherited
+        type: safety_monitoring;
+        
+        description: "[ENGINEER: Specify exact monitoring requirements]";
+        
+        // Template based on VoltageMonitoring pattern
+        monitoring_specification {
+            monitored_signal: "[SPECIFY: Net or rail name]";
+            nominal_value: "[SPECIFY: Expected voltage]";
+            
+            fault_detection {
+                undervoltage_threshold: "[SPECIFY: Below this = fault]";
+                overvoltage_threshold: "[SPECIFY: Above this = fault]";
+                hysteresis: "[SPECIFY: Noise immunity band]";
+            }
+            
+            timing_requirements {
+                detection_time: "[SPECIFY: Max time to detect]";
+                response_time: "[SPECIFY: Max time to signal]";
+                debounce_time: "[SPECIFY: Glitch filtering]";
+            }
+            
+            coverage_requirements {
+                diagnostic_coverage: "[SPECIFY: ≥90% for ASIL B]";
+                fault_detection_rate: "[SPECIFY: % of faults caught]";
+            }
+            
+            interface_requirements {
+                fault_indication: "[SPECIFY: Signal type and polarity]";
+                communication: "[SPECIFY: How to report to MCU]";
+            }
+        }
+        
+        required_capability: VoltageMonitoring;
+        
+        verification_method: "[SPECIFY: Test procedure]";
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // PROTECTION REQUIREMENTS (Pattern detected from FSR2)
+    // ───────────────────────────────────────────────────────────────
+    
+    requirement_template REQ_PROT_001 {
+        source: "FSR2 - Overvoltage protection mechanism";
+        asil: ASIL_B;
+        type: safety_protection;
+        
+        description: "[ENGINEER: Specify protection requirements]";
+        
+        protection_specification {
+            protected_rail: "[SPECIFY: What to protect]";
+            protected_components: "[SPECIFY: Critical components]";
+            
+            protection_thresholds {
+                activation_voltage: "[SPECIFY: When to activate]";
+                clamping_voltage: "[SPECIFY: Max allowed voltage]";
+                release_voltage: "[SPECIFY: When to deactivate]";
+            }
+            
+            dynamic_requirements {
+                response_time: "[SPECIFY: Speed of protection]";
+                energy_absorption: "[SPECIFY: Joules to handle]";
+                repetitive_capability: "[SPECIFY: Cycles before failure]";
+            }
+            
+            protection_coordination {
+                upstream_protection: "[SPECIFY: What protects this]";
+                downstream_impact: "[SPECIFY: Effect on loads]";
+            }
+        }
+        
+        required_capability: OvervoltageProtection;
+        
+        failure_mode: "[SPECIFY: Fail-safe or fail-operational]";
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // SELF-TEST REQUIREMENTS (Pattern detected from FSR3)
+    // ───────────────────────────────────────────────────────────────
+    
+    requirement_template REQ_TEST_001 {
+        source: "FSR3 - Self-test capability";
+        asil: ASIL_B;
+        type: diagnostic;
+        
+        description: "[ENGINEER: Specify self-test requirements]";
+        
+        self_test_specification {
+            test_scope: "[SPECIFY: What functions to test]";
+            
+            test_coverage {
+                target_coverage: "[SPECIFY: ≥60% for ASIL B LFM]";
+                failure_modes_covered: "[LIST: Which failures detected]";
+                untestable_failures: "[LIST: What can't be tested]";
+            }
+            
+            test_scheduling {
+                test_interval: "[SPECIFY: How often, ≤100ms]";
+                test_duration: "[SPECIFY: How long, ≤5ms]";
+                test_trigger: "[SPECIFY: Automatic or commanded]";
+            }
+            
+            test_execution {
+                online_testing: "[SPECIFY: During operation?]";
+                offline_testing: "[SPECIFY: At startup only?]";
+                non_intrusive: "[SPECIFY: Doesn't affect operation]";
+            }
+            
+            test_reporting {
+                result_indication: "[SPECIFY: Pass/fail signal]";
+                detailed_status: "[SPECIFY: Error codes?]";
+                fault_location: "[SPECIFY: Which component failed]";
+            }
+        }
+        
+        required_capability: SelfTestable;
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // ISOLATION REQUIREMENTS (Pattern detected from FSR4)
+    // ───────────────────────────────────────────────────────────────
+    
+    requirement_template REQ_ISOL_001 {
+        source: "FSR4 - Sensor supply isolation";
+        asil: ASIL_A;  // Lower than others
+        type: safety_isolation;
+        
+        description: "[ENGINEER: Specify isolation requirements]";
+        
+        isolation_specification {
+            isolated_domains: "[SPECIFY: What to isolate from what]";
+            
+            electrical_isolation {
+                isolation_voltage: "[SPECIFY: Breakdown voltage]";
+                isolation_resistance: "[SPECIFY: DC resistance]";
+                leakage_current: "[SPECIFY: Max leakage]";
+            }
+            
+            coupling_limits {
+                capacitive_coupling: "[SPECIFY: Max capacitance]";
+                common_mode_rejection: "[SPECIFY: CMRR in dB]";
+                crosstalk: "[SPECIFY: Max interference]";
+            }
+            
+            dynamic_performance {
+                bandwidth: "[SPECIFY: Signal bandwidth needed]";
+                propagation_delay: "[SPECIFY: Max delay]";
+                power_transfer: "[SPECIFY: If applicable]";
+            }
+        }
+        
+        required_capability: GalvanicIsolation;
+        
+        standards_compliance: "[SPECIFY: IEC 60747-5-5, etc.]";
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // GENERAL REQUIREMENTS TEMPLATE
+    // ───────────────────────────────────────────────────────────────
+    
+    requirement_template REQ_GEN_XXX {
+        source: "[SAFETY_FUNCTION_ID]";
+        asil: "[ASIL_LEVEL]";
+        type: "[safety | functional | performance]";
+        
+        description: "[One line description]";
+        
+        rationale: "[Why this requirement exists]";
+        
+        specification {
+            functional: "[What it must do]";
+            performance: "[How well it must do it]";
+            interface: "[How it connects/communicates]";
+            environmental: "[Operating conditions]";
+        }
+        
+        constraints {
+            cost: "[If applicable]";
+            size: "[If applicable]";
+            power: "[If applicable]";
+        }
+        
+        verification {
+            method: "[test | analysis | inspection | demonstration]";
+            acceptance_criteria: "[Pass/fail criteria]";
+            test_procedure_ref: "[Document reference]";
+        }
+        
+        traceability {
+            parent: "[Parent requirement]";
+            children: "[Derived requirements]";
+            verification_evidence: "[Test reports, analysis]";
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// INSTRUCTIONS FOR SAFETY ENGINEER
+// ═══════════════════════════════════════════════════════════════════
+
+/*
+TO COMPLETE THESE TEMPLATES:
+
+1. Review the system safety analysis
+2. Fill in all [SPECIFY] and [ENGINEER] placeholders
+3. Add specific values based on:
+   - System architecture decisions
+   - Component datasheets (if known)
+   - Industry standards
+   - Previous project experience
+   
+4. Ensure values are:
+   - Measurable and testable
+   - Achievable with available technology
+   - Consistent with ASIL requirements
+   - Not over-constraining implementation
+
+5. Save completed requirements in: completed_requirements.bhdl
+
+REMEMBER:
+- Specify WHAT, not HOW
+- Leave implementation choices to board designer
+- Focus on safety-critical parameters
+- Maintain traceability to safety goals
+*/

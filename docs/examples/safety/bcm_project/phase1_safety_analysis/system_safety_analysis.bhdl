@@ -1,0 +1,316 @@
+// ═══════════════════════════════════════════════════════════════════
+// PHASE 1: BCM SYSTEM-LEVEL SAFETY ANALYSIS
+// Author: Board Safety Architect
+// Date: Project Day 1-2
+// Scope: Complete BCM as a system
+// ═══════════════════════════════════════════════════════════════════
+
+import stdlib.attributes.*;
+import stdlib.safety.*;
+
+// This is what the Board Safety Architect creates on Day 1
+system_safety BCM_System {
+    
+    // ───────────────────────────────────────────────────────────────
+    // SYSTEM CONTEXT
+    // ───────────────────────────────────────────────────────────────
+    
+    system_context {
+        product: "Body Control Module";
+        vehicle_class: "Passenger Vehicle M1";
+        production_volume: 500_000_per_year;
+        design_life: 15_years;
+        
+        // Mixed criticality system
+        asil_distribution: {
+            ASIL_B: ["Brake lights", "Window anti-trap"];
+            ASIL_A: ["Turn signals", "Central locking"];
+            QM: ["Interior lighting", "Comfort features"];
+        }
+        
+        operational_profile: {
+            driving_time: 2_hours_per_day;
+            parked_time: 22_hours_per_day;
+            temperature_range: -40°C..85°C;
+        }
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // HAZARD ANALYSIS (What can go wrong at vehicle level)
+    // ───────────────────────────────────────────────────────────────
+    
+    hazards {
+        H_BCM_001: Hazard {
+            description: "Brake lights fail to illuminate";
+            
+            scenario: "Following vehicle unaware of braking";
+            
+            iso26262_classification: {
+                severity: S2;        // Possible injury
+                exposure: E4;        // High probability  
+                controllability: C2; // Driver can warn with hazards
+                asil: ASIL_B;       // S2+E4+C2 = ASIL B
+            }
+            
+            fault_tolerance_time: 300ms;  // Must detect and indicate
+        }
+        
+        H_BCM_002: Hazard {
+            description: "Window closes on obstruction";
+            
+            scenario: "Passenger injury from closing window";
+            
+            iso26262_classification: {
+                severity: S2;        // Injury possible
+                exposure: E3;        // Medium probability
+                controllability: C2; // Can press button to stop
+                asil: ASIL_B;
+            }
+            
+            fault_tolerance_time: 100ms;  // Must reverse quickly
+        }
+        
+        H_BCM_003: Hazard {
+            description: "Turn signals incorrect pattern";
+            
+            scenario: "Misleading indication to other drivers";
+            
+            iso26262_classification: {
+                severity: S1;        // Light injury
+                exposure: E4;        // High exposure
+                controllability: C2; // Other visual cues available
+                asil: ASIL_A;
+            }
+        }
+        
+        H_BCM_004: Hazard {
+            description: "Doors lock unexpectedly";
+            
+            scenario: "Occupants trapped in vehicle";
+            
+            iso26262_classification: {
+                severity: S2;        // Emergency egress blocked
+                exposure: E2;        // Low probability
+                controllability: C2; // Manual override available
+                asil: ASIL_A;
+            }
+        }
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // SAFETY GOALS (What we must ensure)
+    // ───────────────────────────────────────────────────────────────
+    
+    safety_goals {
+        SG_BCM_001: SafetyGoal {
+            description: "Ensure brake light activation";
+            addresses: H_BCM_001;
+            asil: ASIL_B;
+            
+            safe_state: "Brake lights on (fail-safe)";
+            
+            target_metrics: {
+                spfm: ≥90%;  // ASIL B requirement
+                lfm: ≥60%;   // ASIL B requirement
+                pmhf: ≤100FIT;
+            }
+        }
+        
+        SG_BCM_002: SafetyGoal {
+            description: "Prevent window trap injuries";
+            addresses: H_BCM_002;
+            asil: ASIL_B;
+            
+            safe_state: "Window stops and reverses";
+        }
+        
+        SG_BCM_003: SafetyGoal {
+            description: "Maintain correct turn signal pattern";
+            addresses: H_BCM_003;
+            asil: ASIL_A;
+            
+            safe_state: "Default flash rate or all on";
+        }
+        
+        SG_BCM_004: SafetyGoal {
+            description: "Prevent unintended door locking";
+            addresses: H_BCM_004;
+            asil: ASIL_A;
+            
+            safe_state: "Doors remain unlocked";
+        }
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // FUNCTIONAL SAFETY REQUIREMENTS (Allocated to subsystems)
+    // ───────────────────────────────────────────────────────────────
+    
+    functional_safety_requirements {
+        
+        // Power subsystem requirements
+        FSR_PWR_001: FunctionalSafetyRequirement {
+            description: "Power for brake light circuit shall be monitored";
+            asil: ASIL_B;
+            
+            allocation: "Power supply subsystem";
+            
+            // High-level, not specifying implementation
+            requirement: "Detect loss of brake light power within 100ms";
+        }
+        
+        FSR_PWR_002: FunctionalSafetyRequirement {
+            description: "MCU power shall be stable";
+            asil: ASIL_B;  // Highest function determines
+            
+            allocation: "MCU power supply";
+            
+            requirement: "Maintain regulation during transients";
+        }
+        
+        // Output driver requirements
+        FSR_DRV_001: FunctionalSafetyRequirement {
+            description: "Brake light driver shall be diagnosable";
+            asil: ASIL_B;
+            
+            allocation: "High-side driver subsystem";
+            
+            requirement: "Detect open/short circuit within 100ms";
+        }
+        
+        FSR_DRV_002: FunctionalSafetyRequirement {
+            description: "Window motor driver shall detect obstruction";
+            asil: ASIL_B;
+            
+            allocation: "Motor driver subsystem";
+            
+            requirement: "Detect current spike indicating obstruction";
+        }
+        
+        // MCU requirements  
+        FSR_MCU_001: FunctionalSafetyRequirement {
+            description: "MCU shall monitor safety functions";
+            asil: ASIL_B;
+            
+            allocation: "Main processor";
+            
+            requirement: "Periodic self-test of safety paths";
+        }
+        
+        // Communication requirements
+        FSR_COM_001: FunctionalSafetyRequirement {
+            description: "Brake command reception shall be verified";
+            asil: ASIL_B;
+            
+            allocation: "CAN interface";
+            
+            requirement: "CRC and sequence counter on brake messages";
+        }
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // PRELIMINARY ARCHITECTURE ALLOCATION
+    // ───────────────────────────────────────────────────────────────
+    
+    architecture_allocation {
+        // This guides the hardware team
+        
+        power_architecture: {
+            domains: [
+                {
+                    name: "Always-on domain";
+                    voltage: 12V;
+                    functions: ["Wake detection", "CAN standby"];
+                    asil: QM;
+                },
+                {
+                    name: "MCU domain";
+                    voltage: 3.3V;
+                    functions: ["Main processing", "Safety logic"];
+                    asil: ASIL_B;
+                },
+                {
+                    name: "Driver domain";
+                    voltage: 12V;
+                    functions: ["Load switching", "Current sensing"];
+                    asil: ASIL_B;
+                }
+            ];
+            
+            isolation_requirements: [
+                "Safety functions isolated from QM",
+                "Separate power for critical loads"
+            ];
+        }
+        
+        processing_architecture: {
+            main_mcu: {
+                part_family: "S32K14x series";
+                safety_features: ["ECC RAM", "Watchdog", "Self-test"];
+                asil_capability: ASIL_B;
+            }
+            
+            // No redundant MCU needed for ASIL B
+            redundancy: "Function monitoring sufficient";
+        }
+        
+        diagnostic_architecture: {
+            coverage_target: ≥90%;  // ASIL B
+            
+            diagnostics_needed: [
+                "Power rail monitoring",
+                "Driver output sensing",
+                "Communication health",
+                "MCU self-test"
+            ];
+        }
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // SAFETY WORK PRODUCTS NEEDED
+    // ───────────────────────────────────────────────────────────────
+    
+    required_work_products {
+        phase_3_4: [  // Concept phase
+            "Safety Plan",
+            "Hazard Analysis (this)",
+            "Safety Goals",
+            "FSR allocation"
+        ];
+        
+        phase_5: [  // Product development
+            "Technical Safety Requirements",
+            "Hardware Safety Requirements", 
+            "Safety Analysis (FMEA)",
+            "Safety Validation Plan"
+        ];
+        
+        phase_6: [  // After implementation
+            "Safety Case",
+            "Safety Validation Report",
+            "Safety Manual",
+            "Release for Production"
+        ];
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// KEY OUTPUTS FROM BOARD SAFETY ARCHITECT
+// ═══════════════════════════════════════════════════════════════════
+
+/*
+At this point (Day 1-2), the Board Safety Architect has:
+
+1. Identified all hazards and classified them (ASIL B max)
+2. Set safety goals with target metrics
+3. Allocated high-level requirements to subsystems
+4. Defined architecture constraints
+5. Set the framework for parallel development
+
+Now this gets handed off to:
+- Hardware team: Start designing with these constraints
+- Subsystem safety engineers: Detailed requirements
+
+The key is this is ABSTRACT - no voltages, no component 
+selection, no implementation details. Just WHAT must be 
+achieved, not HOW.
+*/

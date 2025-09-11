@@ -20,6 +20,7 @@ pub enum SymbolKind {
     Parameter,
     Net,
     Pin,
+    VirtualPin,
     Instance,
     // Add other kinds later: Net, Port, Pin, Parameter, Variable, etc.
 }

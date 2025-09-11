@@ -277,7 +277,10 @@
       "Bash(RUST_LOG=info cargo run -p bhdl-spice --bin verify_maestro_dc_selection 2 >& 1)",
       "Bash(RUST_LOG=info cargo run -p bhdl-spice --bin test_maestro_verify_fix 2 >& 1)",
       "Bash(exec timeout 30 cargo run -p bhdl-spice --bin test_bhdl_led_transient)",
-      "Bash(RUST_LOG=info cargo run -p bhdl-spice --bin test_maestro_quick_verify 2 >& 1)"
+      "Bash(RUST_LOG=info cargo run -p bhdl-spice --bin test_maestro_quick_verify 2 >& 1)",
+      "Bash(./target/debug/test_satisfies_simple:*)",
+      "Bash(./target/debug/test_complete_safety)",
+      "Bash(timeout 5 cargo run -p bhdl-synthesizer --bin end_to_end_test)"
     ],
     "deny": []
   }

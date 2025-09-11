@@ -1,0 +1,420 @@
+// ═══════════════════════════════════════════════════════════════════
+// SCENARIO 1: FIRST TIME DESIGN (Nothing in Library Yet)
+// Project: ADAS ECU Gen 1
+// Date: 2019 Q1
+// Status: No proven designs exist yet
+// ═══════════════════════════════════════════════════════════════════
+
+import stdlib.attributes.*;
+
+// ───────────────────────────────────────────────────────────────────
+// PHASE 1: SAFETY REQUIREMENTS (From Safety Architect/Engineer)
+// ───────────────────────────────────────────────────────────────────
+
+safety_requirements ADAS_SoC_Power_Requirements {
+    // Coming from system-level allocation
+    
+    REQ_SoC_PWR_001: SafetyRequirement {
+        description: "Provide stable 0.85V for SoC core";
+        voltage: 0.85V ± 2%;
+        current: 15A_max;
+        asil: ASIL_D;
+        
+        monitoring: {
+            undervoltage_threshold: 0.83V;
+            overvoltage_threshold: 0.87V;
+            response_time: ≤20µs;
+        }
+    }
+    
+    REQ_SoC_PWR_002: SafetyRequirement {
+        description: "Protect against overvoltage";
+        protection_threshold: 0.90V;
+        response_time: ≤5µs;
+        asil: ASIL_D;
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────
+// PHASE 2: INITIAL DESIGN (Board Designer - First Implementation)
+// ───────────────────────────────────────────────────────────────────
+
+board ADAS_ECU_Gen1_Initial {
+    
+    // Designer's notes
+    design_notes {
+        "First implementation of SoC core power";
+        "No reference design available";
+        "Must research and select components";
+    }
+    
+    // Component selection process (lots of work!)
+    component_selection {
+        evaluated_options: [
+            {
+                part: "LT8650S";
+                pros: ["High efficiency", "Dual output"];
+                cons: ["Expensive ($8)", "Large package"];
+                decision: "Too expensive";
+            },
+            {
+                part: "TPS54360";
+                pros: ["Good efficiency", "Automotive qualified", "Reasonable cost ($2.50)"];
+                cons: ["Single output only"];
+                decision: "SELECTED";
+            },
+            {
+                part: "MP2145";
+                pros: ["Cheap ($1.80)"];
+                cons: ["Not automotive qualified"];
+                decision: "Rejected - need AEC-Q100";
+            }
+        ];
+        
+        final_selection: "TPS54360";
+        rationale: "Best balance of cost, performance, qualification";
+    }
+    
+    // Initial implementation
+    soc_core_power: PowerSupply {
+        // Input conditioning
+        @5V_INT -> c_in1: CeramicCap(10µF, 10V).1;
+        c_in1.2 -> @PGND;
+        @5V_INT -> c_in2: CeramicCap(10µF, 10V).1;
+        c_in2.2 -> @PGND;
+        
+        // Main regulator
+        @5V_INT -> u1: TPS54360 {
+            // First time using this part
+            for voltage_regulation(0.85V, 15A);
+        };
+        
+        // Bootstrap cap
+        u1.BOOT -> c_boot: CeramicCap(100nF, 10V).1;
+        c_boot.2 -> u1.SW;
+        
+        // Enable with voltage divider for UVLO
+        @5V_INT -> r_en1: Res(100k).1;
+        r_en1.2 -> u1.EN;
+        u1.EN -> r_en2: Res(20k).1;
+        r_en2.2 -> @PGND;
+        
+        // Switching node and inductor
+        u1.SW -> l1: Inductor(1.5µH, 20A, DCR: 1.8mΩ) {
+            // Calculated for 30% ripple current
+            part_number: "744325150";  // Wurth
+        };
+        
+        // Output capacitors (lots of them for low ripple)
+        l1.2 @SoC_CORE_0V85-> c_out1: CeramicCap(47µF, 6.3V, X5R).1;
+        c_out1.2 -> @PGND;
+        @SoC_CORE_0V85 -> c_out2: CeramicCap(47µF, 6.3V, X5R).1;
+        c_out2.2 -> @PGND;
+        @SoC_CORE_0V85 -> c_out3: CeramicCap(47µF, 6.3V, X5R).1;
+        c_out3.2 -> @PGND;
+        @SoC_CORE_0V85 -> c_out4: CeramicCap(22µF, 6.3V, X5R).1;
+        c_out4.2 -> @PGND;
+        
+        // Feedback network (sets 0.85V output)
+        // Vout = 0.8V * (1 + R_top/R_bot)
+        u1.FB -> r_fb_top: Res(1.24k, 0.1%).1;
+        r_fb_top.2 -> @SoC_CORE_0V85;
+        u1.FB -> r_fb_bot: Res(20k, 0.1%).1;
+        r_fb_bot.2 -> @PGND;
+        
+        // Compensation network (stability)
+        u1.COMP -> r_comp: Res(10k).1;
+        r_comp.2 -> c_comp1: CeramicCap(22nF).1;
+        c_comp1.2 -> @PGND;
+        r_comp.2 -> c_comp2: CeramicCap(2.2nF).1;
+        c_comp2.2 -> r_comp2: Res(2.2k).1;
+        r_comp2.2 -> @PGND;
+        
+        // Monitoring (separate supervisor IC)
+        @SoC_CORE_0V85 -> u2: TPS3808G09 {
+            // Threshold at 0.83V (undervoltage)
+            for voltage_monitoring;
+        };
+        u2.RESET_N -> @SoC_UVLO_N;
+        
+        // Overvoltage protection (discrete)
+        @SoC_CORE_0V85 -> r_ovp1: Res(10k).1;
+        r_ovp1.2 -> r_ovp2: Res(12k).1 -> u3: TLV431.REF;
+        r_ovp2.2 -> @PGND;
+        u3.CATHODE -> r_ovp3: Res(1k).1;
+        r_ovp3.2 -> @5V_INT;
+        u3.ANODE -> @PGND;
+        
+        // OVP action (crowbar)
+        u3.CATHODE -> q_ovp: NMOSFET(DMN2004K).gate;
+        q_ovp.source -> @PGND;
+        q_ovp.drain -> r_ovp_limit: Res(0.5Ω, 2W).1;
+        r_ovp_limit.2 -> @SoC_CORE_0V85;
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────
+// EXTENSIVE VALIDATION PHASE (6+ months of work!)
+// ───────────────────────────────────────────────────────────────────
+
+validation_campaign Gen1_Validation {
+    
+    // Functional validation
+    functional_tests {
+        load_regulation: {
+            conditions: "0A to 15A step";
+            result: "±1.2% deviation";
+            status: PASS;
+        }
+        
+        line_regulation: {
+            conditions: "4.5V to 5.5V input";
+            result: "±0.3% deviation";
+            status: PASS;
+        }
+        
+        efficiency: {
+            at_1A: 82%;
+            at_5A: 89%;
+            at_10A: 91%;
+            at_15A: 90%;
+            status: PASS;
+        }
+        
+        ripple: {
+            at_15A: "8mVpp";
+            requirement: "<20mVpp";
+            status: PASS;
+        }
+        
+        transient_response: {
+            step: "0A to 10A in 1µs";
+            overshoot: 22mV;
+            settling_time: 18µs;
+            status: PASS;
+        }
+    }
+    
+    // Thermal testing
+    thermal_validation {
+        ambient_85C_test: {
+            duration: 1000_hours;
+            load: 15A_continuous;
+            junction_temp: 118°C;
+            margin_to_max: 32°C;
+            status: PASS;
+        }
+        
+        thermal_cycling: {
+            cycles: 1000;
+            range: "-40°C to +125°C";
+            failures: 0;
+            status: PASS;
+        }
+    }
+    
+    // EMC testing
+    emc_validation {
+        conducted_emissions: {
+            standard: "CISPR 25 Class 5";
+            status: PASS;
+        }
+        
+        radiated_emissions: {
+            standard: "CISPR 25 Class 5";
+            status: PASS_with_mods;
+            modifications: [
+                "Added ferrite bead on input",
+                "Added snubber on SW node"
+            ];
+        }
+    }
+    
+    // Safety validation
+    safety_validation {
+        fmea: {
+            failure_modes_analyzed: 47;
+            high_risk_items: 3;
+            mitigations_added: 3;
+            residual_risk: acceptable;
+        }
+        
+        fault_injection: {
+            tests_performed: 150;
+            detection_rate: 94.2%;
+            target_spfm: 90%;
+            status: PASS;
+        }
+        
+        calculated_metrics: {
+            spfm: 94.2%;
+            lfm: 72.1%;
+            pmhf: 8.3FIT;
+            asil_achieved: ASIL_D;
+        }
+    }
+    
+    // Environmental testing
+    environmental: {
+        vibration: "ISO 16750-3 passed";
+        shock: "50G mechanical shock passed";
+        humidity: "85% RH, 85°C, 1000hr passed";
+        salt_spray: "96 hours passed";
+    }
+    
+    // Total effort
+    validation_effort {
+        calendar_time: 6_months;
+        engineering_hours: 960;
+        test_equipment_time: 2000_hours;
+        external_lab_cost: $45_000;
+        
+        issues_found_and_fixed: [
+            "EMC failure - added filtering",
+            "Stability issue at light load - adjusted compensation",
+            "Thermal derating insufficient - changed inductor"
+        ];
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────
+// PROVEN DESIGN DOCUMENTATION (For Library)
+// ───────────────────────────────────────────────────────────────────
+
+proven_design SoC_Core_Power_v1 {
+    
+    metadata {
+        created_date: "2019-06-15";
+        created_for: "ADAS_ECU_Gen1";
+        designer: "John Smith";
+        validated_by: "Safety Team A";
+        status: "Production Released";
+    }
+    
+    design_files {
+        schematic: "designs/SoC_Core_Power_v1.sch";
+        layout: "designs/SoC_Core_Power_v1.pcb";
+        bom: "designs/SoC_Core_Power_v1_BOM.xlsx";
+        gerbers: "designs/SoC_Core_Power_v1_gerbers.zip";
+        step_model: "designs/SoC_Core_Power_v1.step";
+    }
+    
+    // Critical: EXACT configuration that was validated
+    validated_configuration {
+        input_voltage: 5V ± 10%;
+        output_voltage: 0.85V ± 2%;
+        output_current: 0A..15A;
+        ambient_temp: -40°C..85°C;
+        
+        critical_components: [
+            "TPS54360RTAR - Must be TI, automotive grade",
+            "744325150 - Wurth inductor, no substitutes",
+            "GRM32ER60J476ME20L - Murata caps, X5R only"
+        ];
+        
+        pcb_requirements: [
+            "4-layer minimum",
+            "2oz copper on power layers",
+            "Via-in-pad for thermal management",
+            "Solid ground plane under switching area"
+        ];
+    }
+    
+    validation_evidence {
+        test_reports: [
+            "TR-2019-0142 - Functional validation",
+            "TR-2019-0143 - Thermal validation",
+            "TR-2019-0144 - EMC compliance",
+            "TR-2019-0145 - Safety validation",
+            "TR-2019-0146 - Environmental"
+        ];
+        
+        certification: "ASIL D certified per ISO 26262";
+    }
+    
+    reuse_guidelines {
+        when_to_reuse: [
+            "Input voltage 5V ± 10% available",
+            "Need 0.85V core voltage",
+            "Current requirement ≤15A",
+            "Can copy exact layout"
+        ];
+        
+        when_not_to_reuse: [
+            "Different input voltage",
+            "Current >15A",
+            "Space constrained (needs different layout)",
+            "Cost reduction priority (expensive solution)"
+        ];
+        
+        copy_instructions: [
+            "1. Copy schematic page exactly",
+            "2. Copy layout section (70mm x 40mm)",
+            "3. Use exact BOM - no substitutions",
+            "4. Follow thermal guidelines",
+            "5. Include in safety case"
+        ];
+    }
+    
+    known_issues {
+        issue_1: {
+            description: "Light load efficiency poor (<50% at 100mA)";
+            impact: "Higher power consumption in sleep mode";
+            workaround: "Add load switch for sleep mode";
+        };
+        
+        issue_2: {
+            description: "Sensitive to input inductance";
+            impact: "May oscillate with long input cables";
+            workaround: "Add 100µF electrolytic at input";
+        };
+    }
+    
+    // This is now a PROVEN DESIGN ready for reuse!
+    library_status: "Available for reuse";
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// OUTCOME OF FIRST DESIGN
+// ═══════════════════════════════════════════════════════════════════
+
+first_design_summary {
+    total_effort {
+        design_time: 2_weeks;
+        layout_time: 1_week;
+        validation_time: 6_months;
+        
+        total_cost: $180_000;  // Including engineering time
+    }
+    
+    result: "Proven design added to library";
+    
+    value_for_future: "Can be reused without 6 months validation";
+}
+
+/*
+KEY OBSERVATIONS - FIRST DESIGN:
+
+1. HUGE EFFORT:
+   - Component selection research
+   - Multiple design iterations
+   - Extensive validation campaign
+   - 6+ months total time
+
+2. MANY UNKNOWNS:
+   - Will TPS54360 work?
+   - Is compensation network stable?
+   - Will it pass EMC?
+   - Can it meet ASIL D?
+
+3. LEARNING PROCESS:
+   - Found EMC issues
+   - Adjusted compensation
+   - Changed inductor for thermal
+
+4. END RESULT:
+   - PROVEN design that works
+   - Fully validated
+   - Ready for reuse
+   - Huge value for next project
+*/

@@ -104,9 +104,12 @@ pub enum SyntaxKind {
     NULL_KW,      // null
     REQUIRE_KW,   // require (for interface requirements)
     OPTIONAL_KW,  // optional (for optional interface signals)
+    VIRTUAL_KW,   // virtual (for virtual pins that expand during synthesis)
     PERSPECTIVE_KW, // perspective (for interface perspectives)
     WHERE_KW,     // where (for connection constraints)
     WITH_KW,      // with (for grouped constraints)
+    SATISFIES_KW, // satisfies (for safety requirement compliance)
+    VIA_KW,       // via (for satisfies declarations)
     
     // Testbench keywords
     TESTBENCH_KW,    // testbench
@@ -267,6 +270,18 @@ pub enum SyntaxKind {
     INTENT_PARAMS,     // (param1, param2: value, ...)
     INTENT_NAMED_PARAM,// name: value in intent parameters
     NET_FLOW_STMT,     // net name: flow_expr for intent;
+
+    // Safety compliance nodes
+    SATISFIES_BLOCK,   // satisfies { ... }
+    SATISFIES_ITEM,    // REQ_001: via component;
+    SATISFIES_VIA,     // via component_name
+    SATISFIES_DETAILS, // { field: value, ... }
+    
+    // Hierarchical requirement nodes
+    SAFETY_GOAL_DEF,    // safety_goal SG_001 { ... }
+    FUNCTIONAL_REQ_DEF, // functional_requirement FSR_001 { ... }
+    TECHNICAL_REQ_DEF,  // technical_requirement TSR_001 { ... }
+    REQ_PROPERTY,       // property: value pairs in requirements
 
     // ERROR must be the last variant for the assertion in kind_from_raw
     ERROR = 65534, // Represents a parsing error node

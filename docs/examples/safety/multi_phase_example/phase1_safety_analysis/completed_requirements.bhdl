@@ -1,0 +1,277 @@
+// ═══════════════════════════════════════════════════════════════════
+// COMPLETED SAFETY REQUIREMENTS
+// Author: Safety Engineer
+// Date: Day 3 of Project (after template review)
+// Status: Ready for implementation
+// ═══════════════════════════════════════════════════════════════════
+
+import stdlib.attributes.*;
+
+namespace safety_requirements {
+    
+    // ───────────────────────────────────────────────────────────────
+    // MCU POWER MONITORING REQUIREMENT
+    // ───────────────────────────────────────────────────────────────
+    
+    requirement REQ_MON_001 {
+        source: "FSR1 - Monitor MCU supply voltage";
+        asil: ASIL_B;
+        type: safety_monitoring;
+        
+        description: "Monitor MCU 5V supply for undervoltage and overvoltage conditions";
+        
+        monitoring_specification {
+            monitored_signal: "MCU_5V power rail";
+            nominal_value: 5.0V;
+            
+            fault_detection {
+                undervoltage_threshold: 4.75V;  // 5% below nominal
+                overvoltage_threshold: 5.25V;   // 5% above nominal
+                hysteresis: 50mV;               // Prevent oscillation
+            }
+            
+            timing_requirements {
+                detection_time: ≤50µs;          // Time to recognize fault
+                response_time: ≤100µs;          // Total time to output signal
+                debounce_time: 10µs;            // Filter transients
+            }
+            
+            coverage_requirements {
+                diagnostic_coverage: ≥92%;      // Exceeds ASIL B minimum
+                fault_detection_rate: ≥95%;     // High confidence
+            }
+            
+            interface_requirements {
+                fault_indication: active_low_open_drain;  // MCU GPIO compatible
+                communication: "Direct GPIO to MCU fault input";
+            }
+        }
+        
+        required_capability: VoltageMonitoring;
+        
+        verification_method: "Inject voltage faults and measure response time";
+        
+        rationale: "MCU requires stable 5V ±5% for reliable operation. Faster detection prevents corruption.";
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // OVERVOLTAGE PROTECTION REQUIREMENT
+    // ───────────────────────────────────────────────────────────────
+    
+    requirement REQ_PROT_001 {
+        source: "FSR2 - Overvoltage protection mechanism";
+        asil: ASIL_B;
+        type: safety_protection;
+        
+        description: "Protect MCU from destructive overvoltage on 5V rail";
+        
+        protection_specification {
+            protected_rail: "MCU_5V power rail";
+            protected_components: ["MCU", "Critical peripherals"];
+            
+            protection_thresholds {
+                activation_voltage: 5.4V;        // Start protecting
+                clamping_voltage: 5.5V_max;      // Never exceed this
+                release_voltage: 5.2V;           // Resume normal
+            }
+            
+            dynamic_requirements {
+                response_time: ≤10µs;           // Very fast protection
+                energy_absorption: ≥100mJ;      // Handle transients
+                repetitive_capability: ≥1000_cycles;  // Reliable protection
+            }
+            
+            protection_coordination {
+                upstream_protection: "Main regulator current limit";
+                downstream_impact: "Non-destructive to MCU";
+            }
+        }
+        
+        required_capability: OvervoltageProtection;
+        
+        failure_mode: "Fail-safe (crowbar to ground acceptable)";
+        
+        rationale: "MCU absolute maximum is 5.5V. Protection must act before damage occurs.";
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // SELF-TEST REQUIREMENT
+    // ───────────────────────────────────────────────────────────────
+    
+    requirement REQ_TEST_001 {
+        source: "FSR3 - Self-test capability";
+        asil: ASIL_B;
+        type: diagnostic;
+        
+        description: "Periodic self-test of voltage monitoring and protection";
+        
+        self_test_specification {
+            test_scope: "Voltage monitor and overvoltage protection";
+            
+            test_coverage {
+                target_coverage: ≥65%;           // Exceeds ASIL B LFM
+                failure_modes_covered: [
+                    "Monitor stuck high",
+                    "Monitor stuck low",
+                    "Reference drift",
+                    "Comparator failure"
+                ];
+                untestable_failures: [
+                    "PCB trace open",
+                    "Connector failure"
+                ];
+            }
+            
+            test_scheduling {
+                test_interval: 100ms;            // Every 100ms
+                test_duration: ≤2ms;             // Quick test
+                test_trigger: automatic_periodic;
+            }
+            
+            test_execution {
+                online_testing: true;            // During normal operation
+                offline_testing: false;          // Not just at startup
+                non_intrusive: true;             // Doesn't affect output
+            }
+            
+            test_reporting {
+                result_indication: "High/Low on TEST_OK pin";
+                detailed_status: "Not required";
+                fault_location: "Not required";
+            }
+        }
+        
+        required_capability: SelfTestable;
+        
+        rationale: "Periodic testing detects latent faults before they become critical";
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // SENSOR ISOLATION REQUIREMENT
+    // ───────────────────────────────────────────────────────────────
+    
+    requirement REQ_ISOL_001 {
+        source: "FSR4 - Sensor supply isolation";
+        asil: ASIL_A;
+        type: safety_isolation;
+        
+        description: "Galvanic isolation between sensor supply and main 5V";
+        
+        isolation_specification {
+            isolated_domains: "Sensor 5V from MCU 5V";
+            
+            electrical_isolation {
+                isolation_voltage: ≥1500V_rms;   // Safety margin
+                isolation_resistance: ≥10MΩ;     // High isolation
+                leakage_current: ≤1µA;          // Minimal leakage
+            }
+            
+            coupling_limits {
+                capacitive_coupling: ≤50pF;     // Low coupling
+                common_mode_rejection: ≥80dB;    // Good CMRR
+                crosstalk: ≤-60dB;              // Low interference
+            }
+            
+            dynamic_performance {
+                bandwidth: DC..10kHz;            // Sensor signals
+                propagation_delay: ≤100µs;       // Acceptable delay
+                power_transfer: 1W_min;          // 200mA @ 5V
+            }
+        }
+        
+        required_capability: GalvanicIsolation;
+        
+        standards_compliance: "IEC 60747-5-5 basic isolation";
+        
+        rationale: "Isolation prevents ground loops and fault propagation between sensor and MCU domains";
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // ADDITIONAL FUNCTIONAL REQUIREMENTS
+    // ───────────────────────────────────────────────────────────────
+    
+    requirement REQ_FUNC_001 {
+        source: "System architecture";
+        asil: QM;  // Not safety-critical
+        type: functional;
+        
+        description: "Main 5V supply efficiency requirement";
+        
+        specification {
+            electrical.efficiency: ≥80% @ full_load;
+            thermal.max_dissipation: ≤2W;
+            note: "Efficiency needed for thermal management";
+        }
+        
+        rationale: "Under-hood environment requires efficient operation to minimize heating";
+    }
+    
+    requirement REQ_FUNC_002 {
+        source: "System architecture";
+        asil: QM;
+        type: functional;
+        
+        description: "Power supply startup timing";
+        
+        specification {
+            timing.startup_time: ≤10ms;         // Power good
+            timing.settling_time: ≤5ms;         // Within regulation
+            sequencing: "MCU_5V before SENSOR_5V";
+        }
+        
+        rationale: "MCU must initialize before sensors to configure them properly";
+    }
+    
+    requirement REQ_FUNC_003 {
+        source: "System architecture";
+        asil: ASIL_B;  // Affects safety function
+        type: functional;
+        
+        description: "Power holdup during cranking";
+        
+        specification {
+            holdup_time: ≥10ms @ 6V_input;
+            output_maintained: "5V ± 10%";
+            note: "Covers typical cranking dropout";
+        }
+        
+        rationale: "MCU must maintain operation during engine cranking voltage dips";
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// SAFETY ENGINEER'S NOTES
+// ═══════════════════════════════════════════════════════════════════
+
+/*
+COMPLETION NOTES:
+
+1. Voltage thresholds set at ±5% based on MCU datasheet
+2. Response times based on damage analysis:
+   - MCU can survive 5.5V for ~1ms
+   - Set protection at 10µs for 100x safety margin
+3. Test coverage exceeds minimums for confidence
+4. Isolation spec based on automotive standards
+5. Added functional requirements discovered during analysis
+
+IMPLEMENTATION FLEXIBILITY:
+
+The board designer can implement these requirements using:
+- Integrated supervisor ICs (e.g., MAX16056)
+- Discrete comparator circuits
+- MCU ADC with software monitoring
+- Any combination that meets the specifications
+
+The designer is NOT constrained on:
+- Component selection
+- Circuit topology
+- Power supply type (linear vs switching)
+- Protection method (TVS, active clamp, etc.)
+- Isolation method (transformer, optocoupler, etc.)
+
+NEXT STEPS:
+1. Board designer implements circuit
+2. Tool validates implementation
+3. Review any gaps or issues
+4. Iterate if needed
+*/

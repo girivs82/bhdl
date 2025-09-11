@@ -199,6 +199,9 @@ impl SafetyAnalyzer {
                     forward_voltage: 2.0,
                     forward_current: 0.02,
                     dynamic_resistance: 10.0,
+                    saturation_current: Some(1e-12),
+                    emission_coefficient: Some(2.0),
+                    thermal_voltage: Some(0.026),
                     limits: ElectricalLimits {
                         max_current: Some(0.030),
                         max_voltage: Some(3.3),
