@@ -1,0 +1,32 @@
+// Simple test of virtual pin with inline TPS54331 definition
+// This tests if virtual pins work without imports
+
+module TPS54331(vout: voltage = 3.3V) {
+    // Physical pins
+    pin VIN: power in;
+    pin SW: switch out;
+    pin GND: ground inout;
+    pin FB: feedback in;
+    pin BOOT: signal inout;
+    pin EN: signal in;
+    pin SS: signal inout;
+    pin COMP: signal inout;
+    
+    // Virtual pin - should expand to components
+    pin VOUT: power out virtual;
+}
+
+board SimpleVirtualPinTest {
+    power VIN = 12V @ 3A;
+    power VOUT = 5V @ 2A;
+    ground GND;
+    
+    // Buck controller with virtual pin
+    U1: TPS54331(vout=5V);
+    VIN -> U1.VIN;
+    U1.GND -> GND;
+    U1.EN -> VIN;
+    
+    // This virtual pin should expand
+    U1.VOUT -> @VOUT;
+}

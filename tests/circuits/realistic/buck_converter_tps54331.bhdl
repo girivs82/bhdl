@@ -1,0 +1,55 @@
+// Buck Converter using TPS54331 with Virtual Pin
+// Tests virtual pin expansion and synthesis knowledge
+// 12V to 5V @ 2A using TPS54331's virtual VOUT pin
+
+import { TPS54331 } from "../../../bhdl-stdlib/components/power/switching_regulators/TPS54331.bhdl";
+import { SS34 } from "../../../bhdl-stdlib/components/power/protection/SS34.bhdl";
+import { Cap } from "../../../bhdl-stdlib/components/passives/capacitors/Capacitor.bhdl";
+
+board BuckConverterTPS54331 {
+    // Power domains
+    power VIN = 12V @ 3A;
+    power VOUT_5V = 5V @ 2A;
+    ground GND;
+    
+    // Input filtering (required but not part of virtual pin)
+    VIN -> C_IN1: Cap(220µF, voltage=25V).1;
+    C_IN1.2 -> GND;
+    VIN -> C_IN2: Cap(0.1µF, voltage=25V).1;  
+    C_IN2.2 -> GND;
+    
+    // Buck controller with virtual pin
+    U1: TPS54331(vout=5V);
+    VIN -> U1.VIN;
+    U1.GND -> GND;
+    U1.EN -> VIN;  // Always enabled
+    
+    // Catch diode (required but not part of virtual pin)
+    GND -> D1: SS34().A;
+    D1.K -> U1.SW;
+    
+    // Virtual pin connection - this should expand to:
+    // - Output inductor (calculated ~15µH for 5V)
+    // - Bootstrap capacitor (100nF)
+    // - Output capacitors (2×22µF)
+    // - Feedback resistor divider
+    // - Compensation network
+    // - Soft-start capacitor
+    U1.VOUT -> @VOUT_5V;
+    
+    // Load for testing (2.5Ω = 2A at 5V)
+    @VOUT_5V -> R_LOAD: Res(2.5Ω, wattage=10W).1;
+    R_LOAD.2 -> GND;
+    
+    // Optional: Add test points
+    @VOUT_5V -> TP1: TestPoint();
+    U1.SW -> TP2: TestPoint();
+    U1.FB -> TP3: TestPoint();
+}
+
+// Module definition for test point (simple)
+module TestPoint() {
+    pin 1: signal inout {
+        description: "Test point connection"
+    };
+}

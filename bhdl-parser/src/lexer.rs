@@ -250,6 +250,8 @@ fn keyword_or_ident_callback(lex: &mut Lexer<LexerToken>) -> KeywordOrIdent {
         "signal" => SyntaxKind::SIGNAL_KW,
         "power" => SyntaxKind::POWER_KW,
         "ground" => SyntaxKind::GROUND_KW,
+        "switch" => SyntaxKind::SWITCH_KW,
+        "feedback" => SyntaxKind::FEEDBACK_KW,
         "if" => SyntaxKind::IF_KW,
         "else" => SyntaxKind::ELSE_KW,
         "when" => SyntaxKind::WHEN_KW,

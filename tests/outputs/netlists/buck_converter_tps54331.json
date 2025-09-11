@@ -1,0 +1,1279 @@
+{
+  "modules": [
+    {
+      "value": null,
+      "version": 0
+    },
+    {
+      "value": {
+        "name": "BuckConverterTPS54331",
+        "kind": "Board",
+        "ports": [],
+        "pins": [],
+        "internal_instances": [],
+        "internal_nets": [],
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "TestPoint",
+        "kind": "Module",
+        "ports": [],
+        "pins": [],
+        "internal_instances": [],
+        "internal_nets": [],
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "Cap",
+        "kind": "PhysicalComponent",
+        "ports": [],
+        "pins": [
+          {
+            "idx": 1,
+            "version": 1
+          },
+          {
+            "idx": 2,
+            "version": 1
+          }
+        ],
+        "internal_instances": [],
+        "internal_nets": [],
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "Cap",
+        "kind": "PhysicalComponent",
+        "ports": [],
+        "pins": [
+          {
+            "idx": 3,
+            "version": 1
+          },
+          {
+            "idx": 4,
+            "version": 1
+          }
+        ],
+        "internal_instances": [],
+        "internal_nets": [],
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "Res",
+        "kind": "PhysicalComponent",
+        "ports": [],
+        "pins": [
+          {
+            "idx": 5,
+            "version": 1
+          },
+          {
+            "idx": 6,
+            "version": 1
+          }
+        ],
+        "internal_instances": [],
+        "internal_nets": [],
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "Power",
+        "kind": "PhysicalComponent",
+        "ports": [],
+        "pins": [
+          {
+            "idx": 7,
+            "version": 1
+          }
+        ],
+        "internal_instances": [],
+        "internal_nets": [],
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "Power",
+        "kind": "PhysicalComponent",
+        "ports": [],
+        "pins": [
+          {
+            "idx": 8,
+            "version": 1
+          }
+        ],
+        "internal_instances": [],
+        "internal_nets": [],
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "Ground",
+        "kind": "PhysicalComponent",
+        "ports": [],
+        "pins": [
+          {
+            "idx": 9,
+            "version": 1
+          }
+        ],
+        "internal_instances": [],
+        "internal_nets": [],
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "BuckConverterTPS54331",
+        "kind": "Board",
+        "ports": [],
+        "pins": [],
+        "internal_instances": [],
+        "internal_nets": [],
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "SS34",
+        "kind": "PhysicalComponent",
+        "ports": [],
+        "pins": [
+          {
+            "idx": 10,
+            "version": 1
+          },
+          {
+            "idx": 11,
+            "version": 1
+          }
+        ],
+        "internal_instances": [],
+        "internal_nets": [],
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "TestPoint",
+        "kind": "PhysicalComponent",
+        "ports": [],
+        "pins": [
+          {
+            "idx": 12,
+            "version": 1
+          },
+          {
+            "idx": 13,
+            "version": 1
+          }
+        ],
+        "internal_instances": [],
+        "internal_nets": [],
+        "attributes": {}
+      },
+      "version": 1
+    }
+  ],
+  "instances": [
+    {
+      "value": null,
+      "version": 0
+    },
+    {
+      "value": {
+        "name": "C_IN1",
+        "definition": {
+          "idx": 3,
+          "version": 1
+        },
+        "attributes": {
+          "value": "0.0000001",
+          "voltage": "25V"
+        }
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "C_IN2",
+        "definition": {
+          "idx": 4,
+          "version": 1
+        },
+        "attributes": {
+          "voltage": "25V",
+          "value": "0.0000001"
+        }
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "R_LOAD",
+        "definition": {
+          "idx": 5,
+          "version": 1
+        },
+        "attributes": {
+          "value": "2.5",
+          "wattage": "10W"
+        }
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "VIN",
+        "definition": {
+          "idx": 6,
+          "version": 1
+        },
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "VOUT_5V",
+        "definition": {
+          "idx": 7,
+          "version": 1
+        },
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "GND",
+        "definition": {
+          "idx": 8,
+          "version": 1
+        },
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "C1",
+        "definition": {
+          "idx": 3,
+          "version": 1
+        },
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "C2",
+        "definition": {
+          "idx": 3,
+          "version": 1
+        },
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "U1",
+        "definition": {
+          "idx": 10,
+          "version": 1
+        },
+        "attributes": {
+          "vout": "5V"
+        }
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "R1",
+        "definition": {
+          "idx": 5,
+          "version": 1
+        },
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "U2",
+        "definition": {
+          "idx": 11,
+          "version": 1
+        },
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "U3",
+        "definition": {
+          "idx": 11,
+          "version": 1
+        },
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "U4",
+        "definition": {
+          "idx": 11,
+          "version": 1
+        },
+        "attributes": {}
+      },
+      "version": 1
+    }
+  ],
+  "nets": [
+    {
+      "value": null,
+      "version": 0
+    },
+    {
+      "value": {
+        "name": "VIN",
+        "connections": [
+          {
+            "PinInstance": {
+              "idx": 7,
+              "version": 1
+            }
+          },
+          {
+            "PinInstance": {
+              "idx": 1,
+              "version": 1
+            }
+          },
+          {
+            "PinInstance": {
+              "idx": 3,
+              "version": 1
+            }
+          }
+        ],
+        "net_class": {
+          "Power": 12.0
+        }
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "VOUT_5V",
+        "connections": [
+          {
+            "PinInstance": {
+              "idx": 8,
+              "version": 1
+            }
+          },
+          {
+            "PinInstance": {
+              "idx": 5,
+              "version": 1
+            }
+          }
+        ],
+        "net_class": {
+          "Power": 5.0
+        }
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "GND",
+        "connections": [
+          {
+            "PinInstance": {
+              "idx": 9,
+              "version": 1
+            }
+          }
+        ],
+        "net_class": "Ground"
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": null,
+        "connections": [
+          {
+            "PinInstance": {
+              "idx": 2,
+              "version": 1
+            }
+          }
+        ],
+        "net_class": "Signal"
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": null,
+        "connections": [
+          {
+            "PinInstance": {
+              "idx": 4,
+              "version": 1
+            }
+          }
+        ],
+        "net_class": "Signal"
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": null,
+        "connections": [
+          {
+            "PinInstance": {
+              "idx": 6,
+              "version": 1
+            }
+          }
+        ],
+        "net_class": "Signal"
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "TP1: TestPoint()",
+        "connections": [],
+        "net_class": "Signal"
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "TP2: TestPoint()",
+        "connections": [],
+        "net_class": "Signal"
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "TP3: TestPoint()",
+        "connections": [],
+        "net_class": "Signal"
+      },
+      "version": 1
+    }
+  ],
+  "ports": [
+    {
+      "value": null,
+      "version": 0
+    }
+  ],
+  "pins": [
+    {
+      "value": null,
+      "version": 0
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 1,
+          "version": 1
+        },
+        "name": "1",
+        "direction": "In",
+        "pin_type": "Signal",
+        "module": {
+          "idx": 3,
+          "version": 1
+        },
+        "description": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 2,
+          "version": 1
+        },
+        "name": "2",
+        "direction": "In",
+        "pin_type": "Signal",
+        "module": {
+          "idx": 3,
+          "version": 1
+        },
+        "description": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 3,
+          "version": 1
+        },
+        "name": "1",
+        "direction": "In",
+        "pin_type": "Signal",
+        "module": {
+          "idx": 4,
+          "version": 1
+        },
+        "description": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 4,
+          "version": 1
+        },
+        "name": "2",
+        "direction": "In",
+        "pin_type": "Signal",
+        "module": {
+          "idx": 4,
+          "version": 1
+        },
+        "description": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 5,
+          "version": 1
+        },
+        "name": "1",
+        "direction": "In",
+        "pin_type": "Signal",
+        "module": {
+          "idx": 5,
+          "version": 1
+        },
+        "description": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 6,
+          "version": 1
+        },
+        "name": "2",
+        "direction": "In",
+        "pin_type": "Signal",
+        "module": {
+          "idx": 5,
+          "version": 1
+        },
+        "description": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 7,
+          "version": 1
+        },
+        "name": "OUT",
+        "direction": "Out",
+        "pin_type": "Power",
+        "module": {
+          "idx": 6,
+          "version": 1
+        },
+        "description": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 8,
+          "version": 1
+        },
+        "name": "OUT",
+        "direction": "Out",
+        "pin_type": "Power",
+        "module": {
+          "idx": 7,
+          "version": 1
+        },
+        "description": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 9,
+          "version": 1
+        },
+        "name": "GND",
+        "direction": "InOut",
+        "pin_type": "Ground",
+        "module": {
+          "idx": 8,
+          "version": 1
+        },
+        "description": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 10,
+          "version": 1
+        },
+        "name": "1",
+        "direction": "InOut",
+        "pin_type": "Signal",
+        "module": {
+          "idx": 10,
+          "version": 1
+        },
+        "description": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 11,
+          "version": 1
+        },
+        "name": "2",
+        "direction": "InOut",
+        "pin_type": "Signal",
+        "module": {
+          "idx": 10,
+          "version": 1
+        },
+        "description": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 12,
+          "version": 1
+        },
+        "name": "1",
+        "direction": "InOut",
+        "pin_type": "Signal",
+        "module": {
+          "idx": 11,
+          "version": 1
+        },
+        "description": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 13,
+          "version": 1
+        },
+        "name": "2",
+        "direction": "InOut",
+        "pin_type": "Signal",
+        "module": {
+          "idx": 11,
+          "version": 1
+        },
+        "description": null
+      },
+      "version": 1
+    }
+  ],
+  "pin_instances": [
+    {
+      "value": null,
+      "version": 0
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 1,
+          "version": 1
+        },
+        "pin_def": {
+          "idx": 1,
+          "version": 1
+        },
+        "instance": {
+          "idx": 1,
+          "version": 1
+        },
+        "net": {
+          "idx": 1,
+          "version": 1
+        },
+        "connection_name": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 2,
+          "version": 1
+        },
+        "pin_def": {
+          "idx": 2,
+          "version": 1
+        },
+        "instance": {
+          "idx": 1,
+          "version": 1
+        },
+        "net": {
+          "idx": 4,
+          "version": 1
+        },
+        "connection_name": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 3,
+          "version": 1
+        },
+        "pin_def": {
+          "idx": 3,
+          "version": 1
+        },
+        "instance": {
+          "idx": 2,
+          "version": 1
+        },
+        "net": {
+          "idx": 1,
+          "version": 1
+        },
+        "connection_name": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 4,
+          "version": 1
+        },
+        "pin_def": {
+          "idx": 4,
+          "version": 1
+        },
+        "instance": {
+          "idx": 2,
+          "version": 1
+        },
+        "net": {
+          "idx": 5,
+          "version": 1
+        },
+        "connection_name": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 5,
+          "version": 1
+        },
+        "pin_def": {
+          "idx": 5,
+          "version": 1
+        },
+        "instance": {
+          "idx": 3,
+          "version": 1
+        },
+        "net": {
+          "idx": 2,
+          "version": 1
+        },
+        "connection_name": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 6,
+          "version": 1
+        },
+        "pin_def": {
+          "idx": 6,
+          "version": 1
+        },
+        "instance": {
+          "idx": 3,
+          "version": 1
+        },
+        "net": {
+          "idx": 6,
+          "version": 1
+        },
+        "connection_name": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 7,
+          "version": 1
+        },
+        "pin_def": {
+          "idx": 7,
+          "version": 1
+        },
+        "instance": {
+          "idx": 4,
+          "version": 1
+        },
+        "net": {
+          "idx": 1,
+          "version": 1
+        },
+        "connection_name": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 8,
+          "version": 1
+        },
+        "pin_def": {
+          "idx": 8,
+          "version": 1
+        },
+        "instance": {
+          "idx": 5,
+          "version": 1
+        },
+        "net": {
+          "idx": 2,
+          "version": 1
+        },
+        "connection_name": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 9,
+          "version": 1
+        },
+        "pin_def": {
+          "idx": 9,
+          "version": 1
+        },
+        "instance": {
+          "idx": 6,
+          "version": 1
+        },
+        "net": {
+          "idx": 3,
+          "version": 1
+        },
+        "connection_name": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 10,
+          "version": 1
+        },
+        "pin_def": {
+          "idx": 1,
+          "version": 1
+        },
+        "instance": {
+          "idx": 7,
+          "version": 1
+        },
+        "net": null,
+        "connection_name": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 11,
+          "version": 1
+        },
+        "pin_def": {
+          "idx": 2,
+          "version": 1
+        },
+        "instance": {
+          "idx": 7,
+          "version": 1
+        },
+        "net": null,
+        "connection_name": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 12,
+          "version": 1
+        },
+        "pin_def": {
+          "idx": 1,
+          "version": 1
+        },
+        "instance": {
+          "idx": 8,
+          "version": 1
+        },
+        "net": null,
+        "connection_name": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 13,
+          "version": 1
+        },
+        "pin_def": {
+          "idx": 2,
+          "version": 1
+        },
+        "instance": {
+          "idx": 8,
+          "version": 1
+        },
+        "net": null,
+        "connection_name": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 14,
+          "version": 1
+        },
+        "pin_def": {
+          "idx": 10,
+          "version": 1
+        },
+        "instance": {
+          "idx": 9,
+          "version": 1
+        },
+        "net": null,
+        "connection_name": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 15,
+          "version": 1
+        },
+        "pin_def": {
+          "idx": 11,
+          "version": 1
+        },
+        "instance": {
+          "idx": 9,
+          "version": 1
+        },
+        "net": null,
+        "connection_name": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 16,
+          "version": 1
+        },
+        "pin_def": {
+          "idx": 5,
+          "version": 1
+        },
+        "instance": {
+          "idx": 10,
+          "version": 1
+        },
+        "net": null,
+        "connection_name": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 17,
+          "version": 1
+        },
+        "pin_def": {
+          "idx": 6,
+          "version": 1
+        },
+        "instance": {
+          "idx": 10,
+          "version": 1
+        },
+        "net": null,
+        "connection_name": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 18,
+          "version": 1
+        },
+        "pin_def": {
+          "idx": 12,
+          "version": 1
+        },
+        "instance": {
+          "idx": 11,
+          "version": 1
+        },
+        "net": null,
+        "connection_name": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 19,
+          "version": 1
+        },
+        "pin_def": {
+          "idx": 13,
+          "version": 1
+        },
+        "instance": {
+          "idx": 11,
+          "version": 1
+        },
+        "net": null,
+        "connection_name": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 20,
+          "version": 1
+        },
+        "pin_def": {
+          "idx": 12,
+          "version": 1
+        },
+        "instance": {
+          "idx": 12,
+          "version": 1
+        },
+        "net": null,
+        "connection_name": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 21,
+          "version": 1
+        },
+        "pin_def": {
+          "idx": 13,
+          "version": 1
+        },
+        "instance": {
+          "idx": 12,
+          "version": 1
+        },
+        "net": null,
+        "connection_name": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 22,
+          "version": 1
+        },
+        "pin_def": {
+          "idx": 12,
+          "version": 1
+        },
+        "instance": {
+          "idx": 13,
+          "version": 1
+        },
+        "net": null,
+        "connection_name": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 23,
+          "version": 1
+        },
+        "pin_def": {
+          "idx": 13,
+          "version": 1
+        },
+        "instance": {
+          "idx": 13,
+          "version": 1
+        },
+        "net": null,
+        "connection_name": null
+      },
+      "version": 1
+    }
+  ],
+  "top_level_module": {
+    "idx": 9,
+    "version": 1
+  },
+  "analysis_data": {
+    "module_definitions": {
+      "TestPoint": {
+        "name": "TestPoint",
+        "pins": {
+          "pins": {
+            "1": {
+              "direction": "Bidirectional",
+              "pin_type": "Signal",
+              "function": null,
+              "electrical": {
+                "voltage_range": null,
+                "max_current": null,
+                "impedance": null,
+                "dv_dt_rating": null,
+                "frequency_range": null
+              },
+              "electrical_specs": {},
+              "documentation": null
+            }
+          }
+        },
+        "parameters": {}
+      },
+      "BuckConverterTPS54331": {
+        "name": "BuckConverterTPS54331",
+        "pins": {
+          "pins": {}
+        },
+        "parameters": {}
+      }
+    },
+    "symbol_data": {
+      "BuckConverterTPS54331": {
+        "symbol_type": "Module",
+        "module_type": null,
+        "parameters": {}
+      },
+      "BuckConverterTPS54331::SS34": {
+        "symbol_type": "Instance",
+        "module_type": "SS34",
+        "parameters": {}
+      },
+      "BuckConverterTPS54331::TestPoint": {
+        "symbol_type": "Instance",
+        "module_type": "TestPoint",
+        "parameters": {}
+      },
+      "TestPoint": {
+        "symbol_type": "Module",
+        "module_type": null,
+        "parameters": {}
+      },
+      "BuckConverterTPS54331::Cap": {
+        "symbol_type": "Instance",
+        "module_type": "Cap",
+        "parameters": {}
+      },
+      "BuckConverterTPS54331::Res": {
+        "symbol_type": "Instance",
+        "module_type": "Res",
+        "parameters": {}
+      },
+      "BuckConverterTPS54331::U1": {
+        "symbol_type": "Instance",
+        "module_type": "TPS54331",
+        "parameters": {}
+      }
+    }
+  }
+}

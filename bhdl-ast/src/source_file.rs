@@ -1,6 +1,6 @@
 use crate::{SyntaxKind, BhdlLanguage, SyntaxNode, SyntaxToken};
 use rowan::ast::AstNode;
-use crate::items::{Board, Module, ComponentDef, InterfaceDef, TypedefDef};
+use crate::items::{Board, Module, ComponentDef, InterfaceDef, TypedefDef, ImportStmt};
 use crate::testbench::TestbenchDef;
 
 // Add definitions for top-level items later
@@ -36,6 +36,11 @@ impl SourceFile {
         self.0.children().filter_map(Item::cast)
     }
 
+    /// Returns an iterator over imports in the file.
+    pub fn imports(&self) -> impl Iterator<Item = ImportStmt> {
+        self.0.children().filter_map(ImportStmt::cast)
+    }
+
     /// Returns an iterator over boards in the file.
     pub fn boards(&self) -> impl Iterator<Item = Board> {
         self.0.children().filter_map(Board::cast)
@@ -57,6 +62,7 @@ impl SourceFile {
 // Enum to represent any top-level item
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Item {
+    ImportStmt(ImportStmt),
     Board(Board),
     Module(Module),
     ComponentDef(ComponentDef),
@@ -70,12 +76,13 @@ impl AstNode for Item {
     type Language = BhdlLanguage;
 
     fn can_cast(kind: SyntaxKind) -> bool {
-        Board::can_cast(kind) || Module::can_cast(kind) || ComponentDef::can_cast(kind) ||
+        ImportStmt::can_cast(kind) || Board::can_cast(kind) || Module::can_cast(kind) || ComponentDef::can_cast(kind) ||
         InterfaceDef::can_cast(kind) || TypedefDef::can_cast(kind) || TestbenchDef::can_cast(kind)
     }
 
     fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> {
-        if Board::can_cast(syntax.kind()) { Some(Item::Board(Board::cast(syntax)?)) }
+        if ImportStmt::can_cast(syntax.kind()) { Some(Item::ImportStmt(ImportStmt::cast(syntax)?)) }
+        else if Board::can_cast(syntax.kind()) { Some(Item::Board(Board::cast(syntax)?)) }
         else if Module::can_cast(syntax.kind()) { Some(Item::Module(Module::cast(syntax)?)) }
         else if ComponentDef::can_cast(syntax.kind()) { Some(Item::ComponentDef(ComponentDef::cast(syntax)?)) }
         else if InterfaceDef::can_cast(syntax.kind()) { Some(Item::InterfaceDef(InterfaceDef::cast(syntax)?)) }
@@ -86,6 +93,7 @@ impl AstNode for Item {
 
     fn syntax(&self) -> &SyntaxNode<BhdlLanguage> {
         match self {
+            Item::ImportStmt(i) => i.syntax(),
             Item::Board(i) => i.syntax(),
             Item::Module(i) => i.syntax(),
             Item::ComponentDef(i) => i.syntax(),

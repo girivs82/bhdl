@@ -20,6 +20,7 @@ pub struct StdlibPinDefinition {
     pub name: String,
     pub direction: PinDirection,
     pub pin_type: PinType,
+    pub is_virtual: bool,  // Whether this is a virtual pin that needs expansion
 }
 
 /// Represents a component definition from the stdlib
@@ -62,6 +63,10 @@ impl StdlibReader {
         
         // Load regulators
         self.load_component_file("regulators/lm7805.bhdl")?;
+        
+        // Load switching regulators
+        self.load_component_file("components/power/switching_regulators/TPS54331.bhdl")?;
+        self.load_component_file("components/power/switching_regulators/LM2596.bhdl")?;
         
         // Load connectors
         self.load_component_file("connectors/testpoint.bhdl")?;
@@ -137,6 +142,10 @@ impl StdlibReader {
     fn extract_pin_definition(&self, pin_decl: &PinDecl) -> Option<StdlibPinDefinition> {
         let name = pin_decl.name()?.text().to_string();
         
+        // Check if this is a virtual pin
+        let decl_text = pin_decl.syntax().text().to_string();
+        let is_virtual = decl_text.contains("virtual");
+        
         // Parse direction from pin declaration
         // The actual parsing would need to handle the BHDL syntax like "signal inout", "power in", etc.
         let (direction, pin_type) = self.parse_pin_type_and_direction(pin_decl)?;
@@ -145,6 +154,7 @@ impl StdlibReader {
             name,
             direction,
             pin_type,
+            is_virtual,
         })
     }
 
@@ -213,11 +223,13 @@ impl StdlibReader {
                         name: "1".to_string(),
                         direction: PinDirection::InOut,
                         pin_type: PinType::Signal,
+                        is_virtual: false,
                     },
                     StdlibPinDefinition {
                         name: "2".to_string(),
                         direction: PinDirection::InOut,
                         pin_type: PinType::Signal,
+                        is_virtual: false,
                     },
                 ]
             })

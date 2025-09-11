@@ -137,10 +137,24 @@ impl<'t> Parser<'t> {
             // Parse destructuring import
             self.parse_import_destructuring();
             
-            // Expect 'from' keyword
-            self.expect(SyntaxKind::FROM_KW);
+            // Expect 'from' - it's lexed as IDENT, not FROM_KW
+            self.skip_trivia();
+            if self.peek() == Some(SyntaxKind::IDENT) {
+                // Check if it's actually "from"
+                let is_from = self.peek_text().map(|t| t == "from").unwrap_or(false);
+                if is_from {
+                    self.bump(); // Consume "from"
+                } else {
+                    self.error("Expected 'from' after destructuring import".to_string());
+                }
+            } else if self.peek() == Some(SyntaxKind::FROM_KW) {
+                self.bump(); // In case FROM_KW is added to lexer later
+            } else {
+                self.error("Expected 'from' after destructuring import".to_string());
+            }
             
             // Parse string literal path
+            self.skip_trivia();
             self.builder.start_node(SyntaxKind::IMPORT_PATH.into());
             self.expect(SyntaxKind::STRING);
             self.builder.finish_node();
