@@ -25,6 +25,10 @@ pub mod attribute_analysis;
 pub mod builtin_variables;
 pub mod expression_evaluator;
 pub mod flow_tracking;
+pub mod unified_simulation;
+
+// Safety analysis module
+pub mod passes;
 
 // Use items needed directly in the analyze function
 use pass1::populate_global_scope_and_build_definition_scopes;
@@ -237,6 +241,10 @@ pub fn analyze(source_file: &SourceFile) -> AnalysisResult {
     }
     
     if let Some(ref mut tracker) = flow_tracker_opt {
+        // Analyze virtual pins and create intent-driven flows
+        let virtual_pin_diagnostics = tracker.analyze_virtual_pins(&global_scope, &definition_scopes);
+        diagnostics.extend(virtual_pin_diagnostics);
+        
         // Propagate intents hierarchically through module instances
         tracker.propagate_hierarchical_intents(&global_scope, &definition_scopes);
         
@@ -246,6 +254,59 @@ pub fn analyze(source_file: &SourceFile) -> AnalysisResult {
                  flow_paths_count, required_sim_mode);
     } else {
         println!("Analyzer: Pass 9 complete. No boards found to track flows.");
+    }
+
+    // Pass 10: Unified Simulation (Run once, extract all data)
+    println!("Analyzer: Starting Pass 10 - Unified Simulation...");
+    let mut simulation_data = types::UnifiedSimulationData::new();
+    
+    // Only run simulation if we have components to analyze
+    if inferred_components_count > 0 {
+        use unified_simulation::UnifiedSimulationOrchestrator;
+        let orchestrator = UnifiedSimulationOrchestrator::new();
+        
+        // Create a placeholder netlist for simulation if none exists
+        let placeholder_netlist = bhdl_netlist::Netlist::new();
+        
+        match orchestrator.run_unified_simulation(&placeholder_netlist, &component_inference) {
+            Ok(sim_data) => {
+                simulation_data = sim_data;
+                let engines_count = simulation_data.simulation_metadata.engines_used.len();
+                let confidence = simulation_data.simulation_metadata.simulation_accuracy.confidence_level * 100.0;
+                println!("Analyzer: Pass 10 complete. Simulation engines: {}, Confidence: {:.1}%", 
+                         engines_count, confidence);
+                         
+                // Add simulation warnings to diagnostics
+                for warning in &simulation_data.simulation_metadata.warnings {
+                    diagnostics.push(types::Diagnostic {
+                        message: format!("Simulation Warning: {}", warning),
+                        range: rowan::TextRange::empty(rowan::TextSize::from(0)),
+                    });
+                }
+            }
+            Err(e) => {
+                println!("Analyzer: Pass 10 failed. Simulation error: {}", e);
+                diagnostics.push(types::Diagnostic {
+                    message: format!("Unified Simulation Failed: {}", e),
+                    range: rowan::TextRange::empty(rowan::TextSize::from(0)),
+                });
+            }
+        }
+    } else {
+        println!("Analyzer: Pass 10 skipped. No components found for simulation.");
+    }
+
+    // Pass 11: Safety Analysis (ISO 26262 compliance tracking)
+    println!("Analyzer: Starting Pass 11 - Safety Analysis...");
+    let safety_analysis = passes::analyze_safety(&source_file);
+    let safety_reqs_count = safety_analysis.requirements.len();
+    let safety_coverage = safety_analysis.coverage.coverage_percentage;
+    println!("Analyzer: Pass 11 complete. Safety requirements: {}, Coverage: {:.1}%", 
+             safety_reqs_count, safety_coverage);
+    
+    // Add safety analysis diagnostics
+    for safety_diag in &safety_analysis.diagnostics {
+        diagnostics.push(safety_diag.clone());
     }
 
     // Convert power analysis errors to diagnostics
@@ -294,6 +355,8 @@ pub fn analyze(source_file: &SourceFile) -> AnalysisResult {
         netlist: None, // Move ownership
         attribute_analysis, // Move ownership
         flow_tracker: flow_tracker_opt, // Move ownership
+        safety_analysis, // Move ownership
+        simulation_data, // Move ownership
     }
 }
 

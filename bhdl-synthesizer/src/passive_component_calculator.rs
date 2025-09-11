@@ -384,32 +384,39 @@ impl PassiveComponentCalculator {
         design_intent: Option<&bhdl_common::IntentCall>,
     ) -> Result<(PowerRating, VoltageRating, f64), Box<dyn std::error::Error>> {
         
-        // Extract actual simulated current from SPICE DC operating point
-        let actual_current = self.extract_actual_current_from_spice(component_name, analysis_result)
+        // Use unified simulation data - single source of truth for all simulation results
+        let simulation_data = &analysis_result.simulation_data;
+        
+        // Extract actual operating conditions from unified simulation data
+        let actual_current = simulation_data.get_operating_current(component_name)
             .unwrap_or_else(|| {
                 // Fallback: estimate from design intent or context
                 self.estimate_current_from_intent(design_intent, analysis_result)
             });
             
-        // Extract actual simulated voltage from SPICE analysis  
-        let actual_voltage = self.extract_actual_voltage_from_spice(component_name, analysis_result)
+        let actual_voltage = simulation_data.get_operating_voltage(component_name)
             .unwrap_or_else(|| {
                 // Fallback: get from power domain analysis
                 self.estimate_voltage_from_power_domains(analysis_result)
             });
             
-        // Extract actual power dissipation from SPICE calculations
-        let actual_power = self.extract_actual_power_from_spice(component_name, analysis_result)
+        let actual_power = simulation_data.get_power_dissipation(component_name)
             .unwrap_or_else(|| {
                 // Fallback: calculate I²R from simulated values
-                actual_current * actual_current * (actual_voltage / actual_current)
+                if actual_current > 0.0 {
+                    actual_current * actual_current * (actual_voltage / actual_current)
+                } else {
+                    0.0
+                }
             });
             
-        // Apply safety analysis enhanced derating
+        // Get comprehensive derating factor from unified simulation (includes all safety analysis)
+        let simulation_derating_factor = simulation_data.get_derating_factor(component_name);
         let enhanced_safety_factors = self.get_safety_enhanced_factors(analysis_result);
         
-        // Calculate power rating using actual simulated power
-        let required_power = actual_power / enhanced_safety_factors.power_derating;
+        // Calculate power rating using actual simulated power with comprehensive derating
+        let total_power_derating = enhanced_safety_factors.power_derating * simulation_derating_factor;
+        let required_power = actual_power / total_power_derating;
         let power_rating = self.select_next_standard_power_rating(required_power);
         
         // Calculate voltage rating using actual simulated voltage
@@ -430,43 +437,73 @@ impl PassiveComponentCalculator {
         design_intent: Option<&bhdl_common::IntentCall>,
     ) -> Result<(VoltageRating, DielectricType, f64), Box<dyn std::error::Error>> {
         
-        // Extract ripple current from transient analysis (if available)
-        let ripple_current = self.extract_ripple_current_from_transient(component_name, analysis_result)
-            .unwrap_or_else(|| {
+        // Use unified simulation data for all capacitor analysis
+        let simulation_data = &analysis_result.simulation_data;
+        
+        // Extract ripple current from unified transient analysis (if available)
+        let ripple_current = if let Some(ref transient) = simulation_data.transient_analysis {
+            transient.ripple_currents.get(component_name).copied().unwrap_or_else(|| {
                 // Fallback: estimate from power analysis
                 self.estimate_ripple_from_power_analysis(analysis_result)
-            });
+            })
+        } else {
+            // Fallback: estimate from power analysis
+            self.estimate_ripple_from_power_analysis(analysis_result)  
+        };
             
-        // Extract actual operating voltage from SPICE
-        let operating_voltage = self.extract_actual_voltage_from_spice(component_name, analysis_result)
+        // Extract actual operating voltage from unified simulation
+        let operating_voltage = simulation_data.get_operating_voltage(component_name)
             .unwrap_or_else(|| {
                 // Fallback: get from power domain analysis
                 self.estimate_voltage_from_power_domains(analysis_result)
             });
             
-        // Extract frequency requirements from AC analysis (if available)
-        let frequency_range = self.extract_frequency_requirements(analysis_result, design_intent);
+        // Extract frequency requirements from unified AC analysis (if available)
+        let frequency_range = if let Some(ref ac) = simulation_data.ac_analysis {
+            if let Some(bandwidth) = ac.bandwidth.get(component_name) {
+                (1.0, *bandwidth)
+            } else {
+                self.extract_frequency_requirements(analysis_result, design_intent)
+            }
+        } else {
+            self.extract_frequency_requirements(analysis_result, design_intent)
+        };
         
-        // Apply safety analysis enhanced derating
+        // Get comprehensive derating from unified simulation
+        let simulation_derating_factor = simulation_data.get_derating_factor(component_name);
         let enhanced_safety_factors = self.get_safety_enhanced_factors(analysis_result);
         
-        // Calculate voltage rating with simulation-based derating
-        let required_voltage = operating_voltage * enhanced_safety_factors.voltage_safety_margin;
+        // Calculate voltage rating with comprehensive simulation-based derating
+        let total_voltage_derating = enhanced_safety_factors.voltage_safety_margin / simulation_derating_factor;
+        let required_voltage = operating_voltage * total_voltage_derating;
         let voltage_rating = self.select_next_standard_voltage_rating(required_voltage);
         
-        // Select dielectric type based on frequency requirements and temperature analysis
-        let temperature_stress = analysis_result.safety_analysis.diagnostics.iter()
-            .any(|d| d.message.contains("temperature") || d.message.contains("thermal"));
-            
-        let dielectric = if frequency_range.1 > 10e6 || temperature_stress {
-            // High frequency or temperature stress - use stable dielectric
-            DielectricType::C0G
-        } else if frequency_range.1 > 1e6 {
-            // Medium frequency - use X7R
-            DielectricType::X7R
+        // Select dielectric type based on unified simulation thermal analysis
+        let dielectric = if let Some(ref thermal) = simulation_data.thermal_analysis {
+            if let Some(operating_temp) = thermal.component_temperatures.get(component_name) {
+                if *operating_temp > 125.0 || frequency_range.1 > 10e6 {
+                    // Ultra-high temperature or high frequency - use most stable dielectric
+                    DielectricType::C0G
+                } else if *operating_temp > 85.0 || frequency_range.1 > 1e6 {
+                    // High temperature or medium frequency - use X7R
+                    DielectricType::X7R
+                } else {
+                    // Normal conditions - use X7R for good balance
+                    DielectricType::X7R
+                }
+            } else if frequency_range.1 > 10e6 {
+                // No thermal data but high frequency
+                DielectricType::C0G
+            } else {
+                DielectricType::X7R
+            }
         } else {
-            // Low frequency - optimize for capacitance
-            DielectricType::X7R
+            // No thermal analysis - use frequency-based selection
+            if frequency_range.1 > 10e6 {
+                DielectricType::C0G
+            } else {
+                DielectricType::X7R
+            }
         };
         
         // Calculate ESR requirements from actual ripple current
