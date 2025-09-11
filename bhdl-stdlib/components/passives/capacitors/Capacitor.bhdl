@@ -1,0 +1,712 @@
+// Generic Capacitor - Complete Component Knowledge  
+// Electrolytic, Ceramic, Film, and Tantalum capacitors
+
+import { capacitance, voltage, resistance, frequency, temperature, current, time } from "../../../units.bhdl";
+
+// ==================== COMPONENT DEFINITION ====================
+module Capacitor(
+    value: capacitance,                 // Capacitance value
+    voltage_rating: voltage = 50V,      // Rated voltage
+    tolerance: float = 20%,             // Capacitance tolerance
+    esr: resistance = 100mΩ,           // Equivalent series resistance
+    dielectric: string = "X7R"          // Dielectric type
+) {
+    pin 1: signal inout {
+        description: "Terminal 1 (positive for polarized)"
+    };
+    
+    pin 2: signal inout {
+        description: "Terminal 2 (negative for polarized)"
+    };
+}
+
+// Shortcuts for common capacitor types
+module Cap = Capacitor;
+module ElectrolyticCap(value: capacitance, voltage: voltage) = 
+    Capacitor(value, voltage, 20%, 50mΩ, "Electrolytic");
+module CeramicCap(value: capacitance, voltage: voltage, dielectric: string = "X7R") = 
+    Capacitor(value, voltage, 10%, 10mΩ, dielectric);
+
+// ==================== ELECTRICAL CHARACTERISTICS ====================
+const CAPACITOR_ELECTRICAL = {
+    // Standard values (E12 series)
+    standard_values_base: [
+        1.0, 1.2, 1.5, 1.8, 2.2, 2.7, 3.3, 3.9, 4.7, 5.6, 6.8, 8.2
+    ],
+    
+    // Multipliers for different ranges
+    multipliers: {
+        pF: 1e-12,
+        nF: 1e-9,
+        uF: 1e-6,
+        mF: 1e-3
+    },
+    
+    // Voltage ratings (standard)
+    standard_voltages: [
+        6.3, 10, 16, 25, 35, 50, 63, 100, 200, 250, 400, 450, 630, 1000
+    ],
+    
+    // Tolerance grades
+    tolerance_codes: {
+        "C0G/NP0": 1%,                  // Class 1 ceramic
+        "X7R": 10%,                     // Class 2 ceramic
+        "X5R": 15%,                     // Class 2 ceramic
+        "Y5V": "+80/-20%",              // Class 2 ceramic
+        "Z5U": "+22/-56%",              // Class 2 ceramic
+        "Film": 5%,
+        "Electrolytic": 20%,
+        "Tantalum": 10%
+    }
+};
+
+// ==================== DIELECTRIC TYPES ====================
+const CAPACITOR_DIELECTRICS = {
+    // Class 1 Ceramic (Temperature Compensating)
+    C0G_NP0: {
+        temp_coefficient: 30,            // ppm/°C
+        voltage_coefficient: 0,          // No voltage dependence
+        aging_rate: 0,                   // No aging
+        dissipation_factor: 0.001,       // tan δ at 1kHz
+        insulation_resistance: 1e12,     // Ω
+        frequency_range: (1Hz, 1GHz),
+        applications: "Timing, filters, resonant circuits",
+        capacitance_range: (0.5pF, 0.1uF)
+    },
+    
+    // Class 2 Ceramic (High Dielectric Constant)
+    X7R: {
+        temp_variation: "±15% from -55°C to +125°C",
+        voltage_coefficient: -15,        // % at rated voltage
+        aging_rate: 2,                   // % per decade hour
+        dissipation_factor: 0.025,       // tan δ at 1kHz
+        insulation_resistance: 1e10,     // Ω
+        frequency_range: (1Hz, 100MHz),
+        applications: "Bypass, coupling, filtering",
+        capacitance_range: (100pF, 100uF)
+    },
+    
+    X5R: {
+        temp_variation: "±15% from -55°C to +85°C",
+        voltage_coefficient: -20,        // % at rated voltage
+        aging_rate: 2,                   // % per decade hour
+        dissipation_factor: 0.035,
+        insulation_resistance: 1e10,
+        frequency_range: (1Hz, 10MHz),
+        applications: "General purpose decoupling",
+        capacitance_range: (100pF, 100uF)
+    },
+    
+    // Aluminum Electrolytic
+    Electrolytic: {
+        temp_variation: "±20% typical",
+        esr_typical: (10mΩ, 5Ω),        // Wide range
+        ripple_current_factor: 1.5,      // Multiplier for temp rise
+        lifetime_formula: "L = L0 × 2^((T0-T)/10)",  // Doubles every 10°C cooler
+        dissipation_factor: 0.15,
+        leakage_current: "0.01CV or 3μA",
+        frequency_range: (10Hz, 100kHz),
+        applications: "Bulk storage, power supply filtering",
+        capacitance_range: (0.1uF, 1F),
+        polarized: true
+    },
+    
+    // Tantalum
+    Tantalum: {
+        temp_variation: "±10% typical",
+        esr_typical: (50mΩ, 2Ω),
+        voltage_derating: 0.5,           // Use at 50% of rated voltage
+        failure_mode: "Short circuit possible",
+        dissipation_factor: 0.08,
+        leakage_current: "0.01CV",
+        frequency_range: (10Hz, 1MHz),
+        applications: "Stable filtering, timing",
+        capacitance_range: (0.1uF, 1000uF),
+        polarized: true
+    },
+    
+    // Film (Polyester, Polypropylene)
+    Film: {
+        temp_coefficient: 200,           // ppm/°C
+        voltage_coefficient: 0,
+        dissipation_factor: 0.005,
+        insulation_resistance: 1e12,
+        self_healing: true,
+        frequency_range: (1Hz, 10MHz),
+        applications: "Audio, power factor correction, snubbers",
+        capacitance_range: (1nF, 100uF),
+        polarized: false
+    }
+};
+
+// ==================== PACKAGE TYPES ====================
+const CAPACITOR_PACKAGES = {
+    // SMD Ceramic
+    "0402": {
+        dimensions: "1.0×0.5×0.5mm",
+        capacitance_max: 0.1uF,
+        voltage_max: 50V,
+        power_rating: 0.05W
+    },
+    
+    "0603": {
+        dimensions: "1.6×0.8×0.8mm",
+        capacitance_max: 10uF,
+        voltage_max: 50V,
+        power_rating: 0.1W
+    },
+    
+    "0805": {
+        dimensions: "2.0×1.25×1.25mm",
+        capacitance_max: 22uF,
+        voltage_max: 50V,
+        power_rating: 0.125W
+    },
+    
+    "1206": {
+        dimensions: "3.2×1.6×1.6mm",
+        capacitance_max: 100uF,
+        voltage_max: 50V,
+        power_rating: 0.25W
+    },
+    
+    "1210": {
+        dimensions: "3.2×2.5×2.5mm",
+        capacitance_max: 100uF,
+        voltage_max: 100V,
+        power_rating: 0.5W
+    },
+    
+    // SMD Electrolytic
+    SMD_A: { diameter: 3.0, height: 5.4, capacitance_max: 10uF },
+    SMD_B: { diameter: 4.3, height: 5.4, capacitance_max: 47uF },
+    SMD_C: { diameter: 5.3, height: 5.4, capacitance_max: 100uF },
+    SMD_D: { diameter: 6.6, height: 5.4, capacitance_max: 220uF },
+    SMD_E: { diameter: 8.3, height: 10.5, capacitance_max: 1000uF },
+    
+    // Through-hole
+    radial: {
+        lead_spacing: [2.5, 5.0, 7.5, 10.0],  // mm
+        diameter_range: (4, 18),              // mm
+        height_range: (5, 40),                // mm
+        capacitance_range: (0.1uF, 10000uF)
+    },
+    
+    axial: {
+        diameter_range: (3, 16),              // mm
+        length_range: (7, 40),                // mm
+        capacitance_range: (0.1uF, 4700uF)
+    }
+};
+
+// ==================== SIMULATION MODEL ====================
+const CAPACITOR_SIMULATION = {
+    // Ideal capacitor
+    ideal_model: {
+        capacitance: "C",
+        impedance: "Z = 1/(jωC)",
+        energy: "E = 0.5 × C × V²"
+    },
+    
+    // Practical model with parasitics
+    practical_model: {
+        capacitance: "C",
+        esr: "ESR in series",
+        esl: "ESL in series (typ 1-10nH)",
+        leakage: "R_leak in parallel (typ > 1MΩ)",
+        
+        // Total impedance
+        impedance: "Z = ESR + j(ωL - 1/ωC)",
+        
+        // Self-resonant frequency
+        srf: "f_res = 1/(2π√(LC))",
+        
+        // Dissipation factor
+        dissipation_factor: "DF = ESR × ωC"
+    },
+    
+    // SPICE model
+    spice_model: {
+        simple: "C{ref} {1} {2} {value}",
+        with_esr: ".subckt C_{ref} 1 2\nC1 1 n1 {value}\nR1 n1 2 {esr}\n.ends",
+        full: ".subckt C_{ref} 1 2\nL1 1 n1 {esl}\nR1 n1 n2 {esr}\nC1 n2 n3 {value}\nR2 n3 2 {r_leak}\n.ends"
+    },
+    
+    // Temperature and voltage effects
+    derating: {
+        voltage_derating: "C(V) = C0 × (1 + kv × V/Vrated)",
+        temp_derating: "C(T) = C0 × (1 + kt × (T - 25))",
+        combined: "C(V,T) = C0 × (1 + kv × V/Vr) × (1 + kt × ΔT)"
+    }
+};
+
+// ==================== POWER SUPPLY APPLICATIONS ====================
+const CAPACITOR_POWER_APPLICATIONS = {
+    // Input filtering (bulk storage)
+    input_bulk: {
+        function: "Energy storage, ripple reduction",
+        type: "Aluminum electrolytic",
+        value_formula: "C = I × Δt / ΔV",
+        typical_values: {
+            "12V input": 470uF,
+            "24V input": 220uF,
+            "48V input": 100uF
+        },
+        voltage_rating: "VIN_MAX × 1.5",
+        ripple_current: "I_ripple > 0.5 × I_out",
+        placement: "Close to input connector"
+    },
+    
+    // Input ceramic bypass
+    input_bypass: {
+        function: "High frequency filtering",
+        type: "Ceramic X7R",
+        value: 0.1uF,
+        voltage_rating: "VIN_MAX × 2",
+        placement: "At each IC VIN pin",
+        quantity: "One per IC"
+    },
+    
+    // Output filtering (buck converter)
+    output_bulk: {
+        function: "Ripple reduction",
+        type: "Aluminum electrolytic or ceramic",
+        value_formula: "C = ΔI / (8 × f × ΔV)",
+        typical_values: {
+            "100kHz": 220uF,
+            "300kHz": 100uF,
+            "500kHz": 47uF
+        },
+        esr_requirement: "ESR < ΔV / ΔI",
+        placement: "Close to inductor output"
+    },
+    
+    // Output ceramic bypass
+    output_bypass: {
+        function: "High frequency noise",
+        type: "Ceramic X7R or X5R",
+        value: "22uF × 2 (parallel for lower ESR)",
+        voltage_rating: "VOUT × 2",
+        placement: "At load connection"
+    },
+    
+    // Bootstrap capacitor
+    bootstrap: {
+        function: "High-side gate drive",
+        type: "Ceramic X7R",
+        value: 100nF,
+        voltage_rating: 16V,
+        placement: "Between BOOT and SW pins"
+    },
+    
+    // Compensation
+    compensation: {
+        function: "Loop stability",
+        type: "Ceramic C0G/NP0",
+        value_range: (10pF, 10nF),
+        voltage_rating: 16V,
+        placement: "At error amplifier"
+    },
+    
+    // Snubber
+    snubber: {
+        function: "Reduce ringing, EMI",
+        type: "Ceramic C0G or Film",
+        value_range: (100pF, 10nF),
+        voltage_rating: "2 × VIN_MAX",
+        series_resistor: "10-100Ω",
+        placement: "Across switch or diode"
+    }
+};
+
+// ==================== THERMAL & RELIABILITY ====================
+const CAPACITOR_RELIABILITY = {
+    // Lifetime calculation (Aluminum electrolytic)
+    electrolytic_lifetime: {
+        base_lifetime_hours: 2000,      // At rated temp and ripple
+        temp_factor: "2^((Trated - Tactual)/10)",
+        ripple_factor: "(Irated/Iactual)^2",
+        voltage_factor: "(Vrated/Vactual)^1.5",
+        
+        total_lifetime: "L = L0 × temp_factor × ripple_factor × voltage_factor"
+    },
+    
+    // Failure modes
+    failure_modes: {
+        overvoltage: {
+            ceramic: "Cracks, short circuit",
+            electrolytic: "Venting, open circuit",
+            tantalum: "Short circuit, fire risk",
+            film: "Self-healing, gradual capacity loss"
+        },
+        overcurrent: {
+            effect: "Heating due to ESR",
+            result: "Electrolyte dry-out, ESR increase",
+            protection: "Limit ripple current"
+        },
+        temperature: {
+            high: "Accelerated aging, leakage increase",
+            low: "ESR increase, reduced capacitance",
+            cycling: "Mechanical stress, lead fatigue"
+        }
+    },
+    
+    // Derating guidelines
+    derating: {
+        voltage: {
+            ceramic: 0.8,               // 80% of rated
+            electrolytic: 0.8,
+            tantalum: 0.5,              // 50% critical!
+            film: 0.7
+        },
+        temperature: {
+            ceramic: 0.9,               // 90% of max temp
+            electrolytic: 0.85,
+            tantalum: 0.85,
+            film: 0.9
+        },
+        ripple_current: 0.7            // 70% of rated
+    }
+};
+
+// ==================== PCB LAYOUT GUIDELINES ====================
+const CAPACITOR_LAYOUT = {
+    // Decoupling capacitor placement
+    decoupling: {
+        distance_to_pin: "< 5mm ideal, < 10mm acceptable",
+        via_placement: "Minimize loop area",
+        trace_width: "Match power trace width",
+        ground_connection: "Direct via to ground plane",
+        multiple_values: "Place smallest closest to IC"
+    },
+    
+    // Bulk capacitor placement
+    bulk_storage: {
+        placement: "Near power entry or regulator",
+        orientation: "Consider electrolyte leak path",
+        spacing: "Allow for capacitor swelling",
+        thermal: "Away from heat sources"
+    },
+    
+    // High frequency layout
+    high_frequency: {
+        mounting: "Use smallest package possible",
+        vias: "Multiple vias for low inductance",
+        traces: "Wide, short traces",
+        ground: "Solid ground plane required"
+    },
+    
+    // EMI considerations
+    emi: {
+        y_capacitors: "Connect to chassis ground",
+        x_capacitors: "Across line and neutral",
+        placement: "At noise source",
+        shielding: "May need shield can"
+    }
+};
+
+// ==================== SYNTHESIS KNOWLEDGE ====================
+const CAPACITOR_SYNTHESIS = {
+    // Connection patterns for different applications
+    buck_converter_input_connections: {
+        description: "Input capacitor for buck converter",
+        connections: [
+            "VIN -> CAP.1",
+            "CAP.2 -> GND",
+            "Place close to regulator VIN pin",
+            "Add ceramic bypass: VIN -> CAP_BYPASS.1, CAP_BYPASS.2 -> GND"
+        ],
+        component_selection: {
+            bulk_cap: "Electrolytic, C > 100µF, low ESR",
+            bypass_cap: "Ceramic 0.1µF, X7R, close to IC"
+        },
+        quantity: "Usually 1 bulk + 1 ceramic per IC"
+    },
+    
+    buck_converter_output_connections: {
+        description: "Output capacitor for buck converter",
+        connections: [
+            "VOUT -> CAP.1",
+            "CAP.2 -> GND",
+            "Place close to inductor output",
+            "Multiple ceramics in parallel for low ESR"
+        ],
+        component_selection: {
+            requirements: "ESR < ΔV/ΔI, ripple current > ΔI/2",
+            preferred: "Multiple 22µF ceramic for > 300kHz",
+            alternative: "Electrolytic for < 300kHz"
+        }
+    },
+    
+    bootstrap_connections: {
+        description: "Bootstrap capacitor for high-side drive",
+        connections: [
+            "BOOT_PIN -> CAP.1",
+            "CAP.2 -> SW_NODE",
+            "Keep loop area minimal"
+        ],
+        value: 100nF,
+        type: "Ceramic X7R",
+        voltage: 16V
+    },
+    
+    decoupling_connections: {
+        description: "IC power supply decoupling",
+        connections: [
+            "VCC_PIN -> CAP.1",
+            "CAP.2 -> GND_PIN",
+            "Via directly to ground plane",
+            "Distance < 5mm from pin"
+        ],
+        values: ["100nF", "1µF", "10µF"],  // Multiple values
+        placement_order: "Smallest closest to IC"
+    },
+    
+    // Part number patterns for database matching
+    part_number_patterns: {
+        ceramic_caps: [
+            "GRM*",      // Murata MLCC
+            "C*C0G*",    // Generic C0G/NP0
+            "C*X7R*",    // Generic X7R
+            "CGA*",      // TDK ceramic
+            "CC*",       // Yageo ceramic
+            "0603*",     // Package-based
+            "0805*",
+            "1206*"
+        ],
+        electrolytic_caps: [
+            "EEU*",      // Panasonic electrolytic
+            "UVR*",      // Nichicon
+            "ESR*",      // Low ESR series
+            "FC*",       // Functional polymer
+            "APXE*"      // Polymer aluminum
+        ],
+        tantalum_caps: [
+            "T491*",     // Kemet tantalum
+            "293D*",     // Vishay tantalum
+            "TPSE*"      // AVX tantalum polymer
+        ]
+    },
+    
+    // Footprint selection based on package
+    footprint_mapping: {
+        "0402": "CAPC1005X50N",         // IPC-7351 naming
+        "0603": "CAPC1608X80N",
+        "0805": "CAPC2012X100N",
+        "1206": "CAPC3216X160N",
+        "1210": "CAPC3225X250N",
+        "SMD_A": "CAPAE330X540N",       // SMD aluminum electrolytic
+        "SMD_B": "CAPAE430X540N",
+        "SMD_C": "CAPAE530X540N",
+        "SMD_D": "CAPAE660X540N",
+        "radial": "CAPPRD{pitch}W{lead}D{dia}H{height}"
+    },
+    
+    // Voltage-based selection rules
+    voltage_based_selection: {
+        "< 6.3V": {
+            derating: 1.5,               // Use 1.5× voltage rating
+            dielectric_preference: ["X7R", "X5R"],
+            package_preference: ["0603", "0805"]
+        },
+        "6.3V - 25V": {
+            derating: 1.5,
+            dielectric_preference: ["X7R", "Electrolytic"],
+            package_preference: ["0805", "1206", "SMD_B"]
+        },
+        "25V - 50V": {
+            derating: 1.5,
+            dielectric_preference: ["X7R", "Electrolytic"],
+            package_preference: ["1206", "1210", "SMD_C"]
+        },
+        "> 50V": {
+            derating: 2.0,               // Use 2× for high voltage
+            dielectric_preference: ["C0G", "Film", "Electrolytic"],
+            package_preference: ["1210", "2220", "SMD_D", "radial"]
+        }
+    },
+    
+    // Application-specific requirements
+    application_requirements: {
+        timing: {
+            dielectric: "C0G/NP0",       // Stable
+            tolerance: 1%,
+            temp_coef: 30                // ppm/°C max
+        },
+        power_supply: {
+            dielectric: ["X7R", "Electrolytic"],
+            esr: "low",
+            ripple_current: "high"
+        },
+        coupling: {
+            dielectric: ["X7R", "Film"],
+            voltage: "2× signal max"
+        },
+        bypass: {
+            dielectric: "X7R",
+            values: [0.1µF, 1µF, 10µF],
+            placement: "cascade from IC"
+        }
+    }
+};
+
+// Function to generate synthesis requirements for capacitors
+export function get_capacitor_synthesis_requirements(
+    application: string,
+    value: capacitance,
+    voltage: voltage,
+    current: current = null
+): SynthesisRequirements {
+    // Determine voltage rating with derating
+    const v_rating = select_voltage_rating(voltage * 1.5);
+    
+    // Determine dielectric based on application
+    let dielectric = "X7R";  // Default
+    if (application === "timing") {
+        dielectric = "C0G";
+    } else if (value > 10e-6 && application === "power_supply") {
+        dielectric = "Electrolytic";
+    }
+    
+    const req = {
+        value: value,
+        voltage_rating: v_rating,
+        dielectric: dielectric,
+        
+        // Get connection pattern
+        connections: CAPACITOR_SYNTHESIS[application + "_connections"],
+        
+        // Determine package
+        package: select_package_for_capacitor(value, v_rating),
+        
+        // Part selection hints
+        search_hints: {
+            keywords: ["capacitor", value.toString(), v_rating.toString() + "V"],
+            series: dielectric === "Electrolytic" ? 
+                CAPACITOR_SYNTHESIS.part_number_patterns.electrolytic_caps :
+                CAPACITOR_SYNTHESIS.part_number_patterns.ceramic_caps,
+            parameters: {
+                "capacitance": value,
+                "voltage_rating": v_rating,
+                "dielectric": dielectric,
+                "esr_max": application === "power_supply" ? 0.1 : null,
+                "ripple_current_min": current
+            }
+        },
+        
+        // Special requirements
+        special: {
+            placement: application === "bypass" ? "< 5mm from IC" : null,
+            quantity: application === "bypass" ? "cascade multiple values" : null,
+            thermal: value > 100e-6 ? "consider ripple heating" : null
+        }
+    };
+    
+    return req;
+}
+
+function select_package_for_capacitor(value: capacitance, voltage: voltage): string {
+    // Ceramic packages
+    if (value <= 0.1e-6 && voltage <= 50) return "0603";
+    if (value <= 1e-6 && voltage <= 50) return "0805";
+    if (value <= 10e-6 && voltage <= 50) return "1206";
+    if (value <= 22e-6 && voltage <= 50) return "1210";
+    
+    // Electrolytic packages  
+    if (value <= 10e-6) return "SMD_A";
+    if (value <= 47e-6) return "SMD_B";
+    if (value <= 100e-6) return "SMD_C";
+    if (value <= 220e-6) return "SMD_D";
+    
+    return "radial";  // Large values
+}
+
+// ==================== SELECTION FUNCTIONS ====================
+export function select_input_capacitor(
+    vin_max: voltage,
+    iin_max: current,
+    ripple_voltage: voltage = 0.1V
+): CapacitorSpec {
+    // Calculate minimum capacitance for ripple
+    const C_min = (iin_max * 0.01) / (120 * ripple_voltage);  // Assuming 120Hz ripple
+    
+    // Select standard value (round up)
+    const C_uF = Math.ceil(C_min * 1e6 / 47) * 47;  // Round to 47uF multiples
+    
+    // Voltage rating with derating
+    const V_rating = select_voltage_rating(vin_max * 1.5);
+    
+    return {
+        capacitance: C_uF * 1e-6,
+        voltage_rating: V_rating,
+        type: "Electrolytic",
+        esr_max: ripple_voltage / (iin_max * 0.1),
+        ripple_current_min: iin_max * 0.5,
+        quantity: C_uF > 470 ? 2 : 1  // Use multiple for large values
+    };
+}
+
+export function select_output_capacitor(
+    vout: voltage,
+    iout: current,
+    fsw: frequency,
+    ripple_current: current,
+    ripple_voltage: voltage = 0.05V
+): CapacitorSpec {
+    // Calculate minimum capacitance
+    const C_min = ripple_current / (8 * fsw * ripple_voltage);
+    
+    // Calculate maximum ESR
+    const esr_max = ripple_voltage / ripple_current;
+    
+    // Determine type based on requirements
+    const use_ceramic = fsw > 300e3 || esr_max < 0.01;
+    
+    if (use_ceramic) {
+        // Use multiple ceramic caps in parallel
+        const C_per_cap = 22e-6;  // 22uF standard
+        const num_caps = Math.ceil(C_min / C_per_cap);
+        
+        return {
+            capacitance: C_per_cap,
+            voltage_rating: select_voltage_rating(vout * 2),
+            type: "Ceramic X7R",
+            package: "1206",
+            quantity: num_caps,
+            esr_per_cap: esr_max * num_caps
+        };
+    } else {
+        // Use electrolytic
+        const C_uF = Math.ceil(C_min * 1e6 / 47) * 47;
+        
+        return {
+            capacitance: C_uF * 1e-6,
+            voltage_rating: select_voltage_rating(vout * 1.5),
+            type: "Electrolytic",
+            esr_max: esr_max,
+            ripple_current_min: ripple_current
+        };
+    }
+}
+
+function select_voltage_rating(v_min: voltage): voltage {
+    const standard = CAPACITOR_ELECTRICAL.standard_voltages;
+    return standard.find(v => v >= v_min) || standard[standard.length - 1];
+}
+
+// ==================== EXPORT ====================
+export {
+    Capacitor,
+    Cap,
+    ElectrolyticCap,
+    CeramicCap,
+    CAPACITOR_ELECTRICAL,
+    CAPACITOR_DIELECTRICS,
+    CAPACITOR_PACKAGES,
+    CAPACITOR_SIMULATION,
+    CAPACITOR_POWER_APPLICATIONS,
+    CAPACITOR_RELIABILITY,
+    CAPACITOR_LAYOUT,
+    select_input_capacitor,
+    select_output_capacitor
+};

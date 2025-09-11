@@ -1,0 +1,625 @@
+// TPS54331 3A Step-Down Converter with Virtual Pin Support
+// Complete component knowledge including virtual pin expansion
+
+import { voltage, current, power, resistance, capacitance, inductance, frequency, temperature } from "../../../units.bhdl";
+
+// ==================== COMPONENT DEFINITION WITH VIRTUAL PIN ====================
+module TPS54331(
+    vout: voltage = 3.3V                // Target output voltage
+) {
+    // Physical pins
+    pin VIN: power in {
+        voltage_range: (3.5V, 28V),
+        voltage_abs_max: 30V,
+        description: "Input supply"
+    };
+    
+    pin SW: switch out {
+        current_max: 4A,                // Peak switch current
+        voltage_max: 30V,
+        switching_freq: 570kHz,
+        description: "Switch node to inductor"
+    };
+    
+    pin GND: ground inout {
+        description: "Ground and thermal pad"
+    };
+    
+    pin FB: feedback in {
+        voltage_ref: 0.8V,               // Reference voltage
+        input_impedance: 1MΩ,
+        description: "Feedback input"
+    };
+    
+    pin BOOT: signal inout {
+        description: "Bootstrap capacitor connection"
+    };
+    
+    pin EN: signal in {
+        threshold_on: 1.25V,
+        threshold_off: 1.15V,
+        description: "Enable input"
+    };
+    
+    pin SS: signal inout {
+        description: "Soft-start capacitor"
+    };
+    
+    pin COMP: signal inout {
+        description: "Compensation network"
+    };
+    
+    // VIRTUAL PIN - This expands to real components
+    pin VOUT: power out virtual {
+        voltage: vout,
+        current_max: 3A,
+        description: "Virtual output pin - expands to inductor, capacitors, and feedback"
+    };
+}
+
+// ==================== VIRTUAL PIN EXPANSION RULES ====================
+const TPS54331_VIRTUAL_PIN_EXPANSION = {
+    // Components that the virtual VOUT pin expands to
+    VOUT_expansion: {
+        // Output inductor from SW
+        inductor: {
+            connection: "SW -> L.1, L.2 -> VOUT_NET",
+            value_formula: "L = (Vout × (Vin - Vout)) / (ΔI × f × Vin)",
+            typical_values: {
+                "3.3V": 10uH,
+                "5V": 15uH,
+                "12V": 33uH
+            },
+            current_rating: "1.3 × IOUT_MAX",
+            dcr_max: 30mΩ,
+            saturation_current: "> 4A"
+        },
+        
+        // Bootstrap capacitor
+        bootstrap_cap: {
+            connection: "BOOT -> C_BOOT.1, C_BOOT.2 -> SW",
+            value: 100nF,
+            voltage_rating: 16V,
+            type: "Ceramic X7R"
+        },
+        
+        // Output capacitors
+        output_caps: [
+            {
+                connection: "VOUT_NET -> C1.1, C1.2 -> GND",
+                value: 22uF,
+                voltage_rating: "VOUT × 2",
+                type: "Ceramic X7R",
+                quantity: 2  // Use 2x22uF for lower ESR
+            },
+            {
+                connection: "VOUT_NET -> C2.1, C2.2 -> GND",
+                value: 100nF,
+                voltage_rating: "VOUT × 2",
+                type: "Ceramic X7R",
+                purpose: "High frequency bypass"
+            }
+        ],
+        
+        // Feedback divider
+        feedback_network: {
+            r_top: {
+                connection: "VOUT_NET -> R1.1, R1.2 -> FB",
+                value_formula: "R1 = R2 × (Vout/0.8 - 1)",
+                recommended_r2: 10kΩ,
+                tolerance: 1%
+            },
+            r_bottom: {
+                connection: "FB -> R2.1, R2.2 -> GND",
+                value: 10kΩ,
+                tolerance: 1%
+            },
+            feedforward_cap: {
+                connection: "Across R1",
+                value: 22pF,
+                type: "C0G",
+                purpose: "Improve transient response"
+            }
+        },
+        
+        // Compensation network
+        compensation: {
+            r_comp: {
+                connection: "COMP -> R_COMP.1, R_COMP.2 -> C_COMP.1",
+                value: 10kΩ
+            },
+            c_comp1: {
+                connection: "R_COMP.2 -> C_COMP1.1, C_COMP1.2 -> GND",
+                value: 4.7nF
+            },
+            c_comp2: {
+                connection: "COMP -> C_COMP2.1, C_COMP2.2 -> GND",
+                value: 47pF
+            }
+        },
+        
+        // Soft-start capacitor
+        soft_start: {
+            connection: "SS -> C_SS.1, C_SS.2 -> GND",
+            value: 10nF,
+            soft_start_time: "5ms typical"
+        }
+    }
+};
+
+// ==================== ELECTRICAL CHARACTERISTICS ====================
+const TPS54331_ELECTRICAL = {
+    // Output specifications
+    output_voltage_range: (0.8V, 25V),   // Adjustable range
+    output_current_max: 3A,
+    output_accuracy: 1%,                 // Reference accuracy
+    
+    // Efficiency
+    efficiency_typical: {
+        "12V_to_5V_1A": 89%,
+        "12V_to_5V_3A": 85%,
+        "24V_to_5V_1A": 87%,
+        "24V_to_5V_3A": 83%,
+        "12V_to_3.3V_1A": 87%,
+        "12V_to_3.3V_3A": 82%
+    },
+    
+    // Switching characteristics
+    switching_frequency: 570kHz,
+    frequency_tolerance: 20%,
+    min_on_time: 130ns,
+    min_off_time: 300ns,
+    
+    // Current limit
+    peak_current_limit: 4.5A,
+    valley_current_limit: 3.5A,
+    
+    // Quiescent current
+    operating_current: 75uA,             // Not switching
+    shutdown_current: 2uA
+};
+
+// ==================== THERMAL CHARACTERISTICS ====================
+const TPS54331_THERMAL = {
+    // SO-8 PowerPAD package
+    SO8_PowerPAD: {
+        theta_ja: 41.8,                  // °C/W with PowerPAD soldered
+        theta_jc: 6.1,                   // °C/W junction to case
+        theta_jb: 20.4,                  // °C/W junction to board
+        
+        max_junction_temp: 150°C,
+        operating_range: (-40°C, 125°C),
+        thermal_shutdown: 165°C,
+        thermal_hysteresis: 15°C,
+        
+        // PowerPAD requirements
+        powerpad_area: 6.45,             // mm²
+        thermal_vias: 5,                 // Minimum recommended
+        via_diameter: 0.33,              // mm
+        copper_area: "1in² per 2W dissipation"
+    }
+};
+
+// ==================== SIMULATION MODEL ====================
+const TPS54331_SIMULATION = {
+    // Control architecture
+    control_type: "Current mode",
+    compensation_type: "Type III",
+    voltage_reference: 0.8V,
+    
+    // Switch characteristics
+    high_side_rdson: 110mΩ,
+    low_side_rdson: 70mΩ,
+    
+    // Loop characteristics
+    crossover_frequency: "fc = fsw/10",  // Typical design target
+    phase_margin_target: 60,             // Degrees
+    gain_margin_target: 10               // dB
+};
+
+// ==================== SYNTHESIS KNOWLEDGE ====================
+const TPS54331_SYNTHESIS = {
+    // Connection patterns for virtual pin expansion
+    virtual_pin_connections: {
+        VOUT: {
+            description: "Virtual output pin expands to complete buck converter output stage",
+            components_added: [
+                "Output inductor (calculated value)",
+                "Bootstrap capacitor (100nF)",
+                "Output capacitors (2×22µF ceramic)",
+                "Feedback resistor divider",
+                "Compensation network (Type III)",
+                "Soft-start capacitor (10nF)"
+            ],
+            connection_sequence: [
+                "SW -> L1.1",
+                "L1.2 -> VOUT_NET",
+                "BOOT -> C_BOOT.1, C_BOOT.2 -> SW",
+                "VOUT_NET -> C_OUT1.1, C_OUT1.2 -> GND",
+                "VOUT_NET -> C_OUT2.1, C_OUT2.2 -> GND",
+                "VOUT_NET -> R_FB1.1, R_FB1.2 -> FB",
+                "FB -> R_FB2.1, R_FB2.2 -> GND",
+                "COMP -> R_COMP.1, R_COMP.2 -> C_COMP1.1, C_COMP1.2 -> GND",
+                "COMP -> C_COMP2.1, C_COMP2.2 -> GND",
+                "SS -> C_SS.1, C_SS.2 -> GND"
+            ]
+        }
+    },
+    
+    // Input circuit requirements (not part of virtual pin but needed)
+    input_circuit_requirements: {
+        input_capacitor: {
+            value: "100µF minimum, 220µF recommended",
+            voltage_rating: "VIN_MAX × 1.5",
+            type: "Electrolytic + 0.1µF ceramic",
+            placement: "< 10mm from VIN pin",
+            ripple_current: "> 0.5 × IOUT"
+        },
+        enable_connection: {
+            options: [
+                "Tie to VIN for always-on",
+                "Control with logic signal",
+                "Add undervoltage lockout divider"
+            ]
+        }
+    },
+    
+    // Catch diode requirements (essential but not in virtual pin)
+    catch_diode_requirements: {
+        description: "Must add external Schottky diode",
+        connections: "GND -> DIODE.A, DIODE.K -> SW",
+        specifications: {
+            type: "Schottky required",
+            voltage_rating: "VIN_MAX × 1.25",
+            current_rating: "IOUT_MAX",
+            forward_voltage: "< 0.5V for efficiency",
+            recommended_parts: ["SS34", "SK34", "MBRS340"]
+        },
+        placement: "Minimize loop area with SW node"
+    },
+    
+    // Component value calculations
+    component_calculations: {
+        inductor: {
+            formula: "L = (Vout × (Vin - Vout)) / (ΔI × f × Vin)",
+            ripple_current: "ΔI = 0.3 × Iout (30% typical)",
+            frequency: 570e3,
+            selection_criteria: {
+                saturation_current: "> 1.3 × (Iout + ΔI/2)",
+                dcr: "< 30mΩ for efficiency",
+                package: "Based on current rating"
+            }
+        },
+        feedback_resistors: {
+            formula: "R1 = R2 × (Vout/0.8 - 1)",
+            r2_standard: 10000,  // 10kΩ
+            tolerance: 1,        // 1% for accuracy
+            power: "< 0.1W, use 0603 package"
+        },
+        output_capacitor: {
+            minimum: "C_min = ΔI / (8 × f × ΔV)",
+            esr_requirement: "ESR < ΔV / ΔI",
+            recommended: "2×22µF ceramic for low ESR",
+            placement: "Close to inductor output"
+        }
+    },
+    
+    // Part number patterns for database matching
+    part_number_patterns: {
+        main_ic: ["TPS54331*", "TPS54331DR*", "TPS54331DDAR*"],
+        compatible_ics: [
+            "TPS54332*",    // 3.5A version
+            "TPS54334*",    // Eco-mode version
+            "TPS54335*",    // 3A with lower Iq
+            "LM2596*",      // Pin-compatible alternative (150kHz)
+        ]
+    },
+    
+    // Footprint and package information
+    footprint_mapping: {
+        "SO-8_PowerPAD": "SOIC127P600X175-9N",  // 8-pin with thermal pad
+        thermal_pad: {
+            size: "2.95×3.0mm",
+            vias: 9,                             // Recommended
+            via_size: "0.3mm drill",
+            connection: "GND"
+        }
+    },
+    
+    // Application-specific configurations
+    application_configs: {
+        "5V_output": {
+            r1: 52300,   // 52.3kΩ
+            r2: 10000,   // 10kΩ
+            inductor: 15e-6,  // 15µH
+            output_cap: "2×22µF ceramic"
+        },
+        "3.3V_output": {
+            r1: 31200,   // 31.2kΩ
+            r2: 10000,   // 10kΩ
+            inductor: 10e-6,  // 10µH
+            output_cap: "2×22µF ceramic"
+        },
+        "12V_output": {
+            r1: 140000,  // 140kΩ
+            r2: 10000,   // 10kΩ
+            inductor: 33e-6,  // 33µH
+            output_cap: "2×22µF ceramic + 100µF electrolytic"
+        },
+        "adjustable": {
+            r1: "Calculate based on Vout",
+            r2: 10000,
+            inductor: "Calculate based on Vout and Vin",
+            output_cap: "Based on ripple requirements"
+        }
+    },
+    
+    // Database search hints
+    database_search: {
+        keywords: ["buck", "step-down", "3A", "570kHz", "TPS54331"],
+        categories: ["Voltage Regulators", "Switching Regulators", "Buck Converters"],
+        parametric_search: {
+            "Output Current": "3A",
+            "Input Voltage": "3.5V to 28V",
+            "Switching Frequency": "570kHz",
+            "Package": "SO-8 PowerPAD"
+        }
+    },
+    
+    // Critical design rules
+    design_rules: {
+        pcb_layers: "4-layer PCB recommended for thermal",
+        ground_plane: "Solid ground plane required",
+        sw_node: "Minimize area, no ground plane underneath",
+        feedback_trace: "Route away from SW node",
+        thermal_relief: "PowerPAD must be soldered for thermal",
+        input_output_separation: "Keep input and output caps separated"
+    }
+};
+
+// Function to get complete synthesis requirements
+export function get_tps54331_synthesis_requirements(
+    vout: voltage,
+    iout: current = 3A,
+    vin_max: voltage = 24V
+): SynthesisRequirements {
+    // Use the expand function to get components
+    const components = expand_tps54331_vout(vout, iout, vin_max);
+    
+    // Add catch diode (not part of virtual pin but essential)
+    components.push({
+        ref: "D1",
+        type: "schottky_diode",
+        part_number: "SS34",
+        voltage_rating: vin_max * 1.25,
+        current_rating: iout,
+        package: iout > 2 ? "SMC" : "SMB",
+        from: "GND",
+        to: "SW"
+    });
+    
+    // Add input capacitors (not part of virtual pin but essential)
+    components.push({
+        ref: "C_IN1",
+        type: "capacitor",
+        value: 220e-6,
+        voltage_rating: vin_max * 1.5,
+        dielectric: "Electrolytic",
+        from: "VIN",
+        to: "GND"
+    });
+    
+    components.push({
+        ref: "C_IN2",
+        type: "capacitor",
+        value: 0.1e-6,
+        voltage_rating: vin_max * 2,
+        dielectric: "X7R",
+        package: "0603",
+        from: "VIN",
+        to: "GND"
+    });
+    
+    return {
+        main_ic: "TPS54331",
+        package: "SO-8_PowerPAD",
+        components: components,
+        connections: TPS54331_SYNTHESIS.virtual_pin_connections.VOUT.connection_sequence,
+        layout_requirements: TPS54331_LAYOUT,
+        design_rules: TPS54331_SYNTHESIS.design_rules,
+        thermal: {
+            power_dissipation: calculate_power_dissipation(vin_max, vout, iout),
+            thermal_pad_required: true,
+            copper_area: "1 in² per 2W dissipation"
+        }
+    };
+}
+
+function calculate_power_dissipation(vin: voltage, vout: voltage, iout: current): power {
+    // Simplified power loss calculation
+    const efficiency = 0.85;  // Typical 85% efficiency
+    const p_in = vin * iout * (vout / vin);
+    const p_out = vout * iout;
+    return p_in - p_out;
+}
+
+// ==================== FUNCTION TO EXPAND VIRTUAL PIN ====================
+export function expand_tps54331_vout(
+    vout_target: voltage,
+    iout_max: current = 3A,
+    vin_max: voltage = 24V
+): ComponentList {
+    const components = [];
+    
+    // Calculate and add inductor
+    const fsw = 570e3;
+    const ripple_factor = 0.3;
+    const delta_i = iout_max * ripple_factor;
+    const L = (vout_target * (vin_max - vout_target)) / (delta_i * fsw * vin_max);
+    
+    components.push({
+        ref: "L1",
+        type: "inductor",
+        value: Math.ceil(L * 1e6) * 1e-6,  // Round up to standard value
+        current_rating: iout_max * 1.3,
+        saturation_current: 4,
+        dcr_max: 0.03,
+        from: "SW",
+        to: "VOUT"
+    });
+    
+    // Add bootstrap capacitor
+    components.push({
+        ref: "C_BOOT",
+        type: "capacitor",
+        value: 100e-9,
+        voltage_rating: 16,
+        dielectric: "X7R",
+        package: "0603",
+        from: "BOOT",
+        to: "SW"
+    });
+    
+    // Add output capacitors
+    components.push({
+        ref: "C_OUT1",
+        type: "capacitor",
+        value: 22e-6,
+        voltage_rating: vout_target * 2,
+        dielectric: "X7R",
+        package: "1206",
+        from: "VOUT",
+        to: "GND"
+    });
+    
+    components.push({
+        ref: "C_OUT2",
+        type: "capacitor",  
+        value: 22e-6,
+        voltage_rating: vout_target * 2,
+        dielectric: "X7R",
+        package: "1206",
+        from: "VOUT",
+        to: "GND"
+    });
+    
+    // Add feedback resistors
+    const R2 = 10000;  // 10kΩ
+    const R1 = R2 * (vout_target / 0.8 - 1);
+    
+    components.push({
+        ref: "R_FB1",
+        type: "resistor",
+        value: R1,
+        tolerance: 1,
+        package: "0603",
+        from: "VOUT",
+        to: "FB"
+    });
+    
+    components.push({
+        ref: "R_FB2",
+        type: "resistor",
+        value: R2,
+        tolerance: 1,
+        package: "0603",
+        from: "FB",
+        to: "GND"
+    });
+    
+    // Add compensation network
+    components.push(
+        {
+            ref: "R_COMP",
+            type: "resistor",
+            value: 10000,
+            package: "0603",
+            from: "COMP",
+            to: "C_COMP_NODE"
+        },
+        {
+            ref: "C_COMP1",
+            type: "capacitor",
+            value: 4.7e-9,
+            dielectric: "X7R",
+            package: "0603",
+            from: "C_COMP_NODE",
+            to: "GND"
+        },
+        {
+            ref: "C_COMP2",
+            type: "capacitor",
+            value: 47e-12,
+            dielectric: "C0G",
+            package: "0603",
+            from: "COMP",
+            to: "GND"
+        }
+    );
+    
+    // Add soft-start capacitor
+    components.push({
+        ref: "C_SS",
+        type: "capacitor",
+        value: 10e-9,
+        dielectric: "X7R",
+        package: "0603",
+        from: "SS",
+        to: "GND"
+    });
+    
+    return components;
+}
+
+// ==================== PCB LAYOUT REQUIREMENTS ====================
+const TPS54331_LAYOUT = {
+    // Critical paths
+    power_loop: "VIN -> CIN -> VIN pin -> SW -> L -> COUT -> GND",
+    gate_drive_loop: "BOOT -> SW (keep minimal)",
+    
+    // Component placement
+    placement_priority: [
+        "Input capacitor - directly at VIN and GND pins",
+        "Bootstrap capacitor - minimal loop BOOT to SW",
+        "Inductor - close to SW, minimal trace length",
+        "Output capacitors - close to inductor output",
+        "Feedback resistors - Kelvin connection to VOUT"
+    ],
+    
+    // PowerPAD requirements
+    powerpad: {
+        must_solder: true,
+        thermal_vias: "5 minimum, 9 recommended",
+        via_size: "12 mil drill, 20 mil pad",
+        copper_pour: "Connect to GND with solid connection"
+    }
+};
+
+// ==================== SAFETY & PROTECTION ====================
+const TPS54331_SAFETY = {
+    protection_features: {
+        overcurrent: "Cycle-by-cycle peak current limit",
+        thermal_shutdown: "165°C with 15°C hysteresis",
+        undervoltage_lockout: "2.95V typical",
+        overvoltage_protection: "Via external circuit",
+        short_circuit: "Hiccup mode protection"
+    },
+    
+    derating: {
+        input_voltage: 0.9,              // 90% of 28V max
+        output_current: 0.8,             // 80% of 3A
+        junction_temp: 0.8               // 80% of 150°C
+    }
+};
+
+// ==================== EXPORT ====================
+export {
+    TPS54331,
+    TPS54331_VIRTUAL_PIN_EXPANSION,
+    TPS54331_ELECTRICAL,
+    TPS54331_THERMAL,
+    TPS54331_SIMULATION,
+    TPS54331_LAYOUT,
+    TPS54331_SAFETY,
+    expand_tps54331_vout
+};

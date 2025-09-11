@@ -1,0 +1,367 @@
+// LM2596 Simple Switcher Buck Regulator - Complete Component Knowledge Repository
+// 3A Step-Down Voltage Regulator with all knowledge in one file
+
+import { voltage, current, power, resistance, capacitance, inductance, frequency, temperature, time } from "../../../units.bhdl";
+
+// ==================== COMPONENT DEFINITION ====================
+module LM2596(
+    vout_target: voltage = 5V,          // Target output voltage for feedback
+    enable: bool = true                 // Enable control
+) {
+    // Power pins
+    pin VIN: power in {
+        voltage_range: (4.5V, 40V),     // Wide input range
+        voltage_abs_max: 45V,
+        description: "Input supply voltage"
+    };
+    
+    pin SW: switch out {
+        current_max: 3A,                // Peak switch current
+        voltage_max: 45V,
+        switching_freq: 150kHz,
+        description: "Switch output to inductor"
+    };
+    
+    pin GND: ground inout {
+        description: "Ground reference and heat sink"
+    };
+    
+    pin FB: feedback in {
+        voltage_ref: 1.23V,              // Internal reference voltage
+        input_impedance: 100kΩ,
+        description: "Feedback for output regulation"
+    };
+    
+    pin EN: signal in {
+        threshold_on: 1.5V,
+        threshold_off: 0.8V,
+        pull_up_current: 5uA,
+        description: "Enable input (tie to VIN if not used)"
+    };
+}
+
+// ==================== ELECTRICAL CHARACTERISTICS ====================
+const LM2596_ELECTRICAL = {
+    // Output specifications
+    output_voltage_versions: {
+        fixed_3v3: 3.3V,
+        fixed_5v: 5.0V,
+        fixed_12v: 12.0V,
+        adjustable: (1.23V, 37V)         // FB reference to VIN-3V
+    },
+    output_tolerance: 4%,                // ±4% over conditions
+    
+    // Current specifications
+    output_current_max: 3.0A,            // Maximum continuous
+    switch_current_limit: 4.5A,          // Peak current limit
+    quiescent_current: 5mA,              // Typical at no load
+    shutdown_current: 80uA,              // When disabled
+    
+    // Switching characteristics
+    switching_frequency: 150kHz,         // Fixed frequency
+    frequency_tolerance: 15%,            // ±15% variation
+    duty_cycle_max: 100%,                // Can reach 100% in dropout
+    duty_cycle_min: 0%,                  // Skip cycle at light load
+    
+    // Efficiency
+    efficiency_typical: {
+        "12V_to_5V_1A": 82%,
+        "12V_to_5V_3A": 80%,
+        "24V_to_5V_1A": 77%,
+        "24V_to_5V_3A": 73%
+    },
+    
+    // Regulation
+    line_regulation: 0.05,               // %/V typical
+    load_regulation: 0.5,                // % from 0.5A to 3A
+    
+    // Dynamic response
+    transient_response: 50us,            // Recovery time
+    soft_start_time: 10ms                // Internal soft start
+};
+
+// ==================== THERMAL CHARACTERISTICS ====================
+const LM2596_THERMAL = {
+    // Package thermal data
+    TO220_5: {
+        theta_ja: 65.0,                  // °C/W junction to ambient
+        theta_jc: 5.0,                   // °C/W junction to case
+        theta_jb: null,                  // Not specified
+        max_junction_temp: 150°C,
+        operating_range: (-40°C, 125°C),
+        thermal_shutdown: 165°C,
+        thermal_hysteresis: 10°C
+    },
+    
+    TO263_5: {                          // Surface mount version
+        theta_ja: 50.0,                  // °C/W with PCB copper
+        theta_jc: 3.0,                   // °C/W to tab
+        theta_jb: 20.0,                  // °C/W to board
+        max_junction_temp: 150°C,
+        operating_range: (-40°C, 125°C),
+        
+        // PCB copper area recommendations
+        copper_area_1W: 1,               // in² for 1W dissipation
+        copper_area_2W: 2,               // in² for 2W dissipation
+        copper_area_3W: 3                // in² for 3W dissipation
+    },
+    
+    // Power dissipation calculation
+    power_dissipation_formula: "Pd = Vin × Iq + (Iout × Vsat) + (Iout² × Rds)",
+    typical_vsat: 1.2V,                  // Saturation voltage at 3A
+    typical_rds: 0.12Ω                   // Switch resistance
+};
+
+// ==================== EXTERNAL COMPONENTS REQUIRED ====================
+const LM2596_EXTERNAL_COMPONENTS = {
+    // Input capacitor
+    input_capacitor: {
+        min_value: 100uF,                // Minimum for stability
+        recommended: 680uF,              // Better transient response
+        voltage_rating: "VIN_MAX × 1.25",
+        esr_max: 100mΩ,                 // Low ESR preferred
+        type: ["Aluminum electrolytic", "Polymer"],
+        placement: "< 1 inch from VIN pin",
+        ripple_current_rating: "0.5 × IOUT"
+    },
+    
+    // Output inductor
+    output_inductor: {
+        value_formula: "L = Vout × (Vin - Vout) / (ΔI × f × Vin)",
+        typical_values: {
+            "5V_output": 33uH,
+            "3.3V_output": 22uH,
+            "12V_output": 68uH
+        },
+        current_rating: "1.5 × IOUT_MAX",
+        dcr_max: "0.05Ω recommended",
+        saturation_current: "> 4.5A",
+        core_material: "Ferrite or powdered iron",
+        shielding: "Recommended for EMI"
+    },
+    
+    // Catch diode (Schottky)
+    catch_diode: {
+        type: "Schottky required",
+        current_rating: "IOUT_MAX",
+        voltage_rating: "VIN_MAX × 1.25",
+        forward_voltage_max: 0.5V,       // At rated current
+        reverse_recovery: "< 100ns",
+        recommended_parts: ["1N5822", "SS34", "SK34"],
+        placement: "Short loop with SW and GND"
+    },
+    
+    // Output capacitor
+    output_capacitor: {
+        min_value: 220uF,                // Minimum for stability
+        recommended: 470uF,              // Lower ripple
+        voltage_rating: "VOUT × 1.5",
+        esr_range: (20mΩ, 200mΩ),       // ESR window for stability
+        type: ["Aluminum electrolytic", "Tantalum", "Polymer"],
+        placement: "Close to diode cathode",
+        ripple_current_rating: "ΔI_inductor / 2"
+    },
+    
+    // Feedback resistors (for adjustable version)
+    feedback_divider: {
+        r1_formula: "R1 = R2 × (Vout/1.23 - 1)",
+        r2_recommended: 1.0kΩ,           // Good noise immunity
+        tolerance: 1%,                   // For accurate output
+        temp_coefficient: 100,           // ppm/°C or better
+        placement: "Kelvin connection to output"
+    },
+    
+    // Optional components
+    feedforward_capacitor: {
+        purpose: "Improve transient response",
+        value: 100pF,                    // Typical
+        placement: "Across R1",
+        type: "C0G/NP0 ceramic"
+    },
+    
+    input_filter: {
+        purpose: "Reduce conducted EMI",
+        inductor: 10uH,
+        capacitor: 0.1uF,
+        type: "Pi filter configuration"
+    }
+};
+
+// ==================== PCB LAYOUT GUIDELINES ====================
+const LM2596_LAYOUT = {
+    // Critical current loops
+    power_loops: {
+        input_loop: "CIN -> VIN -> SW -> Diode -> GND -> CIN",
+        output_loop: "SW -> L -> COUT -> GND -> Diode",
+        priority: "Minimize area of both loops"
+    },
+    
+    // Grounding
+    ground_plane: {
+        requirement: "Solid ground plane",
+        star_point: "At input capacitor negative",
+        thermal_connection: "Connect IC tab to ground plane"
+    },
+    
+    // Component placement priority
+    placement_order: [
+        "Input capacitor - closest to VIN and GND",
+        "Catch diode - minimize SW node area",
+        "Output inductor - short path from SW",
+        "Output capacitor - close to load",
+        "Feedback resistors - Kelvin sense at output"
+    ],
+    
+    // Trace requirements
+    traces: {
+        power_traces: "100 mil per 3A minimum",
+        sw_node: "Keep area minimal for EMI",
+        feedback: "Route away from SW node",
+        thermal_vias: "9-16 under IC for TO263"
+    },
+    
+    // EMI considerations
+    emi_reduction: {
+        sw_node_area: "Minimize copper area",
+        edge_rates: "Add RC snubber if needed",
+        shielding: "Ground plane on adjacent layer",
+        input_filter: "Pi filter at input"
+    }
+};
+
+// ==================== SIMULATION PARAMETERS ====================
+const LM2596_SIMULATION = {
+    // Switching behavior model
+    switch_model: {
+        on_resistance: 0.12Ω,
+        off_resistance: 10MΩ,
+        rise_time: 100ns,
+        fall_time: 100ns,
+        gate_charge: 50nC
+    },
+    
+    // Control loop
+    control_loop: {
+        type: "Voltage mode",
+        reference: 1.23V,
+        error_amp_gain: 1000,
+        compensation: "Type II internal",
+        crossover_frequency: "~10kHz typical"
+    },
+    
+    // Protection features
+    protection: {
+        current_limit: 4.5A,
+        thermal_shutdown: 165°C,
+        undervoltage_lockout: 4V,
+        short_circuit_behavior: "Cycle-by-cycle limiting"
+    }
+};
+
+// ==================== COMPONENT EXPANSION FOR VIRTUAL PINS ====================
+// If the module uses virtual pins, this is how they expand
+export function expand_lm2596_virtual_pins(
+    vout: voltage,
+    iout_max: current
+): ComponentList {
+    const components = [];
+    
+    // Calculate inductor value
+    const L = 33e-6; // 33uH for 5V typical
+    components.push({
+        type: "inductor",
+        value: L,
+        current_rating: iout_max * 1.5,
+        part_number: "SRR1260-330M"
+    });
+    
+    // Add catch diode
+    components.push({
+        type: "schottky_diode",
+        voltage_rating: 45V,
+        current_rating: iout_max,
+        part_number: "SS34"
+    });
+    
+    // Add output capacitor
+    components.push({
+        type: "capacitor",
+        value: 470e-6,
+        voltage_rating: vout * 1.5,
+        esr_max: 0.1,
+        type: "electrolytic"
+    });
+    
+    // Add feedback resistors for adjustable version
+    const R2 = 1000; // 1kΩ
+    const R1 = R2 * (vout / 1.23 - 1);
+    components.push(
+        {
+            type: "resistor",
+            value: R1,
+            tolerance: 1,
+            package: "0603"
+        },
+        {
+            type: "resistor",
+            value: R2,
+            tolerance: 1,
+            package: "0603"
+        }
+    );
+    
+    return components;
+}
+
+// ==================== SAFETY & RELIABILITY ====================
+const LM2596_SAFETY = {
+    // Failure modes
+    failure_modes: {
+        overvoltage_input: {
+            threshold: 45V,
+            result: "Permanent damage",
+            protection: "Input TVS diode"
+        },
+        output_short: {
+            result: "Current limit engages",
+            protection: "Cycle-by-cycle limiting",
+            recovery: "Automatic"
+        },
+        thermal_overload: {
+            threshold: 165°C,
+            result: "Thermal shutdown",
+            recovery: "Automatic with hysteresis"
+        },
+        inductor_saturation: {
+            result: "Loss of regulation",
+            protection: "Proper inductor selection"
+        }
+    },
+    
+    // Derating guidelines
+    derating: {
+        input_voltage: 0.8,              // 80% of 40V max
+        output_current: 0.7,             // 70% of 3A max
+        junction_temp: 0.8,              // 80% of 150°C max
+        switching_frequency: 1.0         // Fixed, no derating
+    },
+    
+    // MTBF and reliability
+    reliability: {
+        mtbf_25c: 2000000,              // Hours at 25°C
+        mtbf_85c: 500000,               // Hours at 85°C
+        failure_rate: 50                // FIT at 55°C
+    }
+};
+
+// ==================== EXPORT ====================
+export {
+    LM2596,
+    LM2596_ELECTRICAL,
+    LM2596_THERMAL,
+    LM2596_EXTERNAL_COMPONENTS,
+    LM2596_LAYOUT,
+    LM2596_SIMULATION,
+    LM2596_SAFETY,
+    expand_lm2596_virtual_pins
+};

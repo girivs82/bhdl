@@ -1,0 +1,352 @@
+// LM7805 Linear Voltage Regulator - Complete Component Knowledge Repository
+// This file contains ALL knowledge about the LM7805: pins, electrical, thermal, simulation, synthesis
+
+import { voltage, current, power, resistance, temperature, capacitance, time } from "../../../units.bhdl";
+import { 
+    LinearRegulatorThermal, LinearRegulatorSpecs, StabilityRequirements,
+    ProtectionFeatures, calculate_linear_power_dissipation, 
+    calculate_heatsink_requirement, LINEAR_REGULATOR_PACKAGES
+} from "./common.bhdl";
+
+// ==================== COMPONENT DEFINITION ====================
+module LM7805(
+    enable: bool = true  // Optional enable for power control
+) {
+    // Pin definitions with complete metadata
+    pin VIN: power in {
+        voltage_range: (7V, 35V),       // Absolute maximum 35V
+        recommended: (7.5V, 25V),       // Recommended operating range
+        description: "Unregulated input voltage"
+    };
+    
+    pin VOUT: power out {
+        voltage: 5V,
+        tolerance: 4%,                   // ±4% over full range
+        current_max: 1.5A,              // With heatsink
+        description: "Regulated 5V output"
+    };
+    
+    pin GND: ground inout {
+        description: "Ground reference and heat sink connection"
+    };
+    
+    // Optional pins for adjustable versions (LM7805C doesn't use these)
+    pin ADJ: signal in when false {     // Only on adjustable variants
+        description: "Output voltage adjustment"
+    };
+}
+
+// ==================== ELECTRICAL CHARACTERISTICS ====================
+const LM7805_ELECTRICAL = {
+    // Output specifications
+    output_voltage: 5.0V,
+    output_tolerance: 0.2V,              // ±200mV worst case
+    line_regulation: 50mV,               // Max change for VIN variation
+    load_regulation: 50mV,               // Max change for load variation
+    
+    // Current specifications
+    quiescent_current: 6mA,              // Typical ground pin current
+    quiescent_current_change: 0.5mA,     // With line/load changes
+    output_current_max: 1.5A,            // With adequate heatsink
+    output_current_typical: 1.0A,        // Without heatsink
+    short_circuit_current: 750mA,        // Current limit
+    peak_current: 2.2A,                  // Transient peak
+    
+    // Protection features
+    thermal_shutdown: 150°C,             // Internal thermal protection
+    safe_area_protection: true,          // SOA protection built-in
+    short_circuit_protection: true,      // Current limiting
+    
+    // Dynamic performance
+    ripple_rejection: 68dB,              // @ 120Hz
+    output_noise: 40uV,                  // RMS, 10Hz-100kHz
+    transient_response: 10us,            // Load step response time
+    
+    // Dropout voltage
+    dropout_voltage: 2.0V,               // VIN - VOUT minimum
+    dropout_current_dependence: 0.5V/A   // Additional dropout vs current
+};
+
+// ==================== THERMAL CHARACTERISTICS ====================
+const LM7805_THERMAL = {
+    // Package-specific thermal resistance
+    theta_ja: {
+        TO220: 65.0,                     // °C/W in still air
+        TO220_with_heatsink: 5.0,        // °C/W with infinite heatsink
+        TO263: 35.0,                     // °C/W surface mount
+        TO92: 180.0                      // °C/W small package
+    },
+    
+    theta_jc: {
+        TO220: 5.0,                      // °C/W junction to case
+        TO263: 3.0,                      // °C/W junction to tab
+        TO92: 35.0                       // °C/W junction to case
+    },
+    
+    theta_jb: {
+        TO263: 24.0                      // °C/W junction to board (SMD)
+    },
+    
+    // Temperature limits
+    max_junction_temp: 125°C,           // Operational limit
+    thermal_shutdown: 150°C,            // Protection activates
+    storage_temp_range: (-65°C, 150°C),
+    operating_temp_range: (0°C, 125°C), // Full specifications
+    
+    // Package thermal details
+    package_thermal_data: {
+        TO220: {
+            package_type: "TO-220",
+            exposed_pad: false,          // Has metal tab instead
+            mounting_hole: true,         // For heatsink attachment
+            thermal_pad_area: 100,       // mm² tab area
+            recommended_heatsink: "2°C/W for 1A continuous",
+            recommended_pcb_copper: 600, // mm² for PCB heatsinking
+            thermal_vias_required: 0     // Through-hole package
+        },
+        TO263: {
+            package_type: "TO-263/D2PAK",
+            exposed_pad: true,           // Tab is thermal pad
+            mounting_hole: false,
+            thermal_pad_area: 60,        // mm² tab area
+            recommended_pcb_copper: 400, // mm² minimum
+            thermal_vias_required: 9,    // 3x3 array under tab
+            via_thermal_resistance: 40   // °C/W per via
+        }
+    },
+    
+    // Dynamic thermal
+    self_heating_enabled: true,
+    thermal_time_constant: 50ms,        // TO-220 thermal mass
+    thermal_capacitance: 0.8            // J/°C
+};
+
+// ==================== SIMULATION KNOWLEDGE ====================
+const LM7805_SIMULATION = {
+    // DC Operating Point
+    operating_point_constraints: {
+        min_node_voltage: 7V,           // Minimum input for regulation
+        max_node_voltage: 35V,          // Absolute maximum input
+        voltage_drop_model: "linear_regulator",
+        min_current: 6mA,               // Quiescent current
+        max_current: 1.5A,              // Maximum output current
+        current_limiting: true,         // Has internal current limit
+        max_power_dissipation: null,    // Calculated as (VIN-VOUT)*IOUT
+        efficiency: null,               // Calculated as VOUT/VIN
+        
+        convergence_aid: {
+            initial_voltage_guess: 5.0V,
+            initial_current_guess: 0.1A,
+            use_gmin_stepping: true,
+            critical_convergence: false
+        }
+    },
+    
+    // Nonlinear behavior
+    nonlinear_model: {
+        model_type: "linear_regulator",
+        
+        // Dropout region behavior
+        dropout_model: {
+            dropout_voltage: 2.0V,
+            dropout_resistance: 1.3Ω,   // Approximate pass transistor
+            dropout_current_factor: 0.5  // Ω/A additional
+        },
+        
+        // Current limiting
+        current_limit_model: {
+            limit_current: 750mA,
+            foldback: true,             // Current reduces in short circuit
+            thermal_dependency: true     // Limit reduces with temperature
+        }
+    },
+    
+    // AC characteristics
+    frequency_response: {
+        bandwidth: 10kHz,               // Unity gain frequency
+        psrr_120hz: 68dB,              // Power supply rejection
+        output_impedance_dc: 0.03Ω,
+        output_impedance_1khz: 0.06Ω,
+        output_impedance_10khz: 0.5Ω,
+        
+        // Stability requirements
+        output_capacitor_min: 0.1uF,   // For stability
+        output_capacitor_esr_min: 0.1Ω,
+        output_capacitor_esr_max: 5Ω
+    },
+    
+    // Transient response
+    dynamic_model: {
+        load_step_response: 10us,      // 10% to 90% load change
+        line_step_response: 20us,      // Input voltage step
+        startup_time: 100us,           // Enable to regulation
+        
+        // Inrush current during startup
+        inrush_current_model: {
+            peak_current: 2A,
+            duration: 50us,
+            output_cap_charging: true
+        }
+    }
+};
+
+// ==================== SYNTHESIS KNOWLEDGE ====================
+const LM7805_SYNTHESIS = {
+    // Component selection rules
+    selection_constraints: {
+        // Input capacitor requirements
+        input_capacitor: {
+            min_value: 0.33uF,          // Minimum for stability
+            recommended: 10uF,          // For better transient response
+            distance_max: 75mm,         // Max distance from regulator
+            type: ["electrolytic", "tantalum", "ceramic"],
+            voltage_rating: "VIN_MAX * 1.5"
+        },
+        
+        // Output capacitor requirements
+        output_capacitor: {
+            min_value: 0.1uF,           // Absolute minimum
+            recommended: 1uF,           // Better transient response
+            improve_transient: 100uF,   // For large load steps
+            esr_range: (0.1Ω, 5Ω),     // ESR requirements for stability
+            type: ["tantalum", "aluminum", "ceramic+series_R"],
+            placement: "Close to VOUT pin"
+        },
+        
+        // Protection diodes
+        protection_diodes: {
+            reverse_voltage: {
+                needed_when: "Output cap > 25uF",
+                type: "1N4001 or similar",
+                connection: "From VOUT to VIN"
+            },
+            reverse_current: {
+                needed_when: "Inductive loads",
+                type: "1N4001 or similar",
+                connection: "From GND to VOUT"
+            }
+        },
+        
+        // Heatsink requirements
+        heatsink: {
+            required_when: "Power > 2W",
+            calculation: "θSA = (TJ_MAX - TA_MAX) / PD - θJC - θCS",
+            mounting: "Thermal compound recommended",
+            isolation: "Use insulator if case not grounded"
+        }
+    },
+    
+    // PCB layout guidelines
+    pcb_layout: {
+        ground_plane: "Large ground plane for heat spreading",
+        trace_width_in: "20 mil minimum for 1A",
+        trace_width_out: "20 mil minimum for 1A",
+        thermal_relief: "Not recommended on GND tab",
+        component_placement: {
+            input_cap: "Within 10mm of VIN pin",
+            output_cap: "Within 10mm of VOUT pin",
+            priority: "Minimize ground loops"
+        }
+    },
+    
+    // Application circuits
+    typical_applications: {
+        basic_5v: {
+            cin: 0.33uF,
+            cout: 0.1uF,
+            diodes: false
+        },
+        improved_transient: {
+            cin: 10uF,
+            cout: 100uF,
+            diodes: true
+        },
+        high_current: {
+            cin: 10uF,
+            cout: 1000uF,
+            heatsink: "Required",
+            parallel_regulators: false  // Not recommended
+        }
+    }
+};
+
+// ==================== SAFETY & RELIABILITY ====================
+const LM7805_SAFETY = {
+    // Failure modes
+    failure_modes: {
+        overvoltage_input: {
+            threshold: 35V,
+            result: "Permanent damage",
+            protection: "Input TVS diode"
+        },
+        thermal_overload: {
+            threshold: 150°C,
+            result: "Thermal shutdown (recoverable)",
+            protection: "Internal protection"
+        },
+        output_short: {
+            result: "Current limit activates",
+            protection: "Internal current limiting"
+        },
+        reverse_voltage: {
+            threshold: -0.3V,
+            result: "Possible damage",
+            protection: "Series diode on input"
+        }
+    },
+    
+    // Derating guidelines
+    derating: {
+        voltage: 0.8,                   // Use 80% of max voltage
+        current: 0.7,                   // Use 70% of max current
+        power: 0.5,                     // Use 50% of max power
+        temperature: 0.8                // Use 80% of max junction temp
+    },
+    
+    // MTBF data
+    reliability: {
+        mtbf_25c: 1000000,             // Hours at 25°C
+        mtbf_85c: 100000,              // Hours at 85°C
+        activation_energy: 0.7,         // eV for Arrhenius model
+        failure_rate: 50                // FIT at 55°C
+    }
+};
+
+// ==================== EXPORT COMPLETE COMPONENT ====================
+export {
+    LM7805,                             // Module definition
+    LM7805_ELECTRICAL,                  // Electrical characteristics
+    LM7805_THERMAL,                     // Thermal model
+    LM7805_SIMULATION,                  // Simulation parameters
+    LM7805_SYNTHESIS,                   // Synthesis knowledge
+    LM7805_SAFETY                       // Safety and reliability
+};
+
+// Helper function to calculate power dissipation (wraps common function)
+export function calculate_lm7805_power_dissipation(
+    vin: voltage,
+    vout: voltage,
+    iout: current,
+    iquiescent: current = 6mA
+): power {
+    return calculate_linear_power_dissipation(vin, vout, iout, iquiescent);
+}
+
+// Helper function to determine heatsink requirement for LM7805
+export function calculate_lm7805_heatsink_requirement(
+    power_dissipation: power,
+    ambient_temp: temperature,
+    max_junction_temp: temperature = 125°C,
+    package: string = "TO220"
+): float {
+    const theta_jc = LM7805_THERMAL.theta_jc[package];
+    const theta_cs = 0.5; // Typical case-to-sink interface
+    
+    return calculate_heatsink_requirement(
+        power_dissipation,
+        max_junction_temp,
+        ambient_temp,
+        theta_jc,
+        theta_cs
+    );
+}
