@@ -6,7 +6,7 @@ use bhdl_ast::{HasName,
     // Needed for Pass2Context, visitors, resolve_node_type_info etc.
     // Removed: SourceFile, Board, Module, ComponentDef, InterfaceDef
     // items::{Board, Module, ComponentDef, InterfaceDef}, // For scope handling - REMOVED
-    common::{NetDecl, PinRef, PortDecl, ComponentInst, TypeRef, SimpleIdentRef, IdentRef, NetRef, ParamAssign}, // Removed PinDecl (v1.0)
+    common::{NetDecl, PinDecl, PinRef, PortDecl, ComponentInst, TypeRef, SimpleIdentRef, IdentRef, NetRef, ParamAssign}, // Added PinDecl for v2.0 virtual pin support
     interfaces::InterfaceInst,
     flow::{FlowExpr, FlowElement},
 };
@@ -907,6 +907,81 @@ pub fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mu
             
             // Still recurse to handle nested expressions within parameters
             recurse_children = true;
+        }
+        SyntaxKind::PIN_DECL => {
+            // Virtual pin validation
+            if let Some(pin_decl) = bhdl_ast::common::PinDecl::cast(node.clone()) {
+                if pin_decl.is_virtual() {
+                    // Validate virtual pin properties
+                    if let Some(name_token) = pin_decl.name() {
+                        let pin_name = name_token.text();
+                        
+                        // Virtual pins must have output direction
+                        if let Some(direction) = pin_decl.direction() {
+                            match direction.kind() {
+                                SyntaxKind::IN_KW => {
+                                    context.add_diagnostic(
+                                        format!("Virtual pin '{}' cannot have 'in' direction - virtual pins represent synthesis expansion points and should be 'out' or 'inout'", pin_name),
+                                        direction.text_range(),
+                                    );
+                                }
+                                SyntaxKind::OUT_KW | SyntaxKind::INOUT_KW => {
+                                    // Valid directions for virtual pins
+                                }
+                                _ => {
+                                    context.add_diagnostic(
+                                        format!("Virtual pin '{}' has invalid direction", pin_name),
+                                        direction.text_range(),
+                                    );
+                                }
+                            }
+                        } else {
+                            context.add_diagnostic(
+                                format!("Virtual pin '{}' must specify direction (out or inout)", pin_name),
+                                name_token.text_range(),
+                            );
+                        }
+                        
+                        // Virtual pins should have a specific type (power, signal, etc.)
+                        if let Some(pin_type_token) = pin_decl.pin_type() {
+                            let type_name = pin_type_token.text();
+                            
+                            // Validate that virtual pins have appropriate types
+                            match type_name.as_ref() {
+                                "power" | "signal" | "ground" => {
+                                    // Valid types for virtual pins
+                                }
+                                _ => {
+                                    // Check if it's a defined type
+                                    match context.lookup_global(type_name).or_else(|| context.lookup(type_name)) {
+                                        Some(symbol) if symbol.kind == SymbolKind::Typedef => {
+                                            // Custom type is valid
+                                        }
+                                        Some(_) => {
+                                            context.add_diagnostic(
+                                                format!("Virtual pin '{}' type '{}' is not a type definition", pin_name, type_name),
+                                                pin_type_token.text_range(),
+                                            );
+                                        }
+                                        None => {
+                                            context.add_diagnostic(
+                                                format!("Virtual pin '{}' has undefined type '{}'", pin_name, type_name),
+                                                pin_type_token.text_range(),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            context.add_diagnostic(
+                                format!("Virtual pin '{}' must specify a type", pin_name),
+                                name_token.text_range(),
+                            );
+                        }
+                    }
+                }
+            }
+            recurse_children = false; // PIN_DECL children are handled above
         }
         _ => {}
     }

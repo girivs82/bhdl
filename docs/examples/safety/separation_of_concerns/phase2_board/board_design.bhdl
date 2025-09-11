@@ -1,0 +1,201 @@
+// BOARD DESIGNER DOMAIN - Phase 2: Circuit Implementation
+// File: phase2_board/board_design.bhdl
+// Author: Board Designer  
+// Purpose: Implement circuit meeting safety-generated requirements
+// References: phase1_safety/safety_requirements.bhdl
+
+board AutomotivePowerSupply {
+    // Project metadata
+    attribute implements_requirements = [
+        "REQ_PSU_001", "REQ_PSU_002", "REQ_PSU_003", 
+        "REQ_PSU_004", "REQ_PSU_005", "INTEGRATION_001"
+    ];
+    attribute design_intent = "12V to 5V power supply for automotive BCM";
+    attribute target_asil = ASIL_B;  // For tool awareness, not design constraint
+    
+    // Power domain definitions - board designer's electrical design
+    power VIN_BATT = 12V @ 6A {
+        attribute source = automotive_battery;
+        attribute operating_range = 9V..16V;
+        attribute survival_range = 6V..24V;
+    }
+    power VCC_5V = 5V @ 3A {
+        attribute regulated = true;
+        attribute tolerance = ±2%;           // Meets REQ_PSU_004
+    }
+    ground GND;
+    
+    // INPUT PROTECTION - Implements REQ_PSU_005
+    // Board designer chooses specific protection approach
+    @VIN_BATT -> input_fuse: AutomotiveFuse(7.5A) {
+        // Intent drives analysis - not safety attributes
+        for overcurrent_protection;
+    };
+    
+    input_fuse.out -> transient_suppressor: TVSDiode(28V) {
+        for overvoltage_transient_protection;
+    };
+    transient_suppressor.cathode -> @GND;
+    
+    // Reverse polarity protection - board designer's choice of method
+    input_fuse.out -> reverse_protection: PChannelMOSFET(30V, 10A) {
+        for reverse_polarity_protection;
+    };
+    reverse_protection.body_diode -> @GND;  // Conducts during reverse
+    
+    // INPUT FILTERING - Board designer determines values
+    reverse_protection.drain @VIN_PROTECTED-> bulk_input: ElectrolyticCap(470µF, 25V) {
+        for input_energy_storage;
+    };
+    bulk_input.- -> @GND;
+    
+    @VIN_PROTECTED -> bypass_input: CeramicCap(100nF, 25V) {
+        for high_frequency_filtering;
+    } -> @GND;
+    
+    // PRIMARY REGULATION - Implements REQ_PSU_004
+    // Board designer selects switching regulator for efficiency
+    @VIN_PROTECTED -> main_regulator: LM2596(5V, 3A) {
+        // Component choice meets all REQ_PSU_004 constraints:
+        // - Output: 5V ± 2% ✓
+        // - Current: 3A ✓  
+        // - Efficiency: ~85% ✓
+        // - Ripple: <50mV with proper output filtering ✓
+        
+        // Intent for analysis - not safety specification
+        for voltage_regulation(5V, efficiency_target: 85%);
+    };
+    
+    // Switching regulator external components - board designer's domain
+    main_regulator.SW -> power_inductor: Inductor(47µH, 4A) {
+        for energy_transfer_and_filtering;
+    };
+    
+    power_inductor.2 -> catch_diode: SchottkyDiode(40V, 5A) {
+        for freewheeling_current_path;
+    };
+    catch_diode.cathode -> @GND;
+    
+    // Feedback network - board designer calculates values
+    main_regulator.FB <- feedback_network: VoltageDivider(10kΩ, 2kΩ) {
+        for voltage_sensing(target: 5.0V);
+    };
+    feedback_network.low_side -> @GND;
+    
+    // OUTPUT FILTERING - Board designer ensures ripple meets REQ_PSU_004
+    power_inductor.2 @VCC_UNREG-> output_bulk: ElectrolyticCap(470µF, 10V) {
+        for output_ripple_reduction;
+    };
+    output_bulk.- -> @GND;
+    
+    @VCC_UNREG -> output_ceramic: CeramicCap(22µF, 10V) {
+        for high_frequency_noise_suppression; 
+    } -> @GND;
+    
+    // OUTPUT MONITORING - Implements REQ_PSU_001 and REQ_PSU_002
+    // Board designer selects monitoring solution
+    @VCC_UNREG @VCC_5V-> power_monitor: LTC2954 {
+        // This component choice implements required functions:
+        // - Continuous voltage monitoring ✓
+        // - Built-in self-test capability ✓
+        // - Fault output ✓
+        // - Test result indication ✓
+        
+        // Component provides required interfaces automatically
+        // No safety attributes needed - tool validates compliance
+        for output_voltage_monitoring_and_protection;
+    };
+    
+    // OVERVOLTAGE PROTECTION - Implements REQ_PSU_003  
+    // LTC2954 provides overvoltage detection with shutdown capability
+    // Board designer just needs to set threshold and connect signals
+    
+    // MCU INTERFACE - Implements INTEGRATION_001
+    // Board designer chooses connector and signal routing
+    power_monitor.FAULT_N -> mcu_connector: AutoConnector(10pin).POWER_FAULT {
+        // Fault indication - active low as required
+        attribute signal_name = "PWR_FAULT_N";
+    };
+    
+    power_monitor.TEST_OK -> mcu_connector.POWER_TEST_OK {
+        // Self-test result indication
+        attribute signal_name = "PWR_BIST_OK";
+    };
+    
+    power_monitor.POWER_GOOD -> mcu_connector.POWER_GOOD {
+        // Power status indication
+        attribute signal_name = "PWR_READY";
+    };
+    
+    // Optional external test control (LTC2954 has automatic BIST)
+    // mcu_connector.TEST_ENABLE -> power_monitor.TEST_EN;
+    
+    // OUTPUT DISTRIBUTION
+    @VCC_5V -> output_connector: AutomotiveConnector(4pin) {
+        for load_power_distribution;
+    };
+    
+    // TEST POINTS - For validation and debug
+    @VIN_PROTECTED -> tp_input: TestPoint("TP_VIN");
+    @VCC_5V -> tp_output: TestPoint("TP_5V");
+    power_monitor.FAULT_N -> tp_fault: TestPoint("TP_FAULT");
+    @GND -> tp_ground: TestPoint("TP_GND");
+    
+    // BOARD-LEVEL CONSTRAINTS - Board designer's expertise
+    constrain placement {
+        // Minimize switching loop area for EMC
+        group switching_core: [main_regulator, power_inductor, catch_diode] {
+            max_loop_area: 50mm²;
+            priority: critical;
+        }
+        
+        // Keep analog feedback clean
+        isolation feedback_path: feedback_network {
+            min_distance_from: switching_core;
+            clearance: 10mm;
+        }
+        
+        // Heat dissipation
+        thermal_management main_regulator {
+            copper_pour: bottom_layer;
+            via_stitching: 1mm_spacing;
+        }
+    }
+    
+    constrain routing {
+        // Power delivery optimization
+        @VCC_5V {
+            min_trace_width: 2mm;
+            copper_weight: 2oz;
+            via_stitching: every_5mm;
+        }
+        
+        // Signal integrity for monitoring
+        power_monitor.FAULT_N {
+            impedance_control: not_required;  // Low speed signal
+            pull_up: 10kΩ_to_mcu_supply;     // Board designer adds
+        }
+        
+        // EMC considerations
+        switching_node: main_regulator.SW {
+            minimize_trace_length: true;
+            avoid_sensitive_signals: true;
+            guard_traces: @GND;
+        }
+    }
+    
+    // ENVIRONMENTAL SPECIFICATIONS
+    attribute operating_conditions = {
+        temperature: -40C..85C;
+        humidity: 0%..95%_non_condensing;
+        vibration: automotive_grade_per_ISO_16750;
+        emc: CISPR_25_Class_3;
+    };
+    
+    // COMPONENT QUALIFICATION
+    attribute component_grades = {
+        automotive_qualified: [input_fuse, transient_suppressor, main_regulator, power_monitor];
+        industrial_grade: [passive_components];
+        qualification_standard: AEC_Q100;
+    };
+}

@@ -117,6 +117,7 @@ impl<'t> Parser<'t> {
                 Some(SyntaxKind::ATTRIBUTE_KW) => self.parse_attribute_decl(),
                 Some(SyntaxKind::WHEN_KW) => self.parse_when_block(),
                 Some(SyntaxKind::WITH_KW) => self.parse_with_block(),
+                Some(SyntaxKind::SATISFIES_KW) => self.parse_satisfies_block(),
                 Some(SyntaxKind::IDENT) => {
                     // Check if this is a module/component instantiation or connection
                     use crate::v2_fixes::NamedDeclarationType;
@@ -166,6 +167,7 @@ impl<'t> Parser<'t> {
                 Some(SyntaxKind::ATTRIBUTE_KW) => self.parse_attribute_decl(),
                 Some(SyntaxKind::GENERATE_KW) => self.parse_generate_block(),
                 Some(SyntaxKind::WITH_KW) => self.parse_with_block(),
+                Some(SyntaxKind::SATISFIES_KW) => self.parse_satisfies_block(),
                 Some(SyntaxKind::IDENT) => {
                     // Check if this is a module instantiation or connection
                     // Module instantiation: instance_name: ModuleType(params) { ... }
@@ -231,6 +233,11 @@ impl<'t> Parser<'t> {
         }
         
         self.expect(SyntaxKind::COLON);
+        
+        // Check for optional 'virtual' keyword
+        if self.peek() == Some(SyntaxKind::VIRTUAL_KW) {
+            self.bump(); // Consume 'virtual'
+        }
         
         // Parse pin type (signal, power, ground)
         if self.peek() == Some(SyntaxKind::SIGNAL_KW) ||
@@ -371,6 +378,123 @@ impl<'t> Parser<'t> {
                 }
             }
         }
+    }
+    
+    // Parse satisfies block
+    fn parse_satisfies_block(&mut self) {
+        self.builder.start_node(SyntaxKind::SATISFIES_BLOCK.into());
+        self.expect(SyntaxKind::SATISFIES_KW);
+        self.expect(SyntaxKind::L_BRACE);
+        
+        // Parse satisfies items
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) => break,
+                Some(SyntaxKind::IDENT) => {
+                    self.parse_satisfies_item();
+                }
+                Some(_) => {
+                    self.error("Expected requirement identifier in satisfies block".to_string());
+                    self.bump_any();
+                }
+                None => {
+                    self.error("Unexpected end of file in satisfies block".to_string());
+                    break;
+                }
+            }
+        }
+        
+        self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+    
+    // Parse a single satisfies item
+    fn parse_satisfies_item(&mut self) {
+        self.builder.start_node(SyntaxKind::SATISFIES_ITEM.into());
+        
+        // Parse requirement ID
+        self.expect(SyntaxKind::IDENT);
+        self.expect(SyntaxKind::COLON);
+        
+        // Parse satisfaction specification
+        match self.peek() {
+            Some(SyntaxKind::VIA_KW) => {
+                // Simple form: REQ_001: via component_name;
+                self.parse_satisfies_via();
+            }
+            Some(SyntaxKind::L_BRACE) => {
+                // Detailed form: REQ_001: { field: value, ... }
+                self.parse_satisfies_details();
+            }
+            _ => {
+                self.error("Expected 'via' or '{' after requirement ID".to_string());
+            }
+        }
+        
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+    
+    // Parse 'via component_name' clause
+    fn parse_satisfies_via(&mut self) {
+        self.builder.start_node(SyntaxKind::SATISFIES_VIA.into());
+        self.expect(SyntaxKind::VIA_KW);
+        
+        // Parse component reference (could be dotted path like module.component)
+        // Support comma-separated list: via comp1, comp2.sub, comp3
+        loop {
+            self.expect(SyntaxKind::IDENT);
+            while self.peek() == Some(SyntaxKind::DOT) {
+                self.bump(); // Consume dot
+                self.expect(SyntaxKind::IDENT);
+            }
+            
+            // Check for comma (more components)
+            if self.peek() == Some(SyntaxKind::COMMA) {
+                self.bump(); // Consume comma
+                self.skip_trivia(); // Skip whitespace after comma
+            } else {
+                break; // No more components
+            }
+        }
+        
+        self.builder.finish_node();
+    }
+    
+    // Parse detailed satisfaction specification
+    fn parse_satisfies_details(&mut self) {
+        self.builder.start_node(SyntaxKind::SATISFIES_DETAILS.into());
+        self.expect(SyntaxKind::L_BRACE);
+        
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) => break,
+                Some(SyntaxKind::IDENT) => {
+                    // Parse field: value pair
+                    self.expect(SyntaxKind::IDENT);
+                    self.expect(SyntaxKind::COLON);
+                    self.parse_expression();
+                    
+                    // Optional comma
+                    if self.peek() == Some(SyntaxKind::COMMA) {
+                        self.bump();
+                    }
+                }
+                Some(_) => {
+                    self.error("Expected field name in satisfies details".to_string());
+                    self.bump_any();
+                }
+                None => {
+                    self.error("Unexpected end of file in satisfies details".to_string());
+                    break;
+                }
+            }
+        }
+        
+        self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
     }
     
     // Parse attribute assignment: attribute name = expression;

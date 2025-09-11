@@ -1,0 +1,372 @@
+// ═══════════════════════════════════════════════════════════════════
+// ECU SYSTEM-LEVEL SAFETY ANALYSIS
+// Author: Board Safety Architect
+// Date: Day 1 of Project
+// Scope: Complete ECU as a system (with multiple subsystems)
+// ═══════════════════════════════════════════════════════════════════
+
+import stdlib.attributes.*;
+
+system_safety ADAS_ECU_System {
+    
+    // ───────────────────────────────────────────────────────────────
+    // ECU SYSTEM CONTEXT (Modern multi-domain ECU)
+    // ───────────────────────────────────────────────────────────────
+    
+    ecu_context {
+        product: "Advanced Driver Assistance System (ADAS) ECU";
+        ecu_functions: [
+            "Camera image processing (4x 8MP cameras)",
+            "Radar data fusion",
+            "Object detection and classification",
+            "Lane keeping assistance",
+            "Automatic emergency braking",
+            "Adaptive cruise control",
+            "Vehicle network gateway"
+        ];
+        
+        target_asil: ASIL_D;  // Highest function determines overall
+        
+        // Modern ECU complexity
+        processing_elements: [
+            "Main SoC (8-core, multiple power domains)",
+            "Vision DSP",
+            "AI accelerator NPU",
+            "Safety MCU (lockstep R5F)"
+        ];
+        
+        communication_interfaces: [
+            "4x Automotive Ethernet (1000BASE-T1)",
+            "4x CAN-FD interfaces",
+            "2x FlexRay",
+            "MIPI CSI-2 for cameras",
+            "PCIe for inter-processor"
+        ];
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // ECU POWER ARCHITECTURE (Multiple power domains)
+    // ───────────────────────────────────────────────────────────────
+    
+    power_architecture {
+        // This ECU has MANY power supplies, not just one
+        
+        power_domains {
+            // Main SoC power domains
+            soc_core_power: PowerDomain {
+                description: "SoC CPU cores";
+                voltage: 0.85V;
+                current: 15A;
+                criticality: ASIL_D;  // Runs safety algorithms
+            }
+            
+            soc_gpu_power: PowerDomain {
+                description: "SoC GPU/NPU";
+                voltage: 1.0V;
+                current: 10A;
+                criticality: ASIL_B;  // Vision processing
+            }
+            
+            soc_io_power: PowerDomain {
+                description: "SoC I/O rails";
+                voltages: [1.8V, 3.3V];
+                current: 3A;
+                criticality: ASIL_D;
+            }
+            
+            ddr4_power: PowerDomain {
+                description: "DDR4 memory";
+                voltages: [1.2V, 2.5V];  // VDD and VPP
+                current: 5A;
+                criticality: ASIL_D;
+            }
+            
+            // Communication power domains
+            ethernet_phy_power: PowerDomain {
+                description: "4x Ethernet PHYs";
+                voltage: 3.3V;
+                current: 2A;
+                criticality: ASIL_C;  // Network communication
+            }
+            
+            can_transceiver_power: PowerDomain {
+                description: "4x CAN transceivers";
+                voltage: 5V;
+                current: 0.5A;
+                criticality: ASIL_B;
+            }
+            
+            // Camera subsystem power
+            camera_deserializer_power: PowerDomain {
+                description: "4x FPD-Link deserializers";
+                voltages: [1.8V, 3.3V];
+                current: 3A;
+                criticality: ASIL_B;
+            }
+            
+            camera_pod_power: PowerDomain {
+                description: "PoC for cameras";
+                voltage: 12V;  // Power over coax
+                current: 8A;   // 2A per camera
+                criticality: ASIL_B;
+            }
+            
+            // Safety MCU power
+            safety_mcu_power: PowerDomain {
+                description: "Lockstep R5F safety MCU";
+                voltages: [1.2V, 3.3V];
+                current: 1A;
+                criticality: ASIL_D;  // Monitors main SoC
+            }
+        }
+        
+        power_sequencing {
+            // Complex sequencing requirements
+            sequence: [
+                "safety_mcu_power",      // First - monitors boot
+                "soc_io_power",          // I/O before core
+                "soc_core_power",        // Main processor
+                "ddr4_power",            // Memory
+                "soc_gpu_power",         // GPU/NPU
+                "ethernet_phy_power",    // Communication
+                "can_transceiver_power",
+                "camera_deserializer_power",
+                "camera_pod_power"       // Last - highest power
+            ];
+            
+            timing_constraints: "Each step ≤10ms";
+        }
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // ECU-LEVEL HAZARDS (Within ECU boundary)
+    // ───────────────────────────────────────────────────────────────
+    
+    ecu_hazards {
+        H_ECU_001: Hazard {
+            description: "Loss of object detection capability";
+            
+            failure_condition: "Vision processing subsystem loses power";
+            
+            ecu_level_effect: "Cannot detect pedestrians/vehicles";
+            
+            system_level_effect: "AEB/ACC functions unavailable";
+            
+            iso26262_classification {
+                severity: S3;        // Could miss pedestrian
+                exposure: E4;        // Always active when driving
+                controllability: C3; // Driver may not react in time
+                asil: ASIL_D;       // S3 + E4 + C3 = ASIL D
+            }
+        }
+        
+        H_ECU_002: Hazard {
+            description: "Corrupted sensor data to vehicle network";
+            
+            failure_condition: "CAN power glitch causes data corruption";
+            
+            ecu_level_effect: "Invalid object data transmitted";
+            
+            system_level_effect: "Other ECUs make wrong decisions";
+            
+            iso26262_classification {
+                severity: S2;
+                exposure: E4;
+                controllability: C2;
+                asil: ASIL_B;
+            }
+        }
+        
+        H_ECU_003: Hazard {
+            description: "Safety MCU cannot monitor main SoC";
+            
+            failure_condition: "Safety MCU loses power";
+            
+            ecu_level_effect: "No fault detection for main processor";
+            
+            system_level_effect: "Latent faults go undetected";
+            
+            iso26262_classification {
+                severity: S3;
+                exposure: E4;
+                controllability: C3;
+                asil: ASIL_D;
+            }
+        }
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // ECU SAFETY GOALS (Allocated to subsystems within ECU)
+    // ───────────────────────────────────────────────────────────────
+    
+    safety_goals {
+        SG_ECU_001: SafetyGoal {
+            description: "Maintain vision processing availability";
+            addresses: H_ECU_001;
+            asil: ASIL_D;
+            
+            fault_tolerance_time: 50ms;  // Time to detect and react
+            
+            allocation_to_subsystems: [
+                "SoC core power supply",      // 0.85V @ 15A
+                "SoC GPU power supply",       // 1.0V @ 10A
+                "DDR4 power supplies",        // 1.2V, 2.5V
+                "Camera power supplies",      // Deserializers + PoC
+                "Thermal management"          // Prevent thermal shutdown
+            ];
+        }
+        
+        SG_ECU_002: SafetyGoal {
+            description: "Ensure network communication integrity";
+            addresses: H_ECU_002;
+            asil: ASIL_B;
+            
+            fault_tolerance_time: 100ms;
+            
+            allocation_to_subsystems: [
+                "CAN transceiver power supply",  // 5V @ 0.5A
+                "Ethernet PHY power supplies",   // 3.3V @ 2A
+                "Network processor power"         // Part of SoC
+            ];
+        }
+        
+        SG_ECU_003: SafetyGoal {
+            description: "Maintain safety supervision function";
+            addresses: H_ECU_003;
+            asil: ASIL_D;
+            
+            fault_tolerance_time: 10ms;  // Very fast detection needed
+            
+            allocation_to_subsystems: [
+                "Safety MCU power supply",  // 1.2V + 3.3V @ 1A
+                "Isolation between domains",
+                "Watchdog circuits"
+            ];
+        }
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // TECHNICAL SAFETY REQUIREMENTS (High-level for each domain)
+    // ───────────────────────────────────────────────────────────────
+    
+    technical_safety_requirements {
+        // Each power domain needs safety analysis
+        
+        TSR_SoC_Core: {
+            description: "SoC core power shall maintain regulation during transients";
+            power_domain: soc_core_power;
+            asil: ASIL_D;
+            allocated_to: "SoC core power supply subsystem engineer";
+            
+            // Note: Specific voltage tolerances not defined here
+        }
+        
+        TSR_CAN_Power: {
+            description: "CAN transceiver power shall detect undervoltage";
+            power_domain: can_transceiver_power;
+            asil: ASIL_B;
+            allocated_to: "CAN power supply subsystem engineer";
+        }
+        
+        TSR_Camera_Power: {
+            description: "Camera power shall provide surge protection";
+            power_domain: camera_pod_power;
+            asil: ASIL_B;
+            allocated_to: "Camera power subsystem engineer";
+        }
+        
+        TSR_Safety_MCU: {
+            description: "Safety MCU power shall be independent of main SoC";
+            power_domain: safety_mcu_power;
+            asil: ASIL_D;
+            allocated_to: "Safety MCU power subsystem engineer";
+        }
+        
+        TSR_Sequencing: {
+            description: "Power sequencing shall prevent latchup conditions";
+            asil: ASIL_D;
+            allocated_to: "Power management subsystem engineer";
+        }
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // SUBSYSTEM SAFETY WORK ALLOCATION
+    // ───────────────────────────────────────────────────────────────
+    
+    work_allocation {
+        // Multiple board safety engineers, each handling different areas
+        
+        power_subsystem_engineers: [
+            {
+                engineer: "SoC Power Engineer";
+                responsible_for: [
+                    "0.85V @ 15A core supply",
+                    "1.0V @ 10A GPU supply", 
+                    "1.8V/3.3V I/O supplies",
+                    "DDR4 power (1.2V, 2.5V)"
+                ];
+                asil_target: ASIL_D;
+            },
+            {
+                engineer: "Communication Power Engineer";
+                responsible_for: [
+                    "CAN transceiver supplies (5V)",
+                    "Ethernet PHY supplies (3.3V)",
+                    "SerDes power supplies"
+                ];
+                asil_target: ASIL_B;
+            },
+            {
+                engineer: "Camera Power Engineer";
+                responsible_for: [
+                    "Deserializer power (1.8V, 3.3V)",
+                    "Power-over-Coax (12V @ 8A)",
+                    "Camera module supplies"
+                ];
+                asil_target: ASIL_B;
+            },
+            {
+                engineer: "Safety Domain Engineer";
+                responsible_for: [
+                    "Safety MCU power (1.2V, 3.3V)",
+                    "Isolation barriers",
+                    "Backup power systems"
+                ];
+                asil_target: ASIL_D;
+            }
+        ];
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// KEY OBSERVATIONS - MODERN ECU COMPLEXITY
+// ═══════════════════════════════════════════════════════════════════
+
+/*
+What this shows about modern ECUs:
+
+1. MULTIPLE POWER SUPPLIES (not just one):
+   - Different voltages: 0.85V, 1.0V, 1.2V, 1.8V, 2.5V, 3.3V, 5V, 12V
+   - Different currents: From 0.5A to 15A
+   - Different ASIL levels: QM to ASIL D
+
+2. COMPLEX POWER DOMAINS:
+   - SoC alone may have 5+ power rails
+   - Each communication interface needs power
+   - Cameras need special power (PoC)
+   - Safety and main domains must be isolated
+
+3. MULTIPLE SAFETY ENGINEERS:
+   - Too complex for one person
+   - Each engineer handles specific domains
+   - Different expertise needed (high-current DC/DC vs PoC vs isolation)
+
+4. HIERARCHICAL REQUIREMENTS:
+   - System level → ECU level → Subsystem level → Component level
+   - Each level adds more specific details
+   - Traceability maintained throughout
+
+This is why the Board Safety Architect creates the system-level
+allocation, then multiple Board Safety Engineers create detailed
+requirements for their specific power subsystems.
+*/

@@ -1,0 +1,608 @@
+// CORRECTED POWER SUPPLY EXAMPLE - Demonstrating All Safety Architecture Concepts
+// This example properly shows:
+// 1. Multi-phase separation
+// 2. Component libraries with failure modes only (no effects)
+// 3. SEooC FIT decomposition
+// 4. Context-sensitive effect generation
+// 5. Minimal interface requirements
+
+// ═══════════════════════════════════════════════════════════════════
+// PHASE 1: SYSTEM SAFETY ANALYSIS (Safety Engineer - Day 1)
+// ═══════════════════════════════════════════════════════════════════
+
+system_safety AutomotivePowerSystemSafety {
+    application_context {
+        domain: automotive;
+        system: body_control_module;
+        asil_target: ASIL_B;
+        environment: under_hood;
+    }
+    
+    // Functional blocks - NO implementation details
+    functional_blocks {
+        power_input: BatteryInterface {
+            voltage_nominal: 12V;
+            voltage_range: 9V..16V;
+            transient_tolerance: 6V..24V;
+            max_current: 5A;
+        }
+        
+        primary_regulation: VoltageRegulation {
+            // Interface contracts only - no component specs
+            interface power_in: PowerInterface {
+                accepts: power_input;
+            }
+            
+            interface power_out: PowerInterface {
+                voltage: 5V ± 2%;
+                max_current: 3A;
+            }
+            
+            interface monitoring: MonitorInterface {
+                fault_indication: signal_out;
+                test_result: signal_out;
+            }
+            
+            // Performance requirements (what, not how)
+            regulation_accuracy: ±2%;
+            output_ripple: <50mV;
+            efficiency: >80%;
+        }
+        
+        critical_loads: SafetyECU {
+            power_source: primary_regulation.power_out;
+            asil_level: ASIL_B;
+            power_tolerance: 5V ± 3%;
+        }
+    }
+    
+    // Hazard analysis
+    hazards {
+        H1: {
+            description: "Loss of power to safety ECU";
+            severity: S2;
+            exposure: E4;
+            controllability: C2;
+            asil: ASIL_B;
+        }
+        
+        H2: {
+            description: "Overvoltage damage to ECU";
+            severity: S2;
+            exposure: E4;
+            controllability: C2;
+            asil: ASIL_B;
+        }
+    }
+    
+    // Abstract safety requirements
+    safety_functions {
+        SF1: {
+            description: "Monitor output voltage";
+            allocated_to: primary_regulation.monitoring;
+            coverage_target: ≥90%;  // ASIL B SPFM
+            response_time: ≤100µs;
+        }
+        
+        SF2: {
+            description: "Periodic self-test";
+            allocated_to: primary_regulation.monitoring;
+            test_coverage: ≥60%;  // ASIL B LFM
+            test_interval: ≤100ms;
+        }
+    }
+}
+
+// GENERATED REQUIREMENTS (Minimal interface spec)
+generated_requirements {
+    REQ_001: {
+        description: "Monitor 5V output with fault indication";
+        interface: active_low_signal_to_mcu;
+        response_time: ≤100µs;
+        // NO electrical specs (drive current, logic levels, etc.)
+    }
+    
+    REQ_002: {
+        description: "Self-test capability with result indication";
+        test_interval: ≤100ms;
+        result_signal: digital_to_mcu;
+        // NO implementation details
+    }
+    
+    REQ_003: {
+        description: "Overvoltage detection";
+        threshold: 5.5V ± 2%;
+        action: fault_indication;
+        // NO specific protection method
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// PHASE 2: BOARD DESIGN (Board Designer - Parallel Development)
+// ═══════════════════════════════════════════════════════════════════
+
+board AutomotivePowerSupply {
+    // Power domains
+    power VBATT = 12V @ 6A;
+    power VCC_5V = 5V @ 3A;
+    ground GND;
+    
+    // Input protection (board designer's choice)
+    @VBATT -> fuse: Fuse(7.5A) for overcurrent_protection;
+    fuse.out -> tvs: TVSDiode(28V) for transient_protection;
+    tvs.cathode -> @GND;
+    
+    // Primary regulation (board designer selects switching for efficiency)
+    fuse.out @PROTECTED-> regulator: LM2596(5V, 3A) {
+        // Intent for context analysis, NOT safety attributes
+        for voltage_regulation(5V, efficiency: 85%);
+    };
+    
+    // Switching regulator support components
+    regulator.SW -> inductor: Inductor(47µH) for energy_transfer;
+    inductor.2 -> diode: SchottkyDiode(40V) for freewheeling;
+    diode.cathode -> @GND;
+    
+    // Output filtering
+    inductor.2 @5V_RAW-> bulk_cap: ElectrolyticCap(470µF, 10V) {
+        for output_filtering(ripple_reduction);
+    };
+    bulk_cap.- -> @GND;
+    
+    // Voltage monitoring (board designer selects component)
+    @5V_RAW @VCC_5V-> monitor: LTC2954 {
+        for output_monitoring_and_protection;
+        // NO safety attributes - tool extracts from library
+    };
+    
+    // MCU interface (board designer handles electrical details)
+    monitor.FAULT_N -> mcu_conn.PWR_FAULT;   // Active low
+    monitor.TEST_OK -> mcu_conn.TEST_RESULT;  // Test result
+    
+    // Board satisfies safety requirements
+    satisfies {
+        // Requirements from Phase 1
+        REQ_001: via monitor;           // Voltage monitoring
+        REQ_002: via monitor.self_test; // Self-test capability
+        REQ_003: via monitor;           // Overvoltage detection
+        
+        // Safety capabilities
+        VoltageMonitoring: via monitor;
+        VoltageRegulation: via regulator;
+        CurrentLimiting: via regulator;
+        SelfTestable: via monitor;
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// COMPONENT LIBRARY DEFINITIONS (bhdl-stdlib)
+// ═══════════════════════════════════════════════════════════════════
+
+// LM2596 Switching Regulator Model
+module LM2596(output_voltage: voltage, max_current: current) {
+    // Electrical and behavioral models for simulation
+    electrical_model {
+        switching_frequency: 150kHz;
+        efficiency: 85%;
+        line_regulation: 0.2%;
+        load_regulation: 0.5%;
+    }
+    
+    behavioral_model {
+        pwm_control: { /* Control loop simulation */ }
+        protection: { /* Current limit, thermal shutdown */ }
+    }
+    
+    // SEooC data from vendor (aggregate FIT rates)
+    seooc_data {
+        vendor: "Texas Instruments";
+        document: "LM2596-SM Rev C";
+        permanent_die_failures: 15FIT;
+        package_failures: 8FIT;
+        total: 23FIT;
+    }
+    
+    // ONLY failure modes - NO effects or severity
+    failure_modes {
+        // Tool decomposes die failures
+        no_switching: {
+            rate: 6FIT;  // ~40% of die failures
+            description: "PWM controller failure";
+            observable_symptom: "0V output";
+            // NO effect like "system shutdown" - context dependent
+        }
+        
+        overvoltage_runaway: {
+            rate: 4FIT;  // ~27% of die failures
+            description: "Feedback loop failure";
+            observable_symptom: "output > regulation_spec";
+            // NO severity - depends on what it powers
+        }
+        
+        oscillation: {
+            rate: 3FIT;  // ~20% of die failures
+            description: "Control loop instability";
+            observable_symptom: "excessive_switching_noise";
+            // NO system impact - tool determines
+        }
+        
+        protection_failure: {
+            rate: 2FIT;  // ~13% of die failures
+            description: "Current limit malfunction";
+            observable_symptom: "no_current_limiting";
+        }
+        
+        // Package failures decomposed by tool
+        pin_short: {
+            rate: 2FIT;
+            description: "Pin-to-pin short";
+            affected_pins: generic;
+        }
+        
+        pin_open: {
+            rate: 2FIT;
+            description: "Pin connectivity loss";
+            affected_pins: generic;
+        }
+        
+        // Additional package failure modes...
+    }
+    
+    // What this component satisfies
+    satisfies [VoltageRegulation, CurrentLimiting] {
+        VoltageRegulation: {
+            method: switching_buck;
+            efficiency: 85%;
+            line_regulation: 0.2%;
+            load_regulation: 0.5%;
+        }
+        CurrentLimiting: {
+            threshold: max_current;
+            method: cycle_by_cycle;
+            response_time: 10µs;
+        }
+    }
+}
+
+// LTC2954 Voltage Monitor Model
+module LTC2954 {
+    electrical_model {
+        monitoring_range: 2.7V..28V;
+        response_time: 50µs;
+        self_test_interval: 100ms;
+    }
+    
+    behavioral_model {
+        voltage_monitoring: { /* Comparator behavior */ }
+        self_test: { /* BIST behavior */ }
+    }
+    
+    // SEooC data from vendor
+    seooc_data {
+        vendor: "Analog Devices";
+        document: "LTC2954-SM Rev B";
+        permanent_die_failures: 12FIT;
+        package_failures: 8FIT;
+        total: 20FIT;
+    }
+    
+    // Decomposed failure modes (NO effects)
+    failure_modes {
+        comparator_stuck_high: {
+            rate: 4FIT;  // Tool decomposed from 12FIT die
+            description: "Comparator output stuck high";
+            detectable_by_self_test: true;
+            self_test_coverage: 85%;
+            // NO "undetected overvoltage" effect
+        }
+        
+        comparator_stuck_low: {
+            rate: 3FIT;
+            description: "Comparator output stuck low";
+            detectable_by_self_test: true;
+            self_test_coverage: 90%;
+            // NO "nuisance shutdown" effect
+        }
+        
+        reference_drift: {
+            rate: 3FIT;
+            description: "Voltage reference degradation";
+            detectable_by_self_test: true;
+            self_test_coverage: 95%;
+        }
+        
+        logic_failure: {
+            rate: 2FIT;
+            description: "Digital logic malfunction";
+            detectable_by_self_test: true;
+            self_test_coverage: 80%;
+        }
+        
+        // Package failures...
+    }
+    
+    // Self-test capabilities
+    self_diagnostic_capabilities {
+        test_method: internal_reference_comparison;
+        die_failure_coverage: 87%;  // Against die failures
+        package_failure_coverage: 0%;  // Can't detect package issues
+        overall_coverage: 52%;  // (12FIT * 87%) / 20FIT
+    }
+    
+    // What this component satisfies
+    satisfies [VoltageMonitoring, SelfTestable] {
+        VoltageMonitoring: {
+            range: 2.7V..28V;
+            response_time: 50µs;
+            accuracy: ±1.5%;
+            coverage: 99%;  // When functioning
+        }
+        SelfTestable: {
+            coverage: 87%;  // Of die failures
+            interval: 100ms;
+            method: internal_reference_comparison;
+        }
+    }
+}
+
+// Passive Component Model
+module ElectrolyticCap(value: capacitance, voltage_rating: voltage) {
+    electrical_model {
+        capacitance: value;
+        esr: calculate_typical_esr(value);
+        ripple_current_rating: calculate_rating(value, voltage_rating);
+    }
+    
+    // Generic failure modes from IEC 62380
+    failure_modes {
+        open_circuit: {
+            rate: calculate_from_IEC_62380(value, voltage_rating, stress);
+            description: "Loss of capacitance";
+            observable_symptom: "no_filtering";
+            // NO "increased ripple to 180mV" - circuit dependent
+        }
+        
+        short_circuit: {
+            rate: calculate_from_IEC_62380(value, voltage_rating, stress);
+            description: "Dielectric breakdown";
+            observable_symptom: "low_resistance_path";
+            // NO "fuse opens" - depends on circuit protection
+        }
+        
+        capacitance_loss: {
+            rate: calculate_from_IEC_62380(value, voltage_rating, stress);
+            description: "Gradual capacitance reduction";
+            observable_symptom: "reduced_filtering";
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// PHASE 3: AUTOMATIC SAFETY ANALYSIS (Tool Generated)
+// ═══════════════════════════════════════════════════════════════════
+
+automatic_safety_analysis {
+    timestamp: "2024-01-15T10:00:00Z";
+    board: AutomotivePowerSupply;
+    safety_spec: AutomotivePowerSystemSafety;
+    
+    // REQUIREMENT VALIDATION
+    requirement_compliance {
+        REQ_001: {
+            requirement: "Monitor 5V with fault indication";
+            claimed_satisfaction: "via monitor";
+            implementation: LTC2954;
+            
+            // Tool validates satisfaction claim
+            component_satisfies: VoltageMonitoring;  // ✓ In library
+            actual_capabilities: {
+                monitoring_range: "2.7V..28V";  // From satisfies block
+                response_time: "50µs";           // From satisfies block
+                fault_output: "FAULT_N active-low";  // From pin definitions
+            }
+            
+            compliance: PASS;  // Component satisfies requirement
+        }
+        
+        REQ_002: {
+            requirement: "Self-test ≤100ms";
+            claimed_satisfaction: "via monitor.self_test";
+            implementation: LTC2954;
+            
+            // Tool validates satisfaction claim
+            component_satisfies: SelfTestable;  // ✓ In library
+            actual_capabilities: {
+                self_test_interval: "100ms";     // From satisfies block
+                test_coverage: "87%";            // From satisfies block
+            }
+            
+            compliance: PASS;  // Component satisfies requirement
+        }
+    }
+    
+    // SATISFACTION VALIDATION (New)
+    satisfaction_validation {
+        // Tool validates all 'satisfies' claims
+        board_claims: {
+            VoltageMonitoring: {
+                claimed_by: "monitor";
+                component: LTC2954;
+                validation: LTC2954 satisfies VoltageMonitoring;  // ✓
+                status: VERIFIED;
+            }
+            
+            VoltageRegulation: {
+                claimed_by: "regulator";
+                component: LM2596;
+                validation: LM2596 satisfies VoltageRegulation;  // ✓
+                status: VERIFIED;
+            }
+            
+            CurrentLimiting: {
+                claimed_by: "regulator";
+                component: LM2596;
+                validation: LM2596 satisfies CurrentLimiting;  // ✓
+                status: VERIFIED;
+            }
+            
+            SelfTestable: {
+                claimed_by: "monitor";
+                component: LTC2954;
+                validation: LTC2954 satisfies SelfTestable;  // ✓
+                status: VERIFIED;
+            }
+        }
+        
+        all_claims_verified: true;
+    }
+    
+    // CONTEXT-SENSITIVE FAILURE EFFECT GENERATION
+    failure_effect_analysis {
+        // LM2596 no_switching failure
+        LM2596_no_switching: {
+            failure_mode: "PWM controller failure";
+            failure_rate: 6FIT;
+            
+            // Tool analyzes circuit context
+            circuit_context: {
+                component_role: "Primary 5V regulation";
+                downstream: [safety_ecu_power];
+                power_domain: VCC_5V;
+                asil_level: ASIL_B;
+                intent: voltage_regulation(5V, efficiency: 85%);
+            }
+            
+            // Tool generates effects based on context
+            generated_effects: {
+                local_effect: "0V on 5V rail (expected 5.0V ± 2%)";
+                downstream_impact: "Safety ECU loses power";
+                system_effect: "ASIL B safety functions unavailable";
+                
+                intent_violation: {
+                    intent: "voltage_regulation(5V)";
+                    actual: "0V output";
+                    violation: "CRITICAL - complete regulation failure";
+                }
+                
+                severity: 8;  // High - safety system unavailable
+                detection: "LTC2954 detects 0V immediately";
+                diagnostic_coverage: 99%;
+            }
+        }
+        
+        // LTC2954 comparator_stuck_high failure
+        LTC2954_stuck_high: {
+            failure_mode: "Comparator stuck high";
+            failure_rate: 4FIT;
+            
+            circuit_context: {
+                component_role: "5V overvoltage protection";
+                protected_components: [safety_ecu];
+                asil_level: ASIL_B;
+            }
+            
+            generated_effects: {
+                local_effect: "No fault indication during overvoltage";
+                downstream_impact: "ECU exposed to damaging overvoltage";
+                system_effect: "Potential ECU damage, safety function loss";
+                
+                severity: 9;  // Critical - defeats protection
+                detection: "Self-test with 85% coverage";
+                diagnostic_coverage: 85%;
+            }
+        }
+        
+        // Capacitor open_circuit failure
+        ElectrolyticCap_open: {
+            failure_mode: "Loss of capacitance";
+            component: bulk_cap;
+            
+            circuit_context: {
+                component_role: "Output ripple filtering";
+                position: "Regulator output to load";
+                intent: output_filtering(ripple_reduction);
+            }
+            
+            generated_effects: {
+                local_effect: "Loss of bulk filtering";
+                
+                // Tool simulates actual ripple
+                simulated_impact: {
+                    ripple_without_cap: calculate_ripple(L: 47µH, C: 0, ESR: inf);
+                    result: "Ripple increases from 30mV to 180mV";
+                }
+                
+                system_effect: "ECU operates with degraded power quality";
+                
+                intent_violation: {
+                    intent: "ripple_reduction(<50mV)";
+                    actual: "180mV ripple";
+                    violation: "CRITICAL - 260% over specification";
+                }
+                
+                severity: 6;  // Moderate - degraded operation
+            }
+        }
+    }
+    
+    // SAFETY METRICS CALCULATION
+    calculated_metrics {
+        // Based on actual failure modes and coverage
+        spfm: {
+            lambda_total: 43FIT;  // Sum of all failure rates
+            lambda_dangerous_detected: 38FIT;
+            lambda_safe: 2FIT;
+            result: 93.0%;  // (38 + 2) / 43
+            requirement: ≥90%;  // ASIL B
+            status: PASS;
+        }
+        
+        lfm: {
+            lambda_latent_detected: 10FIT;  // Self-test coverage
+            result: 66.7%;
+            requirement: ≥60%;  // ASIL B
+            status: PASS;
+        }
+        
+        pmhf: {
+            lambda_dangerous_undetected: 3FIT;
+            result: 3FIT;
+            requirement: ≤100FIT;  // ASIL B
+            status: PASS;
+        }
+        
+        overall_compliance: ASIL_B_COMPLIANT;
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// GENERATED FMEA (Tool Output)
+// ═══════════════════════════════════════════════════════════════════
+
+generated_fmea {
+    system: "Automotive BCM Power Supply";
+    asil_level: ASIL_B;
+    
+    fmea_entries: [
+        {
+            component: "U1 - LM2596";
+            failure_mode: "No switching";
+            failure_rate: 6FIT;
+            
+            // Effects generated from context analysis
+            local_effect: "0V on 5V rail";
+            system_effect: "Safety ECU power loss";  // Tool determined
+            
+            severity: 8;        // Tool calculated from ASIL context
+            occurrence: 2;      // From FIT rate
+            detection: 1;       // Monitor detects
+            rpn: 16;
+            
+            safety_analysis: {
+                diagnostic_coverage: 99%;
+                residual_risk: 0.06FIT;
+            }
+        },
+        // ... additional entries
+    ];
+}

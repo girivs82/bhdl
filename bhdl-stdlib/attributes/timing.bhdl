@@ -1,0 +1,338 @@
+// BHDL Standard Library - Timing Attributes
+// This file defines standard timing-related attributes used throughout BHDL
+
+namespace stdlib.attributes.timing {
+    
+    // ═══════════════════════════════════════════════════════════════
+    // RESPONSE AND REACTION TIMES
+    // ═══════════════════════════════════════════════════════════════
+    
+    attribute_type response_time: time {
+        description: "Time to respond to an input change or condition";
+        units: [ns, µs, ms, s];
+        default_unit: µs;
+        typical_range: 1ns..1s;
+        applications: [digital_logic, analog_circuits, control_systems, safety];
+        
+        validation {
+            must_be: >0;
+            warn_if: >1s { message: "Response time >1s may be too slow for real-time systems" }
+        }
+    }
+    
+    attribute_type reaction_time: time {
+        description: "Time from detection to action (includes processing)";
+        units: [ns, µs, ms, s];
+        default_unit: µs;
+        related_to: response_time;
+        note: "Typically longer than response_time due to processing overhead";
+    }
+    
+    attribute_type detection_time: time {
+        description: "Time required to detect a condition or fault";
+        units: [ns, µs, ms, s];
+        default_unit: µs;
+        applications: [monitoring, fault_detection, safety];
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // SIGNAL PROPAGATION AND DELAYS
+    // ═══════════════════════════════════════════════════════════════
+    
+    attribute_type propagation_delay: time {
+        description: "Time for signal to propagate from input to output";
+        units: [ps, ns, µs, ms];
+        default_unit: ns;
+        measurement_points: "50% input to 50% output";
+        applications: [digital_logic, transmission_lines, gates];
+        
+        subcategories {
+            tpd_lh: "Low to high propagation delay";
+            tpd_hl: "High to low propagation delay";
+        }
+    }
+    
+    attribute_type turn_on_delay: time {
+        description: "Time from enable signal to output valid";
+        aliases: [ton, enable_time];
+        units: [ns, µs, ms, s];
+        default_unit: µs;
+        applications: [power_supplies, switches, regulators];
+    }
+    
+    attribute_type turn_off_delay: time {
+        description: "Time from disable signal to output off";
+        aliases: [toff, disable_time];
+        units: [ns, µs, ms, s];
+        default_unit: µs;
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // EDGE TRANSITIONS
+    // ═══════════════════════════════════════════════════════════════
+    
+    attribute_type rise_time: time {
+        description: "Time for signal to rise from 10% to 90% of final value";
+        aliases: [tr];
+        units: [ps, ns, µs, ms];
+        default_unit: ns;
+        measurement: "10% to 90% unless otherwise specified";
+        
+        validation {
+            must_be: >0;
+            typical: <0.1 * period;  // Should be much less than period
+        }
+    }
+    
+    attribute_type fall_time: time {
+        description: "Time for signal to fall from 90% to 10% of initial value";
+        aliases: [tf];
+        units: [ps, ns, µs, ms];
+        default_unit: ns;
+        measurement: "90% to 10% unless otherwise specified";
+    }
+    
+    attribute_type slew_rate: voltage_per_time {
+        description: "Maximum rate of voltage change";
+        units: [V/µs, V/ms, mV/ns];
+        default_unit: V/µs;
+        related: rise_time = 0.8 * voltage_swing / slew_rate;
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // SETUP AND HOLD TIMES
+    // ═══════════════════════════════════════════════════════════════
+    
+    attribute_type setup_time: time {
+        description: "Minimum time data must be stable before clock edge";
+        aliases: [tsu, t_setup];
+        units: [ps, ns, µs];
+        default_unit: ns;
+        applications: [flip_flops, latches, memory_interfaces];
+        
+        validation {
+            can_be: negative;  // Some devices have negative setup time
+            typical_range: -2ns..20ns;
+        }
+    }
+    
+    attribute_type hold_time: time {
+        description: "Minimum time data must remain stable after clock edge";
+        aliases: [th, t_hold];
+        units: [ps, ns, µs];
+        default_unit: ns;
+        applications: [flip_flops, latches, memory_interfaces];
+        
+        validation {
+            can_be: negative;  // Some devices have negative hold time
+            typical_range: -2ns..10ns;
+        }
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // PERIODIC TIMING
+    // ═══════════════════════════════════════════════════════════════
+    
+    attribute_type period: time {
+        description: "Time for one complete cycle";
+        aliases: [T];
+        units: [ps, ns, µs, ms, s];
+        default_unit: µs;
+        related: frequency = 1 / period;
+        
+        validation {
+            must_be: >0;
+        }
+    }
+    
+    attribute_type frequency: frequency {
+        description: "Number of cycles per unit time";
+        aliases: [f, freq];
+        units: [Hz, kHz, MHz, GHz];
+        default_unit: MHz;
+        related: period = 1 / frequency;
+        
+        validation {
+            must_be: >0;
+            warn_if: >10GHz { message: "Frequencies >10GHz require special design considerations" }
+        }
+    }
+    
+    attribute_type duty_cycle: percentage {
+        description: "Percentage of period that signal is high";
+        aliases: [duty];
+        range: 0%..100%;
+        typical: 50%;
+        formula: "duty_cycle = (high_time / period) * 100%";
+    }
+    
+    attribute_type clock_jitter: time {
+        description: "Random variation in clock edge timing";
+        units: [ps, ns];
+        default_unit: ps;
+        measurement_types: {
+            cycle_to_cycle: "Adjacent cycle variation";
+            period: "Variation from ideal period";
+            long_term: "Accumulated over many cycles";
+        }
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // TEST AND DIAGNOSTIC TIMING
+    // ═══════════════════════════════════════════════════════════════
+    
+    attribute_type test_interval: time {
+        description: "Time between periodic self-tests or diagnostics";
+        units: [ms, s, min, hour];
+        default_unit: ms;
+        applications: [safety, reliability, diagnostics];
+        
+        validation {
+            typical_range: 1ms..1hour;
+            must_be: >0;
+        }
+    }
+    
+    attribute_type test_duration: time {
+        description: "Time required to complete a test";
+        units: [µs, ms, s];
+        default_unit: ms;
+        constraint: "Should be << test_interval";
+        
+        validation {
+            should_be: <0.1 * test_interval;
+        }
+    }
+    
+    attribute_type startup_time: time {
+        description: "Time from power-on to operational";
+        aliases: [boot_time, initialization_time];
+        units: [µs, ms, s];
+        default_unit: ms;
+        applications: [power_supplies, microcontrollers, systems];
+    }
+    
+    attribute_type shutdown_time: time {
+        description: "Time to reach safe/off state";
+        units: [µs, ms, s];
+        default_unit: ms;
+        applications: [safety, power_management];
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // TIMING WINDOWS AND CONSTRAINTS
+    // ═══════════════════════════════════════════════════════════════
+    
+    attribute_type timeout: time {
+        description: "Maximum time to wait for an event";
+        units: [µs, ms, s];
+        default_unit: ms;
+        applications: [communication, watchdog, state_machines];
+        
+        validation {
+            must_be: >0;
+            typical_range: 1ms..10s;
+        }
+    }
+    
+    attribute_type debounce_time: time {
+        description: "Time to filter out contact bounce or noise";
+        units: [µs, ms];
+        default_unit: ms;
+        typical_range: 1ms..50ms;
+        applications: [switches, buttons, noisy_signals];
+    }
+    
+    attribute_type settling_time: time {
+        description: "Time for output to settle within specified accuracy";
+        units: [ns, µs, ms, s];
+        default_unit: µs;
+        measurement: "To within 0.1% of final value unless specified";
+        applications: [amplifiers, filters, dac, adc];
+    }
+    
+    attribute_type acquisition_time: time {
+        description: "Time to acquire valid sample or lock";
+        units: [ns, µs, ms];
+        default_unit: µs;
+        applications: [adc, pll, sample_and_hold];
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // PULSE AND BURST TIMING
+    // ═══════════════════════════════════════════════════════════════
+    
+    attribute_type pulse_width: time {
+        description: "Duration of a pulse";
+        aliases: [pw, t_pulse];
+        units: [ns, µs, ms, s];
+        default_unit: µs;
+        
+        subcategories {
+            min_pulse_width: "Minimum detectable pulse";
+            max_pulse_width: "Maximum allowed pulse";
+        }
+    }
+    
+    attribute_type dead_time: time {
+        description: "Time when both outputs are inactive (prevents shoot-through)";
+        aliases: [blanking_time];
+        units: [ns, µs];
+        default_unit: ns;
+        applications: [h_bridge, motor_control, switching_converters];
+        typical_range: 50ns..2µs;
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // SAMPLE RATES AND CONVERSION
+    // ═══════════════════════════════════════════════════════════════
+    
+    attribute_type sample_rate: frequency {
+        description: "Rate of sampling for ADC/DAC";
+        aliases: [fs, sampling_frequency];
+        units: [Hz, kHz, MHz, MSPS, GSPS];
+        default_unit: kHz;
+        
+        validation {
+            must_be: >0;
+            nyquist: ≥2 * max_signal_frequency;
+        }
+    }
+    
+    attribute_type conversion_time: time {
+        description: "Time to complete one ADC/DAC conversion";
+        units: [ns, µs, ms];
+        default_unit: µs;
+        related: max_sample_rate = 1 / conversion_time;
+        applications: [adc, dac];
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// TIMING RELATIONSHIPS AND CONSTRAINTS
+// ═══════════════════════════════════════════════════════════════════
+
+timing_constraints {
+    // Useful relationships between timing parameters
+    
+    constraint clock_to_output {
+        description: "Output delay after clock";
+        formula: tco = tpd + tsu + internal_delay;
+    }
+    
+    constraint minimum_period {
+        description: "Minimum clock period for reliable operation";
+        formula: period_min = tpd_max + tsu + th;
+    }
+    
+    constraint bandwidth_rise_time {
+        description: "Relationship between bandwidth and rise time";
+        formula: bandwidth ≈ 0.35 / rise_time;  // For first-order systems
+    }
+    
+    constraint setup_hold_window {
+        description: "Data valid window";
+        formula: data_valid_window = period - tsu - th;
+        requirement: data_valid_window > 0;
+    }
+}

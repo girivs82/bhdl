@@ -1,0 +1,389 @@
+// ═══════════════════════════════════════════════════════════════════
+// PHASE 1: SYSTEM SAFETY ANALYSIS
+// Author: Safety Engineer
+// Date: Day 1 of Project
+// Status: No board design exists yet
+// ═══════════════════════════════════════════════════════════════════
+
+import stdlib.attributes.*;
+
+// System-level safety analysis for automotive ECU power supply
+system_safety AutomotiveECU_PowerSystem {
+    
+    // ───────────────────────────────────────────────────────────────
+    // SYSTEM CONTEXT (What we're building)
+    // ───────────────────────────────────────────────────────────────
+    
+    application_context {
+        domain: automotive;
+        system_type: "Electronic Control Unit (ECU)";
+        application: "Engine Management System";
+        safety_relevance: "Controls fuel injection and ignition timing";
+        target_asil: ASIL_B;
+        
+        operational_environment {
+            temperature_range: -40°C..85°C;  // Under-hood environment
+            voltage_range: 6V..16V;          // Cranking to load dump
+            vibration: "ISO 16750-3 Profile";
+            lifetime: 15_years;
+        }
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // FUNCTIONAL BLOCKS (Abstract - no components specified)
+    // ───────────────────────────────────────────────────────────────
+    
+    functional_blocks {
+        // Power input from vehicle
+        vehicle_power: PowerInput {
+            description: "12V vehicle battery system";
+            nominal_voltage: 12V;
+            voltage_range: 6V..16V;        // Cranking to normal
+            transient_tolerance: 24V;       // Jump start
+            load_dump_tolerance: 36V;       // ISO 7637-2
+            reverse_polarity_protection: required;
+        }
+        
+        // Main regulation function
+        main_regulation: VoltageRegulation {
+            description: "Primary 5V regulation for MCU";
+            input: vehicle_power;
+            output_voltage: 5V ± 2%;        // MCU requirement
+            output_current: ≥1A;            // MCU + peripherals
+            
+            // Abstract performance requirements
+            startup_time: ≤10ms;           // Fast boot required
+            holdup_time: ≥5ms;            // During cranking
+            
+            // Note: NO component selection, NO topology specified
+            // Board designer chooses: linear, switching, etc.
+        }
+        
+        // Secondary regulation function
+        sensor_supply: VoltageRegulation {
+            description: "Isolated 5V for sensors";
+            input: vehicle_power;
+            output_voltage: 5V ± 1%;        // Tighter for sensors
+            output_current: ≥200mA;
+            isolation: required;            // Ground loop prevention
+        }
+        
+        // Critical loads (what we're powering)
+        mcu_system: CriticalLoad {
+            description: "Main microcontroller";
+            supply_voltage: 5V ± 3%;
+            max_current: 800mA;
+            power_quality: "Low ripple required";
+            asil_level: ASIL_B;
+            
+            safety_functions: [
+                "Fuel injection control",
+                "Ignition timing",
+                "Diagnostic monitoring"
+            ];
+        }
+        
+        sensor_array: CriticalLoad {
+            description: "Engine sensors";
+            supply_voltage: 5V ± 2%;
+            max_current: 150mA;
+            isolation: required;
+            asil_level: ASIL_B;
+            
+            sensors: [
+                "Crankshaft position",
+                "Camshaft position",
+                "Throttle position"
+            ];
+        }
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // HAZARD ANALYSIS (What can go wrong)
+    // ───────────────────────────────────────────────────────────────
+    
+    hazards {
+        H1: Hazard {
+            description: "Loss of power to engine control MCU";
+            
+            failure_condition: "MCU loses 5V supply";
+            
+            operational_situation: "Vehicle at highway speed";
+            
+            potential_harm: "Engine stalls, loss of power steering/brakes";
+            
+            iso26262_classification {
+                severity: S2;        // Possible serious injuries
+                exposure: E4;        // High probability (highway driving)
+                controllability: C2; // Driver can coast to shoulder
+                asil: ASIL_B;       // S2 + E4 + C2 = ASIL B
+            }
+            
+            safety_goal: "SG1: Maintain MCU power during normal operation";
+        }
+        
+        H2: Hazard {
+            description: "Overvoltage damage to MCU";
+            
+            failure_condition: "5V rail exceeds 5.5V";
+            
+            operational_situation: "Any driving condition";
+            
+            potential_harm: "MCU damage → engine control loss";
+            
+            iso26262_classification {
+                severity: S2;        // Possible serious injuries
+                exposure: E4;        // Can happen anytime
+                controllability: C2; // Depends on driving situation
+                asil: ASIL_B;
+            }
+            
+            safety_goal: "SG2: Prevent overvoltage on MCU supply";
+        }
+        
+        H3: Hazard {
+            description: "Sensor power corruption";
+            
+            failure_condition: "Sensor supply out of specification";
+            
+            operational_situation: "Engine running";
+            
+            potential_harm: "Incorrect sensor readings → wrong fuel/timing";
+            
+            iso26262_classification {
+                severity: S1;        // Light injuries possible
+                exposure: E4;        // High probability
+                controllability: C2; // Driver notices rough running
+                asil: ASIL_A;       // S1 + E4 + C2 = ASIL A
+            }
+            
+            safety_goal: "SG3: Maintain sensor supply accuracy";
+        }
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // SAFETY GOALS (High-level objectives)
+    // ───────────────────────────────────────────────────────────────
+    
+    safety_goals {
+        SG1: SafetyGoal {
+            description: "Maintain MCU power availability";
+            addresses_hazard: H1;
+            asil: ASIL_B;
+            
+            target_metrics {
+                availability: >99.99%;       // High availability required
+                mtbf: >100000_hours;        // Reliability target
+                fault_tolerance_time: 100ms; // Time to detect and react
+            }
+        }
+        
+        SG2: SafetyGoal {
+            description: "Prevent destructive overvoltage";
+            addresses_hazard: H2;
+            asil: ASIL_B;
+            
+            target_metrics {
+                max_voltage: 5.5V;           // Absolute maximum
+                response_time: <100µs;       // Fast protection needed
+                coverage: >99%;              // High fault coverage
+            }
+        }
+        
+        SG3: SafetyGoal {
+            description: "Ensure sensor supply integrity";
+            addresses_hazard: H3;
+            asil: ASIL_A;
+            
+            target_metrics {
+                accuracy: ±1%;               // Tight tolerance
+                isolation: >1MΩ;            // Ground isolation
+                noise: <10mV_pp;            // Low noise
+            }
+        }
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // FUNCTIONAL SAFETY REQUIREMENTS (What capabilities we need)
+    // ───────────────────────────────────────────────────────────────
+    
+    functional_safety_requirements {
+        FSR1: SafetyRequirement {
+            description: "Monitor MCU supply voltage";
+            derived_from: SG1;
+            asil: ASIL_B;
+            
+            safety_function {
+                capability_needed: VoltageMonitoring;
+                monitored_rail: "MCU 5V supply";
+                
+                detection_requirements {
+                    undervoltage_threshold: 4.5V;   // MCU brownout
+                    overvoltage_threshold: 5.5V;    // MCU abs max
+                    response_time: ≤100µs;          // Fast detection
+                    diagnostic_coverage: ≥90%;       // ASIL B SPFM
+                }
+                
+                reaction_requirements {
+                    fault_indication: "Signal to safety monitor";
+                    safe_state: "Alert driver, limp-home mode";
+                }
+            }
+            
+            // Note: NO specification of HOW to monitor
+            // Could be: comparator, ADC, supervisor IC, etc.
+        }
+        
+        FSR2: SafetyRequirement {
+            description: "Overvoltage protection mechanism";
+            derived_from: SG2;
+            asil: ASIL_B;
+            
+            safety_function {
+                capability_needed: OvervoltageProtection;
+                protected_rail: "MCU 5V supply";
+                
+                protection_requirements {
+                    clamp_voltage: 5.5V_max;
+                    response_time: ≤10µs;           // Very fast
+                    energy_handling: "100mJ minimum";
+                }
+                
+                // Note: NO specification of protection type
+                // Could be: TVS, crowbar, active clamp, etc.
+            }
+        }
+        
+        FSR3: SafetyRequirement {
+            description: "Self-test capability";
+            derived_from: [SG1, SG2];
+            asil: ASIL_B;
+            
+            safety_function {
+                capability_needed: SelfTestable;
+                
+                test_requirements {
+                    test_coverage: ≥60%;            // ASIL B LFM
+                    test_interval: ≤100ms;          // Latent fault detection
+                    test_duration: ≤5ms;            // Non-intrusive
+                    test_indication: "Pass/fail status to MCU";
+                }
+                
+                // Note: NO specification of test method
+                // Board designer chooses implementation
+            }
+        }
+        
+        FSR4: SafetyRequirement {
+            description: "Sensor supply isolation";
+            derived_from: SG3;
+            asil: ASIL_A;
+            
+            safety_function {
+                capability_needed: GalvanicIsolation;
+                
+                isolation_requirements {
+                    isolation_voltage: ≥1000V;
+                    isolation_resistance: ≥1MΩ;
+                    capacitive_coupling: ≤100pF;
+                }
+            }
+        }
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // SAFETY MECHANISMS ALLOCATION (Abstract mechanisms needed)
+    // ───────────────────────────────────────────────────────────────
+    
+    safety_mechanisms {
+        SM1: SafetyMechanism {
+            description: "Voltage monitoring for MCU rail";
+            implements: FSR1;
+            type: diagnostic;
+            
+            coverage_claim: 95%;  // Expected diagnostic coverage
+            
+            // Abstract - no component specified
+            possible_implementations: [
+                "Voltage supervisor IC",
+                "Window comparator circuit",
+                "ADC with software monitoring",
+                "Dedicated safety monitor"
+            ];
+        }
+        
+        SM2: SafetyMechanism {
+            description: "Overvoltage protection";
+            implements: FSR2;
+            type: protective;
+            
+            // Abstract - no component specified
+            possible_implementations: [
+                "TVS diode",
+                "Active crowbar",
+                "Series pass limiter",
+                "Foldback current limiting"
+            ];
+        }
+        
+        SM3: SafetyMechanism {
+            description: "Built-in self-test";
+            implements: FSR3;
+            type: diagnostic;
+            
+            // Abstract - no implementation specified
+            test_strategy: "Periodic verification of safety mechanisms";
+        }
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // VALIDATION CRITERIA (How we'll know it's safe)
+    // ───────────────────────────────────────────────────────────────
+    
+    validation_criteria {
+        // Quantitative metrics required for ASIL B
+        iso26262_metrics {
+            spfm: ≥90%;      // Single Point Fault Metric
+            lfm: ≥60%;       // Latent Fault Metric  
+            pmhf: ≤100FIT;   // Probabilistic Metric for Hardware Failures
+        }
+        
+        // Qualitative requirements
+        process_requirements {
+            design_review: required;
+            fmea: required;
+            safety_analysis: required;
+            validation_testing: required;
+        }
+        
+        // Test requirements
+        test_coverage {
+            fault_injection: "All safety mechanisms";
+            environmental: "Temperature, voltage, EMC";
+            lifetime: "Accelerated aging test";
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// KEY OBSERVATIONS
+// ═══════════════════════════════════════════════════════════════════
+
+/*
+What the Safety Engineer has done:
+1. Identified hazards and calculated ASIL levels
+2. Defined safety goals with target metrics
+3. Specified WHAT needs to be achieved (not HOW)
+4. Listed required capabilities (monitoring, protection, etc.)
+5. Set validation criteria
+
+What the Safety Engineer has NOT done:
+1. Selected any components
+2. Specified any circuit topology
+3. Dictated implementation methods
+4. Over-constrained the solution
+5. Made electrical design decisions
+
+This gives the board designer complete freedom to implement
+these safety requirements using their expertise and judgment.
+*/

@@ -1,0 +1,335 @@
+// ═══════════════════════════════════════════════════════════════════
+// PHASE 1: POWER SUBSYSTEM SAFETY REQUIREMENTS
+// Author: Board Safety Engineer (Power Domain)
+// Date: Project Day 3-5
+// Derives from: system_safety_analysis.bhdl
+// ═══════════════════════════════════════════════════════════════════
+
+import stdlib.attributes.*;
+import stdlib.safety.*;
+
+// The power safety engineer takes the high-level requirements
+// and creates detailed technical safety requirements
+
+subsystem_safety BCM_Power_Subsystem {
+    
+    derives_from: BCM_System.functional_safety_requirements;
+    
+    // ───────────────────────────────────────────────────────────────
+    // SUBSYSTEM SCOPE
+    // ───────────────────────────────────────────────────────────────
+    
+    scope {
+        included: [
+            "Battery input protection",
+            "Reverse polarity protection", 
+            "Main 3.3V MCU supply",
+            "5V CAN/LIN supply",
+            "12V switched outputs",
+            "Power monitoring"
+        ];
+        
+        interfaces_to: [
+            "Vehicle battery (KL30, KL15)",
+            "MCU power pins",
+            "Communication transceivers",
+            "High-side drivers"
+        ];
+        
+        inherited_asil: ASIL_B;  // From brake light function
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // POWER-SPECIFIC HAZARDS (Subsystem level)
+    // ───────────────────────────────────────────────────────────────
+    
+    power_hazards {
+        H_PWR_001: PowerHazard {
+            description: "Loss of MCU power during brake command";
+            
+            failure_mode: "3.3V rail undervoltage or loss";
+            
+            effect_on_system: "MCU cannot activate brake lights";
+            
+            maps_to: BCM_System.H_BCM_001;  // Brake light failure
+            
+            inherited_asil: ASIL_B;
+            
+            potential_causes: [
+                "Input voltage drop below threshold",
+                "Regulator failure",
+                "Overcurrent shutdown",
+                "Thermal shutdown"
+            ];
+        }
+        
+        H_PWR_002: PowerHazard {
+            description: "Transient causes MCU reset";
+            
+            failure_mode: "Voltage dip during load dump";
+            
+            effect_on_system: "Temporary loss of all functions";
+            
+            inherited_asil: ASIL_B;
+            
+            potential_causes: [
+                "Insufficient input filtering",
+                "Inadequate holdup capacitance",
+                "Poor transient response"
+            ];
+        }
+        
+        H_PWR_003: PowerHazard {
+            description: "12V output stuck on";
+            
+            failure_mode: "High-side switch shorted";
+            
+            effect_on_system: "Load cannot be turned off";
+            
+            maps_to: BCM_System.H_BCM_004;  // Unintended activation
+            
+            inherited_asil: ASIL_A;
+        }
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // DETAILED TECHNICAL SAFETY REQUIREMENTS
+    // ───────────────────────────────────────────────────────────────
+    
+    technical_safety_requirements {
+        
+        // MCU Power Supply Requirements (ASIL B)
+        TSR_PWR_MCU_001: TechnicalSafetyRequirement {
+            description: "MCU supply voltage monitoring";
+            addresses: H_PWR_001;
+            asil: ASIL_B;
+            
+            requirement: {
+                monitored_rail: "3.3V MCU supply";
+                
+                thresholds: {
+                    undervoltage_warning: 3.1V;
+                    undervoltage_reset: 3.0V;
+                    overvoltage_warning: 3.5V;
+                    overvoltage_shutdown: 3.6V;
+                }
+                
+                timing: {
+                    detection_time: ≤10ms;
+                    notification_time: ≤20ms;
+                }
+                
+                diagnostic_coverage: ≥99%;  // ASIL B requirement
+            }
+            
+            rationale: "Must detect power issues before MCU malfunction";
+        }
+        
+        TSR_PWR_MCU_002: TechnicalSafetyRequirement {
+            description: "Transient immunity";
+            addresses: H_PWR_002;
+            asil: ASIL_B;
+            
+            requirement: {
+                load_dump_immunity: "Survive 40V for 400ms";
+                
+                holdup_time: ≥20ms;  // During cranking
+                
+                input_filter: {
+                    cutoff_frequency: ≤100Hz;
+                    attenuation: ≥40dB_at_1kHz;
+                }
+                
+                output_deviation: ≤5%;  // During transients
+            }
+        }
+        
+        TSR_PWR_MCU_003: TechnicalSafetyRequirement {
+            description: "Power-on reset";
+            asil: ASIL_B;
+            
+            requirement: {
+                reset_threshold: 3.0V;
+                reset_hysteresis: 100mV;
+                reset_delay: 10ms;  // After voltage stable
+                
+                brown_out_detection: enabled;
+            }
+        }
+        
+        // Output Driver Power Requirements
+        TSR_PWR_DRV_001: TechnicalSafetyRequirement {
+            description: "High-side switch monitoring";
+            addresses: H_PWR_003;
+            asil: ASIL_B;  // For brake lights
+            
+            requirement: {
+                monitored_outputs: [
+                    "Brake light output",
+                    "Turn signal outputs",  
+                    "Headlight outputs"
+                ];
+                
+                diagnostics: {
+                    open_load_detection: true;
+                    short_circuit_detection: true;
+                    overtemperature_detection: true;
+                }
+                
+                diagnostic_timing: ≤100ms;
+                
+                feedback_to_mcu: "Status flag per channel";
+            }
+        }
+        
+        TSR_PWR_DRV_002: TechnicalSafetyRequirement {
+            description: "Output protection";
+            asil: ASIL_B;
+            
+            requirement: {
+                overcurrent_protection: {
+                    threshold: 1.5x_nominal;
+                    response_time: ≤10µs;
+                    retry_strategy: "3 attempts then latch off";
+                }
+                
+                thermal_protection: {
+                    warning: 125°C;
+                    shutdown: 150°C;
+                    hysteresis: 20°C;
+                }
+            }
+        }
+        
+        // System Level Power Requirements
+        TSR_PWR_SYS_001: TechnicalSafetyRequirement {
+            description: "Power sequencing";
+            asil: ASIL_B;
+            
+            requirement: {
+                sequence: [
+                    "Input protection active",
+                    "5V supply (CAN wake)",
+                    "3.3V MCU supply",
+                    "MCU reset release",
+                    "Output drivers enable"
+                ];
+                
+                timing: {
+                    total_startup: ≤100ms;
+                    step_delay: 5ms..10ms;
+                }
+                
+                fault_handling: "Abort sequence on any fault";
+            }
+        }
+        
+        TSR_PWR_SYS_002: TechnicalSafetyRequirement {
+            description: "Sleep mode power";
+            asil: QM;  // Not safety critical
+            
+            requirement: {
+                sleep_current: ≤3mA;
+                wake_sources: ["CAN activity", "KL15", "Door signal"];
+                wake_time: ≤50ms;
+            }
+        }
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // SAFETY MECHANISMS REQUIRED
+    // ───────────────────────────────────────────────────────────────
+    
+    required_safety_mechanisms {
+        
+        SM_PWR_001: SafetyMechanism {
+            name: "Voltage Monitoring";
+            capability: VoltageMonitoring;
+            
+            monitors: ["3.3V_MCU", "5V_CAN", "12V_SWITCHED"];
+            
+            implementation_options: [
+                "Dedicated supervisor IC (preferred)",
+                "Window comparators",
+                "ADC with redundant reference"
+            ];
+            
+            coverage_target: 99%;
+        }
+        
+        SM_PWR_002: SafetyMechanism {
+            name: "Diagnostic Feedback";
+            capability: DiagnosticReadback;
+            
+            signals: [
+                "PGOOD_3V3",
+                "PGOOD_5V", 
+                "FAULT_N per output channel"
+            ];
+            
+            to_mcu: "GPIO or SPI status register";
+        }
+        
+        SM_PWR_003: SafetyMechanism {
+            name: "Safe State Control";
+            capability: SafeStateEntry;
+            
+            triggers: [
+                "Overvoltage detected",
+                "Thermal limit exceeded",
+                "MCU watchdog timeout"
+            ];
+            
+            safe_state_action: "Brake lights forced ON";
+        }
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // VALIDATION REQUIREMENTS
+    // ───────────────────────────────────────────────────────────────
+    
+    validation_requirements {
+        // What the hardware team must prove
+        
+        fault_injection: {
+            test_cases: [
+                "Remove input voltage during operation",
+                "Short 3.3V to ground momentarily",
+                "Inject 40V load dump pulse",
+                "Overload each output channel",
+                "Exceed thermal limits"
+            ];
+            
+            pass_criteria: "Correct diagnostic report and safe state";
+        }
+        
+        coverage_analysis: {
+            target_spfm: ≥90%;  // ASIL B
+            target_lfm: ≥60%;   // ASIL B
+            method: "FMEDA or FTA";
+        }
+        
+        environmental_tests: {
+            temperature_cycling: "-40°C to +125°C, 1000 cycles";
+            vibration: "ISO 16750-3 profile";
+            emc: "CISPR 25 Class 3";
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// KEY OUTPUTS FROM POWER SAFETY ENGINEER
+// ═══════════════════════════════════════════════════════════════════
+
+/*
+The Power Safety Engineer has now created:
+1. Detailed technical requirements with specific thresholds
+2. Required safety mechanisms
+3. Validation criteria
+
+This is still ABSTRACT - no specific components chosen,
+but much more detailed than system level.
+
+The hardware designer can now implement these requirements
+using any suitable components and topology.
+*/

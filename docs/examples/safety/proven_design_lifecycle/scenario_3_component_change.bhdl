@@ -1,0 +1,431 @@
+// ═══════════════════════════════════════════════════════════════════
+// SCENARIO 3: COMPONENT SUBSTITUTION REQUIRED
+// Project: ADAS ECU Gen 5
+// Date: 2024 Q1 (5 years after original)
+// Crisis: TPS54360 announced END-OF-LIFE!
+// ═══════════════════════════════════════════════════════════════════
+
+import stdlib.attributes.*;
+import proven_designs.SoC_Core_Power_v1;
+
+// ───────────────────────────────────────────────────────────────────
+// THE PROBLEM: Component Obsolescence
+// ───────────────────────────────────────────────────────────────────
+
+obsolescence_notification {
+    date: "2024-01-15";
+    manufacturer: "Texas Instruments";
+    
+    announcement: {
+        part: "TPS54360";
+        status: "End of Life";
+        last_time_buy: "2024-06-30";
+        last_ship_date: "2024-12-31";
+    }
+    
+    impact: {
+        affected_designs: 47;  // All using SoC_Core_Power_v1!
+        units_per_year: 2_000_000;
+        criticality: "HIGH - Core component";
+    }
+    
+    // This happens ALL THE TIME in automotive!
+}
+
+// ───────────────────────────────────────────────────────────────────
+// PHASE 1: IMPACT ANALYSIS
+// ───────────────────────────────────────────────────────────────────
+
+change_impact_analysis {
+    
+    current_design: proven_designs.SoC_Core_Power_v1;
+    affected_component: "U1: TPS54360";
+    
+    // What this component does
+    component_function: {
+        type: "Synchronous buck converter";
+        input: "5V";
+        output: "0.85V @ 15A";
+        switching_freq: 500kHz;
+        package: "VQFN-16";
+    }
+    
+    // Find alternatives
+    alternative_search {
+        requirements: [
+            "Input: 4.5V to 5.5V",
+            "Output: Adjustable around 0.85V",
+            "Current: ≥15A",
+            "Automotive qualified (AEC-Q100)",
+            "Similar footprint"
+        ];
+        
+        candidates_found: [
+            {
+                part: "RT6150A";
+                vendor: "Richtek";
+                status: "Pin compatible!";  // Lucky!
+                differences: [
+                    "Slightly different efficiency curve",
+                    "Different compensation network",
+                    "Better transient response"
+                ];
+                risk: "LOW - Direct substitution possible";
+            },
+            {
+                part: "ISL85415";
+                vendor: "Renesas";
+                status: "Different pinout";
+                differences: [
+                    "Requires layout change",
+                    "Different package (TQFN)",
+                    "Different switching frequency"
+                ];
+                risk: "MEDIUM - Board respin needed";
+            },
+            {
+                part: "LT8650S";
+                vendor: "Analog Devices";
+                status: "Dual output (can use one)";
+                differences: [
+                    "Larger package",
+                    "Higher cost ($8 vs $2.50)",
+                    "Much better specifications"
+                ];
+                risk: "HIGH - Major redesign";
+            }
+        ];
+        
+        recommendation: "RT6150A - Minimal change required";
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────
+// PHASE 2: DELTA DESIGN (Minimal changes from proven design)
+// ───────────────────────────────────────────────────────────────────
+
+board ADAS_ECU_Gen5_Substitution {
+    
+    // Start from proven design
+    base_design: proven_designs.SoC_Core_Power_v1;
+    
+    // Document the changes
+    design_changes {
+        component_substitution: {
+            old: "U1: TPS54360";
+            new: "U1: RT6150A";
+            
+            reason: "TPS54360 end-of-life";
+            
+            compatibility: "Pin-compatible package";
+        }
+        
+        // RT6150A needs slightly different compensation
+        compensation_adjustment: {
+            // Based on RT6150A datasheet
+            r_comp: "10k → 12k";  // Main compensation resistor
+            c_comp1: "22nF → 27nF";  // Compensation cap
+            // Everything else stays the same!
+        }
+        
+        no_layout_change: true;  // Pin compatible!
+        no_mechanical_change: true;  // Same footprint!
+    }
+    
+    // Modified implementation (mostly same)
+    soc_core_power_v2: PowerSupply {
+        // Input conditioning - IDENTICAL
+        @5V_INT -> c_in1: CeramicCap(10µF, 10V).1;
+        c_in1.2 -> @PGND;
+        @5V_INT -> c_in2: CeramicCap(10µF, 10V).1;
+        c_in2.2 -> @PGND;
+        
+        // Main regulator - COMPONENT CHANGE
+        @5V_INT -> u1: RT6150A {  // ← Only change here!
+            for voltage_regulation(0.85V, 15A);
+        };
+        
+        // Bootstrap cap - IDENTICAL
+        u1.BOOT -> c_boot: CeramicCap(100nF, 10V).1;
+        c_boot.2 -> u1.SW;
+        
+        // Enable with voltage divider - IDENTICAL
+        @5V_INT -> r_en1: Res(100k).1;
+        r_en1.2 -> u1.EN;
+        u1.EN -> r_en2: Res(20k).1;
+        r_en2.2 -> @PGND;
+        
+        // Switching node and inductor - IDENTICAL
+        u1.SW -> l1: Inductor(1.5µH, 20A, DCR: 1.8mΩ) {
+            part_number: "744325150";  // Same inductor!
+        };
+        
+        // Output capacitors - IDENTICAL
+        l1.2 @SoC_CORE_0V85-> c_out1: CeramicCap(47µF, 6.3V, X5R).1;
+        // ... rest identical
+        
+        // Feedback network - IDENTICAL
+        u1.FB -> r_fb_top: Res(1.24k, 0.1%).1;
+        r_fb_top.2 -> @SoC_CORE_0V85;
+        u1.FB -> r_fb_bot: Res(20k, 0.1%).1;
+        r_fb_bot.2 -> @PGND;
+        
+        // Compensation network - ADJUSTED VALUES
+        u1.COMP -> r_comp: Res(12k).1;  // Was 10k
+        r_comp.2 -> c_comp1: CeramicCap(27nF).1;  // Was 22nF
+        c_comp1.2 -> @PGND;
+        r_comp.2 -> c_comp2: CeramicCap(2.2nF).1;  // Same
+        c_comp2.2 -> r_comp2: Res(2.2k).1;  // Same
+        r_comp2.2 -> @PGND;
+        
+        // All protection circuits - IDENTICAL
+        // ... monitoring, OVP, etc unchanged
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────
+// PHASE 3: DELTA VALIDATION (Only what changed)
+// ───────────────────────────────────────────────────────────────────
+
+delta_validation Gen5_Validation {
+    
+    validation_strategy {
+        approach: "Delta validation - only test what changed";
+        
+        can_inherit: [
+            "Protection circuit validation",
+            "Mechanical/vibration testing",
+            "Basic functionality"
+        ];
+        
+        must_revalidate: [
+            "Efficiency (different converter)",
+            "Thermal (different losses)",
+            "Stability (new compensation)",
+            "EMC (different switching edges)",
+            "Transient response"
+        ];
+    }
+    
+    // Focused testing on changes
+    delta_tests {
+        efficiency_comparison: {
+            test: "Measure efficiency curve";
+            result: {
+                at_1A: "83% (was 82%)";   // Slightly better!
+                at_5A: "90% (was 89%)";
+                at_10A: "92% (was 91%)";
+                at_15A: "91% (was 90%)";
+            };
+            conclusion: "RT6150A slightly more efficient";
+            impact: "Lower thermal stress";
+        }
+        
+        stability_verification: {
+            test: "Loop stability with new compensation";
+            measurements: {
+                phase_margin: "52° (was 48°)";
+                gain_margin: "12dB (was 11dB)";
+                crossover_freq: "48kHz (was 45kHz)";
+            };
+            conclusion: "Stable with good margins";
+        }
+        
+        thermal_testing: {
+            test: "Full load at 85°C ambient";
+            duration: 100_hours;  // Shorter than original
+            result: {
+                junction_temp: "112°C (was 118°C)";
+                margin: "38°C to max";
+            };
+            conclusion: "Better thermal performance";
+        }
+        
+        emc_testing: {
+            test: "Conducted emissions";
+            standard: "CISPR 25 Class 5";
+            result: "PASS - Similar profile to original";
+            
+            // No radiated EMC needed - pinout unchanged
+        }
+        
+        transient_response: {
+            test: "0A to 10A load step";
+            result: {
+                overshoot: "19mV (was 22mV)";  // Better!
+                settling: "15µs (was 18µs)";
+            };
+            conclusion: "Improved transient response";
+        }
+    }
+    
+    // Safety re-assessment
+    safety_impact {
+        failure_modes: {
+            new_modes: "None - same topology";
+            changed_rates: {
+                "Regulator failure": "8 FIT (was 10 FIT)";
+            };
+        }
+        
+        metrics_update: {
+            spfm: "94.5% (was 94.2%)";  // Slight improvement
+            lfm: "72.1%";  // No change
+            pmhf: "8.1 FIT (was 8.3 FIT)";  // Slightly better
+            
+            asil_maintained: ASIL_D;
+        }
+    }
+    
+    validation_effort {
+        calendar_time: 6_weeks;  // vs 6 months original
+        engineering_hours: 200;  // vs 960 original
+        lab_costs: $15_000;  // vs $45,000 original
+        
+        effort_reduction: "75% less than new design";
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────
+// LIBRARY UPDATE: Version 2 of proven design
+// ───────────────────────────────────────────────────────────────────
+
+proven_design SoC_Core_Power_v2 {
+    
+    metadata {
+        created_date: "2024-03-15";
+        derived_from: "SoC_Core_Power_v1";
+        reason: "TPS54360 obsolescence";
+        designer: "John Smith";
+        validated_by: "Safety Team A";
+        status: "Production Released";
+    }
+    
+    relationship_to_v1 {
+        compatibility: "Form-fit compatible";
+        
+        can_use_v2_on_v1_boards: true;  // Drop-in replacement!
+        
+        improvements: [
+            "Better efficiency (+1-2%)",
+            "Better transient response",
+            "Lower operating temperature",
+            "Available for next 10 years"
+        ];
+    }
+    
+    migration_guide {
+        for_existing_products: {
+            option_1: "Continue with TPS54360 until last buy";
+            option_2: "Drop in RT6150A (v2) immediately";
+            
+            no_requalification_needed: "Pin compatible";
+        }
+        
+        for_new_designs: {
+            recommendation: "Use v2 (RT6150A based)";
+            reason: "Better performance and availability";
+        }
+    }
+    
+    // Full documentation like v1
+    validated_configuration: {
+        // ... same as v1 with RT6150A
+    }
+    
+    validation_evidence: {
+        // Delta validation reports
+        test_reports: [
+            "TR-2024-0021 - Delta functional validation",
+            "TR-2024-0022 - Thermal comparison",
+            "TR-2024-0023 - EMC verification",
+            "TR-2024-0024 - Safety assessment"
+        ];
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────
+// LESSONS LEARNED: Managing Component Changes
+// ───────────────────────────────────────────────────────────────────
+
+change_management_insights {
+    
+    why_changes_happen: [
+        "Component obsolescence (most common)",
+        "Cost reduction initiatives",
+        "Performance improvements",
+        "Supply chain issues",
+        "Quality issues discovered"
+    ];
+    
+    impact_levels: {
+        best_case: "Pin-compatible substitute (like RT6150A)";
+        typical_case: "Same package, different pinout";
+        worst_case: "Complete redesign needed";
+    }
+    
+    proven_design_advantage: {
+        without_proven_design: {
+            impact: "Start validation from scratch";
+            time: 6_months;
+            cost: $180_000;
+            risk: "HIGH - new unknowns";
+        }
+        
+        with_proven_design: {
+            impact: "Delta validation only";
+            time: 6_weeks;
+            cost: $15_000;
+            risk: "LOW - most is known";
+        }
+    }
+    
+    key_success_factors: [
+        "Good documentation of original design",
+        "Clear understanding of what's critical",
+        "Focused validation on changes",
+        "Reuse of unchanged validation",
+        "Version control and traceability"
+    ];
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// THE REALITY OF HARDWARE DESIGN
+// ═══════════════════════════════════════════════════════════════════
+
+/*
+This scenario shows the REALITY of hardware design:
+
+1. COMPONENTS GO OBSOLETE REGULARLY
+   - 5-7 year product lifecycles
+   - 10-15 year automotive production
+   - Components EOL every few years
+
+2. PROVEN DESIGNS STILL VALUABLE
+   - Even with changes, 75% is reusable
+   - Delta validation much faster
+   - Known baseline for comparison
+
+3. SMART SUBSTITUTION STRATEGIES  
+   - Look for pin-compatible first
+   - Minimize changes
+   - Validate only what changed
+
+4. LIBRARY EVOLUTION
+   - v1: Original TPS54360 design
+   - v2: RT6150A substitution
+   - v3: Future changes...
+   - All versions documented and available
+
+5. TIME/COST STILL DRAMATICALLY REDUCED
+   - New design: 6 months, $180k
+   - Reuse: 2 weeks, $3k  
+   - Substitution: 6 weeks, $15k
+   - Still 75% savings even with changes!
+
+This is why proven design libraries are SO valuable
+in real hardware development. They're not just 
+"reference designs" - they're production-validated
+solutions that save months and hundreds of thousands
+of dollars, even when changes are required.
+*/

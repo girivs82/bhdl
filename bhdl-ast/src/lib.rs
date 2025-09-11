@@ -30,6 +30,8 @@ pub mod interfaces; // Interface-specific AST nodes
 pub mod attributes; // Behavioral modeling attribute support
 pub mod behavioral; // When blocks and behavioral statements
 pub mod testbench; // Testbench AST nodes
+pub mod safety; // Safety-related AST nodes for ISO 26262 compliance
+pub mod safety_hierarchy; // Hierarchical safety requirements
 
 // Core HasName trait (defined here)
 pub trait HasName: AstNode<Language = BhdlLanguage> {
@@ -63,6 +65,7 @@ pub use v2_board::{BoardV2Ext, BoardBody, BoardBodyExt};
 pub use interfaces::{InterfaceSignal, InterfaceRequirement, InterfacePerspective, InterfaceInst, SignalDirection};
 pub use testbench::{TestbenchDef, SimulationBlock, ScopeDef, StimulusBlock, VerifyBlock, MeasureBlock, 
                     SignalRef, CaptureMode, StimulusAssign, WaveformExpr, Assertion, Measurement, TimeSpec};
+pub use safety::{SatisfiesBlock, SatisfiesItem, SatisfiesSpec, SatisfiesVia, SatisfiesDetails, HasSatisfies};
 
 // Add tests module
 #[cfg(test)]

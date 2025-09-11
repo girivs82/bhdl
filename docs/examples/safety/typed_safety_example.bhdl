@@ -1,0 +1,336 @@
+// Example: Power Supply with Strongly-Typed Safety Attributes
+// This example demonstrates compile-time validation of safety attributes
+
+// ═══════════════════════════════════════════════════════════════════
+// ATTRIBUTE TYPE DEFINITIONS (Built into language)
+// ═══════════════════════════════════════════════════════════════════
+
+// These would be built into the BHDL compiler
+namespace safety_attributes {
+    enum TimingAttribute {
+        response_time,
+        detection_time,
+        reaction_time,
+        test_interval,
+        test_duration,
+        startup_time,
+        shutdown_time,
+    }
+    
+    enum ElectricalAttribute {
+        voltage,
+        voltage_range,
+        threshold_voltage,
+        current_limit,
+        max_current,
+        efficiency,
+        switching_frequency,
+    }
+    
+    enum CoverageAttribute {
+        diagnostic_coverage,
+        self_test_coverage,
+        latent_fault_coverage,
+    }
+    
+    enum ProtectionMethod {
+        crowbar,
+        clamp,
+        shutdown,
+        foldback,
+        cycle_by_cycle,
+        hiccup,
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// CAPABILITY DEFINITIONS WITH ALLOWED ATTRIBUTES
+// ═══════════════════════════════════════════════════════════════════
+
+capability VoltageMonitoring {
+    // Define what attributes are valid for this capability
+    required_attributes: [
+        ElectricalAttribute.voltage_range,
+        TimingAttribute.response_time,
+    ];
+    
+    optional_attributes: [
+        ElectricalAttribute.threshold_voltage,
+        CoverageAttribute.diagnostic_coverage,
+        PerformanceAttribute.accuracy,
+    ];
+}
+
+capability CurrentLimiting {
+    required_attributes: [
+        ElectricalAttribute.current_limit,
+        TimingAttribute.response_time,
+    ];
+    
+    optional_attributes: [
+        method: ProtectionMethod,  // Enum constraint
+        ElectricalAttribute.max_current,
+    ];
+}
+
+capability SelfTestable {
+    required_attributes: [
+        TimingAttribute.test_interval,
+        CoverageAttribute.self_test_coverage,
+    ];
+    
+    optional_attributes: [
+        TimingAttribute.test_duration,
+        TimingAttribute.startup_time,
+    ];
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// COMPONENT DEFINITIONS WITH TYPE-SAFE ATTRIBUTES
+// ═══════════════════════════════════════════════════════════════════
+
+component LTC2954_TypeSafe {
+    // Standard component properties
+    electrical_model {
+        monitoring_range: 2.7V..28V;
+        response_time: 50µs;
+        self_test_interval: 100ms;
+    }
+    
+    // Type-safe safety declarations
+    satisfies VoltageMonitoring {
+        // ✓ VALID: These attributes are allowed for VoltageMonitoring
+        voltage_range: 2.7V..28V;         // Required ElectricalAttribute
+        response_time: 50µs;              // Required TimingAttribute  
+        threshold_voltage: 5.5V;          // Optional ElectricalAttribute
+        diagnostic_coverage: 99%;         // Optional CoverageAttribute
+        
+        // ✗ COMPILE ERROR: Unknown attribute
+        // responce_time: 50µs;           // Typo caught at compile time
+        
+        // ✗ COMPILE ERROR: Attribute not allowed for VoltageMonitoring
+        // test_interval: 100ms;          // This belongs to SelfTestable
+        
+        // ✗ COMPILE ERROR: Wrong type for attribute
+        // response_time: 95%;            // Should be time, not percentage
+    }
+    
+    satisfies SelfTestable {
+        // ✓ VALID: Correct attributes for SelfTestable
+        test_interval: 100ms;             // Required TimingAttribute
+        self_test_coverage: 87%;         // Required CoverageAttribute
+        test_duration: 5ms;               // Optional TimingAttribute
+        
+        // ✗ COMPILE ERROR: Missing required attribute
+        // (Must have both test_interval AND self_test_coverage)
+    }
+}
+
+component LM2596_TypeSafe {
+    satisfies VoltageRegulation {
+        // ✓ VALID attributes for VoltageRegulation
+        voltage_range: 4.5V..40V;
+        efficiency: 85%;
+        switching_frequency: 150kHz;
+        
+        // ✗ COMPILE ERROR: response_time not valid for VoltageRegulation
+        // response_time: 10µs;
+    }
+    
+    satisfies CurrentLimiting {
+        // ✓ VALID: All required attributes present
+        current_limit: 3A;                // Required
+        response_time: 10µs;              // Required
+        method: cycle_by_cycle;           // Optional enum value
+        
+        // ✗ COMPILE ERROR: Invalid enum value
+        // method: invalid_method;        // Not in ProtectionMethod enum
+        
+        // ✗ COMPILE ERROR: Wrong type
+        // current_limit: "3 amps";       // Should be current type, not string
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// REQUIREMENT TEMPLATES WITH TYPED PARAMETERS
+// ═══════════════════════════════════════════════════════════════════
+
+requirement_template VoltageMonitoringRequirement {
+    // Typed parameters ensure correct usage
+    parameters: {
+        rail: string;                              // Name of voltage rail
+        nominal: ElectricalAttribute.voltage;     // Nominal voltage
+        threshold: ElectricalAttribute.threshold_voltage;  // Fault threshold
+        response: TimingAttribute.response_time;  // Max response time
+        coverage: CoverageAttribute.diagnostic_coverage;   // Min coverage
+    }
+    
+    // Template uses typed parameters
+    description: "Monitor ${rail} rail at ${nominal}";
+    
+    required_capability: VoltageMonitoring {
+        voltage_range: must_include(nominal);
+        threshold_voltage: threshold;
+        response_time: ≤ response;
+        diagnostic_coverage: ≥ coverage;
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// REQUIREMENTS USING TYPED TEMPLATES
+// ═══════════════════════════════════════════════════════════════════
+
+requirements {
+    // ✓ VALID: Using template with correct types
+    REQ_PSU_001: VoltageMonitoringRequirement {
+        rail: "5V_MAIN";
+        nominal: 5V;
+        threshold: 5.5V;
+        response: 100µs;
+        coverage: 90%;
+    }
+    
+    // ✗ COMPILE ERROR: Wrong parameter type
+    // REQ_PSU_002: VoltageMonitoringRequirement {
+    //     rail: "3.3V";
+    //     nominal: "3.3 volts";      // Should be voltage type
+    //     threshold: 3.6V;
+    //     response: 90%;             // Should be time, not percentage
+    //     coverage: 100µs;           // Should be percentage, not time
+    // }
+    
+    // ✗ COMPILE ERROR: Missing required parameter
+    // REQ_PSU_003: VoltageMonitoringRequirement {
+    //     rail: "12V";
+    //     nominal: 12V;
+    //     // Missing: threshold, response, coverage
+    // }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// BOARD WITH TYPE-SAFE SATISFACTION CLAIMS
+// ═══════════════════════════════════════════════════════════════════
+
+board TypeSafePowerSupply {
+    // Component instantiations
+    @5V -> monitor: LTC2954_TypeSafe;
+    @12V -> regulator: LM2596_TypeSafe -> @5V;
+    
+    // Type-safe satisfaction claims
+    satisfies {
+        // ✓ VALID: Component satisfies requirement through capability
+        REQ_PSU_001: via monitor {
+            // Tool validates these match requirement parameters
+            response_time: 50µs;          // ✓ Validates: 50µs ≤ 100µs
+            diagnostic_coverage: 99%;     // ✓ Validates: 99% ≥ 90%
+            
+            // ✗ COMPILE ERROR: Attribute not in requirement
+            // unknown_param: 123;
+        };
+        
+        // ✓ VALID: Capability satisfaction
+        VoltageMonitoring: via monitor;
+        CurrentLimiting: via regulator;
+        
+        // ✗ COMPILE ERROR: Component doesn't satisfy this capability
+        // OvervoltageProtection: via regulator;  // LM2596 doesn't claim this
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// COMPILER ERROR MESSAGES (What developer would see)
+// ═══════════════════════════════════════════════════════════════════
+
+/*
+error[E001]: Unknown attribute 'responce_time'
+  --> typed_safety_example.bhdl:96:9
+   |
+96 |         responce_time: 50µs;
+   |         ^^^^^^^^^^^^^ did you mean 'response_time'?
+   |
+   = help: Valid TimingAttributes are:
+          response_time, detection_time, reaction_time,
+          test_interval, test_duration, startup_time
+
+error[E002]: Attribute not allowed for capability
+  --> typed_safety_example.bhdl:99:9
+   |
+99 |         test_interval: 100ms;
+   |         ^^^^^^^^^^^^^ 'test_interval' is not valid for VoltageMonitoring
+   |
+   = help: VoltageMonitoring allows:
+          Required: voltage_range, response_time
+          Optional: threshold_voltage, diagnostic_coverage, accuracy
+
+error[E003]: Type mismatch for attribute
+  --> typed_safety_example.bhdl:102:9
+    |
+102 |         response_time: 95%;
+    |         ^^^^^^^^^^^^^^^^^^^ expected time value, found percentage
+    |
+    = help: response_time must be a time value (e.g., 50µs, 100ms)
+
+error[E004]: Missing required attribute
+  --> typed_safety_example.bhdl:108:5
+    |
+108 |     satisfies SelfTestable {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^ missing required attribute 'test_interval'
+    |
+    = help: SelfTestable requires:
+            - test_interval (TimingAttribute)
+            - self_test_coverage (CoverageAttribute)
+
+error[E005]: Invalid enum value
+  --> typed_safety_example.bhdl:127:17
+    |
+127 |         method: invalid_method;
+    |                 ^^^^^^^^^^^^^^^ not a valid ProtectionMethod
+    |
+    = help: Valid ProtectionMethod values are:
+            crowbar, clamp, shutdown, foldback,
+            cycle_by_cycle, hiccup
+
+error[E006]: Component doesn't satisfy capability
+  --> typed_safety_example.bhdl:218:9
+    |
+218 |         OvervoltageProtection: via regulator;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ 
+    |         LM2596_TypeSafe does not satisfy OvervoltageProtection
+    |
+    = help: LM2596_TypeSafe satisfies:
+            - VoltageRegulation
+            - CurrentLimiting
+*/
+
+// ═══════════════════════════════════════════════════════════════════
+// BENEFITS OF TYPE SAFETY
+// ═══════════════════════════════════════════════════════════════════
+
+/*
+1. COMPILE-TIME VALIDATION
+   - Catch typos before runtime
+   - Ensure type correctness
+   - Validate enum values
+   - Check required attributes
+
+2. IDE SUPPORT
+   - Autocomplete for attribute names
+   - Type hints for values  
+   - Inline documentation
+   - Refactoring support
+
+3. CLEAR CONTRACTS
+   - Each capability defines its interface
+   - Requirements have typed parameters
+   - No ambiguity about what's needed
+
+4. BETTER ERROR MESSAGES
+   - Specific error locations
+   - Helpful suggestions
+   - Clear fix instructions
+
+5. MAINTAINABILITY
+   - Add new attributes safely
+   - Deprecate old attributes clearly
+   - Evolve capabilities over time
+*/

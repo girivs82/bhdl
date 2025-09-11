@@ -1,0 +1,304 @@
+// ═══════════════════════════════════════════════════════════════════
+// SYSTEM-LEVEL SAFETY ANALYSIS
+// Author: Board Safety Architect
+// Date: Day 1 of Project
+// Scope: Entire ECU system (not just power supply)
+// ═══════════════════════════════════════════════════════════════════
+
+import stdlib.attributes.*;
+
+system_safety Vehicle_ECU_System {
+    
+    // ───────────────────────────────────────────────────────────────
+    // SYSTEM CONTEXT (The complete ECU, not just power)
+    // ───────────────────────────────────────────────────────────────
+    
+    system_context {
+        product: "Engine Control Unit (ECU)";
+        vehicle_application: "Passenger vehicle - Gasoline engine";
+        
+        system_functions: [
+            "Engine control (fuel injection, ignition timing)",
+            "Emissions management",
+            "Diagnostic monitoring (OBD-II)",
+            "Communication with other ECUs (CAN bus)",
+            "Sensor data processing"
+        ];
+        
+        target_asil: ASIL_B;  // Overall system target
+        
+        operating_environment {
+            location: "Under-hood mounting";
+            temperature: -40°C..85°C;
+            vibration: "ISO 16750-3";
+            lifetime: 15_years;
+        }
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // SYSTEM-LEVEL HAZARDS (Vehicle level, not component level)
+    // ───────────────────────────────────────────────────────────────
+    
+    system_hazards {
+        H_SYS_001: SystemHazard {
+            description: "Unintended engine acceleration";
+            
+            hazardous_event: "ECU commands higher throttle than driver requested";
+            
+            operational_situation: "City driving with pedestrians present";
+            
+            potential_harm: "Vehicle accelerates into pedestrian";
+            
+            iso26262_classification {
+                severity: S3;        // Life-threatening injuries
+                exposure: E3;        // Medium probability
+                controllability: C2; // Driver can brake
+                asil: ASIL_B;       // S3 + E3 + C2 = ASIL B
+            }
+        }
+        
+        H_SYS_002: SystemHazard {
+            description: "Complete loss of engine control";
+            
+            hazardous_event: "ECU fails, engine stops suddenly";
+            
+            operational_situation: "Highway driving at speed";
+            
+            potential_harm: "Loss of power steering/brakes, rear collision";
+            
+            iso26262_classification {
+                severity: S2;        // Serious injuries possible
+                exposure: E4;        // High probability (highway)
+                controllability: C2; // Can coast to shoulder
+                asil: ASIL_B;
+            }
+        }
+        
+        H_SYS_003: SystemHazard {
+            description: "Incorrect emissions control";
+            
+            hazardous_event: "ECU fails to control emissions";
+            
+            operational_situation: "Normal driving";
+            
+            potential_harm: "Environmental damage, regulatory violation";
+            
+            iso26262_classification {
+                severity: S0;        // No injuries
+                exposure: E4;        // High probability
+                controllability: C0; // Not safety relevant
+                asil: QM;           // Not safety critical
+            }
+        }
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // SYSTEM SAFETY GOALS (Top level, allocated to subsystems)
+    // ───────────────────────────────────────────────────────────────
+    
+    safety_goals {
+        SG_SYS_001: SystemSafetyGoal {
+            description: "Prevent unintended acceleration";
+            addresses: H_SYS_001;
+            asil: ASIL_B;
+            
+            safe_state: "Limit engine to idle speed";
+            fault_tolerance_time: 200ms;
+            
+            allocation_to_subsystems: [
+                "Throttle control subsystem",
+                "Sensor input validation",
+                "Software architecture (voting/monitoring)"
+            ];
+        }
+        
+        SG_SYS_002: SystemSafetyGoal {
+            description: "Maintain minimum engine control during faults";
+            addresses: H_SYS_002;
+            asil: ASIL_B;
+            
+            safe_state: "Limp-home mode (limited RPM/power)";
+            fault_tolerance_time: 100ms;
+            
+            allocation_to_subsystems: [
+                "Power supply subsystem",      // ← This drives power requirements
+                "Microcontroller subsystem",
+                "Critical sensor subsystem",
+                "Software fault handling"
+            ];
+        }
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // FUNCTIONAL SAFETY CONCEPT (How subsystems contribute)
+    // ───────────────────────────────────────────────────────────────
+    
+    functional_safety_concept {
+        
+        // High-level allocation, not detailed requirements
+        power_subsystem_allocation {
+            contributes_to: SG_SYS_002;
+            
+            high_level_requirements: [
+                "Maintain MCU operation during cranking",
+                "Detect and indicate power faults",
+                "Prevent damage from voltage transients",
+                "Provide isolated sensor supplies"
+            ];
+            
+            asil_allocation: ASIL_B;  // Inherits from SG_SYS_002
+            
+            // Note: Specific voltages, timing, etc. NOT specified here
+            // That's for the power subsystem safety engineer
+        }
+        
+        mcu_subsystem_allocation {
+            contributes_to: [SG_SYS_001, SG_SYS_002];
+            
+            high_level_requirements: [
+                "Implement safety software architecture",
+                "Detect and handle software faults",
+                "Maintain watchdog function",
+                "Execute safety diagnostics"
+            ];
+            
+            asil_allocation: ASIL_B;
+        }
+        
+        sensor_subsystem_allocation {
+            contributes_to: SG_SYS_001;
+            
+            high_level_requirements: [
+                "Provide redundant position sensing",
+                "Detect sensor faults",
+                "Maintain signal integrity"
+            ];
+            
+            asil_allocation: ASIL_B;
+        }
+        
+        communication_subsystem_allocation {
+            contributes_to: [SG_SYS_001, SG_SYS_002];
+            
+            high_level_requirements: [
+                "Ensure CAN message integrity",
+                "Detect communication faults",
+                "Implement timeout monitoring"
+            ];
+            
+            asil_allocation: ASIL_A;  // Lower for communication
+        }
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // TECHNICAL SAFETY REQUIREMENTS (Still high-level)
+    // ───────────────────────────────────────────────────────────────
+    
+    technical_safety_requirements {
+        TSR_001: TechnicalSafetyRequirement {
+            description: "System shall detect loss of power within fault tolerance time";
+            derived_from: SG_SYS_002;
+            fault_tolerance_time: 100ms;
+            allocated_to: "Power subsystem";
+            
+            // Note: Doesn't specify HOW to detect or WHAT thresholds
+        }
+        
+        TSR_002: TechnicalSafetyRequirement {
+            description: "System shall maintain operation during voltage transients";
+            derived_from: SG_SYS_002;
+            transient_profile: "ISO 7637-2";
+            allocated_to: "Power subsystem";
+            
+            // Note: Doesn't specify protection topology
+        }
+        
+        TSR_003: TechnicalSafetyRequirement {
+            description: "System shall detect MCU faults";
+            derived_from: [SG_SYS_001, SG_SYS_002];
+            diagnostic_coverage: ≥90%;  // ASIL B requirement
+            allocated_to: "MCU subsystem";
+        }
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // SUBSYSTEM INTERFACE REQUIREMENTS
+    // ───────────────────────────────────────────────────────────────
+    
+    subsystem_interfaces {
+        power_to_mcu_interface {
+            safety_relevant: true;
+            asil: ASIL_B;
+            
+            signals: [
+                "Power supply voltage",
+                "Power good indication",
+                "Fault indication",
+                "Test result"
+            ];
+            
+            // Note: Voltage levels, timing NOT specified here
+        }
+        
+        mcu_to_actuator_interface {
+            safety_relevant: true;
+            asil: ASIL_B;
+            
+            signals: [
+                "Injector control",
+                "Ignition control",
+                "Throttle command"
+            ];
+        }
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // SAFETY VALIDATION STRATEGY
+    // ───────────────────────────────────────────────────────────────
+    
+    validation_strategy {
+        system_level_validation: [
+            "Hardware-in-loop testing",
+            "Fault injection testing",
+            "Environmental testing"
+        ];
+        
+        metrics_required {
+            spfm: ≥90%;      // ASIL B requirement
+            lfm: ≥60%;       // ASIL B requirement
+            pmhf: ≤100FIT;   // ASIL B requirement
+        }
+        
+        subsystem_validation: "Each subsystem validates their allocation";
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// KEY OBSERVATIONS - ARCHITECT LEVEL
+// ═══════════════════════════════════════════════════════════════════
+
+/*
+What the Board Safety Architect has done:
+1. Identified SYSTEM-level hazards (vehicle level)
+2. Defined safety goals for the entire ECU
+3. Allocated high-level requirements to subsystems
+4. Set ASIL targets for each subsystem
+5. Defined interfaces between subsystems
+
+What the Board Safety Architect has NOT done:
+1. Specified power supply voltages
+2. Defined specific thresholds or timing
+3. Selected any components or topologies
+4. Written detailed subsystem requirements
+5. Performed subsystem-specific analysis
+
+This system-level analysis drives the work of multiple
+board safety engineers, each handling their subsystem:
+- Power subsystem safety engineer
+- MCU subsystem safety engineer  
+- Sensor subsystem safety engineer
+- Communication subsystem safety engineer
+
+Each will create their own detailed requirements derived
+from this system-level allocation.
+*/

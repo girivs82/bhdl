@@ -1,0 +1,390 @@
+// ═══════════════════════════════════════════════════════════════════
+// SOC POWER SUBSYSTEM SAFETY ANALYSIS
+// Author: Board Safety Engineer (SoC Power Domain)
+// Date: Day 2-3 of Project
+// Scope: SoC core and GPU power supplies only
+// Derives from: system_safety_analysis_ECU.bhdl
+// ═══════════════════════════════════════════════════════════════════
+
+import stdlib.attributes.*;
+
+subsystem_safety SoC_Power_Subsystem {
+    
+    // ───────────────────────────────────────────────────────────────
+    // SUBSYSTEM CONTEXT
+    // ───────────────────────────────────────────────────────────────
+    
+    subsystem_context {
+        parent_system: "ADAS_ECU_System";
+        subsystem: "SoC Power Domain";
+        
+        derives_from: [
+            "SG_ECU_001: Maintain vision processing availability",
+            "TSR_SoC_Core: SoC core power shall maintain regulation"
+        ];
+        
+        inherited_asil: ASIL_D;
+        
+        scope: [
+            "0.85V @ 15A CPU core supply",
+            "1.0V @ 10A GPU/NPU supply",
+            "1.8V @ 3A I/O supply",
+            "3.3V @ 2A I/O supply",
+            "Power sequencing for SoC"
+        ];
+        
+        interfaces_to: [
+            "Main ECU power input (12V)",
+            "SoC power pins",
+            "Power management IC (PMIC)",
+            "Safety MCU monitoring"
+        ];
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // DETAILED FUNCTIONAL BLOCKS (Specific to SoC power)
+    // ───────────────────────────────────────────────────────────────
+    
+    functional_blocks {
+        // Now we get specific about implementation approach
+        
+        input_conditioning: PowerConditioning {
+            description: "12V to intermediate bus conversion";
+            input: "12V vehicle power (9V-16V range)";
+            output: "5V intermediate bus @ 20A";
+            
+            functions: [
+                "Pre-regulation to stable 5V",
+                "Input transient protection",
+                "Inrush current limiting",
+                "Reverse polarity protection"
+            ];
+        }
+        
+        core_voltage_regulator: VoltageRegulation {
+            description: "CPU core supply (highest current)";
+            input: "5V intermediate bus";
+            output: "0.85V @ 15A";
+            
+            critical_requirements: {
+                voltage_accuracy: ±2%;      // SoC requirement
+                transient_response: ±3%;    // During load steps
+                ripple: <10mV;             // Low noise for core
+                efficiency: >90%;          // Thermal constraint
+            }
+            
+            protection_needed: [
+                "Overcurrent protection",
+                "Thermal shutdown",
+                "Output overvoltage protection",
+                "Power good indication"
+            ];
+        }
+        
+        gpu_voltage_regulator: VoltageRegulation {
+            description: "GPU/NPU supply";
+            input: "5V intermediate bus";
+            output: "1.0V @ 10A";
+            
+            critical_requirements: {
+                voltage_accuracy: ±2.5%;    // Slightly relaxed
+                dynamic_voltage_scaling: true;  // DVFS support
+                ripple: <15mV;
+                efficiency: >88%;
+            }
+        }
+        
+        io_voltage_regulators: VoltageRegulation {
+            description: "Multiple I/O voltages";
+            
+            io_1v8_supply: {
+                output: "1.8V @ 3A";
+                usage: "High-speed I/O, MIPI";
+                accuracy: ±3%;
+            }
+            
+            io_3v3_supply: {
+                output: "3.3V @ 2A";
+                usage: "General I/O, JTAG";
+                accuracy: ±3%;
+            }
+        }
+        
+        sequencing_controller: PowerSequencing {
+            description: "Ensures correct power-up sequence";
+            
+            sequence_order: [
+                "io_3v3_supply",    // I/O first
+                "io_1v8_supply",    
+                "core_voltage",     // Core before GPU
+                "gpu_voltage"       
+            ];
+            
+            timing: {
+                step_delay: 5ms;
+                total_time: <30ms;
+            }
+            
+            monitors: [
+                "Power good from each rail",
+                "SoC reset release",
+                "Fault detection"
+            ];
+        }
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // SUBSYSTEM-SPECIFIC HAZARDS (Detailed failure modes)
+    // ───────────────────────────────────────────────────────────────
+    
+    subsystem_hazards {
+        H_SoC_PWR_001: SubsystemHazard {
+            description: "Core voltage drops causing processor halt";
+            
+            failure_mode: "0.85V rail undervoltage";
+            
+            local_effect: "SoC enters undefined state";
+            
+            system_effect: "Vision processing stops, ADAS functions lost";
+            
+            inherited_asil: ASIL_D;  // From parent
+            
+            potential_causes: [
+                "Regulator component failure",
+                "Overcurrent condition",
+                "Thermal shutdown",
+                "Input voltage drop"
+            ];
+        }
+        
+        H_SoC_PWR_002: SubsystemHazard {
+            description: "Core voltage overshoot damaging SoC";
+            
+            failure_mode: "0.85V rail overvoltage (>0.95V)";
+            
+            local_effect: "Permanent SoC damage";
+            
+            system_effect: "Complete ECU failure";
+            
+            inherited_asil: ASIL_D;
+            
+            potential_causes: [
+                "Feedback loop failure",
+                "Reference drift",
+                "Control loop instability"
+            ];
+        }
+        
+        H_SoC_PWR_003: SubsystemHazard {
+            description: "Incorrect power sequencing";
+            
+            failure_mode: "I/O powered before core";
+            
+            local_effect: "Latchup condition in SoC";
+            
+            system_effect: "SoC requires power cycle, temporary loss";
+            
+            inherited_asil: ASIL_D;
+        }
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // DETAILED SAFETY REQUIREMENTS (Now with specific values)
+    // ───────────────────────────────────────────────────────────────
+    
+    detailed_safety_requirements {
+        
+        // Core voltage requirements (most critical)
+        REQ_CORE_001: SafetyRequirement {
+            description: "Monitor core voltage for out-of-range conditions";
+            addresses: H_SoC_PWR_001;
+            asil: ASIL_D;
+            
+            monitoring_specification {
+                monitored_rail: "0.85V core supply";
+                nominal: 0.85V;
+                
+                thresholds {
+                    undervoltage: 0.83V;  // -2.4% (SoC brownout)
+                    overvoltage: 0.87V;   // +2.4% (SoC stress)
+                    critical_overvoltage: 0.90V;  // Damage threshold
+                }
+                
+                timing {
+                    detection_time: ≤10µs;   // Very fast needed
+                    response_time: ≤20µs;    // Include signaling
+                }
+                
+                coverage {
+                    diagnostic_coverage: ≥99%;  // ASIL D requirement
+                }
+            }
+            
+            required_capability: VoltageMonitoring;
+        }
+        
+        REQ_CORE_002: SafetyRequirement {
+            description: "Overvoltage protection for core rail";
+            addresses: H_SoC_PWR_002;
+            asil: ASIL_D;
+            
+            protection_specification {
+                protected_rail: "0.85V core supply";
+                
+                protection_levels {
+                    warning: 0.87V;      // Alert level
+                    action: 0.88V;       // Take action
+                    shutdown: 0.90V;     // Emergency stop
+                }
+                
+                response_time: ≤5µs;     // Faster than monitor
+                
+                protection_method: "Active clamp or shutdown";
+            }
+            
+            required_capability: OvervoltageProtection;
+        }
+        
+        REQ_CORE_003: SafetyRequirement {
+            description: "Current limiting for core supply";
+            addresses: "Overcurrent protection";
+            asil: ASIL_D;
+            
+            current_limit_specification {
+                nominal_current: 15A;
+                current_limit: 18A;      // 20% margin
+                
+                action: "Foldback to safe level";
+                
+                response_time: ≤100µs;
+            }
+            
+            required_capability: CurrentLimiting;
+        }
+        
+        // GPU voltage requirements (slightly relaxed)
+        REQ_GPU_001: SafetyRequirement {
+            description: "Monitor GPU voltage";
+            addresses: H_SoC_PWR_001;
+            asil: ASIL_D;
+            
+            monitoring_specification {
+                monitored_rail: "1.0V GPU supply";
+                
+                thresholds {
+                    undervoltage: 0.97V;  // -3%
+                    overvoltage: 1.03V;   // +3%
+                }
+                
+                timing {
+                    detection_time: ≤20µs;  // Slightly relaxed
+                    response_time: ≤50µs;
+                }
+            }
+        }
+        
+        // Sequencing requirements
+        REQ_SEQ_001: SafetyRequirement {
+            description: "Power sequencing control";
+            addresses: H_SoC_PWR_003;
+            asil: ASIL_D;
+            
+            sequencing_specification {
+                sequence: [
+                    "3.3V I/O",
+                    "1.8V I/O",
+                    "0.85V core",
+                    "1.0V GPU"
+                ];
+                
+                timing {
+                    inter_rail_delay: 3ms..10ms;
+                    total_sequence: ≤40ms;
+                }
+                
+                monitoring: "Power good required before next step";
+                
+                abort_on_fault: true;
+            }
+            
+            required_capability: PowerSequencing;
+        }
+        
+        // Self-test requirements
+        REQ_TEST_001: SafetyRequirement {
+            description: "Periodic self-test of monitors";
+            asil: ASIL_D;
+            
+            self_test_specification {
+                test_coverage: ≥90%;     // ASIL D target
+                test_interval: ≤10ms;    // Fast for ASIL D
+                
+                test_items: [
+                    "Voltage monitor function",
+                    "OVP circuit",
+                    "Current limit",
+                    "Sequencer state machine"
+                ];
+            }
+            
+            required_capability: SelfTestable;
+        }
+    }
+    
+    // ───────────────────────────────────────────────────────────────
+    // INTERFACE TO OTHER SUBSYSTEMS
+    // ───────────────────────────────────────────────────────────────
+    
+    interfaces {
+        to_safety_mcu {
+            signals: [
+                "CORE_PGOOD",     // Power good indication
+                "GPU_PGOOD",
+                "FAULT_N",        // Aggregated fault
+                "TEMP_ALERT"      // Thermal warning
+            ];
+            
+            protocol: "GPIO with defined levels";
+            asil: ASIL_D;
+        }
+        
+        to_pmic {
+            interface: "I2C or SPI";
+            
+            controls: [
+                "Voltage adjustment",
+                "Enable/disable",
+                "Status readback"
+            ];
+            
+            asil: ASIL_D;
+        }
+        
+        from_system_power {
+            input: "12V vehicle power";
+            protection_required: true;
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// KEY OBSERVATIONS - SUBSYSTEM LEVEL
+// ═══════════════════════════════════════════════════════════════════
+
+/*
+What the Board Safety Engineer (SoC Power) has done:
+1. Taken high-level allocation from System Safety Architect
+2. Defined specific voltage rails and currents
+3. Set concrete thresholds based on SoC datasheet
+4. Specified exact timing requirements
+5. Detailed the safety mechanisms needed
+
+This is ONE subsystem engineer's work. In parallel:
+- CAN Power Engineer does similar for CAN supplies
+- Camera Power Engineer handles camera power
+- Safety MCU Engineer handles safety domain
+- Each creates their own detailed requirements
+
+All trace back to the system-level safety goals but with
+subsystem-specific implementation details.
+*/

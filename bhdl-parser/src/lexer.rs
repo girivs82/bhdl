@@ -57,6 +57,8 @@ pub fn lex_ident_or_kw(lex: &mut Lexer<LexerToken>) -> KeywordOrIdent {
         "null" => SyntaxKind::NULL_KW,
         "where" => SyntaxKind::WHERE_KW,
         "with" => SyntaxKind::WITH_KW,
+        "satisfies" => SyntaxKind::SATISFIES_KW,
+        "via" => SyntaxKind::VIA_KW,
         _ => SyntaxKind::IDENT,
     };
     KeywordOrIdent { kind, text: slice.into() }
@@ -269,9 +271,12 @@ fn keyword_or_ident_callback(lex: &mut Lexer<LexerToken>) -> KeywordOrIdent {
         "false" => SyntaxKind::FALSE_KW,
         "require" => SyntaxKind::REQUIRE_KW,
         "optional" => SyntaxKind::OPTIONAL_KW,
+        "virtual" => SyntaxKind::VIRTUAL_KW,
         "perspective" => SyntaxKind::PERSPECTIVE_KW,
         "where" => SyntaxKind::WHERE_KW,
         "with" => SyntaxKind::WITH_KW,
+        "satisfies" => SyntaxKind::SATISFIES_KW,
+        "via" => SyntaxKind::VIA_KW,
         // "pin_map" is NOT a keyword, parsed as IDENT
         
         // Testbench keywords - only top-level keywords are global
