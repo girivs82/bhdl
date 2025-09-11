@@ -1,0 +1,322 @@
+// Common definitions for linear voltage regulators
+// Shared types, parameters, and calculations for the linear regulator family
+
+import { voltage, current, power, resistance, capacitance, temperature, time } from "../../../units.bhdl";
+
+// ==================== LINEAR REGULATOR TYPES ====================
+
+// Regulator topology
+type RegulatorType = "fixed" | "adjustable" | "ldo" | "quasi-ldo";
+
+// Protection features common to linear regulators
+type ProtectionFeatures = {
+    thermal_shutdown: bool,
+    current_limiting: bool,
+    safe_area_protection: bool,
+    reverse_polarity: bool,
+    overvoltage_protection: bool,
+    short_circuit_protection: bool
+};
+
+// Thermal characteristics for linear regulators
+type LinearRegulatorThermal = {
+    // Standard thermal resistances by package
+    theta_ja: float,                    // Junction to ambient (°C/W)
+    theta_jc: float,                    // Junction to case (°C/W)
+    theta_jb: float?,                   // Junction to board (°C/W) - SMD only
+    
+    // Operating limits
+    tj_max: temperature,                 // Maximum junction temperature
+    tj_shutdown: temperature,            // Thermal shutdown temperature
+    tj_hysteresis: temperature,          // Shutdown hysteresis
+    
+    // Package specific
+    package_type: string,
+    heatsink_mountable: bool,
+    exposed_pad: bool
+};
+
+// Common electrical specifications
+type LinearRegulatorSpecs = {
+    // Voltage specifications
+    vin_min: voltage,
+    vin_max: voltage,
+    vout_nominal: voltage,
+    vout_tolerance: float,               // % tolerance
+    dropout_voltage: voltage,
+    
+    // Current specifications
+    iout_max: current,
+    iout_min: current,                   // Minimum load current
+    iq_typ: current,                     // Quiescent current typical
+    iq_max: current,                     // Quiescent current maximum
+    
+    // Regulation specifications
+    line_regulation: voltage,            // mV/V typical
+    load_regulation: voltage,            // mV/A typical
+    
+    // Dynamic specifications
+    psrr: float,                         // dB @ frequency
+    output_noise: voltage,               // µVrms
+    transient_response: time            // Response time to load step
+};
+
+// Stability requirements
+type StabilityRequirements = {
+    cout_min: capacitance,              // Minimum output capacitance
+    cout_max: capacitance?,             // Maximum output capacitance
+    esr_min: resistance?,               // Minimum ESR (for older regulators)
+    esr_max: resistance?,               // Maximum ESR
+    stable_with_ceramic: bool,          // Stable with low-ESR ceramic caps
+    compensation: string                 // "internal", "external", "adaptive"
+};
+
+// ==================== COMMON CALCULATIONS ====================
+
+// Calculate power dissipation in linear regulator
+function calculate_linear_power_dissipation(
+    vin: voltage,
+    vout: voltage,
+    iout: current,
+    iq: current = 5mA                   // Typical quiescent current
+): power {
+    return (vin - vout) * iout + vin * iq;
+}
+
+// Calculate required heatsink thermal resistance
+function calculate_heatsink_requirement(
+    power_dissipation: power,
+    tj_max: temperature,
+    ta_max: temperature,
+    theta_jc: float,
+    theta_cs: float = 0.5               // Case to sink interface (°C/W)
+): float {
+    const total_thermal_budget = (tj_max - ta_max) / power_dissipation;
+    const theta_sa_required = total_thermal_budget - theta_jc - theta_cs;
+    
+    if (theta_sa_required < 0) {
+        // Cannot achieve with any heatsink
+        return -1;
+    }
+    
+    return theta_sa_required;
+}
+
+// Check if regulator can operate without heatsink
+function can_operate_without_heatsink(
+    power_dissipation: power,
+    tj_max: temperature,
+    ta_max: temperature,
+    theta_ja: float
+): bool {
+    const tj_rise = power_dissipation * theta_ja;
+    return (ta_max + tj_rise) < tj_max;
+}
+
+// Calculate minimum input voltage for proper regulation
+function calculate_min_vin(
+    vout: voltage,
+    dropout: voltage,
+    margin: voltage = 0.5V               // Safety margin
+): voltage {
+    return vout + dropout + margin;
+}
+
+// ==================== STANDARD PACKAGES ====================
+
+const LINEAR_REGULATOR_PACKAGES = {
+    // Through-hole packages
+    TO92: {
+        theta_ja: 200,
+        theta_jc: 80,
+        theta_jb: null,
+        power_max: 0.625,                // Watts @ 25°C
+        heatsink_mountable: false,
+        pins: 3
+    },
+    TO220: {
+        theta_ja: 65,
+        theta_jc: 5,
+        theta_jb: null,
+        power_max: 2.0,                  // Without heatsink
+        power_max_heatsink: 20,          // With infinite heatsink
+        heatsink_mountable: true,
+        pins: 3
+    },
+    TO220FP: {                          // Fully plastic (isolated tab)
+        theta_ja: 60,
+        theta_jc: 3,
+        theta_jb: null,
+        power_max: 2.0,
+        heatsink_mountable: true,
+        isolated: true,
+        pins: 3
+    },
+    TO263: {                             // D2PAK
+        theta_ja: 35,
+        theta_jc: 3,
+        theta_jb: 24,
+        power_max: 2.5,                  // On PCB with copper
+        heatsink_mountable: false,       // SMD package
+        exposed_pad: true,
+        pins: 3
+    },
+    TO252: {                             // DPAK
+        theta_ja: 40,
+        theta_jc: 3,
+        theta_jb: 25,
+        power_max: 2.0,
+        heatsink_mountable: false,
+        exposed_pad: true,
+        pins: 3
+    },
+    
+    // SMD packages
+    SOT23: {
+        theta_ja: 250,
+        theta_jc: 150,
+        theta_jb: 50,
+        power_max: 0.35,
+        heatsink_mountable: false,
+        pins: [3, 5, 6]                   // Available in multiple pin counts
+    },
+    SOT223: {
+        theta_ja: 80,
+        theta_jc: 15,
+        theta_jb: 30,
+        power_max: 1.0,
+        heatsink_mountable: false,
+        exposed_pad: true,                // Tab for heat dissipation
+        pins: 4
+    },
+    SO8: {
+        theta_ja: 100,
+        theta_jc: 45,
+        theta_jb: 40,
+        power_max: 0.625,
+        heatsink_mountable: false,
+        pins: 8
+    }
+};
+
+// ==================== CAPACITOR REQUIREMENTS ====================
+
+// Standard capacitor recommendations by regulator generation
+const CAPACITOR_RECOMMENDATIONS = {
+    // Older regulators (7805, LM317, etc.)
+    vintage: {
+        cin_min: 0.33uF,
+        cin_recommended: 10uF,
+        cin_type: ["electrolytic", "tantalum"],
+        
+        cout_min: 0.1uF,
+        cout_recommended: 10uF,
+        cout_type: ["tantalum"],         // Needs ESR for stability
+        esr_range: (0.1, 5.0),           // Ohms
+        
+        stability_note: "Requires ESR for compensation"
+    },
+    
+    // Modern LDOs
+    modern_ldo: {
+        cin_min: 1uF,
+        cin_recommended: 10uF,
+        cin_type: ["ceramic", "tantalum"],
+        
+        cout_min: 1uF,
+        cout_recommended: 10uF,
+        cout_type: ["ceramic"],          // Works with low ESR
+        esr_range: (0.001, 1.0),
+        
+        stability_note: "Stable with ceramic capacitors"
+    },
+    
+    // Ultra-low dropout
+    uldo: {
+        cin_min: 1uF,
+        cin_recommended: 10uF,
+        cin_type: ["ceramic"],
+        
+        cout_min: 2.2uF,
+        cout_recommended: 22uF,
+        cout_type: ["ceramic"],
+        esr_range: (0.001, 0.1),
+        
+        stability_note: "May require specific capacitor value/type"
+    }
+};
+
+// ==================== PROTECTION DIODES ====================
+
+// Standard protection diode configurations
+const PROTECTION_DIODES = {
+    reverse_voltage: {
+        purpose: "Protects against output > input",
+        when_needed: "Output capacitor > 25µF",
+        diode_type: "1N4001 or similar",
+        rating: "Vin_max, Iout_max",
+        connection: "Cathode to input, anode to output"
+    },
+    
+    reverse_polarity_input: {
+        purpose: "Protects against reversed input",
+        when_needed: "Always recommended",
+        diode_type: "Schottky for low dropout",
+        rating: "Vin_max, Iout_max",
+        connection: "Series with input"
+    },
+    
+    output_protection: {
+        purpose: "Protects against negative transients",
+        when_needed: "Inductive loads present",
+        diode_type: "1N4001 or similar",
+        rating: "Vout + margin, load current",
+        connection: "Anode to ground, cathode to output"
+    }
+};
+
+// ==================== LAYOUT GUIDELINES ====================
+
+const PCB_LAYOUT_GUIDELINES = {
+    // Critical considerations
+    thermal: {
+        copper_area: "1 in² per watt minimum",
+        thermal_vias: "Use for SMD packages with exposed pad",
+        via_size: "0.3mm drill, 0.5mm pad",
+        via_count: "9-16 under exposed pad",
+        copper_weight: "2oz for high current"
+    },
+    
+    // Component placement
+    placement: {
+        input_cap: "< 10mm from VIN pin",
+        output_cap: "< 10mm from VOUT pin",
+        feedback_resistors: "< 5mm from FB pin (adjustable)",
+        priority: ["Output cap", "Input cap", "Feedback network"]
+    },
+    
+    // Routing
+    routing: {
+        ground: "Star connection at regulator GND",
+        power_traces: "20 mil per amp minimum",
+        kelvin_connection: "For remote sense if available",
+        avoid: "Ground loops, long feedback traces"
+    }
+};
+
+// ==================== EXPORT ====================
+export {
+    RegulatorType,
+    ProtectionFeatures,
+    LinearRegulatorThermal,
+    LinearRegulatorSpecs,
+    StabilityRequirements,
+    calculate_linear_power_dissipation,
+    calculate_heatsink_requirement,
+    can_operate_without_heatsink,
+    calculate_min_vin,
+    LINEAR_REGULATOR_PACKAGES,
+    CAPACITOR_RECOMMENDATIONS,
+    PROTECTION_DIODES,
+    PCB_LAYOUT_GUIDELINES
+};

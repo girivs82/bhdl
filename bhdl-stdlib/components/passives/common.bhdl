@@ -1,0 +1,201 @@
+// Common definitions for all passive components
+// Shared types, constants, and helper functions for resistors, capacitors, inductors
+
+import { voltage, current, power, resistance, capacitance, inductance, temperature, frequency } from "../../units.bhdl";
+
+// ==================== COMMON TYPES ====================
+
+// Temperature coefficient types
+type TempCoefficient = {
+    value: float,                        // ppm/°C or %/°C
+    reference_temp: temperature,         // Reference temperature
+    range: (temperature, temperature)    // Valid temperature range
+};
+
+// Package thermal characteristics
+type PackageThermal = {
+    thermal_resistance: float,           // °C/W
+    max_power: power,                   // Maximum power dissipation
+    derating_start: temperature,        // Temperature where derating begins
+    derating_factor: float              // Power derating %/°C above start
+};
+
+// Standard SMD package sizes with thermal data
+const PACKAGE_THERMAL_DATA = {
+    // Chip resistors and capacitors
+    "0201": { thermal_resistance: 500, max_power: 0.05W, derating_start: 70°C, derating_factor: 1.0 },
+    "0402": { thermal_resistance: 250, max_power: 0.063W, derating_start: 70°C, derating_factor: 1.0 },
+    "0603": { thermal_resistance: 200, max_power: 0.1W, derating_start: 70°C, derating_factor: 1.0 },
+    "0805": { thermal_resistance: 150, max_power: 0.125W, derating_start: 70°C, derating_factor: 1.0 },
+    "1206": { thermal_resistance: 100, max_power: 0.25W, derating_start: 70°C, derating_factor: 1.0 },
+    "1210": { thermal_resistance: 75, max_power: 0.5W, derating_start: 70°C, derating_factor: 1.0 },
+    "2010": { thermal_resistance: 60, max_power: 0.75W, derating_start: 70°C, derating_factor: 1.0 },
+    "2512": { thermal_resistance: 50, max_power: 1.0W, derating_start: 70°C, derating_factor: 1.0 }
+};
+
+// Tolerance specifications
+type Tolerance = {
+    nominal: float,                     // % tolerance
+    temperature_variation: float,       // Additional % over temp range
+    aging: float,                       // % drift over lifetime
+    voltage_coefficient: float?         // % change per volt (capacitors)
+};
+
+// Standard tolerance values
+const STANDARD_TOLERANCES = {
+    "0.1%": { nominal: 0.1, temperature_variation: 0.05, aging: 0.1 },
+    "0.5%": { nominal: 0.5, temperature_variation: 0.1, aging: 0.2 },
+    "1%": { nominal: 1.0, temperature_variation: 0.2, aging: 0.5 },
+    "5%": { nominal: 5.0, temperature_variation: 0.5, aging: 1.0 },
+    "10%": { nominal: 10.0, temperature_variation: 1.0, aging: 2.0 },
+    "20%": { nominal: 20.0, temperature_variation: 2.0, aging: 5.0 }
+};
+
+// Reliability data
+type ReliabilityData = {
+    mtbf: float,                        // Hours
+    fit_rate: float,                    // Failures per 10^9 hours
+    failure_modes: FailureMode[],
+    stress_factors: StressFactor[]
+};
+
+type FailureMode = {
+    mode: string,                       // "open", "short", "drift", etc.
+    probability: float,                 // % of failures
+    cause: string,                      // Root cause
+    prevention: string                  // Mitigation strategy
+};
+
+type StressFactor = {
+    factor: string,                     // "temperature", "voltage", "current", etc.
+    acceleration: float,                // Acceleration factor
+    model: string                       // "Arrhenius", "Eyring", etc.
+};
+
+// ==================== COMMON FUNCTIONS ====================
+
+// Calculate derated power based on temperature
+function calculate_derated_power(
+    package: string,
+    ambient_temp: temperature
+): power {
+    const pkg_data = PACKAGE_THERMAL_DATA[package];
+    if (ambient_temp <= pkg_data.derating_start) {
+        return pkg_data.max_power;
+    }
+    
+    const temp_rise = ambient_temp - pkg_data.derating_start;
+    const derating = 1.0 - (temp_rise * pkg_data.derating_factor / 100.0);
+    return pkg_data.max_power * derating.max(0.0);
+}
+
+// Calculate junction temperature for a passive component
+function calculate_junction_temp(
+    power_dissipation: power,
+    ambient_temp: temperature,
+    package: string
+): temperature {
+    const pkg_data = PACKAGE_THERMAL_DATA[package];
+    return ambient_temp + (power_dissipation * pkg_data.thermal_resistance);
+}
+
+// Select appropriate package for power dissipation
+function select_package_for_power(
+    power_required: power,
+    derating_factor: float = 0.5,     // 50% derating default
+    max_ambient: temperature = 85°C
+): string {
+    const derated_power = power_required / derating_factor;
+    
+    for (const [package, data] of PACKAGE_THERMAL_DATA) {
+        const available_power = calculate_derated_power(package, max_ambient);
+        if (available_power >= derated_power) {
+            return package;
+        }
+    }
+    
+    return "THT"; // Through-hole required for high power
+}
+
+// ==================== SAFETY FACTORS ====================
+
+// Standard derating factors for different applications
+const DERATING_FACTORS = {
+    commercial: {
+        power: 0.5,                     // 50% power derating
+        voltage: 0.8,                   // 80% voltage derating
+        current: 0.7,                   // 70% current derating
+        temperature: 0.8                // 80% temperature derating
+    },
+    industrial: {
+        power: 0.4,                     // 60% derating (more conservative)
+        voltage: 0.7,
+        current: 0.6,
+        temperature: 0.7
+    },
+    automotive: {
+        power: 0.3,                     // 70% derating (harsh environment)
+        voltage: 0.6,
+        current: 0.5,
+        temperature: 0.6
+    },
+    military: {
+        power: 0.25,                    // 75% derating (maximum reliability)
+        voltage: 0.5,
+        current: 0.5,
+        temperature: 0.5
+    }
+};
+
+// ==================== MANUFACTURING STANDARDS ====================
+
+// Standard value series (E-series)
+const E_SERIES = {
+    E6: [1.0, 1.5, 2.2, 3.3, 4.7, 6.8],                          // 20% tolerance
+    E12: [1.0, 1.2, 1.5, 1.8, 2.2, 2.7, 3.3, 3.9, 4.7, 5.6, 6.8, 8.2],  // 10% tolerance
+    E24: [1.0, 1.1, 1.2, 1.3, 1.5, 1.6, 1.8, 2.0, 2.2, 2.4, 2.7, 3.0,
+          3.3, 3.6, 3.9, 4.3, 4.7, 5.1, 5.6, 6.2, 6.8, 7.5, 8.2, 9.1],  // 5% tolerance
+    E96: "96 values per decade",                                  // 1% tolerance
+    E192: "192 values per decade"                                 // 0.5% tolerance
+};
+
+// Find nearest standard value
+function find_nearest_standard_value(
+    target_value: float,
+    series: string = "E24"
+): float {
+    const decade = 10 ** floor(log10(target_value));
+    const normalized = target_value / decade;
+    
+    const values = E_SERIES[series];
+    let nearest = values[0];
+    let min_diff = abs(normalized - values[0]);
+    
+    for (const value of values) {
+        const diff = abs(normalized - value);
+        if (diff < min_diff) {
+            min_diff = diff;
+            nearest = value;
+        }
+    }
+    
+    return nearest * decade;
+}
+
+// ==================== EXPORT ====================
+export {
+    TempCoefficient,
+    PackageThermal,
+    PACKAGE_THERMAL_DATA,
+    Tolerance,
+    STANDARD_TOLERANCES,
+    ReliabilityData,
+    FailureMode,
+    StressFactor,
+    calculate_derated_power,
+    calculate_junction_temp,
+    select_package_for_power,
+    DERATING_FACTORS,
+    E_SERIES,
+    find_nearest_standard_value
+};

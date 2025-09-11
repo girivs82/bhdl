@@ -1,0 +1,500 @@
+// Generic Resistor - Complete Component Knowledge
+// Fixed, variable, and specialized resistors
+
+import { resistance, power, voltage, current, temperature, frequency } from "../../../units.bhdl";
+
+// ==================== COMPONENT DEFINITION ====================
+module Resistor(
+    value: resistance,                  // Resistance value
+    tolerance: float = 5%,              // Tolerance percentage
+    power_rating: power = 0.25W,        // Power rating
+    temp_coef: float = 100              // ppm/°C
+) {
+    pin 1: signal inout {
+        description: "Terminal 1"
+    };
+    
+    pin 2: signal inout {
+        description: "Terminal 2"
+    };
+}
+
+// Common aliases
+module Res = Resistor;
+module R = Resistor;
+
+// ==================== ELECTRICAL CHARACTERISTICS ====================
+const RESISTOR_ELECTRICAL = {
+    // Standard values (E12 series - 10% tolerance)
+    e12_series: [
+        1.0, 1.2, 1.5, 1.8, 2.2, 2.7, 3.3, 3.9, 4.7, 5.6, 6.8, 8.2
+    ],
+    
+    // E24 series (5% tolerance)
+    e24_series: [
+        1.0, 1.1, 1.2, 1.3, 1.5, 1.6, 1.8, 2.0, 2.2, 2.4, 2.7, 3.0,
+        3.3, 3.6, 3.9, 4.3, 4.7, 5.1, 5.6, 6.2, 6.8, 7.5, 8.2, 9.1
+    ],
+    
+    // E96 series (1% tolerance)
+    e96_series: [
+        1.00, 1.02, 1.05, 1.07, 1.10, 1.13, 1.15, 1.18, 1.21, 1.24,
+        1.27, 1.30, 1.33, 1.37, 1.40, 1.43, 1.47, 1.50, 1.54, 1.58,
+        1.62, 1.65, 1.69, 1.74, 1.78, 1.82, 1.87, 1.91, 1.96, 2.00,
+        2.05, 2.10, 2.15, 2.21, 2.26, 2.32, 2.37, 2.43, 2.49, 2.55,
+        2.61, 2.67, 2.74, 2.80, 2.87, 2.94, 3.01, 3.09, 3.16, 3.24,
+        3.32, 3.40, 3.48, 3.57, 3.65, 3.74, 3.83, 3.92, 4.02, 4.12,
+        4.22, 4.32, 4.42, 4.53, 4.64, 4.75, 4.87, 4.99, 5.11, 5.23,
+        5.36, 5.49, 5.62, 5.76, 5.90, 6.04, 6.19, 6.34, 6.49, 6.65,
+        6.81, 6.98, 7.15, 7.32, 7.50, 7.68, 7.87, 8.06, 8.25, 8.45,
+        8.66, 8.87, 9.09, 9.31, 9.53, 9.76
+    ],
+    
+    // Decade multipliers
+    multipliers: [0.1, 1, 10, 100, 1000, 10000, 100000, 1000000],
+    
+    // Power ratings (standard)
+    standard_power_ratings: [
+        0.05, 0.063, 0.1, 0.125, 0.25, 0.5, 1, 2, 3, 5, 10, 25, 50, 100
+    ],
+    
+    // Tolerance grades
+    tolerance_grades: {
+        "M": 20%,
+        "K": 10%,
+        "J": 5%,
+        "G": 2%,
+        "F": 1%,
+        "D": 0.5%,
+        "C": 0.25%,
+        "B": 0.1%
+    }
+};
+
+// ==================== RESISTOR TYPES ====================
+const RESISTOR_TYPES = {
+    // Carbon Film
+    carbon_film: {
+        temp_coefficient: 350,          // ppm/°C
+        voltage_coefficient: 100,        // ppm/V
+        noise: -10,                      // dB relative to thermal
+        max_voltage: 250,                // V
+        power_range: (0.125, 2),         // W
+        tolerance_range: (2, 20),        // %
+        applications: "General purpose, low cost",
+        operating_temp: (-55°C, 155°C)
+    },
+    
+    // Metal Film
+    metal_film: {
+        temp_coefficient: 50,            // ppm/°C
+        voltage_coefficient: 5,          // ppm/V
+        noise: -20,                      // dB
+        max_voltage: 250,
+        power_range: (0.1, 3),
+        tolerance_range: (0.1, 5),
+        applications: "Precision circuits, low noise",
+        operating_temp: (-55°C, 175°C)
+    },
+    
+    // Thick Film (Chip)
+    thick_film: {
+        temp_coefficient: 100,           // ppm/°C
+        voltage_coefficient: 10,
+        noise: -15,
+        max_voltage: 200,
+        power_range: (0.05, 1),
+        tolerance_range: (1, 5),
+        applications: "SMD general purpose",
+        operating_temp: (-55°C, 155°C)
+    },
+    
+    // Thin Film (Chip)
+    thin_film: {
+        temp_coefficient: 25,            // ppm/°C
+        voltage_coefficient: 1,
+        noise: -30,
+        max_voltage: 150,
+        power_range: (0.05, 0.25),
+        tolerance_range: (0.1, 1),
+        applications: "Precision SMD",
+        operating_temp: (-55°C, 155°C)
+    },
+    
+    // Wirewound
+    wirewound: {
+        temp_coefficient: 20,            // ppm/°C
+        voltage_coefficient: 0,
+        noise: -40,                      // Very low noise
+        max_voltage: 500,
+        power_range: (1, 100),
+        tolerance_range: (0.1, 5),
+        applications: "High power, precision",
+        inductance: "Significant at high frequency",
+        operating_temp: (-55°C, 275°C)
+    },
+    
+    // Current Sense
+    current_sense: {
+        temp_coefficient: 50,            // ppm/°C
+        resistance_range: (0.001, 1),    // Ω
+        power_range: (0.25, 5),
+        tolerance_range: (1, 5),
+        four_terminal: true,             // Kelvin connection
+        applications: "Current measurement",
+        operating_temp: (-55°C, 170°C)
+    }
+};
+
+// ==================== PACKAGE TYPES ====================
+const RESISTOR_PACKAGES = {
+    // SMD Chip packages
+    "0201": {
+        dimensions: "0.6×0.3mm",
+        power_rating: 0.05W,
+        voltage_max: 25V,
+        resistance_range: (1Ω, 10MΩ)
+    },
+    
+    "0402": {
+        dimensions: "1.0×0.5mm",
+        power_rating: 0.063W,
+        voltage_max: 50V,
+        resistance_range: (1Ω, 10MΩ)
+    },
+    
+    "0603": {
+        dimensions: "1.6×0.8mm",
+        power_rating: 0.1W,
+        voltage_max: 75V,
+        resistance_range: (0.1Ω, 10MΩ)
+    },
+    
+    "0805": {
+        dimensions: "2.0×1.25mm",
+        power_rating: 0.125W,
+        voltage_max: 150V,
+        resistance_range: (0.01Ω, 10MΩ)
+    },
+    
+    "1206": {
+        dimensions: "3.2×1.6mm",
+        power_rating: 0.25W,
+        voltage_max: 200V,
+        resistance_range: (0.01Ω, 10MΩ)
+    },
+    
+    "1210": {
+        dimensions: "3.2×2.5mm",
+        power_rating: 0.5W,
+        voltage_max: 200V,
+        resistance_range: (0.01Ω, 10MΩ)
+    },
+    
+    "2010": {
+        dimensions: "5.0×2.5mm",
+        power_rating: 0.75W,
+        voltage_max: 200V,
+        resistance_range: (0.01Ω, 10MΩ)
+    },
+    
+    "2512": {
+        dimensions: "6.35×3.2mm",
+        power_rating: 1W,
+        voltage_max: 200V,
+        resistance_range: (0.01Ω, 10MΩ)
+    },
+    
+    // Through-hole
+    axial: {
+        lead_diameter: 0.6,              // mm typical
+        body_diameter: (2, 10),          // mm range
+        body_length: (3, 25),            // mm range
+        power_range: (0.25, 10),         // W
+        applications: "General purpose, power"
+    },
+    
+    // Power resistor packages
+    TO220: {
+        mounting: "Heatsink mountable",
+        power_rating: (20, 50),          // W with heatsink
+        thermal_resistance: 3,           // °C/W to heatsink
+        applications: "High power dissipation"
+    },
+    
+    // Current sense (4-terminal)
+    kelvin: {
+        sense_terminals: 2,
+        force_terminals: 2,
+        package_types: ["2512", "TO263"],
+        applications: "Precision current measurement"
+    }
+};
+
+// ==================== SIMULATION MODEL ====================
+const RESISTOR_SIMULATION = {
+    // Basic model
+    ideal_model: {
+        resistance: "R",
+        voltage: "V = I × R",
+        power: "P = I² × R = V²/R"
+    },
+    
+    // Practical model with parasitics
+    practical_model: {
+        resistance: "R",
+        inductance: "L_parasitic ≈ 0.002 × length_mm nH",
+        capacitance: "C_parasitic ≈ 0.5pF",
+        
+        // Temperature dependence
+        temp_model: "R(T) = R0 × (1 + α × (T - T0))",
+        
+        // Voltage dependence
+        voltage_model: "R(V) = R0 × (1 + β × V)",
+        
+        // Noise
+        thermal_noise: "V_noise = √(4kTRΔf)",
+        current_noise: "Excess noise in carbon types"
+    },
+    
+    // SPICE model
+    spice_model: {
+        simple: "R{ref} {1} {2} {value}",
+        with_temp: "R{ref} {1} {2} {value} TC={tempco}",
+        subcircuit: ".subckt R_{ref} 1 2\nR1 1 n1 {value}\nL1 n1 n2 {L_parasitic}\nC1 n2 2 {C_parasitic}\n.ends"
+    },
+    
+    // Power derating
+    power_derating: {
+        curve: "P(T) = P_rated × (1 - (T - 70)/(T_max - 70))",
+        start_temp: 70°C,               // Start derating
+        end_temp: 155°C,                // Zero power
+        altitude_factor: 0.95            // Per 1000m elevation
+    }
+};
+
+// ==================== CIRCUIT APPLICATIONS ====================
+const RESISTOR_APPLICATIONS = {
+    // Pull-up/Pull-down
+    pull_resistor: {
+        function: "Define logic level when floating",
+        value_range: (1kΩ, 100kΩ),
+        typical: 10kΩ,
+        power: "P = V²/R, typically < 10mW",
+        speed_consideration: "Lower R = faster, more power"
+    },
+    
+    // Current limiting (LED)
+    current_limiting: {
+        function: "Limit current through component",
+        formula: "R = (Vsupply - Vf) / If",
+        led_typical: {
+            "3.3V supply, red LED": 100Ω,
+            "5V supply, red LED": 220Ω,
+            "12V supply, red LED": 560Ω
+        },
+        power_rating: "P = (Vsupply - Vf)² / R"
+    },
+    
+    // Voltage divider
+    voltage_divider: {
+        function: "Scale voltage",
+        formula: "Vout = Vin × R2/(R1 + R2)",
+        impedance: "Z_out = R1 || R2",
+        loading_effect: "Consider load impedance",
+        tolerance_matching: "Use same tolerance/tempco"
+    },
+    
+    // Feedback network
+    feedback: {
+        function: "Set gain or voltage",
+        tolerance: 1%,                  // Typical requirement
+        temp_matching: true,            // Important
+        noise: "Use metal film for low noise",
+        layout: "Keep traces short, away from noise"
+    },
+    
+    // Termination
+    termination: {
+        function: "Match impedance, prevent reflections",
+        values: {
+            "RS-485": 120Ω,
+            "CAN": 120Ω,
+            "Ethernet": 100Ω,
+            "USB": 90Ω,
+            "Coax 50Ω": 50Ω,
+            "Coax 75Ω": 75Ω
+        },
+        tolerance: 1%,
+        placement: "At end of transmission line"
+    },
+    
+    // Current sensing
+    current_sense: {
+        function: "Measure current via voltage drop",
+        value_range: (0.001Ω, 0.1Ω),
+        tolerance: 1%,
+        temp_coef: 50,                  // ppm/°C max
+        layout: "Kelvin connection required",
+        power: "P = I² × R, keep < 1W typically"
+    },
+    
+    // Snubber
+    snubber: {
+        function: "Dampen oscillations",
+        rc_snubber: "R = √(L/C), typical 10-100Ω",
+        power_rating: "Consider peak currents",
+        type: "Carbon comp or wirewound"
+    }
+};
+
+// ==================== THERMAL CONSIDERATIONS ====================
+const RESISTOR_THERMAL = {
+    // Junction temperature
+    junction_temp: {
+        formula: "Tj = Ta + (P × θja)",
+        max_junction: 155°C,            // Typical for most types
+        derating_start: 70°C,           // Ambient
+        safety_margin: 0.7               // Use 70% of max
+    },
+    
+    // Thermal resistance
+    thermal_resistance: {
+        "0402": 300,                    // °C/W
+        "0603": 200,
+        "0805": 150,
+        "1206": 100,
+        "2010": 60,
+        "2512": 40,
+        "TO220": 3                      // With heatsink
+    },
+    
+    // PCB heat spreading
+    copper_area: {
+        "1oz": "1 in² dissipates ~2W with 40°C rise",
+        "2oz": "1 in² dissipates ~3W with 40°C rise",
+        thermal_vias: "Use for >0.5W SMD resistors"
+    },
+    
+    // Pulse handling
+    pulse_rating: {
+        single_pulse: "P_pulse = P_avg × √(T_period/T_pulse)",
+        repetitive: "Derate by 0.5 for continuous",
+        surge: "Can handle 10× rated for < 1ms"
+    }
+};
+
+// ==================== SELECTION FUNCTIONS ====================
+export function select_led_resistor(
+    vsupply: voltage,
+    vf_led: voltage,
+    if_led: current
+): ResistorSpec {
+    // Calculate resistance
+    const R = (vsupply - vf_led) / if_led;
+    
+    // Find nearest standard value (round up for safety)
+    const R_std = find_nearest_standard(R, true);
+    
+    // Calculate actual current with standard value
+    const I_actual = (vsupply - vf_led) / R_std;
+    
+    // Calculate power
+    const P = (vsupply - vf_led) * I_actual;
+    
+    // Select power rating (2× margin)
+    const P_rating = select_power_rating(P * 2);
+    
+    return {
+        resistance: R_std,
+        power_rating: P_rating,
+        tolerance: 5%,
+        package: select_package_for_power(P_rating),
+        actual_current: I_actual
+    };
+}
+
+export function select_pullup_resistor(
+    voltage: voltage,
+    sink_current: current = 0.5mA,
+    speed_requirement: string = "normal"
+): ResistorSpec {
+    // Select value based on speed requirement
+    let R: resistance;
+    switch(speed_requirement) {
+        case "fast":
+            R = 1000;    // 1kΩ for fast edges
+            break;
+        case "slow":
+            R = 100000;  // 100kΩ for low power
+            break;
+        default:
+            R = 10000;   // 10kΩ standard
+    }
+    
+    // Verify sink current capability
+    const I_max = voltage / R;
+    if (I_max < sink_current) {
+        R = voltage / sink_current;
+        R = find_nearest_standard(R, false);  // Round down
+    }
+    
+    // Power is typically negligible
+    const P = voltage * voltage / R;
+    
+    return {
+        resistance: R,
+        power_rating: 0.125,  // 1/8W is plenty
+        tolerance: 5%,
+        package: "0603",     // Standard SMD
+        pull_current: voltage / R
+    };
+}
+
+function find_nearest_standard(value: float, round_up: bool): float {
+    // Determine decade
+    const decade = Math.pow(10, Math.floor(Math.log10(value)));
+    const normalized = value / decade;
+    
+    // Find in E24 series
+    const series = RESISTOR_ELECTRICAL.e24_series;
+    let nearest: float;
+    
+    if (round_up) {
+        nearest = series.find(v => v >= normalized) || series[0] * 10;
+    } else {
+        nearest = series.reverse().find(v => v <= normalized) || series[series.length - 1] / 10;
+    }
+    
+    return nearest * decade;
+}
+
+function select_power_rating(power: power): power {
+    const ratings = RESISTOR_ELECTRICAL.standard_power_ratings;
+    return ratings.find(p => p >= power) || ratings[ratings.length - 1];
+}
+
+function select_package_for_power(power: power): string {
+    if (power <= 0.063) return "0402";
+    if (power <= 0.1) return "0603";
+    if (power <= 0.125) return "0805";
+    if (power <= 0.25) return "1206";
+    if (power <= 0.5) return "1210";
+    if (power <= 1.0) return "2512";
+    return "TO220";  // High power
+}
+
+// ==================== EXPORT ====================
+export {
+    Resistor,
+    Res,
+    R,
+    RESISTOR_ELECTRICAL,
+    RESISTOR_TYPES,
+    RESISTOR_PACKAGES,
+    RESISTOR_SIMULATION,
+    RESISTOR_APPLICATIONS,
+    RESISTOR_THERMAL,
+    select_led_resistor,
+    select_pullup_resistor
+};
