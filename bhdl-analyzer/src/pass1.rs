@@ -78,8 +78,17 @@ impl Pass1Context {
 
 // Populates global scope AND builds the map of definition_node -> its scope
 pub fn populate_global_scope_and_build_definition_scopes(source_file: &SourceFile) -> (SymbolTable, HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>) {
+    populate_global_scope_and_build_definition_scopes_with_base(source_file, Path::new("."))
+}
+
+// Populates global scope AND builds the map of definition_node -> its scope with specified base path
+pub fn populate_global_scope_and_build_definition_scopes_with_base(
+    source_file: &SourceFile, 
+    base_path: &Path
+) -> (SymbolTable, HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>) {
     println!("Building global scope and definition scopes map (Pass 1)...");
     let mut context = Pass1Context::new();
+    context.base_path = base_path.to_path_buf();
 
     let dummy_range = TextRange::new(0.into(), 0.into()); 
     context.global_scope_mut().insert(Symbol {

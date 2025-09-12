@@ -197,7 +197,15 @@ impl<'t> Parser<'t> {
             }
             
             self.builder.start_node(SyntaxKind::IMPORT_TARGET.into());
-            self.expect(SyntaxKind::IDENT);
+            // In import context, keywords should be treated as identifiers
+            if self.peek() == Some(SyntaxKind::IDENT) {
+                self.bump();
+            } else if self.is_contextual_keyword() {
+                // Accept keywords as identifiers in import context
+                self.bump();
+            } else {
+                self.error("Expected identifier or keyword in import list".to_string());
+            }
             self.builder.finish_node();
             
             // Check for comma
@@ -323,6 +331,18 @@ impl<'t> Parser<'t> {
             Some(self.tokens[pos].0)
         } else {
             None
+        }
+    }
+    
+    /// Check if the current token is a keyword that can be treated as an identifier in certain contexts
+    pub(crate) fn is_contextual_keyword(&self) -> bool {
+        match self.peek() {
+            Some(kind) => matches!(kind,
+                // Common type keywords that can be imported as type names
+                SyntaxKind::POWER_KW | SyntaxKind::SIGNAL_KW | SyntaxKind::GROUND_KW |
+                SyntaxKind::SWITCH_KW | SyntaxKind::FEEDBACK_KW
+            ),
+            None => false,
         }
     }
     
