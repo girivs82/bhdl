@@ -46,10 +46,10 @@ pub trait HasName: AstNode<Language = BhdlLanguage> {
 
 // Consolidated Re-exports
 pub use source_file::{SourceFile, Item};
-pub use items::{Board, Module, ComponentDef, InterfaceDef, TypedefDef, TypedefBase, ParamList, ModuleParam, ImportStmt};
+pub use items::{Board, Module, ComponentDef, InterfaceDef, TypedefDef, TypedefBase, ParamList, ModuleParam, ImportStmt, ConstDecl};
 pub use blocks::{LayerStackupBlock, DefaultDesignRulesBlock, ConstrainBlock, GenerateBlock, ForLoopGenerate, IfGenerate, LayerDef};
 pub use common::{Ident, ParamAssign, PortDecl, PinDecl, NetDecl, TypeRef, BusSuffix, RangeExpr, Value, ComponentInst, PinRef, NetRef, IdentRef, SimpleIdentRef, ComponentType, PortDirection, ParamDecl, ParamAssignBlock, ParamPlaceholder, PinMetadata, MetadataPair};
-pub use expr::{Expr, PrefixExpr, BinaryExpr, TernaryExpr, FunctionCallExpr, ArgumentList, FlowExpr as ExprFlowExpr, ComponentInstExpr};
+pub use expr::{Expr, PrefixExpr, BinaryExpr, TernaryExpr, FunctionCallExpr, ArgumentList, FlowExpr as ExprFlowExpr, ComponentInstExpr, ArrayExpr, StructLiteral, StructField};
 pub use flow::{FlowStmt, FlowExpr, FlowElement, ComponentInstantiation, GenerateStmt, ConditionalStmt, ConditionalExpr, AssignStmt};
 pub use hierarchical::{ModuleInst, PortMapping, PortPinRef, ConnectionTarget, ScopedAttribute, AttributePath};
 pub use visitor::{AstVisitor, ConstructCounter, ComponentTypeCollector};

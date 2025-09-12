@@ -111,6 +111,7 @@ impl<'t> Parser<'t> {
             self.skip_trivia();
             match self.peek() {
                 Some(SyntaxKind::R_BRACE) => break,
+                Some(SyntaxKind::CONST_KW) => self.parse_const_decl(),
                 Some(SyntaxKind::POWER_KW) => self.parse_power_decl(),
                 Some(SyntaxKind::GROUND_KW) => self.parse_ground_decl(),
                 Some(SyntaxKind::NET_KW) => self.parse_net_flow_stmt(),

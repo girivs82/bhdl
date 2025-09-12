@@ -161,6 +161,7 @@ pub enum SyntaxKind {
     INTERFACE_INST,      // instance: InterfaceName();
     TYPE_DEF,       // type TypeName = TypeExpression;
     STRUCT_LITERAL, // { field1: value1, field2: value2 }
+    STRUCT_FIELD,   // field1: value1
     NULL_LITERAL,   // null
     
     // Testbench nodes
@@ -197,6 +198,7 @@ pub enum SyntaxKind {
     CONNECTION_TARGET,  // U1.input or vin_rail
 
     // Items within Blocks
+    CONST_DECL,        // const name: type = value;
     PARAM_DECL,        // const param_name: type = value;
     PORT_DECL,         // port_name: direction type ...;
     PIN_DECL,          // pin pin_name: type direction;

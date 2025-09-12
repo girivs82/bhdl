@@ -78,6 +78,11 @@ impl Board {
     pub fn when_blocks(&self) -> impl Iterator<Item = crate::behavioral::WhenBlock> {
         self.0.children().filter_map(crate::behavioral::WhenBlock::cast)
     }
+    
+    // v2.0 const declarations in boards
+    pub fn const_decls(&self) -> impl Iterator<Item = ConstDecl> {
+        self.0.children().filter_map(ConstDecl::cast)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -366,5 +371,53 @@ impl ImportStmt {
         }
         
         names
+    }
+}
+
+// --- Const Declaration --- `const name: type = value;`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ConstDecl(pub(crate) SyntaxNode<BhdlLanguage>);
+
+impl AstNode for ConstDecl {
+    type Language = BhdlLanguage;
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::CONST_DECL }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { 
+        if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } 
+    }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+
+impl HasName for ConstDecl {}
+
+impl ConstDecl {
+    /// Get the const keyword
+    pub fn const_token(&self) -> Option<SyntaxToken<BhdlLanguage>> {
+        self.0.children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .find(|t| t.kind() == SyntaxKind::CONST_KW)
+    }
+    
+    /// Get the type annotation (if present)
+    pub fn type_ref(&self) -> Option<TypeRef> {
+        self.0.children().find_map(TypeRef::cast)
+    }
+    
+    /// Get the initializer expression
+    pub fn initializer(&self) -> Option<Expr> {
+        self.0.children().find_map(Expr::cast)
+    }
+    
+    /// Get the colon token
+    pub fn colon_token(&self) -> Option<SyntaxToken<BhdlLanguage>> {
+        self.0.children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .find(|t| t.kind() == SyntaxKind::COLON)
+    }
+    
+    /// Get the equals token
+    pub fn eq_token(&self) -> Option<SyntaxToken<BhdlLanguage>> {
+        self.0.children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .find(|t| t.kind() == SyntaxKind::EQ)
     }
 }

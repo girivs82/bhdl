@@ -16,6 +16,9 @@ pub enum Expr {
     // Add flow-specific expressions
     FlowExpr(FlowExpr),
     ComponentInstExpr(ComponentInstExpr),
+    // BHDL v2.0 advanced syntax
+    ArrayExpr(ArrayExpr),
+    StructLiteral(StructLiteral),
     // For simple identifiers (like attribute references)
     Ident(SyntaxNode<BhdlLanguage>),
     // For literal values
@@ -36,6 +39,8 @@ impl AstNode for Expr {
         FunctionCallExpr::can_cast(kind) ||
         FlowExpr::can_cast(kind) ||
         ComponentInstExpr::can_cast(kind) ||
+        ArrayExpr::can_cast(kind) ||
+        StructLiteral::can_cast(kind) ||
         kind == SyntaxKind::IDENT ||
         matches!(kind, SyntaxKind::NUMBER | SyntaxKind::STRING)
     }
@@ -62,6 +67,10 @@ impl AstNode for Expr {
                 Some(Expr::FlowExpr(FlowExpr::cast(syntax.clone())?)),
             _ if ComponentInstExpr::can_cast(syntax.kind()) => 
                 Some(Expr::ComponentInstExpr(ComponentInstExpr::cast(syntax.clone())?)),
+            _ if ArrayExpr::can_cast(syntax.kind()) => 
+                Some(Expr::ArrayExpr(ArrayExpr::cast(syntax.clone())?)),
+            _ if StructLiteral::can_cast(syntax.kind()) => 
+                Some(Expr::StructLiteral(StructLiteral::cast(syntax.clone())?)),
             SyntaxKind::IDENT => 
                 Some(Expr::Ident(syntax)),
             SyntaxKind::NUMBER | SyntaxKind::STRING => 
@@ -82,6 +91,8 @@ impl AstNode for Expr {
             Expr::FunctionCallExpr(n) => n.syntax(),
             Expr::FlowExpr(n) => n.syntax(),
             Expr::ComponentInstExpr(n) => n.syntax(),
+            Expr::ArrayExpr(n) => n.syntax(),
+            Expr::StructLiteral(n) => n.syntax(),
             Expr::Ident(n) => n,
             Expr::Literal(n) => n,
         }
@@ -290,5 +301,115 @@ impl ComponentInstExpr {
     pub fn parameters(&self) -> impl Iterator<Item = Expr> {
         // Find parameter expressions within the instantiation
         self.0.children().filter_map(Expr::cast)
+    }
+}
+
+// --- Array Expression --- `[item1, item2, ...]` or tuple `(item1, item2, ...)`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ArrayExpr(pub(crate) SyntaxNode<BhdlLanguage>);
+
+impl AstNode for ArrayExpr {
+    type Language = BhdlLanguage;
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::ARRAY_EXPR }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { 
+        if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } 
+    }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+
+impl ArrayExpr {
+    /// Get all elements in the array/tuple
+    pub fn elements(&self) -> impl Iterator<Item = Expr> {
+        self.0.children().filter_map(Expr::cast)
+    }
+    
+    /// Check if this is a tuple (parentheses) vs array (brackets)
+    pub fn is_tuple(&self) -> bool {
+        self.0.children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .any(|t| t.kind() == SyntaxKind::L_PAREN)
+    }
+    
+    /// Get the number of elements
+    pub fn len(&self) -> usize {
+        self.elements().count()
+    }
+    
+    /// Check if the array is empty
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+// --- Struct Literal --- `{ field1: value1, field2: value2 }`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StructLiteral(pub(crate) SyntaxNode<BhdlLanguage>);
+
+impl AstNode for StructLiteral {
+    type Language = BhdlLanguage;
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::STRUCT_LITERAL }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { 
+        if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } 
+    }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+
+impl StructLiteral {
+    /// Get all field assignments in the struct literal
+    pub fn fields(&self) -> impl Iterator<Item = StructField> {
+        self.0.children().filter_map(StructField::cast)
+    }
+    
+    /// Get a specific field by name
+    pub fn get_field(&self, name: &str) -> Option<StructField> {
+        self.fields().find(|field| {
+            field.name()
+                .map(|token| token.text() == name)
+                .unwrap_or(false)
+        })
+    }
+    
+    /// Get the number of fields
+    pub fn len(&self) -> usize {
+        self.fields().count()
+    }
+    
+    /// Check if the struct is empty
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+// --- Struct Field --- `field_name: value`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StructField(pub(crate) SyntaxNode<BhdlLanguage>);
+
+impl AstNode for StructField {
+    type Language = BhdlLanguage;
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::STRUCT_FIELD }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { 
+        if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } 
+    }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+
+impl StructField {
+    /// Get the field name
+    pub fn name(&self) -> Option<SyntaxToken<BhdlLanguage>> {
+        self.0.children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .find(|t| t.kind() == SyntaxKind::IDENT)
+    }
+    
+    /// Get the field value expression
+    pub fn value(&self) -> Option<Expr> {
+        self.0.children().find_map(Expr::cast)
+    }
+    
+    /// Get the colon token
+    pub fn colon_token(&self) -> Option<SyntaxToken<BhdlLanguage>> {
+        self.0.children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .find(|t| t.kind() == SyntaxKind::COLON)
     }
 } 
