@@ -1,0 +1,244 @@
+// SPICE Models for Open-Drain/Open-Collector Circuits
+// These models help simulation catch missing or incorrect pull-ups
+
+import { DriveType } from "../pin_characteristics.bhdl";
+
+// Open-drain pin SPICE model
+type OpenDrainSpiceModel = {
+    // Transistor parameters
+    ron: resistance,           // On-resistance when pulling low
+    roff: resistance,          // Off-resistance (very high impedance)
+    capacitance: capacitance,  // Pin capacitance
+    
+    // Voltage thresholds
+    vil: voltage,              // Input low threshold
+    vih: voltage,              // Input high threshold  
+    vol: voltage,              // Output low voltage (when sinking current)
+    
+    // Current capabilities
+    iol_max: current,          // Maximum sink current
+    leakage: current,          // Leakage current when off
+    
+    // Switching characteristics
+    tpd_hl: time,             // Propagation delay high-to-low
+    tpd_lh: time,             // Propagation delay low-to-high (depends on pull-up!)
+    
+    // Pull-up requirements
+    pullup_required: bool,     // Must have pull-up for proper operation
+    pullup_rail_voltage: voltage,  // Expected pull-up voltage
+    pullup_resistance_range: (resistance, resistance),  // Min/max pull-up values
+};
+
+// SPICE equations for open-drain simulation
+module OpenDrainPin(
+    model: OpenDrainSpiceModel,
+    pullup_present: bool = false,
+    pullup_value: resistance = 10kΩ,
+    pullup_voltage: voltage = 3.3V
+) {
+    pin pad: signal inout;     // The actual pin
+    pin control: signal in;    // Internal control signal
+    
+    // SPICE model attributes
+    attribute spice_model = "open_drain";
+    attribute spice_type = "behavioral";
+    
+    // The key SPICE equations that reveal missing pull-ups
+    
+    // Output current equation (positive = sourcing, negative = sinking)
+    attribute spice_equation_i = 
+        control < model.vil ? 
+            // Pulling low: sink current through on-resistance
+            -(v_pad - model.vol) / model.ron :
+        control > model.vih ?
+            // High-Z state: only leakage current (CRITICAL: no active pull-up!)
+            pullup_present ? 
+                (pullup_voltage - v_pad) / pullup_value :  // Pull-up provides current
+                model.leakage :                             // Just leakage - WILL FLOAT!
+        // Transitioning
+        : 0;
+    
+    // Voltage equation shows the problem clearly
+    attribute spice_equation_v_steady_state =
+        control < model.vil ?
+            model.vol :  // Pulled low to VOL (e.g., 0.4V)
+        pullup_present ?
+            pullup_voltage - (model.leakage * pullup_value) :  // Pulls to rail minus drop
+            undefined;   // FLOATING! Simulation would show undefined/oscillating
+    
+    // Rise time equation reveals pull-up dependency
+    attribute spice_equation_rise_time =
+        pullup_present ?
+            2.2 * pullup_value * model.capacitance :  // RC time constant
+            infinity;  // Cannot rise without pull-up!
+    
+    // This is what simulation would show:
+    attribute simulation_behavior = pullup_present ? {
+        low_state: {
+            voltage: model.vol,
+            current: -model.iol_max,  // Sinking current
+            impedance: model.ron
+        },
+        high_state: {
+            voltage: pullup_voltage * (pullup_value / (pullup_value + model.roff)),
+            current: pullup_voltage / pullup_value,  // Pull-up sources current
+            impedance: pullup_value  // Dominated by pull-up
+        },
+        rise_time: 2.2 * pullup_value * model.capacitance,
+        fall_time: 2.2 * model.ron * model.capacitance
+    } : {
+        low_state: {
+            voltage: model.vol,
+            current: -model.iol_max,
+            impedance: model.ron
+        },
+        high_state: {
+            voltage: floating,  // UNDEFINED!
+            current: model.leakage,
+            impedance: model.roff  // Very high impedance
+        },
+        rise_time: infinity,  // CANNOT RISE!
+        fall_time: 2.2 * model.ron * model.capacitance,
+        warning: "Open-drain output without pull-up will float!"
+    };
+    
+    // Validation that would fail in simulation without pull-up
+    attribute validation_checks = [
+        {
+            check: "pull_up_present",
+            condition: pullup_present == true,
+            error: "Open-drain pin requires pull-up resistor for proper operation"
+        },
+        {
+            check: "pull_up_voltage_correct", 
+            condition: pullup_voltage >= model.pullup_rail_voltage * 0.9,
+            error: f"Pull-up voltage {pullup_voltage} too low for {model.pullup_rail_voltage} logic"
+        },
+        {
+            check: "pull_up_value_in_range",
+            condition: pullup_value >= model.pullup_resistance_range.0 && 
+                      pullup_value <= model.pullup_resistance_range.1,
+            error: f"Pull-up {pullup_value} outside recommended range"
+        }
+    ];
+}
+
+// I2C-specific open-drain model
+const I2C_STANDARD_MODE: OpenDrainSpiceModel = {
+    ron: 40Ω,              // Typical for I2C drivers
+    roff: 10MΩ,            // Very high when off
+    capacitance: 10pF,     // Typical pin capacitance
+    
+    vil: 0.3 * 3.3V,       // 30% of VDD for I2C
+    vih: 0.7 * 3.3V,       // 70% of VDD for I2C
+    vol: 0.4V,             // Maximum VOL for I2C
+    
+    iol_max: 3mA,          // I2C standard mode current
+    leakage: 10µA,         // Maximum leakage
+    
+    tpd_hl: 10ns,          // Fast pull-down
+    tpd_lh: null,          // Depends entirely on pull-up!
+    
+    pullup_required: true,
+    pullup_rail_voltage: 3.3V,
+    pullup_resistance_range: (1.5kΩ, 10kΩ)  // I2C typical range
+};
+
+const I2C_FAST_MODE: OpenDrainSpiceModel = {
+    ron: 20Ω,              // Lower resistance for faster edges
+    roff: 10MΩ,
+    capacitance: 10pF,
+    
+    vil: 0.3 * 3.3V,
+    vih: 0.7 * 3.3V,
+    vol: 0.4V,
+    
+    iol_max: 20mA,         // Higher current for fast mode
+    leakage: 10µA,
+    
+    tpd_hl: 5ns,           // Faster transitions
+    tpd_lh: null,
+    
+    pullup_required: true,
+    pullup_rail_voltage: 3.3V,
+    pullup_resistance_range: (1kΩ, 4.7kΩ)  // Stronger pull-ups for speed
+};
+
+// Simulation test case that would fail without pull-up
+module TestOpenDrainWithoutPullup {
+    // This configuration would FAIL in simulation
+    pin scl_bad: OpenDrainPin(
+        model=I2C_STANDARD_MODE,
+        pullup_present=false  // NO PULL-UP!
+    );
+    
+    // Simulation results would show:
+    // Time    Control  Pad Voltage  Status
+    // 0ns     LOW      0.4V         OK (pulled low)
+    // 10ns    HIGH     ???          FLOATING! (undefined)
+    // 20ns    HIGH     0.8V?        Random noise/coupling
+    // 30ns    HIGH     1.2V?        Still below VIH!
+    // Result: I2C communication fails
+    
+    // This configuration would SUCCEED
+    pin scl_good: OpenDrainPin(
+        model=I2C_STANDARD_MODE,
+        pullup_present=true,
+        pullup_value=4.7kΩ,
+        pullup_voltage=3.3V
+    );
+    
+    // Simulation results would show:
+    // Time    Control  Pad Voltage  Status
+    // 0ns     LOW      0.4V         OK (pulled low)
+    // 10ns    HIGH     0.4V         Starting to rise...
+    // 20ns    HIGH     2.1V         Rising (RC curve)
+    // 30ns    HIGH     2.9V         Above VIH threshold
+    // 40ns    HIGH     3.2V         Settled high
+    // Result: I2C communication works!
+}
+
+// Wrong rail voltage detection
+module TestWrongPullupRail {
+    // Pull-up to wrong rail (1.2V core instead of 3.3V I/O)
+    pin scl_wrong_rail: OpenDrainPin(
+        model=I2C_STANDARD_MODE,
+        pullup_present=true,
+        pullup_value=4.7kΩ,
+        pullup_voltage=1.2V  // WRONG! Pulling to core voltage
+    );
+    
+    // Simulation would show:
+    // Maximum high voltage = 1.2V
+    // VIH threshold = 0.7 * 3.3V = 2.31V
+    // Result: 1.2V < 2.31V → LOGIC HIGH NOT RECOGNIZED!
+    // Error: "Signal never reaches valid high level"
+}
+
+// Multi-voltage bus simulation
+module TestMultiVoltageBus {
+    // 3.3V device
+    device_3v3: OpenDrainPin(
+        model={...I2C_STANDARD_MODE, vih: 0.7 * 3.3V},
+        pullup_voltage=3.3V
+    );
+    
+    // 5V device on same bus
+    device_5v: OpenDrainPin(
+        model={...I2C_STANDARD_MODE, vih: 0.7 * 5.0V},
+        pullup_voltage=3.3V  // Bus pulled to 3.3V
+    );
+    
+    // Simulation would show:
+    // Bus high voltage = 3.3V
+    // 3.3V device VIH = 2.31V → OK (3.3V > 2.31V)
+    // 5V device VIH = 3.5V → FAIL (3.3V < 3.5V)
+    // Warning: "5V device may not recognize high level on 3.3V bus"
+}
+
+// Export models and test cases
+export {
+    OpenDrainSpiceModel, OpenDrainPin,
+    I2C_STANDARD_MODE, I2C_FAST_MODE,
+    TestOpenDrainWithoutPullup, TestWrongPullupRail, TestMultiVoltageBus
+};
