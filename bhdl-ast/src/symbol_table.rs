@@ -3,14 +3,12 @@
 //! This module provides symbol table functionality for tracking declarations,
 //! scopes, and name resolution in BHDL programs.
 
-use crate::flow::{FlowStmt, ComponentInstantiation, GenerateStmt, AssignStmt};
-use crate::common::{IdentRef, Value, ParamAssign};
-use crate::expr::Expr;
-use crate::items::{Board, Module, ComponentDef, InterfaceDef};
-use crate::{SyntaxKind, BhdlLanguage, SyntaxNode, HasName};
+use crate::flow::{ComponentInstantiation, GenerateStmt, AssignStmt};
+use crate::items::{Board, Module};
+use crate::{BhdlLanguage, SyntaxNode, HasName};
 use crate::visitor::AstVisitor;
 use rowan::ast::AstNode;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// Symbol kinds for different types of declarations
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

@@ -6,14 +6,14 @@ use bhdl_ast::{HasName,
     // Needed for Pass2Context, visitors, resolve_node_type_info etc.
     // Removed: SourceFile, Board, Module, ComponentDef, InterfaceDef
     // items::{Board, Module, ComponentDef, InterfaceDef}, // For scope handling - REMOVED
-    common::{NetDecl, PinDecl, PinRef, PortDecl, ComponentInst, TypeRef, SimpleIdentRef, IdentRef, NetRef, ParamAssign}, // Added PinDecl for v2.0 virtual pin support
+    common::{NetDecl, PinRef, PortDecl, ComponentInst, TypeRef, SimpleIdentRef, IdentRef, NetRef}, // Added PinDecl for v2.0 virtual pin support
     interfaces::InterfaceInst,
     flow::{FlowExpr, FlowElement},
 };
 
 use crate::symbol_table::{Symbol, SymbolKind, SymbolTable, PortDirectionKind};
 use crate::types::{ResolvedTypeInfo, Diagnostic}; // Need ResolvedTypeInfo, Diagnostic - Removed ResolvedConstants
-use crate::builtin_variables::{BuiltinVariableManager, is_dependency_excluded};
+use crate::builtin_variables::BuiltinVariableManager;
 
 // --- Pass 2: Check References --- 
 

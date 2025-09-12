@@ -1,10 +1,9 @@
 // BHDL v2.0 AST Blocks
 // Only supports v2.0 flow-based syntax
 
-use crate::{SyntaxKind, BhdlLanguage, SyntaxNode, SyntaxToken};
-use rowan::ast::{AstNode, AstChildren};
-use crate::common::{ParamAssign, PortDecl, ComponentInst, NetDecl};
-use crate::v2_statements::ConnectionStmt;
+use crate::{SyntaxKind, BhdlLanguage, SyntaxNode};
+use rowan::ast::AstNode;
+use crate::common::ParamAssign;
 
 // v2.0 only has a few specialized blocks, most content is now direct statements
 

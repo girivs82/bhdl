@@ -9,7 +9,7 @@ use bhdl_ast::{HasName,
 
 use crate::symbol_table::{Symbol, SymbolKind, SymbolTable};
 use crate::types::{Diagnostic, ResolvedConstants};
-use crate::helpers::{parse_expr_as_i64, parse_value_as_i64};
+use crate::helpers::parse_value_as_i64;
 
 // --- Pass 3: Evaluate Constant Expressions ---
 

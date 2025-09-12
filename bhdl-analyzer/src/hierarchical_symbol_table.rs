@@ -2,7 +2,7 @@
 // This module enhances the symbol table to support hierarchical module scopes
 
 use std::collections::HashMap;
-use rowan::{TextRange, ast::SyntaxNodePtr};
+use rowan::ast::SyntaxNodePtr;
 use bhdl_parser::BhdlLanguage;
 use crate::symbol_table::{Symbol, SymbolKind, SymbolTable};
 

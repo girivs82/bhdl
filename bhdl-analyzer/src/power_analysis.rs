@@ -6,7 +6,7 @@
 //! - Power sequencing logic generation
 //! - Cross-domain signal validation
 
-use crate::types::{AnalysisResult, SourceLocation};
+use crate::types::SourceLocation;
 use bhdl_ast::{SyntaxKind, BhdlLanguage, SyntaxNode};
 use rowan::ast::AstNode;
 use std::collections::{HashMap, HashSet};
@@ -1000,7 +1000,7 @@ fn analyze_signal_connections(_node: &SyntaxNode<BhdlLanguage>, _context: &mut P
 
 /// Second pass: propagate power domains through the circuit
 fn propagate_power_domains_in_circuit(syntax: &SyntaxNode<BhdlLanguage>, context: &mut PowerAnalysisContext) {
-    use bhdl_ast::v2_statements::ConnectionStmt;
+    
     
     // Build a map of all connections in the circuit
     let mut connections: Vec<(String, String)> = Vec::new();

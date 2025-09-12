@@ -3,12 +3,11 @@
 //! This module provides utilities for transforming and manipulating AST nodes,
 //! including node replacement, structural modifications, and tree rewrites.
 
-use crate::flow::{FlowStmt, FlowExpr, ComponentInstantiation, GenerateStmt, ConditionalStmt, AssignStmt};
-use crate::common::{ParamAssign, PinRef, NetRef, IdentRef, Value, RangeExpr};
-use crate::v2_statements::ConnectionStmt;
-use crate::expr::{Expr, BinaryExpr, PrefixExpr, TernaryExpr, FunctionCallExpr, ComponentInstExpr};
-use crate::items::{Board, Module, ComponentDef};
-use crate::{SyntaxKind, BhdlLanguage, SyntaxNode, HasName};
+use crate::flow::{FlowStmt, ComponentInstantiation, GenerateStmt, ConditionalStmt};
+use crate::common::IdentRef;
+use crate::expr::Expr;
+use crate::items::Board;
+use crate::{BhdlLanguage, SyntaxNode};
 use crate::visitor::AstVisitor;
 use rowan::ast::AstNode;
 use std::collections::HashMap;
@@ -271,7 +270,7 @@ impl Transformer for FlowFlatteningTransformer {
                 
                 if elements.len() >= 2 {
                     // Create connection statements between adjacent elements
-                    let mut connections = Vec::new();
+                    let connections = Vec::new();
                     
                     for _i in 0..elements.len()-1 {
                         // Create connection from element[i] to element[i+1]

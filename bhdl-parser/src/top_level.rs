@@ -2,7 +2,7 @@
 // Only supports v2.0 flow-based syntax
 
 use crate::syntax::SyntaxKind;
-use super::core::{Parser, SyntaxKindExt};
+use super::core::Parser;
 
 impl<'t> Parser<'t> {
     // Main parsing entry point
@@ -20,6 +20,7 @@ impl<'t> Parser<'t> {
                 SyntaxKind::IMPORT_KW => self.parse_import_stmt(),
                 SyntaxKind::INTERFACE_KW => self.parse_interface_def(),
                 SyntaxKind::TESTBENCH_KW => self.parse_testbench(),
+                SyntaxKind::CONST_KW => self.parse_const_decl(),
                 _ => {
                     // Handle unexpected tokens at the top level
                     self.error(format!("Expected a top-level item (e.g., 'board', 'module', 'interface', 'testbench', etc.), found {:?}", kind));
@@ -637,7 +638,7 @@ impl<'t> Parser<'t> {
     }
 
     // Parse const declaration: const name: type = value;
-    fn parse_const_decl(&mut self) {
+    pub(crate) fn parse_const_decl(&mut self) {
         self.builder.start_node(SyntaxKind::PARAM_DECL.into());
         self.expect(SyntaxKind::CONST_KW);
         self.expect(SyntaxKind::IDENT); // Const name

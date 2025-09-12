@@ -2,7 +2,6 @@
 // Evaluates attribute expressions at runtime with actual values
 
 use std::collections::HashMap;
-use std::f64::consts;
 use bhdl_ast::expr::{Expr, BinaryExpr, PrefixExpr, TernaryExpr, FunctionCallExpr};
 use bhdl_ast::common::{Value, IdentRef};
 use bhdl_ast::{SyntaxNode, BhdlLanguage, SyntaxKind};

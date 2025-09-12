@@ -3,7 +3,6 @@
 //! This module implements intelligent component selection and parameter inference
 //! based on circuit requirements and electrical constraints.
 
-use crate::types::SourceLocation;
 use std::collections::HashMap;
 use std::fmt;
 

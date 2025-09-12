@@ -3,11 +3,10 @@
 //! This module provides semantic validation for AST constructs to ensure
 //! they follow BHDL language rules and constraints.
 
-use crate::flow::{FlowStmt, FlowExpr, ComponentInstantiation, GenerateStmt, ConditionalStmt, AssignStmt};
-use crate::common::{ParamAssign, PinRef, NetRef, IdentRef, Value, RangeExpr};
-use crate::v2_statements::ConnectionStmt;
-use crate::expr::{Expr, BinaryExpr, PrefixExpr, TernaryExpr, FunctionCallExpr, ComponentInstExpr};
-use crate::items::{Board, Module, ComponentDef};
+use crate::flow::{FlowStmt, ComponentInstantiation, GenerateStmt, AssignStmt};
+use crate::common::RangeExpr;
+use crate::expr::{Expr, BinaryExpr};
+use crate::items::Board;
 use crate::{SyntaxKind, BhdlLanguage, SyntaxNode, HasName};
 use crate::visitor::{AstVisitor, ComponentTypeCollector};
 use rowan::ast::AstNode;

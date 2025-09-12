@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
-use anyhow::{Result, Context};
+use anyhow::Result;
 use serde::{Serialize, Deserialize};
 
 pub mod resolver;

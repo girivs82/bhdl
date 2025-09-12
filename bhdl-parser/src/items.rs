@@ -2,7 +2,7 @@
 // Only supports v2.0 flow-based syntax
 
 use crate::syntax::SyntaxKind;
-use super::core::{Parser, SyntaxKindExt};
+use super::core::Parser;
 
 impl<'t> Parser<'t> {
     // v2.0 item parsing functions

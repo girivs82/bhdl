@@ -3,7 +3,7 @@
 use crate::{SyntaxKind, BhdlLanguage, SyntaxNode, SyntaxToken, HasName};
 use crate::expr::Expr;
 use crate::common::{RangeExpr, ParamAssign, ParamAssignBlock};
-use rowan::ast::{AstNode, AstChildren};
+use rowan::ast::AstNode;
 
 // --- Flow Statement --- `name: flow_expr;`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

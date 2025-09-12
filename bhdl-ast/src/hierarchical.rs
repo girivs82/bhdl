@@ -2,8 +2,7 @@
 // Support for modules containing modules and components
 
 use crate::{SyntaxKind, BhdlLanguage, SyntaxNode, SyntaxToken, HasName};
-use rowan::ast::{AstNode, AstChildren};
-use crate::common::{ParamAssign, ComponentInst};
+use rowan::ast::AstNode;
 use crate::items::ParamList;
 use crate::expr::Expr;
 
