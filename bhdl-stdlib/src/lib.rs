@@ -234,6 +234,28 @@ impl StdlibReader {
                 ]
             })
     }
+    
+    /// Check if a component has virtual pins
+    pub fn has_virtual_pins(&self, component_type: &str) -> bool {
+        self.get_component(component_type)
+            .map(|def| def.pins.iter().any(|p| p.is_virtual))
+            .unwrap_or(false)
+    }
+    
+    /// Get synthesis knowledge for a component from its BHDL file
+    /// This extracts the _SYNTHESIS const if it exists
+    pub fn get_synthesis_knowledge(&self, component_type: &str) -> Option<String> {
+        // For now, return a placeholder - full implementation would parse the BHDL file
+        // and extract the const TPS54331_SYNTHESIS or similar
+        // debug!("Loading synthesis knowledge for component: {}", component_type);
+        
+        // TODO: Parse the BHDL file and extract synthesis knowledge
+        // This would look for patterns like:
+        // const TPS54331_SYNTHESIS = { ... }
+        // const TPS54331_VIRTUAL_PIN_EXPANSION = { ... }
+        
+        None
+    }
 }
 
 /// Get the default stdlib path relative to the project root

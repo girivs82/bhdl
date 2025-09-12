@@ -46,15 +46,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Check for virtual pin expansion markers
             println!("\n{}", "=== Looking for Virtual Pin Expansion ===".bold().magenta());
             
+            // Debug: print all instances
+            println!("\n{}", "=== All Instances in Netlist ===".bold().yellow());
+            for (id, inst) in &netlist.instances {
+                let module_name = netlist.modules.get(inst.definition)
+                    .map(|m| m.name.clone())
+                    .unwrap_or_else(|| "Unknown".to_string());
+                
+                println!("Instance {:?}: name={}, module={}", 
+                    id, 
+                    inst.name,
+                    module_name
+                );
+                
+                // Check attributes
+                if !inst.attributes.is_empty() {
+                    println!("  Attributes: {:?}", inst.attributes);
+                }
+            }
+            
             // Look for component names that would indicate virtual pin expansion worked
+            // The synthesizer prefixes virtual pin components with the IC instance name
             let virtual_pin_components = vec![
-                "L1", "C_BOOT", "C_OUT", "R_FB", "C_COMP", "C_SS"
+                "U1_L1",    // Inductor
+                "U1_C",     // Capacitors (multiple)
+                "U1_R",     // Resistors (multiple)
+                "U1_D",     // Diode
+                "U1_LED",   // Status LED
             ];
             
             for comp in &virtual_pin_components {
-                let found = netlist.instances.values().any(|inst| 
+                let found = netlist.instances.values().any(|inst| {
                     inst.name.contains(comp)
-                );
+                });
                 
                 if found {
                     println!("  {} Found component containing '{}'", "✓".green(), comp);

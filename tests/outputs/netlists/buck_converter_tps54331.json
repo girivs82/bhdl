@@ -6,6 +6,23 @@
     },
     {
       "value": {
+        "name": "TestPoint",
+        "kind": "Module",
+        "ports": [],
+        "pins": [
+          {
+            "idx": 10,
+            "version": 1
+          }
+        ],
+        "internal_instances": [],
+        "internal_nets": [],
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
         "name": "BuckConverterTPS54331",
         "kind": "Board",
         "ports": [],
@@ -18,20 +35,8 @@
     },
     {
       "value": {
-        "name": "TestPoint",
-        "kind": "Module",
-        "ports": [],
-        "pins": [],
-        "internal_instances": [],
-        "internal_nets": [],
-        "attributes": {}
-      },
-      "version": 1
-    },
-    {
-      "value": {
-        "name": "Cap",
-        "kind": "PhysicalComponent",
+        "name": "TPS54331",
+        "kind": "Component",
         "ports": [],
         "pins": [
           {
@@ -40,6 +45,34 @@
           },
           {
             "idx": 2,
+            "version": 1
+          },
+          {
+            "idx": 3,
+            "version": 1
+          },
+          {
+            "idx": 4,
+            "version": 1
+          },
+          {
+            "idx": 5,
+            "version": 1
+          },
+          {
+            "idx": 6,
+            "version": 1
+          },
+          {
+            "idx": 7,
+            "version": 1
+          },
+          {
+            "idx": 8,
+            "version": 1
+          },
+          {
+            "idx": 9,
             "version": 1
           }
         ],
@@ -52,15 +85,36 @@
     {
       "value": {
         "name": "Cap",
-        "kind": "PhysicalComponent",
+        "kind": "Component",
         "ports": [],
         "pins": [
           {
-            "idx": 3,
+            "idx": 11,
             "version": 1
           },
           {
-            "idx": 4,
+            "idx": 12,
+            "version": 1
+          }
+        ],
+        "internal_instances": [],
+        "internal_nets": [],
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "SS34",
+        "kind": "Component",
+        "ports": [],
+        "pins": [
+          {
+            "idx": 13,
+            "version": 1
+          },
+          {
+            "idx": 14,
             "version": 1
           }
         ],
@@ -73,15 +127,92 @@
     {
       "value": {
         "name": "Res",
-        "kind": "PhysicalComponent",
+        "kind": "Component",
         "ports": [],
         "pins": [
           {
-            "idx": 5,
+            "idx": 15,
             "version": 1
           },
           {
-            "idx": 6,
+            "idx": 16,
+            "version": 1
+          }
+        ],
+        "internal_instances": [],
+        "internal_nets": [],
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "Capacitor",
+        "kind": "Component",
+        "ports": [],
+        "pins": [],
+        "internal_instances": [],
+        "internal_nets": [],
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "Diode",
+        "kind": "Component",
+        "ports": [],
+        "pins": [],
+        "internal_instances": [],
+        "internal_nets": [],
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "Inductor",
+        "kind": "Component",
+        "ports": [],
+        "pins": [],
+        "internal_instances": [],
+        "internal_nets": [],
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "Resistor",
+        "kind": "Component",
+        "ports": [],
+        "pins": [],
+        "internal_instances": [],
+        "internal_nets": [],
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "LED",
+        "kind": "Component",
+        "ports": [],
+        "pins": [],
+        "internal_instances": [],
+        "internal_nets": [],
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "Power",
+        "kind": "PhysicalComponent",
+        "ports": [],
+        "pins": [
+          {
+            "idx": 17,
             "version": 1
           }
         ],
@@ -98,24 +229,7 @@
         "ports": [],
         "pins": [
           {
-            "idx": 7,
-            "version": 1
-          }
-        ],
-        "internal_instances": [],
-        "internal_nets": [],
-        "attributes": {}
-      },
-      "version": 1
-    },
-    {
-      "value": {
-        "name": "Power",
-        "kind": "PhysicalComponent",
-        "ports": [],
-        "pins": [
-          {
-            "idx": 8,
+            "idx": 18,
             "version": 1
           }
         ],
@@ -132,7 +246,7 @@
         "ports": [],
         "pins": [
           {
-            "idx": 9,
+            "idx": 19,
             "version": 1
           }
         ],
@@ -156,16 +270,58 @@
     },
     {
       "value": {
+        "name": "Cap",
+        "kind": "PhysicalComponent",
+        "ports": [],
+        "pins": [
+          {
+            "idx": 20,
+            "version": 1
+          },
+          {
+            "idx": 21,
+            "version": 1
+          }
+        ],
+        "internal_instances": [],
+        "internal_nets": [],
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
         "name": "SS34",
         "kind": "PhysicalComponent",
         "ports": [],
         "pins": [
           {
-            "idx": 10,
+            "idx": 22,
             "version": 1
           },
           {
-            "idx": 11,
+            "idx": 23,
+            "version": 1
+          }
+        ],
+        "internal_instances": [],
+        "internal_nets": [],
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "Res",
+        "kind": "PhysicalComponent",
+        "ports": [],
+        "pins": [
+          {
+            "idx": 24,
+            "version": 1
+          },
+          {
+            "idx": 25,
             "version": 1
           }
         ],
@@ -182,11 +338,11 @@
         "ports": [],
         "pins": [
           {
-            "idx": 12,
+            "idx": 26,
             "version": 1
           },
           {
-            "idx": 13,
+            "idx": 27,
             "version": 1
           }
         ],
@@ -204,49 +360,51 @@
     },
     {
       "value": {
-        "name": "C_IN1",
+        "name": "U1",
         "definition": {
           "idx": 3,
           "version": 1
         },
-        "attributes": {
-          "value": "0.0000001",
-          "voltage": "25V"
-        }
+        "attributes": {}
       },
       "version": 1
     },
     {
       "value": {
-        "name": "C_IN2",
+        "name": "TestPoint",
+        "definition": {
+          "idx": 1,
+          "version": 1
+        },
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "Cap",
         "definition": {
           "idx": 4,
           "version": 1
         },
-        "attributes": {
-          "voltage": "25V",
-          "value": "0.0000001"
-        }
+        "attributes": {}
       },
       "version": 1
     },
     {
       "value": {
-        "name": "R_LOAD",
+        "name": "SS34",
         "definition": {
           "idx": 5,
           "version": 1
         },
-        "attributes": {
-          "value": "2.5",
-          "wattage": "10W"
-        }
+        "attributes": {}
       },
       "version": 1
     },
     {
       "value": {
-        "name": "VIN",
+        "name": "Res",
         "definition": {
           "idx": 6,
           "version": 1
@@ -257,7 +415,7 @@
     },
     {
       "value": {
-        "name": "VOUT_5V",
+        "name": "U1_C1",
         "definition": {
           "idx": 7,
           "version": 1
@@ -268,7 +426,18 @@
     },
     {
       "value": {
-        "name": "GND",
+        "name": "U1_C2",
+        "definition": {
+          "idx": 7,
+          "version": 1
+        },
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "U1_D1",
         "definition": {
           "idx": 8,
           "version": 1
@@ -279,12 +448,138 @@
     },
     {
       "value": {
-        "name": "C1",
+        "name": "U1_L1",
         "definition": {
-          "idx": 3,
+          "idx": 9,
           "version": 1
         },
         "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "U1_C3",
+        "definition": {
+          "idx": 7,
+          "version": 1
+        },
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "U1_C4",
+        "definition": {
+          "idx": 7,
+          "version": 1
+        },
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "U1_R1",
+        "definition": {
+          "idx": 10,
+          "version": 1
+        },
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "U1_R2",
+        "definition": {
+          "idx": 10,
+          "version": 1
+        },
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "U1_C5",
+        "definition": {
+          "idx": 7,
+          "version": 1
+        },
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "U1_R3",
+        "definition": {
+          "idx": 10,
+          "version": 1
+        },
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "U1_LED1",
+        "definition": {
+          "idx": 11,
+          "version": 1
+        },
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "VIN",
+        "definition": {
+          "idx": 12,
+          "version": 1
+        },
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "VOUT_5V",
+        "definition": {
+          "idx": 13,
+          "version": 1
+        },
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "GND",
+        "definition": {
+          "idx": 14,
+          "version": 1
+        },
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "C1",
+        "definition": {
+          "idx": 16,
+          "version": 1
+        },
+        "attributes": {
+          "calculation_method": "simulation_based",
+          "sim_voltage_rating": "25V",
+          "sim_max_esr": "1.111",
+          "sim_dielectric": "X7R"
+        }
       },
       "version": 1
     },
@@ -292,22 +587,27 @@
       "value": {
         "name": "C2",
         "definition": {
-          "idx": 3,
+          "idx": 16,
           "version": 1
         },
-        "attributes": {}
+        "attributes": {
+          "sim_voltage_rating": "25V",
+          "sim_dielectric": "X7R",
+          "calculation_method": "simulation_based",
+          "sim_max_esr": "1.111"
+        }
       },
       "version": 1
     },
     {
       "value": {
-        "name": "U1",
+        "name": "U2",
         "definition": {
-          "idx": 10,
+          "idx": 17,
           "version": 1
         },
         "attributes": {
-          "vout": "5V"
+          "simulation_enhanced": "true"
         }
       },
       "version": 1
@@ -316,21 +616,15 @@
       "value": {
         "name": "R1",
         "definition": {
-          "idx": 5,
+          "idx": 18,
           "version": 1
         },
-        "attributes": {}
-      },
-      "version": 1
-    },
-    {
-      "value": {
-        "name": "U2",
-        "definition": {
-          "idx": 11,
-          "version": 1
-        },
-        "attributes": {}
+        "attributes": {
+          "sim_resistance": "600.0",
+          "sim_power_rating": "500mW",
+          "calculation_method": "simulation_based",
+          "sim_voltage_rating": "25V"
+        }
       },
       "version": 1
     },
@@ -338,10 +632,12 @@
       "value": {
         "name": "U3",
         "definition": {
-          "idx": 11,
+          "idx": 19,
           "version": 1
         },
-        "attributes": {}
+        "attributes": {
+          "simulation_enhanced": "true"
+        }
       },
       "version": 1
     },
@@ -349,10 +645,25 @@
       "value": {
         "name": "U4",
         "definition": {
-          "idx": 11,
+          "idx": 19,
           "version": 1
         },
-        "attributes": {}
+        "attributes": {
+          "simulation_enhanced": "true"
+        }
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "U5",
+        "definition": {
+          "idx": 19,
+          "version": 1
+        },
+        "attributes": {
+          "simulation_enhanced": "true"
+        }
       },
       "version": 1
     }
@@ -368,19 +679,7 @@
         "connections": [
           {
             "PinInstance": {
-              "idx": 7,
-              "version": 1
-            }
-          },
-          {
-            "PinInstance": {
               "idx": 1,
-              "version": 1
-            }
-          },
-          {
-            "PinInstance": {
-              "idx": 3,
               "version": 1
             }
           }
@@ -397,13 +696,7 @@
         "connections": [
           {
             "PinInstance": {
-              "idx": 8,
-              "version": 1
-            }
-          },
-          {
-            "PinInstance": {
-              "idx": 5,
+              "idx": 2,
               "version": 1
             }
           }
@@ -420,57 +713,12 @@
         "connections": [
           {
             "PinInstance": {
-              "idx": 9,
+              "idx": 3,
               "version": 1
             }
           }
         ],
         "net_class": "Ground"
-      },
-      "version": 1
-    },
-    {
-      "value": {
-        "name": null,
-        "connections": [
-          {
-            "PinInstance": {
-              "idx": 2,
-              "version": 1
-            }
-          }
-        ],
-        "net_class": "Signal"
-      },
-      "version": 1
-    },
-    {
-      "value": {
-        "name": null,
-        "connections": [
-          {
-            "PinInstance": {
-              "idx": 4,
-              "version": 1
-            }
-          }
-        ],
-        "net_class": "Signal"
-      },
-      "version": 1
-    },
-    {
-      "value": {
-        "name": null,
-        "connections": [
-          {
-            "PinInstance": {
-              "idx": 6,
-              "version": 1
-            }
-          }
-        ],
-        "net_class": "Signal"
       },
       "version": 1
     },
@@ -516,9 +764,9 @@
           "idx": 1,
           "version": 1
         },
-        "name": "1",
-        "direction": "In",
-        "pin_type": "Signal",
+        "name": "VIN",
+        "direction": "Power",
+        "pin_type": "Power",
         "module": {
           "idx": 3,
           "version": 1
@@ -533,9 +781,9 @@
           "idx": 2,
           "version": 1
         },
-        "name": "2",
-        "direction": "In",
-        "pin_type": "Signal",
+        "name": "SW",
+        "direction": "Passive",
+        "pin_type": "Passive",
         "module": {
           "idx": 3,
           "version": 1
@@ -550,11 +798,11 @@
           "idx": 3,
           "version": 1
         },
-        "name": "1",
-        "direction": "In",
-        "pin_type": "Signal",
+        "name": "GND",
+        "direction": "Ground",
+        "pin_type": "Ground",
         "module": {
-          "idx": 4,
+          "idx": 3,
           "version": 1
         },
         "description": null
@@ -567,11 +815,11 @@
           "idx": 4,
           "version": 1
         },
-        "name": "2",
-        "direction": "In",
-        "pin_type": "Signal",
+        "name": "FB",
+        "direction": "Passive",
+        "pin_type": "Passive",
         "module": {
-          "idx": 4,
+          "idx": 3,
           "version": 1
         },
         "description": null
@@ -584,11 +832,11 @@
           "idx": 5,
           "version": 1
         },
-        "name": "1",
+        "name": "BOOT",
         "direction": "In",
         "pin_type": "Signal",
         "module": {
-          "idx": 5,
+          "idx": 3,
           "version": 1
         },
         "description": null
@@ -601,11 +849,11 @@
           "idx": 6,
           "version": 1
         },
-        "name": "2",
+        "name": "EN",
         "direction": "In",
         "pin_type": "Signal",
         "module": {
-          "idx": 5,
+          "idx": 3,
           "version": 1
         },
         "description": null
@@ -618,11 +866,11 @@
           "idx": 7,
           "version": 1
         },
-        "name": "OUT",
-        "direction": "Out",
-        "pin_type": "Power",
+        "name": "SS",
+        "direction": "In",
+        "pin_type": "Signal",
         "module": {
-          "idx": 6,
+          "idx": 3,
           "version": 1
         },
         "description": null
@@ -635,11 +883,11 @@
           "idx": 8,
           "version": 1
         },
-        "name": "OUT",
-        "direction": "Out",
-        "pin_type": "Power",
+        "name": "COMP",
+        "direction": "In",
+        "pin_type": "Signal",
         "module": {
-          "idx": 7,
+          "idx": 3,
           "version": 1
         },
         "description": null
@@ -652,11 +900,11 @@
           "idx": 9,
           "version": 1
         },
-        "name": "GND",
-        "direction": "InOut",
-        "pin_type": "Ground",
+        "name": "VOUT",
+        "direction": "Power",
+        "pin_type": "Power",
         "module": {
-          "idx": 8,
+          "idx": 3,
           "version": 1
         },
         "description": null
@@ -670,10 +918,10 @@
           "version": 1
         },
         "name": "1",
-        "direction": "InOut",
+        "direction": "In",
         "pin_type": "Signal",
         "module": {
-          "idx": 10,
+          "idx": 1,
           "version": 1
         },
         "description": null
@@ -686,11 +934,11 @@
           "idx": 11,
           "version": 1
         },
-        "name": "2",
-        "direction": "InOut",
+        "name": "1",
+        "direction": "In",
         "pin_type": "Signal",
         "module": {
-          "idx": 10,
+          "idx": 4,
           "version": 1
         },
         "description": null
@@ -703,11 +951,11 @@
           "idx": 12,
           "version": 1
         },
-        "name": "1",
-        "direction": "InOut",
+        "name": "2",
+        "direction": "In",
         "pin_type": "Signal",
         "module": {
-          "idx": 11,
+          "idx": 4,
           "version": 1
         },
         "description": null
@@ -720,11 +968,249 @@
           "idx": 13,
           "version": 1
         },
+        "name": "1",
+        "direction": "InOut",
+        "pin_type": "Signal",
+        "module": {
+          "idx": 5,
+          "version": 1
+        },
+        "description": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 14,
+          "version": 1
+        },
         "name": "2",
         "direction": "InOut",
         "pin_type": "Signal",
         "module": {
-          "idx": 11,
+          "idx": 5,
+          "version": 1
+        },
+        "description": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 15,
+          "version": 1
+        },
+        "name": "1",
+        "direction": "In",
+        "pin_type": "Signal",
+        "module": {
+          "idx": 6,
+          "version": 1
+        },
+        "description": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 16,
+          "version": 1
+        },
+        "name": "2",
+        "direction": "In",
+        "pin_type": "Signal",
+        "module": {
+          "idx": 6,
+          "version": 1
+        },
+        "description": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 17,
+          "version": 1
+        },
+        "name": "OUT",
+        "direction": "Out",
+        "pin_type": "Power",
+        "module": {
+          "idx": 12,
+          "version": 1
+        },
+        "description": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 18,
+          "version": 1
+        },
+        "name": "OUT",
+        "direction": "Out",
+        "pin_type": "Power",
+        "module": {
+          "idx": 13,
+          "version": 1
+        },
+        "description": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 19,
+          "version": 1
+        },
+        "name": "GND",
+        "direction": "InOut",
+        "pin_type": "Ground",
+        "module": {
+          "idx": 14,
+          "version": 1
+        },
+        "description": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 20,
+          "version": 1
+        },
+        "name": "1",
+        "direction": "Passive",
+        "pin_type": "Passive",
+        "module": {
+          "idx": 16,
+          "version": 1
+        },
+        "description": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 21,
+          "version": 1
+        },
+        "name": "2",
+        "direction": "Passive",
+        "pin_type": "Passive",
+        "module": {
+          "idx": 16,
+          "version": 1
+        },
+        "description": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 22,
+          "version": 1
+        },
+        "name": "1",
+        "direction": "InOut",
+        "pin_type": "Signal",
+        "module": {
+          "idx": 17,
+          "version": 1
+        },
+        "description": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 23,
+          "version": 1
+        },
+        "name": "2",
+        "direction": "InOut",
+        "pin_type": "Signal",
+        "module": {
+          "idx": 17,
+          "version": 1
+        },
+        "description": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 24,
+          "version": 1
+        },
+        "name": "1",
+        "direction": "Passive",
+        "pin_type": "Passive",
+        "module": {
+          "idx": 18,
+          "version": 1
+        },
+        "description": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 25,
+          "version": 1
+        },
+        "name": "2",
+        "direction": "Passive",
+        "pin_type": "Passive",
+        "module": {
+          "idx": 18,
+          "version": 1
+        },
+        "description": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 26,
+          "version": 1
+        },
+        "name": "1",
+        "direction": "InOut",
+        "pin_type": "Signal",
+        "module": {
+          "idx": 19,
+          "version": 1
+        },
+        "description": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 27,
+          "version": 1
+        },
+        "name": "2",
+        "direction": "InOut",
+        "pin_type": "Signal",
+        "module": {
+          "idx": 19,
           "version": 1
         },
         "description": null
@@ -744,11 +1230,11 @@
           "version": 1
         },
         "pin_def": {
-          "idx": 1,
+          "idx": 17,
           "version": 1
         },
         "instance": {
-          "idx": 1,
+          "idx": 17,
           "version": 1
         },
         "net": {
@@ -766,15 +1252,15 @@
           "version": 1
         },
         "pin_def": {
-          "idx": 2,
+          "idx": 18,
           "version": 1
         },
         "instance": {
-          "idx": 1,
+          "idx": 18,
           "version": 1
         },
         "net": {
-          "idx": 4,
+          "idx": 2,
           "version": 1
         },
         "connection_name": null
@@ -788,15 +1274,15 @@
           "version": 1
         },
         "pin_def": {
-          "idx": 3,
+          "idx": 19,
           "version": 1
         },
         "instance": {
-          "idx": 2,
+          "idx": 19,
           "version": 1
         },
         "net": {
-          "idx": 1,
+          "idx": 3,
           "version": 1
         },
         "connection_name": null
@@ -810,17 +1296,14 @@
           "version": 1
         },
         "pin_def": {
-          "idx": 4,
+          "idx": 20,
           "version": 1
         },
         "instance": {
-          "idx": 2,
+          "idx": 20,
           "version": 1
         },
-        "net": {
-          "idx": 5,
-          "version": 1
-        },
+        "net": null,
         "connection_name": null
       },
       "version": 1
@@ -832,17 +1315,14 @@
           "version": 1
         },
         "pin_def": {
-          "idx": 5,
+          "idx": 21,
           "version": 1
         },
         "instance": {
-          "idx": 3,
+          "idx": 20,
           "version": 1
         },
-        "net": {
-          "idx": 2,
-          "version": 1
-        },
+        "net": null,
         "connection_name": null
       },
       "version": 1
@@ -854,17 +1334,14 @@
           "version": 1
         },
         "pin_def": {
-          "idx": 6,
+          "idx": 20,
           "version": 1
         },
         "instance": {
-          "idx": 3,
+          "idx": 21,
           "version": 1
         },
-        "net": {
-          "idx": 6,
-          "version": 1
-        },
+        "net": null,
         "connection_name": null
       },
       "version": 1
@@ -876,17 +1353,14 @@
           "version": 1
         },
         "pin_def": {
-          "idx": 7,
+          "idx": 21,
           "version": 1
         },
         "instance": {
-          "idx": 4,
+          "idx": 21,
           "version": 1
         },
-        "net": {
-          "idx": 1,
-          "version": 1
-        },
+        "net": null,
         "connection_name": null
       },
       "version": 1
@@ -898,17 +1372,14 @@
           "version": 1
         },
         "pin_def": {
-          "idx": 8,
+          "idx": 22,
           "version": 1
         },
         "instance": {
-          "idx": 5,
+          "idx": 22,
           "version": 1
         },
-        "net": {
-          "idx": 2,
-          "version": 1
-        },
+        "net": null,
         "connection_name": null
       },
       "version": 1
@@ -920,17 +1391,14 @@
           "version": 1
         },
         "pin_def": {
-          "idx": 9,
+          "idx": 23,
           "version": 1
         },
         "instance": {
-          "idx": 6,
+          "idx": 22,
           "version": 1
         },
-        "net": {
-          "idx": 3,
-          "version": 1
-        },
+        "net": null,
         "connection_name": null
       },
       "version": 1
@@ -942,11 +1410,11 @@
           "version": 1
         },
         "pin_def": {
-          "idx": 1,
+          "idx": 24,
           "version": 1
         },
         "instance": {
-          "idx": 7,
+          "idx": 23,
           "version": 1
         },
         "net": null,
@@ -961,11 +1429,11 @@
           "version": 1
         },
         "pin_def": {
-          "idx": 2,
+          "idx": 25,
           "version": 1
         },
         "instance": {
-          "idx": 7,
+          "idx": 23,
           "version": 1
         },
         "net": null,
@@ -980,11 +1448,11 @@
           "version": 1
         },
         "pin_def": {
-          "idx": 1,
+          "idx": 26,
           "version": 1
         },
         "instance": {
-          "idx": 8,
+          "idx": 24,
           "version": 1
         },
         "net": null,
@@ -999,11 +1467,11 @@
           "version": 1
         },
         "pin_def": {
-          "idx": 2,
+          "idx": 27,
           "version": 1
         },
         "instance": {
-          "idx": 8,
+          "idx": 24,
           "version": 1
         },
         "net": null,
@@ -1018,11 +1486,11 @@
           "version": 1
         },
         "pin_def": {
-          "idx": 10,
+          "idx": 26,
           "version": 1
         },
         "instance": {
-          "idx": 9,
+          "idx": 25,
           "version": 1
         },
         "net": null,
@@ -1037,11 +1505,11 @@
           "version": 1
         },
         "pin_def": {
-          "idx": 11,
+          "idx": 27,
           "version": 1
         },
         "instance": {
-          "idx": 9,
+          "idx": 25,
           "version": 1
         },
         "net": null,
@@ -1056,11 +1524,11 @@
           "version": 1
         },
         "pin_def": {
-          "idx": 5,
+          "idx": 26,
           "version": 1
         },
         "instance": {
-          "idx": 10,
+          "idx": 26,
           "version": 1
         },
         "net": null,
@@ -1075,125 +1543,11 @@
           "version": 1
         },
         "pin_def": {
-          "idx": 6,
+          "idx": 27,
           "version": 1
         },
         "instance": {
-          "idx": 10,
-          "version": 1
-        },
-        "net": null,
-        "connection_name": null
-      },
-      "version": 1
-    },
-    {
-      "value": {
-        "id": {
-          "idx": 18,
-          "version": 1
-        },
-        "pin_def": {
-          "idx": 12,
-          "version": 1
-        },
-        "instance": {
-          "idx": 11,
-          "version": 1
-        },
-        "net": null,
-        "connection_name": null
-      },
-      "version": 1
-    },
-    {
-      "value": {
-        "id": {
-          "idx": 19,
-          "version": 1
-        },
-        "pin_def": {
-          "idx": 13,
-          "version": 1
-        },
-        "instance": {
-          "idx": 11,
-          "version": 1
-        },
-        "net": null,
-        "connection_name": null
-      },
-      "version": 1
-    },
-    {
-      "value": {
-        "id": {
-          "idx": 20,
-          "version": 1
-        },
-        "pin_def": {
-          "idx": 12,
-          "version": 1
-        },
-        "instance": {
-          "idx": 12,
-          "version": 1
-        },
-        "net": null,
-        "connection_name": null
-      },
-      "version": 1
-    },
-    {
-      "value": {
-        "id": {
-          "idx": 21,
-          "version": 1
-        },
-        "pin_def": {
-          "idx": 13,
-          "version": 1
-        },
-        "instance": {
-          "idx": 12,
-          "version": 1
-        },
-        "net": null,
-        "connection_name": null
-      },
-      "version": 1
-    },
-    {
-      "value": {
-        "id": {
-          "idx": 22,
-          "version": 1
-        },
-        "pin_def": {
-          "idx": 12,
-          "version": 1
-        },
-        "instance": {
-          "idx": 13,
-          "version": 1
-        },
-        "net": null,
-        "connection_name": null
-      },
-      "version": 1
-    },
-    {
-      "value": {
-        "id": {
-          "idx": 23,
-          "version": 1
-        },
-        "pin_def": {
-          "idx": 13,
-          "version": 1
-        },
-        "instance": {
-          "idx": 13,
+          "idx": 26,
           "version": 1
         },
         "net": null,
@@ -1203,11 +1557,18 @@
     }
   ],
   "top_level_module": {
-    "idx": 9,
+    "idx": 15,
     "version": 1
   },
   "analysis_data": {
     "module_definitions": {
+      "BuckConverterTPS54331": {
+        "name": "BuckConverterTPS54331",
+        "pins": {
+          "pins": {}
+        },
+        "parameters": {}
+      },
       "TestPoint": {
         "name": "TestPoint",
         "pins": {
@@ -1229,17 +1590,10 @@
           }
         },
         "parameters": {}
-      },
-      "BuckConverterTPS54331": {
-        "name": "BuckConverterTPS54331",
-        "pins": {
-          "pins": {}
-        },
-        "parameters": {}
       }
     },
     "symbol_data": {
-      "BuckConverterTPS54331": {
+      "TestPoint": {
         "symbol_type": "Module",
         "module_type": null,
         "parameters": {}
@@ -1249,19 +1603,14 @@
         "module_type": "SS34",
         "parameters": {}
       },
-      "BuckConverterTPS54331::TestPoint": {
-        "symbol_type": "Instance",
-        "module_type": "TestPoint",
-        "parameters": {}
-      },
-      "TestPoint": {
-        "symbol_type": "Module",
-        "module_type": null,
-        "parameters": {}
-      },
       "BuckConverterTPS54331::Cap": {
         "symbol_type": "Instance",
         "module_type": "Cap",
+        "parameters": {}
+      },
+      "BuckConverterTPS54331::U1": {
+        "symbol_type": "Instance",
+        "module_type": "TPS54331",
         "parameters": {}
       },
       "BuckConverterTPS54331::Res": {
@@ -1269,9 +1618,14 @@
         "module_type": "Res",
         "parameters": {}
       },
-      "BuckConverterTPS54331::U1": {
+      "BuckConverterTPS54331": {
+        "symbol_type": "Module",
+        "module_type": null,
+        "parameters": {}
+      },
+      "BuckConverterTPS54331::TestPoint": {
         "symbol_type": "Instance",
-        "module_type": "TPS54331",
+        "module_type": "TestPoint",
         "parameters": {}
       }
     }

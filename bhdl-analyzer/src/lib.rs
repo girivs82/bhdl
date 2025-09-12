@@ -58,7 +58,7 @@ pub fn analyze(source_file: &SourceFile) -> AnalysisResult {
     // Pass 1: Build scopes
     let (global_scope, definition_scopes) = populate_global_scope_and_build_definition_scopes(source_file);
     println!("Analyzer: Pass 1 complete. Global symbols: {}, Definition scopes: {}",
-             global_scope.children.len(), // Assuming SymbolTable has a len() method or similar -> USE children.len()
+             global_scope.get_symbols().len(),
              definition_scopes.len());
 
     // Create built-in variable manager for behavioral modeling
