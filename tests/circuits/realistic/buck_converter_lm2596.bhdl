@@ -1,0 +1,55 @@
+// Buck Converter using LM2596 with Virtual Pin
+// Tests virtual pin expansion for LM2596
+// 24V to 12V @ 2A
+
+import { LM2596 } from "../../../bhdl-stdlib/components/power/switching_regulators/LM2596.bhdl";
+import { Cap } from "../../../bhdl-stdlib/components/passives/capacitors/Capacitor.bhdl";
+
+board BuckConverterLM2596 {
+    // Power domains
+    power VIN = 24V @ 3A;
+    power VOUT_12V = 12V @ 2A;
+    ground GND;
+    
+    // Input filtering (required but not part of virtual pin)
+    VIN -> C_IN1: Cap(680µF, voltage=35V).1;
+    C_IN1.2 -> GND;
+    VIN -> C_IN2: Cap(0.1µF, voltage=35V).1;  
+    C_IN2.2 -> GND;
+    
+    // Buck controller with virtual pin
+    U1: LM2596(vout_target=12V);
+    VIN -> U1.VIN;
+    U1.GND -> GND;
+    U1.EN -> VIN;  // Always enabled
+    
+    // Virtual pin connection - this should expand to:
+    // - Output inductor (68µH for 12V)
+    // - Schottky catch diode
+    // - Output capacitors (470µF + 0.1µF)
+    // - Feedback resistor divider
+    // - Feedforward capacitor
+    U1.VOUT -> @VOUT_12V;
+    
+    // Load for testing (6Ω = 2A at 12V)
+    @VOUT_12V -> R_LOAD: Res(6Ω, wattage=25W).1;
+    R_LOAD.2 -> GND;
+    
+    // Optional: Add test points
+    @VOUT_12V -> TP1: TestPoint();
+    U1.SW -> TP2: TestPoint();
+    U1.FB -> TP3: TestPoint();
+}
+
+// Module definition for test point
+module TestPoint() {
+    pin 1: signal inout {
+        description: "Test point connection"
+    };
+}
+
+// Module definition for resistor (if not already defined)
+module Res(value: resistance, wattage: power = 0.25W) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+}

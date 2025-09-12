@@ -1,0 +1,20 @@
+// Test circuit for LM7805 linear regulator with virtual pin
+board LinearRegulatorBoard {
+    power VIN = 12V @ 2A;
+    power VOUT_5V = 5V @ 1A;
+    ground GND;
+    
+    // LM7805 linear regulator
+    U1: LM7805();
+    
+    // Input connections
+    @VIN -> U1.VIN;
+    U1.GND -> @GND;
+    
+    // Virtual pin - should expand to output capacitors
+    U1.VOUT -> @VOUT_5V;
+    
+    // Load resistor to test
+    @VOUT_5V -> R_LOAD: Res(10).1;
+    R_LOAD.2 -> @GND;
+}
