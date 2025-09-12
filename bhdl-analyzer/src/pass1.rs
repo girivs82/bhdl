@@ -167,7 +167,7 @@ pub fn populate_global_scope_and_build_definition_scopes(source_file: &SourceFil
 
     visit_node_pass1_recursive(&source_file.syntax(), &mut context);
 
-    println!("Completed Pass 1.");
+    println!("Completed Pass 1. Total symbols added: {}", context.global_scope_mut().get_symbols().len());
     (context.current_scope_stack.remove(0), context.definition_nodes)
 }
 
@@ -447,6 +447,7 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                         &type_name, 
                         node,
                     );
+                    
                     
                     // Handle parameter overrides
                     let mut overrides_map = HashMap::new();

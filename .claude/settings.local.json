@@ -287,7 +287,15 @@
       "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin test_virtual_pin_inline)",
       "Read(//Users/girivs/src/**)",
       "Bash(RUST_LOG=debug cargo run -p bhdl-synthesizer --bin test_import_preprocessing)",
-      "Bash(./test_pin_parsing)"
+      "Bash(./test_pin_parsing)",
+      "Bash(RUST_LOG=debug cargo run -p bhdl-synthesizer --bin test_intent_aware_integration)",
+      "Bash(RUST_LOG=off rustc --edition 2021 debug_syntax.rs -L target/debug/deps --extern bhdl_parser=target/debug/libbhdl_parser.rlib --extern bhdl_ast=target/debug/libbhdl_ast.rlib --extern rowan=target/debug/deps/librowan-*.rlib -o debug_syntax)",
+      "Bash(./debug_syntax)",
+      "Bash(RUST_LOG=debug cargo run -p bhdl-synthesizer --bin test_main_synthesizer_integration)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin test_main_synthesizer_integration)",
+      "Bash(RUST_LOG=bhdl_synthesizer=info cargo run -p bhdl-synthesizer --bin test_main_synthesizer_integration)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin test_virtual_pin_synthesis_simple)",
+      "Bash(RUST_LOG=debug cargo run -p bhdl-synthesizer --bin test_virtual_pin_synthesis_simple)"
     ],
     "deny": []
   }
