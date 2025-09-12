@@ -7,7 +7,7 @@
 use anyhow::{Result, Context};
 use std::collections::HashMap;
 use std::path::Path;
-use log::{debug, info, warn};
+use log::{debug, info, warn, error};
 use bhdl_common::ComponentTypeMapper;
 use bhdl_common::pin_metadata::{ModulePinMetadata, PinMetadata, PinDirection as CommonPinDirection, PinType as CommonPinType};
 use bhdl_stdlib::{StdlibReader, get_default_stdlib_path};
@@ -190,6 +190,24 @@ impl NetlistGenerator {
     /// Internal implementation that handles both cases
     async fn generate_from_ast_and_analysis_internal(&mut self, ast: Option<&SourceFile>, analysis: &AnalysisResult) -> Result<Netlist> {
         info!("Starting netlist generation from analysis results");
+        
+        // Check for undefined components first
+        if !analysis.diagnostics.is_empty() {
+            let undefined_components: Vec<_> = analysis.diagnostics.iter()
+                .filter(|d| d.message.contains("Undefined component"))
+                .collect();
+            
+            if !undefined_components.is_empty() {
+                error!("Cannot synthesize circuit with undefined components:");
+                for diagnostic in undefined_components {
+                    error!("  - {}", diagnostic.message);
+                }
+                return Err(anyhow::anyhow!(
+                    "Circuit has {} undefined component(s). Please import required components before synthesis.",
+                    undefined_components.len()
+                ));
+            }
+        }
         
         // Phase 0a: Process imports if AST is available
         if let Some(ast) = ast {
@@ -457,46 +475,69 @@ impl NetlistGenerator {
         Ok(())
     }
 
-    /// Generate automatic supporting components for power management ICs
+    /// Generate automatic supporting components from BHDL synthesis knowledge
     async fn generate_automatic_supporting_components(&mut self, all_symbols: &HashMap<String, bhdl_analyzer::symbol_table::Symbol>, analysis: &AnalysisResult) -> Result<()> {
         debug!("Starting automatic supporting component generation for {} symbols", all_symbols.len());
         
-        // Identify power management ICs that need supporting components
+        // Process ALL components that have virtual pins defined in BHDL
         for (name, symbol) in all_symbols {
             if matches!(symbol.kind, bhdl_analyzer::symbol_table::SymbolKind::Instance) {
                 if let Some(ref type_name) = symbol.instance_type_name {
-                    // Check if this is a power management IC that needs supporting components
-                    if self.is_power_management_ic(type_name) {
-                        println!("✅ MAIN SYNTHESIZER: Found power management IC: {} ({})", name, type_name);
-                        info!("Found power management IC: {} ({})", name, type_name);
+                    // ALWAYS check BHDL synthesis knowledge first
+                    let has_virtual = self.stdlib_reader.has_virtual_pins(type_name);
+                    
+                    if has_virtual {
+                        println!("✅ SYNTHESIZER: Component {} ({}) has virtual pins in BHDL - using synthesis knowledge", name, type_name);
+                        info!("Component {} has virtual pins - using BHDL synthesis knowledge", type_name);
                         
-                        // Check if this component has virtual pins
-                        let has_virtual = self.stdlib_reader.has_virtual_pins(type_name);
-                        println!("🔍 MAIN SYNTHESIZER: Checking virtual pins for {} - has_virtual: {}", type_name, has_virtual);
-                        if has_virtual {
-                            println!("✅ MAIN SYNTHESIZER: Component {} has virtual pins - supporting components will implement virtual pin expansion", type_name);
-                            info!("Component {} has virtual pins - supporting components will implement virtual pin expansion", type_name);
-                        }
-                        
-                        // Extract power specifications from analysis results
-                        if let Some(power_spec) = self.extract_power_specifications(analysis, type_name).await? {
-                            println!("✅ MAIN SYNTHESIZER: Extracted power spec - VIN={}V, VOUT={}V, IOUT={}A", 
-                                  power_spec.input_voltage, power_spec.output_voltage, power_spec.output_current);
-                            info!("Extracted power specifications: VIN={}V, VOUT={}V, IOUT={}A", 
-                                  power_spec.input_voltage, power_spec.output_voltage, power_spec.output_current);
+                        // Extract virtual pin components from BHDL synthesis knowledge
+                        if let Some(virtual_pin_components) = self.stdlib_reader.get_virtual_pin_components(type_name) {
+                            info!("Using BHDL synthesis knowledge for {} - {} virtual pins defined", 
+                                  type_name, virtual_pin_components.virtual_pins.len());
                             
-                            // Calculate supporting components
-                            let supporting_components = self.component_calculator.calculate_buck_converter_components(&power_spec, type_name);
-                            println!("✅ MAIN SYNTHESIZER: Generated {} supporting components for {}", supporting_components.len(), name);
-                            info!("Generated {} supporting components for {} ({})", supporting_components.len(), name, type_name);
-                            
-                            // Add calculated components to netlist
-                            for component in supporting_components {
-                                self.add_calculated_component_to_netlist(&component, name)?;
+                            // Generate components from BHDL virtual pin definitions
+                            for component in virtual_pin_components.get_all_supporting_components() {
+                                // Convert from VirtualPinComponent to CalculatedComponent
+                                // This is temporary until we refactor to use VirtualPinComponent directly
+                                let calc_component = crate::component_calculator::CalculatedComponent {
+                                    component_type: match component.component_type.as_str() {
+                                        "Inductor" => crate::component_calculator::ComponentType::Inductor,
+                                        "Capacitor" => crate::component_calculator::ComponentType::Capacitor,
+                                        "Resistor" => crate::component_calculator::ComponentType::Resistor,
+                                        "Diode" => crate::component_calculator::ComponentType::Diode,
+                                        "LED" => crate::component_calculator::ComponentType::LED,
+                                        _ => crate::component_calculator::ComponentType::Capacitor, // Default
+                                    },
+                                    reference: component.reference.clone(),
+                                    value: component.value.clone(),
+                                    rating: component.specs.get("voltage_rating")
+                                        .or_else(|| component.specs.get("current_rating"))
+                                        .or_else(|| component.specs.get("power_rating"))
+                                        .unwrap_or(&"".to_string()).clone(),
+                                    package: component.specs.get("package")
+                                        .or_else(|| component.specs.get("dielectric"))
+                                        .unwrap_or(&"".to_string()).clone(),
+                                    intent: match component.intent.as_deref() {
+                                        Some(s) if s.contains("output") => crate::component_calculator::ComponentIntent::OutputFiltering,
+                                        Some(s) if s.contains("input") => crate::component_calculator::ComponentIntent::InputFiltering,
+                                        Some(s) if s.contains("feedback") => crate::component_calculator::ComponentIntent::FeedbackControl,
+                                        Some(s) if s.contains("energy") => crate::component_calculator::ComponentIntent::EnergyStorage,
+                                        Some(s) if s.contains("bypass") || s.contains("decoupling") => crate::component_calculator::ComponentIntent::Decoupling,
+                                        _ => crate::component_calculator::ComponentIntent::NoiseReduction,
+                                    },
+                                    calculation: component.formula.clone().unwrap_or_else(|| "fixed".to_string()),
+                                    placement: component.placement.clone().unwrap_or_else(|| "standard".to_string()),
+                                    purpose: component.intent.clone().unwrap_or_else(|| "support".to_string()),
+                                };
+                                
+                                self.add_calculated_component_to_netlist(&calc_component, name)?;
                             }
                         } else {
-                            info!("Could not extract power specifications for {}, skipping automatic generation", name);
+                            // No BHDL virtual pin definition found for this component
+                            warn!("No BHDL synthesis knowledge found for component {} ({})", name, type_name);
                         }
+                    } else {
+                        debug!("Component {} ({}) has no virtual pins in BHDL", name, type_name);
                     }
                 }
             }
@@ -505,19 +546,8 @@ impl NetlistGenerator {
         Ok(())
     }
 
-    /// Check if a component type is a power management IC
-    fn is_power_management_ic(&self, type_name: &str) -> bool {
-        let type_lower = type_name.to_lowercase();
-        
-        // Check for known power management IC patterns
-        type_lower.contains("tps543") ||     // TPS54331, TPS54332, etc.
-        type_lower.contains("lm2596") ||     // LM2596 step-down regulator
-        type_lower.contains("lm317") ||      // LM317 linear regulator
-        type_lower.contains("7805") ||       // 7805 linear regulator
-        type_lower.contains("buck") ||       // Generic buck converter
-        type_lower.contains("regulator") ||  // Generic regulator
-        type_lower.contains("converter")     // Generic converter
-    }
+    // REMOVED: is_power_management_ic() - We should not hardcode component types
+    // All component knowledge should come from BHDL files
 
     /// Extract power specifications from analysis results for a given IC
     async fn extract_power_specifications(&self, analysis: &AnalysisResult, ic_type: &str) -> Result<Option<PowerSupplySpec>> {
@@ -2018,6 +2048,21 @@ pub async fn generate_netlist_from_source(source_file: &SourceFile) -> Result<Ne
     let analysis = bhdl_analyzer::analyze(source_file);
     
     if !analysis.diagnostics.is_empty() {
+        // Check if any diagnostics are about undefined components
+        let has_undefined_components = analysis.diagnostics.iter()
+            .any(|d| d.message.contains("Undefined component"));
+        
+        if has_undefined_components {
+            error!("Analysis found undefined components - cannot continue synthesis");
+            for diagnostic in &analysis.diagnostics {
+                if diagnostic.message.contains("Undefined component") {
+                    error!("  {}", diagnostic.message);
+                }
+            }
+            return Err(anyhow::anyhow!("Cannot synthesize circuit with undefined components. Please import required components."));
+        }
+        
+        // Warn about other diagnostics
         warn!("Analysis produced {} diagnostics", analysis.diagnostics.len());
         for diagnostic in &analysis.diagnostics {
             warn!("  {}", diagnostic.message);
@@ -2044,6 +2089,21 @@ pub async fn generate_netlist_with_config(
     let analysis = bhdl_analyzer::analyze(source_file);
     
     if !analysis.diagnostics.is_empty() {
+        // Check for critical errors
+        let has_critical_errors = analysis.diagnostics.iter()
+            .any(|d| d.message.contains("Undefined component") || 
+                     d.message.contains("Cannot resolve"));
+        
+        if has_critical_errors {
+            error!("Analysis found critical errors - cannot continue synthesis");
+            for diagnostic in &analysis.diagnostics {
+                if diagnostic.message.contains("Undefined") || diagnostic.message.contains("Cannot resolve") {
+                    error!("  {}", diagnostic.message);
+                }
+            }
+            return Err(anyhow::anyhow!("Cannot synthesize circuit with undefined components"));
+        }
+        
         warn!("Analysis produced {} diagnostics", analysis.diagnostics.len());
     }
 
