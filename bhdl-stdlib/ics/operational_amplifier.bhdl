@@ -1,0 +1,335 @@
+// Operational Amplifier Module
+// Demonstrates advanced pin characteristics with differential inputs and high impedance
+
+import { ImpedanceCharacteristics } from "../types/electrical_types.bhdl";
+import { PIN_MODEL_HIGH_IMPEDANCE_INPUT, PIN_MODEL_LOW_IMPEDANCE_OUTPUT } from "../pin_characteristics.bhdl";
+
+// Op-amp electrical characteristics
+type OpAmpParams = {
+    supply_voltage_min: voltage,
+    supply_voltage_max: voltage,
+    input_offset_voltage: voltage,
+    input_bias_current: current,
+    input_impedance: resistance,
+    output_impedance: resistance,
+    gain_bandwidth_product: frequency,
+    slew_rate: float,  // V/µs
+    common_mode_rejection: float,  // dB
+    power_supply_rejection: float, // dB
+    max_output_current: current,
+    impedance: ImpedanceCharacteristics,
+};
+
+module OpAmp(
+    type: string = "general_purpose",  // "general_purpose", "precision", "high_speed", "low_power" 
+    package: string = "SO8"
+) {
+    // High-impedance differential inputs
+    pin IN_P: signal in @metadata(
+        function="NonInvertingInput",
+        description="Non-inverting input (positive)",
+        electrical_type="analog_input",
+        drive_model=PIN_MODEL_HIGH_IMPEDANCE_INPUT,
+        synthesis_hints=["differential_pair", "matched_impedance", "low_noise_routing", "guard_traces"]
+    );
+    
+    pin IN_N: signal in @metadata(
+        function="InvertingInput", 
+        description="Inverting input (negative)",
+        electrical_type="analog_input",
+        drive_model=PIN_MODEL_HIGH_IMPEDANCE_INPUT,
+        synthesis_hints=["differential_pair", "matched_impedance", "low_noise_routing", "guard_traces"]
+    );
+    
+    // Low-impedance output
+    pin OUT: signal out @metadata(
+        function="Output",
+        description="Amplifier output",
+        electrical_type="analog_output",
+        drive_model=PIN_MODEL_LOW_IMPEDANCE_OUTPUT,
+        synthesis_hints=["can_drive_loads", "short_circuit_protected", "may_need_compensation"]
+    );
+    
+    // Power supply pins
+    pin VCC: power in @metadata(
+        function="PowerPositive",
+        description="Positive supply voltage",
+        voltage="15V",  // Typical dual supply
+        current="10mA"
+    );
+    
+    pin VEE: power in @metadata(
+        function="PowerNegative", 
+        description="Negative supply voltage",
+        voltage="-15V", // Typical dual supply
+        current="10mA"
+    );
+    
+    // Optional pins based on package
+    pin COMP: signal inout when package != "SO8" @metadata(
+        function="Compensation",
+        description="External compensation pin",
+        electrical_type="analog_passive",
+        synthesis_hints=["needs_compensation_network", "close_to_ic"]
+    );
+    
+    pin OFFSET_NULL_1: signal inout when type == "precision" @metadata(
+        function="OffsetAdjustment",
+        description="Offset null adjustment pin 1",
+        electrical_type="analog_passive",
+        synthesis_hints=["needs_potentiometer", "optional_connection"]
+    );
+    
+    pin OFFSET_NULL_2: signal inout when type == "precision" @metadata(
+        function="OffsetAdjustment",
+        description="Offset null adjustment pin 2", 
+        electrical_type="analog_passive",
+        synthesis_hints=["needs_potentiometer", "optional_connection"]
+    );
+    
+    // Op-amp parameters by type
+    const GENERAL_PURPOSE_PARAMS: OpAmpParams = {
+        supply_voltage_min: 3V,
+        supply_voltage_max: 36V,
+        input_offset_voltage: 2mV,
+        input_bias_current: 80nA,
+        input_impedance: 2MΩ,
+        output_impedance: 75Ω,
+        gain_bandwidth_product: 1MHz,
+        slew_rate: 0.5,
+        common_mode_rejection: 90,
+        power_supply_rejection: 90,
+        max_output_current: 25mA,
+        impedance: {
+            dc_resistance: 2MΩ,  // Input impedance
+            output_impedance: 75Ω,
+            input_impedance: 2MΩ,
+            can_source_current: true,
+            can_sink_current: true,
+            max_source_current: 25mA,
+            max_sink_current: 25mA,
+            power_domain_isolation: false,
+            voltage_drop: null,  // Rail-to-rail capable
+            current_limiting: false,  // Op-amp doesn't limit current
+            transient_response: 1μs,  // Typical settling time
+            inrush_current: null
+        }
+    };
+    
+    const PRECISION_PARAMS: OpAmpParams = {
+        supply_voltage_min: 5V,
+        supply_voltage_max: 36V,
+        input_offset_voltage: 25μV,  // Ultra-low offset
+        input_bias_current: 1nA,     // Ultra-low bias current
+        input_impedance: 100MΩ,      // Very high impedance
+        output_impedance: 50Ω,
+        gain_bandwidth_product: 10MHz,
+        slew_rate: 2.5,
+        common_mode_rejection: 120,  // Excellent CMRR
+        power_supply_rejection: 120, // Excellent PSRR
+        max_output_current: 40mA,
+        impedance: {
+            dc_resistance: 100MΩ,
+            output_impedance: 50Ω,
+            input_impedance: 100MΩ,
+            can_source_current: true,
+            can_sink_current: true,
+            max_source_current: 40mA,
+            max_sink_current: 40mA,
+            power_domain_isolation: false,
+            voltage_drop: null,
+            current_limiting: false,
+            transient_response: 100ns,  // Fast settling
+            inrush_current: null
+        }
+    };
+    
+    const HIGH_SPEED_PARAMS: OpAmpParams = {
+        supply_voltage_min: 5V,
+        supply_voltage_max: 12V,
+        input_offset_voltage: 1mV,
+        input_bias_current: 10μA,
+        input_impedance: 1MΩ,
+        output_impedance: 35Ω,       // Low for high-speed
+        gain_bandwidth_product: 100MHz,  // High GBW
+        slew_rate: 50,               // Very fast slew rate
+        common_mode_rejection: 80,
+        power_supply_rejection: 80,
+        max_output_current: 100mA,   // High output current
+        impedance: {
+            dc_resistance: 1MΩ,
+            output_impedance: 35Ω,
+            input_impedance: 1MΩ,
+            can_source_current: true,
+            can_sink_current: true,
+            max_source_current: 100mA,
+            max_sink_current: 100mA,
+            power_domain_isolation: false,
+            voltage_drop: null,
+            current_limiting: false,
+            transient_response: 10ns,   // Very fast
+            inrush_current: null
+        }
+    };
+    
+    const LOW_POWER_PARAMS: OpAmpParams = {
+        supply_voltage_min: 1.8V,    // Low voltage operation
+        supply_voltage_max: 5.5V,
+        input_offset_voltage: 5mV,
+        input_bias_current: 1pA,     // Ultra-low bias current
+        input_impedance: 1TΩ,        // Extremely high impedance
+        output_impedance: 200Ω,
+        gain_bandwidth_product: 100kHz,  // Lower GBW for power savings
+        slew_rate: 0.1,              // Slower for low power
+        common_mode_rejection: 85,
+        power_supply_rejection: 85,
+        max_output_current: 5mA,     // Limited output current
+        impedance: {
+            dc_resistance: 1TΩ,
+            output_impedance: 200Ω,
+            input_impedance: 1TΩ,
+            can_source_current: true,
+            can_sink_current: true,
+            max_source_current: 5mA,
+            max_sink_current: 5mA,
+            power_domain_isolation: false,
+            voltage_drop: null,
+            current_limiting: false,
+            transient_response: 10μs,   // Slower settling
+            inrush_current: null
+        }
+    };
+    
+    // Get electrical parameters based on type
+    const params: OpAmpParams = 
+        type == "general_purpose" ? GENERAL_PURPOSE_PARAMS :
+        type == "precision" ? PRECISION_PARAMS :
+        type == "high_speed" ? HIGH_SPEED_PARAMS :
+        type == "low_power" ? LOW_POWER_PARAMS :
+        GENERAL_PURPOSE_PARAMS;  // Default
+    
+    // Component metadata
+    attribute component_class = "operational_amplifier";
+    attribute op_amp_type = type;
+    attribute package_type = package;
+    
+    // Electrical characteristics
+    attribute supply_voltage_min = params.supply_voltage_min;
+    attribute supply_voltage_max = params.supply_voltage_max;
+    attribute input_offset_voltage = params.input_offset_voltage;
+    attribute input_bias_current = params.input_bias_current;
+    attribute input_impedance = params.input_impedance;
+    attribute output_impedance = params.output_impedance;
+    attribute gain_bandwidth_product = params.gain_bandwidth_product;
+    attribute slew_rate = params.slew_rate;
+    attribute common_mode_rejection = params.common_mode_rejection;
+    attribute power_supply_rejection = params.power_supply_rejection;
+    attribute max_output_current = params.max_output_current;
+    
+    // Impedance characteristics
+    attribute can_source_current = params.impedance.can_source_current;
+    attribute can_sink_current = params.impedance.can_sink_current;
+    attribute max_source_current = params.impedance.max_source_current;
+    attribute max_sink_current = params.impedance.max_sink_current;
+    attribute transient_response = params.impedance.transient_response;
+    
+    // SPICE model parameters
+    attribute spice_model = "equation_based";
+    attribute spice_type = "opamp";
+    attribute spice_gain = 100000;  // Open-loop gain
+    attribute spice_gbw = params.gain_bandwidth_product;
+    attribute spice_input_impedance = params.input_impedance;
+    attribute spice_output_impedance = params.output_impedance;
+    attribute spice_slew_rate = params.slew_rate;
+    attribute spice_vos = params.input_offset_voltage;
+    attribute spice_ibias = params.input_bias_current;
+    attribute spice_cmrr = params.common_mode_rejection;
+    attribute spice_psrr = params.power_supply_rejection;
+    attribute spice_vcc = params.supply_voltage_max;
+    attribute spice_vee = type == "low_power" ? 0V : -params.supply_voltage_max;
+    
+    // KiCad symbol mapping based on package
+    attribute kicad_symbol = package == "DIP8" ? "Amplifier_Operational:LM358" :
+                           package == "SO8" ? "Amplifier_Operational:LM358" :
+                           package == "MSOP8" ? "Amplifier_Operational:OPA2134" :
+                           "Amplifier_Operational:LM358";
+                           
+    // Package footprint mapping
+    attribute package_footprint = 
+        package == "DIP8" ? "Package_DIP:DIP-8_W7.62mm" :
+        package == "SO8" ? "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm" :
+        package == "MSOP8" ? "Package_SO:MSOP-8_3x3mm_P0.65mm" :
+        package == "TSSOP8" ? "Package_SO:TSSOP-8_4.4x3mm_P0.65mm" :
+        "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm";
+    
+    // Virtual pins for automatic support circuit insertion
+    virtual_pin input_protection_p: signal passive @metadata(
+        function="InputProtection",
+        description="Input protection for IN_P",
+        component_type="TVSDiode",
+        component_value="params.supply_voltage_max * 1.2",
+        connection_signal="IN_P",
+        connection_ground="VEE",
+        synthesis_trigger="analog_input_protection"
+    );
+    
+    virtual_pin input_protection_n: signal passive @metadata(
+        function="InputProtection", 
+        description="Input protection for IN_N",
+        component_type="TVSDiode",
+        component_value="params.supply_voltage_max * 1.2",
+        connection_signal="IN_N",
+        connection_ground="VEE",
+        synthesis_trigger="analog_input_protection"
+    );
+    
+    virtual_pin supply_decoupling_vcc: signal passive @metadata(
+        function="SupplyDecoupling",
+        description="VCC supply decoupling capacitor",
+        component_type="Cap",
+        component_value="100nF",
+        connection_high="VCC",
+        connection_low="VEE",
+        placement_distance="<5mm",
+        synthesis_trigger="analog_power_decoupling"
+    );
+    
+    virtual_pin supply_decoupling_vee: signal passive @metadata(
+        function="SupplyDecoupling",
+        description="VEE supply decoupling capacitor", 
+        component_type="Cap",
+        component_value="100nF",
+        connection_high="VCC",
+        connection_low="VEE",
+        placement_distance="<5mm",
+        synthesis_trigger="analog_power_decoupling"
+    );
+    
+    virtual_pin compensation_network: signal passive when type == "high_speed" @metadata(
+        function="FrequencyCompensation",
+        description="Frequency compensation network",
+        component_type="RC_Network",
+        component_value="R=100Ω, C=10pF",
+        connection_input="OUT",
+        connection_feedback="IN_N",
+        synthesis_trigger="high_speed_compensation"
+    );
+    
+    virtual_pin offset_adjustment: signal passive when type == "precision" @metadata(
+        function="OffsetAdjustment",
+        description="Offset null potentiometer",
+        component_type="Potentiometer", 
+        component_value="10kΩ",
+        connection_wiper="OFFSET_NULL_1",
+        connection_end1="VCC",
+        connection_end2="VEE", 
+        synthesis_trigger="precision_offset_adjustment"
+    );
+}
+
+// Common operational amplifier aliases
+alias LM358 = OpAmp(type="general_purpose", package="DIP8");
+alias LM741 = OpAmp(type="general_purpose", package="DIP8");
+alias OPA2134 = OpAmp(type="precision", package="MSOP8");
+alias LMH6643 = OpAmp(type="high_speed", package="SO8");
+alias LPV521 = OpAmp(type="low_power", package="SO8");

@@ -1,0 +1,56 @@
+// Common Components Library
+// This module provides convenient access to frequently used components
+
+// Import all basic passive components
+import { Cap, Capacitor, ElectrolyticCap } from "./passives/capacitor.bhdl";
+import { Res, Resistor } from "./passives/resistor.bhdl";
+import { LED } from "./passives/led.bhdl";
+import { Diode } from "./passives/diode.bhdl";
+import { Inductor, Ind } from "./passives/inductor.bhdl";
+import { TVSDiode, TVS } from "./passives/tvs_diode.bhdl";
+import { Fuse } from "./passives/fuse.bhdl";
+
+// Import voltage regulators
+import { LM7805 } from "./regulators/lm7805.bhdl";
+import { LM2596 } from "./regulators/lm2596.bhdl";
+import { LM317 } from "./components/power/linear_regulators/LM317.bhdl";
+
+// Import connectors
+import { TestPoint } from "./connectors/testpoint.bhdl";
+
+// Create convenient aliases for common components
+alias C = Cap;           // C(100n) instead of Cap(100n)
+alias R = Res;           // R(4k7) instead of Res(4k7)
+alias L = Ind;           // L(10u) instead of Ind(10u)
+alias D = Diode;         // D() instead of Diode()
+alias TP = TestPoint;    // TP() instead of TestPoint()
+
+// Voltage regulator aliases
+alias U_7805 = LM7805;   // Common IC naming
+alias IC1 = LM7805;      // Generic IC reference
+alias REG = LM7805;      // Regulator shorthand
+
+// Protection component aliases
+alias TVS_DIODE = TVSDiode;
+alias PROTECTION = TVSDiode;
+
+// Export everything for use in other modules
+export {
+    // Basic passives
+    Cap, Capacitor, ElectrolyticCap, C,
+    Res, Resistor, R,
+    LED,
+    Diode, D,
+    Inductor, Ind, L,
+    
+    // Protection components
+    TVSDiode, TVS, TVS_DIODE, PROTECTION,
+    Fuse,
+    
+    // ICs and regulators
+    LM7805, LM2596, LM317,
+    U_7805, IC1, REG,
+    
+    // Connectors
+    TestPoint, TP
+};

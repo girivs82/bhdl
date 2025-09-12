@@ -1,0 +1,257 @@
+// Synthesis Rules for Automatic Component Insertion
+// Defines conditions and actions for intelligent circuit synthesis
+
+import { DriveType, PinElectricalModel } from "./pin_characteristics.bhdl";
+
+/// Synthesis rule definition
+type SynthesisRule = {
+    rule_name: string,
+    description: string,
+    trigger_condition: string,      // Condition that triggers this rule
+    action_type: string,           // "insert_component", "add_constraint", "modify_routing"
+    component_type: string?,       // Component to insert (if applicable)
+    component_value: string?,      // Component value calculation
+    connection_high: string?,      // High side connection (for pull-ups, decoupling, etc.)
+    connection_low: string?,       // Low side connection
+    placement_hints: string[]?,    // Placement guidance
+    routing_hints: string[]?,      // Routing guidance
+    priority: int,                 // Rule priority (lower = higher priority)
+};
+
+// Pull-up resistor insertion rules with power domain awareness
+const RULE_I2C_PULLUPS: SynthesisRule = {
+    rule_name: "i2c_pullup_insertion",
+    description: "Insert pull-up resistors for I2C open-drain pins to correct power rail",
+    trigger_condition: "pin.drive_type.type == 'open-drain' && pin.function in ['I2C_Clock', 'I2C_Data']",
+    action_type: "insert_component",
+    component_type: "Res",
+    component_value: "pin.drive_type.default_pullup_value",
+    // Pull-up connects to the I/O power rail, not core power
+    connection_high: "pin.drive_type.pullup_rail ?? pin.powered_by ?? 'VDD'",
+    connection_low: "pin",
+    placement_hints: ["close_to_pin", "shared_for_bus"],
+    routing_hints: ["minimize_inductance", "avoid_crosstalk"],
+    priority: 1,
+};
+
+const RULE_GENERAL_OD_PULLUPS: SynthesisRule = {
+    rule_name: "open_drain_pullups",
+    description: "Insert pull-up resistors for any open-drain pin to correct power rail",
+    trigger_condition: "pin.drive_type.needs_pullup == true",
+    action_type: "insert_component", 
+    component_type: "Res",
+    component_value: "pin.drive_type.default_pullup_value ?? 10kΩ",
+    // Determine correct pull-up rail: explicit rail > powered_by attribute > default VDD
+    connection_high: "pin.drive_type.pullup_rail ?? pin.powered_by ?? 'VDD'",
+    connection_low: "pin",
+    placement_hints: ["close_to_pin"],
+    routing_hints: ["short_trace"],
+    priority: 2,
+};
+
+// Current limiting resistor rules
+const RULE_LED_CURRENT_LIMITING: SynthesisRule = {
+    rule_name: "led_current_limiting",
+    description: "Insert current limiting resistors for LEDs",
+    trigger_condition: "component.type == 'LED' && driving_pin.type != 'current_source'",
+    action_type: "insert_component",
+    component_type: "Res",
+    component_value: "(supply_voltage - led.forward_voltage) / led.forward_current",
+    placement_hints: ["series_with_led", "close_to_driver"],
+    routing_hints: ["minimize_loop_area"],
+    priority: 1,
+};
+
+const RULE_GPIO_CURRENT_PROTECTION: SynthesisRule = {
+    rule_name: "gpio_current_protection",
+    description: "Insert series resistors to protect GPIO pins",
+    trigger_condition: "pin.function == 'GPIO' && external_connection == true",
+    action_type: "insert_component",
+    component_type: "Res", 
+    component_value: "pin.max_sink_current > 0 ? (3.3V / pin.max_sink_current) * 0.8 : 100Ω",
+    placement_hints: ["series_with_pin", "near_connector"],
+    routing_hints: ["short_series_trace"],
+    priority: 3,
+};
+
+// Termination resistor rules
+const RULE_HIGH_SPEED_TERMINATION: SynthesisRule = {
+    rule_name: "high_speed_termination",
+    description: "Insert termination resistors for high-speed signals",
+    trigger_condition: "signal.frequency > 50MHz || signal.edge_rate < 5ns",
+    action_type: "insert_component",
+    component_type: "Res",
+    component_value: "transmission_line.characteristic_impedance ?? pin.s_params.characteristic_impedance ?? 50Ω",
+    placement_hints: ["at_receiver", "close_to_pin"],
+    routing_hints: ["impedance_matched", "length_matched"],
+    priority: 2,
+};
+
+const RULE_DIFF_PAIR_TERMINATION: SynthesisRule = {
+    rule_name: "differential_termination",
+    description: "Insert differential termination for LVDS/diff pairs",
+    trigger_condition: "pin.drive_type.type == 'differential'",
+    action_type: "insert_component",
+    component_type: "Res",
+    component_value: "pin.drive_type.output_impedance_high",
+    placement_hints: ["across_diff_pair", "at_receiver"],
+    routing_hints: ["differential_routing", "length_matched"],
+    priority: 1,
+};
+
+// Power integrity rules
+const RULE_POWER_DECOUPLING: SynthesisRule = {
+    rule_name: "power_decoupling",
+    description: "Insert decoupling capacitors for power pins",
+    trigger_condition: "pin.function == 'PowerPositive' && pin.current > 10mA",
+    action_type: "insert_component",
+    component_type: "Cap",
+    component_value: "pin.current < 100mA ? '100nF' : '10µF'",
+    placement_hints: ["very_close_to_pin", "low_inductance_path"],
+    routing_hints: ["minimize_loop_inductance", "wide_traces"],
+    priority: 1,
+};
+
+const RULE_BULK_CAPACITANCE: SynthesisRule = {
+    rule_name: "bulk_capacitance",
+    description: "Insert bulk capacitors for power domains",
+    trigger_condition: "power_domain.total_current > 50mA",
+    action_type: "insert_component",
+    component_type: "Cap",
+    component_value: "power_domain.total_current * 20µF_per_A",
+    placement_hints: ["near_power_entry", "shared_for_domain"],
+    routing_hints: ["low_impedance_power_plane"],
+    priority: 3,
+};
+
+// ESD protection rules
+const RULE_EXTERNAL_ESD_PROTECTION: SynthesisRule = {
+    rule_name: "external_esd_protection",
+    description: "Insert ESD protection for external-facing pins",
+    trigger_condition: "pin.external_connector == true && pin.esd_protection < 4.0",
+    action_type: "insert_component",
+    component_type: "TVSDiode",
+    component_value: "pin.voltage_rating * 1.2",
+    placement_hints: ["immediately_after_connector", "before_series_resistor"],
+    routing_hints: ["short_to_ground", "low_inductance"],
+    priority: 1,
+};
+
+// Crystal oscillator support rules
+const RULE_CRYSTAL_LOAD_CAPS: SynthesisRule = {
+    rule_name: "crystal_load_capacitors",
+    description: "Insert load capacitors for crystal oscillators",
+    trigger_condition: "component.type == 'Crystal'",
+    action_type: "insert_component",
+    component_type: "Cap",
+    component_value: "crystal.load_capacitance * 2 - stray_capacitance",
+    placement_hints: ["very_close_to_crystal", "symmetric_placement"],
+    routing_hints: ["minimize_trace_length", "avoid_high_current_traces"],
+    priority: 1,
+};
+
+// Analog signal conditioning rules  
+const RULE_ANALOG_INPUT_FILTERING: SynthesisRule = {
+    rule_name: "analog_input_filtering", 
+    description: "Insert anti-aliasing filters for analog inputs",
+    trigger_condition: "pin.function == 'ADC_Input' && sampling_frequency > 0",
+    action_type: "insert_component",
+    component_type: "RC_Filter",
+    component_value: "cutoff_frequency = sampling_frequency / 2; R=1kΩ, C=1/(2π*R*fc)",
+    placement_hints: ["close_to_adc_pin", "before_protection"],
+    routing_hints: ["shielded_analog_routing", "avoid_digital_coupling"],
+    priority: 2,
+};
+
+const RULE_REFERENCE_BYPASS: SynthesisRule = {
+    rule_name: "reference_voltage_bypass",
+    description: "Insert bypass capacitors for reference voltage pins",
+    trigger_condition: "pin.function in ['VRef', 'AnalogRef']",
+    action_type: "insert_component", 
+    component_type: "Cap",
+    component_value: "1µF",
+    placement_hints: ["very_close_to_pin", "low_noise_placement"],
+    routing_hints: ["isolated_analog_routing", "star_ground"],
+    priority: 1,
+};
+
+// Bus-specific rules
+const RULE_CAN_BUS_TERMINATION: SynthesisRule = {
+    rule_name: "can_bus_termination",
+    description: "Insert 120Ω termination for CAN bus endpoints",
+    trigger_condition: "bus.type == 'CAN' && node.is_endpoint == true",
+    action_type: "insert_component",
+    component_type: "Res", 
+    component_value: "120Ω",
+    placement_hints: ["across_can_differential_pair"],
+    routing_hints: ["differential_routing", "controlled_impedance"],
+    priority: 1,
+};
+
+const RULE_RS485_TERMINATION: SynthesisRule = {
+    rule_name: "rs485_termination",
+    description: "Insert termination and bias for RS-485 endpoints", 
+    trigger_condition: "bus.type == 'RS485' && node.is_endpoint == true",
+    action_type: "insert_component",
+    component_type: "Res",
+    component_value: "120Ω",
+    placement_hints: ["across_rs485_pair", "with_bias_resistors"],
+    routing_hints: ["differential_routing", "fail_safe_bias"],
+    priority: 1,
+};
+
+// Synthesis rule priorities and conflicts
+type RuleConflictResolution = {
+    rule1: string,
+    rule2: string, 
+    resolution: string,  // "rule1_wins", "rule2_wins", "merge", "user_choice"
+    explanation: string,
+};
+
+const RULE_CONFLICTS: RuleConflictResolution[] = [
+    {
+        rule1: "led_current_limiting",
+        rule2: "gpio_current_protection", 
+        resolution: "rule1_wins",
+        explanation: "LED current limiting is more specific than general GPIO protection"
+    },
+    {
+        rule1: "high_speed_termination", 
+        rule2: "diff_pair_termination",
+        resolution: "rule2_wins", 
+        explanation: "Differential termination is more specific for LVDS signals"
+    },
+    {
+        rule1: "power_decoupling",
+        rule2: "bulk_capacitance",
+        resolution: "merge",
+        explanation: "Both decoupling and bulk capacitance are needed"
+    }
+];
+
+// Export all synthesis rules
+export {
+    SynthesisRule, RuleConflictResolution,
+    
+    // Pull-up rules
+    RULE_I2C_PULLUPS, RULE_GENERAL_OD_PULLUPS,
+    
+    // Current limiting rules
+    RULE_LED_CURRENT_LIMITING, RULE_GPIO_CURRENT_PROTECTION,
+    
+    // Termination rules
+    RULE_HIGH_SPEED_TERMINATION, RULE_DIFF_PAIR_TERMINATION,
+    RULE_CAN_BUS_TERMINATION, RULE_RS485_TERMINATION,
+    
+    // Power integrity rules
+    RULE_POWER_DECOUPLING, RULE_BULK_CAPACITANCE,
+    
+    // Protection rules
+    RULE_EXTERNAL_ESD_PROTECTION,
+    
+    // Analog rules
+    RULE_CRYSTAL_LOAD_CAPS, RULE_ANALOG_INPUT_FILTERING, RULE_REFERENCE_BYPASS,
+    
+    // Conflict resolution
+    RULE_CONFLICTS
+};

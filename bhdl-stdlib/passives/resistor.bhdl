@@ -21,12 +21,14 @@ module Res(
     pin 1: signal inout @metadata(
         function="Terminal",
         description="First terminal of resistor",
-        electrical_type="passive"
+        electrical_type="passive",
+        synthesis_hints=["current_path", "voltage_divider", "pullup_capable", "series_element"]
     );
     pin 2: signal inout @metadata(
         function="Terminal", 
         description="Second terminal of resistor",
-        electrical_type="passive"
+        electrical_type="passive",
+        synthesis_hints=["current_path", "voltage_divider", "pulldown_capable", "series_element"]
     );
     
     // Package-specific power ratings and voltage limits

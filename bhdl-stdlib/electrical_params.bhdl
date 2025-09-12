@@ -501,6 +501,163 @@ const LM7805_PARAMS: LinearRegulatorParams = {
 };
 
 // Export all parameter types and constants
+// Crystal oscillator parameters
+type CrystalParams = {
+    frequency: frequency,
+    load_capacitance: capacitance,
+    series_resistance: resistance,
+    frequency_tolerance: percentage,
+    temperature_coefficient: float,    // ppm/°C
+    aging_rate: float,                // ppm/year
+    impedance: ImpedanceCharacteristics,
+};
+
+const CRYSTAL_32KHZ: CrystalParams = {
+    frequency: 32.768kHz,
+    load_capacitance: 12.5pF,
+    series_resistance: 70kΩ,
+    frequency_tolerance: 0.002%,      // ±20ppm
+    temperature_coefficient: -0.04,   // ppm/°C²
+    aging_rate: 3,                    // ppm/year
+    impedance: {
+        dc_resistance: 70000,
+        output_impedance: null,
+        input_impedance: null,
+        can_source_current: false,
+        can_sink_current: false,
+        max_source_current: null,
+        max_sink_current: null,
+        power_domain_isolation: true,
+        voltage_drop: null,
+        current_limiting: false,
+        transient_response: 1μs,
+        inrush_current: null
+    }
+};
+
+const CRYSTAL_16MHZ: CrystalParams = {
+    frequency: 16MHz,
+    load_capacitance: 18pF,
+    series_resistance: 50Ω,
+    frequency_tolerance: 0.005%,      // ±50ppm
+    temperature_coefficient: -10,     // ppm/°C
+    aging_rate: 5,                    // ppm/year
+    impedance: {
+        dc_resistance: 50,
+        output_impedance: null,
+        input_impedance: null,
+        can_source_current: false,
+        can_sink_current: false,
+        max_source_current: null,
+        max_sink_current: null,
+        power_domain_isolation: true,
+        voltage_drop: null,
+        current_limiting: false,
+        transient_response: 100ns,
+        inrush_current: null
+    }
+};
+
+// Connector parameters
+type ConnectorParams = {
+    pin_count: int,
+    current_rating: current,
+    voltage_rating: voltage,
+    contact_resistance: resistance,
+    insulation_resistance: resistance,
+    mating_cycles: int,
+    operating_temperature: temperature,
+    impedance: ImpedanceCharacteristics,
+};
+
+const CONNECTOR_2PIN: ConnectorParams = {
+    pin_count: 2,
+    current_rating: 3A,
+    voltage_rating: 250V,
+    contact_resistance: 20mΩ,
+    insulation_resistance: 1000MΩ,
+    mating_cycles: 1000,
+    operating_temperature: 85°C,
+    impedance: {
+        dc_resistance: 0.02,
+        output_impedance: null,
+        input_impedance: null,
+        can_source_current: false,
+        can_sink_current: false,
+        max_source_current: null,
+        max_sink_current: null,
+        power_domain_isolation: false,
+        voltage_drop: null,
+        current_limiting: false,
+        transient_response: null,
+        inrush_current: null
+    }
+};
+
+// Switch parameters
+type SwitchParams = {
+    contact_current: current,
+    contact_voltage: voltage,
+    contact_resistance: resistance,
+    bounce_time: time,
+    mechanical_life: int,          // cycles
+    electrical_life: int,          // cycles
+    actuate_force: float,          // N
+    impedance: ImpedanceCharacteristics,
+};
+
+const TACTILE_SWITCH: SwitchParams = {
+    contact_current: 50mA,
+    contact_voltage: 12V,
+    contact_resistance: 100mΩ,
+    bounce_time: 5ms,
+    mechanical_life: 100000,       // 100k cycles
+    electrical_life: 50000,        // 50k cycles  
+    actuate_force: 1.6,            // 1.6N
+    impedance: {
+        dc_resistance: 0.1,        // When closed
+        output_impedance: null,
+        input_impedance: null,
+        can_source_current: false,
+        can_sink_current: false,
+        max_source_current: null,
+        max_sink_current: null,
+        power_domain_isolation: false,
+        voltage_drop: null,
+        current_limiting: false,
+        transient_response: 5ms,   // Bounce time
+        inrush_current: null
+    }
+};
+
+// Additional LED parameters for RGB LEDs
+const LED_RGB_PARAMS: LEDParams = {
+    forward_voltage: 3.2V,         // Typical for RGB (blue channel)
+    forward_current: 20mA,         // Per channel
+    max_current: 30mA,             // Per channel
+    max_reverse_voltage: 5V,
+    dynamic_resistance: 15Ω,
+    wavelength: null,              // Multiple wavelengths
+    luminous_intensity: 200,
+    viewing_angle: 120,
+    emission_coefficient: 1.8,
+    saturation_current: 5fA,
+    impedance: {
+        dc_resistance: null,
+        output_impedance: null,
+        input_impedance: null,
+        can_source_current: false,
+        can_sink_current: true,
+        max_source_current: null,
+        max_sink_current: 90mA,    // 3 channels × 30mA
+        power_domain_isolation: false,
+        voltage_drop: 3.2V,
+        current_limiting: false,
+        transient_response: 100ns,
+        inrush_current: null
+    }
+};
+
 export {
     ElectricalLimits,
     ImpedanceCharacteristics,
@@ -514,5 +671,9 @@ export {
     PowerSourceParams, POWER_5V_1A,
     GroundParams, GROUND_REF,
     FuseParams, FUSE_1A_250V,
-    TVSDiodeParams, TVS_15V
+    TVSDiodeParams, TVS_15V,
+    CrystalParams, CRYSTAL_32KHZ, CRYSTAL_16MHZ,
+    ConnectorParams, CONNECTOR_2PIN,
+    SwitchParams, TACTILE_SWITCH,
+    LED_RGB_PARAMS
 };
