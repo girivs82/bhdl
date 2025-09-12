@@ -1,0 +1,28 @@
+// Test circuit for LM317 adjustable regulator with virtual pin expansion
+// Configured for 9V output from 12V input
+
+board AdjustableRegulatorBoard {
+    power VIN = 12V @ 1A;
+    power VOUT_9V = 9V @ 500mA;
+    ground GND;
+    
+    // LM317 configured for 9V output
+    U1: LM317(vout=9V, iout=500mA);
+    
+    // Input connections
+    @VIN -> U1.VIN;
+    
+    // Virtual pin - expands to feedback network and capacitors
+    U1.VOUT -> @VOUT_9V;
+    
+    // Note: GND connection is virtual - through R2 in the expansion
+    
+    // Load for testing
+    @VOUT_9V -> R_LOAD: Res(18).1;  // 18Ω load = 500mA at 9V
+    R_LOAD.2 -> @GND;
+    
+    // LED indicator
+    @VOUT_9V -> R_LED: Res(470).1;
+    R_LED.2 -> D_LED: LED(green).A;
+    D_LED.K -> @GND;
+}
