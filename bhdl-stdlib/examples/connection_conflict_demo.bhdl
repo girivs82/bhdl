@@ -1,0 +1,187 @@
+// Connection Conflict and Domain Crossing Demo
+// Shows automatic detection and resolution of connection issues
+
+import { MCU_MultiDomain } from "../ics/microcontroller_multi_domain.bhdl";
+import { MCU_GPIO } from "../ics/microcontroller.bhdl";
+
+board ConnectionConflictDemo {
+    // Multiple voltage domains
+    power VCC_5V = 5V @ 1A;
+    power VCC_3V3 = 3.3V @ 500mA;
+    power VCC_1V8 = 1.8V @ 200mA;
+    power VCC_1V2 = 1.2V @ 300mA;
+    ground GND;
+    
+    // === EXAMPLE 1: OUTPUT CONFLICT DETECTION ===
+    
+    // Two microcontrollers with GPIO outputs
+    U1: MCU_GPIO(package="QFN-32");
+    U2: MCU_GPIO(package="QFN-32");
+    
+    VCC_3V3 -> U1.VDD;
+    VCC_3V3 -> U2.VDD;
+    GND -> U1.VSS;
+    GND -> U2.VSS;
+    
+    // ❌ FORBIDDEN: Two push-pull outputs connected
+    // U1.PA0 -> U2.PA0;  // Would cause SHORT CIRCUIT!
+    /*
+    SYNTHESIS ERROR:
+    - Type: FORBIDDEN CONNECTION
+    - Issue: Two push-pull outputs connected together
+    - Details: U1.PA0 (output) -> U2.PA0 (output)
+    - Result: Short circuit - excessive current will damage both chips!
+    - Solution: Use tri-state control or multiplexer
+    */
+    
+    // ✅ LEGAL: Open-drain outputs can be connected (wired-OR)
+    U1.SCL -> shared_interrupt_line;
+    U2.SCL -> shared_interrupt_line;
+    /*
+    AUTO-SYNTHESIS:
+    - Type: Wired-OR configuration
+    - Insert: R_WIRED_OR: Res(4.7kΩ) from VCC_3V3 to shared_interrupt_line
+    - Result: Both can pull low, resistor pulls high when released
+    */
+    
+    // === EXAMPLE 2: VOLTAGE DOMAIN CROSSING ===
+    
+    // Multi-domain MCU
+    U3: MCU_MultiDomain(package="BGA256");
+    
+    // Connect different voltage domains
+    VCC_1V2 -> U3.VDDCORE;
+    VCC_3V3 -> U3.VDDIO1;
+    VCC_1V8 -> U3.VDDIO2;
+    GND -> U3.VSS;
+    GND -> U3.VSSIO1;
+    GND -> U3.VSSIO2;
+    
+    // ⚠️ Cross-domain connection: 3.3V to 1.8V
+    U3.PA[0] -> U3.PB[0];  // PA is 3.3V, PB is 1.8V
+    /*
+    AUTO-SYNTHESIS:
+    - Type: Voltage domain crossing
+    - Issue: 3.3V signal to 1.8V input (could damage 1.8V input!)
+    - Insert: LEVEL_SHIFTER_1: SN74LVC1T45
+      * VCCA -> VDDIO1 (3.3V side)
+      * VCCB -> VDDIO2 (1.8V side)
+      * A -> U3.PA[0]
+      * B -> U3.PB[0]
+      * DIR -> VCC (A to B direction)
+    - Result: Safe voltage translation
+    */
+    
+    // ⚠️ Bidirectional cross-domain (e.g., I2C between domains)
+    U1.SDA <-> U3.PB[1];  // 3.3V I2C to 1.8V GPIO
+    /*
+    AUTO-SYNTHESIS:
+    - Type: Bidirectional voltage domain crossing
+    - Issue: 3.3V I2C to 1.8V pin
+    - Insert: LEVEL_SHIFTER_2: TXS0108E (bidirectional)
+      * VCCA -> VCC_3V3
+      * VCCB -> VCC_1V8
+      * A1 -> U1.SDA
+      * B1 -> U3.PB[1]
+      * OE -> VCC (always enabled)
+    - Result: Automatic bidirectional level shifting
+    */
+    
+    // === EXAMPLE 3: 5V TO 3.3V CONNECTION ===
+    
+    // 5V signal source
+    signal_5v: external_5v_signal;
+    
+    // ❌ 5V to non-tolerant 3.3V input
+    // signal_5v -> U1.PA1;  // Would damage 3.3V input!
+    /*
+    SYNTHESIS WARNING:
+    - Type: Over-voltage condition
+    - Issue: 5V signal to 3.3V non-tolerant input
+    - Insert: Protection circuit
+      * R1: Res(2.2kΩ) from signal_5v to divider_mid
+      * R2: Res(3.3kΩ) from divider_mid to GND
+      * Output: divider_mid -> U1.PA1
+    - Result: 5V divided down to 3V (safe for 3.3V input)
+    */
+    
+    // ✅ 5V to 5V-tolerant input (if pin has this attribute)
+    signal_5v -> U1.PA2;  // Assuming PA2 is 5V tolerant
+    /*
+    AUTO-SYNTHESIS:
+    - Type: 5V tolerant input
+    - Check: U1.PA2 has "5V_tolerant" attribute
+    - Result: Direct connection OK (no level shifter needed)
+    */
+    
+    // === EXAMPLE 4: ANALOG/DIGITAL ISOLATION ===
+    
+    // Analog and digital domains
+    VCC_3V3 -> U3.VDDA;  // Analog supply
+    GND -> U3.VSSA;      // Analog ground
+    
+    // Digital signal to analog ADC input
+    U1.PA3 -> U3.ADC[0];
+    /*
+    AUTO-SYNTHESIS:
+    - Type: Digital to analog domain
+    - Issue: Digital noise could affect analog accuracy
+    - Insert: BUFFER_1: Analog buffer
+      * VDD -> VDDA (analog supply)
+      * VSS -> VSSA (analog ground)
+      * IN -> U1.PA3
+      * OUT -> U3.ADC[0]
+    - Additional: RC filter for anti-aliasing
+      * R_FILTER: Res(1kΩ) in series
+      * C_FILTER: Cap(100pF) to VSSA
+    - Result: Isolated, filtered analog input
+    */
+    
+    // === EXAMPLE 5: TRI-STATE BUS CONFLICT ===
+    
+    // Two devices on shared bus (both can drive)
+    U1.PA4 -> shared_data_bus;
+    U2.PA4 -> shared_data_bus;
+    /*
+    SYNTHESIS CHECK:
+    - Type: Shared bus with multiple drivers
+    - Analysis: Both pins are push-pull outputs
+    - Required: Tri-state control or multiplexer
+    - Warning: "Ensure mutually exclusive output enables"
+    - Suggestion: Convert to tri-state with OE control:
+      * U1_OE and U2_OE must never both be high
+      * Add pull-up/pull-down for bus idle state
+    */
+    
+    /*
+    === SYNTHESIS SUMMARY ===
+    
+    Automatic insertions for this circuit:
+    
+    1. FORBIDDEN CONNECTIONS (Blocked):
+       - Push-pull to push-pull: PREVENTED (would cause damage)
+    
+    2. LEVEL SHIFTERS (Auto-inserted):
+       - LS_1: SN74LVC1T45 for 3.3V→1.8V
+       - LS_2: TXS0108E for bidirectional 3.3V↔1.8V
+       - LS_3: Resistor divider for 5V→3.3V
+    
+    3. PULL-UPS (Auto-inserted):
+       - R_WIRED_OR: 4.7kΩ for open-drain shared line
+       - R_I2C_SCL: 4.7kΩ to VCC_3V3 (not VCC_1V2!)
+       - R_I2C_SDA: 4.7kΩ to VCC_3V3
+    
+    4. ISOLATION (Auto-inserted):
+       - BUFFER_1: Analog buffer for digital→analog
+       - RC filter for ADC anti-aliasing
+    
+    5. WARNINGS GENERATED:
+       - Tri-state bus needs exclusive enables
+       - Cross-domain timing considerations
+       - Power sequencing for level shifters
+    
+    Total components auto-synthesized: 8
+    Potential damage prevented: 3 scenarios
+    Design time saved: Hours of debugging!
+    */
+}

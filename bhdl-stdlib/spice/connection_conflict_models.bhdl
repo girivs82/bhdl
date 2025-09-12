@@ -1,0 +1,218 @@
+// SPICE Models for Connection Conflict Detection
+// These models reveal issues like output conflicts and domain crossing problems
+
+// Model for output-to-output conflict detection
+module OutputConflictModel(
+    v1: voltage = 3.3V,  // Output 1 trying to drive high
+    v2: voltage = 0V,     // Output 2 trying to drive low
+    r1: resistance = 25Ω, // Output 1 impedance
+    r2: resistance = 25Ω  // Output 2 impedance
+) {
+    // SPICE equation for conflict current (SHORT CIRCUIT!)
+    attribute spice_conflict_current = (v1 - v2) / (r1 + r2);
+    
+    // Example: 3.3V vs 0V with 25Ω each
+    // I = 3.3V / 50Ω = 66mA (EXCESSIVE!)
+    
+    // Power dissipation in each output driver
+    attribute spice_power_out1 = spice_conflict_current * spice_conflict_current * r1;
+    attribute spice_power_out2 = spice_conflict_current * spice_conflict_current * r2;
+    
+    // Example: P = 66mA² × 25Ω = 109mW per output (DAMAGING!)
+    
+    // Voltage at connection point (fighting outputs)
+    attribute spice_voltage_midpoint = v2 + (v1 - v2) * r2 / (r1 + r2);
+    
+    // Example: V = 0 + 3.3 × 25/50 = 1.65V (undefined logic level!)
+    
+    // Temperature rise model (simplified)
+    attribute spice_temp_rise = spice_power_out1 * thermal_resistance;
+    
+    // Failure detection
+    attribute failure_modes = {
+        overcurrent: spice_conflict_current > 50mA,
+        overpower: spice_power_out1 > 100mW,
+        overtemp: spice_temp_rise > 50°C,
+        logic_undefined: spice_voltage_midpoint > 0.8V && spice_voltage_midpoint < 2.0V
+    };
+    
+    // Simulation would show:
+    // Time=0: Both outputs enabled → 66mA current spike
+    // Time=1µs: Junction temperature rising rapidly
+    // Time=10µs: Output drivers entering thermal shutdown
+    // Time=100µs: Permanent damage likely
+}
+
+// Model for voltage domain crossing without level shifter
+module DomainCrossingModel(
+    source_voltage: voltage = 3.3V,
+    target_max_voltage: voltage = 1.8V,
+    target_input_impedance: resistance = 1MΩ,
+    esd_clamp_voltage: voltage = 2.1V  // Target's ESD protection
+) {
+    // Input protection diode model
+    attribute spice_esd_current = source_voltage > esd_clamp_voltage ?
+        (source_voltage - esd_clamp_voltage) / 100Ω :  // ESD diode on resistance
+        0;
+    
+    // Example: 3.3V to 1.8V pin with 2.1V clamp
+    // I_esd = (3.3 - 2.1) / 100 = 12mA through ESD diode!
+    
+    // Gate oxide stress model
+    attribute spice_gate_voltage = min(source_voltage, esd_clamp_voltage);
+    attribute spice_oxide_field = spice_gate_voltage / gate_oxide_thickness;
+    attribute spice_oxide_stress = spice_oxide_field > max_oxide_field;
+    
+    // Power dissipation in protection diode
+    attribute spice_esd_power = spice_esd_current * (source_voltage - esd_clamp_voltage);
+    
+    // Example: P = 12mA × 1.2V = 14.4mW (continuous heating!)
+    
+    // Long-term reliability impact
+    attribute spice_mttf_hours = spice_oxide_stress ? 
+        1000 * exp(-spice_oxide_field / critical_field) :  // Accelerated failure
+        1000000;  // Normal lifetime
+    
+    // Simulation would show:
+    // Steady state: 12mA flowing through ESD diode
+    // Gate voltage: Clamped at 2.1V (above 1.8V rating)
+    // Result: Gradual degradation, early failure
+}
+
+// Model for open-drain wired-OR without pull-up
+module WiredORWithoutPullup(
+    num_devices: int = 3,
+    all_high_z: bool = true,  // All outputs released
+    bus_capacitance: capacitance = 50pF,
+    leakage_per_device: current = 1µA
+) {
+    // Total leakage current
+    attribute spice_total_leakage = num_devices * leakage_per_device;
+    
+    // Floating voltage (undefined!)
+    attribute spice_float_voltage = all_high_z ? 
+        undefined :  // No defined voltage!
+        0.4V;        // At least one pulling low
+    
+    // Noise susceptibility
+    attribute spice_noise_coupling = all_high_z ?
+        coupled_noise_amplitude :  // Picks up any nearby signal!
+        0;
+    
+    // Rise time without pull-up (infinite!)
+    attribute spice_rise_time = all_high_z ?
+        infinity :  // Cannot rise without pull-up
+        2.2 * 40Ω * bus_capacitance;  // Fall time OK
+    
+    // Simulation would show:
+    // All high-Z: Voltage floating between 0-VDD randomly
+    // Noise: Picks up 60Hz, switching noise, etc.
+    // Logic: Randomly triggers connected inputs!
+}
+
+// Model for correct level shifter insertion
+module LevelShifterModel(
+    vin: voltage,
+    vcca: voltage = 3.3V,
+    vccb: voltage = 1.8V,
+    direction: string = "a_to_b"
+) {
+    // Proper voltage translation
+    attribute spice_vout = direction == "a_to_b" ?
+        (vin / vcca) * vccb :  // Scale to target domain
+        (vin / vccb) * vcca;   // Scale to source domain
+    
+    // Propagation delay through level shifter
+    attribute spice_tpd = 2.5ns;  // Typical for modern level shifters
+    
+    // Power consumption
+    attribute spice_quiescent_current = 10µA;  // When static
+    attribute spice_dynamic_current = 1mA;     // When switching
+    
+    // Output characteristics
+    attribute spice_output_impedance = 50Ω;
+    attribute spice_drive_strength = 20mA;
+    
+    // Voltage thresholds properly scaled
+    attribute spice_vih = direction == "a_to_b" ?
+        0.7 * vcca :  // Input threshold for A side
+        0.7 * vccb;   // Input threshold for B side
+        
+    attribute spice_vol = 0.2V;  // Output low
+    attribute spice_voh = direction == "a_to_b" ?
+        vccb - 0.2V :  // Output high on B side
+        vcca - 0.2V;   // Output high on A side
+}
+
+// Test cases showing simulation results
+module TestOutputConflict {
+    // Scenario: Two outputs fighting
+    test1: OutputConflictModel(v1=3.3V, v2=0V);
+    // Result: 66mA conflict current, 109mW dissipation each
+    // Outcome: DAMAGE after microseconds
+    
+    // Scenario: Slight voltage difference
+    test2: OutputConflictModel(v1=3.3V, v2=3.0V);
+    // Result: 6mA conflict current (still problematic)
+    // Outcome: Gradual degradation
+}
+
+module TestDomainCrossing {
+    // Scenario: 3.3V to 1.8V without protection
+    test1: DomainCrossingModel(source_voltage=3.3V, target_max_voltage=1.8V);
+    // Result: 12mA through ESD diode continuously
+    // Outcome: Device fails in hours/days
+    
+    // Scenario: 5V to 3.3V non-tolerant
+    test2: DomainCrossingModel(source_voltage=5.0V, target_max_voltage=3.3V);
+    // Result: 17mA through ESD diode
+    // Outcome: Immediate damage risk
+}
+
+module TestCorrectSolutions {
+    // Correct: Level shifter for domain crossing
+    test1: LevelShifterModel(vin=3.3V, vcca=3.3V, vccb=1.8V);
+    // Result: Clean 1.8V output, no stress
+    // Outcome: Reliable operation
+    
+    // Correct: Pull-up for wired-OR
+    test2: WiredORWithPullup(pullup_value=4.7kΩ, vcc=3.3V);
+    // Result: Defined high level when all released
+    // Outcome: Proper logic levels
+}
+
+// Validation rules that simulation would check
+const CONNECTION_VALIDATION_RULES = [
+    {
+        name: "No output conflicts",
+        check: "conflict_current < 1mA",
+        failure: "Short circuit detected between outputs"
+    },
+    {
+        name: "Voltage domain compatibility",
+        check: "input_voltage <= max_input_voltage * 1.1",
+        failure: "Over-voltage condition on input"
+    },
+    {
+        name: "Defined logic levels",
+        check: "!is_floating && (v < vil || v > vih)",
+        failure: "Undefined/floating signal detected"
+    },
+    {
+        name: "ESD diode current",
+        check: "esd_current < 100µA",
+        failure: "Excessive current through protection diode"
+    },
+    {
+        name: "Power dissipation",
+        check: "power_dissipation < max_power",
+        failure: "Excessive power dissipation in output"
+    }
+];
+
+// Export models and validation
+export {
+    OutputConflictModel, DomainCrossingModel, 
+    WiredORWithoutPullup, LevelShifterModel,
+    CONNECTION_VALIDATION_RULES
+};
