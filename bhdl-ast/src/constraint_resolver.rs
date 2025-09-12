@@ -5,14 +5,13 @@
 
 use crate::flow::{FlowStmt, FlowExpr, ComponentInstantiation};
 use crate::HasName;
-use crate::common::{ParamAssign, Value};
 use crate::expr::Expr;
 use crate::items::Board;
-use crate::semantic_analysis::{SemanticContext, BhdlType, UnitType, ComponentTypeInfo};
-use crate::symbol_table::{SymbolTable, SourceLocation};
+use crate::semantic_analysis::{SemanticContext, UnitType};
+use crate::symbol_table::SourceLocation;
 use crate::visitor::AstVisitor;
 use rowan::ast::AstNode;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// Constraint types for BHDL designs
 #[derive(Debug, Clone, PartialEq, Eq)]

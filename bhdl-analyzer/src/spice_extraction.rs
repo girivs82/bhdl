@@ -1,8 +1,5 @@
 //! SPICE parameter extraction from BHDL component attributes
 
-use std::collections::HashMap;
-use bhdl_ast::Module;
-use crate::attribute_extraction::extract_module_attributes;
 
 /// Extract SPICE model parameters from module attributes
 // Commented out to avoid cyclic dependency with bhdl_spice

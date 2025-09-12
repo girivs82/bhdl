@@ -33,6 +33,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", "Synthesizing...".bold());
     let mut synthesizer = Synthesizer::new();
     
+    // Set the source file path for proper import resolution
+    synthesizer.set_source_file_path(test_file);
+    
     match synthesizer.synthesize(&ast, &analysis).await {
         Ok(netlist) => {
             println!("{} Synthesis successful!", "✓".green().bold());

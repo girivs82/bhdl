@@ -1,9 +1,8 @@
 // BHDL v2.0 Behavioral modeling AST nodes
 // Support for when blocks and behavioral statements
 
-use crate::{SyntaxKind, BhdlLanguage, SyntaxNode, SyntaxToken, HasName};
+use crate::{SyntaxKind, BhdlLanguage, SyntaxNode, SyntaxToken};
 use crate::expr::Expr;
-use crate::attributes::AttributeDecl;
 use rowan::ast::AstNode;
 
 /// When block for behavioral modeling: when (condition) { statements }

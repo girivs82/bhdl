@@ -2,13 +2,13 @@
 // Only supports v2.0 flow-based syntax
 
 use crate::{SyntaxKind, BhdlLanguage, SyntaxNode, SyntaxToken, HasName};
-use rowan::ast::{AstNode, AstChildren};
+use rowan::ast::AstNode;
 use crate::blocks::{LayerStackupBlock, DefaultDesignRulesBlock, ConstrainBlock};
-use crate::common::{TypeRef, ParamAssign, ComponentInst, PortDecl, PinDecl, NetDecl};
+use crate::common::{TypeRef, ParamAssign, ComponentInst, PortDecl, PinDecl};
 use crate::v2_statements::ConnectionStmt;
 use crate::expr::Expr;
 use crate::v2_statements::{PowerDecl, GroundDecl, FlowStmt};
-use crate::hierarchical::{ModuleInst, ScopedAttribute};
+use crate::hierarchical::ModuleInst;
 use crate::attributes::AttributeDecl;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

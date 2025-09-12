@@ -1,12 +1,11 @@
 //! Conversion from AnalysisResult to common AnalysisData
 
-use bhdl_common::{AnalysisData, ModuleDefinitionInfo, ModulePinMetadata, PinMetadata};
+use bhdl_common::AnalysisData;
 use crate::types::AnalysisResult;
-use std::collections::HashMap;
 
 /// Convert analyzer's AnalysisResult to common AnalysisData for downstream tools
 pub fn convert_to_analysis_data(result: &AnalysisResult) -> AnalysisData {
-    let mut data = AnalysisData::new();
+    let data = AnalysisData::new();
     
     // Extract module definitions from symbol table
     // TODO: Implement proper conversion once symbol table structure is finalized

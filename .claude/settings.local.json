@@ -299,7 +299,16 @@
       "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin test_connection_verification)",
       "Bash(RUST_LOG=error cargo run -p bhdl-synthesizer --bin test_7805_realistic)",
       "Bash(RUST_LOG=info cargo run -p bhdl-analyzer --bin test_import_processing)",
-      "Bash(RUST_LOG=debug cargo run -p bhdl-analyzer --bin test_import_processing)"
+      "Bash(RUST_LOG=debug cargo run -p bhdl-analyzer --bin test_import_processing)",
+      "Bash(./debug_stdlib_parsing:*)",
+      "Bash(RUST_LOG=error cargo run -p bhdl-synthesizer --bin test_symbol_table_integration)",
+      "Bash(awk:*)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin test_symbol_table_integration)",
+      "Bash(RUST_LOG=warn cargo run -p bhdl-synthesizer --bin test_symbol_table_integration)",
+      "Bash(RUST_LOG=error cargo run -p bhdl-parser --bin test_v2_parser bhdl-stdlib/regulators/lm7805.bhdl)",
+      "Bash(./test_unit_parser)",
+      "Bash(./test_real_unit_parser)",
+      "Bash(./test_simple_unit)"
     ],
     "deny": []
   }

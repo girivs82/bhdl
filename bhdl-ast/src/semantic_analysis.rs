@@ -3,17 +3,15 @@
 //! This module provides semantic analysis functionality including type checking,
 //! name resolution, constraint validation, and other semantic validations.
 
-use crate::flow::{FlowStmt, FlowExpr, FlowElement, ComponentInstantiation, GenerateStmt, ConditionalStmt, AssignStmt};
-use crate::common::{ParamAssign, PinRef, NetRef, IdentRef, Value, RangeExpr};
-use crate::v2_statements::ConnectionStmt;
-use crate::expr::{Expr, BinaryExpr, PrefixExpr, TernaryExpr, FunctionCallExpr, ComponentInstExpr};
-use crate::items::{Board, Module, ComponentDef, InterfaceDef};
+use crate::flow::{FlowStmt, FlowExpr, FlowElement, ComponentInstantiation, GenerateStmt, AssignStmt};
+use crate::common::{ParamAssign, IdentRef, Value, RangeExpr};
+use crate::expr::{Expr, BinaryExpr, PrefixExpr, TernaryExpr, ComponentInstExpr};
+use crate::items::Board;
 use crate::{SyntaxKind, BhdlLanguage, SyntaxNode, HasName};
-use crate::symbol_table::{SymbolTable, Symbol, SymbolKind, SymbolError, SourceLocation, build_symbol_table};
+use crate::symbol_table::{SymbolTable, SymbolKind, SymbolError, SourceLocation, build_symbol_table};
 use crate::visitor::AstVisitor;
-use crate::validation::{ValidationError, ValidationReport};
 use rowan::ast::AstNode;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// Result type for semantic analysis operations
 pub type SemanticResult<T = ()> = Result<T, SemanticError>;

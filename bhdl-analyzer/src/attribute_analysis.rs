@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use bhdl_ast::attributes::{AttributeDecl, AttributeType, AttributeDependency};
-use bhdl_ast::{SyntaxNode, BhdlLanguage, SyntaxKind};
+use bhdl_ast::{SyntaxNode, BhdlLanguage};
 use rowan::ast::AstNode;
 
 /// Result of attribute dependency analysis
@@ -127,7 +127,7 @@ impl AttributeAnalyzer {
     
     /// Analyze when blocks to find mutable attributes
     fn analyze_when_blocks(&mut self, root: &SyntaxNode<BhdlLanguage>) {
-        use bhdl_ast::behavioral::{find_when_blocks, find_mutable_attributes};
+        use bhdl_ast::behavioral::find_mutable_attributes;
         
         // Find all attributes modified in when blocks
         let mutable_attrs = find_mutable_attributes(root);

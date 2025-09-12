@@ -1,4 +1,4 @@
-use crate::{SyntaxKind, BhdlLanguage, SyntaxNode, SyntaxToken};
+use crate::{SyntaxKind, BhdlLanguage, SyntaxNode};
 use rowan::ast::AstNode;
 use crate::items::{Board, Module, ComponentDef, InterfaceDef, TypedefDef, ImportStmt};
 use crate::testbench::TestbenchDef;

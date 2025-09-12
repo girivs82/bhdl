@@ -1,6 +1,6 @@
 use crate::{SyntaxKind, BhdlLanguage, SyntaxNode, SyntaxToken, HasName}; // Use SyntaxNode/Token
 use crate::expr::Expr;
-use rowan::ast::{AstNode, AstChildren};
+use rowan::ast::AstNode;
 // v2.0 doesn't have PinMapBlock - it was used for v1.0 pin mapping
 use rowan::NodeOrToken; // Needed for SyntaxNodeExt
 // Removed import for TypeDef as it's not used here

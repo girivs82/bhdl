@@ -5,7 +5,7 @@
 //! the entire flow path, not just the individual net.
 
 use std::collections::HashMap;
-use bhdl_ast::{Board, Statement, AstNode, Module};
+use bhdl_ast::{Board, Statement, AstNode};
 use bhdl_ast::BoardV2Ext;
 use bhdl_ast::v2_statements::NetFlowStmt;
 use bhdl_common::{IntentCall, IntentRegistry, IntentResult, SimMode};
@@ -116,7 +116,7 @@ impl FlowTracker {
         symbol_table: &SymbolTable, 
         definition_scopes: &HashMap<rowan::ast::SyntaxNodePtr<bhdl_parser::BhdlLanguage>, SymbolTable>
     ) -> Vec<Diagnostic> {
-        let mut diagnostics = Vec::new();
+        let diagnostics = Vec::new();
         
         // Iterate through all module scopes to find virtual pins
         for (module_node_ptr, module_scope) in definition_scopes {

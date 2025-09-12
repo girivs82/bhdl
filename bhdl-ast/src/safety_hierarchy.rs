@@ -5,7 +5,6 @@
 //! their decomposition relationships.
 
 use crate::{AstNode, BhdlLanguage, SyntaxKind, SyntaxNode, SyntaxToken};
-use rowan::ast::support;
 use std::collections::HashMap;
 
 /// Requirement level in the V-model hierarchy

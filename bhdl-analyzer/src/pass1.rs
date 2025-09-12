@@ -11,7 +11,7 @@ use bhdl_ast::{
     hierarchical::ModuleInst,
     v2_statements::ConnectionStmt,
     expr::{Expr, BinaryExpr},
-    interfaces::{InterfaceSignal, InterfaceRequirement, InterfaceInst, SignalDirection},
+    interfaces::{InterfaceSignal, InterfaceInst, SignalDirection},
     PowerDecl, GroundDecl,
 };
 

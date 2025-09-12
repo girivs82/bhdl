@@ -1,8 +1,7 @@
 // Interface-specific AST nodes
 
 use crate::{SyntaxKind, BhdlLanguage, SyntaxNode, SyntaxToken, HasName};
-use rowan::ast::{AstNode, AstChildren};
-use crate::common::Ident;
+use rowan::ast::AstNode;
 use crate::items::ParamList;
 use crate::expr::Expr;
 

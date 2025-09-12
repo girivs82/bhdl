@@ -5,9 +5,8 @@
 //! 2. Generative: Calculate missing values
 
 use std::collections::HashMap;
-use anyhow::{Result, Context as _};
+use anyhow::Result;
 use log::{info, warn};
-use bhdl_ast::{SourceFile, SyntaxNode, SyntaxKind};
 // use bhdl_spice::{Circuit, ComponentModel, NonlinearDcAnalysis, ElectricalLimits}; // Commented out to avoid cyclic dependency
 use crate::component_inference::{ComponentSuggestion, InferredParameter, ParameterValue};
 

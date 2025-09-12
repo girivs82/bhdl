@@ -367,8 +367,8 @@ fn analyze_components_for_inference(
     component_inference: &mut ComponentInferenceContext,
     power_context: &PowerAnalysisContext,
 ) {
-    use bhdl_ast::SyntaxKind;
-    use component_inference::CircuitContext;
+    
+    
 
     // Walk through the syntax tree looking for component instantiations
     visit_node_for_component_inference(syntax, component_inference, power_context);
@@ -628,7 +628,7 @@ fn process_component_instantiation_v2(
     component_inference: &mut ComponentInferenceContext,
     power_context: &PowerAnalysisContext,
 ) {
-    use component_inference::{CircuitRequirements, CircuitContext, ParameterValue, InferredParameter};
+    use component_inference::{CircuitContext, ParameterValue, InferredParameter};
     use bhdl_ast::HasName;
     
     // Extract component type from the instantiation
@@ -889,7 +889,7 @@ fn process_component_inst_common(
     component_inference: &mut ComponentInferenceContext,
     power_context: &PowerAnalysisContext,
 ) {
-    use component_inference::{CircuitRequirements, CircuitContext, ParameterValue, InferredParameter};
+    use component_inference::{CircuitContext, ParameterValue, InferredParameter};
     use bhdl_ast::HasName;
     
     // Extract component type

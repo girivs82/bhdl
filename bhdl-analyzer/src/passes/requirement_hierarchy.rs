@@ -204,7 +204,7 @@ impl RequirementHierarchy {
     
     /// Process a simple satisfies specification (fallback)
     fn process_simple_satisfies(&mut self, req_id: &str, item: &bhdl_ast::safety::SatisfiesItem) {
-        let mut req = self.requirements.entry(req_id.to_string())
+        let req = self.requirements.entry(req_id.to_string())
             .or_insert_with(|| RequirementNode {
                 id: req_id.to_string(),
                 level: infer_requirement_level(req_id),

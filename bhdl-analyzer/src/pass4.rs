@@ -4,7 +4,7 @@ use rowan::{SyntaxNode, TextRange, ast::{AstNode, SyntaxNodePtr}};
 use bhdl_ast::common::{NetRef, PinRef};
 
 use crate::symbol_table::{Symbol, SymbolKind, SymbolTable};
-use crate::types::{Diagnostic, ResolvedConstants, ResolvedTypeInfo};
+use crate::types::{Diagnostic, ResolvedConstants};
 
 // --- Pass 4: Bounds Checks ---
 
