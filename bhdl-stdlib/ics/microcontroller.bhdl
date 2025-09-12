@@ -1,0 +1,148 @@
+// Microcontroller GPIO Pin Module
+// Demonstrates pin-level electrical characteristics for synthesis
+
+import { PIN_MODEL_GPIO_3V3, PIN_MODEL_I2C_OPEN_DRAIN, PIN_MODEL_SPI_HIGH_SPEED } from "../pin_characteristics.bhdl";
+
+module MCU_GPIO(package: string = "QFN-32") {
+    // GPIO pins with different electrical models
+    pin PA0: signal inout @metadata(
+        function="GPIO",
+        description="General purpose I/O pin",
+        electrical_type="digital_io",
+        drive_model=PIN_MODEL_GPIO_3V3,
+        synthesis_hints=["can_pullup", "can_pulldown", "5V_tolerant"]
+    );
+    
+    pin PA1: signal inout @metadata(
+        function="GPIO",
+        electrical_type="digital_io", 
+        drive_model=PIN_MODEL_GPIO_3V3,
+        synthesis_hints=["can_pullup", "can_pulldown"]
+    );
+    
+    // I2C pins - open-drain with automatic pull-up synthesis
+    pin SCL: signal inout @metadata(
+        function="I2C_Clock",
+        description="I2C clock (open-drain)",
+        electrical_type="i2c_clock",
+        drive_model=PIN_MODEL_I2C_OPEN_DRAIN,
+        synthesis_hints=["needs_pullup", "auto_pullup=4k7", "bus_signal"]
+    );
+    
+    pin SDA: signal inout @metadata(
+        function="I2C_Data", 
+        description="I2C data (open-drain)",
+        electrical_type="i2c_data",
+        drive_model=PIN_MODEL_I2C_OPEN_DRAIN,
+        synthesis_hints=["needs_pullup", "auto_pullup=4k7", "bus_signal"]
+    );
+    
+    // SPI pins - high-speed push-pull
+    pin SCLK: signal out @metadata(
+        function="SPI_Clock",
+        description="SPI clock output",
+        electrical_type="spi_clock",
+        drive_model=PIN_MODEL_SPI_HIGH_SPEED,
+        synthesis_hints=["matched_impedance", "length_matching"]
+    );
+    
+    pin MOSI: signal out @metadata(
+        function="SPI_MOSI",
+        description="SPI master out, slave in",
+        electrical_type="spi_data",
+        drive_model=PIN_MODEL_SPI_HIGH_SPEED,
+        synthesis_hints=["matched_impedance"]
+    );
+    
+    pin MISO: signal in @metadata(
+        function="SPI_MISO", 
+        description="SPI master in, slave out",
+        electrical_type="spi_data",
+        drive_model=PIN_MODEL_SPI_HIGH_SPEED,
+        synthesis_hints=["matched_impedance", "termination_needed"]
+    );
+    
+    // Power and ground
+    pin VDD: power in @metadata(
+        function="PowerPositive",
+        voltage="3.3V",
+        current="500mA"
+    );
+    
+    pin VSS: ground @metadata(
+        function="Ground"
+    );
+    
+    // Component metadata
+    attribute component_class = "microcontroller";
+    attribute gpio_count = 16;
+    attribute package_type = package;
+    
+    // Synthesis knowledge for automatic component insertion
+    attribute synthesis_rules = [
+        "i2c_pins_need_pullups",
+        "spi_pins_need_series_termination", 
+        "analog_pins_need_filtering",
+        "power_pins_need_decoupling"
+    ];
+    
+    // Virtual pin definitions for synthesizer
+    // Pull-ups connect to VDD (the I/O supply rail for this chip)
+    virtual_pin i2c_pullup_scl: signal passive when SCL.needs_pullup @metadata(
+        function="PullUpResistor",
+        description="Auto-generated I2C SCL pull-up to VDD rail",
+        component_type="Res", 
+        component_value="SCL.drive_model.default_pullup_value",
+        connection_high="VDD",  // Pulls to VDD - the I/O supply for this chip
+        connection_low="SCL",
+        synthesis_trigger="open_drain_pullup",
+        pullup_rail_source="SCL.drive_model.pullup_rail"  // Can also read from drive model
+    );
+    
+    virtual_pin i2c_pullup_sda: signal passive when SDA.needs_pullup @metadata(
+        function="PullUpResistor",
+        description="Auto-generated I2C SDA pull-up to VDD rail", 
+        component_type="Res",
+        component_value="SDA.drive_model.default_pullup_value",
+        connection_high="VDD",  // Pulls to VDD - the I/O supply for this chip
+        connection_low="SDA",
+        synthesis_trigger="open_drain_pullup",
+        pullup_rail_source="SDA.drive_model.pullup_rail"  // Can also read from drive model
+    );
+    
+    virtual_pin spi_termination: signal passive when MISO.needs_termination @metadata(
+        function="SeriesTermination",
+        description="Auto-generated SPI termination",
+        component_type="Res",
+        component_value="MISO.drive_model.output_impedance_high", 
+        connection_series="MISO",
+        synthesis_trigger="high_speed_termination"
+    );
+    
+    // Decoupling capacitors - virtual pins for power integrity
+    virtual_pin power_decoupling_100n: signal passive @metadata(
+        function="DecouplingCapacitor",
+        description="100nF decoupling capacitor",
+        component_type="Cap",
+        component_value="100nF",
+        connection_high="VDD",
+        connection_low="VSS", 
+        placement_distance="<5mm",
+        synthesis_trigger="power_integrity"
+    );
+    
+    virtual_pin power_decoupling_10u: signal passive @metadata(
+        function="BulkCapacitor", 
+        description="10µF bulk capacitor",
+        component_type="Cap",
+        component_value="10µF",
+        connection_high="VDD",
+        connection_low="VSS",
+        placement_distance="<10mm", 
+        synthesis_trigger="power_integrity"
+    );
+}
+
+// Common microcontroller aliases
+alias MCU = MCU_GPIO;
+alias Microcontroller = MCU_GPIO;

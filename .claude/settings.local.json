@@ -315,7 +315,18 @@
       "Bash(./target/debug/test_virtual_pin_synthesis:*)",
       "Bash(./debug_import_tokenize)",
       "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin test_virtual_pin_simple)",
-      "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin test_virtual_pin_simple --quiet)"
+      "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin test_virtual_pin_simple --quiet)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-analyzer --bin test_simple_integration)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-analyzer --bin test_simple_integration test_analyzer_v2_support.bhdl)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-parser --bin test_intent_parsing)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-analyzer --bin test_flow_tracking_simple)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-analyzer --bin test_simple_integration test_intent_example.bhdl)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-analyzer --bin test_flow_intent_analyzer)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-analyzer --bin test_simple_integration test_advanced_expressions.bhdl)",
+      "Bash(RUST_LOG=info cargo run --bin end_to_end_test -- test_visualization_advanced_syntax.bhdl)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-visualizer --bin test_semantic_visualizer)",
+      "Bash(timeout 30s cargo run --bin end_to_end_test)",
+      "Bash(xargs -I {} cargo run -p bhdl-parser --bin test_v2_parser {})"
     ],
     "deny": []
   }

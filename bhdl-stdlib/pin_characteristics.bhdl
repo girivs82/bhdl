@@ -1,0 +1,324 @@
+// Pin-Level Electrical Characteristics
+// Defines S-parameters, drive types, and synthesis hints for intelligent routing
+
+import { ImpedanceCharacteristics } from "./electrical_params.bhdl";
+
+/// Drive type for digital pins - affects pull-up/pull-down requirements
+type DriveType = {
+    type: string,                    // "push-pull", "open-drain", "open-collector", "tri-state", "differential"
+    needs_pullup: bool,             // True for open-drain/open-collector
+    needs_pulldown: bool,           // True for some specialty configurations
+    default_pullup_value: resistance?, // Suggested pull-up resistor value
+    pullup_rail: string?,           // Which power rail to pull up to (e.g., "VDD", "VDDIO", "VCC")
+    pulldown_rail: string?,         // Which rail to pull down to (e.g., "VSS", "GND")
+    max_sink_current: current?,     // Maximum current pin can sink
+    max_source_current: current?,   // Maximum current pin can source
+    output_impedance_high: resistance?, // Output impedance when high
+    output_impedance_low: resistance?,  // Output impedance when low
+    propagation_delay: time?,       // Typical propagation delay
+    rise_time: time?,               // 10%-90% rise time
+    fall_time: time?,               // 90%-10% fall time
+};
+
+/// S-parameters for high-frequency pin modeling
+type SParameters = {
+    frequency: frequency,           // Frequency at which parameters are measured
+    s11_magnitude: float?,          // Input return loss magnitude
+    s11_phase: float?,              // Input return loss phase (degrees)
+    s21_magnitude: float?,          // Forward transmission magnitude
+    s21_phase: float?,              // Forward transmission phase (degrees)
+    s12_magnitude: float?,          // Reverse transmission magnitude
+    s12_phase: float?,              // Reverse transmission phase (degrees)
+    s22_magnitude: float?,          // Output return loss magnitude
+    s22_phase: float?,              // Output return loss phase (degrees)
+    characteristic_impedance: resistance?, // Pin characteristic impedance
+    input_capacitance: capacitance?, // Pin input capacitance
+    output_capacitance: capacitance?, // Pin output capacitance
+};
+
+/// Comprehensive pin electrical model
+type PinElectricalModel = {
+    drive_type: DriveType,
+    s_params_100mhz: SParameters?,  // S-parameters at 100MHz
+    s_params_1ghz: SParameters?,    // S-parameters at 1GHz
+    s_params_10ghz: SParameters?,   // S-parameters at 10GHz (if applicable)
+    dc_characteristics: ImpedanceCharacteristics,
+    esd_protection: float?,         // ESD protection voltage (kV)
+    latch_up_immunity: current?,    // Latch-up immunity (mA)
+    power_dissipation: power?,      // Maximum power dissipation
+    thermal_resistance: float?,     // Junction-to-ambient thermal resistance (°C/W)
+};
+
+// Common drive type definitions
+
+const DRIVE_PUSH_PULL_3V3: DriveType = {
+    type: "push-pull",
+    needs_pullup: false,
+    needs_pulldown: false,
+    default_pullup_value: null,
+    pullup_rail: null,              // Push-pull doesn't need external pulls
+    pulldown_rail: null,
+    max_sink_current: 25mA,
+    max_source_current: 25mA,
+    output_impedance_high: 50Ω,     // Typical CMOS high output impedance
+    output_impedance_low: 25Ω,      // Typical CMOS low output impedance
+    propagation_delay: 5ns,
+    rise_time: 2ns,
+    fall_time: 2ns,
+};
+
+const DRIVE_OPEN_DRAIN_3V3: DriveType = {
+    type: "open-drain",
+    needs_pullup: true,
+    needs_pulldown: false,
+    default_pullup_value: 4.7kΩ,    // Common I2C pull-up value
+    pullup_rail: "VDD",             // Pull up to chip's VDD supply
+    pulldown_rail: null,
+    max_sink_current: 20mA,
+    max_source_current: null,       // Cannot source current
+    output_impedance_high: null,    // High-Z when not driving
+    output_impedance_low: 25Ω,      // Low impedance when sinking
+    propagation_delay: 8ns,         // Slower due to RC time constant
+    rise_time: 10ns,                // Limited by pull-up resistor
+    fall_time: 2ns,
+};
+
+const DRIVE_OPEN_COLLECTOR_5V: DriveType = {
+    type: "open-collector",
+    needs_pullup: true,
+    needs_pulldown: false,
+    default_pullup_value: 2.2kΩ,    // Higher current capability
+    pullup_rail: "VCC",             // Pull up to chip's VCC supply (5V logic)
+    pulldown_rail: null,
+    max_sink_current: 40mA,
+    max_source_current: null,
+    output_impedance_high: null,
+    output_impedance_low: 15Ω,      // BJT saturation resistance
+    propagation_delay: 10ns,
+    rise_time: 15ns,
+    fall_time: 3ns,
+};
+
+const DRIVE_TRI_STATE_3V3: DriveType = {
+    type: "tri-state",
+    needs_pullup: false,            // Usually doesn't need pulls in normal operation
+    needs_pulldown: false,
+    default_pullup_value: 10kΩ,     // Weak pull for unused state
+    pullup_rail: "VDD",             // If needed, pull to VDD
+    pulldown_rail: "VSS",           // If needed, pull to VSS
+    max_sink_current: 25mA,
+    max_source_current: 25mA,
+    output_impedance_high: 50Ω,
+    output_impedance_low: 25Ω,
+    propagation_delay: 6ns,
+    rise_time: 3ns,
+    fall_time: 3ns,
+};
+
+const DRIVE_DIFFERENTIAL_LVDS: DriveType = {
+    type: "differential",
+    needs_pullup: false,
+    needs_pulldown: false,
+    default_pullup_value: null,
+    pullup_rail: null,              // Differential signals don't use pulls
+    pulldown_rail: null,
+    max_sink_current: 3.5mA,        // LVDS current
+    max_source_current: 3.5mA,
+    output_impedance_high: 100Ω,    // Differential impedance
+    output_impedance_low: 100Ω,
+    propagation_delay: 0.5ns,       // Very fast
+    rise_time: 0.2ns,
+    fall_time: 0.2ns,
+};
+
+// S-parameter definitions for common scenarios
+
+const S_PARAMS_DIGITAL_100MHZ: SParameters = {
+    frequency: 100MHz,
+    s11_magnitude: -15,             // dB, good input matching
+    s11_phase: 45,                  // degrees
+    s21_magnitude: -1,              // dB, minimal insertion loss
+    s21_phase: -90,                 // degrees, 90° phase shift
+    s12_magnitude: -30,             // dB, good isolation
+    s12_phase: 0,
+    s22_magnitude: -12,             // dB, output matching
+    s22_phase: -30,
+    characteristic_impedance: 50Ω,
+    input_capacitance: 3pF,
+    output_capacitance: 5pF,
+};
+
+const S_PARAMS_HIGH_SPEED_1GHZ: SParameters = {
+    frequency: 1GHz,
+    s11_magnitude: -10,             // dB, acceptable at 1GHz
+    s11_phase: 90,
+    s21_magnitude: -3,              // dB, some loss at high frequency
+    s21_phase: -180,
+    s12_magnitude: -25,             // dB
+    s12_phase: 45,
+    s22_magnitude: -8,              // dB
+    s22_phase: -60,
+    characteristic_impedance: 50Ω,
+    input_capacitance: 2pF,         // Lower capacitance for high speed
+    output_capacitance: 3pF,
+};
+
+const S_PARAMS_RF_10GHZ: SParameters = {
+    frequency: 10GHz,
+    s11_magnitude: -6,              // dB, challenging at 10GHz
+    s11_phase: 135,
+    s21_magnitude: -6,              // dB, significant loss
+    s21_phase: -270,
+    s12_magnitude: -20,             // dB
+    s12_phase: 90,
+    s22_magnitude: -5,              // dB
+    s22_phase: -120,
+    characteristic_impedance: 50Ω,
+    input_capacitance: 0.5pF,       // Very low for RF
+    output_capacitance: 0.8pF,
+};
+
+// Complete pin electrical models for common IC types
+
+const PIN_MODEL_GPIO_3V3: PinElectricalModel = {
+    drive_type: DRIVE_PUSH_PULL_3V3,
+    s_params_100mhz: S_PARAMS_DIGITAL_100MHZ,
+    s_params_1ghz: S_PARAMS_HIGH_SPEED_1GHZ,
+    s_params_10ghz: null,           // Not characterized at 10GHz
+    dc_characteristics: {
+        dc_resistance: null,         // Depends on state
+        output_impedance: 37.5Ω,     // Average of high/low
+        input_impedance: 1MΩ,        // High input impedance
+        can_source_current: true,
+        can_sink_current: true,
+        max_source_current: 25mA,
+        max_sink_current: 25mA,
+        power_domain_isolation: false,
+        voltage_drop: null,          // Depends on load
+        current_limiting: false,     // No built-in limiting
+        transient_response: 5ns,
+        inrush_current: null
+    },
+    esd_protection: 2.0,             // 2kV ESD protection
+    latch_up_immunity: 200mA,        // 200mA latch-up immunity
+    power_dissipation: 500mW,        // Per pin power dissipation
+    thermal_resistance: 150,         // °C/W
+};
+
+const PIN_MODEL_I2C_OPEN_DRAIN: PinElectricalModel = {
+    drive_type: DRIVE_OPEN_DRAIN_3V3,
+    s_params_100mhz: S_PARAMS_DIGITAL_100MHZ,
+    s_params_1ghz: null,             // I2C not used at 1GHz
+    s_params_10ghz: null,
+    dc_characteristics: {
+        dc_resistance: null,
+        output_impedance: 25Ω,       // When sinking
+        input_impedance: 1MΩ,
+        can_source_current: false,   // Open-drain cannot source
+        can_sink_current: true,
+        max_source_current: null,
+        max_sink_current: 20mA,
+        power_domain_isolation: false,
+        voltage_drop: 0.4V,          // VOL specification
+        current_limiting: false,
+        transient_response: 8ns,
+        inrush_current: null
+    },
+    esd_protection: 2.0,
+    latch_up_immunity: 100mA,
+    power_dissipation: 300mW,
+    thermal_resistance: 200,
+};
+
+const PIN_MODEL_SPI_HIGH_SPEED: PinElectricalModel = {
+    drive_type: DRIVE_PUSH_PULL_3V3,
+    s_params_100mhz: S_PARAMS_DIGITAL_100MHZ,
+    s_params_1ghz: S_PARAMS_HIGH_SPEED_1GHZ,
+    s_params_10ghz: null,
+    dc_characteristics: {
+        dc_resistance: null,
+        output_impedance: 50Ω,       // Matched to transmission line
+        input_impedance: 1MΩ,
+        can_source_current: true,
+        can_sink_current: true,
+        max_source_current: 25mA,
+        max_sink_current: 25mA,
+        power_domain_isolation: false,
+        voltage_drop: null,
+        current_limiting: false,
+        transient_response: 2ns,     // Fast for SPI
+        inrush_current: null
+    },
+    esd_protection: 2.0,
+    latch_up_immunity: 200mA,
+    power_dissipation: 400mW,
+    thermal_resistance: 150,
+};
+
+const PIN_MODEL_ANALOG_INPUT: PinElectricalModel = {
+    drive_type: {
+        type: "high-impedance-input",
+        needs_pullup: false,
+        needs_pulldown: false,
+        default_pullup_value: null,
+        pullup_rail: null,
+        pulldown_rail: null,
+        max_sink_current: 1µA,       // Very low leakage
+        max_source_current: null,    // Input only
+        output_impedance_high: null,
+        output_impedance_low: null,
+        propagation_delay: null,     // Not applicable
+        rise_time: null,
+        fall_time: null,
+    },
+    s_params_100mhz: {
+        frequency: 100MHz,
+        s11_magnitude: -20,          // Very good input matching
+        s11_phase: 0,
+        s21_magnitude: null,         // Input only
+        s21_phase: null,
+        s12_magnitude: null,
+        s12_phase: null,
+        s22_magnitude: null,
+        s22_phase: null,
+        characteristic_impedance: 1MΩ, // Very high impedance
+        input_capacitance: 10pF,     // Typical ADC input capacitance
+        output_capacitance: null,
+    },
+    s_params_1ghz: null,
+    s_params_10ghz: null,
+    dc_characteristics: {
+        dc_resistance: null,
+        output_impedance: null,
+        input_impedance: 10MΩ,       // Very high input impedance
+        can_source_current: false,
+        can_sink_current: false,
+        max_source_current: null,
+        max_sink_current: 1µA,       // Leakage current only
+        power_domain_isolation: false,
+        voltage_drop: null,
+        current_limiting: false,
+        transient_response: null,
+        inrush_current: null
+    },
+    esd_protection: 4.0,             // Higher protection for sensitive analog
+    latch_up_immunity: 50mA,
+    power_dissipation: 100µW,        // Very low power
+    thermal_resistance: 300,
+};
+
+// Export all pin characteristics
+export {
+    DriveType, SParameters, PinElectricalModel,
+    
+    // Drive type definitions
+    DRIVE_PUSH_PULL_3V3, DRIVE_OPEN_DRAIN_3V3, DRIVE_OPEN_COLLECTOR_5V,
+    DRIVE_TRI_STATE_3V3, DRIVE_DIFFERENTIAL_LVDS,
+    
+    // S-parameter definitions  
+    S_PARAMS_DIGITAL_100MHZ, S_PARAMS_HIGH_SPEED_1GHZ, S_PARAMS_RF_10GHZ,
+    
+    // Complete pin models
+    PIN_MODEL_GPIO_3V3, PIN_MODEL_I2C_OPEN_DRAIN, PIN_MODEL_SPI_HIGH_SPEED,
+    PIN_MODEL_ANALOG_INPUT
+};

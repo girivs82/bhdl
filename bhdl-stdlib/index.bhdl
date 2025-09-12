@@ -4,16 +4,27 @@
 // Shared Types
 export * from "./types/electrical_types.bhdl";
 
-// Electrical Parameters and Types (legacy - to be phased out)
+// Pin Electrical Characteristics (NEW)
+export * from "./pin_characteristics.bhdl";
+
+// Synthesis Rules for Intelligent Component Insertion (NEW)
+export * from "./synthesis_rules.bhdl";
+
+// Electrical Parameters and Types 
 export * from "./electrical_params.bhdl";
 
-// Passive Components
+// Passive Components (Enhanced with pin characteristics)
 export * from "./passives/resistor.bhdl";
 export * from "./passives/capacitor.bhdl";
 export * from "./passives/led.bhdl";
 export * from "./passives/diode.bhdl";
 export * from "./passives/fuse.bhdl";
 export * from "./passives/tvs_diode.bhdl";
+
+// Integrated Circuits (NEW)
+export * from "./ics/microcontroller.bhdl";
+export * from "./ics/operational_amplifier.bhdl";  
+export * from "./ics/logic_gate.bhdl";
 
 // Voltage Regulators
 export * from "./regulators/linear_regulator_base.bhdl";
@@ -26,8 +37,9 @@ export * from "./connectors/testpoint.bhdl";
 export * from "./power/power.bhdl";
 export * from "./power/ground.bhdl";
 
-// Future additions:
-// export * from "./passives/inductor.bhdl";
-// export * from "./logic/74xx_series.bhdl";
-// export * from "./amplifiers/opamps.bhdl";
-// export * from "./power/switching_regulators.bhdl";
+// Advanced Examples Demonstrating Pin Characteristics (NEW)
+export * from "./examples/intelligent_synthesis_demo.bhdl";
+export * from "./examples/comprehensive_synthesis_demo.bhdl";
+
+// Additional passive components
+export * from "./passives/inductor.bhdl";

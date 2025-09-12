@@ -20,12 +20,16 @@ module LED(color: string = "red", size: string = "5mm") {
     pin A: signal in @metadata(
         function="Anode",
         description="Positive terminal (Anode)",
-        electrical_type="passive"
+        electrical_type="passive",
+        drive_requirements=["current_limiting", "forward_biased"],
+        synthesis_hints=["needs_series_resistor", "current_source_preferred"]
     );   // Anode (+)
     pin K: signal out @metadata(
         function="Cathode",
-        description="Negative terminal (Cathode)",
-        electrical_type="passive"
+        description="Negative terminal (Cathode)", 
+        electrical_type="passive",
+        drive_requirements=["current_sink"],
+        synthesis_hints=["can_connect_to_ground", "can_connect_to_gpio_sink"]
     );  // Cathode (-)
     
     // LED parameters by color - kept local to this module
@@ -253,4 +257,26 @@ module LED(color: string = "red", size: string = "5mm") {
         size == "1206" ? "LED_SMD:LED_1206_3216Metric" :
         size == "smd" ? "LED_SMD:LED_0805_2012Metric" :
         "LED_THT:LED_D5.0mm";
+        
+    // Virtual pin for automatic current limiting resistor
+    virtual_pin current_limit_resistor: signal passive @metadata(
+        function="CurrentLimitingResistor",
+        description="Auto-generated current limiting resistor for LED",
+        component_type="Res",
+        component_value="(supply_voltage - params.forward_voltage) / params.forward_current",
+        connection_series="A",
+        synthesis_trigger="led_current_limiting",
+        placement_distance="<2mm"
+    );
+    
+    // Alternative virtual pin for constant current driver (advanced)
+    virtual_pin current_driver: signal active when high_power_led @metadata(
+        function="ConstantCurrentDriver",
+        description="Constant current LED driver for high-power LEDs", 
+        component_type="LED_Driver_IC",
+        output_current="params.forward_current",
+        connection_anode="A",
+        connection_cathode="K",
+        synthesis_trigger="high_power_led_drive"
+    );
 }

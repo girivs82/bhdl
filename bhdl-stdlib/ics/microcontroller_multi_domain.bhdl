@@ -1,0 +1,311 @@
+// Multi-Domain Microcontroller Module
+// Demonstrates chips with separate core and I/O power domains
+// Shows how pull-ups connect to the correct power rail
+
+import { PIN_MODEL_GPIO_3V3, PIN_MODEL_I2C_OPEN_DRAIN, PIN_MODEL_SPI_HIGH_SPEED, DRIVE_OPEN_DRAIN_3V3 } from "../pin_characteristics.bhdl";
+import { PowerDomain, ChipPowerArchitecture } from "../pin_characteristics_advanced.bhdl";
+
+module MCU_MultiDomain(package: string = "BGA256") {
+    // === MULTIPLE POWER DOMAINS ===
+    // Core power domain (1.2V)
+    pin VDDCORE: power in @metadata(
+        function="PowerCore",
+        description="Core logic power supply",
+        voltage="1.2V",
+        current="200mA",
+        power_domain="CORE"
+    );
+    
+    // I/O Bank A power (3.3V) - GPIO and standard peripherals
+    pin VDDIO1: power in @metadata(
+        function="PowerIO",
+        description="I/O Bank A power supply (3.3V I/O)",
+        voltage="3.3V",
+        current="150mA",
+        power_domain="IO_BANK_A"
+    );
+    
+    // I/O Bank B power (1.8V) - High-speed interfaces
+    pin VDDIO2: power in @metadata(
+        function="PowerIO",
+        description="I/O Bank B power supply (1.8V I/O)",
+        voltage="1.8V", 
+        current="100mA",
+        power_domain="IO_BANK_B"
+    );
+    
+    // Analog power domain
+    pin VDDA: power in @metadata(
+        function="PowerAnalog",
+        description="Analog power supply",
+        voltage="3.3V",
+        current="50mA",
+        power_domain="ANALOG"
+    );
+    
+    // USB PHY power
+    pin VDDUSB: power in @metadata(
+        function="PowerUSB",
+        description="USB PHY power supply",
+        voltage="3.3V",
+        current="50mA",
+        power_domain="USB_PHY"
+    );
+    
+    // Ground domains (often shared but listed separately for clarity)
+    pin VSS: ground @metadata(
+        function="GroundCore",
+        power_domain="CORE"
+    );
+    
+    pin VSSIO1: ground @metadata(
+        function="GroundIO",
+        power_domain="IO_BANK_A"
+    );
+    
+    pin VSSIO2: ground @metadata(
+        function="GroundIO",
+        power_domain="IO_BANK_B"
+    );
+    
+    pin VSSA: ground @metadata(
+        function="GroundAnalog",
+        power_domain="ANALOG"
+    );
+    
+    // === I/O PINS IN DIFFERENT BANKS ===
+    
+    // Bank A (3.3V) - Standard I/O
+    pin PA[0:7]: signal inout @metadata(
+        function="GPIO",
+        description="General purpose I/O in Bank A (3.3V)",
+        electrical_type="digital_io",
+        drive_model=PIN_MODEL_GPIO_3V3,
+        power_domain="IO_BANK_A",
+        powered_by="VDDIO1",
+        synthesis_hints=["can_pullup", "can_pulldown", "5V_tolerant"]
+    );
+    
+    // I2C in Bank A - Open-drain pins that need pull-ups to VDDIO1
+    pin SCL_3V3: signal inout @metadata(
+        function="I2C_Clock",
+        description="I2C clock in Bank A (3.3V, open-drain)",
+        electrical_type="i2c_clock",
+        drive_model={
+            ...PIN_MODEL_I2C_OPEN_DRAIN,
+            drive_type: {
+                ...DRIVE_OPEN_DRAIN_3V3,
+                pullup_rail: "VDDIO1"  // Explicitly pull to VDDIO1, not VDDCORE
+            }
+        },
+        power_domain="IO_BANK_A",
+        powered_by="VDDIO1",
+        synthesis_hints=["needs_pullup", "auto_pullup=4k7", "bus_signal", "pullup_to_VDDIO1"]
+    );
+    
+    pin SDA_3V3: signal inout @metadata(
+        function="I2C_Data",
+        description="I2C data in Bank A (3.3V, open-drain)",
+        electrical_type="i2c_data",
+        drive_model={
+            ...PIN_MODEL_I2C_OPEN_DRAIN,
+            drive_type: {
+                ...DRIVE_OPEN_DRAIN_3V3,
+                pullup_rail: "VDDIO1"  // Explicitly pull to VDDIO1, not VDDCORE
+            }
+        },
+        power_domain="IO_BANK_A",
+        powered_by="VDDIO1",
+        synthesis_hints=["needs_pullup", "auto_pullup=4k7", "bus_signal", "pullup_to_VDDIO1"]
+    );
+    
+    // Bank B (1.8V) - High-speed interfaces
+    pin PB[0:7]: signal inout @metadata(
+        function="GPIO",
+        description="General purpose I/O in Bank B (1.8V)",
+        electrical_type="digital_io",
+        drive_model={
+            ...PIN_MODEL_GPIO_3V3,  // Base model
+            drive_type: {
+                type: "push-pull",
+                needs_pullup: false,
+                needs_pulldown: false,
+                default_pullup_value: null,
+                pullup_rail: "VDDIO2",  // If needed, pull to VDDIO2
+                pulldown_rail: "VSSIO2",
+                max_sink_current: 12mA,  // Lower current at 1.8V
+                max_source_current: 12mA,
+                output_impedance_high: 75Ω,
+                output_impedance_low: 40Ω,
+                propagation_delay: 3ns,
+                rise_time: 1.5ns,
+                fall_time: 1.5ns,
+            }
+        },
+        power_domain="IO_BANK_B",
+        powered_by="VDDIO2",
+        synthesis_hints=["1V8_logic", "level_shifter_needed_to_3V3"]
+    );
+    
+    // High-speed SPI in Bank B (1.8V)
+    pin SPI_CLK_1V8: signal out @metadata(
+        function="SPI_Clock",
+        description="High-speed SPI clock in Bank B (1.8V)",
+        electrical_type="spi_clock",
+        power_domain="IO_BANK_B",
+        powered_by="VDDIO2",
+        synthesis_hints=["matched_impedance", "length_matching", "1V8_signaling"]
+    );
+    
+    // Analog pins
+    pin ADC[0:3]: signal in @metadata(
+        function="ADC_Input",
+        description="Analog to digital converter inputs",
+        electrical_type="analog_input",
+        power_domain="ANALOG",
+        powered_by="VDDA",
+        reference_voltage="VDDA",
+        synthesis_hints=["anti_alias_filter", "analog_routing", "guard_traces"]
+    );
+    
+    // USB pins
+    pin USB_DP: signal inout @metadata(
+        function="USB_DataPlus",
+        description="USB D+ differential signal",
+        electrical_type="usb_differential",
+        power_domain="USB_PHY",
+        powered_by="VDDUSB",
+        synthesis_hints=["differential_pair", "90ohm_impedance", "length_matched"]
+    );
+    
+    pin USB_DM: signal inout @metadata(
+        function="USB_DataMinus",
+        description="USB D- differential signal",
+        electrical_type="usb_differential",
+        power_domain="USB_PHY",
+        powered_by="VDDUSB",
+        synthesis_hints=["differential_pair", "90ohm_impedance", "length_matched"]
+    );
+    
+    // === VIRTUAL PINS FOR AUTOMATIC SYNTHESIS ===
+    
+    // I2C pull-ups explicitly to VDDIO1 (3.3V I/O supply)
+    virtual_pin i2c_pullup_scl_3v3: signal passive when SCL_3V3.needs_pullup @metadata(
+        function="PullUpResistor",
+        description="I2C SCL pull-up to VDDIO1 (3.3V I/O rail)",
+        component_type="Res",
+        component_value="4.7kΩ",
+        connection_high="VDDIO1",  // NOT VDDCORE! Pull to I/O supply
+        connection_low="SCL_3V3",
+        synthesis_trigger="open_drain_pullup",
+        power_domain_aware=true,
+        comment="Pull-up must connect to VDDIO1 (3.3V) not VDDCORE (1.2V)"
+    );
+    
+    virtual_pin i2c_pullup_sda_3v3: signal passive when SDA_3V3.needs_pullup @metadata(
+        function="PullUpResistor",
+        description="I2C SDA pull-up to VDDIO1 (3.3V I/O rail)",
+        component_type="Res",
+        component_value="4.7kΩ",
+        connection_high="VDDIO1",  // NOT VDDCORE! Pull to I/O supply
+        connection_low="SDA_3V3",
+        synthesis_trigger="open_drain_pullup",
+        power_domain_aware=true,
+        comment="Pull-up must connect to VDDIO1 (3.3V) not VDDCORE (1.2V)"
+    );
+    
+    // Level shifters between power domains
+    virtual_pin level_shifter_3v3_to_1v8: signal active when cross_domain_connection @metadata(
+        function="LevelShifter",
+        description="Auto-inserted level shifter between 3.3V and 1.8V domains",
+        component_type="LevelShifter_Bidirectional",
+        vcca="VDDIO1",  // 3.3V side
+        vccb="VDDIO2",  // 1.8V side
+        gnda="VSSIO1",
+        gndb="VSSIO2",
+        synthesis_trigger="cross_domain_signal",
+        auto_direction_detect=true
+    );
+    
+    // Power supply decoupling - each domain gets its own
+    virtual_pin decouple_core: signal passive @metadata(
+        function="DecouplingCapacitor",
+        description="Core power decoupling",
+        component_type="Cap",
+        component_value="100nF",
+        connection_high="VDDCORE",
+        connection_low="VSS",
+        placement_distance="<2mm",
+        power_domain="CORE"
+    );
+    
+    virtual_pin decouple_io1: signal passive @metadata(
+        function="DecouplingCapacitor",
+        description="I/O Bank A decoupling",
+        component_type="Cap",
+        component_value="100nF",
+        connection_high="VDDIO1",
+        connection_low="VSSIO1",
+        placement_distance="<5mm",
+        power_domain="IO_BANK_A"
+    );
+    
+    virtual_pin decouple_io2: signal passive @metadata(
+        function="DecouplingCapacitor",
+        description="I/O Bank B decoupling",
+        component_type="Cap",
+        component_value="100nF",
+        connection_high="VDDIO2",
+        connection_low="VSSIO2",
+        placement_distance="<5mm",
+        power_domain="IO_BANK_B"
+    );
+    
+    virtual_pin decouple_analog: signal passive @metadata(
+        function="DecouplingCapacitor",
+        description="Analog power decoupling",
+        component_type="Cap",
+        component_value="1µF",  // Larger for analog
+        connection_high="VDDA",
+        connection_low="VSSA",
+        placement_distance="<3mm",
+        power_domain="ANALOG"
+    );
+    
+    // Component metadata
+    attribute component_class = "microcontroller_multi_domain";
+    attribute package_type = package;
+    attribute num_power_domains = 5;
+    attribute io_banks = ["IO_BANK_A", "IO_BANK_B"];
+    attribute core_voltage = "1.2V";
+    attribute io_voltages = ["3.3V", "1.8V"];
+    
+    // Power architecture specification
+    attribute power_architecture = {
+        domains: [
+            { name: "CORE", supply: "VDDCORE", ground: "VSS", voltage: "1.2V" },
+            { name: "IO_BANK_A", supply: "VDDIO1", ground: "VSSIO1", voltage: "3.3V" },
+            { name: "IO_BANK_B", supply: "VDDIO2", ground: "VSSIO2", voltage: "1.8V" },
+            { name: "ANALOG", supply: "VDDA", ground: "VSSA", voltage: "3.3V" },
+            { name: "USB_PHY", supply: "VDDUSB", ground: "VSS", voltage: "3.3V" }
+        ],
+        cross_domain_requirements: [
+            { from: "IO_BANK_A", to: "IO_BANK_B", requirement: "level_shifter" },
+            { from: "CORE", to: "IO_BANK_A", requirement: "internal_level_shift" },
+            { from: "CORE", to: "IO_BANK_B", requirement: "internal_level_shift" }
+        ]
+    };
+    
+    // Synthesis rules
+    attribute synthesis_rules = [
+        "open_drain_pulls_to_io_supply_not_core",
+        "each_power_domain_needs_separate_decoupling",
+        "cross_domain_signals_need_level_shifters",
+        "analog_domain_needs_separate_ground_plane"
+    ];
+}
+
+// Aliases for common multi-domain MCUs
+alias STM32H7_MCU = MCU_MultiDomain(package="BGA176");
+alias iMXRT1060_MCU = MCU_MultiDomain(package="BGA196");
+alias SAME70_MCU = MCU_MultiDomain(package="QFP144");

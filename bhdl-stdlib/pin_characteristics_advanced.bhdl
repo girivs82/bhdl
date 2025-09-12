@@ -1,0 +1,266 @@
+// Advanced Pin Electrical Characteristics with Multi-Rail Support
+// Handles chips with multiple power domains and complex I/O banks
+
+import { DriveType, SParameters, PinElectricalModel } from "./pin_characteristics.bhdl";
+import { ImpedanceCharacteristics } from "./electrical_params.bhdl";
+
+/// Power domain specification for pins
+type PowerDomain = {
+    name: string,                    // Domain name (e.g., "IO_BANK_A", "CORE", "ANALOG")
+    supply_pin: string,              // Which supply pin powers this domain (e.g., "VDDIO1", "VDDCORE")
+    ground_pin: string,              // Which ground pin for this domain (e.g., "VSSIO1", "VSS")
+    nominal_voltage: voltage,        // Nominal voltage for this domain
+    voltage_range_min: voltage,      // Minimum operating voltage
+    voltage_range_max: voltage,      // Maximum operating voltage
+    io_standard: string?,            // I/O standard (e.g., "LVCMOS33", "LVDS", "SSTL")
+    bank_number: int?,               // I/O bank number for FPGAs/complex chips
+};
+
+/// Enhanced drive type with explicit power domain specification
+type DriveTypeAdvanced = {
+    base_drive: DriveType,           // Base drive characteristics
+    power_domain: PowerDomain,       // Which power domain this pin belongs to
+    pullup_to_domain: string?,       // Explicit domain name for pull-up (overrides base)
+    pulldown_to_domain: string?,     // Explicit domain name for pull-down (overrides base)
+    level_shift_required: bool,      // True if level shifting needed to other domains
+    compatible_domains: string[],    // List of domains this can directly connect to
+};
+
+/// Multi-domain chip specification
+type ChipPowerArchitecture = {
+    domains: PowerDomain[],          // All power domains in the chip
+    default_io_domain: string,       // Default domain for I/O pins
+    default_core_domain: string,     // Default domain for core logic
+    cross_domain_rules: CrossDomainRule[], // Rules for cross-domain connections
+};
+
+/// Rules for cross-domain connections
+type CrossDomainRule = {
+    from_domain: string,
+    to_domain: string,
+    connection_type: string,         // "direct", "level_shifter", "isolation", "forbidden"
+    level_shifter_type: string?,     // Type of level shifter needed
+    isolation_type: string?,         // Type of isolation needed
+    max_frequency: frequency?,       // Maximum frequency for cross-domain signals
+};
+
+// Example: Complex microcontroller with multiple I/O banks
+const MCU_POWER_ARCHITECTURE: ChipPowerArchitecture = {
+    domains: [
+        {
+            name: "CORE",
+            supply_pin: "VDDCORE",
+            ground_pin: "VSS",
+            nominal_voltage: 1.2V,
+            voltage_range_min: 1.14V,
+            voltage_range_max: 1.26V,
+            io_standard: null,
+            bank_number: null,
+        },
+        {
+            name: "IO_BANK_A",
+            supply_pin: "VDDIO1",
+            ground_pin: "VSSIO1",
+            nominal_voltage: 3.3V,
+            voltage_range_min: 3.0V,
+            voltage_range_max: 3.6V,
+            io_standard: "LVCMOS33",
+            bank_number: 1,
+        },
+        {
+            name: "IO_BANK_B",
+            supply_pin: "VDDIO2",
+            ground_pin: "VSSIO2",
+            nominal_voltage: 1.8V,
+            voltage_range_min: 1.71V,
+            voltage_range_max: 1.89V,
+            io_standard: "LVCMOS18",
+            bank_number: 2,
+        },
+        {
+            name: "ANALOG",
+            supply_pin: "VDDA",
+            ground_pin: "VSSA",
+            nominal_voltage: 3.3V,
+            voltage_range_min: 3.0V,
+            voltage_range_max: 3.6V,
+            io_standard: null,
+            bank_number: null,
+        },
+        {
+            name: "USB_PHY",
+            supply_pin: "VDDUSB",
+            ground_pin: "VSSUSB",
+            nominal_voltage: 3.3V,
+            voltage_range_min: 3.0V,
+            voltage_range_max: 3.6V,
+            io_standard: "USB2.0",
+            bank_number: null,
+        }
+    ],
+    default_io_domain: "IO_BANK_A",
+    default_core_domain: "CORE",
+    cross_domain_rules: [
+        {
+            from_domain: "IO_BANK_A",
+            to_domain: "IO_BANK_B",
+            connection_type: "level_shifter",
+            level_shifter_type: "bidirectional_auto",
+            isolation_type: null,
+            max_frequency: 100MHz,
+        },
+        {
+            from_domain: "CORE",
+            to_domain: "IO_BANK_A",
+            connection_type: "level_shifter",
+            level_shifter_type: "unidirectional_fast",
+            isolation_type: null,
+            max_frequency: 200MHz,
+        },
+        {
+            from_domain: "ANALOG",
+            to_domain: "CORE",
+            connection_type: "isolation",
+            level_shifter_type: null,
+            isolation_type: "analog_buffer",
+            max_frequency: null,
+        },
+        {
+            from_domain: "USB_PHY",
+            to_domain: "CORE",
+            connection_type: "level_shifter",
+            level_shifter_type: "usb_transceiver",
+            isolation_type: null,
+            max_frequency: 480MHz,  // USB 2.0 high-speed
+        }
+    ]
+};
+
+// Advanced drive types for multi-domain I/O
+const DRIVE_I2C_MULTI_DOMAIN: DriveTypeAdvanced = {
+    base_drive: {
+        type: "open-drain",
+        needs_pullup: true,
+        needs_pulldown: false,
+        default_pullup_value: 4.7kΩ,
+        pullup_rail: "VDDIO",        // Generic, will be resolved to actual domain
+        pulldown_rail: null,
+        max_sink_current: 20mA,
+        max_source_current: null,
+        output_impedance_high: null,
+        output_impedance_low: 25Ω,
+        propagation_delay: 8ns,
+        rise_time: 10ns,
+        fall_time: 2ns,
+    },
+    power_domain: {
+        name: "IO_BANK_A",
+        supply_pin: "VDDIO1",
+        ground_pin: "VSSIO1",
+        nominal_voltage: 3.3V,
+        voltage_range_min: 3.0V,
+        voltage_range_max: 3.6V,
+        io_standard: "I2C",
+        bank_number: 1,
+    },
+    pullup_to_domain: "VDDIO1",      // Explicit: pull up to VDDIO1
+    pulldown_to_domain: null,
+    level_shift_required: false,      // I2C can work across voltage domains
+    compatible_domains: ["IO_BANK_A", "IO_BANK_B"],  // Can connect to both banks
+};
+
+const DRIVE_SPI_BANK_B: DriveTypeAdvanced = {
+    base_drive: {
+        type: "push-pull",
+        needs_pullup: false,
+        needs_pulldown: false,
+        default_pullup_value: null,
+        pullup_rail: null,
+        pulldown_rail: null,
+        max_sink_current: 12mA,      // Lower current at 1.8V
+        max_source_current: 12mA,
+        output_impedance_high: 75Ω,
+        output_impedance_low: 40Ω,
+        propagation_delay: 3ns,
+        rise_time: 1.5ns,
+        fall_time: 1.5ns,
+    },
+    power_domain: {
+        name: "IO_BANK_B",
+        supply_pin: "VDDIO2",
+        ground_pin: "VSSIO2",
+        nominal_voltage: 1.8V,
+        voltage_range_min: 1.71V,
+        voltage_range_max: 1.89V,
+        io_standard: "LVCMOS18",
+        bank_number: 2,
+    },
+    pullup_to_domain: null,
+    pulldown_to_domain: null,
+    level_shift_required: true,      // Needs level shifter to 3.3V domain
+    compatible_domains: ["IO_BANK_B"],  // Only compatible with same voltage
+};
+
+// FPGA-style configurable I/O with selectable standards
+type ConfigurableIO = {
+    pin_name: string,
+    available_standards: string[],   // e.g., ["LVCMOS33", "LVCMOS25", "LVCMOS18", "LVDS"]
+    current_standard: string,
+    drive_strength_options: current[], // e.g., [4mA, 8mA, 12mA, 16mA]
+    current_drive_strength: current,
+    slew_rate_options: string[],     // e.g., ["slow", "fast"]
+    current_slew_rate: string,
+    power_domain: PowerDomain,
+    pullup_available: bool,
+    pulldown_available: bool,
+    keeper_available: bool,          // Weak keeper to maintain last state
+    schmitt_trigger_available: bool,
+};
+
+// Helper function to determine pull-up rail for a pin
+function get_pullup_rail_for_pin(
+    pin_drive: DriveTypeAdvanced,
+    chip_architecture: ChipPowerArchitecture
+) -> string? {
+    // If explicitly specified, use that
+    if (pin_drive.pullup_to_domain != null) {
+        return pin_drive.pullup_to_domain;
+    }
+    
+    // Otherwise, use the pin's power domain supply
+    return pin_drive.power_domain.supply_pin;
+}
+
+// Helper function to determine if level shifter needed
+function needs_level_shifter(
+    source_domain: PowerDomain,
+    target_domain: PowerDomain,
+    chip_architecture: ChipPowerArchitecture
+) -> bool {
+    // Check cross-domain rules
+    for rule in chip_architecture.cross_domain_rules {
+        if (rule.from_domain == source_domain.name && 
+            rule.to_domain == target_domain.name) {
+            return rule.connection_type == "level_shifter";
+        }
+    }
+    
+    // Default: level shifter needed if voltages differ by >0.5V
+    const voltage_diff = abs(source_domain.nominal_voltage - target_domain.nominal_voltage);
+    return voltage_diff > 0.5V;
+}
+
+// Export advanced pin characteristics
+export {
+    PowerDomain, DriveTypeAdvanced, ChipPowerArchitecture, CrossDomainRule,
+    ConfigurableIO,
+    
+    // Example architectures
+    MCU_POWER_ARCHITECTURE,
+    
+    // Example drive types
+    DRIVE_I2C_MULTI_DOMAIN, DRIVE_SPI_BANK_B,
+    
+    // Helper functions
+    get_pullup_rail_for_pin, needs_level_shifter
+};
