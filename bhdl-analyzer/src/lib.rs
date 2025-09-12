@@ -48,6 +48,11 @@ pub use types::{AnalysisResult, Diagnostic, ResolvedConstants};
 
 // Main analysis function
 pub fn analyze(source_file: &SourceFile) -> AnalysisResult {
+    analyze_with_base_path(source_file, std::path::Path::new("."))
+}
+
+// Analysis function with base path for import resolution
+pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::Path) -> AnalysisResult {
     println!("Starting analysis...");
 
     // Result accumulator
@@ -55,8 +60,8 @@ pub fn analyze(source_file: &SourceFile) -> AnalysisResult {
     // Initialize resolved_constants using the type alias from the types module
     let mut resolved_constants = ResolvedConstants::new();
 
-    // Pass 1: Build scopes
-    let (global_scope, definition_scopes) = populate_global_scope_and_build_definition_scopes(source_file);
+    // Pass 1: Build scopes with base path for imports
+    let (global_scope, definition_scopes) = pass1::populate_global_scope_and_build_definition_scopes_with_base(source_file, base_path);
     println!("Analyzer: Pass 1 complete. Global symbols: {}, Definition scopes: {}",
              global_scope.get_symbols().len(),
              definition_scopes.len());

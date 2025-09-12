@@ -308,7 +308,14 @@
       "Bash(RUST_LOG=error cargo run -p bhdl-parser --bin test_v2_parser bhdl-stdlib/regulators/lm7805.bhdl)",
       "Bash(./test_unit_parser)",
       "Bash(./test_real_unit_parser)",
-      "Bash(./test_simple_unit)"
+      "Bash(./test_simple_unit)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin test_virtual_pin_synthesis)",
+      "Bash(RUST_LOG=info ./target/debug/test_virtual_pin_synthesis)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin test_virtual_pin_synthesis --quiet)",
+      "Bash(./target/debug/test_virtual_pin_synthesis:*)",
+      "Bash(./debug_import_tokenize)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin test_virtual_pin_simple)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin test_virtual_pin_simple --quiet)"
     ],
     "deny": []
   }

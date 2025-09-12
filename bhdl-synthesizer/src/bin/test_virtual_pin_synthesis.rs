@@ -1,9 +1,9 @@
 use std::fs;
 use std::path::Path;
-use bhdl_analyzer::Analyzer;
+use bhdl_analyzer::analyze_with_base_path;
 use bhdl_analyzer::net_attributes::NetAttribute;
-use bhdl_ast::SourceFile;
-use bhdl_parser::Parser;
+use bhdl_ast::{SourceFile, AstNode};
+use bhdl_parser;
 use bhdl_synthesizer::Synthesizer;
 use colored::*;
 use tokio;
@@ -20,40 +20,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     // Parse the source
     println!("\n{}", "Parsing...".bold());
-    let mut parser = Parser::new(&source);
-    let (node, diagnostics) = parser.parse();
+    let parse_result = bhdl_parser::parse(&source);
+    let node = parse_result.syntax();
+    let diagnostics = parse_result.errors();
     
     if !diagnostics.is_empty() {
         println!("{}", "Parser diagnostics:".yellow());
-        for diag in &diagnostics {
-            println!("  {} at {:?}: {}", 
-                if diag.is_error() { "ERROR".red() } else { "WARNING".yellow() },
-                diag.range,
+        for diag in diagnostics {
+            println!("  {}: {}", 
+                "ERROR".red(),
                 diag.message
             );
         }
-        if diagnostics.iter().any(|d| d.is_error()) {
-            return Err("Parser errors found".into());
-        }
+        return Err("Parser errors found".into());
     }
     
     // Create AST
     let ast = SourceFile::cast(node.clone()).ok_or("Failed to create AST")?;
     
-    // Run analyzer
+    // Run analyzer with proper base path for imports
     println!("{}", "Analyzing...".bold());
-    let mut analyzer = Analyzer::new();
-    let analysis_result = analyzer.analyze(&ast);
+    let base_path = Path::new(&test_file).parent().unwrap_or(Path::new("."));
+    let analysis_result = analyze_with_base_path(&ast, base_path);
     
     // Check for analyzer errors
     if !analysis_result.diagnostics.is_empty() {
         println!("{}", "Analyzer diagnostics:".yellow());
         for diag in &analysis_result.diagnostics {
             println!("  {}: {}", 
-                diag.severity.to_string().color(
-                    if diag.severity.to_string().contains("Error") { "red" } 
-                    else { "yellow" }
-                ),
+                if diag.message.contains("Error") { "ERROR".red() }
+                else { "WARNING".yellow() },
                 diag.message
             );
         }
@@ -84,7 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Group instances by module type
     let mut instance_types = std::collections::HashMap::new();
     for instance in netlist.instances.values() {
-        let module_name = &netlist.modules[instance.module].name;
+        let module_name = &netlist.modules[instance.definition].name;
         *instance_types.entry(module_name.clone()).or_insert(0) += 1;
     }
     
@@ -94,10 +90,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         
         // Show instances of this type
         for instance in netlist.instances.values() {
-            if &netlist.modules[instance.module].name == module_name {
+            if &netlist.modules[instance.definition].name == module_name {
+                let ref_des = instance.attributes.get("reference")
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "no ref".to_string());
                 println!("    - {} ({})", 
                     instance.name.green(),
-                    instance.reference.as_ref().unwrap_or(&"no ref".to_string()).bright_black()
+                    ref_des.bright_black()
                 );
                 
                 // Check if this is the TPS54331 and look for virtual pin expansion
@@ -112,29 +111,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n{}", "Nets created:".bold());
     println!("  Total nets: {}", netlist.nets.len().to_string().cyan());
     
-    // Show power nets
-    let power_nets: Vec<_> = netlist.nets.values()
-        .filter(|net| net.attributes.iter().any(|attr| 
-            matches!(attr, NetAttribute::PowerDomain { .. })
-        ))
-        .collect();
-    
-    if !power_nets.is_empty() {
-        println!("\n  Power nets:");
-        for net in power_nets {
-            if let Some(attr) = net.attributes.iter().find(|a| 
-                matches!(a, NetAttribute::PowerDomain { .. })
-            ) {
-                if let NetAttribute::PowerDomain { voltage, max_current, .. } = attr {
-                    println!("    - {} ({}V @ {}A)", 
-                        net.name.green(),
-                        voltage,
-                        max_current
-                    );
-                }
-            }
-        }
-    }
+    // Power nets are now stored differently in the netlist
+    // TODO: Update this once we understand the new net structure
     
     // Check for virtual pin expansion
     println!("\n{}", "=== Virtual Pin Expansion Check ===".bold().magenta());
@@ -156,7 +134,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Expected components from virtual pin expansion:");
     for (comp_type, ref_des) in &expected_components {
         let found = netlist.instances.values().any(|inst| 
-            inst.reference.as_ref().map_or(false, |r| r == ref_des)
+            inst.attributes.get("reference")
+                .map(|v| v.to_string() == *ref_des)
+                .unwrap_or(false)
         );
         
         if found {
@@ -177,7 +157,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Final status
     let virtual_pin_expanded = expected_components.iter().all(|(_, ref_des)| 
         netlist.instances.values().any(|inst| 
-            inst.reference.as_ref().map_or(false, |r| r == ref_des)
+            inst.attributes.get("reference")
+                .map(|v| v.to_string() == *ref_des)
+                .unwrap_or(false)
         )
     );
     

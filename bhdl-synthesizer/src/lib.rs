@@ -48,6 +48,9 @@ pub mod import_preprocessor;
 // Synthesis knowledge parser and storage
 pub mod synthesis_knowledge;
 
+// Virtual pin extraction from AST
+pub mod virtual_pin_extractor;
+
 // Intent-aware component generator
 pub mod intent_aware_generator;
 
@@ -179,64 +182,10 @@ impl NetlistGenerator {
 
     /// Extract virtual pin components from a module AST node
     fn extract_virtual_pins_from_module(&self, module: &bhdl_ast::Module) -> Option<Vec<bhdl_stdlib::virtual_pins::VirtualPinComponent>> {
-        use bhdl_ast::HasName;
+        use crate::virtual_pin_extractor::VirtualPinExtractor;
         
-        // Look for virtual pin attributes or supporting component definitions
-        // This is a simplified implementation - in reality, we'd need to parse
-        // attributes and supporting_components specifications
-        
-        let mut virtual_components = Vec::new();
-        
-        // Check if this is a power management IC with known virtual pin patterns
-        if let Some(name) = module.name() {
-            let module_name = name.text();
-            
-            // For now, use heuristics based on module names
-            // TODO: Replace with proper attribute parsing when parser supports complex attributes
-            match module_name {
-                "TPS54331" | "LM2596" | "LM7805" | "LM317" => {
-                    // These are power management ICs that typically have virtual pins
-                    // Create some default virtual pin components as examples
-                    virtual_components.push(bhdl_stdlib::virtual_pins::VirtualPinComponent {
-                        component_type: "Capacitor".to_string(),
-                        reference: "C_IN".to_string(),
-                        value: "10µF".to_string(),
-                        specs: std::collections::HashMap::from([
-                            ("voltage_rating".to_string(), "25V".to_string()),
-                            ("package".to_string(), "0805".to_string()),
-                        ]),
-                        connection_pattern: "between_pins".to_string(),
-                        formula: None,
-                        placement: None,
-                        intent: None,
-                    });
-                    
-                    virtual_components.push(bhdl_stdlib::virtual_pins::VirtualPinComponent {
-                        component_type: "Capacitor".to_string(),
-                        reference: "C_OUT".to_string(),
-                        value: "22µF".to_string(),
-                        specs: std::collections::HashMap::from([
-                            ("voltage_rating".to_string(), "10V".to_string()),
-                            ("package".to_string(), "0805".to_string()),
-                        ]),
-                        connection_pattern: "between_pins".to_string(),
-                        formula: None,
-                        placement: None,
-                        intent: None,
-                    });
-                }
-                _ => {
-                    // No virtual pins for other components
-                    return None;
-                }
-            }
-        }
-        
-        if virtual_components.is_empty() {
-            None
-        } else {
-            Some(virtual_components)
-        }
+        // Use the new virtual pin extractor to parse the module
+        VirtualPinExtractor::extract_from_module(module)
     }
     
     /// Process virtual pin components extracted from AST
