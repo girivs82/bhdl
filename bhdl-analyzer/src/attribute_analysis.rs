@@ -299,15 +299,16 @@ pub fn would_create_cycle(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bhdl_ast::SyntaxKind;
     
     #[test]
     fn test_circular_dependency_detection() {
         let mut analyzer = AttributeAnalyzer::new();
         
         // Create a simple circular dependency: a -> b -> c -> a
-        analyzer.dependencies.insert("a".to_string(), ["b"].iter().cloned().collect());
-        analyzer.dependencies.insert("b".to_string(), ["c"].iter().cloned().collect());
-        analyzer.dependencies.insert("c".to_string(), ["a"].iter().cloned().collect());
+        analyzer.dependencies.insert("a".to_string(), ["b".to_string()].iter().cloned().collect());
+        analyzer.dependencies.insert("b".to_string(), ["c".to_string()].iter().cloned().collect());
+        analyzer.dependencies.insert("c".to_string(), ["a".to_string()].iter().cloned().collect());
         
         // Add attributes
         for name in &["a", "b", "c"] {
@@ -341,9 +342,9 @@ mod tests {
         let mut analyzer = AttributeAnalyzer::new();
         
         // Create dependencies: a -> b, b -> c, d -> c
-        analyzer.dependencies.insert("a".to_string(), ["b"].iter().cloned().collect());
-        analyzer.dependencies.insert("b".to_string(), ["c"].iter().cloned().collect());
-        analyzer.dependencies.insert("d".to_string(), ["c"].iter().cloned().collect());
+        analyzer.dependencies.insert("a".to_string(), ["b".to_string()].iter().cloned().collect());
+        analyzer.dependencies.insert("b".to_string(), ["c".to_string()].iter().cloned().collect());
+        analyzer.dependencies.insert("d".to_string(), ["c".to_string()].iter().cloned().collect());
         analyzer.dependencies.insert("c".to_string(), HashSet::new());
         
         // Add attributes
