@@ -118,6 +118,10 @@ pub enum BhdlType {
     Pin,
     /// Signal type (for behavioral modeling)
     Signal,
+    /// Array type (for arrays and tuples)
+    Array,
+    /// Struct type (for struct literals)
+    Struct,
     /// Unknown/inferred type
     Unknown,
     /// Error type (for error recovery)
@@ -186,6 +190,8 @@ impl std::fmt::Display for BhdlType {
             BhdlType::Net => write!(f, "net"),
             BhdlType::Pin => write!(f, "pin"),
             BhdlType::Signal => write!(f, "signal"),
+            BhdlType::Array => write!(f, "array"),
+            BhdlType::Struct => write!(f, "struct"),
             BhdlType::Unknown => write!(f, "unknown"),
             BhdlType::Error => write!(f, "error"),
         }
@@ -406,6 +412,8 @@ impl SemanticAnalyzer {
             Expr::FunctionCallExpr(_) => BhdlType::Unknown, // Function calls need more context
             Expr::ComponentInstExpr(comp_inst_expr) => self.infer_component_inst_type(comp_inst_expr),
             Expr::FlowExpr(_) => BhdlType::Net, // Flow expressions result in net connections
+            Expr::ArrayExpr(_) => BhdlType::Array, // Arrays are array types
+            Expr::StructLiteral(_) => BhdlType::Struct, // Struct literals are struct types  
             Expr::Ident(_) => BhdlType::Unknown, // Need context to determine identifier type
             Expr::Literal(node) => {
                 // Infer type from literal token

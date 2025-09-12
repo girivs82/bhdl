@@ -6,7 +6,7 @@
 use crate::flow::{FlowStmt, FlowExpr, FlowElement, ComponentInstantiation, GenerateStmt, ConditionalStmt, AssignStmt, ConditionalExpr};
 use crate::common::{ParamAssign, PinRef, NetRef, IdentRef, Value, RangeExpr, BusSuffix};
 use crate::v2_statements::ConnectionStmt;
-use crate::expr::{Expr, BinaryExpr, PrefixExpr, TernaryExpr, FunctionCallExpr, ComponentInstExpr, FlowExpr as ExprFlowExpr};
+use crate::expr::{Expr, BinaryExpr, PrefixExpr, TernaryExpr, FunctionCallExpr, ComponentInstExpr, FlowExpr as ExprFlowExpr, ArrayExpr, StructLiteral, StructField};
 use crate::items::{Board};
 use crate::{SyntaxKind, BhdlLanguage, SyntaxNode, HasName};
 use rowan::ast::AstNode;
@@ -306,6 +306,8 @@ impl PrettyPrint for Expr {
                 flow_expr.pretty_print(ctx, f)
             }
             Expr::ComponentInstExpr(comp_inst) => comp_inst.pretty_print(ctx, f),
+            Expr::ArrayExpr(array_expr) => array_expr.pretty_print(ctx, f),
+            Expr::StructLiteral(struct_literal) => struct_literal.pretty_print(ctx, f),
             Expr::Ident(node) => ctx.write_text(f, &node.text().to_string()),
             Expr::Literal(node) => ctx.write_text(f, &node.text().to_string()),
         }
@@ -710,6 +712,64 @@ impl PrettyPrint for BusSuffix {
         
         ctx.write_text(f, "]")?;
         
+        Ok(())
+    }
+}
+
+// --- Array Expression and Struct Literal pretty printing ---
+
+impl PrettyPrint for ArrayExpr {
+    fn pretty_print(&self, ctx: &mut PrettyPrintContext, f: &mut dyn fmt::Write) -> fmt::Result {
+        if self.is_tuple() {
+            ctx.write_text(f, "(")?;
+        } else {
+            ctx.write_text(f, "[")?;
+        }
+        
+        let elements: Vec<_> = self.elements().collect();
+        for (i, element) in elements.iter().enumerate() {
+            if i > 0 {
+                ctx.write_text(f, ", ")?;
+            }
+            element.pretty_print(ctx, f)?;
+        }
+        
+        if self.is_tuple() {
+            ctx.write_text(f, ")")?;
+        } else {
+            ctx.write_text(f, "]")?;
+        }
+        
+        Ok(())
+    }
+}
+
+impl PrettyPrint for StructLiteral {
+    fn pretty_print(&self, ctx: &mut PrettyPrintContext, f: &mut dyn fmt::Write) -> fmt::Result {
+        ctx.write_text(f, "{ ")?;
+        
+        let fields: Vec<_> = self.fields().collect();
+        for (i, field) in fields.iter().enumerate() {
+            if i > 0 {
+                ctx.write_text(f, ", ")?;
+            }
+            field.pretty_print(ctx, f)?;
+        }
+        
+        ctx.write_text(f, " }")?;
+        Ok(())
+    }
+}
+
+impl PrettyPrint for StructField {
+    fn pretty_print(&self, ctx: &mut PrettyPrintContext, f: &mut dyn fmt::Write) -> fmt::Result {
+        if let Some(name) = self.name() {
+            ctx.write_text(f, &name.text().to_string())?;
+        }
+        ctx.write_text(f, ": ")?;
+        if let Some(value) = self.value() {
+            value.pretty_print(ctx, f)?;
+        }
         Ok(())
     }
 }
