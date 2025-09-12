@@ -80,6 +80,16 @@ pub struct NetlistConfig {
     pub database_path: Option<String>,
 }
 
+/// Database integration statistics
+#[derive(Debug, Clone)]
+pub struct DatabaseStats {
+    pub component_mappings: u32,
+    pub cached_components: u32,
+    pub cached_svg_symbols: u32,
+    pub component_cache_hit_rate: f64,
+    pub symbol_cache_hit_rate: f64,
+}
+
 /// Represents different types of connection endpoints
 #[derive(Debug, Clone)]
 enum ConnectionEndpoint {
@@ -2130,6 +2140,31 @@ impl NetlistGenerator {
     /// Transfer component parameters from analyzer to netlist instance attributes
     pub fn populate_instance_attributes(&mut self, instance_id: InstanceId, handle_name: &str, analysis: &AnalysisResult) {
         populate_instance_attributes(&mut self.netlist, instance_id, handle_name, analysis);
+    }
+
+    /// Check if database integration is enabled
+    pub fn is_database_enabled(&self) -> bool {
+        self.database_mapper.is_some()
+    }
+
+    /// Get database statistics if database is enabled
+    pub async fn get_database_stats(&self) -> Option<DatabaseStats> {
+        if let Some(ref mapper) = self.database_mapper {
+            Some(DatabaseStats {
+                component_mappings: self.component_instances.len() as u32,
+                cached_components: mapper.get_cached_component_count().unwrap_or(0),
+                cached_svg_symbols: mapper.get_cached_symbol_count().unwrap_or(0),
+                component_cache_hit_rate: mapper.get_component_cache_hit_rate(),
+                symbol_cache_hit_rate: mapper.get_symbol_cache_hit_rate(),
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Get all component instances with database mappings
+    pub fn get_component_instances(&self) -> &Vec<DatabaseComponentInstance> {
+        &self.component_instances
     }
 }
 

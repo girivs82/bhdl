@@ -2,7 +2,7 @@
 // Evaluates attribute expressions at runtime with actual values
 
 use std::collections::HashMap;
-use bhdl_ast::expr::{Expr, BinaryExpr, PrefixExpr, TernaryExpr, FunctionCallExpr};
+use bhdl_ast::expr::{Expr, BinaryExpr, PrefixExpr, TernaryExpr, FunctionCallExpr, ArrayExpr, StructLiteral};
 use bhdl_ast::common::{Value, IdentRef};
 use bhdl_ast::{SyntaxNode, BhdlLanguage, SyntaxKind};
 use rowan::ast::AstNode;
@@ -15,6 +15,8 @@ pub enum RuntimeValue {
     Real(f64),
     Boolean(bool),
     String(String),
+    Array(Vec<RuntimeValue>),
+    Object(HashMap<String, RuntimeValue>),
 }
 
 impl RuntimeValue {
@@ -62,6 +64,8 @@ impl RuntimeValue {
             RuntimeValue::Real(_) => "real".to_string(),
             RuntimeValue::Boolean(_) => "boolean".to_string(),
             RuntimeValue::String(_) => "string".to_string(),
+            RuntimeValue::Array(_) => "array".to_string(),
+            RuntimeValue::Object(_) => "object".to_string(),
         }
     }
 }
@@ -182,6 +186,8 @@ impl ExpressionEvaluator {
             Expr::PrefixExpr(prefix) => Self::evaluate_prefix(prefix, context),
             Expr::TernaryExpr(ternary) => Self::evaluate_ternary(ternary, context),
             Expr::FunctionCallExpr(call) => Self::evaluate_function_call(call, context),
+            Expr::ArrayExpr(array) => Self::evaluate_array(array, context),
+            Expr::StructLiteral(struct_lit) => Self::evaluate_struct_literal(struct_lit, context),
             Expr::Literal(node) => Self::evaluate_literal_node(node),
             _ => Err(EvaluationError::InvalidOperation(
                 format!("Cannot evaluate expression type: {:?}", expr)
@@ -657,6 +663,44 @@ impl ExpressionEvaluator {
         }
         let x = args[0].to_f64()?;
         Ok(RuntimeValue::Integer(x.round() as i64))
+    }
+    
+    /// Evaluate array expression: [elem1, elem2, ...]
+    fn evaluate_array(array: &ArrayExpr, context: &EvaluationContext) -> Result<RuntimeValue, EvaluationError> {
+        let mut elements = Vec::new();
+        
+        for element in array.elements() {
+            let value = Self::evaluate(&element, context)?;
+            elements.push(value);
+        }
+        
+        Ok(RuntimeValue::Array(elements))
+    }
+    
+    /// Evaluate struct literal: { field1: value1, field2: value2, ... }
+    fn evaluate_struct_literal(struct_lit: &StructLiteral, context: &EvaluationContext) -> Result<RuntimeValue, EvaluationError> {
+        let mut fields = HashMap::new();
+        
+        for field in struct_lit.fields() {
+            if let Some(name_token) = field.name() {
+                let field_name = name_token.text().to_string();
+                
+                if let Some(value_expr) = field.value() {
+                    let value = Self::evaluate(&value_expr, context)?;
+                    fields.insert(field_name, value);
+                } else {
+                    return Err(EvaluationError::InvalidOperation(
+                        format!("Missing value for field '{}'", field_name)
+                    ));
+                }
+            } else {
+                return Err(EvaluationError::InvalidOperation(
+                    "Field missing name in struct literal".to_string()
+                ));
+            }
+        }
+        
+        Ok(RuntimeValue::Object(fields))
     }
 }
 

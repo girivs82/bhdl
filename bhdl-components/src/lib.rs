@@ -39,7 +39,7 @@ impl ComponentLibrary {
         let database = ComponentDatabase::new(db_path).await?;
         let cache = ComponentCache::new();
         let synthesizer = ComponentSynthesizer::new();
-        let search_engine = ComponentSearchEngine::new(&database);
+        let search_engine = ComponentSearchEngine::new(database.clone());
 
         Ok(Self {
             database,

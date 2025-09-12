@@ -5,6 +5,26 @@ use crate::types::*;
 use super::ComponentStats;
 use chrono::{DateTime, Utc};
 
+/// Parse component category string from database
+fn parse_component_category(category_str: String) -> ComponentCategory {
+    match category_str.as_str() {
+        "resistor" => ComponentCategory::Resistor,
+        "capacitor" => ComponentCategory::Capacitor,
+        "inductor" => ComponentCategory::Inductor,
+        "diode" => ComponentCategory::Diode,
+        "transistor" => ComponentCategory::Transistor,
+        "ic" => ComponentCategory::IC,
+        "connector" => ComponentCategory::Connector,
+        "crystal" => ComponentCategory::Crystal,
+        "led" => ComponentCategory::LED,
+        "switch" => ComponentCategory::Switch,
+        "relay" => ComponentCategory::Relay,
+        "transformer" => ComponentCategory::Transformer,
+        "fuse" => ComponentCategory::Fuse,
+        other => ComponentCategory::Other(other.to_string()),
+    }
+}
+
 /// Get component by ID
 pub fn get_component_by_id(conn: &Connection, id: ComponentId) -> anyhow::Result<Option<Component>> {
     let mut stmt = conn.prepare(
@@ -648,4 +668,85 @@ pub fn count_components(conn: &Connection) -> anyhow::Result<u32> {
         |row| row.get(0)
     )?;
     Ok(count as u32)
+}
+
+/// Get all components from the database
+pub fn get_all_components(conn: &Connection) -> anyhow::Result<Vec<Component>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, name, description, manufacturer, part_number, package_type, 
+                category, subcategory, datasheet_url, created_at, updated_at
+         FROM components
+         ORDER BY name"
+    )?;
+    
+    let components = stmt.query_map([], |row| {
+        Ok(Component {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            description: row.get(2)?,
+            manufacturer: row.get(3)?,
+            part_number: row.get(4)?,
+            package_type: row.get(5)?,
+            category: parse_component_category(row.get(6)?),
+            subcategory: row.get(7)?,
+            datasheet_url: row.get(8)?,
+            electrical_specs: Vec::new(), // Would need join query for specs
+            pins: Vec::new(), // Would need join query for pins
+            symbol: None, // Would need join query for symbol
+            footprint: None, // Would need join query for footprint
+            created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(9)?)
+                .map_err(|_| rusqlite::Error::InvalidColumnType(9, "created_at".to_string(), rusqlite::types::Type::Text))?
+                .with_timezone(&chrono::Utc),
+            updated_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(10)?)
+                .map_err(|_| rusqlite::Error::InvalidColumnType(10, "updated_at".to_string(), rusqlite::types::Type::Text))?
+                .with_timezone(&chrono::Utc),
+        })
+    })?.collect::<Result<Vec<_>, _>>()?;
+    
+    Ok(components)
+}
+
+/// Advanced search with custom WHERE clause and parameters
+pub fn search_components_advanced(conn: &Connection, where_clause: &str, params: &[String]) -> anyhow::Result<Vec<Component>> {
+    let query = format!(
+        "SELECT id, name, description, manufacturer, part_number, package_type, 
+                category, subcategory, datasheet_url, created_at, updated_at
+         FROM components
+         WHERE {}
+         ORDER BY name",
+        where_clause
+    );
+    
+    let mut stmt = conn.prepare(&query)?;
+    
+    // Convert string parameters to rusqlite::types::Value for binding
+    let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter()
+        .map(|s| s as &dyn rusqlite::ToSql)
+        .collect();
+    
+    let components = stmt.query_map(&param_refs[..], |row| {
+        Ok(Component {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            description: row.get(2)?,
+            manufacturer: row.get(3)?,
+            part_number: row.get(4)?,
+            package_type: row.get(5)?,
+            category: parse_component_category(row.get(6)?),
+            subcategory: row.get(7)?,
+            datasheet_url: row.get(8)?,
+            electrical_specs: Vec::new(), // Would need join query for specs
+            pins: Vec::new(), // Would need join query for pins
+            symbol: None, // Would need join query for symbol
+            footprint: None, // Would need join query for footprint
+            created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(9)?)
+                .map_err(|_| rusqlite::Error::InvalidColumnType(9, "created_at".to_string(), rusqlite::types::Type::Text))?
+                .with_timezone(&chrono::Utc),
+            updated_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(10)?)
+                .map_err(|_| rusqlite::Error::InvalidColumnType(10, "updated_at".to_string(), rusqlite::types::Type::Text))?
+                .with_timezone(&chrono::Utc),
+        })
+    })?.collect::<Result<Vec<_>, _>>()?;
+    
+    Ok(components)
 }

@@ -331,6 +331,38 @@ impl DatabaseComponentMapper {
         
         Ok(())
     }
+
+    /// Get number of cached components
+    pub fn get_cached_component_count(&self) -> Result<u32> {
+        let stats = self.cache.get_stats();
+        Ok((stats.component_hits + stats.component_misses) as u32)
+    }
+
+    /// Get number of cached SVG symbols
+    pub fn get_cached_symbol_count(&self) -> Result<u32> {
+        let stats = self.cache.get_stats();
+        Ok((stats.symbol_hits + stats.symbol_misses) as u32)
+    }
+
+    /// Get component cache hit rate
+    pub fn get_component_cache_hit_rate(&self) -> f64 {
+        let stats = self.cache.get_stats();
+        if stats.component_hits + stats.component_misses == 0 {
+            0.0
+        } else {
+            stats.component_hits as f64 / (stats.component_hits + stats.component_misses) as f64
+        }
+    }
+
+    /// Get symbol cache hit rate
+    pub fn get_symbol_cache_hit_rate(&self) -> f64 {
+        let stats = self.cache.get_stats();
+        if stats.symbol_hits + stats.symbol_misses == 0 {
+            0.0
+        } else {
+            stats.symbol_hits as f64 / (stats.symbol_hits + stats.symbol_misses) as f64
+        }
+    }
 }
 
 /// Represents a component instance from the database with SVG data
