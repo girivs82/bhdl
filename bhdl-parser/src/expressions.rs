@@ -307,9 +307,8 @@ impl<'t> Parser<'t> {
                 }
             }
             Some(SyntaxKind::L_PAREN) => {
-                self.bump(); // Consume '('
-                self.parse_expr(0); // Parse nested expression (reset precedence)
-                self.expect(SyntaxKind::R_PAREN); // Expect ')'
+                // Could be either a parenthesized expression or a tuple
+                self.parse_parenthesized_or_tuple();
             }
             Some(SyntaxKind::L_BRACKET) => {
                 // Array expression: [item1, item2, ...]
@@ -421,8 +420,18 @@ impl<'t> Parser<'t> {
                 break;
             }
             
-            // Field name
-            self.expect(SyntaxKind::IDENT);
+            // Field name (can be IDENT or keyword treated as identifier)
+            if self.peek() == Some(SyntaxKind::IDENT) {
+                self.bump();
+            } else if self.is_contextual_keyword() {
+                // Accept keywords as field names in object literal context
+                self.bump();
+            } else {
+                self.error("Expected field name (identifier or keyword)".to_string());
+                if self.peek().is_some() {
+                    self.bump_any(); // Consume unexpected token for recovery
+                }
+            }
             self.expect(SyntaxKind::COLON);
             
             // Field value (expression)
@@ -644,6 +653,54 @@ impl<'t> Parser<'t> {
 
         self.expect(SyntaxKind::R_PAREN);
         self.builder.finish_node(); // Finish PARAM_ASSIGN_BLOCK
+    }
+
+    /// Parse either a parenthesized expression or a tuple expression
+    /// (expr) vs (expr1, expr2, expr3)
+    pub(crate) fn parse_parenthesized_or_tuple(&mut self) {
+        let checkpoint = self.builder.checkpoint();
+        self.expect(SyntaxKind::L_PAREN);
+        
+        self.skip_trivia();
+        if self.peek() == Some(SyntaxKind::R_PAREN) {
+            // Empty parentheses - treat as empty tuple
+            self.expect(SyntaxKind::R_PAREN);
+            self.builder.start_node_at(checkpoint, SyntaxKind::ARRAY_EXPR.into());
+            self.builder.finish_node();
+            return;
+        }
+        
+        // Parse the first expression
+        self.parse_expr(0);
+        
+        self.skip_trivia();
+        if self.peek() == Some(SyntaxKind::COMMA) {
+            // This is a tuple - wrap in ARRAY_EXPR
+            self.builder.start_node_at(checkpoint, SyntaxKind::ARRAY_EXPR.into());
+            
+            loop {
+                if self.peek() == Some(SyntaxKind::COMMA) {
+                    self.bump(); // consume comma
+                    self.skip_trivia();
+                    
+                    // Check for trailing comma
+                    if self.peek() == Some(SyntaxKind::R_PAREN) {
+                        break;
+                    }
+                    
+                    self.parse_expr(0);
+                } else {
+                    break;
+                }
+            }
+            
+            self.expect(SyntaxKind::R_PAREN);
+            self.builder.finish_node(); // finish ARRAY_EXPR
+        } else {
+            // This is a simple parenthesized expression - don't wrap it
+            self.expect(SyntaxKind::R_PAREN);
+            // The expression is already parsed, no need to wrap it in an additional node
+        }
     }
 
     // --- End of Expression Parsing ---
