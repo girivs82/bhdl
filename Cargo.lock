@@ -407,6 +407,8 @@ dependencies = [
  "bhdl-common",
  "bhdl-netlist",
  "bhdl-parser",
+ "log",
+ "serde",
 ]
 
 [[package]]

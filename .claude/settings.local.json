@@ -296,7 +296,8 @@
       "Bash(RUST_LOG=bhdl_synthesizer=info cargo run -p bhdl-synthesizer --bin test_main_synthesizer_integration)",
       "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin test_virtual_pin_synthesis_simple)",
       "Bash(RUST_LOG=debug cargo run -p bhdl-synthesizer --bin test_virtual_pin_synthesis_simple)",
-      "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin test_connection_verification)"
+      "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin test_connection_verification)",
+      "Bash(RUST_LOG=error cargo run -p bhdl-synthesizer --bin test_7805_realistic)"
     ],
     "deny": []
   }
