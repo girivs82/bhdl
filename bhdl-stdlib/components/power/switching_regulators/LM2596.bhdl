@@ -38,6 +38,74 @@ module LM2596(
         pull_up_current: 5uA,
         description: "Enable input (tie to VIN if not used)"
     };
+    
+    // Virtual output pin that expands to supporting components
+    pin VOUT: power out virtual {
+        description: "Virtual output - expands to inductor, diode, capacitors, and feedback network",
+        voltage_range: (1.23V, 37V),
+        current_max: 3A,
+        
+        // Virtual pin expansion components
+        supporting_components: {
+            // Output inductor (connected SW -> VOUT)
+            L1: {
+                type: "Inductor",
+                connection_pattern: "SW -> self.1; self.2 -> VOUT",
+                value_formula: "33uH",  // Typical for 5V output
+                current_rating: "iout_max * 1.5",
+                dcr_max: "50mΩ"
+            },
+            
+            // Catch diode (connected GND -> SW)
+            D1: {
+                type: "SchottkyDiode", 
+                connection_pattern: "GND -> self.A; self.K -> SW",
+                voltage_rating: "45V",
+                current_rating: "iout_max",
+                vf_max: "0.5V"
+            },
+            
+            // Output capacitors
+            C_OUT1: {
+                type: "Capacitor",
+                connection_pattern: "VOUT -> self.1; self.2 -> GND",
+                value: "470µF",
+                voltage_rating: "vout * 1.5",
+                esr_range: "(20mΩ, 200mΩ)"
+            },
+            
+            C_OUT2: {
+                type: "Capacitor",
+                connection_pattern: "VOUT -> self.1; self.2 -> GND",
+                value: "0.1µF",
+                voltage_rating: "vout * 1.5",
+                type: "ceramic"
+            },
+            
+            // Feedback divider (for adjustable version)
+            R_FB1: {
+                type: "Resistor",
+                connection_pattern: "VOUT -> self.1; self.2 -> FB",
+                value_formula: "1000 * (vout / 1.23 - 1)",
+                tolerance: "1%"
+            },
+            
+            R_FB2: {
+                type: "Resistor",
+                connection_pattern: "FB -> self.1; self.2 -> GND",
+                value: "1kΩ",
+                tolerance: "1%"
+            },
+            
+            // Optional feedforward capacitor
+            C_FF: {
+                type: "Capacitor",
+                connection_pattern: "VOUT -> self.1; self.2 -> FB",
+                value: "100pF",
+                type: "C0G"
+            }
+        }
+    };
 }
 
 // ==================== ELECTRICAL CHARACTERISTICS ====================

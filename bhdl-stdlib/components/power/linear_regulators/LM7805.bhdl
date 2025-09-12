@@ -19,11 +19,29 @@ module LM7805(
         description: "Unregulated input voltage"
     };
     
-    pin VOUT: power out {
+    pin VOUT: power out virtual {
         voltage: 5V,
         tolerance: 4%,                   // ±4% over full range
         current_max: 1.5A,              // With heatsink
-        description: "Regulated 5V output"
+        description: "Regulated 5V output - expands to output capacitors",
+        supporting_components: {
+            C_OUT: {
+                type: "Capacitor",
+                connection_pattern: "VOUT -> self.1; self.2 -> GND",
+                value: "100µF",
+                voltage_rating: "10V",
+                placement: "close_to_ic",
+                intent: "output_stabilization(ripple_reduction: 60dB)"
+            },
+            C_BYPASS: {
+                type: "Capacitor",
+                connection_pattern: "VOUT -> self.1; self.2 -> GND", 
+                value: "100nF",
+                voltage_rating: "10V",
+                placement: "very_close_to_ic",
+                intent: "high_frequency_bypass(frequency: 1MHz)"
+            }
+        }
     };
     
     pin GND: ground inout {

@@ -57,7 +57,7 @@ pub mod component_calculator;
 // Re-export key types
 pub use bhdl_analyzer::types::AnalysisResult;
 pub use bhdl_analyzer::component_inference::ParameterValue;
-pub use bhdl_netlist::{Netlist, ModuleId, InstanceId, NetId, PortId, PinId, PinInstanceId, PinInstance};
+pub use bhdl_netlist::{Netlist, ModuleId, InstanceId, NetId, PortId, PinId, PinInstanceId, PinInstance, Pin};
 pub use bhdl_netlist::types::{ModuleKind, PortDirection, PinDirection, PinType, ConnectionPoint, Unit, Quantity, NetClass};
 pub use bhdl_ast::{SourceFile, Board, Module, ComponentDef, HasName, AstNode, PinDecl};
 pub use component_mapping::{DatabaseComponentMapper, DatabaseComponentInstance, DatabaseMapperStats};
@@ -129,6 +129,8 @@ pub struct NetlistGenerator {
     import_preprocessor: Option<ImportPreprocessor>,
     // Component calculator for automatic supporting component generation
     component_calculator: ComponentCalculator,
+    // Supporting component instances for virtual pin expansion
+    supporting_component_instances: HashMap<String, InstanceId>,
 }
 
 impl NetlistGenerator {
@@ -163,6 +165,7 @@ impl NetlistGenerator {
             import_loader,
             import_preprocessor: None,
             component_calculator: ComponentCalculator::new(),
+            supporting_component_instances: HashMap::new(),
         }
     }
 
@@ -224,6 +227,9 @@ impl NetlistGenerator {
             println!("DEBUG: Using semantic instance generation (no database mapper)");
             self.generate_instances_with_semantics(analysis)?;
         }
+        
+        // Phase 2.5: Generate connections for supporting components (virtual pin expansion)
+        self.generate_supporting_component_connections(analysis)?;
         
         // Phase 3: Synthesize interface instances BEFORE connectivity extraction
         // This ensures interface signal nets exist before connections are processed
@@ -627,6 +633,9 @@ impl NetlistGenerator {
         if let Some(instance_id) = self.netlist.add_instance(instance_name.clone(), module_id) {
             debug!("Created calculated component: {} -> {:?} ({})", instance_name, instance_id, component.value);
             
+            // Store the instance ID for later connection generation
+            self.supporting_component_instances.insert(instance_name.clone(), instance_id);
+            
             // Add component metadata as annotations
             // The visualizer can read these annotations to understand component values and purposes
             // TODO: Add proper metadata storage to netlist when available
@@ -638,6 +647,231 @@ impl NetlistGenerator {
         Ok(())
     }
 
+    /// Generate connections for supporting components from virtual pin expansion
+    fn generate_supporting_component_connections(&mut self, analysis: &AnalysisResult) -> Result<()> {
+        if self.supporting_component_instances.is_empty() {
+            info!("No supporting components to connect");
+            return Ok(()); // No supporting components to connect
+        }
+        
+        info!("Generating connections for {} supporting components", self.supporting_component_instances.len());
+        for (name, id) in &self.supporting_component_instances {
+            info!("  Supporting component: {} -> {:?}", name, id);
+        }
+        
+        // Group components by IC they belong to
+        let mut components_by_ic: HashMap<String, Vec<(String, InstanceId)>> = HashMap::new();
+        for (name, id) in &self.supporting_component_instances {
+            if let Some(ic_prefix) = name.split('_').next() {
+                components_by_ic.entry(ic_prefix.to_string())
+                    .or_insert_with(Vec::new)
+                    .push((name.clone(), *id));
+            }
+        }
+        
+        // Create connections for each IC's supporting components
+        for (ic_name, components) in components_by_ic {
+            info!("Creating connections for IC {} supporting components ({} components)", ic_name, components.len());
+            
+            // Find relevant nets - we need SW, VOUT, GND, FB nets
+            let sw_net = self.find_or_create_net(&format!("{}_SW", ic_name), NetClass::Signal);
+            let vout_net = self.find_or_create_net("VOUT", NetClass::Power(5.0)); // TODO: Get actual voltage
+            let gnd_net = self.find_or_create_net("GND", NetClass::Ground);
+            let fb_net = self.find_or_create_net(&format!("{}_FB", ic_name), NetClass::Signal);
+            
+            for (comp_name, comp_id) in components {
+                // Get the module for this component to create pins
+                let module_id = if let Some(inst) = self.netlist.instances.get(comp_id) {
+                    inst.definition
+                } else {
+                    continue;
+                };
+                
+                // Parse component type and number from name (e.g., "U1_L1" -> "L", "1")
+                let comp_parts: Vec<&str> = comp_name.split('_').collect();
+                if comp_parts.len() < 2 {
+                    continue;
+                }
+                
+                let comp_type_str = comp_parts[1];
+                let comp_type = comp_type_str.chars().next().unwrap_or('?');
+                
+                // Create pins if they don't exist and connect based on component type
+                match comp_type {
+                    'L' if comp_type_str == "L1" => {
+                        // Inductor: SW -> L1.1, L1.2 -> VOUT
+                        info!("Connecting inductor {}", comp_name);
+                        let pin1 = self.get_or_create_pin(module_id, "1", PinDirection::In);
+                        let pin2 = self.get_or_create_pin(module_id, "2", PinDirection::Out);
+                        
+                        // Create pin instances and connect
+                        let pin_inst1 = self.netlist.pin_instances.insert_with_key(|id| PinInstance {
+                            id,
+                            pin_def: pin1,
+                            instance: comp_id,
+                            net: Some(sw_net),
+                            connection_name: None,
+                        });
+                        let pin_inst2 = self.netlist.pin_instances.insert_with_key(|id| PinInstance {
+                            id,
+                            pin_def: pin2,
+                            instance: comp_id,
+                            net: Some(vout_net),
+                            connection_name: None,
+                        });
+                        
+                        // Add connections to nets
+                        self.netlist.connect(sw_net, ConnectionPoint::PinInstance(pin_inst1)).ok();
+                        self.netlist.connect(vout_net, ConnectionPoint::PinInstance(pin_inst2)).ok();
+                    },
+                    'C' => {
+                        // Capacitor: Typically VOUT -> C.1, C.2 -> GND
+                        info!("Connecting capacitor {}", comp_name);
+                        let pin1 = self.get_or_create_pin(module_id, "1", PinDirection::In);
+                        let pin2 = self.get_or_create_pin(module_id, "2", PinDirection::In);
+                        
+                        // Determine which nets to connect based on capacitor position
+                        let (net1, net2) = if comp_name.contains("C1") || comp_name.contains("C2") {
+                            // Bootstrap or output capacitors
+                            (vout_net, gnd_net)
+                        } else {
+                            // Other capacitors default to VOUT/GND
+                            (vout_net, gnd_net)
+                        };
+                        
+                        let pin_inst1 = self.netlist.pin_instances.insert_with_key(|id| PinInstance {
+                            id,
+                            pin_def: pin1,
+                            instance: comp_id,
+                            net: Some(net1),
+                            connection_name: None,
+                        });
+                        let pin_inst2 = self.netlist.pin_instances.insert_with_key(|id| PinInstance {
+                            id,
+                            pin_def: pin2,
+                            instance: comp_id,
+                            net: Some(net2),
+                            connection_name: None,
+                        });
+                        
+                        self.netlist.connect(net1, ConnectionPoint::PinInstance(pin_inst1)).ok();
+                        self.netlist.connect(net2, ConnectionPoint::PinInstance(pin_inst2)).ok();
+                    },
+                    'R' => {
+                        // Resistor: Feedback divider typically VOUT -> R1.1, R1.2 -> FB, FB -> R2.1, R2.2 -> GND
+                        info!("Connecting resistor {}", comp_name);
+                        let pin1 = self.get_or_create_pin(module_id, "1", PinDirection::In);
+                        let pin2 = self.get_or_create_pin(module_id, "2", PinDirection::Out);
+                        
+                        let (net1, net2) = if comp_name.contains("R1") {
+                            // Top feedback resistor: VOUT -> R1.1, R1.2 -> FB
+                            (vout_net, fb_net)
+                        } else if comp_name.contains("R2") {
+                            // Bottom feedback resistor: FB -> R2.1, R2.2 -> GND
+                            (fb_net, gnd_net)
+                        } else {
+                            // Other resistors default
+                            (vout_net, gnd_net)
+                        };
+                        
+                        let pin_inst1 = self.netlist.pin_instances.insert_with_key(|id| PinInstance {
+                            id,
+                            pin_def: pin1,
+                            instance: comp_id,
+                            net: Some(net1),
+                            connection_name: None,
+                        });
+                        let pin_inst2 = self.netlist.pin_instances.insert_with_key(|id| PinInstance {
+                            id,
+                            pin_def: pin2,
+                            instance: comp_id,
+                            net: Some(net2),
+                            connection_name: None,
+                        });
+                        
+                        self.netlist.connect(net1, ConnectionPoint::PinInstance(pin_inst1)).ok();
+                        self.netlist.connect(net2, ConnectionPoint::PinInstance(pin_inst2)).ok();
+                    },
+                    'D' if comp_type_str == "D1" => {
+                        // Diode: GND -> D.A (anode), D.K (cathode) -> SW
+                        info!("Connecting diode {}", comp_name);
+                        let pin_a = self.get_or_create_pin(module_id, "A", PinDirection::In);
+                        let pin_k = self.get_or_create_pin(module_id, "K", PinDirection::Out);
+                        
+                        let pin_inst_a = self.netlist.pin_instances.insert_with_key(|id| PinInstance {
+                            id,
+                            pin_def: pin_a,
+                            instance: comp_id,
+                            net: Some(gnd_net),
+                            connection_name: None,
+                        });
+                        let pin_inst_k = self.netlist.pin_instances.insert_with_key(|id| PinInstance {
+                            id,
+                            pin_def: pin_k,
+                            instance: comp_id,
+                            net: Some(sw_net),
+                            connection_name: None,
+                        });
+                        
+                        self.netlist.connect(gnd_net, ConnectionPoint::PinInstance(pin_inst_a)).ok();
+                        self.netlist.connect(sw_net, ConnectionPoint::PinInstance(pin_inst_k)).ok();
+                    },
+                    _ => {
+                        info!("Unknown component type for {} (type={}, char={})", comp_name, comp_type_str, comp_type);
+                    }
+                }
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// Find or create a net with the given name and class
+    fn find_or_create_net(&mut self, name: &str, net_class: NetClass) -> NetId {
+        // First check if the net already exists
+        for (id, net) in &self.netlist.nets {
+            if let Some(ref net_name) = net.name {
+                if net_name == name {
+                    return id;
+                }
+            }
+        }
+        
+        // Create new net
+        self.netlist.add_net_with_class(Some(name.to_string()), net_class)
+    }
+    
+    /// Get or create a pin for a module
+    fn get_or_create_pin(&mut self, module_id: ModuleId, pin_name: &str, direction: PinDirection) -> PinId {
+        // Check if pin already exists for this module
+        if let Some(module) = self.netlist.modules.get(module_id) {
+            for &pin_id in &module.pins {
+                if let Some(pin) = self.netlist.pins.get(pin_id) {
+                    if pin.name == pin_name {
+                        return pin_id;
+                    }
+                }
+            }
+        }
+        
+        // Create new pin
+        let pin_id = self.netlist.pins.insert_with_key(|id| Pin {
+            id,
+            name: pin_name.to_string(),
+            direction,
+            pin_type: PinType::Signal,
+            module: module_id,
+            description: None,
+        });
+        
+        // Add pin to module
+        if let Some(module) = self.netlist.modules.get_mut(module_id) {
+            module.pins.push(pin_id);
+        }
+        
+        pin_id
+    }
+    
     /// Get or create a module definition for a given component type
     fn get_or_create_module(&mut self, component_type: &str, kind: ModuleKind) -> Result<ModuleId> {
         // Check if module already exists
