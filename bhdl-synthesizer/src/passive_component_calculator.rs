@@ -689,7 +689,7 @@ mod tests {
         
         // Test low power: 10mA through 1kΩ = 100mW
         let power_rating = calculator.calculate_resistor_power_rating(1000.0, 0.010);
-        assert_eq!(power_rating, PowerRating::P125mW); // Next higher from 100mW/0.7 ≈ 143mW
+        assert_eq!(power_rating, PowerRating::P250mW); // Next higher from 100mW/0.7 ≈ 143mW
         
         // Test high power: 100mA through 100Ω = 1W  
         let power_rating = calculator.calculate_resistor_power_rating(100.0, 0.100);
@@ -704,9 +704,9 @@ mod tests {
         let voltage_rating = calculator.calculate_capacitor_voltage_rating(3.3);
         assert_eq!(voltage_rating, VoltageRating::V10);
         
-        // Test 5V operation -> should select 16V rating (5V * 2 = 10V)
+        // Test 5V operation -> should select 10V rating (5V * 2 = 10V)
         let voltage_rating = calculator.calculate_capacitor_voltage_rating(5.0);
-        assert_eq!(voltage_rating, VoltageRating::V16);
+        assert_eq!(voltage_rating, VoltageRating::V10);
         
         // Test 12V operation -> should select 25V rating (12V * 2 = 24V)
         let voltage_rating = calculator.calculate_capacitor_voltage_rating(12.0);
