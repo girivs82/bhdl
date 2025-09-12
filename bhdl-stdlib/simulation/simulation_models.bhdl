@@ -1,0 +1,316 @@
+// Core Simulation Model Types and Infrastructure
+// Foundation for component-embedded simulation models
+
+// Model abstraction levels
+enum SimulationLevel {
+    ANALYTICAL = 0,      // Pure equations, no simulation
+    BEHAVIORAL = 1,      // Averaged/behavioral models
+    SWITCHING_SIMPLE = 2, // Simplified switching
+    SWITCHING_FULL = 3,  // Full SPICE with parasitics
+}
+
+// Model metadata
+type ModelMetadata = {
+    name: string,
+    level: SimulationLevel,
+    typical_runtime: duration,
+    accuracy: float,  // 0.0 to 1.0
+    
+    valid_conditions: {
+        frequency_range: (frequency, frequency)?,
+        duty_cycle_range: (float, float)?,
+        temperature_range: (temperature, temperature)?,
+        other_conditions: string[],
+    },
+    
+    provides_outputs: string[],  // What this model can calculate
+    requires_inputs: string[],   // What inputs it needs
+}
+
+// Simulation requirements specification
+type SimulationRequirements = {
+    dc_analysis: {
+        required: bool,
+        solve_for: string[],
+        convergence_aids: string[]?,
+    }?,
+    
+    ac_analysis: {
+        required: bool,
+        frequency_range: (frequency, frequency),
+        points_per_decade: int,
+        extract: string[],
+    }?,
+    
+    transient_analysis: {
+        required: bool,
+        time_span: duration,
+        max_timestep: duration?,
+        events: string[],  // load_step, startup, etc.
+    }?,
+    
+    monte_carlo: {
+        required: bool,
+        parameters: string[],
+        variations: string[],
+        samples: int,
+    }?,
+}
+
+// Optimization strategy specification
+type OptimizationStrategy = {
+    phases: OptimizationPhase[],
+    convergence_criteria: ConvergenceCriteria,
+    max_iterations: int,
+    timeout: duration?,
+}
+
+type OptimizationPhase = {
+    name: string,
+    model_level: SimulationLevel,
+    parameters: string[],
+    objectives: Objective[],
+    constraints: Constraint[],
+    algorithm: string,  // "nelder_mead", "gradient_descent", "genetic", etc.
+}
+
+type Objective = {
+    metric: string,
+    goal: string,  // "minimize", "maximize", "target"
+    target_value: float?,
+    weight: float,  // For multi-objective
+}
+
+type Constraint = {
+    metric: string,
+    condition: string,  // ">", "<", "==", "in_range"
+    value: float,
+    hard: bool,  // Hard constraint vs soft preference
+}
+
+type ConvergenceCriteria = {
+    all_constraints_met: bool,
+    objective_change: float?,  // Stop if change < this
+    iteration_limit: int?,
+    time_limit: duration?,
+}
+
+// Test sequence specification
+type TestSequence = {
+    name: string,
+    description: string,
+    
+    setup: {
+        initial_conditions: map<string, value>,
+        wait_for_steady_state: bool,
+    },
+    
+    stimulus: {
+        type: string,  // "step", "ramp", "sine", "pulse"
+        parameters: map<string, value>,
+        apply_at: string,  // Where to apply stimulus
+    },
+    
+    measurements: {
+        measure: string[],
+        extract: string[],
+        pass_criteria: map<string, string>,
+    },
+}
+
+// Knowledge base for component
+type ComponentKnowledge = {
+    good_starting_points: StartingPoint[],
+    scaling_rules: map<string, string>,
+    coupled_parameters: string[][],
+    common_issues: Issue[],
+}
+
+type StartingPoint = {
+    conditions: string,
+    values: map<string, value>,
+    expected_performance: map<string, value>,
+}
+
+type Issue = {
+    name: string,
+    detection_condition: string,
+    symptoms: string[],
+    fixes: string[],
+}
+
+// Base behavioral model interface
+interface BehavioralModel {
+    metadata: ModelMetadata;
+    
+    // Initialize model with parameters
+    function initialize(params: map<string, value>);
+    
+    // Run DC analysis
+    function solve_dc() -> map<string, value>;
+    
+    // Run AC analysis
+    function solve_ac(frequencies: frequency[]) -> ComplexResponse[];
+    
+    // Run transient analysis  
+    function solve_transient(time_points: time[]) -> map<string, value[]>;
+    
+    // Get transfer function
+    function get_transfer_function(input: string, output: string) -> TransferFunction;
+}
+
+// Transfer function representation
+type TransferFunction = {
+    zeros: complex[],
+    poles: complex[],
+    gain: float,
+    
+    // Computed properties
+    function magnitude_at(f: frequency) -> float;
+    function phase_at(f: frequency) -> float;
+    function step_response() -> value[];
+}
+
+// State-space model representation
+type StateSpaceModel = {
+    A: matrix,  // State matrix
+    B: matrix,  // Input matrix  
+    C: matrix,  // Output matrix
+    D: matrix,  // Feedthrough matrix
+    
+    states: string[],  // State variable names
+    inputs: string[],  // Input names
+    outputs: string[], // Output names
+    
+    // Convert to transfer function
+    function to_transfer_function(input: string, output: string) -> TransferFunction;
+    
+    // Simulate
+    function simulate(u: value[], dt: time) -> value[];
+}
+
+// Averaged model for switching converters
+type AveragedSwitchingModel = {
+    topology: string,  // "buck", "boost", "buck-boost", etc.
+    
+    // Operating point
+    duty_cycle: float,
+    switching_frequency: frequency,
+    
+    // Component values
+    inductance: inductance,
+    capacitance: capacitance,
+    load_resistance: resistance,
+    
+    // Parasitic elements
+    inductor_dcr: resistance?,
+    capacitor_esr: resistance?,
+    switch_ron: resistance?,
+    
+    // Computed state-space model
+    function get_state_space() -> StateSpaceModel;
+    
+    // Get specific transfer functions
+    function control_to_output() -> TransferFunction;
+    function input_to_output() -> TransferFunction;
+    function output_impedance() -> TransferFunction;
+}
+
+// Model selector logic
+type ModelSelector = {
+    // Select best model based on context
+    function select_model(
+        available_models: ModelMetadata[],
+        analysis_type: string,
+        accuracy_requirement: float,
+        time_budget: duration?,
+        frequency_range: (frequency, frequency)?
+    ) -> string {
+        
+        // Filter valid models
+        valid_models = available_models.filter(m => 
+            is_valid_for_analysis(m, analysis_type, frequency_range)
+        );
+        
+        // Sort by preference
+        if (time_budget != null) {
+            // Prefer faster models if time constrained
+            valid_models.sort_by(m => m.typical_runtime);
+        } else {
+            // Prefer more accurate models
+            valid_models.sort_by(m => -m.accuracy);
+        }
+        
+        // Pick best that meets requirements
+        for model in valid_models {
+            if (model.accuracy >= accuracy_requirement) {
+                return model.name;
+            }
+        }
+        
+        // Fall back to best available
+        return valid_models[0].name;
+    }
+}
+
+// Simulation coordinator
+type SimulationCoordinator = {
+    component: Component,
+    models: map<string, BehavioralModel>,
+    strategy: OptimizationStrategy,
+    
+    // Run complete optimization
+    function optimize() -> OptimizationResult {
+        results = [];
+        
+        for phase in strategy.phases {
+            model = models[select_model_for_phase(phase)];
+            
+            result = run_optimization_phase(
+                model,
+                phase.parameters,
+                phase.objectives,
+                phase.constraints,
+                phase.algorithm
+            );
+            
+            results.append(result);
+            
+            if (meets_convergence_criteria(result)) {
+                break;
+            }
+        }
+        
+        return compile_results(results);
+    }
+    
+    // Run verification tests
+    function verify(design: Design) -> VerificationResult {
+        test_results = [];
+        
+        for test in component.test_sequences {
+            model = models[select_model_for_test(test)];
+            result = run_test_sequence(model, test, design);
+            test_results.append(result);
+        }
+        
+        return compile_verification(test_results);
+    }
+}
+
+// Export types and interfaces
+export {
+    SimulationLevel,
+    ModelMetadata,
+    SimulationRequirements,
+    OptimizationStrategy,
+    OptimizationPhase,
+    TestSequence,
+    ComponentKnowledge,
+    BehavioralModel,
+    TransferFunction,
+    StateSpaceModel,
+    AveragedSwitchingModel,
+    ModelSelector,
+    SimulationCoordinator
+};
