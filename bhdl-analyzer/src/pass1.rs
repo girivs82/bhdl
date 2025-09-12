@@ -1,10 +1,12 @@
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::fs;
 use rowan::{SyntaxNode, TextRange, ast::SyntaxNodePtr};
 use rowan::ast::AstNode;
 use bhdl_parser::{SyntaxKind, BhdlLanguage};
 use bhdl_ast::{
     SourceFile, HasName,
-    items::{Board, Module, ComponentDef, InterfaceDef, TypedefDef},
+    items::{Board, Module, ComponentDef, InterfaceDef, TypedefDef, ImportStmt},
     common::{ParamDecl, PortDecl, NetDecl, ComponentInst, NetRef, PinDecl}, // Added PinDecl for v2.0
     hierarchical::ModuleInst,
     v2_statements::ConnectionStmt,
@@ -26,6 +28,10 @@ struct Pass1Context {
     current_definition_node: Option<SyntaxNodePtr<BhdlLanguage>>,
     // Stack to track definition nodes for nested scopes
     definition_node_stack: Vec<Option<SyntaxNodePtr<BhdlLanguage>>>,
+    // Track imported modules to avoid duplicate processing
+    imported_modules: HashMap<String, ()>,
+    // Base path for resolving relative imports
+    base_path: PathBuf,
 }
 
 impl Pass1Context {
@@ -35,6 +41,8 @@ impl Pass1Context {
             definition_nodes: HashMap::new(),
             current_definition_node: None,
             definition_node_stack: Vec::new(),
+            imported_modules: HashMap::new(),
+            base_path: PathBuf::from("."),
         }
     }
     
@@ -165,6 +173,14 @@ pub fn populate_global_scope_and_build_definition_scopes(source_file: &SourceFil
         net_attributes: None,
     });
 
+    // First pass: process imports
+    for item in source_file.items() {
+        if let Some(import) = ImportStmt::cast(item.syntax().clone()) {
+            process_import(&import, &mut context);
+        }
+    }
+    
+    // Second pass: process the rest of the file
     visit_node_pass1_recursive(&source_file.syntax(), &mut context);
 
     println!("Completed Pass 1. Total symbols added: {}", context.global_scope_mut().get_symbols().len());
@@ -176,6 +192,9 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
      let mut scope_pushed_for_this_node = false;
 
      match node.kind() {
+        SyntaxKind::IMPORT_STMT => {
+            // Skip imports - already processed in first pass
+        }
         SyntaxKind::BOARD_DEF => {
             if let Some(def_node) = Board::cast(node.clone()) {
                 if let Some(name_token) = def_node.name() {
@@ -659,6 +678,169 @@ fn collect_net_refs_recursive(node: &SyntaxNode<BhdlLanguage>, net_refs: &mut Ve
     // Recurse into children
     for child in node.children() {
         collect_net_refs_recursive(&child, net_refs);
+    }
+}
+
+// Process an import statement
+fn process_import(import: &ImportStmt, context: &mut Pass1Context) {
+    // Get the import path
+    let path = match import.path() {
+        Some(p) => p,
+        None => {
+            println!("Warning: Import statement has no path");
+            return;
+        }
+    };
+    
+    // Check if already imported
+    if context.imported_modules.contains_key(&path) {
+        return;
+    }
+    
+    // Mark as imported
+    context.imported_modules.insert(path.clone(), ());
+    
+    // Resolve the import path
+    let resolved_path = resolve_import_path(&path, &context.base_path);
+    
+    // Load and parse the imported file
+    match load_and_parse_module(&resolved_path) {
+        Ok(imported_source) => {
+            // Process all module definitions from the imported file
+            for item in imported_source.items() {
+                if let Some(module) = Module::cast(item.syntax().clone()) {
+                    if let Some(name_token) = module.name() {
+                        let node_ptr = SyntaxNodePtr::new(module.syntax());
+                                
+                                // Create symbol with full metadata
+                                let mut symbol = Symbol::new_definition(
+                                    name_token.text(), 
+                                    SymbolKind::Module,
+                                    name_token.text_range(), 
+                                    &node_ptr
+                                );
+                                
+                                // Store the imported module definition node
+                                // This will include all pins, parameters, etc.
+                                symbol.definition_node_ptr = Some(node_ptr.clone());
+                                
+                                // Add to global scope
+                                context.global_scope_mut().insert(symbol);
+                                
+                                // Create a scope for this module definition
+                                let mut module_scope = SymbolTable::default();
+                                module_scope.set_scope_name(name_token.text().to_string());
+                                
+                                // Process module body to populate the scope
+                                // (pins, parameters, etc.)
+                                process_module_body(&module, &mut module_scope);
+                                
+                                // Store the module's scope
+                                context.definition_nodes.insert(node_ptr, module_scope);
+                    }
+                } else if let Some(component) = ComponentDef::cast(item.syntax().clone()) {
+                    if let Some(name_token) = component.name() {
+                        let node_ptr = SyntaxNodePtr::new(component.syntax());
+                                
+                                let mut symbol = Symbol::new_definition(
+                                    name_token.text(), 
+                                    SymbolKind::Component,
+                                    name_token.text_range(), 
+                                    &node_ptr
+                                );
+                                
+                                symbol.definition_node_ptr = Some(node_ptr.clone());
+                                context.global_scope_mut().insert(symbol);
+                                
+                                // Create and populate component scope
+                                let mut component_scope = SymbolTable::default();
+                                component_scope.set_scope_name(name_token.text().to_string());
+                                // Component processing would go here
+                                context.definition_nodes.insert(node_ptr, component_scope);
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            println!("Error loading import '{}': {}", path, e);
+        }
+    }
+}
+
+// Resolve import path relative to base
+fn resolve_import_path(import_path: &str, base_path: &Path) -> PathBuf {
+    // Handle different import path formats
+    if import_path.starts_with("bhdl-stdlib/") {
+        // Standard library import
+        PathBuf::from(import_path)
+    } else if import_path.starts_with('/') {
+        // Absolute path
+        PathBuf::from(import_path)
+    } else {
+        // Relative path
+        base_path.join(import_path)
+    }
+}
+
+// Load and parse a module file
+fn load_and_parse_module(path: &Path) -> Result<SourceFile, String> {
+    // Read the file
+    let content = fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read file {:?}: {}", path, e))?;
+    
+    // Parse it
+    let parsed = bhdl_parser::parse(&content);
+    
+    if !parsed.errors().is_empty() {
+        return Err(format!("Parse errors in {:?}: {:?}", path, parsed.errors()));
+    }
+    
+    // Get the AST
+    let syntax = parsed.syntax();
+    SourceFile::cast(syntax)
+        .ok_or_else(|| format!("Failed to cast to SourceFile for {:?}", path))
+}
+
+// Process module body to extract pins, parameters, etc.
+fn process_module_body(module: &Module, scope: &mut SymbolTable) {
+    // Process pins
+    for pin in module.pins() {
+        if let Some(name) = pin.name() {
+            let pin_symbol = Symbol {
+                name: name.text().to_string(),
+                kind: SymbolKind::Pin,
+                span: name.text_range(),
+                instance_type_name: None,
+                definition_node_ptr: Some(SyntaxNodePtr::new(pin.syntax())),
+                bus_high: None,
+                bus_low: None,
+                direction: None, // Would need to parse pin direction
+                parameter_overrides: None,
+                net_attributes: None,
+            };
+            scope.insert(pin_symbol);
+        }
+    }
+    
+    // Process parameters
+    if let Some(param_list) = module.param_list() {
+        for param in param_list.param_defs() {
+        if let Some(name) = param.name() {
+            let param_symbol = Symbol {
+                name: name.text().to_string(),
+                kind: SymbolKind::Parameter,
+                span: name.text_range(),
+                instance_type_name: None,
+                definition_node_ptr: Some(SyntaxNodePtr::new(param.syntax())),
+                bus_high: None,
+                bus_low: None,
+                direction: None,
+                parameter_overrides: None,
+                net_attributes: None,
+            };
+            scope.insert(param_symbol);
+        }
+    }
     }
 }
 

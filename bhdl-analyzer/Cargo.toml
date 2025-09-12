@@ -5,6 +5,10 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[[bin]]
+name = "test_import_processing"
+path = "src/bin/test_import_processing.rs"
+
 [dependencies]
 bhdl-parser = { path = "../bhdl-parser" }
 bhdl-ast = { path = "../bhdl-ast" }
