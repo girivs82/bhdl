@@ -191,6 +191,10 @@ impl NetlistGenerator {
     async fn generate_from_ast_and_analysis_internal(&mut self, ast: Option<&SourceFile>, analysis: &AnalysisResult) -> Result<Netlist> {
         info!("Starting netlist generation from analysis results");
         
+        // The analyzer has already processed imports and populated the global symbol table
+        // We can now check for component definitions directly in the symbol table
+        info!("Using analyzer's symbol table with {} symbols", analysis.global_scope.get_symbols().len());
+        
         // Check for undefined components first
         if !analysis.diagnostics.is_empty() {
             let undefined_components: Vec<_> = analysis.diagnostics.iter()
@@ -199,7 +203,7 @@ impl NetlistGenerator {
             
             if !undefined_components.is_empty() {
                 error!("Cannot synthesize circuit with undefined components:");
-                for diagnostic in undefined_components {
+                for diagnostic in &undefined_components {
                     error!("  - {}", diagnostic.message);
                 }
                 return Err(anyhow::anyhow!(
@@ -483,14 +487,17 @@ impl NetlistGenerator {
         for (name, symbol) in all_symbols {
             if matches!(symbol.kind, bhdl_analyzer::symbol_table::SymbolKind::Instance) {
                 if let Some(ref type_name) = symbol.instance_type_name {
-                    // ALWAYS check BHDL synthesis knowledge first
-                    let has_virtual = self.stdlib_reader.has_virtual_pins(type_name);
+                    // Check if the component is defined in the analyzer's symbol table (from imports)
+                    let has_module_definition = analysis.global_scope.lookup(type_name)
+                        .map(|s| s.kind == bhdl_analyzer::symbol_table::SymbolKind::Module)
+                        .unwrap_or(false);
                     
-                    if has_virtual {
-                        println!("✅ SYNTHESIZER: Component {} ({}) has virtual pins in BHDL - using synthesis knowledge", name, type_name);
-                        info!("Component {} has virtual pins - using BHDL synthesis knowledge", type_name);
+                    if has_module_definition {
+                        println!("✅ SYNTHESIZER: Found module definition for {} in symbol table", type_name);
+                        info!("Component {} found in analyzer symbol table", type_name);
                         
-                        // Extract virtual pin components from BHDL synthesis knowledge
+                        // TODO: Extract virtual pin information from module definition AST
+                        // For now, fall back to stdlib_reader to maintain functionality
                         if let Some(virtual_pin_components) = self.stdlib_reader.get_virtual_pin_components(type_name) {
                             info!("Using BHDL synthesis knowledge for {} - {} virtual pins defined", 
                                   type_name, virtual_pin_components.virtual_pins.len());
