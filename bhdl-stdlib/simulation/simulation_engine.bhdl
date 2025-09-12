@@ -1,0 +1,360 @@
+// Simulation Engine that Uses Component-Embedded Models
+// Orchestrates simulation using component's built-in intelligence
+
+import { SimulationLevel, BehavioralModel, OptimizationStrategy } from "./simulation_models.bhdl";
+import { BuckConverter } from "../power/buck_converter_complete.bhdl";
+
+// Main simulation engine
+module SimulationEngine {
+    
+    // Run optimization using component's embedded strategy
+    function optimize_component(
+        component: Component,
+        requirements: Requirements
+    ) -> OptimizationResult {
+        
+        // 1. Read component's optimization strategy
+        strategy = component.@optimization_strategy;
+        
+        // 2. Get available models
+        models = component.@behavioral_model;
+        
+        // 3. Execute each optimization phase
+        current_design = get_initial_design(component);
+        
+        for phase in strategy.phases {
+            println(f"Phase: {phase.name}");
+            
+            // Select appropriate model for this phase
+            model = select_model(models, phase.model_level);
+            
+            // Run optimization
+            if (phase.algorithm != "none") {
+                current_design = run_optimization(
+                    model,
+                    current_design,
+                    phase.parameters,
+                    phase.objectives,
+                    phase.constraints,
+                    phase.algorithm
+                );
+            } else {
+                // Just verify constraints
+                verify_constraints(model, current_design, phase.constraints);
+            }
+            
+            // Check convergence
+            if (meets_criteria(current_design, strategy.convergence_criteria)) {
+                break;
+            }
+        }
+        
+        return {
+            final_design: current_design,
+            performance: evaluate_performance(current_design),
+            iterations: iteration_count,
+            runtime: elapsed_time,
+        };
+    }
+    
+    // Run a specific optimization algorithm
+    function run_optimization(
+        model: BehavioralModel,
+        initial_design: Design,
+        parameters: string[],
+        objectives: Objective[],
+        constraints: Constraint[],
+        algorithm: string
+    ) -> Design {
+        
+        switch (algorithm) {
+            case "grid_search":
+                return grid_search_optimization(
+                    model, initial_design, parameters, objectives, constraints
+                );
+                
+            case "nelder_mead":
+                return nelder_mead_optimization(
+                    model, initial_design, parameters, objectives, constraints
+                );
+                
+            case "gradient_descent":
+                return gradient_optimization(
+                    model, initial_design, parameters, objectives, constraints
+                );
+                
+            case "genetic":
+                return genetic_optimization(
+                    model, initial_design, parameters, objectives, constraints
+                );
+                
+            default:
+                error(f"Unknown algorithm: {algorithm}");
+        }
+    }
+    
+    // Grid search for initial exploration
+    function grid_search_optimization(
+        model: BehavioralModel,
+        initial: Design,
+        parameters: string[],
+        objectives: Objective[],
+        constraints: Constraint[]
+    ) -> Design {
+        
+        // Define grid based on parameter ranges
+        grid = create_parameter_grid(parameters, coarse=true);
+        
+        best_design = initial;
+        best_score = -infinity;
+        
+        // Parallel evaluation of grid points
+        results = parallel_map(grid, point => {
+            design = apply_parameters(initial, point);
+            
+            // Quick analytical evaluation
+            if (model.metadata.level == SimulationLevel.ANALYTICAL) {
+                // Just evaluate equations
+                metrics = evaluate_equations(model.equations, design);
+            } else {
+                // Run actual simulation
+                metrics = simulate(model, design);
+            }
+            
+            // Check constraints
+            if (!meets_all_constraints(metrics, constraints)) {
+                return null;
+            }
+            
+            // Calculate objective score
+            score = calculate_weighted_score(metrics, objectives);
+            
+            return {design, metrics, score};
+        });
+        
+        // Find best valid design
+        valid_results = results.filter(r => r != null);
+        if (valid_results.length > 0) {
+            best_result = valid_results.max_by(r => r.score);
+            return best_result.design;
+        }
+        
+        return initial;  // No improvement found
+    }
+    
+    // Nelder-Mead for control loop optimization
+    function nelder_mead_optimization(
+        model: BehavioralModel,
+        initial: Design,
+        parameters: string[],
+        objectives: Objective[],
+        constraints: Constraint[]
+    ) -> Design {
+        
+        // Initialize simplex
+        simplex = create_initial_simplex(initial, parameters);
+        
+        for iteration in 0..100 {
+            // Evaluate all simplex points
+            for point in simplex {
+                point.metrics = simulate_control_loop(model, point.design);
+                point.score = calculate_objective(point.metrics, objectives);
+                
+                // Penalty for constraint violation
+                point.score -= calculate_penalty(point.metrics, constraints);
+            }
+            
+            // Sort by score
+            simplex.sort_by(p => -p.score);
+            
+            // Check convergence
+            if (simplex_converged(simplex)) {
+                break;
+            }
+            
+            // Nelder-Mead operations
+            centroid = calculate_centroid(simplex[0..-1]);
+            
+            // Reflection
+            reflected = reflect_point(simplex[-1], centroid);
+            reflected_score = evaluate_point(model, reflected, objectives, constraints);
+            
+            if (reflected_score > simplex[-2].score) {
+                if (reflected_score > simplex[0].score) {
+                    // Expansion
+                    expanded = expand_point(reflected, centroid);
+                    expanded_score = evaluate_point(model, expanded, objectives, constraints);
+                    
+                    if (expanded_score > reflected_score) {
+                        simplex[-1] = expanded;
+                    } else {
+                        simplex[-1] = reflected;
+                    }
+                } else {
+                    simplex[-1] = reflected;
+                }
+            } else {
+                // Contraction
+                contracted = contract_point(simplex[-1], centroid);
+                contracted_score = evaluate_point(model, contracted, objectives, constraints);
+                
+                if (contracted_score > simplex[-1].score) {
+                    simplex[-1] = contracted;
+                } else {
+                    // Shrink
+                    for i in 1..simplex.length {
+                        simplex[i] = shrink_point(simplex[i], simplex[0]);
+                    }
+                }
+            }
+        }
+        
+        return simplex[0].design;
+    }
+    
+    // Simulate control loop using averaged model
+    function simulate_control_loop(
+        model: BehavioralModel,
+        design: Design
+    ) -> Metrics {
+        
+        // Get state-space model
+        ss_model = model.get_state_space(design);
+        
+        // Calculate transfer functions
+        Gvd = ss_model.control_to_output();
+        
+        // Build control loop
+        error_amp_tf = create_error_amp_tf(design);
+        comp_tf = create_compensation_tf(design);
+        fb_divider = design.vout / 1.2;  // Reference voltage
+        
+        // Loop gain
+        loop_gain = error_amp_tf * comp_tf * Gvd * fb_divider;
+        
+        // Stability metrics
+        frequencies = logspace(1Hz, design.f_sw/2, 100);
+        response = loop_gain.evaluate(frequencies);
+        
+        phase_margin = calculate_phase_margin(response);
+        gain_margin = calculate_gain_margin(response);
+        crossover_freq = find_crossover_frequency(response);
+        
+        return {
+            phase_margin: phase_margin,
+            gain_margin: gain_margin,
+            crossover_frequency: crossover_freq,
+            bandwidth: crossover_freq,
+        };
+    }
+}
+
+// Example: Optimizing a Buck Converter
+module BuckOptimizationExample {
+    
+    function example_optimization() {
+        // Create buck converter
+        buck = BuckConverter(
+            vin_nom: 12V,
+            vout: 5V,
+            iout_max: 2A,
+            f_sw: 500kHz
+        );
+        
+        // Create simulation engine
+        engine = SimulationEngine();
+        
+        // Define requirements
+        requirements = {
+            phase_margin: (45°, 65°),
+            efficiency: > 90%,
+            ripple: < 50mV,
+            cost: minimize,
+            size: minimize,
+        };
+        
+        // Run optimization using buck's embedded strategy
+        result = engine.optimize_component(buck, requirements);
+        
+        // The engine automatically:
+        // 1. Uses analytical model for initial sizing
+        // 2. Switches to averaged model for control loop
+        // 3. Verifies with switching model
+        // All based on buck's @optimization_strategy
+        
+        print_results(result);
+    }
+    
+    function print_results(result: OptimizationResult) {
+        println("=== Optimization Results ===");
+        println(f"L = {result.final_design.L}");
+        println(f"C = {result.final_design.C}");
+        println(f"Compensation: R={result.final_design.R_comp}, C={result.final_design.C_comp}");
+        println(f"Phase Margin: {result.performance.phase_margin}");
+        println(f"Crossover Frequency: {result.performance.crossover_frequency}");
+        println(f"Efficiency: {result.performance.efficiency}");
+        println(f"Ripple: {result.performance.ripple}");
+        println(f"Iterations: {result.iterations}");
+        println(f"Runtime: {result.runtime}");
+    }
+}
+
+// Parallel simulation coordinator
+module ParallelSimulator {
+    
+    // Run multiple simulations in parallel
+    function parallel_sweep(
+        model: BehavioralModel,
+        parameter_sets: ParameterSet[]
+    ) -> SimulationResult[] {
+        
+        // Determine if we can parallelize
+        if (model.metadata.level == SimulationLevel.ANALYTICAL) {
+            // Equations can be evaluated in parallel trivially
+            return parallel_map(parameter_sets, params => 
+                evaluate_analytical(model, params)
+            );
+        }
+        
+        if (model.metadata.level == SimulationLevel.BEHAVIORAL) {
+            // Behavioral models are usually independent
+            return parallel_map(parameter_sets, params =>
+                simulate_behavioral(model, params)
+            );
+        }
+        
+        // Full SPICE might need serialization or careful setup
+        return parameter_sets.map(params =>
+            simulate_spice(model, params)
+        );
+    }
+    
+    // Smart batching for efficiency
+    function batch_simulations(
+        components: Component[],
+        analysis_type: string
+    ) -> BatchResult {
+        
+        // Group by model type for efficiency
+        groups = components.group_by(c => 
+            c.@model_selector.select_model(analysis_type)
+        );
+        
+        results = {};
+        
+        for (model_type, component_group) in groups {
+            // Run all components with same model type together
+            group_results = parallel_simulate(component_group, model_type);
+            results.merge(group_results);
+        }
+        
+        return results;
+    }
+}
+
+// Export the simulation engine
+export { 
+    SimulationEngine,
+    BuckOptimizationExample,
+    ParallelSimulator
+};
