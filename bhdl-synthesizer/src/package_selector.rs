@@ -473,7 +473,7 @@ mod tests {
             VoltageRating::V50,
             &requirements
         );
-        assert_eq!(spec.package, PackageSize::_0805);
+        assert_eq!(spec.package, PackageSize::_1206); // V50 requires larger package for creepage
         
         // High power should select large package
         let spec = selector.select_resistor_spec(
