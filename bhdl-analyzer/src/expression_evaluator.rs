@@ -710,7 +710,7 @@ mod tests {
         let expr = parse_and_get_expr("2 * pi").unwrap();
         let result = ExpressionEvaluator::evaluate(&expr, &eval_ctx).unwrap();
         if let RuntimeValue::Real(val) = result {
-            assert!((val - 2.0 * consts::PI).abs() < 1e-10);
+            assert!((val - 2.0 * std::f64::consts::PI).abs() < 1e-10);
         } else {
             panic!("Expected Real value");
         }
