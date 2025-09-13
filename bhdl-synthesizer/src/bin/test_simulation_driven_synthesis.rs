@@ -9,8 +9,6 @@ use bhdl_analyzer::analyze;
 use bhdl_ast::SourceFile;
 use rowan::ast::AstNode;
 use std::time::Duration;
-use std::collections::HashMap;
-use log::info;
 
 fn main() {
     env_logger::Builder::from_default_env()
@@ -63,6 +61,11 @@ module BuckConverter(
     // Run semantic analysis
     println!("Running semantic analysis...");
     let analysis = analyze(&SourceFile::cast(syntax.clone()).unwrap());
+    
+    // Extract behavioral models from the parsed component
+    let sim_engine = bhdl_simulation::engine::SimulationEngine::new();
+    let behavioral_models = sim_engine.extract_behavioral_models(bhdl_source).unwrap_or_default();
+    println!("Extracted {} behavioral models from the component", behavioral_models.len());
     
     // Generate initial netlist
     println!("Generating initial netlist...");
@@ -133,8 +136,8 @@ module BuckConverter(
     // Note: In a real scenario, we would load the component database
     // sim_synthesizer.with_database(Path::new("components.db")).ok();
     
-    // Run optimization
-    match sim_synthesizer.optimize_netlist(&mut netlist, &requirements) {
+    // Run optimization with behavioral models extracted from component
+    match sim_synthesizer.optimize_netlist(&mut netlist, &requirements, Some(behavioral_models)) {
         Ok(report) => {
             println!("Optimization Report:");
             println!("  Models found: {}", report.models_found);
