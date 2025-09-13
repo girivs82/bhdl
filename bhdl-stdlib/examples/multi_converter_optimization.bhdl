@@ -1,0 +1,470 @@
+// Multi-Converter Optimization with Coupled Constraints
+// Shows how simulation handles interacting power supplies
+
+import { BuckConverter } from "../power/buck_converter_complete.bhdl";
+import { BoostConverter } from "../power/boost_converter.bhdl";
+import { LDO } from "../power/ldo_regulator.bhdl";
+
+// Complex power system with multiple interacting converters
+board MultiRailPowerSystem {
+    // Input power
+    power VIN_BATTERY = 3.7V @ 5A;  // Li-ion battery
+    power VIN_USB = 5V @ 2.5A;       // USB-C input
+    ground GND;
+    
+    // Output rails needed
+    power VCORE = 1.2V @ 2A;         // Processor core
+    power VIO = 1.8V @ 1A;           // I/O voltage
+    power VANALOG = 3.3V @ 500mA;   // Analog circuits
+    power VBOOST = 12V @ 300mA;     // Display backlight
+    
+    /*
+    === COUPLED OPTIMIZATION CHALLENGE ===
+    
+    Multiple converters share input current budget:
+    - Total input current limited by battery/USB
+    - Efficiency of each affects others' available power
+    - Switching frequencies must avoid interference
+    - Total cost and size constraints
+    
+    The simulation engine must optimize ALL converters together!
+    */
+    
+    // === STAGE 1: BOOST TO INTERMEDIATE RAIL ===
+    boost_converter: BoostConverter(
+        vin_nom: 3.7V,
+        vout: 5.5V,  // Intermediate rail
+        iout_max: 2A,
+        f_sw: 1.2MHz  // High freq for small size
+    );
+    
+    VIN_BATTERY -> boost_converter.VIN;
+    intermediate_5v5: boost_converter.VOUT;
+    GND -> boost_converter.GND;
+    
+    // === STAGE 2: MULTIPLE BUCKS FROM INTERMEDIATE ===
+    
+    // Core voltage (most critical)
+    buck_core: BuckConverter(
+        vin_nom: 5.5V,
+        vout: 1.2V,
+        iout_max: 2A,
+        f_sw: 2MHz,  // Very high freq for fast transient
+        vout_ripple_max: 20mV  // Tight spec for digital
+    );
+    
+    intermediate_5v5 -> buck_core.VIN;
+    buck_core.VOUT -> VCORE;
+    
+    // I/O voltage
+    buck_io: BuckConverter(
+        vin_nom: 5.5V,
+        vout: 1.8V,
+        iout_max: 1A,
+        f_sw: 1.5MHz,  // Different freq to avoid beating
+        vout_ripple_max: 30mV
+    );
+    
+    intermediate_5v5 -> buck_io.VIN;
+    buck_io.VOUT -> VIO;
+    
+    // Analog voltage (low noise critical)
+    ldo_analog: LDO(
+        vin_nom: 5.5V,
+        vout: 3.3V,
+        iout_max: 500mA,
+        psrr_required: 60dB  // High PSRR for analog
+    );
+    
+    intermediate_5v5 -> ldo_analog.VIN;
+    ldo_analog.VOUT -> VANALOG;
+    
+    // Display backlight boost
+    boost_display: BoostConverter(
+        vin_nom: 5.5V,
+        vout: 12V,
+        iout_max: 300mA,
+        f_sw: 800kHz
+    );
+    
+    intermediate_5v5 -> boost_display.VIN;
+    boost_display.VOUT -> VBOOST;
+    
+    /*
+    === MULTI-CONVERTER COUPLED SIMULATION ===
+    
+    The simulation engine recognizes these are coupled and optimizes together:
+    
+    ITERATION 1: Initial Assessment
+    --------------------------------
+    Converter      | Efficiency | Input Current | Status
+    boost_5v5      | 85%       | 3.5A         | ⚠️  High input current
+    buck_core      | 82%       | 0.44A        | ✓  OK
+    buck_io        | 85%       | 0.21A        | ✓  OK
+    ldo_analog     | 60%       | 0.17A        | ✓  Expected for LDO
+    boost_display  | 88%       | 0.07A        | ✓  OK
+    
+    Total input: 3.5A from 3.7V battery = 13W
+    Total output: 1.2V×2A + 1.8V×1A + 3.3V×0.5A + 12V×0.3A = 9.45W
+    System efficiency: 72.7% ❌ Too low!
+    
+    FEEDBACK: Improve boost_5v5 and buck_core efficiency
+    
+    ITERATION 2: Optimize Boost Converter
+    --------------------------------------
+    Action: Increase boost L from 2.2µH to 4.7µH (reduce ripple current)
+            Adjust compensation for stability
+    
+    boost_5v5 efficiency: 85% → 89% ✓
+    New input current: 3.3A ✓
+    
+    ITERATION 3: Optimize Buck Core
+    --------------------------------
+    Action: Increase switching frequency to 2.5MHz
+            Use better FETs with lower Rds(on)
+            Optimize dead time
+    
+    buck_core efficiency: 82% → 87% ✓
+    
+    ITERATION 4: Frequency Planning
+    --------------------------------
+    Issue: Harmonics of 2.5MHz (buck_core) interfering with 1.25MHz (boost_5v5)
+    Action: Adjust frequencies to avoid harmonics:
+            - boost_5v5: 1.2MHz
+            - buck_core: 2.1MHz (not a harmonic)
+            - buck_io: 1.55MHz (avoid both)
+            - boost_display: 850kHz (below all)
+    
+    EMI simulation: No problematic interactions ✓
+    
+    ITERATION 5: Thermal Check
+    --------------------------
+    Power dissipation map:
+    - boost_5v5: 420mW
+    - buck_core: 312mW  
+    - buck_io: 135mW
+    - ldo_analog: 275mW
+    - boost_display: 48mW
+    
+    Total: 1.19W
+    With 30°C/W thermal resistance: ΔT = 36°C
+    Max junction temp: 85°C + 36°C = 121°C ✓ (Within 125°C limit)
+    
+    === FINAL OPTIMIZED DESIGN ===
+    
+    Component values:
+    boost_5v5:     L=4.7µH, C=47µF, f_sw=1.2MHz
+    buck_core:     L=1µH, C=44µF, f_sw=2.1MHz  
+    buck_io:       L=1.5µH, C=22µF, f_sw=1.55MHz
+    boost_display: L=10µH, C=22µF, f_sw=850kHz
+    
+    Performance achieved:
+    - System efficiency: 81.2% ✓
+    - Battery current: 3.15A ✓ (< 3.5A limit)
+    - All ripple specs met ✓
+    - No EMI conflicts ✓
+    - Thermal within limits ✓
+    - Total BOM cost: $8.75
+    
+    Optimization time: 47 seconds
+    - Analytical models: 0.5s
+    - Averaged models: 12s
+    - Switching models: 28s
+    - EMI analysis: 6.5s
+    */
+}
+
+// Coupled optimization engine
+module CoupledSystemOptimizer {
+    
+    // Optimize multiple converters with shared constraints
+    function optimize_power_system(
+        converters: Converter[],
+        system_constraints: SystemConstraints
+    ) -> OptimizedSystem {
+        
+        println("=== COUPLED SYSTEM OPTIMIZATION ===\n");
+        
+        // Phase 1: Individual pre-optimization
+        println("Phase 1: Individual converter baseline");
+        
+        for converter in converters {
+            // Quick analytical optimization
+            initial = optimize_individual(converter, level="analytical");
+            converter.apply_design(initial);
+        }
+        
+        // Phase 2: System-level analysis
+        println("\nPhase 2: System-level coupling analysis");
+        
+        coupling_matrix = analyze_coupling(converters);
+        println(f"Coupling identified: {coupling_matrix}");
+        
+        // Identify issues
+        issues = [
+            check_total_input_current(converters, system_constraints),
+            check_total_efficiency(converters, system_constraints),
+            check_emi_interactions(converters),
+            check_thermal_budget(converters, system_constraints),
+        ];
+        
+        // Phase 3: Coupled optimization
+        println("\nPhase 3: Joint optimization");
+        
+        // Use multi-objective optimization
+        pareto_front = multi_objective_optimize(
+            converters,
+            objectives: [
+                "maximize_system_efficiency",
+                "minimize_total_cost",
+                "minimize_total_size",
+                "minimize_emi_interactions"
+            ],
+            constraints: system_constraints,
+            algorithm: "NSGA-II"  // Good for multi-objective
+        );
+        
+        // Select best compromise
+        best_design = select_from_pareto(pareto_front, weights: {
+            efficiency: 0.4,
+            cost: 0.3,
+            size: 0.2,
+            emi: 0.1
+        });
+        
+        return best_design;
+    }
+    
+    // Analyze coupling between converters
+    function analyze_coupling(converters: Converter[]) -> CouplingMatrix {
+        coupling = {};
+        
+        // Power coupling (shared input/output)
+        for (c1, c2) in converters.pairs() {
+            if (shares_input(c1, c2)) {
+                coupling[c1, c2].power = "high";
+            }
+            if (cascaded(c1, c2)) {
+                coupling[c1, c2].power = "very_high";
+            }
+        }
+        
+        // EMI coupling (frequency harmonics)
+        for (c1, c2) in converters.pairs() {
+            harmonics = find_harmonic_conflicts(c1.f_sw, c2.f_sw);
+            if (harmonics.length > 0) {
+                coupling[c1, c2].emi = "high";
+                coupling[c1, c2].problematic_frequencies = harmonics;
+            }
+        }
+        
+        // Thermal coupling (physical proximity)
+        for (c1, c2) in converters.pairs() {
+            if (physically_close(c1, c2)) {
+                coupling[c1, c2].thermal = "medium";
+            }
+        }
+        
+        return coupling;
+    }
+    
+    // Multi-objective optimization using NSGA-II
+    function multi_objective_optimize(
+        converters: Converter[],
+        objectives: string[],
+        constraints: SystemConstraints,
+        algorithm: string
+    ) -> ParetoFront {
+        
+        // Initialize population
+        population_size = 100;
+        population = generate_initial_population(converters, population_size);
+        
+        for generation in 0..50 {
+            // Evaluate all individuals
+            for individual in population {
+                // Simulate system with these parameters
+                results = simulate_system(converters, individual.parameters);
+                
+                // Calculate objective values
+                individual.objectives = {
+                    efficiency: results.system_efficiency,
+                    cost: calculate_total_cost(individual),
+                    size: calculate_total_size(individual),
+                    emi: results.emi_score,
+                };
+                
+                // Check constraint violations
+                individual.feasible = check_all_constraints(results, constraints);
+            }
+            
+            // Non-dominated sorting
+            fronts = non_dominated_sort(population);
+            
+            // Check convergence
+            if (pareto_converged(fronts[0])) {
+                break;
+            }
+            
+            // Selection, crossover, mutation
+            new_population = [];
+            
+            while (new_population.size < population_size) {
+                parents = tournament_selection(population, 2);
+                children = crossover(parents);
+                mutate(children);
+                new_population.extend(children);
+            }
+            
+            population = new_population;
+        }
+        
+        return fronts[0];  // Return Pareto front
+    }
+}
+
+// System-level constraints
+type SystemConstraints = {
+    max_input_current: current,
+    min_system_efficiency: float,
+    max_total_cost: float,
+    max_board_area: float,
+    max_temperature_rise: temperature,
+    emi_limits: map<frequency, float>,
+};
+
+// Thermal co-simulation
+module ThermalCoSimulation {
+    
+    // Simulate thermal interactions between converters
+    function thermal_simulation(
+        converters: Converter[],
+        pcb_layout: Layout
+    ) -> ThermalResult {
+        
+        // Calculate power dissipation for each converter
+        power_map = {};
+        
+        for converter in converters {
+            losses = calculate_losses(converter);
+            power_map[converter.position] = losses;
+        }
+        
+        // Solve thermal network
+        thermal_model = {
+            // Thermal resistances
+            junction_to_case: converters.map(c => c.thermal_resistance.jc),
+            case_to_board: converters.map(c => c.thermal_resistance.cb),
+            board_to_ambient: pcb_layout.thermal_resistance,
+            
+            // Thermal coupling between components
+            coupling_matrix: calculate_thermal_coupling(pcb_layout),
+        };
+        
+        // Steady-state thermal solution
+        temperatures = solve_thermal_network(thermal_model, power_map);
+        
+        // Check for thermal runaway
+        for converter in converters {
+            if (temperatures[converter] > converter.max_junction_temp) {
+                return {
+                    status: "THERMAL_VIOLATION",
+                    problem: f"{converter.name} exceeds max temp",
+                    suggestion: "Reduce power or improve cooling",
+                };
+            }
+        }
+        
+        return {
+            status: "OK",
+            temperatures: temperatures,
+            hotspot: max(temperatures),
+            margin: min(converters.map(c => c.max_temp - temperatures[c])),
+        };
+    }
+}
+
+// EMI co-simulation
+module EMICoSimulation {
+    
+    // Check for EMI interactions between switching converters
+    function emi_analysis(converters: Converter[]) -> EMIResult {
+        
+        // Collect switching frequencies
+        frequencies = converters.map(c => c.f_sw);
+        
+        // Find problematic interactions
+        issues = [];
+        
+        for (f1, f2) in frequencies.pairs() {
+            // Check for beat frequencies
+            beat_freq = abs(f1 - f2);
+            if (beat_freq < 20kHz) {  // Audible range
+                issues.push({
+                    type: "audible_beat",
+                    frequency: beat_freq,
+                    severity: "high",
+                });
+            }
+            
+            // Check for harmonics overlap
+            for n in 1..10 {
+                if (abs(n * f1 - f2) < 10kHz) {
+                    issues.push({
+                        type: "harmonic_overlap",
+                        harmonic: n,
+                        severity: "medium",
+                    });
+                }
+            }
+        }
+        
+        // Suggest frequency adjustments
+        if (issues.length > 0) {
+            new_frequencies = optimize_frequency_plan(frequencies, issues);
+            
+            return {
+                status: "ISSUES_FOUND",
+                issues: issues,
+                suggested_frequencies: new_frequencies,
+            };
+        }
+        
+        return {status: "OK"};
+    }
+    
+    // Optimize switching frequencies to minimize interference
+    function optimize_frequency_plan(
+        current_frequencies: frequency[],
+        issues: EMIIssue[]
+    ) -> frequency[] {
+        
+        // Use prime number ratios to avoid harmonics
+        prime_ratios = [1.0, 1.13, 1.37, 1.61, 1.97, 2.29];
+        
+        base_freq = 1MHz;  // Start from a base
+        
+        new_frequencies = [];
+        for (i, ratio) in prime_ratios.enumerate() {
+            if (i < current_frequencies.length) {
+                new_freq = base_freq * ratio;
+                
+                // Adjust to stay within ±20% of original
+                original = current_frequencies[i];
+                new_freq = clamp(new_freq, original * 0.8, original * 1.2);
+                
+                new_frequencies.push(new_freq);
+            }
+        }
+        
+        return new_frequencies;
+    }
+}
+
+// Export multi-converter optimization
+export {
+    MultiRailPowerSystem,
+    CoupledSystemOptimizer,
+    ThermalCoSimulation,
+    EMICoSimulation
+};

@@ -364,6 +364,12 @@ impl<'t> Parser<'t> {
     
     // Parse module metadata (@attributes)
     fn parse_module_metadata(&mut self) {
+        // First, try parsing simulation annotations
+        if self.parse_simulation_annotation() {
+            return; // Successfully parsed a simulation annotation
+        }
+        
+        // Otherwise, parse as regular attribute
         self.expect(SyntaxKind::AT);
         self.expect(SyntaxKind::IDENT); // Attribute name
         self.expect(SyntaxKind::EQ);

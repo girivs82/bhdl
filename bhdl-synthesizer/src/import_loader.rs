@@ -3,7 +3,7 @@ use std::path::Path;
 use std::fs;
 use anyhow::{Result, Context};
 use bhdl_parser::parse;
-use bhdl_ast::{SourceFile, AstNode, Module, ImportStmt, HasName, PinDecl};
+use bhdl_ast::{SourceFile, AstNode, Module, ImportStmt, HasName, PinDecl, Item};
 use log::info;
 
 /// Handles loading and parsing imported modules from BHDL files
@@ -92,12 +92,67 @@ impl ImportLoader {
         self.loaded_source_files.insert(file_path.clone(), source_file.clone());
         info!("Stored source file AST for: {}", file_path);
         
-        // Extract the requested modules
+        // First, extract all modules from the file
+        let mut file_modules = HashMap::new();
+        for module in source_file.modules() {
+            if let Some(name) = module.name() {
+                let module_name = name.text().to_string();
+                file_modules.insert(module_name.clone(), module.clone());
+            }
+        }
+        
+        // Then, process aliases to find what modules map to requested names
+        // Look for alias statements in the source file by checking all children
+        // (source_file.items() might not include aliases)
+        for child in source_file.syntax().children() {
+            if child.kind() == bhdl_parser::SyntaxKind::ALIAS {
+                // Parse the alias by extracting the relevant tokens
+                let mut alias_name = String::new();
+                let mut target_name = String::new();
+                let mut found_eq = false;
+                
+                for token in child.children_with_tokens() {
+                    if let Some(t) = token.as_token() {
+                        match t.kind() {
+                            bhdl_parser::SyntaxKind::IDENT => {
+                                if !found_eq && alias_name.is_empty() {
+                                    alias_name = t.text().to_string();
+                                } else if found_eq && target_name.is_empty() {
+                                    target_name = t.text().to_string();
+                                }
+                            },
+                            bhdl_parser::SyntaxKind::EQ => {
+                                found_eq = true;
+                            },
+                            _ => {}
+                        }
+                    }
+                }
+                
+                if !alias_name.is_empty() && !target_name.is_empty() {
+                    println!("IMPORT_LOADER: Parsed alias: {} -> {}", alias_name, target_name);
+                    
+                    // If the alias name is requested, load the target module
+                    if module_names.contains(&alias_name) {
+                        if let Some(target_module) = file_modules.get(&target_name) {
+                            println!("IMPORT_LOADER: Found alias {} -> {} (LOADING)", alias_name, target_name);
+                            self.loaded_modules.insert(alias_name, target_module.clone());
+                        } else {
+                            println!("IMPORT_LOADER: Target module {} not found for alias {}", target_name, alias_name);
+                        }
+                    } else {
+                        println!("IMPORT_LOADER: Alias {} not in requested modules {:?}", alias_name, module_names);
+                    }
+                }
+            }
+        }
+        
+        // Finally, load directly requested modules (not aliases)
         for module in source_file.modules() {
             if let Some(name) = module.name() {
                 let module_name = name.text().to_string();
                 
-                // Check if this module was requested
+                // Check if this module was requested directly
                 if module_names.contains(&module_name) {
                     println!("IMPORT_LOADER: Found requested module: {}", module_name);
                     self.loaded_modules.insert(module_name, module.clone());

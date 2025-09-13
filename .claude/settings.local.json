@@ -326,7 +326,13 @@
       "Bash(RUST_LOG=info cargo run --bin end_to_end_test -- test_visualization_advanced_syntax.bhdl)",
       "Bash(RUST_LOG=info cargo run -p bhdl-visualizer --bin test_semantic_visualizer)",
       "Bash(timeout 30s cargo run --bin end_to_end_test)",
-      "Bash(xargs -I {} cargo run -p bhdl-parser --bin test_v2_parser {})"
+      "Bash(xargs -I {} cargo run -p bhdl-parser --bin test_v2_parser {})",
+      "Bash(./target/debug/test_behavioral_model_parsing:*)",
+      "Bash(timeout 10 cargo build -p bhdl-synthesizer --lib)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin test_real_simulation_integration)",
+      "Bash(RUST_LOG=warn cargo run -p bhdl-synthesizer --bin test_real_simulation_integration)",
+      "Bash(./target/debug/test_real_simulation_integration)",
+      "Bash(./target/debug/test_buck_optimization)"
     ],
     "deny": []
   }

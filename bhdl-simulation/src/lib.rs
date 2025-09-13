@@ -14,6 +14,8 @@ pub mod coordinator;
 pub mod config;
 pub mod results;
 pub mod fault_injection;
+pub mod engine;
+pub mod optimization;
 
 pub use config::{SimulationConfig, SolverType};
 pub use coordinator::SimulationCoordinator;
@@ -25,6 +27,26 @@ pub use verification::{Assertion, Measurement};
 pub use fault_injection::{
     FaultInjection, FaultType, FaultTarget, FaultCondition,
     FaultInjectionManager, ComponentFaultBehavior
+};
+
+// Component-embedded simulation exports
+pub use engine::{
+    SimulationEngine,
+    SimulationLevel,
+    ModelMetadata,
+    DesignParameters,
+    SimulationResult as ComponentSimResult,
+    OptimizationResult,
+};
+
+pub use optimization::{
+    GridSearchOptimizer,
+    NelderMeadOptimizer,
+    Objective,
+    OptimizationGoal,
+    Constraint,
+    ConstraintCondition,
+    OptimizationConfig,
 };
 
 /// Simulation error type

@@ -1,0 +1,128 @@
+// Example: USB-Powered Device with Simulation-Driven Optimization
+// This demonstrates how behavioral models embedded in components
+// drive automatic optimization of the design
+
+board USBDevice {
+    // Power input from USB
+    power USB_5V = 5V @ 500mA;
+    ground GND;
+    
+    // The buck converter module contains embedded intelligence
+    module PowerSupply(
+        vin: voltage = 5V,
+        vout: voltage = 3.3V,
+        iout_max: current = 200mA
+    ) {
+        pin VIN: power in;
+        pin VOUT: power out;
+        pin GND: ground;
+        
+        // Behavioral models tell the synthesizer how to simulate
+        @behavioral_model analytical {
+            model_type: "buck_equations",
+            L_critical: "(vin - vout) * vout / (vin * 0.3 * iout_max * fsw)",
+            C_min: "iout_max * 0.3 / (8 * fsw * vout_ripple)",
+            efficiency: "0.95 - 0.02 * (vin/vout - 1)",
+            runtime: 1ms,
+            accuracy: 0.75,
+        }
+        
+        @behavioral_model control_loop {
+            model_type: "state_space_averaged",
+            transfer_function: "Gvd * Hfb * Gc",
+            phase_margin: "180 - angle(loop_gain @ fc)",
+            crossover_freq: "fc where |loop_gain| = 1",
+            runtime: 100ms,
+            accuracy: 0.90,
+        }
+        
+        @behavioral_model switching {
+            model_type: "simplified_switching",
+            switching_freq: 500kHz,
+            duty_cycle: "vout / vin",
+            conduction_losses: "I²R",
+            switching_losses: "0.5 * V * I * (tr + tf) * fsw",
+            runtime: 5s,
+            accuracy: 0.95,
+        }
+        
+        // Optimization strategy guides the synthesizer
+        @optimization_strategy {
+            objectives: [
+                "minimize: total_size",
+                "maximize: efficiency",
+                "target: phase_margin = 60°",
+            ],
+            constraints: [
+                "output_ripple < 50mV",
+                "crossover_frequency > fsw/10",
+                "temperature_rise < 20°C",
+            ],
+            search_method: "progressive_refinement",
+            initial_model: "analytical",
+            refinement_model: "control_loop",
+            verification_model: "switching",
+        }
+        
+        // Component knowledge encodes design expertise
+        @component_knowledge {
+            inductor_selection: "Use ferrite core for fsw > 100kHz",
+            capacitor_type: "Ceramic X7R for low ESR",
+            layout_hint: "Keep feedback trace away from switch node",
+            thermal: "Add thermal vias under switch IC",
+        }
+        
+        // The actual circuit topology
+        // Values will be optimized by simulation feedback
+        net input_filter: VIN -> C_in: Cap(TBD).1 -> C_in.2 -> GND;
+        
+        net switch: @VIN -> Q1: MOSFET(TBD).D -> Q1.S -> sw_node;
+        net freewheeling: GND -> D1: Diode(Schottky).A -> D1.C -> @sw_node;
+        
+        net output_filter: @sw_node -> L1: Inductor(TBD).1 -> L1.2 -> vout_raw;
+        net output_cap: @vout_raw -> C_out: Cap(TBD).1 -> C_out.2 -> GND;
+        
+        net feedback: @vout_raw -> R_fb1: Res(TBD).1 -> R_fb1.2 -> fb;
+        net fb_divider: @fb -> R_fb2: Res(TBD).1 -> R_fb2.2 -> GND;
+        
+        net compensation: @fb -> R_comp: Res(TBD).1 -> R_comp.2 -> comp;
+        net comp_cap: @comp -> C_comp: Cap(TBD).1 -> C_comp.2 -> GND;
+        
+        net output: @vout_raw -> VOUT;
+    }
+    
+    // Instantiate the intelligent power supply
+    net power: USB_5V -> supply: PowerSupply(
+        vin: 5V,
+        vout: 3.3V,
+        iout_max: 200mA
+    ).VIN;
+    
+    net ground: GND -> supply.GND;
+    net vcc_3v3: supply.VOUT -> @VCC_3V3;
+    
+    // The rest of the circuit uses the optimized power
+    net mcu_power: @VCC_3V3 -> mcu: MCU(STM32F0).VDD;
+    net mcu_gnd: GND -> mcu.VSS;
+    
+    // Decoupling caps (values also optimized)
+    net decoupling: @VCC_3V3 -> C_decouple: Cap(TBD).1 -> C_decouple.2 -> GND;
+}
+
+// When this design is synthesized:
+// 1. Parser extracts behavioral models from PowerSupply
+// 2. Synthesizer creates initial netlist with TBD values
+// 3. Simulation engine runs analytical model (1ms)
+// 4. Grid search optimizer finds optimal L and C values
+// 5. Control loop model verifies stability (100ms)
+// 6. Nelder-Mead optimizes compensation network
+// 7. Switching model verifies final design (5s)
+// 8. Component database selects real parts
+// 9. Final netlist has all TBD values replaced with optimal choices
+
+// The result: A fully optimized power supply design that:
+// - Meets all electrical requirements
+// - Uses minimal board space
+// - Has verified stability margins
+// - Selected real purchasable components
+// - Took seconds instead of hours to design

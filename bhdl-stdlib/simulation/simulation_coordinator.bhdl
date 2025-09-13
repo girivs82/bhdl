@@ -1,0 +1,558 @@
+// Simulation Coordinator - Orchestrates Multi-Level Optimization
+// Manages the complete simulation-driven synthesis process
+
+import { SimulationLevel, BehavioralModel, OptimizationStrategy } from "./simulation_models.bhdl";
+import { OptimizationAlgorithm, GridSearchOptimizer, NelderMeadOptimizer } from "./optimization_algorithms.bhdl";
+import { BuckConverter } from "../power/buck_converter_complete.bhdl";
+
+// Coordinator configuration
+type CoordinatorConfig = {
+    parallel_simulations: int,     // Max parallel simulation instances
+    cache_results: bool,           // Cache simulation results
+    adaptive_algorithms: bool,     // Allow algorithm switching
+    progressive_refinement: bool,  // Start coarse, refine progressively
+    early_termination: bool,       // Stop if good enough solution found
+}
+
+// Simulation cache for avoiding redundant calculations
+type SimulationCache = {
+    entries: map<string, CacheEntry>,
+    max_size: int,
+    hit_rate: float,
+    
+    function get(key: string) -> SimulationResult? {
+        if (this.entries.contains(key)) {
+            entry = this.entries[key];
+            entry.access_count++;
+            entry.last_access = now();
+            return entry.result;
+        }
+        return null;
+    }
+    
+    function put(key: string, result: SimulationResult) {
+        if (this.entries.size >= this.max_size) {
+            // Evict least recently used
+            evict_lru();
+        }
+        
+        this.entries[key] = CacheEntry {
+            result: result,
+            creation_time: now(),
+            last_access: now(),
+            access_count: 1,
+        };
+    }
+}
+
+// Main simulation coordinator
+module SimulationCoordinator {
+    config: CoordinatorConfig;
+    cache: SimulationCache;
+    active_simulations: map<string, SimulationInstance>;
+    
+    // Initialize coordinator
+    function initialize(config: CoordinatorConfig = default_config()) {
+        this.config = config;
+        this.cache = SimulationCache {
+            entries: {},
+            max_size: 1000,
+            hit_rate: 0.0,
+        };
+        this.active_simulations = {};
+    }
+    
+    // Main optimization entry point
+    function optimize_design(
+        component: Component,
+        requirements: Requirements
+    ) -> OptimizationResult {
+        
+        start_time = now();
+        
+        println("=== SIMULATION-DRIVEN SYNTHESIS ===");
+        println(f"Component: {component.name}");
+        println(f"Requirements: {requirements}");
+        println("");
+        
+        // Phase 1: Strategy Analysis
+        strategy = analyze_optimization_strategy(component, requirements);
+        println(f"Strategy: {strategy.phases.length} phases identified");
+        
+        // Phase 2: Progressive Optimization
+        current_design = get_initial_design(component);
+        phase_results = [];
+        
+        for (i, phase) in strategy.phases.enumerate() {
+            println(f"\n--- Phase {i+1}: {phase.name} ---");
+            
+            // Select simulation model
+            model = select_model_for_phase(component, phase);
+            println(f"Model: {model.metadata.name} (Level {model.metadata.level})");
+            
+            // Run optimization
+            if (this.config.progressive_refinement && i > 0) {
+                // Use previous result as starting point
+                phase.initial_design = current_design;
+            }
+            
+            phase_result = execute_phase(
+                model,
+                phase,
+                current_design
+            );
+            
+            phase_results.push(phase_result);
+            current_design = phase_result.best_design;
+            
+            // Check early termination
+            if (this.config.early_termination) {
+                if (exceeds_requirements(phase_result, requirements)) {
+                    println("Early termination: Requirements exceeded!");
+                    break;
+                }
+            }
+            
+            // Report phase results
+            print_phase_summary(phase_result);
+        }
+        
+        // Phase 3: Final Verification
+        println("\n--- Final Verification ---");
+        verification = verify_final_design(component, current_design, requirements);
+        
+        // Compile results
+        return OptimizationResult {
+            final_design: current_design,
+            phase_results: phase_results,
+            verification: verification,
+            total_runtime: now() - start_time,
+            cache_hit_rate: this.cache.hit_rate,
+        };
+    }
+    
+    // Execute a single optimization phase
+    function execute_phase(
+        model: BehavioralModel,
+        phase: OptimizationPhase,
+        initial_design: Design
+    ) -> PhaseResult {
+        
+        phase_start = now();
+        
+        // Select algorithm
+        algorithm = select_algorithm(phase, model);
+        
+        // Initialize optimizer
+        optimizer = create_optimizer(algorithm, phase);
+        
+        // Optimization loop
+        state = OptimizationState {
+            iteration: 0,
+            best_design: initial_design,
+            best_score: -infinity,
+            history: [],
+            convergence_metric: 1.0,
+            runtime: 0s,
+        };
+        
+        while (!converged(state, phase.convergence_criteria)) {
+            state.iteration++;
+            
+            // Generate candidate designs
+            candidates = generate_candidates(optimizer, state, phase.parameters);
+            
+            // Evaluate candidates (potentially in parallel)
+            results = evaluate_candidates(model, candidates, phase);
+            
+            // Update state
+            for (candidate, result) in zip(candidates, results) {
+                if (result.score > state.best_score) {
+                    state.best_design = candidate;
+                    state.best_score = result.score;
+                }
+                
+                state.history.push(IterationHistory {
+                    iteration: state.iteration,
+                    parameters: candidate.parameters,
+                    objectives: result.objectives,
+                    constraints_met: result.constraints_met,
+                    score: result.score,
+                    model_used: model.metadata.level,
+                });
+            }
+            
+            // Update convergence metric
+            state.convergence_metric = calculate_convergence_metric(state.history);
+            state.runtime = now() - phase_start;
+            
+            // Adaptive algorithm switching
+            if (this.config.adaptive_algorithms && state.iteration % 10 == 0) {
+                new_algorithm = suggest_algorithm_switch(algorithm, state);
+                if (new_algorithm != null) {
+                    println(f"Switching algorithm: {algorithm} → {new_algorithm}");
+                    algorithm = new_algorithm;
+                    optimizer = create_optimizer(algorithm, phase);
+                }
+            }
+            
+            // Progress reporting
+            if (state.iteration % 5 == 0) {
+                println(f"  Iteration {state.iteration}: Best score = {state.best_score:.3f}");
+            }
+        }
+        
+        return PhaseResult {
+            phase_name: phase.name,
+            best_design: state.best_design,
+            best_score: state.best_score,
+            iterations: state.iteration,
+            runtime: state.runtime,
+            convergence_reason: get_convergence_reason(state, phase.convergence_criteria),
+        };
+    }
+    
+    // Parallel candidate evaluation
+    function evaluate_candidates(
+        model: BehavioralModel,
+        candidates: Design[],
+        phase: OptimizationPhase
+    ) -> EvaluationResult[] {
+        
+        if (this.config.parallel_simulations > 1 && candidates.length > 1) {
+            // Parallel evaluation
+            return parallel_map(candidates, candidate => {
+                evaluate_single_candidate(model, candidate, phase)
+            }, max_parallel=this.config.parallel_simulations);
+        } else {
+            // Sequential evaluation
+            return candidates.map(candidate =>
+                evaluate_single_candidate(model, candidate, phase)
+            );
+        }
+    }
+    
+    // Evaluate a single design candidate
+    function evaluate_single_candidate(
+        model: BehavioralModel,
+        design: Design,
+        phase: OptimizationPhase
+    ) -> EvaluationResult {
+        
+        // Check cache first
+        cache_key = create_cache_key(model, design, phase);
+        cached = this.cache.get(cache_key);
+        if (cached != null) {
+            return cached;
+        }
+        
+        // Run simulation based on model level
+        simulation_result = match model.metadata.level {
+            SimulationLevel.ANALYTICAL => {
+                // Fast analytical evaluation
+                evaluate_analytical_model(model, design)
+            },
+            SimulationLevel.BEHAVIORAL => {
+                // Behavioral simulation
+                simulate_behavioral_model(model, design)
+            },
+            SimulationLevel.SWITCHING_SIMPLE => {
+                // Simplified switching simulation
+                simulate_switching_model(model, design, simplified=true)
+            },
+            SimulationLevel.SWITCHING_FULL => {
+                // Full SPICE simulation
+                simulate_full_spice(model, design)
+            },
+        };
+        
+        // Calculate objectives
+        objectives = {};
+        for objective in phase.objectives {
+            objectives[objective.metric] = extract_metric(simulation_result, objective.metric);
+        }
+        
+        // Check constraints
+        constraints_met = true;
+        constraint_violations = [];
+        
+        for constraint in phase.constraints {
+            value = extract_metric(simulation_result, constraint.metric);
+            met = evaluate_constraint(value, constraint);
+            
+            if (!met) {
+                constraints_met = false;
+                constraint_violations.push({
+                    constraint: constraint,
+                    actual_value: value,
+                    violation_amount: calculate_violation(value, constraint),
+                });
+            }
+        }
+        
+        // Calculate overall score
+        score = calculate_score(objectives, phase.objectives, constraint_violations);
+        
+        result = EvaluationResult {
+            design: design,
+            objectives: objectives,
+            constraints_met: constraints_met,
+            constraint_violations: constraint_violations,
+            score: score,
+            simulation_time: simulation_result.runtime,
+        };
+        
+        // Cache the result
+        this.cache.put(cache_key, result);
+        
+        return result;
+    }
+    
+    // Model selection based on phase requirements
+    function select_model_for_phase(
+        component: Component,
+        phase: OptimizationPhase
+    ) -> BehavioralModel {
+        
+        available_models = component.@behavioral_model;
+        
+        // Filter models by required level
+        suitable_models = available_models.filter(m =>
+            m.metadata.level == phase.model_level
+        );
+        
+        if (suitable_models.length == 0) {
+            // Fall back to closest available level
+            suitable_models = find_closest_level_models(available_models, phase.model_level);
+        }
+        
+        // Select based on phase requirements
+        for model in suitable_models {
+            if (model_meets_requirements(model, phase)) {
+                return model;
+            }
+        }
+        
+        // Default to first suitable model
+        return suitable_models[0];
+    }
+    
+    // Final design verification
+    function verify_final_design(
+        component: Component,
+        design: Design,
+        requirements: Requirements
+    ) -> VerificationResult {
+        
+        println("Running final verification tests...");
+        
+        test_results = [];
+        
+        // Run all test sequences
+        for test in component.@test_sequences {
+            println(f"  Test: {test.name}");
+            
+            // Select highest fidelity model for verification
+            model = select_verification_model(component);
+            
+            // Run test
+            result = run_test_sequence(model, design, test);
+            test_results.push(result);
+            
+            // Report result
+            if (result.passed) {
+                println(f"    ✓ PASSED");
+            } else {
+                println(f"    ✗ FAILED: {result.failure_reason}");
+            }
+        }
+        
+        // Check all requirements
+        requirements_met = check_all_requirements(design, requirements, test_results);
+        
+        return VerificationResult {
+            all_tests_passed: test_results.all(r => r.passed),
+            requirements_met: requirements_met,
+            test_results: test_results,
+            final_metrics: extract_final_metrics(test_results),
+        };
+    }
+}
+
+// Intelligent model selection
+module ModelSelector {
+    
+    // Select model based on analysis context
+    function select_model(
+        available_models: BehavioralModel[],
+        analysis_type: string,
+        time_budget: duration?,
+        accuracy_requirement: float
+    ) -> BehavioralModel {
+        
+        // Score each model
+        model_scores = {};
+        
+        for model in available_models {
+            score = 0.0;
+            
+            // Check if model supports analysis type
+            if (!model_supports_analysis(model, analysis_type)) {
+                continue;
+            }
+            
+            // Time budget factor
+            if (time_budget != null) {
+                if (model.metadata.typical_runtime <= time_budget) {
+                    score += 1.0;
+                } else {
+                    score -= (model.metadata.typical_runtime - time_budget) / time_budget;
+                }
+            }
+            
+            // Accuracy factor
+            score += model.metadata.accuracy * 2.0;
+            
+            // Penalize if below accuracy requirement
+            if (model.metadata.accuracy < accuracy_requirement) {
+                score -= 5.0;
+            }
+            
+            model_scores[model] = score;
+        }
+        
+        // Return highest scoring model
+        return model_scores.max_by(kv => kv.value).key;
+    }
+    
+    // Progressive model refinement
+    function suggest_model_progression(
+        component: Component,
+        phases: OptimizationPhase[]
+    ) -> map<string, BehavioralModel> {
+        
+        progression = {};
+        
+        for phase in phases {
+            if (phase.name.contains("initial") || phase.name.contains("sizing")) {
+                // Use fastest model for initial exploration
+                progression[phase.name] = select_fastest_model(component);
+                
+            } else if (phase.name.contains("control") || phase.name.contains("stability")) {
+                // Use averaged model for control analysis
+                progression[phase.name] = select_averaged_model(component);
+                
+            } else if (phase.name.contains("verify") || phase.name.contains("final")) {
+                // Use highest fidelity for verification
+                progression[phase.name] = select_highest_fidelity_model(component);
+                
+            } else {
+                // Default: balance speed and accuracy
+                progression[phase.name] = select_balanced_model(component);
+            }
+        }
+        
+        return progression;
+    }
+}
+
+// Result compilation and reporting
+module ResultCompiler {
+    
+    // Generate optimization report
+    function generate_report(result: OptimizationResult) -> Report {
+        
+        report = Report {
+            summary: generate_summary(result),
+            phase_details: result.phase_results.map(p => format_phase_result(p)),
+            final_design: format_design(result.final_design),
+            performance_metrics: extract_performance_metrics(result),
+            convergence_analysis: analyze_convergence(result),
+            recommendations: generate_recommendations(result),
+        };
+        
+        return report;
+    }
+    
+    // Generate design recommendations
+    function generate_recommendations(result: OptimizationResult) -> string[] {
+        recommendations = [];
+        
+        // Check for marginal specifications
+        for metric in result.verification.final_metrics {
+            margin = calculate_margin(metric);
+            if (margin < 0.1) {  // Less than 10% margin
+                recommendations.push(
+                    f"Consider increasing margin for {metric.name}: Currently {margin*100:.1f}%"
+                );
+            }
+        }
+        
+        // Check for optimization difficulties
+        total_iterations = result.phase_results.sum(p => p.iterations);
+        if (total_iterations > 100) {
+            recommendations.push(
+                "Optimization required many iterations. Consider relaxing constraints or providing better initial values."
+            );
+        }
+        
+        // Check cache efficiency
+        if (result.cache_hit_rate < 0.1) {
+            recommendations.push(
+                "Low cache hit rate. Consider coarser initial grid for better cache utilization."
+            );
+        }
+        
+        return recommendations;
+    }
+    
+    // Format results for display
+    function print_summary(result: OptimizationResult) {
+        println("\n" + "="*60);
+        println("        OPTIMIZATION COMPLETE");
+        println("="*60);
+        
+        println("\nFinal Design:");
+        for (param, value) in result.final_design.parameters {
+            println(f"  {param}: {format_value(value)}");
+        }
+        
+        println("\nPerformance Achieved:");
+        for metric in result.verification.final_metrics {
+            status = metric.meets_spec ? "✓" : "✗";
+            println(f"  {status} {metric.name}: {metric.value} (spec: {metric.specification})");
+        }
+        
+        println("\nOptimization Statistics:");
+        println(f"  Total runtime: {result.total_runtime}");
+        println(f"  Total iterations: {result.phase_results.sum(p => p.iterations)}");
+        println(f"  Cache hit rate: {result.cache_hit_rate*100:.1f}%");
+        
+        println("\nPhase Breakdown:");
+        for phase_result in result.phase_results {
+            println(f"  {phase_result.phase_name}:");
+            println(f"    Iterations: {phase_result.iterations}");
+            println(f"    Runtime: {phase_result.runtime}");
+            println(f"    Convergence: {phase_result.convergence_reason}");
+        }
+        
+        if (result.verification.all_tests_passed) {
+            println("\n✅ ALL VERIFICATION TESTS PASSED");
+        } else {
+            println("\n⚠️ SOME VERIFICATION TESTS FAILED");
+            for test in result.verification.test_results {
+                if (!test.passed) {
+                    println(f"  Failed: {test.name} - {test.failure_reason}");
+                }
+            }
+        }
+    }
+}
+
+// Export modules
+export {
+    SimulationCoordinator,
+    ModelSelector,
+    ResultCompiler,
+    CoordinatorConfig
+};

@@ -1,0 +1,118 @@
+// Buck Converter Module with Embedded Behavioral Models
+// This demonstrates how optimization requirements come from the component library
+
+module BuckConverter(
+    vin_nom: voltage,
+    vout_target: voltage,
+    iout_max: current,
+    fsw: frequency = 500kHz
+) {
+    pin VIN: power in;
+    pin VOUT: power out;
+    pin GND: ground;
+    pin EN: signal in;
+    pin FB: signal out;
+    
+    // Behavioral models define how to simulate this component
+    @behavioral_model analytical {
+        model_type: "buck_analytical",
+        // Critical inductance calculation
+        L_critical: "(vin_nom - vout_target) * vout_target / (vin_nom * 0.3 * iout_max * fsw)",
+        // Minimum capacitance for ripple
+        C_min: "0.3 * iout_max / (8 * fsw * 0.01 * vout_target)",
+        // Efficiency estimation
+        efficiency: "0.95 - 0.02 * (vin_nom/vout_target - 1) - 0.01 * (iout_max/5)",
+        // Simulation runtime
+        runtime: 1ms,
+        accuracy: 0.75,
+    }
+    
+    @behavioral_model state_space {
+        model_type: "averaged_state_space",
+        // Small signal transfer functions
+        Gvd: "vout_target/vin_nom * (1 + s*L/R) / (1 + s*L/R + s²*L*C)",
+        Gvi: "R * (1 - D) / (1 + s*L/R + s²*L*C)",
+        // Loop gain calculation
+        loop_gain: "Gvd * Hfb * Gc",
+        phase_margin: "180 - angle(loop_gain @ fc)",
+        crossover_freq: "fc where |loop_gain| = 1",
+        runtime: 100ms,
+        accuracy: 0.90,
+    }
+    
+    @behavioral_model switching {
+        model_type: "simplified_switching",
+        switching_frequency: fsw,
+        duty_cycle: "vout_target / vin_nom",
+        conduction_losses: "iout² * (Ron_hs * D + Ron_ls * (1-D))",
+        switching_losses: "0.5 * vin_nom * iout * (tr + tf) * fsw",
+        core_losses: "Kc * B^2.4 * fsw^1.2 * Vcore",
+        runtime: 5s,
+        accuracy: 0.95,
+    }
+    
+    // THIS IS WHERE OPTIMIZATION REQUIREMENTS COME FROM - NOT HARDCODED!
+    @optimization_strategy {
+        // Target specifications (from datasheet/design requirements)
+        target_efficiency: 0.92,      // 92% efficiency target for this converter
+        min_phase_margin: 60,         // 60 degrees for good stability
+        max_crossover_freq: "fsw/10", // Crossover < fsw/10 for stability
+        
+        // Optimization objectives
+        objectives: [
+            "maximize: efficiency",
+            "minimize: total_size",
+            "minimize: cost",
+            "target: phase_margin = 60°",
+        ],
+        
+        // Hard constraints
+        constraints: [
+            "output_ripple < 0.01 * vout_target",  // 1% ripple
+            "phase_margin > 45°",                   // Minimum for stability
+            "crossover_frequency < fsw/10",         // Nyquist requirement
+            "temperature_rise < 40°C",              // Thermal limit
+        ],
+        
+        // Search strategy
+        search_method: "progressive_refinement",
+        initial_model: "analytical",
+        refinement_model: "state_space",
+        verification_model: "switching",
+    }
+    
+    // Component selection knowledge
+    @component_knowledge {
+        // Inductor selection rules
+        inductor_selection: {
+            core_material: "fsw > 200kHz ? Ferrite : Iron_Powder",
+            current_rating: "1.3 * iout_max",  // 30% derating
+            dcr_max: "0.05 * vout_target / iout_max",  // Max 5% loss
+        },
+        
+        // Capacitor selection rules
+        capacitor_selection: {
+            type: "fsw > 100kHz ? Ceramic_X7R : Electrolytic",
+            voltage_rating: "1.5 * max(vin_nom, vout_target * 1.2)",
+            esr_max: "0.01 * vout_target / iout_max",
+        },
+        
+        // MOSFET selection
+        mosfet_selection: {
+            vds_rating: "1.5 * vin_nom",
+            id_rating: "2 * iout_max",
+            rds_on_max: "0.01 * vout_target / iout_max",
+        },
+        
+        // Layout guidelines
+        layout_hints: [
+            "Keep SW node area minimal",
+            "Place input caps close to FETs",
+            "Separate power and signal grounds",
+            "Use thermal vias under FETs",
+        ],
+    }
+    
+    // The actual circuit implementation would go here
+    // Values marked as TBD will be optimized by the simulation engine
+}
