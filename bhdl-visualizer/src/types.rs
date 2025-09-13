@@ -6,7 +6,7 @@ use bhdl_synthesizer::DatabaseComponentInstance;
 use serde::{Serialize, Deserialize};
 
 /// 2D point for layout positioning
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Point {
     pub x: f64,
     pub y: f64,

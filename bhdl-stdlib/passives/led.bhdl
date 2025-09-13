@@ -22,14 +22,22 @@ module LED(color: string = "red", size: string = "5mm") {
         description="Positive terminal (Anode)",
         electrical_type="passive",
         drive_requirements=["current_limiting", "forward_biased"],
-        synthesis_hints=["needs_series_resistor", "current_source_preferred"]
+        synthesis_hints=["needs_series_resistor", "current_source_preferred"],
+        // Schematic visualization
+        schematic_side="top",
+        schematic_position=1,
+        schematic_label="A"
     );   // Anode (+)
     pin K: signal out @metadata(
         function="Cathode",
         description="Negative terminal (Cathode)", 
         electrical_type="passive",
         drive_requirements=["current_sink"],
-        synthesis_hints=["can_connect_to_ground", "can_connect_to_gpio_sink"]
+        synthesis_hints=["can_connect_to_ground", "can_connect_to_gpio_sink"],
+        // Schematic visualization
+        schematic_side="bottom",
+        schematic_position=1,
+        schematic_label="K"
     );  // Cathode (-)
     
     // LED parameters by color - kept local to this module
@@ -279,4 +287,103 @@ module LED(color: string = "red", size: string = "5mm") {
         connection_cathode="K",
         synthesis_trigger="high_power_led_drive"
     );
+    
+    // ==================== SCHEMATIC VISUALIZATION ====================
+    
+    // LED symbol appearance - different shapes based on color and type
+    attribute schematic_symbol = "led_with_arrows";  // Standard LED symbol with light rays
+    attribute schematic_width = 20;    // mm - compact diode symbol
+    attribute schematic_height = 25;   // mm - vertical orientation preferred
+    attribute schematic_label = color; // Show LED color
+    attribute schematic_label_position = "side"; // Color label to the side
+    attribute schematic_orientation = "vertical";  // Anode top, cathode bottom
+    
+    // Color-specific visual characteristics  
+    attribute led_color_indication = color;  // Color for symbol fill/outline
+    attribute symbol_fill_color = 
+        color == "red" ? "#FF4444" :
+        color == "green" ? "#44FF44" :
+        color == "blue" ? "#4444FF" :
+        color == "yellow" ? "#FFFF44" :
+        color == "white" ? "#FFFFFF" :
+        color == "ir" ? "#800080" :  // Purple for infrared
+        "#FF4444";  // Default red
+    
+    // LED-specific symbol features
+    attribute show_polarity = true;        // Always show anode/cathode markings
+    attribute show_light_rays = true;      // Show light emission arrows
+    attribute anode_marking = "triangle";  // Triangular anode symbol
+    attribute cathode_marking = "bar";     // Bar cathode symbol
+    attribute light_ray_count = 2;         // Two light ray arrows typical
+    
+    // Signal flow and placement - LEDs are usually outputs/indicators
+    attribute signal_flow = "current_sink"; // Current flows into LED
+    attribute functional_group = "indicators"; // Group with other status LEDs
+    attribute placement_priority = "medium";  // Place after main circuit components
+    
+    // Spacing preferences for indicator placement
+    attribute min_spacing_left = 3;    // Grid units - space from circuit
+    attribute min_spacing_right = 2;
+    attribute min_spacing_top = 2;
+    attribute min_spacing_bottom = 2;
+    
+    // Professional drawing conventions for LEDs
+    attribute drawing_style = "status_indicator";
+    attribute component_section = 
+        color == "red" ? "error_indicators" :
+        color == "green" ? "status_indicators" :
+        color == "yellow" ? "warning_indicators" :
+        color == "blue" ? "activity_indicators" :
+        "general_indicators";
+    
+    // Typical placement patterns for LEDs
+    attribute typical_placement = "bottom_right_status";  // Bottom right of schematic
+    attribute preferred_orientation = "vertical";         // Vertical standard for LEDs
+    attribute current_flow_direction = "top_to_bottom";   // Conventional current flow
+    
+    // Supporting component requirements - current limiting resistor
+    attribute requires_series_resistor = true;
+    attribute series_resistor_value = "(supply_voltage - forward_voltage) / forward_current";
+    attribute series_resistor_placement = "above_led";   // Resistor above LED
+    attribute resistor_to_led_spacing = 5;  // mm spacing
+    
+    // Routing and connection preferences
+    attribute trace_width = "normal";   // Normal width for LED currents
+    attribute trace_style = "straight"; // Simple straight connections
+    attribute connection_style = "direct";
+    
+    // Current and voltage display
+    attribute show_forward_voltage = true;     // Show Vf rating
+    attribute show_forward_current = true;     // Show nominal current
+    attribute show_max_current = false;        // Don't clutter unless high power
+    attribute show_color_wavelength = color == "ir";  // Show wavelength for IR
+    
+    // Power and thermal considerations
+    attribute show_power_dissipation = params.forward_current > 100mA;  // High power LEDs
+    attribute thermal_considerations = params.forward_current > 500mA;   // Need heatsinking
+    
+    // Package-specific visual hints
+    attribute size_indication = 
+        size == "3mm" ? "small_tht" :
+        size == "5mm" ? "standard_tht" :
+        size == "0603" ? "tiny_smd" :
+        size == "0805" ? "small_smd" :
+        size == "1206" ? "medium_smd" :
+        size == "smd" ? "smd_generic" :
+        "standard";
+    
+    // Special case visualization
+    attribute high_brightness_indication = params.luminous_intensity > 1000;  // High brightness LED
+    attribute infrared_indication = color == "ir";  // Special marking for IR
+    attribute rgb_indication = false;  // Single color LED (not RGB)
+    
+    // Circuit context awareness
+    attribute typical_supply_voltage_range = "3.3V-12V";  // Common supply ranges
+    attribute common_gpio_connection = true;   // Often connected to MCU GPIO
+    attribute status_indicator_function = true; // Primary use as status indicator
+    
+    // Wire routing quality preferences
+    attribute prefer_simple_routing = true;    // LEDs don't need complex routing
+    attribute avoid_high_frequency_routes = true;  // Keep away from fast signals
+    attribute trace_clearance = 0.2;   // mm - standard clearance for indicator circuits
 }

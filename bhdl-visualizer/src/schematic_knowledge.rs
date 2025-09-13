@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 /// This module interprets visualization guidelines to create professional schematics
 pub mod schematic_knowledge {
     use super::*;
-    use crate::layout::{Point, LayoutEngine};
+    use crate::types::Point;
+    use crate::layout::LayoutEngine;
     use bhdl_netlist::{Netlist, InstanceId, ModuleId};
     
     /// Component visualization metadata from stdlib
@@ -263,9 +264,9 @@ pub mod schematic_knowledge {
                 },
             };
             
-            self.component_rules.insert("LM7805".to_string(), lm7805);
+            self.component_rules.insert("LM7805".to_string(), lm7805.clone());
             self.component_rules.insert("7805".to_string(), lm7805.clone());
-            self.component_rules.insert("L7805".to_string(), lm7805.clone());
+            self.component_rules.insert("L7805".to_string(), lm7805);
         }
         
         /// Capacitor placement rules
@@ -310,9 +311,9 @@ pub mod schematic_knowledge {
                 },
             };
             
-            self.component_rules.insert("Capacitor".to_string(), cap);
+            self.component_rules.insert("Capacitor".to_string(), cap.clone());
             self.component_rules.insert("Cap".to_string(), cap.clone());
-            self.component_rules.insert("C".to_string(), cap.clone());
+            self.component_rules.insert("C".to_string(), cap);
         }
         
         /// Resistor placement rules
@@ -357,9 +358,9 @@ pub mod schematic_knowledge {
                 },
             };
             
-            self.component_rules.insert("Resistor".to_string(), res);
+            self.component_rules.insert("Resistor".to_string(), res.clone());
             self.component_rules.insert("Res".to_string(), res.clone());
-            self.component_rules.insert("R".to_string(), res.clone());
+            self.component_rules.insert("R".to_string(), res);
         }
         
         /// LED placement rules
@@ -459,8 +460,8 @@ pub mod schematic_knowledge {
                 },
             };
             
-            self.component_rules.insert("Diode".to_string(), diode);
-            self.component_rules.insert("D".to_string(), diode.clone());
+            self.component_rules.insert("Diode".to_string(), diode.clone());
+            self.component_rules.insert("D".to_string(), diode);
         }
         
         /// Power supply circuit pattern

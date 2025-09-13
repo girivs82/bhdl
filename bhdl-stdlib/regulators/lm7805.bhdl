@@ -8,19 +8,31 @@ module LM7805(package: string = "TO-220") {
         function="PowerIn",
         description="Input voltage (7-35V)",
         electrical_type="power_input",
-        voltage_range="7V-35V"
+        voltage_range="7V-35V",
+        // Schematic visualization
+        schematic_side="left",
+        schematic_position=1,
+        schematic_label="IN"
     );     // Input voltage (7-35V)
     pin GND: ground @metadata(
         function="Ground",
         description="Ground reference",
-        electrical_type="ground"
+        electrical_type="ground",
+        // Schematic visualization
+        schematic_side="bottom",
+        schematic_position=1,
+        schematic_label="GND"
     );      // Ground
     pin OUT: power out @metadata(
         function="PowerOut",
         description="Regulated 5V output @ 1A",
         electrical_type="power_output",
         voltage="5V",
-        current="1A"
+        current="1A",
+        // Schematic visualization
+        schematic_side="right",
+        schematic_position=1,
+        schematic_label="OUT"
     );   // Regulated 5V output @ 1A
     
     // Additional pins for enhanced versions
@@ -124,6 +136,61 @@ module LM7805(package: string = "TO-220") {
     attribute spice_output_voltage = params.output_voltage;
     attribute spice_dropout_voltage = params.dropout_voltage;
     attribute spice_quiescent_current = params.quiescent_current;
+    
+    // ==================== SCHEMATIC VISUALIZATION ====================
+    
+    // Symbol appearance
+    attribute schematic_symbol = "rectangle";
+    attribute schematic_width = 60;    // mm
+    attribute schematic_height = 40;   // mm
+    attribute schematic_label = "7805";
+    attribute schematic_label_position = "center";
+    attribute schematic_orientation = "horizontal";  // Inputs left, outputs right
+    
+    // Signal flow and placement
+    attribute signal_flow = "left_to_right";
+    attribute functional_group = "power_supply";
+    attribute placement_priority = "high";  // Important component, place first
+    
+    // Spacing preferences (in grid units, 2.54mm each)
+    attribute min_spacing_left = 3;    // Space before component
+    attribute min_spacing_right = 3;   // Space after component  
+    attribute min_spacing_top = 2;     // Space above
+    attribute min_spacing_bottom = 2;  // Space below
+    
+    // Professional drawing conventions for linear regulators
+    attribute drawing_style = "linear_regulator";
+    attribute component_section = "power";  // Group with other power components
+    
+    // Supporting components that should be nearby
+    attribute typical_input_cap_bulk = "10uF electrolytic";
+    attribute typical_input_cap_bypass = "100nF ceramic"; 
+    attribute typical_output_cap_bulk = "10uF electrolytic";
+    attribute typical_output_cap_bypass = "100nF ceramic";
+    
+    // Supporting component placement hints
+    attribute input_caps_placement = "vertical_near_input";   // Place vertically near IN pin
+    attribute output_caps_placement = "vertical_near_output"; // Place vertically near OUT pin
+    attribute caps_ground_connection = "star_at_regulator";   // Ground all caps at regulator GND
+    
+    // Routing preferences for power traces
+    attribute power_trace_width = "thick";    // Use thick traces for power
+    attribute power_trace_style = "rounded";  // Rounded corners for high current
+    attribute avoid_diagonal_power = true;    // Keep power traces orthogonal
+    
+    // Heat sink indication
+    attribute show_heatsink_symbol = package == "TO-220" || package == "TO-263";
+    attribute heatsink_required_above = "500mA";  // Show heatsink symbol if >500mA
+    
+    // Annotations to display
+    attribute show_output_voltage = true;     // Show "5V" near output
+    attribute show_current_rating = true;     // Show "1A" near component
+    attribute show_input_range = false;       // Don't clutter, show in notes
+    
+    // Wire routing quality preferences
+    attribute minimize_via_count = true;
+    attribute prefer_straight_traces = true;
+    attribute power_trace_clearance = 0.5;    // mm clearance from other traces
 }
 
 // Common aliases
