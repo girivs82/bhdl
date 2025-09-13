@@ -1,0 +1,470 @@
+// Voltage Regulator Schematic Layout Guidelines
+// Professional schematic drawing patterns for voltage regulators
+
+import { SchematicStyle, Orientation, PinSide } from "./schematic_guidelines.bhdl";
+
+// ==================== LM7805 VISUALIZATION ====================
+
+// Complete visualization specification for LM7805 and similar 3-pin regulators
+module LM7805_Visualization {
+    
+    // Symbol drawing specification
+    symbol: {
+        style: "rectangle_with_label",
+        width: 60,   // pixels/mm
+        height: 40,  // pixels/mm
+        label: "7805",
+        label_position: "center",
+        
+        // Pin positions (relative to symbol center)
+        pins: {
+            IN: {
+                side: "left",
+                position: (0, 0),     // Centered on left side
+                label: "IN",
+                label_offset: (-5, 0)
+            },
+            GND: {
+                side: "bottom",
+                position: (0, -20),   // Centered on bottom
+                label: "GND",
+                label_offset: (0, 5),
+                orientation: "vertical"
+            },
+            OUT: {
+                side: "right", 
+                position: (60, 0),    // Centered on right side
+                label: "OUT",
+                label_offset: (5, 0)
+            }
+        }
+    }
+    
+    // Typical application circuit components and their placement
+    typical_circuit: {
+        // Input section components
+        input_components: [
+            {
+                type: "capacitor",
+                value: "10uF",        // Typical bulk capacitor
+                placement: {
+                    relative_to: "IN",
+                    offset: (-30, 0),  // 30 units before input
+                    orientation: "vertical",
+                    ground_down: true
+                },
+                connections: {
+                    top: "to_input_net",
+                    bottom: "to_ground"
+                }
+            },
+            {
+                type: "capacitor",
+                value: "0.1uF",       // Typical ceramic bypass
+                placement: {
+                    relative_to: "IN",
+                    offset: (-15, 0),  // Closer to IC
+                    orientation: "vertical",
+                    ground_down: true
+                },
+                connections: {
+                    top: "to_input_net",
+                    bottom: "to_ground"
+                }
+            }
+        ],
+        
+        // Output section components
+        output_components: [
+            {
+                type: "capacitor",
+                value: "10uF",        // Output bulk capacitor
+                placement: {
+                    relative_to: "OUT",
+                    offset: (15, 0),   // 15 units after output
+                    orientation: "vertical",
+                    ground_down: true
+                },
+                connections: {
+                    top: "to_output_net",
+                    bottom: "to_ground"
+                }
+            },
+            {
+                type: "capacitor",
+                value: "0.1uF",       // Output bypass
+                placement: {
+                    relative_to: "OUT",
+                    offset: (30, 0),   // Further from IC
+                    orientation: "vertical",
+                    ground_down: true
+                },
+                connections: {
+                    top: "to_output_net",
+                    bottom: "to_ground"
+                }
+            }
+        ],
+        
+        // Protection components (optional)
+        protection_components: [
+            {
+                type: "diode",
+                designation: "D1",
+                purpose: "reverse_protection",
+                placement: {
+                    from: "IN",
+                    to: "OUT",
+                    position: "above",  // Above the regulator
+                    offset: (0, -15)
+                }
+            }
+        ],
+        
+        // Ground connections
+        ground_routing: {
+            style: "star",           // Star ground at regulator
+            main_point: "GND_pin",
+            branches: [
+                "input_caps_ground",
+                "output_caps_ground"
+            ]
+        }
+    }
+    
+    // Net routing guidelines
+    routing_rules: {
+        // Power nets should be thick
+        power_nets: {
+            width: 2.0,              // 2x normal width
+            style: "solid",
+            corners: "rounded",      // Rounded corners for high current
+            clearance: 2.0          // Keep away from signals
+        },
+        
+        // Input to output flow
+        signal_flow: {
+            direction: "left_to_right",
+            vertical_offset: 0,      // Keep on same horizontal line
+            avoid_crossing: true
+        },
+        
+        // Ground routing
+        ground: {
+            style: "star_ground",    // Star ground pattern
+            width: 2.0,
+            symbol: "GND_symbol"     // Use ground symbol
+        }
+    }
+    
+    // Text annotations
+    annotations: {
+        // Input voltage annotation
+        input_voltage: {
+            text: "Vin: 7-35V",
+            position: "above_input_caps",
+            style: "italic",
+            size: "small"
+        },
+        
+        // Output voltage annotation
+        output_voltage: {
+            text: "5V ±4%",
+            position: "above_output",
+            style: "bold",
+            size: "normal"
+        },
+        
+        // Current capability
+        current_rating: {
+            text: "1A max",
+            position: "below_symbol",
+            style: "normal",
+            size: "small"
+        },
+        
+        // Heat sink note (if needed)
+        heatsink_note: {
+            condition: "current > 500mA",
+            text: "Heatsink required",
+            position: "near_symbol",
+            style: "italic",
+            size: "small"
+        }
+    }
+    
+    // Spacing and alignment
+    layout_constraints: {
+        // Minimum spacing between components
+        component_spacing: {
+            min: 10,                // Minimum 10 units
+            preferred: 15,          // Preferred 15 units
+            between_sections: 25    // Between input/output sections
+        },
+        
+        // Alignment rules
+        alignment: {
+            capacitors: "bottom_aligned",  // Align capacitor bottoms
+            horizontal_nets: "same_y",      // Keep power nets horizontal
+            vertical_spacing: 10            // Between parallel nets
+        },
+        
+        // Keep related components together
+        grouping: {
+            input_section: ["input_caps", "protection_diode"],
+            regulator_section: ["LM7805", "heatsink"],
+            output_section: ["output_caps", "load_indicator"]
+        }
+    }
+}
+
+// ==================== LM317 ADJUSTABLE REGULATOR ====================
+
+module LM317_Visualization {
+    // Extends basic 3-pin regulator with adjustment components
+    
+    symbol: {
+        style: "rectangle_with_label",
+        width: 60,
+        height: 50,  // Slightly taller for ADJ pin
+        label: "LM317",
+        
+        pins: {
+            IN: {
+                side: "left",
+                position: (0, 0),
+                label: "IN"
+            },
+            ADJ: {
+                side: "bottom",
+                position: (20, -25),  // Offset from center
+                label: "ADJ",
+                orientation: "vertical"
+            },
+            OUT: {
+                side: "right",
+                position: (60, 0),
+                label: "OUT"
+            }
+        }
+    }
+    
+    // Voltage divider for adjustment
+    adjustment_components: [
+        {
+            type: "resistor",
+            designation: "R1",
+            value: "240Ω",          // Standard value
+            placement: {
+                from: "OUT",
+                to: "ADJ",
+                orientation: "vertical",
+                position: (45, -10)  // Between OUT and ADJ
+            }
+        },
+        {
+            type: "resistor",
+            designation: "R2", 
+            value: "variable",      // Potentiometer
+            placement: {
+                from: "ADJ",
+                to: "GND",
+                orientation: "vertical",
+                position: (20, -35)  // Below ADJ pin
+            }
+        },
+        {
+            type: "capacitor",
+            designation: "C_ADJ",
+            value: "10uF",          // Improve ripple rejection
+            placement: {
+                parallel_to: "R2",
+                offset: (10, 0)      // Next to R2
+            }
+        }
+    ]
+    
+    // Formulas and calculations to display
+    calculations: {
+        output_voltage: {
+            formula: "Vout = 1.25 × (1 + R2/R1)",
+            position: "near_divider",
+            show: true
+        }
+    }
+}
+
+// ==================== SWITCHING REGULATOR LAYOUTS ====================
+
+module BuckConverter_Visualization {
+    // More complex layout for switching regulators
+    
+    layout_strategy: "functional_blocks",
+    
+    blocks: {
+        input_filter: {
+            position: "left",
+            components: ["input_cap", "input_inductor"]
+        },
+        
+        switch_node: {
+            position: "center_top",
+            components: ["high_side_fet", "low_side_fet", "driver_ic"]
+        },
+        
+        output_filter: {
+            position: "center",
+            components: ["inductor", "output_cap", "catch_diode"]
+        },
+        
+        feedback: {
+            position: "bottom",
+            components: ["divider_r1", "divider_r2", "comp_network"]
+        },
+        
+        controller: {
+            position: "center_bottom",
+            components: ["controller_ic", "bypass_caps"]
+        }
+    }
+    
+    critical_paths: {
+        // High current switching path - keep short and wide
+        switching_loop: {
+            path: ["high_side_fet", "inductor", "output_cap", "low_side_fet"],
+            style: "extra_wide",
+            minimize_area: true
+        },
+        
+        // Sensitive feedback path - keep away from switch node
+        feedback_path: {
+            path: ["output", "divider", "controller_fb"],
+            keep_away_from: ["switch_node"],
+            style: "thin_trace"
+        }
+    }
+}
+
+// ==================== LAYOUT QUALITY METRICS ====================
+
+// Scoring system for schematic quality
+module SchematicQualityScore {
+    
+    // Factors that make a schematic "professional"
+    quality_factors: {
+        // Signal flow clarity (left-to-right or top-to-bottom)
+        signal_flow_consistency: {
+            weight: 0.2,
+            measure: "percentage of connections following main flow"
+        },
+        
+        // Component alignment
+        alignment_score: {
+            weight: 0.15,
+            measure: "percentage of aligned components"
+        },
+        
+        // Minimal wire crossings
+        crossing_minimization: {
+            weight: 0.15,
+            measure: "inverse of crossing count"
+        },
+        
+        // Consistent spacing
+        spacing_consistency: {
+            weight: 0.1,
+            measure: "standard deviation of spacings"
+        },
+        
+        // Functional grouping
+        logical_grouping: {
+            weight: 0.15,
+            measure: "cohesion of functional blocks"
+        },
+        
+        // Text readability
+        text_clarity: {
+            weight: 0.1,
+            measure: "no overlapping text"
+        },
+        
+        // Standard symbol usage
+        standard_symbols: {
+            weight: 0.1,
+            measure: "percentage using standard symbols"
+        },
+        
+        // White space usage
+        density_balance: {
+            weight: 0.05,
+            measure: "not too crowded, not too sparse"
+        }
+    }
+    
+    // Calculate overall score
+    function calculate_score(schematic: Schematic) -> float {
+        score = 0.0;
+        for factor in quality_factors {
+            score += factor.weight * measure(schematic, factor);
+        }
+        return score;
+    }
+}
+
+// ==================== COMMON PATTERNS ====================
+
+// Power supply input section pattern
+pattern PowerInputSection {
+    components: {
+        protection: "TVS or MOV",
+        bulk_cap: "10-100uF electrolytic",
+        bypass_cap: "0.1uF ceramic",
+        indicator: "LED with resistor"
+    },
+    
+    arrangement: {
+        order: ["protection", "bulk_cap", "bypass_cap", "to_regulator"],
+        orientation: "vertical_caps",
+        spacing: "consistent"
+    }
+}
+
+// Power supply output section pattern
+pattern PowerOutputSection {
+    components: {
+        bulk_cap: "10-47uF",
+        bypass_cap: "0.1-1uF",
+        load_indicator: "LED",
+        test_point: "TP"
+    },
+    
+    arrangement: {
+        order: ["from_regulator", "bulk_cap", "bypass_cap", "test_point"],
+        orientation: "vertical_caps",
+        led_position: "below_with_resistor_to_ground"
+    }
+}
+
+// Decoupling capacitor pattern for ICs
+pattern DecouplingPattern {
+    rules: {
+        placement: "as close as possible to power pins",
+        orientation: "short path to ground",
+        value_progression: "100nF closest, then 1uF, then 10uF",
+        one_per_power_pin: true
+    }
+}
+
+// Export function for visualizer to query
+export function get_component_layout_rules(
+    component_type: string,
+    context: CircuitContext
+) -> LayoutRules {
+    // Return specific layout rules based on component and context
+    match component_type {
+        "LM7805" -> LM7805_Visualization,
+        "LM317" -> LM317_Visualization,
+        "Buck_*" -> BuckConverter_Visualization,
+        _ -> DefaultLayoutRules
+    }
+}

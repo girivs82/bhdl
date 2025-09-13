@@ -1,0 +1,401 @@
+// BHDL Schematic Visualization Guidelines
+// This file defines how components should be drawn in schematics for professional appearance
+
+// ==================== VISUALIZATION STYLES ====================
+
+// Standard schematic drawing styles
+enum SchematicStyle {
+    IEEE,           // IEEE standard symbols
+    IEC,            // IEC standard symbols  
+    ANSI,           // ANSI standard symbols
+    DIN,            // DIN standard symbols
+    JIS             // Japanese Industrial Standards
+}
+
+// Component orientation preferences
+enum Orientation {
+    Horizontal,     // Component drawn horizontally
+    Vertical,       // Component drawn vertically
+    Auto           // Let visualizer decide based on connections
+}
+
+// Pin side preferences for placement
+enum PinSide {
+    Left,
+    Right,
+    Top,
+    Bottom,
+    Auto
+}
+
+// ==================== VISUALIZATION ATTRIBUTES ====================
+
+// Core visualization metadata that can be attached to modules
+attribute @visualization {
+    // Component placement hints
+    preferred_orientation: Orientation = Orientation.Horizontal;
+    
+    // Signal flow direction (left-to-right is standard)
+    signal_flow: string = "left_to_right";  // left_to_right, right_to_left, top_to_bottom, bottom_to_top
+    
+    // Component grouping for related parts
+    group: string = "";  // e.g., "power_supply", "input_stage", "output_stage"
+    
+    // Drawing style preferences
+    symbol_style: SchematicStyle = SchematicStyle.ANSI;
+    
+    // Size hints (relative units)
+    symbol_width: float = 1.0;
+    symbol_height: float = 1.0;
+    
+    // Whether to show component value/name inside symbol
+    show_value_inside: bool = false;
+    show_name_inside: bool = true;
+    
+    // Spacing preferences (in grid units)
+    min_spacing_before: float = 2.0;
+    min_spacing_after: float = 2.0;
+    min_spacing_above: float = 1.0;
+    min_spacing_below: float = 1.0;
+}
+
+// Pin-specific visualization metadata
+attribute @pin_visualization {
+    // Which side of the component this pin should be on
+    side: PinSide = PinSide.Auto;
+    
+    // Order/position on that side (lower numbers first)
+    position: int = 0;
+    
+    // Whether this pin should be drawn inverted (with bubble)
+    inverted: bool = false;
+    
+    // Whether this is a clock input (draw with arrow)
+    clock: bool = false;
+    
+    // Pin label position
+    label_position: string = "outside";  // inside, outside, none
+    
+    // Connection style hint
+    connection_style: string = "direct";  // direct, bus, differential
+}
+
+// ==================== COMPONENT ARRANGEMENT PATTERNS ====================
+
+// Common schematic arrangement patterns
+enum ArrangementPattern {
+    // Power supply patterns
+    PowerSupplyLinear,      // IN -> REGULATOR -> OUT with caps vertical
+    PowerSupplySwitching,   // More complex switching regulator layout
+    
+    // Amplifier patterns  
+    AmplifierSingleEnded,   // Standard op-amp configuration
+    AmplifierDifferential,  // Differential amplifier layout
+    AmplifierInstrumentation, // Three op-amp instrumentation amp
+    
+    // Digital patterns
+    DigitalLogicGates,      // Logic gate arrangements
+    DigitalSequential,      // Flip-flops, counters, etc.
+    DigitalBus,            // Bus-based layouts
+    
+    // Filter patterns
+    FilterLowPass,         // RC/LC low-pass arrangement
+    FilterHighPass,        // RC/LC high-pass arrangement
+    FilterBandPass,        // Band-pass filter layout
+    
+    // Protection patterns
+    ProtectionInput,       // Input protection (TVS, clamp, etc.)
+    ProtectionOutput,      // Output protection
+    ProtectionPower,       // Power line protection
+}
+
+// ==================== SUPPORTING COMPONENT PLACEMENT ====================
+
+// Rules for placing supporting components (caps, resistors, etc.)
+struct SupportingComponentRule {
+    component_type: string;      // "capacitor", "resistor", etc.
+    placement_relative_to: string; // "parent", "power_pin", "ground_pin"
+    orientation: Orientation;
+    distance: float;             // Grid units from parent
+    alignment: string;           // "center", "top", "bottom", "left", "right"
+}
+
+// ==================== VISUALIZATION TEMPLATES ====================
+
+// Template for linear voltage regulator visualization
+template LinearRegulatorVisualization {
+    @visualization(
+        preferred_orientation: Orientation.Horizontal,
+        signal_flow: "left_to_right",
+        group: "power_supply",
+        symbol_style: SchematicStyle.ANSI,
+        symbol_width: 3.0,
+        symbol_height: 2.0,
+        show_value_inside: true,
+        min_spacing_before: 3.0,
+        min_spacing_after: 3.0
+    )
+    
+    // Pin placement rules
+    pin_rules: {
+        "IN": @pin_visualization(side: PinSide.Left, position: 1),
+        "GND": @pin_visualization(side: PinSide.Bottom, position: 1),
+        "OUT": @pin_visualization(side: PinSide.Right, position: 1)
+    }
+    
+    // Supporting component rules
+    supporting_components: [
+        // Input capacitor - vertical, close to input pin
+        SupportingComponentRule {
+            component_type: "capacitor",
+            placement_relative_to: "IN",
+            orientation: Orientation.Vertical,
+            distance: 1.0,
+            alignment: "center"
+        },
+        // Output capacitor - vertical, close to output pin  
+        SupportingComponentRule {
+            component_type: "capacitor",
+            placement_relative_to: "OUT",
+            orientation: Orientation.Vertical,
+            distance: 1.0,
+            alignment: "center"
+        }
+    ]
+    
+    // Connection routing hints
+    routing_hints: {
+        power_traces_width: 2.0,    // Wider traces for power
+        signal_traces_width: 1.0,
+        preferred_angles: [0, 90],  // Only horizontal and vertical
+        avoid_diagonal: true
+    }
+}
+
+// Template for operational amplifier visualization
+template OpAmpVisualization {
+    @visualization(
+        preferred_orientation: Orientation.Horizontal,
+        signal_flow: "left_to_right",
+        group: "analog",
+        symbol_style: SchematicStyle.ANSI,
+        symbol_width: 2.0,
+        symbol_height: 2.5,
+        show_name_inside: false
+    )
+    
+    pin_rules: {
+        "IN+": @pin_visualization(side: PinSide.Left, position: 1),
+        "IN-": @pin_visualization(side: PinSide.Left, position: 2),
+        "OUT": @pin_visualization(side: PinSide.Right, position: 1),
+        "V+": @pin_visualization(side: PinSide.Top, position: 1),
+        "V-": @pin_visualization(side: PinSide.Bottom, position: 1)
+    }
+}
+
+// Template for microcontroller visualization
+template MicrocontrollerVisualization {
+    @visualization(
+        preferred_orientation: Orientation.Horizontal,
+        signal_flow: "left_to_right",
+        group: "digital",
+        symbol_style: SchematicStyle.ANSI,
+        symbol_width: 6.0,
+        symbol_height: 8.0,
+        show_name_inside: true
+    )
+    
+    // Group pins by function
+    pin_grouping: {
+        "power": ["VDD", "VSS", "AVDD", "AVSS"],
+        "clock": ["XTAL1", "XTAL2", "CLK"],
+        "communication": ["TX", "RX", "SDA", "SCL", "MISO", "MOSI", "SCK"],
+        "gpio": ["GPIO*", "PA*", "PB*", "PC*", "PD*"],
+        "analog": ["ADC*", "DAC*", "AIN*"],
+        "control": ["RESET", "BOOT", "EN"]
+    }
+    
+    // Place power pins on top/bottom, I/O on sides
+    group_placement: {
+        "power": ["top", "bottom"],
+        "clock": ["left"],
+        "communication": ["right"],
+        "gpio": ["left", "right"],
+        "analog": ["left"],
+        "control": ["top"]
+    }
+}
+
+// ==================== SCHEMATIC LAYOUT STRATEGIES ====================
+
+// Overall schematic organization strategies
+enum SchematicOrganization {
+    // Functional blocks - group by function
+    FunctionalBlocks {
+        blocks: ["power_supply", "input_processing", "control", "output_driver"],
+        flow_direction: "left_to_right",
+        block_spacing: 5.0
+    },
+    
+    // Signal flow - follow signal path
+    SignalFlow {
+        start: "input",
+        end: "output",
+        highlight_main_path: true
+    },
+    
+    // Hierarchical - show hierarchy levels
+    Hierarchical {
+        top_level_first: true,
+        indent_submodules: true,
+        show_boundaries: true
+    },
+    
+    // Mixed signal - separate analog and digital
+    MixedSignal {
+        analog_section: "top",
+        digital_section: "bottom",
+        separation_gap: 3.0
+    }
+}
+
+// ==================== EXAMPLE APPLICATIONS ====================
+
+// Example: Apply visualization to LM7805
+extend module LM7805 from "../regulators/lm7805.bhdl" {
+    apply LinearRegulatorVisualization;
+    
+    @visualization(
+        group: "power_supply",
+        signal_flow: "left_to_right"
+    )
+}
+
+// Example: Define visualization for a complete power supply
+module PowerSupplyWithVisualization {
+    // Standard power supply with visualization hints
+    
+    @visualization(
+        preferred_orientation: Orientation.Horizontal,
+        signal_flow: "left_to_right",
+        group: "power_supply"
+    )
+    
+    // Components with specific placement
+    components {
+        input_protection: TVSDiode @visualization(group: "input_protection");
+        input_cap: Cap(100uF) @visualization(
+            orientation: Orientation.Vertical,
+            placement: "before_regulator"
+        );
+        regulator: LM7805;
+        output_cap: Cap(10uF) @visualization(
+            orientation: Orientation.Vertical,
+            placement: "after_regulator"
+        );
+        indicator: LED @visualization(
+            group: "output_indication",
+            placement: "bottom_right"
+        );
+    }
+    
+    // Connection hints for beautiful routing
+    connections {
+        style: "orthogonal",  // Right-angle routes only
+        bus_style: "thick",    // Thicker lines for power buses
+        cross_style: "bridge"  // Bridge crossing wires
+    }
+}
+
+// ==================== GRID AND ALIGNMENT ====================
+
+// Grid system for consistent spacing
+struct GridSystem {
+    base_unit: float = 0.1;  // 0.1 inch = 2.54mm
+    minor_grid: float = 1.0;  // 1 grid unit
+    major_grid: float = 10.0; // 10 grid units
+    
+    // Snap rules
+    snap_components: bool = true;
+    snap_wires: bool = true;
+    snap_text: bool = false;
+    
+    // Alignment guides
+    show_alignment_guides: bool = true;
+    auto_align_similar: bool = true;
+}
+
+// ==================== TEXT AND ANNOTATION ====================
+
+// Text placement and styling rules
+struct TextStyle {
+    // Font preferences
+    component_name_font: string = "Arial";
+    component_value_font: string = "Arial";
+    pin_label_font: string = "Arial Narrow";
+    annotation_font: string = "Arial Italic";
+    
+    // Size preferences (relative to grid)
+    component_name_size: float = 1.2;
+    component_value_size: float = 1.0;
+    pin_label_size: float = 0.8;
+    annotation_size: float = 0.9;
+    
+    // Placement rules
+    component_name_position: string = "top";     // top, bottom, left, right, center
+    component_value_position: string = "bottom";
+    auto_rotate_text: bool = false;             // Keep text horizontal
+}
+
+// ==================== COLOR SCHEME ====================
+
+// Professional color schemes for schematics
+enum ColorScheme {
+    Monochrome {    // Traditional black and white
+        background: "white",
+        component: "black",
+        wire: "black",
+        bus: "black",
+        text: "black",
+        grid: "light_gray"
+    },
+    
+    PowerHighlight { // Highlight power rails
+        background: "white",
+        component: "black",
+        wire: "black",
+        power: "red",
+        ground: "green",
+        signal: "blue"
+    },
+    
+    Functional {    // Color by function
+        power_supply: "red",
+        analog: "blue",
+        digital: "green",
+        protection: "orange",
+        passive: "gray"
+    }
+}
+
+// ==================== EXPORT FUNCTIONS ====================
+
+// Function to get visualization rules for a component
+function get_visualization_rules(component_type: string) -> VisualizationRules {
+    // Return appropriate visualization rules based on component type
+    match component_type {
+        "LM7805" | "LM317" | "LM1117" -> LinearRegulatorVisualization,
+        "LM358" | "TL072" | "OP07" -> OpAmpVisualization,
+        "STM32*" | "ATmega*" | "PIC*" -> MicrocontrollerVisualization,
+        _ -> DefaultVisualization
+    }
+}
+
+// Function to suggest component placement
+function suggest_placement(
+    component: Component,
+    context: SchematicContext
+) -> PlacementSuggestion {
+    // Analyze component type and connections to suggest optimal placement
+    // This helps the visualizer create human-like schematics
+}

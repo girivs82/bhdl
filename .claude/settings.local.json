@@ -355,7 +355,8 @@
       "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin test_manufacturing_optimization)",
       "Bash(RUST_LOG=info cargo run --bin test_manufacturing_optimization)",
       "Bash(RUST_LOG=info cargo run --bin test_ai_layout_generation)",
-      "Bash(RUST_LOG=info cargo run -p bhdl-layout --bin test_ai_layout)"
+      "Bash(RUST_LOG=info cargo run -p bhdl-layout --bin test_ai_layout)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-visualizer --bin test_professional_schematic)"
     ],
     "deny": []
   }
