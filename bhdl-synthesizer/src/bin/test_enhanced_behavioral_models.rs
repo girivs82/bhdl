@@ -76,6 +76,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         min_phase_margin: Some(45.0),       // 45° min phase margin
         use_grid_search: true,
         parameter_ranges: HashMap::new(),
+        enable_cross_component_optimization: true, // Enable cross-component coordination
     };
     
     // Initialize simulation-driven synthesizer
