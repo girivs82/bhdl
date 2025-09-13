@@ -73,6 +73,9 @@ pub mod design_pattern_recognition;
 // Component compatibility analysis
 pub mod component_compatibility;
 
+// Design rule checking (DRC)
+pub mod design_rule_checker;
+
 // Re-export key types
 pub use bhdl_analyzer::types::AnalysisResult;
 pub use bhdl_analyzer::component_inference::ParameterValue;
