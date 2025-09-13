@@ -3,8 +3,7 @@ use crate::schematic_knowledge::schematic_knowledge::{
     ArrangementStrategy, Direction, GroupPosition
 };
 use crate::layout::{LayoutEngine, LayoutConfig};
-use crate::types::{Point, Component, Net};
-use crate::types::{BoundingBox, CircuitLayout};
+use crate::types::{Point, Component, Net, BoundingBox, CircuitLayout, RoutingSegment};
 use bhdl_netlist::{Netlist, InstanceId, ModuleId, NetId};
 use std::collections::HashMap;
 use log::{info, debug, warn};
@@ -126,7 +125,8 @@ impl KnowledgeLayoutEngine {
         let layout = self.create_final_layout(netlist)?;
         
         // Step 8: Score the layout quality
-        let quality_score = self.knowledge.score_layout_quality(&LayoutEngine::new());
+        let layout_engine = LayoutEngine::new(LayoutConfig::default());
+        let quality_score = self.knowledge.score_layout_quality(&layout_engine);
         info!("Generated professional schematic layout with quality score: {:.1}%", 
               quality_score * 100.0);
         
@@ -385,51 +385,33 @@ impl KnowledgeLayoutEngine {
     
     /// Create final circuit layout
     fn create_final_layout(&self, netlist: &Netlist) -> Result<CircuitLayout, String> {
-        let mut components = Vec::new();
-        let mut nets = Vec::new();
-        let mut bounds = BoundingBox::from_points(Point::new(0.0, 0.0), Point::new(0.0, 0.0));
+        let mut layout = CircuitLayout::new();
         
         // Create components with professional positioning
         for (instance_id, instance) in &netlist.instances {
             if let Some(position) = self.component_positions.get(&instance_id) {
-                if let Some(module) = netlist.modules.get(instance.definition) {
-                    let component = Component {
-                        id: format!("instance_{}", instance_id.as_raw()),  // Use as_raw method
-                        name: instance.name.clone(),
-                        component_type: module.name.clone(),
-                        position: *position,
-                        pins: HashMap::new(),  // Filled in later
-                    };
-                    
-                    bounds = bounds.expand_to_include(*position);
-                    components.push(component);
-                }
+                let component = Component::new(instance_id, *position)
+                    .with_label(instance.name.clone());
+                
+                layout.add_component(component);
             }
         }
         
         // Create net routing (simplified)
         for (net_id, net) in &netlist.nets {
-            let circuit_net = Net {
-                id: format!("net_{}", net_id.as_raw()),
-                name: net.name.clone().unwrap_or_else(|| format!("net_{}", net_id.as_raw())),
-                points: Vec::new(),  // Would be computed by router
-            };
-            nets.push(circuit_net);
+            let circuit_net = Net::new(net_id, net.name.clone());
+            layout.add_net(circuit_net);
         }
+        
+        // Update bounding box
+        layout.update_bounding_box();
         
         // Ensure bounds are reasonable
-        if bounds.width() < 100.0 || bounds.height() < 100.0 {
-            bounds = BoundingBox::from_points(
-                Point::new(0.0, 0.0),
-                Point::new(200.0, 150.0),
-            );
+        if layout.bounding_box.width() < 100.0 || layout.bounding_box.height() < 100.0 {
+            layout.bounding_box = BoundingBox::new(0.0, 0.0, 200.0, 150.0);
         }
         
-        Ok(CircuitLayout {
-            components,
-            nets,
-            bounds,
-        })
+        Ok(layout)
     }
 }
 

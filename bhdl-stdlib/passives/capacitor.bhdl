@@ -20,12 +20,20 @@ module Cap(value: capacitance, voltage: voltage = 50V, type: string = "auto") {
     pin 1: signal inout @metadata(
         function="Terminal",
         description="First terminal (positive for polarized)",
-        electrical_type="passive"
+        electrical_type="passive",
+        // Schematic visualization
+        schematic_side="top",
+        schematic_position=1,
+        schematic_label="1"
     );  // Terminal 1 (non-polarized)
     pin 2: signal inout @metadata(
         function="Terminal",
         description="Second terminal (negative for polarized)",
-        electrical_type="passive"
+        electrical_type="passive",
+        // Schematic visualization
+        schematic_side="bottom",
+        schematic_position=1,
+        schematic_label="2"
     );  // Terminal 2 (non-polarized)
     
     // Determine capacitor type
@@ -113,6 +121,60 @@ module Cap(value: capacitance, voltage: voltage = 50V, type: string = "auto") {
                         "0603,0805,1206";
                    
     attribute default_package = cap_type == "electrolytic" ? "THT_Radial_D5.0" : "0805";
+    
+    // ==================== SCHEMATIC VISUALIZATION ====================
+    
+    // Symbol appearance based on capacitor type
+    attribute schematic_symbol = cap_type == "electrolytic" ? "polarized_capacitor" : "capacitor";
+    attribute schematic_width = 15;    // mm - compact for passives
+    attribute schematic_height = 30;   // mm - vertical orientation preferred
+    attribute schematic_label = value;  // Show capacitance value
+    attribute schematic_label_position = "side";  // Next to symbol, not on it
+    attribute schematic_orientation = "vertical";  // Preferred vertical placement
+    
+    // Signal flow and placement preferences
+    attribute signal_flow = "bidirectional";  // Current can flow either direction
+    attribute functional_group = "filtering";  // Group with other filter components
+    attribute placement_priority = "medium";   // Place near associated circuits
+    
+    // Spacing preferences for power supply applications
+    attribute min_spacing_left = 2;    // Grid units (5.08mm)
+    attribute min_spacing_right = 2;
+    attribute min_spacing_top = 2;
+    attribute min_spacing_bottom = 2;
+    
+    // Professional drawing conventions for capacitors
+    attribute drawing_style = "vertical_passive";
+    attribute component_section = cap_type == "electrolytic" ? "power_filter" : "signal_filter";
+    
+    // Common placement contexts and hints
+    attribute typical_placement = cap_type == "electrolytic" ? 
+        "near_power_pins_bulk_filtering" : "near_ic_bypass_filtering";
+    attribute preferred_orientation = "vertical";  // Vertical is standard for power caps
+    attribute ground_connection = "bottom";  // Bottom terminal typically to ground
+    attribute power_connection = "top";     // Top terminal typically to power/signal
+    
+    // Routing preferences
+    attribute trace_width = cap_type == "electrolytic" ? "thick" : "normal";
+    attribute trace_style = "straight";    // Keep connections simple and direct
+    attribute minimize_trace_length = true;  // Especially important for bypass caps
+    
+    // Placement relative to other components
+    attribute place_near_power_pins = true;  // Stay close to the pins being decoupled
+    attribute avoid_high_frequency_traces = cap_type == "electrolytic";  // Electrolytics away from fast edges
+    
+    // Value display preferences
+    attribute show_value = true;           // Always show capacitance value
+    attribute show_voltage_rating = cap_type == "electrolytic";  // Show voltage for electrolytics
+    attribute show_tolerance = false;      // Don't clutter with tolerance unless critical
+    
+    // Type-specific visualization hints
+    attribute polarity_marking = cap_type == "electrolytic";  // Show + marking for electrolytics
+    attribute size_indication = cap_type == "electrolytic" ? "large" : "small";
+    
+    // Wire routing quality preferences
+    attribute prefer_straight_connections = true;
+    attribute power_trace_clearance = cap_type == "electrolytic" ? 0.3 : 0.2;  // mm clearance
 }
 
 // Alias for full name
@@ -120,8 +182,24 @@ alias Capacitor = Cap;
 
 // Polarized Capacitor Module
 module ElectrolyticCap(value: capacitance, voltage: voltage = 25V) {
-    pin +: signal in;   // Positive terminal
-    pin -: signal out;  // Negative terminal
+    pin +: signal in @metadata(
+        function="PositiveTerminal",
+        description="Positive terminal (anode)",
+        electrical_type="passive_positive",
+        // Schematic visualization
+        schematic_side="top",
+        schematic_position=1,
+        schematic_label="+"
+    );   // Positive terminal
+    pin -: signal out @metadata(
+        function="NegativeTerminal",
+        description="Negative terminal (cathode)",
+        electrical_type="passive_negative",
+        // Schematic visualization
+        schematic_side="bottom",
+        schematic_position=1,
+        schematic_label="-"
+    );  // Negative terminal
     
     attribute component_class = "capacitor_polarized";
     attribute value = value;
@@ -130,4 +208,26 @@ module ElectrolyticCap(value: capacitance, voltage: voltage = 25V) {
     attribute kicad_symbol = "Device:CP";
     attribute packages = "THT_Radial_D5.0,THT_Radial_D6.3,THT_Radial_D8.0";
     attribute default_package = "THT_Radial_D6.3";
+    
+    // ==================== SCHEMATIC VISUALIZATION ====================
+    
+    // Polarized capacitor symbol
+    attribute schematic_symbol = "polarized_capacitor";
+    attribute schematic_width = 20;    // mm - slightly larger for polarity marking
+    attribute schematic_height = 35;   // mm - vertical orientation
+    attribute schematic_label = value + " " + voltage;  // Show both value and voltage
+    attribute schematic_label_position = "side";
+    attribute schematic_orientation = "vertical";  // Always vertical for electrolytics
+    
+    // Polarity and placement
+    attribute polarity_marking = true;     // Always show + marking
+    attribute positive_terminal = "top";   // + terminal on top
+    attribute negative_terminal = "bottom"; // - terminal on bottom
+    attribute show_voltage_rating = true;  // Always show voltage for polarized caps
+    
+    // Typical power supply placement
+    attribute functional_group = "power_filtering";
+    attribute typical_placement = "bulk_power_filtering";
+    attribute component_section = "power_supply";
+    attribute placement_priority = "high";  // Important for power filtering
 }

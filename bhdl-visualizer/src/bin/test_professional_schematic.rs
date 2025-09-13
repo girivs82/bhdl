@@ -105,15 +105,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Professional schematic layout generated successfully!");
     info!("Layout contains {} components within bounds ({:.1}, {:.1}) to ({:.1}, {:.1})",
           layout.components.len(),
-          layout.bounds.min.x, layout.bounds.min.y,
-          layout.bounds.max.x, layout.bounds.max.y);
+          layout.bounding_box.min_x, layout.bounding_box.min_y,
+          layout.bounding_box.max_x, layout.bounding_box.max_y);
     
     // Display component positions to show professional arrangement
     info!("Component placement (following professional conventions):");
     for component in &layout.components {
-        info!("  {}: {} at ({:.1}, {:.1})",
-              component.name, 
-              component.component_type,
+        info!("  {}: Instance {:?} at ({:.1}, {:.1})",
+              component.label.as_ref().unwrap_or(&"unlabeled".to_string()), 
+              component.instance_id,
               component.position.x, 
               component.position.y);
     }

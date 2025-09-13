@@ -22,13 +22,21 @@ module Res(
         function="Terminal",
         description="First terminal of resistor",
         electrical_type="passive",
-        synthesis_hints=["current_path", "voltage_divider", "pullup_capable", "series_element"]
+        synthesis_hints=["current_path", "voltage_divider", "pullup_capable", "series_element"],
+        // Schematic visualization
+        schematic_side="left",
+        schematic_position=1,
+        schematic_label="1"
     );
     pin 2: signal inout @metadata(
         function="Terminal", 
         description="Second terminal of resistor",
         electrical_type="passive",
-        synthesis_hints=["current_path", "voltage_divider", "pulldown_capable", "series_element"]
+        synthesis_hints=["current_path", "voltage_divider", "pulldown_capable", "series_element"],
+        // Schematic visualization
+        schematic_side="right",
+        schematic_position=1,
+        schematic_label="2"
     );
     
     // Package-specific power ratings and voltage limits
@@ -189,6 +197,75 @@ module Res(
         package == "1206" ? "Resistor_SMD:R_1206_3216Metric" :
         package == "THT" ? "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal" :
         "Resistor_SMD:R_0805_2012Metric";
+    
+    // ==================== SCHEMATIC VISUALIZATION ====================
+    
+    // Symbol appearance - zigzag for US style, rectangle for IEC
+    attribute schematic_symbol = "resistor_zigzag";  // US standard
+    attribute schematic_width = 40;    // mm - standard resistor symbol width
+    attribute schematic_height = 12;   // mm - standard resistor symbol height
+    attribute schematic_label = value;  // Show resistance value
+    attribute schematic_label_position = "above";  // Value above symbol
+    attribute schematic_orientation = "horizontal";  // Default horizontal
+    
+    // Signal flow and placement
+    attribute signal_flow = "bidirectional";  // Current can flow either direction
+    attribute functional_group = "passive";   // Group with other passives
+    attribute placement_priority = "low";     // Place after active components
+    
+    // Spacing preferences based on function
+    attribute min_spacing_left = 2;    // Grid units
+    attribute min_spacing_right = 2;
+    attribute min_spacing_top = 1;
+    attribute min_spacing_bottom = 1;
+    
+    // Professional drawing conventions
+    attribute drawing_style = "inline_component";  // Inline with signal path
+    attribute component_section = value > 1000000 ? "high_impedance" : "current_path";
+    
+    // Placement based on typical usage patterns
+    attribute typical_placement = 
+        value < 100 ? "current_sensing" :       // Low value = current sense
+        value < 1000 ? "current_limiting" :     // Medium value = current limit
+        value < 100000 ? "pullup_pulldown" :   // 1k-100k = pull resistors
+        "high_impedance";                       // High value = high Z
+    
+    // Orientation preferences based on circuit role
+    attribute preferred_orientation = "horizontal";  // Default to horizontal
+    attribute allow_vertical = true;    // Can be rotated if needed
+    
+    // Routing and connection preferences
+    attribute trace_width = "normal";   // Normal trace width
+    attribute trace_style = "straight"; // Straight connections preferred
+    attribute connection_style = "direct";  // Direct pin-to-pin connections
+    
+    // Current flow indication for high-power resistors
+    attribute show_power_rating = params.power_rating > 125mW;  // Show rating if >1/8W
+    attribute current_flow_indication = value < 10;  // Show flow for current sense
+    
+    // Value display preferences
+    attribute show_value = true;        // Always show resistance value
+    attribute show_tolerance = tolerance != 5%;  // Show if not standard 5%
+    attribute show_power_rating = params.power_rating > 250mW;  // Show if >1/4W
+    
+    // Special case visualization for specific functions
+    attribute pullup_indication = value >= 1000 && value <= 10000;  // 1k-10k typical pullups
+    attribute current_sense_indication = value < 1;  // <1Ω = current sensing
+    attribute high_value_indication = value > 1000000;  // >1MΩ = high impedance
+    
+    // Package-specific visual hints
+    attribute size_indication = 
+        package == "0402" ? "tiny" :
+        package == "0603" ? "small" :
+        package == "0805" ? "medium" :
+        package == "1206" ? "large" :
+        package == "THT" ? "through_hole" :
+        "medium";
+    
+    // Wire routing quality preferences
+    attribute prefer_straight_routing = true;
+    attribute avoid_sharp_bends = false;  // Resistors are less sensitive to routing
+    attribute trace_clearance = 0.15;    // mm - standard clearance
 }
 
 // Alias for full name
