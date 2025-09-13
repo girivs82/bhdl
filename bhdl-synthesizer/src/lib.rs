@@ -76,6 +76,15 @@ pub mod component_compatibility;
 // Design rule checking (DRC)
 pub mod design_rule_checker;
 
+// ML-based component selection optimization
+pub mod ml_component_selection;
+
+// Thermal simulation integration
+pub mod thermal_simulation;
+
+// Cost optimization with supplier data
+pub mod cost_optimization;
+
 // Re-export key types
 pub use bhdl_analyzer::types::AnalysisResult;
 pub use bhdl_analyzer::component_inference::ParameterValue;
@@ -101,6 +110,18 @@ pub struct NetlistConfig {
     pub enable_simulation_optimization: bool,
     /// Enable component compatibility analysis
     pub enable_compatibility_analysis: bool,
+    /// Enable design pattern recognition
+    pub enable_pattern_recognition: bool,
+    /// Enable cross-component optimization
+    pub enable_cross_optimization: bool,
+    /// Enable design rule checking
+    pub enable_design_rule_check: bool,
+    /// Enable ML-based component selection
+    pub enable_ml_selection: bool,
+    /// Enable thermal simulation and analysis
+    pub enable_thermal_simulation: bool,
+    /// Enable cost optimization with supplier data
+    pub enable_cost_optimization: bool,
 }
 
 /// Database integration statistics
@@ -138,6 +159,12 @@ impl Default for NetlistConfig {
             database_path: Some("/Users/girivs/src/bhdl-new/components.db".to_string()),
             enable_simulation_optimization: false,
             enable_compatibility_analysis: true,
+            enable_pattern_recognition: true,
+            enable_cross_optimization: true,
+            enable_design_rule_check: true,
+            enable_ml_selection: false, // Off by default since it requires training data
+            enable_thermal_simulation: false, // Off by default for performance
+            enable_cost_optimization: false, // Off by default, requires supplier API setup
         }
     }
 }
@@ -167,6 +194,8 @@ pub struct NetlistGenerator {
     component_calculator: ComponentCalculator,
     // Supporting component instances for virtual pin expansion
     supporting_component_instances: HashMap<String, InstanceId>,
+    // Cost optimizer for supplier data integration
+    cost_optimizer: Option<crate::cost_optimization::CostOptimizer>,
 }
 
 impl NetlistGenerator {
@@ -195,6 +224,7 @@ impl NetlistGenerator {
             import_preprocessor: None,
             component_calculator: ComponentCalculator::new(),
             supporting_component_instances: HashMap::new(),
+            cost_optimizer: None, // Will be initialized when cost optimization is enabled
         }
     }
 
@@ -330,7 +360,7 @@ impl NetlistGenerator {
         // Check for undefined components after processing imports
         if !analysis.diagnostics.is_empty() {
             let undefined_components: Vec<_> = analysis.diagnostics.iter()
-                .filter(|d| d.message.contains("Undefined component"))
+                .filter(|d| d.message.contains("Undefined component type"))
                 .collect();
             
             if !undefined_components.is_empty() {
@@ -415,11 +445,53 @@ impl NetlistGenerator {
             self.run_simulation_optimization(ast, analysis).await?;
         }
 
-        // Phase 10: Run component compatibility analysis
+        // Phase 10: Run design pattern recognition
+        if self.config.enable_pattern_recognition {
+            info!("Starting design pattern recognition phase...");
+            self.run_pattern_recognition(analysis)?;
+            info!("Design pattern recognition phase completed");
+        }
+        
+        // Phase 11: Run cross-component optimization
+        if self.config.enable_cross_optimization {
+            info!("Starting cross-component optimization phase...");
+            self.run_cross_component_optimization(analysis)?;
+            info!("Cross-component optimization phase completed");
+        }
+        
+        // Phase 12: Run component compatibility analysis
         if self.config.enable_compatibility_analysis {
             info!("Starting component compatibility analysis phase...");
             self.run_compatibility_analysis(analysis).await?;
             info!("Component compatibility analysis phase completed");
+        }
+        
+        // Phase 13: Run design rule checking (DRC)
+        if self.config.enable_design_rule_check {
+            info!("Starting design rule checking phase...");
+            self.run_design_rule_check(analysis)?;
+            info!("Design rule checking phase completed");
+        }
+        
+        // Phase 14: Run ML-based component selection optimization
+        if self.config.enable_ml_selection {
+            info!("Starting ML-based component selection phase...");
+            self.run_ml_component_selection(analysis)?;
+            info!("ML component selection phase completed");
+        }
+        
+        // Phase 15: Run thermal simulation and analysis
+        if self.config.enable_thermal_simulation {
+            info!("Starting thermal simulation phase...");
+            self.run_thermal_simulation(analysis)?;
+            info!("Thermal simulation phase completed");
+        }
+        
+        // Phase 16: Run cost optimization with supplier data
+        if self.config.enable_cost_optimization {
+            info!("Starting cost optimization phase...");
+            self.run_cost_optimization(analysis).await?;
+            info!("Cost optimization phase completed");
         }
 
         info!("Netlist generation complete: {} modules, {} instances, {} nets, {} database components", 
@@ -2396,6 +2468,649 @@ impl NetlistGenerator {
                 warn!("Component compatibility analysis failed: {}", e);
                 // Don't fail the entire synthesis - just log the warning
             }
+        }
+        
+        Ok(())
+    }
+    
+    /// Run design pattern recognition on the generated netlist
+    fn run_pattern_recognition(&mut self, analysis: &AnalysisResult) -> Result<()> {
+        use crate::design_pattern_recognition::DesignPatternRecognizer;
+        
+        info!("Running design pattern recognition on {} components", self.netlist.instances.len());
+        
+        let mut recognizer = DesignPatternRecognizer::new();
+        
+        // Recognize patterns in the netlist
+        match recognizer.recognize_patterns(&self.netlist, analysis) {
+            Ok(report) => {
+                info!("Recognized {} circuit patterns", report.recognized_patterns.len());
+                for pattern in &report.recognized_patterns {
+                    info!("  - {} (confidence: {:.1}%)", pattern.pattern_name, pattern.confidence_score * 100.0);
+                    if !pattern.matched_components.is_empty() {
+                        info!("    Components: {} instances", pattern.matched_components.len());
+                    }
+                }
+            },
+            Err(e) => {
+                warn!("Pattern recognition failed: {}", e);
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// Run cross-component optimization
+    fn run_cross_component_optimization(&mut self, analysis: &AnalysisResult) -> Result<()> {
+        use crate::cross_component_optimization::CrossComponentOptimizer;
+        
+        info!("Running cross-component optimization");
+        
+        let mut optimizer = CrossComponentOptimizer::new();
+        
+        // Analyze coordination opportunities  
+        // Note: Using empty behavioral models array as we don't have them yet
+        let behavioral_models = Vec::new();
+        match optimizer.analyze_coordination_opportunities(&self.netlist, &behavioral_models) {
+            Ok(plan) => {
+                info!("Found coordination plan with {} participants", plan.total_participants);
+                
+                // Execute coordinated optimization if there are participants
+                if plan.total_participants > 0 {
+                    // Create initial design parameters (would come from simulation in full implementation)
+                    let initial_params = bhdl_simulation::DesignParameters::new();
+                    match optimizer.execute_coordinated_optimization(&mut self.netlist, &initial_params) {
+                        Ok(result) => {
+                            info!("Cross-component optimization completed:");
+                            info!("  - {} optimization phases executed", result.phase_results.len());
+                            info!("  - Objectives met: {}", result.objectives_met);
+                            
+                            // Log phase results
+                            for phase in &result.phase_results {
+                                let total_objectives = phase.objectives_achieved.len();
+                                info!("    Phase '{}': {} participants, {} objectives achieved",
+                                      phase.phase_name, phase.participants_optimized, total_objectives);
+                            }
+                        },
+                        Err(e) => {
+                            warn!("Cross-component optimization execution failed: {}", e);
+                        }
+                    }
+                }
+            },
+            Err(e) => {
+                warn!("Cross-component opportunity analysis failed: {}", e);
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// Run design rule checking
+    fn run_design_rule_check(&self, analysis: &AnalysisResult) -> Result<()> {
+        use crate::design_rule_checker::{DesignRuleChecker, IndustryStandard};
+        
+        info!("Running design rule check on netlist");
+        
+        // Use IPC-2221 as default standard
+        let mut checker = DesignRuleChecker::new(IndustryStandard::IPC2221);
+        let report = checker.run_checks(&self.netlist, analysis);
+        
+        info!("DRC Results:");
+        info!("  - Rules checked: {}", report.rules_checked);
+        info!("  - Pass rate: {:.1}%", report.pass_rate);
+        
+        if report.critical_count > 0 {
+            error!("  - {} CRITICAL violations found!", report.critical_count);
+        }
+        if report.error_count > 0 {
+            error!("  - {} ERROR violations found!", report.error_count);
+        }
+        if report.warning_count > 0 {
+            warn!("  - {} WARNING violations found", report.warning_count);
+        }
+        if report.info_count > 0 {
+            info!("  - {} INFO messages", report.info_count);
+        }
+        
+        if report.manufacturing_ready {
+            info!("✅ Design is MANUFACTURING READY");
+        } else {
+            warn!("❌ Design is NOT manufacturing ready - fix critical and error violations");
+        }
+        
+        Ok(())
+    }
+    
+    /// Run ML-based component selection optimization
+    fn run_ml_component_selection(&mut self, analysis: &AnalysisResult) -> Result<()> {
+        use crate::ml_component_selection::{
+            MLComponentSelector, ComponentRequirements, ComponentCategory,
+            EnvironmentalConditions, DesignContext
+        };
+        
+        info!("Running ML-based component selection optimization");
+        
+        let ml_selector = MLComponentSelector::new();
+        let mut optimization_count = 0;
+        let mut total_components = 0;
+        
+        // Process each component instance for potential optimization
+        for (instance_id, instance) in &self.netlist.instances {
+            total_components += 1;
+            
+            // Determine component category
+            let category = self.determine_component_category(&instance.name);
+            
+            // Extract requirements from instance and analysis
+            let requirements = self.extract_component_requirements(
+                instance,
+                &category,
+                analysis
+            )?;
+            
+            // Create design context
+            let context = DesignContext {
+                application_type: "General Purpose".to_string(),
+                production_volume: 1000,
+                target_cost: 100.0,
+                regulatory_requirements: vec![],
+            };
+            
+            // Run ML selection
+            match ml_selector.select_component(&requirements, &context) {
+                Ok(prediction) => {
+                    if !prediction.recommended_components.is_empty() {
+                        let best = &prediction.recommended_components[0];
+                        
+                        // Only suggest optimization if confidence is high
+                        if best.score > 0.8 {
+                            info!("  ML recommends {} for {} (score: {:.2})",
+                                  best.part_number, instance.name, best.score);
+                            
+                            // Store recommendation for later application
+                            // In production, would update the netlist or generate report
+                            optimization_count += 1;
+                            
+                            // Log reasons
+                            for reason in &best.reasons {
+                                debug!("    - {}", reason);
+                            }
+                        }
+                    }
+                },
+                Err(e) => {
+                    debug!("ML selection failed for {}: {}", instance.name, e);
+                }
+            }
+        }
+        
+        info!("ML component selection completed:");
+        info!("  - {} components analyzed", total_components);
+        info!("  - {} optimization opportunities found", optimization_count);
+        
+        if optimization_count > 0 {
+            let optimization_rate = (optimization_count as f64 / total_components as f64) * 100.0;
+            info!("  - Optimization potential: {:.1}%", optimization_rate);
+        }
+        
+        Ok(())
+    }
+    
+    /// Determine component category from instance name/type
+    fn determine_component_category(&self, name: &str) -> crate::ml_component_selection::ComponentCategory {
+        use crate::ml_component_selection::ComponentCategory;
+        
+        let name_lower = name.to_lowercase();
+        
+        if name_lower.contains("res") || name_lower.starts_with('r') {
+            ComponentCategory::Resistor
+        } else if name_lower.contains("cap") || name_lower.starts_with('c') {
+            ComponentCategory::Capacitor
+        } else if name_lower.contains("ind") || name_lower.starts_with('l') {
+            ComponentCategory::Inductor
+        } else if name_lower.contains("diode") || name_lower.starts_with('d') {
+            ComponentCategory::Diode
+        } else if name_lower.starts_with('q') || name_lower.contains("trans") {
+            ComponentCategory::Transistor
+        } else if name_lower.starts_with('u') {
+            ComponentCategory::IC
+        } else if name_lower.starts_with('j') || name_lower.contains("conn") {
+            ComponentCategory::Connector
+        } else if name_lower.starts_with('y') || name_lower.contains("xtal") {
+            ComponentCategory::Crystal
+        } else {
+            ComponentCategory::IC // Default
+        }
+    }
+    
+    /// Extract component requirements from instance and analysis
+    fn extract_component_requirements(
+        &self,
+        instance: &bhdl_netlist::Instance,
+        category: &crate::ml_component_selection::ComponentCategory,
+        analysis: &AnalysisResult,
+    ) -> Result<crate::ml_component_selection::ComponentRequirements> {
+        use crate::ml_component_selection::{ComponentRequirements, ComponentCategory, EnvironmentalConditions};
+        use std::collections::HashMap;
+        
+        let mut electrical_specs = HashMap::new();
+        
+        // Extract electrical specifications from instance attributes
+        for (key, value) in &instance.attributes {
+            if let Ok(num_value) = value.parse::<f64>() {
+                electrical_specs.insert(key.clone(), num_value);
+            }
+        }
+        
+        // Add default specs based on category
+        match category {
+            ComponentCategory::Resistor => {
+                electrical_specs.entry("power_rating".to_string()).or_insert(0.25);
+                electrical_specs.entry("tolerance".to_string()).or_insert(5.0);
+            },
+            ComponentCategory::Capacitor => {
+                electrical_specs.entry("voltage_rating".to_string()).or_insert(16.0);
+                electrical_specs.entry("tolerance".to_string()).or_insert(10.0);
+            },
+            _ => {}
+        }
+        
+        Ok(ComponentRequirements {
+            component_type: category.clone(),
+            electrical_specs,
+            environmental_conditions: EnvironmentalConditions {
+                temperature_range: (-40.0, 85.0),
+                humidity_range: (0.0, 95.0),
+                vibration_level: "Standard".to_string(),
+                altitude_max: 3000.0,
+                chemical_exposure: vec![],
+            },
+            cost_target: None,
+            size_constraints: None,
+            reliability_requirements: None,
+        })
+    }
+    
+    /// Run thermal simulation and analysis
+    fn run_thermal_simulation(&mut self, analysis: &AnalysisResult) -> Result<()> {
+        use crate::thermal_simulation::{ThermalSimulator, AmbientConditions, BoardThermalProperties};
+        use std::collections::HashMap;
+        
+        info!("Running thermal simulation on {} components", self.netlist.instances.len());
+        
+        let mut simulator = ThermalSimulator::new();
+        
+        // Set up simulation environment
+        let ambient = AmbientConditions {
+            temperature: 25.0,  // °C - typical room temperature
+            humidity: 50.0,     // %RH
+            pressure: 101.3,    // kPa - sea level
+            altitude: 0.0,      // m
+            enclosure_properties: None,
+        };
+        simulator.set_ambient_conditions(ambient);
+        
+        // Set up board properties (would come from PCB design in production)
+        let board_props = BoardThermalProperties::default();
+        simulator.set_board_properties(board_props);
+        
+        // Extract component list and load thermal models
+        let component_names: Vec<String> = self.netlist.instances.keys()
+            .map(|id| self.netlist.instances[id].name.clone())
+            .collect();
+        
+        simulator.load_component_models(&component_names)?;
+        
+        // Estimate power dissipation for each component
+        let power_map = self.estimate_component_power_dissipation(analysis)?;
+        
+        info!("Power dissipation estimates:");
+        for (name, power) in &power_map {
+            debug!("  {}: {:.3}W", name, power);
+        }
+        
+        // Run thermal simulation
+        match simulator.simulate(&power_map) {
+            Ok(results) => {
+                info!("Thermal simulation results:");
+                info!("  - Components analyzed: {}", results.component_temperatures.len());
+                info!("  - Thermal violations: {}", results.thermal_violations.len());
+                info!("  - Hot spots identified: {}", results.hot_spots.len());
+                
+                // Report component temperatures
+                for (name, temp) in &results.component_temperatures {
+                    let status = if temp.thermal_margin > 10.0 {
+                        "✓ OK"
+                    } else if temp.thermal_margin > 0.0 {
+                        "⚠ WARM"
+                    } else {
+                        "❌ HOT"
+                    };
+                    
+                    info!("    {}: {:.1}°C junction, {:.1}°C margin {}",
+                          name, temp.junction_temperature, temp.thermal_margin, status);
+                }
+                
+                // Report violations
+                if !results.thermal_violations.is_empty() {
+                    warn!("Thermal violations detected:");
+                    for violation in &results.thermal_violations {
+                        warn!("  - {}: {:.1}°C exceeds {:.1}°C limit ({:?})",
+                              violation.component_name,
+                              violation.actual_value,
+                              violation.limit_value,
+                              violation.severity);
+                    }
+                }
+                
+                // Report hot spots
+                if !results.hot_spots.is_empty() {
+                    warn!("Hot spots detected:");
+                    for hot_spot in &results.hot_spots {
+                        warn!("  - {:.1}°C at ({:.1}, {:.1}) mm - {} - {:?}",
+                              hot_spot.temperature,
+                              hot_spot.position.0,
+                              hot_spot.position.1,
+                              hot_spot.root_cause,
+                              hot_spot.severity);
+                    }
+                }
+                
+                // Show cooling recommendations
+                if !results.cooling_recommendations.is_empty() {
+                    info!("Cooling recommendations:");
+                    for rec in &results.cooling_recommendations {
+                        info!("  - {:?}: {} ({:.1}°C improvement, {:?} cost)",
+                              rec.solution_type,
+                              rec.description,
+                              rec.estimated_improvement,
+                              rec.implementation_cost);
+                    }
+                }
+                
+                // Show derating recommendations
+                if !results.power_derating_recommendations.is_empty() {
+                    info!("Power derating recommendations:");
+                    for rec in &results.power_derating_recommendations {
+                        info!("  - {}: Reduce to {:.2}W ({:.0}% derating)",
+                              rec.component_name,
+                              rec.recommended_power,
+                              (1.0 - rec.derating_factor) * 100.0);
+                    }
+                }
+                
+                // Generate thermal report
+                match simulator.export_thermal_report(&results) {
+                    Ok(report) => {
+                        debug!("Thermal analysis report:\n{}", report);
+                    },
+                    Err(e) => {
+                        warn!("Failed to generate thermal report: {}", e);
+                    }
+                }
+            },
+            Err(e) => {
+                error!("Thermal simulation failed: {}", e);
+                return Err(e);
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// Estimate power dissipation for components
+    fn estimate_component_power_dissipation(
+        &self,
+        analysis: &AnalysisResult,
+    ) -> Result<HashMap<String, f64>> {
+        let mut power_map = HashMap::new();
+        
+        // Extract power information from component instances
+        for (_, instance) in &self.netlist.instances {
+            let mut power = 0.0;
+            
+            // Check for explicit power attributes
+            if let Some(power_str) = instance.attributes.get("power") {
+                if let Ok(parsed_power) = power_str.parse::<f64>() {
+                    power = parsed_power;
+                }
+            }
+            
+            // Estimate based on component type if no explicit power
+            if power == 0.0 {
+                power = self.estimate_power_by_type(&instance.name);
+            }
+            
+            // Add power domain contributions
+            power += self.estimate_power_from_domains(&instance.name, analysis);
+            
+            power_map.insert(instance.name.clone(), power);
+        }
+        
+        Ok(power_map)
+    }
+    
+    /// Estimate power by component type
+    fn estimate_power_by_type(&self, component_name: &str) -> f64 {
+        let name_lower = component_name.to_lowercase();
+        
+        if name_lower.starts_with('r') {
+            0.001 // 1mW typical resistor
+        } else if name_lower.starts_with('c') {
+            0.0001 // 0.1mW typical capacitor
+        } else if name_lower.starts_with('l') {
+            0.0001 // 0.1mW typical inductor
+        } else if name_lower.starts_with('d') {
+            0.01 // 10mW typical diode
+        } else if name_lower.starts_with('q') {
+            0.1 // 100mW typical transistor
+        } else if name_lower.starts_with('u') {
+            0.25 // 250mW typical IC
+        } else if name_lower.contains("led") {
+            0.02 // 20mW typical LED
+        } else {
+            0.1 // 100mW default
+        }
+    }
+    
+    /// Estimate power contribution from power domains
+    fn estimate_power_from_domains(&self, _component_name: &str, analysis: &AnalysisResult) -> f64 {
+        // Check if component is connected to high-power domains
+        // This would require connection analysis in production
+        
+        // For now, add small contribution based on power domain voltage
+        let mut domain_power = 0.0;
+        
+        for (_domain_name, symbol) in analysis.global_scope.get_symbols() {
+            if let Some(net_attr) = &symbol.net_attributes {
+                if let Some(voltage) = net_attr.voltage() {
+                    // Check for current in the net attributes (simplified)
+                    // In production, would have proper current extraction method
+                    if voltage > 3.0 {
+                        domain_power += voltage * 0.01 * 0.01; // Very small estimated contribution
+                    }
+                }
+            }
+        }
+        
+        domain_power.min(1.0f64) // Cap at 1W
+    }
+    
+    /// Run cost optimization with supplier data integration
+    async fn run_cost_optimization(&mut self, analysis: &AnalysisResult) -> Result<()> {
+        use crate::cost_optimization::{CostOptimizer, CostOptimizationConfig, SupplierClient, RateLimit, BackoffStrategy};
+        use std::time::Duration;
+        
+        info!("Running cost optimization on {} components", self.netlist.instances.len());
+        
+        // Initialize cost optimizer if not already initialized
+        if self.cost_optimizer.is_none() {
+            let mut config = CostOptimizationConfig::default();
+            config.enable_real_time_pricing = true;
+            config.cache_pricing_hours = 4;
+            config.parallel_supplier_queries = 5;
+            config.include_shipping_costs = true;
+            config.optimization_iterations = 30;
+            
+            let mut optimizer = CostOptimizer::with_config(config);
+            
+            // Add default suppliers (in production, these would come from configuration)
+            let digikey = SupplierClient {
+                supplier_name: "DigiKey".to_string(),
+                api_endpoint: "https://api.digikey.com/v1/".to_string(),
+                api_key: None, // Would be loaded from environment in production
+                rate_limit: RateLimit {
+                    requests_per_minute: 60,
+                    burst_allowance: 10,
+                    backoff_strategy: BackoffStrategy::Exponential(Duration::from_secs(1)),
+                },
+                availability_check: true,
+                real_time_pricing: true,
+                bulk_discount_support: true,
+                lead_time_data: true,
+            };
+            
+            let mouser = SupplierClient {
+                supplier_name: "Mouser".to_string(),
+                api_endpoint: "https://api.mouser.com/v1/".to_string(),
+                api_key: None,
+                rate_limit: RateLimit {
+                    requests_per_minute: 100,
+                    burst_allowance: 20,
+                    backoff_strategy: BackoffStrategy::Linear(Duration::from_millis(500)),
+                },
+                availability_check: true,
+                real_time_pricing: true,
+                bulk_discount_support: true,
+                lead_time_data: true,
+            };
+            
+            let arrow = SupplierClient {
+                supplier_name: "Arrow".to_string(),
+                api_endpoint: "https://api.arrow.com/v1/".to_string(),
+                api_key: None,
+                rate_limit: RateLimit {
+                    requests_per_minute: 30,
+                    burst_allowance: 5,
+                    backoff_strategy: BackoffStrategy::Fixed(Duration::from_secs(2)),
+                },
+                availability_check: true,
+                real_time_pricing: false, // Batch pricing updates
+                bulk_discount_support: true,
+                lead_time_data: true,
+            };
+            
+            // Add suppliers to optimizer
+            optimizer.add_supplier(digikey).await.context("Failed to add DigiKey supplier")?;
+            optimizer.add_supplier(mouser).await.context("Failed to add Mouser supplier")?;
+            optimizer.add_supplier(arrow).await.context("Failed to add Arrow supplier")?;
+            
+            self.cost_optimizer = Some(optimizer);
+            info!("Cost optimizer initialized with 3 suppliers");
+        }
+        
+        // Run cost optimization
+        if let Some(optimizer) = &mut self.cost_optimizer {
+            match optimizer.optimize_component_costs(&self.netlist, analysis).await {
+                Ok(results) => {
+                    info!("Cost optimization results:");
+                    info!("  - Original total cost: ${:.2}", results.original_cost.total);
+                    info!("  - Optimized total cost: ${:.2}", results.optimized_cost.total);
+                    info!("  - Total cost savings: ${:.2} ({:.1}%)", 
+                          results.cost_savings, results.savings_percentage);
+                    
+                    // Report component-level savings
+                    let significant_savings: Vec<_> = results.component_recommendations.iter()
+                        .filter(|(_, rec)| rec.cost_change.abs() > 0.10) // Show savings > $0.10
+                        .collect();
+                    
+                    if !significant_savings.is_empty() {
+                        info!("  - Components with significant cost changes:");
+                        for (instance_id, recommendation) in significant_savings.iter().take(10) {
+                            let component_name = self.netlist.instances.get(**instance_id)
+                                .map(|inst| inst.name.as_str())
+                                .unwrap_or("unknown");
+                            
+                            let change_sign = if recommendation.cost_change >= 0.0 { "+" } else { "" };
+                            info!("    • {}: {}{:.2} ({:.1}%) -> {}",
+                                  component_name,
+                                  change_sign,
+                                  recommendation.cost_change,
+                                  recommendation.cost_change_percentage,
+                                  recommendation.recommended_component);
+                        }
+                        
+                        if significant_savings.len() > 10 {
+                            info!("    ... and {} more components with cost changes",
+                                  significant_savings.len() - 10);
+                        }
+                    }
+                    
+                    // Report supplier consolidation
+                    info!("  - Supplier optimization:");
+                    info!("    • Suppliers: {} → {}",
+                          results.supplier_consolidation.original_supplier_count,
+                          results.supplier_consolidation.optimized_supplier_count);
+                    info!("    • Consolidation savings: ${:.2}",
+                          results.supplier_consolidation.consolidation_savings);
+                    info!("    • Volume discount achieved: ${:.2}",
+                          results.supplier_consolidation.volume_discount_achieved);
+                    
+                    // Report lifecycle risks
+                    if !results.lifecycle_risks.is_empty() {
+                        warn!("  - Lifecycle risks identified: {}", results.lifecycle_risks.len());
+                        let high_risks = results.lifecycle_risks.iter()
+                            .filter(|r| matches!(r.risk_level, crate::cost_optimization::RiskLevel::High | crate::cost_optimization::RiskLevel::Critical))
+                            .count();
+                        
+                        if high_risks > 0 {
+                            warn!("    • High/Critical risks: {} components", high_risks);
+                        }
+                    }
+                    
+                    // Show key findings and recommendations
+                    if !results.optimization_summary.key_findings.is_empty() {
+                        info!("  - Key findings:");
+                        for finding in &results.optimization_summary.key_findings {
+                            info!("    • {}", finding);
+                        }
+                    }
+                    
+                    if !results.optimization_summary.recommendations.is_empty() {
+                        info!("  - Recommendations:");
+                        for recommendation in &results.optimization_summary.recommendations {
+                            info!("    • {}", recommendation);
+                        }
+                    }
+                    
+                    // Report optimization performance
+                    info!("  - Optimization performance:");
+                    info!("    • Iterations: {} (converged: {})",
+                          results.optimization_summary.iterations_performed,
+                          results.optimization_summary.convergence_achieved);
+                    info!("    • Components analyzed: {}",
+                          results.optimization_summary.components_analyzed);
+                    info!("    • Alternatives evaluated: {}",
+                          results.optimization_summary.alternatives_evaluated);
+                    info!("    • Supplier queries: {}",
+                          results.optimization_summary.supplier_queries_made);
+                    info!("    • Time: {:.2}s",
+                          results.optimization_summary.optimization_time_seconds);
+                    
+                    // Store results for later use (e.g., BOM generation)
+                    // In production, this would be stored in the netlist or a separate structure
+                    debug!("Cost optimization data available for BOM generation and procurement");
+                },
+                Err(e) => {
+                    error!("Cost optimization failed: {}", e);
+                    warn!("Continuing synthesis without cost optimization");
+                    // Don't fail the entire synthesis due to cost optimization failure
+                }
+            }
+        } else {
+            error!("Cost optimizer not initialized - this should not happen");
+            return Err(anyhow::anyhow!("Cost optimizer initialization failed"));
         }
         
         Ok(())
