@@ -87,6 +87,7 @@ pub mod cost_optimization;
 
 // EMI/EMC (Electromagnetic Interference/Electromagnetic Compatibility) analysis
 pub mod emi_emc_analysis;
+pub mod reliability_analysis;
 
 // Re-export key types
 pub use bhdl_analyzer::types::AnalysisResult;
@@ -127,6 +128,8 @@ pub struct NetlistConfig {
     pub enable_cost_optimization: bool,
     /// Enable EMI/EMC (Electromagnetic Interference/Electromagnetic Compatibility) analysis
     pub enable_emi_emc_analysis: bool,
+    /// Enable reliability and lifecycle analysis
+    pub enable_reliability_analysis: bool,
 }
 
 /// Database integration statistics
@@ -171,6 +174,7 @@ impl Default for NetlistConfig {
             enable_thermal_simulation: false, // Off by default for performance
             enable_cost_optimization: false, // Off by default, requires supplier API setup
             enable_emi_emc_analysis: false,  // Off by default for performance
+            enable_reliability_analysis: false, // Off by default for performance
         }
     }
 }
@@ -204,6 +208,8 @@ pub struct NetlistGenerator {
     cost_optimizer: Option<crate::cost_optimization::CostOptimizer>,
     // EMI/EMC analyzer for electromagnetic compatibility analysis
     emi_emc_analyzer: Option<crate::emi_emc_analysis::EMIEMCAnalyzer>,
+    // Reliability analyzer for component reliability and lifecycle analysis
+    reliability_analyzer: Option<crate::reliability_analysis::ReliabilityAnalyzer>,
 }
 
 impl NetlistGenerator {
@@ -234,6 +240,7 @@ impl NetlistGenerator {
             supporting_component_instances: HashMap::new(),
             cost_optimizer: None, // Will be initialized when cost optimization is enabled
             emi_emc_analyzer: None, // Will be initialized when EMI/EMC analysis is enabled
+            reliability_analyzer: None, // Will be initialized when reliability analysis is enabled
         }
     }
 
@@ -508,6 +515,13 @@ impl NetlistGenerator {
             info!("Starting EMI/EMC analysis phase...");
             self.run_emi_emc_analysis(analysis).await?;
             info!("EMI/EMC analysis phase completed");
+        }
+        
+        // Phase 18: Run reliability and lifecycle analysis
+        if self.config.enable_reliability_analysis {
+            info!("Starting reliability and lifecycle analysis phase...");
+            self.run_reliability_analysis(analysis).await?;
+            info!("Reliability and lifecycle analysis phase completed");
         }
 
         info!("Netlist generation complete: {} modules, {} instances, {} nets, {} database components", 
@@ -3346,6 +3360,275 @@ impl NetlistGenerator {
         } else {
             error!("EMI/EMC analyzer not initialized - this should not happen");
             return Err(anyhow::anyhow!("EMI/EMC analyzer initialization failed"));
+        }
+        
+        Ok(())
+    }
+
+    /// Run reliability and lifecycle analysis
+    async fn run_reliability_analysis(&mut self, analysis: &AnalysisResult) -> Result<()> {
+        use crate::reliability_analysis::{ReliabilityAnalyzer, ReliabilityConfig};
+        
+        info!("Running reliability and lifecycle analysis on {} components", self.netlist.instances.len());
+        
+        // Initialize reliability analyzer if not already initialized
+        if self.reliability_analyzer.is_none() {
+            let mut config = ReliabilityConfig::default();
+            
+            // Configure analysis parameters
+            config.analysis_period = 87600.0;  // 10 years in hours
+            config.confidence_level = 0.95;    // 95% confidence
+            config.enable_accelerated_testing = true;
+            config.enable_physics_of_failure = true;
+            config.enable_bayesian_analysis = false;
+            config.enable_prognostics = true;
+            config.temperature_cycling_enabled = true;
+            config.burn_in_hours = 168.0;      // 1 week burn-in
+            
+            // Configure derating factors for conservative design
+            config.derating_factors.voltage_derating = 0.8;  // 80% of maximum
+            config.derating_factors.current_derating = 0.75; // 75% of maximum
+            config.derating_factors.power_derating = 0.8;    // 80% of maximum
+            config.derating_factors.temperature_derating = 10.0; // 10°C below maximum
+            config.derating_factors.frequency_derating = 0.8; // 80% of maximum
+            
+            let analysis_period = config.analysis_period;
+            let confidence_level = config.confidence_level;
+            
+            let analyzer = ReliabilityAnalyzer::with_config(config);
+            self.reliability_analyzer = Some(analyzer);
+            
+            info!("Reliability analyzer initialized for {:.0}-year analysis with {}% confidence",
+                  analysis_period / 8760.0, confidence_level * 100.0);
+        }
+        
+        // Run reliability analysis
+        if let Some(analyzer) = &mut self.reliability_analyzer {
+            match analyzer.analyze_reliability(&self.netlist, analysis).await {
+                Ok(results) => {
+                    info!("Reliability analysis results:");
+                    
+                    // Report system-level reliability
+                    info!("  - System Reliability:");
+                    info!("    • Overall reliability: {:.4} ({:.2}%)", 
+                          results.overall_system_reliability, 
+                          results.overall_system_reliability * 100.0);
+                    info!("    • Mean Time Between Failures: {:.0} hours ({:.1} years)", 
+                          results.mean_time_between_failures, 
+                          results.mean_time_between_failures / 8760.0);
+                    info!("    • System failure rate: {:.2e} failures/hour", results.failure_rate);
+                    
+                    // Report component reliability summary
+                    info!("  - Component Reliability:");
+                    info!("    • Total components analyzed: {}", results.component_reliabilities.len());
+                    
+                    let low_reliability_count = results.component_reliabilities.values()
+                        .filter(|c| c.reliability < 0.9)
+                        .count();
+                    
+                    if low_reliability_count > 0 {
+                        warn!("    ⚠ {} components with reliability < 90%", low_reliability_count);
+                        
+                        // Show worst components
+                        let mut worst_components: Vec<_> = results.component_reliabilities.values().collect();
+                        worst_components.sort_by(|a, b| a.reliability.partial_cmp(&b.reliability).unwrap());
+                        
+                        info!("    • Lowest reliability components:");
+                        for (i, component) in worst_components.iter().take(3).enumerate() {
+                            info!("      {}. {}: {:.3} ({:.1}% reliability)", 
+                                  i + 1, 
+                                  component.component_name, 
+                                  component.reliability,
+                                  component.reliability * 100.0);
+                        }
+                    }
+                    
+                    // Report critical components
+                    info!("  - Critical Components:");
+                    info!("    • Critical components identified: {}", results.critical_components.len());
+                    
+                    let single_point_failures = results.critical_components.iter()
+                        .filter(|c| c.single_point_of_failure)
+                        .count();
+                    
+                    if single_point_failures > 0 {
+                        warn!("    ⚠ {} single points of failure detected", single_point_failures);
+                    }
+                    
+                    // Show top critical components
+                    if !results.critical_components.is_empty() {
+                        info!("    • Top critical components:");
+                        for (i, component) in results.critical_components.iter().take(5).enumerate() {
+                            let impact_str = match component.failure_impact {
+                                crate::reliability_analysis::ImpactSeverity::Catastrophic => "CATASTROPHIC",
+                                crate::reliability_analysis::ImpactSeverity::Critical => "CRITICAL",
+                                crate::reliability_analysis::ImpactSeverity::Marginal => "MARGINAL",
+                                crate::reliability_analysis::ImpactSeverity::Negligible => "NEGLIGIBLE",
+                            };
+                            
+                            info!("      {}. {} (Score: {:.2}, Impact: {}{})", 
+                                  i + 1, 
+                                  component.component_name,
+                                  component.criticality_score,
+                                  impact_str,
+                                  if component.single_point_of_failure { ", SPOF" } else { "" });
+                        }
+                    }
+                    
+                    // Report failure predictions
+                    info!("  - Failure Predictions:");
+                    info!("    • Predicted failures in analysis period: {}", results.failure_predictions.len());
+                    
+                    let near_term_failures = results.failure_predictions.iter()
+                        .filter(|f| f.predicted_failure_time < 8760.0) // Within 1 year
+                        .count();
+                    
+                    if near_term_failures > 0 {
+                        warn!("    ⚠ {} components predicted to fail within 1 year", near_term_failures);
+                        
+                        info!("    • Near-term failure predictions:");
+                        for (i, prediction) in results.failure_predictions.iter()
+                            .filter(|f| f.predicted_failure_time < 8760.0)
+                            .take(3)
+                            .enumerate() {
+                            
+                            info!("      {}. {} in {:.0} hours ({:.1} months, confidence: {:.0}%)",
+                                  i + 1,
+                                  prediction.component_name,
+                                  prediction.predicted_failure_time,
+                                  prediction.predicted_failure_time / (8760.0 / 12.0),
+                                  prediction.prediction_confidence * 100.0);
+                        }
+                    }
+                    
+                    // Report lifecycle risks
+                    info!("  - Lifecycle Risks:");
+                    info!("    • Total lifecycle risks identified: {}", results.lifecycle_risks.len());
+                    
+                    let high_lifecycle_risks = results.lifecycle_risks.iter()
+                        .filter(|r| matches!(r.risk_level, crate::reliability_analysis::RiskLevel::High | crate::reliability_analysis::RiskLevel::Critical))
+                        .count();
+                    
+                    if high_lifecycle_risks > 0 {
+                        warn!("    ⚠ {} high/critical lifecycle risks", high_lifecycle_risks);
+                        
+                        info!("    • High-priority lifecycle risks:");
+                        for (i, risk) in results.lifecycle_risks.iter()
+                            .filter(|r| matches!(r.risk_level, crate::reliability_analysis::RiskLevel::High | crate::reliability_analysis::RiskLevel::Critical))
+                            .take(3)
+                            .enumerate() {
+                            
+                            let risk_type_str = match risk.risk_type {
+                                crate::reliability_analysis::LifecycleRiskType::ComponentObsolescence => "Obsolescence",
+                                crate::reliability_analysis::LifecycleRiskType::SupplierDiscontinuation => "Supplier Risk",
+                                crate::reliability_analysis::LifecycleRiskType::TechnologySupersession => "Technology",
+                                crate::reliability_analysis::LifecycleRiskType::RegulatoryChange => "Regulatory",
+                            };
+                            
+                            info!("      {}. {} - {} ({:.1} years): {}",
+                                  i + 1,
+                                  risk.component_name,
+                                  risk_type_str,
+                                  risk.time_horizon,
+                                  risk.impact_description);
+                        }
+                    }
+                    
+                    // Report maintenance recommendations
+                    info!("  - Maintenance Recommendations:");
+                    info!("    • Total maintenance items: {}", results.maintenance_recommendations.len());
+                    
+                    let critical_maintenance = results.maintenance_recommendations.iter()
+                        .filter(|m| matches!(m.priority, crate::reliability_analysis::MaintenancePriority::Critical))
+                        .count();
+                    
+                    let high_maintenance = results.maintenance_recommendations.iter()
+                        .filter(|m| matches!(m.priority, crate::reliability_analysis::MaintenancePriority::High))
+                        .count();
+                    
+                    info!("    • Critical priority: {}", critical_maintenance);
+                    info!("    • High priority: {}", high_maintenance);
+                    
+                    if critical_maintenance > 0 || high_maintenance > 0 {
+                        info!("    • Priority maintenance items:");
+                        for (i, maintenance) in results.maintenance_recommendations.iter()
+                            .filter(|m| matches!(m.priority, crate::reliability_analysis::MaintenancePriority::Critical | crate::reliability_analysis::MaintenancePriority::High))
+                            .take(5)
+                            .enumerate() {
+                            
+                            let priority_str = match maintenance.priority {
+                                crate::reliability_analysis::MaintenancePriority::Critical => "CRITICAL",
+                                crate::reliability_analysis::MaintenancePriority::High => "HIGH",
+                                _ => "MEDIUM",
+                            };
+                            
+                            info!("      {}. [{}] {} - Every {:.0} hours ({:.1} months)",
+                                  i + 1,
+                                  priority_str,
+                                  maintenance.component_name,
+                                  maintenance.recommended_interval,
+                                  maintenance.recommended_interval / (8760.0 / 12.0));
+                        }
+                    }
+                    
+                    // Report derating analysis
+                    info!("  - Derating Analysis:");
+                    info!("    • Overall derating compliance: {:.1}%", 
+                          results.derating_analysis.overall_derating_compliance);
+                    info!("    • Voltage derating: {:.1}% compliant", 
+                          results.derating_analysis.voltage_derating_status.compliance_percentage);
+                    info!("    • Current derating: {:.1}% compliant", 
+                          results.derating_analysis.current_derating_status.compliance_percentage);
+                    info!("    • Thermal derating: {:.1}% compliant", 
+                          results.derating_analysis.thermal_derating_status.compliance_percentage);
+                    
+                    if results.derating_analysis.overall_derating_compliance < 90.0 {
+                        warn!("    ⚠ Derating compliance below 90% - review component stress levels");
+                    }
+                    
+                    // Report environmental impact
+                    info!("  - Environmental Impact:");
+                    info!("    • Temperature impact factor: {:.2}", results.environmental_impact.temperature_impact);
+                    info!("    • Humidity impact factor: {:.2}", results.environmental_impact.humidity_impact);
+                    info!("    • Vibration impact factor: {:.2}", results.environmental_impact.vibration_impact);
+                    info!("    • Overall environmental factor: {:.2}", results.environmental_impact.overall_environmental_factor);
+                    
+                    if results.environmental_impact.overall_environmental_factor > 1.5 {
+                        warn!("    ⚠ High environmental stress factor - consider environmental mitigation");
+                    }
+                    
+                    // Report confidence intervals
+                    info!("  - Statistical Confidence:");
+                    info!("    • Reliability range: {:.3} - {:.3}", 
+                          results.confidence_intervals.reliability_lower_bound,
+                          results.confidence_intervals.reliability_upper_bound);
+                    info!("    • MTBF range: {:.0} - {:.0} hours", 
+                          results.confidence_intervals.mtbf_lower_bound,
+                          results.confidence_intervals.mtbf_upper_bound);
+                    
+                    // Summary assessment
+                    if results.overall_system_reliability > 0.95 {
+                        info!("✅ Reliability analysis: EXCELLENT - System meets high reliability standards");
+                    } else if results.overall_system_reliability > 0.90 {
+                        info!("✅ Reliability analysis: GOOD - System meets reliability requirements");
+                    } else if results.overall_system_reliability > 0.80 {
+                        warn!("⚠️ Reliability analysis: MARGINAL - System reliability could be improved");
+                    } else {
+                        error!("❌ Reliability analysis: POOR - System reliability needs significant improvement");
+                    }
+                    
+                    // Store results for later use (e.g., maintenance planning, lifecycle management)
+                    debug!("Reliability analysis data available for maintenance planning and lifecycle management");
+                },
+                Err(e) => {
+                    error!("Reliability analysis failed: {}", e);
+                    warn!("Continuing synthesis without reliability analysis");
+                    // Don't fail the entire synthesis due to reliability analysis failure
+                }
+            }
+        } else {
+            error!("Reliability analyzer not initialized - this should not happen");
+            return Err(anyhow::anyhow!("Reliability analyzer initialization failed"));
         }
         
         Ok(())
