@@ -52,6 +52,537 @@ module LM7805(
     pin ADJ: signal in when false {     // Only on adjustable variants
         description: "Output voltage adjustment"
     };
+    
+    // === BEHAVIORAL MODEL: ANALYTICAL (Level 0) ===
+    @behavioral_model analytical {
+        metadata: {
+            name: "analytical",
+            level: "ANALYTICAL",
+            typical_runtime: 0.1ms,
+            accuracy: 0.8,  // 80% accurate for basic calculations
+            provides_outputs: ["power_dissipation", "heatsink_requirement", "efficiency", "junction_temp"],
+        },
+        
+        // Simple equations for linear regulator analysis
+        equations: {
+            // Power dissipation
+            power_dissipation: "(vin - 5.0) * iout + vin * 6mA",
+            
+            // Junction temperature rise
+            junction_temp_rise: "power_dissipation * theta_ja",
+            junction_temp: "ambient_temp + junction_temp_rise",
+            
+            // Efficiency
+            efficiency: "5.0 / vin",
+            
+            // Heat sink requirement (negative means no heatsink needed)
+            heatsink_theta_sa: "(125°C - ambient_temp) / power_dissipation - 5.0 - 0.5",
+            
+            // Dropout check
+            in_regulation: "vin > 7.0",
+            
+            // Thermal shutdown check
+            thermal_safe: "junction_temp < 150°C",
+        },
+        
+        // Design constraints from equations
+        constraints: {
+            vin_min: "7.0V",  // Minimum for regulation
+            vin_max: "35V",   // Absolute maximum
+            iout_max: "1.5A", // Maximum current
+            power_max: "15W", // Practical limit for TO-220 with heatsink
+            thermal_limit: "junction_temp < 125°C",
+        },
+        
+        use_when: "initial_sizing || thermal_check || efficiency_estimate",
+    }
+    
+    // === BEHAVIORAL MODEL: DC_SPICE (Level 1) ===
+    @behavioral_model dc_spice {
+        metadata: {
+            name: "dc_spice",
+            level: "DC_CIRCUIT",
+            typical_runtime: 10ms,
+            accuracy: 0.95,  // 95% accurate DC analysis
+            
+            provides_outputs: [
+                "precise_voltage_regulation",
+                "load_line",
+                "dropout_behavior",
+                "current_limiting"
+            ],
+        },
+        
+        // SPICE-level DC model
+        dc_model: {
+            // Pass transistor model
+            pass_transistor: {
+                type: "bjt_darlington",
+                beta: 1000,
+                vbe: 1.4V,  // Darlington VBE
+                rce_sat: 1.3Ω,
+                thermal_voltage: "kT/q",
+            },
+            
+            // Reference voltage
+            bandgap_reference: {
+                voltage: 1.25V,
+                temperature_coefficient: 50e-6, // V/°C
+                psrr: 80dB,
+            },
+            
+            // Error amplifier
+            error_amp: {
+                gain: 10000,
+                input_bias_current: 1uA,
+                input_offset: 5mV,
+                output_current: 10mA,
+            },
+            
+            // Current limit
+            current_limit: {
+                sense_resistance: 0.6Ω,
+                limit_voltage: 0.6V,
+                foldback_factor: 0.5,
+            },
+            
+            // Thermal protection
+            thermal_protection: {
+                shutdown_temp: 150°C,
+                hysteresis: 10°C,
+                response_time: 10us,
+            }
+        },
+        
+        // Operating point analysis
+        dc_analysis: {
+            sweep_input: "(6V, 30V, 0.1V)",
+            sweep_load: "(0mA, 1.5A, 10mA)",
+            extract: [
+                "output_voltage",
+                "quiescent_current", 
+                "dropout_voltage",
+                "line_regulation",
+                "load_regulation"
+            ],
+        },
+        
+        use_when: "precise_dc_analysis || dropout_analysis || regulation_verification",
+    }
+    
+    // === BEHAVIORAL MODEL: AC_FREQUENCY (Level 2) ===
+    @behavioral_model ac_frequency {
+        metadata: {
+            name: "ac_frequency",
+            level: "AC_CIRCUIT",
+            typical_runtime: 100ms,
+            accuracy: 0.92,  // 92% accurate for frequency response
+            
+            valid_conditions: {
+                frequency_range: (0.1Hz, 1MHz),
+                signal_amplitude: "< 100mV",  // Small signal only
+            },
+            
+            provides_outputs: [
+                "psrr_curve",
+                "output_impedance_curve",
+                "noise_analysis",
+                "stability_margins"
+            ],
+        },
+        
+        // Small-signal AC model
+        ac_model: {
+            // Error amplifier small-signal
+            error_amp_ac: {
+                gain_dc: 10000,
+                gbw: 1MHz,
+                pole1: 100Hz,
+                phase_margin: 45°,
+                slew_rate: 0.5, // V/us
+            },
+            
+            // Pass transistor AC model
+            pass_transistor_ac: {
+                gm: "ic / vt",  // Transconductance
+                rce: 100Ω,      // Small-signal resistance
+                cbe: 100pF,     // Base-emitter capacitance
+                cbc: 20pF,      // Base-collector capacitance
+            },
+            
+            // Internal compensation
+            compensation: {
+                miller_cap: 30pF,   // Internal Miller compensation
+                zero_frequency: 1kHz, // ESR zero from output cap
+            }
+        },
+        
+        // Frequency domain analysis
+        ac_analysis: {
+            psrr_measurement: {
+                frequency_range: (1Hz, 100kHz),
+                injection_point: "input",
+                measurement_point: "output",
+                target_psrr_120hz: 68dB,
+            },
+            
+            output_impedance: {
+                frequency_range: (1Hz, 100kHz),
+                target_dc_impedance: 0.03Ω,
+                target_1khz_impedance: 0.06Ω,
+            },
+            
+            noise_analysis: {
+                frequency_range: (10Hz, 100kHz),
+                noise_sources: ["bandgap", "error_amp", "pass_transistor"],
+                target_total_noise: 40uV, // RMS
+            },
+            
+            stability_analysis: {
+                loop_gain_measurement: true,
+                phase_margin_min: 30°,
+                gain_margin_min: 10dB,
+            }
+        },
+        
+        use_when: "psrr_analysis || noise_analysis || stability_check || compensation_design",
+    }
+    
+    // === BEHAVIORAL MODEL: TRANSIENT (Level 3) ===
+    @behavioral_model transient {
+        metadata: {
+            name: "transient",
+            level: "TRANSIENT_CIRCUIT",
+            typical_runtime: 1s,
+            accuracy: 0.98,  // 98% accurate for transient analysis
+            
+            provides_outputs: [
+                "startup_behavior",
+                "load_step_response", 
+                "line_step_response",
+                "thermal_transients"
+            ],
+        },
+        
+        // Dynamic model including thermal
+        transient_model: {
+            // Capacitive effects
+            internal_capacitances: {
+                compensation_cap: 30pF,
+                pass_transistor_cap: 120pF,
+                bandgap_cap: 10pF,
+            },
+            
+            // Thermal model
+            thermal_network: {
+                thermal_capacitance: 0.8, // J/°C
+                thermal_resistance: 5.0,   // °C/W junction to case
+                thermal_time_constant: 50ms,
+                
+                // Self-heating effects
+                self_heating: {
+                    power_calculation: "(vin - vout) * iout",
+                    temperature_feedback: "affect_bandgap_and_current_limit",
+                }
+            },
+            
+            // Startup sequence
+            startup_model: {
+                enable_delay: 1us,
+                reference_startup: 10us,
+                regulation_time: 100us,
+                inrush_current_limit: 2A,
+                inrush_duration: 50us,
+            }
+        },
+        
+        // Transient test scenarios
+        transient_tests: {
+            startup_test: {
+                initial_conditions: "all_caps_discharged",
+                input_ramp: "0V to 12V in 10us",
+                measure: ["vout_settling", "inrush_current", "overshoot"],
+            },
+            
+            load_step_test: {
+                initial_load: 100mA,
+                step_to: 1A,
+                step_time: 1us,
+                measure: ["voltage_dip", "recovery_time", "oscillation"],
+            },
+            
+            line_step_test: {
+                initial_vin: 12V,
+                step_to: 9V,
+                step_time: 1us,
+                measure: ["output_variation", "psrr_dynamic"],
+            },
+            
+            thermal_step_test: {
+                power_step: "1W to 5W",
+                measure: ["junction_temp_rise", "thermal_runaway_check"],
+            }
+        },
+        
+        use_when: "startup_analysis || transient_verification || thermal_simulation || load_step_test",
+    }
+    
+    // === OPTIMIZATION STRATEGY ===
+    @optimization_strategy {
+        phases: [
+            // Phase 1: Thermal sizing
+            {
+                name: "thermal_sizing",
+                model_level: "ANALYTICAL",
+                parameters: ["package_type", "heatsink_size", "pcb_copper_area"],
+                
+                objectives: [
+                    {metric: "junction_temp", goal: "minimize", weight: 0.6},
+                    {metric: "cost", goal: "minimize", weight: 0.2},
+                    {metric: "size", goal: "minimize", weight: 0.2},
+                ],
+                
+                constraints: [
+                    {metric: "junction_temp", condition: "<", value: 125°C, hard: true},
+                    {metric: "power_dissipation", condition: ">", value: 0, hard: true},
+                    {metric: "heatsink_theta_sa", condition: ">", value: 0, hard: false}, // Negative means no heatsink
+                ],
+                
+                algorithm: "lookup_table",  // Use thermal tables
+            },
+            
+            // Phase 2: Component sizing
+            {
+                name: "component_sizing",
+                model_level: "DC_CIRCUIT",
+                parameters: ["C_in", "C_out", "C_out_esr"],
+                
+                objectives: [
+                    {metric: "transient_response", goal: "minimize", weight: 0.4},
+                    {metric: "psrr", goal: "maximize", weight: 0.3},
+                    {metric: "cost", goal: "minimize", weight: 0.3},
+                ],
+                
+                constraints: [
+                    {metric: "C_in", condition: ">", value: 0.33uF, hard: true},
+                    {metric: "C_out", condition: ">", value: 0.1uF, hard: true},
+                    {metric: "C_out_esr", condition: ">", value: 0.1Ω, hard: true},
+                    {metric: "C_out_esr", condition: "<", value: 5Ω, hard: true},
+                    {metric: "stability", condition: "==", value: true, hard: true},
+                ],
+                
+                algorithm: "grid_search",  // Simple 3D optimization
+            },
+            
+            // Phase 3: Verification
+            {
+                name: "verification",
+                model_level: "TRANSIENT_CIRCUIT",
+                parameters: [],  // No optimization, just verify
+                
+                objectives: [],  // Just checking constraints
+                
+                constraints: [
+                    {metric: "startup_overshoot", condition: "<", value: 0.1, hard: true},
+                    {metric: "load_step_dip", condition: "<", value: 0.05, hard: true},
+                    {metric: "psrr_120hz", condition: ">", value: 60dB, hard: true},
+                    {metric: "thermal_safe", condition: "==", value: true, hard: true},
+                ],
+                
+                algorithm: "none",  // Just simulate and check
+            }
+        ],
+        
+        convergence_criteria: {
+            all_constraints_met: true,
+            thermal_margin: 10°C,  // Keep 10°C below limit
+            no_oscillation: true,
+        },
+        
+        max_iterations: 20,
+        timeout: 2min,
+    }
+    
+    // === COMPONENT KNOWLEDGE ===
+    @component_knowledge {
+        good_starting_points: [
+            {
+                conditions: "vin <= 12V && iout <= 500mA",
+                values: {
+                    package: "TO-220",
+                    C_in: 0.33uF,
+                    C_out: 0.1uF,
+                    heatsink: false,
+                },
+                expected_performance: {
+                    junction_temp: 45°C,
+                    efficiency: 42%, // 5V/12V
+                    psrr_120hz: 68dB,
+                    regulation: 50mV,
+                }
+            },
+            {
+                conditions: "vin <= 12V && iout > 500mA && iout <= 1A",
+                values: {
+                    package: "TO-220",
+                    C_in: 10uF,
+                    C_out: 100uF,
+                    C_out_esr: 0.5Ω,
+                    heatsink: "small_heatsink_5_C_per_W",
+                },
+                expected_performance: {
+                    junction_temp: 85°C,
+                    efficiency: 42%,
+                    transient_response: 50us,
+                    load_step_dip: 100mV,
+                }
+            },
+            {
+                conditions: "vin > 15V || iout > 1A",
+                values: {
+                    package: "TO-220",
+                    C_in: 10uF,
+                    C_out: 1000uF,
+                    C_out_esr: 0.2Ω,
+                    heatsink: "large_heatsink_2_C_per_W",
+                    pcb_copper: "maximum",
+                },
+                expected_performance: {
+                    junction_temp: 100°C,
+                    efficiency: 25%, // Assuming 20V input
+                    power_dissipation: 15W,
+                }
+            }
+        ],
+        
+        scaling_rules: {
+            "Output capacitor scales with load current for same transient response",
+            "Input capacitor should be larger for higher input voltages",
+            "Heatsink requirement scales quadratically with voltage difference",
+            "ESR requirements become tighter at higher frequencies",
+        },
+        
+        coupled_parameters: [
+            ["C_out", "C_out_esr"],  // Output filter characteristics
+            ["power_dissipation", "heatsink_requirement"],  // Thermal design
+            ["vin", "efficiency"],  // Fundamental relationship
+        ],
+        
+        common_issues: [
+            {
+                name: "thermal_runaway",
+                detection_condition: "junction_temp > 100°C && no_heatsink",
+                symptoms: ["regulation_loss", "thermal_shutdown"],
+                fixes: ["add_heatsink", "reduce_input_voltage", "reduce_load_current"],
+            },
+            {
+                name: "oscillation",
+                detection_condition: "C_out_esr < 0.1Ω && C_out > 1uF",
+                symptoms: ["output_ripple", "instability"],
+                fixes: ["add_series_resistance", "change_capacitor_type"],
+            },
+            {
+                name: "poor_transient_response",
+                detection_condition: "C_out < 10uF && load_steps > 100mA",
+                symptoms: ["voltage_dip", "slow_recovery"],
+                fixes: ["increase_output_capacitance", "reduce_esr"],
+            },
+            {
+                name: "poor_line_regulation",
+                detection_condition: "C_in < 1uF && vin_variation > 2V",
+                symptoms: ["output_voltage_variation", "increased_ripple"],
+                fixes: ["increase_input_capacitance", "add_pi_filter"],
+            }
+        ]
+    }
+    
+    // === TEST SEQUENCES ===
+    @test_sequences {
+        regulation_test: {
+            name: "regulation",
+            description: "Verify voltage regulation over line and load",
+            
+            setup: {
+                initial_conditions: {
+                    vin: 12V,
+                    load: 100mA,
+                    temperature: 25°C,
+                },
+                wait_for_steady_state: true,
+            },
+            
+            stimulus: {
+                type: "sweep",
+                parameters: {
+                    vin_sweep: "7V to 25V in 1V steps",
+                    load_sweep: "10mA to 1A in 100mA steps",
+                },
+            },
+            
+            measurements: {
+                measure: ["vout", "iq", "efficiency"],
+                extract: ["line_regulation", "load_regulation"],
+                pass_criteria: {
+                    line_regulation: "< 50mV",
+                    load_regulation: "< 50mV",
+                    vout_tolerance: "±4%",
+                }
+            }
+        },
+        
+        thermal_test: {
+            name: "thermal",
+            description: "Verify thermal protection and safe operation",
+            
+            setup: {
+                initial_conditions: {
+                    vin: 20V,
+                    load: 1A,  // High dissipation
+                    ambient: 85°C,
+                },
+                enable_thermal_model: true,
+            },
+            
+            stimulus: {
+                type: "step",
+                parameters: {
+                    power_step: "15W applied for 1 second",
+                },
+            },
+            
+            measurements: {
+                measure: ["junction_temp", "vout", "thermal_shutdown"],
+                extract: ["max_junction_temp", "shutdown_temp", "recovery_time"],
+                pass_criteria: {
+                    thermal_shutdown: "< 150°C",
+                    recovery_after_cooling: "< 10s",
+                }
+            }
+        },
+        
+        transient_test: {
+            name: "transient",
+            description: "Load and line transient response",
+            
+            stimulus: {
+                type: "step",
+                parameters: {
+                    load_step: "100mA to 1A in 1us",
+                    line_step: "12V to 9V in 1us",
+                },
+            },
+            
+            measurements: {
+                measure: ["vout", "iout"],
+                extract: ["undershoot", "overshoot", "settling_time"],
+                pass_criteria: {
+                    undershoot: "< 250mV",
+                    overshoot: "< 100mV",
+                    settling_time: "< 100us",
+                }
+            }
+        }
+    }
 }
 
 // ==================== ELECTRICAL CHARACTERISTICS ====================
