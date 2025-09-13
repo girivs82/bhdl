@@ -92,6 +92,9 @@ pub mod reliability_analysis;
 // Predictive analytics and machine learning integration
 pub mod predictive_analytics;
 
+// Manufacturing and assembly optimization (DFM/DFA)
+pub mod manufacturing_optimization;
+
 // Re-export key types
 pub use bhdl_analyzer::types::AnalysisResult;
 pub use bhdl_analyzer::component_inference::ParameterValue;
@@ -135,6 +138,8 @@ pub struct NetlistConfig {
     pub enable_reliability_analysis: bool,
     /// Enable predictive analytics and machine learning integration
     pub enable_predictive_analytics: bool,
+    /// Enable manufacturing and assembly optimization (DFM/DFA)
+    pub enable_manufacturing_optimization: bool,
 }
 
 /// Database integration statistics
@@ -181,6 +186,7 @@ impl Default for NetlistConfig {
             enable_emi_emc_analysis: false,  // Off by default for performance
             enable_reliability_analysis: false, // Off by default for performance
             enable_predictive_analytics: false, // Off by default for performance
+            enable_manufacturing_optimization: false, // Off by default for performance
         }
     }
 }
@@ -218,6 +224,8 @@ pub struct NetlistGenerator {
     reliability_analyzer: Option<crate::reliability_analysis::ReliabilityAnalyzer>,
     // Predictive analytics for machine learning integration
     predictive_analyzer: Option<crate::predictive_analytics::PredictiveAnalyzer>,
+    // Manufacturing optimizer for DFM/DFA analysis
+    manufacturing_optimizer: Option<crate::manufacturing_optimization::ManufacturingOptimizer>,
 }
 
 impl NetlistGenerator {
@@ -250,6 +258,7 @@ impl NetlistGenerator {
             emi_emc_analyzer: None, // Will be initialized when EMI/EMC analysis is enabled
             reliability_analyzer: None, // Will be initialized when reliability analysis is enabled
             predictive_analyzer: None, // Will be initialized when predictive analytics is enabled
+            manufacturing_optimizer: None, // Will be initialized when manufacturing optimization is enabled
         }
     }
 
@@ -538,6 +547,13 @@ impl NetlistGenerator {
             info!("Starting predictive analytics and machine learning integration phase...");
             self.run_predictive_analysis(analysis).await?;
             info!("Predictive analytics and machine learning integration phase completed");
+        }
+        
+        // Phase 20: Run manufacturing and assembly optimization (DFM/DFA)
+        if self.config.enable_manufacturing_optimization {
+            info!("Starting manufacturing and assembly optimization phase...");
+            self.run_manufacturing_optimization(analysis).await?;
+            info!("Manufacturing and assembly optimization phase completed");
         }
 
         info!("Netlist generation complete: {} modules, {} instances, {} nets, {} database components", 
@@ -3716,6 +3732,123 @@ impl NetlistGenerator {
         } else {
             error!("Predictive analyzer not initialized - this should not happen");
             return Err(anyhow::anyhow!("Predictive analyzer initialization failed"));
+        }
+        
+        Ok(())
+    }
+    
+    /// Run manufacturing and assembly optimization (DFM/DFA)
+    async fn run_manufacturing_optimization(&mut self, analysis: &AnalysisResult) -> Result<()> {
+        use crate::manufacturing_optimization::{ManufacturingOptimizer, ManufacturingConfig};
+        
+        info!("Running manufacturing and assembly optimization on {} components", self.netlist.instances.len());
+        
+        // Initialize manufacturing optimizer if not already initialized
+        if self.manufacturing_optimizer.is_none() {
+            let mut config = ManufacturingConfig::default();
+            
+            // Configure based on production intent
+            config.target_process = crate::manufacturing_optimization::ManufacturingProcess::SmallBatch;
+            config.assembly_method = crate::manufacturing_optimization::AssemblyMethod::FullySMT;
+            config.target_volume = crate::manufacturing_optimization::ProductionVolume::MediumVolume;
+            config.quality_level = crate::manufacturing_optimization::QualityLevel::Standard;
+            
+            // Enable optimization features
+            config.enable_panelization = true;
+            config.enable_testpoint_generation = true;
+            config.enable_component_consolidation = true;
+            config.enable_placement_optimization = true;
+            config.enable_routing_optimization = true;
+            
+            // Set targets
+            config.target_yield = 0.95;
+            config.max_board_layers = 4;
+            
+            let optimizer = ManufacturingOptimizer::with_config(config);
+            self.manufacturing_optimizer = Some(optimizer);
+            
+            info!("Manufacturing optimizer initialized for small batch SMT production");
+        }
+        
+        // Run manufacturing analysis
+        if let Some(optimizer) = &mut self.manufacturing_optimizer {
+            match optimizer.analyze_manufacturing(&self.netlist, analysis).await {
+                Ok(results) => {
+                    info!("Manufacturing optimization results:");
+                    info!("  - DFM Score: {:.1}%", results.dfm_score * 100.0);
+                    info!("  - DFA Score: {:.1}%", results.dfa_score * 100.0);
+                    info!("  - Estimated Yield: {:.1}%", results.estimated_yield * 100.0);
+                    info!("  - Unit Cost: ${:.2}", results.estimated_cost.total_unit_cost);
+                    info!("  - Violations: {}", results.violations.len());
+                    info!("  - Warnings: {}", results.warnings.len());
+                    info!("  - Optimization Suggestions: {}", results.suggestions.len());
+                    
+                    // Report critical violations
+                    let critical_violations = results.violations.iter()
+                        .filter(|v| matches!(v.severity, crate::manufacturing_optimization::ViolationSeverity::Critical))
+                        .count();
+                    
+                    if critical_violations > 0 {
+                        error!("  ⚠ {} critical manufacturing violations found - design changes required", critical_violations);
+                        for violation in results.violations.iter()
+                            .filter(|v| matches!(v.severity, crate::manufacturing_optimization::ViolationSeverity::Critical))
+                            .take(3) {
+                            error!("    - {}: {}", violation.location, violation.description);
+                        }
+                    }
+                    
+                    // Report panelization if enabled
+                    if let Some(panel) = &results.panelization {
+                        info!("  - Panelization: {}x{} boards per panel, {:.1}% utilization",
+                              panel.panel_layout.rows,
+                              panel.panel_layout.columns,
+                              panel.utilization * 100.0);
+                    }
+                    
+                    // Report test coverage
+                    info!("  - Test Coverage:");
+                    info!("    • ICT: {:.1}%", results.test_coverage.in_circuit_test_coverage * 100.0);
+                    info!("    • Boundary Scan: {:.1}%", results.test_coverage.boundary_scan_coverage * 100.0);
+                    info!("    • Functional: {:.1}%", results.test_coverage.functional_test_coverage * 100.0);
+                    
+                    // Report assembly sequence
+                    info!("  - Assembly Steps: {}", results.assembly_sequence.len());
+                    let total_time: f64 = results.assembly_sequence.iter()
+                        .map(|s| s.time_estimate)
+                        .sum();
+                    info!("    • Total assembly time: {:.1} minutes", total_time);
+                    
+                    // Report critical components
+                    if !results.critical_components.is_empty() {
+                        info!("  - Critical Components: {}", results.critical_components.len());
+                        for component in results.critical_components.iter().take(3) {
+                            info!("    • {}: {:?}", component.component_name, component.criticality_reason);
+                        }
+                    }
+                    
+                    // Overall assessment
+                    if results.dfm_score > 0.9 && results.dfa_score > 0.9 {
+                        info!("✅ Manufacturing optimization: EXCELLENT - Design ready for production");
+                    } else if results.dfm_score > 0.8 && results.dfa_score > 0.8 {
+                        info!("✅ Manufacturing optimization: GOOD - Minor improvements recommended");
+                    } else if results.dfm_score > 0.7 && results.dfa_score > 0.7 {
+                        warn!("⚠️ Manufacturing optimization: MODERATE - Several improvements needed");
+                    } else {
+                        error!("❌ Manufacturing optimization: POOR - Significant redesign recommended");
+                    }
+                    
+                    // Store results for production planning
+                    debug!("Manufacturing analysis data available for production planning and cost estimation");
+                },
+                Err(e) => {
+                    error!("Manufacturing optimization failed: {}", e);
+                    warn!("Continuing synthesis without manufacturing optimization");
+                    // Don't fail the entire synthesis due to manufacturing optimization failure
+                }
+            }
+        } else {
+            error!("Manufacturing optimizer not initialized - this should not happen");
+            return Err(anyhow::anyhow!("Manufacturing optimizer initialization failed"));
         }
         
         Ok(())
