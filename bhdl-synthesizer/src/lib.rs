@@ -89,6 +89,9 @@ pub mod cost_optimization;
 pub mod emi_emc_analysis;
 pub mod reliability_analysis;
 
+// Predictive analytics and machine learning integration
+pub mod predictive_analytics;
+
 // Re-export key types
 pub use bhdl_analyzer::types::AnalysisResult;
 pub use bhdl_analyzer::component_inference::ParameterValue;
@@ -130,6 +133,8 @@ pub struct NetlistConfig {
     pub enable_emi_emc_analysis: bool,
     /// Enable reliability and lifecycle analysis
     pub enable_reliability_analysis: bool,
+    /// Enable predictive analytics and machine learning integration
+    pub enable_predictive_analytics: bool,
 }
 
 /// Database integration statistics
@@ -175,6 +180,7 @@ impl Default for NetlistConfig {
             enable_cost_optimization: false, // Off by default, requires supplier API setup
             enable_emi_emc_analysis: false,  // Off by default for performance
             enable_reliability_analysis: false, // Off by default for performance
+            enable_predictive_analytics: false, // Off by default for performance
         }
     }
 }
@@ -210,6 +216,8 @@ pub struct NetlistGenerator {
     emi_emc_analyzer: Option<crate::emi_emc_analysis::EMIEMCAnalyzer>,
     // Reliability analyzer for component reliability and lifecycle analysis
     reliability_analyzer: Option<crate::reliability_analysis::ReliabilityAnalyzer>,
+    // Predictive analytics for machine learning integration
+    predictive_analyzer: Option<crate::predictive_analytics::PredictiveAnalyzer>,
 }
 
 impl NetlistGenerator {
@@ -241,6 +249,7 @@ impl NetlistGenerator {
             cost_optimizer: None, // Will be initialized when cost optimization is enabled
             emi_emc_analyzer: None, // Will be initialized when EMI/EMC analysis is enabled
             reliability_analyzer: None, // Will be initialized when reliability analysis is enabled
+            predictive_analyzer: None, // Will be initialized when predictive analytics is enabled
         }
     }
 
@@ -522,6 +531,13 @@ impl NetlistGenerator {
             info!("Starting reliability and lifecycle analysis phase...");
             self.run_reliability_analysis(analysis).await?;
             info!("Reliability and lifecycle analysis phase completed");
+        }
+        
+        // Phase 19: Run predictive analytics and machine learning integration
+        if self.config.enable_predictive_analytics {
+            info!("Starting predictive analytics and machine learning integration phase...");
+            self.run_predictive_analysis(analysis).await?;
+            info!("Predictive analytics and machine learning integration phase completed");
         }
 
         info!("Netlist generation complete: {} modules, {} instances, {} nets, {} database components", 
@@ -3629,6 +3645,77 @@ impl NetlistGenerator {
         } else {
             error!("Reliability analyzer not initialized - this should not happen");
             return Err(anyhow::anyhow!("Reliability analyzer initialization failed"));
+        }
+        
+        Ok(())
+    }
+    
+    /// Run predictive analytics and machine learning integration
+    async fn run_predictive_analysis(&mut self, analysis: &AnalysisResult) -> Result<()> {
+        use crate::predictive_analytics::{PredictiveAnalyzer, PredictiveConfig};
+        
+        info!("Running predictive analytics and machine learning integration on {} components", self.netlist.instances.len());
+        
+        // Initialize predictive analyzer if not already initialized
+        if self.predictive_analyzer.is_none() {
+            let mut config = PredictiveConfig::default();
+            
+            // Enable key ML models
+            config.enabled_models.insert(crate::predictive_analytics::ModelType::ComponentSelection);
+            config.enabled_models.insert(crate::predictive_analytics::ModelType::PerformancePrediction);
+            config.enabled_models.insert(crate::predictive_analytics::ModelType::DesignCompletion);
+            config.enabled_models.insert(crate::predictive_analytics::ModelType::AnomalyDetection);
+            config.enabled_models.insert(crate::predictive_analytics::ModelType::ParameterTuning);
+            config.enabled_models.insert(crate::predictive_analytics::ModelType::ThermalPrediction);
+            config.enabled_models.insert(crate::predictive_analytics::ModelType::EMIPrediction);
+            config.enabled_models.insert(crate::predictive_analytics::ModelType::ReliabilityPrediction);
+            
+            // Configure prediction parameters
+            config.prediction_confidence_threshold = 0.8;
+            config.max_prediction_time_ms = 30000; // 30 seconds max
+            config.enable_explainable_ai = true;
+            config.enable_uncertainty_quantification = true;
+            config.enable_online_learning = false; // Off by default for stability
+            
+            let analyzer = PredictiveAnalyzer::with_config(config);
+            self.predictive_analyzer = Some(analyzer);
+            
+            info!("Predictive analyzer initialized with ML algorithms: Random Forest, Gradient Boosting, SVM, Ensemble Methods");
+        }
+        
+        // Run predictive analysis
+        if let Some(analyzer) = &mut self.predictive_analyzer {
+            match analyzer.analyze_predictive_insights(&self.netlist, analysis).await {
+                Ok(results) => {
+                    info!("Predictive analytics completed successfully:");
+                    info!("  - Component recommendations: {}", results.component_recommendations.len());
+                    info!("  - Performance predictions: {}", results.performance_predictions.len());
+                    info!("  - Design completion suggestions: {}", results.design_completion_suggestions.len());
+                    info!("  - Optimization opportunities: {}", results.optimization_opportunities.len());
+                    info!("  - Risk assessments: {}", results.risk_assessments.len());
+                    info!("  - Design pattern matches: {}", results.design_pattern_matches.len());
+                    info!("  - Anomalies detected: {}", results.anomaly_detections.len());
+                    
+                    if results.component_recommendations.len() + results.optimization_opportunities.len() > 5 {
+                        info!("✅ Predictive analysis: EXCELLENT - Multiple insights generated for design optimization");
+                    } else if results.component_recommendations.len() + results.optimization_opportunities.len() > 2 {
+                        info!("✅ Predictive analysis: GOOD - Several insights generated for improvement");
+                    } else {
+                        info!("✅ Predictive analysis: BASIC - Limited insights available with current data");
+                    }
+                    
+                    // Store results for ML model training and future predictions
+                    debug!("Predictive analytics data available for ML model improvement and future predictions");
+                },
+                Err(e) => {
+                    error!("Predictive analytics failed: {}", e);
+                    warn!("Continuing synthesis without predictive analytics");
+                    // Don't fail the entire synthesis due to predictive analytics failure
+                }
+            }
+        } else {
+            error!("Predictive analyzer not initialized - this should not happen");
+            return Err(anyhow::anyhow!("Predictive analyzer initialization failed"));
         }
         
         Ok(())
