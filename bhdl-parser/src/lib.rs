@@ -20,6 +20,7 @@ mod v2_fixes;
 mod v2_parsing;
 mod intent;
 mod testbench;
+mod simulation;
 
 #[cfg(test)]
 mod test_net_ref;

@@ -139,6 +139,14 @@ pub enum SyntaxKind {
     PARAMETER_KW, // parameter
     CONNECT_KW,   // connect
     ATTRIBUTE_KW, // attribute
+    
+    // Simulation and optimization keywords
+    BEHAVIORAL_MODEL_KW,      // behavioral_model
+    OPTIMIZATION_STRATEGY_KW, // optimization_strategy
+    COMPONENT_KNOWLEDGE_KW,   // component_knowledge
+    SIMULATION_REQUIREMENTS_KW, // simulation_requirements
+    TEST_SEQUENCES_KW,        // test_sequences
+    MODEL_SELECTOR_KW,        // model_selector
 
     // Nodes (Grammar rules)
     SOURCE_FILE,    // Root node
@@ -286,6 +294,17 @@ pub enum SyntaxKind {
     FUNCTIONAL_REQ_DEF, // functional_requirement FSR_001 { ... }
     TECHNICAL_REQ_DEF,  // technical_requirement TSR_001 { ... }
     REQ_PROPERTY,       // property: value pairs in requirements
+    
+    // Simulation and optimization nodes
+    BEHAVIORAL_MODEL,       // @behavioral_model name { ... }
+    OPTIMIZATION_STRATEGY,  // @optimization_strategy { ... }
+    COMPONENT_KNOWLEDGE,    // @component_knowledge { ... }
+    SIMULATION_REQUIREMENTS,// @simulation_requirements { ... }
+    TEST_SEQUENCES,         // @test_sequences { ... }
+    MODEL_SELECTOR,         // @model_selector { ... }
+    MODEL_PROPERTY,         // property: value in behavioral model
+    OPTIMIZATION_PHASE,     // phase definition in optimization strategy
+    KNOWLEDGE_ITEM,         // item in component knowledge
 
     // ERROR must be the last variant for the assertion in kind_from_raw
     ERROR = 65534, // Represents a parsing error node

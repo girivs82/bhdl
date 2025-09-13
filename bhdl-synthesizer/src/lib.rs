@@ -16,6 +16,7 @@ use crate::import_preprocessor::ImportPreprocessor;
 use crate::synthesis_knowledge::{SynthesisKnowledge, SynthesisKnowledgeEngine};
 use crate::intent_aware_generator::IntentAwareGenerator;
 use crate::component_calculator::{ComponentCalculator, PowerSupplySpec};
+use crate::behavioral_model_extractor::BehavioralModelExtractor;
 
 
 // Component database mapping module  
@@ -57,6 +58,12 @@ pub mod intent_aware_generator;
 // Component value calculation engine
 pub mod component_calculator;
 
+// Simulation-driven synthesis optimization
+pub mod simulation_driven;
+
+// Behavioral model extraction from components
+pub mod behavioral_model_extractor;
+
 // Re-export key types
 pub use bhdl_analyzer::types::AnalysisResult;
 pub use bhdl_analyzer::component_inference::ParameterValue;
@@ -78,6 +85,8 @@ pub struct NetlistConfig {
     pub flatten_hierarchy: bool,
     /// Path to component database
     pub database_path: Option<String>,
+    /// Enable simulation-driven optimization
+    pub enable_simulation_optimization: bool,
 }
 
 /// Database integration statistics
@@ -113,6 +122,7 @@ impl Default for NetlistConfig {
             include_component_inference: true,
             flatten_hierarchy: false,
             database_path: Some("/Users/girivs/src/bhdl-new/components.db".to_string()),
+            enable_simulation_optimization: false,
         }
     }
 }
@@ -380,6 +390,11 @@ impl NetlistGenerator {
         
         // Phase 8: Populate analysis data in netlist (unified model)
         self.populate_analysis_data(analysis)?;
+        
+        // Phase 9: Run simulation-driven optimization if enabled
+        if self.config.enable_simulation_optimization {
+            self.run_simulation_optimization(ast, analysis).await?;
+        }
 
         info!("Netlist generation complete: {} modules, {} instances, {} nets, {} database components", 
               self.netlist.modules.len(), 
@@ -2142,6 +2157,112 @@ impl NetlistGenerator {
         populate_instance_attributes(&mut self.netlist, instance_id, handle_name, analysis);
     }
 
+    /// Run simulation-driven optimization on the netlist
+    async fn run_simulation_optimization(&mut self, ast: Option<&SourceFile>, analysis: &AnalysisResult) -> Result<()> {
+        info!("Starting simulation-driven optimization");
+        
+        // Step 1: Extract behavioral models from components in the netlist
+        let behavioral_models = self.extract_behavioral_models_from_components(ast, analysis)?;
+        
+        if behavioral_models.is_empty() {
+            warn!("No behavioral models found in components - skipping optimization");
+            return Ok(());
+        }
+        
+        info!("Found {} behavioral models for optimization", behavioral_models.len());
+        
+        // Step 2: Create simulation engine and run optimization
+        let mut sim_optimizer = simulation_driven::SimulationDrivenSynthesizer::new();
+        
+        // Step 3: Set up design requirements from analysis
+        let requirements = self.create_design_requirements(analysis)?;
+        
+        // Step 4: Run optimization on the netlist (pass the extracted models)
+        match sim_optimizer.optimize_netlist(&mut self.netlist, &requirements, Some(behavioral_models)) {
+            Ok(report) => {
+                info!("Simulation optimization complete:");
+                info!("  Models used: {}", report.models_found);
+                info!("  Success: {}", report.optimization_successful);
+                
+                if !report.final_metrics.is_empty() {
+                    info!("  Final metrics:");
+                    for (metric, value) in &report.final_metrics {
+                        info!("    {}: {:.3}", metric, value);
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("Simulation optimization failed: {}", e);
+                // Continue with unoptimized netlist
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// Extract behavioral models from component definitions
+    fn extract_behavioral_models_from_components(
+        &self,
+        ast: Option<&SourceFile>, 
+        analysis: &AnalysisResult
+    ) -> Result<Vec<bhdl_simulation::ModelMetadata>> {
+        // Use the behavioral model extractor
+        let mut extractor = BehavioralModelExtractor::new();
+        
+        // Extract from AST if available
+        if let Some(ast) = ast {
+            if let Err(e) = extractor.extract_from_ast(ast, analysis) {
+                warn!("Failed to extract behavioral models: {}", e);
+            }
+        }
+        
+        Ok(extractor.get_models().to_vec())
+    }
+    
+    /// Create design requirements from analysis results and component behavioral models
+    fn create_design_requirements(&self, analysis: &AnalysisResult) -> Result<simulation_driven::DesignRequirements> {
+        let mut requirements = simulation_driven::DesignRequirements::default();
+        
+        // Extract requirements from component behavioral models
+        // These should come from @optimization_strategy annotations in the components
+        for (name, symbol) in analysis.global_scope.get_symbols() {
+            // Check if this is a module/component with optimization requirements
+            if symbol.kind == bhdl_analyzer::symbol_table::SymbolKind::Module {
+                // TODO: Extract from @optimization_strategy annotation
+                // For now, look for known power converter types
+                if name.contains("Buck") || name.contains("Boost") || name.contains("PowerSupply") {
+                    // These values should come from the component's behavioral model
+                    // e.g., @optimization_strategy { target_efficiency: 0.92, min_phase_margin: 60 }
+                    debug!("Component {} should provide its own optimization requirements", name);
+                }
+            }
+            
+            // Extract voltage/current requirements from power domains
+            if let Some(net_attr) = &symbol.net_attributes {
+                if let Some(voltage) = net_attr.voltage() {
+                    if name.contains("OUT") {
+                        // Ripple requirement should also come from component specs
+                        // e.g., @component_knowledge { max_ripple_percent: 1.0 }
+                        requirements.max_output_ripple = Some(voltage * 0.01); // Default 1% if not specified
+                    }
+                }
+            }
+        }
+        
+        // Default optimization goals if not specified by components
+        // These should be overridden by component-specific requirements
+        requirements.minimize_cost = true;
+        requirements.minimize_size = true;
+        
+        // DON'T hardcode these - they should come from behavioral models
+        // requirements.target_efficiency = Some(0.90);  // WRONG - should come from component
+        // requirements.min_phase_margin = Some(60.0);   // WRONG - should come from component
+        
+        warn!("Design requirements should be extracted from component behavioral models, not hardcoded");
+        
+        Ok(requirements)
+    }
+    
     /// Check if database integration is enabled
     pub fn is_database_enabled(&self) -> bool {
         self.database_mapper.is_some()

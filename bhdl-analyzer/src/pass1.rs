@@ -709,63 +709,107 @@ fn process_import(import: &ImportStmt, context: &mut Pass1Context) {
     // Mark as imported
     context.imported_modules.insert(path.clone(), ());
     
+    // Get the imported names (for destructuring imports)
+    let imported_names = import.imported_names();
+    let is_destructuring = !imported_names.is_empty();
+    
     // Resolve the import path
     let resolved_path = resolve_import_path(&path, &context.base_path);
     
     // Load and parse the imported file
     match load_and_parse_module(&resolved_path) {
         Ok(imported_source) => {
-            // Process all module definitions from the imported file
+            // First, build a map of all modules in the file
+            let mut available_modules = std::collections::HashMap::new();
             for item in imported_source.items() {
                 if let Some(module) = Module::cast(item.syntax().clone()) {
                     if let Some(name_token) = module.name() {
-                        let node_ptr = SyntaxNodePtr::new(module.syntax());
-                                
-                                // Create symbol with full metadata
-                                let mut symbol = Symbol::new_definition(
-                                    name_token.text(), 
-                                    SymbolKind::Module,
-                                    name_token.text_range(), 
-                                    &node_ptr
-                                );
-                                
-                                // Store the imported module definition node
-                                // This will include all pins, parameters, etc.
-                                symbol.definition_node_ptr = Some(node_ptr.clone());
-                                
-                                // Add to global scope
-                                context.global_scope_mut().insert(symbol);
-                                
-                                // Create a scope for this module definition
-                                let mut module_scope = SymbolTable::default();
-                                module_scope.set_scope_name(name_token.text().to_string());
-                                
-                                // Process module body to populate the scope
-                                // (pins, parameters, etc.)
-                                process_module_body(&module, &mut module_scope);
-                                
-                                // Store the module's scope
-                                context.definition_nodes.insert(node_ptr, module_scope);
+                        let module_name = name_token.text().to_string();
+                        available_modules.insert(module_name, module);
                     }
-                } else if let Some(component) = ComponentDef::cast(item.syntax().clone()) {
-                    if let Some(name_token) = component.name() {
-                        let node_ptr = SyntaxNodePtr::new(component.syntax());
-                                
-                                let mut symbol = Symbol::new_definition(
-                                    name_token.text(), 
-                                    SymbolKind::Component,
-                                    name_token.text_range(), 
-                                    &node_ptr
-                                );
-                                
-                                symbol.definition_node_ptr = Some(node_ptr.clone());
-                                context.global_scope_mut().insert(symbol);
-                                
-                                // Create and populate component scope
-                                let mut component_scope = SymbolTable::default();
-                                component_scope.set_scope_name(name_token.text().to_string());
-                                // Component processing would go here
-                                context.definition_nodes.insert(node_ptr, component_scope);
+                }
+            }
+            
+            // Then, process aliases to find what maps to requested names
+            let mut aliases = std::collections::HashMap::new();
+            for child in imported_source.syntax().children() {
+                if child.kind() == SyntaxKind::ALIAS {
+                    // Parse alias: extract name and target
+                    let mut alias_name = String::new();
+                    let mut target_name = String::new();
+                    let mut found_eq = false;
+                    
+                    for token in child.children_with_tokens() {
+                        if let Some(t) = token.as_token() {
+                            match t.kind() {
+                                SyntaxKind::IDENT => {
+                                    if !found_eq && alias_name.is_empty() {
+                                        alias_name = t.text().to_string();
+                                    } else if found_eq && target_name.is_empty() {
+                                        target_name = t.text().to_string();
+                                    }
+                                },
+                                SyntaxKind::EQ => {
+                                    found_eq = true;
+                                },
+                                _ => {}
+                            }
+                        }
+                    }
+                    
+                    if !alias_name.is_empty() && !target_name.is_empty() {
+                        aliases.insert(alias_name, target_name);
+                    }
+                }
+            }
+            
+            // Now process the imports
+            if is_destructuring {
+                // Only import the requested modules and their aliases
+                for requested_name in &imported_names {
+                    // Check if it's an alias
+                    if let Some(target_name) = aliases.get(requested_name) {
+                        // Import the target module under the alias name
+                        if let Some(module) = available_modules.get(target_name) {
+                            process_imported_module(module, requested_name, context);
+                        }
+                    } else {
+                        // Direct module import
+                        if let Some(module) = available_modules.get(requested_name) {
+                            process_imported_module(module, requested_name, context);
+                        }
+                    }
+                }
+            } else {
+                // Import all modules (old behavior)
+                for (module_name, module) in available_modules {
+                    process_imported_module(&module, &module_name, context);
+                }
+            }
+            
+            // Also process component definitions if not destructuring
+            if !is_destructuring {
+                for item in imported_source.items() {
+                    if let Some(component) = ComponentDef::cast(item.syntax().clone()) {
+                        if let Some(name_token) = component.name() {
+                            let node_ptr = SyntaxNodePtr::new(component.syntax());
+                                    
+                            let mut symbol = Symbol::new_definition(
+                                name_token.text(), 
+                                SymbolKind::Component,
+                                name_token.text_range(), 
+                                &node_ptr
+                            );
+                            
+                            symbol.definition_node_ptr = Some(node_ptr.clone());
+                            context.global_scope_mut().insert(symbol);
+                            
+                            // Create and populate component scope
+                            let mut component_scope = SymbolTable::default();
+                            component_scope.set_scope_name(name_token.text().to_string());
+                            // Component processing would go here
+                            context.definition_nodes.insert(node_ptr, component_scope);
+                        }
                     }
                 }
             }
@@ -808,6 +852,35 @@ fn load_and_parse_module(path: &Path) -> Result<SourceFile, String> {
     let syntax = parsed.syntax();
     SourceFile::cast(syntax)
         .ok_or_else(|| format!("Failed to cast to SourceFile for {:?}", path))
+}
+
+// Process an imported module and add it to the symbol table
+fn process_imported_module(module: &Module, name: &str, context: &mut Pass1Context) {
+    let node_ptr = SyntaxNodePtr::new(module.syntax());
+    
+    // Create symbol with the specified name (could be an alias)
+    let mut symbol = Symbol::new_definition(
+        name, 
+        SymbolKind::Module,
+        module.syntax().text_range(), 
+        &node_ptr
+    );
+    
+    // Store the imported module definition node
+    symbol.definition_node_ptr = Some(node_ptr.clone());
+    
+    // Add to global scope
+    context.global_scope_mut().insert(symbol);
+    
+    // Create a scope for this module definition
+    let mut module_scope = SymbolTable::default();
+    module_scope.set_scope_name(name.to_string());
+    
+    // Process module body to populate the scope
+    process_module_body(module, &mut module_scope);
+    
+    // Store the module's scope
+    context.definition_nodes.insert(node_ptr, module_scope);
 }
 
 // Process module body to extract pins, parameters, etc.

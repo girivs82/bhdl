@@ -169,9 +169,11 @@ impl FaultInjectionManager {
         let mut newly_activated = Vec::new();
         let mut newly_deactivated = Vec::new();
         
-        for (id, fault) in &self.faults {
-            let was_active = self.active_faults.contains(id);
-            let is_active = self.is_fault_active(fault, time, signal_values)?;
+        let fault_ids: Vec<String> = self.faults.keys().cloned().collect();
+        for id in fault_ids {
+            let fault = self.faults.get(&id).unwrap().clone();
+            let was_active = self.active_faults.contains(&id);
+            let is_active = self.is_fault_active(&fault, time, signal_values)?;
             
             if is_active && !was_active {
                 newly_activated.push(id.clone());

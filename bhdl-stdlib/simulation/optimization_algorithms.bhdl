@@ -1,0 +1,463 @@
+// Core Optimization Algorithms for Simulation-Driven Synthesis
+// Implements various optimization strategies used by the simulation engine
+
+import { SimulationLevel, BehavioralModel } from "./simulation_models.bhdl";
+
+// Optimization algorithm types
+enum OptimizationAlgorithm {
+    GRID_SEARCH,        // Exhaustive search over parameter grid
+    NELDER_MEAD,       // Simplex method for nonlinear optimization
+    GRADIENT_DESCENT,   // Gradient-based optimization
+    GENETIC,           // Genetic algorithm for global optimization
+    SIMULATED_ANNEALING, // Probabilistic global optimization
+    PARTICLE_SWARM,    // Swarm intelligence optimization
+}
+
+// Parameter bounds and constraints
+type ParameterConstraints = {
+    min: float,
+    max: float,
+    discrete_values: float[]?,  // For discrete components (E12, E24 series)
+    preferred_values: float[]?,  // Manufacturer preferred values
+}
+
+// Optimization state tracking
+type OptimizationState = {
+    iteration: int,
+    best_design: Design,
+    best_score: float,
+    history: IterationHistory[],
+    convergence_metric: float,
+    runtime: duration,
+}
+
+type IterationHistory = {
+    iteration: int,
+    parameters: map<string, float>,
+    objectives: map<string, float>,
+    constraints_met: bool,
+    score: float,
+    model_used: SimulationLevel,
+}
+
+// Grid Search Implementation
+module GridSearchOptimizer {
+    
+    // Create parameter grid with intelligent spacing
+    function create_parameter_grid(
+        parameters: map<string, ParameterConstraints>,
+        resolution: string  // "coarse", "medium", "fine"
+    ) -> ParameterGrid {
+        
+        grid_points = {};
+        
+        for (param_name, constraints) in parameters {
+            if (constraints.discrete_values != null) {
+                // Use provided discrete values (E12, E24 series)
+                grid_points[param_name] = constraints.discrete_values;
+            } else {
+                // Generate grid points
+                num_points = resolution == "coarse" ? 3 :
+                           resolution == "medium" ? 5 : 10;
+                
+                if (is_logarithmic(param_name)) {
+                    // Logarithmic spacing for inductors, capacitors
+                    grid_points[param_name] = logspace(
+                        constraints.min,
+                        constraints.max,
+                        num_points
+                    );
+                } else {
+                    // Linear spacing for other parameters
+                    grid_points[param_name] = linspace(
+                        constraints.min,
+                        constraints.max,
+                        num_points
+                    );
+                }
+            }
+        }
+        
+        return ParameterGrid {
+            points: grid_points,
+            total_combinations: calculate_combinations(grid_points),
+        };
+    }
+    
+    // Intelligent pruning of parameter combinations
+    function prune_invalid_combinations(
+        grid: ParameterGrid,
+        knowledge: ComponentKnowledge
+    ) -> ParameterGrid {
+        
+        valid_combinations = [];
+        
+        for combination in grid.all_combinations() {
+            // Check coupled parameter constraints
+            if (violates_coupling_rules(combination, knowledge.coupled_parameters)) {
+                continue;
+            }
+            
+            // Check scaling rules
+            if (violates_scaling_rules(combination, knowledge.scaling_rules)) {
+                continue;
+            }
+            
+            // Quick analytical feasibility check
+            if (!is_analytically_feasible(combination)) {
+                continue;
+            }
+            
+            valid_combinations.push(combination);
+        }
+        
+        return ParameterGrid {
+            points: grid.points,
+            valid_combinations: valid_combinations,
+        };
+    }
+}
+
+// Nelder-Mead Simplex Optimization
+module NelderMeadOptimizer {
+    
+    // Adaptive parameters based on problem characteristics
+    type SimplexParameters = {
+        alpha: float,  // Reflection coefficient (default 1.0)
+        gamma: float,  // Expansion coefficient (default 2.0)
+        rho: float,    // Contraction coefficient (default 0.5)
+        sigma: float,  // Shrink coefficient (default 0.5)
+        
+        // Adaptive adjustments
+        function adapt_to_landscape(history: IterationHistory[]) {
+            if (history.length < 5) return;
+            
+            // Analyze convergence rate
+            recent_improvements = history[-5:].map(h => h.score);
+            improvement_rate = calculate_improvement_rate(recent_improvements);
+            
+            if (improvement_rate < 0.01) {
+                // Slow convergence - be more aggressive
+                this.gamma = min(3.0, this.gamma * 1.2);
+                this.alpha = min(1.5, this.alpha * 1.1);
+            } else if (improvement_rate > 0.1) {
+                // Fast convergence - be more conservative
+                this.gamma = max(1.5, this.gamma * 0.9);
+                this.alpha = max(0.8, this.alpha * 0.95);
+            }
+        }
+    }
+    
+    // Initialize simplex with smart starting points
+    function create_initial_simplex(
+        initial_point: Design,
+        parameters: string[],
+        knowledge: ComponentKnowledge
+    ) -> Simplex {
+        
+        simplex_points = [initial_point];
+        
+        // Use knowledge base for good starting points
+        if (knowledge.good_starting_points.length > 0) {
+            for starting_point in knowledge.good_starting_points[0..min(3, len)] {
+                simplex_points.push(apply_starting_point(initial_point, starting_point));
+            }
+        }
+        
+        // Fill remaining with perturbations
+        while (simplex_points.length <= parameters.length) {
+            perturbation = create_smart_perturbation(
+                initial_point,
+                parameters,
+                scale=0.2  // 20% perturbation
+            );
+            simplex_points.push(perturbation);
+        }
+        
+        return Simplex { points: simplex_points };
+    }
+    
+    // Constraint handling with penalty functions
+    function calculate_penalty(
+        metrics: Metrics,
+        constraints: Constraint[]
+    ) -> float {
+        
+        penalty = 0.0;
+        
+        for constraint in constraints {
+            violation = calculate_constraint_violation(metrics, constraint);
+            
+            if (violation > 0) {
+                if (constraint.hard) {
+                    // Severe penalty for hard constraints
+                    penalty += 1000 * violation^2;
+                } else {
+                    // Mild penalty for soft constraints
+                    penalty += 10 * violation;
+                }
+            }
+        }
+        
+        return penalty;
+    }
+}
+
+// Gradient-Based Optimization
+module GradientOptimizer {
+    
+    // Automatic differentiation for gradient calculation
+    function calculate_gradient(
+        model: BehavioralModel,
+        design: Design,
+        objective: Objective,
+        delta: float = 1e-6
+    ) -> Gradient {
+        
+        gradient = {};
+        base_value = evaluate_objective(model, design, objective);
+        
+        for param_name in design.parameters {
+            // Forward difference approximation
+            perturbed_design = design.copy();
+            perturbed_design[param_name] += delta;
+            
+            perturbed_value = evaluate_objective(model, perturbed_design, objective);
+            gradient[param_name] = (perturbed_value - base_value) / delta;
+        }
+        
+        return gradient;
+    }
+    
+    // Adaptive learning rate with momentum
+    type AdaptiveLearningRate = {
+        initial_rate: float,
+        momentum: float,
+        velocity: map<string, float>,
+        
+        function update(gradient: Gradient, iteration: int) -> map<string, float> {
+            // Adam-like optimizer
+            beta1 = 0.9;  // Momentum coefficient
+            beta2 = 0.999;  // RMSprop coefficient
+            epsilon = 1e-8;
+            
+            // Update biased first moment estimate
+            for (param, grad) in gradient {
+                if (this.velocity[param] == null) {
+                    this.velocity[param] = 0;
+                }
+                this.velocity[param] = beta1 * this.velocity[param] + (1 - beta1) * grad;
+            }
+            
+            // Learning rate decay
+            current_rate = this.initial_rate / (1 + 0.01 * iteration);
+            
+            updates = {};
+            for param in gradient.keys() {
+                updates[param] = -current_rate * this.velocity[param];
+            }
+            
+            return updates;
+        }
+    }
+    
+    // Line search for optimal step size
+    function line_search(
+        model: BehavioralModel,
+        design: Design,
+        direction: map<string, float>,
+        objective: Objective
+    ) -> float {
+        
+        // Backtracking line search
+        alpha = 1.0;
+        c = 0.5;  // Armijo condition parameter
+        tau = 0.5;  // Backtracking factor
+        
+        initial_value = evaluate_objective(model, design, objective);
+        gradient = calculate_gradient(model, design, objective);
+        directional_derivative = dot_product(gradient, direction);
+        
+        while (alpha > 1e-6) {
+            new_design = apply_step(design, direction, alpha);
+            new_value = evaluate_objective(model, new_design, objective);
+            
+            // Armijo condition
+            if (new_value <= initial_value + c * alpha * directional_derivative) {
+                return alpha;
+            }
+            
+            alpha *= tau;
+        }
+        
+        return alpha;
+    }
+}
+
+// Multi-Objective Optimization
+module MultiObjectiveOptimizer {
+    
+    // Pareto dominance checking
+    function dominates(solution1: Solution, solution2: Solution) -> bool {
+        better_in_any = false;
+        
+        for objective in solution1.objectives.keys() {
+            if (solution1.objectives[objective] < solution2.objectives[objective]) {
+                return false;  // Worse in at least one objective
+            }
+            if (solution1.objectives[objective] > solution2.objectives[objective]) {
+                better_in_any = true;
+            }
+        }
+        
+        return better_in_any;
+    }
+    
+    // Non-dominated sorting for Pareto front
+    function non_dominated_sort(solutions: Solution[]) -> Solution[][] {
+        fronts = [];
+        current_front = [];
+        
+        // Find first Pareto front
+        for solution in solutions {
+            is_dominated = false;
+            
+            for other in solutions {
+                if (other != solution && dominates(other, solution)) {
+                    is_dominated = true;
+                    break;
+                }
+            }
+            
+            if (!is_dominated) {
+                current_front.push(solution);
+            }
+        }
+        
+        fronts.push(current_front);
+        
+        // Find subsequent fronts
+        remaining = solutions.filter(s => !current_front.contains(s));
+        while (remaining.length > 0) {
+            current_front = non_dominated_sort_recursive(remaining, fronts[-1]);
+            fronts.push(current_front);
+            remaining = remaining.filter(s => !current_front.contains(s));
+        }
+        
+        return fronts;
+    }
+    
+    // Weighted sum scalarization
+    function scalarize_objectives(
+        objectives: map<string, float>,
+        weights: map<string, float>
+    ) -> float {
+        
+        score = 0.0;
+        
+        for (name, value) in objectives {
+            weight = weights[name] ?? 1.0;
+            
+            // Normalize based on objective type
+            normalized = normalize_objective(name, value);
+            score += weight * normalized;
+        }
+        
+        return score;
+    }
+}
+
+// Convergence Detection
+module ConvergenceDetector {
+    
+    // Multiple convergence criteria
+    function check_convergence(
+        state: OptimizationState,
+        criteria: ConvergenceCriteria
+    ) -> bool {
+        
+        // Check constraint satisfaction
+        if (criteria.all_constraints_met) {
+            last_iteration = state.history[-1];
+            if (!last_iteration.constraints_met) {
+                return false;
+            }
+        }
+        
+        // Check objective improvement
+        if (criteria.objective_change != null && state.history.length >= 5) {
+            recent_scores = state.history[-5:].map(h => h.score);
+            improvement = abs(recent_scores[-1] - recent_scores[0]) / abs(recent_scores[0]);
+            
+            if (improvement < criteria.objective_change) {
+                return true;  // Converged
+            }
+        }
+        
+        // Check iteration limit
+        if (criteria.iteration_limit != null) {
+            if (state.iteration >= criteria.iteration_limit) {
+                return true;
+            }
+        }
+        
+        // Check time limit
+        if (criteria.time_limit != null) {
+            if (state.runtime >= criteria.time_limit) {
+                return true;
+            }
+        }
+        
+        return false;
+    }
+    
+    // Detect oscillation or cycling
+    function detect_oscillation(history: IterationHistory[]) -> bool {
+        if (history.length < 10) return false;
+        
+        // Check for repeating patterns
+        recent = history[-10:];
+        for i in 0..5 {
+            if (parameters_similar(recent[i].parameters, recent[i+5].parameters)) {
+                return true;  // Oscillating
+            }
+        }
+        
+        return false;
+    }
+    
+    // Suggest algorithm switch based on convergence behavior
+    function suggest_algorithm_switch(
+        current_algorithm: OptimizationAlgorithm,
+        state: OptimizationState
+    ) -> OptimizationAlgorithm? {
+        
+        if (detect_oscillation(state.history)) {
+            // Switch to global optimizer if oscillating
+            if (current_algorithm == GRADIENT_DESCENT) {
+                return SIMULATED_ANNEALING;
+            }
+        }
+        
+        if (state.iteration > 50 && state.convergence_metric > 0.5) {
+            // Not converging - try different approach
+            if (current_algorithm == NELDER_MEAD) {
+                return GENETIC;
+            }
+        }
+        
+        return null;  // No switch needed
+    }
+}
+
+// Export optimization modules
+export {
+    OptimizationAlgorithm,
+    ParameterConstraints,
+    OptimizationState,
+    GridSearchOptimizer,
+    NelderMeadOptimizer,
+    GradientOptimizer,
+    MultiObjectiveOptimizer,
+    ConvergenceDetector
+};

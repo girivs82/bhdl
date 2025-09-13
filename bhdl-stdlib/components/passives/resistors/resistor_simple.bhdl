@@ -1,0 +1,9 @@
+// Simplified Resistor Module for testing
+
+module Resistor(value: resistance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+}
+
+// Common alias
+alias Res = Resistor;
