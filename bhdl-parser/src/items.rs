@@ -87,8 +87,22 @@ impl<'t> Parser<'t> {
     pub(crate) fn parse_type_ref(&mut self) {
         self.builder.start_node(SyntaxKind::TYPE_REF.into());
         
-        // Base type
-        self.expect(SyntaxKind::IDENT);
+        // Base type - can be an identifier or a keyword that's also a type
+        match self.peek() {
+            Some(SyntaxKind::IDENT) |
+            Some(SyntaxKind::POWER_KW) |
+            Some(SyntaxKind::SIGNAL_KW) |
+            Some(SyntaxKind::GROUND_KW) => {
+                self.bump();
+            }
+            _ => {
+                self.error("Expected type name".to_string());
+                // Try to recover by treating the next token as the type
+                if self.peek().is_some() {
+                    self.bump();
+                }
+            }
+        }
         
         // Optional type parameters
         if self.peek() == Some(SyntaxKind::L_PAREN) {
