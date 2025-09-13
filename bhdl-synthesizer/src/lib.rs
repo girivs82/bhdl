@@ -64,6 +64,15 @@ pub mod simulation_driven;
 // Behavioral model extraction from components
 pub mod behavioral_model_extractor;
 
+// Cross-component optimization coordination
+pub mod cross_component_optimization;
+
+// Design pattern recognition engine
+pub mod design_pattern_recognition;
+
+// Component compatibility analysis
+pub mod component_compatibility;
+
 // Re-export key types
 pub use bhdl_analyzer::types::AnalysisResult;
 pub use bhdl_analyzer::component_inference::ParameterValue;
@@ -87,6 +96,8 @@ pub struct NetlistConfig {
     pub database_path: Option<String>,
     /// Enable simulation-driven optimization
     pub enable_simulation_optimization: bool,
+    /// Enable component compatibility analysis
+    pub enable_compatibility_analysis: bool,
 }
 
 /// Database integration statistics
@@ -123,6 +134,7 @@ impl Default for NetlistConfig {
             flatten_hierarchy: false,
             database_path: Some("/Users/girivs/src/bhdl-new/components.db".to_string()),
             enable_simulation_optimization: false,
+            enable_compatibility_analysis: true,
         }
     }
 }
@@ -344,9 +356,12 @@ impl NetlistGenerator {
         
         // Phase 1: Extract board/module hierarchy from analysis
         // Always extract to ensure top-level module is created
+        info!("Phase 1: Extracting module hierarchy...");
         self.extract_module_hierarchy(analysis)?;
+        info!("Phase 1 complete: {} modules created", self.netlist.modules.len());
         
         // Phase 2: Generate database component instances if mapper is available
+        info!("Phase 2: Generating component instances...");
         if self.database_mapper.is_some() {
             println!("DEBUG: Using database component mapper for instance generation");
             println!("DEBUG: About to call generate_database_component_instances");
@@ -358,6 +373,7 @@ impl NetlistGenerator {
             println!("DEBUG: Using semantic instance generation (no database mapper)");
             self.generate_instances_with_semantics(analysis)?;
         }
+        info!("Phase 2 complete: {} instances created", self.netlist.instances.len());
         
         // Phase 2.5: Generate connections for supporting components (virtual pin expansion)
         self.generate_supporting_component_connections(analysis)?;
@@ -394,6 +410,13 @@ impl NetlistGenerator {
         // Phase 9: Run simulation-driven optimization if enabled
         if self.config.enable_simulation_optimization {
             self.run_simulation_optimization(ast, analysis).await?;
+        }
+
+        // Phase 10: Run component compatibility analysis
+        if self.config.enable_compatibility_analysis {
+            info!("Starting component compatibility analysis phase...");
+            self.run_compatibility_analysis(analysis).await?;
+            info!("Component compatibility analysis phase completed");
         }
 
         info!("Netlist generation complete: {} modules, {} instances, {} nets, {} database components", 
@@ -2286,6 +2309,93 @@ impl NetlistGenerator {
     /// Get all component instances with database mappings
     pub fn get_component_instances(&self) -> &Vec<DatabaseComponentInstance> {
         &self.component_instances
+    }
+    
+    /// Run component compatibility analysis on the generated netlist  
+    async fn run_compatibility_analysis(&self, analysis: &AnalysisResult) -> Result<()> {
+        use crate::component_compatibility::ComponentCompatibilityAnalyzer;
+        use std::path::Path;
+        
+        info!("Running component compatibility analysis on {} components", self.netlist.instances.len());
+        
+        // Initialize the compatibility analyzer (try to use database if available)
+        let analyzer = if let Some(ref db_path) = self.config.database_path {
+            match ComponentCompatibilityAnalyzer::with_database(Path::new(db_path)).await {
+                Ok(analyzer) => {
+                    info!("Using real component database for compatibility analysis");
+                    analyzer
+                },
+                Err(e) => {
+                    warn!("Failed to connect to component database: {}. Using mock data.", e);
+                    ComponentCompatibilityAnalyzer::new()
+                }
+            }
+        } else {
+            info!("No database path configured. Using mock compatibility data.");
+            ComponentCompatibilityAnalyzer::new()
+        };
+        
+        // Run the compatibility analysis
+        match analyzer.analyze_compatibility(&self.netlist, analysis) {
+            Ok(report) => {
+                // Report compatibility results to the user
+                info!("=== Component Compatibility Analysis Results ===");
+                info!("Overall compatibility score: {:.1}%", report.overall_compatibility_score * 100.0);
+                
+                // Report power domain analysis
+                if !report.power_domain_analysis.is_empty() {
+                    info!("Power Domain Analysis:");
+                    for (i, domain) in report.power_domain_analysis.iter().enumerate() {
+                        info!("  {}. Domain '{}' ({:.1}V) - {} components, {:.1}A capacity", 
+                              i + 1, domain.domain_name, domain.nominal_voltage, 
+                              domain.connected_components.len(), domain.max_current);
+                        
+                        if !domain.compatibility_issues.is_empty() {
+                            warn!("     {} compatibility issues found", domain.compatibility_issues.len());
+                            for issue in &domain.compatibility_issues {
+                                warn!("     - {}: {}", issue.title, issue.description);
+                            }
+                        }
+                    }
+                }
+                
+                // Report thermal analysis
+                if !report.thermal_analysis.is_empty() {
+                    info!("Thermal Analysis:");
+                    for (i, zone) in report.thermal_analysis.iter().enumerate() {
+                        info!("  {}. Zone '{}' - {:.2}W dissipation, max {:.1}°C", 
+                              i + 1, zone.thermal_zone, zone.total_power_dissipation, zone.max_junction_temp);
+                    }
+                }
+                
+                // Report critical issues
+                if !report.critical_issues.is_empty() {
+                    warn!("Critical compatibility issues found:");
+                    for issue in &report.critical_issues {
+                        warn!("  - {}: {}", issue.title, issue.description);
+                        warn!("    Recommended action: {}", issue.recommended_action);
+                    }
+                } else {
+                    info!("No critical compatibility issues detected");
+                }
+                
+                // Report optimization opportunities
+                if !report.optimization_opportunities.is_empty() {
+                    info!("Optimization opportunities identified:");
+                    for opportunity in &report.optimization_opportunities {
+                        info!("  - {}: {}", opportunity.title, opportunity.description);
+                    }
+                }
+                
+                info!("Component compatibility analysis completed successfully");
+            },
+            Err(e) => {
+                warn!("Component compatibility analysis failed: {}", e);
+                // Don't fail the entire synthesis - just log the warning
+            }
+        }
+        
+        Ok(())
     }
 }
 

@@ -334,7 +334,12 @@
       "Bash(./target/debug/test_real_simulation_integration)",
       "Bash(./target/debug/test_buck_optimization)",
       "Bash(./test_parser_power_type)",
-      "Bash(./target/debug/end_to_end_test:*)"
+      "Bash(./target/debug/end_to_end_test:*)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin test_integrated_compatibility_analysis)",
+      "Bash(timeout 30 RUST_LOG=info cargo run -p bhdl-synthesizer --bin test_integrated_compatibility_analysis)",
+      "Bash(timeout:*)",
+      "Bash(RUST_LOG=debug cargo run -p bhdl-synthesizer --bin test_integrated_compatibility_analysis)",
+      "Bash(RUST_LOG=error cargo run -p bhdl-synthesizer --bin test_integrated_compatibility_analysis)"
     ],
     "deny": []
   }

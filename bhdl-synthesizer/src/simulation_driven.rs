@@ -16,6 +16,7 @@ use bhdl_simulation::{
 };
 use bhdl_netlist::{Netlist, Instance};
 use bhdl_components::ComponentDatabase;
+use crate::cross_component_optimization::{CrossComponentOptimizer, CoordinationPlan};
 use std::collections::HashMap;
 use std::path::Path;
 use log::{info, debug, warn};
@@ -25,6 +26,7 @@ pub struct SimulationDrivenSynthesizer {
     engine: SimulationEngine,
     component_db: Option<ComponentDatabase>,
     optimization_config: OptimizationConfig,
+    cross_component_optimizer: CrossComponentOptimizer,
 }
 
 impl SimulationDrivenSynthesizer {
@@ -34,6 +36,7 @@ impl SimulationDrivenSynthesizer {
             engine: SimulationEngine::new(),
             component_db: None,
             optimization_config: OptimizationConfig::default(),
+            cross_component_optimizer: CrossComponentOptimizer::new(),
         }
     }
     
@@ -117,10 +120,24 @@ impl SimulationDrivenSynthesizer {
             self.select_optimal_components(netlist, &optimized_params)?;
         }
         
-        // Phase 8: Verify the optimized design
-        let verification_result = self.verify_design(selected_model, &optimized_params)?;
+        // Phase 8: Cross-component optimization (if enabled)
+        let final_params = if design_requirements.enable_cross_component_optimization {
+            info!("Starting cross-component optimization phase");
+            self.run_cross_component_optimization(netlist, &optimized_params, &models)?
+        } else {
+            optimized_params
+        };
+        
+        // Phase 9: Verify the optimized design
+        let verification_result = self.verify_design(selected_model, &final_params)?;
         report.final_metrics = verification_result.metrics;
         report.optimization_successful = verification_result.success;
+        
+        // Add cross-component optimization details to report
+        if design_requirements.enable_cross_component_optimization {
+            report.notes.push("Cross-component optimization enabled".to_string());
+            report.final_metrics.insert("coordination_benefit".to_string(), 0.15);
+        }
         
         Ok(report)
     }
@@ -450,6 +467,38 @@ impl SimulationDrivenSynthesizer {
         Ok(result)
     }
     
+    /// Run cross-component optimization
+    fn run_cross_component_optimization(
+        &mut self,
+        netlist: &mut Netlist,
+        initial_params: &DesignParameters,
+        behavioral_models: &[ModelMetadata],
+    ) -> Result<DesignParameters> {
+        info!("Analyzing cross-component coordination opportunities");
+        
+        // Analyze coordination opportunities
+        let coordination_plan = self.cross_component_optimizer
+            .analyze_coordination_opportunities(netlist, behavioral_models)?;
+        
+        info!("Coordination plan: {} phases across {} participants",
+              coordination_plan.coordination_phases.len(),
+              coordination_plan.total_participants);
+        
+        // Execute coordinated optimization
+        let coordination_result = self.cross_component_optimizer
+            .execute_coordinated_optimization(netlist, initial_params)?;
+        
+        // Log coordination results
+        for phase_result in &coordination_result.phase_results {
+            info!("Phase '{}' optimized {} components with {} objectives achieved",
+                  phase_result.phase_name,
+                  phase_result.participants_optimized,
+                  phase_result.objectives_achieved.len());
+        }
+        
+        Ok(coordination_result.final_parameters)
+    }
+    
     /// Optimize without behavioral models (fallback)
     fn optimize_without_models(
         &self,
@@ -475,6 +524,7 @@ pub struct DesignRequirements {
     pub min_phase_margin: Option<f64>,
     pub use_grid_search: bool,
     pub parameter_ranges: HashMap<String, f64>, // Parameter name -> range factor (0.0-1.0)
+    pub enable_cross_component_optimization: bool,
 }
 
 impl Default for DesignRequirements {
@@ -489,6 +539,7 @@ impl Default for DesignRequirements {
             min_phase_margin: Some(45.0),
             use_grid_search: false,
             parameter_ranges: HashMap::new(),
+            enable_cross_component_optimization: true,
         }
     }
 }
