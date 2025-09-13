@@ -1,8 +1,383 @@
-// Simplified Resistor Module for testing
+// Enhanced Resistor Module with Component Knowledge
+// Complete model for precision resistor design and selection
 
-module Resistor(value: resistance) {
-    pin 1: signal inout;
-    pin 2: signal inout;
+import { resistance, voltage, current, power, temperature, time } from "../../../units.bhdl";
+
+module Resistor(
+    value: resistance,
+    tolerance: float = 5%,          // Default to 5% tolerance
+    power_rating: power = 250mW,    // Default to 1/4 watt
+    temp_coefficient: float = 100e-6 // Default 100ppm/°C
+) {
+    pin 1: signal inout {
+        current_max: "sqrt(power_rating / value)",
+        voltage_max: "sqrt(power_rating * value)",
+        description: "Terminal 1"
+    };
+    
+    pin 2: signal inout {
+        current_max: "sqrt(power_rating / value)",
+        voltage_max: "sqrt(power_rating * value)",
+        description: "Terminal 2"
+    };
+    
+    // === BEHAVIORAL MODEL: ANALYTICAL (Level 0) ===
+    @behavioral_model analytical {
+        metadata: {
+            name: "analytical",
+            level: "ANALYTICAL",
+            typical_runtime: 0.01ms,
+            accuracy: 0.99,  // 99% accurate for linear resistors
+            provides_outputs: ["power_dissipation", "voltage_drop", "thermal_analysis"],
+        },
+        
+        // Simple resistor equations
+        equations: {
+            // Ohm's law
+            voltage_drop: "current * value",
+            current: "voltage_drop / value",
+            
+            // Power calculations
+            power_dissipation: "voltage_drop² / value",
+            power_current: "current² * value",
+            power_vi: "voltage_drop * current",
+            
+            // Thermal analysis
+            temperature_rise: "power_dissipation * thermal_resistance",
+            operating_temperature: "ambient_temp + temperature_rise",
+            
+            // Resistance change with temperature
+            resistance_actual: "value * (1 + temp_coefficient * (operating_temperature - 25°C))",
+            
+            // Voltage divider (when used in divider)
+            divider_ratio: "value / (value + other_resistor_value)",
+            
+            // Derating calculations
+            power_derated: "power_rating * derating_factor",
+            safe_power: "power_rating * 0.7",  // 70% derating
+        },
+        
+        // Design constraints
+        constraints: {
+            power_max: "power_rating",
+            voltage_max: "sqrt(power_rating * value)",
+            current_max: "sqrt(power_rating / value)",
+            temp_max: "125°C",  // Typical for standard resistors
+        },
+        
+        use_when: "always",  // Resistors always use analytical model
+    }
+    
+    // === COMPONENT KNOWLEDGE ===
+    @component_knowledge {
+        standard_values: {
+            // E12 series (10% tolerance)
+            e12: [1.0, 1.2, 1.5, 1.8, 2.2, 2.7, 3.3, 3.9, 4.7, 5.6, 6.8, 8.2],
+            
+            // E24 series (5% tolerance)
+            e24: [1.0, 1.1, 1.2, 1.3, 1.5, 1.6, 1.8, 2.0, 2.2, 2.4, 2.7, 3.0, 
+                  3.3, 3.6, 3.9, 4.3, 4.7, 5.1, 5.6, 6.2, 6.8, 7.5, 8.2, 9.1],
+            
+            // E96 series (1% tolerance)  
+            e96: [1.00, 1.02, 1.05, 1.07, 1.10, 1.13, 1.15, 1.18, 1.21, 1.24,
+                  1.27, 1.30, 1.33, 1.37, 1.40, 1.43, 1.47, 1.50, 1.54, 1.58,
+                  1.62, 1.65, 1.69, 1.74, 1.78, 1.82, 1.87, 1.91, 1.96, 2.00,
+                  2.05, 2.10, 2.15, 2.21, 2.26, 2.32, 2.37, 2.43, 2.49, 2.55,
+                  2.61, 2.67, 2.74, 2.80, 2.87, 2.94, 3.01, 3.09, 3.16, 3.24,
+                  3.32, 3.40, 3.48, 3.57, 3.65, 3.74, 3.83, 3.92, 4.02, 4.12,
+                  4.22, 4.32, 4.42, 4.53, 4.64, 4.75, 4.87, 4.99, 5.11, 5.23,
+                  5.36, 5.49, 5.62, 5.76, 5.90, 6.04, 6.19, 6.34, 6.49, 6.65,
+                  6.81, 6.98, 7.15, 7.32, 7.50, 7.68, 7.87, 8.06, 8.25, 8.45,
+                  8.66, 8.87, 9.09, 9.31, 9.53, 9.76],
+        },
+        
+        resistor_types: {
+            carbon_film: {
+                tolerance_typical: 5%,
+                temp_coefficient: 250e-6,  // ppm/°C
+                noise_coefficient: -10,     // dB µV/V
+                power_ratings: [125mW, 250mW, 500mW, 1W, 2W],
+                voltage_coefficient: 10e-6, // ppm/V
+                cost: "low",
+                stability: "moderate",
+                use_when: "general_purpose || low_cost",
+            },
+            
+            metal_film: {
+                tolerance_typical: 1%,
+                temp_coefficient: 50e-6,
+                noise_coefficient: -20,
+                power_ratings: [125mW, 250mW, 500mW, 1W, 2W],
+                voltage_coefficient: 1e-6,
+                cost: "medium",
+                stability: "good",
+                use_when: "precision || low_noise",
+            },
+            
+            thick_film: {
+                tolerance_typical: 5%,
+                temp_coefficient: 200e-6,
+                noise_coefficient: -5,
+                power_ratings: [63mW, 100mW, 125mW, 250mW, 500mW, 1W],
+                voltage_coefficient: 50e-6,
+                cost: "very_low",
+                stability: "moderate",
+                use_when: "smd || high_volume",
+            },
+            
+            thin_film: {
+                tolerance_typical: 0.1%,
+                temp_coefficient: 25e-6,
+                noise_coefficient: -25,
+                power_ratings: [63mW, 100mW, 125mW, 250mW],
+                voltage_coefficient: 0.1e-6,
+                cost: "high",
+                stability: "excellent",
+                use_when: "high_precision || instrumentation",
+            },
+            
+            wirewound: {
+                tolerance_typical: 1%,
+                temp_coefficient: 20e-6,
+                noise_coefficient: -30,  // Very low noise
+                power_ratings: [1W, 2W, 5W, 10W, 25W, 50W],
+                voltage_coefficient: 0.1e-6,
+                cost: "high",
+                stability: "excellent",
+                inductance: "significant",  // Has parasitic inductance
+                use_when: "high_power || ultra_precision",
+            },
+            
+            current_sense: {
+                tolerance_typical: 1%,
+                temp_coefficient: 100e-6,
+                noise_coefficient: -15,
+                power_ratings: [1W, 2W, 3W, 5W],
+                voltage_coefficient: 1e-6,
+                cost: "medium",
+                stability: "good",
+                kelvin_connection: true,    // 4-wire connection
+                use_when: "current_sensing || power_measurement",
+            }
+        },
+        
+        package_types: {
+            // SMD packages
+            "0201": {size: "0.6×0.3mm", power_max: 31mW, voltage_max: 25V},
+            "0402": {size: "1.0×0.5mm", power_max: 63mW, voltage_max: 50V},
+            "0603": {size: "1.6×0.8mm", power_max: 100mW, voltage_max: 75V},
+            "0805": {size: "2.0×1.25mm", power_max: 125mW, voltage_max: 150V},
+            "1206": {size: "3.2×1.6mm", power_max: 250mW, voltage_max: 200V},
+            "1210": {size: "3.2×2.5mm", power_max: 500mW, voltage_max: 200V},
+            "2010": {size: "5.0×2.5mm", power_max: 750mW, voltage_max: 200V},
+            "2512": {size: "6.35×3.2mm", power_max: 1W, voltage_max: 200V},
+            
+            // Through-hole packages
+            "1/8W": {power_max: 125mW, length: "3.2mm", diameter: "1.8mm"},
+            "1/4W": {power_max: 250mW, length: "6.35mm", diameter: "2.3mm"},
+            "1/2W": {power_max: 500mW, length: "9.5mm", diameter: "3.2mm"},
+            "1W": {power_max: 1W, length: "12.7mm", diameter: "4.5mm"},
+            "2W": {power_max: 2W, length: "15.9mm", diameter: "6.35mm"},
+            "5W": {power_max: 5W, length: "22.2mm", diameter: "9.5mm"},
+        },
+        
+        selection_guidelines: {
+            tolerance_selection: {
+                "20%": "Very rough calculations, LED current limiting",
+                "10%": "General purpose, non-critical applications",
+                "5%": "Standard precision, most analog circuits", 
+                "1%": "Precision analog, measurement circuits",
+                "0.5%": "High precision instrumentation",
+                "0.1%": "Ultra-precision, calibration standards",
+                "0.01%": "Metrology, reference standards",
+            },
+            
+            temp_coefficient_selection: {
+                "500ppm/°C": "General purpose, cost-sensitive",
+                "100ppm/°C": "Standard applications, -40°C to +85°C",
+                "50ppm/°C": "Precision applications, temperature variation",
+                "25ppm/°C": "High precision, wide temperature range",
+                "5ppm/°C": "Ultra-stable, metrology applications",
+            },
+            
+            power_derating: {
+                "Above 70°C": "Derate 2.5mW/°C for standard packages",
+                "High reliability": "Use 50% of rated power maximum",
+                "Automotive": "Use 70% of rated power with temperature derating",
+                "Military": "Follow MIL-STD derating curves",
+            }
+        },
+        
+        common_applications: {
+            voltage_divider: {
+                ratio_calculation: "Vout = Vin * R2 / (R1 + R2)",
+                loading_effect: "Consider input impedance of following stage",
+                power_distribution: "P1 = Vin² * R1 / (R1 + R2)²",
+                tolerance_effect: "Output tolerance ≈ sqrt(tol1² + tol2²)",
+                recommended_tolerance: "1% for precision dividers",
+            },
+            
+            current_limiting: {
+                calculation: "R = (Vin - Vforward) / Idesired",
+                power: "P = (Vin - Vforward) * Idesired",
+                tolerance_effect: "Current varies inversely with resistance",
+                temperature_effect: "Current decreases with increasing temperature",
+                safety_factor: "Use 150% power rating minimum",
+            },
+            
+            pull_up_pull_down: {
+                pull_up_calculation: "R = (Vcc - Vol) / Iol",
+                pull_down_calculation: "R = Voh / Ioh", 
+                typical_values: "4.7kΩ to 10kΩ for digital logic",
+                power_consideration: "P = Vcc² / R when active",
+                speed_tradeoff: "Lower R = faster, higher power",
+            },
+            
+            feedback_networks: {
+                amplifier_gain: "Gain = 1 + Rf/Rin",
+                stability: "Use metal film for low noise",
+                matching: "1% tolerance for differential circuits",
+                bandwidth: "Consider parasitic capacitance at high frequency",
+                noise: "Johnson noise = sqrt(4*k*T*R*BW)",
+            },
+            
+            current_sensing: {
+                calculation: "Vsense = Isense * Rshunt",
+                power: "P = Isense² * Rshunt",
+                tolerance: "0.1% to 1% depending on accuracy needed",
+                temperature_drift: "Critical for precision measurement",
+                kelvin_connection: "Required for accuracies < 1%",
+            }
+        },
+        
+        design_rules: {
+            parallel_series_combinations: {
+                parallel: "1/Rtotal = 1/R1 + 1/R2 + ... + 1/Rn",
+                series: "Rtotal = R1 + R2 + ... + Rn",
+                tolerance_parallel: "Better tolerance with parallel combination",
+                tolerance_series: "Tolerances add in quadrature",
+                power_parallel: "Power distributes inversely with resistance",
+                power_series: "Power distributes proportionally with resistance",
+            },
+            
+            thermal_considerations: {
+                derating: "Derate power linearly above 70°C",
+                thermal_resistance: "θJA depends on package and PCB copper",
+                spacing: "Allow airflow around high-power resistors",
+                pcb_heating: "Large resistors heat adjacent components",
+                thermal_cycling: "Affects reliability, use proper derating",
+            },
+            
+            layout_guidelines: {
+                current_sense: "Use Kelvin connections for precision",
+                high_power: "Use wide traces, thermal vias",
+                precision: "Match trace resistances in differential pairs",
+                noise_sensitive: "Keep away from switching circuits",
+                mechanical: "Allow for thermal expansion in high-power",
+            }
+        },
+        
+        failure_modes: {
+            open_circuit: {
+                probability: "Most common failure mode",
+                causes: ["Overcurrent", "Thermal stress", "Mechanical shock"],
+                detection: "Infinite resistance measurement",
+                prevention: "Proper derating, surge protection",
+            },
+            
+            resistance_drift: {
+                probability: "Gradual degradation",
+                causes: ["Temperature cycling", "Humidity", "UV exposure"],
+                detection: "Regular calibration checks",
+                prevention: "Environmental protection, quality components",
+            },
+            
+            short_circuit: {
+                probability: "Rare for quality components",
+                causes: ["Manufacturing defect", "Extreme overstress"],
+                detection: "Near-zero resistance",
+                prevention: "Component screening, surge protection",
+            }
+        }
+    }
+    
+    // === TEST SEQUENCES ===
+    @test_sequences {
+        basic_resistance_test: {
+            name: "resistance_measurement",
+            description: "Verify resistance value and tolerance",
+            
+            setup: {
+                initial_conditions: {
+                    temperature: 25°C,
+                    no_power_applied: true,
+                },
+            },
+            
+            stimulus: {
+                type: "dc_measurement",
+                parameters: {
+                    test_current: "1mA",  // Low current to avoid self-heating
+                    measurement_points: ["1", "2"],
+                },
+            },
+            
+            measurements: {
+                measure: ["resistance", "voltage", "current"],
+                extract: ["actual_resistance", "tolerance_error"],
+                pass_criteria: {
+                    resistance_tolerance: "within specified tolerance",
+                    linearity: "< 0.1% deviation from Ohm's law",
+                }
+            }
+        },
+        
+        power_handling_test: {
+            name: "power_capability",
+            description: "Verify power rating and thermal behavior",
+            
+            stimulus: {
+                type: "power_step",
+                parameters: {
+                    power_levels: ["25%", "50%", "75%", "100%"],
+                    step_duration: "30s each",
+                },
+            },
+            
+            measurements: {
+                measure: ["resistance", "temperature", "power"],
+                extract: ["temp_coefficient", "power_rating_actual", "thermal_time_constant"],
+                pass_criteria: {
+                    resistance_drift: "< 1% at rated power",
+                    no_thermal_runaway: "temperature stabilizes",
+                    power_rating: "meets datasheet specification",
+                }
+            }
+        },
+        
+        temperature_coefficient_test: {
+            name: "temperature_stability",
+            description: "Measure temperature coefficient of resistance",
+            
+            stimulus: {
+                type: "temperature_sweep",
+                parameters: {
+                    temp_range: "-40°C to +125°C",
+                    step_size: "25°C",
+                    stabilization_time: "10min",
+                },
+            },
+            
+            measurements: {
+                measure: ["resistance", "temperature"],
+                extract: ["temp_coefficient", "linearity"],
+                pass_criteria: {
+                    temp_coefficient: "within datasheet specification",
+                    linearity: "> 0.99 correlation coefficient",
+                }
+            }
+        }
+    }
 }
 
 // Common alias
