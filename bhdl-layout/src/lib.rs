@@ -1,9 +1,17 @@
-use crate::Result;
+//! BHDL Layout Engine - AI-powered PCB layout generation
+//! 
+//! This crate provides automated PCB layout generation using machine learning
+//! and advanced placement/routing algorithms. It takes a netlist as input
+//! and produces optimized component placement and routing.
+
+use anyhow::Result;
 use bhdl_netlist::{Netlist, InstanceId, NetId, ModuleId};
 use bhdl_analyzer::AnalysisResult;
 use serde::{Serialize, Deserialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use log::{info, warn, debug};
+
+// Types are already public, no need for re-export
 
 /// AI-powered automated PCB layout generation
 /// Uses machine learning techniques for intelligent component placement and routing

@@ -1,4 +1,5 @@
-use bhdl_synthesizer::{NetlistConfig, NetlistGenerator};
+use bhdl_layout::{AILayoutGenerator, AILayoutConfig, PlacementStrategy, RoutingStrategy, OptimizationLevel};
+use bhdl_netlist::Netlist;
 use bhdl_analyzer;
 use bhdl_parser::parse;
 use bhdl_ast::AstNode;
@@ -110,29 +111,59 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     info!("Analysis completed. Found {} diagnostics", analysis_result.diagnostics.len());
     
-    // Create generator with AI layout generation enabled
-    let config = NetlistConfig {
-        enable_ai_layout_generation: true,
-        include_component_inference: true,
-        ..Default::default()
-    };
+    // First generate the netlist using the standard netlist generator
+    info!("Generating netlist from BHDL source...");
+    let netlist = bhdl_synthesizer::generate_netlist_from_source(&source_file).await?;
     
-    let mut generator = NetlistGenerator::with_config(config);
+    info!("Netlist generated with {} modules, {} instances, {} nets", 
+          netlist.modules.len(), netlist.instances.len(), netlist.nets.len());
     
-    // Generate netlist with AI layout
-    info!("Starting netlist generation with AI-powered layout...");
-    let netlist = generator.generate_from_ast_and_analysis(&source_file, &analysis_result).await?;
+    // Now create AI layout generator and generate layout
+    info!("Starting AI-powered layout generation...");
     
-    info!("Netlist generation completed successfully!");
-    info!("Generated netlist with {} modules", netlist.modules.len());
-    info!("Generated netlist with {} instances", netlist.instances.len());
-    info!("Generated netlist with {} nets", netlist.nets.len());
+    let mut layout_config = AILayoutConfig::default();
+    layout_config.board_width = 100.0;  // 100mm x 100mm board
+    layout_config.board_height = 100.0;
+    layout_config.layer_count = 4;
+    layout_config.placement_strategy = PlacementStrategy::Intelligent;
+    layout_config.routing_strategy = RoutingStrategy::Adaptive;
+    layout_config.optimization_level = OptimizationLevel::High;
+    layout_config.use_ml_placement = true;
+    layout_config.use_ml_routing = true;
     
-    // Display generated components to verify the synthesis worked
-    info!("Generated Components:");
-    for (instance_id, instance) in &netlist.instances {
-        if let Some(module) = netlist.modules.get(instance.definition) {
-            info!("  Component: {} ({})", instance.name, module.name);
+    let mut layout_generator = AILayoutGenerator::new(layout_config);
+    let layout_result = layout_generator.generate_layout(&netlist, &analysis_result).await?;
+    
+    info!("Layout generation completed successfully!");
+    info!("  ✓ Components placed: {}", layout_result.placements.len());
+    info!("  ✓ Nets routed: {}", layout_result.routes.len());
+    info!("  ✓ Total wire length: {:.2}mm", layout_result.metrics.total_wire_length);
+    info!("  ✓ Via count: {}", layout_result.metrics.via_count);
+    info!("  ✓ Thermal score: {:.1}%", layout_result.metrics.thermal_score * 100.0);
+    info!("  ✓ Signal integrity score: {:.1}%", layout_result.metrics.signal_integrity_score * 100.0);
+    info!("  ✓ Manufacturability score: {:.1}%", layout_result.metrics.manufacturability_score * 100.0);
+    info!("  ✓ Overall layout score: {:.1}%", layout_result.metrics.overall_score * 100.0);
+    
+    // Check for violations
+    if !layout_result.violations.is_empty() {
+        info!("Layout violations detected:");
+        for violation in &layout_result.violations {
+            info!("  - {:?} at ({:.1}, {:.1}): {}", 
+                  violation.violation_type, 
+                  violation.location.0, 
+                  violation.location.1,
+                  violation.description);
+        }
+    }
+    
+    // Show improvement suggestions
+    if !layout_result.suggestions.is_empty() {
+        info!("Layout optimization suggestions:");
+        for suggestion in &layout_result.suggestions {
+            info!("  - {:?}: {} (improvement: {:.1}%)", 
+                  suggestion.suggestion_type,
+                  suggestion.description,
+                  suggestion.expected_improvement);
         }
     }
     
