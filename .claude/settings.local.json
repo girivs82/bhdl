@@ -332,7 +332,9 @@
       "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin test_real_simulation_integration)",
       "Bash(RUST_LOG=warn cargo run -p bhdl-synthesizer --bin test_real_simulation_integration)",
       "Bash(./target/debug/test_real_simulation_integration)",
-      "Bash(./target/debug/test_buck_optimization)"
+      "Bash(./target/debug/test_buck_optimization)",
+      "Bash(./test_parser_power_type)",
+      "Bash(./target/debug/end_to_end_test:*)"
     ],
     "deny": []
   }
