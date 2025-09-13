@@ -292,6 +292,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "bhdl-layout"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bhdl-analyzer",
+ "bhdl-ast",
+ "bhdl-netlist",
+ "bhdl-parser",
+ "bhdl-synthesizer",
+ "env_logger 0.10.2",
+ "log",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "bhdl-lsp"
 version = "0.1.0"
 

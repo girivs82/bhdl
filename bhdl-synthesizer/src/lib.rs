@@ -94,7 +94,6 @@ pub mod predictive_analytics;
 
 // Manufacturing and assembly optimization (DFM/DFA)
 pub mod manufacturing_optimization;
-pub mod ai_layout_generation;
 
 // Re-export key types
 pub use bhdl_analyzer::types::AnalysisResult;
@@ -141,8 +140,6 @@ pub struct NetlistConfig {
     pub enable_predictive_analytics: bool,
     /// Enable manufacturing and assembly optimization (DFM/DFA)
     pub enable_manufacturing_optimization: bool,
-    /// Enable AI-powered automated layout generation
-    pub enable_ai_layout_generation: bool,
 }
 
 /// Database integration statistics
@@ -190,7 +187,6 @@ impl Default for NetlistConfig {
             enable_reliability_analysis: false, // Off by default for performance
             enable_predictive_analytics: false, // Off by default for performance
             enable_manufacturing_optimization: false, // Off by default for performance
-            enable_ai_layout_generation: false, // Off by default for performance
         }
     }
 }
@@ -230,8 +226,6 @@ pub struct NetlistGenerator {
     predictive_analyzer: Option<crate::predictive_analytics::PredictiveAnalyzer>,
     // Manufacturing optimizer for DFM/DFA analysis
     manufacturing_optimizer: Option<crate::manufacturing_optimization::ManufacturingOptimizer>,
-    // AI layout generator for automated PCB layout
-    ai_layout_generator: Option<crate::ai_layout_generation::AILayoutGenerator>,
 }
 
 impl NetlistGenerator {
@@ -265,7 +259,6 @@ impl NetlistGenerator {
             reliability_analyzer: None, // Will be initialized when reliability analysis is enabled
             predictive_analyzer: None, // Will be initialized when predictive analytics is enabled
             manufacturing_optimizer: None, // Will be initialized when manufacturing optimization is enabled
-            ai_layout_generator: None, // Will be initialized when AI layout generation is enabled
         }
     }
 
@@ -561,13 +554,6 @@ impl NetlistGenerator {
             info!("Starting manufacturing and assembly optimization phase...");
             self.run_manufacturing_optimization(analysis).await?;
             info!("Manufacturing and assembly optimization phase completed");
-        }
-
-        // Phase 21: Run AI-powered automated layout generation
-        if self.config.enable_ai_layout_generation {
-            info!("Starting AI-powered automated layout generation phase...");
-            self.run_ai_layout_generation(analysis).await?;
-            info!("AI-powered automated layout generation phase completed");
         }
 
         info!("Netlist generation complete: {} modules, {} instances, {} nets, {} database components", 
@@ -3752,96 +3738,6 @@ impl NetlistGenerator {
     }
     
     /// Run manufacturing and assembly optimization (DFM/DFA)
-    async fn run_ai_layout_generation(&mut self, analysis: &AnalysisResult) -> Result<()> {
-        use crate::ai_layout_generation::{AILayoutGenerator, AILayoutConfig, PlacementStrategy, RoutingStrategy, OptimizationLevel};
-        
-        info!("Running AI-powered automated layout generation on {} components and {} nets", 
-              self.netlist.instances.len(), self.netlist.nets.len());
-        
-        // Initialize AI layout generator if not already initialized
-        if self.ai_layout_generator.is_none() {
-            let mut config = AILayoutConfig::default();
-            
-            // Configure layout parameters
-            config.board_width = 100.0;  // 100mm x 100mm board
-            config.board_height = 100.0;
-            config.layer_count = 4;       // 4-layer PCB
-            config.min_trace_width = 0.2; // 0.2mm trace width
-            config.min_via_size = 0.3;    // 0.3mm via size
-            
-            // Use intelligent AI-powered strategies
-            config.placement_strategy = PlacementStrategy::Intelligent;
-            config.routing_strategy = RoutingStrategy::Adaptive;
-            config.optimization_level = OptimizationLevel::High;
-            
-            // Enable ML features
-            config.use_ml_placement = true;
-            config.use_ml_routing = true;
-            config.thermal_aware = true;
-            config.signal_integrity_aware = true;
-            config.manufacturing_constraints = true;
-            
-            let generator = AILayoutGenerator::new(config);
-            self.ai_layout_generator = Some(generator);
-            
-            info!("AI layout generator initialized with ML-powered placement and routing");
-        }
-        
-        // Run AI layout generation
-        if let Some(generator) = &mut self.ai_layout_generator {
-            let result = generator.generate_layout(&self.netlist, analysis).await?;
-            
-            // Log results
-            info!("AI Layout Generation Results:");
-            info!("  ✓ Components placed: {}", result.placements.len());
-            info!("  ✓ Nets routed: {}", result.routes.len());
-            info!("  ✓ Total wire length: {:.2}mm", result.metrics.total_wire_length);
-            info!("  ✓ Via count: {}", result.metrics.via_count);
-            info!("  ✓ Thermal score: {:.1}%", result.metrics.thermal_score * 100.0);
-            info!("  ✓ Signal integrity score: {:.1}%", result.metrics.signal_integrity_score * 100.0);
-            info!("  ✓ Manufacturability score: {:.1}%", result.metrics.manufacturability_score * 100.0);
-            info!("  ✓ Overall layout score: {:.1}%", result.metrics.overall_score * 100.0);
-            
-            // Check for violations
-            if !result.violations.is_empty() {
-                warn!("Layout violations detected:");
-                for violation in &result.violations {
-                    warn!("  - {:?} at ({:.1}, {:.1}): {}", 
-                          violation.violation_type, 
-                          violation.location.0, 
-                          violation.location.1,
-                          violation.description);
-                }
-            }
-            
-            // Show improvement suggestions
-            if !result.suggestions.is_empty() {
-                info!("Layout optimization suggestions:");
-                for suggestion in &result.suggestions {
-                    info!("  - {}: {} (potential improvement: {:.1}%, confidence: {:.1}%)",
-                          match suggestion.suggestion_type {
-                              crate::ai_layout_generation::SuggestionType::ComponentMove => "Move component",
-                              crate::ai_layout_generation::SuggestionType::RotationChange => "Rotate component",
-                              crate::ai_layout_generation::SuggestionType::LayerChange => "Change layer",
-                              crate::ai_layout_generation::SuggestionType::RouteOptimization => "Optimize route",
-                              crate::ai_layout_generation::SuggestionType::ViaReduction => "Reduce vias",
-                              crate::ai_layout_generation::SuggestionType::ThermalImprovement => "Improve thermal",
-                          },
-                          suggestion.description,
-                          suggestion.expected_improvement,
-                          suggestion.confidence * 100.0);
-                }
-            }
-            
-            // Store layout results in netlist analysis data for downstream tools
-            // In a real implementation, this would populate the netlist with layout information
-            
-            info!("AI-powered PCB layout generation completed successfully");
-        }
-        
-        Ok(())
-    }
-
     async fn run_manufacturing_optimization(&mut self, analysis: &AnalysisResult) -> Result<()> {
         use crate::manufacturing_optimization::{ManufacturingOptimizer, ManufacturingConfig};
         
