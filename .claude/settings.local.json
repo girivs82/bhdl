@@ -353,7 +353,8 @@
       "Bash(RUST_LOG=info timeout 30s cargo run -p bhdl-synthesizer --bin test_emi_emc_analysis)",
       "Bash(RUST_LOG=info timeout 30s cargo run -p bhdl-synthesizer --bin test_reliability_analysis)",
       "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin test_manufacturing_optimization)",
-      "Bash(RUST_LOG=info cargo run --bin test_manufacturing_optimization)"
+      "Bash(RUST_LOG=info cargo run --bin test_manufacturing_optimization)",
+      "Bash(RUST_LOG=info cargo run --bin test_ai_layout_generation)"
     ],
     "deny": []
   }
