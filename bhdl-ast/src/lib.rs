@@ -29,6 +29,7 @@ pub mod hierarchical; // Hierarchical module support
 pub mod interfaces; // Interface-specific AST nodes
 pub mod attributes; // Behavioral modeling attribute support
 pub mod behavioral; // When blocks and behavioral statements
+pub mod behavioral_models; // Behavioral model and optimization annotations
 pub mod testbench; // Testbench AST nodes
 pub mod safety; // Safety-related AST nodes for ISO 26262 compliance
 pub mod safety_hierarchy; // Hierarchical safety requirements
@@ -66,6 +67,7 @@ pub use interfaces::{InterfaceSignal, InterfaceRequirement, InterfacePerspective
 pub use testbench::{TestbenchDef, SimulationBlock, ScopeDef, StimulusBlock, VerifyBlock, MeasureBlock, 
                     SignalRef, CaptureMode, StimulusAssign, WaveformExpr, Assertion, Measurement, TimeSpec};
 pub use safety::{SatisfiesBlock, SatisfiesItem, SatisfiesSpec, SatisfiesVia, SatisfiesDetails, HasSatisfies};
+pub use behavioral_models::{BehavioralModel, OptimizationStrategy, ComponentKnowledge};
 
 // Add tests module
 #[cfg(test)]
