@@ -85,6 +85,9 @@ pub mod thermal_simulation;
 // Cost optimization with supplier data
 pub mod cost_optimization;
 
+// EMI/EMC (Electromagnetic Interference/Electromagnetic Compatibility) analysis
+pub mod emi_emc_analysis;
+
 // Re-export key types
 pub use bhdl_analyzer::types::AnalysisResult;
 pub use bhdl_analyzer::component_inference::ParameterValue;
@@ -122,6 +125,8 @@ pub struct NetlistConfig {
     pub enable_thermal_simulation: bool,
     /// Enable cost optimization with supplier data
     pub enable_cost_optimization: bool,
+    /// Enable EMI/EMC (Electromagnetic Interference/Electromagnetic Compatibility) analysis
+    pub enable_emi_emc_analysis: bool,
 }
 
 /// Database integration statistics
@@ -165,6 +170,7 @@ impl Default for NetlistConfig {
             enable_ml_selection: false, // Off by default since it requires training data
             enable_thermal_simulation: false, // Off by default for performance
             enable_cost_optimization: false, // Off by default, requires supplier API setup
+            enable_emi_emc_analysis: false,  // Off by default for performance
         }
     }
 }
@@ -196,6 +202,8 @@ pub struct NetlistGenerator {
     supporting_component_instances: HashMap<String, InstanceId>,
     // Cost optimizer for supplier data integration
     cost_optimizer: Option<crate::cost_optimization::CostOptimizer>,
+    // EMI/EMC analyzer for electromagnetic compatibility analysis
+    emi_emc_analyzer: Option<crate::emi_emc_analysis::EMIEMCAnalyzer>,
 }
 
 impl NetlistGenerator {
@@ -225,6 +233,7 @@ impl NetlistGenerator {
             component_calculator: ComponentCalculator::new(),
             supporting_component_instances: HashMap::new(),
             cost_optimizer: None, // Will be initialized when cost optimization is enabled
+            emi_emc_analyzer: None, // Will be initialized when EMI/EMC analysis is enabled
         }
     }
 
@@ -492,6 +501,13 @@ impl NetlistGenerator {
             info!("Starting cost optimization phase...");
             self.run_cost_optimization(analysis).await?;
             info!("Cost optimization phase completed");
+        }
+        
+        // Phase 17: Run EMI/EMC analysis
+        if self.config.enable_emi_emc_analysis {
+            info!("Starting EMI/EMC analysis phase...");
+            self.run_emi_emc_analysis(analysis).await?;
+            info!("EMI/EMC analysis phase completed");
         }
 
         info!("Netlist generation complete: {} modules, {} instances, {} nets, {} database components", 
@@ -3111,6 +3127,225 @@ impl NetlistGenerator {
         } else {
             error!("Cost optimizer not initialized - this should not happen");
             return Err(anyhow::anyhow!("Cost optimizer initialization failed"));
+        }
+        
+        Ok(())
+    }
+    
+    /// Run EMI/EMC (Electromagnetic Interference/Electromagnetic Compatibility) analysis
+    async fn run_emi_emc_analysis(&mut self, analysis: &AnalysisResult) -> Result<()> {
+        use crate::emi_emc_analysis::{EMIEMCAnalyzer, EMIEMCConfig, EmissionStandard, ImmunityStandard};
+        
+        info!("Running EMI/EMC analysis on {} components", self.netlist.instances.len());
+        
+        // Initialize EMI/EMC analyzer if not already initialized
+        if self.emi_emc_analyzer.is_none() {
+            let mut config = EMIEMCConfig::default();
+            
+            // Configure analysis parameters
+            config.target_standards = vec![
+                EmissionStandard::CISPR22,   // Information Technology Equipment
+                EmissionStandard::FCC15,     // US FCC Part 15
+                EmissionStandard::IEC61000,  // General EMC Standard
+            ];
+            
+            config.immunity_standards = vec![
+                ImmunityStandard::IEC61000_4_2, // ESD Immunity
+                ImmunityStandard::IEC61000_4_3, // Radiated RF Immunity
+                ImmunityStandard::IEC61000_4_4, // Electrical Fast Transient
+                ImmunityStandard::IEC61000_4_6, // Conducted RF
+            ];
+            
+            config.frequency_range = (9_000.0, 1_000_000_000.0); // 9 kHz to 1 GHz
+            config.analysis_resolution = 100_000.0; // 100 kHz resolution
+            config.enable_prediction = true;
+            config.enable_mitigation_suggestions = true;
+            config.include_crosstalk_analysis = true;
+            config.include_power_integrity = true;
+            config.safety_margin = 6.0; // 6 dB safety margin
+            
+            let analyzer = EMIEMCAnalyzer::with_config(config);
+            self.emi_emc_analyzer = Some(analyzer);
+            
+            info!("EMI/EMC analyzer initialized with {} emission standards and {} immunity standards",
+                  3, 4);
+        }
+        
+        // Run EMI/EMC analysis
+        if let Some(analyzer) = &mut self.emi_emc_analyzer {
+            match analyzer.analyze_emi_emc(&self.netlist, analysis).await {
+                Ok(results) => {
+                    info!("EMI/EMC analysis results:");
+                    
+                    // Report emission compliance
+                    info!("  - Emission Compliance:");
+                    info!("    • Conducted emissions: {:?}", results.emission_compliance.conducted_emissions.overall_status);
+                    info!("    • Radiated emissions: {:?}", results.emission_compliance.radiated_emissions.overall_status);
+                    info!("    • Harmonic emissions: {:?}", results.emission_compliance.harmonic_emissions.overall_status);
+                    info!("    • Emission hotspots found: {}", results.emission_compliance.emission_hotspots.len());
+                    
+                    // Report worst-case margins
+                    let worst_conducted_margin = results.emission_compliance.conducted_emissions.worst_case_margin;
+                    let worst_radiated_margin = results.emission_compliance.radiated_emissions.worst_case_margin;
+                    
+                    info!("    • Worst-case conducted margin: {:.1} dB", worst_conducted_margin);
+                    info!("    • Worst-case radiated margin: {:.1} dB", worst_radiated_margin);
+                    
+                    if worst_conducted_margin < 0.0 || worst_radiated_margin < 0.0 {
+                        warn!("    ⚠ Emission limits exceeded - mitigation required");
+                    }
+                    
+                    // Report emission hotspots
+                    if !results.emission_compliance.emission_hotspots.is_empty() {
+                        info!("  - Emission Hotspots (top 5):");
+                        for (i, hotspot) in results.emission_compliance.emission_hotspots.iter().take(5).enumerate() {
+                            let component_name = self.netlist.instances.get(hotspot.component_id)
+                                .map(|inst| inst.name.as_str())
+                                .unwrap_or("unknown");
+                            
+                            info!("    {}. {} at {:.1} MHz: {:.1} dBμV ({:.1}% contribution)",
+                                  i + 1,
+                                  component_name,
+                                  hotspot.emission_frequency / 1_000_000.0,
+                                  hotspot.emission_level,
+                                  hotspot.contribution_percentage);
+                        }
+                        
+                        if results.emission_compliance.emission_hotspots.len() > 5 {
+                            info!("    ... and {} more hotspots",
+                                  results.emission_compliance.emission_hotspots.len() - 5);
+                        }
+                    }
+                    
+                    // Report immunity assessment
+                    info!("  - Immunity Assessment:");
+                    info!("    • Overall immunity level: {:.1} dBμV/m", 
+                          results.immunity_assessment.susceptibility_analysis.overall_immunity_level);
+                    info!("    • Protection effectiveness: {:.1}%", 
+                          results.immunity_assessment.susceptibility_analysis.protection_effectiveness);
+                    info!("    • Vulnerable components: {}", 
+                          results.immunity_assessment.vulnerable_components.len());
+                    
+                    // Report vulnerable components
+                    let high_risk_components = results.immunity_assessment.vulnerable_components.iter()
+                        .filter(|v| matches!(v.risk_level, crate::emi_emc_analysis::RiskLevel::High | crate::emi_emc_analysis::RiskLevel::Critical))
+                        .count();
+                    
+                    if high_risk_components > 0 {
+                        warn!("    ⚠ {} components at high/critical risk for interference", high_risk_components);
+                        
+                        info!("    • High-risk components:");
+                        for vulnerable in results.immunity_assessment.vulnerable_components.iter()
+                            .filter(|v| matches!(v.risk_level, crate::emi_emc_analysis::RiskLevel::High | crate::emi_emc_analysis::RiskLevel::Critical))
+                            .take(3) {
+                            
+                            info!("      - {} at {:.1} MHz (threshold: {:.1} dBμV/m)",
+                                  vulnerable.component_name,
+                                  vulnerable.susceptible_frequency / 1_000_000.0,
+                                  vulnerable.immunity_threshold);
+                        }
+                    }
+                    
+                    // Report interference analysis
+                    info!("  - Interference Analysis:");
+                    info!("    • Internal interference sources: {}", 
+                          results.interference_analysis.internal_interference.len());
+                    info!("    • Crosstalk pairs analyzed: {}", 
+                          results.interference_analysis.crosstalk_analysis.near_end_crosstalk.len());
+                    info!("    • Power integrity issues: {}", 
+                          results.interference_analysis.power_integrity_issues.len());
+                    
+                    let severe_interference = results.interference_analysis.internal_interference.iter()
+                        .filter(|i| matches!(i.impact_severity, crate::emi_emc_analysis::ImpactSeverity::Severe | crate::emi_emc_analysis::ImpactSeverity::Critical))
+                        .count();
+                    
+                    if severe_interference > 0 {
+                        warn!("    ⚠ {} severe/critical interference issues detected", severe_interference);
+                    }
+                    
+                    // Report worst-case crosstalk
+                    if results.interference_analysis.crosstalk_analysis.worst_case_crosstalk > -30.0 {
+                        warn!("    ⚠ Excessive crosstalk detected: {:.1} dB", 
+                              results.interference_analysis.crosstalk_analysis.worst_case_crosstalk);
+                    }
+                    
+                    // Report mitigation recommendations
+                    info!("  - Mitigation Recommendations:");
+                    info!("    • Total recommendations: {}", results.mitigation_recommendations.len());
+                    
+                    let critical_recs = results.mitigation_recommendations.iter()
+                        .filter(|r| matches!(r.priority, crate::emi_emc_analysis::MitigationPriority::Critical))
+                        .count();
+                    
+                    let high_recs = results.mitigation_recommendations.iter()
+                        .filter(|r| matches!(r.priority, crate::emi_emc_analysis::MitigationPriority::High))
+                        .count();
+                    
+                    info!("    • Critical priority: {}", critical_recs);
+                    info!("    • High priority: {}", high_recs);
+                    
+                    if critical_recs > 0 || high_recs > 0 {
+                        info!("    • Top recommendations:");
+                        for (i, rec) in results.mitigation_recommendations.iter()
+                            .filter(|r| matches!(r.priority, crate::emi_emc_analysis::MitigationPriority::Critical | crate::emi_emc_analysis::MitigationPriority::High))
+                            .take(5)
+                            .enumerate() {
+                            
+                            info!("      {}. [{}] {} - Effectiveness: {:.0}%",
+                                  i + 1,
+                                  match rec.priority {
+                                      crate::emi_emc_analysis::MitigationPriority::Critical => "CRITICAL",
+                                      crate::emi_emc_analysis::MitigationPriority::High => "HIGH",
+                                      _ => "MEDIUM",
+                                  },
+                                  rec.description,
+                                  rec.effectiveness * 100.0);
+                        }
+                    }
+                    
+                    // Report compliance summary
+                    info!("  - Compliance Summary:");
+                    info!("    • Overall compliance: {:?}", results.compliance_summary.overall_compliance);
+                    info!("    • Standards passed: {}", results.compliance_summary.standards_passed.len());
+                    info!("    • Standards failed: {}", results.compliance_summary.standards_failed.len());
+                    info!("    • Estimated fix cost: {:?}", results.compliance_summary.estimated_fix_cost);
+                    
+                    // Report analysis performance
+                    info!("  - Analysis Performance:");
+                    info!("    • Components analyzed: {}", results.analysis_summary.components_analyzed);
+                    info!("    • Nets analyzed: {}", results.analysis_summary.nets_analyzed);
+                    info!("    • Frequencies analyzed: {}", results.analysis_summary.frequencies_analyzed);
+                    info!("    • Analysis time: {:.2}s", results.analysis_summary.analysis_time_seconds);
+                    info!("    • Prediction confidence: {:.1}%", results.analysis_summary.prediction_confidence * 100.0);
+                    
+                    // Summary status
+                    match results.compliance_summary.overall_compliance {
+                        crate::emi_emc_analysis::ComplianceLevel::Pass => {
+                            info!("✅ EMI/EMC analysis: PASS - Circuit meets all EMC requirements");
+                        },
+                        crate::emi_emc_analysis::ComplianceLevel::PassWithMargin(_) => {
+                            info!("✅ EMI/EMC analysis: PASS WITH MARGIN - Circuit exceeds EMC requirements");
+                        },
+                        crate::emi_emc_analysis::ComplianceLevel::Marginal(_) => {
+                            warn!("⚠️ EMI/EMC analysis: MARGINAL - Circuit meets requirements but with limited margin");
+                        },
+                        crate::emi_emc_analysis::ComplianceLevel::Fail(_) => {
+                            error!("❌ EMI/EMC analysis: FAIL - Circuit does not meet EMC requirements");
+                        },
+                    }
+                    
+                    // Store results for later use (e.g., compliance reporting)
+                    debug!("EMI/EMC analysis data available for compliance documentation and design optimization");
+                },
+                Err(e) => {
+                    error!("EMI/EMC analysis failed: {}", e);
+                    warn!("Continuing synthesis without EMI/EMC analysis");
+                    // Don't fail the entire synthesis due to EMI/EMC analysis failure
+                }
+            }
+        } else {
+            error!("EMI/EMC analyzer not initialized - this should not happen");
+            return Err(anyhow::anyhow!("EMI/EMC analyzer initialization failed"));
         }
         
         Ok(())

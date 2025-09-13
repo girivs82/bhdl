@@ -348,7 +348,9 @@
       "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin test_ml_component_selection)",
       "Bash(RUST_LOG=info ./target/debug/test_ml_component_selection)",
       "Bash(RUST_LOG=warn ./target/debug/test_ml_component_selection)",
-      "Bash(RUST_LOG=info ./target/debug/test_thermal_simulation)"
+      "Bash(RUST_LOG=info ./target/debug/test_thermal_simulation)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-synthesizer --bin test_emi_emc_analysis)",
+      "Bash(RUST_LOG=info timeout 30s cargo run -p bhdl-synthesizer --bin test_emi_emc_analysis)"
     ],
     "deny": []
   }
