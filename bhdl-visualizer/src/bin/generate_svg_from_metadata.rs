@@ -103,29 +103,59 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .with_size(20.0, 25.0)  // Vertical
     );
     
-    // Add simplified net connections
+    // Add proper net connections to component pins with orthogonal routing
     let mut vin = Net::new(vin_net, Some("VIN".to_string()));
-    vin.add_connection_point(Point::new(50.0, 200.0));   // Input
-    vin.add_connection_point(Point::new(100.0, 200.0));  // C1
-    vin.add_connection_point(Point::new(130.0, 200.0));  // C2
-    vin.add_connection_point(Point::new(210.0, 200.0));  // U1 IN
+    vin.add_connection_point(Point::new(50.0, 185.0));   // Input terminal
+    vin.add_connection_point(Point::new(100.0, 185.0));  // C1 top pin
+    vin.add_connection_point(Point::new(100.0, 185.0));  // Junction
+    vin.add_connection_point(Point::new(130.0, 185.0));  // C2 top pin
+    vin.add_connection_point(Point::new(130.0, 185.0));  // Junction
+    vin.add_connection_point(Point::new(210.0, 185.0));  // Horizontal to U1
+    vin.add_connection_point(Point::new(210.0, 200.0));  // Down to U1 IN pin
     layout.add_net(vin);
     
     let mut vout = Net::new(vout_net, Some("5V".to_string()));
-    vout.add_connection_point(Point::new(290.0, 200.0));  // U1 OUT
-    vout.add_connection_point(Point::new(370.0, 200.0));  // C3
-    vout.add_connection_point(Point::new(400.0, 200.0));  // C4
-    vout.add_connection_point(Point::new(480.0, 200.0));  // R1
+    vout.add_connection_point(Point::new(290.0, 200.0));  // U1 OUT pin
+    vout.add_connection_point(Point::new(290.0, 185.0));  // Up from U1
+    vout.add_connection_point(Point::new(370.0, 185.0));  // Horizontal to C3
+    vout.add_connection_point(Point::new(370.0, 185.0));  // C3 top pin
+    vout.add_connection_point(Point::new(400.0, 185.0));  // C4 top pin
+    vout.add_connection_point(Point::new(400.0, 185.0));  // Junction
+    vout.add_connection_point(Point::new(480.0, 185.0));  // Horizontal to R1
+    vout.add_connection_point(Point::new(480.0, 200.0));  // Down to R1 left pin
     layout.add_net(vout);
     
+    // Add connection from R1 to LED
+    let r1_to_led_net = netlist.add_net(Some("LED_CURRENT".to_string()));
+    let mut r1_to_led = Net::new(r1_to_led_net, Some("LED+".to_string()));
+    r1_to_led.add_connection_point(Point::new(520.0, 200.0));  // R1 right pin
+    r1_to_led.add_connection_point(Point::new(580.0, 200.0));  // Horizontal to LED
+    r1_to_led.add_connection_point(Point::new(580.0, 185.0));  // Up to LED anode (top)
+    layout.add_net(r1_to_led);
+    
     let mut gnd = Net::new(gnd_net, Some("GND".to_string()));
-    gnd.add_connection_point(Point::new(100.0, 230.0));   // C1 bottom
-    gnd.add_connection_point(Point::new(130.0, 230.0));   // C2 bottom
-    gnd.add_connection_point(Point::new(250.0, 250.0));   // U1 GND
-    gnd.add_connection_point(Point::new(370.0, 230.0));   // C3 bottom
-    gnd.add_connection_point(Point::new(400.0, 230.0));   // C4 bottom
-    gnd.add_connection_point(Point::new(580.0, 225.0));   // D1 cathode
-    gnd.add_connection_point(Point::new(580.0, 280.0));   // Ground rail
+    // Ground rail at bottom
+    gnd.add_connection_point(Point::new(50.0, 280.0));    // Start of ground rail
+    gnd.add_connection_point(Point::new(600.0, 280.0));   // End of ground rail
+    
+    // Vertical connections from components to ground rail
+    gnd.add_connection_point(Point::new(100.0, 215.0));   // C1 bottom pin
+    gnd.add_connection_point(Point::new(100.0, 280.0));   // Down to rail
+    
+    gnd.add_connection_point(Point::new(130.0, 215.0));   // C2 bottom pin  
+    gnd.add_connection_point(Point::new(130.0, 280.0));   // Down to rail
+    
+    gnd.add_connection_point(Point::new(250.0, 225.0));   // U1 GND pin
+    gnd.add_connection_point(Point::new(250.0, 280.0));   // Down to rail
+    
+    gnd.add_connection_point(Point::new(370.0, 215.0));   // C3 bottom pin
+    gnd.add_connection_point(Point::new(370.0, 280.0));   // Down to rail
+    
+    gnd.add_connection_point(Point::new(400.0, 215.0));   // C4 bottom pin
+    gnd.add_connection_point(Point::new(400.0, 280.0));   // Down to rail
+    
+    gnd.add_connection_point(Point::new(580.0, 210.0));   // D1 cathode (bottom)
+    gnd.add_connection_point(Point::new(580.0, 280.0));   // Down to rail
     layout.add_net(gnd);
     
     // Update bounds

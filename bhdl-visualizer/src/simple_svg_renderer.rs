@@ -151,6 +151,13 @@ impl SimpleSvgRenderer {
             return;
         }
         
+        // Special handling for ground net - draw as a rail with drops
+        if net.name.as_ref().map_or(false, |n| n.contains("GND")) {
+            self.draw_ground_net(svg, net);
+            return;
+        }
+        
+        // For regular nets, connect points directly (they should already be orthogonal)
         let mut path = String::new();
         write!(&mut path, "M {} {}", net.connection_points[0].x, net.connection_points[0].y).unwrap();
         
@@ -172,6 +179,65 @@ impl SimpleSvgRenderer {
                     point.x + 5.0, point.y - 5.0, name
                 ).unwrap();
             }
+        }
+    }
+    
+    fn draw_ground_net(&self, svg: &mut String, net: &Net) {
+        // Draw ground as a horizontal rail with vertical drops
+        if net.connection_points.len() < 2 {
+            return;
+        }
+        
+        // Find the ground rail (should be the first two points defining horizontal line)
+        if net.connection_points.len() >= 2 {
+            let rail_start = &net.connection_points[0];
+            let rail_end = &net.connection_points[1];
+            
+            // Draw the main ground rail
+            writeln!(svg,
+                r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="black" stroke-width="2"/>"#,
+                rail_start.x, rail_start.y, rail_end.x, rail_end.y
+            ).unwrap();
+            
+            // Draw vertical drops from components to rail
+            let mut i = 2;
+            while i < net.connection_points.len() {
+                if i + 1 < net.connection_points.len() {
+                    let drop_start = &net.connection_points[i];
+                    let drop_end = &net.connection_points[i + 1];
+                    
+                    writeln!(svg,
+                        r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="black" stroke-width="1.5"/>"#,
+                        drop_start.x, drop_start.y, drop_end.x, drop_end.y
+                    ).unwrap();
+                    
+                    // Add connection dot at junction
+                    writeln!(svg,
+                        r#"    <circle cx="{}" cy="{}" r="2" fill="black"/>"#,
+                        drop_end.x, drop_end.y
+                    ).unwrap();
+                }
+                i += 2;
+            }
+            
+            // Add ground symbol at the end
+            let gnd_x = rail_end.x - 20.0;
+            let gnd_y = rail_end.y;
+            writeln!(svg,
+                r#"    <g transform="translate({}, {})">
+      <line x1="0" y1="0" x2="0" y2="10" stroke="black" stroke-width="2"/>
+      <line x1="-10" y1="10" x2="10" y2="10" stroke="black" stroke-width="2"/>
+      <line x1="-7" y1="14" x2="7" y2="14" stroke="black" stroke-width="1.5"/>
+      <line x1="-4" y1="18" x2="4" y2="18" stroke="black" stroke-width="1"/>
+    </g>"#,
+                gnd_x, gnd_y
+            ).unwrap();
+            
+            // Add GND label
+            writeln!(svg,
+                r#"    <text x="{}" y="{}" font-family="Arial" font-size="10" font-weight="bold">GND</text>"#,
+                gnd_x - 15.0, gnd_y + 35.0
+            ).unwrap();
         }
     }
 }
