@@ -4,6 +4,19 @@ use crate::types::{Point, Component, Net, CircuitLayout, BoundingBox};
 use bhdl_netlist::{Netlist, InstanceId, NetId};
 use std::collections::{HashMap, HashSet};
 
+/// Component role in the circuit (determined by synthesizer based on connectivity)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ComponentRole {
+    IC,
+    InputCapacitor,   // Connected to IC input pin
+    OutputCapacitor,  // Connected to IC output pin
+    SeriesResistor,   // In series with signal path
+    PullupResistor,   // Pull-up configuration
+    PulldownResistor, // Pull-down configuration
+    LED,
+    Generic,
+}
+
 pub struct MetadataLayoutEngine {
     knowledge: SchematicKnowledge,
     power_rail_y: f64,
@@ -179,16 +192,12 @@ impl MetadataLayoutEngine {
         netlist: &Netlist,
         layout: &mut CircuitLayout,
     ) {
-        // Position IC at current X, centered vertically between rails
-        let ic_y = (self.power_rail_y + self.ground_rail_y) / 2.0;
-        
         if let Some(ic_inst) = netlist.instances.get(group.center) {
             // Get IC metadata for size
             let ic_width = 80.0;
             let ic_height = 50.0;
             
-            // Position IC so its pins align with power rail
-            // IN pin should align with power rail for straight connection
+            // Position IC so its IN pin aligns with power rail for straight connection
             let ic_position = Point::new(self.current_x + ic_width/2.0, self.power_rail_y);
             
             layout.add_component(
@@ -199,8 +208,11 @@ impl MetadataLayoutEngine {
             
             self.component_positions.insert(group.center, ic_position);
             
-            // Position associated capacitors
-            let mut cap_x = self.current_x - 30.0;
+            // Separate capacitors into input and output groups based on their names
+            // In a real system, the synthesizer would provide this metadata
+            let mut input_caps = Vec::new();
+            let mut output_caps = Vec::new();
+            
             for member_id in &group.members {
                 if member_id == &group.center {
                     continue;
@@ -208,23 +220,58 @@ impl MetadataLayoutEngine {
                 
                 if let Some(member_inst) = netlist.instances.get(*member_id) {
                     if member_inst.name.starts_with("C") {
-                        // Center capacitors between rails
-                        let cap_center_y = (self.power_rail_y + self.ground_rail_y) / 2.0;
-                        let cap_pos = Point::new(cap_x, cap_center_y);
-                        
-                        layout.add_component(
-                            Component::new(*member_id, cap_pos)
-                                .with_label(member_inst.name.clone())
-                                .with_size(15.0, 30.0)
-                        );
-                        
-                        self.component_positions.insert(*member_id, cap_pos);
-                        cap_x -= 35.0;
+                        // Simple heuristic: C1, C2 are input, C3, C4 are output
+                        // Real system would use connectivity analysis
+                        let cap_number = member_inst.name[1..].parse::<u32>().unwrap_or(0);
+                        if cap_number <= 2 {
+                            input_caps.push((*member_id, member_inst));
+                        } else {
+                            output_caps.push((*member_id, member_inst));
+                        }
                     }
                 }
             }
             
-            self.current_x += ic_width + 100.0;
+            // Position input capacitors to the left of IC
+            let input_cap_x = self.current_x - 30.0;
+            let cap_vertical_center = (self.power_rail_y + self.ground_rail_y) / 2.0;
+            let cap_spacing = 35.0;
+            
+            for (i, (cap_id, cap_inst)) in input_caps.iter().enumerate() {
+                let cap_pos = Point::new(
+                    input_cap_x - (i as f64 * cap_spacing),
+                    cap_vertical_center
+                );
+                
+                layout.add_component(
+                    Component::new(*cap_id, cap_pos)
+                        .with_label(cap_inst.name.clone())
+                        .with_size(15.0, 30.0)
+                );
+                
+                self.component_positions.insert(*cap_id, cap_pos);
+            }
+            
+            // Position output capacitors to the right of IC
+            let output_cap_x = self.current_x + ic_width + 30.0;
+            
+            for (i, (cap_id, cap_inst)) in output_caps.iter().enumerate() {
+                let cap_pos = Point::new(
+                    output_cap_x + (i as f64 * cap_spacing),
+                    cap_vertical_center
+                );
+                
+                layout.add_component(
+                    Component::new(*cap_id, cap_pos)
+                        .with_label(cap_inst.name.clone())
+                        .with_size(15.0, 30.0)
+                );
+                
+                self.component_positions.insert(*cap_id, cap_pos);
+            }
+            
+            // Update current X position for next group
+            self.current_x = output_cap_x + (output_caps.len() as f64 * cap_spacing) + 50.0;
         }
     }
     

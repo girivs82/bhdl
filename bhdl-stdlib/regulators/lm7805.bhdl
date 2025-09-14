@@ -162,7 +162,27 @@ module LM7805(package: string = "TO-220") {
     attribute drawing_style = "linear_regulator";
     attribute component_section = "power";  // Group with other power components
     
-    // Supporting components that should be nearby
+    // Supporting component placement rules (actual components determined by synthesizer)
+    attribute supporting_component_rules = {
+        input_capacitors: {
+            placement: "vertical_stack",      // Stack vertically
+            position: "left_of_ic",          // Position to the left of IC
+            spacing: "close",                 // Keep close to IC (1-2 grid units)
+            alignment: "center_on_pin",      // Align with IN pin vertically
+            order: "largest_first"           // Place larger caps closer to IC
+        },
+        output_capacitors: {
+            placement: "vertical_stack",      // Stack vertically
+            position: "right_of_ic",         // Position to the right of IC
+            spacing: "close",                 // Keep close to IC (1-2 grid units)
+            alignment: "center_on_pin",      // Align with OUT pin vertically
+            order: "largest_first"           // Place larger caps closer to IC
+        },
+        ground_strategy: "star_ground",      // Star ground at regulator GND pin
+        layout_priority: "minimize_loops"    // Minimize current loops
+    };
+    
+    // Legacy attributes for compatibility
     attribute typical_input_cap_bulk = "10uF electrolytic";
     attribute typical_input_cap_bypass = "100nF ceramic"; 
     attribute typical_output_cap_bulk = "10uF electrolytic";
