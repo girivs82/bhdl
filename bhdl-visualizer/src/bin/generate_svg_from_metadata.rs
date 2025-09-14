@@ -57,34 +57,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Following embedded metadata rules:
     layout.components.clear();
     
-    // Input capacitors - VERTICAL orientation (from metadata)
+    // Calculate vertical center between power and ground
+    let power_y = 185.0;
+    let ground_y = 280.0;
+    let vertical_center = (power_y + ground_y) / 2.0;  // 232.5
+    
+    // Input capacitors - VERTICAL orientation, centered between power and ground
     layout.add_component(
-        Component::new(c1, Point::new(100.0, 200.0))
+        Component::new(c1, Point::new(100.0, vertical_center))
             .with_label("C1".to_string())
             .with_size(15.0, 30.0)  // Vertical
     );
     layout.add_component(
-        Component::new(c2, Point::new(130.0, 200.0))
+        Component::new(c2, Point::new(130.0, vertical_center))
             .with_label("C2".to_string())
             .with_size(15.0, 30.0)  // Vertical
     );
     
     // LM7805 - HORIZONTAL orientation (from metadata)
     // IN=left, OUT=right, GND=bottom
+    // Position it slightly higher so GND pin can drop to ground rail
     layout.add_component(
-        Component::new(u1, Point::new(250.0, 200.0))
+        Component::new(u1, Point::new(250.0, 220.0))
             .with_label("U1".to_string())
             .with_size(80.0, 50.0)  // Horizontal
     );
     
-    // Output capacitors - VERTICAL orientation
+    // Output capacitors - VERTICAL orientation, centered
     layout.add_component(
-        Component::new(c3, Point::new(370.0, 200.0))
+        Component::new(c3, Point::new(370.0, vertical_center))
             .with_label("C3".to_string())
             .with_size(15.0, 30.0)  // Vertical
     );
     layout.add_component(
-        Component::new(c4, Point::new(400.0, 200.0))
+        Component::new(c4, Point::new(400.0, vertical_center))
             .with_label("C4".to_string())
             .with_size(15.0, 30.0)  // Vertical
     );
@@ -104,23 +110,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     
     // Add proper net connections to component pins with orthogonal routing
+    // Capacitors are now at vertical_center (232.5), so pins are at ±15 from center
+    let cap_top_y = vertical_center - 15.0;  // 217.5
+    let cap_bottom_y = vertical_center + 15.0;  // 247.5
+    
     let mut vin = Net::new(vin_net, Some("VIN".to_string()));
     vin.add_connection_point(Point::new(50.0, 185.0));   // Input terminal
-    vin.add_connection_point(Point::new(100.0, 185.0));  // C1 top pin
-    vin.add_connection_point(Point::new(100.0, 185.0));  // Junction
-    vin.add_connection_point(Point::new(130.0, 185.0));  // C2 top pin
-    vin.add_connection_point(Point::new(130.0, 185.0));  // Junction
-    vin.add_connection_point(Point::new(210.0, 185.0));  // Horizontal to U1
-    vin.add_connection_point(Point::new(210.0, 200.0));  // Down to U1 IN pin
+    vin.add_connection_point(Point::new(100.0, 185.0));  // Horizontal to C1
+    vin.add_connection_point(Point::new(100.0, cap_top_y));  // Down to C1 top pin
+    vin.add_connection_point(Point::new(100.0, 185.0));  // Back up
+    vin.add_connection_point(Point::new(130.0, 185.0));  // Horizontal to C2
+    vin.add_connection_point(Point::new(130.0, cap_top_y));  // Down to C2 top pin
+    vin.add_connection_point(Point::new(130.0, 185.0));  // Back up
+    vin.add_connection_point(Point::new(210.0, 185.0));  // Horizontal to U1 x-position
+    vin.add_connection_point(Point::new(210.0, 220.0));  // Down to U1 IN pin (left side at center)
     layout.add_net(vin);
     
     let mut vout = Net::new(vout_net, Some("5V".to_string()));
-    vout.add_connection_point(Point::new(290.0, 200.0));  // U1 OUT pin
+    vout.add_connection_point(Point::new(290.0, 220.0));  // U1 OUT pin (right side at center)
     vout.add_connection_point(Point::new(290.0, 185.0));  // Up from U1
     vout.add_connection_point(Point::new(370.0, 185.0));  // Horizontal to C3
-    vout.add_connection_point(Point::new(370.0, 185.0));  // C3 top pin
-    vout.add_connection_point(Point::new(400.0, 185.0));  // C4 top pin
-    vout.add_connection_point(Point::new(400.0, 185.0));  // Junction
+    vout.add_connection_point(Point::new(370.0, cap_top_y));  // Down to C3 top pin
+    vout.add_connection_point(Point::new(370.0, 185.0));  // Back up
+    vout.add_connection_point(Point::new(400.0, 185.0));  // Horizontal to C4
+    vout.add_connection_point(Point::new(400.0, cap_top_y));  // Down to C4 top pin
+    vout.add_connection_point(Point::new(400.0, 185.0));  // Back up
     vout.add_connection_point(Point::new(480.0, 185.0));  // Horizontal to R1
     vout.add_connection_point(Point::new(480.0, 200.0));  // Down to R1 left pin
     layout.add_net(vout);
@@ -139,19 +153,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     gnd.add_connection_point(Point::new(600.0, 280.0));   // End of ground rail
     
     // Vertical connections from components to ground rail
-    gnd.add_connection_point(Point::new(100.0, 215.0));   // C1 bottom pin
+    gnd.add_connection_point(Point::new(100.0, cap_bottom_y));   // C1 bottom pin (247.5)
     gnd.add_connection_point(Point::new(100.0, 280.0));   // Down to rail
     
-    gnd.add_connection_point(Point::new(130.0, 215.0));   // C2 bottom pin  
+    gnd.add_connection_point(Point::new(130.0, cap_bottom_y));   // C2 bottom pin (247.5)
     gnd.add_connection_point(Point::new(130.0, 280.0));   // Down to rail
     
-    gnd.add_connection_point(Point::new(250.0, 225.0));   // U1 GND pin
+    gnd.add_connection_point(Point::new(250.0, 245.0));   // U1 GND pin (bottom center of IC)
     gnd.add_connection_point(Point::new(250.0, 280.0));   // Down to rail
     
-    gnd.add_connection_point(Point::new(370.0, 215.0));   // C3 bottom pin
+    gnd.add_connection_point(Point::new(370.0, cap_bottom_y));   // C3 bottom pin (247.5)
     gnd.add_connection_point(Point::new(370.0, 280.0));   // Down to rail
     
-    gnd.add_connection_point(Point::new(400.0, 215.0));   // C4 bottom pin
+    gnd.add_connection_point(Point::new(400.0, cap_bottom_y));   // C4 bottom pin (247.5)
     gnd.add_connection_point(Point::new(400.0, 280.0));   // Down to rail
     
     gnd.add_connection_point(Point::new(580.0, 210.0));   // D1 cathode (bottom)
