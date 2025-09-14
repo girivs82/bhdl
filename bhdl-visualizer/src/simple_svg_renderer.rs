@@ -113,13 +113,15 @@ impl SimpleSvgRenderer {
                 ).unwrap();
             }
             "LED" => {
-                // LED - triangle with arrows (vertical)
+                // LED - triangle pointing down with cathode bar (vertical)
+                // Anode at top, cathode at bottom
                 writeln!(svg,
-                    r#"      <path d="M 0 -10 L -8 0 L 8 0 Z" fill="none" stroke="black" stroke-width="2"/>
-      <line x1="-8" y1="5" x2="8" y2="5" stroke="black" stroke-width="2"/>
-      <line x1="0" y1="-10" x2="0" y2="-15" stroke="black" stroke-width="2"/>
-      <line x1="0" y1="5" x2="0" y2="10" stroke="black" stroke-width="2"/>
-      <path d="M 10 -5 l 5 -5 m -1 1 l 0 -2 l 2 0" stroke="black" stroke-width="1" fill="none"/>"#
+                    r#"      <line x1="0" y1="-15" x2="0" y2="-8" stroke="black" stroke-width="2"/>
+      <path d="M -8 -8 L 8 -8 L 0 2 Z" fill="none" stroke="black" stroke-width="2"/>
+      <line x1="-8" y1="2" x2="8" y2="2" stroke="black" stroke-width="2"/>
+      <line x1="0" y1="2" x2="0" y2="10" stroke="black" stroke-width="2"/>
+      <path d="M 10 -5 l 5 -5 m -1 1 l 0 -2 l 2 0" stroke="black" stroke-width="1" fill="none"/>
+      <path d="M 12 -2 l 5 -5 m -1 1 l 0 -2 l 2 0" stroke="black" stroke-width="1" fill="none"/>"#
                 ).unwrap();
             }
             _ => {
