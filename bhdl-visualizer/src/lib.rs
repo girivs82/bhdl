@@ -17,6 +17,7 @@ pub mod schematic_knowledge;
 pub mod knowledge_layout;
 // pub mod metadata_svg_renderer;  // Temporarily disabled due to string literal issues
 pub mod simple_svg_renderer;
+pub mod metadata_layout_engine;
 
 // Re-export main types
 pub use renderer::CircuitRenderer;
