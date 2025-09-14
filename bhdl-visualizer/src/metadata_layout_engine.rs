@@ -208,10 +208,12 @@ impl MetadataLayoutEngine {
             
             self.component_positions.insert(group.center, ic_position);
             
-            // Separate capacitors into input and output groups based on their names
-            // In a real system, the synthesizer would provide this metadata
+            // Use component role metadata from analysis if available
             let mut input_caps = Vec::new();
             let mut output_caps = Vec::new();
+            
+            // Check if we have analysis data with component roles
+            let use_analysis_data = netlist.analysis_data.is_some();
             
             for member_id in &group.members {
                 if member_id == &group.center {
@@ -220,12 +222,34 @@ impl MetadataLayoutEngine {
                 
                 if let Some(member_inst) = netlist.instances.get(*member_id) {
                     if member_inst.name.starts_with("C") {
-                        // Simple heuristic: C1, C2 are input, C3, C4 are output
-                        // Real system would use connectivity analysis
-                        let cap_number = member_inst.name[1..].parse::<u32>().unwrap_or(0);
-                        if cap_number <= 2 {
+                        // Try to get role from analysis data first
+                        let mut is_input_cap = false;
+                        let mut is_output_cap = false;
+                        
+                        if let Some(ref analysis_data) = netlist.analysis_data {
+                            if let Some(instance_analysis) = analysis_data.instance_analysis.get(&member_inst.name) {
+                                if let Some(ref role) = instance_analysis.component_role {
+                                    // Use the actual role from SPICE analysis
+                                    is_input_cap = role.contains("InputFilter");
+                                    is_output_cap = role.contains("OutputStabilization") || 
+                                                   role.contains("Decoupling");
+                                }
+                            }
+                        }
+                        
+                        // Fallback to simple heuristic if no analysis data
+                        if !use_analysis_data || (!is_input_cap && !is_output_cap) {
+                            let cap_number = member_inst.name[1..].parse::<u32>().unwrap_or(0);
+                            if cap_number <= 2 {
+                                is_input_cap = true;
+                            } else {
+                                is_output_cap = true;
+                            }
+                        }
+                        
+                        if is_input_cap {
                             input_caps.push((*member_id, member_inst));
-                        } else {
+                        } else if is_output_cap {
                             output_caps.push((*member_id, member_inst));
                         }
                     }
