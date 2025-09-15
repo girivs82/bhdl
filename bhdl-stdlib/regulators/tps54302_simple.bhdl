@@ -1,0 +1,60 @@
+// TPS54302 3A Synchronous Buck Converter - Simplified
+// High-efficiency step-down converter with integrated FETs
+
+module TPS54302() {
+    // Power pins
+    pin VIN: power in;
+    pin GND: ground;
+    pin SW: power out;
+    
+    // Control pins
+    pin FB: signal in;
+    pin EN: signal in;
+    
+    // Bootstrap and internal supply pins
+    pin BOOT: signal inout;
+    pin PH: signal out;
+    
+    // Component attributes
+    attribute component_class = "voltage_regulator";
+    attribute regulator_type = "synchronous_buck";
+    attribute topology = "buck";
+    attribute package = "SOT-23-6";
+    
+    // Electrical specifications
+    attribute output_current = 3A;
+    attribute input_voltage_min = 4.5V;
+    attribute input_voltage_max = 28V;
+    attribute switching_frequency = 500kHz;
+    attribute efficiency = 92%;
+    attribute dropout_voltage = 0.5V;
+    attribute feedback_voltage = 0.6V;
+    
+    // Protection features
+    attribute has_thermal_protection = true;
+    attribute has_current_limiting = true;
+    attribute has_undervoltage_lockout = true;
+    attribute has_overvoltage_protection = true;
+    attribute has_soft_start = true;
+    
+    // External component requirements
+    attribute inductor_value_min = "2.2uH";
+    attribute inductor_value_rec = "4.7uH";
+    attribute inductor_value_max = "10uH";
+    attribute input_capacitor_min = "10uF";
+    attribute input_capacitor_rec = "22uF";
+    attribute output_capacitor_min = "22uF";
+    attribute output_capacitor_rec = "47uF";
+    attribute bootstrap_capacitor = "100nF";
+    
+    // No external diode required - synchronous rectification
+    attribute catch_diode_required = false;
+    attribute synchronous_rectification = true;
+    
+    // SPICE model parameters
+    attribute spice_model = "synchronous_buck_regulator";
+    attribute spice_topology = "synchronous_buck";
+    attribute spice_switching_frequency = 500kHz;
+    attribute spice_duty_cycle = "variable";
+    attribute spice_feedback_reference = 0.6V;
+}

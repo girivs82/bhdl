@@ -1,0 +1,30 @@
+// Simplified Inductor Component Module
+// Compatible with current BHDL parser
+
+module Inductor(value: inductance, current: current = 1A) {
+    pin 1: signal inout;  // Terminal 1
+    pin 2: signal inout;  // Terminal 2
+    
+    // Component attributes
+    attribute component_class = "inductor";
+    attribute inductance = value;
+    attribute current_rating = current;
+    
+    // Inductor type based on value and current
+    attribute inductor_type = 
+        current >= 3A ? "power" :
+        value <= 100nH ? "air_core" :
+        "ferrite";
+    
+    // DCR approximation (simplified without sqrt)
+    attribute dcr = 
+        current >= 3A ? 0.02Ω :
+        value <= 100nH ? 0.001Ω :
+        0.01Ω;
+    
+    // SPICE model parameters
+    attribute spice_model = "inductor";
+    attribute spice_inductance = value;
+    attribute spice_dcr = dcr;
+    attribute spice_current_rating = current;
+}
