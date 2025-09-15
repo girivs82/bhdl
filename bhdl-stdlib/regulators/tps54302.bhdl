@@ -1,0 +1,273 @@
+// TPS54302 3A Synchronous Buck Converter
+// High-efficiency step-down converter with integrated FETs
+
+import { ImpedanceCharacteristics } from "../types/electrical_types.bhdl";
+
+// Buck regulator parameters
+type BuckRegulatorParams = {
+    output_voltage: voltage?,      // Adjustable via feedback resistors
+    output_current: current,
+    input_voltage_min: voltage,
+    input_voltage_max: voltage,
+    switching_frequency: frequency,
+    efficiency: percentage,
+    dropout_voltage: voltage,
+    quiescent_current: current,
+    impedance: ImpedanceCharacteristics,
+};
+
+module TPS54302() {
+    // Power pins
+    pin VIN: power in @metadata(
+        function="PowerIn",
+        description="Input voltage (4.5V-28V)",
+        electrical_type="power_input",
+        voltage_range="4.5V-28V",
+        schematic_side="left",
+        schematic_position=1,
+        schematic_label="VIN"
+    );
+    pin GND: ground @metadata(
+        function="Ground",
+        description="Ground reference",
+        electrical_type="ground",
+        // Schematic visualization
+        schematic_side="bottom",
+        schematic_position=1,
+        schematic_label="GND"
+    );
+    pin SW: power out @metadata(
+        function="SwitchNode",
+        description="Switch output to inductor",
+        electrical_type="power_output",
+        max_current="3A",
+        switching="true",
+        // Schematic visualization
+        schematic_side="right",
+        schematic_position=1,
+        schematic_label="SW"
+    );
+    
+    // Control pins
+    pin FB: signal in @metadata(
+        function="Feedback",
+        description="Feedback input (0.6V reference)",
+        electrical_type="control_input",
+        voltage="0.6V",
+        // Schematic visualization
+        schematic_side="left",
+        schematic_position=2,
+        schematic_label="FB"
+    );
+    pin EN: signal in @metadata(
+        function="Enable",
+        description="Enable input (active high)",
+        electrical_type="control_input",
+        active="high",
+        threshold="1.2V",
+        // Schematic visualization
+        schematic_side="left",
+        schematic_position=3,
+        schematic_label="EN"
+    );
+    
+    // Bootstrap and internal supply pins
+    pin BOOT: signal inout @metadata(
+        function="Bootstrap",
+        description="Bootstrap capacitor connection",
+        electrical_type="bootstrap",
+        // Schematic visualization
+        schematic_side="top",
+        schematic_position=1,
+        schematic_label="BOOT"
+    );
+    pin PH: signal out @metadata(
+        function="PhaseNode",
+        description="Internal switch node for bootstrap",
+        electrical_type="internal_node",
+        // Schematic visualization  
+        schematic_side="right",
+        schematic_position=2,
+        schematic_label="PH"
+    );
+    
+    // Buck regulator parameters
+    const BUCK_PARAMS: BuckRegulatorParams = {
+        output_voltage: null,  // Adjustable via FB resistors
+        output_current: 3A,
+        input_voltage_min: 4.5V,
+        input_voltage_max: 28V,
+        switching_frequency: 500kHz,  // Fixed frequency
+        efficiency: 92%,  // Typical at 12V to 5V
+        dropout_voltage: 0.5V,
+        quiescent_current: 85μA,  // Typical operating current
+        impedance: {
+            dc_resistance: null,
+            output_impedance: 0.05Ω,
+            input_impedance: null,
+            can_source_current: true,
+            can_sink_current: false,
+            max_source_current: 3A,
+            max_sink_current: null,
+            power_domain_isolation: true,
+            voltage_drop: 0.5V,
+            current_limiting: true,
+            transient_response: 20μs,
+            inrush_current: null
+        }
+    };
+    
+    // Component attributes
+    attribute component_class = "voltage_regulator";
+    attribute regulator_type = "synchronous_buck";
+    attribute topology = "buck";
+    attribute package = "SOT-23-6";
+    
+    // Electrical specifications
+    attribute output_current = BUCK_PARAMS.output_current;
+    attribute input_voltage_min = BUCK_PARAMS.input_voltage_min;
+    attribute input_voltage_max = BUCK_PARAMS.input_voltage_max;
+    attribute switching_frequency = BUCK_PARAMS.switching_frequency;
+    attribute efficiency = BUCK_PARAMS.efficiency;
+    attribute dropout_voltage = BUCK_PARAMS.dropout_voltage;
+    attribute feedback_voltage = 0.6V;  // Internal reference
+    
+    // Impedance characteristics
+    attribute output_impedance = BUCK_PARAMS.impedance.output_impedance;
+    attribute can_source_current = BUCK_PARAMS.impedance.can_source_current;
+    attribute max_source_current = BUCK_PARAMS.impedance.max_source_current;
+    attribute power_domain_isolation = BUCK_PARAMS.impedance.power_domain_isolation;
+    attribute current_limiting = BUCK_PARAMS.impedance.current_limiting;
+    
+    // Protection features
+    attribute has_thermal_protection = true;
+    attribute has_current_limiting = true;
+    attribute has_undervoltage_lockout = true;
+    attribute has_overvoltage_protection = true;
+    attribute has_soft_start = true;
+    
+    // External component requirements
+    attribute inductor_value_min = "2.2μH";
+    attribute inductor_value_rec = "4.7μH";
+    attribute inductor_value_max = "10μH";
+    attribute input_capacitor_min = "10μF";
+    attribute input_capacitor_rec = "22μF";
+    attribute output_capacitor_min = "22μF";
+    attribute output_capacitor_rec = "47μF";
+    attribute bootstrap_capacitor = "100nF";
+    
+    // No external diode required - synchronous rectification
+    attribute catch_diode_required = false;
+    attribute synchronous_rectification = true;
+    
+    // SPICE model parameters
+    attribute spice_model = "synchronous_buck_regulator";
+    attribute spice_topology = "synchronous_buck";
+    attribute spice_switching_frequency = BUCK_PARAMS.switching_frequency;
+    attribute spice_duty_cycle = "variable";  // Adjusted by control loop
+    attribute spice_feedback_reference = 0.6V;
+    
+    // ==================== SCHEMATIC VISUALIZATION ====================
+    
+    // Symbol appearance
+    attribute schematic_symbol = "rectangle";
+    attribute schematic_width = 80;    // mm (wider for more pins)
+    attribute schematic_height = 60;   // mm (taller for bootstrap)
+    attribute schematic_label = "TPS54302";
+    attribute schematic_label_position = "center";
+    attribute schematic_orientation = "horizontal";  // Inputs left, outputs right
+    
+    // Signal flow and placement
+    attribute signal_flow = "left_to_right";
+    attribute functional_group = "power_supply";
+    attribute placement_priority = "high";  // Important component, place first
+    
+    // Spacing preferences (in grid units, 2.54mm each)
+    attribute min_spacing_left = 4;    // Space before component (more for feedback network)
+    attribute min_spacing_right = 4;   // Space after component (for inductor)
+    attribute min_spacing_top = 3;     // Space above (for bootstrap cap)
+    attribute min_spacing_bottom = 2;  // Space below
+    
+    // Professional drawing conventions for buck converters
+    attribute drawing_style = "switching_regulator";
+    attribute component_section = "power";  // Group with other power components
+    
+    // Supporting component placement rules
+    attribute supporting_component_rules = {
+        input_capacitors: {
+            placement: "vertical_stack",      // Stack vertically
+            position: "left_of_ic",          // Position to the left of IC
+            spacing: "close",                 // Keep close to IC (1-2 grid units)
+            alignment: "center_on_pin",      // Align with VIN pin vertically
+            order: "largest_first"           // Place larger caps closer to IC
+        },
+        output_capacitors: {
+            placement: "vertical_stack",      // Stack vertically
+            position: "after_inductor",      // Position after the inductor
+            spacing: "close",                 // Keep close to inductor output
+            alignment: "center_on_vout",     // Align with VOUT net
+            order: "largest_first"           // Place larger caps first
+        },
+        inductor: {
+            placement: "horizontal",          // Place horizontally
+            position: "right_of_ic",         // Between SW pin and output
+            spacing: "moderate",              // 2-3 grid units from IC
+            alignment: "center_on_sw"        // Align with SW pin
+        },
+        feedback_network: {
+            placement: "voltage_divider",     // R1 and R2 in divider config
+            position: "below_output",        // Below the output net
+            spacing: "close",                 // Keep resistors close
+            alignment: "vertical",           // Stack vertically
+            tap_connection: "to_fb_pin"      // Connect tap to FB pin
+        },
+        bootstrap_capacitor: {
+            placement: "above_ic",            // Place above IC
+            position: "between_boot_ph",     // Between BOOT and PH pins
+            spacing: "minimal",               // Very close to pins
+            value: "100nF"                   // Standard value
+        },
+        catch_diode: {
+            placement: "not_required",        // Synchronous rectification
+            note: "internal_synchronous_fet"  // Uses internal FET
+        },
+        ground_strategy: "star_ground",      // Star ground at regulator GND pin
+        layout_priority: "minimize_loops"    // Minimize switching current loops
+    };
+    
+    // Component database mapping
+    attribute kicad_symbol = "Regulator_Switching:TPS54302DDC";
+    attribute kicad_footprint = "Package_TO_SOT_SMD:SOT-23-6";
+    attribute manufacturer = "Texas Instruments";
+    attribute manufacturer_part = "TPS54302DDCR";
+    
+    // Routing preferences for switching converters
+    attribute power_trace_width = "thick";       // Use thick traces for power
+    attribute sw_node_trace = "short_wide";      // Keep SW node trace short and wide
+    attribute feedback_trace = "thin_shielded";  // Thin trace, away from SW node
+    attribute power_trace_style = "rounded";     // Rounded corners for high current
+    attribute avoid_diagonal_power = true;       // Keep power traces orthogonal
+    attribute sw_node_clearance = 1.0;          // mm clearance from SW node
+    
+    // Critical layout considerations
+    attribute critical_loop = "VIN-SW-GND";      // Minimize this loop area
+    attribute sensitive_node = "FB";             // Keep away from noise
+    attribute high_di_dt_node = "SW";           // High dI/dt switching node
+    
+    // Thermal considerations
+    attribute thermal_pad = true;                // Has thermal pad
+    attribute thermal_pad_connection = "GND";    // Connect to ground plane
+    attribute power_dissipation_typical = "300mW"; // At 12V->5V, 1A
+    
+    // Annotations to display
+    attribute show_switching_frequency = true;   // Show "500kHz" near component
+    attribute show_current_rating = true;        // Show "3A" near component
+    attribute show_topology = true;              // Show "BUCK" indication
+    attribute show_efficiency = false;           // Don't clutter
+    
+    // Wire routing quality preferences
+    attribute minimize_via_count = true;
+    attribute prefer_straight_traces = true;
+    attribute power_trace_clearance = 0.5;       // mm clearance from other traces
+    attribute separate_power_grounds = false;    // Use single ground plane
+}

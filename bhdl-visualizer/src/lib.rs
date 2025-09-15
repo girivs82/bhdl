@@ -19,6 +19,7 @@ pub mod knowledge_layout;
 pub mod simple_svg_renderer;
 pub mod metadata_layout_engine;
 pub mod generic_netlist_visualizer;
+pub mod orthogonal_router;
 
 // Re-export main types
 pub use renderer::CircuitRenderer;

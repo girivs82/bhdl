@@ -178,6 +178,7 @@ pub struct Net {
     pub name: Option<String>,
     pub connection_points: Vec<Point>,
     pub routing_segments: Vec<RoutingSegment>,
+    pub junctions: Vec<Junction>,
 }
 
 impl Net {
@@ -187,6 +188,7 @@ impl Net {
             name,
             connection_points: Vec::new(),
             routing_segments: Vec::new(),
+            junctions: Vec::new(),
         }
     }
     
@@ -196,6 +198,10 @@ impl Net {
     
     pub fn add_routing_segment(&mut self, segment: RoutingSegment) {
         self.routing_segments.push(segment);
+    }
+    
+    pub fn add_junction(&mut self, junction: Junction) {
+        self.junctions.push(junction);
     }
 }
 
@@ -235,6 +241,35 @@ impl RoutingSegment {
             }
         }
     }
+}
+
+/// Junction point where multiple wires meet
+#[derive(Debug, Clone)]
+pub struct Junction {
+    pub position: Point,
+    pub junction_type: JunctionType,
+}
+
+impl Junction {
+    pub fn new(position: Point, junction_type: JunctionType) -> Self {
+        Self { position, junction_type }
+    }
+    
+    pub fn cross(position: Point) -> Self {
+        Self::new(position, JunctionType::Cross)
+    }
+    
+    pub fn tee(position: Point) -> Self {
+        Self::new(position, JunctionType::Tee)
+    }
+}
+
+/// Type of junction point
+#[derive(Debug, Clone)]
+pub enum JunctionType {
+    Cross,   // + intersection (4-way)
+    Tee,     // T intersection (3-way)
+    Corner,  // L corner (2-way with angle)
 }
 
 /// Complete circuit layout with all positioned components and routed nets

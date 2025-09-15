@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">
+  <title>Reference Layout - LM7805 Linear Voltage Regulator</title>
+  <rect width="100%" height="100%" fill="white" stroke="none"/>
+  <g id="circuit">
+
+    <!-- LM7805 Voltage Regulator (U1) -->
+    <g transform="translate(400, 300)">
+      <g transform="scale(30)">
+        <rect x="-0.508" y="-0.508" width="1.016" height="0.6985" stroke="black" stroke-width="0.03" fill="none"/>
+        <line x1="-1.5" y1="0" x2="-0.508" y2="0" stroke="black" stroke-width="0.03"/>
+        <line x1="1.5" y1="0" x2="0.508" y2="0" stroke="black" stroke-width="0.03"/>
+        <!-- GND pin extends further down to reach the ground rail -->
+        <line x1="0" y1="3.33" x2="0" y2="0.508" stroke="black" stroke-width="0.03"/>
+      </g>
+      <text x="0" y="-40" text-anchor="middle" font-size="14" fill="black">U1</text>
+      <text x="0" y="-25" text-anchor="middle" font-size="12" fill="black">LM7805</text>
+      <text x="-45" y="5" text-anchor="middle" font-size="10" fill="black">VI</text>
+      <text x="45" y="5" text-anchor="middle" font-size="10" fill="black">VO</text>
+      <text x="0" y="40" text-anchor="middle" font-size="10" fill="black">GND</text>
+    </g>
+
+    <!-- Input Capacitor (C1) - Between power rails -->
+    <g transform="translate(250, 350)">
+      <g transform="scale(30)">
+        <line x1="-0.3" y1="-0.1" x2="0.3" y2="-0.1" stroke="black" stroke-width="0.04" stroke-linecap="square"/>
+        <line x1="-0.3" y1="0.1" x2="0.3" y2="0.1" stroke="black" stroke-width="0.04" stroke-linecap="square"/>
+        <line x1="0" y1="-0.1" x2="0" y2="-1.67" stroke="black" stroke-width="0.03"/>
+        <line x1="0" y1="0.1" x2="0" y2="1.67" stroke="black" stroke-width="0.03"/>
+      </g>
+      <text x="30" y="0" text-anchor="middle" font-size="14" fill="black">C1</text>
+      <text x="30" y="15" text-anchor="middle" font-size="12" fill="black">10µF</text>
+    </g>
+
+    <!-- Output Capacitor (C2) - Between power rails -->
+    <g transform="translate(550, 350)">
+      <g transform="scale(30)">
+        <line x1="-0.3" y1="-0.1" x2="0.3" y2="-0.1" stroke="black" stroke-width="0.04" stroke-linecap="square"/>
+        <line x1="-0.3" y1="0.1" x2="0.3" y2="0.1" stroke="black" stroke-width="0.04" stroke-linecap="square"/>
+        <line x1="0" y1="-0.1" x2="0" y2="-1.67" stroke="black" stroke-width="0.03"/>
+        <line x1="0" y1="0.1" x2="0" y2="1.67" stroke="black" stroke-width="0.03"/>
+      </g>
+      <text x="30" y="0" text-anchor="middle" font-size="14" fill="black">C2</text>
+      <text x="30" y="15" text-anchor="middle" font-size="12" fill="black">100nF</text>
+    </g>
+
+    <!-- Load Resistor (R1) - Between power rails -->
+    <g transform="translate(650, 350)">
+      <g transform="scale(30)">
+        <rect x="-0.15" y="-0.4" width="0.3" height="0.8" stroke="black" stroke-width="0.03" fill="none"/>
+        <line x1="0" y1="-0.4" x2="0" y2="-1.67" stroke="black" stroke-width="0.03"/>
+        <line x1="0" y1="0.4" x2="0" y2="1.67" stroke="black" stroke-width="0.03"/>
+      </g>
+      <text x="30" y="0" text-anchor="middle" font-size="14" fill="black">R1</text>
+      <text x="30" y="15" text-anchor="middle" font-size="12" fill="black">1kΩ</text>
+    </g>
+
+    <!-- Connections -->
+    <!-- VIN net - horizontal rail at y=300 -->
+    <line x1="100" y1="300" x2="355" y2="300" stroke="blue" stroke-width="2"/>
+    <!-- Connect C1 top to VIN -->
+    <line x1="250" y1="300" x2="250" y2="347" stroke="blue" stroke-width="2"/>
+    <circle cx="250" cy="300" r="3" fill="blue"/>
+    <text x="120" y="295" font-size="14" fill="blue">VIN (12V)</text>
+    
+    <!-- VOUT net - horizontal rail at y=300 from U1 output -->
+    <line x1="445" y1="300" x2="700" y2="300" stroke="red" stroke-width="2"/>
+    <!-- Connect C2 top to VOUT -->
+    <line x1="550" y1="300" x2="550" y2="347" stroke="red" stroke-width="2"/>
+    <!-- Connect R1 top to VOUT -->
+    <line x1="650" y1="300" x2="650" y2="338" stroke="red" stroke-width="2"/>
+    <circle cx="550" cy="300" r="3" fill="red"/>
+    <circle cx="650" cy="300" r="3" fill="red"/>
+    <text x="680" y="295" font-size="14" fill="red">VOUT (5V)</text>
+    
+    <!-- GND net - horizontal rail at y=400 -->
+    <line x1="100" y1="400" x2="700" y2="400" stroke="black" stroke-width="2"/>
+    <!-- U1 GND pin now extends directly to the rail, no extra line needed -->
+    <!-- Connect C1 bottom to GND -->
+    <line x1="250" y1="353" x2="250" y2="400" stroke="black" stroke-width="1"/>
+    <!-- Connect C2 bottom to GND -->
+    <line x1="550" y1="353" x2="550" y2="400" stroke="black" stroke-width="1"/>
+    <!-- Connect R1 bottom to GND -->
+    <line x1="650" y1="362" x2="650" y2="400" stroke="black" stroke-width="1"/>
+    <circle cx="250" cy="400" r="3" fill="black"/>
+    <circle cx="400" cy="400" r="3" fill="black"/>
+    <circle cx="550" cy="400" r="3" fill="black"/>
+    <circle cx="650" cy="400" r="3" fill="black"/>
+    <text x="380" y="420" font-size="14">GND</text>
+    
+    <!-- Ground symbol -->
+    <g transform="translate(400, 400)">
+      <line x1="0" y1="0" x2="0" y2="30" stroke="black" stroke-width="2"/>
+      <line x1="-20" y1="30" x2="20" y2="30" stroke="black" stroke-width="2"/>
+      <line x1="-15" y1="35" x2="15" y2="35" stroke="black" stroke-width="1.5"/>
+      <line x1="-10" y1="40" x2="10" y2="40" stroke="black" stroke-width="1"/>
+    </g>
+
+    <text x="400" y="50" text-anchor="middle" font-size="24" font-weight="bold">
+      LM7805 Linear Voltage Regulator Circuit
+    </text>
+    <text x="400" y="80" text-anchor="middle" font-size="16">
+      Reference Layout for Professional Schematics
+    </text>
+    
+    <text x="50" y="550" font-size="12" fill="gray">
+      Key Layout Principles:
+      • Power IC centered with horizontal rails
+      • Capacitors/resistors vertical between rails
+      • Clean orthogonal routing
+    </text>
+  </g>
+</svg>

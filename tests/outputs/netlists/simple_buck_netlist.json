@@ -1,0 +1,619 @@
+{
+  "modules": [
+    {
+      "value": null,
+      "version": 0
+    },
+    {
+      "value": {
+        "name": "Resistor",
+        "kind": "Module",
+        "ports": [],
+        "pins": [],
+        "internal_instances": [],
+        "internal_nets": [],
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "TPS54302",
+        "kind": "Module",
+        "ports": [],
+        "pins": [],
+        "internal_instances": [],
+        "internal_nets": [],
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "Capacitor",
+        "kind": "Module",
+        "ports": [],
+        "pins": [],
+        "internal_instances": [],
+        "internal_nets": [],
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "SimpleTPS",
+        "kind": "Board",
+        "ports": [],
+        "pins": [],
+        "internal_instances": [],
+        "internal_nets": [],
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "Power",
+        "kind": "PhysicalComponent",
+        "ports": [],
+        "pins": [
+          {
+            "idx": 1,
+            "version": 1
+          }
+        ],
+        "internal_instances": [],
+        "internal_nets": [],
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "Ground",
+        "kind": "PhysicalComponent",
+        "ports": [],
+        "pins": [
+          {
+            "idx": 2,
+            "version": 1
+          }
+        ],
+        "internal_instances": [],
+        "internal_nets": [],
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "Power",
+        "kind": "PhysicalComponent",
+        "ports": [],
+        "pins": [
+          {
+            "idx": 3,
+            "version": 1
+          }
+        ],
+        "internal_instances": [],
+        "internal_nets": [],
+        "attributes": {}
+      },
+      "version": 1
+    }
+  ],
+  "instances": [
+    {
+      "value": null,
+      "version": 0
+    },
+    {
+      "value": {
+        "name": "u1",
+        "definition": {
+          "idx": 2,
+          "version": 1
+        },
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "r1",
+        "definition": {
+          "idx": 1,
+          "version": 1
+        },
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "c1",
+        "definition": {
+          "idx": 3,
+          "version": 1
+        },
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "VIN",
+        "definition": {
+          "idx": 5,
+          "version": 1
+        },
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "GND",
+        "definition": {
+          "idx": 6,
+          "version": 1
+        },
+        "attributes": {}
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "VOUT",
+        "definition": {
+          "idx": 7,
+          "version": 1
+        },
+        "attributes": {}
+      },
+      "version": 1
+    }
+  ],
+  "nets": [
+    {
+      "value": null,
+      "version": 0
+    },
+    {
+      "value": {
+        "name": "VIN",
+        "connections": [
+          {
+            "PinInstance": {
+              "idx": 1,
+              "version": 1
+            }
+          }
+        ],
+        "net_class": {
+          "Power": 12.0
+        }
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "GND",
+        "connections": [
+          {
+            "PinInstance": {
+              "idx": 2,
+              "version": 1
+            }
+          }
+        ],
+        "net_class": "Ground"
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "name": "VOUT",
+        "connections": [
+          {
+            "PinInstance": {
+              "idx": 3,
+              "version": 1
+            }
+          }
+        ],
+        "net_class": {
+          "Power": 5.0
+        }
+      },
+      "version": 1
+    }
+  ],
+  "ports": [
+    {
+      "value": null,
+      "version": 0
+    }
+  ],
+  "pins": [
+    {
+      "value": null,
+      "version": 0
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 1,
+          "version": 1
+        },
+        "name": "OUT",
+        "direction": "Out",
+        "pin_type": "Power",
+        "module": {
+          "idx": 5,
+          "version": 1
+        },
+        "description": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 2,
+          "version": 1
+        },
+        "name": "GND",
+        "direction": "InOut",
+        "pin_type": "Ground",
+        "module": {
+          "idx": 6,
+          "version": 1
+        },
+        "description": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 3,
+          "version": 1
+        },
+        "name": "OUT",
+        "direction": "Out",
+        "pin_type": "Power",
+        "module": {
+          "idx": 7,
+          "version": 1
+        },
+        "description": null
+      },
+      "version": 1
+    }
+  ],
+  "pin_instances": [
+    {
+      "value": null,
+      "version": 0
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 1,
+          "version": 1
+        },
+        "pin_def": {
+          "idx": 1,
+          "version": 1
+        },
+        "instance": {
+          "idx": 4,
+          "version": 1
+        },
+        "net": {
+          "idx": 1,
+          "version": 1
+        },
+        "connection_name": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 2,
+          "version": 1
+        },
+        "pin_def": {
+          "idx": 2,
+          "version": 1
+        },
+        "instance": {
+          "idx": 5,
+          "version": 1
+        },
+        "net": {
+          "idx": 2,
+          "version": 1
+        },
+        "connection_name": null
+      },
+      "version": 1
+    },
+    {
+      "value": {
+        "id": {
+          "idx": 3,
+          "version": 1
+        },
+        "pin_def": {
+          "idx": 3,
+          "version": 1
+        },
+        "instance": {
+          "idx": 6,
+          "version": 1
+        },
+        "net": {
+          "idx": 3,
+          "version": 1
+        },
+        "connection_name": null
+      },
+      "version": 1
+    }
+  ],
+  "top_level_module": {
+    "idx": 4,
+    "version": 1
+  },
+  "analysis_data": {
+    "module_definitions": {
+      "SimpleTPS": {
+        "name": "SimpleTPS",
+        "pins": {
+          "pins": {}
+        },
+        "parameters": {}
+      },
+      "Resistor": {
+        "name": "Resistor",
+        "pins": {
+          "pins": {
+            "1": {
+              "direction": "Bidirectional",
+              "pin_type": "Signal",
+              "function": null,
+              "electrical": {
+                "voltage_range": null,
+                "max_current": null,
+                "impedance": null,
+                "dv_dt_rating": null,
+                "frequency_range": null
+              },
+              "electrical_specs": {},
+              "documentation": null
+            },
+            "2": {
+              "direction": "Bidirectional",
+              "pin_type": "Signal",
+              "function": null,
+              "electrical": {
+                "voltage_range": null,
+                "max_current": null,
+                "impedance": null,
+                "dv_dt_rating": null,
+                "frequency_range": null
+              },
+              "electrical_specs": {},
+              "documentation": null
+            }
+          }
+        },
+        "parameters": {}
+      },
+      "TPS54302": {
+        "name": "TPS54302",
+        "pins": {
+          "pins": {
+            "SW": {
+              "direction": "Bidirectional",
+              "pin_type": "Signal",
+              "function": null,
+              "electrical": {
+                "voltage_range": null,
+                "max_current": null,
+                "impedance": null,
+                "dv_dt_rating": null,
+                "frequency_range": null
+              },
+              "electrical_specs": {},
+              "documentation": null
+            },
+            "BOOT": {
+              "direction": "Bidirectional",
+              "pin_type": "Signal",
+              "function": null,
+              "electrical": {
+                "voltage_range": null,
+                "max_current": null,
+                "impedance": null,
+                "dv_dt_rating": null,
+                "frequency_range": null
+              },
+              "electrical_specs": {},
+              "documentation": null
+            },
+            "PH": {
+              "direction": "Bidirectional",
+              "pin_type": "Signal",
+              "function": null,
+              "electrical": {
+                "voltage_range": null,
+                "max_current": null,
+                "impedance": null,
+                "dv_dt_rating": null,
+                "frequency_range": null
+              },
+              "electrical_specs": {},
+              "documentation": null
+            },
+            "VIN": {
+              "direction": "Bidirectional",
+              "pin_type": "Power",
+              "function": null,
+              "electrical": {
+                "voltage_range": null,
+                "max_current": null,
+                "impedance": null,
+                "dv_dt_rating": null,
+                "frequency_range": null
+              },
+              "electrical_specs": {},
+              "documentation": null
+            },
+            "FB": {
+              "direction": "Bidirectional",
+              "pin_type": "Signal",
+              "function": null,
+              "electrical": {
+                "voltage_range": null,
+                "max_current": null,
+                "impedance": null,
+                "dv_dt_rating": null,
+                "frequency_range": null
+              },
+              "electrical_specs": {},
+              "documentation": null
+            },
+            "EN": {
+              "direction": "Bidirectional",
+              "pin_type": "Enable",
+              "function": null,
+              "electrical": {
+                "voltage_range": null,
+                "max_current": null,
+                "impedance": null,
+                "dv_dt_rating": null,
+                "frequency_range": null
+              },
+              "electrical_specs": {},
+              "documentation": null
+            },
+            "GND": {
+              "direction": "Bidirectional",
+              "pin_type": "Ground",
+              "function": null,
+              "electrical": {
+                "voltage_range": null,
+                "max_current": null,
+                "impedance": null,
+                "dv_dt_rating": null,
+                "frequency_range": null
+              },
+              "electrical_specs": {},
+              "documentation": null
+            }
+          }
+        },
+        "parameters": {}
+      },
+      "Capacitor": {
+        "name": "Capacitor",
+        "pins": {
+          "pins": {
+            "2": {
+              "direction": "Bidirectional",
+              "pin_type": "Signal",
+              "function": null,
+              "electrical": {
+                "voltage_range": null,
+                "max_current": null,
+                "impedance": null,
+                "dv_dt_rating": null,
+                "frequency_range": null
+              },
+              "electrical_specs": {},
+              "documentation": null
+            },
+            "1": {
+              "direction": "Bidirectional",
+              "pin_type": "Signal",
+              "function": null,
+              "electrical": {
+                "voltage_range": null,
+                "max_current": null,
+                "impedance": null,
+                "dv_dt_rating": null,
+                "frequency_range": null
+              },
+              "electrical_specs": {},
+              "documentation": null
+            }
+          }
+        },
+        "parameters": {}
+      }
+    },
+    "symbol_data": {
+      "SimpleTPS::r1": {
+        "symbol_type": "Instance",
+        "module_type": "Resistor",
+        "parameters": {}
+      },
+      "Capacitor": {
+        "symbol_type": "Module",
+        "module_type": null,
+        "parameters": {}
+      },
+      "Resistor::value": {
+        "symbol_type": "Constant",
+        "module_type": null,
+        "parameters": {}
+      },
+      "Capacitor::voltage": {
+        "symbol_type": "Constant",
+        "module_type": null,
+        "parameters": {}
+      },
+      "Resistor": {
+        "symbol_type": "Module",
+        "module_type": null,
+        "parameters": {}
+      },
+      "SimpleTPS::u1": {
+        "symbol_type": "Instance",
+        "module_type": "TPS54302",
+        "parameters": {}
+      },
+      "SimpleTPS": {
+        "symbol_type": "Module",
+        "module_type": null,
+        "parameters": {}
+      },
+      "Capacitor::value": {
+        "symbol_type": "Constant",
+        "module_type": null,
+        "parameters": {}
+      },
+      "TPS54302": {
+        "symbol_type": "Module",
+        "module_type": null,
+        "parameters": {}
+      },
+      "SimpleTPS::c1": {
+        "symbol_type": "Instance",
+        "module_type": "Capacitor",
+        "parameters": {}
+      },
+      "Resistor::tolerance": {
+        "symbol_type": "Constant",
+        "module_type": null,
+        "parameters": {}
+      }
+    }
+  }
+}
