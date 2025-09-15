@@ -219,15 +219,26 @@ impl<'t> Parser<'t> {
                 self.parse_net_ref();
             }
             Some(SyntaxKind::IDENT) => {
+                // Get the identifier text to check if it's a built-in function
+                let ident_text = if let Some((_, text)) = self.tokens.get(self.pos) {
+                    text.as_str()
+                } else {
+                    ""
+                };
+                
                 let checkpoint = self.builder.checkpoint(); // Checkpoint before IDENT
                 self.bump(); // Consume IDENT (don't wrap in node yet)
 
                 // Check what follows the identifier
                 match self.peek() {
                     Some(SyntaxKind::L_PAREN) => {
-                        // Could be Function Call or Component Instantiation
-                        // Check if this looks like component instantiation pattern
-                        if self.is_component_instantiation() {
+                        // Check if this is a built-in math function
+                        if self.is_builtin_function(&ident_text) {
+                            // Built-in function call
+                            self.builder.start_node_at(checkpoint, SyntaxKind::FUNCTION_CALL_EXPR.into());
+                            self.parse_param_list_expr(); // Parse arguments
+                            self.builder.finish_node();
+                        } else if self.is_component_instantiation() {
                             // Component Instantiation: Wrap IDENT in COMPONENT_INST
                             self.builder.start_node_at(checkpoint, SyntaxKind::COMPONENT_INST.into());
                             self.parse_component_parameters(); // Consumes (...) including parens
@@ -283,21 +294,42 @@ impl<'t> Parser<'t> {
                         self.builder.finish_node();
                     }
                     Some(SyntaxKind::DOT) => {
-                        // Pin access on simple identifier: LED.A
-                        self.builder.start_node_at(checkpoint, SyntaxKind::PIN_REF.into());
+                        // Could be pin access (LED.A) or member access (Math.sqrt)
                         self.bump(); // Consume DOT
-                        match self.peek() {
-                            Some(SyntaxKind::IDENT) | Some(SyntaxKind::NUMBER) | Some(SyntaxKind::UNIT_IDENTIFIER) => {
-                                self.bump(); // Consume pin identifier/number/unit (for pins like .A, .K)
+                        
+                        // Look ahead to see if this is a method call (IDENT followed by L_PAREN)
+                        let is_method_call = if self.peek() == Some(SyntaxKind::IDENT) {
+                            let mut lookahead = self.pos + 1;
+                            while lookahead < self.tokens.len() && self.tokens[lookahead].0.is_trivia() {
+                                lookahead += 1;
                             }
-                            Some(SyntaxKind::PLUS) | Some(SyntaxKind::MINUS) => {
-                                self.bump(); // Consume + or - as pin names (for capacitor pins)
+                            lookahead < self.tokens.len() && self.tokens[lookahead].0 == SyntaxKind::L_PAREN
+                        } else {
+                            false
+                        };
+                        
+                        if is_method_call {
+                            // Member function call: Math.sqrt(...)
+                            self.builder.start_node_at(checkpoint, SyntaxKind::FUNCTION_CALL_EXPR.into());
+                            self.bump(); // Consume method name (e.g., "sqrt")
+                            self.parse_param_list_expr(); // Parse arguments
+                            self.builder.finish_node();
+                        } else {
+                            // Pin access: LED.A
+                            self.builder.start_node_at(checkpoint, SyntaxKind::PIN_REF.into());
+                            match self.peek() {
+                                Some(SyntaxKind::IDENT) | Some(SyntaxKind::NUMBER) | Some(SyntaxKind::UNIT_IDENTIFIER) => {
+                                    self.bump(); // Consume pin identifier/number/unit (for pins like .A, .K)
+                                }
+                                Some(SyntaxKind::PLUS) | Some(SyntaxKind::MINUS) => {
+                                    self.bump(); // Consume + or - as pin names (for capacitor pins)
+                                }
+                                _ => {
+                                    self.error("Expected pin name after '.'".to_string());
+                                }
                             }
-                            _ => {
-                                self.error("Expected pin name after '.'".to_string());
-                            }
+                            self.builder.finish_node();
                         }
-                        self.builder.finish_node();
                     }
                     _ => {
                         // Simple Identifier Reference: Wrap IDENT in IDENT_REF
@@ -518,14 +550,36 @@ impl<'t> Parser<'t> {
         self.builder.finish_node();
     }
 
+    // Helper function to determine if an identifier is a built-in math function
+    fn is_builtin_function(&self, name: &str) -> bool {
+        matches!(name, 
+            "sqrt" | "abs" | "floor" | "ceil" | "round" | 
+            "pow" | "exp" | "log" | "log10" | "sin" | "cos" | 
+            "tan" | "asin" | "acos" | "atan" | "min" | "max"
+        )
+    }
+    
     // Helper function to determine if an IDENT(...) pattern is a component instantiation
     // This is a heuristic - we assume it's a component if the parameters contain electrical units
     // or if the identifier starts with a capital letter (component naming convention)
     fn is_component_instantiation(&self) -> bool {
-        // Simple heuristic: Check if first parameter contains a unit or if identifier looks like a component
-        // For now, assume all IDENT(...) in expressions are component instantiations
-        // since function calls are less common in circuit descriptions
-        true
+        // Check the identifier we just consumed (it's one position back)
+        if self.pos > 0 {
+            if let Some((_, text)) = self.tokens.get(self.pos - 1) {
+                // Built-in functions are not components
+                if self.is_builtin_function(text) {
+                    return false;
+                }
+                // Check if it starts with a capital letter (component naming convention)
+                if let Some(first_char) = text.chars().next() {
+                    if first_char.is_uppercase() {
+                        return true;
+                    }
+                }
+            }
+        }
+        // Default to false, assuming it's a function call unless proven otherwise
+        false
     }
     
     // Helper to determine if we're parsing inside a connection expression

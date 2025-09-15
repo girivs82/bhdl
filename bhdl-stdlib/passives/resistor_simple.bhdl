@@ -1,0 +1,24 @@
+// Simplified Resistor Component Module
+// Compatible with current BHDL parser
+
+module Resistor(value: resistance, tolerance: percentage = 5%) {
+    pin 1: signal inout;  // Terminal 1
+    pin 2: signal inout;  // Terminal 2
+    
+    // Component attributes
+    attribute component_class = "resistor";
+    attribute resistance = value;
+    attribute tolerance = tolerance;
+    
+    // Power rating based on standard sizes
+    attribute power_rating = 
+        value <= 1kΩ ? 0.125W :
+        value <= 10kΩ ? 0.25W :
+        value <= 100kΩ ? 0.25W :
+        0.5W;
+    
+    // SPICE model parameters
+    attribute spice_model = "resistor";
+    attribute spice_resistance = value;
+    attribute spice_tolerance = tolerance;
+}
