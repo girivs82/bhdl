@@ -27,6 +27,8 @@ rayon = "1.8.1"
 ordered-float = "2.10"
 slotmap = { version = "1", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rusqlite = { version = "0.31", features = ["bundled"] }
 
 [dev-dependencies]
 tempfile = "3.0"
@@ -51,3 +53,15 @@ path = "src/bin/test_simple_connections.rs"
 [[bin]]
 name = "test_connection_parsing"
 path = "src/bin/test_connection_parsing.rs"
+
+[[bin]]
+name = "test_kicad_symbols"
+path = "src/bin/test_kicad_symbols.rs"
+
+[[bin]]
+name = "test_kicad_symbols_simple"
+path = "src/bin/test_kicad_symbols_simple.rs"
+
+[[bin]]
+name = "test_topology_aware_visualizer"
+path = "src/bin/test_topology_aware_visualizer.rs"

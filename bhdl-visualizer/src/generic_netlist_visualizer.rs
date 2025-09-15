@@ -3,6 +3,7 @@
 use crate::schematic_knowledge::schematic_knowledge::SchematicKnowledge;
 use crate::simple_svg_renderer::SimpleSvgRenderer;
 use crate::types::{Point, Component, Net, CircuitLayout};
+use crate::orthogonal_router::OrthogonalRouter;
 use bhdl_netlist::{Netlist, InstanceId, NetId, ConnectionPoint};
 use bhdl_synthesizer::DatabaseComponentInstance;
 use std::collections::{HashMap, HashSet};
@@ -75,11 +76,12 @@ impl GenericNetlistVisualizer {
             self.place_component(instance_id, netlist, db_components, &mut layout);
         }
         
-        // Step 4: Route nets using actual connectivity
-        self.route_nets(netlist, &mut layout);
+        // Step 4: Add nets with connection points to layout
+        self.add_nets_to_layout(netlist, &mut layout);
         
-        // Step 5: Add power and ground rails
-        self.add_power_rails(netlist, &mut layout);
+        // Step 5: Route nets using orthogonal router
+        let mut router = OrthogonalRouter::new();
+        router.route_nets(&mut layout);
         
         layout.update_bounding_box();
         layout
@@ -273,28 +275,58 @@ impl GenericNetlistVisualizer {
         let mut info = self.component_positions.get(&instance_id).unwrap().clone();
         
         // Determine position based on role and connectivity
+        // Use consistent Y positions for better alignment
+        const MAIN_Y: f64 = 150.0;  // Main component row
+        const FILTER_Y_OFFSET: f64 = 30.0;  // Offset for stacked filters
+        
         let position = match info.role {
             ComponentRole::PowerRegulator => {
-                // Center of layout, advance for next IC
-                let pos = Point::new(self.current_x, 150.0);
-                self.current_x += info.width + 100.0;
-                pos
+                // IC at the center-left of the layout
+                Point::new(150.0, MAIN_Y)
             }
             ComponentRole::InputFilter => {
-                // Find the IC this is connected to and place to its left
-                let ic_pos = self.find_connected_ic_position(instance_id, netlist);
-                Point::new(ic_pos.x - 50.0 - info.width/2.0, ic_pos.y)
+                // Input capacitors to the left of IC, spread horizontally to avoid wire conflicts
+                let num_input_filters = self.component_positions.values()
+                    .filter(|c| c.role == ComponentRole::InputFilter && c.position.x > 0.0)
+                    .count();
+                let x = 30.0 + (num_input_filters as f64 * 40.0);  // Spread horizontally
+                let y = MAIN_Y - 25.0;  // Place above main row to avoid ground wire conflicts
+                Point::new(x, y)
             }
             ComponentRole::OutputFilter => {
-                // Find the IC this is connected to and place to its right
-                let ic_pos = self.find_connected_ic_position(instance_id, netlist);
-                Point::new(ic_pos.x + 50.0 + info.width/2.0, ic_pos.y)
+                // Output capacitors to the right of IC, placed BELOW to avoid wire interference
+                let num_output_filters = self.component_positions.values()
+                    .filter(|c| c.role == ComponentRole::OutputFilter && c.position.x > 0.0)
+                    .count();
+                let x = 250.0 + (num_output_filters as f64 * 70.0);  // Spread them out horizontally
+                let y = MAIN_Y + 40.0;  // Place well below main row to avoid wire paths
+                Point::new(x, y)
             }
             _ => {
-                // Place in sequence
-                let pos = Point::new(self.current_x, 200.0);
-                self.current_x += info.width + 30.0;
-                pos
+                // Place other components in a logical sequence
+                if instance.name.starts_with("D") {
+                    // Diode - place well away from all wire routing paths
+                    Point::new(360.0, MAIN_Y + 60.0)  // Moved left and further down to avoid vertical wire at x=380
+                } else if instance.name.starts_with("L") {
+                    // Inductor - energy storage
+                    Point::new(420.0, MAIN_Y)
+                } else if instance.name == "C4" {
+                    // C4 is often parallel with diode - place it near but offset
+                    Point::new(320.0, MAIN_Y + 25.0)
+                } else if instance.name.starts_with("R") {
+                    // Resistors - feedback network
+                    let num_resistors = self.component_positions.values()
+                        .filter(|c| c.instance_name.starts_with("R") && c.position.x > 0.0)
+                        .count();
+                    let x = 490.0 + (num_resistors as f64 * 60.0);
+                    Point::new(x, MAIN_Y)
+                } else if instance.name.starts_with("C") && info.role == ComponentRole::Passive {
+                    // Additional capacitors
+                    Point::new(320.0, MAIN_Y)
+                } else {
+                    // Default placement
+                    Point::new(600.0, MAIN_Y)
+                }
             }
         };
         
@@ -346,21 +378,47 @@ impl GenericNetlistVisualizer {
         // In a real system, this would use the database pin definitions
         
         if info.role == ComponentRole::PowerRegulator {
-            // IC: IN on left, OUT on right, GND on bottom
-            info.pins.insert("IN".to_string(), Point::new(info.position.x - info.width/2.0, info.position.y));
-            info.pins.insert("OUT".to_string(), Point::new(info.position.x + info.width/2.0, info.position.y));
-            info.pins.insert("GND".to_string(), Point::new(info.position.x, info.position.y + info.height/2.0));
-        } else if info.instance_name.starts_with("C") || info.instance_name.starts_with("R") {
+            // IC: IN on left, OUT on right, GND on bottom - extend pins just beyond border
+            info.pins.insert("IN".to_string(), Point::new(info.position.x - info.width/2.0 - 5.0, info.position.y));
+            info.pins.insert("OUT".to_string(), Point::new(info.position.x + info.width/2.0 + 5.0, info.position.y));
+            info.pins.insert("GND".to_string(), Point::new(info.position.x, info.position.y + info.height/2.0 + 10.0));
+        } else if info.instance_name.starts_with("C") || info.instance_name.starts_with("R") || info.instance_name.starts_with("L") {
             // Two-terminal passive: pins at ends
             if info.width > info.height {
-                // Horizontal
-                info.pins.insert("1".to_string(), Point::new(info.position.x - info.width/2.0, info.position.y));
-                info.pins.insert("2".to_string(), Point::new(info.position.x + info.width/2.0, info.position.y));
+                // Horizontal - extend pins beyond visual body
+                info.pins.insert("1".to_string(), Point::new(info.position.x - info.width/2.0 - 5.0, info.position.y));
+                info.pins.insert("2".to_string(), Point::new(info.position.x + info.width/2.0 + 5.0, info.position.y));
             } else {
-                // Vertical
-                info.pins.insert("1".to_string(), Point::new(info.position.x, info.position.y - info.height/2.0));
-                info.pins.insert("2".to_string(), Point::new(info.position.x, info.position.y + info.height/2.0));
+                // Vertical - put pins well outside component body
+                if info.instance_name.starts_with("C") {
+                    // Capacitors: pins at actual wire connection points beyond the visual body
+                    // Visual body extends ±15 units, so place pins beyond that
+                    // But need to connect to the middle row for proper routing
+                    // For all capacitors, connect pins to the routing layer where wires actually run
+                    // Determine the main routing layer based on component role and positioning
+                    let routing_y = if info.role == ComponentRole::InputFilter || info.role == ComponentRole::OutputFilter {
+                        150.0  // Main routing layer for power connections
+                    } else {
+                        // Standard capacitors: adjust based on position relative to main layer
+                        if info.position.y < 150.0 {
+                            info.position.y + 15.0  // Above main layer: connect downward
+                        } else {
+                            info.position.y - 15.0  // Below main layer: connect upward
+                        }
+                    };
+                    
+                    info.pins.insert("1".to_string(), Point::new(info.position.x, routing_y));
+                    info.pins.insert("2".to_string(), Point::new(info.position.x, info.position.y + 20.0));
+                } else {
+                    // Other passives
+                    info.pins.insert("1".to_string(), Point::new(info.position.x, info.position.y - info.height/2.0 - 5.0));
+                    info.pins.insert("2".to_string(), Point::new(info.position.x, info.position.y + info.height/2.0 + 5.0));
+                }
             }
+        } else if info.instance_name.starts_with("D") {
+            // Diode: A (anode) at top, K (cathode) at bottom - extend beyond body
+            info.pins.insert("A".to_string(), Point::new(info.position.x, info.position.y - 15.0));
+            info.pins.insert("K".to_string(), Point::new(info.position.x, info.position.y + 15.0));
         }
     }
     
@@ -371,8 +429,8 @@ impl GenericNetlistVisualizer {
             .unwrap_or_else(|| "?".to_string())
     }
     
-    /// Route all nets based on actual connectivity
-    fn route_nets(&mut self, netlist: &Netlist, layout: &mut CircuitLayout) {
+    /// Add nets with actual pin connection points to the layout
+    fn add_nets_to_layout(&self, netlist: &Netlist, layout: &mut CircuitLayout) {
         for (net_id, net) in &netlist.nets {
             if let Some(connections) = self.net_connections.get(&net_id) {
                 if connections.len() < 2 {
@@ -386,6 +444,35 @@ impl GenericNetlistVisualizer {
                     if let Some(comp_info) = self.component_positions.get(&conn.instance_id) {
                         if let Some(pin_pos) = comp_info.pins.get(&conn.pin_name) {
                             net_obj.add_connection_point(*pin_pos);
+                        }
+                    }
+                }
+                
+                if net_obj.connection_points.len() >= 2 {
+                    layout.add_net(net_obj);
+                }
+            }
+        }
+    }
+    
+    /// Route all nets based on actual connectivity
+    fn route_nets(&mut self, netlist: &Netlist, layout: &mut CircuitLayout) {
+        for (net_id, net) in &netlist.nets {
+            if let Some(connections) = self.net_connections.get(&net_id) {
+                if connections.len() < 2 {
+                    continue;
+                }
+                
+                let mut net_obj = Net::new(net_id, net.name.clone());
+                
+                // Get actual pin positions for routing
+                // But adjust capacitor pins to be at the actual edge, not center
+                for conn in connections {
+                    if let Some(comp_info) = self.component_positions.get(&conn.instance_id) {
+                        if let Some(pin_pos) = comp_info.pins.get(&conn.pin_name) {
+                            // Use the pin position directly - we've already adjusted them
+                            let adjusted_pos = *pin_pos;
+                            net_obj.add_connection_point(adjusted_pos);
                         }
                     }
                 }

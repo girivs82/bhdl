@@ -359,7 +359,15 @@
       "Bash(RUST_LOG=info cargo run -p bhdl-visualizer --bin test_professional_schematic)",
       "Bash(RUST_LOG=info cargo run -p bhdl-visualizer --bin test_embedded_metadata)",
       "Bash(./target/debug/generate_svg_from_metadata:*)",
-      "Bash(./target/debug/test_metadata_pipeline)"
+      "Bash(./target/debug/test_metadata_pipeline)",
+      "Bash(RUST_LOG=debug cargo run -p bhdl-visualizer --bin test_generic_visualizer)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-visualizer --bin test_generic_visualizer)",
+      "Bash(./target/debug/test_tps54302_synthesis)",
+      "Bash(./test_parser_simple)",
+      "Bash(./test_parser_minimal)",
+      "Bash(./test_parser_impedance:*)",
+      "Bash(./test_tps_parse)",
+      "Bash(./tests/scratch/test_math_parser:*)"
     ],
     "deny": []
   }

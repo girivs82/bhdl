@@ -1,0 +1,40 @@
+// Simple Buck Converter Test Circuit
+// Uses new simplified library components
+
+import { TPS54302 } from "bhdl-stdlib/regulators/tps54302_simple.bhdl";
+import { Capacitor } from "bhdl-stdlib/passives/capacitor_simple.bhdl";
+import { Resistor } from "bhdl-stdlib/passives/resistor_simple.bhdl";
+import { Inductor } from "bhdl-stdlib/passives/inductor_simple.bhdl";
+
+board SimpleBuck {
+    // Power domains
+    power VIN = 12V @ 2A;
+    power VOUT = 5V @ 1A;
+    ground GND;
+    
+    // Simple buck converter
+    u1: TPS54302();
+    c1: Capacitor(22uF, 25V);
+    l1: Inductor(4.7uH, 2A);
+    r1: Resistor(10kohm, 1%);
+    r2: Resistor(2.2kohm, 1%);
+    
+    // Power connections
+    @VIN -> u1.VIN;
+    @VIN -> u1.EN;
+    @GND -> u1.GND;
+    
+    // Output path
+    u1.SW -> l1.1;
+    l1.2 -> @VOUT;
+    
+    // Feedback
+    @VOUT -> r1.1;
+    r1.2 -> r2.1;
+    r2.2 -> @GND;
+    r1.2 -> u1.FB;
+    
+    // Output capacitor
+    @VOUT -> c1.1;
+    c1.2 -> @GND;
+}

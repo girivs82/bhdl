@@ -1,0 +1,31 @@
+// Simple TPS54302 Test Circuit
+// Tests the new parser with TPS54302 component
+
+import { TPS54302 } from "bhdl-stdlib/regulators/tps54302_simple.bhdl";
+import { Capacitor } from "bhdl-stdlib/passives/capacitor_simple.bhdl";
+import { Resistor } from "bhdl-stdlib/passives/resistor_simple.bhdl";
+
+board SimpleTPS {
+    // Power domains  
+    power VIN = 12V @ 2A;
+    power VOUT = 5V @ 1A;
+    ground GND;
+    
+    // Components
+    u1: TPS54302();
+    c1: Capacitor(22uF, 25V);
+    r1: Resistor(10000, 1%);
+    
+    // Basic connections
+    VIN -> u1.VIN;
+    u1.GND -> GND;
+    u1.SW -> VOUT;
+    
+    // Simple feedback
+    VOUT -> r1.1;
+    r1.2 -> u1.FB;
+    
+    // Output cap
+    VOUT -> c1.1;
+    c1.2 -> GND;
+}

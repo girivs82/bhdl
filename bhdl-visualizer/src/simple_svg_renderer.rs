@@ -1,6 +1,6 @@
 /// Simple SVG renderer that uses embedded component metadata
 use crate::schematic_knowledge::schematic_knowledge::SchematicKnowledge;
-use crate::types::{CircuitLayout, Component, Point, Net};
+use crate::types::{CircuitLayout, Component, Point, Net, RoutingSegment, Junction};
 use std::fmt::Write;
 
 pub struct SimpleSvgRenderer {
@@ -149,30 +149,29 @@ impl SimpleSvgRenderer {
     }
     
     fn draw_net(&self, svg: &mut String, net: &Net) {
-        if net.connection_points.len() < 2 {
-            return;
+        // If we have routed segments, use those. Otherwise fall back to simple connections
+        if !net.routing_segments.is_empty() {
+            // Draw routing segments from the orthogonal router
+            for segment in &net.routing_segments {
+                self.draw_routing_segment(svg, segment);
+            }
+        } else if net.connection_points.len() >= 2 {
+            // Fallback: draw simple point-to-point connections
+            for i in 1..net.connection_points.len() {
+                writeln!(svg,
+                    r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="black" stroke-width="1.5"/>"#,
+                    net.connection_points[i-1].x, net.connection_points[i-1].y,
+                    net.connection_points[i].x, net.connection_points[i].y
+                ).unwrap();
+            }
         }
         
-        // Special handling for ground net - draw as a rail with drops
-        if net.name.as_ref().map_or(false, |n| n.contains("GND")) {
-            self.draw_ground_net(svg, net);
-            return;
+        // Draw junctions (dots where wires meet)
+        for junction in &net.junctions {
+            self.draw_junction(svg, junction);
         }
         
-        // For regular nets, connect points directly (they should already be orthogonal)
-        let mut path = String::new();
-        write!(&mut path, "M {} {}", net.connection_points[0].x, net.connection_points[0].y).unwrap();
-        
-        for point in &net.connection_points[1..] {
-            write!(&mut path, " L {} {}", point.x, point.y).unwrap();
-        }
-        
-        writeln!(svg,
-            r#"    <path d="{}" fill="none" stroke="black" stroke-width="1.5"/>"#,
-            path
-        ).unwrap();
-        
-        // Add net label
+        // Add net label at the first connection point
         if let Some(name) = &net.name {
             if !net.connection_points.is_empty() {
                 let point = &net.connection_points[0];
@@ -182,6 +181,40 @@ impl SimpleSvgRenderer {
                 ).unwrap();
             }
         }
+    }
+    
+    fn draw_routing_segment(&self, svg: &mut String, segment: &RoutingSegment) {
+        match segment {
+            RoutingSegment::Line { start, end } => {
+                writeln!(svg,
+                    r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="black" stroke-width="1.5"/>"#,
+                    start.x, start.y, end.x, end.y
+                ).unwrap();
+            }
+            RoutingSegment::Arc { center, radius, start_angle, end_angle } => {
+                // Convert angles to start and end points for SVG arc
+                let start_x = center.x + radius * start_angle.to_radians().cos();
+                let start_y = center.y + radius * start_angle.to_radians().sin();
+                let end_x = center.x + radius * end_angle.to_radians().cos();
+                let end_y = center.y + radius * end_angle.to_radians().sin();
+                
+                let large_arc = if (end_angle - start_angle).abs() > 180.0 { 1 } else { 0 };
+                let sweep = if end_angle > start_angle { 1 } else { 0 };
+                
+                writeln!(svg,
+                    r#"    <path d="M {} {} A {} {} 0 {} {} {} {}" fill="none" stroke="black" stroke-width="1.5"/>"#,
+                    start_x, start_y, radius, radius, large_arc, sweep, end_x, end_y
+                ).unwrap();
+            }
+        }
+    }
+    
+    fn draw_junction(&self, svg: &mut String, junction: &Junction) {
+        // Draw junction as a solid black circle
+        writeln!(svg,
+            r#"    <circle cx="{}" cy="{}" r="2" fill="black"/>"#,
+            junction.position.x, junction.position.y
+        ).unwrap();
     }
     
     fn draw_ground_net(&self, svg: &mut String, net: &Net) {
