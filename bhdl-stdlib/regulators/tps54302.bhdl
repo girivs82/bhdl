@@ -171,11 +171,86 @@ module TPS54302() {
     
     // Symbol appearance
     attribute schematic_symbol = "rectangle";
-    attribute schematic_width = 80;    // mm (wider for more pins)
-    attribute schematic_height = 60;   // mm (taller for bootstrap)
+    attribute schematic_width = 100;    // SVG units
+    attribute schematic_height = 60;     // SVG units  
     attribute schematic_label = "TPS54302";
     attribute schematic_label_position = "center";
     attribute schematic_orientation = "horizontal";  // Inputs left, outputs right
+    
+    // Professional layout template with exact coordinates
+    attribute schematic_template = {
+        // Main IC position (center of professional layout)
+        ic_position: { x: 140, y: 100 },
+        
+        // Pin positions relative to IC center (for 7-pin version)
+        pin_positions: {
+            VIN:  { x: -50, y: -15, side: "left" },
+            SW:   { x: -50, y: 0, side: "left" },
+            GND:  { x: -50, y: 15, side: "left" },
+            FB:   { x: 50, y: 15, side: "right" },
+            EN:   { x: 50, y: 0, side: "right" },
+            VCC:  { x: 50, y: -15, side: "right" },
+            COMP: { x: 0, y: -30, side: "top" }
+        },
+        
+        // Supporting component positions (relative to IC center)
+        component_positions: {
+            input_cap_1:  { x: -70, y: 100, type: "capacitor", role: "input_filter" },
+            input_cap_2:  { x: -105, y: 100, type: "capacitor", role: "input_filter" },
+            inductor:     { x: 80, y: 0, type: "inductor", role: "energy_storage" },
+            output_cap_1: { x: 150, y: 100, type: "capacitor", role: "output_filter" },
+            output_cap_2: { x: 185, y: 100, type: "capacitor", role: "output_filter" },
+            fb_resistor_1: { x: 200, y: 160, type: "resistor", role: "feedback_top" },
+            fb_resistor_2: { x: 200, y: 200, type: "resistor", role: "feedback_bottom" },
+            diode: { x: 20, y: 80, type: "diode", role: "freewheeling" }
+        },
+        
+        // Wire routing templates (orthogonal paths)
+        wire_routes: {
+            vin_to_ic: [
+                { from: "rail_vin", to: "input_cap_1.top" },
+                { from: "input_cap_1.top", to: "input_cap_2.top" },
+                { from: "input_cap_2.top", to: "ic.VIN" }
+            ],
+            sw_to_inductor: [
+                { from: "ic.SW", to: { x: 160, y: 100 }, type: "orthogonal" },
+                { from: { x: 160, y: 100 }, to: "inductor.left" }
+            ],
+            inductor_to_vout: [
+                { from: "inductor.right", to: "rail_vout" },
+                { from: "rail_vout", to: "output_cap_1.top" },
+                { from: "rail_vout", to: "output_cap_2.top" }
+            ],
+            feedback_network: [
+                { from: "rail_vout", to: "fb_resistor_1.top" },
+                { from: "fb_resistor_1.bottom", to: "fb_resistor_2.top" },
+                { from: "fb_resistor_2.bottom", to: "rail_gnd" },
+                { from: "fb_resistor_1.bottom", to: { x: 340, y: 285 }, type: "orthogonal" },
+                { from: { x: 340, y: 285 }, to: "ic.FB", type: "orthogonal" }
+            ],
+            ground_connections: [
+                { from: "ic.GND", to: "rail_gnd" },
+                { from: "input_cap_1.bottom", to: "rail_gnd" },
+                { from: "input_cap_2.bottom", to: "rail_gnd" },
+                { from: "output_cap_1.bottom", to: "rail_gnd" },
+                { from: "output_cap_2.bottom", to: "rail_gnd" },
+                { from: "diode.anode", to: "rail_gnd" }
+            ],
+            switching_node: [
+                { from: "ic.SW", to: "diode.cathode", type: "orthogonal" }
+            ]
+        },
+        
+        // Power rails
+        power_rails: {
+            vin:  { y: 100, x_start: 50, x_end: 90, color: "red", label: "VIN" },
+            vout: { y: 100, x_start: 250, x_end: 450, color: "green", label: "VOUT" },
+            gnd:  { y: 300, x_start: 50, x_end: 450, color: "black", label: "GND" }
+        },
+        
+        // Canvas size
+        canvas: { width: 500, height: 350 }
+    }
     
     // Signal flow and placement
     attribute signal_flow = "left_to_right";

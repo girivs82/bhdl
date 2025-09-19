@@ -1,0 +1,57 @@
+// Simple TPS54302 Buck Converter Test
+// 12V to 5V buck converter without imports
+
+board TPS54302_Buck_Simple {
+    // Power domains
+    power VIN = 12V @ 3A;
+    power VOUT = 5V @ 2A;
+    ground GND;
+    
+    // Input filtering
+    @VIN -> c_in1: Cap(22uF).1 -> @GND;
+    @VIN -> c_in2: Cap(100nF).1 -> @GND;
+    
+    // Main regulator (simplified as a module)
+    @VIN -> reg: TPS54302().VIN;
+    reg.GND -> @GND;
+    @VIN -> reg.EN;  // Enable always high
+    
+    // Phase/switching node and inductor
+    reg.PH -> l_out: Ind(4.7uH).1 -> @VOUT;
+    
+    // Output filtering
+    @VOUT -> c_out1: Cap(47uF).1 -> @GND;
+    @VOUT -> c_out2: Cap(22uF).1 -> @GND;
+    
+    // Feedback network
+    @VOUT -> r_fb1: Res(22k).1 -> reg.FB;
+    reg.FB -> r_fb2: Res(3k).1 -> @GND;
+    
+    // Bootstrap capacitor
+    reg.BOOT -> c_boot: Cap(100nF).1 -> reg.PH;
+}
+
+// Simplified component modules
+module TPS54302() {
+    pin VIN: power in;
+    pin GND: ground;
+    pin PH: power out;    // Phase/Switching node (connects to inductor)
+    pin EN: signal in;    // Enable
+    pin FB: signal in;    // Feedback
+    pin BOOT: signal inout; // Bootstrap
+}
+
+module Cap(value: capacitance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+}
+
+module Res(value: resistance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+}
+
+module Ind(value: inductance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+}

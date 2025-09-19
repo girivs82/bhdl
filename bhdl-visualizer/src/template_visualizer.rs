@@ -89,6 +89,124 @@ impl TemplateVisualizer {
         })
     }
     
+    /// Extract current information from actual simulation results in netlist
+    fn extract_net_currents(&self, netlist: &Netlist) -> HashMap<String, f64> {
+        let mut net_currents = HashMap::new();
+        
+        // Extract actual operating currents from instance attributes (populated by synthesizer)
+        for (instance_id, instance) in &netlist.instances {
+            let instance_name = &instance.name;
+            // Look for simulation-derived operating current
+            if let Some(current_str) = instance.attributes.get("sim_operating_current") {
+                // Parse the current value (format: "1.234A")
+                if let Some(current_value) = Self::parse_current_value(current_str) {
+                    println!("Found simulation current for {}: {:.3}A", instance_name, current_value);
+                    
+                    // Map component currents to their connected nets based on circuit topology
+                    match instance_name.as_str() {
+                        name if name.starts_with("c_in") => {
+                            net_currents.insert("VIN".to_string(), current_value.abs());
+                        },
+                        name if name.starts_with("c_out") => {
+                            net_currents.insert("VOUT".to_string(), current_value.abs());
+                        },
+                        name if name.starts_with("l_out") => {
+                            net_currents.insert("PH".to_string(), current_value.abs());
+                        },
+                        name if name.starts_with("r_fb") => {
+                            net_currents.insert("FB".to_string(), current_value.abs());
+                        },
+                        name if name.starts_with("c_boot") => {
+                            net_currents.insert("BOOT".to_string(), current_value.abs());
+                        },
+                        "reg" => {
+                            // Main IC - represents VIN current draw
+                            net_currents.insert("VIN".to_string(), current_value.abs());
+                        },
+                        _ => {}
+                    }
+                }
+            }
+        }
+        
+        // Check analysis_data as backup source
+        if net_currents.is_empty() {
+            if let Some(analysis_data) = &netlist.analysis_data {
+                for (instance_name, instance_data) in &analysis_data.instance_analysis {
+                    if let Some(safety_info) = &instance_data.safety_info {
+                        if let Some(operating_current) = safety_info.operating_current {
+                            println!("Found analysis current for {}: {:.3}A", instance_name, operating_current);
+                            // Same mapping logic as above
+                            match instance_name.as_str() {
+                                name if name.starts_with("c_in") => {
+                                    net_currents.insert("VIN".to_string(), operating_current.abs());
+                                },
+                                name if name.starts_with("c_out") => {
+                                    net_currents.insert("VOUT".to_string(), operating_current.abs());
+                                },
+                                name if name.starts_with("l_out") => {
+                                    net_currents.insert("PH".to_string(), operating_current.abs());
+                                },
+                                name if name.starts_with("r_fb") => {
+                                    net_currents.insert("FB".to_string(), operating_current.abs());
+                                },
+                                name if name.starts_with("c_boot") => {
+                                    net_currents.insert("BOOT".to_string(), operating_current.abs());
+                                },
+                                "reg" => {
+                                    net_currents.insert("VIN".to_string(), operating_current.abs());
+                                },
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Fallback to reasonable defaults if no simulation data available
+        if net_currents.is_empty() {
+            println!("No simulation current data found, using fallback defaults");
+            net_currents.insert("VIN".to_string(), 3.0);   
+            net_currents.insert("PH".to_string(), 2.0);    
+            net_currents.insert("VOUT".to_string(), 2.0);  
+            net_currents.insert("GND".to_string(), 3.0);   
+            net_currents.insert("FB".to_string(), 0.001);  
+            net_currents.insert("BOOT".to_string(), 0.01); 
+        }
+        
+        // GND current is typically the sum of all other currents (return path)
+        let total_current: f64 = net_currents.values().sum();
+        net_currents.insert("GND".to_string(), total_current);
+        
+        net_currents
+    }
+    
+    /// Parse current value from string format like "1.234A"
+    fn parse_current_value(current_str: &str) -> Option<f64> {
+        if current_str.ends_with('A') {
+            current_str[..current_str.len()-1].parse().ok()
+        } else {
+            current_str.parse().ok()
+        }
+    }
+    
+    /// Calculate wire thickness based on current
+    fn calculate_wire_thickness(&self, current_amps: f64) -> f64 {
+        // Base thickness is 1, scale up for higher currents
+        // Power rails (1-3A) get thickness 2-4
+        // Signal lines (<0.1A) get thickness 1
+        let thickness = if current_amps >= 1.0 {
+            2.0 + current_amps  // Power rails: 3-5 thickness
+        } else if current_amps >= 0.1 {
+            1.5             // Medium current: 1.5 thickness  
+        } else {
+            1.0             // Low current signals: 1 thickness
+        };
+        
+        thickness.min(5.0) // Cap at 5 for very thick power lines
+    }
+    
     /// Extract template from stdlib component definition
     pub fn extract_template(&mut self, ic_type: &str) -> Result<CircuitTemplate> {
         // Check cache first
@@ -165,8 +283,8 @@ impl TemplateVisualizer {
                 });
                 
                 // Bootstrap capacitor: positioned between IC and inductor
-                // BOOT pin at (480, 300), SW pin at (480, 260)
-                let boot_cap_y = (300.0 + 260.0) / 2.0; // y=280
+                // Position so top pin aligns with PH (y=260) and bottom pin aligns with BOOT (y=300)
+                let boot_cap_y = 280.0; // Center between PH (260) and BOOT (300)
                 comps.insert("boot_cap".to_string(), ComponentPosition {
                     x: 540.0, y: boot_cap_y,  // Moved left to 540 for spacing from inductor
                     component_type: "capacitor".to_string(),
@@ -230,8 +348,11 @@ impl TemplateVisualizer {
         // Step 2: Map netlist components to template roles
         let component_mapping = self.map_components_to_roles(netlist, &template)?;
         
-        // Step 3: Generate SVG with substituted components
-        let svg = self.generate_svg_from_template(&template, &component_mapping, netlist)?;
+        // Step 3: Extract current information from netlist
+        let net_currents = self.extract_net_currents(netlist);
+        
+        // Step 4: Generate SVG with substituted components and current-proportional wires
+        let svg = self.generate_svg_from_template_with_currents(&template, &component_mapping, netlist, &net_currents)?;
         
         Ok(svg)
     }
@@ -264,11 +385,12 @@ impl TemplateVisualizer {
     }
     
     /// Generate SVG from template with substituted components
-    fn generate_svg_from_template(
+    fn generate_svg_from_template_with_currents(
         &self,
         template: &CircuitTemplate,
         component_mapping: &HashMap<String, String>,
-        netlist: &Netlist
+        netlist: &Netlist,
+        net_currents: &HashMap<String, f64>,
     ) -> Result<String> {
         let mut svg = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -279,7 +401,7 @@ impl TemplateVisualizer {
 "#, template.canvas.width, template.canvas.height, template.canvas.width, template.canvas.height);
         
         // Draw power rails
-        self.draw_power_rails(&mut svg, &template.power_rails);
+        self.draw_power_rails(&mut svg, &template.power_rails, net_currents);
         
         // Draw IC at template position
         self.draw_ic(&mut svg, &template.ic_position, &template.pin_positions, &template.ic_type);
@@ -297,42 +419,46 @@ impl TemplateVisualizer {
         }
         
         // Draw wires connecting components
-        self.draw_wires(&mut svg, template, component_mapping);
+        self.draw_wires(&mut svg, template, component_mapping, net_currents);
         
         svg.push_str("  </g>\n</svg>");
         Ok(svg)
     }
     
     /// Draw power rails
-    fn draw_power_rails(&self, svg: &mut String, rails: &PowerRails) {
+    fn draw_power_rails(&self, svg: &mut String, rails: &PowerRails, net_currents: &HashMap<String, f64>) {
         // VIN rail
         svg.push_str(&format!(
-            r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="{}" stroke-width="2"/>
+            r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="{}" stroke-width="{}"/>
     <text x="{}" y="{}" font-family="Arial" font-size="9" fill="{}">{}</text>
 "#, rails.vin.x_start, rails.vin.y, rails.vin.x_end, rails.vin.y, 
-    rails.vin.color, rails.vin.x_start + 5.0, rails.vin.y - 5.0, 
+    rails.vin.color, self.calculate_wire_thickness(*net_currents.get("VIN").unwrap_or(&3.0)),
+    rails.vin.x_start + 5.0, rails.vin.y - 5.0, 
     rails.vin.color, rails.vin.label));
         
         // VOUT rail
         svg.push_str(&format!(
-            r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="{}" stroke-width="2"/>
+            r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="{}" stroke-width="{}"/>
     <text x="{}" y="{}" font-family="Arial" font-size="9" fill="{}">{}</text>
 "#, rails.vout.x_start, rails.vout.y, rails.vout.x_end, rails.vout.y,
-    rails.vout.color, rails.vout.x_start + 5.0, rails.vout.y - 5.0,
+    rails.vout.color, self.calculate_wire_thickness(*net_currents.get("VOUT").unwrap_or(&2.0)),
+    rails.vout.x_start + 5.0, rails.vout.y - 5.0,
     rails.vout.color, rails.vout.label));
         
         // GND rail with symbol
+        let gnd_thickness = self.calculate_wire_thickness(*net_currents.get("GND").unwrap_or(&3.0));
         svg.push_str(&format!(
-            r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="{}" stroke-width="2"/>
+            r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="{}" stroke-width="{}"/>
     <g transform="translate({}, {})">
-      <line x1="0" y1="0" x2="0" y2="10" stroke="black" stroke-width="2"/>
-      <line x1="-10" y1="10" x2="10" y2="10" stroke="black" stroke-width="2"/>
-      <line x1="-7" y1="14" x2="7" y2="14" stroke="black" stroke-width="1.5"/>
-      <line x1="-4" y1="18" x2="4" y2="18" stroke="black" stroke-width="1"/>
+      <line x1="0" y1="0" x2="0" y2="10" stroke="black" stroke-width="{}"/>
+      <line x1="-10" y1="10" x2="10" y2="10" stroke="black" stroke-width="{}"/>
+      <line x1="-7" y1="14" x2="7" y2="14" stroke="black" stroke-width="{}"/>
+      <line x1="-4" y1="18" x2="4" y2="18" stroke="black" stroke-width="{}"/>
     </g>
     <text x="{}" y="{}" font-family="Arial" font-size="10" font-weight="bold">{}</text>
 "#, rails.gnd.x_start, rails.gnd.y, rails.gnd.x_end, rails.gnd.y,
-    rails.gnd.color, rails.gnd.x_end - 20.0, rails.gnd.y,
+    rails.gnd.color, gnd_thickness, rails.gnd.x_end - 20.0, rails.gnd.y,
+    gnd_thickness, gnd_thickness, gnd_thickness * 0.75, gnd_thickness * 0.5,
     rails.gnd.x_end - 35.0, rails.gnd.y + 35.0, rails.gnd.label));
     }
     
@@ -504,7 +630,7 @@ impl TemplateVisualizer {
     }
     
     /// Draw wires connecting components with simple straight-line rules
-    fn draw_wires(&self, svg: &mut String, template: &CircuitTemplate, _component_mapping: &HashMap<String, String>) {
+    fn draw_wires(&self, svg: &mut String, template: &CircuitTemplate, _component_mapping: &HashMap<String, String>, net_currents: &HashMap<String, f64>) {
         // Simple straight-line wiring rules - NO BENDS
         
         // Rule 1: VIN power rail goes directly to VIN pin (no additional wire needed since rail ends at pin)
@@ -513,33 +639,33 @@ impl TemplateVisualizer {
         // Rule 2: PH→Inductor→VOUT (no bends) - all at same Y level
         // PH pin (phase/switching node) to inductor (updated for new external pin position)
         svg.push_str(&format!(
-            r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="purple" stroke-width="2"/>
+            r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="purple" stroke-width="{}"/>
 "#, template.ic_position.x + 92.0, template.ic_position.y - 40.0,  // PH pin at external square center (492, 260)
-    590.0, 260.0));  // Straight horizontal to inductor at x=620-30=590
+    590.0, 260.0, self.calculate_wire_thickness(*net_currents.get("PH").unwrap_or(&2.0))));  // PH net thickness
         
         // Inductor to VOUT (updated for new inductor position at x=620)
         svg.push_str(&format!(
-            r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="green" stroke-width="2"/>
+            r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="green" stroke-width="{}"/>
 "#, 650.0, 260.0,  // From inductor at x=620+30=650
-    template.power_rails.vout.x_start, template.power_rails.vout.y));  // Straight to VOUT rail
+    template.power_rails.vout.x_start, template.power_rails.vout.y, self.calculate_wire_thickness(*net_currents.get("VOUT").unwrap_or(&2.0))));  // VOUT net thickness
         
         // Rule 3: Extend VOUT straight to the right for output caps
         svg.push_str(&format!(
-            r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="green" stroke-width="2"/>
+            r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="green" stroke-width="{}"/>
 "#, template.power_rails.vout.x_end, template.power_rails.vout.y,  // Extend VOUT rail
-    750.0, template.power_rails.vout.y));  // Extended to the right
+    750.0, template.power_rails.vout.y, self.calculate_wire_thickness(*net_currents.get("VOUT").unwrap_or(&2.0))));  // VOUT net thickness
         
         // Rule 4: Input caps vertically between VIN and GND - straight connections (updated positions)
         for comp_x in [180.0, 230.0] {  // Updated X positions
             // VIN to cap top (straight down)
             svg.push_str(&format!(
-                r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="red" stroke-width="2"/>
-"#, comp_x, template.power_rails.vin.y, comp_x, 340.0));  // Straight down to cap top
+                r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="red" stroke-width="{}"/>
+"#, comp_x, template.power_rails.vin.y, comp_x, 340.0, self.calculate_wire_thickness(*net_currents.get("VIN").unwrap_or(&3.0))));
             
             // Cap bottom to GND (straight down)
             svg.push_str(&format!(
-                r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="black" stroke-width="1"/>
-"#, comp_x, 380.0, comp_x, template.power_rails.gnd.y));  // Straight down to GND
+                r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="black" stroke-width="{}"/>
+"#, comp_x, 380.0, comp_x, template.power_rails.gnd.y, self.calculate_wire_thickness(*net_currents.get("GND").unwrap_or(&3.0))));  // GND net thickness
         }
         
         // Rule 5: Bootstrap cap connects BOOT to PH (not separate connections!)
@@ -551,85 +677,73 @@ impl TemplateVisualizer {
         // Cap top pin square is at y=255 (5 pixels above body which spans 260-300)
         // But for cleaner routing, let's connect horizontally and then to the pin
         
-        // Horizontal from BOOT pin to capacitor X position
+        // Bootstrap circuit: Simple straight horizontal connections
+        // PH pin (upper, y=260) connects to capacitor top pin
         svg.push_str(&format!(
-            r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="brown" stroke-width="1"/>
-"#, template.ic_position.x + 92.0, template.ic_position.y,  // BOOT pin at (492, 300)
-    540.0, template.ic_position.y));  // Horizontal to cap X at same Y
-        
-        // Then connect down to cap top pin square
-        svg.push_str(&format!(
-            r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="brown" stroke-width="1"/>
-"#, 540.0, template.ic_position.y,  // From horizontal line at y=300
-    540.0, 255.0));  // Down to cap top pin square at y=255
-        
-        // PH pin to boot cap bottom 
-        // The capacitor connects BOOT to PH (they are the same net through the cap)
-        // PH is now on the right side at y=-40 (where SW used to be)
-        // Simple connection: PH pin to capacitor bottom
-        svg.push_str(&format!(
-            r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="brown" stroke-width="1"/>
+            r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="brown" stroke-width="{}"/>
 "#, template.ic_position.x + 92.0, template.ic_position.y - 40.0,  // PH pin at (492, 260)
-    540.0, template.ic_position.y - 40.0));  // Horizontal to cap X
+    540.0, template.ic_position.y - 40.0, self.calculate_wire_thickness(*net_currents.get("PH").unwrap_or(&2.0))));
+        
+        // BOOT pin (lower, y=300) connects to capacitor bottom pin
         svg.push_str(&format!(
-            r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="brown" stroke-width="1"/>
-"#, 540.0, template.ic_position.y - 40.0,  // From horizontal segment
-    540.0, 305.0));  // Vertical down to cap bottom pin square at y=305
+            r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="brown" stroke-width="{}"/>
+"#, template.ic_position.x + 92.0, template.ic_position.y,  // BOOT pin at (492, 300)
+    540.0, template.ic_position.y, self.calculate_wire_thickness(*net_currents.get("BOOT").unwrap_or(&0.01))));
         
         // Rule 6: Feedback resistors positioned so middle goes straight to FB pin (updated positions)
         // VOUT to top resistor (straight down)
         svg.push_str(&format!(
-            r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="orange" stroke-width="1.5"/>
-"#, 590.0, template.power_rails.vout.y, 590.0, 300.0));  // Straight down to R1 top (updated to 590)
+            r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="orange" stroke-width="{}"/>
+"#, 590.0, template.power_rails.vout.y, 590.0, 300.0, self.calculate_wire_thickness(*net_currents.get("FB").unwrap_or(&0.001))));  // Feedback signal thickness
         
         // Resistor middle to FB pin (straight horizontal, updated for external pin position)
         svg.push_str(&format!(
-            r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="orange" stroke-width="1.5"/>
+            r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="orange" stroke-width="{}"/>
 "#, 590.0, 340.0,  // Middle of resistor divider (updated to 590)
-    template.ic_position.x + 92.0, template.ic_position.y + 40.0));  // Straight to FB pin at external square center
+    template.ic_position.x + 92.0, template.ic_position.y + 40.0, self.calculate_wire_thickness(*net_currents.get("FB").unwrap_or(&0.001))));  // Feedback signal thickness
         
         // Bottom resistor to GND (straight down)
         svg.push_str(&format!(
-            r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="black" stroke-width="1"/>
-"#, 590.0, 380.0, 590.0, template.power_rails.gnd.y));  // Straight down to GND (updated to 590)
+            r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="black" stroke-width="{}"/>
+"#, 590.0, 380.0, 590.0, template.power_rails.gnd.y, self.calculate_wire_thickness(*net_currents.get("GND").unwrap_or(&3.0))));  // GND net thickness
         
         // Rule 7: Output caps and diode between VOUT and GND - straight connections (positioned right of inductor)
         for comp_x in [670.0, 720.0, 770.0] {  // Updated positions: diode at 670, caps at 720,770 (right of inductor at 620)
             // VOUT to component top (straight down)
             svg.push_str(&format!(
-                r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="green" stroke-width="2"/>
-"#, comp_x, template.power_rails.vout.y, comp_x, 340.0));  // Straight down to component top
+                r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="green" stroke-width="{}"/>
+"#, comp_x, template.power_rails.vout.y, comp_x, 340.0, self.calculate_wire_thickness(*net_currents.get("VOUT").unwrap_or(&2.0))));  // VOUT net thickness
             
             // Component bottom to GND (straight down)
             svg.push_str(&format!(
-                r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="black" stroke-width="1"/>
-"#, comp_x, 380.0, comp_x, template.power_rails.gnd.y));  // Straight down to GND
+                r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="black" stroke-width="{}"/>
+"#, comp_x, 380.0, comp_x, template.power_rails.gnd.y, self.calculate_wire_thickness(*net_currents.get("GND").unwrap_or(&3.0))));  // GND net thickness
         }
         
         // Rule 8: EN pin connection to VIN rail (orthogonal routing to avoid IC body)
         // Route EN pin to VIN rail with L-shaped path going around IC body
         // First go left from EN pin to clear the IC body
         svg.push_str(&format!(
-            r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="red" stroke-width="1.5"/>
+            r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="red" stroke-width="{}"/>
 "#, template.ic_position.x - 92.0, template.ic_position.y,  // EN pin at external square center
-    250.0, template.ic_position.y));  // Horizontal to left (clear of IC)
+    250.0, template.ic_position.y, self.calculate_wire_thickness(*net_currents.get("VIN").unwrap_or(&3.0))));  // EN signal thickness
         
         // Then go up to VIN rail level
         svg.push_str(&format!(
-            r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="red" stroke-width="1.5"/>
+            r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="red" stroke-width="{}"/>
 "#, 250.0, template.ic_position.y,  // From horizontal segment
-    250.0, template.power_rails.vin.y));  // Vertical up to VIN rail
+    250.0, template.power_rails.vin.y, self.calculate_wire_thickness(*net_currents.get("VIN").unwrap_or(&3.0))));  // EN signal thickness
         
         // Finally connect to VIN rail
         svg.push_str(&format!(
-            r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="red" stroke-width="1.5"/>
+            r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="red" stroke-width="{}"/>
 "#, 250.0, template.power_rails.vin.y,  // From vertical segment
-    template.power_rails.vin.x_start, template.power_rails.vin.y));  // Horizontal to VIN rail
+    template.power_rails.vin.x_start, template.power_rails.vin.y, self.calculate_wire_thickness(*net_currents.get("VIN").unwrap_or(&3.0))));  // EN signal thickness
         
         // IC GND pin to GND rail (straight down, updated for external pin position)
         svg.push_str(&format!(
-            r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="black" stroke-width="2"/>
+            r#"    <line x1="{}" y1="{}" x2="{}" y2="{}" stroke="black" stroke-width="{}"/>
 "#, template.ic_position.x, template.ic_position.y + 72.0,  // GND pin at external square center
-    template.ic_position.x, template.power_rails.gnd.y));  // Straight down to GND rail
+    template.ic_position.x, template.power_rails.gnd.y, self.calculate_wire_thickness(*net_currents.get("GND").unwrap_or(&3.0))));  // GND net thickness
     }
 }
