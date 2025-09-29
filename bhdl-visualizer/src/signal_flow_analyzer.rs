@@ -32,7 +32,7 @@ pub enum StageType {
     Support,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ComponentRole {
     InputFilter,
     PowerConverter,  // IC doing conversion
@@ -550,7 +550,7 @@ impl SignalFlowAnalyzer {
     fn is_significant_component(&self, component: &str) -> bool {
         if let Some(info) = self.components.get(component) {
             matches!(info.component_type.as_str(), 
-                "IC" | "Inductor" | "Transformer" | "Diode" | "MOSFET" | "Transistor")
+                "IC" | "TPS54302" | "Inductor" | "Transformer" | "Diode" | "MOSFET" | "Transistor")
         } else {
             false
         }
@@ -693,15 +693,34 @@ impl SignalFlowAnalyzer {
             }
         }
         
-        // For components not covered by analysis_data, fall back to stages-based assignment
-        if roles.len() < self.components.len() {
-            let stages = self.identify_stages(&self.trace_power_path_internal());
-            let stage_roles = self.assign_component_roles(&stages);
-            
-            for (comp_name, role) in stage_roles {
-                if !roles.contains_key(&comp_name) {
-                    roles.insert(comp_name, role);
-                }
+        // For components not covered by analysis_data, fall back to type-based assignment
+        for (comp_name, comp_info) in &self.components {
+            if !roles.contains_key(comp_name) {
+                let role = match comp_info.component_type.as_str() {
+                    "TPS54302" | "IC" => ComponentRole::PowerConverter,
+                    "Inductor" => ComponentRole::EnergyStorage,
+                    "Capacitor" => {
+                        // Try to infer from connections
+                        if self.is_connected_to_input_net(comp_name) {
+                            ComponentRole::InputFilter
+                        } else if self.is_connected_to_output_net(comp_name) {
+                            ComponentRole::OutputFilter
+                        } else {
+                            ComponentRole::Decoupling
+                        }
+                    }
+                    "Resistor" => {
+                        // Check if connected to feedback nets
+                        if self.is_connected_to_feedback_net(comp_name) {
+                            ComponentRole::FeedbackNetwork
+                        } else {
+                            ComponentRole::Supporting
+                        }
+                    }
+                    "Diode" => ComponentRole::Protection,
+                    _ => ComponentRole::Supporting,
+                };
+                roles.insert(comp_name.clone(), role);
             }
         }
         
@@ -770,6 +789,45 @@ impl SignalFlowAnalyzer {
             connected.iter().any(|comp| {
                 self.components.get(comp)
                     .map_or(false, |info| info.component_type == "IC")
+            })
+        } else {
+            false
+        }
+    }
+    
+    /// Check if component is connected to input nets
+    fn is_connected_to_input_net(&self, component: &str) -> bool {
+        if let Some(comp_info) = self.components.get(component) {
+            comp_info.pins.iter().any(|pin| {
+                pin.net.as_ref().map_or(false, |net| {
+                    net.contains("VIN") || net.contains("INPUT")
+                })
+            })
+        } else {
+            false
+        }
+    }
+    
+    /// Check if component is connected to output nets
+    fn is_connected_to_output_net(&self, component: &str) -> bool {
+        if let Some(comp_info) = self.components.get(component) {
+            comp_info.pins.iter().any(|pin| {
+                pin.net.as_ref().map_or(false, |net| {
+                    net.contains("VOUT") || net.contains("OUTPUT")
+                })
+            })
+        } else {
+            false
+        }
+    }
+    
+    /// Check if component is connected to feedback nets
+    fn is_connected_to_feedback_net(&self, component: &str) -> bool {
+        if let Some(comp_info) = self.components.get(component) {
+            comp_info.pins.iter().any(|pin| {
+                pin.net.as_ref().map_or(false, |net| {
+                    net.contains("FB") || net.contains("FEEDBACK")
+                })
             })
         } else {
             false

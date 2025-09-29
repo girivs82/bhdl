@@ -367,7 +367,10 @@
       "Bash(./test_parser_minimal)",
       "Bash(./test_parser_impedance:*)",
       "Bash(./test_tps_parse)",
-      "Bash(./tests/scratch/test_math_parser:*)"
+      "Bash(./tests/scratch/test_math_parser:*)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-visualizer --bin test_intelligent_visualizer)",
+      "Bash(./target/debug/test_template_pipeline)",
+      "Bash(RUST_LOG=info cargo run -p bhdl-visualizer --bin test_template_pipeline)"
     ],
     "deny": []
   }

@@ -89,17 +89,103 @@ impl IntelligentPlacer {
         // Stage 3: Apply alignment rules
         self.apply_alignment_rules();
         
-        // Stage 4: Optimize placement
-        self.optimize_placement();
+        // Stage 4: Optimize placement (disabled - using fixed professional positions)
+        // self.optimize_placement();
         
-        // Stage 5: Center and scale to canvas
-        self.fit_to_canvas();
+        // Stage 5: Center and scale to canvas (disabled - using fixed professional positions)
+        // self.fit_to_canvas();
         
         self.placements.clone()
     }
     
-    /// Place components based on signal flow stages
+    /// Place components based on component roles and signal flow
     fn place_by_signal_flow(&mut self) {
+        // Place components by role instead of stages for more accurate placement
+        self.place_by_component_roles();
+    }
+    
+    /// Place components based on their roles from metadata
+    fn place_by_component_roles(&mut self) {
+        let mut role_positions = std::collections::HashMap::new();
+        
+        // Use proper schematic positions based on professional layout
+        // Main IC at center-left, caps below at Y=200
+        role_positions.insert(ComponentRole::PowerConverter, (140.0, 100.0));     // IC like 7805
+        role_positions.insert(ComponentRole::InputFilter, (52.5, 200.0));         // Input caps C1,C2 base position
+        role_positions.insert(ComponentRole::OutputFilter, (227.5, 200.0));       // Output caps C3,C4 base position  
+        role_positions.insert(ComponentRole::EnergyStorage, (300.0, 100.0));      // Inductor to right of IC
+        role_positions.insert(ComponentRole::Decoupling, (260.0, 200.0));         // Additional decoupling caps
+        role_positions.insert(ComponentRole::FeedbackNetwork, (140.0, 280.0));    // Feedback resistors below IC
+        role_positions.insert(ComponentRole::Protection, (220.0, 50.0));          // Protection above circuit
+        role_positions.insert(ComponentRole::Supporting, (400.0, 200.0));
+        
+        // Group components by role
+        let mut components_by_role: std::collections::HashMap<ComponentRole, Vec<String>> = 
+            std::collections::HashMap::new();
+        
+        for (comp_name, comp_info) in &self.components {
+            let role = self.flow_analysis.component_roles.get(comp_name)
+                .cloned()
+                .unwrap_or(ComponentRole::Supporting);
+            components_by_role.entry(role).or_insert_with(Vec::new).push(comp_name.clone());
+        }
+        
+        // Place components for each role
+        for (role, components) in components_by_role {
+            if let Some(&(base_x, base_y)) = role_positions.get(&role) {
+                let num_components = components.len();
+                
+                if num_components == 1 {
+                    // Single component at base position
+                    let comp_name = &components[0];
+                    self.placements.insert(comp_name.clone(), ComponentPlacement {
+                        name: comp_name.clone(),
+                        position: (base_x, base_y),
+                        size: self.components[comp_name].size,
+                        rotation: 0.0,
+                    });
+                } else {
+                    // Multiple components - position them side by side or in proper arrangement
+                    let spacing = 35.0; // Tighter spacing for capacitors like C1, C2
+                    
+                    for (i, comp_name) in components.iter().enumerate() {
+                        let offset_x = if num_components > 1 { 
+                            (i as f64 - (num_components as f64 - 1.0) / 2.0) * spacing 
+                        } else { 
+                            0.0 
+                        };
+                        
+                        self.placements.insert(comp_name.clone(), ComponentPlacement {
+                            name: comp_name.clone(),
+                            position: (base_x + offset_x, base_y),
+                            size: self.components[comp_name].size,
+                            rotation: 0.0,
+                        });
+                    }
+                }
+            }
+        }
+        
+        // Ensure all components are placed (fallback for any missing)
+        for (comp_name, comp_info) in &self.components {
+            if !self.placements.contains_key(comp_name) {
+                // Place at supporting position as fallback
+                let (base_x, base_y) = role_positions.get(&ComponentRole::Supporting)
+                    .cloned()
+                    .unwrap_or((400.0, 200.0));
+                self.placements.insert(comp_name.clone(), ComponentPlacement {
+                    name: comp_name.clone(),
+                    position: (base_x, base_y),
+                    size: comp_info.size,
+                    rotation: 0.0,
+                });
+            }
+        }
+    }
+    
+    /// Fallback placement when stages are not available
+    fn place_components_in_power_path(&mut self) {
+        // This is the old stage-based approach, kept as fallback
         let num_stages = self.flow_analysis.signal_stages.len();
         if num_stages == 0 {
             self.place_fallback();
