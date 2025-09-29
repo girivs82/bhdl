@@ -23,6 +23,7 @@ pub mod orthogonal_router;
 pub mod placement_rules;
 pub mod signal_flow_analyzer;
 pub mod intelligent_placer;
+pub mod template_visualizer;
 
 // Re-export main types
 pub use renderer::CircuitRenderer;
