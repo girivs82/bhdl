@@ -48,6 +48,7 @@ pub mod topology;
 pub mod strategies;
 pub mod integrated_glacier_solver;
 pub mod stdlib_model_loader;
+pub mod intent_handler;
 
 // Production GLACIER+MAESTRO implementation
 pub mod glacier_production;
@@ -103,6 +104,11 @@ pub use maestro_production::{
     CircuitPattern,
     SolvingStrategy,
     solve_with_glacier_maestro,
+};
+pub use intent_handler::{
+    SpiceAnalysisScope, AnalysisHint, AnalysisConfiguration,
+    determine_spice_scope, filter_for_spice_analysis, should_analyze_with_spice,
+    get_analysis_configuration,
 };
 
 /// Prelude module for convenient imports
