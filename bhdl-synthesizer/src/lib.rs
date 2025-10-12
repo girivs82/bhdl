@@ -95,6 +95,9 @@ pub mod predictive_analytics;
 // Manufacturing and assembly optimization (DFM/DFA)
 pub mod manufacturing_optimization;
 
+// Intent hint processor - applies synthesis hints to guide component selection
+pub mod intent_hint_processor;
+
 // Re-export key types
 pub use bhdl_analyzer::types::AnalysisResult;
 pub use bhdl_analyzer::component_inference::ParameterValue;
@@ -102,6 +105,10 @@ pub use bhdl_netlist::{Netlist, ModuleId, InstanceId, NetId, PortId, PinId, PinI
 pub use bhdl_netlist::types::{ModuleKind, PortDirection, PinDirection, PinType, ConnectionPoint, Unit, Quantity, NetClass};
 pub use bhdl_ast::{SourceFile, Board, Module, ComponentDef, HasName, AstNode, PinDecl};
 pub use component_mapping::{DatabaseComponentMapper, DatabaseComponentInstance, DatabaseMapperStats};
+pub use intent_hint_processor::{
+    IntentHintProcessor, ComponentRecommendation, ComponentPreference,
+    OptimizationPriority, ValidationResult,
+};
 
 /// Configuration for netlist generation
 #[derive(Debug, Clone)]
@@ -444,7 +451,12 @@ impl NetlistGenerator {
         
         // Phase 2.5: Generate connections for supporting components (virtual pin expansion)
         self.generate_supporting_component_connections(analysis)?;
-        
+
+        // Phase 2.7: Process power domain expansion (Phase 1: Scalability)
+        info!("Phase 2.7: Processing power domain expansion...");
+        self.process_power_domain_expansion(analysis)?;
+        info!("Phase 2.7 complete: Power domain expansion processed");
+
         // Phase 3: Synthesize interface instances BEFORE connectivity extraction
         // This ensures interface signal nets exist before connections are processed
         self.synthesize_interfaces(analysis)?;
@@ -1857,6 +1869,160 @@ impl NetlistGenerator {
     }
 
     /// Include power domain information from analysis
+    /// Process power domain expansion results (Phase 1: Scalability)
+    fn process_power_domain_expansion(&mut self, analysis: &AnalysisResult) -> Result<()> {
+        info!("Processing power domain expansion (Phase 2: Scalability Integration)");
+
+        let expansion = &analysis.power_domain_expansion;
+
+        // Get or create GND net for capacitor connections
+        let gnd_net_id = if let Some(&net_id) = self.ast_to_net.get("GND") {
+            net_id
+        } else {
+            let net_id = self.netlist.add_net_with_class(
+                Some("GND".to_string()),
+                bhdl_netlist::types::NetClass::Ground
+            );
+            self.ast_to_net.insert("GND".to_string(), net_id);
+            net_id
+        };
+
+        // Process expanded power distribution connections
+        for connection in &expansion.connections {
+            info!("  Power connection: @{} -> {}.{}",
+                  connection.source_net, connection.component, connection.pin);
+
+            // Get or create the source net
+            let source_net_id = if let Some(&net_id) = self.ast_to_net.get(&connection.source_net) {
+                net_id
+            } else {
+                // Create the net with appropriate class
+                let net_id = self.netlist.add_net_with_class(
+                    Some(connection.source_net.clone()),
+                    bhdl_netlist::types::NetClass::Power(3.3) // Default voltage, should be from domain spec
+                );
+                self.ast_to_net.insert(connection.source_net.clone(), net_id);
+                net_id
+            };
+
+            // Get the component instance
+            if let Some(&instance_id) = self.ast_to_instance.get(&connection.component) {
+                // Find the pin instance for this component's pin
+                if let Some(pin_inst_id) = self.netlist.find_pin_instance(instance_id, &connection.pin) {
+                    // Connect the power net to this pin instance
+                    if let Err(e) = self.netlist.connect(source_net_id, ConnectionPoint::PinInstance(pin_inst_id)) {
+                        debug!("  Failed to connect power to {}.{}: {}", connection.component, connection.pin, e);
+                    } else {
+                        debug!("  Connected: @{} -> {}.{}", connection.source_net, connection.component, connection.pin);
+                    }
+                } else {
+                    debug!("  Pin instance not found for {}.{}", connection.component, connection.pin);
+                }
+            } else {
+                debug!("  Component instance not yet created: {}", connection.component);
+            }
+        }
+
+        // Create capacitor module definition with proper pins if not exists
+        let cap_module_id = if let Some(&module_id) = self.ast_to_module.get("Capacitor") {
+            module_id
+        } else {
+            // Create the Capacitor module with + and - pins
+            let module_id = self.netlist.add_module(
+                "Capacitor".to_string(),
+                bhdl_netlist::types::ModuleKind::Component
+            );
+
+            // Add pins to the capacitor module
+            self.netlist.add_pin(
+                module_id,
+                "+".to_string(),
+                bhdl_netlist::types::PinDirection::InOut,
+                bhdl_netlist::types::PinType::Power
+            );
+            self.netlist.add_pin(
+                module_id,
+                "-".to_string(),
+                bhdl_netlist::types::PinDirection::InOut,
+                bhdl_netlist::types::PinType::Ground
+            );
+
+            self.ast_to_module.insert("Capacitor".to_string(), module_id);
+            debug!("Created Capacitor module with + and - pins");
+            module_id
+        };
+
+        // Process decoupling capacitors
+        for cap in &expansion.decoupling_caps {
+            info!("  Decoupling capacitor: {} = {}", cap.instance_name, cap.value);
+
+            // Create an instance of the capacitor
+            if let Some(inst_id) = self.netlist.add_instance(
+                cap.instance_name.clone(),
+                cap_module_id
+            ) {
+                self.ast_to_instance.insert(cap.instance_name.clone(), inst_id);
+
+                // Create pin instances for this capacitor
+                if let Ok(pin_instances) = self.netlist.create_pin_instances(inst_id) {
+                    debug!("  Created {} pin instances for {}", pin_instances.len(), cap.instance_name);
+
+                    // Find the power net to connect to
+                    // Assumption: All decoupling caps connect to the same power domain that generated them
+                    // In a real implementation, we'd need to track which domain each cap belongs to
+                    let power_net_id = if let Some(first_conn) = expansion.connections.first() {
+                        self.ast_to_net.get(&first_conn.source_net).copied()
+                    } else {
+                        None
+                    };
+
+                    if let Some(power_net) = power_net_id {
+                        // Connect capacitor + pin to power net
+                        if let Some(plus_pin_inst) = self.netlist.find_pin_instance(inst_id, "+") {
+                            if let Err(e) = self.netlist.connect(power_net, ConnectionPoint::PinInstance(plus_pin_inst)) {
+                                debug!("  Failed to connect {} + pin to power: {}", cap.instance_name, e);
+                            } else {
+                                debug!("  Connected {} + pin to power net", cap.instance_name);
+                            }
+                        }
+
+                        // Connect capacitor - pin to GND
+                        if let Some(minus_pin_inst) = self.netlist.find_pin_instance(inst_id, "-") {
+                            if let Err(e) = self.netlist.connect(gnd_net_id, ConnectionPoint::PinInstance(minus_pin_inst)) {
+                                debug!("  Failed to connect {} - pin to GND: {}", cap.instance_name, e);
+                            } else {
+                                debug!("  Connected {} - pin to GND", cap.instance_name);
+                            }
+                        }
+                    } else {
+                        debug!("  No power net found for capacitor connections");
+                    }
+
+                    // Store capacitor value as instance attribute
+                    if let Some(instance) = self.netlist.instances.get_mut(inst_id) {
+                        instance.attributes.insert("value".to_string(), cap.value.clone());
+                        if let Some(ref near_comp) = cap.near_component {
+                            instance.attributes.insert("placement".to_string(), format!("near {}", near_comp));
+                            info!("    Placement: near {}", near_comp);
+                        } else if cap.is_distributed {
+                            instance.attributes.insert("placement".to_string(), "distributed".to_string());
+                            info!("    Placement: distributed");
+                        }
+                    }
+                } else {
+                    warn!("  Failed to create pin instances for {}", cap.instance_name);
+                }
+            } else {
+                warn!("Failed to create capacitor instance: {}", cap.instance_name);
+            }
+        }
+
+        info!("Power domain expansion complete: {} connections, {} decoupling caps",
+              expansion.connections.len(), expansion.decoupling_caps.len());
+
+        Ok(())
+    }
+
     fn include_power_domain_info(&mut self, analysis: &AnalysisResult) -> Result<()> {
         debug!("Including power domain information");
 
