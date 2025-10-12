@@ -8,6 +8,7 @@ pub mod analog;
 pub mod digital;
 pub mod measurement;
 pub mod development;
+pub mod safety;
 
 use bhdl_common::{IntentRegistry, IntentFunction};
 
@@ -42,4 +43,10 @@ pub fn register_stdlib_intents(registry: &mut IntentRegistry) {
 
     // Register development intents
     registry.register(Box::new(development::DebugOnlyIntent));
+
+    // Register safety intents
+    registry.register(Box::new(safety::AutomotiveSafetyIntent));
+    registry.register(Box::new(safety::IndustrialControlIntent));
+    registry.register(Box::new(safety::MedicalSafetyIntent));
+    registry.register(Box::new(safety::EsdProtectionIntent));
 }
