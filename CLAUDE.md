@@ -16,7 +16,12 @@ BHDL (Board Hardware Description Language) is a domain-specific language for des
 - `cargo clippy` - Run linter for code quality
 
 ### Running Tools
-- `cargo run -p bhdl-cli` - Run the CLI tool (currently placeholder)
+- `cargo run -p bhdl-cli --bin bhdl-cli <circuit.bhdl> <command>` - Run the CLI tool
+  - `doc` - Generate power domain documentation (see `docs/cli/DOC_COMMAND.md`)
+  - `parse` - Parse and validate BHDL syntax
+  - `analyze` - Run semantic analysis
+  - `synthesize` - Generate netlist
+  - `visualize` - Create circuit visualization
 - `cargo run -p bhdl-visualizer` - Run the visualizer
 - `cargo run -p bhdl-visualizer --bin <binary>` - Run specific visualizer binary
 
@@ -37,16 +42,22 @@ The toolchain follows a multi-stage pipeline:
    - Provides high-level wrappers around syntax nodes
    - Key types: `SourceFile`, `Board`, `Module`, `ComponentDef`
 
-3. **bhdl-analyzer**: Multi-pass semantic analysis (8 passes)
+3. **bhdl-analyzer**: Multi-pass semantic analysis (11 passes)
    - Pass 1: Build scopes and collect definitions
-   - Pass 2: Resolve references and type checking  
+   - Pass 1.25: Early component instance registry (NEW - scalability)
+   - Pass 1.5: Power domain expansion with wildcards/ranges (NEW - scalability)
+   - Pass 2: Resolve references and type checking
    - Pass 3: Constant evaluation
    - Pass 4: Bounds checking and validation
    - Pass 5: Power domain analysis
    - Pass 6: Component inference
-   - Pass 7: Netlist synthesis
-   - Pass 8: Electrical safety analysis (DC + safety checks)
-   - Outputs symbol tables, diagnostics, and netlist
+   - Pass 6.5: SPICE synthesis
+   - Pass 7: Power sequencing
+   - Pass 8: Attribute analysis
+   - Pass 9: Flow tracking and intent resolution
+   - Pass 10: Unified simulation
+   - Pass 11: Safety analysis
+   - Outputs symbol tables, diagnostics, netlist, and expanded power domains
 
 4. **bhdl-netlist**: Structural circuit representation
    - Core types: `Netlist`, `ModuleDefinition`, `Instance`, `Net`
@@ -79,7 +90,12 @@ The toolchain follows a multi-stage pipeline:
 
 9. **bhdl-common**: Shared utilities and types (future)
 
-10. **bhdl-cli**: Command-line interface (placeholder)  
+10. **bhdl-cli**: Command-line interface
+   - Parse, analyze, synthesize, and visualize commands
+   - **Power domain documentation generation** (NEW - Oct 12, 2025)
+   - Supports multiple output formats and specialized modes
+   - See `docs/cli/DOC_COMMAND.md` for documentation command details
+
 11. **bhdl-lsp**: Language Server Protocol for IDE integration (placeholder)
 
 ### Key Data Structures
@@ -235,6 +251,7 @@ Common SVG issues to watch for:
 - ✅ Conditional pins: `pin EN: signal in when condition;`
 - ✅ Module aliases: `alias 7805 = LM7805;`
 - ✅ Destructuring imports: `import { A, B } from "file.bhdl";`
+- ✅ Numeric pin references: `resistor.1`, `capacitor.2` (2025-10-12)
 
 **Migration Notes:**
 - Old v1.0 examples moved to `docs/examples/old_syntax/` for reference
@@ -278,6 +295,29 @@ This ensures we build a robust, production-ready toolchain rather than a demo wi
    - Visible in symbol table like regular nets
    - Supports voltage, current, tolerance, and control properties
    - Electrical unit conversion (mA→A, mV→V, kΩ→Ω, etc.)
+
+13. **Power Domain Scalability Features** (2025-10-11): ✅ COMPLETED
+   - **Pass 1.25**: Early Component Instance Registry
+     - Scans AST before power domain expansion
+     - Registers all component instances (sensor_0, sensor_1, etc.)
+     - Enables wildcard pattern matching for bulk operations
+   - **Pass 1.5 Enhancements**: Power Domain Expansion with scalability
+     - **Wildcard expansion**: `sensor[*].VCC` → expands to all matching instances
+     - **Range expansion**: `fpga.VCCO[0..7]` → expands to 8 indexed pins
+     - **Decoupling generation**: Automatic capacitor instantiation with placement constraints
+   - Reduces verbosity by 10-100x for large designs
+   - See `docs/implementation/Power_Domain_Scalability_Implementation.md` for details
+   - Test: `cargo run -p bhdl-analyzer --bin test_scalability_comprehensive`
+
+14. **Enhanced Documentation Generation** (2025-10-12): ✅ COMPLETED
+   - Automatic Markdown documentation for power domains
+   - **5 comprehensive sections**: voltage summary, power tree, BOM, budget analysis, connection summary
+   - **Pattern detection**: Shows wildcard/range expansions
+   - **Capacitance parsing**: Smart unit conversion (pF/nF/µF/mF/F)
+   - **CLI integration**: `bhdl circuit.bhdl doc` command with multiple modes
+   - **Flexible output**: Full docs, BOM-only, budget-only modes
+   - See `docs/cli/DOC_COMMAND.md` and `docs/examples/documentation_usage.md`
+   - Test: `cargo run -p bhdl-analyzer --bin test_documentation_generation`
 
 ### Recent Major Advances (Previous)
 1. **Complete SPICE Analysis Integration**: Implemented Newton-Raphson nonlinear solver
@@ -359,6 +399,8 @@ This ensures we build a robust, production-ready toolchain rather than a demo wi
 - Parser support for keyword-value pairs in component instantiation
 
 ### Test Commands
+- `cargo run -p bhdl-analyzer --bin test_scalability_comprehensive` - Test power domain scalability features
+- `cargo run -p bhdl-synthesizer --bin test_scalability_pipeline_simple` - Test scalability through full pipeline
 - `cargo run -p bhdl-synthesizer --bin test_7805_realistic` - Test net assignment handling
 - `cargo run --bin test_pipeline_7805` - Test 7805 regulator circuit through pipeline
 - `cargo run --bin end_to_end_test` - Run complete end-to-end test
