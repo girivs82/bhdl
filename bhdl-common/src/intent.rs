@@ -49,7 +49,7 @@ pub struct IntentResult {
 }
 
 /// Hints for synthesis tools
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SynthesisHint {
     BufferChain,
     RCNetwork,
@@ -145,6 +145,11 @@ impl IntentRegistry {
     /// Get all registered intent names
     pub fn registered_intents(&self) -> Vec<&str> {
         self.functions.keys().map(|s| s.as_str()).collect()
+    }
+
+    /// Get an intent function by name
+    pub fn get(&self, name: &str) -> Option<&dyn IntentFunction> {
+        self.functions.get(name).map(|b| &**b as &dyn IntentFunction)
     }
 }
 
