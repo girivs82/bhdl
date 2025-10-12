@@ -114,6 +114,7 @@ impl<'t> Parser<'t> {
                 Some(SyntaxKind::CONST_KW) => self.parse_const_decl(),
                 Some(SyntaxKind::POWER_KW) => self.parse_power_decl(),
                 Some(SyntaxKind::GROUND_KW) => self.parse_ground_decl(),
+                Some(SyntaxKind::POWER_DOMAIN_KW) => self.parse_power_domain_def(),
                 Some(SyntaxKind::NET_KW) => self.parse_net_flow_stmt(),
                 Some(SyntaxKind::GENERATE_KW) => self.parse_generate_block(),
                 Some(SyntaxKind::ATTRIBUTE_KW) => self.parse_attribute_decl(),
@@ -953,6 +954,390 @@ impl<'t> Parser<'t> {
             }
         }
         
+        self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
+    // Parse power domain definition (Phase 1: Scalability)
+    // Syntax: power_domain @VCC_3V3 = 3.3V @ 10A { sources { ... } distribution { ... } ... }
+    pub(crate) fn parse_power_domain_def(&mut self) {
+        self.builder.start_node(SyntaxKind::POWER_DOMAIN_DEF.into());
+        self.expect(SyntaxKind::POWER_DOMAIN_KW);
+
+        // Expect @ prefix for net name
+        self.expect(SyntaxKind::AT);
+        self.expect(SyntaxKind::IDENT);
+
+        // Power spec: = 3.3V @ 10A
+        self.expect(SyntaxKind::EQ);
+        self.parse_expression(); // voltage
+        self.expect(SyntaxKind::AT);
+        self.parse_expression(); // current
+
+        // Body
+        self.expect(SyntaxKind::L_BRACE);
+
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) => break,
+                Some(SyntaxKind::SOURCES_KW) => self.parse_sources_block(),
+                Some(SyntaxKind::DISTRIBUTION_KW) => self.parse_distribution_block(),
+                Some(SyntaxKind::DECOUPLING_KW) => self.parse_decoupling_block(),
+                Some(SyntaxKind::CONSTRAINTS_KW) => self.parse_constraints_block(),
+                Some(_) => {
+                    self.error("Expected sources, distribution, decoupling, or constraints in power domain".to_string());
+                    self.bump_any();
+                }
+                None => {
+                    self.error("Unexpected end of file in power domain definition".to_string());
+                    break;
+                }
+            }
+        }
+
+        self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
+    // Parse sources block: sources { reg1: LDO_3V3().OUT; }
+    fn parse_sources_block(&mut self) {
+        self.builder.start_node(SyntaxKind::SOURCES_BLOCK.into());
+        self.expect(SyntaxKind::SOURCES_KW);
+        self.expect(SyntaxKind::L_BRACE);
+
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) => break,
+                Some(SyntaxKind::IDENT) => {
+                    self.parse_source_definition();
+                }
+                Some(_) => {
+                    self.error("Expected source definition in sources block".to_string());
+                    self.bump_any();
+                }
+                None => {
+                    self.error("Unexpected end of file in sources block".to_string());
+                    break;
+                }
+            }
+        }
+
+        self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
+    // Parse single source definition: handle: Component().pin;
+    fn parse_source_definition(&mut self) {
+        self.builder.start_node(SyntaxKind::SOURCE_DEFINITION.into());
+
+        // Handle name
+        self.expect(SyntaxKind::IDENT);
+        self.expect(SyntaxKind::COLON);
+
+        // Component instantiation: Type(params)
+        self.expect(SyntaxKind::IDENT); // Component type
+        if self.peek() == Some(SyntaxKind::L_PAREN) {
+            self.parse_param_list_expr();
+        }
+
+        // Pin reference: .OUT
+        self.expect(SyntaxKind::DOT);
+        self.expect(SyntaxKind::IDENT); // Pin name
+
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+
+    // Parse distribution block: distribution { fpga.VCCO[0..7]; ics[*].VDD; }
+    fn parse_distribution_block(&mut self) {
+        self.builder.start_node(SyntaxKind::DISTRIBUTION_BLOCK.into());
+        self.expect(SyntaxKind::DISTRIBUTION_KW);
+        self.expect(SyntaxKind::L_BRACE);
+
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) => break,
+                Some(SyntaxKind::IDENT) => {
+                    self.parse_distribution_pin_list();
+                }
+                Some(_) => {
+                    self.error("Expected pin reference in distribution block".to_string());
+                    self.bump_any();
+                }
+                None => {
+                    self.error("Unexpected end of file in distribution block".to_string());
+                    break;
+                }
+            }
+        }
+
+        self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
+    // Parse distribution pin reference with support for hierarchical paths
+    // Examples:
+    //   fpga.VCCO[0..7];                    // simple with range
+    //   ics[*].VDD;                         // simple with wildcard
+    //   sensor_board[*].sensor.VCC;         // hierarchical with wildcard
+    //   array.*sensor.VCC;                  // hierarchical with bare wildcard
+    fn parse_distribution_pin_list(&mut self) {
+        self.builder.start_node(SyntaxKind::DISTRIBUTION_PIN_LIST.into());
+
+        // Parse first path segment
+        self.parse_path_segment();
+
+        // Parse additional path segments (for hierarchical paths)
+        // Keep parsing: . IDENT [wildcard|array]
+        while self.peek() == Some(SyntaxKind::DOT) {
+            self.bump(); // Consume dot
+
+            // Check for bare wildcard: .*sensor
+            if self.peek() == Some(SyntaxKind::STAR) {
+                self.bump(); // Consume star
+            }
+
+            // Parse next segment identifier or number (for numeric pins like .1, .2)
+            if self.peek() == Some(SyntaxKind::IDENT) || self.peek() == Some(SyntaxKind::NUMBER) {
+                self.bump();
+            } else {
+                self.error("Expected pin name or number after dot".to_string());
+            }
+
+            // Optional array/wildcard/pattern on this segment
+            if self.peek() == Some(SyntaxKind::L_BRACKET) {
+                self.bump(); // [
+                self.parse_bracket_contents();
+                self.expect(SyntaxKind::R_BRACKET);
+            }
+        }
+
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+
+    // Parse a single path segment: IDENT [wildcard|array|pattern]?
+    fn parse_path_segment(&mut self) {
+        // Path segment identifier
+        self.expect(SyntaxKind::IDENT);
+
+        // Optional array/wildcard/pattern: [0..7] or [*] or [even] or [0,2,4] or [0..7:2]
+        if self.peek() == Some(SyntaxKind::L_BRACKET) {
+            self.bump(); // [
+
+            self.parse_bracket_contents();
+
+            self.expect(SyntaxKind::R_BRACKET);
+        }
+    }
+
+    // Parse contents of brackets: wildcard, keyword, range, list, or stepped range
+    fn parse_bracket_contents(&mut self) {
+        if self.peek() == Some(SyntaxKind::STAR) {
+            // Wildcard: [*]
+            self.bump();
+        } else if self.peek() == Some(SyntaxKind::IDENT) {
+            // Check for keywords: even, odd
+            let checkpoint = self.builder.checkpoint();
+
+            // Peek at the identifier text
+            let ident_text = if self.pos < self.tokens.len() {
+                self.tokens[self.pos].1.as_str()
+            } else {
+                ""
+            };
+
+            if ident_text == "even" || ident_text == "odd" {
+                // Pattern keyword
+                self.builder.start_node_at(checkpoint, SyntaxKind::PATTERN_KEYWORD.into());
+                self.bump(); // Consume keyword
+                self.builder.finish_node();
+            } else {
+                self.error(format!("Unknown pattern keyword '{}'", ident_text));
+                self.bump(); // Consume the invalid identifier
+            }
+        } else {
+            // Range, list, or stepped range
+            self.parse_pattern_range_or_list();
+        }
+    }
+
+    // Parse pattern range or list: [0..7] or [0,2,4] or [0..7:2]
+    fn parse_pattern_range_or_list(&mut self) {
+        self.builder.start_node(SyntaxKind::PATTERN_INDICES.into());
+
+        // Parse first expression
+        self.parse_expression();
+
+        // Check what follows
+        match self.peek() {
+            Some(SyntaxKind::DOT_DOT) => {
+                // Range: [0..7] or [0..7:2]
+                self.bump(); // ..
+                self.parse_expression(); // End
+
+                // Check for step
+                if self.peek() == Some(SyntaxKind::COLON) {
+                    self.bump(); // :
+                    self.parse_expression(); // Step
+                }
+            }
+            Some(SyntaxKind::COMMA) => {
+                // List: [0,2,4,8]
+                while self.peek() == Some(SyntaxKind::COMMA) {
+                    self.bump(); // ,
+                    self.parse_expression(); // Next index
+                }
+            }
+            _ => {
+                // Single index: [5]
+            }
+        }
+
+        self.builder.finish_node();
+    }
+
+    // Parse decoupling block: decoupling { near fpga: [10µF @ 5]; distributed: [0.1µF @ 50]; }
+    fn parse_decoupling_block(&mut self) {
+        self.builder.start_node(SyntaxKind::DECOUPLING_BLOCK.into());
+        self.expect(SyntaxKind::DECOUPLING_KW);
+        self.expect(SyntaxKind::L_BRACE);
+
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) => break,
+                Some(SyntaxKind::NEAR_KW) | Some(SyntaxKind::DISTRIBUTED_KW) => {
+                    self.parse_decoupling_rule();
+                }
+                Some(_) => {
+                    self.error("Expected 'near' or 'distributed' in decoupling block".to_string());
+                    self.bump_any();
+                }
+                None => {
+                    self.error("Unexpected end of file in decoupling block".to_string());
+                    break;
+                }
+            }
+        }
+
+        self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
+    // Parse decoupling rule: near fpga: [10µF @ 5, 1µF @ 10]; or distributed: [0.1µF @ 50];
+    fn parse_decoupling_rule(&mut self) {
+        self.builder.start_node(SyntaxKind::DECOUPLING_RULE.into());
+
+        // Placement: near <component> or distributed
+        if self.peek() == Some(SyntaxKind::NEAR_KW) {
+            self.bump(); // near
+
+            // Optional 'each' keyword: near each fpga.VCCO[0..3]
+            if self.peek() == Some(SyntaxKind::EACH_KW) {
+                self.bump(); // each
+            }
+
+            // Component reference
+            self.expect(SyntaxKind::IDENT);
+
+            // Optional pin reference with dots and arrays
+            while self.peek() == Some(SyntaxKind::DOT) {
+                self.bump(); // .
+                self.expect(SyntaxKind::IDENT); // pin name
+
+                // Optional array indexing on pin: .VCCO[0..3]
+                if self.peek() == Some(SyntaxKind::L_BRACKET) {
+                    self.bump(); // [
+                    if self.peek() == Some(SyntaxKind::STAR) {
+                        self.bump(); // *
+                    } else {
+                        self.parse_expression(); // Start index
+                        if self.peek() == Some(SyntaxKind::DOT_DOT) {
+                            self.bump(); // ..
+                            self.parse_expression(); // End index
+                        }
+                    }
+                    self.expect(SyntaxKind::R_BRACKET);
+                }
+            }
+        } else if self.peek() == Some(SyntaxKind::DISTRIBUTED_KW) {
+            self.bump(); // distributed
+        }
+
+        self.expect(SyntaxKind::COLON);
+
+        // Capacitor list: 10µF @ 5, 1µF @ 10 (no brackets)
+        loop {
+            self.skip_trivia();
+
+            // Check if we've reached the semicolon
+            if self.peek() == Some(SyntaxKind::SEMI) {
+                break;
+            }
+
+            // Parse capacitor spec: 10µF @ 5
+            self.parse_cap_spec();
+
+            // Optional comma
+            if self.peek() == Some(SyntaxKind::COMMA) {
+                self.bump();
+            } else if self.peek() != Some(SyntaxKind::SEMI) {
+                // If not comma and not semicolon, something went wrong
+                self.error("Expected ',' or ';' after capacitor specification".to_string());
+                break;
+            }
+        }
+
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+
+    // Parse capacitor specification: 10µF @ 5 (value @ count)
+    fn parse_cap_spec(&mut self) {
+        self.builder.start_node(SyntaxKind::CAP_SPEC.into());
+
+        // Capacitance value: 10µF
+        self.parse_expression();
+
+        // @ count
+        self.expect(SyntaxKind::AT);
+        self.parse_expression(); // count
+
+        self.builder.finish_node();
+    }
+
+    // Parse constraints block: constraints { max_voltage_drop: 50mV; }
+    fn parse_constraints_block(&mut self) {
+        self.builder.start_node(SyntaxKind::CONSTRAINTS_KW.into()); // Use CONSTRAINTS_KW as block node
+        self.expect(SyntaxKind::CONSTRAINTS_KW);
+        self.expect(SyntaxKind::L_BRACE);
+
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) => break,
+                Some(SyntaxKind::IDENT) => {
+                    // Constraint item: name: value;
+                    self.expect(SyntaxKind::IDENT); // Constraint name
+                    self.expect(SyntaxKind::COLON);
+                    self.parse_expression(); // Constraint value
+                    self.expect(SyntaxKind::SEMI);
+                }
+                Some(_) => {
+                    self.error("Expected constraint name in constraints block".to_string());
+                    self.bump_any();
+                }
+                None => {
+                    self.error("Unexpected end of file in constraints block".to_string());
+                    break;
+                }
+            }
+        }
+
         self.expect(SyntaxKind::R_BRACE);
         self.builder.finish_node();
     }

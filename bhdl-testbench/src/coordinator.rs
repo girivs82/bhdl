@@ -372,6 +372,9 @@ impl TestbenchRunner {
                                     forward_voltage,
                                     forward_current,
                                     dynamic_resistance,
+                                    saturation_current: Some(3.96e-19),  // Typical value for LED
+                                    emission_coefficient: Some(1.8),      // Typical LED ideality factor
+                                    thermal_voltage: Some(0.026),         // Room temperature Vt
                                     limits: ElectricalLimits {
                                         max_current,
                                         ..Default::default()
@@ -679,6 +682,9 @@ impl TestbenchRunner {
                                 forward_voltage,
                                 forward_current,
                                 dynamic_resistance,
+                                saturation_current: Some(3.96e-19),  // Typical value for LED
+                                emission_coefficient: Some(1.8),      // Typical LED ideality factor
+                                thermal_voltage: Some(0.026),         // Room temperature Vt
                                 limits: ElectricalLimits::default()
                             })
                         }
@@ -719,6 +725,9 @@ impl TestbenchRunner {
                             forward_voltage: 2.0,
                             forward_current: 0.02,
                             dynamic_resistance: 10.0,
+                            saturation_current: Some(3.96e-19),  // Typical value for LED
+                            emission_coefficient: Some(1.8),      // Typical LED ideality factor
+                            thermal_voltage: Some(0.026),         // Room temperature Vt
                             limits: ElectricalLimits::default()
                         })
                     } else {

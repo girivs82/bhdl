@@ -243,7 +243,8 @@ impl<'a> StateInspector<'a> {
             RuntimeValue::Real(r) => format!("{:.6}", r),
             RuntimeValue::String(s) => s.clone(),
             RuntimeValue::Boolean(b) => b.to_string(),
-            // Array and Struct not implemented in RuntimeValue yet
+            RuntimeValue::Array(items) => format!("[{} items]", items.len()),
+            RuntimeValue::Object(fields) => format!("{{ {} fields }}", fields.len()),
         }
     }
 }

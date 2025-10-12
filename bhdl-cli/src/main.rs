@@ -18,7 +18,7 @@ use log::info;
 
 use bhdl_parser::parse;
 use bhdl_ast::{SourceFile, AstNode, HasName};
-use bhdl_analyzer::{analyze};
+use bhdl_analyzer::{analyze, documentation::{generate_documentation, DocumentationOptions, OutputFormat}};
 use bhdl_synthesizer::NetlistGenerator;
 use bhdl_visualizer::{render_circuit_with_analysis};
 use bhdl_spice::{ComponentRoleDetector, NetlistToSpiceConverter, SpiceAnalysisAugmenter};
@@ -122,18 +122,41 @@ enum Commands {
         /// Testbench file
         #[arg(short, long)]
         testbench: PathBuf,
-        
+
         /// Output directory for simulation results
         #[arg(short, long, default_value = "./sim_results")]
         output: PathBuf,
-        
+
         /// Waveform format (vcd, csv, json)
         #[arg(short, long, default_value = "vcd")]
         format: String,
-        
+
         /// Show real-time progress
         #[arg(long)]
         verbose: bool,
+    },
+
+    /// Generate power domain documentation
+    Doc {
+        /// Output file path
+        #[arg(short, long, default_value = "power_domains.md")]
+        output: PathBuf,
+
+        /// Generate only Bill of Materials
+        #[arg(long)]
+        bom_only: bool,
+
+        /// Generate only power budget analysis
+        #[arg(long)]
+        budget_only: bool,
+
+        /// Disable power tree visualization
+        #[arg(long)]
+        no_tree: bool,
+
+        /// Disable pattern detection
+        #[arg(long)]
+        no_patterns: bool,
     },
 }
 
@@ -205,8 +228,12 @@ async fn main() -> Result<()> {
         Some(Commands::Simulate { testbench, output, format, verbose: _verbose }) => {
             run_simulation(&source_file, testbench, output, &format).await?;
         }
+
+        Some(Commands::Doc { output, bom_only, budget_only, no_tree, no_patterns }) => {
+            cmd_doc(&source_file, output, bom_only, budget_only, no_tree, no_patterns).await?;
+        }
     }
-    
+
     Ok(())
 }
 
@@ -650,6 +677,101 @@ async fn run_simulation(source_file: &SourceFile, testbench_path: PathBuf, outpu
     
     fs::write(&summary_path, serde_json::to_string_pretty(&summary)?)?;
     println!("  Summary saved to: {}", summary_path.display());
-    
+
+    Ok(())
+}
+
+async fn cmd_doc(
+    source_file: &SourceFile,
+    output: PathBuf,
+    bom_only: bool,
+    budget_only: bool,
+    no_tree: bool,
+    no_patterns: bool,
+) -> Result<()> {
+    println!("{}", "Generating power domain documentation...".bold());
+
+    // Step 1: Run analysis to get power domain expansion
+    println!("\n{}", "1. Analyzing circuit".blue().bold());
+    let analysis = analyze(source_file);
+
+    if !analysis.diagnostics.is_empty() {
+        eprintln!("{}", "Warning: Circuit has diagnostics".yellow());
+        for diag in &analysis.diagnostics {
+            eprintln!("  • {}", diag.message);
+        }
+    }
+
+    // Check if there are power domains to document
+    let expansion = &analysis.power_domain_expansion;
+    if expansion.connections.is_empty() && expansion.decoupling_caps.is_empty() {
+        eprintln!("{}", "Warning: No power domains found in circuit".yellow());
+        eprintln!("  Make sure your circuit defines power domains using:");
+        eprintln!("    power_domain @VCC_3V3 = 3.3V @ 1A {{ ... }}");
+        return Ok(());
+    }
+
+    // Count unique domains from connections
+    let domain_names: std::collections::HashSet<_> = expansion.connections
+        .iter()
+        .map(|conn| &conn.source_net)
+        .collect();
+
+    println!("  ✓ Found {} power domain(s)", domain_names.len());
+    println!("    Connections: {}", expansion.connections.len());
+    println!("    Capacitors: {}", expansion.decoupling_caps.len());
+
+    // Step 2: Configure documentation options based on flags
+    println!("\n{}", "2. Configuring documentation options".blue().bold());
+
+    // Handle mutually exclusive flags
+    let (include_bom, include_budget, include_connections, include_tree) = if bom_only {
+        println!("  Mode: BOM only");
+        (true, false, false, false)
+    } else if budget_only {
+        println!("  Mode: Budget analysis only");
+        (false, true, false, false)
+    } else {
+        println!("  Mode: Full documentation");
+        (true, true, true, !no_tree)
+    };
+
+    let options = DocumentationOptions {
+        format: OutputFormat::Markdown,
+        include_power_tree: include_tree,
+        include_bom,
+        include_budget,
+        include_connections,
+        include_summary: true, // Always include summary
+        show_patterns: !no_patterns,
+    };
+
+    // Step 3: Generate documentation
+    println!("\n{}", "3. Generating documentation".blue().bold());
+    let documentation = generate_documentation(expansion, options)
+        .context("Failed to generate documentation")?;
+
+    // Step 4: Write to output file
+    fs::write(&output, &documentation)
+        .with_context(|| format!("Failed to write to: {}", output.display()))?;
+
+    // Step 5: Print success summary
+    println!("\n{}", "✓ Documentation generated".green().bold());
+    println!("  Output: {}", output.display());
+    println!("  Size: {} bytes", documentation.len());
+
+    // Print section breakdown
+    let sections: Vec<&str> = documentation
+        .lines()
+        .filter(|line| line.starts_with("## "))
+        .collect();
+
+    if !sections.is_empty() {
+        println!("  Sections:");
+        for section in sections {
+            println!("    • {}", section.trim_start_matches("## "));
+        }
+    }
+
     Ok(())
 }
