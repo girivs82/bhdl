@@ -1,0 +1,141 @@
+// Example 2: Multi-LED Board with Wildcards
+//
+// This example demonstrates wildcard expansion for repetitive components.
+//
+// Features demonstrated:
+// - Wildcard pattern matching
+// - Array-like component naming
+// - Efficient power distribution
+//
+// Difficulty: ⭐⭐ Intermediate
+
+board MultiLEDBoard {
+    // Power supply
+    regulator: LDO_Regulator();
+
+    // 8 status LEDs with consistent naming pattern
+    // The _N suffix enables wildcard matching
+    led_0: LED(red);
+    led_1: LED(red);
+    led_2: LED(yellow);
+    led_3: LED(yellow);
+    led_4: LED(green);
+    led_5: LED(green);
+    led_6: LED(blue);
+    led_7: LED(blue);
+
+    // Current limiting resistors
+    res_0: Resistor(330);
+    res_1: Resistor(330);
+    res_2: Resistor(330);
+    res_3: Resistor(330);
+    res_4: Resistor(330);
+    res_5: Resistor(330);
+    res_6: Resistor(330);
+    res_7: Resistor(330);
+
+    // Power domain with wildcard expansion
+    power_domain @VCC_3V3 = 3.3V @ 1A {
+        distribution {
+            // Single component reference
+            regulator.VOUT;
+
+            // Wildcard: [*] matches all instances with same base name
+            // This expands to: led_0.A, led_1.A, ..., led_7.A
+            led[*].A;
+
+            // Another wildcard for all resistors
+            // Expands to: res_0.VCC, res_1.VCC, ..., res_7.VCC
+            res[*].VCC;
+        }
+
+        decoupling {
+            // Bulk capacitor near regulator
+            near regulator: 10µF @ 1;
+
+            // High-frequency decoupling across the board
+            distributed: 100nF @ 4;
+        }
+    }
+
+    ground GND;
+}
+
+// ============================================================================
+// Expected Output:
+// ============================================================================
+//
+// Connections: 17
+//   @VCC_3V3 → regulator.VOUT (1 connection)
+//   @VCC_3V3 → led_*.A (8 connections via wildcard)
+//   @VCC_3V3 → res_*.VCC (8 connections via wildcard)
+//
+// Decoupling Capacitors: 5
+//   C_DECOUP_1: 10µF (near regulator)
+//   C_DECOUP_2-5: 100nF (distributed)
+//
+// ============================================================================
+// Wildcard Pattern Matching:
+// ============================================================================
+//
+// Pattern: led[*].A
+//
+// Matches instances with naming patterns:
+//   - led_0, led_1, led_2, ... (underscore + number)
+//   - led0, led1, led2, ... (direct number)
+//   - led[0], led[1], led[2], ... (array notation)
+//
+// Benefits:
+//   ✓ Write once, connect many
+//   ✓ Easy to add/remove instances
+//   ✓ Maintainable for large designs
+//   ✓ No manual repetition
+//
+// ============================================================================
+// Comparison: With vs. Without Wildcards
+// ============================================================================
+//
+// WITHOUT WILDCARDS (verbose, error-prone):
+// distribution {
+//     led_0.A;
+//     led_1.A;
+//     led_2.A;
+//     led_3.A;
+//     led_4.A;
+//     led_5.A;
+//     led_6.A;
+//     led_7.A;
+// }
+//
+// WITH WILDCARDS (concise, maintainable):
+// distribution {
+//     led[*].A;
+// }
+//
+// Add 100 more LEDs? No change needed!
+//
+// ============================================================================
+// Tips:
+// ============================================================================
+//
+// 1. Naming Convention
+//    Use consistent patterns: component_0, component_1, ...
+//    Or: component0, component1, ...
+//    Or: component[0], component[1], ...
+//
+// 2. Base Name Matching
+//    The base name (before [*]) must match the component prefix.
+//    led[*] matches: led_0, led_1, led_2, ...
+//    sensor[*] matches: sensor_0, sensor_1, sensor_2, ...
+//
+// 3. Error Messages
+//    If wildcard finds no matches, you'll get helpful suggestions:
+//    "Did you mean 'led'? (found 8 instances: led_0, led_1, ...)"
+//
+// ============================================================================
+// Next Steps:
+// ============================================================================
+//
+// Learn more patterns:
+// - 03_sensor_array.bhdl - Range patterns for contiguous indices
+// - comprehensive_power_demo.bhdl - Advanced patterns (even/odd, lists, steps)

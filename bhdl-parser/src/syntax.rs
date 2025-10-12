@@ -23,6 +23,7 @@ pub enum SyntaxKind {
     L_BRACKET, // [
     R_BRACKET, // ]
     DOT,     // .
+    DOT_DOT, // ..
     COMMA,   // ,
     COLON,   // :
     SEMI,    // ;
@@ -148,6 +149,16 @@ pub enum SyntaxKind {
     TEST_SEQUENCES_KW,        // test_sequences
     MODEL_SELECTOR_KW,        // model_selector
 
+    // Scalability keywords (Phase 1: Power Domains)
+    POWER_DOMAIN_KW,   // power_domain
+    SOURCES_KW,        // sources
+    DISTRIBUTION_KW,   // distribution
+    DECOUPLING_KW,     // decoupling
+    NEAR_KW,           // near
+    EACH_KW,           // each
+    DISTRIBUTED_KW,    // distributed
+    CONSTRAINTS_KW,    // constraints (already exists but listing for clarity)
+
     // Nodes (Grammar rules)
     SOURCE_FILE,    // Root node
     IMPORT_STMT,    // import ...;
@@ -199,6 +210,20 @@ pub enum SyntaxKind {
     CONDITIONAL_STMT,   // if (...) { ... } else { ... }
     FLOW_STMT,          // name: flow_expr;
     FLOW_EXPR,          // flow expression with |> operators
+
+    // Power domain nodes (Phase 1: Scalability)
+    POWER_DOMAIN_DEF,       // power_domain @NAME = spec { ... }
+    SOURCES_BLOCK,          // sources { ... }
+    DISTRIBUTION_BLOCK,     // distribution { ... }
+    DECOUPLING_BLOCK,       // decoupling { ... }
+    DECOUPLING_RULE,        // near fpga: [caps] or distributed: [caps]
+    SOURCE_DEFINITION,      // component: Type().pin;
+    DISTRIBUTION_PIN_LIST,  // List of pins for distribution
+    CAP_SPEC,               // 10µF @ 5 (capacitor specification)
+
+    // Advanced pattern matching nodes (Phase 2: Advanced Patterns)
+    PATTERN_KEYWORD,        // "even" or "odd" in brackets
+    PATTERN_INDICES,        // Explicit list or stepped range
     
     // Individual statements for linear regulator syntax
     POWER_DECL,         // power VIN = 12V @ 2A;

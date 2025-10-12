@@ -458,7 +458,15 @@ impl LayoutEngine {
         
         for (net_id, netlist_net) in &netlist.nets {
             debug!("Routing net: {:?} ({:?})", netlist_net.name, net_id);
-            let mut net = Net::new(net_id, netlist_net.name.clone());
+
+            // Determine net type from netlist classification
+            let net_type = match &netlist_net.net_class {
+                bhdl_netlist::types::NetClass::Power(_) => crate::types::NetType::Power,
+                bhdl_netlist::types::NetClass::Ground => crate::types::NetType::Ground,
+                _ => crate::types::NetType::Signal,
+            };
+
+            let mut net = Net::with_type(net_id, netlist_net.name.clone(), net_type);
             
             // Collect connection points for this net
             let mut connection_points = Vec::new();

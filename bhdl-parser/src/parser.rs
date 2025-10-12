@@ -62,6 +62,7 @@ fn map_token(token: LexerToken) -> SyntaxKind {
         LexerToken::Comma => COMMA,
         LexerToken::Eq => EQ,
         LexerToken::Dot => DOT,
+        LexerToken::DotDot => DOT_DOT,
         LexerToken::Plus => PLUS,
         LexerToken::Minus => MINUS,
         LexerToken::Star => STAR,

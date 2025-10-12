@@ -1,0 +1,100 @@
+// Example 1: Simple LED Board
+//
+// This is a beginner-friendly example demonstrating basic power domain concepts.
+//
+// Features demonstrated:
+// - Simple power domain declaration
+// - Direct pin connections
+// - Basic decoupling capacitors
+// - Ground reference
+//
+// Difficulty: ⭐ Beginner
+
+board SimpleLEDBoard {
+    // Components
+    power_supply: PowerRegulator();
+    led_red: LED(red);
+    led_green: LED(green);
+    led_blue: LED(blue);
+    resistor_1: Resistor(330);
+    resistor_2: Resistor(330);
+    resistor_3: Resistor(330);
+
+    // Power domain: 5V supply for all components
+    power_domain @VCC_5V = 5V @ 500mA {
+        distribution {
+            // Connect power to each component
+            power_supply.VOUT;
+            led_red.VCC;
+            led_green.VCC;
+            led_blue.VCC;
+        }
+
+        // Add decoupling capacitors
+        decoupling {
+            // One 10µF capacitor near the power supply
+            near power_supply: 10µF @ 1;
+
+            // Small decoupling caps distributed across the board
+            distributed: 100nF @ 3;
+        }
+    }
+
+    // Ground reference for all components
+    ground GND;
+}
+
+// ============================================================================
+// Expected Output:
+// ============================================================================
+//
+// Connections: 4
+//   @VCC_5V → power_supply.VOUT
+//   @VCC_5V → led_red.VCC
+//   @VCC_5V → led_green.VCC
+//   @VCC_5V → led_blue.VCC
+//
+// Decoupling Capacitors: 4
+//   C_DECOUP_1: 10µF (near power_supply)
+//   C_DECOUP_2: 100nF (distributed)
+//   C_DECOUP_3: 100nF (distributed)
+//   C_DECOUP_4: 100nF (distributed)
+//
+// ============================================================================
+// Key Concepts:
+// ============================================================================
+//
+// 1. Power Domain Declaration
+//    power_domain @VCC_5V = 5V @ 500mA { ... }
+//
+//    The @ prefix indicates this is a net (power rail).
+//    Specify voltage (5V) and current capacity (500mA).
+//
+// 2. Distribution Block
+//    distribution { ... }
+//
+//    Lists all pins that connect to this power domain.
+//    Simple format: component.pin;
+//
+// 3. Decoupling Capacitors
+//    near component: value @ count;
+//    distributed: value @ count;
+//
+//    "near" places capacitors close to specific components.
+//    "distributed" spreads capacitors across the board.
+//
+// 4. Ground Reference
+//    ground GND;
+//
+//    Declares the ground net for the board.
+//
+// ============================================================================
+// Next Steps:
+// ============================================================================
+//
+// Ready to learn more? Try these examples in order:
+//
+// 02_multi_led_wildcards.bhdl - Learn wildcard expansion
+// 03_sensor_array.bhdl - Learn ranges and patterns
+// 04_multi_voltage_domains.bhdl - Learn multiple power domains
+// comprehensive_power_demo.bhdl - See all features together

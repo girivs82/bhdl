@@ -1,0 +1,236 @@
+// Comprehensive Integration Test: FPGA Development Board
+// Tests power domain expansion with 100+ pins across multiple voltage domains
+// Realistic scenario based on Xilinx Zynq-7000 / Intel Cyclone V FPGA boards
+
+board FPGADevBoard {
+    // ===== Component Declarations =====
+
+    // FPGA with multiple power domains
+    fpga: GenericFPGA();
+
+    // DDR3 Memory (2 chips for 64-bit bus)
+    ddr3_0: DDR3_RAM();
+    ddr3_1: DDR3_RAM();
+
+    // Peripheral ICs
+    flash: QSPIFlash();
+    ethernet_phy: GigabitPHY();
+    usb_hub: USB3Hub();
+
+    // Clock sources
+    main_oscillator: Crystal_25MHz();
+    rtc: Crystal_32kHz();
+
+    // Power regulators
+    pmic: PowerManagementIC();
+    ldo_1v0: LDO_1V0();
+    ldo_1v8: LDO_1V8();
+    ldo_2v5: LDO_2V5();
+    ldo_3v3: LDO_3V3();
+
+    // Debug interfaces
+    jtag_connector: JTAG_10pin();
+    uart_bridge: FT2232H();
+
+    // User peripherals
+    generate for i in 0..7 {
+        led_{i}: LED(color: "red");
+        led_resistor_{i}: Res(value: 470ohm);
+    }
+
+    generate for i in 0..3 {
+        button_{i}: PushButton();
+        button_pullup_{i}: Res(value: 10kohm);
+    }
+
+    // Expansion headers
+    generate for i in 0..1 {
+        pmod_{i}: PMODConnector();
+    }
+
+    // ===== Power Domain Declarations =====
+
+    // FPGA Core voltage (1.0V)
+    power_domain @VCCINT = 1.0V @ 10A {
+        distribution {
+            // FPGA core power pins (32 pins total)
+            fpga.VCCINT[0..31];
+        }
+
+        decoupling {
+            // Bulk capacitance near FPGA
+            near fpga: 220µF @ 2, 100µF @ 4;
+
+            // High-frequency decoupling at each pin
+            near each pin: 100nF @ 32;
+
+            // Distributed across board
+            distributed: 10µF @ 8, 1µF @ 16;
+        }
+    }
+
+    // FPGA Auxiliary voltage (1.8V)
+    power_domain @VCCAUX = 1.8V @ 3A {
+        distribution {
+            // FPGA auxiliary power (16 pins)
+            fpga.VCCAUX[0..15];
+
+            // Configuration memory
+            flash.VCC;
+        }
+
+        decoupling {
+            near fpga: 100µF @ 2, 47µF @ 2;
+            near each pin: 100nF @ 16;
+            near flash: 10µF, 100nF;
+            distributed: 10µF @ 4, 1µF @ 8;
+        }
+    }
+
+    // FPGA I/O Bank 0 (3.3V)
+    power_domain @VCCO_BANK0 = 3.3V @ 2A {
+        distribution {
+            // High-speed I/O bank for DDR3 interface
+            fpga.VCCO[0..11];
+        }
+
+        decoupling {
+            near fpga: 47µF @ 2;
+            near each pin: 100nF @ 12;
+            distributed: 10µF @ 2, 1µF @ 4;
+        }
+    }
+
+    // FPGA I/O Bank 1 (3.3V)
+    power_domain @VCCO_BANK1 = 3.3V @ 1.5A {
+        distribution {
+            // General purpose I/O
+            fpga.VCCO[12..23];
+        }
+
+        decoupling {
+            near fpga: 47µF @ 1;
+            near each pin: 100nF @ 12;
+            distributed: 10µF @ 2, 1µF @ 4;
+        }
+    }
+
+    // FPGA I/O Bank 2 (2.5V)
+    power_domain @VCCO_BANK2 = 2.5V @ 1A {
+        distribution {
+            // JTAG and configuration interface
+            fpga.VCCO[24..31];
+        }
+
+        decoupling {
+            near fpga: 47µF @ 1;
+            near each pin: 100nF @ 8;
+            distributed: 10µF @ 2, 1µF @ 4;
+        }
+    }
+
+    // DDR3 Memory voltage (1.5V)
+    power_domain @VDD_DDR = 1.5V @ 4A {
+        distribution {
+            // DDR3 core voltage (multiple pins per chip)
+            ddr3_0.VDD[0..7];
+            ddr3_1.VDD[0..7];
+        }
+
+        decoupling {
+            near ddr3_0: 100µF @ 2, 47µF @ 2, 10µF @ 4;
+            near ddr3_1: 100µF @ 2, 47µF @ 2, 10µF @ 4;
+            near each pin: 100nF @ 16;
+            distributed: 22µF @ 4;
+        }
+    }
+
+    // DDR3 Termination voltage (0.75V)
+    power_domain @VTT_DDR = 0.75V @ 1A {
+        distribution {
+            ddr3_0.VTT[0..1];
+            ddr3_1.VTT[0..1];
+        }
+
+        decoupling {
+            near ddr3_0: 47µF, 10µF @ 2;
+            near ddr3_1: 47µF, 10µF @ 2;
+            near each pin: 100nF @ 4;
+        }
+    }
+
+    // Main 3.3V rail for peripherals
+    power_domain @VCC_3V3 = 3.3V @ 5A {
+        distribution {
+            // Ethernet PHY
+            ethernet_phy.VCC[0..3];
+
+            // USB Hub
+            usb_hub.VCC[0..1];
+
+            // UART bridge
+            uart_bridge.VCCIO[0..1];
+
+            // PMOD connectors
+            pmod[*].VCC;
+
+            // Button pull-ups
+            button_pullup[*].1;
+
+            // Oscillators
+            main_oscillator.VCC;
+            rtc.VCC;
+        }
+
+        decoupling {
+            near ethernet_phy: 47µF, 10µF @ 2, 1µF @ 2;
+            near usb_hub: 47µF, 10µF, 1µF @ 2;
+            near uart_bridge: 10µF, 1µF, 100nF;
+            distributed: 22µF @ 4, 10µF @ 8, 1µF @ 12;
+        }
+    }
+
+    // 1.8V for USB and UART
+    power_domain @VCC_1V8_IO = 1.8V @ 1A {
+        distribution {
+            uart_bridge.VCORE;
+        }
+
+        decoupling {
+            near uart_bridge: 10µF, 1µF, 100nF;
+            distributed: 10µF @ 2;
+        }
+    }
+
+    // LED power (3.3V, separate for noise isolation)
+    power_domain @VCC_LED = 3.3V @ 500mA {
+        distribution {
+            // LEDs through current-limiting resistors
+            led_resistor[*].1;
+        }
+
+        decoupling {
+            distributed: 10µF, 1µF @ 2;
+        }
+    }
+
+    // ===== Ground =====
+    ground GND;
+
+    // ===== Power Statistics Summary =====
+    // Expected connection counts:
+    // @VCCINT: 32 pins (FPGA core)
+    // @VCCAUX: 17 pins (16 FPGA + 1 flash)
+    // @VCCO_BANK0: 12 pins
+    // @VCCO_BANK1: 12 pins
+    // @VCCO_BANK2: 8 pins
+    // @VDD_DDR: 16 pins (8 per chip × 2 chips)
+    // @VTT_DDR: 4 pins (2 per chip × 2 chips)
+    // @VCC_3V3: ~21 pins (4 PHY + 2 USB + 2 UART + 2 PMOD + 4 pullups + 2 clocks)
+    // @VCC_1V8_IO: 1 pin
+    // @VCC_LED: 8 pins (resistors)
+    //
+    // TOTAL: 131 power connections
+    //
+    // Decoupling capacitors: ~200+ capacitors total
+}

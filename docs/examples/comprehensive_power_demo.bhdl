@@ -1,0 +1,237 @@
+// Comprehensive Power Domain Demo
+// Demonstrates all BHDL power domain scalability features:
+// - Wildcard expansion
+// - Range expansion
+// - Hierarchical wildcards
+// - Advanced patterns (even/odd, explicit lists, stepped ranges)
+// - Generate blocks with wildcards
+// - Decoupling capacitors
+// - Multiple voltage domains
+
+// Sensor module with internal components
+module SensorModule() {
+    sensor: TempSensor();
+    buffer: OpAmp();
+    filter: RCFilter();
+}
+
+// Multi-sensor array module
+module SensorArray() {
+    temp_sensor: TempSensor();
+    humidity_sensor: HumiditySensor();
+    pressure_sensor: PressureSensor();
+}
+
+board DataAcquisitionSystem {
+    // ========================================
+    // Component Declarations
+    // ========================================
+
+    // Main processor
+    mcu: Microcontroller();
+
+    // Hierarchical sensor modules (for hierarchical wildcard demo)
+    sensor_board_0: SensorModule();
+    sensor_board_1: SensorModule();
+    sensor_board_2: SensorModule();
+    sensor_board_3: SensorModule();
+
+    // Sensor array (for suffix wildcard demo)
+    array: SensorArray();
+
+    // ADC channels (for even/odd differential pair demo)
+    adc_0: ADC();
+    adc_1: ADC();
+    adc_2: ADC();
+    adc_3: ADC();
+    adc_4: ADC();
+    adc_5: ADC();
+    adc_6: ADC();
+    adc_7: ADC();
+
+    // Memory banks (for stepped range demo)
+    mem_0: SRAM();
+    mem_1: SRAM();
+    mem_2: SRAM();
+    mem_3: SRAM();
+    mem_4: SRAM();
+    mem_5: SRAM();
+    mem_6: SRAM();
+    mem_7: SRAM();
+    mem_8: SRAM();
+    mem_9: SRAM();
+    mem_10: SRAM();
+    mem_11: SRAM();
+
+    // Critical monitoring sensors (for explicit list demo)
+    monitor_0: TempSensor();
+    monitor_1: TempSensor();
+    monitor_2: TempSensor();
+    monitor_3: TempSensor();
+    monitor_4: TempSensor();
+    monitor_5: TempSensor();
+    monitor_6: TempSensor();
+    monitor_7: TempSensor();
+
+    // Communication interfaces
+    uart: UART();
+    spi: SPI();
+    i2c: I2C();
+
+    // ========================================
+    // Status LEDs
+    // ========================================
+
+    // Status LEDs (for wildcard demo)
+    led_0: LED(red);
+    led_1: LED(red);
+    led_2: LED(red);
+    led_3: LED(red);
+    led_4: LED(red);
+    led_5: LED(red);
+    led_6: LED(red);
+    led_7: LED(red);
+
+    // ========================================
+    // Power Domain: 3.3V Digital
+    // ========================================
+
+    power_domain @VCC_3V3 = 3.3V @ 10A {
+        distribution {
+            // Main processor (single instance)
+            mcu.VCC;
+
+            // Communication interfaces (single instances)
+            uart.VCC;
+            spi.VCC;
+            i2c.VCC;
+
+            // Hierarchical wildcards - access internal components across multiple modules
+            sensor_board[*].sensor.VCC;
+            sensor_board[*].buffer.VCC;
+            sensor_board[*].filter.VCC;
+
+            // Suffix wildcard - all sensors in array module
+            array.*sensor.VCC;
+
+            // All LEDs (wildcard expansion)
+            led[*].A;
+        }
+
+        decoupling {
+            // Bulk decoupling near MCU
+            near mcu: 10µF @ 2, 1µF @ 4;
+
+            // Distributed high-frequency decoupling
+            distributed: 100nF @ 16;
+        }
+    }
+
+    // ========================================
+    // Power Domain: 5V Digital
+    // ========================================
+
+    power_domain @VCC_5V = 5V @ 5A {
+        distribution {
+            // Simple range expansion
+            monitor[0..7].VCC;
+
+            // Explicit list - only specific critical monitors get 5V
+            monitor[0,3,5,7].VREF;
+        }
+
+        decoupling {
+            distributed: 10µF @ 4, 1µF @ 8, 100nF @ 16;
+        }
+    }
+
+    // ========================================
+    // Power Domain: Analog 5V (Even ADC Channels)
+    // ========================================
+
+    power_domain @AVCC_P = 5V @ 2A {
+        distribution {
+            // Even/odd pattern for differential pairs
+            // Positive channels get AVCC_P
+            adc[even].AVCC;
+        }
+
+        decoupling {
+            // Near each ADC for clean analog supply
+            near adc_0: 10µF @ 1, 100nF @ 1;
+            near adc_2: 10µF @ 1, 100nF @ 1;
+            near adc_4: 10µF @ 1, 100nF @ 1;
+            near adc_6: 10µF @ 1, 100nF @ 1;
+        }
+    }
+
+    // ========================================
+    // Power Domain: Analog 5V (Odd ADC Channels)
+    // ========================================
+
+    power_domain @AVCC_N = 5V @ 2A {
+        distribution {
+            // Negative channels get AVCC_N
+            adc[odd].AVCC;
+        }
+
+        decoupling {
+            near adc_1: 10µF @ 1, 100nF @ 1;
+            near adc_3: 10µF @ 1, 100nF @ 1;
+            near adc_5: 10µF @ 1, 100nF @ 1;
+            near adc_7: 10µF @ 1, 100nF @ 1;
+        }
+    }
+
+    // ========================================
+    // Power Domain: Memory Bank Phase A
+    // ========================================
+
+    power_domain @VCC_MEM_A = 3.3V @ 3A {
+        distribution {
+            // Stepped range - power up memory in phases
+            // Phase A: 0, 3, 6, 9 (every 3rd bank starting at 0)
+            mem[0..11:3].VCC;
+        }
+
+        decoupling {
+            distributed: 10µF @ 4, 1µF @ 4;
+        }
+    }
+
+    // ========================================
+    // Power Domain: Memory Bank Phase B
+    // ========================================
+
+    power_domain @VCC_MEM_B = 3.3V @ 3A {
+        distribution {
+            // Phase B: 1, 4, 7, 10 (every 3rd bank starting at 1)
+            mem[1..11:3].VCC;
+        }
+
+        decoupling {
+            distributed: 10µF @ 4, 1µF @ 4;
+        }
+    }
+
+    // ========================================
+    // Power Domain: Memory Bank Phase C
+    // ========================================
+
+    power_domain @VCC_MEM_C = 3.3V @ 3A {
+        distribution {
+            // Phase C: 2, 5, 8, 11 (every 3rd bank starting at 2)
+            mem[2..11:3].VCC;
+        }
+
+        decoupling {
+            distributed: 10µF @ 4, 1µF @ 4;
+        }
+    }
+
+    // ========================================
+    // Ground Reference
+    // ========================================
+
+    ground GND;
+}

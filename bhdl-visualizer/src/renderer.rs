@@ -109,11 +109,18 @@ impl CircuitRenderer {
     
     /// Render a single net
     async fn render_net(&self, svg_doc: &mut SvgDocument, net: &Net) -> Result<()> {
-        // Render routing segments
+        // Determine CSS class based on net type
+        let net_class = match net.net_type {
+            crate::types::NetType::Power => "net-power",
+            crate::types::NetType::Ground => "net-ground",
+            crate::types::NetType::Signal => "net",
+        };
+
+        // Render routing segments with appropriate styling
         for segment in &net.routing_segments {
-            svg_doc.add_routing_segment(segment, Some("net"));
+            svg_doc.add_routing_segment(segment, Some(net_class));
         }
-        
+
         // Render connection points as small circles
         for point in &net.connection_points {
             svg_doc.add_circle(*point, 1.5, Some("pin"));

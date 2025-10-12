@@ -212,6 +212,7 @@ dependencies = [
  "bhdl-parser",
  "bhdl-stdlib",
  "bincode",
+ "chrono",
  "dirs",
  "env_logger 0.10.2",
  "log",

@@ -1,0 +1,73 @@
+// Test circuit for Advanced Pattern Matching feature
+// Tests even/odd keywords, explicit lists, and stepped ranges
+
+board AdvancedPatternTest {
+    // Create 16 sensor instances manually for pattern testing
+    sensor_0: TempSensor();
+    sensor_1: TempSensor();
+    sensor_2: TempSensor();
+    sensor_3: TempSensor();
+    sensor_4: TempSensor();
+    sensor_5: TempSensor();
+    sensor_6: TempSensor();
+    sensor_7: TempSensor();
+    sensor_8: TempSensor();
+    sensor_9: TempSensor();
+    sensor_10: TempSensor();
+    sensor_11: TempSensor();
+    sensor_12: TempSensor();
+    sensor_13: TempSensor();
+    sensor_14: TempSensor();
+    sensor_15: TempSensor();
+
+    // Pattern 1: Even keyword - should match 0,2,4,6,8,10,12,14
+    power_domain @VCC_EVEN = 3.3V @ 2A {
+        distribution {
+            sensor[even].VCC;
+        }
+    }
+
+    // Pattern 2: Odd keyword - should match 1,3,5,7,9,11,13,15
+    power_domain @VCC_ODD = 3.3V @ 2A {
+        distribution {
+            sensor[odd].VCC;
+        }
+    }
+
+    // Pattern 3: Explicit list - should match only 0,5,10,15
+    power_domain @VCC_SPECIAL = 3.3V @ 1A {
+        distribution {
+            sensor[0,5,10,15].VCC;
+        }
+    }
+
+    // Pattern 4: Stepped range - should match 0,3,6,9,12,15
+    power_domain @VCC_SAMPLED = 3.3V @ 1A {
+        distribution {
+            sensor[0..15:3].VCC;
+        }
+    }
+
+    // Pattern 5: Simple range (existing feature) - should match 0,1,2,3,4
+    power_domain @VCC_RANGE = 3.3V @ 1A {
+        distribution {
+            sensor[0..4].VCC;
+        }
+    }
+
+    // Pattern 6: Single index (existing feature) - should match only 7
+    power_domain @VCC_SINGLE = 3.3V @ 1A {
+        distribution {
+            sensor[7].VCC;
+        }
+    }
+
+    // Pattern 7: Wildcard (existing feature) - should match all 0-15
+    power_domain @VCC_ALL = 3.3V @ 5A {
+        distribution {
+            sensor[*].VCC;
+        }
+    }
+
+    ground GND;
+}

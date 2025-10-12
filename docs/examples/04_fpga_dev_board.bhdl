@@ -1,0 +1,347 @@
+// Example 4: FPGA Development Board
+//
+// This example demonstrates a realistic multi-voltage FPGA design with
+// sophisticated power management.
+//
+// Features demonstrated:
+// - Multiple voltage domains (1.0V, 1.8V, 2.5V, 3.3V)
+// - Range patterns for FPGA banks
+// - Advanced decoupling strategies
+// - Real-world power sequencing requirements
+//
+// Difficulty: ⭐⭐⭐⭐ Expert
+
+board FPGADevBoard {
+    // Main FPGA (Xilinx 7-Series style architecture)
+    fpga: FPGA_XC7();
+
+    // Power regulators
+    vccint_reg: BuckConverter(1.0V, 30A);      // Core logic
+    vccaux_reg: LDO_Regulator(1.8V, 3A);       // Auxiliary
+    vcco_reg_0: LDO_Regulator(2.5V, 2A);       // I/O Bank 0-1
+    vcco_reg_1: LDO_Regulator(3.3V, 2A);       // I/O Bank 2-3
+
+    // Configuration memory
+    config_flash: SPI_Flash();
+
+    // Clock sources
+    osc_100mhz: Oscillator(100MHz);
+
+    // DDR3 memory interface (16 data lines)
+    ddr_ctrl: DDR3_Controller();
+
+    // Peripherals
+    uart: UART();
+    usb: USB_Controller();
+    eth: Ethernet_PHY();
+
+    // Status LEDs (8 for monitoring)
+    led_0: LED(red);
+    led_1: LED(red);
+    led_2: LED(yellow);
+    led_3: LED(yellow);
+    led_4: LED(green);
+    led_5: LED(green);
+    led_6: LED(blue);
+    led_7: LED(blue);
+
+    // =========================================================================
+    // Power Domain 1: FPGA Core Logic (VCCINT)
+    // =========================================================================
+    // This is the most critical power domain - powers all internal logic
+    // Requires very low noise and fast transient response
+    power_domain @VCCINT = 1.0V @ 30A {
+        distribution {
+            vccint_reg.VOUT;
+
+            // FPGA has 12 VCCINT pins distributed across the package
+            // Using simple range to connect all of them
+            fpga.VCCINT[0..11];
+        }
+
+        decoupling {
+            // Aggressive decoupling for high-speed switching logic
+            // Multiple ceramic capacitors for different frequency ranges
+            near vccint_reg: 100µF @ 2;           // Bulk storage
+            near fpga: 47µF @ 4, 10µF @ 8, 1µF @ 12;  // Near FPGA
+            distributed: 100nF @ 24;               // High-frequency decoupling
+        }
+    }
+
+    // =========================================================================
+    // Power Domain 2: Auxiliary Supply (VCCAUX)
+    // =========================================================================
+    // Powers PLLs, clock management, and analog circuits in FPGA
+    // Needs clean power for low jitter
+    power_domain @VCCAUX = 1.8V @ 3A {
+        distribution {
+            vccaux_reg.VOUT;
+
+            // FPGA has 4 VCCAUX pins
+            fpga.VCCAUX[0..3];
+
+            // Configuration memory also uses 1.8V
+            config_flash.VCC;
+
+            // DDR3 controller auxiliary supply
+            ddr_ctrl.VCCAUX;
+        }
+
+        decoupling {
+            // Lower noise requirements than VCCINT
+            near vccaux_reg: 10µF @ 2;
+            near fpga: 10µF @ 4, 1µF @ 4;
+            distributed: 100nF @ 8;
+        }
+    }
+
+    // =========================================================================
+    // Power Domain 3: I/O Banks 0-1 (VCCO_0)
+    // =========================================================================
+    // Powers I/O buffers for banks 0 and 1
+    // Bank 0: DDR3 interface (requires 2.5V for DDR3)
+    // Bank 1: High-speed serial interfaces
+    power_domain @VCCO_0 = 2.5V @ 2A {
+        distribution {
+            vcco_reg_0.VOUT;
+
+            // FPGA I/O banks 0 and 1 (8 pins each = 16 total)
+            // Using explicit range for each bank
+            fpga.VCCO[0..15];
+
+            // DDR3 requires 2.5V I/O supply
+            ddr_ctrl.VCCIO;
+        }
+
+        decoupling {
+            near vcco_reg_0: 10µF @ 1;
+            near fpga: 10µF @ 2, 1µF @ 4;
+            distributed: 100nF @ 8;
+        }
+    }
+
+    // =========================================================================
+    // Power Domain 4: I/O Banks 2-3 (VCCO_1)
+    // =========================================================================
+    // Powers I/O buffers for banks 2 and 3
+    // Bank 2: General purpose I/O (LEDs, buttons, headers)
+    // Bank 3: Communication interfaces (UART, USB, Ethernet)
+    power_domain @VCCO_1 = 3.3V @ 2A {
+        distribution {
+            vcco_reg_1.VOUT;
+
+            // FPGA I/O banks 2 and 3 (8 pins each = 16 total)
+            fpga.VCCO[16..31];
+
+            // Peripherals using 3.3V I/O
+            uart.VCC;
+            usb.VCC;
+            eth.VCC;
+
+            // LEDs powered from 3.3V
+            led[*].A;
+        }
+
+        decoupling {
+            near vcco_reg_1: 10µF @ 1;
+            near fpga: 10µF @ 2, 1µF @ 4;
+            distributed: 100nF @ 8;
+        }
+    }
+
+    // =========================================================================
+    // Power Domain 5: Clock Source
+    // =========================================================================
+    // Dedicated clean supply for oscillator
+    power_domain @VCC_CLOCK = 3.3V @ 100mA {
+        distribution {
+            osc_100mhz.VCC;
+        }
+
+        decoupling {
+            near osc_100mhz: 10µF @ 1, 100nF @ 2;
+        }
+    }
+
+    ground GND;
+}
+
+// =============================================================================
+// Expected Output:
+// =============================================================================
+//
+// Power Domain Summary:
+//
+// @VCCINT (1.0V @ 30A):
+//   Connections: 13
+//     vccint_reg.VOUT (1)
+//     fpga.VCCINT[0..11] (12 via range)
+//   Decoupling: 48 capacitors
+//     2× 100µF (bulk)
+//     4× 47µF + 8× 10µF + 12× 1µF (near FPGA)
+//     24× 100nF (distributed)
+//
+// @VCCAUX (1.8V @ 3A):
+//   Connections: 7
+//     vccaux_reg.VOUT (1)
+//     fpga.VCCAUX[0..3] (4 via range)
+//     config_flash.VCC (1)
+//     ddr_ctrl.VCCAUX (1)
+//   Decoupling: 18 capacitors
+//
+// @VCCO_0 (2.5V @ 2A):
+//   Connections: 18
+//     vcco_reg_0.VOUT (1)
+//     fpga.VCCO[0..15] (16 via range)
+//     ddr_ctrl.VCCIO (1)
+//   Decoupling: 15 capacitors
+//
+// @VCCO_1 (3.3V @ 2A):
+//   Connections: 28
+//     vcco_reg_1.VOUT (1)
+//     fpga.VCCO[16..31] (16 via range)
+//     uart.VCC, usb.VCC, eth.VCC (3)
+//     led[*].A (8 via wildcard)
+//   Decoupling: 15 capacitors
+//
+// @VCC_CLOCK (3.3V @ 100mA):
+//   Connections: 1
+//     osc_100mhz.VCC (1)
+//   Decoupling: 3 capacitors
+//
+// Total Connections: 67
+// Total Decoupling Capacitors: 101
+//
+// =============================================================================
+// Design Considerations:
+// =============================================================================
+//
+// 1. POWER SEQUENCING
+//
+//    Recommended power-up sequence for most FPGAs:
+//    VCCAUX → VCCINT → VCCO
+//
+//    This is typically handled by the regulators' power-good signals
+//    and external sequencing circuitry (not shown in this example).
+//
+// 2. DECOUPLING STRATEGY
+//
+//    Each power domain uses a three-tier decoupling approach:
+//
+//    a) Bulk Capacitance (10µF - 100µF)
+//       - Provides energy storage for load transients
+//       - Placed near voltage regulators
+//
+//    b) Mid-Frequency (1µF - 10µF)
+//       - Handles medium-speed transients
+//       - Placed near FPGA power pins
+//
+//    c) High-Frequency (100nF)
+//       - Bypasses high-frequency switching noise
+//       - Distributed across all power pins
+//
+// 3. I/O BANK ORGANIZATION
+//
+//    I/O banks are grouped by voltage level:
+//
+//    Banks 0-1 (VCCO[0..15]): 2.5V
+//      - DDR3 memory interface
+//      - High-speed serial
+//
+//    Banks 2-3 (VCCO[16..31]): 3.3V
+//      - General purpose I/O
+//      - Communication peripherals
+//
+//    This organization minimizes the number of voltage regulators needed
+//    while providing appropriate I/O voltages for each interface.
+//
+// 4. CURRENT REQUIREMENTS
+//
+//    VCCINT (1.0V @ 30A):
+//      - Highest current - powers all internal logic
+//      - Requires high-efficiency buck converter
+//      - Power = 30W (significant thermal consideration)
+//
+//    VCCAUX (1.8V @ 3A):
+//      - Moderate current - powers PLLs and analog blocks
+//      - LDO acceptable due to low dropout from input supply
+//
+//    VCCO (2.5V/3.3V @ 2A each):
+//      - I/O buffer current depends on load and switching frequency
+//      - Separate regulators per voltage level for flexibility
+//
+// =============================================================================
+// Real-World Design Patterns:
+// =============================================================================
+//
+// PATTERN 1: Per-Pin Decoupling for Critical Rails
+//
+// VCCINT uses 24× 100nF capacitors - approximately 2 per power pin
+// This is typical for high-speed FPGAs where each power pin should have
+// its own high-frequency decoupling capacitor within 5mm.
+//
+// PATTERN 2: Voltage-Scaled Decoupling
+//
+// Notice that VCCINT (1.0V) has more aggressive decoupling than VCCO (3.3V).
+// Lower voltage domains typically need more capacitance to provide the same
+// energy storage (E = 0.5 × C × V²).
+//
+// PATTERN 3: Separate Clock Supply
+//
+// The oscillator has its own dedicated power domain. Even though it's only
+// 3.3V like VCCO_1, isolating it prevents digital switching noise from
+// causing clock jitter.
+//
+// PATTERN 4: Range-Based Bank Assignment
+//
+// Using ranges (VCCO[0..15], VCCO[16..31]) makes it easy to:
+// - Reorganize bank assignments
+// - Add or remove I/O banks
+// - Maintain clear voltage domain boundaries
+//
+// =============================================================================
+// Practical Applications:
+// =============================================================================
+//
+// This power architecture is typical for:
+// - FPGA development boards
+// - Embedded processing platforms
+// - High-speed data acquisition systems
+// - Software-defined radio (SDR) platforms
+// - Video processing boards
+// - Test and measurement equipment
+//
+// =============================================================================
+// BOM Summary:
+// =============================================================================
+//
+// Power Components:
+//   1× Buck converter (1.0V @ 30A) - VCCINT
+//   3× LDO regulators (1.8V @ 3A, 2.5V @ 2A, 3.3V @ 2A)
+//
+// Decoupling Capacitors:
+//   3× 100µF   (bulk storage)
+//   11× 47µF   (near FPGA)
+//   22× 10µF   (mid-frequency)
+//   20× 1µF    (mid-frequency)
+//   43× 100nF  (high-frequency)
+//   Total: 99 capacitors
+//
+// Estimated Board Cost Impact:
+//   Power regulators: $15-25
+//   Decoupling capacitors: $10-15
+//   Total power management: ~$30-40
+//
+// =============================================================================
+// Next Steps:
+// =============================================================================
+//
+// After mastering this example, consider:
+//
+// 1. Adding power integrity analysis to verify voltage drops
+// 2. Simulating PDN impedance to optimize decoupling values
+// 3. Exploring power sequencing with enable signal dependencies
+// 4. Adding current monitoring for power budgeting
+//
+// See comprehensive_power_demo.bhdl for even more advanced patterns!
+//

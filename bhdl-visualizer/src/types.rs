@@ -171,11 +171,29 @@ impl Component {
     }
 }
 
+/// Type of net for visualization styling
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetType {
+    /// Signal net (default)
+    Signal,
+    /// Power rail (VCC, VDD, etc.)
+    Power,
+    /// Ground net (GND, VSS, etc.)
+    Ground,
+}
+
+impl Default for NetType {
+    fn default() -> Self {
+        NetType::Signal
+    }
+}
+
 /// Net routing information for visualization
 #[derive(Debug, Clone)]
 pub struct Net {
     pub net_id: NetId,
     pub name: Option<String>,
+    pub net_type: NetType,
     pub connection_points: Vec<Point>,
     pub routing_segments: Vec<RoutingSegment>,
     pub junctions: Vec<Junction>,
@@ -186,10 +204,28 @@ impl Net {
         Self {
             net_id,
             name,
+            net_type: NetType::Signal, // Default to signal
             connection_points: Vec::new(),
             routing_segments: Vec::new(),
             junctions: Vec::new(),
         }
+    }
+
+    /// Create a new net with specified type
+    pub fn with_type(net_id: NetId, name: Option<String>, net_type: NetType) -> Self {
+        Self {
+            net_id,
+            name,
+            net_type,
+            connection_points: Vec::new(),
+            routing_segments: Vec::new(),
+            junctions: Vec::new(),
+        }
+    }
+
+    /// Set the net type
+    pub fn set_type(&mut self, net_type: NetType) {
+        self.net_type = net_type;
     }
     
     pub fn add_connection_point(&mut self, point: Point) {

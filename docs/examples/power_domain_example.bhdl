@@ -1,0 +1,131 @@
+// Example: Multi-Domain Power Distribution System
+// Demonstrates Phase 1: Power Domain Enhancement features
+
+board MultiDomainBoard {
+    // Main 5V power domain from USB
+    power_domain @VCC_5V = 5V @ 2A {
+        sources {
+            usb: USB_Connector().VBUS;
+        }
+
+        distribution {
+            motor_driver.VIN;
+            led_driver.VIN;
+            boost_converter.VIN;
+        }
+
+        decoupling {
+            near usb: 47µF @ 1, 10µF @ 2;
+            distributed: 1µF @ 5, 100nF @ 10;
+        }
+
+        constraints {
+            max_ripple: 100mV;
+            dropout: 0V;  // No dropout for USB source
+        }
+    }
+
+    // Regulated 3.3V domain for digital logic
+    power_domain @VCC_3V3 = 3.3V @ 1.5A {
+        sources {
+            reg_3v3: LM7805().OUT;
+            backup_reg: LP5907().OUT;
+        }
+
+        distribution {
+            mcu.VDD;
+            wifi_module.VDDIO;
+            display.VDDIO;
+            flash_memory.VCC;
+        }
+
+        decoupling {
+            near reg_3v3: 22µF @ 1, 10µF @ 2, 1µF @ 4;
+            near each mcu: 100nF @ 2;
+            near wifi_module: 10µF @ 1, 100nF @ 4;
+            distributed: 100nF @ 15;
+        }
+
+        constraints {
+            max_ripple: 50mV;
+            dropout: 1.5V;
+            startup_time: 10ms;
+        }
+    }
+
+    // Low voltage 1.8V domain for FPGA I/O banks
+    power_domain @VCC_1V8_IO = 1.8V @ 2A {
+        sources {
+            buck_1v8: TPS54302().OUT;
+        }
+
+        distribution {
+            fpga.VCCO[0..3];        // Range expansion: banks 0-3
+            ddr_memory[*].VDD;      // Wildcard: all DDR chips
+            high_speed_io[0..7].VCC; // Range: 8 I/O transceivers
+        }
+
+        decoupling {
+            near buck_1v8: 47µF @ 2, 22µF @ 4, 10µF @ 8;
+            near each fpga.VCCO[0..3]: 10µF @ 1, 100nF @ 2;
+            distributed: 1µF @ 20, 100nF @ 40;
+        }
+
+        constraints {
+            max_ripple: 20mV;
+            dropout: 0.5V;
+            load_regulation: 2%;
+        }
+    }
+
+    // Core voltage domain for FPGA internal logic
+    power_domain @VCC_CORE = 1.2V @ 5A {
+        sources {
+            pmic: TPS65950().VCORE;
+        }
+
+        distribution {
+            fpga.VCCINT;
+        }
+
+        decoupling {
+            near pmic: 100µF @ 1, 47µF @ 2, 22µF @ 4, 10µF @ 8, 1µF @ 16;
+            distributed: 1µF @ 30, 100nF @ 60;
+        }
+
+        constraints {
+            max_ripple: 10mV;
+            dropout: 0.3V;
+            transient_response: 10us;
+        }
+    }
+
+    // Analog 3.3V domain (low noise)
+    power_domain @VCC_ANALOG = 3.3V @ 500mA {
+        sources {
+            ldo_analog: LT3045().OUT;  // Low noise LDO
+        }
+
+        distribution {
+            adc.AVDD;
+            dac.AVDD;
+            sensors[*].AVDD;
+        }
+
+        decoupling {
+            near ldo_analog: 10µF @ 1, 1µF @ 2, 100nF @ 4;
+            near each adc: 10µF @ 1, 1µF @ 1, 100nF @ 2;
+            near dac: 10µF @ 1, 1µF @ 1, 100nF @ 2;
+            distributed: 100nF @ 10;
+        }
+
+        constraints {
+            max_ripple: 5mV;
+            psrr: 80dB;  // Power supply rejection ratio
+            noise: 10uVrms;
+        }
+    }
+
+    // Ground reference (implicit - all domains share common ground)
+    ground GND;
+}

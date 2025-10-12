@@ -374,6 +374,10 @@ pub struct AnalysisResult {
     pub safety_analysis: SafetyAnalysisResult,
     /// Unified simulation data from all engines (run once, used by all phases)
     pub simulation_data: UnifiedSimulationData,
+    /// Component instance registry (Phase 2: Pass 1.25)
+    pub instance_registry: crate::passes::InstanceRegistry,
+    /// Power domain expansion results (Phase 1: Scalability)
+    pub power_domain_expansion: crate::passes::PowerDomainExpansion,
 }
 
 impl Default for AnalysisResult {
@@ -397,6 +401,8 @@ impl Default for AnalysisResult {
             flow_tracker: None,
             safety_analysis: SafetyAnalysisResult::default(),
             simulation_data: UnifiedSimulationData::default(),
+            instance_registry: crate::passes::InstanceRegistry::new(),
+            power_domain_expansion: crate::passes::PowerDomainExpansion::new(),
         }
     }
 } 
