@@ -55,10 +55,14 @@ enum Commands {
         /// Show all diagnostics including hints
         #[arg(long)]
         all: bool,
-        
+
         /// Output format (text, json)
         #[arg(short, long, default_value = "text")]
         format: String,
+
+        /// Show intent analysis and flow tracking
+        #[arg(long)]
+        show_intents: bool,
     },
     
     /// Synthesize netlist
@@ -136,6 +140,25 @@ enum Commands {
         verbose: bool,
     },
 
+    /// Analyze design intent and flow tracking
+    Intents {
+        /// Show synthesis hints for each flow
+        #[arg(long)]
+        show_hints: bool,
+
+        /// Show validation rules for each flow
+        #[arg(long)]
+        show_rules: bool,
+
+        /// Filter by intent name
+        #[arg(short, long)]
+        filter: Option<String>,
+
+        /// Output format (text, json)
+        #[arg(short = 'o', long, default_value = "text")]
+        format: String,
+    },
+
     /// Generate power domain documentation
     Doc {
         /// Output file path
@@ -205,8 +228,8 @@ async fn main() -> Result<()> {
             run_parse(&source_file, &root, &format)?;
         }
         
-        Some(Commands::Analyze { all, format }) => {
-            run_analysis(&source_file, all, &format).await?;
+        Some(Commands::Analyze { all, format, show_intents }) => {
+            run_analysis_with_intents(&source_file, all, &format, show_intents).await?;
         }
         
         Some(Commands::Synthesize { output, format }) => {
@@ -231,6 +254,10 @@ async fn main() -> Result<()> {
 
         Some(Commands::Doc { output, bom_only, budget_only, no_tree, no_patterns }) => {
             cmd_doc(&source_file, output, bom_only, budget_only, no_tree, no_patterns).await?;
+        }
+
+        Some(Commands::Intents { show_hints, show_rules, filter, format }) => {
+            run_intents_analysis(&source_file, show_hints, show_rules, filter, &format).await?;
         }
     }
 
@@ -279,31 +306,232 @@ fn run_parse(source_file: &SourceFile, root: &bhdl_ast::SyntaxNode<bhdl_ast::Bhd
 }
 
 async fn run_analysis(source_file: &SourceFile, _show_all: bool, format: &str) -> Result<()> {
+    run_analysis_with_intents(source_file, _show_all, format, false).await
+}
+
+async fn run_analysis_with_intents(source_file: &SourceFile, _show_all: bool, format: &str, show_intents: bool) -> Result<()> {
     let result = analyze(source_file);
-    
+
     match format {
         "text" => {
             if result.diagnostics.is_empty() {
                 println!("{}", "✓ Analysis successful - no issues found".green().bold());
             } else {
-                println!("{}", format!("Analysis found {} diagnostics", 
+                println!("{}", format!("Analysis found {} diagnostics",
                     result.diagnostics.len()).yellow().bold());
-                
+
                 for diag in &result.diagnostics {
                     println!("  • {}", diag.message);
+                }
+            }
+
+            // Show intent analysis if requested
+            if show_intents {
+                println!();
+                if let Some(ref flow_tracker) = result.flow_tracker {
+                    let flows = flow_tracker.get_flow_paths();
+                    let sim_mode = flow_tracker.get_required_sim_mode();
+
+                    println!("{}", "Intent Analysis:".bold());
+                    println!("  Flow paths tracked: {}", flows.len());
+                    println!("  Required simulation mode: {:?}", sim_mode);
+
+                    // Count intents by category
+                    let mut intent_counts: HashMap<String, usize> = HashMap::new();
+                    for flow in flows {
+                        if let Some(ref intent) = flow.intent {
+                            *intent_counts.entry(intent.name.clone()).or_insert(0) += 1;
+                        }
+                    }
+
+                    if !intent_counts.is_empty() {
+                        println!("  Intent usage:");
+                        for (intent, count) in intent_counts.iter() {
+                            println!("    • {}: {} times", intent, count);
+                        }
+                    }
+                } else {
+                    println!("{}", "  No intent analysis available (no boards found)".yellow());
                 }
             }
         }
         "json" => {
             // TODO: AnalysisResult doesn't implement Serialize
-            println!("{{\"diagnostics_count\": {}}}", result.diagnostics.len());
+            let intent_count = result.flow_tracker
+                .as_ref()
+                .map(|ft| ft.get_flow_paths().len())
+                .unwrap_or(0);
+            println!("{{\"diagnostics_count\": {}, \"intent_flows\": {}}}",
+                result.diagnostics.len(), intent_count);
         }
         _ => {
             eprintln!("Unknown format: {}", format);
             std::process::exit(1);
         }
     }
-    
+
+    Ok(())
+}
+
+async fn run_intents_analysis(
+    source_file: &SourceFile,
+    show_hints: bool,
+    show_rules: bool,
+    filter: Option<String>,
+    format: &str
+) -> Result<()> {
+    // Run analysis to get intent data
+    let result = analyze(source_file);
+
+    if let Some(ref flow_tracker) = result.flow_tracker {
+        let flows = flow_tracker.get_flow_paths();
+        let sim_mode = flow_tracker.get_required_sim_mode();
+
+        match format {
+            "text" => {
+                println!("{}", "╔═══════════════════════════════════════════════════════════════════╗".bold());
+                println!("{}", "║              BHDL INTENT ANALYSIS                                 ║".bold());
+                println!("{}", "╚═══════════════════════════════════════════════════════════════════╝".bold());
+                println!();
+
+                println!("{}", "Summary:".bold());
+                println!("  Total flow paths: {}", flows.len());
+                println!("  Required simulation mode: {:?}", sim_mode);
+                println!();
+
+                // Filter flows if requested
+                let filtered_flows: Vec<_> = if let Some(ref filter_str) = filter {
+                    flows.iter()
+                        .filter(|f| f.intent.as_ref()
+                            .map(|i| i.name.contains(filter_str))
+                            .unwrap_or(false))
+                        .collect()
+                } else {
+                    flows.iter().collect()
+                };
+
+                if filtered_flows.is_empty() {
+                    if filter.is_some() {
+                        println!("{}", format!("No flows matching filter: {}", filter.unwrap()).yellow());
+                    } else {
+                        println!("{}", "No flow paths with intents found".yellow());
+                    }
+                    return Ok(());
+                }
+
+                println!("{}", format!("Flow Paths ({} shown):", filtered_flows.len()).bold());
+                println!();
+
+                for (i, flow) in filtered_flows.iter().enumerate() {
+                    println!("{}. Flow Path:", i + 1);
+                    println!("   Nets: {}", flow.nets.join(" -> "));
+
+                    if let Some(ref intent) = flow.intent {
+                        println!("   Intent: {}", intent.name.bold().green());
+
+                        // Show parameters
+                        if !intent.params.is_empty() {
+                            println!("   Parameters:");
+                            for param in &intent.params {
+                                match param {
+                                    bhdl_common::IntentParam::Named(name, value) => {
+                                        println!("     • {}: {:?}", name, value);
+                                    }
+                                    bhdl_common::IntentParam::Positional(value) => {
+                                        println!("     • {:?}", value);
+                                    }
+                                }
+                            }
+                        }
+
+                        if let Some(ref intent_result) = flow.intent_result {
+                            println!("   Simulation Mode: {:?}", intent_result.sim_mode);
+
+                            // Show synthesis hints if requested
+                            if show_hints && !intent_result.synthesis_hints.is_empty() {
+                                println!("   Synthesis Hints:");
+                                for hint in &intent_result.synthesis_hints {
+                                    match hint {
+                                        bhdl_common::SynthesisHint::Custom(s) => {
+                                            println!("     • {}", s);
+                                        }
+                                        _ => println!("     • {:?}", hint),
+                                    }
+                                }
+                            }
+
+                            // Show validation rules if requested
+                            if show_rules && !intent_result.validation_rules.is_empty() {
+                                println!("   Validation Rules:");
+                                for rule in &intent_result.validation_rules {
+                                    println!("     • Condition: {}", rule.condition);
+                                    println!("       Error if violated: {}", rule.error_message);
+                                }
+                            }
+                        }
+                    } else {
+                        println!("   Intent: {}", "none".dimmed());
+                    }
+
+                    println!();
+                }
+
+                // Print statistics
+                println!("{}", "Intent Statistics:".bold());
+                let mut intent_counts: HashMap<String, usize> = HashMap::new();
+                let mut sim_mode_counts: HashMap<String, usize> = HashMap::new();
+
+                for flow in flows.iter() {
+                    if let Some(ref intent) = flow.intent {
+                        *intent_counts.entry(intent.name.clone()).or_insert(0) += 1;
+
+                        if let Some(ref result) = flow.intent_result {
+                            let mode_str = format!("{:?}", result.sim_mode);
+                            *sim_mode_counts.entry(mode_str).or_insert(0) += 1;
+                        }
+                    }
+                }
+
+                if !intent_counts.is_empty() {
+                    println!("  Intent usage:");
+                    let mut sorted_intents: Vec<_> = intent_counts.iter().collect();
+                    sorted_intents.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+                    for (intent, count) in sorted_intents {
+                        println!("    • {}: {} times", intent, count);
+                    }
+                }
+
+                if !sim_mode_counts.is_empty() {
+                    println!("  Simulation mode distribution:");
+                    for (mode, count) in sim_mode_counts.iter() {
+                        println!("    • {}: {} flows", mode, count);
+                    }
+                }
+            }
+            "json" => {
+                // Simple JSON output
+                let intent_names: Vec<_> = flows.iter()
+                    .filter_map(|f| f.intent.as_ref().map(|i| i.name.clone()))
+                    .collect();
+
+                let json = serde_json::json!({
+                    "flow_count": flows.len(),
+                    "required_sim_mode": format!("{:?}", sim_mode),
+                    "intents": intent_names,
+                });
+
+                println!("{}", serde_json::to_string_pretty(&json)?);
+            }
+            _ => {
+                eprintln!("Unknown format: {}", format);
+                std::process::exit(1);
+            }
+        }
+    } else {
+        println!("{}", "No intent analysis available (no boards found in circuit)".yellow());
+        println!("Make sure your BHDL file contains at least one board definition.");
+    }
+
     Ok(())
 }
 
