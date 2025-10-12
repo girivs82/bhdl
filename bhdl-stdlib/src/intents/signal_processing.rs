@@ -133,3 +133,94 @@ impl IntentFunction for LowNoiseIntent {
         ]
     }
 }
+
+/// Noise filtering intent for removing unwanted signals
+pub struct NoiseFilteringIntent;
+
+impl IntentFunction for NoiseFilteringIntent {
+    fn name(&self) -> &str {
+        "noise_filtering"
+    }
+
+    fn resolve(&self, params: &[IntentParam]) -> Result<IntentResult, String> {
+        // Extract cutoff frequency parameter (first positional or named)
+        let cutoff = params.get(0).and_then(|p| {
+            match p {
+                IntentParam::Positional(IntentValue::Number(val, unit)) => {
+                    Some((*val, unit.clone()))
+                }
+                _ => None
+            }
+        }).or_else(|| {
+            params.iter().find_map(|p| {
+                match p {
+                    IntentParam::Named(name, IntentValue::Number(val, unit)) if name == "cutoff" => {
+                        Some((*val, unit.clone()))
+                    }
+                    _ => None
+                }
+            })
+        });
+
+        // Extract attenuation parameter (second positional or named)
+        let attenuation = params.get(1).and_then(|p| {
+            match p {
+                IntentParam::Positional(IntentValue::Number(val, unit)) => {
+                    Some((*val, unit.clone()))
+                }
+                _ => None
+            }
+        }).or_else(|| {
+            params.iter().find_map(|p| {
+                match p {
+                    IntentParam::Named(name, IntentValue::Number(val, unit)) if name == "attenuation" => {
+                        Some((*val, unit.clone()))
+                    }
+                    _ => None
+                }
+            })
+        });
+
+        let cutoff_val = cutoff.ok_or_else(|| "noise_filtering() requires cutoff frequency".to_string())?;
+        let cutoff_str = format!("{}{}", cutoff_val.0, cutoff_val.1.as_deref().unwrap_or("Hz"));
+
+        let mut synthesis_hints = vec![
+            SynthesisHint::AnalogFilter,
+            SynthesisHint::Custom(format!("Low-pass filter with {} cutoff", cutoff_str)),
+        ];
+
+        if let Some((atten, unit)) = attenuation {
+            let atten_str = format!("{}{}", atten, unit.as_deref().unwrap_or("dB"));
+            synthesis_hints.push(SynthesisHint::Custom(format!("Attenuation: {} @ stopband", atten_str)));
+        }
+
+        Ok(IntentResult {
+            sim_mode: SimMode::AnalogRequired,
+            synthesis_hints,
+            validation_rules: vec![
+                ValidationRule {
+                    condition: format!("filter_cutoff_at_{}", cutoff_str),
+                    error_message: format!("Filter cutoff frequency must be {}", cutoff_str),
+                }
+            ],
+            tool_scope: ToolScope::All,
+        })
+    }
+
+    fn param_metadata(&self) -> Vec<ParamMetadata> {
+        vec![
+            ParamMetadata {
+                name: "cutoff".to_string(),
+                param_type: ParamType::Frequency,
+                required: true,
+                default_value: None,
+            },
+            ParamMetadata {
+                name: "attenuation".to_string(),
+                param_type: ParamType::Number,
+                required: false,
+                default_value: None,
+            },
+        ]
+    }
+}
