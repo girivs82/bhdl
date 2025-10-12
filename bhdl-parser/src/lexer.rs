@@ -170,6 +170,7 @@ pub enum LexerToken {
     #[token(":")] Colon,
     #[token(",")] Comma,
     #[token("=")] Eq,
+    #[token("..", priority = 2)] DotDot,
     #[token(".")] Dot,
     #[token("+")] Plus,
     #[token("-")] Minus,
@@ -279,8 +280,18 @@ fn keyword_or_ident_callback(lex: &mut Lexer<LexerToken>) -> KeywordOrIdent {
         "with" => SyntaxKind::WITH_KW,
         "satisfies" => SyntaxKind::SATISFIES_KW,
         "via" => SyntaxKind::VIA_KW,
+
+        // Power domain keywords (Phase 1: Scalability)
+        "power_domain" => SyntaxKind::POWER_DOMAIN_KW,
+        "sources" => SyntaxKind::SOURCES_KW,
+        "distribution" => SyntaxKind::DISTRIBUTION_KW,
+        "decoupling" => SyntaxKind::DECOUPLING_KW,
+        "near" => SyntaxKind::NEAR_KW,
+        "each" => SyntaxKind::EACH_KW,
+        "distributed" => SyntaxKind::DISTRIBUTED_KW,
+        "constraints" => SyntaxKind::CONSTRAINTS_KW,
         // "pin_map" is NOT a keyword, parsed as IDENT
-        
+
         // Testbench keywords - only top-level keywords are global
         "testbench" => SyntaxKind::TESTBENCH_KW,
         // The following are contextual and will be treated as IDENT
@@ -302,10 +313,9 @@ mod tests {
 
     #[test]
     fn lex_ident_and_keywords() {
-        let input = "board module pins components connections nets generate for in interface port const signal wire assign";
+        let input = "board module net generate for in interface port const signal wire assign";
         let expected_kinds = vec![
-            SyntaxKind::BOARD_KW, SyntaxKind::MODULE_KW, SyntaxKind::PINS_KW,
-            SyntaxKind::COMPONENTS_KW, SyntaxKind::CONNECTIONS_KW, SyntaxKind::NETS_KW,
+            SyntaxKind::BOARD_KW, SyntaxKind::MODULE_KW, SyntaxKind::NET_KW,
             SyntaxKind::GENERATE_KW, SyntaxKind::FOR_KW, SyntaxKind::IN_KW,
             SyntaxKind::INTERFACE_KW, SyntaxKind::PORT_KW, SyntaxKind::CONST_KW,
             SyntaxKind::SIGNAL_KW, SyntaxKind::WIRE_KW, SyntaxKind::ASSIGN_KW,

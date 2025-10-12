@@ -1,0 +1,42 @@
+//! Simple test for power domain scalability with basic components
+//! Uses only components defined in bhdl-stdlib
+
+import { Resistor } from "bhdl-stdlib/passives/resistor_simple.bhdl";
+import { Capacitor } from "bhdl-stdlib/passives/capacitor_simple.bhdl";
+import { Inductor } from "bhdl-stdlib/passives/inductor_simple.bhdl";
+
+board SimplePowerTest {
+    // Four resistors for wildcard testing
+    resistor_0: Resistor(10k);
+    resistor_1: Resistor(10k);
+    resistor_2: Resistor(10k);
+    resistor_3: Resistor(10k);
+
+    // Inductor for range testing (with multiple pins)
+    inductor: Inductor(10µH);
+
+    // Power domain with scalability features
+    power_domain @VCC_5V = 5V @ 1A {
+        sources {
+            // External power source
+        }
+
+        distribution {
+            // Wildcard expansion: Connect to all resistors
+            resistor[*].1;
+
+            // Simple reference: Connect to inductor
+            inductor.1;
+        }
+
+        decoupling {
+            // Near inductor: 2 capacitors
+            near inductor: 100µF @ 1, 10µF @ 1;
+
+            // Distributed: 4 capacitors
+            distributed: 100nF @ 4;
+        }
+    }
+
+    ground GND;
+}

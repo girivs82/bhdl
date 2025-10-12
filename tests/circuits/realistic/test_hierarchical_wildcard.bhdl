@@ -1,0 +1,74 @@
+// Test circuit for hierarchical wildcard expansion
+// Demonstrates wildcards across module instance boundaries
+
+// Module containing a sensor component
+module SensorModule() {
+    pin VCC: power in;
+    pin GND: power in;
+    pin OUT: signal out;
+
+    sensor: TempSensor();
+    buffer: OpAmp();
+}
+
+// Module containing multiple sensors
+module SensorArray() {
+    pin VCC: power in;
+    pin GND: power in;
+    pin BUS: signal out;
+
+    // Internal sensors
+    temp_sensor: TempSensor();
+    humidity_sensor: HumiditySensor();
+    pressure_sensor: PressureSensor();
+}
+
+board HierarchicalTest {
+    // Instantiate multiple modules
+    sensor_board_0: SensorModule();
+    sensor_board_1: SensorModule();
+    sensor_board_2: SensorModule();
+
+    // Instantiate array module
+    array: SensorArray();
+
+    // Manual component for comparison
+    led: LED(red);
+
+    // Power domain with hierarchical wildcards
+    power_domain @VCC_3V3 = 3.3V @ 5A {
+        distribution {
+            // Hierarchical wildcard: matches sensor inside all sensor_board instances
+            // Should expand to:
+            //   sensor_board_0.sensor.VCC
+            //   sensor_board_1.sensor.VCC
+            //   sensor_board_2.sensor.VCC
+            sensor_board[*].sensor.VCC;
+
+            // Hierarchical wildcard: matches buffer inside all sensor_board instances
+            sensor_board[*].buffer.VCC;
+
+            // Multi-level wildcard: matches all sensors inside array module
+            // Should expand to:
+            //   array.temp_sensor.VCC
+            //   array.humidity_sensor.VCC
+            //   array.pressure_sensor.VCC
+            array.*sensor.VCC;
+
+            // Simple component reference
+            led.A;
+        }
+
+        decoupling {
+            // Decoupling per module instance
+            near each sensor_board[*]: [100nF @ 2];
+
+            // Decoupling for array
+            near array: [1µF @ 1];
+
+            distributed: [10µF @ 5];
+        }
+    }
+
+    ground GND;
+}

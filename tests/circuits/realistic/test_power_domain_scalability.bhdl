@@ -1,0 +1,54 @@
+// Comprehensive test for power domain scalability features
+// Demonstrates: wildcard expansion, range expansion, and decoupling generation
+
+board MultiSensorBoard {
+    // Component instances for wildcard expansion test
+    sensor_0: TempSensor();
+    sensor_1: TempSensor();
+    sensor_2: TempSensor();
+    sensor_3: TempSensor();
+
+    // FPGA with multiple power pins
+    fpga: FPGA();
+
+    // Regulator component
+    reg: LM7805();
+
+    // Power domain with all scalability features
+    power_domain @VCC_3V3 = 3.3V @ 5A {
+        sources {
+            reg: LM7805().OUT;
+        }
+
+        distribution {
+            // Feature 1: Wildcard expansion
+            // Expands to: sensor_0.VCC, sensor_1.VCC, sensor_2.VCC, sensor_3.VCC
+            sensor[*].VCC;
+
+            // Feature 2: Range expansion
+            // Expands to: fpga.VCCO[0], fpga.VCCO[1], ..., fpga.VCCO[7]
+            fpga.VCCO[0..7];
+
+            // Feature 3: Simple pin reference
+            fpga.VCCAUX;
+        }
+
+        decoupling {
+            // Near-component placement
+            near reg: 10µF @ 1, 1µF @ 2;
+
+            // Near each FPGA power pin (with range)
+            near each fpga.VCCO[0..3]: 100nF @ 1;
+
+            // Distributed decoupling
+            distributed: 100nF @ 10, 10nF @ 20;
+        }
+
+        constraints {
+            max_voltage_drop: 100mV;
+            max_ripple: 50mV;
+        }
+    }
+
+    ground GND;
+}

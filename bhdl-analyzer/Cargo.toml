@@ -9,6 +9,18 @@ edition = "2021"
 name = "test_import_processing"
 path = "src/bin/test_import_processing.rs"
 
+[[bin]]
+name = "test_documentation_generation"
+path = "src/bin/test_documentation_generation.rs"
+
+[[bin]]
+name = "test_fpga_comprehensive"
+path = "src/bin/test_fpga_comprehensive.rs"
+
+[[bin]]
+name = "test_multi_voltage_integration"
+path = "src/bin/test_multi_voltage_integration.rs"
+
 [dependencies]
 bhdl-parser = { path = "../bhdl-parser" }
 bhdl-ast = { path = "../bhdl-ast" }
@@ -26,3 +38,4 @@ anyhow = "1.0"
 log = "0.4"
 tokio = { version = "1", features = ["rt", "macros"] }
 env_logger = "0.10"
+chrono = "0.4"

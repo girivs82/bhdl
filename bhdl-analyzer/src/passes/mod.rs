@@ -4,6 +4,8 @@ pub mod safety_analysis;
 pub mod requirement_hierarchy;
 pub mod fmea_analysis;
 pub mod redundancy_analysis;
+pub mod instance_registry;
+pub mod power_domain_expansion;
 
 pub use safety_analysis::{
     analyze_safety,
@@ -39,4 +41,17 @@ pub use redundancy_analysis::{
     RedundancyConfig,
     RedundancyType,
     RedundancyReport,
+};
+
+pub use instance_registry::{
+    InstanceRegistry,
+    InstanceInfo,
+    build_instance_registry,
+};
+
+pub use power_domain_expansion::{
+    PowerDomainExpansion,
+    ExpandedConnection,
+    DecouplingCapacitor,
+    expand_power_domains,
 };

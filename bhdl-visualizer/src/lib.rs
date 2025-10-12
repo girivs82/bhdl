@@ -30,7 +30,7 @@ pub use renderer::CircuitRenderer;
 pub use layout::{LayoutEngine, LayoutConfig, PlacementAlgorithm};
 pub use knowledge_layout::{KnowledgeLayoutEngine, KnowledgeLayoutConfig};
 pub use schematic_knowledge::schematic_knowledge::SchematicKnowledge;
-pub use types::{Point, BoundingBox, Component, Net, CircuitLayout};
+pub use types::{Point, BoundingBox, Component, Net, NetType, CircuitLayout};
 pub use svg::SvgDocument;
 pub use semantic_visualizer::{SemanticVisualizer, generate_svg as generate_semantic_svg};
 

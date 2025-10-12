@@ -26,6 +26,7 @@ pub mod builtin_variables;
 pub mod expression_evaluator;
 pub mod flow_tracking;
 pub mod unified_simulation;
+pub mod documentation;
 
 // Safety analysis module
 pub mod passes;
@@ -66,9 +67,26 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
              global_scope.get_symbols().len(),
              definition_scopes.len());
 
+    // Pass 1.25: Build Early Component Instance Registry (Phase 2: Scalability)
+    println!("Analyzer: Starting Pass 1.25 - Component Instance Registry...");
+    let instance_registry = passes::build_instance_registry(source_file);
+    println!("Analyzer: Pass 1.25 complete. Registered {} component instances", instance_registry.len());
+
+    // Pass 1.5: Power Domain Expansion (Phase 1: Scalability)
+    println!("Analyzer: Starting Pass 1.5 - Power Domain Expansion...");
+    let power_domain_expansion = passes::expand_power_domains(source_file, &instance_registry);
+    let connections_count = power_domain_expansion.connections.len();
+    let decoupling_caps_count = power_domain_expansion.decoupling_caps.len();
+    let expansion_diags_count = power_domain_expansion.diagnostics.len();
+    println!("Analyzer: Pass 1.5 complete. Connections expanded: {}, Decoupling capacitors generated: {}, Diagnostics: {}",
+             connections_count, decoupling_caps_count, expansion_diags_count);
+
+    // Add power domain expansion diagnostics to the accumulator
+    diagnostics.extend(power_domain_expansion.diagnostics.clone());
+
     // Create built-in variable manager for behavioral modeling
     let builtin_manager = builtin_variables::BuiltinVariableManager::new();
-    
+
     // Pass 2: Reference Checks
     println!("Analyzer: Starting Pass 2 - References & Basic Types...");
     let mut pass2_context = Pass2Context::new(&global_scope, &definition_scopes, source_file.syntax(), &mut diagnostics, &builtin_manager);
@@ -362,6 +380,8 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
         flow_tracker: flow_tracker_opt, // Move ownership
         safety_analysis, // Move ownership
         simulation_data, // Move ownership
+        instance_registry, // Move ownership (Phase 2: Pass 1.25)
+        power_domain_expansion, // Move ownership (Phase 1: Scalability)
     }
 }
 

@@ -1,0 +1,197 @@
+// Example 3: Sensor Array with Range Patterns
+//
+// This example demonstrates range expansion for indexed components.
+//
+// Features demonstrated:
+// - Simple range patterns
+// - Explicit list patterns
+// - Multiple voltage domains
+// - Strategic decoupling
+//
+// Difficulty: ⭐⭐⭐ Advanced
+
+board SensorArray {
+    // Microcontroller
+    mcu: Microcontroller();
+
+    // 16 temperature sensors
+    sensor_0: TempSensor();
+    sensor_1: TempSensor();
+    sensor_2: TempSensor();
+    sensor_3: TempSensor();
+    sensor_4: TempSensor();
+    sensor_5: TempSensor();
+    sensor_6: TempSensor();
+    sensor_7: TempSensor();
+    sensor_8: TempSensor();
+    sensor_9: TempSensor();
+    sensor_10: TempSensor();
+    sensor_11: TempSensor();
+    sensor_12: TempSensor();
+    sensor_13: TempSensor();
+    sensor_14: TempSensor();
+    sensor_15: TempSensor();
+
+    // ADC for sensor readings
+    adc: ADC_16Channel();
+
+    // Communication interface
+    uart: UART();
+
+    // Main 3.3V power for digital logic
+    power_domain @VCC_3V3 = 3.3V @ 2A {
+        distribution {
+            // MCU and peripherals
+            mcu.VCC;
+            uart.VCC;
+            adc.DVCC;
+
+            // Range pattern: Connect sensors 0 through 7
+            // Expands to: sensor[0].VCC, sensor[1].VCC, ..., sensor[7].VCC
+            sensor[0..7].VCC;
+        }
+
+        decoupling {
+            near mcu: 10µF @ 1, 1µF @ 2;
+            distributed: 100nF @ 8;
+        }
+    }
+
+    // Separate 3.3V supply for high-precision sensors
+    power_domain @VCC_3V3_PRECISION = 3.3V @ 500mA {
+        distribution {
+            // Range pattern: Connect sensors 8 through 15
+            // These get cleaner power for better accuracy
+            sensor[8..15].VCC;
+
+            // Analog supply for ADC
+            adc.AVCC;
+        }
+
+        decoupling {
+            near adc: 10µF @ 1, 1µF @ 1;
+            distributed: 100nF @ 4;
+        }
+    }
+
+    // Critical monitoring sensors get separate 5V supply
+    power_domain @VCC_5V_MONITOR = 5V @ 200mA {
+        distribution {
+            // Explicit list pattern: Only specific sensors
+            // Expands to: sensor[0].VREF, sensor[5].VREF, sensor[10].VREF, sensor[15].VREF
+            sensor[0,5,10,15].VREF;
+        }
+
+        decoupling {
+            distributed: 10µF @ 2, 100nF @ 4;
+        }
+    }
+
+    ground GND;
+}
+
+// ============================================================================
+// Expected Output:
+// ============================================================================
+//
+// Power Domain: @VCC_3V3
+// Connections: 11
+//   mcu.VCC, uart.VCC, adc.DVCC (3)
+//   sensor[0].VCC through sensor[7].VCC (8 via range)
+//
+// Power Domain: @VCC_3V3_PRECISION
+// Connections: 9
+//   sensor[8].VCC through sensor[15].VCC (8 via range)
+//   adc.AVCC (1)
+//
+// Power Domain: @VCC_5V_MONITOR
+// Connections: 4
+//   sensor[0].VREF, sensor[5].VREF, sensor[10].VREF, sensor[15].VREF (4 via list)
+//
+// Total Connections: 24
+// Total Decoupling Capacitors: 20
+//
+// ============================================================================
+// Pattern Types:
+// ============================================================================
+//
+// 1. SIMPLE RANGE: sensor[0..7].VCC
+//
+//    Syntax: [start..end]
+//    Expands to contiguous indices from start to end (inclusive)
+//
+//    sensor[0..7] → 0, 1, 2, 3, 4, 5, 6, 7
+//    adc[0..15] → 0, 1, 2, ..., 14, 15
+//
+//    Use when: You need all consecutive indices
+//
+// 2. EXPLICIT LIST: sensor[0,5,10,15].VREF
+//
+//    Syntax: [index1,index2,index3,...]
+//    Expands to specific non-contiguous indices
+//
+//    sensor[0,5,10,15] → only 0, 5, 10, 15
+//    led[1,3,7] → only 1, 3, 7
+//
+//    Use when: You need specific, non-sequential components
+//
+// ============================================================================
+// Design Pattern: Power Domain Separation
+// ============================================================================
+//
+// This example demonstrates a common pattern in sensor systems:
+//
+// 1. DIGITAL DOMAIN (@VCC_3V3)
+//    - Microcontroller and communication
+//    - Standard accuracy sensors (0-7)
+//    - May have more noise, but adequate for most sensors
+//
+// 2. PRECISION ANALOG DOMAIN (@VCC_3V3_PRECISION)
+//    - High-accuracy sensors (8-15)
+//    - ADC analog supply
+//    - Cleaner power → better measurement accuracy
+//    - Separate to isolate from digital switching noise
+//
+// 3. REFERENCE VOLTAGE DOMAIN (@VCC_5V_MONITOR)
+//    - Critical monitoring points only
+//    - Higher voltage for better SNR
+//    - Explicit list ensures only key sensors get this supply
+//
+// Benefits:
+//   ✓ Noise isolation improves measurement quality
+//   ✓ Flexible power allocation per sensor group
+//   ✓ Easy to identify critical sensors in code
+//   ✓ Optimized power consumption
+//
+// ============================================================================
+// When to Use Range vs. List vs. Wildcard:
+// ============================================================================
+//
+// WILDCARD [*]:
+//   Use when: You want ALL instances
+//   Example: led[*].A  →  every LED
+//
+// SIMPLE RANGE [0..N]:
+//   Use when: You want contiguous subset
+//   Example: sensor[0..7].VCC  →  first 8 sensors
+//
+// EXPLICIT LIST [a,b,c]:
+//   Use when: You want specific non-contiguous instances
+//   Example: sensor[0,5,10,15].VREF  →  exactly 4 specific sensors
+//
+// ============================================================================
+// Advanced Patterns (see comprehensive_power_demo.bhdl):
+// ============================================================================
+//
+// - sensor[even].VCC → only even indices (0, 2, 4, 6, ...)
+// - sensor[odd].VCC → only odd indices (1, 3, 5, 7, ...)
+// - sensor[0..15:3].VCC → stepped range (0, 3, 6, 9, 12, 15)
+//
+// These enable even more sophisticated power routing patterns!
+//
+// ============================================================================
+// Next Steps:
+// ============================================================================
+//
+// - 04_multi_voltage_domains.bhdl - Complex multi-rail designs
+// - comprehensive_power_demo.bhdl - See all features in action

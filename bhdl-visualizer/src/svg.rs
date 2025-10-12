@@ -45,6 +45,8 @@ impl SvgDocument {
             ".pin-number { font-family: Arial, sans-serif; font-size: 5px; fill: #666; }".to_string(),
             ".pin-name { font-family: Arial, sans-serif; font-size: 6px; fill: black; }".to_string(),
             ".net { fill: none; stroke: blue; stroke-width: 1.2; }".to_string(),
+            ".net-power { fill: none; stroke: #c00; stroke-width: 2.5; }".to_string(), // Thicker red line for power rails
+            ".net-ground { fill: none; stroke: #000; stroke-width: 2.0; }".to_string(), // Thicker black line for ground
             ".net-label { font-family: Arial, sans-serif; font-size: 8px; fill: blue; }".to_string(),
             ".grid { stroke: #f0f0f0; stroke-width: 0.5; opacity: 0.5; }".to_string(),
         ]);

@@ -129,6 +129,55 @@ impl AstNode for ForLoopGenerate {
     }
 }
 
+impl ForLoopGenerate {
+    /// Get the loop variable name (e.g., "i" in `generate for i in 0..15`)
+    pub fn loop_var(&self) -> Option<String> {
+        // Find the first IDENT after the FOR keyword
+        let mut found_for = false;
+        for element in self.0.children_with_tokens() {
+            if let Some(token) = element.as_token() {
+                if token.kind() == SyntaxKind::FOR_KW {
+                    found_for = true;
+                } else if found_for && token.kind() == SyntaxKind::IDENT {
+                    return Some(token.text().to_string());
+                }
+            }
+        }
+        None
+    }
+
+    /// Get the range bounds (start, end) for the loop (e.g., `(0, 15)` from `generate for i in 0..15`)
+    pub fn range_bounds(&self) -> Option<(i32, i32)> {
+        // The range is represented as: VALUE (containing NUMBER) DOT_DOT NUMBER
+        // We need to extract both numbers
+        let mut numbers = Vec::new();
+
+        // Traverse all tokens to find NUMBER tokens
+        for element in self.0.descendants_with_tokens() {
+            if let Some(token) = element.as_token() {
+                if token.kind() == SyntaxKind::NUMBER {
+                    if let Ok(num) = token.text().parse::<i32>() {
+                        numbers.push(num);
+                    }
+                }
+            }
+        }
+
+        // We should have at least 2 numbers: start and end
+        // (may have more if there are numbers in component parameters)
+        if numbers.len() >= 2 {
+            Some((numbers[0], numbers[1]))
+        } else {
+            None
+        }
+    }
+
+    /// Get all component instances within the generate block
+    pub fn component_instances(&self) -> impl Iterator<Item = crate::common::ComponentInst> {
+        self.0.children().filter_map(crate::common::ComponentInst::cast)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IfGenerate(pub(crate) SyntaxNode<BhdlLanguage>);
 

@@ -1,0 +1,23 @@
+// Test circuit with power domain syntax
+board TestPowerDomain {
+    power_domain @VCC_3V3 = 3.3V @ 2A {
+        sources {
+            regulator: LM7805().OUT;
+        }
+
+        distribution {
+            mcu.VDD;
+            fpga.VCCO[0..7];
+            sensors[*].VCC;
+        }
+
+        decoupling {
+            near regulator: 10µF @ 2, 100nF @ 4;
+            distributed: 1µF @ 10;
+        }
+
+        constraints {
+            max_ripple: 50mV;
+        }
+    }
+}
