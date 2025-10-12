@@ -1,0 +1,19 @@
+// Simple circuit to test CLI intent analysis
+board TestIntents {
+    power VCC = 5V @ 1A;
+    ground GND;
+
+    // Timing intent
+    net delay_path: @VCC -> Res(10k).1 -> Cap(100nF).1 for delay(5ms);
+    Cap(100nF).2 -> @GND;
+
+    // Signal processing intent
+    net filtered: @VCC -> Res(1k).1 -> Cap(10nF).1 for noise_filtering(10kHz, 40dB);
+    Cap(10nF).2 -> @GND;
+
+    // Protection intent
+    net protected: sensor_in -> tvs: TVSDiode(15V).1 -> tvs.2 -> @GND for input_protection(15V, 100mA);
+
+    // Level shifting
+    net shifted: input_3v3 -> Res(10k).1 -> mosfet: NMOS().G for level_shifting(3.3V, 5V);
+}
