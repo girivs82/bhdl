@@ -11,6 +11,7 @@ pub mod development;
 pub mod safety;
 pub mod power_management;
 pub mod digital_timing;
+pub mod advanced;
 
 use bhdl_common::{IntentRegistry, IntentFunction};
 
@@ -62,4 +63,10 @@ pub fn register_stdlib_intents(registry: &mut IntentRegistry) {
     registry.register(Box::new(digital_timing::ClockDistributionIntent));
     registry.register(Box::new(digital_timing::ResetGenerationIntent));
     registry.register(Box::new(digital_timing::BootSequencingIntent));
+
+    // Register advanced feature intents
+    registry.register(Box::new(advanced::SignalIntegrityIntent));
+    registry.register(Box::new(advanced::EmiFilteringIntent));
+    registry.register(Box::new(advanced::IsolationIntent));
+    registry.register(Box::new(advanced::ThermalManagementIntent));
 }
