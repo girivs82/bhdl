@@ -1,0 +1,294 @@
+// Analog circuit intent functions
+
+use bhdl_common::{
+    IntentFunction, IntentParam, IntentResult, IntentValue,
+    SimMode, SynthesisHint, ValidationRule, ToolScope,
+    ParamMetadata, ParamType
+};
+
+/// Current limiting intent for safety and protection
+pub struct CurrentLimitingIntent;
+
+impl IntentFunction for CurrentLimitingIntent {
+    fn name(&self) -> &str {
+        "current_limiting"
+    }
+
+    fn resolve(&self, params: &[IntentParam]) -> Result<IntentResult, String> {
+        // Extract max current parameter
+        let max_current = params.iter().find_map(|p| {
+            match p {
+                IntentParam::Named(name, IntentValue::Number(val, unit)) if name == "max" => {
+                    Some((*val, unit.clone()))
+                }
+                IntentParam::Positional(IntentValue::Number(val, unit)) => {
+                    Some((*val, unit.clone()))
+                }
+                _ => None
+            }
+        });
+
+        let (current_val, current_unit) = max_current
+            .ok_or_else(|| "current_limiting() requires max current parameter".to_string())?;
+
+        let current_str = format!("{}{}", current_val, current_unit.as_deref().unwrap_or("A"));
+
+        Ok(IntentResult {
+            sim_mode: SimMode::AnalogRequired,
+            synthesis_hints: vec![
+                SynthesisHint::Custom(format!("Add current limiting resistor for max {}", current_str)),
+                SynthesisHint::Custom("Consider current sense resistor".to_string()),
+            ],
+            validation_rules: vec![
+                ValidationRule {
+                    condition: "current_within_limit".to_string(),
+                    error_message: format!("Current must not exceed {}", current_str),
+                }
+            ],
+            tool_scope: ToolScope::All,
+        })
+    }
+
+    fn param_metadata(&self) -> Vec<ParamMetadata> {
+        vec![
+            ParamMetadata {
+                name: "max".to_string(),
+                param_type: ParamType::Current,
+                required: true,
+                default_value: None,
+            },
+        ]
+    }
+}
+
+/// Level shifting intent for voltage domain translation
+pub struct LevelShiftingIntent;
+
+impl IntentFunction for LevelShiftingIntent {
+    fn name(&self) -> &str {
+        "level_shifting"
+    }
+
+    fn resolve(&self, params: &[IntentParam]) -> Result<IntentResult, String> {
+        // Extract from and to voltage levels
+        let from_voltage = params.iter().find_map(|p| {
+            match p {
+                IntentParam::Named(name, IntentValue::Number(val, unit)) if name == "from" => {
+                    Some((*val, unit.clone()))
+                }
+                _ => None
+            }
+        });
+
+        let to_voltage = params.iter().find_map(|p| {
+            match p {
+                IntentParam::Named(name, IntentValue::Number(val, unit)) if name == "to" => {
+                    Some((*val, unit.clone()))
+                }
+                _ => None
+            }
+        });
+
+        let from_v = from_voltage.ok_or_else(|| "level_shifting() requires 'from' voltage".to_string())?;
+        let to_v = to_voltage.ok_or_else(|| "level_shifting() requires 'to' voltage".to_string())?;
+
+        let from_str = format!("{}{}", from_v.0, from_v.1.as_deref().unwrap_or("V"));
+        let to_str = format!("{}{}", to_v.0, to_v.1.as_deref().unwrap_or("V"));
+
+        // Determine if we need active or passive level shifting
+        let needs_active = from_v.0 > to_v.0 + 0.7; // voltage drop > 0.7V
+
+        let hint = if needs_active {
+            SynthesisHint::Custom(format!("Use level shifter IC for {} to {}", from_str, to_str))
+        } else {
+            SynthesisHint::Custom(format!("Use voltage divider for {} to {}", from_str, to_str))
+        };
+
+        Ok(IntentResult {
+            sim_mode: SimMode::MixedSignal,
+            synthesis_hints: vec![
+                hint,
+                SynthesisHint::Custom("Verify logic thresholds match".to_string()),
+            ],
+            validation_rules: vec![
+                ValidationRule {
+                    condition: format!("input_voltage_is_{}", from_str),
+                    error_message: format!("Input must be at {}", from_str),
+                },
+                ValidationRule {
+                    condition: format!("output_voltage_is_{}", to_str),
+                    error_message: format!("Output must be at {}", to_str),
+                }
+            ],
+            tool_scope: ToolScope::All,
+        })
+    }
+
+    fn param_metadata(&self) -> Vec<ParamMetadata> {
+        vec![
+            ParamMetadata {
+                name: "from".to_string(),
+                param_type: ParamType::Voltage,
+                required: true,
+                default_value: None,
+            },
+            ParamMetadata {
+                name: "to".to_string(),
+                param_type: ParamType::Voltage,
+                required: true,
+                default_value: None,
+            },
+        ]
+    }
+}
+
+/// Voltage division intent for resistive dividers
+pub struct VoltageDivisionIntent;
+
+impl IntentFunction for VoltageDivisionIntent {
+    fn name(&self) -> &str {
+        "voltage_division"
+    }
+
+    fn resolve(&self, params: &[IntentParam]) -> Result<IntentResult, String> {
+        // Extract division ratio
+        let ratio = params.iter().find_map(|p| {
+            match p {
+                IntentParam::Named(name, IntentValue::Number(val, _)) if name == "ratio" => {
+                    Some(*val)
+                }
+                IntentParam::Positional(IntentValue::Number(val, _)) => {
+                    Some(*val)
+                }
+                _ => None
+            }
+        });
+
+        let ratio_val = ratio.ok_or_else(|| "voltage_division() requires ratio parameter".to_string())?;
+
+        if ratio_val <= 0.0 || ratio_val > 1.0 {
+            return Err("Voltage division ratio must be between 0 and 1".to_string());
+        }
+
+        Ok(IntentResult {
+            sim_mode: SimMode::AnalogRequired,
+            synthesis_hints: vec![
+                SynthesisHint::Custom(format!("Use resistor divider with ratio {:.3}", ratio_val)),
+                SynthesisHint::Custom("Consider load impedance effects".to_string()),
+            ],
+            validation_rules: vec![
+                ValidationRule {
+                    condition: format!("output_is_{}x_input", ratio_val),
+                    error_message: format!("Output should be {:.1}% of input", ratio_val * 100.0),
+                }
+            ],
+            tool_scope: ToolScope::All,
+        })
+    }
+
+    fn param_metadata(&self) -> Vec<ParamMetadata> {
+        vec![
+            ParamMetadata {
+                name: "ratio".to_string(),
+                param_type: ParamType::Number,
+                required: true,
+                default_value: None,
+            },
+        ]
+    }
+}
+
+/// Signal amplification intent for gain stages
+pub struct SignalAmplificationIntent;
+
+impl IntentFunction for SignalAmplificationIntent {
+    fn name(&self) -> &str {
+        "signal_amplification"
+    }
+
+    fn resolve(&self, params: &[IntentParam]) -> Result<IntentResult, String> {
+        // Extract gain parameter (first positional or named "gain")
+        let gain = params.get(0).and_then(|p| {
+            match p {
+                IntentParam::Positional(IntentValue::Number(val, unit)) => {
+                    Some((*val, unit.clone()))
+                }
+                _ => None
+            }
+        }).or_else(|| {
+            params.iter().find_map(|p| {
+                match p {
+                    IntentParam::Named(name, IntentValue::Number(val, unit)) if name == "gain" => {
+                        Some((*val, unit.clone()))
+                    }
+                    _ => None
+                }
+            })
+        });
+
+        // Extract bandwidth parameter (second positional or named "bandwidth")
+        let bandwidth = params.get(1).and_then(|p| {
+            match p {
+                IntentParam::Positional(IntentValue::Number(val, unit)) => {
+                    Some((*val, unit.clone()))
+                }
+                _ => None
+            }
+        }).or_else(|| {
+            params.iter().find_map(|p| {
+                match p {
+                    IntentParam::Named(name, IntentValue::Number(val, unit)) if name == "bandwidth" => {
+                        Some((*val, unit.clone()))
+                    }
+                    _ => None
+                }
+            })
+        });
+
+        let gain_val = gain.ok_or_else(|| "signal_amplification() requires gain parameter".to_string())?;
+
+        let gain_str = if gain_val.1.as_deref() == Some("dB") {
+            format!("{}dB", gain_val.0)
+        } else {
+            format!("{}x", gain_val.0)
+        };
+
+        let mut synthesis_hints = vec![
+            SynthesisHint::Custom(format!("Use amplifier with {} gain", gain_str)),
+        ];
+
+        if let Some((bw, unit)) = bandwidth {
+            let bw_str = format!("{}{}", bw, unit.as_deref().unwrap_or("Hz"));
+            synthesis_hints.push(SynthesisHint::Custom(format!("Bandwidth: {}", bw_str)));
+        }
+
+        Ok(IntentResult {
+            sim_mode: SimMode::AnalogRequired,
+            synthesis_hints,
+            validation_rules: vec![
+                ValidationRule {
+                    condition: "gain_within_spec".to_string(),
+                    error_message: format!("Amplifier gain must achieve {}", gain_str),
+                }
+            ],
+            tool_scope: ToolScope::All,
+        })
+    }
+
+    fn param_metadata(&self) -> Vec<ParamMetadata> {
+        vec![
+            ParamMetadata {
+                name: "gain".to_string(),
+                param_type: ParamType::Number,
+                required: true,
+                default_value: None,
+            },
+            ParamMetadata {
+                name: "bandwidth".to_string(),
+                param_type: ParamType::Frequency,
+                required: false,
+                default_value: None,
+            },
+        ]
+    }
+}

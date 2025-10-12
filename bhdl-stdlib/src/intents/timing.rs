@@ -133,3 +133,75 @@ impl IntentFunction for DebounceIntent {
         ]
     }
 }
+
+/// Pulse stretch intent - extends short pulses to minimum duration
+pub struct PulseStretchIntent;
+
+impl IntentFunction for PulseStretchIntent {
+    fn name(&self) -> &str {
+        "pulse_stretch"
+    }
+
+    fn resolve(&self, params: &[IntentParam]) -> Result<IntentResult, String> {
+        // Extract stretch duration parameter
+        let duration = params.iter().find_map(|p| {
+            match p {
+                IntentParam::Named(name, IntentValue::Number(val, unit)) if name == "duration" => {
+                    Some((*val, unit.clone()))
+                }
+                IntentParam::Positional(IntentValue::Number(val, unit)) => {
+                    Some((*val, unit.clone()))
+                }
+                _ => None
+            }
+        });
+
+        let (duration_val, duration_unit) = duration
+            .ok_or_else(|| "pulse_stretch() requires duration parameter".to_string())?;
+
+        let duration_str = format!("{}{}", duration_val, duration_unit.as_deref().unwrap_or("s"));
+
+        // Convert to seconds for mode determination
+        let duration_seconds = match duration_unit.as_deref() {
+            Some("s") => duration_val,
+            Some("ms") => duration_val / 1000.0,
+            Some("us") | Some("µs") => duration_val / 1_000_000.0,
+            Some("ns") => duration_val / 1_000_000_000.0,
+            _ => duration_val, // Assume seconds
+        };
+
+        // Determine simulation mode based on duration
+        let sim_mode = if duration_seconds < 1e-6 {
+            SimMode::DigitalWithTiming  // Sub-microsecond
+        } else {
+            SimMode::MixedSignal        // Longer durations need timing analysis
+        };
+
+        Ok(IntentResult {
+            sim_mode,
+            synthesis_hints: vec![
+                SynthesisHint::Custom(format!("Pulse stretcher for min {}", duration_str)),
+                SynthesisHint::RCNetwork,
+                SynthesisHint::Custom("Consider monostable multivibrator".to_string()),
+            ],
+            validation_rules: vec![
+                ValidationRule {
+                    condition: format!("pulse_min_width_{}", duration_str),
+                    error_message: format!("Output pulse must be at least {}", duration_str),
+                }
+            ],
+            tool_scope: ToolScope::All,
+        })
+    }
+
+    fn param_metadata(&self) -> Vec<ParamMetadata> {
+        vec![
+            ParamMetadata {
+                name: "duration".to_string(),
+                param_type: ParamType::Duration,
+                required: true,
+                default_value: None,
+            },
+        ]
+    }
+}
