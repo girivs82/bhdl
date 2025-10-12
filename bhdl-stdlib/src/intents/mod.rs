@@ -9,6 +9,7 @@ pub mod digital;
 pub mod measurement;
 pub mod development;
 pub mod safety;
+pub mod power_management;
 
 use bhdl_common::{IntentRegistry, IntentFunction};
 
@@ -49,4 +50,10 @@ pub fn register_stdlib_intents(registry: &mut IntentRegistry) {
     registry.register(Box::new(safety::IndustrialControlIntent));
     registry.register(Box::new(safety::MedicalSafetyIntent));
     registry.register(Box::new(safety::EsdProtectionIntent));
+
+    // Register power management intents
+    registry.register(Box::new(power_management::PowerSequencingIntent));
+    registry.register(Box::new(power_management::VoltageMonitoringIntent));
+    registry.register(Box::new(power_management::PowerGoodSignalIntent));
+    registry.register(Box::new(power_management::InrushLimitingIntent));
 }
