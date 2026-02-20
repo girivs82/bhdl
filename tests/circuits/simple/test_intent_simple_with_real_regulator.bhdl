@@ -43,7 +43,7 @@ board IntentLayoutDemo {
     c1.2 -> GND;
 
     // TOP ZONE: Voltage regulation
-    net regulated: c1.1 -> reg: LM7805().VI -> reg.VO -> VOUT for voltage_regulation(5V, 12V);
+    net vin_filtered: c1.1 -> reg: LM7805().VI -> reg.VO -> VOUT for voltage_regulation(5V, 12V);
     reg.GND -> GND;
 
     // CENTER ZONE: Output filtering
