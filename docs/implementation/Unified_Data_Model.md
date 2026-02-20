@@ -99,7 +99,7 @@ pub fn with_ast_metadata(circuit: Circuit, netlist: &Netlist, ...) -> Self {
 ### 4. Component Registry Integration
 All component-specific information comes from stdlib definitions:
 - No hardcoded pin functions in SPICE
-- Component pin metadata flows from BHDL module definitions
+- Component pin metadata flows from BHDL entity definitions
 - Database population from analysis data, not hardcoded values
 
 ## Benefits

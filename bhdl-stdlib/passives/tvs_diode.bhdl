@@ -3,7 +3,7 @@
 
 import { TVSDiodeParams, TVS_15V } from "../electrical_params.bhdl";
 
-module TVSDiode(voltage: voltage) {
+entity TVSDiode(voltage: voltage) {
     pin 1: signal inout;  // Terminal 1 (bidirectional)
     pin 2: signal inout;  // Terminal 2 (bidirectional)
     

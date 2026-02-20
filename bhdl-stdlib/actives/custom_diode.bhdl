@@ -1,7 +1,7 @@
 // Custom Diode Component - Example of equation-based model
 // Demonstrates how users can define their own component models
 
-module CustomDiode() {
+entity CustomDiode() {
     pin A: signal in @metadata(
         function="Anode",
         description="Positive terminal (Anode)",

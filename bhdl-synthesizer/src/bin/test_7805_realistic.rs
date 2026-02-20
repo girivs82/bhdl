@@ -49,6 +49,7 @@ async fn main() -> Result<()> {
         include_component_inference: true,
         flatten_hierarchy: false,
         database_path: None, // This will prevent database initialization
+        ..Default::default()
     };
     
     let mut generator = NetlistGenerator::with_config(config);

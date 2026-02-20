@@ -69,17 +69,17 @@ board TestBoard {
     ground GND;
     
     // Component definitions
-    module Resistor(value: resistance) {
+    entity Resistor(value: resistance) {
         pin 1: signal inout;
         pin 2: signal inout;
     }
     
-    module Capacitor(value: capacitance) {
+    entity Capacitor(value: capacitance) {
         pin 1: signal inout;
         pin 2: signal inout;
     }
     
-    module LED(color: string) {
+    entity LED(color: string) {
         pin A: signal in;
         pin K: signal out;
     }

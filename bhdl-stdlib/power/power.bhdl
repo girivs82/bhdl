@@ -14,7 +14,7 @@ type PowerSourceParams = {
     impedance: ImpedanceCharacteristics,
 };
 
-module Power(voltage: voltage, current: current) {
+entity Power(voltage: voltage, current: current) {
     // Power output pin
     pin OUT: power out @metadata(
         function="PowerOut",

@@ -41,7 +41,7 @@ board TestBoard {
     
     // Test satisfies in module
     let module_satisfies = r#"
-module PowerSupply(voltage: voltage) {
+entity PowerSupply(voltage: voltage) {
     pin VIN: power in;
     pin VOUT: power out;
     pin PGOOD: signal out;
@@ -126,7 +126,7 @@ fn print_ast(node: rowan::NodeOrToken<rowan::SyntaxNode<bhdl_parser::BhdlLanguag
                 for child in n.children_with_tokens() {
                     print_ast(child, depth);
                 }
-            } else if matches!(kind, SyntaxKind::BOARD_DEF | SyntaxKind::MODULE_DEF) {
+            } else if matches!(kind, SyntaxKind::BOARD_DEF | SyntaxKind::ENTITY_DEF) {
                 // Recurse through board/module definitions
                 for child in n.children_with_tokens() {
                     print_ast(child, depth);

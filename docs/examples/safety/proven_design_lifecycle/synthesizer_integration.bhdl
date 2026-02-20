@@ -97,7 +97,7 @@ synthesizer_workflow {
 // INTELLIGENT PARAMETER CALCULATION
 // ───────────────────────────────────────────────────────────────────
 
-module Parameterized_Buck_Proven(
+entity Parameterized_Buck_Proven(
     input_voltage: voltage,
     output_voltage: voltage,
     output_current: current

@@ -8,7 +8,7 @@ board BoostConverter {
     VIN -> Cap(10uF, ceramic).1 -> GND;
     
     // Boost controller (e.g., TPS61088)
-    module BoostController {
+    entity BoostController {
         pin VIN: power in;
         pin SW: power inout;    // Switch node
         pin VOUT: power in;     // Output sense

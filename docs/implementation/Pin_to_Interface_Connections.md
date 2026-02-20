@@ -125,7 +125,7 @@ interface I2C {
     signal SCL: out;
 }
 
-module STM32F4 {
+entity STM32F4 {
     pin PA4: signal inout;
     pin PA5: signal inout;
 }

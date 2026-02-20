@@ -1,7 +1,7 @@
 // Simple test of virtual pin with inline TPS54331 definition
 // This tests if virtual pins work without imports
 
-module TPS54331(vout: voltage = 3.3V) {
+entity TPS54331(vout: voltage = 3.3V) {
     // Physical pins
     pin VIN: power in;
     pin SW: switch out;

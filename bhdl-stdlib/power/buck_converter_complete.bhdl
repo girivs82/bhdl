@@ -6,7 +6,7 @@ import { Inductor } from "../passives/inductor.bhdl";
 import { Capacitor } from "../passives/capacitor.bhdl";
 import { Resistor } from "../passives/resistor.bhdl";
 
-module BuckConverter(
+entity BuckConverter(
     vin_nom: voltage = 12V,
     vin_min: voltage = 10V, 
     vin_max: voltage = 14V,

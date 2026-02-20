@@ -118,7 +118,7 @@ pub enum SatisfiesSpec {
 /// Example:
 /// ```bhdl
 /// via component_name
-/// via module.component
+/// via entity.component
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SatisfiesVia {
@@ -323,6 +323,6 @@ pub trait HasSatisfies: AstNode<Language = BhdlLanguage> {
     }
 }
 
-// Implement HasSatisfies for Board and Module (they can contain satisfies blocks)
+// Implement HasSatisfies for Board and Entity (they can contain satisfies blocks)
 impl HasSatisfies for crate::items::Board {}
-impl HasSatisfies for crate::items::Module {}
+impl HasSatisfies for crate::items::Entity {}

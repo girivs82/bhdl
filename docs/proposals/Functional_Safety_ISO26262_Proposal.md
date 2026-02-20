@@ -31,7 +31,7 @@ This document presents a comprehensive design for integrating ISO 26262 function
 
 ### 1.2 Design Goals
 - **Separation of Concerns**: Board designers and safety engineers work independently
-- **No New Keywords**: Reuse existing BHDL constructs (`module`, `requirements`, `attributes`)
+- **No New Keywords**: Reuse existing BHDL constructs (`entity`, `requirements`, `attributes`)
 - **Automatic Analysis**: Calculate safety metrics (SPFM, LFM, PMHF) automatically
 - **Bidirectional Flow**: Safety requirements → board implementation → safety validation
 - **ISO 26262 Compliance**: Support all ASIL levels and required metrics
@@ -42,10 +42,10 @@ This document presents a comprehensive design for integrating ISO 26262 function
 ## 2. Core Design Principles
 
 ### 2.1 Minimal Language Extension
-- Use existing `module` construct for all components (no `safety_part` keyword)
+- Use existing `entity` construct for all components (no `safety_part` keyword)
 - Use `attributes` to mark safety properties (PSM, LSM, ASIL levels)
 - Use unified `requirements` block for all requirement types
-- Introduce only one new construct: `safety_module` for safety analysis overlay
+- Introduce only one new construct: `safety_entity` for safety analysis overlay
 
 ### 2.2 Clear Domain Separation
 ```
@@ -131,8 +131,8 @@ requirements {
 ### 4.2 Module Safety Attributes
 
 ```bhdl
-module VoltageMonitor {
-    // Standard module with safety attributes
+entity VoltageMonitor {
+    // Standard entity with safety attributes
     attribute safety_mechanism = "primary";  // PSM
     attribute asil = ASIL_B;
     attribute diagnostic_coverage = 90%;
@@ -144,7 +144,7 @@ module VoltageMonitor {
         drift: { rate: 10FIT, detectable: false }
     };
     
-    // Regular module interface
+    // Regular entity interface
     pin VIN: signal in;
     pin FAULT: signal out;
     pin TEST: signal in optional;
@@ -305,7 +305,7 @@ safety_alternative {
 
 ```bhdl
 // Component provides base failure data
-module CurrentSensor {
+entity CurrentSensor {
     attribute failure_data = {
         lambda_total: 50FIT,
         failure_modes: [
@@ -498,7 +498,7 @@ builtin_failure_models {
 
 // TIER 2: Component Library Definitions
 // In bhdl-stdlib or vendor libraries
-module LM7805 {
+entity LM7805 {
     attribute failure_data = {
         source: "STMicroelectronics datasheet";
         lambda_total: 30FIT;  // At 25°C, nominal load
@@ -1304,7 +1304,7 @@ jobs:
 1. **Pilot Project**: Single board with safety overlay
 2. **Department Adoption**: One team uses for all boards
 3. **Company Rollout**: Standardize across organization
-4. **Supply Chain**: Share safety modules with suppliers
+4. **Supply Chain**: Share safety entities with suppliers
 
 ---
 

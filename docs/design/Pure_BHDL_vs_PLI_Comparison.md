@@ -208,7 +208,7 @@ Based on the examples, the optimal approach is:
 
 ```bhdl
 // BHDL: Simple behavioral for common cases
-module BuckController {
+entity BuckController {
     // Basic state and equations
     param duty = clamp(kp * error, 0, 0.9);
     

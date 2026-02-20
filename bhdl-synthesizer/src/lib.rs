@@ -25,8 +25,8 @@ pub mod component_mapping;
 // Hierarchical connectivity extraction
 pub mod hierarchical_connectivity;
 
-// Module variant management
-pub mod module_variants;
+// Entity variant management
+pub mod entity_variants;
 
 // Hierarchical reference designator generation
 pub mod hierarchical_refdes;
@@ -103,7 +103,7 @@ pub use bhdl_analyzer::types::AnalysisResult;
 pub use bhdl_analyzer::component_inference::ParameterValue;
 pub use bhdl_netlist::{Netlist, ModuleId, InstanceId, NetId, PortId, PinId, PinInstanceId, PinInstance, Pin};
 pub use bhdl_netlist::types::{ModuleKind, PortDirection, PinDirection, PinType, ConnectionPoint, Unit, Quantity, NetClass};
-pub use bhdl_ast::{SourceFile, Board, Module, ComponentDef, HasName, AstNode, PinDecl};
+pub use bhdl_ast::{SourceFile, Board, Entity, ComponentDef, HasName, AstNode, PinDecl};
 pub use component_mapping::{DatabaseComponentMapper, DatabaseComponentInstance, DatabaseMapperStats};
 pub use intent_hint_processor::{
     IntentHintProcessor, ComponentRecommendation, ComponentPreference,
@@ -286,12 +286,12 @@ impl NetlistGenerator {
         }
     }
 
-    /// Extract virtual pin components from a module AST node
-    fn extract_virtual_pins_from_module(&self, module: &bhdl_ast::Module) -> Option<Vec<bhdl_stdlib::virtual_pins::VirtualPinComponent>> {
+    /// Extract virtual pin components from an entity AST node
+    fn extract_virtual_pins_from_entity(&self, entity: &bhdl_ast::Entity) -> Option<Vec<bhdl_stdlib::virtual_pins::VirtualPinComponent>> {
         use crate::virtual_pin_extractor::VirtualPinExtractor;
-        
-        // Use the new virtual pin extractor to parse the module
-        VirtualPinExtractor::extract_from_module(module)
+
+        // Use the new virtual pin extractor to parse the entity
+        VirtualPinExtractor::extract_from_entity(entity)
     }
     
     /// Process virtual pin components extracted from AST
@@ -568,9 +568,15 @@ impl NetlistGenerator {
             info!("Manufacturing and assembly optimization phase completed");
         }
 
-        info!("Netlist generation complete: {} modules, {} instances, {} nets, {} database components", 
-              self.netlist.modules.len(), 
-              self.netlist.instances.len(), 
+        // Populate database components for ALL netlist instances (before power symbols)
+        self.populate_all_netlist_components().await?;
+
+        // Final phase: Populate power symbol database entries for visualization
+        self.populate_power_symbol_components(analysis).await?;
+
+        info!("Netlist generation complete: {} modules, {} instances, {} nets, {} database components",
+              self.netlist.modules.len(),
+              self.netlist.instances.len(),
               self.netlist.nets.len(),
               self.component_instances.len());
 
@@ -594,7 +600,7 @@ impl NetlistGenerator {
         } else {
             // Extract module definitions from global scope
             for symbol in analysis.global_scope.iter() {
-                if matches!(symbol.kind, bhdl_analyzer::symbol_table::SymbolKind::Module | 
+                if matches!(symbol.kind, bhdl_analyzer::symbol_table::SymbolKind::Entity |
                                        bhdl_analyzer::symbol_table::SymbolKind::Board) {
                     let module_kind = if matches!(symbol.kind, bhdl_analyzer::symbol_table::SymbolKind::Board) {
                         ModuleKind::Board
@@ -687,11 +693,11 @@ impl NetlistGenerator {
                     // Transfer component parameters from analyzer to instance attributes
                     println!("DEBUG: Calling populate_instance_attributes for instance '{}' (id: {:?})", instance_name, instance_id);
                     populate_instance_attributes(&mut self.netlist, instance_id, &instance_name, analysis);
-                    
+
                     self.ast_to_module.insert(component_type.clone(), module_id);
                     self.ast_to_instance.insert(instance_name.clone(), instance_id);
-                    
-                    debug!("Created instance '{}' of type '{}' with semantic kind {:?}", 
+
+                    debug!("Created instance '{}' of type '{}' with semantic kind {:?}",
                            instance_name, component_type, module_kind);
                 }
             }
@@ -729,11 +735,11 @@ impl NetlistGenerator {
         for (name, symbol) in &all_symbols {
             if matches!(symbol.kind, bhdl_analyzer::symbol_table::SymbolKind::Instance) {
                 debug!("Processing component instance: {} of kind {:?}", name, symbol.kind);
-                
+
                 // Extract component type from the symbol's instance_type_name
                 if let Some(ref type_name) = symbol.instance_type_name {
                     debug!("Component {} is of type: {}", name, type_name);
-                    
+
                     // Create module for the component type if it doesn't exist
                     let module_id = self.get_or_create_module(type_name, ModuleKind::Component)?;
                     
@@ -742,10 +748,29 @@ impl NetlistGenerator {
                     
                     if let Some(instance_id) = instance_id {
                         debug!("Created component instance: {} -> {:?}", name, instance_id);
-                        
+
                         // Add pins for the component based on database or default pins
                         if let Err(e) = self.add_pins_for_component(name, type_name, module_id) {
                             warn!("Failed to add pins for component {}: {}", name, e);
+                        }
+
+                        // Try to match this instance to a database component for visualization
+                        // BUT: Skip module type definitions (where name == type_name like "Cap" == "Cap")
+                        // These are library types, not actual component instances
+                        if name != type_name {
+                            if let Some(ref mut mapper) = self.database_mapper {
+                                match mapper.create_component_instance(name, type_name).await {
+                                    Ok(component_instance) => {
+                                        debug!("Matched component {} to database component: {}", name, component_instance.component_name);
+                                        self.component_instances.push(component_instance);
+                                    }
+                                    Err(e) => {
+                                        debug!("Could not match component {} (type: {}) to database: {}", name, type_name, e);
+                                    }
+                                }
+                            }
+                        } else {
+                            debug!("Skipping database component for module type definition: {}", name);
                         }
                     } else {
                         warn!("Failed to create instance for component: {}", name);
@@ -774,12 +799,12 @@ impl NetlistGenerator {
             if matches!(symbol.kind, bhdl_analyzer::symbol_table::SymbolKind::Instance) {
                 if let Some(ref type_name) = symbol.instance_type_name {
                     // Check if the component is defined in the analyzer's symbol table (from imports)
-                    let has_module_definition = analysis.global_scope.lookup(type_name)
-                        .map(|s| s.kind == bhdl_analyzer::symbol_table::SymbolKind::Module)
+                    let has_entity_definition = analysis.global_scope.lookup(type_name)
+                        .map(|s| s.kind == bhdl_analyzer::symbol_table::SymbolKind::Entity)
                         .unwrap_or(false);
-                    
-                    if has_module_definition {
-                        println!("✅ SYNTHESIZER: Found module definition for {} in symbol table", type_name);
+
+                    if has_entity_definition {
+                        println!("✅ SYNTHESIZER: Found entity definition for {} in symbol table", type_name);
                         info!("Component {} found in analyzer symbol table", type_name);
                         
                         // Try to extract component information directly from the AST node in the symbol table
@@ -820,9 +845,9 @@ impl NetlistGenerator {
                                 
                                 // Extract virtual pins if we found the node
                                 if let Some(syntax_node) = resolved_node {
-                                    if let Some(module_node) = bhdl_ast::Module::cast(syntax_node) {
+                                    if let Some(entity_node) = bhdl_ast::Entity::cast(syntax_node) {
                                         info!("Successfully resolved {} AST node from symbol table", type_name);
-                                        virtual_components_from_ast = self.extract_virtual_pins_from_module(&module_node);
+                                        virtual_components_from_ast = self.extract_virtual_pins_from_entity(&entity_node);
                                     }
                                 } else {
                                     warn!("Could not resolve AST node for {} - may need to load more imports", type_name);
@@ -1296,16 +1321,17 @@ impl NetlistGenerator {
                 
                 // NEW: Create component instances for power and ground
                 if domain_name.contains("GND") || domain_info.voltage == 0.0 {
-                    // Create Ground component instance
+                    // Create Ground component instance using KiCad GND symbol
+                    let symbol_name = "GND".to_string();
                     let module_id = self.netlist.add_module(
-                        "Ground".to_string(),
+                        symbol_name.clone(),
                         ModuleKind::PhysicalComponent
                     );
-                    
-                    // Add GND pin to the module
+
+                    // Add pin to the module (ground symbols have pin "1")
                     let pin_id = self.netlist.add_pin(
                         module_id,
-                        "GND".to_string(),
+                        "1".to_string(),
                         PinDirection::InOut,
                         PinType::Ground
                     ).ok_or_else(|| anyhow::anyhow!("Failed to add GND pin"))?;
@@ -1327,22 +1353,30 @@ impl NetlistGenerator {
                     }
                     
                     self.ast_to_instance.insert(domain_name.clone(), instance_id);
-                    
+
                     info!("Created Ground component instance '{}' connected to net", domain_name);
                 } else {
-                    // Create Power component instance
+                    // Create Power component instance using voltage-appropriate symbol
+                    let symbol_name = match domain_info.voltage.round() as i32 {
+                        5 => "+5V".to_string(),
+                        12 => "+12V".to_string(),
+                        3 => "+3V3".to_string(),
+                        24 => "+24V".to_string(),
+                        _ => format!("+{}V", domain_info.voltage.round() as i32),
+                    };
+
                     let module_id = self.netlist.add_module(
-                        "Power".to_string(),
+                        symbol_name.clone(),
                         ModuleKind::PhysicalComponent
                     );
-                    
-                    // Add OUT pin to the module
+
+                    // Add pin to the module (power symbols have pin "1")
                     let pin_id = self.netlist.add_pin(
                         module_id,
-                        "OUT".to_string(),
+                        "1".to_string(),
                         PinDirection::Out,
                         PinType::Power
-                    ).ok_or_else(|| anyhow::anyhow!("Failed to add OUT pin"))?;
+                    ).ok_or_else(|| anyhow::anyhow!("Failed to add power pin"))?;
                     
                     // Create instance
                     let instance_id = self.netlist.add_instance(
@@ -1361,15 +1395,110 @@ impl NetlistGenerator {
                     }
                     
                     self.ast_to_instance.insert(domain_name.clone(), instance_id);
-                    
-                    info!("Created Power component instance '{}' ({}V @ {}A) connected to net", 
+
+                    info!("Created Power component instance '{}' ({}V @ {}A) connected to net",
                           domain_name, domain_info.voltage, domain_info.max_current);
                 }
             }
         }
         Ok(())
     }
-    
+
+    /// Populate database components for all netlist instances
+    async fn populate_all_netlist_components(&mut self) -> Result<()> {
+        if self.database_mapper.is_none() {
+            return Ok(()); // No database, skip
+        }
+
+        // Track which instances already have database components
+        let existing_instances: std::collections::HashSet<String> =
+            self.component_instances.iter()
+                .map(|c| c.instance_name.clone())
+                .collect();
+
+        debug!("Populating database components for netlist instances (already have {} components)", existing_instances.len());
+
+        // Iterate over all netlist instances
+        for (instance_id, instance) in &self.netlist.instances {
+            // Skip if already have a database component for this instance
+            if existing_instances.contains(&instance.name) {
+                debug!("Skipping instance '{}' - already has database component", instance.name);
+                continue;
+            }
+
+            // Get module definition to find component type
+            let module_def = match self.netlist.get_module(instance.definition) {
+                Some(def) => def,
+                None => {
+                    debug!("WARNING: Module definition not found for instance {}, skipping", instance.name);
+                    continue;
+                }
+            };
+
+            // Skip module types where instance name == module name (like "Cap" == "Cap")
+            if instance.name == module_def.name {
+                debug!("Skipping module type definition: {}", instance.name);
+                continue;
+            }
+
+            // Try to create database component instance
+            if let Some(ref mut mapper) = self.database_mapper {
+                match mapper.create_component_instance(&instance.name, &module_def.name).await {
+                    Ok(component_instance) => {
+                        debug!("Created database component for instance '{}' (type: {})", instance.name, module_def.name);
+                        self.component_instances.push(component_instance);
+                    }
+                    Err(e) => {
+                        debug!("Could not create database component for instance '{}' (type: {}): {}",
+                               instance.name, module_def.name, e);
+                    }
+                }
+            }
+        }
+
+        info!("Populated database components: {} total", self.component_instances.len());
+        Ok(())
+    }
+
+    /// Populate power symbol database entries for visualization
+    async fn populate_power_symbol_components(&mut self, analysis: &AnalysisResult) -> Result<()> {
+        if self.database_mapper.is_none() {
+            return Ok(()); // No database, skip
+        }
+
+        let power_context = &analysis.power_analysis;
+
+        for (domain_name, domain_info) in &power_context.domains {
+            // Determine symbol name
+            let symbol_name = if domain_name.contains("GND") || domain_info.voltage == 0.0 {
+                "GND".to_string()
+            } else {
+                match domain_info.voltage.round() as i32 {
+                    5 => "+5V".to_string(),
+                    12 => "+12V".to_string(),
+                    3 => "+3V3".to_string(),
+                    24 => "+24V".to_string(),
+                    _ => format!("+{}V", domain_info.voltage.round() as i32),
+                }
+            };
+
+            // Create database component instance for this power symbol using direct database lookup
+            if let Some(ref mut mapper) = self.database_mapper {
+                match mapper.create_component_instance_direct(domain_name, &symbol_name).await {
+                    Ok(component_instance) => {
+                        info!("Added power symbol '{}' ({}) to component instances", domain_name, symbol_name);
+                        self.component_instances.push(component_instance);
+                    }
+                    Err(e) => {
+                        debug!("Could not add power symbol {} ({}): {}", domain_name, symbol_name, e);
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Visit all connection statements in the AST
     fn visit_connections_in_ast(&mut self, node: &bhdl_ast::SyntaxNode<bhdl_ast::BhdlLanguage>, count: &mut usize, analysis: &AnalysisResult) -> Result<()> {
         use bhdl_ast::{SyntaxKind, AstNode, ConnectionStmt};
@@ -2114,7 +2243,7 @@ impl NetlistGenerator {
         // Convert analyzer symbols to common symbol format
         for (name, symbol) in global_symbols {
             let symbol_type = match symbol.kind {
-                SymbolKind::Module => SymbolType::Module,
+                SymbolKind::Entity => SymbolType::Module,
                 SymbolKind::Instance => SymbolType::Instance,
                 SymbolKind::Component => SymbolType::Module, // Components are module definitions
                 SymbolKind::Board => SymbolType::Module,     // Boards are top-level modules
@@ -2131,7 +2260,7 @@ impl NetlistGenerator {
             analysis_data.symbol_data.insert(name.clone(), symbol_info);
             
             // If this is a module definition, create module definition info
-            if matches!(symbol.kind, SymbolKind::Module | SymbolKind::Component | SymbolKind::Board) {
+            if matches!(symbol.kind, SymbolKind::Entity | SymbolKind::Component | SymbolKind::Board) {
                 let module_info = ModuleDefinitionInfo {
                     name: name.clone(),
                     pins: self.extract_module_pins(name, analysis)?,
@@ -2297,12 +2426,12 @@ impl NetlistGenerator {
         
         // First check if this component was imported via preprocessor
         let (pin_definitions, has_virtual_pins) = if let Some(ref preprocessor) = self.import_preprocessor {
-            if let Some(module) = preprocessor.get_imported_module(component_type) {
-                println!("SYNTHESIZER: Using preprocessed imported module definition for '{}'", component_type);
-                
-                // Extract pins from the imported module
+            if let Some(entity) = preprocessor.get_imported_entity(component_type) {
+                println!("SYNTHESIZER: Using preprocessed imported entity definition for '{}'", component_type);
+
+                // Extract pins from the imported entity
                 let mut pins = Vec::new();
-                for pin in module.pins() {
+                for pin in entity.pins() {
                     if let Some(name) = pin.name() {
                         let pin_text = pin.syntax().text().to_string();
                         let is_virtual = pin_text.contains("virtual");
@@ -2340,13 +2469,13 @@ impl NetlistGenerator {
                 warn!("No import preprocessor available for component {} - cannot extract pins", component_type);
                 (Vec::new(), false)
             }
-        } else if let Some(module) = self.import_loader.get_module(component_type) {
+        } else if let Some(entity) = self.import_loader.get_entity(component_type) {
             // Legacy path: check import_loader if no preprocessor
             println!("SYNTHESIZER: Using legacy import_loader for '{}'", component_type);
-            
-            // Extract pins from the imported module
+
+            // Extract pins from the imported entity
             let mut pins = Vec::new();
-            for pin in module.pins() {
+            for pin in entity.pins() {
                 if let Some(name) = pin.name() {
                     let pin_text = pin.syntax().text().to_string();
                     let is_virtual = pin_text.contains("virtual");
@@ -2553,7 +2682,7 @@ impl NetlistGenerator {
         // These should come from @optimization_strategy annotations in the components
         for (name, symbol) in analysis.global_scope.get_symbols() {
             // Check if this is a module/component with optimization requirements
-            if symbol.kind == bhdl_analyzer::symbol_table::SymbolKind::Module {
+            if symbol.kind == bhdl_analyzer::symbol_table::SymbolKind::Entity {
                 // TODO: Extract from @optimization_strategy annotation
                 // For now, look for known power converter types
                 if name.contains("Buck") || name.contains("Boost") || name.contains("PowerSupply") {

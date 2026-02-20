@@ -51,7 +51,7 @@ board BuckConverterBoard {
 }
 
 // Buck controller module with detailed pin metadata
-module BuckController() {
+entity BuckController() {
     // Power input with metadata
     pin VIN: power in @metadata(
         function="PowerIn",
@@ -98,12 +98,12 @@ module BuckController() {
 }
 
 // Supporting modules
-module SchottkyDiode(breakdown_voltage: voltage) {
+entity SchottkyDiode(breakdown_voltage: voltage) {
     pin A: signal;
     pin K: signal;
 }
 
-module Inductor(inductance: inductance) {
+entity Inductor(inductance: inductance) {
     pin 1: signal;
     pin 2: signal;
 }

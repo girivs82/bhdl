@@ -126,7 +126,7 @@ pub trait ComponentFaultBehavior {
 
 #### 2. BHDL Syntax Extension
 ```bhdl
-module STM32F103 {
+entity STM32F103 {
     // Regular pins...
     
     fault_behavior {

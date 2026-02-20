@@ -1,7 +1,7 @@
 // Simplified Inductor Component Module
 // Compatible with current BHDL parser
 
-module Inductor(value: inductance, current: current = 1A) {
+entity Inductor(value: inductance, current: current = 1A) {
     pin 1: signal inout;  // Terminal 1
     pin 2: signal inout;  // Terminal 2
     

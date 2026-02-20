@@ -48,7 +48,7 @@ board PowerSupplyBoard {
     main_i2c <-> [temp_sensor, eeprom];
     
     // Module instantiation
-    module PowerFilter(VCC_3V3, GND) {
+    entity PowerFilter(VCC_3V3, GND) {
         flow: INPUT |> filtering |> OUTPUT;
     }
 }

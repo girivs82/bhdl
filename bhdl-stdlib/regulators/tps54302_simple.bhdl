@@ -1,7 +1,7 @@
 // TPS54302 3A Synchronous Buck Converter - Simplified
 // High-efficiency step-down converter with integrated FETs
 
-module TPS54302() {
+entity TPS54302() {
     // Power pins
     pin VIN: power in;
     pin GND: ground;

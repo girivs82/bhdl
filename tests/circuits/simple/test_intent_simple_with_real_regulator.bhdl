@@ -1,0 +1,59 @@
+// Simple intent-driven layout demo with real voltage regulator
+// Uses LM7805 from the component database
+
+entity Res(value: resistance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+}
+
+entity Cap(value: capacitance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+}
+
+entity LED(color: string) {
+    pin A: signal in;
+    pin K: signal in;
+}
+
+entity TVSDiode(voltage: voltage) {
+    pin 1: signal in;
+    pin 2: signal in;
+}
+
+// LM7805 voltage regulator - matches database component
+// Database pins: 1=VI, 2=GND, 3=VO
+entity LM7805 {
+    pin VI: power in;      // Input voltage (pin 1)
+    pin GND: ground;       // Ground (pin 2)
+    pin VO: power out;     // Regulated 5V output (pin 3)
+}
+
+board IntentLayoutDemo {
+    power VIN = 12V @ 500mA;
+    power VOUT = 5V @ 300mA;
+    ground GND;
+
+    // LEFT ZONE: Input protection
+    net protected: VIN -> tvs: TVSDiode(15V).1 for input_protection(15V, 500mA);
+    tvs.2 -> GND;
+
+    // CENTER ZONE: Input filtering
+    net filtered_in: tvs.1 -> c1: Cap(100µF).1 for noise_filtering(100Hz, 40dB);
+    c1.2 -> GND;
+
+    // TOP ZONE: Voltage regulation
+    net regulated: c1.1 -> reg: LM7805().VI -> reg.VO -> VOUT for voltage_regulation(5V, 12V);
+    reg.GND -> GND;
+
+    // CENTER ZONE: Output filtering
+    net filtered_out: VOUT -> c2: Cap(10µF).1 for noise_filtering(10kHz, 60dB);
+    c2.2 -> GND;
+
+    // RIGHT ZONE: LED indicator
+    net indicator: VOUT -> r1: Res(330).1 -> r1.2 -> led: LED("green").A for current_limiting(20mA);
+    led.K -> GND;
+
+    // BOTTOM ZONE: Current sensing
+    net sensed: r1.2 -> sense: Res(0.1).1 -> sense.2 -> led.A for current_sensing(20mA, 1%);
+}

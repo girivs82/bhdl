@@ -1,7 +1,7 @@
 // Simplified Buck Converter Module for testing
 // Without behavioral model annotations that parser doesn't support yet
 
-module BuckConverter(
+entity BuckConverter(
     vin_nom: voltage,
     vout_target: voltage,
     iout_max: current,

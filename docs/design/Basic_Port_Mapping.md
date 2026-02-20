@@ -9,25 +9,25 @@ When instantiating a module, you need to connect its pins to signals in the pare
 ### 1. Simple Port Mapping During Instantiation
 
 ```bhdl
-module Regulator {
+entity Regulator {
     pin VIN: power in;
     pin VOUT: power out;
     pin EN: digital in;
     pin FB: analog in;
     
-    // Module implementation...
+    // Entity implementation...
 }
 
 board PowerSupply {
     power INPUT_12V = 12V;
     power OUTPUT_5V = 5V;
     
-    // Basic port mapping - module pins on LEFT, parent signals on RIGHT
+    // Basic port mapping - entity pins on LEFT, parent signals on RIGHT
     reg: Regulator {
-        VIN <- INPUT_12V;       // Module input receives from board power
-        VOUT -> OUTPUT_5V;      // Module output sends to board power
-        EN <- enable_signal;    // Module input receives from net
-        FB <- feedback_net;     // Module input receives from net
+        VIN <- INPUT_12V;       // Entity input receives from board power
+        VOUT -> OUTPUT_5V;      // Entity output sends to board power
+        EN <- enable_signal;    // Entity input receives from net
+        FB <- feedback_net;     // Entity input receives from net
     }
 }
 ```
@@ -36,13 +36,13 @@ board PowerSupply {
 
 ```bhdl
 board System {
-    // First module
+    // First entity
     buck: BuckConverter {
         VIN <- VIN_24V;
         VOUT -> intermediate_12v;
     }
     
-    // Second module - connected to first
+    // Second entity - connected to first
     ldo: LinearRegulator {
         VIN <- intermediate_12v;  // Connect between modules
         VOUT -> final_5v;
@@ -53,7 +53,7 @@ board System {
 ### 3. Pin Name Mapping in Connection Body
 
 ```bhdl
-module PowerStage {
+entity PowerStage {
     pin VCC: power in;
     pin OUT: power out;
     pin CONTROL: signal in;
@@ -75,7 +75,7 @@ module PowerStage {
 ### 4. Array Pin Mapping
 
 ```bhdl
-module LED_Bank {
+entity LED_Bank {
     pin ANODES[8]: current out;
     pin CATHODES[8]: current in;
     
@@ -94,7 +94,7 @@ board Display {
 ### 5. Selective Pin Mapping
 
 ```bhdl
-module FlexibleModule {
+entity FlexibleModule {
     pin REQUIRED: power in;
     pin OPTIONAL_1: signal in;
     pin OPTIONAL_2: signal in;
@@ -112,7 +112,7 @@ board MinimalUsage {
 
 ## What We've Been Calling "Port Mapping"
 
-This is just the basic connection syntax inside module instantiation blocks:
+This is just the basic connection syntax inside entity instantiation blocks:
 
 ```bhdl
 instance_name: ModuleType {
@@ -127,27 +127,27 @@ instance_name: ModuleType {
 
 ### 1. Input Pins
 ```bhdl
-module_input_pin <- external_signal;
+entity_input_pin <- external_signal;
 ```
 
 ### 2. Output Pins  
 ```bhdl
-module_output_pin -> external_signal;
+entity_output_pin -> external_signal;
 ```
 
 ### 3. Bidirectional Pins
 ```bhdl
-module_bidir_pin <-> external_signal;
+entity_bidir_pin <-> external_signal;
 ```
 
 ### 4. Direct Instance-to-Instance
 ```bhdl
-module2_input <- module1.output_pin;
+entity2_input <- entity1.output_pin;
 ```
 
 ### 5. Through Intermediate Signals
 ```bhdl
-module Container {
+entity Container {
     signal intermediate_net;
     
     source: SourceModule {
@@ -163,7 +163,7 @@ module Container {
 ## Complete Example
 
 ```bhdl
-module UARTTransceiver {
+entity UARTTransceiver {
     pin TX: signal out;
     pin RX: signal in;
     pin CTS: signal in;
@@ -172,7 +172,7 @@ module UARTTransceiver {
     pin GND: ground;
 }
 
-module LevelShifter {
+entity LevelShifter {
     pin A: signal inout;
     pin B: signal inout;
     pin VCCA: power in;
@@ -229,9 +229,9 @@ board SerialInterface {
 
 ## Why This is Fundamental
 
-1. **It's How You Wire Modules** - Without port mapping, modules can't connect to anything!
+1. **It's How You Wire Entities** - Without port mapping, entities can't connect to anything!
 
-2. **Name Independence** - Module pins can have generic names; mapping provides context:
+2. **Name Independence** - Entity pins can have generic names; mapping provides context:
    ```bhdl
    reg1: Regulator {
        VIN <- V12V;
@@ -240,13 +240,13 @@ board SerialInterface {
    
    reg2: Regulator {
        VIN <- V12V;  
-       VOUT -> V3V3;  // Same module, different usage
+       VOUT -> V3V3;  // Same entity, different usage
    }
    ```
 
-3. **Hierarchy Support** - Signals at board level map to module pins, which map to sub-module pins:
+3. **Hierarchy Support** - Signals at board level map to entity pins, which map to sub-entity pins:
    ```bhdl
-   board -> module -> submodule -> component
+   board -> entity -> subentity -> component
    ```
 
 4. **Type Checking** - The analyzer verifies signal types match:
@@ -255,7 +255,7 @@ board SerialInterface {
    power_in <- digital_signal; // ERROR: type mismatch
    ```
 
-5. **Consistent Syntax** - Module pins always on left, signals on right:
-   - Easy to scan vertically to see all module pins
+5. **Consistent Syntax** - Entity pins always on left, signals on right:
+   - Easy to scan vertically to see all entity pins
    - Arrow direction shows actual data flow
    - No ambiguity about what's being connected

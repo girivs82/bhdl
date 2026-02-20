@@ -1,36 +1,36 @@
 use bhdl_parser;
 
 #[test]
-fn test_module_definition_parsing() {
-    let module_code = r#"
-module Cap(value: capacitance) {
+fn test_entity_definition_parsing() {
+    let entity_code = r#"
+entity Cap(value: capacitance) {
     pins {
         +: passive;
         -: passive;
     }
-    
+
     @component_class = "capacitor";
 }
 "#;
 
-    let parsed = bhdl_parser::parse(module_code);
+    let parsed = bhdl_parser::parse(entity_code);
     assert!(parsed.errors().is_empty(), "Parse errors: {:?}", parsed.errors());
-    
+
     let syntax = parsed.syntax();
     println!("Root kind: {:?}", syntax.kind());
-    
-    // Look for MODULE_DEF
-    let mut found_module = false;
+
+    // Look for ENTITY_DEF
+    let mut found_entity = false;
     for child in syntax.children() {
-        if child.kind() == bhdl_parser::SyntaxKind::MODULE_DEF {
-            found_module = true;
-            println!("Found MODULE_DEF!");
-            
-            // Find the module name
+        if child.kind() == bhdl_parser::SyntaxKind::ENTITY_DEF {
+            found_entity = true;
+            println!("Found ENTITY_DEF!");
+
+            // Find the entity name
             for gc in child.children_with_tokens() {
                 if let rowan::NodeOrToken::Token(t) = gc {
                     if t.kind() == bhdl_parser::SyntaxKind::IDENT {
-                        println!("Module name: {}", t.text());
+                        println!("Entity name: {}", t.text());
                         assert_eq!(t.text(), "Cap");
                         break;
                     }
@@ -38,6 +38,6 @@ module Cap(value: capacitance) {
             }
         }
     }
-    
-    assert!(found_module, "MODULE_DEF not found in parsed syntax tree");
+
+    assert!(found_entity, "ENTITY_DEF not found in parsed syntax tree");
 }

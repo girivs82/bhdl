@@ -6,6 +6,7 @@ use rowan::ast::AstNode; // For source_file.syntax()
 pub mod types;
 mod helpers;
 pub mod symbol_table;
+pub mod scope_registry;
 pub mod hierarchical_symbol_table;
 pub mod net_attributes;
 mod pass1;
@@ -32,7 +33,6 @@ pub mod documentation;
 pub mod passes;
 
 // Use items needed directly in the analyze function
-use pass1::populate_global_scope_and_build_definition_scopes;
 use pass2::{visit_node_pass2_references, Pass2Context};
 use pass3::{visit_node_pass3_const_eval, Pass3Context};
 use pass4::{visit_node_pass4_bounds_checks, Pass4Context};
@@ -61,11 +61,15 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
     // Initialize resolved_constants using the type alias from the types module
     let mut resolved_constants = ResolvedConstants::new();
 
-    // Pass 1: Build scopes with base path for imports
-    let (global_scope, definition_scopes) = pass1::populate_global_scope_and_build_definition_scopes_with_base(source_file, base_path);
-    println!("Analyzer: Pass 1 complete. Global symbols: {}, Definition scopes: {}",
+    // Pass 1: Build scope registry with base path for imports
+    let mut scope_registry = pass1::build_scope_registry_with_base(source_file, base_path);
+    // Extract legacy data structures for backward compatibility with existing passes
+    let global_scope = scope_registry.extract_global_scope();
+    let definition_scopes = scope_registry.extract_definition_scopes();
+    println!("Analyzer: Pass 1 complete. Global symbols: {}, Definition scopes: {}, Total scopes: {}",
              global_scope.get_symbols().len(),
-             definition_scopes.len());
+             definition_scopes.len(),
+             scope_registry.len());
 
     // Pass 1.25: Build Early Component Instance Registry (Phase 2: Scalability)
     println!("Analyzer: Starting Pass 1.25 - Component Instance Registry...");
@@ -89,18 +93,26 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
 
     // Pass 2: Reference Checks
     println!("Analyzer: Starting Pass 2 - References & Basic Types...");
-    let mut pass2_context = Pass2Context::new(&global_scope, &definition_scopes, source_file.syntax(), &mut diagnostics, &builtin_manager);
+    let mut pass2_context = Pass2Context::new(&scope_registry, source_file.syntax(), &mut diagnostics, &builtin_manager);
     visit_node_pass2_references(source_file.syntax(), &mut pass2_context);
     println!("Analyzer: Pass 2 complete. Diagnostics found so far: {}", diagnostics.len());
 
+    // Pass 2.5: Monomorphization
+    println!("Analyzer: Starting Pass 2.5 - Monomorphization...");
+    let mono_result = passes::run_monomorphization(&scope_registry, &resolved_constants);
+    if !mono_result.specializations.is_empty() {
+        passes::register_specializations(&mut scope_registry, &mono_result);
+    }
+    diagnostics.extend(mono_result.diagnostics.clone());
+    println!("Analyzer: Pass 2.5 complete. Specializations: {}, Iterations: {}",
+             mono_result.specializations.len(), mono_result.iterations);
 
     // Pass 3: Constant Evaluation
     println!("Analyzer: Starting Pass 3 - Constant Evaluation...");
     // Pass diagnostics vec and resolved_constants map mutably
     let diag_count_before_pass3 = diagnostics.len(); // Get length BEFORE creating context
     let mut pass3_context = Pass3Context::new(
-        &global_scope,
-        &definition_scopes,
+        &scope_registry,
         source_file.syntax(),
         &mut resolved_constants,
         &mut diagnostics, // Pass cumulative diagnostics vec
@@ -116,8 +128,7 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
     // Pass diagnostics vec mutably
     let diag_count_before_pass4 = diagnostics.len(); // Get length BEFORE creating context
     let mut pass4_context = Pass4Context::new(
-        &global_scope,
-        &definition_scopes,
+        &scope_registry,
         &resolved_constants, // Pass constants immutably
         &mut diagnostics, // Pass cumulative diagnostics vec
     );
@@ -193,26 +204,26 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
                 
                 // Add any resolution errors to diagnostics
                 for error in &resolution_report.errors {
-                    diagnostics.push(types::Diagnostic {
-                        message: format!("SPICE Resolution Error: {}", error),
-                        range: rowan::TextRange::empty(rowan::TextSize::from(0)),
-                    });
+                    diagnostics.push(types::Diagnostic::new(
+                        format!("SPICE Resolution Error: {}", error),
+                        rowan::TextRange::empty(rowan::TextSize::from(0)),
+                    ));
                 }
                 
                 // Add any resolution warnings to diagnostics
                 for warning in &resolution_report.warnings {
-                    diagnostics.push(types::Diagnostic {
-                        message: format!("SPICE Resolution Warning: {}", warning),
-                        range: rowan::TextRange::empty(rowan::TextSize::from(0)),
-                    });
+                    diagnostics.push(types::Diagnostic::new(
+                        format!("SPICE Resolution Warning: {}", warning),
+                        rowan::TextRange::empty(rowan::TextSize::from(0)),
+                    ));
                 }
             }
             Err(e) => {
                 println!("Analyzer: SPICE resolution failed: {}", e);
-                diagnostics.push(types::Diagnostic {
-                    message: format!("SPICE Resolution Failed: {}", e),
-                    range: rowan::TextRange::empty(rowan::TextSize::from(0)),
-                });
+                diagnostics.push(types::Diagnostic::new(
+                    format!("SPICE Resolution Failed: {}", e),
+                    rowan::TextRange::empty(rowan::TextSize::from(0)),
+                ));
             }
         }
     } else {
@@ -240,10 +251,10 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
     
     // Add diagnostics for circular attribute dependencies
     for cycle in &attribute_analysis.circular_dependencies {
-        diagnostics.push(types::Diagnostic {
-            message: format!("Circular attribute dependency: {}", cycle.join(" -> ")),
-            range: rowan::TextRange::empty(rowan::TextSize::from(0)),
-        });
+        diagnostics.push(types::Diagnostic::new(
+            format!("Circular attribute dependency: {}", cycle.join(" -> ")),
+            rowan::TextRange::empty(rowan::TextSize::from(0)),
+        ));
     }
 
     // Pass 9: Flow Tracking and Intent Resolution
@@ -301,18 +312,18 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
                          
                 // Add simulation warnings to diagnostics
                 for warning in &simulation_data.simulation_metadata.warnings {
-                    diagnostics.push(types::Diagnostic {
-                        message: format!("Simulation Warning: {}", warning),
-                        range: rowan::TextRange::empty(rowan::TextSize::from(0)),
-                    });
+                    diagnostics.push(types::Diagnostic::new(
+                        format!("Simulation Warning: {}", warning),
+                        rowan::TextRange::empty(rowan::TextSize::from(0)),
+                    ));
                 }
             }
             Err(e) => {
                 println!("Analyzer: Pass 10 failed. Simulation error: {}", e);
-                diagnostics.push(types::Diagnostic {
-                    message: format!("Unified Simulation Failed: {}", e),
-                    range: rowan::TextRange::empty(rowan::TextSize::from(0)),
-                });
+                diagnostics.push(types::Diagnostic::new(
+                    format!("Unified Simulation Failed: {}", e),
+                    rowan::TextRange::empty(rowan::TextSize::from(0)),
+                ));
             }
         }
     } else {
@@ -334,34 +345,34 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
 
     // Convert power analysis errors to diagnostics
     for error in &power_context.errors {
-        diagnostics.push(types::Diagnostic {
-            message: format!("Power Analysis: {}", error),
-            range: rowan::TextRange::empty(rowan::TextSize::from(0)),
-        });
+        diagnostics.push(types::Diagnostic::new(
+            format!("Power Analysis: {}", error),
+            rowan::TextRange::empty(rowan::TextSize::from(0)),
+        ));
     }
 
     // Convert power analysis warnings to diagnostics
     for warning in &power_context.warnings {
-        diagnostics.push(types::Diagnostic {
-            message: format!("Power Warning: {}", warning),
-            range: rowan::TextRange::empty(rowan::TextSize::from(0)),
-        });
+        diagnostics.push(types::Diagnostic::new(
+            format!("Power Warning: {}", warning),
+            rowan::TextRange::empty(rowan::TextSize::from(0)),
+        ));
     }
 
     // Convert component inference warnings to diagnostics
     for warning in &component_inference.warnings {
-        diagnostics.push(types::Diagnostic {
-            message: format!("Component Inference: {}", warning),
-            range: rowan::TextRange::empty(rowan::TextSize::from(0)),
-        });
+        diagnostics.push(types::Diagnostic::new(
+            format!("Component Inference: {}", warning),
+            rowan::TextRange::empty(rowan::TextSize::from(0)),
+        ));
     }
 
     // Convert power sequencing warnings to diagnostics
     for warning in &power_sequencing.warnings {
-        diagnostics.push(types::Diagnostic {
-            message: format!("Power Sequencing: {}", warning),
-            range: rowan::TextRange::empty(rowan::TextSize::from(0)),
-        });
+        diagnostics.push(types::Diagnostic::new(
+            format!("Power Sequencing: {}", warning),
+            rowan::TextRange::empty(rowan::TextSize::from(0)),
+        ));
     }
 
 
@@ -370,6 +381,7 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
     AnalysisResult {
         global_scope, // Move ownership
         definition_scopes, // Move ownership
+        scope_registry, // Move ownership
         diagnostics, // Move ownership
         resolved_constants, // Move ownership
         power_analysis: power_context, // Move ownership
@@ -382,6 +394,7 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
         simulation_data, // Move ownership
         instance_registry, // Move ownership (Phase 2: Pass 1.25)
         power_domain_expansion, // Move ownership (Phase 1: Scalability)
+        monomorphization: mono_result, // Move ownership (Pass 2.5)
     }
 }
 

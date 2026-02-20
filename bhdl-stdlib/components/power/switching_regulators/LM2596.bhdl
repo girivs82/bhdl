@@ -4,7 +4,7 @@
 import { voltage, current, power, resistance, capacitance, inductance, frequency, temperature, time } from "../../../units.bhdl";
 
 // ==================== COMPONENT DEFINITION ====================
-module LM2596(
+entity LM2596(
     vout_target: voltage = 5V,          // Target output voltage for feedback
     enable: bool = true                 // Enable control
 ) {

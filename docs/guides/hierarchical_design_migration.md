@@ -1,6 +1,6 @@
 # Hierarchical Design Migration Guide
 
-This guide helps you migrate from flat BHDL designs to hierarchical module-based designs, enabling better code organization, reusability, and team collaboration.
+This guide helps you migrate from flat BHDL designs to hierarchical entity-based designs, enabling better code organization, reusability, and team collaboration.
 
 ## Table of Contents
 1. [Why Use Hierarchical Design?](#why-use-hierarchical-design)
@@ -14,13 +14,13 @@ This guide helps you migrate from flat BHDL designs to hierarchical module-based
 
 ### Benefits
 - **Code Reuse**: Define once, use many times
-- **Team Collaboration**: Different engineers can work on separate modules
+- **Team Collaboration**: Different engineers can work on separate entities
 - **Better Organization**: Logical grouping of functionality
-- **Easier Testing**: Test modules in isolation
-- **Clear Interfaces**: Well-defined module boundaries
+- **Easier Testing**: Test entities in isolation
+- **Clear Interfaces**: Well-defined entity boundaries
 - **Automatic Component Naming**: Hierarchical reference designators (e.g., `filter1.R1`)
 
-### When to Use Modules
+### When to Use Entities
 - Repeated circuit patterns (filters, regulators, indicators)
 - Functional blocks (power management, sensor interfaces)
 - Complex subsystems (communication interfaces, analog front-ends)
@@ -42,10 +42,10 @@ VCC -> Res(1kΩ).1 -> LED(blue).A;
 LED(blue).K -> GND;
 ```
 
-### Step 2: Extract into Module
-Create a module for the repeated pattern:
+### Step 2: Extract into Entity
+Create an entity for the repeated pattern:
 ```bhdl
-module StatusLED(color: string = "red", R_value: resistance = 1kΩ) {
+entity StatusLED(color: string = "red", R_value: resistance = 1kΩ) {
     pin VCC: power in;
     pin GND: ground in;
     pin EN: signal in;  // Optional enable
@@ -55,9 +55,9 @@ module StatusLED(color: string = "red", R_value: resistance = 1kΩ) {
 }
 ```
 
-### Step 3: Replace with Module Instances
+### Step 3: Replace with Entity Instances
 ```bhdl
-// After: Using module instances
+// After: Using entity instances
 board StatusPanel {
     power VCC = 3.3V @ 100mA;
     ground GND;
@@ -84,10 +84,10 @@ board StatusPanel {
 
 ## Common Patterns
 
-### 1. Power Supply Modules
+### 1. Power Supply Entities
 ```bhdl
-// Reusable power regulator module
-module PowerRail(Vin: voltage, Vout: voltage, Imax: current = 1A) {
+// Reusable power regulator entity
+entity PowerRail(Vin: voltage, Vout: voltage, Imax: current = 1A) {
     pin IN: power in;
     pin OUT: power out;
     pin GND: ground in;
@@ -109,10 +109,10 @@ module PowerRail(Vin: voltage, Vout: voltage, Imax: current = 1A) {
 }
 ```
 
-### 2. Filter Modules
+### 2. Filter Entities
 ```bhdl
-// Configurable filter module
-module Filter(type: string = "RC", fc: frequency = 1kHz) {
+// Configurable filter entity
+entity Filter(type: string = "RC", fc: frequency = 1kHz) {
     pin IN: signal in;
     pin OUT: signal out;
     pin GND: ground in;
@@ -134,10 +134,10 @@ module Filter(type: string = "RC", fc: frequency = 1kHz) {
 }
 ```
 
-### 3. Interface Modules
+### 3. Interface Entities
 ```bhdl
 // I2C interface with protection
-module I2CInterface(voltage: voltage = 3.3V) {
+entity I2CInterface(voltage: voltage = 3.3V) {
     pin SDA_EXT: signal inout;  // External connection
     pin SCL_EXT: signal inout;  // External connection
     pin SDA_INT: signal inout;  // Internal connection
@@ -198,7 +198,7 @@ board SensorBoard {
 
 **After (Hierarchical Design):**
 ```bhdl
-module SensorInterface() {
+entity SensorInterface() {
     pin VCC: power in;
     pin GND: ground in;
     pin SDA: signal inout;
@@ -281,7 +281,7 @@ board PowerBoard {
 
 **After (Hierarchical Design):**
 ```bhdl
-module PowerStage(Vin: voltage, Vout: voltage, Imax: current, 
+entity PowerStage(Vin: voltage, Vout: voltage, Imax: current,
                   topology: string = "linear") {
     pin IN: power in;
     pin OUT: power out;
@@ -349,20 +349,20 @@ board PowerBoard {
 
 ## Best Practices
 
-### 1. Module Naming
+### 1. Entity Naming
 - Use descriptive names that indicate function
-- Include key parameters in module names if helpful
+- Include key parameters in entity names if helpful
 - Follow consistent naming conventions
 
 ```bhdl
-// Good module names
-module PowerRegulator() { ... }
-module I2CInterface() { ... }
-module AnalogInputFilter() { ... }
+// Good entity names
+entity PowerRegulator() { ... }
+entity I2CInterface() { ... }
+entity AnalogInputFilter() { ... }
 
 // Avoid generic names
-module Module1() { ... }  // Bad
-module Thing() { ... }    // Bad
+entity Entity1() { ... }  // Bad
+entity Thing() { ... }    // Bad
 ```
 
 ### 2. Parameter Design
@@ -371,7 +371,7 @@ module Thing() { ... }    // Bad
 - Document parameter ranges and constraints
 
 ```bhdl
-module Filter(
+entity Filter(
     fc: frequency = 1kHz,        // Cutoff frequency
     type: string = "lowpass",    // "lowpass", "highpass", "bandpass"
     order: int = 2               // Filter order (1-4)
@@ -389,7 +389,7 @@ module Filter(
 - Document pin purposes
 
 ```bhdl
-module MCUInterface() {
+entity MCUInterface() {
     // Power pins
     pin VCC: power in;
     pin GND: ground in;
@@ -406,14 +406,14 @@ module MCUInterface() {
 }
 ```
 
-### 4. Module Boundaries
-- Create modules at natural functional boundaries
-- Keep modules focused on a single responsibility
-- Avoid modules that are too large or too small
+### 4. Entity Boundaries
+- Create entities at natural functional boundaries
+- Keep entities focused on a single responsibility
+- Avoid entities that are too large or too small
 
 ```bhdl
 // Good: Clear functional boundary
-module USBPowerInput() {
+entity USBPowerInput() {
     pin VBUS: power in;
     pin D_P: signal inout;
     pin D_N: signal inout;
@@ -422,23 +422,23 @@ module USBPowerInput() {
 }
 
 // Too large: Should be split
-module EntireAnalogSection() {
+entity EntireAnalogSection() {
     // Hundreds of lines...
 }
 
-// Too small: Not worth modularizing
-module SingleResistor() {
+// Too small: Not worth making an entity
+entity SingleResistor() {
     pin A: signal in;
     pin B: signal out;
     A -> Res(1kΩ).1 -> B;
 }
 ```
 
-### 5. Testing Modules
-Create test boards for individual modules:
+### 5. Testing Entities
+Create test boards for individual entities:
 
 ```bhdl
-// test_filter_module.bhdl
+// test_filter_entity.bhdl
 board TestFilter {
     power VCC = 3.3V @ 100mA;
     ground GND;
@@ -469,12 +469,12 @@ board TestFilter {
 ### Common Issues
 
 1. **Circular Dependencies**
-   - Problem: Module A uses Module B, which uses Module A
+   - Problem: Entity A uses Entity B, which uses Entity A
    - Solution: Refactor to break the cycle, extract common functionality
 
 2. **Missing Pins**
-   - Problem: "Pin X not found on module Y"
-   - Solution: Ensure all pins are declared in the module definition
+   - Problem: "Pin X not found on entity Y"
+   - Solution: Ensure all pins are declared in the entity definition
 
 3. **Parameter Type Mismatches**
    - Problem: "Cannot convert string to resistance"
@@ -487,9 +487,9 @@ board TestFilter {
 ### Migration Checklist
 
 - [ ] Identify repeated circuit patterns
-- [ ] Create module definitions with clear interfaces
-- [ ] Replace repeated circuits with module instances
-- [ ] Test each module in isolation
+- [ ] Create entity definitions with clear interfaces
+- [ ] Replace repeated circuits with entity instances
+- [ ] Test each entity in isolation
 - [ ] Update documentation and schematics
 - [ ] Review generated hierarchical component names
 - [ ] Verify electrical connectivity is preserved

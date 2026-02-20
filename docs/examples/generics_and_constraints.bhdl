@@ -1,0 +1,35 @@
+// Example: Generic modules with type constraints in BHDL
+// Demonstrates RFC Tasks 6-8 - Parameterized types, typed generics, monomorphization
+
+// A generic filter module parameterized by component type
+entity Filter<T>(cutoff: frequency) where T: Passive {
+    pin input: signal in;
+    pin output: signal out;
+    pin gnd: power in;
+
+    // The actual component type is provided at instantiation
+    @input -> T(cutoff).1 -> T(cutoff).2 -> @output;
+}
+
+// A generic voltage divider
+entity VoltageDivider<R1, R2>(ratio: float)
+    where R1: Passive, R2: Passive
+{
+    pin vin: power in;
+    pin vout: signal out;
+    pin gnd: power in;
+
+    @vin -> R1.1 -> R1.2 -> @vout;
+    @vout -> R2.1 -> R2.2 -> @gnd;
+}
+
+// Board using generic modules with concrete types
+board FilteredSensor {
+    power VCC = 3.3V @ 100mA;
+    ground GND;
+
+    // Monomorphization: Filter<Cap> creates a concrete capacitor-based filter
+    @VCC -> Res(10k).1 -> Res(10k).2 -> Filter<Cap>(1kHz).input;
+    Filter<Cap>(1kHz).output -> ADC().input;
+    Filter<Cap>(1kHz).gnd -> @GND;
+}

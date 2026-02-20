@@ -111,7 +111,7 @@
 
 **Example**:
 ```bhdl
-module SensorModule() {
+entity SensorModule() {
     sensor: TempSensor();
     // ...
 }

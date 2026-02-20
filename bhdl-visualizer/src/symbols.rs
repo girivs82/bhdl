@@ -261,11 +261,12 @@ impl SymbolManager {
         let mut component = Component::new(instance_id, position)
             .with_svg(symbol.svg_content)
             .with_rotation(rotation)
-            .with_size(symbol.size.x, symbol.size.y);
-        
+            .with_size(symbol.size.x, symbol.size.y)
+            .with_label(component_instance.instance_name.clone());
+
         // Set pin positions from symbol
         component.pins = symbol.pin_positions;
-        
+
         Ok(component)
     }
     

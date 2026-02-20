@@ -9,7 +9,7 @@ BHDL needs only **5 new concepts** (not 6!) by extending the existing `attribute
 ### 1. Extended Attributes (Expressions & Pin References)
 
 ```bhdl
-module Controller {
+entity Controller {
     pin FB: analog in;
     pin PWM: digital out;
     
@@ -28,7 +28,7 @@ module Controller {
 ### 2. Mutable Attributes (Inferred from Usage)
 
 ```bhdl
-module SoftStart {
+entity SoftStart {
     pin ENABLE: digital in;
     
     // Looks like regular attribute
@@ -44,7 +44,7 @@ module SoftStart {
 ### 3. External Model Decorator
 
 ```bhdl
-module ComplexController {
+entity ComplexController {
     pin VIN: power in;
     pin VOUT: power out;
     
@@ -83,7 +83,7 @@ By reusing `attribute` instead of adding `param`, we get one less keyword to lea
 
 ### Simple Behavioral (No PLI)
 ```bhdl
-module ThermalLED {
+entity ThermalLED {
     pin TEMP_SENSE: analog in;
     pin LED_DRIVE: current out;
     
@@ -101,7 +101,7 @@ module ThermalLED {
 
 ### Time-Based Behavioral
 ```bhdl
-module BuckWithSoftStart {
+entity BuckWithSoftStart {
     pin ENABLE: digital in;
     pin FB: analog in;
     pin PWM: digital out;
@@ -124,7 +124,7 @@ module BuckWithSoftStart {
 
 ### Complex Behavioral (PLI)
 ```bhdl
-module USBPDController {
+entity USBPDController {
     pin CC1, CC2: analog inout;
     pin VBUS: power out;
     
@@ -198,4 +198,4 @@ This unified approach gives us:
 - **Same power** (simple behavioral + PLI)
 - **Better consistency** with existing BHDL
 
-The key insight: `attribute` already means "property of this module" - whether that property is static metadata, a computed value, or time-varying state!
+The key insight: `attribute` already means "property of this entity" - whether that property is static metadata, a computed value, or time-varying state!

@@ -1,56 +1,56 @@
 use std::collections::HashMap;
 use anyhow::Result;
-use bhdl_ast::{SourceFile, AstNode, Module, ImportStmt, HasName};
+use bhdl_ast::{SourceFile, AstNode, Entity, ImportStmt, HasName};
 use bhdl_analyzer::{AnalysisResult, symbol_table::SymbolTable};
 use crate::import_loader::ImportLoader;
 use log::info;
 
 /// Pre-processes imports and augments the symbol table with imported definitions
-/// This ensures the analyzer knows about imported modules before running analysis
+/// This ensures the analyzer knows about imported entities before running analysis
 pub struct ImportPreprocessor {
     import_loader: ImportLoader,
-    imported_modules: HashMap<String, Module>,
+    imported_entities: HashMap<String, Entity>,
 }
 
 impl ImportPreprocessor {
     pub fn new(base_path: impl Into<String>) -> Self {
         Self {
             import_loader: ImportLoader::new(base_path),
-            imported_modules: HashMap::new(),
+            imported_entities: HashMap::new(),
         }
     }
-    
+
     /// Pre-process all imports in a source file
-    /// This loads the imported modules and makes them available for analysis
+    /// This loads the imported entities and makes them available for analysis
     pub fn preprocess_imports(&mut self, source_file: &SourceFile) -> Result<()> {
         info!("Pre-processing imports before analysis");
-        
-        // Load all imported modules
+
+        // Load all imported entities
         self.import_loader.process_imports(source_file)?;
-        
-        // Store the loaded modules for later use
-        for (name, module) in self.import_loader.loaded_modules() {
-            self.imported_modules.insert(name.clone(), module.clone());
+
+        // Store the loaded entities for later use
+        for (name, entity) in self.import_loader.loaded_entities() {
+            self.imported_entities.insert(name.clone(), entity.clone());
             info!("Pre-processed import: {}", name);
         }
-        
+
         Ok(())
     }
-    
-    /// Augment the analyzer's symbol table with imported module definitions
+
+    /// Augment the analyzer's symbol table with imported entity definitions
     /// This should be called before running the analyzer
     pub fn augment_symbol_table(&self, symbol_table: &mut SymbolTable) -> Result<()> {
-        info!("Augmenting symbol table with {} imported modules", self.imported_modules.len());
-        
-        for (name, module) in &self.imported_modules {
-            // Add the module as a component type to the symbol table
+        info!("Augmenting symbol table with {} imported entities", self.imported_entities.len());
+
+        for (name, _entity) in &self.imported_entities {
+            // Add the entity as a component type to the symbol table
             // This will allow the analyzer to recognize it as a valid component type
             use bhdl_analyzer::symbol_table::{Symbol, SymbolKind};
             use rowan::TextRange;
-            
+
             let symbol = Symbol {
                 name: name.clone(),
-                kind: SymbolKind::Module,
+                kind: SymbolKind::Entity,
                 span: TextRange::new(0.into(), 0.into()), // Dummy range for imported symbols
                 instance_type_name: Some(name.clone()),
                 definition_node_ptr: None, // No AST node for imported symbols
@@ -59,29 +59,31 @@ impl ImportPreprocessor {
                 direction: None,
                 parameter_overrides: None,
                 net_attributes: None,
+                resolved_type: None,
+                generic_params: None,
             };
-            
+
             symbol_table.insert(symbol);
-            info!("Added imported module '{}' to symbol table", name);
+            info!("Added imported entity '{}' to symbol table", name);
         }
-        
+
         Ok(())
     }
-    
-    /// Get an imported module by name
-    pub fn get_imported_module(&self, name: &str) -> Option<&Module> {
-        self.imported_modules.get(name)
+
+    /// Get an imported entity by name
+    pub fn get_imported_entity(&self, name: &str) -> Option<&Entity> {
+        self.imported_entities.get(name)
     }
-    
-    /// Get all imported modules
-    pub fn imported_modules(&self) -> &HashMap<String, Module> {
-        &self.imported_modules
+
+    /// Get all imported entities
+    pub fn imported_entities(&self) -> &HashMap<String, Entity> {
+        &self.imported_entities
     }
-    
-    /// Check if a module has virtual pins
-    pub fn module_has_virtual_pins(&self, module_name: &str) -> bool {
-        if let Some(module) = self.get_imported_module(module_name) {
-            for pin in module.pins() {
+
+    /// Check if an entity has virtual pins
+    pub fn entity_has_virtual_pins(&self, entity_name: &str) -> bool {
+        if let Some(entity) = self.get_imported_entity(entity_name) {
+            for pin in entity.pins() {
                 let pin_text = pin.syntax().text().to_string();
                 if pin_text.contains("virtual") {
                     return true;
@@ -90,13 +92,13 @@ impl ImportPreprocessor {
         }
         false
     }
-    
-    /// Get virtual pins for a module
-    pub fn get_virtual_pins(&self, module_name: &str) -> Vec<String> {
+
+    /// Get virtual pins for an entity
+    pub fn get_virtual_pins(&self, entity_name: &str) -> Vec<String> {
         let mut virtual_pins = Vec::new();
-        
-        if let Some(module) = self.get_imported_module(module_name) {
-            for pin in module.pins() {
+
+        if let Some(entity) = self.get_imported_entity(entity_name) {
+            for pin in entity.pins() {
                 let pin_text = pin.syntax().text().to_string();
                 if pin_text.contains("virtual") {
                     if let Some(name) = pin.name() {
@@ -105,7 +107,7 @@ impl ImportPreprocessor {
                 }
             }
         }
-        
+
         virtual_pins
     }
 }

@@ -2,7 +2,7 @@
 // Circuit protection components
 
 // TVS Diode Module
-module TVSDiode(voltage: voltage) {
+entity TVSDiode(voltage: voltage) {
     pin 1: signal inout;
     pin 2: ground;
     
@@ -14,7 +14,7 @@ module TVSDiode(voltage: voltage) {
 }
 
 // Fuse Module
-module Fuse(current: current, type: string = "fast") {
+entity Fuse(current: current, type: string = "fast") {
     pin 1: power inout;
     pin 2: power inout;
     
@@ -25,7 +25,7 @@ module Fuse(current: current, type: string = "fast") {
 }
 
 // Resettable Fuse (PTC)
-module ResettableFuse(current: current) {
+entity ResettableFuse(current: current) {
     pin 1: power inout;
     pin 2: power inout;
     
@@ -36,7 +36,7 @@ module ResettableFuse(current: current) {
 }
 
 // Varistor (MOV) Module
-module Varistor(voltage: voltage) {
+entity Varistor(voltage: voltage) {
     pin 1: signal inout;
     pin 2: signal inout;
     
@@ -47,7 +47,7 @@ module Varistor(voltage: voltage) {
 }
 
 // Gas Discharge Tube
-module GDT(voltage: voltage) {
+entity GDT(voltage: voltage) {
     pin 1: signal inout;
     pin 2: signal inout;
     
@@ -58,7 +58,7 @@ module GDT(voltage: voltage) {
 }
 
 // Common Mode Choke
-module CommonModeChoke(inductance: inductance) {
+entity CommonModeChoke(inductance: inductance) {
     pin 1: signal in;
     pin 2: signal out;
     pin 3: signal in;
@@ -71,7 +71,7 @@ module CommonModeChoke(inductance: inductance) {
 }
 
 // Circuit Breaker Module
-module CircuitBreaker(current: current) {
+entity CircuitBreaker(current: current) {
     pin LINE: power in;
     pin LOAD: power out;
     
@@ -82,7 +82,7 @@ module CircuitBreaker(current: current) {
 }
 
 // Spark Gap Module
-module SparkGap(voltage: voltage) {
+entity SparkGap(voltage: voltage) {
     pin 1: signal inout;
     pin 2: signal inout;
     
@@ -92,7 +92,7 @@ module SparkGap(voltage: voltage) {
 }
 
 // ESD Protection Module
-module ESDProtection() {
+entity ESDProtection() {
     pin IO: signal inout;
     pin VCC: power in;
     pin GND: ground;
@@ -104,7 +104,7 @@ module ESDProtection() {
 }
 
 // Ferrite Bead Module
-module FerriteBead(impedance: resistance) {
+entity FerriteBead(impedance: resistance) {
     pin 1: signal inout;
     pin 2: signal inout;
     
@@ -116,7 +116,7 @@ module FerriteBead(impedance: resistance) {
 }
 
 // Crowbar Protection Module
-module CrowbarProtection(voltage: voltage) {
+entity CrowbarProtection(voltage: voltage) {
     pin IN: power in;
     pin OUT: power out;
     pin GND: ground;
@@ -128,7 +128,7 @@ module CrowbarProtection(voltage: voltage) {
 }
 
 // Isolation Transformer Module
-module IsolationTransformer(ratio: string = "1:1") {
+entity IsolationTransformer(ratio: string = "1:1") {
     pin PRI_L: signal in;
     pin PRI_N: signal in;
     pin SEC_L: signal out;

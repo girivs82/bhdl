@@ -26,7 +26,7 @@ This document provides the detailed implementation plan for adding component-emb
 ```
 ┌─────────────────────────────────────────────────────┐
 │                    BHDL File                        │
-│  module BuckConverter {                             │
+│  entity BuckConverter {                             │
 │    @behavioral_model analytical { ... }             │
 │    @optimization_strategy { ... }                   │
 │  }                                                  │
@@ -438,7 +438,7 @@ impl Synthesizer {
 #[test]
 fn test_buck_converter_optimization() {
     let bhdl_code = r#"
-        module BuckConverter(vin_nom: voltage, vout: voltage) {
+        entity BuckConverter(vin_nom: voltage, vout: voltage) {
             @behavioral_model analytical {
                 model_type: "equations",
                 L_min: "(vin_nom - vout) * vout / (vin_nom * 0.3 * 2A * 500kHz)",

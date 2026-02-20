@@ -2,7 +2,7 @@
 // Demonstrates wildcards across module instance boundaries
 
 // Module containing a sensor component
-module SensorModule() {
+entity SensorModule() {
     pin VCC: power in;
     pin GND: power in;
     pin OUT: signal out;
@@ -12,7 +12,7 @@ module SensorModule() {
 }
 
 // Module containing multiple sensors
-module SensorArray() {
+entity SensorArray() {
     pin VCC: power in;
     pin GND: power in;
     pin BUS: signal out;

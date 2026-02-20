@@ -16,7 +16,7 @@ type BuckRegulatorParams = {
     impedance: ImpedanceCharacteristics,
 };
 
-module TPS54302() {
+entity TPS54302() {
     // Power pins
     pin VIN: power in @metadata(
         function="PowerIn",

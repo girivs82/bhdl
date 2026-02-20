@@ -2,7 +2,7 @@
 
 ## Current Syntax
 
-The dot notation (`.pin_name`) is currently used to distinguish module pins from signals:
+The dot notation (`.pin_name`) is currently used to distinguish entity pins from signals:
 
 ```bhdl
 instance_name: ModuleType {
@@ -15,15 +15,15 @@ instance_name: ModuleType {
 
 ### 1. Disambiguation
 Without dot notation, we can't tell if an identifier refers to:
-- A pin of the module being instantiated
-- A signal in the parent module
+- A pin of the entity being instantiated
+- A signal in the parent entity
 - A pin of another instance
 
 ```bhdl
 // Ambiguous without dots:
 reg: Regulator {
     VIN -> VIN;     // Which VIN is which?
-    VOUT -> VOUT;   // Parent signal or module pin?
+    VOUT -> VOUT;   // Parent signal or entity pin?
 }
 
 // Clear with dots:
@@ -64,7 +64,7 @@ buck: BuckConverter {
 }
 ```
 **Problems**: 
-- Requires looking up module definition
+- Requires looking up entity definition
 - Ambiguous for inout pins
 - Can't detect typos early
 
@@ -97,17 +97,17 @@ buck: BuckConverter {
 
 ### With Dot Notation (Current)
 ```bhdl
-module PowerSystem {
+entity PowerSystem {
     signal VIN;           // Parent has VIN signal
     signal VOUT;          // Parent has VOUT signal
     
     reg1: VoltageRegulator {
-        VIN -> .VIN;      // Clear: parent's VIN to module's VIN
-        .VOUT -> VOUT;    // Clear: module's VOUT to parent's VOUT
-        .EN -> enable;    // Clear: module's EN to parent's enable
+        VIN -> .VIN;      // Clear: parent's VIN to entity's VIN
+        .VOUT -> VOUT;    // Clear: entity's VOUT to parent's VOUT
+        .EN -> enable;    // Clear: entity's EN to parent's enable
     }
-    
-    // Inter-module connection
+
+    // Inter-entity connection
     reg2: VoltageRegulator {
         reg1.VOUT -> .VIN;  // Clear: reg1's output to reg2's input
         .VOUT -> final_out; // Clear: reg2's output to signal
@@ -117,7 +117,7 @@ module PowerSystem {
 
 ### Without Dot Notation (Ambiguous)
 ```bhdl
-module PowerSystem {
+entity PowerSystem {
     signal VIN;
     signal VOUT;
     
@@ -134,7 +134,7 @@ module PowerSystem {
 ### 1. Same Name Signals and Pins
 Very common in practice:
 ```bhdl
-module System {
+entity System {
     signal RESET;
     signal CLOCK;
     

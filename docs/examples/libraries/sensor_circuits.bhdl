@@ -13,7 +13,7 @@
 // ---------------------------------------------------------
 
 // Thermistor interface module with voltage divider
-module ThermistorInterfaceDivider {
+entity ThermistorInterfaceDivider {
   ports {
     ADC_INPUT: out signal;
     VREF: in power;
@@ -51,7 +51,7 @@ module ThermistorInterfaceDivider {
 // ---------------------------------------------------------
 
 // Bridge pressure sensor direct connection module (Amplification done externally)
-module BridgePressureSensorInterface {
+entity BridgePressureSensorInterface {
   ports {
     SENSOR_OUT_P: out signal;
     SENSOR_OUT_N: out signal;
@@ -68,7 +68,7 @@ module BridgePressureSensorInterface {
 }
 
 // I2C MEMS pressure sensor module (handles pullups and bypass)
-module I2CPressureSensorInterface {
+entity I2CPressureSensorInterface {
   ports {
     SCL: inout signal;
     SDA: inout signal;
@@ -109,7 +109,7 @@ module I2CPressureSensorInterface {
 // ---------------------------------------------------------
 
 // Photodiode transimpedance amplifier module (Basic TIA)
-module PhotodiodeTIA {
+entity PhotodiodeTIA {
   ports {
     TIA_OUT: out signal;
     VCC: in power;
@@ -147,7 +147,7 @@ module PhotodiodeTIA {
 }
 
 // LDR (Light Dependent Resistor) interface module
-module LDRInterfaceDivider {
+entity LDRInterfaceDivider {
   ports {
     ADC_INPUT: out signal;
     VCC: in power;
@@ -180,7 +180,7 @@ module LDRInterfaceDivider {
 // ---------------------------------------------------------
 
 // Accelerometer SPI interface module (Handles bypass caps)
-module SPIAccelerometerInterface {
+entity SPIAccelerometerInterface {
   ports {
     // SPI Interface Ports
     MOSI: in signal;

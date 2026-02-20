@@ -37,7 +37,7 @@ type OpAmpParams = {
     impedance: ImpedanceCharacteristics,
 };
 
-module OpAmp(part: string = "LM741", package: string = "DIP-8") {
+entity OpAmp(part: string = "LM741", package: string = "DIP-8") {
     pin IN+: signal in;      // Non-inverting input
     pin IN-: signal in;      // Inverting input
     pin OUT: signal out;     // Output

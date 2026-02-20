@@ -71,7 +71,7 @@ board PowerSupplyWithConstraints {
 }
 
 // Test module for voltage divider calculations
-module VoltageDivider(v_in, v_out, load_current) {
+entity VoltageDivider(v_in, v_out, load_current) {
   pin IN: power in;
   pin OUT: signal out;
   pin GND: ground;

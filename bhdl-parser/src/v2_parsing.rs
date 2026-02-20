@@ -225,8 +225,8 @@ impl<'t> Parser<'t> {
         self.builder.finish_node();
     }
     
-    /// Parse module parameters: (value: resistance, package: string = "0805")
-    pub(crate) fn parse_module_parameters(&mut self) {
+    /// Parse entity parameters: (value: resistance, package: string = "0805")
+    pub(crate) fn parse_entity_parameters(&mut self) {
         self.builder.start_node(SyntaxKind::PARAM_LIST.into());
         self.expect(SyntaxKind::L_PAREN);
         

@@ -10,7 +10,7 @@
 //! Phase 3 adds hierarchical support, enabling patterns like `sensor_board[*].sensor.VCC`
 //! to expand across module instance boundaries.
 
-use bhdl_ast::{SourceFile, AstNode, Board, Module, ComponentInst, Item};
+use bhdl_ast::{SourceFile, AstNode, Board, Entity, ComponentInst, Item};
 use std::collections::HashMap;
 
 /// Registry of component and module instances found in the AST
@@ -317,10 +317,10 @@ impl InstanceRegistry {
 pub fn build_instance_registry(source_file: &SourceFile) -> InstanceRegistry {
     let mut registry = InstanceRegistry::new();
 
-    // First pass: Scan all module definitions
+    // First pass: Scan all entity definitions
     for item in source_file.items() {
-        if let Some(module) = Module::cast(item.syntax().clone()) {
-            scan_module_definition(&module, &mut registry);
+        if let Some(entity) = Entity::cast(item.syntax().clone()) {
+            scan_module_definition(&entity, &mut registry);
         }
     }
 
@@ -336,11 +336,11 @@ pub fn build_instance_registry(source_file: &SourceFile) -> InstanceRegistry {
     registry
 }
 
-/// Scan a module definition and register its contents
-fn scan_module_definition(module: &Module, registry: &mut InstanceRegistry) {
+/// Scan an entity definition and register its contents
+fn scan_module_definition(entity: &Entity, registry: &mut InstanceRegistry) {
     use bhdl_ast::HasName;
 
-    let module_name = match module.name() {
+    let module_name = match entity.name() {
         Some(name) => name.text().to_string(),
         None => return,
     };
@@ -350,8 +350,8 @@ fn scan_module_definition(module: &Module, registry: &mut InstanceRegistry) {
         modules: HashMap::new(),
     };
 
-    // Scan component instances inside the module
-    for component_inst in module.component_instances() {
+    // Scan component instances inside the entity
+    for component_inst in entity.component_instances() {
         if let (Some(inst_name), Some(type_name)) = (
             extract_instance_name(&component_inst),
             extract_component_type(&component_inst)
@@ -368,12 +368,12 @@ fn scan_module_definition(module: &Module, registry: &mut InstanceRegistry) {
         }
     }
 
-    // Scan module instances inside the module (for nested modules)
-    for module_inst in module.module_instances() {
+    // Scan nested entity instances inside the entity
+    for entity_inst in entity.entity_instances() {
         use bhdl_ast::HasName;
         if let (Some(inst_name), Some(mod_type)) = (
-            module_inst.name().map(|t| t.text().to_string()),
-            module_inst.module_type().map(|t| t.text().to_string())
+            entity_inst.name().map(|t| t.text().to_string()),
+            entity_inst.entity_type().map(|t| t.text().to_string())
         ) {
             let is_array = inst_name.contains('[') || inst_name.contains('_');
             contents.modules.insert(
@@ -427,12 +427,12 @@ fn scan_board_instances(board: &Board, registry: &mut InstanceRegistry) {
     }
 }
 
-/// Register a module instance
-fn register_module_instance(inst: &bhdl_ast::ModuleInst, registry: &mut InstanceRegistry) {
+/// Register an entity instance
+fn register_module_instance(inst: &bhdl_ast::EntityInst, registry: &mut InstanceRegistry) {
     use bhdl_ast::HasName;
 
     let instance_name = inst.name().map(|t| t.text().to_string());
-    let module_type = inst.module_type().map(|t| t.text().to_string());
+    let module_type = inst.entity_type().map(|t| t.text().to_string());
 
     if let (Some(name), Some(type_name)) = (instance_name, module_type) {
         let is_array = name.contains('[') || name.contains('_');

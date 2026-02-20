@@ -42,9 +42,9 @@ fn print_tree(node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>, depth: usize)
 }
 
 fn find_modules(node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>) {
-    // Find all MODULE_DEF nodes
+    // Find all ENTITY_DEF nodes
     for child in node.children() {
-        if child.kind() == SyntaxKind::MODULE_DEF {
+        if child.kind() == SyntaxKind::ENTITY_DEF {
             print_module_info(&child);
         } else {
             find_modules(&child);

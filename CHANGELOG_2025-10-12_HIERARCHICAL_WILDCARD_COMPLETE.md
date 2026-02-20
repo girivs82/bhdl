@@ -166,12 +166,12 @@ This ensures `array: SensorArray()` is correctly classified as a module instance
 
 ### Module Definitions
 ```bhdl
-module SensorModule() {
+entity SensorModule() {
     sensor: TempSensor();
     buffer: OpAmp();
 }
 
-module SensorArray() {
+entity SensorArray() {
     temp_sensor: TempSensor();
     humidity_sensor: HumiditySensor();
     pressure_sensor: PressureSensor();

@@ -5,7 +5,7 @@
 // ============================================================
 
 // Need separate modules for each configuration
-module BuckConverter_3V3 {
+entity BuckConverter_3V3 {
     pin VIN: power in;
     pin VOUT: power out;
     
@@ -13,7 +13,7 @@ module BuckConverter_3V3 {
     // ... 50 lines of code ...
 }
 
-module BuckConverter_5V0 {
+entity BuckConverter_5V0 {
     pin VIN: power in;
     pin VOUT: power out;
     
@@ -21,7 +21,7 @@ module BuckConverter_5V0 {
     // ... 50 lines of code ...
 }
 
-module BuckConverter_1V2_HighCurrent {
+entity BuckConverter_1V2_HighCurrent {
     pin VIN: power in;
     pin VOUT: power out;
     
@@ -43,7 +43,7 @@ board PowerSupply_Old {
 // ============================================================
 
 // One flexible module handles all cases
-module BuckConverter(
+entity BuckConverter(
     vout: voltage = 3.3V,
     imax: current = 2A,
     fsw: frequency = 500kHz,
@@ -166,7 +166,7 @@ module BuckConverter(
 }
 
 // Submodule for compensation (also parameterized!)
-module TypeIIICompensation(
+entity TypeIIICompensation(
     fp1: frequency,
     fz1: frequency, 
     fz2: frequency,
@@ -269,7 +269,7 @@ board PowerSupply_New {
 //    - Can nest arbitrarily deep
 
 // Example: Multi-phase converter using generates
-module MultiphaseBuck(
+entity MultiphaseBuck(
     vout: voltage = 1.0V,
     imax: current = 100A,
     phases: int = 4

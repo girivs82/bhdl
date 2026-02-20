@@ -4,7 +4,7 @@
 import { capacitance, voltage, resistance, frequency, temperature, current, time } from "../../../units.bhdl";
 
 // ==================== COMPONENT DEFINITION ====================
-module Capacitor(
+entity Capacitor(
     value: capacitance,                 // Capacitance value
     voltage_rating: voltage = 50V,      // Rated voltage
     tolerance: float = 20%,             // Capacitance tolerance
@@ -21,10 +21,10 @@ module Capacitor(
 }
 
 // Shortcuts for common capacitor types
-module Cap = Capacitor;
-module ElectrolyticCap(value: capacitance, voltage: voltage) = 
+entity Cap = Capacitor;
+entity ElectrolyticCap(value: capacitance, voltage: voltage) = 
     Capacitor(value, voltage, 20%, 50mΩ, "Electrolytic");
-module CeramicCap(value: capacitance, voltage: voltage, dielectric: string = "X7R") = 
+entity CeramicCap(value: capacitance, voltage: voltage, dielectric: string = "X7R") = 
     Capacitor(value, voltage, 10%, 10mΩ, dielectric);
 
 // ==================== ELECTRICAL CHARACTERISTICS ====================

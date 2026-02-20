@@ -12,7 +12,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     // Test module with virtual pins
     let content = r#"
-module TestVirtualModule() {
+entity TestVirtualModule() {
     // Regular pins
     pin VIN: power in;
     pin GND: ground inout;

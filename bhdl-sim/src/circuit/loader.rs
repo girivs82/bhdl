@@ -88,7 +88,13 @@ impl CircuitLoader {
         for (_ptr, value) in &self.analysis_result.resolved_constants {
             // TODO: Map pointer to attribute name
             // For now, just convert the value
-            let _runtime_value = RuntimeValue::Integer(*value);
+            let _runtime_value = match value.as_i64() {
+                Some(i) => RuntimeValue::Integer(i),
+                None => match value.as_f64() {
+                    Some(f) => RuntimeValue::Real(f),
+                    None => continue,
+                },
+            };
             // TODO: state.update_attribute(name, runtime_value);
         }
         

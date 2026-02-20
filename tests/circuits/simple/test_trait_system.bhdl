@@ -1,0 +1,27 @@
+// Test: Trait system for component interfaces
+
+trait PowerRegulator {
+    pin VIN: power in;
+    pin VOUT: power out;
+    pin GND: ground;
+    const DROPOUT: voltage;
+    const MAX_CURRENT: current;
+}
+
+trait SpiPeripheral {
+    pin MOSI: signal in;
+    pin MISO: signal out;
+    pin SCK: signal in;
+    pin CS: signal in;
+    const MAX_FREQ: frequency;
+}
+
+impl PowerRegulator for LM7805 {
+    const DROPOUT = 2.0V;
+    const MAX_CURRENT = 1.5A;
+}
+
+board TraitTestBoard {
+    power VCC = 5V;
+    ground GND;
+}

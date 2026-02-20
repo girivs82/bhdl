@@ -101,7 +101,7 @@ power VCC_ANALOG = 3.3V @ 500mA isolated
 power VCC_DIGITAL = 3.3V @ 2A isolated
 
 // Power domain crossing requires explicit isolation
-module ADC {
+entity ADC {
     power analog_supply: VCC_ANALOG in
     power digital_supply: VCC_DIGITAL in
     
@@ -120,7 +120,7 @@ module ADC {
 
 ```bhdl
 // Conditional power consumption
-module AdaptiveProcessor {
+entity AdaptiveProcessor {
     power vcc: power in
     
     state idle {
@@ -196,7 +196,7 @@ VCC_MAIN.IO -> {
 
 ```bhdl
 // Power conversion with losses
-module PowerPath {
+entity PowerPath {
     power in: power input
     power out: power output
     
@@ -231,7 +231,7 @@ power_sequence startup {
 }
 
 // Power dependencies
-module SensitiveDevice {
+entity SensitiveDevice {
     power vcore: power input requires stable
     power vio: power input requires vcore.is_stable
     
@@ -317,7 +317,7 @@ analyze power_distribution {
 
 ```bhdl
 // Link power consumption to thermal model
-module PowerDevice {
+entity PowerDevice {
     power vcc: power input
     thermal junction_temp: temperature
     

@@ -122,7 +122,7 @@
 2. SPI with multiple slaves
 3. UART with flow control
 4. Parameterized bus interface
-5. Mixed interface and module design
+5. Mixed interface and entity design
 
 ### Validation Tests
 1. Error on incompatible connections

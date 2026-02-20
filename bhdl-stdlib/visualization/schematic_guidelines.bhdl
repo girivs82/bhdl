@@ -262,7 +262,7 @@ enum SchematicOrganization {
 // ==================== EXAMPLE APPLICATIONS ====================
 
 // Example: Apply visualization to LM7805
-extend module LM7805 from "../regulators/lm7805.bhdl" {
+extend entity LM7805 from "../regulators/lm7805.bhdl" {
     apply LinearRegulatorVisualization;
     
     @visualization(
@@ -272,7 +272,7 @@ extend module LM7805 from "../regulators/lm7805.bhdl" {
 }
 
 // Example: Define visualization for a complete power supply
-module PowerSupplyWithVisualization {
+entity PowerSupplyWithVisualization {
     // Standard power supply with visualization hints
     
     @visualization(

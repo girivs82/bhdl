@@ -2,15 +2,15 @@
 
 use std::collections::HashMap;
 use rowan::ast::AstNode;
-use bhdl_ast::{Module, Board};
+use bhdl_ast::{Entity, Board};
 use bhdl_parser::SyntaxKind;
 
-/// Extract attributes from a module's syntax tree
-pub fn extract_module_attributes(module: &Module) -> HashMap<String, String> {
+/// Extract attributes from an entity's syntax tree
+pub fn extract_module_attributes(entity: &Entity) -> HashMap<String, String> {
     let mut attributes = HashMap::new();
-    
-    // Walk through the module's syntax tree looking for attribute declarations
-    let syntax = module.syntax();
+
+    // Walk through the entity's syntax tree looking for attribute declarations
+    let syntax = entity.syntax();
     
     for child in syntax.children() {
         // Look for attribute declarations (attribute name = value;)

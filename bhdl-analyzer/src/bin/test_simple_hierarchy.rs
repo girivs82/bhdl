@@ -2,7 +2,7 @@ use bhdl_parser::parse;
 
 fn main() {
     let test_code = r#"
-module PWMController(frequency: frequency = 100kHz) {
+entity PWMController(frequency: frequency = 100kHz) {
     pin VCC: power in;
     pin OUT: signal out;
     pin EN: signal in;

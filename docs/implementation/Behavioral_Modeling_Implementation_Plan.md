@@ -379,7 +379,7 @@ impl BehavioralModel for PythonModelWrapper {
 #[test]
 fn test_attribute_expressions() {
     let source = r#"
-        module Controller {
+        entity Controller {
             pin FB: analog in;
             pin PWM: digital out;
             
@@ -401,7 +401,7 @@ fn test_attribute_expressions() {
 #[test]
 fn test_mutable_attribute_detection() {
     let source = r#"
-        module SoftStart {
+        entity SoftStart {
             attribute vref = 0V;
             
             when (enable) {
@@ -441,7 +441,7 @@ board ThermalLEDDemo {
     LED.K -> GND;
 }
 
-module ThermalLED {
+entity ThermalLED {
     pin TEMP: analog in;
     pin LED_DRIVE: current out;
     
@@ -492,7 +492,7 @@ module ThermalLED {
 
 2. **Link in BHDL**:
    ```bhdl
-   module Buck {
+   entity Buck {
        @behavioral(model="buck.BuckController", language="python")
    }
    ```

@@ -12,9 +12,9 @@ This document provides a detailed implementation plan for adding hierarchical mo
 ```rust
 // In bhdl-parser/src/grammar.rs
 pub(crate) fn module_def(p: &mut Parser) {
-    assert!(p.at(T![module]));
+    assert!(p.at(T![entity]));
     let m = p.start();
-    p.bump(T![module]);
+    p.bump(T![entity]);
     p.expect(T![ident]);
     
     // NEW: Parse parameter list
@@ -30,7 +30,7 @@ pub(crate) fn module_def(p: &mut Parser) {
         } else if p.at(T![attribute]) {
             attribute_declaration(p);
         } else if p.at(T![ident]) && p.nth_at(1, T![:]) {
-            // NEW: Module instantiation within module
+            // NEW: Entity instantiation within entity
             instance_declaration(p);
         } else {
             component_or_connection(p);
@@ -38,7 +38,7 @@ pub(crate) fn module_def(p: &mut Parser) {
     }
     
     p.expect(T!['}']);
-    m.complete(p, MODULE_DEF);
+    m.complete(p, ENTITY_DEF);
 }
 
 fn param_list(p: &mut Parser) {
@@ -78,7 +78,7 @@ fn instance_declaration(p: &mut Parser) {
     let m = p.start();
     p.expect(T![ident]);  // instance name
     p.expect(T![:]);
-    p.expect(T![ident]);  // module name
+    p.expect(T![ident]);  // entity name
     
     // NEW: Parse arguments
     if p.at(T!['(']) {
@@ -103,7 +103,7 @@ fn instance_declaration(p: &mut Parser) {
 fn port_mapping(p: &mut Parser) {
     let m = p.start();
     
-    // Left side: module pin (no dots!)
+    // Left side: entity pin (no dots!)
     pin_reference(p);
     
     // Connection operator
@@ -131,7 +131,7 @@ fn port_mapping(p: &mut Parser) {
 // In bhdl-ast/src/lib.rs
 
 #[derive(Debug, Clone)]
-pub struct ModuleDef {
+pub struct EntityDef {
     pub name: String,
     pub params: Option<ParamList>,
     pub pins: Vec<PinDecl>,
@@ -156,7 +156,7 @@ pub struct ParamDecl {
 #[derive(Debug, Clone)]
 pub struct InstanceDecl {
     pub name: String,
-    pub module_name: String,
+    pub entity_name: String,
     pub args: Option<InstanceArgs>,      // NEW
     pub port_mappings: Vec<PortMapping>, // NEW syntax
     pub attributes: Vec<ScopedAttribute>, // NEW
@@ -164,7 +164,7 @@ pub struct InstanceDecl {
 
 #[derive(Debug, Clone)]
 pub struct PortMapping {
-    pub module_pin: PinRef,      // Always on left
+    pub entity_pin: PinRef,      // Always on left
     pub direction: ConnOp,       // <-, ->, <->
     pub target: ConnectionTarget, // Signal or qualified pin
 }
@@ -206,12 +206,12 @@ pub struct ModuleInfo {
 }
 
 impl SymbolTable {
-    pub fn enter_module_scope(&mut self, module: &ModuleDef) -> ScopeId {
+    pub fn enter_entity_scope(&mut self, entity: &EntityDef) -> ScopeId {
         let scope = HierarchicalScope {
             parent: Some(self.current_scope),
-            kind: ScopeKind::Module(ModuleInfo {
-                name: module.name.clone(),
-                params: self.extract_params(module),
+            kind: ScopeKind::Entity(EntityInfo {
+                name: entity.name.clone(),
+                params: self.extract_params(entity),
                 is_definition: true,
             }),
             symbols: HashMap::new(),
@@ -222,7 +222,7 @@ impl SymbolTable {
         self.current_scope = scope_id;
         
         // Add parameters to scope
-        for param in &module.params {
+        for param in &entity.params {
             self.add_parameter(param);
         }
         
@@ -238,40 +238,40 @@ impl SymbolTable {
 
 impl Resolver {
     fn resolve_instance(&mut self, instance: &InstanceDecl) -> Result<ResolvedInstance> {
-        // Look up module definition
-        let module_def = self.symbol_table
-            .lookup_module(&instance.module_name)
-            .ok_or_else(|| format!("Unknown module: {}", instance.module_name))?;
+        // Look up entity definition
+        let entity_def = self.symbol_table
+            .lookup_entity(&instance.entity_name)
+            .ok_or_else(|| format!("Unknown entity: {}", instance.entity_name))?;
         
         // Create instance scope
         let instance_scope = self.symbol_table.enter_instance_scope(
             &instance.name,
-            &module_def,
+            &entity_def,
         );
-        
+
         // Resolve parameter arguments
         let resolved_args = self.resolve_instance_args(
             &instance.args,
-            &module_def.params,
+            &entity_def.params,
         )?;
-        
+
         // Resolve port mappings
         let resolved_mappings = self.resolve_port_mappings(
             &instance.port_mappings,
-            &module_def,
+            &entity_def,
         )?;
-        
+
         // Resolve scoped attributes
         let resolved_attrs = self.resolve_scoped_attributes(
             &instance.attributes,
-            &module_def,
+            &entity_def,
         )?;
         
         self.symbol_table.exit_scope();
         
         Ok(ResolvedInstance {
             name: instance.name.clone(),
-            module_def,
+            entity_def,
             args: resolved_args,
             mappings: resolved_mappings,
             attributes: resolved_attrs,
@@ -349,16 +349,16 @@ impl ParameterValidator {
         &self,
         instance: &ResolvedInstance,
     ) -> Result<()> {
-        let module_params = &instance.module_def.params;
+        let entity_params = &instance.entity_def.params;
         let provided_args = &instance.args;
-        
+
         // Check all required parameters are provided
-        for param in module_params {
+        for param in entity_params {
             if param.default.is_none() {
                 if !provided_args.contains_key(&param.name) {
                     return Err(format!(
-                        "Missing required parameter '{}' for module '{}'",
-                        param.name, instance.module_def.name
+                        "Missing required parameter '{}' for entity '{}'",
+                        param.name, instance.entity_def.name
                     ));
                 }
             }
@@ -366,7 +366,7 @@ impl ParameterValidator {
         
         // Validate parameter types and constraints
         for (name, value) in provided_args {
-            let param_def = module_params.iter()
+            let param_def = entity_params.iter()
                 .find(|p| p.name == *name)
                 .ok_or_else(|| format!("Unknown parameter: {}", name))?;
             
@@ -397,15 +397,15 @@ impl HierarchicalSynthesizer {
         instance: &ResolvedInstance,
         parent_module: ModuleDefinitionId,
     ) -> Result<InstanceId> {
-        // Check if identical module already synthesized
+        // Check if identical entity already synthesized
         let signature = self.compute_module_signature(instance);
         
         let module_def_id = if let Some(&cached) = self.module_cache.get(&signature) {
             cached
         } else {
-            // Synthesize new module definition
-            let new_def = self.synthesize_module_definition(
-                &instance.module_def,
+            // Synthesize new entity definition
+            let new_def = self.synthesize_entity_definition(
+                &instance.entity_def,
                 &instance.args,
             )?;
             self.module_cache.insert(signature, new_def);
@@ -430,9 +430,9 @@ impl HierarchicalSynthesizer {
         Ok(instance_id)
     }
     
-    fn compute_module_signature(&self, instance: &ResolvedInstance) -> ModuleSignature {
-        ModuleSignature {
-            module_name: instance.module_def.name.clone(),
+    fn compute_entity_signature(&self, instance: &ResolvedInstance) -> EntitySignature {
+        EntitySignature {
+            entity_name: instance.entity_def.name.clone(),
             parameters: instance.args.clone(),
             // Don't include instance-specific attributes
         }
@@ -476,9 +476,9 @@ impl RefDesGenerator {
 ```rust
 // In bhdl-parser/src/tests/hierarchical.rs
 #[test]
-fn test_parse_module_with_params() {
+fn test_parse_entity_with_params() {
     let input = r#"
-        module VoltageRegulator(vout: voltage = 3.3V, imax: current) {
+        entity VoltageRegulator(vout: voltage = 3.3V, imax: current) {
             pin VIN: power in;
             pin VOUT: power out;
         }
@@ -523,7 +523,7 @@ fn test_hierarchical_power_supply() {
     
     // Check hierarchy
     assert_eq!(analysis.module_instances.len(), 2);
-    assert_eq!(analysis.get_instance("buck_5v").unwrap().module_name, "BuckConverter");
+    assert_eq!(analysis.get_instance("buck_5v").unwrap().entity_name, "BuckConverter");
     
     // Synthesize
     let netlist = synthesize(&analysis).unwrap();
@@ -565,7 +565,7 @@ Create comprehensive test circuits:
 
 ```bhdl
 // tests/circuits/hierarchical/multi_level.bhdl
-module PowerStage(voltage: voltage) {
+entity PowerStage(voltage: voltage) {
     pin VIN: power in;
     pin VOUT: power out;
     
@@ -599,7 +599,7 @@ board System {
 ### 6.1 Update BHDL Specification
 
 Add hierarchical module syntax to `docs/spec/BHDL_Complete_Specification.md`:
-- Module definition with parameters
+- Entity definition with parameters
 - Instance declaration with arguments
 - Port mapping syntax (left-right convention)
 - Scoped attribute syntax

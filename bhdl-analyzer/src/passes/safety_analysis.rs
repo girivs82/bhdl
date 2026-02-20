@@ -111,25 +111,25 @@ fn analyze_safety_compliance(
                         
                         // Validate required fields for detailed compliance
                         if !fields.contains_key("implementation") {
-                            diagnostics.push(Diagnostic {
-                                message: format!(
+                            diagnostics.push(Diagnostic::new(
+                                format!(
                                     "Safety requirement {} lacks implementation description",
                                     req_id_str
                                 ),
-                                range: rowan::TextRange::empty(rowan::TextSize::from(0)),
-                            });
+                                rowan::TextRange::empty(rowan::TextSize::from(0)),
+                            ));
                         }
                         
                         SafetyCompliance::WithDetails { details: fields }
                     }
                     None => {
-                        diagnostics.push(Diagnostic {
-                            message: format!(
+                        diagnostics.push(Diagnostic::new(
+                            format!(
                                 "Safety requirement {} declared but not satisfied",
                                 req_id_str
                             ),
-                            range: rowan::TextRange::empty(rowan::TextSize::from(0)),
-                        });
+                            rowan::TextRange::empty(rowan::TextSize::from(0)),
+                        ));
                         SafetyCompliance::NotSatisfied
                     }
                 };
@@ -147,10 +147,10 @@ fn analyze_safety_compliance(
     } else {
         // Check if this is a safety-critical board (has certain components)
         if is_safety_critical_board(board) {
-            diagnostics.push(Diagnostic {
-                message: "Safety-critical board lacks satisfies block".to_string(),
-                range: rowan::TextRange::empty(rowan::TextSize::from(0)),
-            });
+            diagnostics.push(Diagnostic::new(
+                "Safety-critical board lacks satisfies block".to_string(),
+                rowan::TextRange::empty(rowan::TextSize::from(0)),
+            ));
         }
     }
 }
@@ -193,15 +193,15 @@ fn check_missing_requirements(
     
     // For now, just check coverage
     if result.coverage.coverage_percentage < 100.0 && !result.requirements.is_empty() {
-        diagnostics.push(Diagnostic {
-            message: format!(
+        diagnostics.push(Diagnostic::new(
+            format!(
                 "Safety requirement coverage is {:.1}% ({}/{} satisfied)",
                 result.coverage.coverage_percentage,
                 result.coverage.satisfied_requirements,
                 result.coverage.total_requirements
             ),
-            range: rowan::TextRange::empty(rowan::TextSize::from(0)),
-        });
+            rowan::TextRange::empty(rowan::TextSize::from(0)),
+        ));
     }
 }
 

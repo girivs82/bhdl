@@ -15,7 +15,7 @@ BHDL needs only **5 new concepts** to enable powerful behavioral modeling while 
 ### 1. Attributes for Configuration
 
 ```bhdl
-module PIController {
+entity PIController {
     // Static configuration
     attribute description = "PI Controller";
     attribute kp = 0.1;
@@ -34,13 +34,13 @@ module PIController {
 **Key rules:**
 - Can only reference other attributes
 - Cannot reference signals or pins
-- Represent module configuration/metadata
+- Represent entity configuration/metadata
 - Can be mutable but only based on attribute logic
 
 ### 2. Signals for Dynamic Behavior
 
 ```bhdl
-module PowerController {
+entity PowerController {
     pin ENABLE: digital in;
     pin FB: analog in;
     pin PWM: digital out;
@@ -89,7 +89,7 @@ module PowerController {
 ### 3. External Model Decorator
 
 ```bhdl
-module ComplexController {
+entity ComplexController {
     pin VIN: power in;
     pin VOUT: power out;
     pin I_SENSE: analog in;
@@ -128,7 +128,7 @@ when (ramping) {
 ### Example 1: LED Thermal Controller (Pure BHDL)
 
 ```bhdl
-module ThermalLED {
+entity ThermalLED {
     pin TEMP_SENSE: analog in;
     pin LED_DRIVE: current out;
     
@@ -154,7 +154,7 @@ module ThermalLED {
 ### Example 2: Power Sequencer
 
 ```bhdl
-module PowerSequencer {
+entity PowerSequencer {
     pin ENABLE: digital in;
     pin EN0, EN1, EN2, EN3: digital out;
     pin ALL_GOOD: digital out;
@@ -213,7 +213,7 @@ module PowerSequencer {
 ### Example 3: Buck with Soft-Start
 
 ```bhdl
-module BuckController {
+entity BuckController {
     pin ENABLE: digital in;
     pin VIN: power in;
     pin FB: analog in;
@@ -262,7 +262,7 @@ module BuckController {
 ### Example 4: Complex USB PD (PLI)
 
 ```bhdl
-module USBPDController {
+entity USBPDController {
     pin CC1, CC2: analog inout;
     pin VBUS_EN: digital out;
     pin VBUS_PROG: analog out;
@@ -275,9 +275,9 @@ module USBPDController {
 ## Why This Design Works
 
 ### 1. Clear Separation of Concerns
-- **Attributes**: What the module IS (configuration)
-- **Signals**: What the module DOES (behavior)
-- **Pins**: How the module CONNECTS (interface)
+- **Attributes**: What the entity IS (configuration)
+- **Signals**: What the entity DOES (behavior)
+- **Pins**: How the entity CONNECTS (interface)
 
 ### 2. Natural Mental Model
 - "Attributes" naturally mean properties/configuration

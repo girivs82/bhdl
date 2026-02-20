@@ -2,7 +2,7 @@ use bhdl_parser::parse;
 
 fn main() {
     let simple_resistor = r#"
-module Res(value: resistance) {
+entity Res(value: resistance) {
     pin 1: signal inout;
     pin 2: signal inout;
 }

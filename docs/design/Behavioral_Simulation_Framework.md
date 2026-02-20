@@ -30,11 +30,11 @@ impl PowerValidator {
 }
 ```
 
-### 2. Behavioral Module Library
+### 2. Behavioral Entity Library
 
 ```bhdl
 // Behavioral model of buck converter with controller
-behavioral module BuckController {
+behavioral entity BuckController {
     // High-level parameters
     param switching_freq: frequency = 500kHz;
     param soft_start_time: time = 10ms;
@@ -212,7 +212,7 @@ testbench PowerSequenceValidation for PowerManagementSystem {
 
 ```bhdl
 // LED driver with thermal feedback
-behavioral module LEDDriverWithThermal {
+behavioral entity LEDDriverWithThermal {
     pin TEMP_SENSE: analog in;
     pin LED_CURRENT: current out;
     
@@ -266,7 +266,7 @@ testbench ThermalDerating for LEDDriver {
 
 ```bhdl
 // I2C communication between devices
-behavioral module I2CTransaction {
+behavioral entity I2CTransaction {
     behavior {
         // Master initiates transaction
         master.start();

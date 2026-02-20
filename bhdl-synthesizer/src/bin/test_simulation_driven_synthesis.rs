@@ -19,7 +19,7 @@ fn main() {
     
     // Buck converter circuit in BHDL
     let bhdl_source = r#"
-module BuckConverter(
+entity BuckConverter(
     vin_nom: voltage = 12V,
     vout_target: voltage = 5V,
     iout_max: current = 2A,

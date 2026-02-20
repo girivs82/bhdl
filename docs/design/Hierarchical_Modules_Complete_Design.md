@@ -2,8 +2,8 @@
 
 ## Overview
 
-This document specifies the complete design for hierarchical modules in BHDL, including:
-- Module instantiation within modules
+This document specifies the complete design for hierarchical entities in BHDL, including:
+- Entity instantiation within entities
 - Parameter passing (configuration)
 - Port mapping (connections)
 - Attribute scoping and inheritance
@@ -13,14 +13,14 @@ This document specifies the complete design for hierarchical modules in BHDL, in
 ### 1. Parameters vs Attributes
 
 **Parameters**: Configuration values passed during instantiation
-- Defined in module header: `module Name(param: type = default)`
+- Defined in entity header: `entity Name(param: type = default)`
 - Set during instantiation: `inst: Module(param = value)`
 - Cross scope boundaries (parent → child)
-- Immutable within the module
+- Immutable within the entity
 
-**Attributes**: Module properties and internal state
+**Attributes**: Entity properties and internal state
 - Defined with `attribute` keyword
-- Exist within module scope
+- Exist within entity scope
 - Can be static metadata or computed values
 - Can be passed as parameter values
 
@@ -28,8 +28,8 @@ This document specifies the complete design for hierarchical modules in BHDL, in
 
 ```bhdl
 board TopLevel {
-    module Container {
-        module Nested {
+    entity Container {
+        entity Nested {
             component Instance
         }
     }
@@ -38,10 +38,10 @@ board TopLevel {
 
 ## Syntax Specification
 
-### Module Definition with Parameters
+### Entity Definition with Parameters
 
 ```bhdl
-module ModuleName(
+entity EntityName(
     param1: type1,
     param2: type2 = default_value,
     param3: type3
@@ -54,7 +54,7 @@ module ModuleName(
 
 ```bhdl
 instance_name: ModuleType(param1=value1, param2=value2) {
-    // Port mappings - module pins on LEFT, parent signals on RIGHT
+    // Port mappings - entity pins on LEFT, parent signals on RIGHT
     input_pin <- source_signal;      // Input mapping
     output_pin -> dest_signal;       // Output mapping
     inout_pin <-> bidirectional_signal;  // Bidirectional mapping
@@ -65,7 +65,7 @@ instance_name: ModuleType(param1=value1, param2=value2) {
 
 ```bhdl
 // Module definition with parameters
-module VoltageRegulator(
+entity VoltageRegulator(
     vout_target: voltage,
     current_limit: current = 2A,
     switching_freq: frequency = 500kHz
@@ -102,13 +102,13 @@ module VoltageRegulator(
 
 }
 
-// Parent module passing parameters
-module PowerSupply {
+// Parent entity passing parameters
+entity PowerSupply {
     pin INPUT: power in;
     pin OUTPUT_5V: power out;
     pin OUTPUT_3V3: power out;
     
-    // Module-level attributes
+    // Entity-level attributes
     attribute efficiency_mode = "high";
     attribute board_temp = 25C;
     
@@ -143,7 +143,7 @@ module PowerSupply {
 ### Direct Pass-Through
 
 ```bhdl
-module Parent(base_voltage: voltage) {
+entity Parent(base_voltage: voltage) {
     child: Child(
         operating_voltage = base_voltage  // Direct pass
     ) {
@@ -155,7 +155,7 @@ module Parent(base_voltage: voltage) {
 ### Transformed Parameters
 
 ```bhdl
-module Parent(
+entity Parent(
     input_voltage: voltage,
     num_outputs: int
 ) {
@@ -182,21 +182,21 @@ module Parent(
 ### Multi-Level Parameter Flow
 
 ```bhdl
-module Level1(system_freq: frequency) {
+entity Level1(system_freq: frequency) {
     // Pass to Level2
     sub: Level2(
         base_freq = system_freq
     ) { }
 }
 
-module Level2(base_freq: frequency) {
+entity Level2(base_freq: frequency) {
     // Pass to Level3 with modification
     subsub: Level3(
         operating_freq = base_freq / 2
     ) { }
 }
 
-module Level3(operating_freq: frequency) {
+entity Level3(operating_freq: frequency) {
     // Use the parameter
     attribute period = 1 / operating_freq;
 }
@@ -206,13 +206,13 @@ module Level3(operating_freq: frequency) {
 
 ### Basic Port Mapping
 
-Port mapping connects signals between module boundaries using consistent syntax:
-- Module pins always on LEFT side
+Port mapping connects signals between entity boundaries using consistent syntax:
+- Entity pins always on LEFT side
 - Parent signals/pins on RIGHT side
 - Arrow shows data flow direction
 
 ```bhdl
-module Container {
+entity Container {
     signal internal_net;
     
     child: ChildModule {
@@ -240,7 +240,7 @@ PIN <-> signal;   // Bidirectional connection
 ### Array Pin Mapping
 
 ```bhdl
-module ArrayExample {
+entity ArrayExample {
     pin DATA_IN[8]: signal in;
     pin DATA_OUT[8]: signal out;
     
@@ -254,7 +254,7 @@ module ArrayExample {
 ### Instance-to-Instance Connections
 
 ```bhdl
-module Pipeline {
+entity Pipeline {
     stage1: ProcessorA {
         IN <- input;
         OUT -> intermediate;  // To net
@@ -277,7 +277,7 @@ module Pipeline {
 ### Basic Scoped Attributes
 
 ```bhdl
-module Parent {
+entity Parent {
     child: Child {
         // Port mappings
         input <- IN;
@@ -293,7 +293,7 @@ module Parent {
 ### Array Element Attributes
 
 ```bhdl
-module MultiChannel {
+entity MultiChannel {
     drivers: DriverBank(channels=8) {
         // Port mappings for array
         IN[0..7] <- input_signals[0..7];
@@ -315,7 +315,7 @@ module MultiChannel {
 ## Complete Integration Example
 
 ```bhdl
-module PowerManagementSystem(
+entity PowerManagementSystem(
     input_voltage: voltage = 24V,
     low_power_mode: bool = false
 ) {
@@ -379,15 +379,15 @@ module PowerManagementSystem(
 
 ## Implementation Priorities
 
-1. **Basic Instantiation**: Module-in-module with port mapping
-2. **Parameter System**: Module parameters with defaults
+1. **Basic Instantiation**: Entity-in-entity with port mapping
+2. **Parameter System**: Entity parameters with defaults
 3. **Parameter Flow**: Passing parameters through hierarchy
-4. **Scoped Attributes**: Setting nested module attributes
-5. **Arrays and Generation**: Parameterized module arrays
+4. **Scoped Attributes**: Setting nested entity attributes
+5. **Arrays and Generation**: Parameterized entity arrays
 
 ## Design Decisions Summary
 
-1. **No `param` keyword** - Parameters are implicit in module header
+1. **No `param` keyword** - Parameters are implicit in entity header
 2. **Parameters vs Attributes** - Clear distinction by context
 3. **Unified instantiation syntax** - Parameters in parens, ports in braces
 4. **Attribute keyword for scoping** - Clear nested configuration

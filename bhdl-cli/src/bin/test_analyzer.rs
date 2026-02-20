@@ -35,7 +35,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     // Print analysis summary
     println!("\n📊 Analysis Results:");
-    println!("  Global symbols: {}", analysis_result.global_scope.children.len());
+    println!("  Global symbols: {}", analysis_result.global_scope.get_symbols().len());
     println!("  Definition scopes: {}", analysis_result.definition_scopes.len());
     println!("  Resolved constants: {}", analysis_result.resolved_constants.len());
     println!("  Power domains: {}", analysis_result.power_analysis.domains.len());

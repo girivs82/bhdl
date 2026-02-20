@@ -109,7 +109,7 @@ board USBPoweredDevice {
 }
 
 // Module definition example
-module AudioAmplifier(gain: real = 10dB) {
+entity AudioAmplifier(gain: real = 10dB) {
     pin power_in: power in;
     pin ground: ground;
     pin input: signal in;

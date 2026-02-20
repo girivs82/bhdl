@@ -13,7 +13,7 @@ type FuseParams = {
     impedance: ImpedanceCharacteristics,
 };
 
-module Fuse(current: current, voltage: voltage = 250V) {
+entity Fuse(current: current, voltage: voltage = 250V) {
     pin 1: signal inout;  // Terminal 1
     pin 2: signal inout;  // Terminal 2
     

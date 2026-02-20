@@ -11,7 +11,7 @@
 // import StandardLibrary.CircuitPatterns.{NonInvertingAmplifier}; // Assuming OpAmp module
 
 // Placeholder RC Filter Module (if not imported)
-module RCFilterModule {
+entity RCFilterModule {
   ports { INPUT: in signal; OUTPUT: out signal; GND: ground; }
   parameters { r_value: resistance = 1kOhm; c_value: capacitance = 10nF; }
   components { R1: Resistor {value: module.r_value;}; C1: Capacitor {value: module.c_value;}; }
@@ -19,7 +19,7 @@ module RCFilterModule {
 }
 
 // Placeholder Voltage Divider Module (if not imported)
-module VoltageDividerModule {
+entity VoltageDividerModule {
     ports { INPUT: in power; OUTPUT: out signal; GND: ground; }
     parameters { r_top_value: resistance = 10kOhm; r_bottom_value: resistance = 5kOhm; }
     components { R_Top: Resistor {value: module.r_top_value;}; R_Bottom: Resistor {value: module.r_bottom_value;}; }

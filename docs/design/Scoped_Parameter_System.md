@@ -2,7 +2,7 @@
 
 ## Overview
 
-Enable fine-grained control over deeply nested module parameters from higher levels using scoped references. This allows configuring identical module instances differently based on their role in the system.
+Enable fine-grained control over deeply nested entity parameters from higher levels using scoped references. This allows configuring identical entity instances differently based on their role in the system.
 
 ## Motivation Example
 
@@ -10,7 +10,7 @@ Enable fine-grained control over deeply nested module parameters from higher lev
 // Problem: Two identical buck converters need different output voltages
 board PowerSupply {
     // Traditional approach - must expose every parameter
-    module BuckWithFeedback(vout: voltage) {
+    entity BuckWithFeedback(vout: voltage) {
         buck: BuckConverter {
             // How to set feedback resistors for vout?
         }
@@ -35,7 +35,7 @@ board PowerSupply {
 ### Approach 1: Scoped Parameter Paths
 
 ```bhdl
-module BuckConverter {
+entity BuckConverter {
     pin VIN: power in;
     pin VOUT: power out;
     
@@ -44,7 +44,7 @@ module BuckConverter {
         .FB -> feedback.center;
     }
     
-    // Feedback network as submodule
+    // Feedback network as sub-entity
     feedback: FeedbackDivider {
         VOUT -> .IN;
         .OUT -> controller.FB;
@@ -82,7 +82,7 @@ board System {
 ### Approach 2: Parameter Propagation
 
 ```bhdl
-module BuckConverter(
+entity BuckConverter(
     target_vout: voltage = 3.3V,
     // Allow override of nested params
     feedback_r_top: resistance = auto,
@@ -104,7 +104,7 @@ module BuckConverter(
 ### Approach 3: Constraint-Based Configuration
 
 ```bhdl
-module BuckConverter {
+entity BuckConverter {
     pin VOUT: power out;
     
     // Declare configurable parameters
@@ -133,12 +133,12 @@ board System {
 ### 1. Parameter Declaration with Paths
 
 ```bhdl
-module PowerSupply {
-    // Module-level parameters
+entity PowerSupply {
+    // Entity-level parameters
     @param vin_nominal: voltage = 12V;
     @param efficiency_target: ratio = 0.9;
     
-    // Nested module with its own params
+    // Nested entity with its own params
     input_filter: EMIFilter {
         @param cutoff: frequency = 100kHz;
         @param stages: int = 2;
@@ -186,7 +186,7 @@ board MainBoard {
 ### 3. Parameter Inheritance and Computation
 
 ```bhdl
-module BuckConverter(base_fsw: frequency = 500kHz) {
+entity BuckConverter(base_fsw: frequency = 500kHz) {
     // Parameters can reference parent params
     @param controller.fsw: frequency = base_fsw;
     @param controller.deadtime: time = 100ns / (controller.fsw / 500kHz);
@@ -202,7 +202,7 @@ module BuckConverter(base_fsw: frequency = 500kHz) {
 ### 4. Array Parameter Scoping
 
 ```bhdl
-module MultiPhaseConverter(phases: int = 4) {
+entity MultiPhaseConverter(phases: int = 4) {
     @param base_current: current = 25A;
     
     generate for i in 0..phases {
@@ -327,11 +327,11 @@ impl ModuleInstantiator {
 ### 1. Parameter Constraints with Scopes
 
 ```bhdl
-module RegulatedSupply {
+entity RegulatedSupply {
     conv1: BuckConverter { @param vout = 5V; }
     conv2: BuckConverter { @param vout = 3.3V; }
     
-    // Cross-module constraint
+    // Cross-entity constraint
     @constraint conv2.vin < conv1.vout;  // conv2 fed from conv1
     @constraint conv1.imax >= conv2.imax * 1.2;  // Margin
 }
@@ -355,13 +355,13 @@ board System {
 ### 3. Type-Safe Parameter Paths
 
 ```bhdl
-module TypedParams {
+entity TypedParams {
     // Declare parameter types
     @param<voltage> vref = 1.2V;
     @param<resistance> r_series = 100;
     
     // Type-checked at compile time
-    submodule: Child {
+    sub_entity: Child {
         @param vref = vref;  // OK: voltage -> voltage
         // @param r_value = vref;  // ERROR: voltage -> resistance
     }
@@ -384,7 +384,7 @@ module TypedParams {
     shield.required = true;
 }
 
-module ConfigurableSupply {
+entity ConfigurableSupply {
     // Apply template
     @apply_params HighPower;
     @apply_params LowNoise;
@@ -398,7 +398,7 @@ module ConfigurableSupply {
 
 1. **Fine Control**: Configure any parameter at any depth
 2. **Type Safety**: Paths are checked at compile time
-3. **Reusability**: Same module, different configurations
+3. **Reusability**: Same entity, different configurations
 4. **Clarity**: Override paths show exactly what's changing
 5. **Maintainability**: Changes in one place affect all instances
 
@@ -444,4 +444,4 @@ board ServerPower {
 }
 ```
 
-This scoped parameter system makes it possible to create truly flexible, reusable modules while maintaining precise control over every aspect of the design!
+This scoped parameter system makes it possible to create truly flexible, reusable entities while maintaining precise control over every aspect of the design!

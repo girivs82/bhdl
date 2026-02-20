@@ -3,8 +3,8 @@
 ## What We've Covered
 
 1. **Core Syntax** ✓
-   - Module definitions with parameters
-   - Module instantiation within modules/boards
+   - Entity definitions with parameters
+   - Entity instantiation within entities/boards
    - Consistent left-right port mapping (no dots)
    - Parameter passing during instantiation
 
@@ -28,9 +28,9 @@
 
 ## Potential Additions to Consider
 
-### 1. Generate Constructs for Module Arrays
+### 1. Generate Constructs for Entity Arrays
 ```bhdl
-module MultiChannelADC(channels: int = 8) {
+entity MultiChannelADC(channels: int = 8) {
     generate for i in 0..channels {
         channel[i]: ADCChannel {
             IN <- analog_in[i];
@@ -40,9 +40,9 @@ module MultiChannelADC(channels: int = 8) {
 }
 ```
 
-### 2. Conditional Module Instantiation
+### 2. Conditional Entity Instantiation
 ```bhdl
-module PowerSystem(needs_backup: bool = false) {
+entity PowerSystem(needs_backup: bool = false) {
     main_supply: MainPower { }
     
     when (needs_backup) {
@@ -54,7 +54,7 @@ module PowerSystem(needs_backup: bool = false) {
 }
 ```
 
-### 3. Module Libraries/Packages
+### 3. Entity Libraries/Packages
 ```bhdl
 import power_modules { BuckConverter, LDO, BatteryCharger };
 import sensor_modules { TemperatureSensor, CurrentMonitor };
@@ -68,8 +68,8 @@ interface PowerSource {
     pin PGOOD: digital out;
 }
 
-// Any module implementing PowerSource can be used
-module System {
+// Any entity implementing PowerSource can be used
+entity System {
     supply: PowerSource {  // Could be Buck, LDO, etc.
         EN <- enable;
         VOUT -> system_rail;
@@ -77,9 +77,9 @@ module System {
 }
 ```
 
-### 5. Module Versioning
+### 5. Entity Versioning
 ```bhdl
-module BuckConverter@2.0 {  // Version specification
+entity BuckConverter@2.0 {  // Version specification
     // Updated implementation
 }
 
@@ -89,8 +89,8 @@ buck: BuckConverter@1.5 { }  // Use older version
 
 ## Verdict
 
-The core hierarchical module functionality is well-covered. The items above are nice-to-haves that can be added later:
-- Generate constructs - Already part of BHDL, just need module support
+The core hierarchical entity functionality is well-covered. The items above are nice-to-haves that can be added later:
+- Generate constructs - Already part of BHDL, just need entity support
 - Conditional instantiation - Natural extension of existing 'when' syntax
 - Libraries/packages - Future enhancement for code organization
 - Interfaces - Advanced feature for large designs

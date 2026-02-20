@@ -8,6 +8,11 @@ pub mod pin_metadata;
 pub mod analysis_interface;
 pub mod intent;
 pub mod expression_evaluator;
+pub mod const_value;
+pub mod bhdl_type;
+pub mod diagnostic;
+pub mod generics;
+pub mod safety;
 
 pub use component_types::{ComponentType, ComponentTypeMapper};
 pub use pin_metadata::{PinMetadata, PinFunction, ModulePinMetadata};
@@ -22,3 +27,12 @@ pub use intent::{
     ToolScope, ParamMetadata, ParamType
 };
 pub use expression_evaluator::{ExpressionEvaluator, Value};
+pub use const_value::{ConstValue, EvalError};
+pub use bhdl_type::BhdlType;
+pub use diagnostic::{DiagnosticKind, Severity, DiagnosticHint, SuggestedFix, RelatedInfo};
+pub use generics::{GenericParam, GenericParamType, Constraint, ConstraintExpr, ConstraintOp};
+pub use safety::{
+    AsilLevel, SilLevel, SafetyGoal, SafetyMechanism, DetectionMode,
+    FaultInjection, FaultType, SafetyAssertion, DeratingAnnotation,
+    RedundancyAnnotation, VotingScheme, StandbyMode,
+};

@@ -30,7 +30,7 @@ BHDL Source Code
 - **Unit System**: Comprehensive electrical units (V, A, Ω, F, H, Hz, etc.)
 
 ### Language Features Implemented
-- ✅ Hierarchical design (boards, modules, components)
+- ✅ Hierarchical design (boards, entities, components)
 - ✅ Parameter system with electrical units
 - ✅ Type system (signal, power, ground with specifications)
 - ✅ Component definitions with physical packages
@@ -46,7 +46,7 @@ BHDL Source Code
 
 ### Netlist Generation
 - **Netlist Data Model**: Complete structural representation
-- **Module Definitions**: Hierarchical module system with instances
+- **Entity Definitions**: Hierarchical entity system with instances
 - **Connection Resolution**: Net connectivity analysis
 - **Type-safe IDs**: `slotmap`-based component/net identification
 - **Serialization**: JSON export for downstream tools

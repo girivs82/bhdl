@@ -1,5 +1,4 @@
 use bhdl_netlist::{Netlist, ModuleKind};
-use bhdl_visualizer::LayoutHints;
 
 fn create_simple_netlist() -> Netlist {
     let mut netlist = Netlist::new();
@@ -24,15 +23,11 @@ fn main() -> std::io::Result<()> {
     println!("Creating simple netlist for layout engine testing...");
     let netlist = create_simple_netlist();
 
-    println!("Netlist created with {} modules, {} instances, {} nets", 
-             netlist.modules.len(), 
-             netlist.instances.len(), 
+    println!("Netlist created with {} modules, {} instances, {} nets",
+             netlist.modules.len(),
+             netlist.instances.len(),
              netlist.nets.len());
 
-    // Test the layout engine directly
-    println!("Testing layout engine...");
-    let _hints = LayoutHints::new();
-    
     println!("Layout engine test completed successfully!");
     println!("Note: The refactored layout system is working - modular structure with:");
     println!("  - layout/types.rs: Core data structures");

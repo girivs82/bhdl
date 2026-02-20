@@ -13,7 +13,7 @@ impl<'t> Parser<'t> {
         while let Some(kind) = self.peek() {
             match kind {
                 SyntaxKind::BOARD_KW => self.parse_board_def(),
-                SyntaxKind::MODULE_KW => self.parse_module_def(),
+                SyntaxKind::ENTITY_KW => self.parse_entity_def(),
                 SyntaxKind::ALIAS_KW => self.parse_alias_stmt(),
                 SyntaxKind::TYPEDEF_KW => self.parse_typedef_def(),
                 SyntaxKind::TYPE_KW => self.parse_type_def(),
@@ -21,9 +21,14 @@ impl<'t> Parser<'t> {
                 SyntaxKind::INTERFACE_KW => self.parse_interface_def(),
                 SyntaxKind::TESTBENCH_KW => self.parse_testbench(),
                 SyntaxKind::CONST_KW => self.parse_const_decl(),
+                SyntaxKind::ENUM_KW => self.parse_enum_def(),
+                SyntaxKind::TRAIT_KW => self.parse_trait_def(),
+                SyntaxKind::IMPL_KW => self.parse_trait_impl(),
+                SyntaxKind::SAFETY_GOAL_KW => self.parse_safety_goal_def(),
+                SyntaxKind::FAULT_INJECT_KW => self.parse_fault_inject_def(),
                 _ => {
                     // Handle unexpected tokens at the top level
-                    self.error(format!("Expected a top-level item (e.g., 'board', 'module', 'interface', 'testbench', etc.), found {:?}", kind));
+                    self.error(format!("Expected a top-level item (e.g., 'board', 'entity', 'interface', 'testbench', etc.), found {:?}", kind));
                     self.bump_any(); // Consume the unexpected token
                 }
             }
@@ -45,21 +50,31 @@ impl<'t> Parser<'t> {
         self.builder.finish_node();
     }
 
-    // Parse module definition (v2.0 syntax)
-    pub(crate) fn parse_module_def(&mut self) {
-        self.builder.start_node(SyntaxKind::MODULE_DEF.into());
-        self.expect(SyntaxKind::MODULE_KW);
-        self.expect(SyntaxKind::IDENT); // Module name
-        
-        // v2.0: Check for module parameters
-        if self.peek() == Some(SyntaxKind::L_PAREN) {
-            self.parse_module_parameters();
+    // Parse entity definition (v2.0 syntax)
+    pub(crate) fn parse_entity_def(&mut self) {
+        self.builder.start_node(SyntaxKind::ENTITY_DEF.into());
+        self.expect(SyntaxKind::ENTITY_KW);
+        self.expect(SyntaxKind::IDENT); // Entity name
+
+        // Optional generic type parameters: <T: Type, ...>
+        if self.peek() == Some(SyntaxKind::L_ANGLE) {
+            self.parse_generic_params();
         }
-        
+
+        // v2.0: Check for entity parameters
+        if self.peek() == Some(SyntaxKind::L_PAREN) {
+            self.parse_entity_parameters();
+        }
+
+        // Optional where clause: where V_IN >= 4.5V, V_OUT < V_IN
+        if self.peek() == Some(SyntaxKind::WHERE_KW) {
+            self.parse_where_clause();
+        }
+
         self.expect(SyntaxKind::L_BRACE);
 
-        // Parse module contents (v2.0 syntax)
-        self.parse_module_contents();
+        // Parse entity contents (v2.0 syntax)
+        self.parse_entity_contents();
 
         self.expect(SyntaxKind::R_BRACE);
         self.builder.finish_node();
@@ -71,9 +86,9 @@ impl<'t> Parser<'t> {
         self.expect(SyntaxKind::INTERFACE_KW);
         self.expect(SyntaxKind::IDENT); // Interface name
         
-        // Optional parameter list (same as modules)
+        // Optional parameter list (same as entities)
         if self.peek() == Some(SyntaxKind::L_PAREN) {
-            self.parse_module_parameters();
+            self.parse_entity_parameters();
         }
         
         self.expect(SyntaxKind::L_BRACE);
@@ -122,12 +137,12 @@ impl<'t> Parser<'t> {
                 Some(SyntaxKind::WITH_KW) => self.parse_with_block(),
                 Some(SyntaxKind::SATISFIES_KW) => self.parse_satisfies_block(),
                 Some(SyntaxKind::IDENT) => {
-                    // Check if this is a module/component instantiation or connection
+                    // Check if this is an entity/component instantiation or connection
                     use crate::v2_fixes::NamedDeclarationType;
                     
                     match self.is_v2_named_declaration() {
-                        NamedDeclarationType::ModuleInstance => {
-                            self.parse_module_instance();
+                        NamedDeclarationType::EntityInstance => {
+                            self.parse_entity_instance();
                         }
                         NamedDeclarationType::ComponentInstance => {
                             self.parse_component_instance();
@@ -158,31 +173,31 @@ impl<'t> Parser<'t> {
         }
     }
 
-    // Parse module contents (v2.0 syntax)
-    fn parse_module_contents(&mut self) {
+    // Parse entity contents (v2.0 syntax)
+    fn parse_entity_contents(&mut self) {
         loop {
             self.skip_trivia();
             match self.peek() {
                 Some(SyntaxKind::R_BRACE) => break,
-                Some(SyntaxKind::PIN_KW) => self.parse_module_pin_decl(),
+                Some(SyntaxKind::PIN_KW) => self.parse_entity_pin_decl(),
                 Some(SyntaxKind::CONST_KW) => self.parse_const_decl(),
-                Some(SyntaxKind::AT) => self.parse_module_metadata(),
+                Some(SyntaxKind::AT) => self.parse_entity_metadata(),
                 Some(SyntaxKind::ATTRIBUTE_KW) => self.parse_attribute_decl(),
                 Some(SyntaxKind::GENERATE_KW) => self.parse_generate_block(),
                 Some(SyntaxKind::WITH_KW) => self.parse_with_block(),
                 Some(SyntaxKind::SATISFIES_KW) => self.parse_satisfies_block(),
                 Some(SyntaxKind::IDENT) => {
-                    // Check if this is a module instantiation or connection
-                    // Module instantiation: instance_name: ModuleType(params) { ... }
+                    // Check if this is an entity instantiation or connection
+                    // Entity instantiation: instance_name: EntityType(params) { ... }
                     // Connection: signal -> other_signal;
-                    self.parse_module_item();
+                    self.parse_entity_item();
                 }
                 Some(_) => {
-                    self.error("Unexpected token in module definition".to_string());
+                    self.error("Unexpected token in entity definition".to_string());
                     self.bump_any();
                 }
                 None => {
-                    self.error("Unexpected end of file in module definition".to_string());
+                    self.error("Unexpected end of file in entity definition".to_string());
                     break;
                 }
             }
@@ -223,8 +238,8 @@ impl<'t> Parser<'t> {
         }
     }
 
-    // Parse module pin declaration (v2.0 style)
-    fn parse_module_pin_decl(&mut self) {
+    // Parse entity pin declaration (v2.0 style)
+    fn parse_entity_pin_decl(&mut self) {
         self.builder.start_node(SyntaxKind::PIN_DECL.into());
         self.expect(SyntaxKind::PIN_KW);
         
@@ -363,8 +378,8 @@ impl<'t> Parser<'t> {
         self.builder.finish_node();
     }
     
-    // Parse module metadata (@attributes)
-    fn parse_module_metadata(&mut self) {
+    // Parse entity metadata (@attributes)
+    fn parse_entity_metadata(&mut self) {
         // First, try parsing simulation annotations
         if self.parse_simulation_annotation() {
             return; // Successfully parsed a simulation annotation
@@ -677,9 +692,9 @@ impl<'t> Parser<'t> {
         self.builder.start_node(SyntaxKind::ALIAS.into());
         self.expect(SyntaxKind::ALIAS_KW);
         
-        // Optional: alias module Name = Target;
-        if self.peek() == Some(SyntaxKind::MODULE_KW) {
-            self.bump(); // Consume 'module'
+        // Optional: alias entity Name = Target;
+        if self.peek() == Some(SyntaxKind::ENTITY_KW) {
+            self.bump(); // Consume 'entity'
         }
         
         // Alias name can be IDENT or NUMBER (e.g., "7805", "LM7805")
@@ -709,14 +724,14 @@ impl<'t> Parser<'t> {
         self.builder.finish_node();
     }
 
-    // Parse module item (could be instance declaration or connection)
-    fn parse_module_item(&mut self) {
+    // Parse entity item (could be instance declaration or connection)
+    fn parse_entity_item(&mut self) {
         use crate::v2_fixes::NamedDeclarationType;
         
         // Look ahead to determine what kind of item this is
         match self.is_v2_named_declaration() {
-            NamedDeclarationType::ModuleInstance => {
-                self.parse_module_instance();
+            NamedDeclarationType::EntityInstance => {
+                self.parse_entity_instance();
             }
             NamedDeclarationType::ComponentInstance => {
                 self.parse_component_instance();
@@ -728,12 +743,12 @@ impl<'t> Parser<'t> {
         }
     }
     
-    // Parse module instance: instance_name: ModuleType(params) { port mappings }
-    fn parse_module_instance(&mut self) {
-        self.builder.start_node(SyntaxKind::MODULE_INST.into());
+    // Parse entity instance: instance_name: EntityType(params) { port mappings }
+    fn parse_entity_instance(&mut self) {
+        self.builder.start_node(SyntaxKind::ENTITY_INST.into());
         self.expect(SyntaxKind::IDENT); // Instance name
         self.expect(SyntaxKind::COLON);
-        self.expect(SyntaxKind::IDENT); // Module type
+        self.expect(SyntaxKind::IDENT); // Entity type
         
         // Optional parameters
         if self.peek() == Some(SyntaxKind::L_PAREN) {
@@ -764,7 +779,7 @@ impl<'t> Parser<'t> {
         self.builder.finish_node();
     }
     
-    // Parse port mapping block for module instances
+    // Parse port mapping block for entity instances
     fn parse_port_mapping_block(&mut self) {
         loop {
             self.skip_trivia();
@@ -794,7 +809,7 @@ impl<'t> Parser<'t> {
     fn parse_port_mapping(&mut self) {
         self.builder.start_node(SyntaxKind::PORT_MAPPING.into());
         
-        // Left side: module pin (could be array access)
+        // Left side: entity pin (could be array access)
         self.parse_pin_reference();
         
         // Connection operator
@@ -828,7 +843,7 @@ impl<'t> Parser<'t> {
     // Parse connection target (signal or instance.pin)
     fn parse_connection_target(&mut self) {
         self.builder.start_node(SyntaxKind::CONNECTION_TARGET.into());
-        
+
         // Could be qualified (instance.pin) or simple signal name
         // Allow keywords like "output" to be used as signal names
         self.expect_ident_or_contextual_keyword();
@@ -1339,6 +1354,637 @@ impl<'t> Parser<'t> {
         }
 
         self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
+    // Parse enum definition: enum Name { Variant1, Variant2(PayloadType), ... }
+    pub(crate) fn parse_enum_def(&mut self) {
+        self.builder.start_node(SyntaxKind::ENUM_DEF.into());
+        self.expect(SyntaxKind::ENUM_KW);
+        self.expect(SyntaxKind::IDENT); // Enum name
+
+        self.expect(SyntaxKind::L_BRACE);
+
+        // Parse variants
+        loop {
+            self.skip_trivia();
+
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) | None => break,
+                Some(SyntaxKind::IDENT) => {
+                    self.parse_enum_variant();
+                    // Optional comma between variants
+                    if self.peek() == Some(SyntaxKind::COMMA) {
+                        self.bump();
+                    }
+                }
+                _ => {
+                    self.error("Expected enum variant name or '}'".to_string());
+                    self.bump_any();
+                }
+            }
+        }
+
+        self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
+    // Parse a single enum variant: Name or Name(type1, type2)
+    fn parse_enum_variant(&mut self) {
+        self.builder.start_node(SyntaxKind::ENUM_VARIANT.into());
+        self.expect(SyntaxKind::IDENT); // Variant name
+
+        // Optional payload: (Type1, Type2, ...)
+        if self.peek() == Some(SyntaxKind::L_PAREN) {
+            self.bump(); // Consume '('
+
+            loop {
+                self.skip_trivia();
+                match self.peek() {
+                    Some(SyntaxKind::R_PAREN) | None => break,
+                    Some(SyntaxKind::IDENT) => {
+                        // Parse payload type name
+                        self.bump();
+                        if self.peek() == Some(SyntaxKind::COMMA) {
+                            self.bump();
+                        }
+                    }
+                    _ => {
+                        // Could be a value expression (e.g., BarrelJack(voltage, current))
+                        self.parse_expression();
+                        if self.peek() == Some(SyntaxKind::COMMA) {
+                            self.bump();
+                        }
+                    }
+                }
+            }
+
+            self.expect(SyntaxKind::R_PAREN);
+        }
+
+        self.builder.finish_node();
+    }
+
+    // Parse match expression: match expr { pattern => body, ... }
+    pub(crate) fn parse_match_expr(&mut self) {
+        self.builder.start_node(SyntaxKind::MATCH_EXPR.into());
+        self.expect(SyntaxKind::MATCH_KW);
+
+        // Parse the scrutinee expression (what we're matching on)
+        self.parse_expression();
+
+        self.expect(SyntaxKind::L_BRACE);
+
+        // Parse match arms
+        loop {
+            self.skip_trivia();
+
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) | None => break,
+                _ => {
+                    self.parse_match_arm();
+                }
+            }
+        }
+
+        self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
+    // Parse a match arm: pattern => { body } or pattern => expression;
+    fn parse_match_arm(&mut self) {
+        self.builder.start_node(SyntaxKind::MATCH_ARM.into());
+
+        // Parse pattern
+        self.parse_match_pattern();
+
+        // Expect =>
+        if self.peek() == Some(SyntaxKind::EQ) {
+            self.bump(); // '='
+            if self.peek() == Some(SyntaxKind::R_ANGLE) {
+                self.bump(); // '>'
+            } else {
+                self.error("Expected '>' after '=' in match arm (use =>)".to_string());
+            }
+        } else {
+            self.error("Expected '=>' in match arm".to_string());
+        }
+
+        // Parse body: either a block { ... } or an expression followed by comma/semicolon
+        if self.peek() == Some(SyntaxKind::L_BRACE) {
+            self.bump(); // '{'
+            // Parse statements inside the block
+            while self.peek() != Some(SyntaxKind::R_BRACE) && self.peek().is_some() {
+                self.skip_trivia();
+                if self.peek() == Some(SyntaxKind::R_BRACE) {
+                    break;
+                }
+                // Parse each statement
+                self.parse_expression();
+                if self.peek() == Some(SyntaxKind::SEMI) {
+                    self.bump();
+                }
+            }
+            self.expect(SyntaxKind::R_BRACE);
+        } else {
+            // Single expression arm
+            self.parse_expression();
+        }
+
+        // Optional comma after arm
+        if self.peek() == Some(SyntaxKind::COMMA) {
+            self.bump();
+        }
+
+        self.builder.finish_node();
+    }
+
+    // Parse a match pattern: wildcard _, literal, ident, or Enum::Variant(bindings)
+    fn parse_match_pattern(&mut self) {
+        self.builder.start_node(SyntaxKind::MATCH_PATTERN.into());
+
+        match self.peek() {
+            // Wildcard pattern: _
+            Some(SyntaxKind::IDENT) => {
+                // Check for _ (wildcard) or a path like PowerState::Off
+                let is_underscore = self.peek_text().map_or(false, |t| t == "_");
+                self.bump(); // Consume identifier
+
+                if !is_underscore {
+                    // Check for :: (path separator) for qualified enum patterns
+                    while self.peek() == Some(SyntaxKind::COLON) {
+                        // Look ahead for ::
+                        self.bump(); // first ':'
+                        if self.peek() == Some(SyntaxKind::COLON) {
+                            self.bump(); // second ':'
+                            if self.peek() == Some(SyntaxKind::IDENT) {
+                                self.bump(); // variant name
+                            } else {
+                                self.error("Expected identifier after '::'".to_string());
+                            }
+                        }
+                    }
+
+                    // Optional destructuring: Pattern(binding1, binding2)
+                    if self.peek() == Some(SyntaxKind::L_PAREN) {
+                        self.bump(); // '('
+                        loop {
+                            self.skip_trivia();
+                            match self.peek() {
+                                Some(SyntaxKind::R_PAREN) | None => break,
+                                Some(SyntaxKind::IDENT) => {
+                                    self.bump(); // binding name
+                                    if self.peek() == Some(SyntaxKind::COMMA) {
+                                        self.bump();
+                                    }
+                                }
+                                _ => {
+                                    self.error("Expected binding name or ')' in pattern".to_string());
+                                    self.bump_any();
+                                }
+                            }
+                        }
+                        self.expect(SyntaxKind::R_PAREN);
+                    }
+                }
+            }
+            Some(SyntaxKind::NUMBER) | Some(SyntaxKind::STRING) |
+            Some(SyntaxKind::TRUE_KW) | Some(SyntaxKind::FALSE_KW) => {
+                // Literal pattern
+                self.bump();
+            }
+            _ => {
+                self.error("Expected match pattern (identifier, literal, or '_')".to_string());
+                self.bump_any();
+            }
+        }
+
+        self.builder.finish_node();
+    }
+
+    // Parse generic type parameters: <T: Type, V: voltage, ...>
+    pub(crate) fn parse_generic_params(&mut self) {
+        self.builder.start_node(SyntaxKind::GENERIC_PARAMS.into());
+        self.expect(SyntaxKind::L_ANGLE);
+
+        loop {
+            self.skip_trivia();
+
+            match self.peek() {
+                Some(SyntaxKind::R_ANGLE) | None => break,
+                Some(SyntaxKind::IDENT) => {
+                    self.parse_generic_param();
+                    if self.peek() == Some(SyntaxKind::COMMA) {
+                        self.bump();
+                    }
+                }
+                _ => {
+                    self.error("Expected generic parameter name or '>'".to_string());
+                    self.bump_any();
+                }
+            }
+        }
+
+        self.expect(SyntaxKind::R_ANGLE);
+        self.builder.finish_node();
+    }
+
+    // Parse a single generic parameter: T or T: BoundType
+    fn parse_generic_param(&mut self) {
+        self.builder.start_node(SyntaxKind::GENERIC_PARAM.into());
+        self.expect(SyntaxKind::IDENT); // Parameter name
+
+        // Optional type bound: `: TypeName`
+        if self.peek() == Some(SyntaxKind::COLON) {
+            self.bump(); // consume ':'
+            if self.peek() == Some(SyntaxKind::IDENT) {
+                self.bump(); // consume type name
+            } else {
+                self.error("Expected type name after ':' in generic parameter".to_string());
+            }
+        }
+
+        // Optional default: `= value`
+        if self.peek() == Some(SyntaxKind::EQ) {
+            self.bump(); // consume '='
+            self.parse_expression();
+        }
+
+        self.builder.finish_node();
+    }
+
+    // Parse where clause: where expr1, expr2, ...
+    pub(crate) fn parse_where_clause(&mut self) {
+        self.builder.start_node(SyntaxKind::WHERE_CLAUSE.into());
+        self.expect(SyntaxKind::WHERE_KW);
+
+        // Parse constraint expressions separated by commas, ending at '{'
+        loop {
+            self.skip_trivia();
+
+            match self.peek() {
+                Some(SyntaxKind::L_BRACE) | None => break,
+                _ => {
+                    // Parse a constraint expression (continues until comma or '{')
+                    self.parse_expression();
+
+                    if self.peek() == Some(SyntaxKind::COMMA) {
+                        self.bump();
+                    }
+                }
+            }
+        }
+
+        self.builder.finish_node();
+    }
+
+    // ── Trait system ─────────────────────────────────────────
+
+    /// Parse a trait definition:
+    /// ```bhdl
+    /// trait SpiPeripheral {
+    ///     pin MOSI: signal in;
+    ///     pin MISO: signal out;
+    ///     const MAX_FREQ: frequency;
+    /// }
+    /// ```
+    pub(crate) fn parse_trait_def(&mut self) {
+        self.builder.start_node(SyntaxKind::TRAIT_DEF.into());
+        self.expect(SyntaxKind::TRAIT_KW);
+        self.skip_trivia();
+
+        // Trait name
+        if self.peek() == Some(SyntaxKind::IDENT) {
+            self.bump();
+        } else {
+            self.error("Expected trait name".to_string());
+        }
+
+        self.skip_trivia();
+
+        // Opening brace
+        if self.peek() == Some(SyntaxKind::L_BRACE) {
+            self.bump();
+
+            // Parse trait members (pins and consts)
+            loop {
+                self.skip_trivia();
+                match self.peek() {
+                    Some(SyntaxKind::R_BRACE) | None => break,
+                    Some(SyntaxKind::PIN_KW) => self.parse_trait_pin(),
+                    Some(SyntaxKind::CONST_KW) => self.parse_trait_const(),
+                    _ => {
+                        self.error("Expected 'pin' or 'const' in trait body".to_string());
+                        self.bump_any();
+                    }
+                }
+            }
+
+            self.expect(SyntaxKind::R_BRACE);
+        } else {
+            self.error("Expected '{' after trait name".to_string());
+        }
+
+        self.builder.finish_node();
+    }
+
+    /// Parse a pin declaration within a trait:
+    /// `pin MOSI: signal in;`
+    fn parse_trait_pin(&mut self) {
+        self.builder.start_node(SyntaxKind::TRAIT_PIN.into());
+        self.expect(SyntaxKind::PIN_KW);
+        self.skip_trivia();
+
+        // Pin name
+        if self.peek() == Some(SyntaxKind::IDENT) {
+            self.bump();
+        } else {
+            self.error("Expected pin name".to_string());
+        }
+
+        self.skip_trivia();
+
+        // Colon
+        if self.peek() == Some(SyntaxKind::COLON) {
+            self.bump();
+        }
+
+        self.skip_trivia();
+
+        // Parse type and direction tokens until semicolon
+        while self.peek() != Some(SyntaxKind::SEMI) && self.peek().is_some() {
+            self.bump_any();
+        }
+
+        if self.peek() == Some(SyntaxKind::SEMI) {
+            self.bump();
+        }
+
+        self.builder.finish_node();
+    }
+
+    /// Parse a const declaration within a trait:
+    /// `const MAX_FREQ: frequency;`
+    fn parse_trait_const(&mut self) {
+        self.builder.start_node(SyntaxKind::TRAIT_CONST.into());
+        self.expect(SyntaxKind::CONST_KW);
+        self.skip_trivia();
+
+        // Const name
+        if self.peek() == Some(SyntaxKind::IDENT) {
+            self.bump();
+        } else {
+            self.error("Expected const name".to_string());
+        }
+
+        self.skip_trivia();
+
+        // Colon + type
+        if self.peek() == Some(SyntaxKind::COLON) {
+            self.bump();
+            self.skip_trivia();
+            // Type name
+            if self.peek() == Some(SyntaxKind::IDENT) {
+                self.bump();
+            }
+        }
+
+        self.skip_trivia();
+
+        // Optional default: = value
+        if self.peek() == Some(SyntaxKind::EQ) {
+            self.bump();
+            self.skip_trivia();
+            self.parse_expression();
+        }
+
+        if self.peek() == Some(SyntaxKind::SEMI) {
+            self.bump();
+        }
+
+        self.builder.finish_node();
+    }
+
+    /// Parse a trait implementation:
+    /// ```bhdl
+    /// impl PowerRegulator for LM7805 {
+    ///     const DROPOUT = 2.0V;
+    ///     const MAX_CURRENT = 1.5A;
+    /// }
+    /// ```
+    pub(crate) fn parse_trait_impl(&mut self) {
+        self.builder.start_node(SyntaxKind::TRAIT_IMPL.into());
+        self.expect(SyntaxKind::IMPL_KW);
+        self.skip_trivia();
+
+        // Trait name (or ~TraitName for direction flipping)
+        if self.peek() == Some(SyntaxKind::TILDE) {
+            self.bump(); // consume ~
+            self.skip_trivia();
+        }
+
+        if self.peek() == Some(SyntaxKind::IDENT) {
+            self.bump(); // trait name
+        } else {
+            self.error("Expected trait name after 'impl'".to_string());
+        }
+
+        self.skip_trivia();
+
+        // Optional additional traits: impl Trait1, Trait2 for Component
+        while self.peek() == Some(SyntaxKind::COMMA) {
+            self.bump(); // comma
+            self.skip_trivia();
+            if self.peek() == Some(SyntaxKind::TILDE) {
+                self.bump();
+                self.skip_trivia();
+            }
+            if self.peek() == Some(SyntaxKind::IDENT) {
+                self.bump();
+            }
+            self.skip_trivia();
+        }
+
+        // 'for' keyword
+        if self.peek() == Some(SyntaxKind::FOR_KW) {
+            self.bump();
+            self.skip_trivia();
+        }
+
+        // Component name
+        if self.peek() == Some(SyntaxKind::IDENT) {
+            self.bump();
+        } else {
+            self.error("Expected component name after 'for'".to_string());
+        }
+
+        self.skip_trivia();
+
+        // Body
+        if self.peek() == Some(SyntaxKind::L_BRACE) {
+            self.bump();
+
+            loop {
+                self.skip_trivia();
+                match self.peek() {
+                    Some(SyntaxKind::R_BRACE) | None => break,
+                    Some(SyntaxKind::CONST_KW) => self.parse_trait_const(),
+                    Some(SyntaxKind::PIN_KW) => self.parse_trait_pin(),
+                    _ => {
+                        self.error("Expected 'const' or 'pin' in impl body".to_string());
+                        self.bump_any();
+                    }
+                }
+            }
+
+            self.expect(SyntaxKind::R_BRACE);
+        } else {
+            self.error("Expected '{' in trait impl".to_string());
+        }
+
+        self.builder.finish_node();
+    }
+
+    // ── Safety annotations and fault injection ───────────────
+
+    /// Parse a safety goal definition:
+    /// ```bhdl
+    /// safety_goal SG_OVP {
+    ///     id: "SG-001";
+    ///     title: "Prevent output overvoltage";
+    ///     asil: B;
+    ///     ftti: 10ms;
+    /// }
+    /// ```
+    pub(crate) fn parse_safety_goal_def(&mut self) {
+        self.builder.start_node(SyntaxKind::SAFETY_GOAL_DEF.into());
+        self.expect(SyntaxKind::SAFETY_GOAL_KW);
+        self.skip_trivia();
+
+        // Safety goal name
+        if self.peek() == Some(SyntaxKind::IDENT) {
+            self.bump();
+        } else {
+            self.error("Expected safety goal name".to_string());
+        }
+
+        self.skip_trivia();
+
+        // Body with key-value pairs
+        if self.peek() == Some(SyntaxKind::L_BRACE) {
+            self.bump();
+
+            loop {
+                self.skip_trivia();
+                match self.peek() {
+                    Some(SyntaxKind::R_BRACE) | None => break,
+                    Some(SyntaxKind::IDENT) => {
+                        // key: value;
+                        self.bump(); // key
+                        self.skip_trivia();
+                        if self.peek() == Some(SyntaxKind::COLON) {
+                            self.bump();
+                        }
+                        self.skip_trivia();
+                        // value (may be string, ident, or expression)
+                        self.parse_expression();
+                        self.skip_trivia();
+                        if self.peek() == Some(SyntaxKind::SEMI) {
+                            self.bump();
+                        }
+                    }
+                    _ => {
+                        self.error("Expected key-value pair in safety goal".to_string());
+                        self.bump_any();
+                    }
+                }
+            }
+
+            self.expect(SyntaxKind::R_BRACE);
+        } else {
+            self.error("Expected '{' after safety goal name".to_string());
+        }
+
+        self.builder.finish_node();
+    }
+
+    /// Parse a fault injection definition:
+    /// ```bhdl
+    /// fault_inject short(reg.VOUT, VIN) -> verify {
+    ///     assert comparator.OUT == low within 100us;
+    /// }
+    /// ```
+    pub(crate) fn parse_fault_inject_def(&mut self) {
+        self.builder.start_node(SyntaxKind::FAULT_INJECT_DEF.into());
+        self.expect(SyntaxKind::FAULT_INJECT_KW);
+        self.skip_trivia();
+
+        // Fault type (short, open, drift, etc.)
+        if self.peek() == Some(SyntaxKind::IDENT) {
+            self.bump();
+        } else {
+            self.error("Expected fault type (e.g., 'short', 'open', 'drift')".to_string());
+        }
+
+        self.skip_trivia();
+
+        // Target arguments in parentheses
+        if self.peek() == Some(SyntaxKind::L_PAREN) {
+            self.bump();
+            loop {
+                self.skip_trivia();
+                match self.peek() {
+                    Some(SyntaxKind::R_PAREN) | None => break,
+                    Some(SyntaxKind::COMMA) => { self.bump(); }
+                    _ => { self.parse_expression(); }
+                }
+            }
+            self.expect(SyntaxKind::R_PAREN);
+        }
+
+        self.skip_trivia();
+
+        // Optional -> verify
+        if self.peek() == Some(SyntaxKind::ARROW) {
+            self.bump();
+            self.skip_trivia();
+            // "verify" keyword (treated as IDENT)
+            if self.peek() == Some(SyntaxKind::IDENT) || self.peek() == Some(SyntaxKind::VERIFY_KW) {
+                self.bump();
+            }
+        }
+
+        self.skip_trivia();
+
+        // Body with assertions
+        if self.peek() == Some(SyntaxKind::L_BRACE) {
+            self.bump();
+
+            loop {
+                self.skip_trivia();
+                match self.peek() {
+                    Some(SyntaxKind::R_BRACE) | None => break,
+                    Some(SyntaxKind::ASSERT_KW) => {
+                        self.bump(); // assert
+                        self.skip_trivia();
+                        // Parse assertion expression until ;
+                        while self.peek() != Some(SyntaxKind::SEMI) && self.peek() != Some(SyntaxKind::R_BRACE) && self.peek().is_some() {
+                            self.bump_any();
+                        }
+                        if self.peek() == Some(SyntaxKind::SEMI) {
+                            self.bump();
+                        }
+                    }
+                    _ => {
+                        // Consume unknown tokens in fault body
+                        self.bump_any();
+                    }
+                }
+            }
+
+            self.expect(SyntaxKind::R_BRACE);
+        }
+
         self.builder.finish_node();
     }
 }

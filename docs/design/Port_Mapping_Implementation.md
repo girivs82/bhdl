@@ -2,12 +2,12 @@
 
 ## What Port Mapping Actually Is
 
-Port mapping is the connection syntax inside module instantiation blocks:
+Port mapping is the connection syntax inside entity instantiation blocks:
 
 ```bhdl
 instance_name: ModuleType {
-    pin_name <- signal_name;    // Module pin receives from signal
-    pin_name -> signal_name;    // Module pin sends to signal
+    pin_name <- signal_name;    // Entity pin receives from signal
+    pin_name -> signal_name;    // Entity pin sends to signal
     pin_name <-> signal_name;   // Bidirectional connection
 }
 ```
@@ -16,7 +16,7 @@ instance_name: ModuleType {
 
 ### 1. Module Instantiation Block
 ```bhdl
-module Container {
+entity Container {
     // Instance with port mapping block
     child: ChildModule {
         // Port mappings go here
@@ -170,7 +170,7 @@ fn hierarchical_net_name(path: &[String], local_name: &str) -> String {
 
 ### 1. Power Distribution
 ```bhdl
-module System {
+entity System {
     power VCC = 5V;
     
     sub1: SubModule {
@@ -185,7 +185,7 @@ module System {
 
 ### 2. Signal Chaining
 ```bhdl
-module Pipeline {
+entity Pipeline {
     stage1: Process {
         IN <- input;
         OUT -> intermediate;
@@ -200,7 +200,7 @@ module Pipeline {
 
 ### 3. Bus Connections
 ```bhdl
-module BusSystem {
+entity BusSystem {
     master: BusMaster {
         ADDR[0..7] -> addr_bus[0..7];
         DATA[0..7] <-> data_bus[0..7];
@@ -226,4 +226,4 @@ module BusSystem {
 - [ ] Handle array pin mappings
 - [ ] Support all connection operators (←, →, ↔)
 
-This is the foundation that makes modules composable!
+This is the foundation that makes entities composable!

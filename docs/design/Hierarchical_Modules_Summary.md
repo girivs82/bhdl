@@ -2,27 +2,27 @@
 
 ## Overview
 
-This document summarizes the complete design for hierarchical modules in BHDL, consolidating all design decisions and specifications.
+This document summarizes the complete design for hierarchical entities in BHDL, consolidating all design decisions and specifications.
 
 ## Core Features
 
-### 1. Module Definition with Parameters
+### 1. Entity Definition with Parameters
 ```bhdl
-module ModuleName(param1: type1, param2: type2 = default) {
+entity EntityName(param1: type1, param2: type2 = default) {
     pin PIN_NAME: type direction;
     attribute internal_state = value;
-    
-    // Can contain other module instances
-    child: ChildModule(param=value) {
+
+    // Can contain other entity instances
+    child: ChildEntity(param=value) {
         PIN <- signal;  // Port mapping
     }
 }
 ```
 
-### 2. Module Instantiation
+### 2. Entity Instantiation
 ```bhdl
 instance_name: ModuleType(param1=value1, param2=value2) {
-    // Port mappings - module pins LEFT, signals RIGHT
+    // Port mappings - entity pins LEFT, signals RIGHT
     INPUT_PIN <- source_signal;
     OUTPUT_PIN -> dest_signal;
     BIDIR_PIN <-> bidirectional_signal;
@@ -46,10 +46,10 @@ instance_name: ModuleType(param1=value1, param2=value2) {
 
 #### Port Mapping Syntax
 ```bhdl
-// Input: module pin receives from signal
+// Input: entity pin receives from signal
 PIN <- signal;
 
-// Output: module pin sends to signal  
+// Output: entity pin sends to signal
 PIN -> signal;
 
 // Bidirectional
@@ -92,9 +92,9 @@ Instance 1: R1_1, R1_2, C1_1
 Instance 2: R2_1, R2_2, C2_1
 ```
 
-### 2. Module Deduplication
-- Identical module instances share synthesized definition
-- Based on module signature (name + parameters)
+### 2. Entity Deduplication
+- Identical entity instances share synthesized definition
+- Based on entity signature (name + parameters)
 - Reduces SPICE analysis time
 
 ### 3. Hierarchical Net Naming
@@ -105,8 +105,8 @@ board.power_section.buck_controller.feedback_net
 ## Complete Example
 
 ```bhdl
-// Reusable parameterized module
-module BuckConverter(
+// Reusable parameterized entity
+entity BuckConverter(
     vout: voltage,
     imax: current = 2A,
     fsw: frequency = 500kHz
@@ -201,5 +201,5 @@ board PowerSupply {
 
 1. Begin parser implementation following the plan
 2. Create test circuits for validation
-3. Update existing examples to use modules
+3. Update existing examples to use entities
 4. Write migration guide for users

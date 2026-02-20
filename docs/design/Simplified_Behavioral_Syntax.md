@@ -9,8 +9,8 @@ Based on the PLI discussion, here's a simplified approach that keeps BHDL clean 
 ### 1. Simple Behavioral Equations (No New Keywords)
 
 ```bhdl
-// Instead of complex "behavioral" blocks, use module parameters
-module BuckController(vout_target: voltage = 3.3V) {
+// Instead of complex "behavioral" blocks, use entity parameters
+entity BuckController(vout_target: voltage = 3.3V) {
     pin FB: analog in;
     pin PWM: digital out;
     
@@ -26,7 +26,7 @@ module BuckController(vout_target: voltage = 3.3V) {
 ### 2. Time-Based Behavior with "when" (Already Exists)
 
 ```bhdl
-module SoftStartController {
+entity SoftStartController {
     pin ENABLE: digital in;
     pin VREF: analog out;
     
@@ -46,7 +46,7 @@ module SoftStartController {
 
 ```bhdl
 // For complex state machines, use external model
-module USBPDController {
+entity USBPDController {
     pin CC1, CC2: analog inout;
     pin VBUS_EN: digital out;
     
@@ -120,7 +120,7 @@ testbench ClosedLoopControl for MotorDriver {
 
 ### Buck with Soft Start (No Behavioral Keywords)
 ```bhdl
-module BuckWithSoftStart {
+entity BuckWithSoftStart {
     pin VIN: power in;
     pin VOUT: power out @ 3.3V;
     pin ENABLE: digital in;
@@ -141,7 +141,7 @@ module BuckWithSoftStart {
 
 ### LED with Thermal Derating (Simple Equations)
 ```bhdl
-module ThermallyDeratedLED {
+entity ThermallyDeratedLED {
     pin TEMP_SENSE: analog in;
     pin LED_ANODE: current out;
     
@@ -163,7 +163,7 @@ module ThermallyDeratedLED {
 
 ### Complex USB-PD via External
 ```bhdl
-module USBC_PowerDelivery {
+entity USBC_PowerDelivery {
     // Simple BHDL interface
     pin CC1, CC2: analog inout;
     pin VBUS: power out;
@@ -211,7 +211,7 @@ when (startup) {
 
 ### Original Proposal (Too Many Keywords)
 ```bhdl
-behavioral module Controller {
+behavioral entity Controller {
     state IDLE {
         when (start) -> ACTIVE;
     }
@@ -228,7 +228,7 @@ behavioral module Controller {
 
 ### New Proposal (Minimal)
 ```bhdl
-module Controller {
+entity Controller {
     param state = "IDLE";
     
     when (start && state == "IDLE") {

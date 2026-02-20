@@ -9,7 +9,7 @@ import {
 } from "./common.bhdl";
 
 // ==================== COMPONENT DEFINITION ====================
-module LM7805(
+entity LM7805(
     enable: bool = true  // Optional enable for power control
 ) {
     // Pin definitions with complete metadata

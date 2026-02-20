@@ -67,22 +67,22 @@ board TPS54331TestBoard {
     
     println!("✅ Analysis complete:");
     println!("  - Total diagnostics: {}", analysis_result.diagnostics.len());
-    println!("  - Imported modules loaded: {}", preprocessor.imported_modules().len());
+    println!("  - Imported entities loaded: {}", preprocessor.imported_entities().len());
     
     // Step 4: Detailed pin analysis  
     println!("\n🔌 Step 4: TPS54331 Pin Analysis...");
     
-    for (name, _module) in preprocessor.imported_modules() {
-        println!("  📦 Module: {}", name);
-        
+    for (name, _entity) in preprocessor.imported_entities() {
+        println!("  📦 Entity: {}", name);
+
         if name == "TPS54331" {
             // Get virtual pins
             let virtual_pins = preprocessor.get_virtual_pins(name);
             println!("    🌟 Virtual pins detected: {:?}", virtual_pins);
-            
+
             // Get all pins
-            if let Some(module) = preprocessor.get_imported_module(name) {
-                let pins: Vec<_> = module.pins().collect();
+            if let Some(entity) = preprocessor.get_imported_entity(name) {
+                let pins: Vec<_> = entity.pins().collect();
                 println!("    📊 Total pins parsed: {} (expected: 9)", pins.len());
                 
                 if pins.len() == 9 {
@@ -107,10 +107,10 @@ board TPS54331TestBoard {
     println!("\n🎉 Test Results Summary:");
     println!("========================================");
     
-    if preprocessor.imported_modules().contains_key("TPS54331") {
+    if preprocessor.imported_entities().contains_key("TPS54331") {
         let virtual_pins = preprocessor.get_virtual_pins("TPS54331");
-        let total_pins = if let Some(module) = preprocessor.get_imported_module("TPS54331") {
-            module.pins().count()
+        let total_pins = if let Some(entity) = preprocessor.get_imported_entity("TPS54331") {
+            entity.pins().count()
         } else {
             0
         };

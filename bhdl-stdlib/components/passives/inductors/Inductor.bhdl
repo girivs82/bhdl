@@ -4,7 +4,7 @@
 import { inductance, current, resistance, frequency, temperature, voltage } from "../../../units.bhdl";
 
 // ==================== COMPONENT DEFINITION ====================
-module Inductor(
+entity Inductor(
     value: inductance,                  // Inductance value
     current_rating: current = 1A,       // Rated continuous current
     dcr: resistance = 100mΩ,           // DC resistance

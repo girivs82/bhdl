@@ -177,7 +177,7 @@ Standard tests for the component:
 ## Example: Buck Converter
 
 ```bhdl
-module BuckConverter(...) {
+entity BuckConverter(...) {
     // Level 0: Equations
     @behavioral_model equations {
         model_type: "analytical",

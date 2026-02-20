@@ -5,7 +5,7 @@ use bhdl_analyzer::analyze;
 
 fn main() {
     let content = r#"
-module TPS54331(vout: voltage = 3.3V) {
+entity TPS54331(vout: voltage = 3.3V) {
     // Physical pins
     pin VIN: power in;
     pin SW: signal out;
@@ -42,12 +42,12 @@ module TPS54331(vout: voltage = 3.3V) {
     for (name, symbol) in analysis.global_scope.get_symbols() {
         println!("  {}: {:?}", name, symbol.kind);
         
-        // Look for module scope
-        if symbol.kind == bhdl_analyzer::symbol_table::SymbolKind::Module {
-            if let Some(module_scope_id) = symbol.definition_node_ptr {
-                if let Some(module_scope) = analysis.definition_scopes.get(&module_scope_id) {
-                    println!("    Module scope symbols:");
-                    for (pin_name, pin_symbol) in module_scope.get_symbols() {
+        // Look for entity scope
+        if symbol.kind == bhdl_analyzer::symbol_table::SymbolKind::Entity {
+            if let Some(entity_scope_id) = symbol.definition_node_ptr {
+                if let Some(entity_scope) = analysis.definition_scopes.get(&entity_scope_id) {
+                    println!("    Entity scope symbols:");
+                    for (pin_name, pin_symbol) in entity_scope.get_symbols() {
                         println!("      {}: {:?}", pin_name, pin_symbol.kind);
                     }
                 }

@@ -43,24 +43,12 @@ name = "test_ascii"
 path = "src/bin/test_ascii.rs"
 
 [[bin]]
-name = "test_orthogonal_routing"
-path = "src/bin/test_orthogonal_routing.rs"
-
-[[bin]]
-name = "test_simple_connections"
-path = "src/bin/test_simple_connections.rs"
-
-[[bin]]
 name = "test_connection_parsing"
 path = "src/bin/test_connection_parsing.rs"
 
 [[bin]]
 name = "test_kicad_symbols"
 path = "src/bin/test_kicad_symbols.rs"
-
-[[bin]]
-name = "test_kicad_symbols_simple"
-path = "src/bin/test_kicad_symbols_simple.rs"
 
 [[bin]]
 name = "test_topology_aware_visualizer"

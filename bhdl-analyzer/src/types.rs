@@ -315,15 +315,83 @@ impl ResolvedTypeInfo {
     }
 }
 
-// Represents a diagnostic message (error, warning)
+/// Structured diagnostic message with optional typed classification.
+///
+/// All diagnostics have a `message` and `range`. The structured fields
+/// (`kind`, `severity`, `code`, `hints`, `related`) are optional for
+/// backward compatibility — existing code that only sets `message`/`range`
+/// continues to work. New code should populate the structured fields.
 #[derive(Debug, Clone)]
 pub struct Diagnostic {
     pub message: String,
-    pub range: TextRange, // Position in the source text
+    pub range: TextRange,
+    /// Typed diagnostic category (defaults to Unclassified for legacy diagnostics).
+    pub kind: bhdl_common::DiagnosticKind,
+    /// Severity level.
+    pub severity: bhdl_common::Severity,
+    /// Machine-readable error code (e.g., "E0100"). Auto-derived from `kind`.
+    pub code: String,
+    /// Hints with optional suggested fixes.
+    pub hints: Vec<bhdl_common::DiagnosticHint>,
+    /// Related source locations.
+    pub related: Vec<bhdl_common::RelatedInfo>,
 }
 
-// Type alias for the map storing results of constant evaluation
-pub type ResolvedConstants = HashMap<SyntaxNodePtr<BhdlLanguage>, i64>;
+impl Diagnostic {
+    /// Create a simple diagnostic with just a message and range (backward compat).
+    pub fn new(message: String, range: TextRange) -> Self {
+        Self {
+            message,
+            range,
+            kind: bhdl_common::DiagnosticKind::Unclassified,
+            severity: bhdl_common::Severity::Error,
+            code: "E0000".to_string(),
+            hints: Vec::new(),
+            related: Vec::new(),
+        }
+    }
+
+    /// Create a structured diagnostic with a specific kind.
+    pub fn with_kind(kind: bhdl_common::DiagnosticKind, message: String, range: TextRange) -> Self {
+        let code = kind.error_code().to_string();
+        Self {
+            message,
+            range,
+            kind,
+            severity: bhdl_common::Severity::Error,
+            code,
+            hints: Vec::new(),
+            related: Vec::new(),
+        }
+    }
+
+    /// Set severity and return self (builder pattern).
+    pub fn with_severity(mut self, severity: bhdl_common::Severity) -> Self {
+        self.severity = severity;
+        self
+    }
+
+    /// Add a hint and return self (builder pattern).
+    pub fn with_hint(mut self, message: impl Into<String>) -> Self {
+        self.hints.push(bhdl_common::DiagnosticHint {
+            message: message.into(),
+            fix: None,
+        });
+        self
+    }
+
+    /// Add related info and return self (builder pattern).
+    pub fn with_related(mut self, message: impl Into<String>) -> Self {
+        self.related.push(bhdl_common::RelatedInfo {
+            message: message.into(),
+        });
+        self
+    }
+}
+
+// Type alias for the map storing results of constant evaluation.
+// ConstValue supports integers, floats, booleans, strings, and physical quantities.
+pub type ResolvedConstants = HashMap<SyntaxNodePtr<BhdlLanguage>, bhdl_common::ConstValue>;
 
 // Source location information for diagnostics
 #[derive(Debug, Clone, PartialEq)]
@@ -363,6 +431,10 @@ impl SourceLocation {
 pub struct AnalysisResult {
     pub global_scope: SymbolTable,
     pub definition_scopes: HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>,
+    /// Arena-based scope registry with parent-chain lookup.
+    /// During migration, `global_scope` and `definition_scopes` are extracted
+    /// from this registry for backward compatibility.
+    pub scope_registry: crate::scope_registry::ScopeRegistry,
     pub diagnostics: Vec<Diagnostic>,
     pub resolved_constants: ResolvedConstants,
     pub power_analysis: PowerAnalysisContext,
@@ -378,6 +450,8 @@ pub struct AnalysisResult {
     pub instance_registry: crate::passes::InstanceRegistry,
     /// Power domain expansion results (Phase 1: Scalability)
     pub power_domain_expansion: crate::passes::PowerDomainExpansion,
+    /// Monomorphization results (Pass 2.5: generic specialization)
+    pub monomorphization: crate::passes::MonomorphizationResult,
 }
 
 impl Default for AnalysisResult {
@@ -385,6 +459,7 @@ impl Default for AnalysisResult {
         Self {
             global_scope: SymbolTable::default(),
             definition_scopes: HashMap::new(),
+            scope_registry: crate::scope_registry::ScopeRegistry::new(),
             diagnostics: Vec::new(),
             resolved_constants: HashMap::new(),
             power_analysis: PowerAnalysisContext::new(),
@@ -403,6 +478,7 @@ impl Default for AnalysisResult {
             simulation_data: UnifiedSimulationData::default(),
             instance_registry: crate::passes::InstanceRegistry::new(),
             power_domain_expansion: crate::passes::PowerDomainExpansion::new(),
+            monomorphization: crate::passes::MonomorphizationResult::new(),
         }
     }
 } 

@@ -44,7 +44,7 @@ Successfully implemented the complete intent and flow tracking system for BHDL, 
 
 ### 4. Hierarchical Intent Propagation (sim-7) ✅
 
-**Problem**: Intents didn't propagate through module instances.
+**Problem**: Intents didn't propagate through entity instances.
 
 **Solution**:
 - Added MODULE_INST tracking in flow path tracing

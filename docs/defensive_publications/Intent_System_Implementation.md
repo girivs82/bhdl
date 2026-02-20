@@ -6,7 +6,7 @@
 
 ## Abstract
 
-This publication discloses a novel system for propagating design intent through hierarchical hardware descriptions. Unlike traditional HDLs that only capture structural information, this innovation allows designers to specify high-level intent that automatically propagates through module boundaries and influences simulation strategy, synthesis optimization, and verification focus. The system uses a hierarchical propagation model where board-level intent flows down to modules and individual signal paths, with explicit override capabilities at each level.
+This publication discloses a novel system for propagating design intent through hierarchical hardware descriptions. Unlike traditional HDLs that only capture structural information, this innovation allows designers to specify high-level intent that automatically propagates through entity boundaries and influences simulation strategy, synthesis optimization, and verification focus. The system uses a hierarchical propagation model where board-level intent flows down to entities and individual signal paths, with explicit override capabilities at each level.
 
 ## Background and Prior Art
 
@@ -36,7 +36,7 @@ This publication discloses a novel system for propagating design intent through 
 - **Tool-Specific**: Each tool has different directive syntax
 - **Separation**: Constraints often in separate files from design
 - **Limited Scope**: Cannot express system-level intent
-- **No Hierarchy**: Intent doesn't flow through module boundaries
+- **No Hierarchy**: Intent doesn't flow through entity boundaries
 
 ## Innovation Details
 
@@ -49,12 +49,12 @@ Intent propagates through three levels with explicit override capability:
 board PowerSupply for safety_critical(sil=3) {
     
     // Module inherits board intent unless overridden
-    module PowerRegulator {
+    entity PowerRegulator {
         // Inherits safety_critical(sil=3)
     }
     
     // Module with override
-    module LEDIndicator for non_critical {
+    entity LEDIndicator for non_critical {
         // Overrides to non_critical
     }
     
@@ -69,21 +69,21 @@ board PowerSupply for safety_critical(sil=3) {
 ```bhdl
 // Rule 1: Child inherits parent intent
 board System for high_performance {
-    module Processor {
+    entity Processor {
         // Automatically: for high_performance
     }
 }
 
 // Rule 2: Explicit intent overrides inherited
 board System for low_power {
-    module RadioSection for high_performance {
+    entity RadioSection for high_performance {
         // Uses high_performance, not low_power
     }
 }
 
 // Rule 3: Most specific intent wins
 board System for low_power {
-    module Subsystem for balanced_power {
+    entity Subsystem for balanced_power {
         net critical: in -> out
             for high_performance
         // critical path uses high_performance
@@ -103,8 +103,8 @@ board MedicalDevice
         reliability(mtbf=50000hours) {
     
     // Conflict resolution by priority
-    module EmergencyAlert 
-        for high_performance  // Overrides low_power for this module
+    entity EmergencyAlert
+        for high_performance  // Overrides low_power for this entity
         with safety_critical, reliability {  // Maintains these
         
         // Intent priority system
@@ -120,29 +120,29 @@ board MedicalDevice
 #### Simulation Strategy Selection
 ```bhdl
 // Intent determines simulation approach
-module AnalogFilter for analog_accuracy {
+entity AnalogFilter for analog_accuracy {
     // Tools select: SPICE-level simulation
 }
 
-module DigitalCounter for functional_only {
+entity DigitalCounter for functional_only {
     // Tools select: Discrete event simulation
 }
 
-module MixedConverter for balanced_accuracy {
+entity MixedConverter for balanced_accuracy {
     // Tools select: Mixed-signal simulation
 }
 ```
 
 #### Synthesis Optimization
 ```bhdl
-module DataPath for high_performance {
+entity DataPath for high_performance {
     // Synthesis tools will:
     // - Minimize logic depth
     // - Use faster components
     // - Allow higher power consumption
 }
 
-module ControlLogic for low_power {
+entity ControlLogic for low_power {
     // Synthesis tools will:
     // - Clock gate aggressively  
     // - Use low-leakage components
@@ -160,7 +160,7 @@ interface I2CBus for reliability(error_rate=1e-6) {
 }
 
 // Modules using interface inherit intent
-module Sensor implements I2CBus {
+entity Sensor implements I2CBus {
     // Automatically includes reliability intent
     // Implementation must meet error_rate requirement
 }
@@ -174,7 +174,7 @@ board ConfigurableSystem(mode: operation_mode) {
     for mode == high_speed ? high_performance : low_power;
     
     // Conditional module-level intent
-    module Processor {
+    entity Processor {
         for debug_enabled ? full_visibility : optimized;
     }
     
@@ -204,7 +204,7 @@ board PowerSupply for efficiency(min=90%) {
 }
 
 // Tool-specific validation hooks
-module BuckConverter for stability(phase_margin=45deg) {
+entity BuckConverter for stability(phase_margin=45deg) {
     validate with spice_analysis {
         pm = phase_margin(feedback_loop)
         assert pm >= stability.phase_margin
@@ -216,7 +216,7 @@ module BuckConverter for stability(phase_margin=45deg) {
 
 ```bhdl
 // Intent automatically generates documentation
-module CriticalSensor for safety_critical(sil=2) {
+entity CriticalSensor for safety_critical(sil=2) {
     // Auto-generated docs will include:
     // - Safety requirements
     // - Required validation tests
@@ -238,16 +238,16 @@ for custom_intent {
 
 ```bhdl
 // Private intent (local to module)
-module InternalProcessor {
+entity InternalProcessor {
     private for optimized_layout {
-        // Doesn't propagate outside module
+        // Doesn't propagate outside entity
     }
 }
 
 // Protected intent (visible to children)
-module ParentModule {
+entity ParentModule {
     protected for shared_timing(clock=100MHz) {
-        // Child modules see this intent
+        // Child entities see this intent
     }
 }
 
@@ -307,7 +307,7 @@ intent<T> optimized_for(metric: T) {
 }
 
 // Instantiate template
-module VideoProcessor for optimized_for<throughput> {
+entity VideoProcessor for optimized_for<throughput> {
     // Optimizes for throughput specifically
 }
 ```
@@ -327,7 +327,7 @@ board AdaptiveSystem {
         current_mode = power_saving
     }
     
-    module Processor for current_mode {
+    entity Processor for current_mode {
         // Intent changes dynamically
     }
 }
@@ -381,7 +381,7 @@ board AutomotiveECU
     
     // Power section maintains safety, adds efficiency
     section PowerManagement for efficiency(min=85%) {
-        module BuckConverter for stability(margin=45deg) {
+        entity BuckConverter for stability(margin=45deg) {
             // Has: automotive_safety, emc_compliant, 
             //      temperature_range, efficiency, stability
         }
@@ -389,7 +389,7 @@ board AutomotiveECU
     
     // Communication overrides for performance
     section Communications for high_performance {
-        module CANTransceiver {
+        entity CANTransceiver {
             // Has: automotive_safety, emc_compliant,
             //      temperature_range, high_performance
             // Note: efficiency not inherited (different section)

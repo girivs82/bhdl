@@ -274,27 +274,27 @@ fn run_parse(source_file: &SourceFile, root: &bhdl_ast::SyntaxNode<bhdl_ast::Bhd
             println!("\n{}", "AST Summary:".bold());
             
             let boards: Vec<_> = source_file.boards().collect();
-            let modules: Vec<_> = source_file.modules().collect();
-            
+            let entities: Vec<_> = source_file.entities().collect();
+
             println!("  Boards: {}", boards.len());
             for board in boards {
                 if let Some(name) = board.name() {
                     println!("    • {}", name.text());
                 }
             }
-            
-            println!("  Modules: {}", modules.len());
-            for module in modules {
-                if let Some(name) = module.name() {
+
+            println!("  Entities: {}", entities.len());
+            for entity in entities {
+                if let Some(name) = entity.name() {
                     println!("    • {}", name.text());
                 }
             }
         }
         "json" => {
             // TODO: Implement JSON serialization of AST
-            println!("{{\"status\": \"parsed\", \"boards\": {}, \"modules\": {}}}",
+            println!("{{\"status\": \"parsed\", \"boards\": {}, \"entities\": {}}}",
                 source_file.boards().count(),
-                source_file.modules().count()
+                source_file.entities().count()
             );
         }
         _ => {
@@ -624,26 +624,28 @@ async fn run_synthesis(source_file: &SourceFile, output: Option<PathBuf>, format
 async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, layout: &str, show_values: bool) -> Result<()> {
     // Run full pipeline to get netlist
     let analysis = analyze(source_file);
-    
+
     let mut generator = NetlistGenerator::new();
     let netlist = generator.generate_from_ast_and_analysis(source_file, &analysis).await?;
-    
+
     // Configure visualization (layout algorithm is handled by semantic visualizer)
     // TODO: Pass layout algorithm preference when API supports it
     info!("Using layout algorithm: {}", layout);
     info!("Show values: {}", show_values);
-    
+
+    // Get database component instances from synthesizer
+    let components = generator.get_component_instances();
+    info!("Retrieved {} database component instances for visualization", components.len());
+
     // Generate SVG using semantic visualizer
-    // TODO: Need to get database components for visualization
-    let components = vec![]; // Empty for now
     let svg = render_circuit_with_analysis(&netlist, &components, Some(&analysis), None).await?;
-    
+
     let output_path = output.unwrap_or_else(|| PathBuf::from("circuit.svg"));
     fs::write(&output_path, svg)?;
-    
+
     println!("{}", "✓ Visualization generated".green().bold());
     println!("  Output: {}", output_path.display());
-    
+
     Ok(())
 }
 
@@ -729,8 +731,9 @@ async fn run_pipeline(source_file: &SourceFile, _input_path: &PathBuf, output_di
     // Step 3: Visualization
     if !no_viz {
         println!("\n{}", "3. Visualization".blue().bold());
-        // TODO: Need to get database components for visualization
-        let components = vec![]; // Empty for now
+        // Get database component instances from synthesizer
+        let components = generator.get_component_instances();
+        info!("Retrieved {} database component instances for visualization", components.len());
         let svg = render_circuit_with_analysis(&netlist, &components, Some(&analysis), None).await?;
         
         let svg_path = output_dir.join("circuit.svg");

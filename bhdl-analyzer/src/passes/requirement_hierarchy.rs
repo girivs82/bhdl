@@ -467,13 +467,13 @@ impl RequirementHierarchy {
             if matches!(req.level, RequirementLevel::SafetyGoal | RequirementLevel::Functional) {
                 if req.decomposes_to.is_empty() && 
                    matches!(req.implemented_by, ImplementationDetails::NotImplemented) {
-                    self.diagnostics.push(Diagnostic {
-                        message: format!(
+                    self.diagnostics.push(Diagnostic::new(
+                        format!(
                             "{:?} requirement {} has no decomposition or implementation",
                             req.level, req_id
                         ),
-                        range: rowan::TextRange::empty(rowan::TextSize::from(0)),
-                    });
+                        rowan::TextRange::empty(rowan::TextSize::from(0)),
+                    ));
                 }
             }
         }
@@ -488,13 +488,13 @@ impl RequirementHierarchy {
                     if let Some(parent) = self.requirements.get(parent_id) {
                         if let Some(parent_asil) = &parent.asil {
                             if req_asil < parent_asil {
-                                self.diagnostics.push(Diagnostic {
-                                    message: format!(
+                                self.diagnostics.push(Diagnostic::new(
+                                    format!(
                                         "Requirement {} has ASIL {:?} which is lower than parent {} with ASIL {:?}",
                                         req_id, req_asil, parent_id, parent_asil
                                     ),
-                                    range: rowan::TextRange::empty(rowan::TextSize::from(0)),
-                                });
+                                    rowan::TextRange::empty(rowan::TextSize::from(0)),
+                                ));
                             }
                         }
                     }
@@ -515,13 +515,13 @@ impl RequirementHierarchy {
             if req.derived_from.is_empty() && 
                self.composition_tree.get(req_id).map(|p| p.is_empty()).unwrap_or(true) &&
                matches!(req.implemented_by, ImplementationDetails::NotImplemented) {
-                self.diagnostics.push(Diagnostic {
-                    message: format!(
+                self.diagnostics.push(Diagnostic::new(
+                    format!(
                         "Requirement {} is orphaned (no parent requirements and no implementation)",
                         req_id
                     ),
-                    range: rowan::TextRange::empty(rowan::TextSize::from(0)),
-                });
+                    rowan::TextRange::empty(rowan::TextSize::from(0)),
+                ));
             }
         }
     }
@@ -534,10 +534,10 @@ impl RequirementHierarchy {
         for req_id in self.requirements.keys() {
             if !visited.contains(req_id) {
                 if self.has_cycle(req_id, &mut visited, &mut rec_stack) {
-                    self.diagnostics.push(Diagnostic {
-                        message: format!("Circular dependency detected involving requirement {}", req_id),
-                        range: rowan::TextRange::empty(rowan::TextSize::from(0)),
-                    });
+                    self.diagnostics.push(Diagnostic::new(
+                        format!("Circular dependency detected involving requirement {}", req_id),
+                        rowan::TextRange::empty(rowan::TextSize::from(0)),
+                    ));
                 }
             }
         }

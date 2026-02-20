@@ -179,7 +179,7 @@ board AutomotivePowerSupply {
 // ═══════════════════════════════════════════════════════════════════
 
 // LM2596 Switching Regulator Model
-module LM2596(output_voltage: voltage, max_current: current) {
+entity LM2596(output_voltage: voltage, max_current: current) {
     // Electrical and behavioral models for simulation
     electrical_model {
         switching_frequency: 150kHz;
@@ -265,7 +265,7 @@ module LM2596(output_voltage: voltage, max_current: current) {
 }
 
 // LTC2954 Voltage Monitor Model
-module LTC2954 {
+entity LTC2954 {
     electrical_model {
         monitoring_range: 2.7V..28V;
         response_time: 50µs;
@@ -346,7 +346,7 @@ module LTC2954 {
 }
 
 // Passive Component Model
-module ElectrolyticCap(value: capacitance, voltage_rating: voltage) {
+entity ElectrolyticCap(value: capacitance, voltage_rating: voltage) {
     electrical_model {
         capacitance: value;
         esr: calculate_typical_esr(value);

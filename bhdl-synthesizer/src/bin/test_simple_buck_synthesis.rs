@@ -62,6 +62,7 @@ async fn main() -> Result<()> {
         enable_reliability_analysis: false,
         enable_predictive_analytics: false,
         enable_manufacturing_optimization: false,
+        ..Default::default()
     };
     
     let mut generator = NetlistGenerator::new();

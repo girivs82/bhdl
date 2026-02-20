@@ -1,7 +1,7 @@
 // Buck Converter Module with Embedded Behavioral Models
 // This demonstrates how optimization requirements come from the component library
 
-module BuckConverter(
+entity BuckConverter(
     vin_nom: voltage,
     vout_target: voltage,
     iout_max: current,

@@ -90,37 +90,37 @@
 
 #### Module Symbols (NEW: `bhdl-visualizer/src/symbols/module_symbol.rs`)
 - [ ] Create `ModuleSymbol` struct
-- [ ] Render module as box with label
+- [ ] Render entity as box with label
 - [ ] Support nested content rendering
 - [ ] Handle pin connection points
 
 #### Hierarchical Layout (`bhdl-visualizer/src/layout/semantic_layout.rs`)
 - [ ] Build hierarchy tree from netlist
 - [ ] Implement recursive layout algorithm
-- [ ] Group components by parent module
-- [ ] Handle cross-module routing
+- [ ] Group components by parent entity
+- [ ] Handle cross-entity routing
 
 ## Test Cases to Implement
 
 ### Parser Tests
 ```bhdl
-// test_parse_simple_module_instance
-module Container {
+// test_parse_simple_entity_instance
+entity Container {
     child: ChildModule {
         input -> .in;
         .out -> output;
     }
 }
 
-// test_parse_mixed_instances  
-module Mixed {
+// test_parse_mixed_instances
+entity Mixed {
     R1: Res(10k) { ... }
     mod1: SubModule { ... }
     C1: Cap(100nF) { ... }
 }
 
 // test_parse_nested_connections
-module Parent {
+entity Parent {
     child.internal_signal -> R1.1;
     child.submodule.pin -> output;
 }
@@ -132,10 +132,10 @@ module Parent {
 #[test]
 fn test_resolve_nested_module_reference() {
     let source = r#"
-        module Child { 
-            signal internal = 3.3V; 
+        entity Child {
+            signal internal = 3.3V;
         }
-        module Parent {
+        entity Parent {
             c: Child {};
             signal test = c.internal;
         }
@@ -179,10 +179,10 @@ board TestSystem {
 
 ## Success Criteria
 
-- [ ] Can parse hierarchical modules without ambiguity
-- [ ] Symbol resolution works across module boundaries  
+- [ ] Can parse hierarchical entities without ambiguity
+- [ ] Symbol resolution works across entity boundaries
 - [ ] Netlist preserves full hierarchy
-- [ ] Visualizer shows module boxes with contents
+- [ ] Visualizer shows entity boxes with contents
 - [ ] All existing tests still pass
 - [ ] Performance overhead < 10% for flat designs
 - [ ] Example USB charger system processes correctly
@@ -190,6 +190,6 @@ board TestSystem {
 ## Next Steps After Implementation
 
 1. **Behavioral Modeling** - Can now use proper instance paths
-2. **Library System** - Package reusable modules
-3. **Incremental Compilation** - Compile modules independently
-4. **Module Testing** - Test modules in isolation
+2. **Library System** - Package reusable entities
+3. **Incremental Compilation** - Compile entities independently
+4. **Entity Testing** - Test entities in isolation

@@ -40,8 +40,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if content_str.contains("import") {
             println!("✅ Import statements detected");
         }
-        if content_str.contains("module") {
-            println!("✅ Module definitions detected");
+        if content_str.contains("entity") {
+            println!("✅ Entity definitions detected");
         }
         if content_str.contains("const") {
             println!("✅ Const declarations detected");
@@ -92,7 +92,7 @@ fn print_tree_summary(node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>, depth
     match kind {
         SyntaxKind::SOURCE_FILE |
         SyntaxKind::IMPORT_STMT |
-        SyntaxKind::MODULE_DEF |
+        SyntaxKind::ENTITY_DEF |
         SyntaxKind::PARAM_DECL |
         SyntaxKind::ALIAS |
         SyntaxKind::PIN_DECL |

@@ -12,7 +12,7 @@ board LinearLDO {
     protected_vin -> Cap(1uF, ceramic).1 -> GND;
     
     // LDO regulator (e.g., AMS1117-3.3)
-    module LDO_3V3 {
+    entity LDO_3V3 {
         pin VIN: power in;
         pin VOUT: power out;
         pin ADJ: signal in;

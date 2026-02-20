@@ -361,7 +361,7 @@ CPU.CLK -> RAM.CLK where impedance = 50Ω, max_vias = 2, length_match = true;
 - **Compatible**: Different constraint types are combined
 - **Conflicting**: Same constraint type with different values causes error
 - **Override**: Use `override` keyword to explicitly replace inherited constraints
-- **Inheritance**: Child modules inherit parent constraints unless overridden
+- **Inheritance**: Child entities inherit parent constraints unless overridden
 
 #### Connection Groups with 'with'
 Use the `with` keyword to apply shared constraints to multiple connections:
@@ -423,7 +423,7 @@ Pin-to-pin connections naturally express circuit topology, critical for analog c
 
 ```bhdl
 // Buck converter with feedback tap point
-module BuckConverter {
+entity BuckConverter {
     // Power path with explicit topology
     L1.2 -> C1.1;              // Inductor to first cap
     C1.1 -> R_TOP.1;           // Feedback divider taps HERE
@@ -532,14 +532,14 @@ if (high_speed) {
 }
 ```
 
-### 3.7 Module Definition
+### 3.7 Entity Definition
 
-Modules enable hierarchical design and code reuse by encapsulating functionality into reusable components with well-defined interfaces.
+Entities enable hierarchical design and code reuse by encapsulating functionality into reusable components with well-defined interfaces.
 
-#### Basic Module Syntax
+#### Basic Entity Syntax
 ```bhdl
-// Module with parameters and pins
-module RC_Filter(R_value: resistance = 1kΩ, C_value: capacitance = 100nF) {
+// Entity with parameters and pins
+entity RC_Filter(R_value: resistance = 1kΩ, C_value: capacitance = 100nF) {
     // Pin declarations with types and directions
     pin IN: signal in;      // Input signal pin
     pin OUT: signal out;    // Output signal pin  
@@ -552,8 +552,8 @@ module RC_Filter(R_value: resistance = 1kΩ, C_value: capacitance = 100nF) {
     Cap(C_value).2 -> GND;
 }
 
-// Simple module without parameters
-module PowerIndicator() {
+// Simple entity without parameters
+entity PowerIndicator() {
     pin VCC: power in;
     pin GND: ground in;
     
@@ -563,7 +563,7 @@ module PowerIndicator() {
 }
 ```
 
-#### Module Instantiation
+#### Entity Instantiation
 ```bhdl
 board AudioAmplifier {
     power VCC_12V = 12V @ 2A;
@@ -592,7 +592,7 @@ board AudioAmplifier {
 ```
 
 #### Hierarchical Reference Designators
-Components within module instances receive hierarchical names:
+Components within entity instances receive hierarchical names:
 ```bhdl
 // In the above example, components are named:
 // - input_filter.R1 (10kΩ resistor)
@@ -603,9 +603,9 @@ Components within module instances receive hierarchical names:
 // - power_indicator.D1 (green LED)
 ```
 
-#### Module Pin Types
+#### Entity Pin Types
 ```bhdl
-module ComplexInterface() {
+entity ComplexInterface() {
     // Power pins
     pin VCC: power in;          // Power input
     pin VOUT: power out;        // Power output
@@ -622,10 +622,10 @@ module ComplexInterface() {
 }
 ```
 
-#### Parameterized Modules
+#### Parameterized Entities
 ```bhdl
 // Parameters with types and constraints
-module VoltageRegulator(
+entity VoltageRegulator(
     Vin: voltage,                    // Required parameter
     Vout: voltage,                   // Required parameter
     Imax: current = 1A,              // Optional with default
@@ -650,9 +650,9 @@ module VoltageRegulator(
 }
 ```
 
-#### Module Arrays and Generate
+#### Entity Arrays and Generate
 ```bhdl
-module LEDArray(count: int = 8) {
+entity LEDArray(count: int = 8) {
     pin VCC: power in;
     pin GND: ground in;
     pin[count] CTRL: signal in;  // Pin array
@@ -678,10 +678,10 @@ board LEDPanel {
 }
 ```
 
-#### Module Composition
+#### Entity Composition
 ```bhdl
-// Modules can instantiate other modules
-module PowerManagement() {
+// Entities can instantiate other entities
+entity PowerManagement() {
     pin VIN: power in;
     pin VOUT_3V3: power out;
     pin VOUT_1V8: power out;
@@ -710,36 +710,36 @@ module PowerManagement() {
 }
 ```
 
-#### Module Variants and Deduplication
-The BHDL toolchain automatically deduplicates module instances with identical parameters:
+#### Entity Variants and Deduplication
+The BHDL toolchain automatically deduplicates entity instances with identical parameters:
 ```bhdl
-// These create a single module definition
+// These create a single entity definition
 filter1: RC_Filter(1kΩ, 100nF) { ... }
-filter2: RC_Filter(1kΩ, 100nF) { ... }  // Reuses same module
+filter2: RC_Filter(1kΩ, 100nF) { ... }  // Reuses same entity
 
 // This creates a new variant
-filter3: RC_Filter(10kΩ, 10nF) { ... }  // New module variant
+filter3: RC_Filter(10kΩ, 10nF) { ... }  // New entity variant
 ```
 
-#### Module Imports and Multi-File Support
+#### Entity Imports and Multi-File Support
 ```bhdl
-// Import all public modules from a file
+// Import all public entities from a file
 import "common/filters.bhdl";
 import "power/regulators.bhdl";
 
-// Import specific modules (destructuring)
+// Import specific entities (destructuring)
 import { RC_Filter, LC_Filter } from "common/filters.bhdl";
 import { LinearReg, BuckConverter } from "power/regulators.bhdl";
 
 #### Parameter Override Semantics
 
-Module parameters can be overridden during instantiation with specific precedence rules:
+Entity parameters can be overridden during instantiation with specific precedence rules:
 
 ```bhdl
-// Module definition with parameters
-module VoltageRegulator(
+// Entity definition with parameters
+entity VoltageRegulator(
     input_voltage: voltage = 12V,          // Required parameter
-    output_voltage: voltage = 5V,          // Required parameter  
+    output_voltage: voltage = 5V,          // Required parameter
     max_current: current = 1A,             // Optional with default
     efficiency: percentage = 85%,          // Optional with default
     topology: string = "linear"            // String parameter with default
@@ -823,11 +823,11 @@ good_regulator: VoltageRegulator(
 
 3. **Default Parameter Resolution:**
    - Unspecified parameters use their default values
-   - Defaults are evaluated in the module's context
+   - Defaults are evaluated in the entity's context
    - Defaults can reference other parameters
 
 ```bhdl
-module SmartRegulator(
+entity SmartRegulator(
     input_voltage: voltage,                     // Required, no default
     output_voltage: voltage = input_voltage / 2, // Default references input_voltage
     ripple_spec: voltage = output_voltage * 0.01 // Default is 1% of output
@@ -842,11 +842,11 @@ smart_reg: SmartRegulator(input_voltage = 12V);
 
 4. **Parameter Scope and Visibility:**
 ```bhdl
-module OuterModule(outer_param: voltage = 5V) {
-    // Parameter is visible throughout module scope
-    
-    inner_module: InnerModule(
-        param1 = outer_param,               // Reference outer module parameter
+entity OuterEntity(outer_param: voltage = 5V) {
+    // Parameter is visible throughout entity scope
+
+    inner_entity: InnerEntity(
+        param1 = outer_param,               // Reference outer entity parameter
         param2 = outer_param * 0.5          // Computed from outer parameter
     );
     
@@ -1011,12 +1011,12 @@ The analyzer validates attribute consistency and electrical feasibility:
 This attribute system enables sophisticated electrical analysis while maintaining design intent throughout the toolchain.
 // Relative imports
 import "../shared/connectors.bhdl";
-import "./local_modules.bhdl";
+import "./local_entities.bhdl";
 ```
 
-#### Module Aliases
+#### Entity Aliases
 ```bhdl
-// Create shorter names for frequently used modules
+// Create shorter names for frequently used entities
 alias LDO = LinearDropoutRegulator;
 alias Buck = BuckConverter;
 alias TVS = TransientVoltageSuppressor;
@@ -1029,10 +1029,10 @@ conv1: Buck(12V, 5V) { ... } // Same as BuckConverter
 #### Best Practices
 1. **Clear Interfaces**: Define all pins with explicit types and directions
 2. **Meaningful Parameters**: Use typed parameters with sensible defaults
-3. **Hierarchical Organization**: Build complex systems from simple modules
-4. **Consistent Naming**: Use descriptive names for modules and instances
-5. **Documentation**: Add comments explaining module purpose and usage
-6. **File Organization**: Group related modules in separate files
+3. **Hierarchical Organization**: Build complex systems from simple entities
+4. **Consistent Naming**: Use descriptive names for entities and instances
+5. **Documentation**: Add comments explaining entity purpose and usage
+6. **File Organization**: Group related entities in separate files
 7. **Namespace Management**: Use clear import paths to avoid conflicts
 
 ### 3.8 Constraint Declaration
@@ -1393,18 +1393,18 @@ board PowerSupply {
 - No limit on length: `high_precision_voltage_reference` is valid
 
 **Handle Scope:**
-- Handles are scoped to their containing board or module
+- Handles are scoped to their containing board or entity
 - Handles can be referenced throughout their scope
 - Module instances create hierarchical handle namespaces
 
 ```bhdl
 // Handle scoping example
-module PowerModule() {
+entity PowerEntity() {
     pin VIN: power in;
     pin VOUT: power out;
     pin GND: ground in;
-    
-    // Local handles within module
+
+    // Local handles within entity
     VIN -> input_filter: Cap(10µF).+;
     input_filter.- -> GND;
     input_filter.+ -> regulator: LinearReg(3.3V).IN;
@@ -1416,14 +1416,14 @@ board MainBoard {
     power VCC_12V = 12V @ 1A;
     ground GND;
     
-    // Module instance creates handle namespace
-    power_module: PowerModule() {
+    // Entity instance creates handle namespace
+    power_entity: PowerEntity() {
         VIN <- @VCC_12V;
         VOUT -> @VCC_3V3;
         GND <- @GND;
     }
-    
-    // Access module internal handles (if exposed)
+
+    // Access entity internal handles (if exposed)
     // power_module.regulator.thermal_pad -> thermal_via;
 }
 ```
@@ -1570,14 +1570,14 @@ Virtual pins are a powerful synthesis feature that allows components to declare 
 #### 5.7.1 Virtual Pin Declaration
 
 ```bhdl
-module TPS54331(vout: voltage = 3.3V, iout: current = 2A) {
+entity TPS54331(vout: voltage = 3.3V, iout: current = 2A) {
     // Physical pins - these exist on the actual IC
     pin VIN: power in;
     pin SW: switch out;         // Switch node output
     pin GND: ground inout;
     pin FB: feedback in;
     pin EN: enable in;
-    
+
     // Virtual pin - represents the regulated output after external components
     pin VOUT: virtual power out;
 }
@@ -1588,9 +1588,9 @@ module TPS54331(vout: voltage = 3.3V, iout: current = 2A) {
 Components define how their virtual pins expand into actual circuit paths:
 
 ```bhdl
-module TPS54331(vout: voltage = 3.3V, iout: current = 2A) {
+entity TPS54331(vout: voltage = 3.3V, iout: current = 2A) {
     // Pin declarations (as above)
-    
+
     // Define how VOUT virtual pin expands
     @virtual_expansion(VOUT) {
         // Path from physical pin to virtual pin
@@ -1723,7 +1723,7 @@ R2.2 -> GND;
 Components can declare multiple virtual pins for multi-output converters:
 
 ```bhdl
-module TPS54240(vout1: voltage = 5V, vout2: voltage = 3.3V) {
+entity TPS54240(vout1: voltage = 5V, vout2: voltage = 3.3V) {
     // Physical pins
     pin VIN: power in;
     pin SW1: switch out;
@@ -1756,7 +1756,7 @@ U1.VOUT2 -> @3V3;
 Virtual pins can be conditional based on component configuration:
 
 ```bhdl
-module BuckController(fixed_output: bool = false, vout: voltage = 3.3V) {
+entity BuckController(fixed_output: bool = false, vout: voltage = 3.3V) {
     pin VIN: power in;
     pin SW: switch out;
     pin GND: ground inout;
@@ -1804,12 +1804,12 @@ The synthesizer automatically generates intent information for all components it
 When expanding virtual pins, the synthesizer adds intent to each created component:
 
 ```bhdl
-module TPS54331(vout: voltage = 3.3V, iout: current = 2A) {
+entity TPS54331(vout: voltage = 3.3V, iout: current = 2A) {
     pin VOUT: virtual power out;
-    
+
     @virtual_expansion(VOUT) {
         path: SW -> [external_fet] -> [inductor] -> [output_cap] -> VOUT
-        
+
         components: {
             external_fet: {
                 type: NFET,
@@ -2213,7 +2213,7 @@ board Example {
 
 ```bhdl
 // Pin-to-interface connections
-module MCU {
+entity MCU {
     interface I2C i2c;
     interface SPI spi_master;
     pin VDD: power in;
@@ -2286,7 +2286,7 @@ interface RMII {
 }
 
 // Interface arrays
-module AudioCodec {
+entity AudioCodec {
     interface I2S[4] channels;  // 4 I2S interfaces
     pin VDD: power in;
     pin GND: ground;
@@ -2479,11 +2479,11 @@ board MotorController {
 
 #### Hierarchical Intent Inheritance
 
-Intents are inherited through module boundaries and can be overridden:
+Intents are inherited through entity boundaries and can be overridden:
 
 ```bhdl
-// Module with intent specification
-module SensorInterface() {
+// Entity with intent specification
+entity SensorInterface() {
     pin SENSOR_IN: signal in;
     pin DIGITAL_OUT: signal out;
     pin VCC: power in;
@@ -2499,12 +2499,12 @@ board MainSystem {
     power VCC_ANALOG = 5V @ 100mA;
     ground ANALOG_GND;
     
-    // Module instance inherits and extends intents
+    // Entity instance inherits and extends intents
     sensor_if: SensorInterface() {
         VCC <- @VCC_ANALOG;
         GND <- @ANALOG_GND;
         SENSOR_IN <- temperature_sensor.OUT for [
-            // These intents combine with module's internal intents
+            // These intents combine with entity's internal intents
             temperature_compensation(range=-40C to +85C),
             calibration(points=3)
         ];
@@ -2636,7 +2636,7 @@ board ConflictExample {
 1. **Most Specific**: Direct intent attachment overrides broader scopes
 2. **Additive**: Non-conflicting intents are combined
 3. **Error on Conflict**: Contradictory intents generate compilation errors
-4. **Inheritance**: Child modules inherit parent intents unless overridden
+4. **Inheritance**: Child entities inherit parent intents unless overridden
 
 This intent system enables design intent capture and guides both synthesis and analysis phases of the toolchain.
   CHASSIS_GND: safety_ground {
@@ -3429,7 +3429,7 @@ bhdl-stdlib = "1.0.0"
 // components/custom_amplifiers.bhdl
 import "../types/custom_types.bhdl";
 
-module HighPrecisionOpAmp(
+entity HighPrecisionOpAmp(
     gain: float = 1.0,
     bandwidth: frequency = 1MHz,
     offset: voltage = 1mV
@@ -3804,7 +3804,7 @@ mcu.i2c1 <-> cross_domain_i2c <-> low_voltage_sensors;
 back_drive_protection {
   cross_domain_uart: {
     transmitter: mcu.UART_TX(domain=VCC_3V3);
-    receiver: module.UART_RX(domain=VCC_1V8);
+    receiver: entity.UART_RX(domain=VCC_1V8);
     
     power_dependencies {
       VCC_3V3.power_up_time = 50ms;
@@ -3946,7 +3946,7 @@ usb_connector.DP, usb_connector.DN <- esd_protection(type=TVS, clamp=5.5V);
 3. **Interface Declaration**: `main_i2c: I2C(3.3V, 400kHz);`
 4. **Generate Loops**: `generate for i in 0..7 { GPIO[i] -> LED[i]; }`
 5. **Conditional Logic**: `if (condition) { action } else { alternative }`
-6. **Module Definition**: `module Name(params) { implementation }`
+6. **Entity Definition**: `entity Name(params) { implementation }`
 7. **Constraint Declaration**: `constrain { placement, routing, timing }`
 
 ### 17.2 Operators
@@ -4003,7 +4003,7 @@ power |====> regulation |====> loads;
 
 ```bhdl
 // Core constructs
-if else when generate for in module constrain
+if else when generate for in entity constrain
 
 // Declarations  
 board system circuit interface power_domain
@@ -4125,10 +4125,10 @@ Component limits come from the component database or explicit declarations:
 
 ```bhdl
 // Component with explicit limits
-module LED(color: string) {
+entity LED(color: string) {
     pin A: signal in;
     pin K: signal out;
-    
+
     // Electrical limits
     max_current = 30mA;
     max_voltage = 3.3V;
@@ -4200,7 +4200,7 @@ The complete BHDL v2.0 grammar in Extended Backus-Naur Form (EBNF):
 (* BHDL v2.0 Formal Grammar *)
 
 (* Top-level constructs *)
-bhdl_file = { import_statement | board_definition | module_definition | 
+bhdl_file = { import_statement | board_definition | entity_definition |
               system_definition | circuit_definition | interface_definition |
               constrain_statement } ;
 
@@ -4214,10 +4214,10 @@ board_body = { power_declaration | ground_declaration | connection_statement |
                component_instantiation | attribute_statement | 
                constrain_statement | generate_statement | if_statement } ;
 
-(* Module definition *)
-module_definition = "module" identifier [ parameter_list ] "{" module_body "}" ;
-module_body = { pin_declaration | connection_statement | component_instantiation |
-                generate_statement | if_statement | module_instantiation } ;
+(* Entity definition *)
+entity_definition = "entity" identifier [ parameter_list ] "{" entity_body "}" ;
+entity_body = { pin_declaration | connection_statement | component_instantiation |
+                generate_statement | if_statement | entity_instantiation } ;
 
 (* Parameter list *)
 parameter_list = "(" [ parameter { "," parameter } ] ")" ;
@@ -4337,7 +4337,7 @@ digit = "0" .. "9" ;
 character = ? any character except '"' ? ;
 
 (* Keywords *)
-keywords = "board" | "module" | "system" | "circuit" | "interface" |
+keywords = "board" | "entity" | "system" | "circuit" | "interface" |
           "power" | "ground" | "signal" | "pin" | "import" | "from" |
           "generate" | "for" | "in" | "if" | "else" | "when" |
           "constrain" | "where" | "with" | "require" | "perspective" |
@@ -4371,7 +4371,7 @@ Complete list of reserved words in BHDL v2.0:
 ```
 Keywords:
   alias, attribute, board, circuit, constrain, else, for, from,
-  generate, ground, if, import, in, interface, module, null,
+  generate, ground, if, import, in, interface, entity, null,
   out, inout, perspective, pin, power, require, signal, system,
   type, when, where, with
 

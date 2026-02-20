@@ -17,7 +17,7 @@ type InductorParams = {
     impedance: ImpedanceCharacteristics,
 };
 
-module Ind(
+entity Ind(
     value: inductance,
     current: current = 1A,
     core: string = "ferrite",

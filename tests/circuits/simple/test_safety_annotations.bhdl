@@ -1,0 +1,24 @@
+// Test: Safety annotations and fault injection
+
+safety_goal SG_OVP {
+    id: "SG-001";
+    asil: B;
+}
+
+safety_goal SG_OCP {
+    id: "SG-002";
+    asil: C;
+}
+
+fault_inject short(VOUT, VIN) -> verify {
+    assert shutdown == true;
+}
+
+fault_inject open(R_SENSE) -> verify {
+    assert fault_flag == true;
+}
+
+board SafetyTestBoard {
+    power VCC = 5V;
+    ground GND;
+}

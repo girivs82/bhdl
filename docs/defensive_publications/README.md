@@ -44,7 +44,7 @@ Defensive publications serve to:
 
 ### 7. [Hierarchical Intent Propagation](Intent_System_Implementation.md)
 - **Priority**: Medium
-- **Summary**: Intent inheritance through module boundaries
+- **Summary**: Intent inheritance through entity boundaries
 - **Key Innovation**: System-level intent automatically flows to components
 
 ### 8. [Flow-Based Power Management](Flow_Based_Power_Management.md)

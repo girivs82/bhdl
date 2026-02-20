@@ -67,8 +67,8 @@ pub fn propagate_hierarchical_intents(&mut self,
     symbol_table: &SymbolTable,
     definition_scopes: &HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>
 ) {
-    // Find module instances in flows with intents
-    // Create new flow paths for module internals
+    // Find entity instances in flows with intents
+    // Create new flow paths for entity internals
     // Propagate intent to internal components
 }
 ```
@@ -153,9 +153,9 @@ board AudioBoard {
 }
 ```
 
-### Hierarchical Module with Intent Propagation
+### Hierarchical Entity with Intent Propagation
 ```bhdl
-module FilterStage(cutoff: frequency) {
+entity FilterStage(cutoff: frequency) {
     pin IN: signal in;
     pin OUT: signal out;
     // Internal components inherit parent intent

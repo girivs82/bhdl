@@ -3,14 +3,14 @@ use std::path::Path;
 use std::fs;
 use anyhow::{Result, Context};
 use bhdl_parser::parse;
-use bhdl_ast::{SourceFile, AstNode, Module, ImportStmt, HasName, PinDecl, Item};
+use bhdl_ast::{SourceFile, AstNode, Entity, ImportStmt, HasName, PinDecl, Item};
 use log::info;
 
 /// Handles loading and parsing imported modules from BHDL files
 pub struct ImportLoader {
     /// Cache of loaded modules from imports
-    /// Key is the module name, value is the parsed Module AST
-    loaded_modules: HashMap<String, Module>,
+    /// Key is the entity name, value is the parsed Entity AST
+    loaded_entities: HashMap<String, Entity>,
     
     /// Cache of full source file ASTs for cross-import resolution
     /// Key is the file path, value is the parsed SourceFile AST
@@ -23,7 +23,7 @@ pub struct ImportLoader {
 impl ImportLoader {
     pub fn new(base_path: impl Into<String>) -> Self {
         Self {
-            loaded_modules: HashMap::new(),
+            loaded_entities: HashMap::new(),
             loaded_source_files: HashMap::new(),
             base_path: base_path.into(),
         }
@@ -59,7 +59,7 @@ impl ImportLoader {
         Ok(())
     }
     
-    /// Load modules from a file path
+    /// Load entities from a file path
     fn load_from_path(&mut self, import_path: &str, module_names: &[String]) -> Result<()> {
         // Resolve the path relative to the base path
         let full_path = if import_path.starts_with("../") || import_path.starts_with("./") {
@@ -92,12 +92,12 @@ impl ImportLoader {
         self.loaded_source_files.insert(file_path.clone(), source_file.clone());
         info!("Stored source file AST for: {}", file_path);
         
-        // First, extract all modules from the file
+        // First, extract all entities from the file
         let mut file_modules = HashMap::new();
-        for module in source_file.modules() {
-            if let Some(name) = module.name() {
+        for entity in source_file.entities() {
+            if let Some(name) = entity.name() {
                 let module_name = name.text().to_string();
-                file_modules.insert(module_name.clone(), module.clone());
+                file_modules.insert(module_name.clone(), entity.clone());
             }
         }
         
@@ -134,11 +134,11 @@ impl ImportLoader {
                     
                     // If the alias name is requested, load the target module
                     if module_names.contains(&alias_name) {
-                        if let Some(target_module) = file_modules.get(&target_name) {
+                        if let Some(target_entity) = file_modules.get(&target_name) {
                             println!("IMPORT_LOADER: Found alias {} -> {} (LOADING)", alias_name, target_name);
-                            self.loaded_modules.insert(alias_name, target_module.clone());
+                            self.loaded_entities.insert(alias_name, target_entity.clone());
                         } else {
-                            println!("IMPORT_LOADER: Target module {} not found for alias {}", target_name, alias_name);
+                            println!("IMPORT_LOADER: Target entity {} not found for alias {}", target_name, alias_name);
                         }
                     } else {
                         println!("IMPORT_LOADER: Alias {} not in requested modules {:?}", alias_name, module_names);
@@ -147,17 +147,17 @@ impl ImportLoader {
             }
         }
         
-        // Finally, load directly requested modules (not aliases)
-        for module in source_file.modules() {
-            if let Some(name) = module.name() {
-                let module_name = name.text().to_string();
-                
-                // Check if this module was requested directly
-                if module_names.contains(&module_name) {
-                    println!("IMPORT_LOADER: Found requested module: {}", module_name);
-                    self.loaded_modules.insert(module_name, module.clone());
+        // Finally, load directly requested entities (not aliases)
+        for entity in source_file.entities() {
+            if let Some(name) = entity.name() {
+                let entity_name = name.text().to_string();
+
+                // Check if this entity was requested directly
+                if module_names.contains(&entity_name) {
+                    println!("IMPORT_LOADER: Found requested entity: {}", entity_name);
+                    self.loaded_entities.insert(entity_name, entity.clone());
                 } else {
-                    println!("IMPORT_LOADER: Skipping module {} (not requested)", module_name);
+                    println!("IMPORT_LOADER: Skipping entity {} (not requested)", entity_name);
                 }
             }
         }
@@ -166,13 +166,13 @@ impl ImportLoader {
     }
     
     /// Get a loaded module by name
-    pub fn get_module(&self, name: &str) -> Option<&Module> {
-        self.loaded_modules.get(name)
+    pub fn get_entity(&self, name: &str) -> Option<&Entity> {
+        self.loaded_entities.get(name)
     }
     
     /// Get all loaded modules
-    pub fn loaded_modules(&self) -> &HashMap<String, Module> {
-        &self.loaded_modules
+    pub fn loaded_entities(&self) -> &HashMap<String, Entity> {
+        &self.loaded_entities
     }
     
     /// Get all loaded source file ASTs for cross-import resolution
@@ -194,8 +194,8 @@ impl ImportLoader {
     }
     
     /// Check if a module has virtual pins
-    pub fn module_has_virtual_pins(&self, module_name: &str) -> bool {
-        if let Some(module) = self.get_module(module_name) {
+    pub fn entity_has_virtual_pins(&self, module_name: &str) -> bool {
+        if let Some(module) = self.get_entity(module_name) {
             // Check if any pins are marked as virtual
             for pin in module.pins() {
                 let pin_text = pin.syntax().text().to_string();
@@ -211,7 +211,7 @@ impl ImportLoader {
     pub fn get_virtual_pins(&self, module_name: &str) -> Vec<String> {
         let mut virtual_pins = Vec::new();
         
-        if let Some(module) = self.get_module(module_name) {
+        if let Some(module) = self.get_entity(module_name) {
             for pin in module.pins() {
                 let pin_text = pin.syntax().text().to_string();
                 if pin_text.contains("virtual") {

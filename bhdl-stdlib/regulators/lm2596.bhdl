@@ -16,7 +16,7 @@ type BuckRegulatorParams = {
     impedance: ImpedanceCharacteristics,
 };
 
-module LM2596(fixed_voltage: voltage? = null) {
+entity LM2596(fixed_voltage: voltage? = null) {
     pin VIN: power in @metadata(
         function="PowerIn",
         description="Input voltage (4.5V-40V)",

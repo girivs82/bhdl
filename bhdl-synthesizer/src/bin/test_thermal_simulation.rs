@@ -81,7 +81,7 @@ board PowerBoard {
     ground GND;
     
     // Component definitions with power characteristics
-    module VoltageRegulator(vin: voltage, vout: voltage) {
+    entity VoltageRegulator(vin: voltage, vout: voltage) {
         pin VIN: power in;
         pin VOUT: power out;
         pin GND: ground in;
@@ -92,7 +92,7 @@ board PowerBoard {
         const thermal_resistance: thermal = 25C_per_W;
     }
     
-    module PowerTransistor(type: string) {
+    entity PowerTransistor(type: string) {
         pin G: signal in;
         pin D: power inout;
         pin S: ground inout;
@@ -102,7 +102,7 @@ board PowerBoard {
         const thermal_resistance: thermal = 50C_per_W;
     }
     
-    module Resistor(value: resistance) {
+    entity Resistor(value: resistance) {
         pin 1: signal inout;
         pin 2: signal inout;
         
@@ -111,7 +111,7 @@ board PowerBoard {
         const thermal_resistance: thermal = 200C_per_W;
     }
     
-    module Capacitor(value: capacitance) {
+    entity Capacitor(value: capacitance) {
         pin 1: signal inout;
         pin 2: signal inout;
         
@@ -120,7 +120,7 @@ board PowerBoard {
         const thermal_resistance: thermal = 300C_per_W;
     }
     
-    module LED(color: string) {
+    entity LED(color: string) {
         pin A: signal in;
         pin K: signal out;
         
@@ -129,7 +129,7 @@ board PowerBoard {
         const thermal_resistance: thermal = 100C_per_W;
     }
     
-    module IC(type: string) {
+    entity IC(type: string) {
         pin VCC: power in;
         pin GND: ground in;
         pin IN: signal in;

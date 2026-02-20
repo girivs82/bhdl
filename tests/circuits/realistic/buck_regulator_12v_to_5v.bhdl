@@ -19,7 +19,7 @@ board BuckRegulator12Vto5V {
     vin_fused -> Cap(0.1uF, 50V, ceramic).1 -> GND;       // VIN pin bypass
     
     // Buck controller - TPS54360 (60V, 3.5A)
-    module TPS54360 {
+    entity TPS54360 {
         pin VIN: power in;
         pin SW: power out;      // Switch node
         pin BOOT: power in;     // Bootstrap cap

@@ -1,0 +1,54 @@
+// Intent-driven layout demo using actual database components
+// This version uses components from the KiCad database
+
+entity Res(value: resistance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+}
+
+entity Cap(value: capacitance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+}
+
+entity LED(color: string) {
+    pin A: signal in;
+    pin K: signal in;
+}
+
+entity TVSDiode(voltage: voltage) {
+    pin 1: signal in;
+    pin 2: signal in;
+}
+
+// Use actual LM7805 voltage regulator from database
+entity LM7805 {
+    pin VIN: power in;
+    pin GND: ground;
+    pin VOUT: power out;
+}
+
+board IntentLayoutDemo {
+    // LEFT ZONE: Input protection
+    net input: tvs: TVSDiode(15V).1 for input_protection(15V, 500mA);
+    tvs.2 -> gnd1: GND();  // Ground symbol
+
+    // CENTER ZONE: Input filtering
+    net filtered_in: tvs.1 -> c1: Cap(100µF).1 for noise_filtering(100Hz, 40dB);
+    c1.2 -> gnd2: GND();
+
+    // TOP ZONE: Voltage regulation
+    net regulated: c1.1 -> reg: LM7805().VIN for voltage_regulation(5V, 12V);
+    reg.GND -> gnd3: GND();
+
+    // CENTER ZONE: Output filtering
+    net filtered_out: reg.VOUT -> c2: Cap(10µF).1 for noise_filtering(10kHz, 60dB);
+    c2.2 -> gnd4: GND();
+
+    // RIGHT ZONE: LED indicator
+    net indicator: c2.1 -> r1: Res(330).1 -> r1.2 -> led: LED("green").A for current_limiting(20mA);
+    led.K -> gnd5: GND();
+
+    // BOTTOM ZONE: Current sensing
+    net sensed: r1.2 -> sense: Res(0.1).1 -> sense.2 -> led.A for current_sensing(20mA, 1%);
+}

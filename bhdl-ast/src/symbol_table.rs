@@ -4,7 +4,7 @@
 //! scopes, and name resolution in BHDL programs.
 
 use crate::flow::{ComponentInstantiation, GenerateStmt, AssignStmt};
-use crate::items::{Board, Module};
+use crate::items::{Board, Entity};
 use crate::{BhdlLanguage, SyntaxNode, HasName};
 use crate::visitor::AstVisitor;
 use rowan::ast::AstNode;
@@ -15,8 +15,8 @@ use std::collections::HashMap;
 pub enum SymbolKind {
     /// Board definition
     Board,
-    /// Module definition
-    Module,
+    /// Entity definition
+    Entity,
     /// Component type definition
     ComponentType,
     /// Interface definition
@@ -45,7 +45,7 @@ impl SymbolKind {
     }
     
     pub fn is_declaration(&self) -> bool {
-        matches!(self, SymbolKind::Board | SymbolKind::Module | SymbolKind::ComponentType | SymbolKind::Interface)
+        matches!(self, SymbolKind::Board | SymbolKind::Entity | SymbolKind::ComponentType | SymbolKind::Interface)
     }
 }
 
@@ -150,8 +150,8 @@ pub enum ScopeKind {
     Global,
     /// Board scope
     Board,
-    /// Module scope
-    Module,
+    /// Entity scope
+    Entity,
     /// Component definition scope
     ComponentDef,
     /// Interface definition scope
@@ -171,7 +171,7 @@ pub struct Scope {
     pub kind: ScopeKind,
     /// Parent scope (None for global scope)
     pub parent: Option<ScopeId>,
-    /// Scope name (for named scopes like boards, modules)
+    /// Scope name (for named scopes like boards, entities)
     pub name: Option<String>,
     /// Symbols declared in this scope
     pub symbols: HashMap<String, Symbol>,
@@ -510,23 +510,23 @@ impl AstVisitor for SymbolTableBuilder {
         self.symbol_table.exit_scope();
     }
     
-    fn visit_module(&mut self, module: &Module) {
-        let module_name = module.name()
+    fn visit_entity(&mut self, entity: &Entity) {
+        let entity_name = entity.name()
             .map(|token| token.text().to_string())
-            .unwrap_or_else(|| "unnamed_module".to_string());
-            
-        self.symbol_table.enter_scope(ScopeKind::Module, Some(module_name.clone()));
-        
-        // Add module symbol
-        let module_symbol = Symbol::new(
-            module_name,
-            SymbolKind::Module,
+            .unwrap_or_else(|| "unnamed_entity".to_string());
+
+        self.symbol_table.enter_scope(ScopeKind::Entity, Some(entity_name.clone()));
+
+        // Add entity symbol
+        let entity_symbol = Symbol::new(
+            entity_name,
+            SymbolKind::Entity,
             self.symbol_table.current_scope_id(),
-            self.get_location_from_node(module.syntax())
+            self.get_location_from_node(entity.syntax())
         );
-        self.add_symbol_safe(module_symbol);
-        
-        self.walk_module(module);
+        self.add_symbol_safe(entity_symbol);
+
+        self.walk_entity(entity);
         self.symbol_table.exit_scope();
     }
     
@@ -662,12 +662,12 @@ mod tests {
         let board_scope = table.enter_scope(ScopeKind::Board, Some("test_board".to_string()));
         assert_eq!(table.current_scope_id(), board_scope);
         
-        let module_scope = table.enter_scope(ScopeKind::Module, Some("test_module".to_string()));
-        assert_eq!(table.current_scope_id(), module_scope);
+        let entity_scope = table.enter_scope(ScopeKind::Entity, Some("test_entity".to_string()));
+        assert_eq!(table.current_scope_id(), entity_scope);
         
         table.exit_scope();
         assert_eq!(table.current_scope_id(), board_scope);
-        
+
         table.exit_scope();
         assert_eq!(table.current_scope_id(), 0); // Back to global
     }
@@ -715,8 +715,8 @@ mod tests {
         let kind = SymbolKind::ComponentType;
         assert!(kind.is_type());
         assert!(!kind.is_instance());
-        assert!(!kind.is_declaration());
-        
+        assert!(kind.is_declaration());
+
         let kind = SymbolKind::ComponentInstance;
         assert!(!kind.is_type());
         assert!(kind.is_instance());

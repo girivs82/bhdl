@@ -3,7 +3,7 @@
 use crate::flow::{FlowStmt, FlowExpr, ComponentInstantiation, GenerateStmt, ConditionalStmt, AssignStmt};
 use crate::v2_statements::ConnectionStmt;
 use crate::expr::{Expr, BinaryExpr};
-use crate::items::{Board, Module, ComponentDef, InterfaceDef};
+use crate::items::{Board, Entity, ComponentDef, InterfaceDef};
 use crate::{SyntaxNode, BhdlLanguage};
 use rowan::ast::AstNode;
 
@@ -19,9 +19,9 @@ pub trait AstVisitor {
         self.walk_board(board);
     }
 
-    /// Visit a module definition
-    fn visit_module(&mut self, module: &Module) {
-        self.walk_module(module);
+    /// Visit an entity definition
+    fn visit_entity(&mut self, entity: &Entity) {
+        self.walk_entity(entity);
     }
 
     /// Visit a component definition
@@ -88,8 +88,8 @@ pub trait AstVisitor {
         for child in node.children() {
             if let Some(board) = Board::cast(child.clone()) {
                 self.visit_board(&board);
-            } else if let Some(module) = Module::cast(child.clone()) {
-                self.visit_module(&module);
+            } else if let Some(entity) = Entity::cast(child.clone()) {
+                self.visit_entity(&entity);
             } else if let Some(comp_def) = ComponentDef::cast(child.clone()) {
                 self.visit_component_def(&comp_def);
             } else if let Some(interface_def) = InterfaceDef::cast(child.clone()) {
@@ -117,9 +117,9 @@ pub trait AstVisitor {
         }
     }
 
-    fn walk_module(&mut self, module: &Module) {
+    fn walk_entity(&mut self, entity: &Entity) {
         // Similar to board walking
-        self.walk_board_like_node(module.syntax());
+        self.walk_board_like_node(entity.syntax());
     }
 
     fn walk_component_def(&mut self, _comp_def: &ComponentDef) {
@@ -243,7 +243,7 @@ pub trait AstVisitor {
         }
     }
 
-    // Helper for walking board-like nodes (modules, etc.)
+    // Helper for walking board-like nodes (entities, etc.)
     fn walk_board_like_node(&mut self, node: &SyntaxNode<BhdlLanguage>) {
         use rowan::ast::AstNode;
         

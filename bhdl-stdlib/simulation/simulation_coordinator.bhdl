@@ -46,7 +46,7 @@ type SimulationCache = {
 }
 
 // Main simulation coordinator
-module SimulationCoordinator {
+entity SimulationCoordinator {
     config: CoordinatorConfig;
     cache: SimulationCache;
     active_simulations: map<string, SimulationInstance>;
@@ -380,7 +380,7 @@ module SimulationCoordinator {
 }
 
 // Intelligent model selection
-module ModelSelector {
+entity ModelSelector {
     
     // Select model based on analysis context
     function select_model(
@@ -457,7 +457,7 @@ module ModelSelector {
 }
 
 // Result compilation and reporting
-module ResultCompiler {
+entity ResultCompiler {
     
     // Generate optimization report
     function generate_report(result: OptimizationResult) -> Report {

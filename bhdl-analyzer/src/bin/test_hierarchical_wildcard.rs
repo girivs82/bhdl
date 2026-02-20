@@ -1,12 +1,12 @@
 // Test hierarchical wildcard integration
-// Verifies that wildcards correctly expand across module instance boundaries
+// Verifies that wildcards correctly expand across entity instance boundaries
 
 use bhdl_parser;
 use bhdl_analyzer::passes::{build_instance_registry, expand_power_domains};
 use bhdl_ast::{AstNode, SourceFile, HasName};
 
 fn main() {
-    // Parse test circuit with hierarchical modules
+    // Parse test circuit with hierarchical entities
     let source = std::fs::read_to_string("tests/circuits/realistic/test_hierarchical_wildcard.bhdl")
         .expect("Failed to read test file");
 
@@ -19,14 +19,14 @@ fn main() {
 
     println!("--- AST Structure Analysis ---");
 
-    // Find all module definitions
+    // Find all entity definitions
     for item in ast.items() {
-        if let Some(module) = bhdl_ast::Module::cast(item.syntax().clone()) {
-            if let Some(name) = module.name() {
-                println!("Found module definition: {}", name.text());
+        if let Some(entity) = bhdl_ast::Entity::cast(item.syntax().clone()) {
+            if let Some(name) = entity.name() {
+                println!("Found entity definition: {}", name.text());
 
-                // List components inside this module
-                for comp_inst in module.component_instances() {
+                // List components inside this entity
+                for comp_inst in entity.component_instances() {
                     // Try to extract instance name and type
                     let inst_name = comp_inst.syntax()
                         .children_with_tokens()
@@ -43,19 +43,19 @@ fn main() {
     }
     println!();
 
-    // Find board and analyze module instances
+    // Find board and analyze entity instances
     for item in ast.items() {
         if let Some(board) = bhdl_ast::Board::cast(item.syntax().clone()) {
             if let Some(name) = board.name() {
                 println!("Found board: {}", name.text());
 
-                // List module instances
-                for mod_inst in board.module_instances() {
+                // List entity instances
+                for mod_inst in board.entity_instances() {
                     let inst_name = mod_inst.name();
-                    let mod_type = mod_inst.module_type();
+                    let mod_type = mod_inst.entity_type();
 
                     if let (Some(inst), Some(typ)) = (inst_name, mod_type) {
-                        println!("  - Module instance: {} : {}", inst.text(), typ.text());
+                        println!("  - Entity instance: {} : {}", inst.text(), typ.text());
                     }
                 }
             }
@@ -67,15 +67,15 @@ fn main() {
     let registry = build_instance_registry(&ast);
     println!();
 
-    // Verify that module instances and their contents are handled
+    // Verify that entity instances and their contents are handled
     println!("--- Expected Hierarchical Instances ---");
     let expected_hierarchical = vec![
-        // Module instances (top level)
+        // Entity instances (top level)
         "sensor_board_0",
         "sensor_board_1",
         "sensor_board_2",
         "array",
-        // Components inside modules (hierarchical paths)
+        // Components inside entities (hierarchical paths)
         "sensor_board_0.sensor",
         "sensor_board_0.buffer",
         "sensor_board_1.sensor",

@@ -8,7 +8,7 @@ A robust parser for the Board Hardware Description Language (BHDL) v2.0, built u
 - **Complex Expressions**: Ternary operators, member access, comparisons
 - **Smart Unit Handling**: Context-aware tokenization for electrical units
 - **Conditional Syntax**: Pins with `when` clauses
-- **Module Aliases**: Support for component aliases with numeric names
+- **Entity Aliases**: Support for component aliases with numeric names
 - **Error Recovery**: Continues parsing after errors for better diagnostics
 - **Unicode Support**: Handles Unicode symbols (Ω, µF, °C)
 
@@ -18,7 +18,7 @@ A robust parser for the Board Hardware Description Language (BHDL) v2.0, built u
 use bhdl_parser::{parse, SyntaxKind};
 
 let source = r#"
-module LED(color: string = "red") {
+entity LED(color: string = "red") {
     pin A: signal in;
     pin K: signal out;
     
@@ -37,9 +37,9 @@ if result.errors().is_empty() {
 
 ## Supported Syntax
 
-### Modules and Components
+### Entities and Components
 ```bhdl
-module ModuleName(param: type = default) {
+entity EntityName(param: type = default) {
     pin name: signal in;
     pin vcc: power;
     const value: type = expression;
@@ -64,7 +64,7 @@ attribute value = params.forward_voltage;
 const valid: bool = (type == "NPN" || type == "PNP") && voltage > 0V;
 ```
 
-### Module Aliases
+### Entity Aliases
 ```bhdl
 alias 7805 = LM7805;
 alias RedLED = LED("red");
@@ -72,7 +72,7 @@ alias RedLED = LED("red");
 
 ### Import Statements
 ```bhdl
-import module.submodule;
+import entity.subentity;
 import { Type1, Type2 } from "path/to/file.bhdl";
 ```
 

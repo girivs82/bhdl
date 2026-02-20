@@ -84,7 +84,7 @@ board SafePowerSupply {
 ### Example 2: Sensor Interface with Intent
 
 ```bhdl
-module SensorInterface {
+entity SensorInterface {
     pin SENSOR_IN: signal in;
     pin ADC_OUT: signal out;
     pin VCC: power in;

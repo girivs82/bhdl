@@ -6,25 +6,25 @@ use bhdl_ast::{SourceFile, AstNode, HasName};
 fn main() {
     let test_cases = vec![
         ("Basic metadata", r#"
-module LM7805() {
+entity LM7805() {
     pin IN: power in @metadata(function="PowerIn");
     pin OUT: power out @metadata(function="PowerOut");
     pin GND: ground @metadata(function="Ground");
 }"#),
         ("Multiple attributes", r#"
-module BuckConverter() {
+entity BuckConverter() {
     pin SW: power inout @metadata(function="SwitchNode", max_voltage="30V", slew_rate="fast");
     pin FB: signal in @metadata(function="Feedback", impedance="high");
     pin COMP: signal out @metadata(function="Compensation");
 }"#),
         ("Mixed quoted and unquoted", r#"
-module OpAmp() {
+entity OpAmp() {
     pin IN+: signal in @metadata(function="Signal", impedance=10Mohm);
     pin IN-: signal in @metadata(function="Signal", impedance=10Mohm);
     pin OUT: signal out @metadata(function="Signal", drive_strength="50mA");
 }"#),
         ("With conditional pins", r#"
-module ConfigurableRegulator(enable_mode: bool = true) {
+entity ConfigurableRegulator(enable_mode: bool = true) {
     pin IN: power in @metadata(function="PowerIn");
     pin OUT: power out @metadata(function="PowerOut");
     pin EN: signal in when enable_mode @metadata(function="Enable", active="high");
@@ -46,12 +46,12 @@ module ConfigurableRegulator(enable_mode: bool = true) {
         let root = parse_result.syntax();
         let source_file = SourceFile::cast(root).expect("Expected SourceFile");
         
-        // Find module
-        if let Some(module) = source_file.modules().next() {
-            println!("Module: {}", module.name().map(|n| n.text().to_string()).unwrap_or_default());
-            
+        // Find entity
+        if let Some(entity) = source_file.entities().next() {
+            println!("Entity: {}", entity.name().map(|n| n.text().to_string()).unwrap_or_default());
+
             // Check pins
-            for pin in module.pins() {
+            for pin in entity.pins() {
                 let pin_name = pin.name().map(|n| n.text().to_string()).unwrap_or_default();
                 print!("  Pin {}: ", pin_name);
                 

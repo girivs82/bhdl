@@ -45,7 +45,7 @@ BHDL already has flow-based intents, but making intent a first-class type would 
 
 1. **Component Library Parameterization:** Components could adapt based on intent
    ```bhdl
-   module TPS54302<intent I: Intent>(vin: voltage) {
+   entity TPS54302<intent I: Intent>(vin: voltage) {
        // Optimize bootstrap circuit based on intent
        pin BOOT: power out when I.optimize == Efficiency;
        pin BOOT: power out with_faster_switching when I.optimize == Speed;
@@ -143,7 +143,7 @@ BHDL is for circuit boards, not FPGAs, but the inline constraint concept applies
 
 2. **Component Package Constraints:**
    ```bhdl
-   module TPS54302() {
+   entity TPS54302() {
        // Package information inline
        package: SOT23-6 @ {
            footprint: "SOT23-6",
@@ -283,11 +283,11 @@ BHDL already has interfaces but could benefit from direction flipping:
        in enable: signal
    }
 
-   module Regulator() {
+   entity Regulator() {
        interface supply: PowerSupply    // Provides power (vin/gnd are outputs)
    }
 
-   module Load() {
+   entity Load() {
        interface supply: ~PowerSupply   // Consumes power (vin/gnd are inputs)
    }
    ```
@@ -301,11 +301,11 @@ BHDL already has interfaces but could benefit from direction flipping:
        out cs: signal
    }
 
-   module MCU() {
+   entity MCU() {
        interface spi: SPI      // SPI master
    }
 
-   module Sensor() {
+   entity Sensor() {
        interface spi: ~SPI     // SPI slave (directions flipped)
    }
    ```
@@ -486,7 +486,7 @@ BHDL could benefit from parameterized electrical types:
    type r1k = resistor<1kohm, 0.01, 0.25W>    // 1kΩ ±1% 1/4W
 
    // Generic resistor divider
-   module ResistorDivider<R1: resistor, R2: resistor>() {
+   entity ResistorDivider<R1: resistor, R2: resistor>() {
        // Works for any resistor types
    }
    ```

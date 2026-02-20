@@ -7,7 +7,7 @@ fn main() {
     
     // Test 1: Simple behavioral model
     let simple_model = r#"
-module BuckConverter(vin_nom: voltage, vout: voltage) {
+entity BuckConverter(vin_nom: voltage, vout: voltage) {
     pin VIN: power in;
     pin VOUT: power out;
     pin GND: ground;
@@ -39,7 +39,7 @@ module BuckConverter(vin_nom: voltage, vout: voltage) {
     
     // Test 2: Multiple models at different abstraction levels
     let multi_model = r#"
-module BuckConverterComplete(vin_nom: voltage, vout: voltage) {
+entity BuckConverterComplete(vin_nom: voltage, vout: voltage) {
     pin VIN: power in;
     pin VOUT: power out;
     
@@ -88,7 +88,7 @@ module BuckConverterComplete(vin_nom: voltage, vout: voltage) {
     
     // Test 3: Optimization strategy
     let optimization = r#"
-module OptimizedBuck() {
+entity OptimizedBuck() {
     pin VIN: power in;
     pin VOUT: power out;
     
@@ -135,7 +135,7 @@ module OptimizedBuck() {
     
     // Test 4: Component knowledge
     let knowledge = r#"
-module SmartBuck() {
+entity SmartBuck() {
     pin VIN: power in;
     pin VOUT: power out;
     
@@ -176,7 +176,7 @@ module SmartBuck() {
     
     // Test 5: Complete example with all annotations
     let complete = r#"
-module CompleteBuckConverter(
+entity CompleteBuckConverter(
     vin_nom: voltage = 12V,
     vout: voltage = 5V,
     iout_max: current = 2A,

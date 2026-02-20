@@ -5,9 +5,9 @@ fn main() {
     
     // Test cases for parameter type annotations
     let test_cases = vec![
-        "module Resistor(value: resistance) { pin 1: signal inout; pin 2: signal inout; }",  // Type annotation without default
-        "module Resistor(value: resistance = 10k) { pin 1: signal inout; pin 2: signal inout; }",  // Type annotation with default
-        "module LinearRegulator(
+        "entity Resistor(value: resistance) { pin 1: signal inout; pin 2: signal inout; }",  // Type annotation without default
+        "entity Resistor(value: resistance = 10k) { pin 1: signal inout; pin 2: signal inout; }",  // Type annotation with default
+        "entity LinearRegulator(
             input_voltage: voltage = 12V,
             output_voltage: voltage = 5V,
             current_rating: current = 1A,
@@ -17,7 +17,7 @@ fn main() {
             pin OUT: power out; 
             pin GND: ground inout; 
         }",  // Multiple typed parameters with defaults
-        "module OpAmp(
+        "entity OpAmp(
             supply_voltage: voltage,
             gain: number = 1.0,
             bandwidth: frequency = 1MHz
@@ -26,7 +26,7 @@ fn main() {
             pin VIN-: signal in; 
             pin VOUT: signal out; 
         }",  // Mixed parameters (some with defaults, some without)
-        "module Buffer() { pin IN: signal in; pin OUT: signal out; }",  // Empty parameters
+        "entity Buffer() { pin IN: signal in; pin OUT: signal out; }",  // Empty parameters
     ];
     
     for (i, input) in test_cases.iter().enumerate() {

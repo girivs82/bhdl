@@ -78,7 +78,7 @@ board USBPoweredDevice {
 }
 
 // Demonstration of the complete workflow
-module CompleteWorkflowDemo {
+entity CompleteWorkflowDemo {
     
     function demonstrate_full_optimization() {
         println("="*70);
@@ -379,7 +379,7 @@ module CompleteWorkflowDemo {
 }
 
 // Show different convergence scenarios
-module ConvergenceScenarios {
+entity ConvergenceScenarios {
     
     function demonstrate_convergence_patterns() {
         println("\n=== CONVERGENCE PATTERN EXAMPLES ===\n");

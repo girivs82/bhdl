@@ -3,7 +3,7 @@ use bhdl_parser::parse;
 fn main() {
     println!("Test 1: Module without parameters");
     let code1 = r#"
-module SimpleModule {
+entity SimpleModule {
     pin VCC: power in;
 }
 "#;
@@ -15,7 +15,7 @@ module SimpleModule {
     
     println!("\nTest 2: Module with empty parameters");
     let code2 = r#"
-module ModuleWithEmptyParams() {
+entity ModuleWithEmptyParams() {
     pin VCC: power in;
 }
 "#;
@@ -27,7 +27,7 @@ module ModuleWithEmptyParams() {
     
     println!("\nTest 3: Module with one parameter");
     let code3 = r#"
-module ModuleWithParam(value: resistance) {
+entity ModuleWithParam(value: resistance) {
     pin VCC: power in;
 }
 "#;
@@ -39,7 +39,7 @@ module ModuleWithParam(value: resistance) {
     
     println!("\nTest 4: Module with parameter and default");
     let code4 = r#"
-module ModuleWithDefault(value: resistance = 10k) {
+entity ModuleWithDefault(value: resistance = 10k) {
     pin VCC: power in;
 }
 "#;

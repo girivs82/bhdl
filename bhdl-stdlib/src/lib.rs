@@ -8,7 +8,7 @@ use std::path::Path;
 use std::fs;
 use anyhow::{Result, Context};
 use bhdl_parser::parse;
-use bhdl_ast::{SourceFile, AstNode, Module, PinDecl, HasName, AttributeDecl};
+use bhdl_ast::{SourceFile, AstNode, Entity, PinDecl, HasName, AttributeDecl};
 use bhdl_ast::expr::Expr;
 use bhdl_netlist::types::{PinDirection, PinType};
 use log::{debug, info, warn};
@@ -18,7 +18,7 @@ pub mod virtual_pins;
 
 use virtual_pins::{ComponentVirtualPins, VirtualPinDefinition, VirtualPinComponent};
 
-/// Represents a pin definition extracted from a BHDL module
+/// Represents a pin definition extracted from a BHDL entity
 #[derive(Debug, Clone)]
 pub struct StdlibPinDefinition {
     pub name: String,
@@ -94,14 +94,14 @@ impl StdlibReader {
         let source_file = SourceFile::cast(syntax_node)
             .ok_or_else(|| anyhow::anyhow!("Failed to cast to SourceFile"))?;
         
-        // Extract module definitions
+        // Extract entity definitions
         for item in source_file.items() {
-            if let Some(module) = Module::cast(item.syntax().clone()) {
-                if let Some(component_def) = self.extract_component_definition(&module) {
+            if let Some(entity) = Entity::cast(item.syntax().clone()) {
+                if let Some(component_def) = self.extract_component_definition(&entity) {
                     // Store the component definition
                     self.component_cache.insert(component_def.module_name.clone(), component_def.clone());
-                    
-                    // Also handle module aliases (e.g., module Capacitor = Cap;)
+
+                    // Also handle entity aliases (e.g., alias Capacitor = Cap;)
                     // This is a simplified approach - in reality we'd need to parse alias syntax
                 }
             }
@@ -110,14 +110,14 @@ impl StdlibReader {
         Ok(())
     }
 
-    /// Extract component definition from a module AST node
-    fn extract_component_definition(&self, module: &Module) -> Option<StdlibComponentDefinition> {
-        let module_name = module.name()?.text().to_string();
+    /// Extract component definition from an entity AST node
+    fn extract_component_definition(&self, entity: &Entity) -> Option<StdlibComponentDefinition> {
+        let module_name = entity.name()?.text().to_string();
         let mut pins = Vec::new();
         let mut attributes = HashMap::new();
         
-        // Extract attributes from the module
-        for attr in module.attributes() {
+        // Extract attributes from the entity
+        for attr in entity.attributes() {
             if let Some(name) = attr.name() {
                 let attr_name = name.text().to_string();
                 if let Some(value) = attr.value() {
@@ -129,7 +129,7 @@ impl StdlibReader {
         }
         
         // Now we can properly use the AST to get pins
-        for pin in module.pins() {
+        for pin in entity.pins() {
             if let Some(pin_def) = self.extract_pin_definition(&pin) {
                 pins.push(pin_def);
             }

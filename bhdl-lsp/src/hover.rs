@@ -33,7 +33,7 @@ pub fn provide_hover(
     // Check for common BHDL keywords
     let keyword_doc = match word.as_str() {
         "board" => Some("**board** - Defines a complete circuit board\n\nExample:\n```bhdl\nboard MyBoard {\n  power VCC = 5V @ 1A;\n  ground GND;\n}\n```"),
-        "module" => Some("**module** - Defines a reusable circuit component\n\nExample:\n```bhdl\nmodule Resistor(value: resistance) {\n  pin 1: signal inout;\n  pin 2: signal inout;\n}\n```"),
+        "entity" => Some("**entity** - Defines a reusable circuit component\n\nExample:\n```bhdl\nentity Resistor(value: resistance) {\n  pin 1: signal inout;\n  pin 2: signal inout;\n}\n```"),
         "power" => Some("**power** - Declares a power domain\n\nExample:\n```bhdl\npower VCC = 5V @ 1A;\n```"),
         "ground" => Some("**ground** - Declares a ground reference\n\nExample:\n```bhdl\nground GND;\n```"),
         "net" => Some("**net** - Declares a named signal net\n\nExample:\n```bhdl\nnet signal_path: @VCC -> Res(10k).1 -> Cap(100nF).1;\n```"),

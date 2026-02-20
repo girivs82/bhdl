@@ -11,7 +11,7 @@ board FlybackConverter {
     fused_line -> MOV(275V).1 -> AC_NEUTRAL;
     
     // Bridge rectifier
-    module BridgeRect {
+    entity BridgeRect {
         pin AC1: power in;
         pin AC2: power in;
         pin DC_POS: power out;
@@ -27,7 +27,7 @@ board FlybackConverter {
     VDC_MAIN -> Cap(100uF, 200V, electrolytic).1 -> GND;
     
     // Flyback controller (e.g., UC3844)
-    module FlybackController {
+    entity FlybackController {
         pin VCC: power in;
         pin GATE: signal out;
         pin CS: signal in;      // Current sense
@@ -49,7 +49,7 @@ board FlybackConverter {
     current_sense -> FlybackController().CS;
     
     // Transformer (flyback)
-    module FlybackTransformer {
+    entity FlybackTransformer {
         pin PRI_DOT: power in;    // Primary dot end
         pin PRI: power in;        // Primary other end
         pin SEC1_DOT: power out;  // 12V secondary dot
@@ -86,7 +86,7 @@ board FlybackConverter {
     vcc_aux -> Cap(100uF, 35V).1 -> GND;
     
     // Feedback via optocoupler
-    module Optocoupler {
+    entity Optocoupler {
         pin LED_A: signal in;
         pin LED_K: signal in;
         pin C: signal out;

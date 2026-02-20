@@ -516,33 +516,33 @@ impl FMEAAnalysis {
         
         // Generate diagnostics for non-compliance
         if !spfm_ok {
-            self.diagnostics.push(Diagnostic {
-                message: format!(
+            self.diagnostics.push(Diagnostic::new(
+                format!(
                     "SPFM {:.1}% does not meet ASIL {:?} target of {:.1}%",
                     spfm * 100.0, target_asil, targets.spfm_target * 100.0
                 ),
-                range: rowan::TextRange::empty(rowan::TextSize::from(0)),
-            });
+                rowan::TextRange::empty(rowan::TextSize::from(0)),
+            ));
         }
         
         if !lfm_ok {
-            self.diagnostics.push(Diagnostic {
-                message: format!(
+            self.diagnostics.push(Diagnostic::new(
+                format!(
                     "LFM {:.1}% does not meet ASIL {:?} target of {:.1}%",
                     lfm * 100.0, target_asil, targets.lfm_target * 100.0
                 ),
-                range: rowan::TextRange::empty(rowan::TextSize::from(0)),
-            });
+                rowan::TextRange::empty(rowan::TextSize::from(0)),
+            ));
         }
         
         if !pmhf_ok {
-            self.diagnostics.push(Diagnostic {
-                message: format!(
+            self.diagnostics.push(Diagnostic::new(
+                format!(
                     "PMHF {} FIT exceeds ASIL {:?} target of {} FIT",
                     pmhf, target_asil, targets.pmhf_target
                 ),
-                range: rowan::TextRange::empty(rowan::TextSize::from(0)),
-            });
+                rowan::TextRange::empty(rowan::TextSize::from(0)),
+            ));
         }
     }
     

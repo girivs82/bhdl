@@ -1,7 +1,7 @@
 // Simplified Resistor Component Module
 // Compatible with current BHDL parser
 
-module Resistor(value: resistance, tolerance: percentage = 5%) {
+entity Resistor(value: resistance, tolerance: percentage = 5%) {
     pin 1: signal inout;  // Terminal 1
     pin 2: signal inout;  // Terminal 2
     

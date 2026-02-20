@@ -53,7 +53,7 @@ interface RGMII {
 }
 
 // Module using interfaces
-module MCU {
+entity MCU {
     pin RESET: signal in;
     pin VDD: power in;
     pin GND: ground;
@@ -115,7 +115,7 @@ board InterfaceTestBoard {
 }
 
 // Test module with interface
-module I2CSensor {
+entity I2CSensor {
     interface I2C i2c;
     pin VDD: power in;
     pin GND: ground;
@@ -159,7 +159,7 @@ board AdvancedInterfaceTest {
     }
 }
 
-module AudioCodec {
+entity AudioCodec {
     interface I2S[4] i2s;
     pin VDD: power in;
     pin GND: ground;

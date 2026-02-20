@@ -160,7 +160,7 @@ Power Domain Analysis:
 This demo successfully demonstrates:
   • Complete power domain scalability
   • All wildcard pattern types
-  • Hierarchical module traversal
+  • Hierarchical entity traversal
   • Advanced pattern matching (even/odd, lists, stepped ranges)
   • Decoupling capacitor generation
   • Multiple voltage domain management
@@ -186,7 +186,7 @@ Matches all instances: led_0, led_1, ..., led_7
 sensor_board[*].sensor.VCC;
 sensor_board[*].buffer.VCC;
 ```
-Accesses internal components across multiple module instances.
+Accesses internal components across multiple entity instances.
 
 ### 4. Suffix Wildcards
 ```bhdl
@@ -274,10 +274,10 @@ This staggers power-up to reduce inrush current and provide graceful system init
 
 ### Hierarchical Power Distribution
 
-The sensor modules demonstrate hierarchical power distribution:
+The sensor entities demonstrate hierarchical power distribution:
 
 ```bhdl
-module SensorModule() {
+entity SensorModule() {
     sensor: TempSensor();
     buffer: OpAmp();
     filter: RCFilter();
@@ -298,14 +298,14 @@ power_domain @VCC_3V3 = 3.3V @ 10A {
 }
 ```
 
-This enables modular design with automatic power distribution to all module instances.
+This enables modular design with automatic power distribution to all entity instances.
 
 ## Statistics
 
 | Metric | Value |
 |--------|-------|
 | Total Instances | 45 |
-| Module Definitions | 2 |
+| Entity Definitions | 2 |
 | Power Domains | 7 |
 | Total Connections | 59 |
 | Decoupling Capacitors | 90 |
@@ -340,7 +340,7 @@ This example teaches:
 - **Analysis Time**: < 10ms
 - **Expansion Accuracy**: 100% (59/59 connections correct)
 - **Pattern Utilization**: Uses all 7 pattern types
-- **Module Depth**: 2 levels (board → module → component)
+- **Entity Depth**: 2 levels (board → entity → component)
 - **Power Domains**: 7 independent domains
 
 ## Next Steps

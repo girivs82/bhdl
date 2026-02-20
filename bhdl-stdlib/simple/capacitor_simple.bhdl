@@ -1,0 +1,24 @@
+// Simplified Capacitor - v2.0 compatible
+
+entity Cap(value: capacitance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+
+    attribute component_class = "capacitor";
+    attribute capacitance = value;
+    attribute voltage_rating = 50V;
+    attribute tolerance = 0.10;
+    attribute kicad_symbol = "Device:C";
+}
+
+entity ElectrolyticCap(value: capacitance, voltage: voltage) {
+    pin pos: signal inout;
+    pin neg: signal inout;
+
+    attribute component_class = "capacitor";
+    attribute capacitance = value;
+    attribute voltage_rating = voltage;
+    attribute tolerance = 0.20;
+    attribute polarized = true;
+    attribute kicad_symbol = "Device:CP";
+}

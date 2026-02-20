@@ -86,7 +86,7 @@ pub struct FlowPath {
 **Features:**
 - Automatic discovery of signal flow paths
 - Intent resolution during analysis Pass 2
-- Hierarchical propagation through module instances
+- Hierarchical propagation through entity instances
 - Net-to-flow and component-to-flow mappings
 
 **Integration:** Added as `flow_tracker: Option<FlowTracker>` in `AnalysisResult`

@@ -2,7 +2,7 @@
 // Audio ICs and components
 
 // Audio Codec Module
-module AudioCodec(sample_rate: frequency = 48kHz) {
+entity AudioCodec(sample_rate: frequency = 48kHz) {
     // Analog audio interface
     pin LINEIN_L: signal in;
     pin LINEIN_R: signal in;
@@ -36,7 +36,7 @@ module AudioCodec(sample_rate: frequency = 48kHz) {
 }
 
 // Audio Amplifier Module
-module AudioAmplifier(power: power = 1W, channels: int = 2) {
+entity AudioAmplifier(power: power = 1W, channels: int = 2) {
     pin IN_L: signal in;
     pin IN_R: signal in when channels == 2;
     pin OUT_L+: signal out;
@@ -55,7 +55,7 @@ module AudioAmplifier(power: power = 1W, channels: int = 2) {
 }
 
 // Class D Audio Amplifier
-module TPA3116() {
+entity TPA3116() {
     pin INL+: signal in;
     pin INL-: signal in;
     pin INR+: signal in;
@@ -78,7 +78,7 @@ module TPA3116() {
 }
 
 // Microphone Preamplifier
-module MicPreamp() {
+entity MicPreamp() {
     pin MIC+: signal in;
     pin MIC-: signal in;
     pin OUT: signal out;
@@ -93,7 +93,7 @@ module MicPreamp() {
 }
 
 // Audio Jack Module
-module AudioJack3_5mm(type: string = "TRS") {
+entity AudioJack3_5mm(type: string = "TRS") {
     pin TIP: signal inout;
     pin RING: signal inout when type == "TRS" or type == "TRRS";
     pin RING2: signal inout when type == "TRRS";
@@ -106,7 +106,7 @@ module AudioJack3_5mm(type: string = "TRS") {
 }
 
 // XLR Connector
-module XLRConnector(gender: string = "female") {
+entity XLRConnector(gender: string = "female") {
     pin 1: ground;         // Shield/Ground
     pin 2: signal inout;   // Hot/Positive
     pin 3: signal inout;   // Cold/Negative
@@ -117,7 +117,7 @@ module XLRConnector(gender: string = "female") {
 }
 
 // Audio DAC Module
-module AudioDAC(bits: int = 24) {
+entity AudioDAC(bits: int = 24) {
     pin DIN: signal in;    // Serial data
     pin BCK: signal in;    // Bit clock
     pin LRCK: signal in;   // L/R clock
@@ -134,7 +134,7 @@ module AudioDAC(bits: int = 24) {
 }
 
 // Audio ADC Module
-module AudioADC(bits: int = 24) {
+entity AudioADC(bits: int = 24) {
     pin AINL: signal in;   // Analog in left
     pin AINR: signal in;   // Analog in right
     pin DOUT: signal out;  // Serial data
@@ -151,7 +151,7 @@ module AudioADC(bits: int = 24) {
 }
 
 // Speaker Module
-module Speaker(impedance: resistance = 8Ω, power: power = 5W) {
+entity Speaker(impedance: resistance = 8Ω, power: power = 5W) {
     pin +: signal in;
     pin -: signal in;
     
@@ -162,7 +162,7 @@ module Speaker(impedance: resistance = 8Ω, power: power = 5W) {
 }
 
 // Audio Transformer
-module AudioTransformer(ratio: string = "1:1") {
+entity AudioTransformer(ratio: string = "1:1") {
     pin PRI+: signal in;
     pin PRI-: signal in;
     pin SEC+: signal out;

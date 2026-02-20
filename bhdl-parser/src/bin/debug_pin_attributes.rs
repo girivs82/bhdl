@@ -1,7 +1,7 @@
 use bhdl_parser::lex;
 
 fn main() {
-    let input = r#"module TestModule {
+    let input = r#"entity TestModule {
     pin VIN: power in {
         voltage_range: (3.5V, 28V),
         voltage_abs_max: 30V,

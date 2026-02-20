@@ -13,27 +13,29 @@ pub enum PortDirectionKind {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SymbolKind {
     Board,
-    Module,
+    Entity,
     Component,
     Interface,
     Typedef,
+    Enum,
+    EnumVariant,
+    Trait,
     Parameter,
     Net,
     Pin,
     VirtualPin,
     Instance,
-    // Add other kinds later: Net, Port, Pin, Parameter, Variable, etc.
 }
 
 impl SymbolKind {
     /// Checks if the symbol kind represents a type definition.
     pub fn is_type_kind(&self) -> bool {
-        matches!(self, 
-            SymbolKind::Component | 
-            SymbolKind::Interface | 
-            SymbolKind::Module | 
-            SymbolKind::Typedef
-            // Maybe Board too, if boards can be referenced by type? Unlikely.
+        matches!(self,
+            SymbolKind::Component |
+            SymbolKind::Interface |
+            SymbolKind::Entity |
+            SymbolKind::Typedef |
+            SymbolKind::Enum
         )
     }
 
@@ -41,7 +43,7 @@ impl SymbolKind {
     pub fn is_component_type_kind(&self) -> bool {
         matches!(self, 
             SymbolKind::Component | 
-            SymbolKind::Module |
+            SymbolKind::Entity |
             SymbolKind::Board |
             SymbolKind::Interface
         )
@@ -61,12 +63,14 @@ pub struct Symbol {
     pub parameter_overrides: Option<HashMap<String, SyntaxNodePtr<BhdlLanguage>>>,
     /// Attributes for nets (power domains, etc.)
     pub net_attributes: Option<NetAttribute>,
-    // pub definition_span: Option<TextRange>, // TODO: Add span info from CST node
-    // pub documentation: Option<String>, // TODO
+    /// Rich type information (populated during Pass 2 type resolution).
+    pub resolved_type: Option<bhdl_common::BhdlType>,
+    /// Generic parameter declarations with constraints (for modules/components with `where` clauses).
+    pub generic_params: Option<Vec<bhdl_common::GenericParam>>,
 }
 
 impl Symbol {
-    // Constructor for top-level definitions (Board, Module, Component, Interface, Typedef)
+    // Constructor for top-level definitions (Board, Entity, Component, Interface, Typedef)
     pub fn new_definition(
         name: &str,
         kind: SymbolKind,
@@ -84,6 +88,8 @@ impl Symbol {
             direction: None,
             parameter_overrides: None,
             net_attributes: None,
+            resolved_type: None,
+            generic_params: None,
         }
     }
 
@@ -108,6 +114,8 @@ impl Symbol {
             direction, // Store the direction
             parameter_overrides: None,
             net_attributes: None,
+            resolved_type: None,
+            generic_params: None,
         }
     }
 
@@ -129,6 +137,8 @@ impl Symbol {
             direction: None,
             parameter_overrides: None,
             net_attributes: None,
+            resolved_type: None,
+            generic_params: None,
         }
     }
 }
@@ -138,7 +148,6 @@ pub struct SymbolTable {
     pub scope_name: Option<String>,
     symbols: HashMap<String, Symbol>,
     nets: HashMap<String, Symbol>, // Separate namespace for nets
-    pub children: Vec<SymbolTable>,
 }
 
 impl SymbolTable {
@@ -168,9 +177,7 @@ impl SymbolTable {
         self.nets.get(name)
     }
 
-    pub fn add_child_scope(&mut self, child_scope: SymbolTable) {
-        self.children.push(child_scope);
-    }
+    // Removed: add_child_scope (dead code — children were never used for lookup)
     
     pub fn get_nets(&self) -> &HashMap<String, Symbol> {
         &self.nets

@@ -3,7 +3,7 @@
 
 import { LinearRegulatorParams, LinearRegulatorBase } from "./linear_regulator_base.bhdl";
 
-module LM7805(package: string = "TO-220") {
+entity LM7805(package: string = "TO-220") {
     pin IN: power in @metadata(
         function="PowerIn",
         description="Input voltage (7-35V)",

@@ -7,7 +7,7 @@ board ConnectionConstraintTest {
     ground GND;
     
     // Test 1: Individual connection constraints with 'where'
-    module TestIndividualConstraints {
+    entity TestIndividualConstraints {
         // Length constraints
         U1: MCU().XTAL_OUT -> XTAL.1 where trace_length < 10mm;
         XTAL.2 -> U1.XTAL_IN where trace_length < 10mm, no_vias;
@@ -28,7 +28,7 @@ board ConnectionConstraintTest {
     }
     
     // Test 2: Grouped constraints with 'with'
-    module TestGroupedConstraints {
+    entity TestGroupedConstraints {
         // Simple routing group
         with routing(impedance = 50Ω, layer = "top") {
             U5: FPGA().IO[0] -> U6: RAM().A[0];
@@ -54,7 +54,7 @@ board ConnectionConstraintTest {
     }
     
     // Test 3: Nested groups
-    module TestNestedGroups {
+    entity TestNestedGroups {
         with routing(reference_plane = "ground", layer = "inner") {
             // High-speed signals
             with impedance(50Ω ± 5%) {
@@ -73,7 +73,7 @@ board ConnectionConstraintTest {
     }
     
     // Test 4: Complex constraints
-    module TestComplexConstraints {
+    entity TestComplexConstraints {
         // Multiple constraints on single connection
         PSU.out -> LOAD.in where {
             current_rating >= 5A,
@@ -94,7 +94,7 @@ board ConnectionConstraintTest {
     }
     
     // Test 5: Thermal constraints
-    module TestThermalConstraints {
+    entity TestThermalConstraints {
         // Power components with thermal requirements
         @VCC -> Q2: PowerTransistor().collector where {
             current_rating = 10A,
@@ -108,7 +108,7 @@ board ConnectionConstraintTest {
     }
     
     // Test 6: Mixed nets and pin-to-pin
-    module TestMixedConnections {
+    entity TestMixedConnections {
         // Power uses nets (equipotential)
         @VCC -> U11.VDD;
         @VCC -> U12.VDD;
@@ -130,7 +130,7 @@ board ConnectionConstraintTest {
     }
     
     // Test 7: Generate with constraints
-    module TestGenerateConstraints {
+    entity TestGenerateConstraints {
         // Generate with individual where clauses
         generate for i in 0..7 {
             MCU.GPIO[i] -> LED[i].anode where current_limit = 20mA;
@@ -149,58 +149,58 @@ board ConnectionConstraintTest {
 }
 
 // Module definitions for testing
-module MCU() {
+entity MCU() {
     pin XTAL_OUT: signal out;
     pin XTAL_IN: signal in;
 }
 
-module Transceiver() {
+entity Transceiver() {
     pin TX: signal out;
     pin RX: signal in;
 }
 
-module Connector() {
+entity Connector() {
     pin TX: signal;
     pin RX: signal;
 }
 
-module MOSFET() {
+entity MOSFET() {
     pin gate: signal in;
     pin drain: power;
     pin source: power;
 }
 
-module OpAmp() {
+entity OpAmp() {
     pin in_p: signal in;
     pin in_n: signal in;
     pin out: signal out;
 }
 
-module ADC() {
+entity ADC() {
     pin in: signal in;
 }
 
-module FPGA() {
+entity FPGA() {
     pin IO[0..31]: signal inout;
     pin CLK: clock in;
     pin DATA[0..15]: signal out;
 }
 
-module RAM() {
+entity RAM() {
     pin A[0..15]: signal in;
     pin DQ[0..7]: signal inout;
     pin CLK: clock in;
     pin CS: signal in;
 }
 
-module PHY() {
+entity PHY() {
     pin TX_P: signal out;
     pin TX_N: signal out;
     pin RX_P: signal in;
     pin RX_N: signal in;
 }
 
-module PowerTransistor() {
+entity PowerTransistor() {
     pin collector: power in;
     pin base: signal in;
     pin emitter: power out;

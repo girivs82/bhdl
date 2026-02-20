@@ -1,0 +1,69 @@
+// Realistic 7805 Linear Regulator Circuit with Intent-Driven Layout - BHDL v2.0
+// Demonstrates intent-driven spatial zone placement
+
+// Import required components from the standard library
+import { LM7805 } from "bhdl-stdlib/components/power/linear_regulators/LM7805.bhdl";
+import { Fuse } from "bhdl-stdlib/passives/fuse.bhdl";
+import { TVSDiode } from "bhdl-stdlib/passives/tvs_diode.bhdl";
+import { ElectrolyticCap, Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { LED } from "bhdl-stdlib/passives/led.bhdl";
+import { TestPoint } from "bhdl-stdlib/connectors/testpoint.bhdl";
+
+board PowerSupply_7805_Intent {
+    // Power domains
+    power VIN = 12V @ 1A;      // Input voltage from DC adapter
+    power VCC = 5V @ 1A;       // Regulated output
+    ground GND;
+
+    // LEFT ZONE: Input protection with intent
+    net input_protected: VIN -> fuse: Fuse(1A).1 -> fuse.2 -> @protected_vin
+        for input_protection(15V, 1A);
+
+    // Add TVS protection
+    @protected_vin -> TVSDiode(15V).1;
+    TVSDiode(15V).2 -> GND;
+
+    // CENTER ZONE: Input filtering with intent
+    net input_filtered: @protected_vin -> c_in1: ElectrolyticCap(100µF, 25V).pos
+        for noise_filtering(100Hz, 40dB);
+
+    @protected_vin -> c_in2: Cap(0.1µF).1;
+    c_in1.neg -> GND;
+    c_in2.2 -> GND;
+
+    // TOP ZONE: Power regulation with intent
+    net regulated: @protected_vin -> reg: LM7805().IN -> reg.OUT -> VCC
+        for voltage_regulation(5V, 12V);
+
+    reg.GND -> GND;
+
+    // CENTER ZONE: Output filtering with intent
+    net output_filtered: VCC -> c_out1: ElectrolyticCap(10µF, 10V).pos
+        for noise_filtering(10kHz, 60dB);
+
+    VCC -> c_out2: Cap(0.1µF).1;
+    c_out1.neg -> GND;
+    c_out2.2 -> GND;
+
+    // RIGHT ZONE: LED indicator with intent
+    net led_drive: VCC -> r_led: Res(330Ω).1 -> r_led.2 -> led: LED(green).A
+        for current_limiting(20mA);
+
+    led.K -> GND;
+
+    // BOTTOM ZONE: Test points for measurement with intent
+    net measurement: @protected_vin -> tp_vin: TestPoint().1
+        for voltage_monitoring(12V);
+
+    net output_measure: VCC -> tp_vout: TestPoint().1
+        for voltage_monitoring(5V);
+
+    GND -> tp_gnd: TestPoint().1;
+
+    // Board metadata
+    attribute title = "7805 Linear Regulator with Intent-Driven Layout";
+    attribute version = "2.0";
+    attribute author = "BHDL Test Suite";
+    attribute description = "12V to 5V regulator demonstrating intent-driven spatial placement";
+}

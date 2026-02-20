@@ -21,7 +21,7 @@ Current approaches to circuit simulation and synthesis suffer from fundamental l
 Each BHDL component becomes a self-contained expert system containing:
 
 ```bhdl
-module BuckConverter(...) {
+entity BuckConverter(...) {
     // Traditional component definition
     pin VIN: power in;
     pin VOUT: power out;

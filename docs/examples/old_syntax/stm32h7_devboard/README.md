@@ -87,7 +87,7 @@ This example shows how different team members can work concurrently on the same 
 - ✅ **Interface Declaration**: `main_i2c: I2C(3.3V, 400kHz)`
 - ✅ **Generate Constructs**: Complex DDR and GPIO connection generation
 - ✅ **Conditional Logic**: Power sequencing and component selection
-- ✅ **Module Definition**: Reusable power supply and interface patterns
+- ✅ **Entity Definition**: Reusable power supply and interface patterns
 - ✅ **Constraint Declaration**: Complete physical design constraints
 
 ### 2. Advanced Features

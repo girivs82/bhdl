@@ -72,6 +72,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             forward_voltage: 2.0,      // 2V forward drop
             forward_current: 0.02,     // 20mA nominal
             dynamic_resistance: 10.0,  // 10 ohm dynamic resistance
+            saturation_current: None,
+            emission_coefficient: None,
+            thermal_voltage: None,
             limits: bhdl_spice::components::ElectricalLimits {
                 max_current: Some(0.030),  // 30mA absolute max
                 max_voltage: Some(3.3),    // 3.3V max
@@ -81,7 +84,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             },
         }
     );
-    
+
     dc_analysis.add_model(
         "WIRE1".to_string(),
         ComponentModel::Resistor { 
@@ -213,6 +216,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             forward_voltage: 2.0,
             forward_current: 0.02,
             dynamic_resistance: 10.0,
+            saturation_current: None,
+            emission_coefficient: None,
+            thermal_voltage: None,
             limits: bhdl_spice::components::ElectricalLimits {
                 max_current: Some(0.030),
                 max_voltage: Some(3.3),
@@ -222,7 +228,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             },
         }
     );
-    
+
     // Run DC analysis
     let dc_safe_result = dc_safe.analyze()?;
     

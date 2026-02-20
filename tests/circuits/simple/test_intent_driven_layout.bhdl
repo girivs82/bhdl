@@ -1,0 +1,60 @@
+// Test circuit for intent-driven spatial layout
+// This circuit demonstrates all 5 spatial zones
+
+entity TVSDiode(voltage: voltage) {
+    pin cathode: signal in;
+    pin anode: signal in;
+}
+
+entity Res(value: resistance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+}
+
+entity Cap(value: capacitance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+}
+
+entity LM7805 {
+    pin VIN: power in;
+    pin VOUT: power out;
+    pin GND: ground;
+}
+
+entity LED(color: string) {
+    pin A: signal in;
+    pin K: signal in;
+}
+
+board IntentLayoutDemo {
+    power VCC = 12V @ 500mA;
+    power VCC5V = 5V @ 200mA;
+    ground GND;
+
+    // LEFT ZONE: Input protection
+    net input_protected: external_in -> tvs1: TVSDiode(15V).cathode -> tvs1.anode -> @protected_in
+        for input_protection(15V, 100mA);
+
+    // TOP ZONE: Power regulation
+    net power_regulated: @VCC -> reg: LM7805().VIN -> reg.VOUT -> @VCC5V
+        for voltage_regulation(5V, 12V);
+
+    // CENTER ZONE: Signal processing / filtering
+    net signal_filtered: @protected_in -> r1: Res(10k).1 -> r1.2 -> c1: Cap(100nF).1 -> c1.2 -> @filtered_signal
+        for noise_filtering(1kHz, 40dB);
+
+    // RIGHT ZONE: Output buffering
+    net output_buffered: @filtered_signal -> r2: Res(330).1 -> r2.2 -> led: LED("red").A
+        for output_buffering(20mA);
+
+    // BOTTOM ZONE: Current sensing
+    net current_sensed: r2.2 -> sense_r: Res(0.1).1 -> sense_r.2 -> @sense_point
+        for current_sensing(50mA, 1%);
+
+    // Ground connections
+    tvs1.anode -> @GND;
+    c1.2 -> @GND;
+    led.K -> @GND;
+    reg.GND -> @GND;
+}

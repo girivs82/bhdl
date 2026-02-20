@@ -4,7 +4,7 @@
 import { voltage, current, power, capacitance, temperature, time, resistance } from "../../../units.bhdl";
 
 // ==================== COMPONENT DEFINITION ====================
-module SS34() {
+entity SS34() {
     pin A: signal inout {
         description: "Anode"
     };
@@ -15,7 +15,7 @@ module SS34() {
 }
 
 // Alternate name for better readability
-module SchottkyDiode = SS34;
+entity SchottkyDiode = SS34;
 
 // ==================== ELECTRICAL CHARACTERISTICS ====================
 const SS34_ELECTRICAL = {

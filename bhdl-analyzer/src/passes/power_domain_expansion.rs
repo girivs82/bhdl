@@ -90,10 +90,10 @@ fn expand_single_power_domain(domain: &PowerDomain, instance_registry: &Instance
     let net_name = match domain.net_name() {
         Some(name) => name,
         None => {
-            expansion.diagnostics.push(Diagnostic {
-                message: "Power domain missing net name".to_string(),
-                range: TextRange::empty(rowan::TextSize::from(0)),
-            });
+            expansion.diagnostics.push(Diagnostic::new(
+                "Power domain missing net name".to_string(),
+                TextRange::empty(rowan::TextSize::from(0)),
+            ));
             return;
         }
     };
@@ -102,17 +102,17 @@ fn expand_single_power_domain(domain: &PowerDomain, instance_registry: &Instance
 
     // Validate voltage and current specifications
     if domain.voltage().is_none() {
-        expansion.diagnostics.push(Diagnostic {
-            message: format!("Power domain @{} missing voltage specification", net_name),
-            range: TextRange::empty(rowan::TextSize::from(0)),
-        });
+        expansion.diagnostics.push(Diagnostic::new(
+            format!("Power domain @{} missing voltage specification", net_name),
+            TextRange::empty(rowan::TextSize::from(0)),
+        ));
     }
 
     if domain.current().is_none() {
-        expansion.diagnostics.push(Diagnostic {
-            message: format!("Power domain @{} missing current specification", net_name),
-            range: TextRange::empty(rowan::TextSize::from(0)),
-        });
+        expansion.diagnostics.push(Diagnostic::new(
+            format!("Power domain @{} missing current specification", net_name),
+            TextRange::empty(rowan::TextSize::from(0)),
+        ));
     }
 
     // Expand distribution block (create connections from domain to all loads)
@@ -161,10 +161,10 @@ fn expand_pin_list(
     let component = match pin_list.component() {
         Some(c) => c,
         None => {
-            expansion.diagnostics.push(Diagnostic {
-                message: "Distribution pin list missing component name".to_string(),
-                range: TextRange::empty(rowan::TextSize::from(0)),
-            });
+            expansion.diagnostics.push(Diagnostic::new(
+                "Distribution pin list missing component name".to_string(),
+                TextRange::empty(rowan::TextSize::from(0)),
+            ));
             return;
         }
     };
@@ -172,10 +172,10 @@ fn expand_pin_list(
     let pin_name = match pin_list.pin_name() {
         Some(p) => p,
         None => {
-            expansion.diagnostics.push(Diagnostic {
-                message: format!("Distribution pin list for {} missing pin name", component),
-                range: TextRange::empty(rowan::TextSize::from(0)),
-            });
+            expansion.diagnostics.push(Diagnostic::new(
+                format!("Distribution pin list for {} missing pin name", component),
+                TextRange::empty(rowan::TextSize::from(0)),
+            ));
             return;
         }
     };
@@ -270,13 +270,13 @@ fn expand_pin_list(
             }
 
             if even_matches.is_empty() {
-                expansion.diagnostics.push(Diagnostic {
-                    message: format!(
+                expansion.diagnostics.push(Diagnostic::new(
+                    format!(
                         "Even pattern {}[even].{} found no matching instances with even indices",
                         component, pin_name
                     ),
-                    range: TextRange::empty(rowan::TextSize::from(0)),
-                });
+                    TextRange::empty(rowan::TextSize::from(0)),
+                ));
             } else {
                 println!(
                     "  Expanded even pattern {}[even].{} -> {} connections",
@@ -304,13 +304,13 @@ fn expand_pin_list(
             }
 
             if odd_matches.is_empty() {
-                expansion.diagnostics.push(Diagnostic {
-                    message: format!(
+                expansion.diagnostics.push(Diagnostic::new(
+                    format!(
                         "Odd pattern {}[odd].{} found no matching instances with odd indices",
                         component, pin_name
                     ),
-                    range: TextRange::empty(rowan::TextSize::from(0)),
-                });
+                    TextRange::empty(rowan::TextSize::from(0)),
+                ));
             } else {
                 println!(
                     "  Expanded odd pattern {}[odd].{} -> {} connections",
@@ -382,10 +382,10 @@ fn expand_hierarchical_path(
     let expanded_paths = instance_registry.expand_hierarchical_wildcard(full_path);
 
     if expanded_paths.is_empty() {
-        expansion.diagnostics.push(Diagnostic {
-            message: format!("Hierarchical path '{}' found no matching instances", full_path),
-            range: TextRange::empty(rowan::TextSize::from(0)),
-        });
+        expansion.diagnostics.push(Diagnostic::new(
+            format!("Hierarchical path '{}' found no matching instances", full_path),
+            TextRange::empty(rowan::TextSize::from(0)),
+        ));
         return;
     }
 
@@ -426,10 +426,10 @@ fn expand_wildcard_instances(
         // Generate helpful error message with suggestions
         let error_msg = generate_wildcard_error_message(base_component, instance_registry);
 
-        expansion.diagnostics.push(Diagnostic {
-            message: error_msg,
-            range: TextRange::empty(rowan::TextSize::from(0)),
-        });
+        expansion.diagnostics.push(Diagnostic::new(
+            error_msg,
+            TextRange::empty(rowan::TextSize::from(0)),
+        ));
         return;
     }
 
@@ -559,10 +559,10 @@ fn expand_decoupling_rule(
     } else if rule.is_distributed() {
         (None, true)
     } else {
-        expansion.diagnostics.push(Diagnostic {
-            message: "Decoupling rule must be either 'near' or 'distributed'".to_string(),
-            range: TextRange::empty(rowan::TextSize::from(0)),
-        });
+        expansion.diagnostics.push(Diagnostic::new(
+            "Decoupling rule must be either 'near' or 'distributed'".to_string(),
+            TextRange::empty(rowan::TextSize::from(0)),
+        ));
         return;
     };
 
@@ -596,10 +596,10 @@ fn expand_cap_spec(
     let value_str = match cap_spec.value() {
         Some(expr) => expr.syntax().text().to_string(),
         None => {
-            expansion.diagnostics.push(Diagnostic {
-                message: "Capacitor specification missing value".to_string(),
-                range: TextRange::empty(rowan::TextSize::from(0)),
-            });
+            expansion.diagnostics.push(Diagnostic::new(
+                "Capacitor specification missing value".to_string(),
+                TextRange::empty(rowan::TextSize::from(0)),
+            ));
             return;
         }
     };

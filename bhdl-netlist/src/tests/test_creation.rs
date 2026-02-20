@@ -114,7 +114,7 @@ fn test_add_pin_to_physical() {
     let mut netlist = Netlist::new();
     let mod_id = netlist.add_module("Resistor".to_string(), ModuleKind::PhysicalComponent);
 
-    let pin_id = netlist.add_pin(mod_id, "1".to_string()).expect("Failed to add pin");
+    let pin_id = netlist.add_pin(mod_id, "1".to_string(), PinDirection::Passive, PinType::Passive).expect("Failed to add pin");
 
     let module = netlist.get_module(mod_id).expect("Module not found");
     let pins = &module.pins;
@@ -138,6 +138,7 @@ fn test_add_port_to_physical_fails() {
 fn test_add_pin_to_module_fails() {
     let mut netlist = Netlist::new();
     let mod_id = netlist.add_module("MyModule".to_string(), ModuleKind::Module);
-    let result = netlist.add_pin(mod_id, "P1".to_string());
-    assert!(result.is_none(), "Should not be able to add Pin to ModuleKind::Module");
+    let result = netlist.add_pin(mod_id, "P1".to_string(), PinDirection::Passive, PinType::Signal);
+    // add_pin now allows Module kind (guard was updated), so this should succeed
+    assert!(result.is_some(), "add_pin should succeed for ModuleKind::Module");
 } 

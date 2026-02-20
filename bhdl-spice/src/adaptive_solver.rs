@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use log::{info, debug};
 
 use crate::{
-    Circuit, ComponentModel, SpiceError, Result,
+    Circuit, ComponentModel, ElectricalLimits, SpiceError, Result,
     NodeVoltages, BranchCurrents, AnalysisResult,
     runtime_models::{RuntimeModelEngine, ModelExecutionContext},
 };
@@ -892,19 +892,25 @@ mod tests {
         let mut solver = AdaptiveCircuitSolver::new(circuit);
         
         // Add linear components
-        solver.add_model("R1".to_string(), ComponentModel::Resistor { 
-            resistance: 1000.0, 
-            limits: None 
+        solver.add_model("R1".to_string(), ComponentModel::Resistor {
+            resistance: 1000.0,
+            tolerance: 5.0,
+            limits: ElectricalLimits::default(),
         });
-        
+
         let circuit_type = solver.detect_circuit_type();
         assert!(matches!(circuit_type, CircuitType::Linear));
-        
+
         // Add nonlinear component
-        solver.add_model("D1".to_string(), ComponentModel::LED { 
+        solver.add_model("D1".to_string(), ComponentModel::LED {
+            color: "red".to_string(),
             forward_voltage: 2.0,
+            forward_current: 0.020,
             dynamic_resistance: 10.0,
-            limits: None 
+            saturation_current: None,
+            emission_coefficient: None,
+            thermal_voltage: None,
+            limits: ElectricalLimits::default(),
         });
         
         let circuit_type = solver.detect_circuit_type();

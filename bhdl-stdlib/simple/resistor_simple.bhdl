@@ -1,0 +1,12 @@
+// Simplified Resistor - v2.0 compatible
+
+entity Res(value: resistance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+
+    attribute component_class = "resistor";
+    attribute resistance = value;
+    attribute tolerance = 0.05;
+    attribute power_rating = 0.25W;
+    attribute kicad_symbol = "Device:R";
+}

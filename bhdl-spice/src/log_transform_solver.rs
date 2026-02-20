@@ -216,7 +216,7 @@ mod tests {
         let transform = LogTransform::default();
         
         // Test forward transform
-        assert!((transform.forward)(0.001) - (-6.907755).abs() < 0.001);
+        assert!((transform.forward)(0.001) - (-6.907755_f64).abs() < 0.001);
         assert!((transform.forward)(1.0) - 0.0 < 0.001);
         
         // Test inverse transform

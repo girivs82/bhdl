@@ -1,6 +1,6 @@
 use super::common::*;
 use crate::analyze;
-use bhdl_ast::{Board, Module, HasName}; // Removed common::ParamDecl
+use bhdl_ast::{Board, Entity, HasName}; // Removed common::ParamDecl
 use rowan::ast::{AstNode, SyntaxNodePtr};
 
 

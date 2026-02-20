@@ -18,7 +18,7 @@ type LinearRegulatorParams = {
 };
 
 // Base module that specific regulators can extend
-module LinearRegulatorBase(
+entity LinearRegulatorBase(
     output_voltage: voltage,
     max_current: current = 1A,
     params: LinearRegulatorParams?

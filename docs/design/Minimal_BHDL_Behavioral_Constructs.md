@@ -5,7 +5,7 @@
 ### 1. Simple Parameter-Based Behavioral (No PLI Needed)
 
 ```bhdl
-module SimpleBuckController {
+entity SimpleBuckController {
     pin FB: analog in;
     pin PWM: digital out;
     
@@ -26,7 +26,7 @@ module SimpleBuckController {
 ### 2. Time-Dependent Behavioral (Still No PLI)
 
 ```bhdl
-module SoftStartController {
+entity SoftStartController {
     pin ENABLE: digital in;
     pin VREF_OUT: analog out;
     
@@ -50,7 +50,7 @@ module SoftStartController {
 ### 3. External Model Declaration (PLI)
 
 ```bhdl
-module ComplexBuckController {
+entity ComplexBuckController {
     // Pin interface - this is all BHDL needs to know
     pin VIN: power in;
     pin VOUT: power out;
@@ -69,7 +69,7 @@ module ComplexBuckController {
 ### 4. Enhanced External Model (Optional Parameters)
 
 ```bhdl
-module ParametricBuckController(
+entity ParametricBuckController(
     vout_target: voltage = 3.3V,
     fsw: frequency = 500kHz
 ) {
@@ -120,7 +120,7 @@ testbench BuckValidation for BuckController {
 - **Implicit conversions**: `ratio` → `digital out` PWM
 
 ### 2. For PLI Integration:
-- **`@behavioral` decorator**: Links module to external model
+- **`@behavioral` decorator**: Links entity to external model
 - **`@cosim` decorator**: Links testbench to external harness
 
 That's it! Just 6 concepts total.
@@ -148,7 +148,7 @@ class BuckModel(bhdl.BehavioralModel):
 ### 2. Debugging Support
 
 ```bhdl
-module DebugableBuck {
+entity DebugableBuck {
     @behavioral(
         model="buck_controller",
         debug_port=12345,  // Enable debug connection
@@ -199,7 +199,7 @@ testbench FlexibleTest for BuckController {
 ### Example 1: Thermal Derating (No PLI)
 
 ```bhdl
-module ThermalLED {
+entity ThermalLED {
     pin TEMP: analog in;
     pin LED_DRIVE: current out;
     
@@ -216,7 +216,7 @@ module ThermalLED {
 ### Example 2: Complex USB PD (PLI)
 
 ```bhdl
-module USBPD_Controller {
+entity USBPD_Controller {
     pin CC1, CC2: analog inout;
     pin VBUS_EN: digital out;
     pin VBUS_PROG: analog out;
@@ -229,7 +229,7 @@ module USBPD_Controller {
 ### Example 3: Motor Control (PLI)
 
 ```bhdl
-module FOC_Controller {
+entity FOC_Controller {
     pin PHASE_A, PHASE_B, PHASE_C: analog in;  // Current sense
     pin PWM_A, PWM_B, PWM_C: digital out;      // Gate drives
     pin ENCODER: digital in;

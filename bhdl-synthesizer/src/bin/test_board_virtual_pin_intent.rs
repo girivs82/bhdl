@@ -30,7 +30,7 @@ board TestBoard {
     GND <-> amplifier.GND;
 }
 
-module FilterModule() {
+entity FilterModule() {
     pin VIN: power in;
     pin GND: ground inout;
     
@@ -39,12 +39,12 @@ module FilterModule() {
     pin SIGNAL_OUT: virtual signal out;
 }
 
-module LoadModule() {
+entity LoadModule() {
     pin VIN: power in;
     pin GND: ground inout;
 }
 
-module AmpModule() {
+entity AmpModule() {
     pin SIGNAL_IN: virtual signal in;
     pin SIGNAL_OUT: virtual signal out;
     pin GND: ground inout;

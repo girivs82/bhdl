@@ -69,7 +69,7 @@ board BuckConverterBoard {
 }
 
 // Buck controller module with detailed pin metadata
-module BuckController() {
+entity BuckController() {
     // Power input with metadata
     pin VIN: power in @metadata(
         function="PowerIn",
@@ -117,7 +117,7 @@ module BuckController() {
 
 // Additional SMPS controller examples with pin metadata
 
-module BoostController() {
+entity BoostController() {
     pin VIN: power in @metadata(function="PowerIn");
     pin SW: power inout @metadata(
         function="SwitchNode",
@@ -136,7 +136,7 @@ module BoostController() {
     pin GND: ground @metadata(function="Ground");
 }
 
-module FlybackController() {
+entity FlybackController() {
     pin VIN: power in @metadata(function="PowerIn");
     pin GATE: signal out @metadata(
         function="GateDriver",
@@ -154,7 +154,7 @@ module FlybackController() {
 }
 
 // Linear regulator with pin metadata
-module LM7805() {
+entity LM7805() {
     pin IN: power in @metadata(
         function="PowerIn",
         voltage_range="7V-35V"

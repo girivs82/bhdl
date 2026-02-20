@@ -12,7 +12,7 @@
 // ---------------------------------------------------------
 
 // Pi matching network module
-module PiMatchingNetwork {
+entity PiMatchingNetwork {
   ports {
     INPUT_PORT: inout signal;
     OUTPUT_PORT: inout signal;
@@ -40,7 +40,7 @@ module PiMatchingNetwork {
 }
 
 // L matching network (high-pass) module
-module LMatchingNetworkHighPass {
+entity LMatchingNetworkHighPass {
   ports {
     INPUT_PORT: inout signal;
     OUTPUT_PORT: inout signal;
@@ -64,7 +64,7 @@ module LMatchingNetworkHighPass {
 }
 
 // L matching network (low-pass) module
-module LMatchingNetworkLowPass {
+entity LMatchingNetworkLowPass {
   ports {
     INPUT_PORT: inout signal;
     OUTPUT_PORT: inout signal;
@@ -92,7 +92,7 @@ module LMatchingNetworkLowPass {
 // ---------------------------------------------------------
 
 // LC low-pass filter module
-module LCLowPassFilter {
+entity LCLowPassFilter {
   ports {
     INPUT_PORT: inout signal;
     OUTPUT_PORT: inout signal;
@@ -120,7 +120,7 @@ module LCLowPassFilter {
 }
 
 // LC high-pass filter module
-module LCHighPassFilter {
+entity LCHighPassFilter {
   ports {
     INPUT_PORT: inout signal;
     OUTPUT_PORT: inout signal;

@@ -14,7 +14,7 @@ pub fn lex_ident_or_kw(lex: &mut Lexer<LexerToken>) -> KeywordOrIdent {
     let slice = lex.slice();
     let kind = match slice {
         "board" => SyntaxKind::BOARD_KW,
-        "module" => SyntaxKind::MODULE_KW,
+        "entity" => SyntaxKind::ENTITY_KW,
         "interface" => SyntaxKind::INTERFACE_KW,
         "component" => SyntaxKind::COMPONENT_KW,
         "net" => SyntaxKind::NET_KW,
@@ -29,6 +29,7 @@ pub fn lex_ident_or_kw(lex: &mut Lexer<LexerToken>) -> KeywordOrIdent {
         "typedef" => SyntaxKind::TYPEDEF_KW,
         "struct" => SyntaxKind::STRUCT_KW,
         "enum" => SyntaxKind::ENUM_KW,
+        "match" => SyntaxKind::MATCH_KW,
         "power" => SyntaxKind::POWER_KW,
         "ground" => SyntaxKind::GROUND_KW,
         "clock" => SyntaxKind::CLOCK_KW,
@@ -59,6 +60,10 @@ pub fn lex_ident_or_kw(lex: &mut Lexer<LexerToken>) -> KeywordOrIdent {
         "with" => SyntaxKind::WITH_KW,
         "satisfies" => SyntaxKind::SATISFIES_KW,
         "via" => SyntaxKind::VIA_KW,
+        "trait" => SyntaxKind::TRAIT_KW,
+        "impl" => SyntaxKind::IMPL_KW,
+        "safety_goal" => SyntaxKind::SAFETY_GOAL_KW,
+        "fault_inject" => SyntaxKind::FAULT_INJECT_KW,
         _ => SyntaxKind::IDENT,
     };
     KeywordOrIdent { kind, text: slice.into() }
@@ -219,12 +224,13 @@ fn keyword_or_ident_callback(lex: &mut Lexer<LexerToken>) -> KeywordOrIdent {
     let kind = match slice {
         // Top Level Keywords
         "board" => SyntaxKind::BOARD_KW,
-        "module" => SyntaxKind::MODULE_KW,
+        "entity" => SyntaxKind::ENTITY_KW,
         "component" => SyntaxKind::COMPONENT_KW, // Used for def & inst
         "interface" => SyntaxKind::INTERFACE_KW,
         "typedef" => SyntaxKind::TYPEDEF_KW,
         "struct" => SyntaxKind::STRUCT_KW,
         "enum" => SyntaxKind::ENUM_KW,
+        "match" => SyntaxKind::MATCH_KW,
         "import" => SyntaxKind::IMPORT_KW,
         "const" => SyntaxKind::CONST_KW,
 
@@ -280,6 +286,10 @@ fn keyword_or_ident_callback(lex: &mut Lexer<LexerToken>) -> KeywordOrIdent {
         "with" => SyntaxKind::WITH_KW,
         "satisfies" => SyntaxKind::SATISFIES_KW,
         "via" => SyntaxKind::VIA_KW,
+        "trait" => SyntaxKind::TRAIT_KW,
+        "impl" => SyntaxKind::IMPL_KW,
+        "safety_goal" => SyntaxKind::SAFETY_GOAL_KW,
+        "fault_inject" => SyntaxKind::FAULT_INJECT_KW,
 
         // Power domain keywords (Phase 1: Scalability)
         "power_domain" => SyntaxKind::POWER_DOMAIN_KW,
@@ -313,9 +323,9 @@ mod tests {
 
     #[test]
     fn lex_ident_and_keywords() {
-        let input = "board module net generate for in interface port const signal wire assign";
+        let input = "board entity net generate for in interface port const signal wire assign";
         let expected_kinds = vec![
-            SyntaxKind::BOARD_KW, SyntaxKind::MODULE_KW, SyntaxKind::NET_KW,
+            SyntaxKind::BOARD_KW, SyntaxKind::ENTITY_KW, SyntaxKind::NET_KW,
             SyntaxKind::GENERATE_KW, SyntaxKind::FOR_KW, SyntaxKind::IN_KW,
             SyntaxKind::INTERFACE_KW, SyntaxKind::PORT_KW, SyntaxKind::CONST_KW,
             SyntaxKind::SIGNAL_KW, SyntaxKind::WIRE_KW, SyntaxKind::ASSIGN_KW,

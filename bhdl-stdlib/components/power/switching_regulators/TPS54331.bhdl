@@ -4,7 +4,7 @@
 import { voltage, current, power, resistance, capacitance, inductance, frequency, temperature } from "../../../units.bhdl";
 
 // ==================== COMPONENT DEFINITION WITH VIRTUAL PIN ====================
-module TPS54331(
+entity TPS54331(
     vout: voltage = 3.3V                // Target output voltage
 ) {
     // Physical pins

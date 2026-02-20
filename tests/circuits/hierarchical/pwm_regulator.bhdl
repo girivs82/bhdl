@@ -1,7 +1,7 @@
 // PWM-based voltage regulator with hierarchical module design
 // Demonstrates module parameters, nested instances, and port mapping
 
-module PWMController(frequency: frequency = 100kHz, duty_cycle: percentage = 50%) {
+entity PWMController(frequency: frequency = 100kHz, duty_cycle: percentage = 50%) {
     pin VCC: power in;
     pin GND: ground in;
     pin OUT: signal out;
@@ -12,7 +12,7 @@ module PWMController(frequency: frequency = 100kHz, duty_cycle: percentage = 50%
     // Duty cycle controlled by feedback loop
 }
 
-module PowerRegulator(vin_nominal: voltage, vout: voltage = 3.3V) {
+entity PowerRegulator(vin_nominal: voltage, vout: voltage = 3.3V) {
     pin VIN: power in;
     pin VOUT: power out;
     pin GND: ground in;

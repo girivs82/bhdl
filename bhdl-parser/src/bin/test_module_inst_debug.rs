@@ -7,7 +7,7 @@ board TestBoard {
     ground GND;
     
     // Module instantiation
-    module Filter1(VCC, VCC_FILTERED, GND);
+    entity Filter1(VCC, VCC_FILTERED, GND);
 }
 "#;
     

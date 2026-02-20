@@ -63,7 +63,7 @@ board SimulationTestBoard {
     
     println!("Analysis Results:");
     println!("  - Total diagnostics: {}", analysis_result.diagnostics.len());
-    println!("  - Imported modules: {}", preprocessor.imported_modules().len());
+    println!("  - Imported entities: {}", preprocessor.imported_entities().len());
     
     // Check if unified simulation ran
     println!("\n📊 Unified Simulation Status:");

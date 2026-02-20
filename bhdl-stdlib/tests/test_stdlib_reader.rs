@@ -29,7 +29,7 @@ fn test_stdlib_reader_loads_components() -> Result<()> {
         println!("Testing component: {}", component_name);
         
         if let Some(component_def) = reader.get_component(component_name) {
-            println!("  Found module: {}", component_def.module_name);
+            println!("  Found entity: {}", component_def.module_name);
             println!("  Pins: {} total", component_def.pins.len());
             
             for pin in &component_def.pins {

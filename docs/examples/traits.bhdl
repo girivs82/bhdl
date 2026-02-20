@@ -1,0 +1,66 @@
+// Example: Trait definitions and implementations in BHDL
+// Demonstrates RFC Task 9 - Trait system for component abstraction
+
+// Define a trait for components that can be filtered
+trait Filterable {
+    fn cutoff_frequency() -> frequency;
+    fn impedance_at(freq: frequency) -> resistance;
+}
+
+// Define a trait for components with protection features
+trait Protected {
+    fn max_voltage() -> voltage;
+    fn clamp_voltage() -> voltage;
+}
+
+// Implement Filterable for a low-pass RC filter module
+entity LowPassRC(r: resistance, c: capacitance) {
+    pin input: signal in;
+    pin output: signal out;
+    pin gnd: power in;
+
+    @input -> Res(r).1 -> Res(r).2 -> @output;
+    @output -> Cap(c).1 -> Cap(c).2 -> @gnd;
+}
+
+impl Filterable for LowPassRC {
+    fn cutoff_frequency() -> frequency {
+        rc_cutoff(r, c)
+    }
+
+    fn impedance_at(freq: frequency) -> resistance {
+        parallel(r, 1.0 / (2.0 * 3.14159 * freq * c))
+    }
+}
+
+// A TVS diode module implementing Protected
+entity TVSProtection(clamp: voltage) {
+    pin line: signal inout;
+    pin gnd: power in;
+
+    @line -> TVSDiode(clamp).cathode;
+    TVSDiode(clamp).anode -> @gnd;
+}
+
+impl Protected for TVSProtection {
+    fn max_voltage() -> voltage {
+        clamp * 1.1
+    }
+
+    fn clamp_voltage() -> voltage {
+        clamp
+    }
+}
+
+// Board using trait-constrained components
+board ProtectedSensorInput {
+    power VCC = 5V @ 500mA;
+    ground GND;
+
+    // Components selected via trait constraints
+    @VCC -> TVSProtection(6V).line;
+    TVSProtection(6V).line -> LowPassRC(10k, 100nF).input;
+    LowPassRC(10k, 100nF).output -> ADC().input;
+    LowPassRC(10k, 100nF).gnd -> @GND;
+    TVSProtection(6V).gnd -> @GND;
+}

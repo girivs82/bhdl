@@ -30,7 +30,7 @@ type OpenDrainSpiceModel = {
 };
 
 // SPICE equations for open-drain simulation
-module OpenDrainPin(
+entity OpenDrainPin(
     model: OpenDrainSpiceModel,
     pullup_present: bool = false,
     pullup_value: resistance = 10kΩ,
@@ -165,7 +165,7 @@ const I2C_FAST_MODE: OpenDrainSpiceModel = {
 };
 
 // Simulation test case that would fail without pull-up
-module TestOpenDrainWithoutPullup {
+entity TestOpenDrainWithoutPullup {
     // This configuration would FAIL in simulation
     pin scl_bad: OpenDrainPin(
         model=I2C_STANDARD_MODE,
@@ -199,7 +199,7 @@ module TestOpenDrainWithoutPullup {
 }
 
 // Wrong rail voltage detection
-module TestWrongPullupRail {
+entity TestWrongPullupRail {
     // Pull-up to wrong rail (1.2V core instead of 3.3V I/O)
     pin scl_wrong_rail: OpenDrainPin(
         model=I2C_STANDARD_MODE,
@@ -216,7 +216,7 @@ module TestWrongPullupRail {
 }
 
 // Multi-voltage bus simulation
-module TestMultiVoltageBus {
+entity TestMultiVoltageBus {
     // 3.3V device
     device_3v3: OpenDrainPin(
         model={...I2C_STANDARD_MODE, vih: 0.7 * 3.3V},

@@ -2,7 +2,7 @@
 // User interface and control components
 
 // Potentiometer Module
-module Potentiometer(value: resistance) {
+entity Potentiometer(value: resistance) {
     pin 1: signal inout;    // End terminal 1
     pin 2: signal inout;    // Wiper
     pin 3: signal inout;    // End terminal 2
@@ -14,10 +14,10 @@ module Potentiometer(value: resistance) {
 }
 
 // Alias for convenience
-module Pot = Potentiometer;
+entity Pot = Potentiometer;
 
 // Rotary Encoder Module
-module RotaryEncoder(pulses_per_revolution: int = 24) {
+entity RotaryEncoder(pulses_per_revolution: int = 24) {
     pin A: signal out;      // Channel A
     pin B: signal out;      // Channel B
     pin SW: signal out;     // Push switch (if present)
@@ -31,7 +31,7 @@ module RotaryEncoder(pulses_per_revolution: int = 24) {
 }
 
 // Push Button Module
-module PushButton(type: string = "momentary") {
+entity PushButton(type: string = "momentary") {
     pin 1: signal inout;
     pin 2: signal inout;
     pin 3: signal inout when type == "DPDT";
@@ -43,7 +43,7 @@ module PushButton(type: string = "momentary") {
 }
 
 // Toggle Switch Module
-module ToggleSwitch(poles: int = 1, throws: int = 2) {
+entity ToggleSwitch(poles: int = 1, throws: int = 2) {
     pin COM[1:poles]: signal inout;
     pin NO[1:poles]: signal inout;
     pin NC[1:poles]: signal inout when throws == 2;
@@ -54,7 +54,7 @@ module ToggleSwitch(poles: int = 1, throws: int = 2) {
 }
 
 // DIP Switch Module
-module DIPSwitch(positions: int = 8) {
+entity DIPSwitch(positions: int = 8) {
     pin SW[1:positions]: signal inout;
     pin COM[1:positions]: signal inout;
     
@@ -64,7 +64,7 @@ module DIPSwitch(positions: int = 8) {
 }
 
 // Joystick Module
-module Joystick() {
+entity Joystick() {
     pin VRX: signal out;    // X-axis potentiometer
     pin VRY: signal out;    // Y-axis potentiometer
     pin SW: signal out;     // Push button
@@ -77,7 +77,7 @@ module Joystick() {
 }
 
 // Touch Sensor Module
-module TouchSensor() {
+entity TouchSensor() {
     pin SIG: signal out;
     pin VCC: power in;
     pin GND: ground;
@@ -88,7 +88,7 @@ module TouchSensor() {
 }
 
 // Slide Potentiometer
-module SlidePot(value: resistance, length: length = 60mm) {
+entity SlidePot(value: resistance, length: length = 60mm) {
     pin 1: signal inout;
     pin 2: signal inout;    // Wiper
     pin 3: signal inout;
@@ -99,7 +99,7 @@ module SlidePot(value: resistance, length: length = 60mm) {
 }
 
 // Membrane Keypad
-module MembraneKeypad(rows: int = 4, cols: int = 4) {
+entity MembraneKeypad(rows: int = 4, cols: int = 4) {
     pin ROW[1:rows]: signal out;
     pin COL[1:cols]: signal in;
     
@@ -109,7 +109,7 @@ module MembraneKeypad(rows: int = 4, cols: int = 4) {
 }
 
 // Thumbwheel Switch
-module ThumbwheelSwitch() {
+entity ThumbwheelSwitch() {
     pin C: signal inout;    // Common
     pin 0-9: signal out;    // BCD outputs
     
@@ -119,7 +119,7 @@ module ThumbwheelSwitch() {
 }
 
 // Limit Switch
-module LimitSwitch() {
+entity LimitSwitch() {
     pin C: signal inout;    // Common
     pin NO: signal inout;   // Normally open
     pin NC: signal inout;   // Normally closed
