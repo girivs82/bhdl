@@ -536,15 +536,15 @@ impl NetlistToSpiceConverter {
                       instance_name, vout_voltage, vout_name, gnd_node_name);
             }
 
-            // Model the regulator's internal VIN→VOUT dropout path as a resistance.
-            // This provides necessary circuit connectivity for MNA solver stability.
-            // The resistance is derived from dropout voltage / typical load current:
-            // For LM7805: dropout ~2V at 1A → ~2Ω internal resistance.
-            // We use a moderate value that doesn't dominate circuit currents.
+            // Model the regulator's internal VIN→VOUT dropout path as a high resistance.
+            // This provides necessary circuit connectivity for MNA solver stability
+            // but must NOT create a significant parallel current path — the voltage
+            // source at VOUT already sets the output; this resistor only ensures the
+            // VIN node has a DC path to the rest of the circuit.
+            // Use 10kΩ: high enough that parasitic current is negligible (~0.7mA at 7V drop)
+            // but low enough for MNA numerical stability.
             if let (Some(vin_name), Some(vout_name)) = (&vin_net, &vout_net) {
-                let dropout = (vout_voltage * 0.4).max(1.0); // ~40% of Vout or at least 1V
-                let typical_current = 0.5; // 500mA typical load
-                let internal_resistance = (dropout / typical_current).max(1.0).min(100.0);
+                let internal_resistance = 10_000.0; // 10kΩ — connectivity only, not a power path
                 circuit.add_branch(
                     format!("{}_dropout", instance_name),
                     vin_name,

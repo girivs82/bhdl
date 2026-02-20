@@ -171,9 +171,11 @@
                 if (regIdx >= 0) {
                     driver = sinks.splice(regIdx, 1)[0];
                 } else if (sinks.length > 0) {
-                    const label = net.voltage != null ? `${net.name} (${net.voltage}V)` : net.name;
+                    const simV = data.simulation?.net_voltages?.[net.name];
+                    const displayV = net.voltage ?? simV;
+                    const label = displayV != null ? `${net.name} (${formatVoltage(displayV)})` : net.name;
                     const sourceId = `__pwr_${net.name}__`;
-                    powerSourceNodes.push({ id: sourceId, label, voltage: net.voltage });
+                    powerSourceNodes.push({ id: sourceId, label, voltage: displayV });
                     driver = { type: 'power_source', name: sourceId, port: 'out' };
                 } else { continue; }
             }
@@ -944,7 +946,21 @@
 
                 // Gather simulation annotations for this wire
                 const voltage = data.simulation?.net_voltages?.[net.name];
-                layoutWires.push({ from: fromPos, to: toPos, segments, width: net.width || 1, netName: net.name, netClass: net.net_class || 'signal', isPower: isPowerNet, voltage });
+                // Current: use the sink component's current (current flowing into it through this wire)
+                // GLACIER decomposes some components (e.g. regulators → name_dropout + name_vout),
+                // so fall back to the sub-component with the largest absolute current.
+                let current = data.simulation?.instance_currents?.[sink.name];
+                if (current == null && data.simulation?.instance_currents) {
+                    let maxAbs = 0;
+                    for (const [key, val] of Object.entries(data.simulation.instance_currents)) {
+                        if (key.startsWith(sink.name + '_') && Math.abs(val) > maxAbs) {
+                            maxAbs = Math.abs(val);
+                            current = val;
+                        }
+                    }
+                }
+                const driverIsPowerSource = net.driver.type === 'power_source';
+                layoutWires.push({ from: fromPos, to: toPos, segments, width: net.width || 1, netName: net.name, netClass: net.net_class || 'signal', isPower: isPowerNet, voltage, current, driverIsPowerSource });
             }
         }
         layoutElements._junctionPoints = junctionPoints;
@@ -1336,25 +1352,49 @@
             ctx.arc(wire.to.x, wire.to.y, isBus ? 3 : 2, 0, Math.PI * 2);
             ctx.fill();
 
-            // Net name label (with voltage annotation if available)
+            // Net annotations on horizontal wire segments
+            // Skip net name if driver is a power source node — the box already shows it
             if (wire.segments.length > 0) {
                 const seg = wire.segments[0];
-                if (Math.abs(seg.x2 - seg.x1) > 60) {
+                const isHoriz = Math.abs(seg.x2 - seg.x1) > 60;
+                if (isHoriz && !wire.driverIsPowerSource) {
                     const lx = (seg.x1 + seg.x2) / 2;
                     ctx.font = `${FONT_SIZE - 2}px monospace`;
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'bottom';
                     if (wire.voltage != null && isPower) {
-                        // Power net: show name + voltage in red
                         ctx.fillStyle = COLORS.portPower;
                         ctx.fillText(`${wire.netName} (${formatVoltage(wire.voltage)})`, lx, seg.y1 - 6);
                     } else if (wire.voltage != null && isHighlighted) {
-                        // Hovered signal net: show voltage
                         ctx.fillStyle = COLORS.wireHighlight;
                         ctx.fillText(`${wire.netName} (${formatVoltage(wire.voltage)})`, lx, seg.y1 - 6);
                     } else {
                         ctx.fillStyle = COLORS.textMuted;
                         ctx.fillText(wire.netName, lx, seg.y1 - 6);
+                    }
+                }
+                // Current annotation on the wire
+                if (wire.current != null && Math.abs(wire.current) > 1e-9) {
+                    const hSeg = wire.segments.find(s => Math.abs(s.x2 - s.x1) > 40);
+                    if (hSeg) {
+                        // Horizontal segment: label below
+                        const cx = (hSeg.x1 + hSeg.x2) / 2;
+                        ctx.font = `${FONT_SIZE - 2}px monospace`;
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'top';
+                        ctx.fillStyle = '#8bc34a';
+                        ctx.fillText(formatCurrent(Math.abs(wire.current)), cx, hSeg.y1 + 4);
+                    } else {
+                        // No horizontal segment — try vertical (e.g. shunt/drop wires)
+                        const vSeg = wire.segments.find(s => Math.abs(s.y2 - s.y1) > 20);
+                        if (vSeg) {
+                            const cy = (vSeg.y1 + vSeg.y2) / 2;
+                            ctx.font = `${FONT_SIZE - 2}px monospace`;
+                            ctx.textAlign = 'left';
+                            ctx.textBaseline = 'middle';
+                            ctx.fillStyle = '#8bc34a';
+                            ctx.fillText(formatCurrent(Math.abs(wire.current)), vSeg.x1 + 6, cy);
+                        }
                     }
                 }
             }
