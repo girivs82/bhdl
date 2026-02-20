@@ -18,6 +18,9 @@ pub struct SchematicData {
     pub nets: Vec<SchematicNet>,
     /// Power rail visualization data
     pub power_rails: Vec<PowerRail>,
+    /// Flow paths from intent analysis
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub flow_paths: Vec<SchematicFlowPath>,
     /// Source file path (for click-to-navigate)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file_path: Option<String>,
@@ -42,6 +45,35 @@ pub struct SchematicPort {
     pub line: Option<usize>,
 }
 
+/// Placement role derived from intent analysis — tells the layout engine
+/// where to position this component relative to the main signal path.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PlacementRole {
+    /// Inline on main left-to-right signal path
+    MainPath,
+    /// Vertical drop from junction to GND (TVS, protection)
+    Shunt,
+    /// Capacitor adjacent to an IC (input/output filtering)
+    Decoupling { adjacent_to: String },
+    /// Horizontal sub-chain off main path (LED indicator, sense)
+    Branch,
+    /// Synthetic power source node
+    PowerSource,
+}
+
+/// A serialized flow path from the analyzer's FlowTracker.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SchematicFlowPath {
+    pub id: usize,
+    pub nets: Vec<String>,
+    pub components: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub intent_name: Option<String>,
+    #[serde(default)]
+    pub intent_params: Vec<(String, String)>,
+}
+
 /// A component instance rendered as a box with ports.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SchematicInstance {
@@ -56,6 +88,15 @@ pub struct SchematicInstance {
     /// Component parameters, e.g. [("value", "10k"), ("voltage", "5V")]
     #[serde(default)]
     pub parameters: Vec<(String, String)>,
+    /// Placement role for layout (from intent analysis or heuristic)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub placement_role: Option<PlacementRole>,
+    /// Intent name associated with this instance's primary flow
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub intent: Option<String>,
+    /// IDs of flow paths this instance participates in
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub flow_ids: Vec<usize>,
     /// Source line for click-to-navigate
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<usize>,

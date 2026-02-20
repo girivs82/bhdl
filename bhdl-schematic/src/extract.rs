@@ -18,7 +18,7 @@ use crate::types::*;
 /// This is the main public API for the Rust extraction layer.
 pub fn extract_schematic_data(
     netlist: &Netlist,
-    _analysis: Option<&bhdl_analyzer::AnalysisResult>,
+    analysis: Option<&bhdl_analyzer::AnalysisResult>,
 ) -> Result<SchematicData, String> {
     let top_module_id = netlist.top_level_module
         .ok_or_else(|| "No top-level module in netlist".to_string())?;
@@ -276,6 +276,9 @@ pub fn extract_schematic_data(
             category,
             connections,
             parameters,
+            placement_role: None,  // filled in by classify_placement_roles below
+            intent: None,
+            flow_ids: Vec::new(),
             line: None,
         });
     }
@@ -509,12 +512,17 @@ pub fn extract_schematic_data(
         }
     }
 
+    // --- 7. Extract flow paths and classify placement roles ---
+    let flow_paths = extract_flow_paths(analysis);
+    classify_placement_roles(&mut instances, &flow_paths, &net_class_map, &net_names);
+
     Ok(SchematicData {
         entity_name: top_module.name.clone(),
         ports,
         instances,
         nets,
         power_rails,
+        flow_paths,
         file_path: None,
         entity_line: None,
     })
@@ -582,6 +590,225 @@ fn pin_type_to_str(pin_type: &PinType) -> &'static str {
         PinType::DifferentialNeg => "signal",
         PinType::Passive => "passive",
     }
+}
+
+/// Extract flow paths from the AnalysisResult's FlowTracker.
+fn extract_flow_paths(
+    analysis: Option<&bhdl_analyzer::AnalysisResult>,
+) -> Vec<SchematicFlowPath> {
+    let tracker = match analysis.and_then(|a| a.flow_tracker.as_ref()) {
+        Some(t) => t,
+        None => return Vec::new(),
+    };
+
+    tracker
+        .get_flow_paths()
+        .iter()
+        .map(|fp| {
+            let intent_name = fp.intent.as_ref().map(|ic| ic.name.clone());
+            let intent_params = fp
+                .intent
+                .as_ref()
+                .map(|ic| {
+                    ic.params
+                        .iter()
+                        .filter_map(|p| match p {
+                            bhdl_common::intent::IntentParam::Named(k, v) => {
+                                Some((k.clone(), format!("{:?}", v)))
+                            }
+                            bhdl_common::intent::IntentParam::Positional(v) => {
+                                Some(("_".to_string(), format!("{:?}", v)))
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+
+            SchematicFlowPath {
+                id: fp.id,
+                nets: fp.nets.clone(),
+                components: fp.components.clone(),
+                intent_name,
+                intent_params,
+            }
+        })
+        .collect()
+}
+
+/// Classify placement roles for instances based on intent and heuristics.
+///
+/// Intent-based mapping (when flow data is available):
+///   voltage_regulation, signal_buffering, level_shifting, delay → MainPath
+///   input_protection, overvoltage_protection, esd_protection, emi_filtering → Shunt
+///   noise_filtering on power net → Decoupling, on signal net → MainPath
+///   current_limiting, current_sensing, voltage_monitoring, test_point → Branch
+///
+/// Heuristic fallback (when no intent data):
+///   2-pin with 1 signal + 1 GND → Shunt
+///   Capacitor on power rail → Decoupling
+///   Category "regulator" → MainPath
+///   Category "protection" → Shunt
+///   Default → MainPath
+fn classify_placement_roles(
+    instances: &mut [SchematicInstance],
+    flow_paths: &[SchematicFlowPath],
+    net_class_map: &HashMap<NetId, String>,
+    net_names: &HashMap<NetId, String>,
+) {
+    // Build reverse map: net name → net class string
+    let net_name_to_class: HashMap<&str, &str> = net_names
+        .iter()
+        .filter_map(|(nid, name)| {
+            net_class_map.get(nid).map(|cls| (name.as_str(), cls.as_str()))
+        })
+        .collect();
+
+    // Build component → flow path mapping
+    let mut component_flows: HashMap<&str, Vec<&SchematicFlowPath>> = HashMap::new();
+    for fp in flow_paths {
+        for comp in &fp.components {
+            component_flows
+                .entry(comp.as_str())
+                .or_default()
+                .push(fp);
+        }
+    }
+
+    // Pre-compute category map for adjacency lookups (avoids borrow conflict)
+    let category_map: HashMap<String, String> = instances
+        .iter()
+        .map(|inst| (inst.name.clone(), inst.category.clone()))
+        .collect();
+
+    for inst in instances.iter_mut() {
+        // Record flow IDs and intent (for annotation/hover, not placement)
+        if let Some(fps) = component_flows.get(inst.name.as_str()) {
+            inst.flow_ids = fps.iter().map(|f| f.id).collect();
+            if let Some(fp) = fps.iter().find(|fp| fp.intent_name.is_some()) {
+                inst.intent = fp.intent_name.clone();
+            }
+        }
+
+        // TOPOLOGY FIRST: if the circuit structure clearly indicates a role, use it.
+        // A component with exactly 1 non-ground signal pin + ground pins is a shunt
+        // or decoupling cap, regardless of what the intent says.
+        let topo_role = heuristic_role(inst, &net_name_to_class);
+        if matches!(topo_role, PlacementRole::Shunt | PlacementRole::Decoupling { .. }) {
+            inst.placement_role = Some(topo_role);
+            continue;
+        }
+
+        // For multi-signal-pin components, use intent to refine placement
+        if let Some(intent) = inst.intent.as_deref() {
+            let fps = component_flows.get(inst.name.as_str());
+            inst.placement_role = Some(match intent {
+                "voltage_regulation" | "signal_buffering" | "level_shifting" | "delay"
+                | "pulse_stretch" | "debounce" | "anti_alias" | "fast_response" => {
+                    PlacementRole::MainPath
+                }
+                "input_protection" | "overvoltage_protection" | "esd_protection"
+                | "overvoltage_clamp" | "emi_filtering" | "glitch_immunity" => {
+                    PlacementRole::Shunt
+                }
+                "noise_filtering" => {
+                    let on_power = inst.connections.iter().any(|c| {
+                        net_name_to_class.get(c.signal.as_str()) == Some(&"power")
+                    });
+                    if on_power {
+                        let adjacent = fps
+                            .and_then(|fps| fps.iter().find(|fp| fp.intent_name.is_some()))
+                            .map(|fp| find_adjacent_ic(&inst.name, fp, &category_map))
+                            .unwrap_or_default();
+                        PlacementRole::Decoupling {
+                            adjacent_to: adjacent,
+                        }
+                    } else {
+                        PlacementRole::MainPath
+                    }
+                }
+                "current_limiting" | "current_sensing" => PlacementRole::MainPath,
+                "voltage_monitoring" | "test_point" | "data_logging"
+                | "fault_detection" => PlacementRole::Branch,
+                _ => PlacementRole::MainPath,
+            });
+            continue;
+        }
+
+        // No intent, topology says MainPath — use it
+        inst.placement_role = Some(topo_role);
+    }
+}
+
+/// Heuristic role classification when no intent data is available.
+fn heuristic_role(
+    inst: &SchematicInstance,
+    net_name_to_class: &HashMap<&str, &str>,
+) -> PlacementRole {
+    let signal_pins: Vec<_> = inst
+        .connections
+        .iter()
+        .filter(|c| {
+            net_name_to_class.get(c.signal.as_str()) != Some(&"ground")
+                && c.pin_type != "ground"
+        })
+        .collect();
+    let gnd_pins: Vec<_> = inst
+        .connections
+        .iter()
+        .filter(|c| {
+            net_name_to_class.get(c.signal.as_str()) == Some(&"ground")
+                || c.pin_type == "ground"
+        })
+        .collect();
+
+    // 2-pin with 1 signal + 1 GND → Shunt
+    if signal_pins.len() == 1 && !gnd_pins.is_empty() {
+        if inst.category == "protection" {
+            return PlacementRole::Shunt;
+        }
+        // Capacitor with 1 signal + GND → always Decoupling (bypass cap)
+        if inst.category == "capacitor" {
+            return PlacementRole::Decoupling {
+                adjacent_to: String::new(),
+            };
+        }
+        // Other 2-pin shunt (e.g., TVS, zener, diode)
+        return PlacementRole::Shunt;
+    }
+
+    match inst.category.as_str() {
+        "regulator" | "buffer" => PlacementRole::MainPath,
+        "protection" => PlacementRole::Shunt,
+        _ => PlacementRole::MainPath,
+    }
+}
+
+/// Find the IC closest to a component in the same flow path.
+fn find_adjacent_ic(
+    inst_name: &str,
+    flow_path: &SchematicFlowPath,
+    category_map: &HashMap<String, String>,
+) -> String {
+    let pos = flow_path
+        .components
+        .iter()
+        .position(|c| c == inst_name);
+
+    if let Some(idx) = pos {
+        for offset in [1i32, -1, 2, -2] {
+            let neighbor_idx = idx as i32 + offset;
+            if neighbor_idx >= 0 && (neighbor_idx as usize) < flow_path.components.len() {
+                let neighbor_name = &flow_path.components[neighbor_idx as usize];
+                if let Some(cat) = category_map.get(neighbor_name) {
+                    if cat == "ic" || cat == "regulator" {
+                        return neighbor_name.clone();
+                    }
+                }
+            }
+        }
+    }
+
+    String::new()
 }
 
 /// Categorize a component by its entity type name and attributes.
