@@ -337,22 +337,57 @@
         }
 
         // ── 7c. Detect parallel branches (fan-out to multiple main-path sinks) ──
-        // When a net drives multiple main-path components, they are parallel branches.
-        // Keep the first (in mainPathOrder) on main path; demote the rest to branches.
+        // When a net drives multiple main-path components through SIGNAL pins,
+        // they form parallel branches. Keep the one with the longest forward chain
+        // on the main path; demote the rest to branches.
         const parallelBranchJunctions = new Map(); // demotedName → keepName
         {
+            // Count forward-reachable main-path nodes (excluding driver to avoid cycles)
+            function forwardMainPathDepth(startName, driverName) {
+                const visited = new Set();
+                const q = [startName];
+                let depth = 0;
+                let cyclesToDriver = false;
+                while (q.length > 0) {
+                    const cur = q.shift();
+                    for (const n of (allForward.get(cur) || [])) {
+                        if (n === driverName) { cyclesToDriver = true; continue; }
+                        if (mainPathNames.has(n) && !visited.has(n)) {
+                            visited.add(n);
+                            depth++;
+                            q.push(n);
+                        }
+                    }
+                }
+                return { depth, cyclesToDriver };
+            }
+
             for (const net of processedNets) {
+                // Only consider signal-pin sinks (filter out power/ground connections like VCC)
                 const mainSinks = net.sinks
-                    .filter(s => mainPathNames.has(s.name))
+                    .filter(s => {
+                        if (!mainPathNames.has(s.name)) return false;
+                        const pinType = getPortPinType(s.name, s.port);
+                        return pinType !== 'power' && pinType !== 'ground';
+                    })
                     .map(s => s.name);
                 if (mainSinks.length <= 1) continue;
 
-                // Sort by position in mainPathOrder — keep the first
-                mainSinks.sort((a, b) => mainPathOrder.indexOf(a) - mainPathOrder.indexOf(b));
-                const keepName = mainSinks[0];
+                // Score each sink: longest forward chain wins, prefer non-cyclic paths
+                const driverName = net.driver.type === 'power_source' ? null : net.driver.name;
+                const scored = mainSinks.map(name => {
+                    const { depth, cyclesToDriver } = forwardMainPathDepth(name, driverName);
+                    return { name, depth, cyclesToDriver };
+                });
+                scored.sort((a, b) => {
+                    if (b.depth !== a.depth) return b.depth - a.depth;
+                    if (a.cyclesToDriver !== b.cyclesToDriver) return a.cyclesToDriver ? 1 : -1;
+                    return mainPathOrder.indexOf(a.name) - mainPathOrder.indexOf(b.name);
+                });
+                const keepName = scored[0].name;
 
-                for (let i = 1; i < mainSinks.length; i++) {
-                    const demotedName = mainSinks[i];
+                for (let i = 1; i < scored.length; i++) {
+                    const demotedName = scored[i].name;
                     mainPathNames.delete(demotedName);
                     const idx = mainPathOrder.indexOf(demotedName);
                     if (idx >= 0) mainPathOrder.splice(idx, 1);
@@ -386,6 +421,8 @@
                 }
             }
         }
+
+        // (flippedNames computed after positioning in step 10b)
 
         // ── 7b. Reclassify: shunts connected only to off-path → branch tail ──
         // e.g., LED connected to sense (branch) should join the branch chain
@@ -901,6 +938,130 @@
             }
         }
 
+        // ── 10b. Detect flipped instances (wire direction opposite to port side) ──
+        // If a component's input source is to its right, or its output sink is
+        // to its left, the normal L→R port assignment produces wires that cross
+        // through the component box. Flip ports so wires route cleanly.
+        const flippedNames = new Set();
+        for (const [name, inst] of instMap) {
+            const pos = positions.get(name);
+            if (!pos) continue;
+            if (shuntInstNames.has(name)) continue; // shunts use NORTH port, not L/R
+            const cx = pos.x + pos.w / 2;
+            let backwardIn = 0, forwardIn = 0;
+            let backwardOut = 0, forwardOut = 0;
+            for (const c of inst.connections) {
+                if (gndNetNames.has(c.signal)) continue;
+                const pinType = getPortPinType(name, c.port);
+                if (pinType === 'power' || pinType === 'ground') continue;
+                const k = `${name}.${c.port}`;
+                const r = instPortRoles.get(k);
+                if (!r) continue;
+                // Find the connected peer's position
+                for (const net of processedNets) {
+                    if (r.has('in')) {
+                        // This port is an input — check where the driver is
+                        const isSink = net.sinks.some(s => s.name === name && s.port === c.port);
+                        if (isSink && net.driver.name) {
+                            const driverPos = positions.get(net.driver.name);
+                            if (driverPos) {
+                                const driverCx = driverPos.x + driverPos.w / 2;
+                                if (driverCx > cx) backwardIn++; else forwardIn++;
+                            }
+                        }
+                    }
+                    if (r.has('out')) {
+                        // This port is an output — check where sinks are
+                        if (net.driver.name === name && net.driver.port === c.port) {
+                            for (const s of net.sinks) {
+                                const sinkPos = positions.get(s.name);
+                                if (sinkPos) {
+                                    const sinkCx = sinkPos.x + sinkPos.w / 2;
+                                    if (sinkCx < cx) backwardOut++; else forwardOut++;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            const backward = backwardIn + backwardOut;
+            const forward = forwardIn + forwardOut;
+            if (backward > 0 && backward >= forward) {
+                flippedNames.add(name);
+            }
+        }
+
+        // ── 10c. Reposition flipped components so wires don't cross through blocks ──
+        // A flipped component has its input on the RIGHT. Position it so that right
+        // edge aligns with where the input wire comes from (the driver's output side),
+        // preventing wires from crossing intermediate blocks.
+        for (const name of flippedNames) {
+            const pos = positions.get(name);
+            if (!pos) continue;
+            const inst = instMap.get(name);
+            if (!inst) continue;
+            // Find the output destination's left edge (where the return wire goes)
+            let sinkLeftX = null;
+            for (const c of inst.connections) {
+                if (gndNetNames.has(c.signal)) continue;
+                const pinType = getPortPinType(name, c.port);
+                if (pinType === 'power' || pinType === 'ground') continue;
+                const k = `${name}.${c.port}`;
+                const r = instPortRoles.get(k);
+                if (!r || !r.has('out')) continue;
+                for (const net of processedNets) {
+                    if (net.driver.name === name && net.driver.port === c.port) {
+                        for (const s of net.sinks) {
+                            const sinkPos = positions.get(s.name);
+                            if (sinkPos && (sinkLeftX === null || sinkPos.x < sinkLeftX)) {
+                                sinkLeftX = sinkPos.x;
+                            }
+                        }
+                    }
+                }
+            }
+            if (sinkLeftX !== null) {
+                // Offset left so the output stub dot clears the destination's input port stubs.
+                // Output dot will be at newX - PORT_STUB_LEN, routed up then right to
+                // destination's input dot at sinkLeftX - PORT_STUB_LEN.
+                const newX = sinkLeftX - PORT_STUB_LEN - 10;
+                positions.set(name, { x: newX, y: pos.y, w: pos.w, h: pos.h });
+            }
+        }
+
+        // ── 10d. Resolve overlapping components ──
+        // After all positioning (including flip repositioning), ensure no two
+        // components overlap. Shift colliding off-path components down.
+        {
+            const GAP = 20; // minimum spacing between component bounding boxes
+            const allNames = [...positions.keys()].filter(n => n !== '__entity_in__' && n !== '__entity_out__');
+            // Iterate off-path names; nudge them if they collide with anything
+            const offPath = allNames.filter(n => offPathNames.has(n));
+            for (const name of offPath) {
+                let pos = positions.get(name);
+                let moved = true;
+                while (moved) {
+                    moved = false;
+                    for (const other of allNames) {
+                        if (other === name) continue;
+                        const op = positions.get(other);
+                        if (!op) continue;
+                        // Check bounding box overlap with gap
+                        const overlapX = pos.x < op.x + op.w + GAP && pos.x + pos.w + GAP > op.x;
+                        const overlapY = pos.y < op.y + op.h + GAP && pos.y + pos.h + GAP > op.y;
+                        if (overlapX && overlapY) {
+                            // Shift down below the colliding component
+                            const newY = op.y + op.h + GAP;
+                            pos = { x: pos.x, y: newY, w: pos.w, h: pos.h };
+                            positions.set(name, pos);
+                            moved = true;
+                            break; // re-check all after shift
+                        }
+                    }
+                }
+            }
+        }
+
         // ── 11. Build layout elements ──
 
         // Entity input
@@ -941,15 +1102,18 @@
                         instInPorts.push({ name: c.port, x: pos.x + pos.w / 2, y: pos.y, pinType: getPortPinType(name, c.port) });
                     }
                 } else {
+                    const isFlipped = flippedNames.has(name);
                     if (r.has('in') && !seenIn.has(c.port)) {
                         seenIn.add(c.port);
                         const py = pos.y + HEADER_HEIGHT + INSTANCE_PADDING + (instInPorts.length + 0.5) * PORT_SPACING;
-                        instInPorts.push({ name: c.port, x: pos.x, y: py, pinType: getPortPinType(name, c.port), isClock: clockSignals.has(c.signal), isReset: resetSignals.has(c.signal) });
+                        const px = isFlipped ? pos.x + pos.w : pos.x;
+                        instInPorts.push({ name: c.port, x: px, y: py, pinType: getPortPinType(name, c.port), isClock: clockSignals.has(c.signal), isReset: resetSignals.has(c.signal) });
                     }
                     if (r.has('out') && !seenOut.has(c.port)) {
                         seenOut.add(c.port);
                         const py = pos.y + HEADER_HEIGHT + INSTANCE_PADDING + (instOutPorts.length + 0.5) * PORT_SPACING;
-                        instOutPorts.push({ name: c.port, x: pos.x + pos.w, y: py, pinType: getPortPinType(name, c.port) });
+                        const px = isFlipped ? pos.x : pos.x + pos.w;
+                        instOutPorts.push({ name: c.port, x: px, y: py, pinType: getPortPinType(name, c.port) });
                     }
                 }
             }
@@ -974,7 +1138,7 @@
                 }
                 if (found) simPowerW = total;
             }
-            layoutElements.push({ x: pos.x, y: pos.y, w: pos.w, h: pos.h, name, type: 'instance', entityType: inst.entity_type, parameters: inst.parameters, category: inst.category, isShunt: isShuntLike, inputPorts: instInPorts, outputPorts: instOutPorts, gndStubs: gndStubsByInst.get(name) || [], pgStubs: [], line: inst.line, simCurrent, simPower: simPowerW });
+            layoutElements.push({ x: pos.x, y: pos.y, w: pos.w, h: pos.h, name, type: 'instance', entityType: inst.entity_type, parameters: inst.parameters, category: inst.category, isShunt: isShuntLike, isFlipped: flippedNames.has(name), inputPorts: instInPorts, outputPorts: instOutPorts, gndStubs: gndStubsByInst.get(name) || [], pgStubs: [], line: inst.line, simCurrent, simPower: simPowerW });
         }
 
         // Entity output
@@ -1006,8 +1170,16 @@
                     // NORTH port: dot is above the box
                     return { x: p.x, y: p.y - PORT_STUB_LEN };
                 }
-                const dx = sides[li] === 'out' ? PORT_STUB_LEN : -PORT_STUB_LEN;
-                return { x: p.x + dx, y: p.y };
+                let dx;
+                if (el.isFlipped) {
+                    dx = sides[li] === 'out' ? -PORT_STUB_LEN : PORT_STUB_LEN;
+                } else {
+                    dx = sides[li] === 'out' ? PORT_STUB_LEN : -PORT_STUB_LEN;
+                }
+                // dir: the horizontal direction the wire should approach/depart from this dot
+                // +1 = wire extends to the right, -1 = wire extends to the left
+                const dir = dx > 0 ? 1 : -1;
+                return { x: p.x + dx, y: p.y, dir };
             }
             return null;
         }
@@ -1030,7 +1202,11 @@
                 const isShuntWire = sinkEl && sinkEl.isShunt;
                 const segments = [];
 
-                if (isShuntWire || toPos.y > fromPos.y + 20) {
+                // dir: +1 = wire extends right from dot, -1 = wire extends left
+                const fromDir = fromPos.dir || 1;   // driver output default: rightward
+                const toDir = toPos.dir || -1;       // sink input default: leftward
+
+                if (isShuntWire || (toPos.y > fromPos.y + 20 && toDir <= 0)) {
                     if (toPos.x >= fromPos.x - 2) {
                         // Normal L-route: horizontal forward to shunt X, then vertical drop
                         const jx = toPos.x;
@@ -1047,6 +1223,21 @@
                         segments.push({ x1: fromPos.x, y1: fromPos.y, x2: fromPos.x, y2: toPos.y });
                         segments.push({ x1: fromPos.x, y1: toPos.y, x2: toPos.x, y2: toPos.y });
                     }
+                } else if (toDir > 0 && toPos.y > fromPos.y + 20) {
+                    // Flipped sink below driver: sink expects wire from the RIGHT.
+                    // Route: horizontal from driver to sink dot X, then vertical drop
+                    // to sink dot. The vertical is at the dot's X (outside the box).
+                    junctionPoints.push({ x: toPos.x, y: fromPos.y });
+                    if (Math.abs(fromPos.x - toPos.x) > 2) {
+                        segments.push({ x1: fromPos.x, y1: fromPos.y, x2: toPos.x, y2: fromPos.y });
+                    }
+                    segments.push({ x1: toPos.x, y1: fromPos.y, x2: toPos.x, y2: toPos.y });
+                } else if (fromDir < 0 && toPos.y < fromPos.y - 20) {
+                    // Flipped driver below sink: driver departs LEFT, sink is above.
+                    // Route: vertical up from driver dot (leftmost X, clear of blocks),
+                    // then horizontal right to sink dot.
+                    segments.push({ x1: fromPos.x, y1: fromPos.y, x2: fromPos.x, y2: toPos.y });
+                    segments.push({ x1: fromPos.x, y1: toPos.y, x2: toPos.x, y2: toPos.y });
                 } else if (Math.abs(fromPos.y - toPos.y) < 2) {
                     // Horizontal
                     segments.push({ x1: fromPos.x, y1: fromPos.y, x2: toPos.x, y2: toPos.y });
@@ -1348,47 +1539,51 @@
             return COLORS.port;
         }
 
-        // Input ports (left)
+        // Input ports — normally left, but right if flipped
+        const inDir = el.isFlipped ? 1 : -1;  // stub direction: -1 = left, +1 = right
         for (const port of el.inputPorts) {
             const pc = portColor(port);
             ctx.strokeStyle = pc;
             ctx.lineWidth = 1.5;
             ctx.beginPath();
-            ctx.moveTo(port.x - PORT_STUB_LEN, port.y);
-            ctx.lineTo(port.x, port.y);
+            ctx.moveTo(port.x, port.y);
+            ctx.lineTo(port.x + inDir * PORT_STUB_LEN, port.y);
             ctx.stroke();
             ctx.fillStyle = pc;
             ctx.beginPath();
-            ctx.arc(port.x - PORT_STUB_LEN, port.y, PORT_DOT_R - 0.5, 0, Math.PI * 2);
+            ctx.arc(port.x + inDir * PORT_STUB_LEN, port.y, PORT_DOT_R - 0.5, 0, Math.PI * 2);
             ctx.fill();
             if (showLabels) {
                 ctx.fillStyle = COLORS.text;
                 ctx.font = `${FONT_SIZE - 1}px monospace`;
-                ctx.textAlign = 'left';
+                ctx.textAlign = el.isFlipped ? 'right' : 'left';
                 ctx.textBaseline = 'middle';
-                ctx.fillText(port.name, port.x + 4, port.y);
+                const labelX = el.isFlipped ? port.x - 4 : port.x + 4;
+                ctx.fillText(port.name, labelX, port.y);
             }
         }
 
-        // Output ports (right)
+        // Output ports — normally right, but left if flipped
+        const outDir = el.isFlipped ? -1 : 1;
         for (const port of el.outputPorts) {
             const pc = portColor(port);
             ctx.strokeStyle = pc;
             ctx.lineWidth = 1.5;
             ctx.beginPath();
             ctx.moveTo(port.x, port.y);
-            ctx.lineTo(port.x + PORT_STUB_LEN, port.y);
+            ctx.lineTo(port.x + outDir * PORT_STUB_LEN, port.y);
             ctx.stroke();
             ctx.fillStyle = pc;
             ctx.beginPath();
-            ctx.arc(port.x + PORT_STUB_LEN, port.y, PORT_DOT_R - 0.5, 0, Math.PI * 2);
+            ctx.arc(port.x + outDir * PORT_STUB_LEN, port.y, PORT_DOT_R - 0.5, 0, Math.PI * 2);
             ctx.fill();
             if (showLabels) {
                 ctx.fillStyle = COLORS.text;
                 ctx.font = `${FONT_SIZE - 1}px monospace`;
-                ctx.textAlign = 'right';
+                ctx.textAlign = el.isFlipped ? 'left' : 'right';
                 ctx.textBaseline = 'middle';
-                ctx.fillText(port.name, port.x - 4, port.y);
+                const labelX = el.isFlipped ? port.x + 4 : port.x - 4;
+                ctx.fillText(port.name, labelX, port.y);
             }
         }
     }
