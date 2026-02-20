@@ -4,109 +4,122 @@
 
 BHDL aims to revolutionize electronic circuit design by providing a modern, intuitive hardware description language with professional-grade tooling. We bring software development best practices to hardware design.
 
-## Current Status (October 2025)
+## Current Status (February 2026)
 
 ### ✅ Completed Milestones
 
-#### Core Language & Toolchain (100% Complete)
-- ✅ **Parser**: Full v2.0 flow-based syntax
-- ✅ **Analyzer**: 11-pass semantic analysis
-- ✅ **Synthesizer**: Multi-format netlist generation
-- ✅ **Visualizer**: Multiple layout algorithms
+#### Core Language & Toolchain
+- ✅ **Parser**: Full v2.0 flow-based syntax with `entity` keyword
+- ✅ **Analyzer**: 11-pass semantic analysis with arena-based scope registry
+- ✅ **Synthesizer**: Multi-format netlist generation with entity variants
 - ✅ **SPICE Engine**: DC analysis with safety checking
-- ✅ **Standard Library**: 38 intent functions
+- ✅ **Standard Library**: 38 intent functions, 137+ `.bhdl` component files
 - ✅ **Testbench System**: Simulation and verification
 
-#### Professional Tooling (100% Complete)
-- ✅ **CLI**: 9 comprehensive commands (October 2025)
-- ✅ **LSP**: 22 features for IDE integration (October 2025)
-- ✅ **Documentation**: Complete guides and references
+#### Professional Tooling
+- ✅ **CLI**: 9 comprehensive commands
+- ✅ **LSP**: 22 features for IDE integration
+- ✅ **Documentation**: Complete guides, specs, and references
 
-#### Advanced Features (100% Complete)
-- ✅ **Intent System**: Flow tracking and validation
-- ✅ **Power Domain Scalability**: Wildcards and ranges
+#### Advanced Features
+- ✅ **Intent System**: Flow tracking and validation with `for` keyword
+- ✅ **Power Domain Scalability**: Wildcards and ranges (Pass 1.25/1.5)
 - ✅ **Unified Simulation**: DC + safety + thermal
 - ✅ **Documentation Generation**: Automatic power domain docs
 
-**Total Lines of Code**: 56,667
-**Total Tests**: 700+
-**Production-Ready Components**: 9/9
+#### SKALP RFC Language Infrastructure (February 2026)
+- ✅ **Scope Registry**: Arena-based scope storage with parent-chain lookup
+- ✅ **Rich Const Evaluator**: Physical quantities with SI units (V, A, Ω, F, H, W, Hz, s)
+- ✅ **Dimensional Analysis**: Built-in functions (`parallel()`, `divider_ratio()`, `rc_cutoff()`)
+- ✅ **Enums & Match**: `enum` definitions with pattern matching
+- ✅ **Structured Diagnostics**: Diagnostic framework with source spans and fix suggestions
+- ✅ **Parameterized Types**: Generic entity instantiation with type parameters
+- ✅ **Typed Generics**: `where` clause constraints on generic type parameters
+- ✅ **Monomorphization**: Pass 2.5 for generic type specialization
+- ✅ **Traits**: `trait` definitions and `impl` blocks with method resolution
+- ✅ **Safety Annotations**: `safety_goal` and `fault_inject` for ISO 26262
+
+#### Language Alignment (February 2026)
+- ✅ **`module` → `entity` rename**: Full codebase rename (583 files) to align with SKALP
+
+**Rust Lines of Code**: ~345K
+**BHDL Lines of Code**: ~49K
+**Lib Tests Passing**: 455 (341 core + 114 bhdl-sim)
+**Workspace Crates**: 14 (bhdl-visualizer replaced by bhdl-schematic)
 
 ---
 
-## Release 1.0 Goals (Target: Q1 2026)
+## Completed: Schematic Viewer Rewrite
+
+### ✅ bhdl-schematic — SKALP-style Schematic Viewer (February 2026)
+
+Replaced the broken `bhdl-visualizer` (Rust SVG) with `bhdl-schematic`: a Rust extraction layer + Canvas renderer ported from SKALP's proven schematic viewer.
+
+#### Completed Features
+- [x] Rust `extract_schematic_data()`: Netlist → SchematicData JSON
+- [x] Ported SKALP `schematic.js` Canvas renderer with BHDL enhancements
+- [x] ELK.js automatic layout (Sugiyama layered + orthogonal edge routing)
+- [x] Power/ground pin and wire coloring (BHDL-specific)
+- [x] Component parameter display
+- [x] Power rail visualization
+- [x] Bus-width visualization with slash marks and width labels
+- [x] Signal highlighting on hover
+- [x] Zoom/pan with trackpad gesture support
+- [x] Dark theme
+- [x] Standalone HTML output (`bhdl-cli visualize`)
+- [x] JSON output for tooling (`bhdl-cli visualize --json`)
+- [x] LSP `bhdl.generateSchematicJson` command
+- [x] Click-to-navigate support (VSCode webview ready)
+
+#### Architecture
+- **Data extraction**: `bhdl-schematic/src/extract.rs` — Netlist slotmaps → JSON
+- **Layout**: ELK.js layered algorithm (vendored `elk.bundled.js`, EPL-2.0)
+- **Rendering**: `bhdl-schematic/viewer/schematic.js` — HTML5 Canvas
+- **Bundling**: `bhdl-schematic/src/html_bundle.rs` — self-contained HTML
+
+---
+
+## Release 1.0 Goals (Target: Q2 2026)
 
 ### High Priority
 
-#### 1. Community & Adoption
-- [ ] **GitHub Repository Setup**
-  - Public repository with CI/CD
-  - Issue templates and PR guidelines
-  - Community guidelines and CODE_OF_CONDUCT.md
-  - CONTRIBUTING.md with detailed guidelines
+#### 1. VSCode Extension for Schematic Viewer
+- [ ] Create `bhdl-vscode/` extension directory
+- [ ] Register `bhdl.showSchematic` command
+- [ ] Create WebviewPanel with `schematic.js` + `elk.bundled.js`
+- [ ] Handle `navigateToEntity` / `navigateToLine` messages
 
-- [ ] **Example Library**
-  - 20+ example circuits covering common use cases
-  - Tutorial series (Getting Started, Intents, Power Domains, Simulation)
-  - Video demonstrations
-  - Interactive playground (web-based, optional)
+#### 2. VSCode Extension
+- [ ] Package LSP + schematic viewer as VSCode extension
+- [ ] Syntax highlighting (TextMate grammar for `.bhdl` files)
+- [ ] Snippet support for common patterns
+- [ ] Publish to VSCode marketplace
 
-- [ ] **Editor Extensions**
-  - VSCode extension with full LSP integration
-  - Neovim plugin configuration
-  - Emacs configuration examples
-  - Syntax highlighting for GitHub/GitLab
-
-#### 2. Documentation Improvements
-- [ ] **User Documentation**
-  - Complete beginner's guide
-  - Advanced topics guide
-  - Best practices handbook
-  - Migration guide (from other HDLs)
-
-- [ ] **API Documentation**
-  - Rustdoc for all public APIs
-  - Architecture decision records (ADRs)
-  - Contribution guide with code walkthrough
-  - Testing guide expansion
-
-- [ ] **Interactive Documentation**
-  - Searchable online docs
-  - Code playground integration
-  - FAQ section
-  - Troubleshooting database
-
-#### 3. Visualization Enhancements
-- [ ] **Symbol Library Expansion**
-  - Additional IC symbols (microcontrollers, FPGAs, etc.)
-  - Connector symbols (USB, HDMI, etc.)
-  - Mechanical symbols (mounting holes, etc.)
-  - Custom symbol support
-
-- [ ] **Layout Improvements**
-  - Symbol scaling refinement
-  - Orthogonal routing optimization
-  - Multi-layer support visualization
-  - Component orientation optimization
-
-- [ ] **Output Formats**
-  - PDF export
-  - PNG/JPG raster export
-  - Interactive HTML schematics
-  - 3D preview (stretch goal)
-
-#### 4. Component Database
+#### 3. Component Database
 - [ ] **Database Expansion**
   - Import full KiCad symbol libraries
   - Manufacturer part database integration
   - Parametric search capabilities
-  - Part availability checking (API integration)
 
 - [ ] **Footprint Support**
   - KiCad footprint parsing
-  - Footprint visualization
   - PCB layout hints
   - DRC rule generation
+
+#### 4. Community & Adoption
+- [ ] **GitHub Repository Setup**
+  - CI/CD pipeline
+  - Issue templates and PR guidelines
+  - CONTRIBUTING.md
+
+- [ ] **Example Library**
+  - 20+ example circuits covering common use cases
+  - Tutorial series (Getting Started, Power Domains, Generics, Safety)
+
+- [ ] **Documentation**
+  - Complete beginner's guide
+  - Rustdoc for all public APIs
+  - Migration guide from other HDLs
 
 ### Medium Priority
 
@@ -115,317 +128,69 @@ BHDL aims to revolutionize electronic circuit design by providing a modern, intu
   - AC frequency response
   - Transient analysis
   - Monte Carlo simulation
-  - Temperature sweep
 
 - [ ] **Signal Integrity**
   - Transmission line analysis
   - Crosstalk detection
-  - Ground bounce analysis
   - Power supply noise
 
-- [ ] **EMC/EMI Analysis**
-  - Radiated emissions prediction
-  - Susceptibility analysis
-  - Filter design recommendations
-  - Shielding effectiveness
-
 #### 6. Synthesis Improvements
-- [ ] **Smart Component Selection**
-  - Multi-objective optimization
-  - Cost vs. performance tradeoffs
-  - Availability-aware selection
-  - Obsolescence warnings
+- [ ] **Bill of Materials**
+  - Automated BOM generation
+  - Cost estimation
+  - Alternative part suggestions
 
 - [ ] **PCB Integration**
   - Routing constraint generation
   - Layer stackup recommendations
-  - Via placement optimization
-  - Thermal relief patterns
 
-- [ ] **Bill of Materials**
-  - Automated BOM generation
-  - Cost estimation
-  - Supplier integration
-  - Alternative part suggestions
+#### 7. Output Formats
+- [ ] KiCad netlist export
+- [ ] Altium Designer export
+- [ ] PDF schematic export
+- [x] Interactive HTML schematics (via bhdl-schematic)
 
-#### 7. Simulation Enhancements
-- [ ] **Advanced Behavioral Models**
-  - Verilog-A integration
-  - VHDL-AMS support
-  - SystemVerilog behavioral models
-  - Custom model definition language
+### Lower Priority
 
-- [ ] **Mixed-Signal Simulation**
-  - Digital/analog co-simulation
-  - Event-driven digital simulation
-  - Fast behavioral simulation modes
-  - Hardware-in-the-loop support
-
-- [ ] **Verification**
-  - Formal verification basics
-  - Assertion-based verification
-  - Coverage-driven verification
-  - Regression test framework
-
-### Low Priority / Future
-
-#### 8. Advanced Language Features *(Priority elevated — see [RFC: SKALP Language Infrastructure](docs/proposals/RFC_SKALP_Language_Infrastructure.md))*
-
-> **Cross-reference**: A comprehensive analysis of SKALP compiler features portable to BHDL
-> has been completed. The RFC covers type system, generics, const evaluator, monomorphization,
-> enums/match, traits, safety annotations, diagnostics, scope chain, and dimensional analysis.
-> Estimated ~18 weeks across 3 phases. Start with the type system and const evaluator (Phase 1).
-
-- [ ] **Parameterized Type System** *(Phase 1, ~3 weeks)*
-  - Replace string-based types with `BhdlType` enum (electrical primitives, component refs)
-  - Width tracking (`Fixed`, `Parameterized`, `Inferred`)
-  - Voltage domain types, current ratings
-  - See RFC §1
-
-- [ ] **Rich Const Evaluator** *(Phase 1, ~2 weeks)*
-  - `ConstValue` enum with physical units (voltage, current, resistance, capacitance)
-  - Unit-aware arithmetic (V × A = W, dimensional checking)
-  - Built-in functions for component calculations
-  - Stack overflow prevention via `stacker` crate
-  - See RFC §3, §10
-
-- [ ] **Hierarchical Parameterization** *(Phase 2, ~3 weeks)*
-  - Typed generic parameters with constraints (`where V_IN > V_OUT`)
-  - Monomorphization pipeline (collect → specialize → remap → deduplicate)
-  - Template modules / generic programming constructs
-  - See RFC §2, §4
-
-- [ ] **Type Classes / Traits** *(Phase 2, ~3 weeks)*
-  - `trait SpiPeripheral`, `trait I2cDevice`, `trait PowerRegulator`
-  - Direction flipping operator (`~`) for complementary interfaces
-  - Default implementations
-  - See RFC §6
-
-- [ ] **Enums and Match Expressions** *(Phase 2, ~1 week)*
-  - `PowerState`, `FaultKind`, `ConnectorType` enums
-  - Exhaustive match with compile-time checking
-  - See RFC §5
-
-- [ ] **Safety Annotations and Fault Injection** *(Phase 3, ~2 weeks)*
-  - ASIL/SIL safety level annotations
-  - Diagnostic coverage requirements
-  - `fault_inject` test framework
-  - See RFC §7
-
-- [ ] **Structured Diagnostics** *(Phase 3, ~2 weeks)*
-  - `DiagnosticKind` enum (type, constraint, safety, electrical errors)
-  - Source spans, fix suggestions, related information
-  - See RFC §8
-
-- [ ] **Advanced Constraint Solving**
-  - Electrical constraints
-  - Manufacturing constraints
-
-- [ ] **Design Constraints**
-  - Timing constraints
-  - Physical constraints
-  - Electrical constraints
-  - Manufacturing constraints
-
-- [ ] **Optimization Directives**
-  - Area optimization
-  - Power optimization
-  - Cost optimization
-  - Multi-objective optimization
+#### 8. Advanced Constraint Solving
+- [ ] Electrical constraints
+- [ ] Manufacturing constraints
+- [ ] Timing constraints
 
 #### 9. Tool Integrations
-- [ ] **PCB Tools**
-  - Altium Designer export
-  - Eagle export
-  - OrCAD integration
-  - Direct PCB generation (stretch)
-
-- [ ] **Simulation Tools**
-  - LTspice integration
-  - ngspice direct interface
-  - Cadence integration
-  - MATLAB/Simulink co-sim
-
-- [ ] **Manufacturing**
-  - Gerber generation
-  - Pick-and-place files
-  - Assembly instructions
-  - Test program generation
-
-#### 10. Web Platform (Stretch Goal)
-- [ ] **Online IDE**
-  - Browser-based editor
-  - Cloud compilation
-  - Shared project workspace
-  - Real-time collaboration
-
-- [ ] **Circuit Marketplace**
-  - Share designs
-  - Component sharing
-  - Template library
-  - Design review platform
+- [ ] LTspice / ngspice direct interface
+- [ ] Gerber generation
+- [ ] Pick-and-place files
 
 ---
 
-## Version 2.0 Goals (Target: Q3 2026)
+## Version 2.0 Goals (Target: Q4 2026)
 
 ### Language Evolution
-- [ ] **Hierarchical Intents**
-  - Nested intent scopes
-  - Intent inheritance
-  - Custom intent definitions
-  - Intent composition
-
-- [ ] **Advanced Type System**
-  - Dependent types
-  - Effect system for side effects
-  - Linear types for resources
-  - Gradual typing
-
-- [ ] **Metaprogramming**
-  - Macro system
-  - Code generation
-  - Template metaprogramming
-  - Procedural macros
+- [ ] **Hierarchical Intents**: Nested scopes, inheritance, composition
+- [ ] **Advanced Constraint Solving**: Multi-domain optimization
+- [ ] **Metaprogramming**: Macro system for circuit pattern generation
 
 ### Toolchain Improvements
-- [ ] **Incremental Compilation**
-  - Fast recompilation
-  - Cached analysis results
-  - Partial invalidation
-  - Background analysis
-
-- [ ] **Parallel Processing**
-  - Multi-threaded analysis
-  - Distributed simulation
-  - GPU-accelerated simulation
-  - Cloud burst processing
-
-- [ ] **Machine Learning Integration**
-  - Learned component selection
-  - Learned routing optimization
-  - Anomaly detection
-  - Predictive debugging
+- [ ] **Incremental Compilation**: Fast recompilation with cached analysis
+- [ ] **Parallel Processing**: Multi-threaded analysis passes
 
 ### Platform Expansion
-- [ ] **Mobile Support**
-  - iOS/Android viewers
-  - Remote monitoring
-  - Mobile editing (limited)
-  - On-device simulation
-
-- [ ] **Cloud Services**
-  - Managed compilation
-  - Simulation as a service
-  - Design storage
-  - Collaboration platform
+- [x] **Web Viewer**: Standalone browser-based schematic viewer (bhdl-schematic HTML output)
+- [ ] **Cloud Services**: Shared project workspace
 
 ---
 
 ## Long-term Vision (2027+)
 
-### Research Areas
 - **AI-Assisted Design**: Copilot for circuit design
-- **Automated Layout**: AI-driven PCB layout
-- **Self-Healing Circuits**: Adaptive fault tolerance
-- **Quantum Circuit Support**: Hybrid quantum-classical designs
-- **Photonic Circuits**: Optical circuit description
-
-### Ecosystem Development
+- **Automated PCB Layout**: AI-driven placement and routing
 - **University Adoption**: Curriculum integration
-- **Industry Partnerships**: Enterprise features
-- **Open Source Community**: Vibrant contributor base
-- **Standards Body**: Influence industry standards
-
-### Market Expansion
-- **Consumer Electronics**: Rapid prototyping
-- **Automotive**: Safety-critical systems
-- **Aerospace**: High-reliability designs
-- **IoT**: Low-power optimization
-- **Medical Devices**: Regulatory compliance
+- **Industry Partnerships**: Automotive (ISO 26262), medical, aerospace
+- **Standards Influence**: Push for modern HDL standards
 
 ---
 
-## How to Contribute
+**Last Updated**: February 20, 2026
 
-We welcome contributions in all areas! Priority areas for community involvement:
-
-### Immediate Needs
-1. **Examples & Tutorials**: Help others learn BHDL
-2. **Bug Reports**: Find and report issues
-3. **Documentation**: Improve guides and references
-4. **Component Library**: Add more components
-
-### Ongoing Needs
-5. **Testing**: Expand test coverage
-6. **Visualization**: Improve symbols and layouts
-7. **IDE Plugins**: Create editor extensions
-8. **Translations**: Internationalization
-
-### Advanced Contributions
-9. **Analysis Engines**: New analysis passes
-10. **Optimization**: Performance improvements
-11. **Tool Integrations**: Connect to other tools
-12. **Research**: Explore new features
-
-See `CONTRIBUTING.md` for detailed guidelines.
-
----
-
-## Release Schedule
-
-### Minor Releases (Monthly)
-- Bug fixes
-- Documentation updates
-- Small feature additions
-- Performance improvements
-
-### Major Releases (Quarterly)
-- New language features
-- Major tool enhancements
-- Breaking changes (with migration guide)
-- Ecosystem expansions
-
-### LTS Releases (Annually)
-- Long-term support
-- Stability focus
-- Enterprise features
-- Professional certification
-
----
-
-## Success Metrics
-
-### Technical Metrics
-- **Lines of Code**: Current 56,667 → Target 100,000 by v1.0
-- **Test Coverage**: Current 700+ tests → Target 1,500+ by v1.0
-- **Performance**: <1s analysis for 1000-component designs
-- **Reliability**: 99.9% crash-free rate
-
-### Adoption Metrics
-- **GitHub Stars**: Target 1,000 by v1.0
-- **Active Users**: Target 500 by v1.0
-- **Contributors**: Target 50 by v1.0
-- **Companies Using**: Target 10 by v1.0
-
-### Community Metrics
-- **Examples Created**: Target 100 by v1.0
-- **Tutorial Views**: Target 10,000 by v1.0
-- **Forum Activity**: Target 1,000 posts by v1.0
-- **Stack Overflow Questions**: Target 100 by v1.0
-
----
-
-## Stay Updated
-
-- **Blog**: [blog.bhdl.dev](https://blog.bhdl.dev) (coming soon)
-- **Twitter**: [@bhdl_lang](https://twitter.com/bhdl_lang) (coming soon)
-- **Discord**: [discord.gg/bhdl](https://discord.gg/bhdl) (coming soon)
-- **Newsletter**: [newsletter.bhdl.dev](https://newsletter.bhdl.dev) (coming soon)
-
----
-
-**Last Updated**: October 13, 2025
-**Next Review**: January 2026
-
-*This roadmap is a living document and will be updated quarterly based on community feedback and project progress.*
+*This roadmap is a living document updated as the project evolves.*

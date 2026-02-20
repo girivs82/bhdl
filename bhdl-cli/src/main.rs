@@ -20,7 +20,7 @@ use bhdl_parser::parse;
 use bhdl_ast::{SourceFile, AstNode, HasName};
 use bhdl_analyzer::{analyze, documentation::{generate_documentation, DocumentationOptions, OutputFormat}};
 use bhdl_synthesizer::NetlistGenerator;
-use bhdl_visualizer::{render_circuit_with_analysis};
+use bhdl_schematic;
 use bhdl_spice::{ComponentRoleDetector, NetlistToSpiceConverter, SpiceAnalysisAugmenter};
 use bhdl_common::AnalysisData;
 use bhdl_testbench::{TestbenchRunner, WaveformFormat};
@@ -76,19 +76,15 @@ enum Commands {
         format: String,
     },
     
-    /// Generate circuit visualization
+    /// Generate interactive schematic visualization (HTML)
     Visualize {
-        /// Output SVG file
+        /// Output HTML file
         #[arg(short, long)]
         output: Option<PathBuf>,
-        
-        /// Layout algorithm (semantic, force, analytical)
-        #[arg(short, long, default_value = "semantic")]
-        layout: String,
-        
-        /// Show component values
+
+        /// Output raw SchematicData JSON instead of HTML
         #[arg(long)]
-        show_values: bool,
+        json: bool,
     },
     
     /// Run SPICE analysis
@@ -236,8 +232,8 @@ async fn main() -> Result<()> {
             run_synthesis(&source_file, output, &format).await?;
         }
         
-        Some(Commands::Visualize { output, layout, show_values }) => {
-            run_visualization(&source_file, output, &layout, show_values).await?;
+        Some(Commands::Visualize { output, json }) => {
+            run_visualization(&source_file, output, json).await?;
         }
         
         Some(Commands::Spice { analysis, output, use_metadata }) => {
@@ -621,30 +617,33 @@ async fn run_synthesis(source_file: &SourceFile, output: Option<PathBuf>, format
     Ok(())
 }
 
-async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, layout: &str, show_values: bool) -> Result<()> {
+async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, json_output: bool) -> Result<()> {
     // Run full pipeline to get netlist
     let analysis = analyze(source_file);
 
     let mut generator = NetlistGenerator::new();
     let netlist = generator.generate_from_ast_and_analysis(source_file, &analysis).await?;
 
-    // Configure visualization (layout algorithm is handled by semantic visualizer)
-    // TODO: Pass layout algorithm preference when API supports it
-    info!("Using layout algorithm: {}", layout);
-    info!("Show values: {}", show_values);
+    // Extract schematic data from netlist
+    let schematic_data = bhdl_schematic::extract_schematic_data(&netlist, Some(&analysis))
+        .map_err(|e| anyhow::anyhow!("Schematic extraction failed: {}", e))?;
 
-    // Get database component instances from synthesizer
-    let components = generator.get_component_instances();
-    info!("Retrieved {} database component instances for visualization", components.len());
-
-    // Generate SVG using semantic visualizer
-    let svg = render_circuit_with_analysis(&netlist, &components, Some(&analysis), None).await?;
-
-    let output_path = output.unwrap_or_else(|| PathBuf::from("circuit.svg"));
-    fs::write(&output_path, svg)?;
-
-    println!("{}", "✓ Visualization generated".green().bold());
-    println!("  Output: {}", output_path.display());
+    if json_output {
+        // Output raw JSON for tooling/debugging
+        let json = serde_json::to_string_pretty(&schematic_data)?;
+        let output_path = output.unwrap_or_else(|| PathBuf::from("circuit.json"));
+        fs::write(&output_path, &json)?;
+        println!("{}", "✓ Schematic JSON generated".green().bold());
+        println!("  Output: {}", output_path.display());
+    } else {
+        // Generate standalone HTML with interactive Canvas viewer
+        let html = bhdl_schematic::generate_standalone_html(&schematic_data);
+        let output_path = output.unwrap_or_else(|| PathBuf::from("circuit.html"));
+        fs::write(&output_path, &html)?;
+        println!("{}", "✓ Schematic viewer generated".green().bold());
+        println!("  Output: {}", output_path.display());
+        println!("  Open in a browser for interactive viewing (zoom, pan, hover)");
+    }
 
     Ok(())
 }
@@ -731,14 +730,19 @@ async fn run_pipeline(source_file: &SourceFile, _input_path: &PathBuf, output_di
     // Step 3: Visualization
     if !no_viz {
         println!("\n{}", "3. Visualization".blue().bold());
-        // Get database component instances from synthesizer
-        let components = generator.get_component_instances();
-        info!("Retrieved {} database component instances for visualization", components.len());
-        let svg = render_circuit_with_analysis(&netlist, &components, Some(&analysis), None).await?;
-        
-        let svg_path = output_dir.join("circuit.svg");
-        fs::write(&svg_path, svg)?;
-        println!("  ✓ SVG saved to {}", svg_path.display());
+
+        let schematic_data = bhdl_schematic::extract_schematic_data(&netlist, Some(&analysis))
+            .map_err(|e| anyhow::anyhow!("Schematic extraction failed: {}", e))?;
+        let html = bhdl_schematic::generate_standalone_html(&schematic_data);
+
+        let html_path = output_dir.join("circuit.html");
+        fs::write(&html_path, html)?;
+        println!("  ✓ Schematic viewer saved to {}", html_path.display());
+
+        // Also save SchematicData JSON for tooling
+        let json_path = output_dir.join("schematic.json");
+        fs::write(&json_path, serde_json::to_string_pretty(&schematic_data)?)?;
+        println!("  ✓ Schematic JSON saved to {}", json_path.display());
     }
     
     // Step 4: SPICE Analysis

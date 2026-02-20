@@ -9,7 +9,7 @@ bhdl-ast = { path = "../bhdl-ast" }
 bhdl-analyzer = { path = "../bhdl-analyzer" }
 bhdl-synthesizer = { path = "../bhdl-synthesizer" }
 bhdl-netlist = { path = "../bhdl-netlist" }
-bhdl-visualizer = { path = "../bhdl-visualizer" }
+bhdl-schematic = { path = "../bhdl-schematic" }
 bhdl-spice = { path = "../bhdl-spice" }
 bhdl-components = { path = "../bhdl-components" }
 bhdl-common = { path = "../bhdl-common" }

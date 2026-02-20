@@ -1,0 +1,13 @@
+//! BHDL Schematic Viewer — Rust extraction layer + HTML/Canvas renderer.
+//!
+//! This crate provides two public functions:
+//! - `extract_schematic_data()` — converts a BHDL `Netlist` to a JSON-serializable `SchematicData`
+//! - `generate_standalone_html()` — bundles the data with the Canvas renderer into a standalone HTML file
+
+pub mod types;
+pub mod extract;
+pub mod html_bundle;
+
+pub use types::*;
+pub use extract::extract_schematic_data;
+pub use html_bundle::generate_standalone_html;

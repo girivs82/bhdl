@@ -1,0 +1,11 @@
+[package]
+name = "bhdl-schematic"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bhdl-netlist = { path = "../bhdl-netlist" }
+bhdl-analyzer = { path = "../bhdl-analyzer" }
+bhdl-common = { path = "../bhdl-common" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

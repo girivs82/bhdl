@@ -134,10 +134,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("   To enable visualization:");
         println!("   1. Ensure components.db exists");
         println!("   2. Run: cargo run -p bhdl-components --example kicad_integration");
-        println!("   3. Use bhdl-visualizer crate for SVG generation");
+        println!("   3. Use bhdl-schematic crate for HTML schematic generation");
     } else {
         println!("\n✅ Components matched! Ready for visualization stage");
-        println!("   Next step: Use bhdl-visualizer to generate SVG");
+        println!("   Next step: Use bhdl-schematic to generate schematic");
     }
     
     println!("\n✅ Pipeline test completed successfully");

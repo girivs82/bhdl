@@ -188,7 +188,7 @@ async fn main() -> Result<()> {
     // Step 5: Ready for visualization
     println!("\n🎨 Step 5: Ready for visualization with new clean API");
     println!("   The netlist and database components are ready for the new visualizer");
-    println!("   Use: bhdl_visualizer::render_circuit(&netlist, &component_instances)");
+    println!("   Use: bhdl_schematic::extract_schematic_data(&netlist, analysis)");
     
     // Step 6: Summary
     println!("\n🎉 End-to-End Pipeline Test Complete!");

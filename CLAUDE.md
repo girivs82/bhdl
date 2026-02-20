@@ -21,15 +21,13 @@ BHDL (Board Hardware Description Language) is a domain-specific language for des
   - `parse` - Parse and validate BHDL syntax
   - `analyze` - Run semantic analysis
   - `synthesize` - Generate netlist
-  - `visualize` - Create circuit visualization
-- `cargo run -p bhdl-visualizer` - Run the visualizer
-- `cargo run -p bhdl-visualizer --bin <binary>` - Run specific visualizer binary
+  - `visualize` - Create interactive schematic visualization (HTML)
 
 ## Architecture
 
 The toolchain follows a multi-stage pipeline:
 
-**bhdl-parser** → **bhdl-ast** → **bhdl-analyzer** → **bhdl-netlist** → **bhdl-visualizer**
+**bhdl-parser** → **bhdl-ast** → **bhdl-analyzer** → **bhdl-netlist** → **bhdl-schematic**
 
 ### Core Crates
 
@@ -65,11 +63,13 @@ The toolchain follows a multi-stage pipeline:
    - Uses `slotmap` for type-safe ID management
    - Serialization support via `serde`
 
-5. **bhdl-visualizer**: Layout generation and SVG visualization
-   - Multi-threaded placement algorithms (semantic, analytical, force-directed)
-   - Intelligent routing with pathfinding and cost optimization
-   - Component symbol libraries for passives, ICs, power components
-   - SVG generation for circuit diagrams
+5. **bhdl-schematic**: Interactive schematic viewer (replaces bhdl-visualizer)
+   - Rust extraction layer: Netlist → SchematicData JSON
+   - TypeScript/Canvas renderer ported from SKALP's proven schematic viewer
+   - ELK.js (Sugiyama hierarchical layout) for orthogonal edge routing
+   - HTML5 Canvas interactive rendering (zoom, pan, hover)
+   - Standalone HTML output or JSON for LSP/IDE integration
+   - Power rail visualization, component parameter display
 
 6. **bhdl-synthesizer**: Circuit synthesis and netlist generation
    - Converts AST and analysis results to structural netlist
@@ -96,7 +96,7 @@ The toolchain follows a multi-stage pipeline:
    - Parse and validate BHDL syntax
    - Full semantic analysis with all 11 passes
    - Netlist generation (JSON and SPICE formats)
-   - Circuit visualization with multiple layout algorithms
+   - Interactive schematic visualization (HTML output)
    - Component role detection and SPICE analysis
    - Complete pipeline execution
    - Simulation with testbenches
@@ -116,7 +116,7 @@ The toolchain follows a multi-stage pipeline:
 - **Parse Layer**: `SyntaxNode<BhdlLanguage>`, AST nodes (`Board`, `Entity`, etc.)
 - **Analysis Layer**: `SymbolTable`, `AnalysisResult`, `Diagnostic`, `ResolvedConstants` 
 - **Netlist Layer**: Type-safe IDs (`ModuleId`, `InstanceId`, `NetId`), `ConnectionPoint`
-- **Visualization Layer**: `LayoutEngine`, `Point`, `LayoutHints`, `RoutingCosts`
+- **Visualization Layer**: `SchematicData`, `SchematicInstance`, `SchematicNet`, `PowerRail`
 
 ## BHDL Language Features (v2.0)
 
@@ -169,7 +169,7 @@ cargo run -p bhdl-components --example kicad_integration
 ## Known Gaps
 
 - KiCad footprint parsing not yet implemented
-- Remaining visualization improvements: component symbol scaling, orthogonal routing refinement
+- Future: VSCode extension wrapper for LSP schematic webview
 - Additional manufacturer datasheet integration opportunities
 
 ## Important Files
@@ -184,8 +184,8 @@ cargo run -p bhdl-components --example kicad_integration
 - `bhdl-stdlib/src/intents/` - Intent function library (to be implemented)
 - `bhdl-spice/src/safety/` - Electrical safety analysis implementation
 - `bhdl-spice/src/bin/test_safety_with_dc.rs` - Complete safety analysis example
-- `bhdl-visualizer/src/symbols/` - Component symbol definitions
-- Various `*.svg` files in `bhdl-visualizer/` - Test visualization outputs
+- `bhdl-schematic/viewer/schematic.js` - Canvas-based schematic renderer (ported from SKALP)
+- `bhdl-schematic/viewer/elk.bundled.js` - Vendored ELK.js layout engine (EPL-2.0)
 
 ## Development Reminders
 
@@ -193,7 +193,7 @@ cargo run -p bhdl-components --example kicad_integration
 ⚠️ **CRITICAL**: When creating or running tests, NEVER use the project root directory:
 1. **Test binaries** (.rs) → Place in `<crate>/src/bin/` directory
 2. **Test circuits** (.bhdl) → Place in `tests/circuits/{simple|realistic|edge_cases}/`
-3. **Test outputs** (.svg, .net) → Write to `tests/outputs/{svg|netlists}/`
+3. **Test outputs** (.html, .net) → Write to `tests/outputs/{schematics|netlists}/`
 4. **Temporary files** → Use `tests/scratch/` (git-ignored)
 5. **Run tests** → Use `./tests/run_tests.sh` or cargo commands with proper paths
 
@@ -203,7 +203,7 @@ Example test structure:
 let test_file = std::env::args().nth(1)
     .unwrap_or_else(|| "tests/circuits/realistic/my_circuit.bhdl".to_string());
     
-let output_path = "tests/outputs/svg/my_test_output.svg";
+let output_path = "tests/outputs/schematics/my_test_output.html";
 ```
 
 See `tests/TESTING.md` for complete testing guidelines.
@@ -214,7 +214,7 @@ See `tests/TESTING.md` for complete testing guidelines.
 2. **No hardcoded component parameters** - Use values from bhdl-stdlib or database
 3. **No mock data** - Use real circuits processed through the actual pipeline
 4. **No placeholder values** - Every value must come from authentic sources
-5. **Test with real data** - Process actual BHDL files through parser → analyzer → synthesizer → visualizer
+5. **Test with real data** - Process actual BHDL files through parser → analyzer → synthesizer → schematic
 
 Example of what NOT to do:
 ```rust
@@ -224,25 +224,25 @@ r1.pins.insert("1", Point::new(-60.0, 0.0));
 
 // ✅ CORRECT - Use actual pipeline
 let netlist = synthesizer.generate_from_ast(&ast)?;
-let layout = semantic_visualizer.generate_layout(&netlist)?;
-// Positions come from actual layout algorithms and database
+let schematic = schematic_extractor.extract(&netlist)?;
+// Layout computed by ELK.js from SchematicData
 ```
 
-### SVG Visualization Quality Control
-⚠️ **CRITICAL**: After generating any SVG visualization, always:
-1. **Read and inspect the actual SVG content** - don't just assume it worked
+### Schematic Visualization Quality Control
+⚠️ **CRITICAL**: After generating any HTML schematic output, always:
+1. **Read and inspect the actual HTML/JSON content** - don't just assume it worked
 2. **Check for component overlapping** - components should be clearly separated
-3. **Verify all components are visible** - ensure viewBox includes all elements
+3. **Verify all components are visible** - ensure the schematic data includes all elements
 4. **Validate proper routing** - connections should be clear and not overlapping
 5. **Test with different circuit types** - simple and complex circuits
 6. **Never claim success without visual verification**
 
-Common SVG issues to watch for:
+Common schematic issues to watch for:
 - Components rendered at same coordinates (overlapping)
-- Components outside viewBox boundaries (not visible)
-- Incorrect SVG transform calculations
-- Missing or malformed component symbols
-- Routing lines that don't connect properly to pins
+- Components missing from SchematicData JSON
+- Incorrect ELK layout calculations
+- Missing or malformed component parameters
+- Routing edges that don't connect properly to ports
 
 ## BHDL Version 2.0 Support
 
@@ -296,7 +296,7 @@ Common SVG issues to watch for:
 
 1. **NO MOCKING/HARDCODING**: Never mock or hardcode values just to get through the pipeline flow
 2. **PROPER IMPLEMENTATION REQUIRED**: Each stage must properly process real data from the previous stage
-3. **AUTHENTIC DATA FLOW**: Parser → AST → Analyzer → Netlist → Visualizer must use authentic data structures
+3. **AUTHENTIC DATA FLOW**: Parser → AST → Analyzer → Netlist → Schematic must use authentic data structures
 4. **REAL COMPONENT MATCHING**: Components must be matched to actual KiCad symbols, not placeholder data
 5. **GENUINE TESTING**: Test with real circuits that can be verified at each pipeline stage
 
@@ -434,8 +434,7 @@ This ensures we build a robust, production-ready toolchain rather than a demo wi
   - Scope registry, rich const eval, dimensional analysis
   - Enums/match, structured diagnostics, parameterized types
   - Typed generics, monomorphization, traits, safety annotations
-- Component symbol scaling and visualization improvements
-- Orthogonal routing to proper pin positions
+- VSCode extension for schematic webview (Phase 2)
 - Additional manufacturer datasheet values in stdlib
 - Further simulation tool integration
 
