@@ -336,6 +336,57 @@
             if (!mpVisited.has(name)) mainPathOrder.push(name);
         }
 
+        // ── 7c. Detect parallel branches (fan-out to multiple main-path sinks) ──
+        // When a net drives multiple main-path components, they are parallel branches.
+        // Keep the first (in mainPathOrder) on main path; demote the rest to branches.
+        const parallelBranchJunctions = new Map(); // demotedName → keepName
+        {
+            for (const net of processedNets) {
+                const mainSinks = net.sinks
+                    .filter(s => mainPathNames.has(s.name))
+                    .map(s => s.name);
+                if (mainSinks.length <= 1) continue;
+
+                // Sort by position in mainPathOrder — keep the first
+                mainSinks.sort((a, b) => mainPathOrder.indexOf(a) - mainPathOrder.indexOf(b));
+                const keepName = mainSinks[0];
+
+                for (let i = 1; i < mainSinks.length; i++) {
+                    const demotedName = mainSinks[i];
+                    mainPathNames.delete(demotedName);
+                    const idx = mainPathOrder.indexOf(demotedName);
+                    if (idx >= 0) mainPathOrder.splice(idx, 1);
+                    parallelBranchJunctions.set(demotedName, keepName);
+                    branchNames.push({
+                        name: demotedName,
+                        junctionName: keepName,
+                        junctionSide: 'left',
+                        isParallel: true
+                    });
+                }
+            }
+
+            // Move downstream shunts of demoted components into the branch group
+            for (const [demotedName, keepName] of parallelBranchJunctions) {
+                for (let si = shuntNames.length - 1; si >= 0; si--) {
+                    const shunt = shuntNames[si];
+                    const isDriven = processedNets.some(net =>
+                        net.driver.name === demotedName &&
+                        net.sinks.some(s => s.name === shunt.name)
+                    );
+                    if (isDriven) {
+                        shuntNames.splice(si, 1);
+                        branchNames.push({
+                            name: shunt.name,
+                            junctionName: keepName,
+                            junctionSide: 'left',
+                            isParallel: true
+                        });
+                    }
+                }
+            }
+        }
+
         // ── 7b. Reclassify: shunts connected only to off-path → branch tail ──
         // e.g., LED connected to sense (branch) should join the branch chain
         for (let i = shuntNames.length - 1; i >= 0; i--) {
@@ -574,6 +625,7 @@
         }
 
         for (const item of [...shuntNames, ...decouplingNames, ...branchNames]) {
+            if (item.junctionName) continue; // Pre-set by parallel branch detection
             const j = findJunction(item.name);
             if (j) {
                 item.junctionName = j.name;
@@ -769,10 +821,24 @@
             const jPos = positions.get(group.junctionName);
             if (!jPos) continue;
             const ordered = orderBranchChain(group.items, processedNets);
+            const isParallel = group.items.some(item => item.isParallel);
 
-            let bx;
-            if (group.side === 'left') {
+            let bx, by;
+            if (isParallel) {
+                // Parallel branch: start at junction's X (aligned with main-path sibling)
+                bx = jPos.x;
+                // Place below any shunts at this junction
+                let maxYBelow = shuntY;
+                for (const dItem of verticalDropItems) {
+                    if (dItem.junctionName === group.junctionName) {
+                        const dPos = positions.get(dItem.name);
+                        if (dPos) maxYBelow = Math.max(maxYBelow, dPos.y + dPos.h);
+                    }
+                }
+                by = maxYBelow + 60;
+            } else if (group.side === 'left') {
                 bx = jPos.x - 200;
+                by = shuntY;
             } else {
                 bx = jPos.x + jPos.w + 20;
                 for (const dItem of verticalDropItems) {
@@ -781,12 +847,24 @@
                         if (dPos) bx = Math.max(bx, dPos.x + dPos.w + 30);
                     }
                 }
+                by = shuntY;
             }
 
+            let prevBranchPos = null;
             for (const item of ordered) {
                 const sz = offPathSizes.get(item.name) || { w: INSTANCE_BOX_MIN_WIDTH, h: 60 };
-                positions.set(item.name, { x: bx, y: shuntY, w: sz.w, h: sz.h });
-                bx += sz.w + 120;
+                if (shuntInstNames.has(item.name) && prevBranchPos) {
+                    // Shunt-like component: position at predecessor's output port dot X,
+                    // below predecessor — mirrors how main-path shunts are placed
+                    const portDotX = prevBranchPos.x + prevBranchPos.w + PORT_STUB_LEN + 20;
+                    const dropX = portDotX - sz.w / 2;
+                    const dropY = prevBranchPos.y + prevBranchPos.h + SHUNT_DROP;
+                    positions.set(item.name, { x: dropX, y: dropY, w: sz.w, h: sz.h });
+                } else {
+                    positions.set(item.name, { x: bx, y: by, w: sz.w, h: sz.h });
+                    prevBranchPos = { x: bx, y: by, w: sz.w, h: sz.h };
+                    bx += sz.w + 120;
+                }
             }
         }
 
@@ -813,7 +891,7 @@
         for (const [name, inst] of instMap) {
             const pos = positions.get(name);
             if (!pos) continue;
-            const isShuntLike = offPathNames.has(name) && !branchNames.some(b => b.name === name);
+            const isShuntLike = offPathNames.has(name) && (shuntInstNames.has(name) || !branchNames.some(b => b.name === name));
 
             const instInPorts = [], instOutPorts = [];
             const seenIn = new Set(), seenOut = new Set();
@@ -843,8 +921,26 @@
                 }
             }
             // Attach simulation annotations (current, power) if available
-            const simCurrent = data.simulation?.instance_currents?.[name];
-            const simPowerW = data.simulation?.instance_power?.[name];
+            // GLACIER decomposes some components (e.g. regulators → name_dropout + name_vout),
+            // so fall back to aggregating sub-component values when no exact match exists.
+            let simCurrent = data.simulation?.instance_currents?.[name];
+            let simPowerW = data.simulation?.instance_power?.[name];
+            if (simCurrent == null && data.simulation?.instance_currents) {
+                let maxAbs = 0;
+                for (const [key, val] of Object.entries(data.simulation.instance_currents)) {
+                    if (key.startsWith(name + '_') && Math.abs(val) > maxAbs) {
+                        maxAbs = Math.abs(val);
+                        simCurrent = val;
+                    }
+                }
+            }
+            if (simPowerW == null && data.simulation?.instance_power) {
+                let total = 0, found = false;
+                for (const [key, val] of Object.entries(data.simulation.instance_power)) {
+                    if (key.startsWith(name + '_')) { total += val; found = true; }
+                }
+                if (found) simPowerW = total;
+            }
             layoutElements.push({ x: pos.x, y: pos.y, w: pos.w, h: pos.h, name, type: 'instance', entityType: inst.entity_type, parameters: inst.parameters, category: inst.category, isShunt: isShuntLike, inputPorts: instInPorts, outputPorts: instOutPorts, gndStubs: gndStubsByInst.get(name) || [], pgStubs: [], line: inst.line, simCurrent, simPower: simPowerW });
         }
 
@@ -1352,48 +1448,85 @@
             ctx.arc(wire.to.x, wire.to.y, isBus ? 3 : 2, 0, Math.PI * 2);
             ctx.fill();
 
-            // Net annotations on horizontal wire segments
-            // Skip net name if driver is a power source node — the box already shows it
-            if (wire.segments.length > 0) {
-                const seg = wire.segments[0];
-                const isHoriz = Math.abs(seg.x2 - seg.x1) > 60;
-                if (isHoriz && !wire.driverIsPowerSource) {
+            // ── Voltage annotation ──
+            // Show node voltage on any wire that has simulation data.
+            // Find the longest segment to place the label on.
+            if (wire.voltage != null && wire.segments.length > 0) {
+                // Find best segment: prefer horizontal, pick longest
+                let bestSeg = null, bestLen = 0;
+                for (const s of wire.segments) {
+                    const hLen = Math.abs(s.x2 - s.x1);
+                    const vLen = Math.abs(s.y2 - s.y1);
+                    const len = Math.max(hLen, vLen);
+                    if (len > bestLen) { bestLen = len; bestSeg = s; }
+                }
+                if (bestSeg && bestLen > 20) {
+                    const segIsHoriz = Math.abs(bestSeg.x2 - bestSeg.x1) >= Math.abs(bestSeg.y2 - bestSeg.y1);
+                    ctx.font = `${FONT_SIZE - 2}px monospace`;
+                    ctx.fillStyle = isPower ? COLORS.portPower
+                        : isHighlighted ? COLORS.wireHighlight
+                        : '#90caf9';
+                    if (segIsHoriz) {
+                        const lx = (bestSeg.x1 + bestSeg.x2) / 2;
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'bottom';
+                        ctx.fillText(formatVoltage(wire.voltage), lx, bestSeg.y1 - 6);
+                    } else {
+                        const cy = (bestSeg.y1 + bestSeg.y2) / 2;
+                        ctx.textAlign = 'right';
+                        ctx.textBaseline = 'middle';
+                        ctx.fillText(formatVoltage(wire.voltage), bestSeg.x1 - 6, cy);
+                    }
+                }
+            } else if (!wire.driverIsPowerSource && wire.segments.length > 0) {
+                // No simulation voltage — show net name on first long horizontal segment
+                const seg = wire.segments.find(s => Math.abs(s.x2 - s.x1) > 60);
+                if (seg) {
                     const lx = (seg.x1 + seg.x2) / 2;
                     ctx.font = `${FONT_SIZE - 2}px monospace`;
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'bottom';
-                    if (wire.voltage != null && isPower) {
-                        ctx.fillStyle = COLORS.portPower;
-                        ctx.fillText(`${wire.netName} (${formatVoltage(wire.voltage)})`, lx, seg.y1 - 6);
-                    } else if (wire.voltage != null && isHighlighted) {
-                        ctx.fillStyle = COLORS.wireHighlight;
-                        ctx.fillText(`${wire.netName} (${formatVoltage(wire.voltage)})`, lx, seg.y1 - 6);
-                    } else {
-                        ctx.fillStyle = COLORS.textMuted;
-                        ctx.fillText(wire.netName, lx, seg.y1 - 6);
-                    }
+                    ctx.fillStyle = COLORS.textMuted;
+                    ctx.fillText(wire.netName, lx, seg.y1 - 6);
                 }
-                // Current annotation on the wire
-                if (wire.current != null && Math.abs(wire.current) > 1e-9) {
-                    const hSeg = wire.segments.find(s => Math.abs(s.x2 - s.x1) > 40);
-                    if (hSeg) {
-                        // Horizontal segment: label below
-                        const cx = (hSeg.x1 + hSeg.x2) / 2;
-                        ctx.font = `${FONT_SIZE - 2}px monospace`;
-                        ctx.textAlign = 'center';
-                        ctx.textBaseline = 'top';
-                        ctx.fillStyle = '#8bc34a';
-                        ctx.fillText(formatCurrent(Math.abs(wire.current)), cx, hSeg.y1 + 4);
-                    } else {
-                        // No horizontal segment — try vertical (e.g. shunt/drop wires)
-                        const vSeg = wire.segments.find(s => Math.abs(s.y2 - s.y1) > 20);
-                        if (vSeg) {
-                            const cy = (vSeg.y1 + vSeg.y2) / 2;
-                            ctx.font = `${FONT_SIZE - 2}px monospace`;
-                            ctx.textAlign = 'left';
-                            ctx.textBaseline = 'middle';
-                            ctx.fillStyle = '#8bc34a';
-                            ctx.fillText(formatCurrent(Math.abs(wire.current)), vSeg.x1 + 6, cy);
+            }
+
+            // ── Current annotation ──
+            // Show branch current on every wire, placed near the SINK end
+            // so labels don't get hidden behind intermediate component boxes.
+            if (wire.current != null && Math.abs(wire.current) > 1e-9 && wire.segments.length > 0) {
+                ctx.font = `${FONT_SIZE - 2}px monospace`;
+                ctx.fillStyle = '#8bc34a';
+                const lastSeg = wire.segments[wire.segments.length - 1];
+                const lastH = Math.abs(lastSeg.x2 - lastSeg.x1);
+                const lastV = Math.abs(lastSeg.y2 - lastSeg.y1);
+                if (lastH > lastV && lastH > 25) {
+                    // Last segment is horizontal — label near the sink (75% toward end)
+                    const cx = lastSeg.x1 + (lastSeg.x2 - lastSeg.x1) * 0.75;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'top';
+                    ctx.fillText(formatCurrent(Math.abs(wire.current)), cx, lastSeg.y1 + 4);
+                } else if (lastV > 8) {
+                    // Last segment is vertical — label to the right, near sink end
+                    const cy = lastSeg.y1 + (lastSeg.y2 - lastSeg.y1) * 0.65;
+                    ctx.textAlign = 'left';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(formatCurrent(Math.abs(wire.current)), lastSeg.x1 + 6, cy);
+                } else {
+                    // Very short last segment — use any segment, label near sink end
+                    for (let si = wire.segments.length - 1; si >= 0; si--) {
+                        const s = wire.segments[si];
+                        const h = Math.abs(s.x2 - s.x1), v = Math.abs(s.y2 - s.y1);
+                        if (h > v && h > 25) {
+                            const cx = s.x1 + (s.x2 - s.x1) * 0.75;
+                            ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+                            ctx.fillText(formatCurrent(Math.abs(wire.current)), cx, s.y1 + 4);
+                            break;
+                        } else if (v > 8) {
+                            const cy = s.y1 + (s.y2 - s.y1) * 0.65;
+                            ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+                            ctx.fillText(formatCurrent(Math.abs(wire.current)), s.x1 + 6, cy);
+                            break;
                         }
                     }
                 }
@@ -1407,6 +1540,41 @@
             ctx.beginPath();
             ctx.arc(jp.x, jp.y, 4, 0, Math.PI * 2);
             ctx.fill();
+        }
+
+        // Draw total current at driver side for multi-sink nets (junction total)
+        if (schematicData.simulation?.instance_currents) {
+            // Group wires by net name to find multi-sink nets
+            const wiresByNet = new Map();
+            for (const wire of layoutWires) {
+                if (wire.current != null && Math.abs(wire.current) > 1e-9) {
+                    if (!wiresByNet.has(wire.netName)) wiresByNet.set(wire.netName, []);
+                    wiresByNet.get(wire.netName).push(wire);
+                }
+            }
+            for (const [netName, wires] of wiresByNet) {
+                if (wires.length < 2) continue; // only annotate junctions
+                // Total current = sum of branch currents
+                const totalCurrent = wires.reduce((sum, w) => sum + Math.abs(w.current), 0);
+                if (totalCurrent < 1e-9) continue;
+                // Use the driver current if available (more accurate)
+                const net = (schematicData.nets || []).find(n => n.name === netName);
+                const driverCurrent = net?.driver ? schematicData.simulation.instance_currents[net.driver.name] : null;
+                const displayCurrent = driverCurrent != null ? Math.abs(driverCurrent) : totalCurrent;
+                // Find the shared driver-side horizontal segment (first segment of first wire)
+                const firstWire = wires[0];
+                if (firstWire.segments.length > 1) {
+                    const seg = firstWire.segments[0];
+                    if (Math.abs(seg.x2 - seg.x1) > 30) {
+                        const cx = (seg.x1 + seg.x2) / 2;
+                        ctx.font = `${FONT_SIZE - 2}px monospace`;
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'top';
+                        ctx.fillStyle = '#8bc34a';
+                        ctx.fillText(formatCurrent(displayCurrent), cx, seg.y1 + 4);
+                    }
+                }
+            }
         }
     }
 
