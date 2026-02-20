@@ -850,20 +850,53 @@
                 by = shuntY;
             }
 
-            let prevBranchPos = null;
-            for (const item of ordered) {
-                const sz = offPathSizes.get(item.name) || { w: INSTANCE_BOX_MIN_WIDTH, h: 60 };
-                if (shuntInstNames.has(item.name) && prevBranchPos) {
-                    // Shunt-like component: position at predecessor's output port dot X,
-                    // below predecessor — mirrors how main-path shunts are placed
-                    const portDotX = prevBranchPos.x + prevBranchPos.w + PORT_STUB_LEN + 20;
-                    const dropX = portDotX - sz.w / 2;
-                    const dropY = prevBranchPos.y + prevBranchPos.h + SHUNT_DROP;
-                    positions.set(item.name, { x: dropX, y: dropY, w: sz.w, h: sz.h });
-                } else {
-                    positions.set(item.name, { x: bx, y: by, w: sz.w, h: sz.h });
-                    prevBranchPos = { x: bx, y: by, w: sz.w, h: sz.h };
-                    bx += sz.w + 120;
+            if (isParallel) {
+                // Parallel sub-chains: each head (from parallelBranchJunctions) starts a new row
+                // at the same X, stacked vertically. Shunt tails drop below their head.
+                let chainX = bx;
+                let chainY = by;
+                let prevPos = null;
+                let maxBottom = by;
+
+                for (const item of ordered) {
+                    const sz = offPathSizes.get(item.name) || { w: INSTANCE_BOX_MIN_WIDTH, h: 60 };
+                    const isHead = parallelBranchJunctions.has(item.name);
+
+                    if (isHead) {
+                        // New sub-chain row
+                        if (prevPos) chainY = maxBottom + 60;
+                        chainX = bx;
+                        positions.set(item.name, { x: chainX, y: chainY, w: sz.w, h: sz.h });
+                        prevPos = { x: chainX, y: chainY, w: sz.w, h: sz.h };
+                        maxBottom = Math.max(maxBottom, chainY + sz.h);
+                        chainX += sz.w + 120;
+                    } else if (shuntInstNames.has(item.name) && prevPos) {
+                        const portDotX = prevPos.x + prevPos.w + PORT_STUB_LEN + 20;
+                        const dropX = portDotX - sz.w / 2;
+                        const dropY = prevPos.y + prevPos.h + SHUNT_DROP;
+                        positions.set(item.name, { x: dropX, y: dropY, w: sz.w, h: sz.h });
+                        maxBottom = Math.max(maxBottom, dropY + sz.h);
+                    } else {
+                        positions.set(item.name, { x: chainX, y: chainY, w: sz.w, h: sz.h });
+                        prevPos = { x: chainX, y: chainY, w: sz.w, h: sz.h };
+                        maxBottom = Math.max(maxBottom, chainY + sz.h);
+                        chainX += sz.w + 120;
+                    }
+                }
+            } else {
+                let prevBranchPos = null;
+                for (const item of ordered) {
+                    const sz = offPathSizes.get(item.name) || { w: INSTANCE_BOX_MIN_WIDTH, h: 60 };
+                    if (shuntInstNames.has(item.name) && prevBranchPos) {
+                        const portDotX = prevBranchPos.x + prevBranchPos.w + PORT_STUB_LEN + 20;
+                        const dropX = portDotX - sz.w / 2;
+                        const dropY = prevBranchPos.y + prevBranchPos.h + SHUNT_DROP;
+                        positions.set(item.name, { x: dropX, y: dropY, w: sz.w, h: sz.h });
+                    } else {
+                        positions.set(item.name, { x: bx, y: by, w: sz.w, h: sz.h });
+                        prevBranchPos = { x: bx, y: by, w: sz.w, h: sz.h };
+                        bx += sz.w + 120;
+                    }
                 }
             }
         }
