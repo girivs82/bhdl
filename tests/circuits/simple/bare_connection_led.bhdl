@@ -1,0 +1,19 @@
+// Test bare CONNECTION_STMT syntax (no net keyword)
+entity Res(value: resistance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+}
+
+entity LED(color: string) {
+    pin A: signal in;
+    pin K: signal in;
+}
+
+board BareLED {
+    power VCC = 5V @ 100mA;
+    ground GND;
+
+    // Bare connection - no net keyword
+    VCC -> r1: Res(330).1 -> r1.2 -> led1: LED("red").A;
+    led1.K -> GND;
+}

@@ -1,0 +1,18 @@
+// Simple LED circuit — self-contained with all entity definitions
+entity Res(value: resistance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+}
+
+entity LED(color: string) {
+    pin A: signal in;
+    pin K: signal in;
+}
+
+board SimpleLED {
+    power VCC = 5V @ 100mA;
+    ground GND;
+
+    net led_drive: VCC -> r1: Res(330).1 -> r1.2 -> led1: LED("red").A for current_limiting(15mA);
+    led1.K -> GND;
+}

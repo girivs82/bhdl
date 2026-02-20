@@ -1,0 +1,13 @@
+// Voltage divider — two resistors, no nonlinear components
+entity Res(value: resistance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+}
+
+board VoltageDivider {
+    power VIN = 12V @ 100mA;
+    ground GND;
+
+    net divided: VIN -> r_top: Res(10000).1 -> r_top.2 -> r_bot: Res(10000).1;
+    r_bot.2 -> GND;
+}
