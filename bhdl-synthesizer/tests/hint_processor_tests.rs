@@ -196,7 +196,7 @@ fn test_validation_rules_from_hints() {
             power VCC = 5V;
             ground GND;
 
-            net protected: @VCC -> TVSDiode(6V).cathode -> Res(1k).1 -> @GND
+            net protected: @VCC -> TVSDiode(6V).K -> Res(1k).1 -> @GND
                 for input_protection(overvoltage: 6V, current_limit: 5mA);
         }
     "#;

@@ -2,8 +2,8 @@
 // This circuit demonstrates all 5 spatial zones
 
 entity TVSDiode(voltage: voltage) {
-    pin cathode: signal in;
-    pin anode: signal in;
+    pin K: signal in;
+    pin A: signal in;
 }
 
 entity Res(value: resistance) {
@@ -33,7 +33,7 @@ board IntentLayoutDemo {
     ground GND;
 
     // LEFT ZONE: Input protection
-    net input_protected: external_in -> tvs1: TVSDiode(15V).cathode -> tvs1.anode -> @protected_in
+    net input_protected: external_in -> tvs1: TVSDiode(15V).K -> tvs1.A -> @protected_in
         for input_protection(15V, 100mA);
 
     // TOP ZONE: Power regulation
@@ -53,7 +53,7 @@ board IntentLayoutDemo {
         for current_sensing(50mA, 1%);
 
     // Ground connections
-    tvs1.anode -> @GND;
+    tvs1.A -> @GND;
     c1.2 -> @GND;
     led.K -> @GND;
     reg.GND -> @GND;

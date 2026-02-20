@@ -125,7 +125,7 @@ BHDL v2.0 uses a flow-based syntax for intuitive circuit description:
 - **Flow operators**: `->` (connection), `<->` (bidirectional), `|>` (flow), `<=>` (interface)
 - **Power/Ground**: Explicit declarations `power VCC = 5V @ 1A;` and `ground GND;`
 - **Direct instantiation**: `VCC -> Res(10k).1 -> LED(red).A;`
-- **Net assignments**: `protected_vin: TVSDiode(15V).1` creates net and implicit handle
+- **Net assignments**: `protected_vin: TVSDiode(15V).K` creates net and implicit handle
 - **Entity definition**: `entity Name(params) { pin name: type direction; ... }`
 - **Generate constructs**: `generate for i in 0..n { ... }` for repetitive structures
 - **Units**: Comprehensive electrical unit system (V, A, Ω, F, H, Hz, etc.)
@@ -377,7 +377,7 @@ This ensures we build a robust, production-ready toolchain rather than a demo wi
    - Derating factors for conservative design (70% current, 80% voltage)
 
 3. **Synthesizer Enhancement**: Full netlist generation with component intelligence
-   - Net assignment with implicit handle creation (`protected_vin: TVSDiode(15V).1`)
+   - Net assignment with implicit handle creation (`protected_vin: TVSDiode(15V).K`)
    - Component database integration for real part selection
    - Reference designator auto-generation (R1, D1, C1, etc.)
    - Proper connection endpoint parsing
@@ -457,7 +457,7 @@ The intent system allows designers to declare the purpose of signal flows:
 
 ```bhdl
 // Intent applies to entire flow path
-net protection: sensor -> tvs: TVSDiode(6V).cathode -> tvs.anode -> r: Res(1k).1 -> r.2 -> @protected
+net protection: sensor -> tvs: TVSDiode(6V).K -> tvs.A -> r: Res(1k).1 -> r.2 -> @protected
     for input_protection(overvoltage: 6V, current_limit: 5mA);
 
 // Different intents on branches

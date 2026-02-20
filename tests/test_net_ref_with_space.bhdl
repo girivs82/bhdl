@@ -8,6 +8,6 @@ board TestNetRefWithSpace {
     led.K -> GND;
     
     // Also test with other power domains
-    VIN @PROTECTED-> TVSDiode(15V).1;
-    TVSDiode.2 -> GND;
+    VIN @PROTECTED-> TVSDiode(15V).K;
+    TVSDiode.A -> GND;
 }

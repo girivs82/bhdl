@@ -21,8 +21,8 @@ board TestNetNaming {
     
     // Test @NETNAME-> syntax for creating named nets
     VIN @RAW-> fuse: Fuse(1A).1;
-    fuse.2 @PROTECTED-> tvs: TVSDiode(15V).1;
-    tvs.2 -> GND;
+    fuse.2 @PROTECTED-> tvs: TVSDiode(15V).K;
+    tvs.A -> GND;
     
     // Reference the named net
     @PROTECTED -> bulk_cap: ElectrolyticCap(100µF, 25V).+;

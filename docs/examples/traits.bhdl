@@ -38,8 +38,8 @@ entity TVSProtection(clamp: voltage) {
     pin line: signal inout;
     pin gnd: power in;
 
-    @line -> TVSDiode(clamp).cathode;
-    TVSDiode(clamp).anode -> @gnd;
+    @line -> TVSDiode(clamp).K;
+    TVSDiode(clamp).A -> @gnd;
 }
 
 impl Protected for TVSProtection {

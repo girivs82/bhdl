@@ -109,7 +109,7 @@ pub struct NetlistGenerator {
     ast_to_instance: HashMap<String, InstanceId>,
     ast_to_net: HashMap<String, NetId>,
     // Mapping from net assignment handles to instance IDs
-    // When we see "protected_vin: TVSDiode(15V).1", we map "protected_vin" -> TVSDiode instance
+    // When we see "protected_vin: TVSDiode(15V).K", we map "protected_vin" -> TVSDiode instance
     net_assignment_handles: HashMap<String, InstanceId>,
     // Database component mapper for real component instances
     database_mapper: Option<DatabaseComponentMapper>,

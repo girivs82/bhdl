@@ -114,8 +114,8 @@ board PowerSupply {
     U1: LM7805();
     
     // Input protection
-    net protected_vin: TVSDiode(15V).cathode -> U1.IN;
-    VIN -> TVSDiode(15V).anode -> GND;
+    net protected_vin: TVSDiode(15V).K -> U1.IN;
+    VIN -> TVSDiode(15V).A -> GND;
     
     // Input capacitors
     VIN -> C1: Capacitor(10uF).1 -> C1.2 -> GND;

@@ -55,8 +55,8 @@ If we need named flows, make them more distinct:
 // Define a named flow (different from connection)
 flow protection_circuit {
     @VIN -> fuse.1 -> @protected for overvoltage_protection;
-    @protected -> tvs: TVSDiode(15V).1;
-    tvs.2 -> @GND;
+    @protected -> tvs: TVSDiode(15V).K;
+    tvs.A -> @GND;
 }
 
 // Or inline with clear syntax

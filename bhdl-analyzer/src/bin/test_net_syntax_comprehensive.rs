@@ -79,8 +79,8 @@ board Test {
     power VIN = 12V @ 2A;
     ground GND;
     
-    @protected: TVSDiode(15V).1 <- @VIN;
-    TVSDiode(15V).2 -> @GND;
+    @protected: TVSDiode(15V).K <- @VIN;
+    TVSDiode(15V).A -> @GND;
 }
 "#,
             vec![],

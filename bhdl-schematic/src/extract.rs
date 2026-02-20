@@ -15,10 +15,14 @@ use crate::types::*;
 
 /// Extract a `SchematicData` from a BHDL `Netlist` and optional analysis result.
 ///
+/// If `simulation` is provided (from GLACIER DC solver), it is attached to the
+/// output `SchematicData` for the JS renderer to use for wire coloring and annotations.
+///
 /// This is the main public API for the Rust extraction layer.
 pub fn extract_schematic_data(
     netlist: &Netlist,
     analysis: Option<&bhdl_analyzer::AnalysisResult>,
+    simulation: Option<SimulationAnnotations>,
 ) -> Result<SchematicData, String> {
     let top_module_id = netlist.top_level_module
         .ok_or_else(|| "No top-level module in netlist".to_string())?;
@@ -403,7 +407,7 @@ pub fn extract_schematic_data(
     // We must ensure instance connection directions match their net roles,
     // otherwise ELK edges can't connect and components appear unconnected.
     //
-    // A pin can appear in multiple nets with different roles (e.g., tvs.1 is
+    // A pin can appear in multiple nets with different roles (e.g., tvs.K is
     // a sink of VIN and a driver of filtered_in). In that case, we need both
     // an "in" and "out" connection for the same port.
     let mut pin_roles: HashMap<(String, String), std::collections::HashSet<String>> = HashMap::new();
@@ -525,6 +529,7 @@ pub fn extract_schematic_data(
         flow_paths,
         file_path: None,
         entity_line: None,
+        simulation,
     })
 }
 
@@ -908,7 +913,7 @@ mod tests {
     #[test]
     fn test_extract_basic() {
         let nl = make_test_netlist();
-        let data = extract_schematic_data(&nl, None).unwrap();
+        let data = extract_schematic_data(&nl, None, None).unwrap();
 
         assert_eq!(data.entity_name, "TestBoard");
         assert_eq!(data.ports.len(), 2);
@@ -952,7 +957,7 @@ mod tests {
 
         nl.connect(vcc_net, ConnectionPoint::PinInstance(r1_pins[0])).unwrap();
 
-        let data = extract_schematic_data(&nl, None).unwrap();
+        let data = extract_schematic_data(&nl, None, None).unwrap();
         assert_eq!(data.power_rails.len(), 1);
         assert_eq!(data.power_rails[0].name, "VCC");
         assert_eq!(data.power_rails[0].voltage, 5.0);

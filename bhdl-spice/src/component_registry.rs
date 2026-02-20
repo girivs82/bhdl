@@ -119,14 +119,24 @@ impl ComponentRegistry {
     /// Fuzzy matching for component types
     fn fuzzy_match_component_type(&self, module_name: &str) -> Option<ComponentType> {
         let lower = module_name.to_lowercase();
-        
+
+        // Check for power symbol patterns: +12V, +5V, +3V3, etc.
+        if module_name.starts_with('+') && module_name.len() > 1 {
+            return Some(ComponentType::VoltageSource);
+        }
+
+        // Check for ground patterns
+        if lower == "gnd" || lower == "ground" || lower == "vss" || lower == "0" {
+            return Some(ComponentType::Other("ground".to_string()));
+        }
+
         // Check registered modules first
         for (name, class) in &self.module_map {
             if lower.contains(&name.to_lowercase()) {
                 return self.class_to_component_type(class);
             }
         }
-        
+
         None
     }
     

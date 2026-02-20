@@ -16,7 +16,7 @@ board PowerSupply {
     net delayed_trigger: VIN -> Res(10k).1 -> Cap(100n).1 -> GND for delay(3ms);
     
     // Simple protection intent  
-    net protected_vin: VIN -> TVSDiode(15V).1 for overvoltage_protection(15V);
+    net protected_vin: VIN -> TVSDiode(15V).K for overvoltage_protection(15V);
     
     // Simple debounce intent
     net switch_signal: SW1.1 -> Res(10k).1 -> MCU.GPIO1 for debounce(SW1, 20ms);

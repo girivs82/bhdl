@@ -54,7 +54,7 @@ board ECU_PowerSupply {
         // Designer's reasoning: Handles load dump per ISO 7637-2
         for transient_protection(36V_clamp);
     };
-    tvs1.2 -> @GND;
+    tvs1.A -> @GND;
     
     @PROTECTED_VIN -> mov1: Varistor(ERZ-V14D220) {
         // Designer's reasoning: Additional energy absorption

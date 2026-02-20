@@ -12,7 +12,7 @@ board TestIntents {
     Cap(10nF).2 -> @GND;
 
     // Protection intent
-    net protected: sensor_in -> tvs: TVSDiode(15V).1 -> tvs.2 -> @GND for input_protection(15V, 100mA);
+    net protected: sensor_in -> tvs: TVSDiode(15V).K -> tvs.A -> @GND for input_protection(15V, 100mA);
 
     // Level shifting
     net shifted: input_3v3 -> Res(10k).1 -> mosfet: NMOS().G for level_shifting(3.3V, 5V);

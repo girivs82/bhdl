@@ -624,8 +624,34 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
     let mut generator = NetlistGenerator::new();
     let netlist = generator.generate_from_ast_and_analysis(source_file, &analysis).await?;
 
+    // Run GLACIER DC simulation for voltage/current annotation
+    let sim_annotations = {
+        let mut converter = NetlistToSpiceConverter::new();
+        match converter.convert(&netlist) {
+            Ok(circuit) => {
+                let circuit_ref = circuit.clone();
+                let solver = bhdl_spice::GlacierDcSolver::new();
+                match solver.solve(circuit) {
+                    Ok(result) => {
+                        info!("GLACIER DC simulation converged in {} iterations (error: {:.2e})",
+                              result.iterations, result.final_error);
+                        Some(build_simulation_annotations(&result, &circuit_ref))
+                    }
+                    Err(e) => {
+                        eprintln!("{}", format!("  DC simulation failed: {} (schematic will lack V/I annotations)", e).yellow());
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("{}", format!("  Circuit conversion failed: {} (schematic will lack V/I annotations)", e).yellow());
+                None
+            }
+        }
+    };
+
     // Extract schematic data from netlist
-    let schematic_data = bhdl_schematic::extract_schematic_data(&netlist, Some(&analysis))
+    let schematic_data = bhdl_schematic::extract_schematic_data(&netlist, Some(&analysis), sim_annotations)
         .map_err(|e| anyhow::anyhow!("Schematic extraction failed: {}", e))?;
 
     if json_output {
@@ -731,7 +757,7 @@ async fn run_pipeline(source_file: &SourceFile, _input_path: &PathBuf, output_di
     if !no_viz {
         println!("\n{}", "3. Visualization".blue().bold());
 
-        let schematic_data = bhdl_schematic::extract_schematic_data(&netlist, Some(&analysis))
+        let schematic_data = bhdl_schematic::extract_schematic_data(&netlist, Some(&analysis), None)
             .map_err(|e| anyhow::anyhow!("Schematic extraction failed: {}", e))?;
         let html = bhdl_schematic::generate_standalone_html(&schematic_data);
 
@@ -1009,4 +1035,63 @@ async fn cmd_doc(
     }
 
     Ok(())
+}
+
+/// Default current threshold for power vs signal net classification.
+/// Nets with branch current >= 1mA are classified as power nets (rendered red).
+const POWER_THRESHOLD_AMPS: f64 = 1e-3;
+
+/// Map GLACIER DC solver results (NodeIndex/EdgeIndex) back to schematic-level
+/// net names and instance names, producing a `SimulationAnnotations` struct
+/// that the JS renderer can consume for wire coloring and hover annotations.
+fn build_simulation_annotations(
+    dc_result: &bhdl_spice::DcAnalysisResult,
+    circuit: &bhdl_spice::Circuit,
+) -> bhdl_schematic::SimulationAnnotations {
+    let mut annotations = bhdl_schematic::SimulationAnnotations::default();
+
+    // Map node voltages: NodeIndex → node.name → voltage
+    for (node_idx, voltage) in &dc_result.node_voltages {
+        if let Some(name) = circuit.get_node_name(*node_idx) {
+            annotations.net_voltages.insert(name.to_string(), *voltage);
+        }
+    }
+
+    // Map branch currents: EdgeIndex → branch.name → current
+    // Also compute power dissipation per branch
+    for (edge_idx, current) in &dc_result.branch_currents {
+        if let Some(branch) = circuit.graph.edge_weight(*edge_idx) {
+            annotations.instance_currents.insert(branch.name.clone(), *current);
+
+            // Power = |V_across| * |I|
+            if let Some((src, tgt)) = circuit.branch_nodes(*edge_idx) {
+                let v_src = dc_result.node_voltages.get(&src).unwrap_or(&0.0);
+                let v_tgt = dc_result.node_voltages.get(&tgt).unwrap_or(&0.0);
+                let power = (v_src - v_tgt).abs() * current.abs();
+                annotations.instance_power.insert(branch.name.clone(), power);
+            }
+        }
+    }
+
+    // Classify power nets: a net is "power" if any branch connected to it carries
+    // current above the threshold. We iterate all branches and mark both endpoint
+    // nets as power when the branch current is significant.
+    for (edge_idx, current) in &dc_result.branch_currents {
+        if current.abs() >= POWER_THRESHOLD_AMPS {
+            if let Some((src, tgt)) = circuit.branch_nodes(*edge_idx) {
+                if let Some(name) = circuit.get_node_name(src) {
+                    annotations.power_nets.insert(name.to_string());
+                }
+                if let Some(name) = circuit.get_node_name(tgt) {
+                    annotations.power_nets.insert(name.to_string());
+                }
+            }
+        }
+    }
+
+    // Never classify GND as a power net for rendering purposes (it gets its own gray color)
+    annotations.power_nets.remove("GND");
+    annotations.power_nets.remove("0");
+
+    annotations
 }

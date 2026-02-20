@@ -21,8 +21,8 @@ board PowerSupply_7805_Intent {
         for input_protection(15V, 1A);
 
     // Add TVS protection
-    @protected_vin -> TVSDiode(15V).1;
-    TVSDiode(15V).2 -> GND;
+    @protected_vin -> TVSDiode(15V).K;
+    TVSDiode(15V).A -> GND;
 
     // CENTER ZONE: Input filtering with intent
     net input_filtered: @protected_vin -> c_in1: ElectrolyticCap(100µF, 25V).pos

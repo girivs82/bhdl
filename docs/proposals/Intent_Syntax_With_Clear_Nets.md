@@ -61,8 +61,8 @@ board SafePowerSupply {
         for input_protection(overvoltage: 15V, current_limit: 2A);
     
     // Protected net to TVS diode
-    @protected -> tvs: TVSDiode(15V).1;
-    tvs.2 -> GND;
+    @protected -> tvs: TVSDiode(15V).K;
+    tvs.A -> GND;
     
     // Regulation with safety intent
     main_regulation: @protected -> reg: LM7805().IN 

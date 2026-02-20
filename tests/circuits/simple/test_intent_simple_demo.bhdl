@@ -17,8 +17,8 @@ entity LED(color: string) {
 }
 
 entity TVSDiode(voltage: voltage) {
-    pin 1: signal in;
-    pin 2: signal in;
+    pin K: signal in;
+    pin A: signal in;
 }
 
 entity RegulatorIC {
@@ -33,11 +33,11 @@ board IntentLayoutDemo {
     ground GND;
 
     // LEFT ZONE: Input protection
-    net protected: VIN -> tvs: TVSDiode(15V).1 for input_protection(15V, 500mA);
-    tvs.2 -> GND;
+    net protected: VIN -> tvs: TVSDiode(15V).K for input_protection(15V, 500mA);
+    tvs.A -> GND;
 
     // CENTER ZONE: Input filtering
-    net filtered_in: tvs.1 -> c1: Cap(100µF).1 for noise_filtering(100Hz, 40dB);
+    net filtered_in: tvs.K -> c1: Cap(100µF).1 for noise_filtering(100Hz, 40dB);
     c1.2 -> GND;
 
     // TOP ZONE: Voltage regulation

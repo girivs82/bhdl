@@ -6,7 +6,7 @@ board BuckConverter {
     ground GND;
 
     // Input protection
-    net protected_vin: @VIN -> tvs: TVSDiode(18V).cathode -> tvs.anode -> @GND
+    net protected_vin: @VIN -> tvs: TVSDiode(18V).K -> tvs.A -> @GND
         for input_protection(overvoltage: 18V, current_limit: 3A);
 
     // Input bulk capacitor for current surge

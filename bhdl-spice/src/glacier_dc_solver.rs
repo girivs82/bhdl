@@ -300,6 +300,135 @@ mod tests {
     use crate::Circuit;
     
     #[test]
+    fn test_regulator_circuit_with_diodes() {
+        // Replicates the exact topology from IntentLayoutDemo:
+        // VIN (12V) → regulated → reg_dropout (4Ω) → VOUT
+        // reg_vout: VoltageSource 5V on VOUT→GND
+        // TVS diode: GND→regulated (reverse biased at 12V)
+        // c1: regulated→GND (cap, DC open)
+        // c2: VOUT→GND (cap, DC open)
+        // r1: VOUT→sensed (330Ω)
+        // sense: sensed→net_sense (0.1Ω)
+        // LED: net_sense→GND (forward biased)
+        let _ = env_logger::builder().is_test(true).try_init();
+
+        let mut circuit = Circuit::new();
+
+        // Voltage sources
+        circuit.add_branch("VIN".into(), "regulated", "GND", "VoltageSource".into(), 12.0, None);
+        circuit.add_branch("reg_vout".into(), "VOUT", "GND", "VoltageSource".into(), 5.0, None);
+
+        // Regulator dropout path
+        circuit.add_branch("reg_dropout".into(), "regulated", "VOUT", "Resistor".into(), 4.0, None);
+
+        // TVS diode: anode=GND, cathode=regulated (reverse biased)
+        circuit.add_branch("tvs".into(), "GND", "regulated", "Diode".into(), 1.0, None);
+
+        // Capacitors (DC: open circuit)
+        circuit.add_branch("c1".into(), "regulated", "GND", "Capacitor".into(), 100.0, None);
+        circuit.add_branch("c2".into(), "VOUT", "GND", "Capacitor".into(), 10.0, None);
+
+        // Load path
+        circuit.add_branch("r1".into(), "VOUT", "sensed", "Resistor".into(), 330.0, None);
+        circuit.add_branch("sense".into(), "sensed", "net_sense", "Resistor".into(), 0.1, None);
+        circuit.add_branch("led".into(), "net_sense", "GND", "LED".into(), 1.0, None);
+
+        let solver = GlacierDcSolver::new();
+        let result = solver.solve(circuit);
+
+        match &result {
+            Ok(r) => {
+                println!("Converged in {} iterations, error={:.2e}", r.iterations, r.final_error);
+                for (node_idx, v) in &r.node_voltages {
+                    println!("  Node {:?} = {:.4}V", node_idx, v);
+                }
+                for (edge_idx, i) in &r.branch_currents {
+                    println!("  Branch {:?} = {:.6}A ({:.4}mA)", edge_idx, i, i * 1000.0);
+                }
+            }
+            Err(e) => {
+                println!("FAILED: {}", e);
+            }
+        }
+
+        assert!(result.is_ok(), "Circuit should converge");
+    }
+
+    #[test]
+    fn test_regulator_no_diodes() {
+        // Same circuit but WITHOUT diodes to test if diodes cause convergence failure
+        let _ = env_logger::builder().is_test(true).try_init();
+        let mut circuit = Circuit::new();
+
+        circuit.add_branch("VIN".into(), "regulated", "GND", "VoltageSource".into(), 12.0, None);
+        circuit.add_branch("reg_vout".into(), "VOUT", "GND", "VoltageSource".into(), 5.0, None);
+        circuit.add_branch("reg_dropout".into(), "regulated", "VOUT", "Resistor".into(), 4.0, None);
+        circuit.add_branch("r1".into(), "VOUT", "sensed", "Resistor".into(), 330.0, None);
+        circuit.add_branch("sense".into(), "sensed", "net_sense", "Resistor".into(), 0.1, None);
+        // Replace LED with a resistor to get equivalent load
+        circuit.add_branch("rled".into(), "net_sense", "GND", "Resistor".into(), 200.0, None);
+
+        let solver = GlacierDcSolver::new();
+        let result = solver.solve(circuit);
+        match &result {
+            Ok(r) => println!("No-diode: Converged {} iters, err={:.2e}", r.iterations, r.final_error),
+            Err(e) => println!("No-diode FAILED: {}", e),
+        }
+        assert!(result.is_ok(), "Linear circuit should converge");
+    }
+
+    #[test]
+    fn test_regulator_led_only() {
+        // Two voltage sources + dropout + LED load, no TVS diode
+        let _ = env_logger::builder().is_test(true).try_init();
+        let mut circuit = Circuit::new();
+
+        circuit.add_branch("VIN".into(), "regulated", "GND", "VoltageSource".into(), 12.0, None);
+        circuit.add_branch("reg_vout".into(), "VOUT", "GND", "VoltageSource".into(), 5.0, None);
+        circuit.add_branch("reg_dropout".into(), "regulated", "VOUT", "Resistor".into(), 4.0, None);
+        circuit.add_branch("r1".into(), "VOUT", "sensed", "Resistor".into(), 330.0, None);
+        circuit.add_branch("sense".into(), "sensed", "net_sense", "Resistor".into(), 0.1, None);
+        circuit.add_branch("led".into(), "net_sense", "GND", "LED".into(), 1.0, None);
+
+        let solver = GlacierDcSolver::new();
+        let result = solver.solve(circuit);
+        match &result {
+            Ok(r) => {
+                println!("LED-only: Converged {} iters, err={:.2e}", r.iterations, r.final_error);
+                for (ni, v) in &r.node_voltages { println!("  {:?} = {:.4}V", ni, v); }
+                for (ei, i) in &r.branch_currents { println!("  {:?} = {:.4}mA", ei, i*1000.0); }
+            }
+            Err(e) => println!("LED-only FAILED: {}", e),
+        }
+        assert!(result.is_ok(), "LED-only circuit should converge");
+    }
+
+    #[test]
+    fn test_regulator_high_dropout() {
+        // Full circuit with 1000Ω dropout (previously worked)
+        let _ = env_logger::builder().is_test(true).try_init();
+        let mut circuit = Circuit::new();
+
+        circuit.add_branch("VIN".into(), "regulated", "GND", "VoltageSource".into(), 12.0, None);
+        circuit.add_branch("reg_vout".into(), "VOUT", "GND", "VoltageSource".into(), 5.0, None);
+        circuit.add_branch("reg_dropout".into(), "regulated", "VOUT", "Resistor".into(), 1000.0, None);
+        circuit.add_branch("tvs".into(), "GND", "regulated", "Diode".into(), 1.0, None);
+        circuit.add_branch("c1".into(), "regulated", "GND", "Capacitor".into(), 100.0, None);
+        circuit.add_branch("c2".into(), "VOUT", "GND", "Capacitor".into(), 10.0, None);
+        circuit.add_branch("r1".into(), "VOUT", "sensed", "Resistor".into(), 330.0, None);
+        circuit.add_branch("sense".into(), "sensed", "net_sense", "Resistor".into(), 0.1, None);
+        circuit.add_branch("led".into(), "net_sense", "GND", "LED".into(), 1.0, None);
+
+        let solver = GlacierDcSolver::new();
+        let result = solver.solve(circuit);
+        match &result {
+            Ok(r) => println!("High-dropout: Converged {} iters, err={:.2e}", r.iterations, r.final_error),
+            Err(e) => println!("High-dropout FAILED: {}", e),
+        }
+        assert!(result.is_ok(), "High dropout circuit should converge");
+    }
+
+    #[test]
     fn test_simple_resistor_divider() {
         // Create voltage divider: 5V -> 1k -> 1k -> GND
         let mut circuit = Circuit::new();

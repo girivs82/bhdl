@@ -3,6 +3,7 @@
 //! These mirror the shape that `schematic.js` (ported from SKALP) expects,
 //! adapted for BHDL's structural netlist model.
 
+use std::collections::{HashMap, HashSet};
 use serde::{Serialize, Deserialize};
 
 /// Top-level schematic data structure, serialized to JSON for the viewer.
@@ -27,6 +28,9 @@ pub struct SchematicData {
     /// Source line of the entity/board definition
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entity_line: Option<usize>,
+    /// DC simulation annotations (voltages, currents, power classification)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub simulation: Option<SimulationAnnotations>,
 }
 
 /// A port on the board boundary (shown as input/output bar).
@@ -148,6 +152,26 @@ pub struct SchematicNet {
     pub driver: SchematicEndpoint,
     /// Receiving endpoints
     pub sinks: Vec<SchematicEndpoint>,
+}
+
+/// DC simulation results mapped to schematic-level names.
+///
+/// Produced by running the GLACIER DC solver on the synthesized netlist,
+/// then mapping `NodeIndex`/`EdgeIndex` results back to net and instance names.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct SimulationAnnotations {
+    /// Node voltage at each net: net_name → voltage (V)
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub net_voltages: HashMap<String, f64>,
+    /// Branch current through each instance: instance_name → current (A)
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub instance_currents: HashMap<String, f64>,
+    /// Power dissipation per instance: instance_name → power (W)
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub instance_power: HashMap<String, f64>,
+    /// Nets classified as power (|current| > threshold through any connected branch)
+    #[serde(default, skip_serializing_if = "HashSet::is_empty")]
+    pub power_nets: HashSet<String>,
 }
 
 /// A power rail shown at the top/bottom of the schematic.

@@ -1,0 +1,18 @@
+// Minimal circuit for GLACIER DC simulation testing
+// Uses only resistors + voltage source (no caps/regulators/LEDs)
+// Expected: VIN=12V, V(mid)~8V (divider), I~1.2mA
+
+entity Res(value: resistance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+}
+
+board GlacierDCTest {
+    power VIN = 12V @ 100mA;
+    ground GND;
+
+    // Voltage divider: 10k + 5k = 15k total, I = 12/15000 = 0.8mA
+    // V(mid) = 12 * 5000/15000 = 4.0V
+    VIN -> r1: Res(10kΩ).1 -> r1.2 -> r2: Res(5kΩ).1;
+    r2.2 -> GND;
+}

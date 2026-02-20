@@ -12,8 +12,8 @@ board USBPoweredDevice {
     VIN -> fuse: Fuse(2A).1;
     
     // 2. Net assignment with implicit handles
-    fuse.2 -> @protected_vin -> TVSDiode(15V).1;
-    TVSDiode(15V).2 -> GND;
+    fuse.2 -> @protected_vin -> TVSDiode(15V).K;
+    TVSDiode(15V).A -> GND;
     
     // 3. Power regulation flow
     power_flow: @protected_vin |> 

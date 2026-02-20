@@ -17,6 +17,15 @@ use bhdl_netlist::{
     ConnectionPoint, ModuleKind, ModuleDefinition,
 };
 
+/// Pin connection info for an instance, including pin type and direction
+struct PinNetInfo {
+    net_id: NetId,
+    net_name: String,
+    pin_name: String,
+    pin_type: bhdl_netlist::PinType,
+    pin_direction: bhdl_netlist::PinDirection,
+}
+
 /// Enhanced netlist converter with proper SPICE model creation
 pub struct NetlistToSpiceConverter {
     /// Component model extractor
@@ -51,33 +60,104 @@ impl NetlistToSpiceConverter {
     /// Convert BHDL netlist to SPICE circuit with proper models
     pub fn convert(&mut self, netlist: &Netlist) -> Result<Circuit> {
         let mut circuit = Circuit::new();
-        
+
         info!("Converting netlist to SPICE circuit with {} instances", netlist.instances.len());
-        
+
         // Step 1: Add all nets as nodes
         self.add_nets_as_nodes(&mut circuit, netlist)?;
-        
-        // Step 2: Process each instance and create proper SPICE models
+
+        // Step 2: Process regulators first (they define voltage sources on output nets)
+        let mut vsource_nodes: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut deferred: Vec<(InstanceId, &bhdl_netlist::Instance)> = Vec::new();
+
         for (instance_id, instance) in &netlist.instances {
+            let module = netlist.modules.get(instance.definition);
+            let is_regulator = module.map(|m| {
+                self.component_registry.get_component_type(&m.name, &instance.attributes)
+                    == Some(crate::components::ComponentType::VoltageRegulator)
+            }).unwrap_or(false);
+
+            if is_regulator {
+                // Use pin types from stdlib to identify regulator output
+                let pin_info = Self::get_pin_net_info(netlist, instance_id);
+                let reg_output_net = pin_info.iter()
+                    .find(|p| p.pin_type == bhdl_netlist::PinType::Power
+                           && p.pin_direction == bhdl_netlist::PinDirection::Out)
+                    .map(|p| p.net_name.clone());
+
+                info!("Regulator pre-scan for {}: output_net={:?} (from pin types: {:?})",
+                      instance.name, reg_output_net,
+                      pin_info.iter().map(|p| format!("{}:{:?}/{:?}→{}", p.pin_name, p.pin_type, p.pin_direction, p.net_name)).collect::<Vec<_>>());
+
+                match self.process_instance(&mut circuit, netlist, instance_id, instance) {
+                    Ok(_) => {
+                        info!("Successfully processed regulator: {}", instance.name);
+                        if let Some(output_net) = reg_output_net {
+                            vsource_nodes.insert(output_net.clone());
+                            info!("Regulator {} drives output net: {}", instance.name, output_net);
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to process regulator {}: {}", instance.name, e);
+                    }
+                }
+            } else {
+                deferred.push((instance_id, instance));
+            }
+        }
+
+        // Step 3: Process remaining instances, skipping power symbols whose nets are
+        //         already driven by a regulator voltage source
+        for (instance_id, instance) in deferred {
+            let module = netlist.modules.get(instance.definition);
+            let is_power_symbol = module.map(|m| Self::is_power_symbol(&m.name)).unwrap_or(false);
+
+            if is_power_symbol {
+                let connected = self.get_connected_nets(netlist, instance_id).unwrap_or_default();
+                if let Some((net_id, net_name)) = connected.first() {
+                    // Skip if net already driven by a regulator voltage source
+                    if vsource_nodes.contains(net_name) {
+                        info!("Skipping power symbol {} — net '{}' already driven by regulator",
+                              instance.name, net_name);
+                        continue;
+                    }
+                    // Skip if net is floating (only the power symbol is connected, no load)
+                    let net_connection_count = netlist.nets.get(*net_id)
+                        .map(|n| n.connections.len())
+                        .unwrap_or(0);
+                    if net_connection_count <= 1 {
+                        info!("Skipping power symbol {} — net '{}' is floating ({} connections)",
+                              instance.name, net_name, net_connection_count);
+                        continue;
+                    }
+                }
+            }
+
             match self.process_instance(&mut circuit, netlist, instance_id, instance) {
                 Ok(_) => info!("Successfully processed instance: {}", instance.name),
                 Err(e) => {
                     warn!("Failed to process instance {}: {}", instance.name, e);
-                    // For debugging, let's see what's happening
-                    eprintln!("ERROR processing {}: {}", instance.name, e);
                 }
             }
         }
-        
-        info!("Created SPICE circuit with {} nodes and {} components", 
+
+        info!("Created SPICE circuit with {} nodes and {} components",
              circuit.nodes().count(), circuit.branches().count());
-        
+
         Ok(circuit)
     }
     
-    /// Add all nets as circuit nodes
+    /// Add nets as circuit nodes, skipping floating nets (those with < 2 connections)
     fn add_nets_as_nodes(&self, circuit: &mut Circuit, netlist: &Netlist) -> Result<()> {
         for (net_id, net) in &netlist.nets {
+            // Skip nets with fewer than 2 connections — they're floating and would
+            // create underconstrained equations in MNA. They'll be added lazily if
+            // a branch references them later.
+            if net.connections.len() < 2 {
+                let name = net.name.as_deref().unwrap_or("unnamed");
+                debug!("Skipping floating net '{}' ({} connections)", name, net.connections.len());
+                continue;
+            }
             let name = net.name.clone()
                 .unwrap_or_else(|| format!("net_{:?}", net_id));
             circuit.add_node(name, Some(net_id));
@@ -85,6 +165,40 @@ impl NetlistToSpiceConverter {
         Ok(())
     }
     
+    /// Parse voltage from a power symbol name like "+12V", "+3V3", "+5V"
+    fn parse_power_symbol_voltage(name: &str) -> Option<f64> {
+        let trimmed = name.trim_start_matches('+');
+
+        // Handle "3V3" style: replace 'V' with '.' → "3.3"
+        // This covers: "3V3" → 3.3, "1V8" → 1.8, "2V5" → 2.5
+        if trimmed.contains('V') {
+            let normalized = trimmed.replace('V', ".");
+            // Strip trailing '.' from cases like "12V" → "12."
+            let normalized = normalized.trim_end_matches('.');
+            if let Ok(v) = normalized.parse::<f64>() {
+                return Some(v);
+            }
+        }
+
+        // Try parsing directly (e.g., just a number)
+        if let Ok(v) = trimmed.parse::<f64>() {
+            return Some(v);
+        }
+
+        None
+    }
+
+    /// Check if a module name represents a power symbol
+    fn is_power_symbol(module_name: &str) -> bool {
+        module_name.starts_with('+') && module_name.len() > 1
+    }
+
+    /// Check if a module name represents a ground symbol
+    fn is_ground_symbol(module_name: &str) -> bool {
+        let lower = module_name.to_lowercase();
+        lower == "gnd" || lower == "ground" || lower == "vss" || lower == "0"
+    }
+
     /// Process a single instance and create SPICE model
     fn process_instance(
         &mut self,
@@ -95,25 +209,59 @@ impl NetlistToSpiceConverter {
     ) -> Result<()> {
         let module = netlist.modules.get(instance.definition)
             .ok_or_else(|| anyhow::anyhow!("Module not found for instance {}", instance.name))?;
-        
-        info!("Processing instance {} with module kind {:?}", 
-              instance.name, module.kind);
-        
+
+        info!("Processing instance {} with module kind {:?}, module name: {}",
+              instance.name, module.kind, module.name);
+
+        // Get connected nets for this instance
+        let connected_nets = self.get_connected_nets(netlist, instance_id)?;
+
+        info!("Instance {} has {} connected nets: {:?}",
+              instance.name, connected_nets.len(),
+              connected_nets.iter().map(|(_, n)| n.as_str()).collect::<Vec<_>>());
+
+        // Special handling: power symbols (+12V, +5V, +3V3, etc.)
+        // These are 1-pin components that represent voltage sources to GND
+        if Self::is_power_symbol(&module.name) {
+            if let Some(voltage) = Self::parse_power_symbol_voltage(&module.name) {
+                if let Some((_, net_name)) = connected_nets.first() {
+                    // Ensure GND node exists
+                    circuit.add_node("GND".to_string(), None);
+                    // Add voltage source from net to GND
+                    circuit.add_branch(
+                        instance.name.clone(),
+                        net_name,
+                        "GND",
+                        "VoltageSource".to_string(),
+                        voltage,
+                        Some(instance_id),
+                    );
+                    info!("Added power symbol {} as VoltageSource {}V: {} -> GND",
+                          instance.name, voltage, net_name);
+                }
+            } else {
+                warn!("Could not parse voltage from power symbol: {}", module.name);
+            }
+            return Ok(());
+        }
+
+        // Special handling: ground symbols
+        // GND instances just mark their connected net as ground — the node is already added
+        if Self::is_ground_symbol(&module.name) {
+            debug!("Skipping ground symbol instance: {} (ground node already exists)", instance.name);
+            return Ok(());
+        }
+
         // Extract model based on available information
         let extracted_model = self.extract_model_for_instance(
             &instance.name,
             module,
             &instance.attributes,
         )?;
-        
+
         // Create SPICE model
         let spice_model = self.model_extractor.create_spice_model(&extracted_model)?;
-        
-        // Get connected nets for this instance
-        let connected_nets = self.get_connected_nets(netlist, instance_id)?;
-        
-        info!("Instance {} has {} connected nets", instance.name, connected_nets.len());
-        
+
         // Handle different component types
         match module.kind {
             ModuleKind::PhysicalComponent | ModuleKind::Component => {
@@ -128,7 +276,7 @@ impl NetlistToSpiceConverter {
             }
             ModuleKind::Interface => {
                 // Interfaces might represent connectors or test points
-                if module.name.to_lowercase().contains("test") || 
+                if module.name.to_lowercase().contains("test") ||
                    module.name.to_lowercase().contains("point") ||
                    module.name.to_lowercase().contains("connector") {
                     self.add_physical_component(
@@ -151,10 +299,10 @@ impl NetlistToSpiceConverter {
                 debug!("Skipping module kind {:?} for {}", module.kind, instance.name);
             }
         }
-        
+
         // Cache the model
         self.instance_models.insert(instance_id, spice_model);
-        
+
         Ok(())
     }
     
@@ -209,29 +357,128 @@ impl NetlistToSpiceConverter {
         instance_id: InstanceId,
     ) -> Result<Vec<(NetId, String)>> {
         let mut connected_nets = Vec::new();
-        
-        // Better approach: look at pin instances for this instance
-        for (pin_inst_id, pin_inst) in &netlist.pin_instances {
+
+        // Look at pin instances for this instance
+        for (_pin_inst_id, pin_inst) in &netlist.pin_instances {
             if pin_inst.instance == instance_id {
                 if let Some(net_id) = pin_inst.net {
                     if let Some(net) = netlist.nets.get(net_id) {
                         let net_name = net.name.clone()
                             .unwrap_or_else(|| format!("net_{:?}", net_id));
-                        
+
                         // Add the net if not already present
                         if !connected_nets.iter().any(|(id, _)| *id == net_id) {
                             connected_nets.push((net_id, net_name));
                         }
                     }
+                } else {
+                    // Log unconnected pins for debugging
+                    let pin_name = netlist.pins.get(pin_inst.pin_def)
+                        .map(|p| p.name.as_str())
+                        .unwrap_or("?");
+                    debug!("Pin {} of instance {:?} has no net assigned", pin_name, instance_id);
                 }
             }
         }
-        
+
+        // Also check net connections pointing to this instance's pins
+        for (_net_id, net) in &netlist.nets {
+            for conn in &net.connections {
+                match conn {
+                    ConnectionPoint::PinInstance(pi_id) => {
+                        if let Some(pi) = netlist.pin_instances.get(*pi_id) {
+                            if pi.instance == instance_id {
+                                let net_name = net.name.clone()
+                                    .unwrap_or_else(|| format!("net_{:?}", _net_id));
+                                if !connected_nets.iter().any(|(id, _)| *id == _net_id) {
+                                    connected_nets.push((_net_id, net_name));
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         debug!("Instance {:?} has {} connected nets", instance_id, connected_nets.len());
-        
+
         Ok(connected_nets)
     }
     
+    /// Map ComponentType to SPICE equation system string
+    fn component_type_to_spice_string(ct: &crate::components::ComponentType) -> String {
+        use crate::components::ComponentType;
+        match ct {
+            ComponentType::Resistor => "Resistor".to_string(),
+            ComponentType::Capacitor => "Capacitor".to_string(),
+            ComponentType::Inductor => "Inductor".to_string(),
+            ComponentType::Diode => "Diode".to_string(),
+            ComponentType::LED => "LED".to_string(),
+            ComponentType::VoltageSource => "VoltageSource".to_string(),
+            ComponentType::CurrentSource => "CurrentSource".to_string(),
+            ComponentType::VoltageRegulator => "VoltageRegulator".to_string(),
+            ComponentType::BJT => "BJT".to_string(),
+            ComponentType::MOSFET => "MOSFET".to_string(),
+            ComponentType::OpAmp => "OpAmp".to_string(),
+            ComponentType::Other(s) => s.clone(),
+        }
+    }
+
+    /// Get connected nets with full pin metadata for an instance.
+    /// Uses both pin_inst.net and net.connections for completeness.
+    fn get_pin_net_info(
+        netlist: &Netlist,
+        instance_id: InstanceId,
+    ) -> Vec<PinNetInfo> {
+        let mut result = Vec::new();
+        let mut seen_pins: std::collections::HashSet<bhdl_netlist::PinId> = std::collections::HashSet::new();
+
+        // Pass 1: pin_inst.net (direct assignment)
+        for (_pi_id, pin_inst) in &netlist.pin_instances {
+            if pin_inst.instance == instance_id {
+                if let Some(net_id) = pin_inst.net {
+                    if let (Some(net), Some(pin_def)) = (netlist.nets.get(net_id), netlist.pins.get(pin_inst.pin_def)) {
+                        seen_pins.insert(pin_inst.pin_def);
+                        let net_name = net.name.clone().unwrap_or_else(|| format!("net_{:?}", net_id));
+                        result.push(PinNetInfo {
+                            net_id,
+                            net_name,
+                            pin_name: pin_def.name.clone(),
+                            pin_type: pin_def.pin_type,
+                            pin_direction: pin_def.direction,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Pass 2: net.connections → PinInstance (fills gaps where pin_inst.net is null)
+        for (net_id, net) in &netlist.nets {
+            for conn in &net.connections {
+                if let ConnectionPoint::PinInstance(pi_id) = conn {
+                    if let Some(pi) = netlist.pin_instances.get(*pi_id) {
+                        if pi.instance == instance_id && !seen_pins.contains(&pi.pin_def) {
+                            if let Some(pin_def) = netlist.pins.get(pi.pin_def) {
+                                seen_pins.insert(pi.pin_def);
+                                let net_name = net.name.clone().unwrap_or_else(|| format!("net_{:?}", net_id));
+                                result.push(PinNetInfo {
+                                    net_id,
+                                    net_name,
+                                    pin_name: pin_def.name.clone(),
+                                    pin_type: pin_def.pin_type,
+                                    pin_direction: pin_def.direction,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        result
+    }
+
     /// Add a physical component to the circuit
     fn add_physical_component(
         &self,
@@ -242,33 +489,139 @@ impl NetlistToSpiceConverter {
         connected_nets: &[(NetId, String)],
         extracted_model: ExtractedModel,
     ) -> Result<()> {
+        use crate::components::ComponentType;
+
+        let spice_type = Self::component_type_to_spice_string(&extracted_model.component_type);
+
+        // Special handling for voltage regulators (3-terminal)
+        // Use pin types from stdlib: power-in = VIN, power-out = VOUT, ground = GND
+        if extracted_model.component_type == ComponentType::VoltageRegulator {
+            let vout_voltage = extracted_model.parameters.get("vout").copied()
+                .or(extracted_model.parameters.get("voltage").copied())
+                .unwrap_or(5.0);
+
+            let pin_info = Self::get_pin_net_info(netlist, instance_id);
+
+            // Classify pins by their type and direction from stdlib definitions
+            let vin_net = pin_info.iter()
+                .find(|p| p.pin_type == bhdl_netlist::PinType::Power
+                       && (p.pin_direction == bhdl_netlist::PinDirection::In
+                           || p.pin_direction == bhdl_netlist::PinDirection::InOut))
+                .map(|p| p.net_name.clone());
+            let vout_net = pin_info.iter()
+                .find(|p| p.pin_type == bhdl_netlist::PinType::Power
+                       && p.pin_direction == bhdl_netlist::PinDirection::Out)
+                .map(|p| p.net_name.clone());
+            let gnd_node_name = pin_info.iter()
+                .find(|p| p.pin_type == bhdl_netlist::PinType::Ground)
+                .map(|p| p.net_name.clone())
+                .unwrap_or_else(|| "GND".to_string());
+
+            circuit.add_node(gnd_node_name.clone(), None);
+
+            info!("Regulator {} decomposition (from pin types): VIN={:?}, VOUT={:?}, GND={}, vout_voltage={}V",
+                  instance_name, vin_net, vout_net, gnd_node_name, vout_voltage);
+
+            // Add voltage source on output: VOUT → GND = vout_voltage
+            if let Some(vout_name) = &vout_net {
+                circuit.add_branch(
+                    format!("{}_vout", instance_name),
+                    vout_name,
+                    &gnd_node_name,
+                    "VoltageSource".to_string(),
+                    vout_voltage,
+                    Some(instance_id),
+                );
+                info!("Added regulator {} output as VoltageSource {}V: {} -> {}",
+                      instance_name, vout_voltage, vout_name, gnd_node_name);
+            }
+
+            // Model the regulator's internal VIN→VOUT dropout path as a resistance.
+            // This provides necessary circuit connectivity for MNA solver stability.
+            // The resistance is derived from dropout voltage / typical load current:
+            // For LM7805: dropout ~2V at 1A → ~2Ω internal resistance.
+            // We use a moderate value that doesn't dominate circuit currents.
+            if let (Some(vin_name), Some(vout_name)) = (&vin_net, &vout_net) {
+                let dropout = (vout_voltage * 0.4).max(1.0); // ~40% of Vout or at least 1V
+                let typical_current = 0.5; // 500mA typical load
+                let internal_resistance = (dropout / typical_current).max(1.0).min(100.0);
+                circuit.add_branch(
+                    format!("{}_dropout", instance_name),
+                    vin_name,
+                    vout_name,
+                    "Resistor".to_string(),
+                    internal_resistance,
+                    Some(instance_id),
+                );
+                info!("Added regulator {} dropout path ({:.1}Ω): {} -> {}",
+                      instance_name, internal_resistance, vin_name, vout_name);
+            }
+
+            return Ok(());
+        }
+
         // For 2-terminal components
         if connected_nets.len() >= 2 {
-            let node1 = &connected_nets[0].1;
-            let node2 = &connected_nets[1].1;
-            
             // Get primary value from extracted model
             let value = self.get_primary_value(&extracted_model);
-            
-            info!("Adding component {} ({:?}): {} -> {}, value={}",
-                  instance_name, extracted_model.component_type, node1, node2, value);
-            
+
+            // For diode-type components, use pin metadata to determine anode/cathode
+            // ordering. SPICE convention: node1 = anode, node2 = cathode.
+            let (node1, node2) = if matches!(extracted_model.component_type,
+                ComponentType::Diode | ComponentType::LED)
+            {
+                let pin_info = Self::get_pin_net_info(netlist, instance_id);
+                let anode_net = pin_info.iter()
+                    .find(|p| {
+                        let name = p.pin_name.to_uppercase();
+                        name == "A" || name == "ANODE"
+                            || p.pin_direction == bhdl_netlist::PinDirection::In
+                    })
+                    .map(|p| p.net_name.clone());
+                let cathode_net = pin_info.iter()
+                    .find(|p| {
+                        let name = p.pin_name.to_uppercase();
+                        name == "K" || name == "CATHODE"
+                            || p.pin_direction == bhdl_netlist::PinDirection::Out
+                    })
+                    .map(|p| p.net_name.clone());
+
+                match (anode_net, cathode_net) {
+                    (Some(anode), Some(cathode)) => {
+                        info!("Diode {} pin-aware ordering: anode={}, cathode={}",
+                              instance_name, anode, cathode);
+                        (anode, cathode)
+                    }
+                    _ => {
+                        // Fallback to connection order if pin metadata is ambiguous
+                        warn!("Diode {} has ambiguous pin metadata, using connection order", instance_name);
+                        (connected_nets[0].1.clone(), connected_nets[1].1.clone())
+                    }
+                }
+            } else {
+                // Symmetric components (resistors, capacitors): order doesn't matter
+                (connected_nets[0].1.clone(), connected_nets[1].1.clone())
+            };
+
+            info!("Adding component {} ({}): {} -> {}, value={}",
+                  instance_name, spice_type, node1, node2, value);
+
             circuit.add_branch(
                 instance_name.to_string(),
-                node1,
-                node2,
-                format!("{:?}", extracted_model.component_type),
+                &node1,
+                &node2,
+                spice_type,
                 value,
                 Some(instance_id),
             );
         } else if connected_nets.len() == 1 {
             // Single-pin components (like test points)
-            debug!("Single-pin component {}: connected to {}", 
+            debug!("Single-pin component {}: connected to {}",
                    instance_name, connected_nets[0].1);
         } else {
             warn!("Component {} has no connections", instance_name);
         }
-        
+
         Ok(())
     }
     

@@ -59,8 +59,8 @@ board BCM_Power_Supply {
             clamping: 45V @ 100A;
             
             for transient_protection(load_dump: 40V);
-        }.1;
-        tvs1.2 -> @GND;
+        }.K;
+        tvs1.A -> @GND;
         
         // Input filter
         @VBAT_PROTECTED -> l1: Inductor(10µH, 30A, DCR: 2mΩ).1;

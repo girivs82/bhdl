@@ -56,8 +56,8 @@ board ClearSyntaxExample {
     
     // Input protection - clear what's what
     $VCC -> fuse: Fuse(1A).1;
-    fuse.2 -> @protected -> tvs: TVSDiode(5.5V).1;
-    tvs.2 -> $GND;
+    fuse.2 -> @protected -> tvs: TVSDiode(5.5V).K;
+    tvs.A -> $GND;
     
     // Voltage regulation - no ambiguity
     @protected -> reg: LM7805().IN;

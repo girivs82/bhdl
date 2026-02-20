@@ -52,7 +52,7 @@ board IntentSystemDemo {
     // ============================================================================
     // 4. SAFETY-CRITICAL: Automotive safety with ESD protection
     // ============================================================================
-    net input_protected: sensor_in -> tvs: TVSDiode(15V).cathode -> tvs.anode -> @GND
+    net input_protected: sensor_in -> tvs: TVSDiode(15V).K -> tvs.A -> @GND
         for input_protection(overvoltage: 15V, current_limit: 100mA)
         for esd_protection(level: 8kV)
         for automotive_safety(level: "ASIL_D");

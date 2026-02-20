@@ -8,8 +8,8 @@ board TestNetNamingArrow {
     
     // Test @NETNAME-> syntax
     VIN @RAW-> fuse: Fuse(1A).1;
-    fuse.2 @PROTECTED-> tvs: TVSDiode(15V).1;
-    tvs.2 -> GND;
+    fuse.2 @PROTECTED-> tvs: TVSDiode(15V).K;
+    tvs.A -> GND;
     
     // Reference named nets
     @PROTECTED -> bulk_cap: ElectrolyticCap(100µF, 25V).+;

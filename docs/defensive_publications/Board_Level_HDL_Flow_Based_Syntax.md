@@ -231,7 +231,7 @@ entity switching_regulator(vout: voltage) {
 
 ```bhdl
 // Intent for entire flow path
-net protected_input: sensor -> tvs: TVSDiode(5.1V).1 -> tvs.2 -> 
+net protected_input: sensor -> tvs: TVSDiode(5.1V).K -> tvs.A ->
                      filter: RC_Filter(fc=1kHz) -> @cleaned_signal
     for protection(overvoltage: 5.1V, noise_rejection: 40dB)
 
@@ -276,7 +276,7 @@ VCC -> @filtered_vcc: Cap(10µF) -> GND
 @filtered_vcc -> subcircuit_power
 
 // Net assignment creates implicit handle
-protected_vin: TVSDiode(15V).1
+protected_vin: TVSDiode(15V).K
 protected_vin -> regulator.input
 
 // Multi-point net references

@@ -36,8 +36,8 @@ board TestAllComponents {
     d1.2 -> test_point: TestPoint().1;
     
     // Test TVS diode
-    VCC -> tvs1: TVSDiode(15V).1;
-    tvs1.2 -> GND;
+    VCC -> tvs1: TVSDiode(15V).K;
+    tvs1.A -> GND;
     
     // Test fuse
     VCC -> f1: Fuse(1A).1;
@@ -103,7 +103,7 @@ board TestAllComponents {
         ("ElectrolyticCap", vec!["pos", "neg", "1", "2"]),
         ("LED", vec!["A", "K"]),
         ("Diode", vec!["1", "2"]),
-        ("TVSDiode", vec!["1", "2"]),
+        ("TVSDiode", vec!["K", "A"]),
         ("Fuse", vec!["1", "2"]),
         ("TestPoint", vec!["1"]),
         ("LM7805", vec!["IN", "GND", "OUT"]),
