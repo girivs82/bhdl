@@ -92,8 +92,61 @@ impl Netlist {
         self.nets.insert(net)
     }
 
-    // Connect a point to a net
+    // Connect a point to a net.
+    //
+    // If the point is a PinInstance already connected to a different net, the two
+    // nets are merged: all connections from the old net move into the target net,
+    // and the old net is left empty. This ensures each pin appears on exactly one
+    // net, which is a fundamental netlist invariant.
     pub fn connect(&mut self, net_id: NetId, point: ConnectionPoint) -> Result<(), String> {
+        // For PinInstance: if already on a different net, merge the two nets.
+        // This must happen before the main borrow of self.nets[net_id].
+        if let ConnectionPoint::PinInstance(pin_inst_id) = point {
+            let old_net_id = self.pin_instances.get(pin_inst_id)
+                .and_then(|pi| pi.net)
+                .filter(|&old_id| old_id != net_id);
+
+            if let Some(old_id) = old_net_id {
+                // Collect connections from old net (clone to release borrow)
+                let old_connections: Vec<ConnectionPoint> = self.nets.get(old_id)
+                    .map(|n| n.connections.clone())
+                    .unwrap_or_default();
+
+                // Update all PinInstance references from old net to target net
+                for cp in &old_connections {
+                    if let ConnectionPoint::PinInstance(pi_id) = cp {
+                        if let Some(pi) = self.pin_instances.get_mut(*pi_id) {
+                            pi.net = Some(net_id);
+                        }
+                    }
+                }
+
+                // Move connections into target net (skip duplicates)
+                if let Some(target_net) = self.nets.get_mut(net_id) {
+                    for cp in old_connections {
+                        if !target_net.connections.contains(&cp) {
+                            target_net.connections.push(cp);
+                        }
+                    }
+                }
+
+                // Clear old net
+                if let Some(old_net) = self.nets.get_mut(old_id) {
+                    old_net.connections.clear();
+                }
+
+                // The pin is now in the target net via the merge. Add the
+                // point itself if it wasn't already present (e.g. if the pin
+                // was being connected for the first time to the old net and
+                // then immediately merged).
+                if let Some(target_net) = self.nets.get(net_id) {
+                    if target_net.connections.contains(&point) {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
         if let Some(net) = self.nets.get_mut(net_id) {
             match point {
                 ConnectionPoint::InstancePort(inst_id, port_id) => {
@@ -122,7 +175,6 @@ impl Netlist {
                 }
                 ConnectionPoint::PinInstance(pin_inst_id) => {
                     if let Some(pin_inst) = self.pin_instances.get_mut(pin_inst_id) {
-                        // Update the pin instance's net reference
                         pin_inst.net = Some(net_id);
                     } else {
                         return Err(format!("PinInstance {:?} does not exist", pin_inst_id));
