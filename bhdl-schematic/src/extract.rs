@@ -321,8 +321,12 @@ pub fn extract_schematic_data(
                                     name: inst.name.clone(),
                                     port: pin.name.clone(),
                                 };
+                                // A pin drives if its direction is Out, or if it's a
+                                // Power-typed pin that isn't explicitly an input
+                                // (e.g., power symbol output vs regulator input).
                                 let is_driver = matches!(pin.direction, PinDirection::Out)
-                                    || matches!(pin.pin_type, PinType::Power);
+                                    || (matches!(pin.pin_type, PinType::Power)
+                                        && !matches!(pin.direction, PinDirection::In));
                                 if is_driver && driver.is_none() {
                                     driver = Some(ep);
                                 } else {
@@ -341,7 +345,8 @@ pub fn extract_schematic_data(
                                 port: pin.name.clone(),
                             };
                             let is_driver = matches!(pin.direction, PinDirection::Out)
-                                || matches!(pin.pin_type, PinType::Power);
+                                || (matches!(pin.pin_type, PinType::Power)
+                                    && !matches!(pin.direction, PinDirection::In));
                             if is_driver && driver.is_none() {
                                 driver = Some(ep);
                             } else {
