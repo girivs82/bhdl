@@ -126,30 +126,33 @@
         const netClassEdgeMap = new Map();
 
         // Entity input port bar → ELK node with output ports (drives into design)
-        const entityInPortCount = Math.max(inputPorts.length, 1);
-        const entityInH = HEADER_HEIGHT + ENTITY_PADDING * 2 + entityInPortCount * PORT_SPACING;
-        let maxInPortNameW = 0;
-        for (const p of inputPorts) { maxInPortNameW = Math.max(maxInPortNameW, measureTextWidth(p.name, FONT_SIZE)); }
-        const entityInW = Math.max(ENTITY_BOX_MIN_WIDTH, maxInPortNameW + 50);
+        // Only create if there are actual input ports
+        if (inputPorts.length > 0) {
+            const entityInPortCount = inputPorts.length;
+            const entityInH = HEADER_HEIGHT + ENTITY_PADDING * 2 + entityInPortCount * PORT_SPACING;
+            let maxInPortNameW = 0;
+            for (const p of inputPorts) { maxInPortNameW = Math.max(maxInPortNameW, measureTextWidth(p.name, FONT_SIZE)); }
+            const entityInW = Math.max(ENTITY_BOX_MIN_WIDTH, maxInPortNameW + 50);
 
-        elkNodes.push({
-            id: '__entity_in__',
-            width: entityInW,
-            height: entityInH,
-            layoutOptions: {
-                'elk.layered.layerConstraint': 'FIRST',
-                'elk.portConstraints': 'FIXED_ORDER'
-            },
-            ports: inputPorts.map((p, i) => ({
-                id: '__entity_in___' + p.name + '_out',
-                width: 1,
-                height: 1,
+            elkNodes.push({
+                id: '__entity_in__',
+                width: entityInW,
+                height: entityInH,
                 layoutOptions: {
-                    'elk.port.side': 'EAST',
-                    'elk.port.index': String(i)
-                }
-            }))
-        });
+                    'elk.layered.layerConstraint': 'FIRST',
+                    'elk.portConstraints': 'FIXED_ORDER'
+                },
+                ports: inputPorts.map((p, i) => ({
+                    id: '__entity_in___' + p.name + '_out',
+                    width: 1,
+                    height: 1,
+                    layoutOptions: {
+                        'elk.port.side': 'EAST',
+                        'elk.port.index': String(i)
+                    }
+                }))
+            });
+        }
 
         // Instance boxes → ELK nodes
         for (const inst of data.instances) {
@@ -193,30 +196,33 @@
         }
 
         // Entity output port bar → ELK node with input ports
-        const entityOutPortCount = Math.max(outputPorts.length, 1);
-        const entityOutH = HEADER_HEIGHT + ENTITY_PADDING * 2 + entityOutPortCount * PORT_SPACING;
-        let maxOutPortNameW = 0;
-        for (const p of outputPorts) { maxOutPortNameW = Math.max(maxOutPortNameW, measureTextWidth(p.name, FONT_SIZE)); }
-        const entityOutW = Math.max(ENTITY_BOX_MIN_WIDTH, maxOutPortNameW + 50);
+        // Only create if there are actual output ports
+        if (outputPorts.length > 0) {
+            const entityOutPortCount = outputPorts.length;
+            const entityOutH = HEADER_HEIGHT + ENTITY_PADDING * 2 + entityOutPortCount * PORT_SPACING;
+            let maxOutPortNameW = 0;
+            for (const p of outputPorts) { maxOutPortNameW = Math.max(maxOutPortNameW, measureTextWidth(p.name, FONT_SIZE)); }
+            const entityOutW = Math.max(ENTITY_BOX_MIN_WIDTH, maxOutPortNameW + 50);
 
-        elkNodes.push({
-            id: '__entity_out__',
-            width: entityOutW,
-            height: entityOutH,
-            layoutOptions: {
-                'elk.layered.layerConstraint': 'LAST',
-                'elk.portConstraints': 'FIXED_ORDER'
-            },
-            ports: outputPorts.map((p, i) => ({
-                id: '__entity_out___' + p.name + '_in',
-                width: 1,
-                height: 1,
+            elkNodes.push({
+                id: '__entity_out__',
+                width: entityOutW,
+                height: entityOutH,
                 layoutOptions: {
-                    'elk.port.side': 'WEST',
-                    'elk.port.index': String(i)
-                }
-            }))
-        });
+                    'elk.layered.layerConstraint': 'LAST',
+                    'elk.portConstraints': 'FIXED_ORDER'
+                },
+                ports: outputPorts.map((p, i) => ({
+                    id: '__entity_out___' + p.name + '_in',
+                    width: 1,
+                    height: 1,
+                    layoutOptions: {
+                        'elk.port.side': 'WEST',
+                        'elk.port.index': String(i)
+                    }
+                }))
+            });
+        }
 
         // Build set of all valid port IDs for edge validation
         const validPortIds = new Set();

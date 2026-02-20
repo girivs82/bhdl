@@ -390,7 +390,56 @@ pub fn extract_schematic_data(
         });
     }
 
-    // --- 5b. Post-filter: remove orphaned power symbols ---
+    // --- 5b. Align instance connection directions with net roles ---
+    // The viewer expects: net driver → _out port, net sink → _in port.
+    // We must ensure instance connection directions match their net roles,
+    // otherwise ELK edges can't connect and components appear unconnected.
+    //
+    // A pin can appear in multiple nets with different roles (e.g., tvs.1 is
+    // a sink of VIN and a driver of filtered_in). In that case, we need both
+    // an "in" and "out" connection for the same port.
+    let mut pin_roles: HashMap<(String, String), std::collections::HashSet<String>> = HashMap::new();
+    for net in &nets {
+        if net.driver.endpoint_type == "instance" {
+            pin_roles.entry((net.driver.name.clone(), net.driver.port.clone()))
+                .or_default()
+                .insert("out".to_string());
+        }
+        for sink in &net.sinks {
+            if sink.endpoint_type == "instance" {
+                pin_roles.entry((sink.name.clone(), sink.port.clone()))
+                    .or_default()
+                    .insert("in".to_string());
+            }
+        }
+    }
+
+    // Apply roles: set direction, and duplicate connections for dual-role pins
+    for inst in instances.iter_mut() {
+        let mut extra_connections = Vec::new();
+        for conn in inst.connections.iter_mut() {
+            let key = (inst.name.clone(), conn.port.clone());
+            if let Some(roles) = pin_roles.get(&key) {
+                if roles.contains("out") && roles.contains("in") {
+                    // Dual-role pin: keep this connection as "in", add an "out" copy
+                    conn.direction = "in".to_string();
+                    extra_connections.push(SchematicConnection {
+                        port: conn.port.clone(),
+                        signal: conn.signal.clone(),
+                        direction: "out".to_string(),
+                        pin_type: conn.pin_type.clone(),
+                    });
+                } else if roles.contains("out") {
+                    conn.direction = "out".to_string();
+                } else if roles.contains("in") {
+                    conn.direction = "in".to_string();
+                }
+            }
+        }
+        inst.connections.extend(extra_connections);
+    }
+
+    // --- 5c. Post-filter: remove orphaned power symbols ---
     // A power symbol is orphaned if all its connections go to nets that don't
     // also connect to other non-power-symbol instances.
     let net_name_set: std::collections::HashSet<String> = nets.iter()
