@@ -1,0 +1,73 @@
+// Sensor interface: regulated power + signal conditioning + protection
+// Tests: mixed topology — series chain, shunts, and branches
+entity Res(value: resistance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+}
+
+entity Cap(value: capacitance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+}
+
+entity LED(color: string) {
+    pin A: signal in;
+    pin K: signal in;
+}
+
+entity TVSDiode(voltage: voltage) {
+    pin A: signal in;
+    pin K: signal in;
+}
+
+entity LM7805 {
+    pin VI: power in;
+    pin GND: ground;
+    pin VO: power out;
+}
+
+entity OpAmp {
+    pin INP: signal in;
+    pin INM: signal in;
+    pin OUT: signal out;
+    pin VCC: power in;
+    pin GND: ground;
+}
+
+board SensorInterface {
+    power VIN = 12V @ 500mA;
+    power VREG = 5V @ 200mA;
+    ground GND;
+
+    // Input protection
+    VIN -> tvs: TVSDiode(15V).K;
+    tvs.A -> GND;
+
+    // Input filter
+    net vin_prot: tvs.K -> c_in: Cap(100µF).1 for noise_filtering(100Hz, 40dB);
+    c_in.2 -> GND;
+
+    // Regulation
+    net vin_filt: c_in.1 -> reg: LM7805().VI -> reg.VO -> VREG for voltage_regulation(5V, 12V);
+    reg.GND -> GND;
+
+    // Regulated output filter
+    VREG -> c_reg: Cap(10µF).1;
+    c_reg.2 -> GND;
+
+    // Power indicator LED
+    net pwr_led: VREG -> r_led: Res(330).1 -> r_led.2 -> led_pwr: LED("green").A for current_limiting(15mA);
+    led_pwr.K -> GND;
+
+    // Signal path: sensor bias → amplifier
+    net sensor_bias: VREG -> r_bias: Res(10000).1 -> r_bias.2 -> amp: OpAmp().INP for signal_conditioning;
+    amp.VCC -> VREG;
+    amp.GND -> GND;
+
+    // Feedback network
+    net fb_net: amp.OUT -> r_fb: Res(100000).1 -> r_fb.2 -> amp.INM;
+
+    // Output filter
+    net amp_out: amp.OUT -> r_out: Res(1000).1 -> r_out.2 -> c_filt: Cap(100nF).1 for anti_alias(10kHz);
+    c_filt.2 -> GND;
+}
