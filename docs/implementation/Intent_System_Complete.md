@@ -242,12 +242,12 @@ Intent applies to entire signal flow paths, not individual nets:
 
 ```bhdl
 // ✅ Good: Intent describes the flow's purpose
-net protection: sensor -> tvs: TVSDiode(6V).cathode -> tvs.anode -> r: Res(1k).1 -> r.2 -> @protected
+net protection: sensor -> tvs: TVSDiode(6V).K -> tvs.A -> r: Res(1k).1 -> r.2 -> @protected
     for input_protection(overvoltage: 6V, current_limit: 5mA);
 
 // ❌ Bad: Intent on individual components loses flow context
-net n1: sensor -> tvs: TVSDiode(6V).cathode for input_protection(overvoltage: 6V);
-net n2: tvs.anode -> r: Res(1k).1 for input_protection(current_limit: 5mA);
+net n1: sensor -> tvs: TVSDiode(6V).K for input_protection(overvoltage: 6V);
+net n2: tvs.A -> r: Res(1k).1 for input_protection(current_limit: 5mA);
 ```
 
 **Rationale:**

@@ -245,7 +245,7 @@ The synthesizer provides rich intent information through the flow tracking syste
 
 ```rust
 // 1. Parser captures intent on flow statements
-protection: sensor -> tvs: TVSDiode(6V).cathode -> tvs.anode -> @GND
+protection: sensor -> tvs: TVSDiode(6V).K -> tvs.A -> @GND
     for input_protection(overvoltage: 6V, current_limit: 5mA);
 
 // 2. Flow tracker identifies components in path

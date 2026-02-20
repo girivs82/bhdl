@@ -155,8 +155,18 @@ impl SpiceEquationSystem {
                         current: branch.value,
                     }
                 }
+                // Capacitor: DC open circuit (very small conductance for numerical stability)
+                "Capacitor" => {
+                    debug!("Capacitor {} modeled as DC open circuit (1e-12 S)", branch.name);
+                    ComponentEquation::Linear { conductance: 1e-12 }
+                }
+                // Inductor: DC short circuit (very large conductance / very small resistance)
+                "Inductor" => {
+                    debug!("Inductor {} modeled as DC short circuit (1e6 S)", branch.name);
+                    ComponentEquation::Linear { conductance: 1e6 }
+                }
                 _ => {
-                    warn!("Unknown component type: {}, treating as open circuit", 
+                    warn!("Unknown component type: {}, treating as open circuit",
                           branch.component_type);
                     ComponentEquation::Linear { conductance: 1e-12 }
                 }
@@ -449,12 +459,19 @@ impl EquationSystem for SpiceEquationSystem {
             if let Some(equation) = self.component_equations.get(&edge_idx) {
                 match equation {
                     ComponentEquation::Linear { conductance } => {
-                        // Stamp conductance matrix
-                        if let (Some(i), Some(j)) = (v1_idx, v2_idx) {
+                        // Stamp conductance matrix (MNA standard stamp)
+                        // Must handle cases where one node is ground (idx = None)
+                        if let Some(i) = v1_idx {
                             jacobian[(i, i)] += conductance;
-                            jacobian[(i, j)] -= conductance;
-                            jacobian[(j, i)] -= conductance;
+                            if let Some(j) = v2_idx {
+                                jacobian[(i, j)] -= conductance;
+                            }
+                        }
+                        if let Some(j) = v2_idx {
                             jacobian[(j, j)] += conductance;
+                            if let Some(i) = v1_idx {
+                                jacobian[(j, i)] -= conductance;
+                            }
                         }
                     }
                     

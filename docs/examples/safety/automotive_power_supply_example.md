@@ -287,7 +287,7 @@ board AutomotivePowerSupply {
     fuse.out @FUSED-> tvs: TVSDiode(28V) {
         for transient_protection(max_voltage: 28V, response_time: <1ns);
     };
-    tvs.cathode -> @PGND;
+    tvs.A -> @PGND;
     
     // Input filtering - intent clarifies purpose
     @FUSED -> input_bulk: ElectrolyticCap(220µF, 25V) {

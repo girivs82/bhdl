@@ -13,7 +13,7 @@ Implement clear, unambiguous net syntax:
 
 The current parser seems to support this confusing pattern:
 ```bhdl
-fuse.2 -> protected_vin: TVSDiode(15V).1;
+fuse.2 -> protected_vin: TVSDiode(15V).K;
 ```
 
 This creates a net `protected_vin` but uses `:` which is also used for component handles.

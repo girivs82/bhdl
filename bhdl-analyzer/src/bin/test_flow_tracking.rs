@@ -16,7 +16,7 @@ board PowerSupply {
     net delayed_trigger: VIN -> Res(10k).1 -> Cap(100n).1 -> GND for delay(3ms);
     
     // Protection intent
-    net protected_vin: VIN -> TVSDiode(15V).1 for overvoltage_protection(15V);
+    net protected_vin: VIN -> TVSDiode(15V).K for overvoltage_protection(15V);
     
     // Anti-alias filter before ADC
     net adc_input: sensor_out -> Res(1k).1 -> Cap(10n).1 -> GND for anti_alias(before: ADC1, cutoff: 10kHz);

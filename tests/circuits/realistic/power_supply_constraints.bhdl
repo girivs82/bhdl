@@ -16,8 +16,8 @@ board PowerSupplyWithConstraints {
   
   // Input protection with constraint-based design
   VIN @RAW_IN-> fuse: Fuse(?, current_trip=3.5A).1;
-  fuse.2 @FUSED-> tvs: TVSDiode(?, clamp_voltage<15V).1;
-  tvs.2 -> GND;
+  fuse.2 @FUSED-> tvs: TVSDiode(?, clamp_voltage<15V).K;
+  tvs.A -> GND;
   
   // Input filtering with ripple constraint
   @FUSED -> c_bulk: ElectrolyticCap(?, ripple_current>1A, voltage=25V).+;

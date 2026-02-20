@@ -4,8 +4,8 @@
 import { TVSDiodeParams, TVS_15V } from "../electrical_params.bhdl";
 
 entity TVSDiode(voltage: voltage) {
-    pin 1: signal inout;  // Terminal 1 (bidirectional)
-    pin 2: signal inout;  // Terminal 2 (bidirectional)
+    pin A: signal in;   // Anode (ground-side terminal)
+    pin K: signal out;  // Cathode (protected-line terminal, band side)
     
     // Electrical parameters
     const params: TVSDiodeParams = {

@@ -15,8 +15,8 @@ board NetAssignmentTest {
     // - A net named "protected_vin"
     // - F1.2 connects to the "protected_vin" net
     // - A TVSDiode instance (D1)
-    // - D1.1 connects to the "protected_vin" net
-    fuse.2 -> protected_vin: TVSDiode(15V).1;
+    // - D1.K connects to the "protected_vin" net
+    fuse.2 -> protected_vin: TVSDiode(15V).K;
     
     // These reference the "protected_vin" net (not a component)
     protected_vin -> c1: Cap(100µF).+;
@@ -25,14 +25,14 @@ board NetAssignmentTest {
     // This is WRONG - protected_vin is a net, not a component
     // protected_vin.2 -> GND;  // INCORRECT!
     
-    // Instead, to connect the TVSDiode's pin 2 to ground, we need to
+    // Instead, to connect the TVSDiode's anode to ground, we need to
     // reference it by its auto-generated refdes or create another connection
     // Since we can't know the refdes in advance, we'd need to do:
-    // TVSDiode(15V).2 -> GND;  // But this creates a new instance!
+    // TVSDiode(15V).A -> GND;  // But this creates a new instance!
     
     // The correct pattern would be to use the full connection:
-    // fuse.2 -> protected_vin: TVSDiode(15V).1;
-    // protected_vin: TVSDiode(15V).2 -> GND;  // But this syntax isn't valid
+    // fuse.2 -> protected_vin: TVSDiode(15V).K;
+    // protected_vin: TVSDiode(15V).A -> GND;  // But this syntax isn't valid
     
     // Or better yet, use a more complete connection pattern
     // This is why the realistic example uses explicit component references

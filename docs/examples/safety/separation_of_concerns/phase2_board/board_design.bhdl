@@ -35,7 +35,7 @@ board AutomotivePowerSupply {
     input_fuse.out -> transient_suppressor: TVSDiode(28V) {
         for overvoltage_transient_protection;
     };
-    transient_suppressor.cathode -> @GND;
+    transient_suppressor.A -> @GND;
     
     // Reverse polarity protection - board designer's choice of method
     input_fuse.out -> reverse_protection: PChannelMOSFET(30V, 10A) {

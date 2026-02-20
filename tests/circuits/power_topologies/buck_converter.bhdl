@@ -5,7 +5,7 @@ board BuckConverter {
 
     // Input protection and filtering
     VIN -> Fuse(3A).1 -> protected_vin;
-    protected_vin -> TVSDiode(30V).1 -> GND;
+    protected_vin -> TVSDiode(30V).K -> GND;
     
     // Input capacitors - bulk storage
     protected_vin -> Cap(220uF, 35V, electrolytic).1 -> GND;

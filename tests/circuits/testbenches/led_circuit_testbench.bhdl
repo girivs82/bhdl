@@ -8,7 +8,7 @@ board LEDCircuitWithProtection {
     net protected_signal;
     
     // Protection circuit
-    input_signal -> D1: TVSDiode(6V).cathode -> D1.anode -> GND;
+    input_signal -> D1: TVSDiode(6V).K -> D1.A -> GND;
     input_signal -> R1: Res(100Ω).1 -> R1.2 -> protected_signal;
     
     // LED driver circuit

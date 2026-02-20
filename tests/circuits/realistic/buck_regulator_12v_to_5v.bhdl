@@ -11,7 +11,7 @@ board BuckRegulator12Vto5V {
     
     // Input protection
     vin_filtered -> Fuse(5A, fast).1 -> vin_fused;
-    vin_fused -> TVSDiode(SMAJ15A, 15V).1 -> GND;  // 15V clamp for 12V input
+    vin_fused -> TVSDiode(SMAJ15A, 15V).K -> GND;  // 15V clamp for 12V input
     
     // Input bulk capacitance
     vin_fused -> Cap(220uF, 25V, electrolytic).1 -> GND;  // Bulk storage
@@ -81,7 +81,7 @@ board BuckRegulator12Vto5V {
     VOUT -> Res(0.01ohm, 2512, 1W, 1%).1 -> vout_sensed;
     
     // Output protection
-    vout_sensed -> TVSDiode(SMAJ5.0A, 5V).1 -> GND;
+    vout_sensed -> TVSDiode(SMAJ5.0A, 5V).K -> GND;
     
     // Test points
     testpoint TP_VIN: vin_fused;

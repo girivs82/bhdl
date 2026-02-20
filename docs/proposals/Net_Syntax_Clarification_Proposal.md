@@ -5,7 +5,7 @@
 The current BHDL syntax has multiple, inconsistent ways to create and reference nets:
 
 1. **@ prefix syntax**: `VCC @FILTERED-> r1: Res(10k).1`
-2. **Net assignment pattern**: `fuse.2 -> protected_vin: TVSDiode(15V).1`
+2. **Net assignment pattern**: `fuse.2 -> protected_vin: TVSDiode(15V).K`
 3. **Component handles**: `r1: Res(10k)` 
 4. **Anonymous nets**: `VCC -> Res(10k).1`
 
@@ -41,13 +41,13 @@ VCC -> Res(10k).1 -> LED(red).A;       // Direct connections
 Remove the ambiguous pattern:
 ```bhdl
 // REMOVE THIS PATTERN - it's confusing!
-fuse.2 -> protected_vin: TVSDiode(15V).1;
+fuse.2 -> protected_vin: TVSDiode(15V).K;
 ```
 
 Replace with clear @ syntax:
 ```bhdl
 // CLEAR: @ means net
-fuse.2 -> @protected_vin -> TVSDiode(15V).1;
+fuse.2 -> @protected_vin -> TVSDiode(15V).K;
 ```
 
 ## Complete Syntax Rules
@@ -136,16 +136,16 @@ sensor -> @signal -> filter.IN for anti_alias(before: adc);
 ### Before (Confusing)
 ```bhdl
 // Is protected_vin a net or component? Unclear!
-fuse.2 -> protected_vin: TVSDiode(15V).1;
+fuse.2 -> protected_vin: TVSDiode(15V).K;
 protected_vin -> Cap(100uF).+;  // This suggests it's a net
-// But TVSDiode.2 is disconnected - can't reference it!
+// But TVSDiode.A is disconnected - can't reference it!
 ```
 
 ### After (Clear)
 ```bhdl
 // Clearly a net with @
-fuse.2 -> @protected_vin -> tvs: TVSDiode(15V).1;
-tvs.2 -> GND;                    // Can reference component
+fuse.2 -> @protected_vin -> tvs: TVSDiode(15V).K;
+tvs.A -> GND;                    // Can reference component
 @protected_vin -> Cap(100uF).+;  // Clearly referencing net
 ```
 

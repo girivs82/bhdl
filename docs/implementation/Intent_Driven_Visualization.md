@@ -118,7 +118,7 @@ board IntentLayoutDemo {
     ground GND;
 
     // LEFT ZONE: Input protection
-    net protected: VIN -> tvs: TVSDiode(15V).1
+    net protected: VIN -> tvs: TVSDiode(15V).K
         for input_protection(15V, 500mA);
 
     // TOP ZONE: Voltage regulation

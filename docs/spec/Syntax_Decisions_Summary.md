@@ -116,8 +116,8 @@ board ClearSyntaxExample {
     
     // All nets use @ for reference
     @VIN -> fuse: Fuse(2A).1;
-    fuse.2 -> @protected -> tvs: TVSDiode(15V).1;
-    tvs.2 -> @GND;
+    fuse.2 -> @protected -> tvs: TVSDiode(15V).K;
+    tvs.A -> @GND;
     
     // Intent without labels or 'net' keyword
     @protected -> reg: LM7805().IN for voltage_regulation;

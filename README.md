@@ -34,7 +34,7 @@ board PowerSupply {
 - **Express circuits as flows**: `VCC -> Res(1kΩ).1 -> LED(red).A -> GND`
 - **Component instantiation in-line**: No separate declaration/instantiation
 - **Multiple connection operators**: `->` (unidirectional), `<->` (bidirectional), `|>` (flow)
-- **Net assignments**: `protected_vin: TVSDiode(15V).1` creates nets with implicit handles
+- **Net assignments**: `protected_vin: TVSDiode(15V).K` creates nets with implicit handles
 
 ### 🎨 Design Intent System
 - **Capture design purpose**: 38 standard intent functions
@@ -278,7 +278,7 @@ net debounced: button -> rc_filter
     for debounce(time: 50ms);
 
 // Protection intent
-net protected: input -> tvs: TVSDiode(6V).cathode
+net protected: input -> tvs: TVSDiode(6V).K
     for input_protection(max_voltage: 6V);
 
 // Measurement intent

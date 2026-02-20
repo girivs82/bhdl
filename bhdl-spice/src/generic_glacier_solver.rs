@@ -150,7 +150,7 @@ impl Default for SolverConfig {
         Self {
             max_iterations: 100,
             tolerance: 1e-9,
-            use_adaptive_damping: true,
+            use_adaptive_damping: false, // Full Newton steps; ramping provides robustness
             min_damping: 1e-6,
             max_damping: 1.0,
             singular_perturbation: 1e-10,
@@ -289,10 +289,12 @@ impl GenericGlacierSolver {
     fn apply_update(&self, variables: &mut [Variable], delta: &DVector<f64>, damping: f64) {
         for (i, var) in variables.iter_mut().enumerate() {
             var.value += damping * delta[i];
-            
-            // Ensure log variables don't go too negative
-            if var.space == VariableSpace::Logarithmic && var.value < -50.0 {
-                var.value = -50.0;  // Limit to ~1e-22 in linear space
+
+            // Clamp log variables to prevent IEEE 754 issues
+            // -700 corresponds to exp(-700) ≈ 0 (below f64 denormal range)
+            // This is generous enough for deeply reverse-biased diodes
+            if var.space == VariableSpace::Logarithmic && var.value < -700.0 {
+                var.value = -700.0;
             }
         }
     }

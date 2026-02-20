@@ -956,7 +956,7 @@ In series processing, one intent can cover the entire signal transformation chai
 // Input: 0-5V sensor signal, Output: 0-3.3V conditioned signal for ADC
 
 // Stage 1: Input protection - clamp overvoltage, limit current
-net protected_input: sensor_pin -> d1: TVSDiode(6V).cathode -> d1.anode -> r1: Res(1k).1 -> r1.2 -> protected_node
+net protected_input: sensor_pin -> d1: TVSDiode(6V).K -> d1.A -> r1: Res(1k).1 -> r1.2 -> protected_node
     for input_protection(overvoltage_clamp: 6V, current_limit: 5mA);
 // TVS diode clamps voltage spikes above 6V, 1kΩ resistor limits current to 5mA max
 
@@ -1008,7 +1008,7 @@ Sensor → TVS(6V) → 1kΩ → 10kΩ → OpAmp(×10) → 3.3k/6.7k → Buffer �
 
 ```bhdl
 // Main signal path with protection intent
-net main_path: sensor_pin -> tvs: TVSDiode(6V).cathode -> tvs.anode -> r1: Res(1k).1 -> r1.2 -> @protected_signal
+net main_path: sensor_pin -> tvs: TVSDiode(6V).K -> tvs.A -> r1: Res(1k).1 -> r1.2 -> @protected_signal
     for input_protection(overvoltage: 6V, current_limit: 5mA);
 
 // Branch 1: Fast monitoring path (different intent)
@@ -1044,7 +1044,7 @@ net filtered_path: sensor_pin -> rf: Res(1k).1 -> rf.2 -> cf: Cap(1uF).1 -> u4: 
     for noise_immunity(cutoff: 159Hz);
 
 // SERIES: Sequential processing - single signal path through multiple stages
-net protection_stage: sensor_pin -> tvs: TVSDiode(6V).cathode -> tvs.anode -> rp: Res(1k).1 -> rp.2 -> protected_node
+net protection_stage: sensor_pin -> tvs: TVSDiode(6V).K -> tvs.A -> rp: Res(1k).1 -> rp.2 -> protected_node
     for input_protection(clamp: 6V, current_limit: 5mA);
 net filter_stage: protected_node -> rf2: Res(10k).1 -> rf2.2 -> filter_point
     for filter_resistance;

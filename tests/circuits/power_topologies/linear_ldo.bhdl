@@ -4,8 +4,8 @@ board LinearLDO {
     ground GND;
 
     // Input protection and filtering
-    vin_protection: TVSDiode(18V).1 <- VIN;
-    vin_protection.2 -> protected_vin;
+    vin_protection: TVSDiode(18V).K <- VIN;
+    vin_protection.A -> protected_vin;
     
     // Input filtering - bulk and ceramic
     protected_vin -> Cap(100uF, 25V).1 -> GND;

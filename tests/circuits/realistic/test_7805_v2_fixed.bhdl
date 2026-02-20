@@ -9,7 +9,7 @@ board PowerSupply_7805 {
     
     // Input protection and filtering
     @VIN -> fuse: Fuse(1A).1;
-    fuse.2 -> @protected_vin -> TVSDiode(15V).1;
+    fuse.2 -> @protected_vin -> TVSDiode(15V).K;
     @protected_vin -> c_in1: ElectrolyticCap(100µF, 25V).+;
     @protected_vin -> c_in2: Cap(0.1µF).1;
     
@@ -32,7 +32,7 @@ board PowerSupply_7805 {
     c_in2.2 -> @GND;
     c_out1.- -> @GND;
     c_out2.2 -> @GND;
-    TVSDiode(15V).2 -> @GND;
+    TVSDiode(15V).A -> @GND;
     
     // Test points for measurement
     @protected_vin -> tp_vin: TestPoint().1;

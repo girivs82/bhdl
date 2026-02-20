@@ -968,8 +968,8 @@ board AutomotivePSU {
     ground GND;
     
     // Input protection
-    @VIN -> tvs: TVSDiode(40V).cathode;
-    tvs.anode -> @GND;
+    @VIN -> tvs: TVSDiode(40V).K;
+    tvs.A -> @GND;
     
     // Voltage regulation
     @VIN -> reg: VoltageRegulator(5V, 2A) {

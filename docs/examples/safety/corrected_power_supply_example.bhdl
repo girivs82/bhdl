@@ -130,7 +130,7 @@ board AutomotivePowerSupply {
     // Input protection (board designer's choice)
     @VBATT -> fuse: Fuse(7.5A) for overcurrent_protection;
     fuse.out -> tvs: TVSDiode(28V) for transient_protection;
-    tvs.cathode -> @GND;
+    tvs.A -> @GND;
     
     // Primary regulation (board designer selects switching for efficiency)
     fuse.out @PROTECTED-> regulator: LM2596(5V, 3A) {

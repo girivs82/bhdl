@@ -163,8 +163,8 @@ regulator.OUT -> Cap(10µF).+ -> VOUT;
 ### Net Assignment with Implicit Handles
 ```bhdl
 // Creates both a net and component handle
-fuse.2 -> protected_vin: TVSDiode(15V).1;
-protected_vin.2 -> GND;  // Use handle to reference other pins
+fuse.2 -> protected_vin: TVSDiode(15V).K;
+protected_vin.A -> GND;  // Use handle to reference other pins
 ```
 
 ### Flow Specifications

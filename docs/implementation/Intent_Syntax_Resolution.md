@@ -7,7 +7,7 @@ There is a syntax inconsistency between the BHDL specification and the intent sy
 1. **BHDL Specification (v2.0)**: Does not include a `net` keyword. Nets are created through:
    - Direct connections: `VCC -> Res(4.7kΩ).1 -> LED(red).A;`
    - Named nets with @ prefix: `VCC @FILTERED-> r1: Res(4.7kΩ).1;`
-   - Net references: `fuse.2 -> @protected_vin -> TVSDiode(15V).1;`
+   - Net references: `fuse.2 -> @protected_vin -> TVSDiode(15V).K;`
 
 2. **Intent System Implementation**: Requires `net` keyword for intent attachment:
    - Parser expects: `net name: flow_expr for intent_clause;`

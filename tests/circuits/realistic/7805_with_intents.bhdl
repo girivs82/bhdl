@@ -7,7 +7,7 @@ board LM7805_Regulator {
     ground GND;
 
     // Input protection circuit
-    net protected_input: VIN -> tvs: TVSDiode(15V).cathode -> tvs.anode -> @GND
+    net protected_input: VIN -> tvs: TVSDiode(15V).K -> tvs.A -> @GND
         for input_protection(overvoltage: 15V, current_limit: 2A);
 
     // Input filtering with anti-noise requirements

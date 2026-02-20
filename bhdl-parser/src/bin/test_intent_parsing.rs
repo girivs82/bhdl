@@ -14,7 +14,7 @@ board TestBoard {
     net filtered: noisy_signal -> RC_Filter(1kHz)
         for anti_alias(before: adc);
     
-    net protection: sensor -> tvs: TVSDiode(6V).cathode -> tvs.anode -> r: Res(1k).1 -> r.2 -> @protected
+    net protection: sensor -> tvs: TVSDiode(6V).K -> tvs.A -> r: Res(1k).1 -> r.2 -> @protected
         for input_protection(overvoltage: 6V, current_limit: 5mA);
 }
 "#,

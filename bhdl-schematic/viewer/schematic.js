@@ -36,15 +36,16 @@
     const COLORS = {
         entityBg: '#1e3a5f', entityBorder: '#4fc3f7', entityHeader: '#0d2137',
         instanceBg: '#2a2d2e', instanceBorder: '#555', instanceHeader: '#383b3d',
-        portIn: '#64b5f6', portOut: '#ff9800', portInout: '#9c27b0',
-        portClock: '#4caf50', portReset: '#ef5350',
-        portPower: '#ff6b6b', portGround: '#888888', portPassive: '#ffa726',
+        port: '#5c8dbf',           // signal port stubs and dots
+        portPower: '#ff6b6b',      // power port stubs
+        portClock: '#4caf50',      // clock signal ports
+        portReset: '#ef5350',      // reset signal ports
         wire: '#5c8dbf', wireBus: '#7baad4',
         wireHighlight: '#ffeb3b',
         text: '#d4d4d4', textDim: '#777', textMuted: '#555',
         paramText: '#9e9e9e',
         busSlash: '#8cb4d8', busLabel: '#8cb4d8',
-        highlight: '#ffeb3b', junctionDot: '#8cb4d8',
+        highlight: '#ffeb3b', junctionDot: '#5c8dbf',
         powerSrcBg: '#3a1818', powerSrcBorder: '#ff6b6b', powerSrcText: '#ff6b6b',
         groundStub: '#888888'
     };
@@ -64,6 +65,32 @@
     }
 
     // ─────────── HELPERS ───────────
+
+    function formatVoltage(v) {
+        if (v == null) return '';
+        const abs = Math.abs(v);
+        if (abs >= 1) return v.toFixed(2) + 'V';
+        if (abs >= 1e-3) return (v * 1e3).toFixed(1) + 'mV';
+        return (v * 1e6).toFixed(0) + 'µV';
+    }
+
+    function formatCurrent(a) {
+        if (a == null) return '';
+        const abs = Math.abs(a);
+        if (abs >= 1) return a.toFixed(2) + 'A';
+        if (abs >= 1e-3) return (a * 1e3).toFixed(1) + 'mA';
+        if (abs >= 1e-6) return (a * 1e6).toFixed(1) + 'µA';
+        return (a * 1e9).toFixed(0) + 'nA';
+    }
+
+    function formatPower(w) {
+        if (w == null) return '';
+        const abs = Math.abs(w);
+        if (abs >= 1) return w.toFixed(2) + 'W';
+        if (abs >= 1e-3) return (w * 1e3).toFixed(1) + 'mW';
+        if (abs >= 1e-6) return (w * 1e6).toFixed(1) + 'µW';
+        return (w * 1e9).toFixed(0) + 'nW';
+    }
 
     function isPowerGroundSymbol(inst) {
         const t = inst.entity_type || '';
@@ -813,7 +840,10 @@
                     }
                 }
             }
-            layoutElements.push({ x: pos.x, y: pos.y, w: pos.w, h: pos.h, name, type: 'instance', entityType: inst.entity_type, parameters: inst.parameters, category: inst.category, isShunt: isShuntLike, inputPorts: instInPorts, outputPorts: instOutPorts, gndStubs: gndStubsByInst.get(name) || [], pgStubs: [], line: inst.line });
+            // Attach simulation annotations (current, power) if available
+            const simCurrent = data.simulation?.instance_currents?.[name];
+            const simPowerW = data.simulation?.instance_power?.[name];
+            layoutElements.push({ x: pos.x, y: pos.y, w: pos.w, h: pos.h, name, type: 'instance', entityType: inst.entity_type, parameters: inst.parameters, category: inst.category, isShunt: isShuntLike, inputPorts: instInPorts, outputPorts: instOutPorts, gndStubs: gndStubsByInst.get(name) || [], pgStubs: [], line: inst.line, simCurrent, simPower: simPowerW });
         }
 
         // Entity output
@@ -897,7 +927,24 @@
                     segments.push({ x1: midX, y1: toPos.y, x2: toPos.x, y2: toPos.y });
                 }
 
-                layoutWires.push({ from: fromPos, to: toPos, segments, width: net.width || 1, netName: net.name, netClass: net.net_class || 'signal' });
+                // Classify wire as power or signal.
+                // Prefer GLACIER DC simulation data (ground-truth current flow)
+                // over heuristic driver-pin-type check.
+                const simPower = data.simulation?.power_nets;
+                let isPowerNet;
+                if (simPower) {
+                    // Simulation available: a net is power if GLACIER says so
+                    isPowerNet = simPower instanceof Set ? simPower.has(net.name) : !!simPower[net.name];
+                } else {
+                    // Fallback: driver pin_type heuristic
+                    const driverPinType = net.driver.type === 'power_source' ? 'power'
+                        : getPortPinType(net.driver.name, net.driver.port);
+                    isPowerNet = driverPinType === 'power' || net.net_class === 'power';
+                }
+
+                // Gather simulation annotations for this wire
+                const voltage = data.simulation?.net_voltages?.[net.name];
+                layoutWires.push({ from: fromPos, to: toPos, segments, width: net.width || 1, netName: net.name, netClass: net.net_class || 'signal', isPower: isPowerNet, voltage });
             }
         }
         layoutElements._junctionPoints = junctionPoints;
@@ -962,7 +1009,62 @@
         }
 
         ctx.restore();
+
+        // Draw simulation tooltip for hovered items (in screen space)
+        drawSimTooltip();
     }
+
+    function drawSimTooltip() {
+        if (!schematicData?.simulation) return;
+        const sim = schematicData.simulation;
+        const lines = [];
+
+        if (hoveredItem) {
+            const el = layoutElements.find(e => e.name === hoveredItem);
+            if (el && el.type === 'instance') {
+                lines.push(el.name + ' (' + (el.entityType || '') + ')');
+                if (el.simCurrent != null) lines.push('I = ' + formatCurrent(el.simCurrent));
+                if (el.simPower != null) lines.push('P = ' + formatPower(el.simPower));
+            }
+        } else if (hoveredNet) {
+            lines.push(hoveredNet);
+            const v = sim.net_voltages?.[hoveredNet];
+            if (v != null) lines.push('V = ' + formatVoltage(v));
+            const isPwr = sim.power_nets && (
+                sim.power_nets instanceof Set ? sim.power_nets.has(hoveredNet) : !!sim.power_nets[hoveredNet]
+            );
+            lines.push(isPwr ? 'Class: power' : 'Class: signal');
+        }
+
+        if (lines.length === 0) return;
+
+        const px = tooltipScreenX, py = tooltipScreenY;
+        const padX = 8, padY = 5;
+        ctx.font = `${FONT_SIZE - 1}px monospace`;
+        let maxW = 0;
+        for (const l of lines) maxW = Math.max(maxW, ctx.measureText(l).width);
+        const boxW = maxW + padX * 2;
+        const boxH = lines.length * (FONT_SIZE + 2) + padY * 2;
+        const bx = px + 12, by = py - boxH - 4;
+
+        ctx.fillStyle = 'rgba(30,30,30,0.92)';
+        ctx.strokeStyle = '#666';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(bx, by, boxW, boxH, 4);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = '#ddd';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        for (let i = 0; i < lines.length; i++) {
+            ctx.fillStyle = i === 0 ? '#fff' : '#bbb';
+            ctx.fillText(lines[i], bx + padX, by + padY + i * (FONT_SIZE + 2));
+        }
+    }
+
+    let tooltipScreenX = 0, tooltipScreenY = 0;
 
     function drawPowerSourceNode(el) {
         drawRoundedRect(ctx, el.x, el.y, el.w, el.h, 3, COLORS.powerSrcBg, COLORS.powerSrcBorder, 1.5);
@@ -1013,7 +1115,7 @@
 
         const ports = isInput ? el.outputPorts : el.inputPorts;
         for (const port of ports) {
-            const color = port.isClock ? COLORS.portClock : port.isReset ? COLORS.portReset : isInput ? COLORS.portIn : COLORS.portOut;
+            const color = port.isClock ? COLORS.portClock : port.isReset ? COLORS.portReset : COLORS.port;
             ctx.strokeStyle = color;
             ctx.lineWidth = 2;
             ctx.beginPath();
@@ -1080,13 +1182,13 @@
         if (el.isShunt) {
             // Shunt component: single port on NORTH (top), GND stub on SOUTH (bottom)
             for (const port of el.inputPorts) {
-                ctx.strokeStyle = COLORS.portIn;
+                ctx.strokeStyle = COLORS.port;
                 ctx.lineWidth = 1.5;
                 ctx.beginPath();
                 ctx.moveTo(port.x, port.y);
                 ctx.lineTo(port.x, port.y - PORT_STUB_LEN);
                 ctx.stroke();
-                ctx.fillStyle = COLORS.portIn;
+                ctx.fillStyle = COLORS.port;
                 ctx.beginPath();
                 ctx.arc(port.x, port.y - PORT_STUB_LEN, PORT_DOT_R, 0, Math.PI * 2);
                 ctx.fill();
@@ -1094,13 +1196,16 @@
             return; // Skip standard left/right port rendering
         }
 
+        function portColor(port) {
+            if (port.pinType === 'power') return COLORS.portPower;
+            if (port.isClock || port.pinType === 'clock') return COLORS.portClock;
+            if (port.isReset || port.pinType === 'reset') return COLORS.portReset;
+            return COLORS.port;
+        }
+
         // Input ports (left)
         for (const port of el.inputPorts) {
-            const pc = port.pinType === 'power' ? COLORS.portPower :
-                       port.pinType === 'ground' ? COLORS.portGround :
-                       port.pinType === 'clock' ? COLORS.portClock :
-                       port.pinType === 'reset' ? COLORS.portReset :
-                       COLORS.portIn;
+            const pc = portColor(port);
             ctx.strokeStyle = pc;
             ctx.lineWidth = 1.5;
             ctx.beginPath();
@@ -1122,9 +1227,7 @@
 
         // Output ports (right)
         for (const port of el.outputPorts) {
-            const pc = port.pinType === 'power' ? COLORS.portPower :
-                       port.pinType === 'ground' ? COLORS.portGround :
-                       COLORS.portOut;
+            const pc = portColor(port);
             ctx.strokeStyle = pc;
             ctx.lineWidth = 1.5;
             ctx.beginPath();
@@ -1184,7 +1287,7 @@
         for (const wire of layoutWires) {
             const isBus = wire.width > 1;
             const isHighlighted = hoveredNet === wire.netName;
-            const isPower = wire.netClass === 'power';
+            const isPower = wire.isPower;
             const isClock = clockSignals.has(wire.netName);
             const isReset = resetSignals.has(wire.netName);
 
@@ -1224,8 +1327,8 @@
                 ctx.fillText(String(wire.width), mx + 8, my - 3);
             }
 
-            // Junction dots
-            ctx.fillStyle = isPower ? COLORS.portPower : COLORS.junctionDot;
+            // Junction dots — match wire color
+            ctx.fillStyle = color;
             ctx.beginPath();
             ctx.arc(wire.from.x, wire.from.y, isBus ? 3 : 2, 0, Math.PI * 2);
             ctx.fill();
@@ -1233,16 +1336,26 @@
             ctx.arc(wire.to.x, wire.to.y, isBus ? 3 : 2, 0, Math.PI * 2);
             ctx.fill();
 
-            // Net name label
+            // Net name label (with voltage annotation if available)
             if (wire.segments.length > 0) {
                 const seg = wire.segments[0];
                 if (Math.abs(seg.x2 - seg.x1) > 60) {
                     const lx = (seg.x1 + seg.x2) / 2;
-                    ctx.fillStyle = COLORS.textMuted;
                     ctx.font = `${FONT_SIZE - 2}px monospace`;
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'bottom';
-                    ctx.fillText(wire.netName, lx, seg.y1 - 6);
+                    if (wire.voltage != null && isPower) {
+                        // Power net: show name + voltage in red
+                        ctx.fillStyle = COLORS.portPower;
+                        ctx.fillText(`${wire.netName} (${formatVoltage(wire.voltage)})`, lx, seg.y1 - 6);
+                    } else if (wire.voltage != null && isHighlighted) {
+                        // Hovered signal net: show voltage
+                        ctx.fillStyle = COLORS.wireHighlight;
+                        ctx.fillText(`${wire.netName} (${formatVoltage(wire.voltage)})`, lx, seg.y1 - 6);
+                    } else {
+                        ctx.fillStyle = COLORS.textMuted;
+                        ctx.fillText(wire.netName, lx, seg.y1 - 6);
+                    }
                 }
             }
         }
@@ -1319,6 +1432,9 @@
     }
 
     canvas.addEventListener('mousemove', (e) => {
+        const rect = canvas.getBoundingClientRect();
+        tooltipScreenX = e.clientX - rect.left;
+        tooltipScreenY = e.clientY - rect.top;
         const { x: mx, y: my } = screenToWorld(e.clientX, e.clientY);
         let foundItem = null, foundNet = null;
         for (const el of layoutElements) {
@@ -1399,7 +1515,13 @@
         const instCount = data.instances ? data.instances.filter(i => !isPowerGroundSymbol(i)).length : 0;
         const netCount = data.nets ? data.nets.length : 0;
         const portCount = data.ports ? data.ports.length : 0;
-        statsEl.textContent = `${portCount} ports, ${instCount} components, ${netCount} nets`;
+        const simStatus = data.simulation ? ' | DC sim: ✓' : '';
+        statsEl.textContent = `${portCount} ports, ${instCount} components, ${netCount} nets${simStatus}`;
+
+        // Convert power_nets array to a Set for efficient lookup
+        if (data.simulation && Array.isArray(data.simulation.power_nets)) {
+            data.simulation.power_nets = new Set(data.simulation.power_nets);
+        }
         computeLayout().then(() => zoomToFit());
     }
 

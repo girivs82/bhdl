@@ -126,8 +126,8 @@ board PowerSupply {
     
     // Protection stage
     VIN @RAW-> fuse: Fuse(2A).1;
-    fuse.2 @FUSED-> tvs: TVSDiode(15V).1;
-    tvs.2 -> GND;
+    fuse.2 @FUSED-> tvs: TVSDiode(15V).K;
+    tvs.A -> GND;
     
     // Regulation stage
     @FUSED -> c_in: Cap(10uF).pos;

@@ -10,7 +10,7 @@ Intent applies to entire signal flow paths, not individual nets. When a net bran
 
 ```bhdl
 // Intent applies to entire flow path
-net protection: sensor -> tvs: TVSDiode(6V).cathode -> tvs.anode -> r: Res(1k).1 -> r.2 -> @protected
+net protection: sensor -> tvs: TVSDiode(6V).K -> tvs.A -> r: Res(1k).1 -> r.2 -> @protected
     for input_protection(overvoltage: 6V, current_limit: 5mA);
 
 // Different intents on branches
@@ -179,7 +179,7 @@ Safeguard circuits from damage.
 Protects input from overvoltage and overcurrent.
 
 ```bhdl
-net protected_input: VIN -> tvs: TVSDiode(15V).cathode -> tvs.anode -> @GND
+net protected_input: VIN -> tvs: TVSDiode(15V).K -> tvs.A -> @GND
     for input_protection(overvoltage: 15V, current_limit: 2A);
 ```
 
@@ -449,7 +449,7 @@ board LM7805_Regulator {
     ground GND;
 
     // Input protection circuit
-    net protected_input: VIN -> tvs: TVSDiode(15V).cathode -> tvs.anode -> @GND
+    net protected_input: VIN -> tvs: TVSDiode(15V).K -> tvs.A -> @GND
         for input_protection(overvoltage: 15V, current_limit: 2A);
 
     // Input filtering with anti-noise requirements
@@ -493,7 +493,7 @@ board BuckConverter {
     ground GND;
 
     // Input protection
-    net protected_vin: @VIN -> tvs: TVSDiode(18V).cathode -> tvs.anode -> @GND
+    net protected_vin: @VIN -> tvs: TVSDiode(18V).K -> tvs.A -> @GND
         for input_protection(overvoltage: 18V, current_limit: 3A);
 
     // Input bulk capacitor

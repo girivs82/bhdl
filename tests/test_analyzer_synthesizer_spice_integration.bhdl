@@ -19,8 +19,8 @@ board AnalyzerSpiceIntegration {
     r2.2 -> GND;
     
     // Test 4: Protection circuit
-    VIN @PROTECTED-> tvs: TVSDiode(15V).1;
-    tvs.2 -> GND;
+    VIN @PROTECTED-> tvs: TVSDiode(15V).K;
+    tvs.A -> GND;
     @PROTECTED -> fuse: Fuse(2A).1;
     fuse.2 @FUSED-> downstream_circuit;
     

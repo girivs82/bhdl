@@ -1,8 +1,8 @@
 // Simplified Protection Components - v2.0 compatible
 
 entity TVSDiode(voltage: voltage) {
-    pin 1: signal inout;
-    pin 2: signal inout;
+    pin A: signal in;   // Anode (ground-side terminal)
+    pin K: signal out;  // Cathode (protected-line terminal)
 
     attribute component_class = "tvs_diode";
     attribute breakdown_voltage = voltage;

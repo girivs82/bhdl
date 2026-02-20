@@ -162,8 +162,8 @@ board PowerSupply_7805 {
     
     // Input protection and filtering with named nets
     @VIN @RAW-> fuse: Fuse(1A).1;
-    fuse.2 @PROTECTED-> tvs: TVSDiode(15V).1;
-    tvs.2 -> @GND;
+    fuse.2 @PROTECTED-> tvs: TVSDiode(15V).K;
+    tvs.A -> @GND;
     
     // Input filtering capacitors on protected net
     @PROTECTED -> c_in1: ElectrolyticCap(100µF, 25V).+;
@@ -1284,8 +1284,8 @@ led.K -> @GND;
 ```bhdl
 // Create and reference named nets with @ prefix
 @VIN @RAW-> fuse: Fuse(1A).1;
-fuse.2 @PROTECTED-> tvs: TVSDiode(15V).1;
-tvs.2 -> @GND;
+fuse.2 @PROTECTED-> tvs: TVSDiode(15V).K;
+tvs.A -> @GND;
 
 // Reference named nets - ALWAYS with @
 @PROTECTED -> bulk_cap: ElectrolyticCap(100µF, 25V).+;
@@ -1305,7 +1305,7 @@ ceramic_cap.2 -> @GND;
 ```bhdl
 // Power supply with clear net/component distinction
 @VIN @RAW-> fuse: Fuse(1A).1;           // @RAW is net, fuse is component
-fuse.2 @FUSED-> tvs: TVSDiode(15V).1;  // @FUSED is net, tvs is component
+fuse.2 @FUSED-> tvs: TVSDiode(15V).K;  // @FUSED is net, tvs is component
 @FUSED -> reg: LM7805.IN;              // Reference @FUSED net
 reg.OUT @5V-> c_out: Cap(100µF).+;    // Create @5V net
 reg.GND -> @GND;
@@ -1786,7 +1786,7 @@ Components can reference their virtual pins in synthesis rules:
 @synthesis_rule(input_protection) {
     when: VIN > 24V,
     create: TVSDiode(VIN * 1.2),
-    connect: [VIN -> tvs.cathode, tvs.anode -> GND]
+    connect: [VIN -> tvs.K, tvs.A -> GND]
 }
 
 @synthesis_rule(output_sensing) {
@@ -1882,8 +1882,8 @@ Synthesis rules specify intent for component groups they create:
     },
     connect: [
         VIN -> series_r.1,
-        series_r.2 -> tvs.cathode,
-        tvs.anode -> GND
+        series_r.2 -> tvs.K,
+        tvs.A -> GND
     ],
     // Protection intent with specifications
     intent: overvoltage_protection(
@@ -3594,8 +3594,8 @@ board PowerSupply_7805 {
     
     // Input protection and filtering with named nets
     @VIN @RAW-> fuse: Fuse(1A).1;
-    fuse.2 @PROTECTED-> tvs: TVSDiode(15V).1;
-    tvs.2 -> @GND;
+    fuse.2 @PROTECTED-> tvs: TVSDiode(15V).K;
+    tvs.A -> @GND;
     
     // Input filtering capacitors on protected net
     @PROTECTED -> c_in1: ElectrolyticCap(100µF, 25V).+;

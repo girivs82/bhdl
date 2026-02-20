@@ -16,8 +16,8 @@ board IntentDrivenPowerSupply {
     net protected_input: VIN -> fuse: Fuse(1A).1 -> fuse.2 -> @protected_vin
         for input_protection(15V, 1A);
 
-    @protected_vin -> tvs: TVSDiode(15V).1;
-    tvs.2 -> GND;
+    @protected_vin -> tvs: TVSDiode(15V).K;
+    tvs.A -> GND;
 
     // CENTER ZONE: Input filtering with intent
     net filtered_input: @protected_vin -> c_in: ElectrolyticCap(100µF, 25V).pos -> c_in.pos -> @filtered_in

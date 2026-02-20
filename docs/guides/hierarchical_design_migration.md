@@ -94,8 +94,8 @@ entity PowerRail(Vin: voltage, Vout: voltage, Imax: current = 1A) {
     pin EN: signal in;
     
     // Input protection
-    IN -> tvs: TVSDiode(Vin * 1.2).1;
-    tvs.2 -> GND;
+    IN -> tvs: TVSDiode(Vin * 1.2).K;
+    tvs.A -> GND;
     
     // Regulation
     IN -> reg: LinearReg(Vout, Imax).IN;
@@ -150,8 +150,8 @@ entity I2CInterface(voltage: voltage = 3.3V) {
     VCC -> Res(4.7kΩ).1 -> SCL_EXT;
     
     // ESD protection
-    SDA_EXT -> TVSDiode(voltage * 1.2).1 -> GND;
-    SCL_EXT -> TVSDiode(voltage * 1.2).1 -> GND;
+    SDA_EXT -> TVSDiode(voltage * 1.2).K -> GND;
+    SCL_EXT -> TVSDiode(voltage * 1.2).K -> GND;
     
     // Series resistors for protection
     SDA_EXT -> Res(100Ω).1;
