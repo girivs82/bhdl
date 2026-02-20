@@ -55,6 +55,8 @@ pub fn extract_schematic_data(
     // Also track net names for lookup
     let mut net_names: HashMap<NetId, String> = HashMap::new();
     let mut net_counter = 0;
+    // Map (InstanceId, PortId) → NetId for InstancePort connections
+    let mut inst_port_to_net: HashMap<(InstanceId, bhdl_netlist::PortId), NetId> = HashMap::new();
 
     for (net_id, net) in netlist.nets.iter() {
         let net_name = net.name.clone().unwrap_or_else(|| {
@@ -75,8 +77,7 @@ pub fn extract_schematic_data(
                     port_to_net.insert(port_id, net_id);
                 }
                 ConnectionPoint::InstancePort(inst_id, port_id) => {
-                    // Also store these — some netlists use InstancePort
-                    let _ = (inst_id, port_id);
+                    inst_port_to_net.insert((inst_id, port_id), net_id);
                 }
             }
         }
@@ -119,75 +120,130 @@ pub fn extract_schematic_data(
 
         // Build connections for this instance
         let mut connections = Vec::new();
+        let mut found_pins: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         // Method 1: Use pin instances (preferred — most netlists use this)
         let pin_instances: Vec<_> = netlist.pin_instances.iter()
             .filter(|(_, pi)| pi.instance == instance_id)
             .collect();
 
-        if !pin_instances.is_empty() {
-            for (pi_id, pi) in &pin_instances {
-                let pin_def = match netlist.pins.get(pi.pin_def) {
-                    Some(p) => p,
-                    None => continue,
-                };
+        for (pi_id, pi) in &pin_instances {
+            let pin_def = match netlist.pins.get(pi.pin_def) {
+                Some(p) => p,
+                None => continue,
+            };
 
-                // Find which net this pin instance is connected to
-                let net_id = pi.net.or_else(|| pin_inst_to_net.get(pi_id).copied());
-                let signal = match net_id {
-                    Some(nid) => net_names.get(&nid).cloned().unwrap_or_default(),
-                    None => String::new(),
-                };
+            // Find which net this pin instance is connected to.
+            // Prefer the map (built from net.connections) over pi.net,
+            // because pi.net can reference stale/merged net IDs.
+            let net_id = pin_inst_to_net.get(pi_id).copied()
+                .or(pi.net)
+                .filter(|nid| net_names.contains_key(nid)); // skip stale IDs
+            let signal = match net_id {
+                Some(nid) => net_names.get(&nid).cloned().unwrap_or_default(),
+                None => String::new(),
+            };
 
-                if signal.is_empty() {
-                    continue; // unconnected pin
-                }
-
-                let direction = determine_pin_direction(
-                    &pin_def.direction,
-                    &pin_def.pin_type,
-                    &pin_def.name,
-                    net_id.and_then(|nid| net_class_map.get(&nid).map(|s| s.as_str())),
-                );
-
-                let pin_type_str = pin_type_to_str(&pin_def.pin_type);
-
-                connections.push(SchematicConnection {
-                    port: pin_def.name.clone(),
-                    signal,
-                    direction: direction.to_string(),
-                    pin_type: pin_type_str.to_string(),
-                });
+            if signal.is_empty() {
+                continue; // unconnected pin
             }
-        } else {
-            // Method 2: Use pin definitions + InstancePin connections
-            for &pin_id in &module_def.pins {
-                let pin_def = match netlist.pins.get(pin_id) {
-                    Some(p) => p,
-                    None => continue,
-                };
 
-                let net_id = inst_pin_to_net.get(&(instance_id, pin_id)).copied();
+            let direction = determine_pin_direction(
+                &pin_def.direction,
+                &pin_def.pin_type,
+                &pin_def.name,
+                net_id.and_then(|nid| net_class_map.get(&nid).map(|s| s.as_str())),
+            );
+
+            let pin_type_str = pin_type_to_str(&pin_def.pin_type);
+
+            found_pins.insert(pin_def.name.clone());
+            connections.push(SchematicConnection {
+                port: pin_def.name.clone(),
+                signal,
+                direction: direction.to_string(),
+                pin_type: pin_type_str.to_string(),
+            });
+        }
+
+        // Method 2: Also check InstancePin connections for any pins not found via PinInstance
+        for &pin_id in &module_def.pins {
+            let pin_def = match netlist.pins.get(pin_id) {
+                Some(p) => p,
+                None => continue,
+            };
+
+            // Skip pins already found via Method 1
+            if found_pins.contains(&pin_def.name) {
+                continue;
+            }
+
+            let net_id = inst_pin_to_net.get(&(instance_id, pin_id)).copied();
+            let signal = match net_id {
+                Some(nid) => net_names.get(&nid).cloned().unwrap_or_default(),
+                None => String::new(),
+            };
+
+            if signal.is_empty() {
+                continue; // unconnected pin
+            }
+
+            let direction = determine_pin_direction(
+                &pin_def.direction,
+                &pin_def.pin_type,
+                &pin_def.name,
+                net_id.and_then(|nid| net_class_map.get(&nid).map(|s| s.as_str())),
+            );
+
+            let pin_type_str = pin_type_to_str(&pin_def.pin_type);
+
+            connections.push(SchematicConnection {
+                port: pin_def.name.clone(),
+                signal,
+                direction: direction.to_string(),
+                pin_type: pin_type_str.to_string(),
+            });
+        }
+
+        // Method 3: Check InstancePort connections for ports not found via pins
+        for &port_id in &module_def.ports {
+            if let Some(port) = netlist.ports.get(port_id) {
+                if found_pins.contains(&port.name) {
+                    continue;
+                }
+
+                let net_id = inst_port_to_net.get(&(instance_id, port_id)).copied();
                 let signal = match net_id {
                     Some(nid) => net_names.get(&nid).cloned().unwrap_or_default(),
                     None => String::new(),
                 };
 
                 if signal.is_empty() {
-                    continue; // unconnected pin
+                    continue;
                 }
 
-                let direction = determine_pin_direction(
-                    &pin_def.direction,
-                    &pin_def.pin_type,
-                    &pin_def.name,
-                    net_id.and_then(|nid| net_class_map.get(&nid).map(|s| s.as_str())),
-                );
+                let direction = match port.direction {
+                    PortDirection::Input => "in",
+                    PortDirection::Output => "out",
+                    PortDirection::InOut => "in",
+                    PortDirection::Internal => continue,
+                };
 
-                let pin_type_str = pin_type_to_str(&pin_def.pin_type);
+                // Determine pin type from port name heuristic
+                let pin_type_str = if port.name.to_uppercase().contains("VCC")
+                    || port.name.to_uppercase().contains("VDD")
+                    || port.name == "VI" || port.name == "VO"
+                    || port.name == "VIN" || port.name == "VOUT"
+                {
+                    "power"
+                } else if port.name.to_uppercase() == "GND" || port.name.to_uppercase() == "VSS" {
+                    "ground"
+                } else {
+                    "signal"
+                };
 
                 connections.push(SchematicConnection {
-                    port: pin_def.name.clone(),
+                    port: port.name.clone(),
                     signal,
                     direction: direction.to_string(),
                     pin_type: pin_type_str.to_string(),
@@ -195,8 +251,22 @@ pub fn extract_schematic_data(
             }
         }
 
-        // Extract parameters from instance attributes
+        // Skip instances with no connections (entity definitions, not real instances)
+        if connections.is_empty() {
+            continue;
+        }
+
+        // Extract meaningful parameters from instance attributes
+        // Filter out simulation/stress metadata — only show user-visible values
         let parameters: Vec<(String, String)> = instance.attributes.iter()
+            .filter(|(k, _)| {
+                // Keep: value, voltage, named component params
+                // Skip: sim_*, stress_*, calculation_method, simulation_enhanced, empty keys
+                !k.starts_with("sim_") && !k.starts_with("stress_")
+                    && k.as_str() != "calculation_method"
+                    && k.as_str() != "simulation_enhanced"
+                    && !k.is_empty()
+            })
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
@@ -320,13 +390,34 @@ pub fn extract_schematic_data(
         });
     }
 
+    // --- 5b. Post-filter: remove orphaned power symbols ---
+    // A power symbol is orphaned if all its connections go to nets that don't
+    // also connect to other non-power-symbol instances.
+    let net_name_set: std::collections::HashSet<String> = nets.iter()
+        .map(|n| n.name.clone())
+        .collect();
+    instances.retain(|inst| {
+        // Keep all non-power-symbol instances
+        if inst.connections.iter().any(|c| c.pin_type != "power" && c.pin_type != "ground") {
+            return true;
+        }
+        // For power symbol instances, keep only if at least one of their signals
+        // appears in a routable net (which requires both driver and sinks)
+        inst.connections.iter().any(|c| net_name_set.contains(&c.signal))
+    });
+
     // --- 6. Extract power rails ---
+    // Collect names of instances that actually appear in the schematic (have connections)
+    let instance_names: std::collections::HashSet<String> = instances.iter()
+        .map(|i| i.name.clone())
+        .collect();
+
     let mut power_rails = Vec::new();
     for (net_id, net) in netlist.nets.iter() {
         if let NetClass::Power(voltage) = net.net_class {
             let net_name = net_names.get(&net_id).cloned().unwrap_or_default();
 
-            // Find connected instances
+            // Find connected instances that are actually in the schematic
             let mut connected = Vec::new();
             for conn in &net.connections {
                 let inst_name = match *conn {
@@ -346,18 +437,21 @@ pub fn extract_schematic_data(
                     _ => None,
                 };
                 if let Some(name) = inst_name {
-                    if !connected.contains(&name) {
+                    if !connected.contains(&name) && instance_names.contains(&name) {
                         connected.push(name);
                     }
                 }
             }
 
-            power_rails.push(PowerRail {
-                name: net_name,
-                voltage,
-                max_current: 0.0, // TODO: extract from analysis if available
-                connected_instances: connected,
-            });
+            // Only include power rails that connect to actual schematic instances
+            if !connected.is_empty() {
+                power_rails.push(PowerRail {
+                    name: net_name,
+                    voltage,
+                    max_current: 0.0, // TODO: extract from analysis if available
+                    connected_instances: connected,
+                });
+            }
         }
     }
 
@@ -398,10 +492,13 @@ fn determine_pin_direction(
         PinDirection::Ground => "in",
         PinDirection::Passive => {
             // Heuristic for passive components:
-            // - If connected to a power net → input side
+            // - Pin connected to power → input side (power feeds in from left)
+            // - Pin connected to ground → output side (ground sinks to right)
             // - Pin "1" → input, Pin "2" → output (left-to-right flow)
-            if matches!(net_class, Some("power") | Some("ground")) {
+            if matches!(net_class, Some("power")) {
                 "in"
+            } else if matches!(net_class, Some("ground")) {
+                "out" // ground is always a sink → right side
             } else if pin_name == "1" || pin_name == "A" || pin_name == "pos" || pin_name == "IN" {
                 "in"
             } else if pin_name == "2" || pin_name == "K" || pin_name == "neg" || pin_name == "OUT" {
