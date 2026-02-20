@@ -6,7 +6,7 @@ board MixedSignalBoard {
     ground GND;
 
     // Button input with debouncing
-    module Button {
+    entity Button {
         pin OUT: signal out;
         pin GND: ground inout;
     }
@@ -30,7 +30,7 @@ board MixedSignalBoard {
         for current_limiting(max: 10mA);
 
     // Analog sensor path with anti-aliasing
-    module AnalogSensor {
+    entity AnalogSensor {
         pin OUT: signal out;
         pin VCC: power in;
         pin GND: ground inout;
@@ -40,7 +40,7 @@ board MixedSignalBoard {
     sensor.GND -> @GND;
 
     // Anti-aliasing filter before ADC
-    module ADC {
+    entity ADC {
         pin IN: signal in;
         pin CLK: clock in;
         pin DATA: signal out;

@@ -2,7 +2,7 @@ use bhdl_parser::parse;
 
 fn main() {
     let test_code = r#"
-module BuckConverter(vout: voltage = 3.3V, imax: current = 2A) {
+entity BuckConverter(vout: voltage = 3.3V, imax: current = 2A) {
     pin VIN: power in;
     pin VOUT: power out;
     pin EN: signal in;

@@ -40,14 +40,15 @@ The toolchain follows a multi-stage pipeline:
 
 2. **bhdl-ast**: Abstraction layer converting CST to typed AST nodes
    - Provides high-level wrappers around syntax nodes
-   - Key types: `SourceFile`, `Board`, `Module`, `ComponentDef`
+   - Key types: `SourceFile`, `Board`, `Entity`, `ComponentDef`
 
-3. **bhdl-analyzer**: Multi-pass semantic analysis (11 passes)
-   - Pass 1: Build scopes and collect definitions
-   - Pass 1.25: Early component instance registry (NEW - scalability)
-   - Pass 1.5: Power domain expansion with wildcards/ranges (NEW - scalability)
+3. **bhdl-analyzer**: Multi-pass semantic analysis (11+ passes)
+   - Pass 1: Build scopes and collect definitions (uses ScopeRegistry arena)
+   - Pass 1.25: Early component instance registry (scalability)
+   - Pass 1.5: Power domain expansion with wildcards/ranges (scalability)
    - Pass 2: Resolve references and type checking
-   - Pass 3: Constant evaluation
+   - Pass 2.5: Monomorphization (generic type instantiation)
+   - Pass 3: Constant evaluation (rich ConstValue with physical quantities)
    - Pass 4: Bounds checking and validation
    - Pass 5: Power domain analysis
    - Pass 6: Component inference
@@ -90,17 +91,29 @@ The toolchain follows a multi-stage pipeline:
 
 9. **bhdl-common**: Shared utilities and types (future)
 
-10. **bhdl-cli**: Command-line interface
-   - Parse, analyze, synthesize, and visualize commands
-   - **Power domain documentation generation** (NEW - Oct 12, 2025)
-   - Supports multiple output formats and specialized modes
-   - See `docs/cli/DOC_COMMAND.md` for documentation command details
+10. **bhdl-cli**: Command-line interface ✅ **PRODUCTION READY**
+   - **9 comprehensive commands**: parse, analyze, synthesize, visualize, spice, pipeline, simulate, intents, doc
+   - Parse and validate BHDL syntax
+   - Full semantic analysis with all 11 passes
+   - Netlist generation (JSON and SPICE formats)
+   - Circuit visualization with multiple layout algorithms
+   - Component role detection and SPICE analysis
+   - Complete pipeline execution
+   - Simulation with testbenches
+   - Intent analysis and flow tracking
+   - Power domain documentation generation
+   - See `docs/implementation/CLI_IMPLEMENTATION_GUIDE.md` for complete reference
 
-11. **bhdl-lsp**: Language Server Protocol for IDE integration (placeholder)
+11. **bhdl-lsp**: Language Server Protocol for IDE integration ✅ **PRODUCTION READY**
+   - **22 major features**: diagnostics, autocomplete, hover, go to definition, find references, rename, and more
+   - Full Intent System integration with autocomplete for all 38 intent functions
+   - Real-time semantic analysis
+   - Works with any LSP-compatible editor (VSCode, Neovim, Emacs, etc.)
+   - See `docs/implementation/LSP_IMPLEMENTATION_SUMMARY.md` for complete reference
 
 ### Key Data Structures
 
-- **Parse Layer**: `SyntaxNode<BhdlLanguage>`, AST nodes (`Board`, `Module`, etc.)
+- **Parse Layer**: `SyntaxNode<BhdlLanguage>`, AST nodes (`Board`, `Entity`, etc.)
 - **Analysis Layer**: `SymbolTable`, `AnalysisResult`, `Diagnostic`, `ResolvedConstants` 
 - **Netlist Layer**: Type-safe IDs (`ModuleId`, `InstanceId`, `NetId`), `ConnectionPoint`
 - **Visualization Layer**: `LayoutEngine`, `Point`, `LayoutHints`, `RoutingCosts`
@@ -108,14 +121,19 @@ The toolchain follows a multi-stage pipeline:
 ## BHDL Language Features (v2.0)
 
 BHDL v2.0 uses a flow-based syntax for intuitive circuit description:
-- **Structure**: boards with direct flow connections, modules with inline pins
+- **Structure**: boards with direct flow connections, entities with inline pins
 - **Flow operators**: `->` (connection), `<->` (bidirectional), `|>` (flow), `<=>` (interface)
 - **Power/Ground**: Explicit declarations `power VCC = 5V @ 1A;` and `ground GND;`
 - **Direct instantiation**: `VCC -> Res(10k).1 -> LED(red).A;`
 - **Net assignments**: `protected_vin: TVSDiode(15V).1` creates net and implicit handle
-- **Module definition**: `module Name(params) { pin name: type direction; ... }`
+- **Entity definition**: `entity Name(params) { pin name: type direction; ... }`
 - **Generate constructs**: `generate for i in 0..n { ... }` for repetitive structures
 - **Units**: Comprehensive electrical unit system (V, A, Ω, F, H, Hz, etc.)
+- **Enums**: `enum PinState { High, Low, HighZ, Unknown }` with match expressions
+- **Match expressions**: `match state { PinState::High => ..., PinState::Low => ... }`
+- **Generics**: `entity Filter<T: Passive>(cutoff: frequency) where T: HasValue { ... }`
+- **Traits**: `trait Filterable { fn cutoff_frequency() -> frequency; }` with `impl` blocks
+- **Safety annotations**: `safety_goal ASIL_B("description") { ... }` and `fault_inject { ... }`
 
 **Note**: v1.0 block-based syntax (pins {}, parameters {}, etc.) has been completely removed.
 
@@ -150,9 +168,9 @@ cargo run -p bhdl-components --example kicad_integration
 
 ## Known Gaps
 
-- CLI and LSP implementations are placeholders  
 - KiCad footprint parsing not yet implemented
-- Remaining visualization issues: component symbol scaling, orthogonal routing
+- Remaining visualization improvements: component symbol scaling, orthogonal routing refinement
+- Additional manufacturer datasheet integration opportunities
 
 ## Important Files
 
@@ -239,7 +257,7 @@ Common SVG issues to watch for:
 - Generate constructs: `generate for i in 0..7 { ... }`
 - Flow specifications: `power_flow: USB_5V |> regulation |> distribution;`
 - Power/ground declarations: `power VCC = 5V @ 1A;`
-- Module syntax with inline pins: `module Res(value: resistance) { pin 1: signal inout; ... }`
+- Entity syntax with inline pins: `entity Res(value: resistance) { pin 1: signal inout; ... }`
 
 **Complex Syntax Support (2025-06-18):**
 - ✅ Const declarations with type annotations: `const name: type = value;`
@@ -249,15 +267,27 @@ Common SVG issues to watch for:
 - ✅ Logical operators: `||`, `&&`
 - ✅ Member access: `params.forward_voltage`
 - ✅ Conditional pins: `pin EN: signal in when condition;`
-- ✅ Module aliases: `alias 7805 = LM7805;`
+- ✅ Entity aliases: `alias 7805 = LM7805;`
 - ✅ Destructuring imports: `import { A, B } from "file.bhdl";`
 - ✅ Numeric pin references: `resistor.1`, `capacitor.2` (2025-10-12)
+
+**SKALP RFC Language Features (2026-02):**
+- ✅ Enum definitions: `enum PinState { High, Low, HighZ, Unknown }`
+- ✅ Match expressions: `match expr { Pattern => result, ... }`
+- ✅ Generic entities: `entity Filter<T>(cutoff: frequency) { ... }`
+- ✅ Where clauses: `where T: Passive + HasValue`
+- ✅ Trait definitions: `trait Filterable { fn cutoff_frequency() -> frequency; }`
+- ✅ Trait implementations: `impl Filterable for LowPassFilter { ... }`
+- ✅ Safety goals: `safety_goal ASIL_B("description") { ... }`
+- ✅ Fault injection: `fault_inject { ... }`
+- ✅ Rich const evaluation: Physical quantities with dimensional analysis
+- ✅ Arena-based scope registry: Replaces stack-based scope lookup
 
 **Migration Notes:**
 - Old v1.0 examples moved to `docs/examples/old_syntax/` for reference
 - All library files updated to v2.0 syntax
 - Parser, AST, and analyzer only support v2.0 constructs
-- Use `alias` keyword instead of `module Name = Target;` for aliases
+- Use `alias` keyword instead of `entity Name = Target;` for aliases
 - Use `||` instead of `or` for logical OR operations
 
 ## End-to-End Pipeline Development Policy
@@ -276,11 +306,24 @@ This ensures we build a robust, production-ready toolchain rather than a demo wi
 
 ### Recent Major Advances
 
+15. **SKALP RFC Language Infrastructure** (2026-02): ✅ ALL 10 TASKS COMPLETED
+    - **Scope Registry** (Task 1): Arena-based scope storage with parent-chain lookup in `scope_registry.rs`
+    - **Rich Const Evaluator** (Task 2): ConstValue enum with physical quantities (V, A, Ω, F, H, W, Hz, s)
+    - **Dimensional Analysis** (Task 3): Built-in functions (parallel(), divider_ratio(), rc_cutoff(), etc.)
+    - **Enums & Match** (Task 4): `enum` definitions with `match` expressions in parser, AST, and analyzer
+    - **Structured Diagnostics** (Task 5): Diagnostic framework in bhdl-common
+    - **Parameterized Types** (Task 6): Generic entity instantiation with type parameters
+    - **Typed Generics** (Task 7): `where` clause constraints on generic type parameters
+    - **Monomorphization** (Task 8): Pass 2.5 for generic type specialization
+    - **Traits** (Task 9): `trait` definitions and `impl` blocks with method resolution
+    - **Safety Annotations** (Task 10): `safety_goal` and `fault_inject` constructs for ISO 26262
+    - See `docs/proposals/RFC_SKALP_Language_Infrastructure.md` for complete RFC
+
 10. **Complete Intent and Flow System**: Full implementation of design intent framework
    - Parser support for `for` keyword on flow statements and net declarations
    - Flow tracking system that identifies components in signal paths
    - Intent resolution with simulation mode determination
-   - Hierarchical intent propagation through module instances
+   - Hierarchical intent propagation through entity instances
    - Standard library of intent functions (delay, analog, digital, etc.)
    - See `docs/implementation/Intent_and_Flow_System.md` for details
 
@@ -387,16 +430,14 @@ This ensures we build a robust, production-ready toolchain rather than a demo wi
    - See `docs/implementation/Intent_System_Implementation_Plan.md` for implementation details
 
 ### Current Focus Areas
-- **Intent System Implementation** (HIGH PRIORITY)
-  - Add `for` keyword to parser
-  - Implement stdlib intent functions
-  - Build flow tracking engine
-  - Integrate with simulation tools
+- **SKALP RFC Language Infrastructure**: ✅ ALL 10 TASKS COMPLETED
+  - Scope registry, rich const eval, dimensional analysis
+  - Enums/match, structured diagnostics, parameterized types
+  - Typed generics, monomorphization, traits, safety annotations
 - Component symbol scaling and visualization improvements
 - Orthogonal routing to proper pin positions
-- Capacitor symbols using parallel plates from database
 - Additional manufacturer datasheet values in stdlib
-- Parser support for keyword-value pairs in component instantiation
+- Further simulation tool integration
 
 ### Test Commands
 - `cargo run -p bhdl-analyzer --bin test_scalability_comprehensive` - Test power domain scalability features
@@ -441,7 +482,7 @@ net measure: @protected -> filter -> adc
 - [x] Parser support for `for` keyword on flow statements
 - [x] Stdlib intent function framework with standard intents
 - [x] Flow tracking engine with component identification
-- [x] Hierarchical intent propagation through modules
+- [x] Hierarchical intent propagation through entities
 - [x] Net syntax consistency with @ prefix requirement
 - [ ] Tool integration (partial - simulation coordinator ready)
 - [x] Documentation and examples

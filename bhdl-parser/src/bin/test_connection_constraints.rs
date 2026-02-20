@@ -73,7 +73,7 @@ board TestBoard2 {
     
     // Test 3: Combined usage
     let test3 = r#"
-module PowerSupply() {
+entity PowerSupply() {
     pin VIN: power in;
     pin VOUT: power out;
     pin GND: ground;

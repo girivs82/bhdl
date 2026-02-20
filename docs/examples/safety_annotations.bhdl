@@ -1,0 +1,37 @@
+// Example: Safety annotations for ISO 26262 compliance in BHDL
+// Demonstrates RFC Task 10 - Safety goals and fault injection
+
+// Define a safety-critical power supply
+board AutomotivePowerSupply {
+    power VBAT = 12V @ 5A;
+    power VCC_3V3 = 3.3V @ 1A;
+    ground GND;
+
+    // Safety goal: ASIL-B rated power regulation
+    safety_goal ASIL_B("Maintain stable 3.3V output under all conditions") {
+        // The regulator must maintain output within tolerance
+        @VBAT -> LM7805().IN;
+        LM7805().OUT -> LDO_3V3().IN;
+        LDO_3V3().OUT -> @VCC_3V3;
+        LM7805().GND -> @GND;
+        LDO_3V3().GND -> @GND;
+    }
+
+    // Fault injection: Test behavior under component failure
+    fault_inject {
+        // Short circuit on output
+        short VCC_3V3 to GND;
+        // Open circuit on regulator
+        open LM7805.OUT;
+        // Overvoltage on input
+        overvoltage VBAT 18V;
+    }
+
+    // Safety goal for sensor monitoring
+    safety_goal ASIL_D("Detect sensor failures within 10ms") {
+        @VCC_3V3 -> Res(10k).1 -> Res(10k).2 -> sensor: TempSensor().VCC;
+        sensor: TempSensor().OUT -> Comparator().IN_P;
+        Ref(1.5V).OUT -> Comparator().IN_N;
+        Comparator().OUT -> MCU().FAULT_IN;
+    }
+}

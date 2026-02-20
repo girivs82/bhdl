@@ -6,7 +6,7 @@ import { SchematicStyle, Orientation, PinSide } from "./schematic_guidelines.bhd
 // ==================== LM7805 VISUALIZATION ====================
 
 // Complete visualization specification for LM7805 and similar 3-pin regulators
-module LM7805_Visualization {
+entity LM7805_Visualization {
     
     // Symbol drawing specification
     symbol: {
@@ -220,7 +220,7 @@ module LM7805_Visualization {
 
 // ==================== LM317 ADJUSTABLE REGULATOR ====================
 
-module LM317_Visualization {
+entity LM317_Visualization {
     // Extends basic 3-pin regulator with adjustment components
     
     symbol: {
@@ -296,7 +296,7 @@ module LM317_Visualization {
 
 // ==================== SWITCHING REGULATOR LAYOUTS ====================
 
-module BuckConverter_Visualization {
+entity BuckConverter_Visualization {
     // More complex layout for switching regulators
     
     layout_strategy: "functional_blocks",
@@ -348,7 +348,7 @@ module BuckConverter_Visualization {
 // ==================== LAYOUT QUALITY METRICS ====================
 
 // Scoring system for schematic quality
-module SchematicQualityScore {
+entity SchematicQualityScore {
     
     // Factors that make a schematic "professional"
     quality_factors: {

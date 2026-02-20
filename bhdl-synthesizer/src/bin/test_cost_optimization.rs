@@ -83,7 +83,7 @@ board CostTestBoard {\n    power VCC = 5V @ 1A;
     ground GND;
     
     // Component definitions with different cost characteristics
-    module VoltageRegulator(vin: voltage, vout: voltage) {
+    entity VoltageRegulator(vin: voltage, vout: voltage) {
         pin VIN: power in;
         pin VOUT: power out;
         pin GND: ground in;
@@ -94,7 +94,7 @@ board CostTestBoard {\n    power VCC = 5V @ 1A;
         const volume_sensitivity: percentage = 25;
     }
     
-    module PowerTransistor(type: string) {
+    entity PowerTransistor(type: string) {
         pin G: signal in;
         pin D: power inout;
         pin S: ground inout;
@@ -104,7 +104,7 @@ board CostTestBoard {\n    power VCC = 5V @ 1A;
         const volume_sensitivity: percentage = 15;
     }
     
-    module PrecisionResistor(value: resistance, tolerance: percentage) {
+    entity PrecisionResistor(value: resistance, tolerance: percentage) {
         pin 1: signal inout;
         pin 2: signal inout;
         
@@ -113,7 +113,7 @@ board CostTestBoard {\n    power VCC = 5V @ 1A;
         const volume_sensitivity: percentage = 40;
     }
     
-    module StandardResistor(value: resistance) {
+    entity StandardResistor(value: resistance) {
         pin 1: signal inout;
         pin 2: signal inout;
         
@@ -122,7 +122,7 @@ board CostTestBoard {\n    power VCC = 5V @ 1A;
         const volume_sensitivity: percentage = 50;
     }
     
-    module Capacitor(value: capacitance, voltage: voltage) {
+    entity Capacitor(value: capacitance, voltage: voltage) {
         pin 1: signal inout;
         pin 2: signal inout;
         
@@ -131,7 +131,7 @@ board CostTestBoard {\n    power VCC = 5V @ 1A;
         const volume_sensitivity: percentage = 45;
     }
     
-    module Inductor(value: inductance, current: current) {
+    entity Inductor(value: inductance, current: current) {
         pin 1: signal inout;
         pin 2: signal inout;
         
@@ -140,7 +140,7 @@ board CostTestBoard {\n    power VCC = 5V @ 1A;
         const volume_sensitivity: percentage = 20;
     }
     
-    module LED(color: string, brightness: luminosity) {
+    entity LED(color: string, brightness: luminosity) {
         pin A: signal in;
         pin K: signal out;
         
@@ -149,7 +149,7 @@ board CostTestBoard {\n    power VCC = 5V @ 1A;
         const volume_sensitivity: percentage = 30;
     }
     
-    module Crystal(frequency: frequency) {
+    entity Crystal(frequency: frequency) {
         pin 1: signal inout;
         pin 2: signal inout;
         
@@ -158,7 +158,7 @@ board CostTestBoard {\n    power VCC = 5V @ 1A;
         const volume_sensitivity: percentage = 10;
     }
     
-    module Microcontroller(package: string) {
+    entity Microcontroller(package: string) {
         pin VCC: power in;
         pin GND: ground in;
         pin XTAL1: signal in;
@@ -171,7 +171,7 @@ board CostTestBoard {\n    power VCC = 5V @ 1A;
         const volume_sensitivity: percentage = 35;
     }
     
-    module OpAmp(type: string) {
+    entity OpAmp(type: string) {
         pin VCC: power in;
         pin VEE: power in;
         pin IN_PLUS: signal in;

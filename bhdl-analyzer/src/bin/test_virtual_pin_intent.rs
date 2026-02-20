@@ -6,9 +6,9 @@ use bhdl_analyzer::analyze;
 fn main() {
     println!("Testing virtual pin intent resolution...");
     
-    // Test module with virtual pins
+    // Test entity with virtual pins
     let content = r#"
-module TestVirtualPins() {
+entity TestVirtualPins() {
     // Regular pins
     pin VIN: power in;
     pin GND: ground inout;

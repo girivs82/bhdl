@@ -457,7 +457,7 @@ board LM7805_Regulator {
         for noise_filtering(cutoff: 100kHz, attenuation: 40dB);
 
     // Voltage regulation
-    module LM7805 {
+    entity LM7805 {
         pin VIN: power in;
         pin VOUT: power out;
         pin GND: ground inout;
@@ -501,7 +501,7 @@ board BuckConverter {
         for noise_filtering(cutoff: 10kHz);
 
     // Buck controller
-    module TPS54302 {
+    entity TPS54302 {
         pin VIN: power in;
         pin SW: signal out;
         pin FB: signal in;
@@ -547,7 +547,7 @@ board MixedSignalBoard {
     power VCC = 5V @ 500mA;
     ground GND;
 
-    module Button {
+    entity Button {
         pin OUT: signal out;
         pin GND: ground inout;
     }
@@ -572,7 +572,7 @@ board MixedSignalBoard {
         for current_limiting(max: 10mA);
 
     // Analog sensor with anti-aliasing
-    module AnalogSensor {
+    entity AnalogSensor {
         pin OUT: signal out;
         pin VCC: power in;
         pin GND: ground inout;
@@ -581,7 +581,7 @@ board MixedSignalBoard {
     @VCC -> sensor: AnalogSensor().VCC;
     sensor.GND -> @GND;
 
-    module ADC {
+    entity ADC {
         pin IN: signal in;
         pin CLK: clock in;
         pin DATA: signal out;

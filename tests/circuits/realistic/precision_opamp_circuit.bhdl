@@ -7,7 +7,7 @@ board PrecisionAmplifier {
     ground GND;
     
     // Input signal conditioning
-    module InputStage {
+    entity InputStage {
         // Input protection and filtering
         @INPUT -> R_IN.1 where trace_length < 20mm;
         R_IN: Res(1kΩ, tolerance=0.1%);
@@ -35,7 +35,7 @@ board PrecisionAmplifier {
     }
     
     // Gain stage with precise resistor ratios
-    module GainStage {
+    entity GainStage {
         // Non-inverting amplifier with gain = 1 + Rf/Rg = 10
         @BUFFERED -> U2: PrecisionOpAmp().IN_P;
         
@@ -59,7 +59,7 @@ board PrecisionAmplifier {
     }
     
     // Output filter and driver
-    module OutputStage {
+    entity OutputStage {
         // Low-pass filter to remove noise
         @AMPLIFIED -> R_FILT.1;
         R_FILT: Res(100Ω);
@@ -86,7 +86,7 @@ board PrecisionAmplifier {
     }
     
     // Voltage reference for offset trimming
-    module VoltageReference {
+    entity VoltageReference {
         // Precision voltage reference
         @VCC -> U_REF: VoltageReference(2.5V).VIN;
         U_REF.GND -> @GND;
@@ -159,7 +159,7 @@ constraints thermal {
     }
 }
 
-module PrecisionOpAmp() {
+entity PrecisionOpAmp() {
     pin IN_P: signal in;   // Non-inverting input
     pin IN_N: signal in;   // Inverting input
     pin OUT: signal out;   // Output
@@ -172,7 +172,7 @@ module PrecisionOpAmp() {
     attribute CMRR = 120dB;
 }
 
-module VoltageReference(voltage: voltage) {
+entity VoltageReference(voltage: voltage) {
     pin VIN: power in;
     pin VOUT: signal out;
     pin GND: ground;
@@ -181,7 +181,7 @@ module VoltageReference(voltage: voltage) {
     attribute tempco = 10ppm;
 }
 
-module Potentiometer(resistance: resistance) {
+entity Potentiometer(resistance: resistance) {
     pin 1: signal;
     pin 2: signal;
     pin wiper: signal out;

@@ -119,17 +119,31 @@ impl DatabaseComponentMapper {
 
     /// Find a component in the database by name
     async fn find_component_by_name(&self, name: &str) -> Result<Option<Component>> {
-        // Search for components by name
+        // First try exact match using get_component_id_by_name + get_component_by_id
+        // This avoids FTS issues with special characters like "+" in "+12V"
+        match self.database.get_component_id_by_name(name).await {
+            Ok(component_id) => {
+                // Found exact match by ID, now get full component
+                return self.database.get_component(component_id).await
+                    .context("Failed to get component by ID");
+            }
+            Err(_) => {
+                // Exact match failed, try FTS search as fallback
+                debug!("Exact match failed for '{}', trying FTS search", name);
+            }
+        }
+
+        // Fallback to FTS search for fuzzy matching
         let components = self.database.search_components(name).await
             .context("Failed to search components in database")?;
-        
+
         // Find exact match or closest match
         for component in &components {
             if component.name == name {
                 return Ok(Some(component.clone()));
             }
         }
-        
+
         // If no exact match, return the first component found
         if let Some(component) = components.into_iter().next() {
             debug!("Using closest match for '{}': '{}'", name, component.name);
@@ -222,10 +236,10 @@ impl DatabaseComponentMapper {
         let mapping = self.get_mapping(bhdl_component_type)
             .ok_or_else(|| anyhow::anyhow!("No mapping found for component type: {}", bhdl_component_type))?
             .clone(); // Clone the mapping to avoid borrow checker issues
-        
+
         let component = self.get_component(bhdl_component_type).await?
             .ok_or_else(|| anyhow::anyhow!("Component not found in database: {}", bhdl_component_type))?;
-        
+
         // Get SVG data from LRU cache or component symbol
         let svg_data = if let Some(cached_svg) = self.cache.get_symbol_svg(mapping.component_id).await {
             debug!("Cache hit for SVG data for component {} (ID: {})", bhdl_component_type, mapping.component_id);
@@ -242,7 +256,7 @@ impl DatabaseComponentMapper {
             warn!("No SVG symbol data found for component: {}", component.name);
             String::new()
         };
-        
+
         Ok(DatabaseComponentInstance {
             instance_name: instance_name.to_string(),
             bhdl_type: bhdl_component_type.to_string(),
@@ -252,6 +266,69 @@ impl DatabaseComponentMapper {
             svg_data,
             pin_mapping: mapping.pin_mapping.clone(),
             category: mapping.category.clone(),
+            electrical_specs: component.electrical_specs.clone(),
+            pins: component.pins.clone(),
+        })
+    }
+
+    /// Create a component instance directly from database by name (bypasses mapping)
+    /// This is useful for power symbols and other components that aren't inferred
+    pub async fn create_component_instance_direct(
+        &mut self,
+        instance_name: &str,
+        database_component_name: &str,
+    ) -> Result<DatabaseComponentInstance> {
+        // Query database directly by name
+        let component = self.find_component_by_name(database_component_name).await?
+            .ok_or_else(|| anyhow::anyhow!("Component not found in database: {}", database_component_name))?;
+
+        // Get SVG data from cache or component symbol
+        let svg_data = if let Some(cached_svg) = self.cache.get_symbol_svg(component.id).await {
+            debug!("Cache hit for SVG data for component {} (ID: {})", database_component_name, component.id);
+            cached_svg
+        } else if let Some(symbol) = &component.symbol {
+            debug!("Using component symbol for {} (ID: {})", database_component_name, component.id);
+            let svg = symbol.svg_data.clone();
+            // Cache the SVG for next time
+            if !svg.is_empty() {
+                self.cache.cache_symbol_svg(component.id, svg.clone()).await;
+            }
+            svg
+        } else {
+            warn!("No SVG symbol data found for component: {}", component.name);
+            String::new()
+        };
+
+        // Create simple pin mapping based on database pins
+        let pin_mapping: HashMap<String, String> = component.pins.iter()
+            .map(|pin| {
+                let pin_name = pin.pin_name.clone().unwrap_or_else(|| pin.pin_number.clone());
+                (pin_name, pin.pin_number.clone())
+            })
+            .collect();
+
+        // Determine category based on component name/type
+        let category = if database_component_name.contains("7805") || database_component_name.contains("Regulator") {
+            ComponentCategory::PowerRegulator
+        } else if database_component_name.starts_with('C') {
+            ComponentCategory::PassiveCapacitor
+        } else if database_component_name.starts_with('R') {
+            ComponentCategory::PassiveResistor
+        } else if database_component_name.contains("LED") || database_component_name.starts_with('D') {
+            ComponentCategory::Semiconductor
+        } else {
+            ComponentCategory::Unknown
+        };
+
+        Ok(DatabaseComponentInstance {
+            instance_name: instance_name.to_string(),
+            bhdl_type: database_component_name.to_string(),
+            component_id: component.id,
+            component_name: component.name.clone(),
+            component_description: component.description.clone(),
+            svg_data,
+            pin_mapping,
+            category,
             electrical_specs: component.electrical_specs.clone(),
             pins: component.pins.clone(),
         })

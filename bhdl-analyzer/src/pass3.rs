@@ -1,33 +1,34 @@
-use std::collections::HashMap;
 use rowan::{SyntaxNode, TextRange, ast::{AstNode, SyntaxNodePtr}};
 use bhdl_parser::{SyntaxKind, BhdlLanguage};
 use bhdl_ast::{HasName,
-    // Needed for Pass3Context, visitors, evaluate_const_expr_as_i64 etc.
-    common::{Value, ParamDecl, IdentRef, BusSuffix, ComponentInst, ParamAssign}, 
-    // Removed Board, Module, ComponentDef, InterfaceDef
+    common::{Value, ParamDecl, IdentRef, BusSuffix, ComponentInst, ParamAssign},
 };
+use bhdl_common::ConstValue;
 
-use crate::symbol_table::{Symbol, SymbolKind, SymbolTable};
+use crate::symbol_table::{Symbol, SymbolKind};
 use crate::types::{Diagnostic, ResolvedConstants};
-use crate::helpers::parse_value_as_i64;
+use crate::helpers::parse_value_as_const;
+use crate::scope_registry::{ScopeRegistry, ScopeId};
 
 // --- Pass 3: Evaluate Constant Expressions ---
 
-// Function to evaluate constants - uses Pass3Context
-// Needs to be pub(crate) if called directly from elsewhere (e.g. maybe Pass 4 needs it?)
-// For now, keep it internal to the module.
-fn evaluate_const_expr_as_i64<'a>(
+/// Recursively evaluate a syntax node as a compile-time constant expression.
+/// Returns `Some(ConstValue)` on success, `None` on failure (with diagnostics added).
+///
+/// Supports: integer/float literals with SI units, unary minus, binary +/-/*/÷,
+/// identifier references (parameters with defaults and instance overrides).
+fn evaluate_const_expr<'a>(
     node: &SyntaxNode<BhdlLanguage>,
     context: &mut Pass3Context<'a>,
-) -> Option<i64> {
+) -> Option<ConstValue> {
     let node_ptr = SyntaxNodePtr::new(node);
     if let Some(value) = context.resolved_constants.get(&node_ptr) {
-        return Some(*value);
+        return Some(value.clone());
     }
 
     let result = match node.kind() {
         SyntaxKind::VALUE => {
-            Value::cast(node.clone()).and_then(|v| parse_value_as_i64(&v))
+            Value::cast(node.clone()).and_then(|v| parse_value_as_const(&v))
         }
         SyntaxKind::PREFIX_EXPR => {
             let op_token = node.first_token().filter(|t| t.kind() == SyntaxKind::MINUS);
@@ -36,13 +37,24 @@ fn evaluate_const_expr_as_i64<'a>(
                     .filter_map(|e| e.into_node())
                     .find(|n| n.text_range().start() >= op.text_range().end())
             });
-            
+
             if op_token.is_some() {
                 if let Some(operand) = operand_node {
-                    evaluate_const_expr_as_i64(&operand, context).map(|val| -val)
+                    evaluate_const_expr(&operand, context).and_then(|val| {
+                        match val.negate() {
+                            Ok(negated) => Some(negated),
+                            Err(e) => {
+                                context.add_diagnostic(
+                                    format!("Error in unary minus: {}", e),
+                                    node.text_range(),
+                                );
+                                None
+                            }
+                        }
+                    })
                 } else {
                     context.add_diagnostic("Malformed unary minus expression".to_string(), node.text_range());
-                    None 
+                    None
                 }
             } else {
                 context.add_diagnostic(format!("Unsupported prefix operator: {:?}", node.first_token().map(|t| t.kind())), node.text_range());
@@ -54,7 +66,7 @@ fn evaluate_const_expr_as_i64<'a>(
             let op_token = lhs_node.as_ref().and_then(|lhs| {
                 node.children_with_tokens()
                     .filter(|t| t.text_range().start() >= lhs.text_range().end())
-                    .find(|t| matches!(t.kind(), 
+                    .find(|t| matches!(t.kind(),
                         SyntaxKind::PLUS | SyntaxKind::MINUS | SyntaxKind::STAR | SyntaxKind::SLASH
                     ))
             });
@@ -65,20 +77,30 @@ fn evaluate_const_expr_as_i64<'a>(
             });
 
             if let (Some(lhs), Some(rhs), Some(op)) = (lhs_node, rhs_node, op_token) {
-                let lhs_val = evaluate_const_expr_as_i64(&lhs, context);
-                let rhs_val = evaluate_const_expr_as_i64(&rhs, context);
+                let lhs_val = evaluate_const_expr(&lhs, context);
+                let rhs_val = evaluate_const_expr(&rhs, context);
 
-                match (lhs_val, rhs_val, op.kind()) {
-                    (Some(l), Some(r), SyntaxKind::PLUS) => Some(l + r),
-                    (Some(l), Some(r), SyntaxKind::MINUS) => Some(l - r),
-                    (Some(l), Some(r), SyntaxKind::STAR) => Some(l * r),
-                    (Some(l), Some(r), SyntaxKind::SLASH) => {
-                        if r != 0 { Some(l / r) } else { 
-                            context.add_diagnostic("Division by zero in constant expression".to_string(), op.text_range());
-                            None 
+                match (lhs_val, rhs_val) {
+                    (Some(l), Some(r)) => {
+                        let arith_result = match op.kind() {
+                            SyntaxKind::PLUS => l.add(r),
+                            SyntaxKind::MINUS => l.sub(r),
+                            SyntaxKind::STAR => l.mul(r),
+                            SyntaxKind::SLASH => l.div(r),
+                            _ => return None,
+                        };
+                        match arith_result {
+                            Ok(val) => Some(val),
+                            Err(e) => {
+                                context.add_diagnostic(
+                                    format!("{}", e),
+                                    op.text_range(),
+                                );
+                                None
+                            }
                         }
                     }
-                    _ => None, 
+                    _ => None,
                 }
             } else {
                 context.add_diagnostic("Malformed binary expression".to_string(), node.text_range());
@@ -90,81 +112,78 @@ fn evaluate_const_expr_as_i64<'a>(
                 .and_then(|ident_ref| ident_ref.token())
                 .and_then(|token| {
                     let name = token.text();
-                    let name_str = name.to_string(); 
+                    let name_str = name.to_string();
 
                     // 1. Check for instance override first
                     let mut maybe_override_ptr: Option<SyntaxNodePtr<BhdlLanguage>> = None;
                     if let Some(inst_symbol_from_context) = context.current_instance_symbol {
-                        if let Some(actual_inst_symbol_in_scope) = context.lookup(inst_symbol_from_context.name.as_str()) { 
+                        if let Some(actual_inst_symbol_in_scope) = context.lookup(inst_symbol_from_context.name.as_str()) {
                              if let Some(overrides_map) = &actual_inst_symbol_in_scope.parameter_overrides {
                                  if let Some(ptr) = overrides_map.get(&name_str) {
-                                     maybe_override_ptr = Some(ptr.clone()); 
+                                     maybe_override_ptr = Some(ptr.clone());
                                  }
                              }
-                        } 
+                        }
                     }
 
                     if let Some(override_ptr) = maybe_override_ptr {
-                        let eval_result = override_ptr.try_to_node(context.source_file_root) 
-                            .and_then(|override_expr_node| { 
-                                evaluate_const_expr_as_i64(&override_expr_node, context) 
+                        let eval_result = override_ptr.try_to_node(context.source_file_root)
+                            .and_then(|override_expr_node| {
+                                evaluate_const_expr(&override_expr_node, context)
                             });
-                        if let Some(value) = eval_result {
-                            context.resolved_constants.insert(override_ptr.clone(), value); 
+                        if let Some(ref value) = eval_result {
+                            context.resolved_constants.insert(override_ptr.clone(), value.clone());
                         }
                         return eval_result.or_else(|| {
-                            context.add_diagnostic(format!("Failed to evaluate override expression for parameter '{}'", name), token.text_range()); 
+                            context.add_diagnostic(format!("Failed to evaluate override expression for parameter '{}'", name), token.text_range());
                             None
                         });
                     }
-                    
+
                     // 2. No override OR not in instance context: Evaluate parameter definition
-                    
-                    let get_definition_scope_stack = |node: &SyntaxNode<BhdlLanguage>, context: &Pass3Context<'a>| -> Option<Vec<&'a SymbolTable>> {
+
+                    let get_definition_scope_id = |node: &SyntaxNode<BhdlLanguage>, context: &Pass3Context<'a>| -> Option<ScopeId> {
                         let mut current = node.parent();
                         while let Some(parent) = current {
                             match parent.kind() {
                                 SyntaxKind::BOARD_DEF |
-                                SyntaxKind::MODULE_DEF |
+                                SyntaxKind::ENTITY_DEF |
                                 SyntaxKind::COMPONENT_DEF |
                                 SyntaxKind::INTERFACE_DEF => {
                                     let parent_ptr = SyntaxNodePtr::new(&parent);
-                                    if let Some(def_scope) = context.definition_scopes.get(&parent_ptr) {
-                                        return Some(vec![context._global_scope, def_scope]); 
+                                    if let Some(scope_id) = context.registry.scope_id_for_node(&parent_ptr) {
+                                        return Some(scope_id);
                                     } else {
                                         eprintln!("Pass3 Internal Error: Scope not found for definition node {:?} @ {:?}", parent.kind(), parent.text_range());
                                         return None;
                                     }
                                 }
-                                SyntaxKind::SOURCE_FILE => return None, 
-                                _ => {} 
+                                SyntaxKind::SOURCE_FILE => return None,
+                                _ => {}
                             }
                             current = parent.parent();
                         }
-                        None 
+                        None
                     };
 
-                    let evaluate_symbol_default_value = |param_symbol_to_eval: &Symbol, context: &mut Pass3Context<'a>| -> Option<i64> {
+                    let evaluate_symbol_default_value = |param_symbol_to_eval: &Symbol, context: &mut Pass3Context<'a>| -> Option<ConstValue> {
                          param_symbol_to_eval.definition_node_ptr.as_ref()
                             .and_then(|ptr| ptr.try_to_node(context.source_file_root))
                             .and_then(|param_decl_node| {
-                                let maybe_def_scope_stack = get_definition_scope_stack(&param_decl_node, context);
-                                
-                                maybe_def_scope_stack.and_then(|def_scope_stack| {
+                                let maybe_def_scope_id = get_definition_scope_id(&param_decl_node, context);
+
+                                maybe_def_scope_id.and_then(|def_scope_id| {
                                     ParamDecl::cast(param_decl_node.clone())
-                                        .and_then(|param_decl| param_decl.default_value()) 
+                                        .and_then(|param_decl| param_decl.default_value())
                                         .and_then(|value_node| {
-                                            // Preserve the current instance symbol when evaluating defaults
-                                            let mut def_context = Pass3Context {
-                                                _global_scope: context._global_scope, 
-                                                definition_scopes: context.definition_scopes, 
-                                                source_file_root: context.source_file_root, 
-                                                resolved_constants: context.resolved_constants, 
-                                                diagnostics: context.diagnostics,         
-                                                current_scope_stack: def_scope_stack,     
-                                                current_instance_symbol: context.current_instance_symbol, // Pass current instance context
-                                            };
-                                            evaluate_const_expr_as_i64(value_node.syntax(), &mut def_context)
+                                            // Temporarily switch to the definition scope for evaluation
+                                            let saved_stack = std::mem::replace(
+                                                &mut context.scope_stack,
+                                                vec![context.registry.global_id(), def_scope_id]
+                                            );
+                                            let result = evaluate_const_expr(value_node.syntax(), context);
+                                            context.scope_stack = saved_stack;
+                                            result
                                         })
                                         .or_else(|| {
                                             context.add_diagnostic(format!("Could not find default value expression node for parameter '{}'", param_symbol_to_eval.name), param_symbol_to_eval.span);
@@ -181,22 +200,18 @@ fn evaluate_const_expr_as_i64<'a>(
                             })
                     };
 
-                    // Search the current (instantiation) scope stack for the parameter definition
-                    let mut found_param_symbol: Option<&Symbol> = None;
-                    for scope in context.current_scope_stack.iter().rev() {
-                        if let Some(symbol) = scope.lookup(name) {
-                            if symbol.kind == SymbolKind::Parameter {
-                                found_param_symbol = Some(symbol);
-                                break; 
-                            } else {
-                                context.add_diagnostic(format!("Symbol '{}' is not a constant parameter (found {:?})", name, symbol.kind), token.text_range());
-                                return None;
-                            }
+                    // Search for the parameter using direct registry lookup (avoids borrow conflict)
+                    let registry = context.registry;
+                    let scope_id = context.current_scope();
+                    match registry.lookup(scope_id, name) {
+                        Some(symbol) if symbol.kind == SymbolKind::Parameter => {
+                            return evaluate_symbol_default_value(symbol, context);
                         }
-                    }
-
-                    if let Some(param_symbol) = found_param_symbol {
-                        return evaluate_symbol_default_value(param_symbol, context);
+                        Some(symbol) => {
+                            context.add_diagnostic(format!("Symbol '{}' is not a constant parameter (found {:?})", name, symbol.kind), token.text_range());
+                            return None;
+                        }
+                        None => {}
                     }
 
                     // 3. Not found as override or definition: Undefined.
@@ -209,89 +224,76 @@ fn evaluate_const_expr_as_i64<'a>(
         }
     };
 
-    if let Some(value) = result {
-        // DEBUG: Print what's being stored
-        println!("Pass3 DEBUG: Storing {:?} -> {} for node '{}' ({:?})", 
-                 node_ptr, value, node.text(), node.kind());
-        context.resolved_constants.insert(node_ptr, value);
+    if let Some(ref value) = result {
+        context.resolved_constants.insert(node_ptr, value.clone());
     }
-    
+
     result
 }
 
 // Pass 3 Context: Holds state for constant evaluation
 #[derive(Debug)]
 pub struct Pass3Context<'a> {
-    pub(crate) _global_scope: &'a SymbolTable,
-    pub(crate) definition_scopes: &'a HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>,
+    pub(crate) registry: &'a ScopeRegistry,
     pub(crate) source_file_root: &'a SyntaxNode<BhdlLanguage>,
-    pub(crate) resolved_constants: &'a mut ResolvedConstants, 
-    pub(crate) diagnostics: &'a mut Vec<Diagnostic>, 
-    pub(crate) current_scope_stack: Vec<&'a SymbolTable>,
+    pub(crate) resolved_constants: &'a mut ResolvedConstants,
+    pub(crate) diagnostics: &'a mut Vec<Diagnostic>,
+    pub(crate) scope_stack: Vec<ScopeId>,
     pub(crate) current_instance_symbol: Option<&'a Symbol>,
 }
 
 impl<'a> Pass3Context<'a> {
     pub fn new(
-        global_scope: &'a SymbolTable, 
-        def_scopes: &'a HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>, 
+        registry: &'a ScopeRegistry,
         source_file_root: &'a SyntaxNode<BhdlLanguage>,
         resolved_constants: &'a mut ResolvedConstants,
         diagnostics: &'a mut Vec<Diagnostic>,
     ) -> Self {
+        let global_id = registry.global_id();
         Self {
-            _global_scope: global_scope,
-            definition_scopes: def_scopes,
+            registry,
             source_file_root,
             resolved_constants,
             diagnostics,
-            current_scope_stack: vec![global_scope], 
-            current_instance_symbol: None, 
+            scope_stack: vec![global_id],
+            current_instance_symbol: None,
         }
     }
 
-    // Made pub(crate) for use in evaluate_const_expr_as_i64
+    pub(crate) fn current_scope(&self) -> ScopeId {
+        *self.scope_stack.last().unwrap()
+    }
+
     pub(crate) fn add_diagnostic(&mut self, message: String, range: TextRange) {
-        self.diagnostics.push(Diagnostic { message, range });
+        self.diagnostics.push(Diagnostic::new(message, range));
     }
 
-    // Made pub(crate) for use in evaluate_const_expr_as_i64
     pub(crate) fn lookup(&self, name: &str) -> Option<&Symbol> {
-        for scope in self.current_scope_stack.iter().rev() {
-            if let Some(symbol) = scope.lookup(name) {
-                return Some(symbol);
-            }
-        }
-        None
+        self.registry.lookup(self.current_scope(), name)
     }
 
-    // Made pub(crate) for internal use
     pub(crate) fn push_scope(&mut self, node_ptr: &SyntaxNodePtr<BhdlLanguage>) {
-        if let Some(scope) = self.definition_scopes.get(node_ptr) {
-            self.current_scope_stack.push(scope);
+        if let Some(scope_id) = self.registry.scope_id_for_node(node_ptr) {
+            self.scope_stack.push(scope_id);
         }
     }
 
-    // Made pub(crate) for internal use
     pub(crate) fn pop_scope(&mut self) {
-       if self.current_scope_stack.len() > 1 {
-           self.current_scope_stack.pop();
+       if self.scope_stack.len() > 1 {
+           self.scope_stack.pop();
        }
     }
 }
 
 // Pass 3 visitor function (main entry point for the pass)
 pub fn visit_node_pass3_const_eval(node: &SyntaxNode<BhdlLanguage>, context: &mut Pass3Context) {
-    // DEBUG: Print node being visited
-    println!("Pass3 Visit: {:?} ('{}')", node.kind(), node.text());
-
     let mut pushed_scope = false;
     let mut pushed_instance_context = false;
     let previous_instance_symbol = context.current_instance_symbol;
 
     match node.kind() {
         SyntaxKind::BOARD_DEF |
-        SyntaxKind::MODULE_DEF |
+        SyntaxKind::ENTITY_DEF |
         SyntaxKind::COMPONENT_DEF |
         SyntaxKind::INTERFACE_DEF => {
              let ptr = SyntaxNodePtr::new(node);
@@ -301,27 +303,27 @@ pub fn visit_node_pass3_const_eval(node: &SyntaxNode<BhdlLanguage>, context: &mu
         SyntaxKind::COMPONENT_INST => {
             if let Some(inst_node) = ComponentInst::cast(node.clone()) {
                 if let Some(inst_name_token) = inst_node.name() {
-                    if let Some(parent_scope) = context.current_scope_stack.last() {
-                        if let Some(inst_symbol) = parent_scope.lookup(inst_name_token.text()) {
-                             if inst_symbol.kind == SymbolKind::Instance {
-                                 context.current_instance_symbol = Some(inst_symbol);
-                                 pushed_instance_context = true;
-                                 // REMOVED pushing component definition scope
-                             } 
-                        } 
-                    } 
-                } 
+                    // Use direct registry access to avoid borrow conflict with context
+                    let registry = context.registry;
+                    let scope_id = context.current_scope();
+                    if let Some(inst_symbol) = registry.lookup(scope_id, inst_name_token.text()) {
+                        if inst_symbol.kind == SymbolKind::Instance {
+                            context.current_instance_symbol = Some(inst_symbol);
+                            pushed_instance_context = true;
+                        }
+                    }
+                }
             }
         }
         _ => {}
     }
 
-    // Find and Evaluate Constant Expressions 
+    // Find and Evaluate Constant Expressions
     match node.kind() {
         SyntaxKind::PARAM_DECL => {
             // Evaluate default value expression
             if let Some(expr_node) = ParamDecl::cast(node.clone()).and_then(|p| p.default_value()) {
-                evaluate_const_expr_as_i64(expr_node.syntax(), context); 
+                evaluate_const_expr(expr_node.syntax(), context);
             }
         }
         SyntaxKind::PARAM_ASSIGN => {
@@ -337,20 +339,18 @@ pub fn visit_node_pass3_const_eval(node: &SyntaxNode<BhdlLanguage>, context: &mu
                                 if let Some(token) = ident_ref.token() {
                                     let text = token.text();
                                     // Common string parameter values that shouldn't be evaluated as constants
-                                    if matches!(text.as_ref(), "red" | "green" | "blue" | "yellow" | "white" | "black" | 
-                                               "orange" | "amber" | "IR" | "UV" | "SMD" | "TH" | "DIP" | "SOIC" | 
+                                    if matches!(text.as_ref(), "red" | "green" | "blue" | "yellow" | "white" | "black" |
+                                               "orange" | "amber" | "IR" | "UV" | "SMD" | "TH" | "DIP" | "SOIC" |
                                                "QFN" | "BGA" | "TO220" | "0402" | "0603" | "0805" | "1206") {
                                         // Skip constant evaluation for these string values
-                                        // Just return without evaluating
                                     } else {
-                                        // Not a known string value, evaluate as constant
-                                        evaluate_const_expr_as_i64(expr_node.syntax(), context);
+                                        evaluate_const_expr(expr_node.syntax(), context);
                                     }
                                 }
                             }
                         }
                         _ => {
-                            evaluate_const_expr_as_i64(expr_node.syntax(), context);
+                            evaluate_const_expr(expr_node.syntax(), context);
                         }
                     }
                 }
@@ -359,20 +359,19 @@ pub fn visit_node_pass3_const_eval(node: &SyntaxNode<BhdlLanguage>, context: &mu
         SyntaxKind::BUS_SUFFIX => {
             if let Some(suffix) = BusSuffix::cast(node.clone()) {
                 if let Some(index_expr) = suffix.index_expr_node() {
-                    evaluate_const_expr_as_i64(&index_expr, context);
+                    evaluate_const_expr(&index_expr, context);
                 }
                 if let Some(range_expr) = suffix.range() {
                     if let Some(lhs) = range_expr.lhs_node() {
-                        evaluate_const_expr_as_i64(&lhs, context);
+                        evaluate_const_expr(&lhs, context);
                     }
                     if let Some(rhs) = range_expr.rhs_node() {
-                         evaluate_const_expr_as_i64(&rhs, context);
+                         evaluate_const_expr(&rhs, context);
                     }
                 }
             }
         }
-        // TODO: Add other contexts where constants might need evaluation (e.g., generate ranges)?
-        _ => {} 
+        _ => {}
     }
 
     // Recurse into Children
@@ -387,4 +386,4 @@ pub fn visit_node_pass3_const_eval(node: &SyntaxNode<BhdlLanguage>, context: &mu
     if pushed_instance_context {
         context.current_instance_symbol = previous_instance_symbol;
     }
-} 
+}

@@ -2,7 +2,7 @@
 // These models reveal issues like output conflicts and domain crossing problems
 
 // Model for output-to-output conflict detection
-module OutputConflictModel(
+entity OutputConflictModel(
     v1: voltage = 3.3V,  // Output 1 trying to drive high
     v2: voltage = 0V,     // Output 2 trying to drive low
     r1: resistance = 25Ω, // Output 1 impedance
@@ -44,7 +44,7 @@ module OutputConflictModel(
 }
 
 // Model for voltage domain crossing without level shifter
-module DomainCrossingModel(
+entity DomainCrossingModel(
     source_voltage: voltage = 3.3V,
     target_max_voltage: voltage = 1.8V,
     target_input_impedance: resistance = 1MΩ,
@@ -80,7 +80,7 @@ module DomainCrossingModel(
 }
 
 // Model for open-drain wired-OR without pull-up
-module WiredORWithoutPullup(
+entity WiredORWithoutPullup(
     num_devices: int = 3,
     all_high_z: bool = true,  // All outputs released
     bus_capacitance: capacitance = 50pF,
@@ -111,7 +111,7 @@ module WiredORWithoutPullup(
 }
 
 // Model for correct level shifter insertion
-module LevelShifterModel(
+entity LevelShifterModel(
     vin: voltage,
     vcca: voltage = 3.3V,
     vccb: voltage = 1.8V,
@@ -145,7 +145,7 @@ module LevelShifterModel(
 }
 
 // Test cases showing simulation results
-module TestOutputConflict {
+entity TestOutputConflict {
     // Scenario: Two outputs fighting
     test1: OutputConflictModel(v1=3.3V, v2=0V);
     // Result: 66mA conflict current, 109mW dissipation each
@@ -157,7 +157,7 @@ module TestOutputConflict {
     // Outcome: Gradual degradation
 }
 
-module TestDomainCrossing {
+entity TestDomainCrossing {
     // Scenario: 3.3V to 1.8V without protection
     test1: DomainCrossingModel(source_voltage=3.3V, target_max_voltage=1.8V);
     // Result: 12mA through ESD diode continuously
@@ -169,7 +169,7 @@ module TestDomainCrossing {
     // Outcome: Immediate damage risk
 }
 
-module TestCorrectSolutions {
+entity TestCorrectSolutions {
     // Correct: Level shifter for domain crossing
     test1: LevelShifterModel(vin=3.3V, vcca=3.3V, vccb=1.8V);
     // Result: Clean 1.8V output, no stress

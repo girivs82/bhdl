@@ -4,7 +4,7 @@ use bhdl_ast::{AstNode, SourceFile, HasName};
 
 fn main() {
     let content = r#"
-module TestVirtual() {
+entity TestVirtual() {
     pin VIN: power in;
     pin VOUT: virtual power out;
     pin GND: ground inout;
@@ -22,10 +22,10 @@ module TestVirtual() {
 
     let source_file = SourceFile::cast(parsed.syntax()).unwrap();
     
-    for module in source_file.modules() {
-        println!("Module: {}", module.name().unwrap().text());
-        
-        for pin in module.pins() {
+    for entity in source_file.entities() {
+        println!("Entity: {}", entity.name().unwrap().text());
+
+        for pin in entity.pins() {
             let pin_name = pin.name().unwrap().text().to_string();
             let is_virtual = pin.is_virtual();
             let pin_type = pin.pin_type().map(|t| t.text().to_string()).unwrap_or("unknown".to_string());

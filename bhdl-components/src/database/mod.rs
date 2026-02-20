@@ -41,6 +41,12 @@ impl ComponentDatabase {
         queries::get_component_by_id(&*conn, id)
     }
 
+    /// Get component ID by name
+    pub async fn get_component_id_by_name(&self, name: &str) -> anyhow::Result<ComponentId> {
+        let conn = self.connection.lock().unwrap();
+        queries::get_component_id_by_name(&*conn, name)
+    }
+
     /// Search components by name/description
     pub async fn search_components(&self, query: &str) -> anyhow::Result<Vec<Component>> {
         let conn = self.connection.lock().unwrap();
@@ -133,6 +139,12 @@ impl ComponentDatabase {
     pub async fn count_components(&self) -> anyhow::Result<u32> {
         let conn = self.connection.lock().unwrap();
         queries::count_components(&*conn)
+    }
+
+    /// Insert component footprint
+    pub async fn insert_component_footprint(&self, component_id: ComponentId, footprint: &ComponentFootprint) -> anyhow::Result<()> {
+        let mut conn = self.connection.lock().unwrap();
+        queries::insert_component_footprint(&mut *conn, component_id, footprint)
     }
 }
 

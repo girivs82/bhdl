@@ -25,7 +25,7 @@ This document describes the sustainable architecture for modeling integrated cir
 
 ### BHDL Component Definition
 ```bhdl
-module VReg78xx(voltage: voltage = 5V, package: string = "TO-220") {
+entity VReg78xx(voltage: voltage = 5V, package: string = "TO-220") {
     pin IN: power in;
     pin OUT: power out;
     pin GND: ground;
@@ -117,7 +117,7 @@ To add a new IC type:
 
 1. **Create BHDL Component Module**
    ```bhdl
-   module NewIC(...) {
+   entity NewIC(...) {
        // Define pins
        // Define parameter types
        // Create parameter constants for variants

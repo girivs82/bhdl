@@ -8,7 +8,7 @@ use crate::common::{TypeRef, ParamAssign, ComponentInst, PortDecl, PinDecl};
 use crate::v2_statements::ConnectionStmt;
 use crate::expr::Expr;
 use crate::v2_statements::{PowerDecl, GroundDecl, FlowStmt};
-use crate::hierarchical::ModuleInst;
+use crate::hierarchical::EntityInst;
 use crate::attributes::AttributeDecl;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -43,15 +43,15 @@ impl Board {
         self.0.children().filter_map(FlowStmt::cast)
     }
     
-    // Hierarchical module support
-    pub fn module_instances(&self) -> impl Iterator<Item = ModuleInst> {
-        self.0.children().filter_map(ModuleInst::cast)
+    // Hierarchical entity support
+    pub fn entity_instances(&self) -> impl Iterator<Item = EntityInst> {
+        self.0.children().filter_map(EntityInst::cast)
     }
-    
+
     pub fn component_instances(&self) -> impl Iterator<Item = ComponentInst> {
         self.0.children().filter_map(ComponentInst::cast)
     }
-    
+
     pub fn layer_stackup_block(&self) -> Option<LayerStackupBlock> { 
         self.0.children().find_map(LayerStackupBlock::cast) 
     }
@@ -96,48 +96,48 @@ impl Board {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Module(pub(crate) SyntaxNode<BhdlLanguage>);
+pub struct Entity(pub(crate) SyntaxNode<BhdlLanguage>);
 
-impl AstNode for Module {
+impl AstNode for Entity {
     type Language = BhdlLanguage;
-    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::MODULE_DEF }
-    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { 
-        if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } 
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::ENTITY_DEF }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> {
+        if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None }
     }
     fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
 }
 
-impl HasName for Module {}
+impl HasName for Entity {}
 
-impl Module {
-    // v2.0 modules have pins and metadata
+impl Entity {
+    // v2.0 entities have pins and metadata
     pub fn pins(&self) -> impl Iterator<Item = PinDecl> {
         self.0.children().filter_map(PinDecl::cast)
     }
-    
-    // Keep ports() for compatibility with higher-level modules that might use ports
+
+    // Keep ports() for compatibility with higher-level entities that might use ports
     pub fn ports(&self) -> impl Iterator<Item = PortDecl> {
         self.0.children().filter_map(PortDecl::cast)
     }
-    
+
     pub fn param_list(&self) -> Option<ParamList> {
         self.0.children().find_map(ParamList::cast)
     }
-    
-    // Hierarchical module support
-    pub fn module_instances(&self) -> impl Iterator<Item = ModuleInst> {
-        self.0.children().filter_map(ModuleInst::cast)
+
+    // Hierarchical entity support
+    pub fn entity_instances(&self) -> impl Iterator<Item = EntityInst> {
+        self.0.children().filter_map(EntityInst::cast)
     }
-    
+
     pub fn component_instances(&self) -> impl Iterator<Item = ComponentInst> {
         self.0.children().filter_map(ComponentInst::cast)
     }
-    
+
     pub fn connections(&self) -> impl Iterator<Item = ConnectionStmt> {
         self.0.children().filter_map(ConnectionStmt::cast)
     }
-    
-    // Module metadata (attributes)
+
+    // Entity metadata (attributes)
     pub fn attributes(&self) -> impl Iterator<Item = AttributeDecl> {
         self.0.children().filter_map(AttributeDecl::cast)
     }
@@ -247,14 +247,14 @@ impl ParamList {
         self.0.children().filter_map(ParamAssign::cast)
     }
     
-    /// Get module parameter definitions (name: type = default)
-    pub fn param_defs(&self) -> impl Iterator<Item = ModuleParam> {
-        self.0.children().filter_map(ModuleParam::cast)
+    /// Get entity parameter definitions (name: type = default)
+    pub fn param_defs(&self) -> impl Iterator<Item = EntityParam> {
+        self.0.children().filter_map(EntityParam::cast)
     }
-    
-    /// Check if this is a module parameter list (has type annotations)
-    pub fn is_module_params(&self) -> bool {
-        // Module params have COLON tokens for type annotations
+
+    /// Check if this is an entity parameter list (has type annotations)
+    pub fn is_entity_params(&self) -> bool {
+        // Entity params have COLON tokens for type annotations
         self.0.children_with_tokens()
             .any(|element| element.as_token()
                 .map(|token| token.kind() == SyntaxKind::COLON)
@@ -262,16 +262,16 @@ impl ParamList {
     }
 }
 
-/// Module parameter definition: name: type = default_value
+/// Entity parameter definition: name: type = default_value
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ModuleParam(pub(crate) SyntaxNode<BhdlLanguage>);
+pub struct EntityParam(pub(crate) SyntaxNode<BhdlLanguage>);
 
-impl AstNode for ModuleParam {
+impl AstNode for EntityParam {
     type Language = BhdlLanguage;
-    fn can_cast(kind: SyntaxKind) -> bool { 
+    fn can_cast(kind: SyntaxKind) -> bool {
         kind == SyntaxKind::PARAM_DECL
     }
-    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { 
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> {
         if Self::can_cast(syntax.kind()) {
             Some(Self(syntax))
         } else {
@@ -281,7 +281,7 @@ impl AstNode for ModuleParam {
     fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
 }
 
-impl ModuleParam {
+impl EntityParam {
     pub fn name(&self) -> Option<SyntaxToken<BhdlLanguage>> {
         self.0.children_with_tokens()
             .filter_map(|element| element.into_token())
@@ -731,7 +731,7 @@ impl DistributionPinList {
     /// Check if this is a hierarchical path (more than 2 segments)
     /// Examples:
     ///   fpga.VCC -> false (2 segments: component.pin)
-    ///   sensor_board[*].sensor.VCC -> true (3 segments: module.component.pin)
+    ///   sensor_board[*].sensor.VCC -> true (3 segments: entity.component.pin)
     pub fn is_hierarchical(&self) -> bool {
         self.path_segments().len() > 2
     }

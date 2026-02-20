@@ -5,7 +5,7 @@
 import { PIN_MODEL_GPIO_3V3, PIN_MODEL_I2C_OPEN_DRAIN, PIN_MODEL_SPI_HIGH_SPEED, DRIVE_OPEN_DRAIN_3V3 } from "../pin_characteristics.bhdl";
 import { PowerDomain, ChipPowerArchitecture } from "../pin_characteristics_advanced.bhdl";
 
-module MCU_MultiDomain(package: string = "BGA256") {
+entity MCU_MultiDomain(package: string = "BGA256") {
     // === MULTIPLE POWER DOMAINS ===
     // Core power domain (1.2V)
     pin VDDCORE: power in @metadata(

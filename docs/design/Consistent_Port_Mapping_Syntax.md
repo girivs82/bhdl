@@ -2,7 +2,7 @@
 
 ## The Proposal
 
-Always put module pins on the LEFT side of connections, parent signals/pins on the RIGHT:
+Always put entity pins on the LEFT side of connections, parent signals/pins on the RIGHT:
 
 ```bhdl
 instance_name: ModuleType {
@@ -16,7 +16,7 @@ instance_name: ModuleType {
 
 ### 1. Complete Disambiguation
 ```bhdl
-module PowerSystem {
+entity PowerSystem {
     signal VIN;
     signal VOUT;
     
@@ -70,7 +70,7 @@ buck: BuckConverter {
 2. **Visual Consistency**: All pins aligned on left
 3. **Clear Direction**: Arrow always shows data flow
 4. **Simpler Parser**: No need to handle dot prefix
-5. **Easy to Scan**: Can quickly see all module pins
+5. **Easy to Scan**: Can quickly see all entity pins
 
 ## Handling Edge Cases
 
@@ -112,11 +112,11 @@ stage2: Processor {
 ## Why Arrows Make Sense
 
 The arrow direction naturally indicates data flow:
-- `<-` : Into the module (input)
-- `->` : Out of the module (output)  
+- `<-` : Into the entity (input)
+- `->` : Out of the entity (output)
 - `<->` : Bidirectional
 
-This matches how we think about module interfaces!
+This matches how we think about entity interfaces!
 
 ## Potential Issues
 
@@ -151,7 +151,7 @@ amp: OpAmp {
 ## Complete Example
 
 ```bhdl
-module PowerSupply {
+entity PowerSupply {
     pin VIN: power in;
     pin VOUT_5V: power out;
     pin VOUT_3V3: power out;

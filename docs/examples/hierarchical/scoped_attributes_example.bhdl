@@ -1,7 +1,7 @@
 // Scoped attributes example using existing 'attribute' keyword
 // No new syntax needed!
 
-module AdjustableRegulator {
+entity AdjustableRegulator {
     pin VIN: power in;
     pin VOUT: power out;
     pin EN: digital in;
@@ -64,7 +64,7 @@ module AdjustableRegulator {
 }
 
 // Submodule definitions
-module VoltageDivider {
+entity VoltageDivider {
     pin top: signal in;
     pin tap: signal out;
     pin bottom: signal in;
@@ -84,7 +84,7 @@ module VoltageDivider {
     }
 }
 
-module CapacitorBank {
+entity CapacitorBank {
     pin positive: power in;
     pin negative: ground;
     
@@ -193,7 +193,7 @@ board MultiRailPowerSupply {
 }
 
 // Example with array attributes
-module LEDDriverBank(channels: int = 8) {
+entity LEDDriverBank(channels: int = 8) {
     pin VIN: power in;
     pin EN: digital in;
     

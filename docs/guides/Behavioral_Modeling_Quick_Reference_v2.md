@@ -27,7 +27,7 @@
 
 ### Basic Comparator
 ```bhdl
-module Comparator {
+entity Comparator {
     pin IN_P, IN_N: analog in;
     pin OUT: digital out;
     
@@ -38,7 +38,7 @@ module Comparator {
 
 ### Thermal Derating
 ```bhdl
-module ThermalLED {
+entity ThermalLED {
     pin TEMP: analog in;
     pin I_OUT: current out;
     
@@ -56,7 +56,7 @@ module ThermalLED {
 
 ### Soft-Start
 ```bhdl
-module SoftStart {
+entity SoftStart {
     pin ENABLE: digital in;
     pin VREF: analog out;
     
@@ -79,7 +79,7 @@ module SoftStart {
 
 ### Power Sequencer
 ```bhdl
-module Sequencer {
+entity Sequencer {
     pin ENABLE: digital in;
     pin EN0, EN1, EN2: digital out;
     
@@ -113,7 +113,7 @@ module Sequencer {
 
 ### PI Controller
 ```bhdl
-module PIController {
+entity PIController {
     pin FB: analog in;
     pin PWM: digital out;
     
@@ -136,7 +136,7 @@ module PIController {
 
 ### State Machine
 ```bhdl
-module SimpleStateMachine {
+entity SimpleStateMachine {
     pin START, STOP, FAULT: digital in;
     pin RUNNING, ERROR: digital out;
     
@@ -175,7 +175,7 @@ module SimpleStateMachine {
 
 ### Basic External Model
 ```bhdl
-module ComplexController {
+entity ComplexController {
     pin VIN: power in;
     pin VOUT: power out;
     
@@ -185,7 +185,7 @@ module ComplexController {
 
 ### With Parameters
 ```bhdl
-module MotorController(pwm_freq: frequency = 20kHz) {
+entity MotorController(pwm_freq: frequency = 20kHz) {
     pin PHASE_A, PHASE_B, PHASE_C: current out;
     
     attribute max_current = 10A;

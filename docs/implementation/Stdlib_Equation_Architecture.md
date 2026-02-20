@@ -35,7 +35,7 @@ attribute spice_equation_conditional = v_diff > 0.1 ? expr1 : expr2;
 Components will define their equations using BHDL attributes:
 
 ```bhdl
-module Res(value: resistance) {
+entity Res(value: resistance) {
     // ... pins ...
     
     // Define the equation for current as a function of voltage
@@ -45,7 +45,7 @@ module Res(value: resistance) {
     attribute spice_equation_di_dv = "1 / value";
 }
 
-module LED(color: string) {
+entity LED(color: string) {
     // ... pins ...
     
     // Constants used in equations
@@ -78,7 +78,7 @@ module LED(color: string) {
     """;
 }
 
-module LM7805() {
+entity LM7805() {
     // ... pins ...
     
     // Adaptive voltage regulator equations
@@ -220,7 +220,7 @@ impl RuntimeModelEngine {
 A vendor could provide a highly accurate MOSFET model:
 
 ```bhdl
-module IRF540N() {
+entity IRF540N() {
     // Pins...
     
     // Level 3 MOSFET model equations

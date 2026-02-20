@@ -7,7 +7,7 @@ board SwitchedRCFilter {
     ground GND;
     
     // Analog switch with digital control
-    module AnalogSwitch(ron: resistance = 10Ω, roff: resistance = 10MΩ) {
+    entity AnalogSwitch(ron: resistance = 10Ω, roff: resistance = 10MΩ) {
         pin ctrl: signal in;
         pin in: signal inout;
         pin out: signal inout;
@@ -17,7 +17,7 @@ board SwitchedRCFilter {
     }
     
     // Input signal source
-    module SignalSource(frequency: frequency = 1kHz, amplitude: voltage = 2.5V) {
+    entity SignalSource(frequency: frequency = 1kHz, amplitude: voltage = 2.5V) {
         pin out: signal out;
         
         // Behavioral sine wave generator
@@ -40,7 +40,7 @@ board SwitchedRCFilter {
     C1.2 -> @GND;
     
     // Output buffer with behavioral model
-    module Buffer(gain: real = 1.0) {
+    entity Buffer(gain: real = 1.0) {
         pin in: signal in;
         pin out: signal out;
         
@@ -53,7 +53,7 @@ board SwitchedRCFilter {
     @BUFFERED_OUT: BUF1.out;
     
     // Digital control logic with timing
-    module TimingController(period: time = 100µs, duty: real = 0.5) {
+    entity TimingController(period: time = 100µs, duty: real = 0.5) {
         pin enable: signal out;
         
         attribute counter = (t % period);

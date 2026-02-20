@@ -183,8 +183,8 @@ impl PortDecl {
     pub fn bus_suffix(&self) -> Option<BusSuffix> { self.0.children().find_map(BusSuffix::cast) }
 }
 
-// --- Pin Declaration --- (within modules)
-// v2.0 uses pin declarations in modules for physical component pins
+// --- Pin Declaration --- (within entities)
+// v2.0 uses pin declarations in entities for physical component pins
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PinDecl(pub(crate) SyntaxNode<BhdlLanguage>);
 impl AstNode for PinDecl {

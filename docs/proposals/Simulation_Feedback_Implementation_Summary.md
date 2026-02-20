@@ -103,7 +103,7 @@ Final Optimized Design
 
 ### Behavioral Model in BHDL
 ```bhdl
-module BuckConverter {
+entity BuckConverter {
     @behavioral_model analytical {
         model_type: "equations",
         L_min: "(vin - vout) * vout / (vin * ΔI * fsw)",

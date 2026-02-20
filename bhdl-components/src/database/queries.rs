@@ -25,6 +25,21 @@ fn parse_component_category(category_str: String) -> ComponentCategory {
     }
 }
 
+/// Get component ID by name
+pub fn get_component_id_by_name(conn: &Connection, name: &str) -> anyhow::Result<ComponentId> {
+    let mut stmt = conn.prepare(
+        "SELECT id FROM components WHERE name = ?1 LIMIT 1"
+    )?;
+
+    match stmt.query_row([name], |row| Ok(row.get::<_, ComponentId>(0)?)) {
+        Ok(id) => Ok(id),
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            Err(anyhow::anyhow!("Component '{}' not found in database", name))
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
 /// Get component by ID
 pub fn get_component_by_id(conn: &Connection, id: ComponentId) -> anyhow::Result<Option<Component>> {
     let mut stmt = conn.prepare(
@@ -468,8 +483,64 @@ fn get_component_symbol(conn: &Connection, component_id: ComponentId) -> anyhow:
 }
 
 fn get_component_footprint(conn: &Connection, component_id: ComponentId) -> anyhow::Result<Option<ComponentFootprint>> {
-    // This is a placeholder - full implementation would load footprint and pads
-    Ok(None)
+    // Get footprint metadata
+    let mut stmt = conn.prepare(
+        "SELECT id, footprint_name, svg_data, pad_count, body_width, body_height, pitch
+         FROM component_footprints WHERE component_id = ?1 LIMIT 1"
+    )?;
+
+    let footprint_result = stmt.query_row([component_id], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,  // footprint_id
+            row.get::<_, String>(1)?,  // footprint_name
+            row.get::<_, String>(2)?,  // svg_data
+            row.get::<_, u32>(3)?,  // pad_count
+            row.get::<_, f64>(4)?,  // body_width
+            row.get::<_, f64>(5)?,  // body_height
+            row.get::<_, Option<f64>>(6)?,  // pitch
+        ))
+    });
+
+    match footprint_result {
+        Ok((footprint_id, footprint_name, svg_data, pad_count, body_width, body_height, pitch)) => {
+            // Load pads for this footprint
+            let pads = get_footprint_pads(conn, footprint_id)?;
+
+            Ok(Some(ComponentFootprint {
+                footprint_name,
+                svg_data,
+                pad_count,
+                body_width,
+                body_height,
+                pitch,
+                pads,
+            }))
+        }
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+fn get_footprint_pads(conn: &Connection, footprint_id: i64) -> anyhow::Result<Vec<FootprintPad>> {
+    let mut stmt = conn.prepare(
+        "SELECT pad_number, x_position, y_position, width, height, shape, drill_diameter, pad_type
+         FROM footprint_pads WHERE footprint_id = ?1"
+    )?;
+
+    let pads = stmt.query_map([footprint_id], |row| {
+        Ok(FootprintPad {
+            pad_number: row.get(0)?,
+            x_position: row.get(1)?,
+            y_position: row.get(2)?,
+            width: row.get(3)?,
+            height: row.get(4)?,
+            shape: parse_pad_shape(row.get::<_, String>(5)?),
+            drill_diameter: row.get(6)?,
+            pad_type: parse_pad_type(row.get::<_, String>(7)?),
+        })
+    })?.collect::<Result<Vec<_>, _>>()?;
+
+    Ok(pads)
 }
 
 fn insert_electrical_spec(conn: &Connection, component_id: ComponentId, spec: &ElectricalSpec) -> anyhow::Result<()> {
@@ -538,8 +609,53 @@ fn insert_component_symbol(conn: &Connection, component_id: ComponentId, symbol:
     Ok(())
 }
 
-fn insert_component_footprint(conn: &Connection, component_id: ComponentId, footprint: &ComponentFootprint) -> anyhow::Result<()> {
-    // Placeholder - would insert footprint and pads
+pub fn insert_component_footprint(conn: &Connection, component_id: ComponentId, footprint: &ComponentFootprint) -> anyhow::Result<()> {
+    // Insert footprint metadata
+    let mut stmt = conn.prepare(
+        "INSERT INTO component_footprints
+         (component_id, footprint_name, svg_data, pad_count, body_width, body_height, pitch)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
+    )?;
+
+    stmt.execute(params![
+        component_id,
+        footprint.footprint_name,
+        footprint.svg_data,
+        footprint.pad_count,
+        footprint.body_width,
+        footprint.body_height,
+        footprint.pitch,
+    ])?;
+
+    let footprint_id = conn.last_insert_rowid();
+
+    // Insert pads
+    for pad in &footprint.pads {
+        insert_footprint_pad(conn, footprint_id, pad)?;
+    }
+
+    Ok(())
+}
+
+fn insert_footprint_pad(conn: &Connection, footprint_id: i64, pad: &FootprintPad) -> anyhow::Result<()> {
+    let mut stmt = conn.prepare(
+        "INSERT INTO footprint_pads
+         (footprint_id, pad_number, x_position, y_position, width, height, shape, drill_diameter, pad_type)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
+    )?;
+
+    stmt.execute(params![
+        footprint_id,
+        pad.pad_number,
+        pad.x_position,
+        pad.y_position,
+        pad.width,
+        pad.height,
+        pad_shape_to_string(&pad.shape),
+        pad.drill_diameter,
+        pad_type_to_string(&pad.pad_type),
+    ])?;
+
     Ok(())
 }
 
@@ -627,6 +743,42 @@ fn pin_shape_to_string(pin_shape: &PinShape) -> &'static str {
         PinShape::OutputLow => "output_low",
         PinShape::EdgeClockHigh => "edge_clock_high",
         PinShape::NonLogic => "non_logic",
+    }
+}
+
+fn parse_pad_shape(s: String) -> PadShape {
+    match s.as_str() {
+        "circle" => PadShape::Circle,
+        "rectangle" | "rect" => PadShape::Rectangle,
+        "oval" => PadShape::Oval,
+        "rounded_rectangle" | "roundrect" => PadShape::RoundedRectangle,
+        _ => PadShape::Rectangle,
+    }
+}
+
+fn pad_shape_to_string(shape: &PadShape) -> &'static str {
+    match shape {
+        PadShape::Circle => "circle",
+        PadShape::Rectangle => "rectangle",
+        PadShape::Oval => "oval",
+        PadShape::RoundedRectangle => "rounded_rectangle",
+    }
+}
+
+fn parse_pad_type(s: String) -> PadType {
+    match s.as_str() {
+        "smd" => PadType::SMD,
+        "through_hole" | "thru_hole" => PadType::ThroughHole,
+        "npth" => PadType::NPTH,
+        _ => PadType::SMD,
+    }
+}
+
+fn pad_type_to_string(pad_type: &PadType) -> &'static str {
+    match pad_type {
+        PadType::SMD => "smd",
+        PadType::ThroughHole => "through_hole",
+        PadType::NPTH => "npth",
     }
 }
 

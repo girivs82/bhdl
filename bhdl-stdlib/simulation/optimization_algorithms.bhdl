@@ -41,7 +41,7 @@ type IterationHistory = {
 }
 
 // Grid Search Implementation
-module GridSearchOptimizer {
+entity GridSearchOptimizer {
     
     // Create parameter grid with intelligent spacing
     function create_parameter_grid(
@@ -119,7 +119,7 @@ module GridSearchOptimizer {
 }
 
 // Nelder-Mead Simplex Optimization
-module NelderMeadOptimizer {
+entity NelderMeadOptimizer {
     
     // Adaptive parameters based on problem characteristics
     type SimplexParameters = {
@@ -204,7 +204,7 @@ module NelderMeadOptimizer {
 }
 
 // Gradient-Based Optimization
-module GradientOptimizer {
+entity GradientOptimizer {
     
     // Automatic differentiation for gradient calculation
     function calculate_gradient(
@@ -295,7 +295,7 @@ module GradientOptimizer {
 }
 
 // Multi-Objective Optimization
-module MultiObjectiveOptimizer {
+entity MultiObjectiveOptimizer {
     
     // Pareto dominance checking
     function dominates(solution1: Solution, solution2: Solution) -> bool {
@@ -368,7 +368,7 @@ module MultiObjectiveOptimizer {
 }
 
 // Convergence Detection
-module ConvergenceDetector {
+entity ConvergenceDetector {
     
     // Multiple convergence criteria
     function check_convergence(

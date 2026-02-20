@@ -97,7 +97,7 @@ with routing(star_ground = true) {
 }
 
 // Buck controller module
-module BuckController() {
+entity BuckController() {
     pin VIN: power in;
     pin SW: power out;  // Switch node
     pin FB: signal in;  // Feedback
@@ -108,12 +108,12 @@ module BuckController() {
 }
 
 // Supporting modules
-module SchottkyDiode(model: string) {
+entity SchottkyDiode(model: string) {
     pin A: signal;
     pin K: signal;
 }
 
-module Inductor(inductance: inductance) {
+entity Inductor(inductance: inductance) {
     pin 1: signal;
     pin 2: signal;
     
@@ -122,7 +122,7 @@ module Inductor(inductance: inductance) {
     attribute saturation_current = 3A;
 }
 
-module PowerConnector() {
+entity PowerConnector() {
     pin VOUT: power out;
     pin GND: ground;
 }

@@ -134,7 +134,7 @@ constraints timing {
 }
 
 // Modules (simplified)
-module DDR3Controller() {
+entity DDR3Controller() {
     // Data
     pin DQ[0..31]: signal inout;
     pin DQS[0..3]_P: signal inout;
@@ -158,7 +158,7 @@ module DDR3Controller() {
     pin CK_N: clock out;
 }
 
-module DDR3_4Gb() {
+entity DDR3_4Gb() {
     // Matching pinout to controller
     pin DQ[0..31]: signal inout;
     pin DQS[0..3]_P: signal inout;

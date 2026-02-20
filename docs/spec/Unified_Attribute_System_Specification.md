@@ -101,7 +101,7 @@ An attribute is considered mutable if:
 3. It is explicitly declared with `var` (future extension)
 
 ```bhdl
-module Example {
+entity Example {
     attribute static_val = 3.3V;        // Immutable
     attribute computed = a + b;         // Immutable (recomputed)
     attribute counter = 0;              // Mutable (modified below)
@@ -194,7 +194,7 @@ when (condition_expr) {
 
 ### 6.1 Thermal Protection
 ```bhdl
-module ThermalProtection {
+entity ThermalProtection {
     pin TEMP_SENSE: analog in;
     pin ENABLE_OUT: digital out;
     
@@ -220,7 +220,7 @@ module ThermalProtection {
 
 ### 6.2 Soft-Start Controller
 ```bhdl
-module SoftStart {
+entity SoftStart {
     pin ENABLE: digital in;
     pin FB: analog in;
     pin COMP: analog out;
@@ -249,7 +249,7 @@ module SoftStart {
 
 ### 6.3 PWM Generator
 ```bhdl
-module SimplePWM {
+entity SimplePWM {
     pin FREQ_SET: analog in;
     pin DUTY_SET: analog in;
     pin PWM_OUT: digital out;
@@ -303,7 +303,7 @@ module SimplePWM {
 All existing BHDL code remains valid:
 - Static attributes work unchanged
 - No new keywords introduced
-- Existing modules need no modifications
+- Existing entities need no modifications
 
 ## 9. Future Extensions
 

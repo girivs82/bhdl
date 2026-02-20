@@ -221,16 +221,18 @@ impl fmt::Display for PowerAnalysisError {
 }
 
 impl PowerAnalysisContext {
-    /// Create a new power analysis context
+    /// Create a new power analysis context with standard domains pre-populated
     pub fn new() -> Self {
-        Self {
+        let mut ctx = Self {
             domains: HashMap::new(),
             level_shifted_signals: Vec::new(),
             power_sequence: Vec::new(),
             component_domains: HashMap::new(),
             errors: Vec::new(),
             warnings: Vec::new(),
-        }
+        };
+        ctx.add_standard_domains();
+        ctx
     }
 
     /// Add standard power domains commonly used in designs
@@ -541,10 +543,8 @@ fn load_power_domains_from_symbols(context: &mut PowerAnalysisContext, symbol_ta
         }
     }
     
-    // Recursively check child scopes
-    for child in &symbol_table.children {
-        load_power_domains_from_symbols(context, child);
-    }
+    // Note: child scope traversal is now handled by ScopeRegistry parent-chain lookup.
+    // Power domain symbols are in the global scope nets namespace, so no recursion needed.
 }
 
 /// Perform power analysis on a syntax tree with symbol table

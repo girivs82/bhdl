@@ -38,11 +38,11 @@ board AudioAmplifierRefactored {
   component ElectrolyticCapacitor { pins {POS: inout signal; NEG: inout signal;} properties {value: capacitance; voltage: voltage;} }
   component Resistor { pins {1: inout signal; 2: inout signal;} properties {value: resistance; tolerance: percentage=1pct; power: power=0.25W;} }
   // Placeholder Modules
-  module ToneControl { // Example placeholder module
+  entity ToneControl { // Example placeholder module
     ports { IN: in signal; OUT: out signal; VCC: in power; GND: ground; BASS_CTRL: in signal; TREBLE_CTRL: in signal; }
     parameters { bass_center: frequency; treble_center: frequency; }
   }
-  module PowerAmplifier { // Example placeholder module
+  entity PowerAmplifier { // Example placeholder module
     ports { IN: in signal; OUT: out signal; VCC: in power; GND: ground; }
     parameters { output_power: power; load_impedance: resistance = 8Ohm; }
   }

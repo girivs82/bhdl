@@ -107,8 +107,8 @@ impl LibraryLoader {
             for child in syntax.children() {
                 child_count += 1;
                 println!("DEBUG: Processing child {} of kind {:?}", child_count, child.kind());
-                if child.kind() == bhdl_parser::SyntaxKind::MODULE_DEF {
-                    println!("DEBUG: Found MODULE_DEF, parsing...");
+                if child.kind() == bhdl_parser::SyntaxKind::ENTITY_DEF {
+                    println!("DEBUG: Found ENTITY_DEF, parsing...");
                     match Self::parse_module_definition(&child, source_file) {
                         Ok(Some(module)) => {
                             println!("DEBUG: Successfully parsed module: {}", module.name);

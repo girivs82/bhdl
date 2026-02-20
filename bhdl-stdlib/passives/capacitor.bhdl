@@ -16,7 +16,7 @@ type CapacitorParams = {
     impedance: ImpedanceCharacteristics,
 };
 
-module Cap(value: capacitance, voltage: voltage = 50V, type: string = "auto") {
+entity Cap(value: capacitance, voltage: voltage = 50V, type: string = "auto") {
     pin 1: signal inout @metadata(
         function="Terminal",
         description="First terminal (positive for polarized)",
@@ -181,7 +181,7 @@ module Cap(value: capacitance, voltage: voltage = 50V, type: string = "auto") {
 alias Capacitor = Cap;
 
 // Polarized Capacitor Module
-module ElectrolyticCap(value: capacitance, voltage: voltage = 25V) {
+entity ElectrolyticCap(value: capacitance, voltage: voltage = 25V) {
     pin +: signal in @metadata(
         function="PositiveTerminal",
         description="Positive terminal (anode)",

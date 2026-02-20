@@ -2,7 +2,7 @@
 // Power supply and regulation components
 
 // Linear Regulator Module
-module LinearRegulator(input_voltage: voltage, output_voltage: voltage, max_current: current = 1A) {
+entity LinearRegulator(input_voltage: voltage, output_voltage: voltage, max_current: current = 1A) {
     pin IN: power in;
     pin OUT: power out;
     pin GND: ground;
@@ -13,7 +13,7 @@ module LinearRegulator(input_voltage: voltage, output_voltage: voltage, max_curr
 }
 
 // LDO Regulator Module
-module LDORegulator(input_voltage: voltage, output_voltage: voltage, max_current: current = 500mA) {
+entity LDORegulator(input_voltage: voltage, output_voltage: voltage, max_current: current = 500mA) {
     pin IN: power in;
     pin OUT: power out;
     pin GND: ground;
@@ -25,7 +25,7 @@ module LDORegulator(input_voltage: voltage, output_voltage: voltage, max_current
 }
 
 // 7805 5V Linear Regulator
-module LM7805() {
+entity LM7805() {
     pin IN: power in;
     pin OUT: power out;
     pin GND: ground;
@@ -38,7 +38,7 @@ module LM7805() {
 }
 
 // 3.3V LDO Regulator
-module LM1117_3V3() {
+entity LM1117_3V3() {
     pin IN: power in;
     pin OUT: power out;
     pin GND: ground;
@@ -52,7 +52,7 @@ module LM1117_3V3() {
 }
 
 // Buck Converter Module
-module BuckConverter(input_voltage: voltage, output_voltage: voltage, max_current: current) {
+entity BuckConverter(input_voltage: voltage, output_voltage: voltage, max_current: current) {
     pin VIN: power in;
     pin VOUT: power out;
     pin GND: ground;
@@ -66,7 +66,7 @@ module BuckConverter(input_voltage: voltage, output_voltage: voltage, max_curren
 }
 
 // Boost Converter Module
-module BoostConverter(input_voltage: voltage, output_voltage: voltage, max_current: current) {
+entity BoostConverter(input_voltage: voltage, output_voltage: voltage, max_current: current) {
     pin VIN: power in;
     pin VOUT: power out;
     pin GND: ground;
@@ -80,7 +80,7 @@ module BoostConverter(input_voltage: voltage, output_voltage: voltage, max_curre
 }
 
 // USB Power Input Module
-module USBPowerInput() {
+entity USBPowerInput() {
     pin VBUS: power out;
     pin D+: signal inout;
     pin D-: signal inout;
@@ -94,7 +94,7 @@ module USBPowerInput() {
 }
 
 // Barrel Jack Power Input
-module BarrelJack() {
+entity BarrelJack() {
     pin CENTER: power in;
     pin SLEEVE: ground;
     pin SWITCH: signal out;  // Switch contact (optional)
@@ -106,7 +106,7 @@ module BarrelJack() {
 }
 
 // Battery Holder Module
-module BatteryHolder(chemistry: string = "LiPo", cells: int = 1) {
+entity BatteryHolder(chemistry: string = "LiPo", cells: int = 1) {
     pin +: power out;
     pin -: ground;
     
@@ -116,7 +116,7 @@ module BatteryHolder(chemistry: string = "LiPo", cells: int = 1) {
 }
 
 // Power Switch Module
-module PowerSwitch() {
+entity PowerSwitch() {
     pin IN: power in;
     pin OUT: power out;
     
@@ -126,7 +126,7 @@ module PowerSwitch() {
 }
 
 // Fuse Module
-module Fuse(current: current) {
+entity Fuse(current: current) {
     pin 1: power inout;
     pin 2: power inout;
     
@@ -137,7 +137,7 @@ module Fuse(current: current) {
 }
 
 // TVS Diode for protection
-module TVSDiode(voltage: voltage) {
+entity TVSDiode(voltage: voltage) {
     pin 1: signal inout;
     pin 2: ground;
     

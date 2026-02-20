@@ -49,7 +49,7 @@ board AnalyzerSpiceIntegration {
 }
 
 // Component definitions for testing
-module I2C_Device() {
+entity I2C_Device() {
     pin SDA: signal inout;
     pin SCL: signal inout;
     pin VCC: power in;

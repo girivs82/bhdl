@@ -4,7 +4,7 @@
 import "../types/electrical_types.bhdl";
 
 // Generic buck converter controller behavioral model
-behavioral module BuckControllerBehavioral(
+behavioral entity BuckControllerBehavioral(
     vin_min: voltage = 4.5V,
     vin_max: voltage = 28V,
     vout: voltage = 3.3V,
@@ -193,7 +193,7 @@ behavioral module BuckControllerBehavioral(
 }
 
 // Behavioral model of complete buck converter (controller + power stage)
-behavioral module BuckConverterComplete(
+behavioral entity BuckConverterComplete(
     vin_nominal: voltage = 12V,
     vout: voltage = 3.3V,
     iout_max: current = 2A,

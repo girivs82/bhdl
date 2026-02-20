@@ -170,7 +170,7 @@ C1.1 -> R_SENSE.1 where trace_width = 0.2mm;  // Light current
 ### Example 1: Precision Analog Circuit
 
 ```bhdl
-module PrecisionAnalog {
+entity PrecisionAnalog {
     // Input path with shielding
     @INPUT -> R1.1 where trace_length < 20mm;
     R1.2 -> OPAMP.in_p where shielded;
@@ -193,7 +193,7 @@ module PrecisionAnalog {
 ### Example 2: High-Speed Digital
 
 ```bhdl
-module DDR3Interface {
+entity DDR3Interface {
     // Matched length byte lanes
     with routing(impedance = 50Ω, matched_length) {
         generate for i in 0..7 {
@@ -212,7 +212,7 @@ module DDR3Interface {
 ### Example 3: Power Management
 
 ```bhdl
-module PowerPath {
+entity PowerPath {
     // Main power distribution
     @VIN -> FUSE.1 where current_rating = 10A;
     FUSE.2 -> MOSFET.drain;

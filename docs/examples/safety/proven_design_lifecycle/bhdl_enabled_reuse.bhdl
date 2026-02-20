@@ -12,7 +12,7 @@ import proven_designs.*;  // Library of proven BHDL modules
 // ───────────────────────────────────────────────────────────────────
 
 // This lives in proven_designs/power_supplies.bhdl
-module SoC_Core_Power_Proven(
+entity SoC_Core_Power_Proven(
     target_voltage: voltage = 0.85V,
     max_current: current = 15A
 ) {
@@ -193,7 +193,7 @@ board Custom_Voltage_ECU {
 // ───────────────────────────────────────────────────────────────────
 
 // When TPS54360 goes obsolete, update the module
-module SoC_Core_Power_Proven_v2(
+entity SoC_Core_Power_Proven_v2(
     target_voltage: voltage = 0.85V,
     max_current: current = 15A
 ) {
@@ -313,7 +313,7 @@ synthesis_benefits {
 // ───────────────────────────────────────────────────────────────────
 
 // Build bigger proven designs from smaller ones
-module Complete_SoC_Power_Proven() {
+entity Complete_SoC_Power_Proven() {
     // Compose from proven building blocks
     
     // Pre-regulation

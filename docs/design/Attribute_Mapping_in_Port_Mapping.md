@@ -1,15 +1,15 @@
-# Attribute Mapping During Module Instantiation
+# Attribute Mapping During Entity Instantiation
 
 ## Overview
 
-When instantiating a module, we need to map both pins (port mapping) and attributes (configuration). This allows parameterizing each instance differently.
+When instantiating an entity, we need to map both pins (port mapping) and attributes (configuration). This allows parameterizing each instance differently.
 
 ## Syntax Design
 
 ### Basic Attribute Mapping
 
 ```bhdl
-module VoltageRegulator {
+entity VoltageRegulator {
     pin VIN: power in;
     pin VOUT: power out;
     
@@ -65,8 +65,8 @@ board AdaptiveSystem {
 ### Nested Attribute Mapping
 
 ```bhdl
-module ComplexRegulator {
-    // Nested modules with their own attributes
+entity ComplexRegulator {
+    // Nested entities with their own attributes
     controller: ControlIC {
         attribute fsw = 500kHz;
         attribute compensation = "type3";
@@ -94,7 +94,7 @@ board System {
 ### Array Attribute Mapping
 
 ```bhdl
-module MultiChannelDriver(channels: int = 4) {
+entity MultiChannelDriver(channels: int = 4) {
     generate for i in 0..channels {
         driver[i]: ChannelDriver {
             attribute max_current = 350mA;
@@ -126,7 +126,7 @@ board LEDSystem {
 ### 1. Attribute Inheritance
 
 ```bhdl
-module Parent {
+entity Parent {
     attribute base_frequency = 1MHz;
     
     child: Child {
@@ -154,7 +154,7 @@ board FlexibleSystem {
 ### 3. Type-Checked Attribute Mapping
 
 ```bhdl
-module TypedModule {
+entity TypedModule {
     attribute<voltage> vref = 1.2V;
     attribute<frequency> fsw = 500kHz;
     attribute<int> divider_ratio = 2;
@@ -170,11 +170,11 @@ board Usage {
 }
 ```
 
-### 4. Module Parameter vs Attribute Mapping
+### 4. Entity Parameter vs Attribute Mapping
 
 ```bhdl
-// Module with both parameters and attributes
-module FlexRegulator(
+// Entity with both parameters and attributes
+entity FlexRegulator(
     topology: string = "buck"  // Parameter: fixed at instantiation
 ) {
     attribute vout = 3.3V;     // Attribute: can be overridden
@@ -235,7 +235,7 @@ fn parse_attribute_mapping(p: &mut Parser) {
 #[derive(Debug, Clone)]
 pub struct InstanceDecl {
     pub name: String,
-    pub module_type: String,
+    pub entity_type: String,
     pub params: Option<ParamList>,
     pub port_mappings: Vec<PortMapping>,
     pub attribute_mappings: Vec<AttributeMapping>,  // NEW
@@ -255,12 +255,12 @@ impl Analyzer {
     fn resolve_instance_attributes(
         &mut self,
         instance: &InstanceDecl,
-        module_def: &Module,
+        entity_def: &Entity,
     ) -> AttributeContext {
         let mut context = AttributeContext::new();
         
-        // 1. Start with module defaults
-        for attr in module_def.attributes() {
+        // 1. Start with entity defaults
+        for attr in entity_def.attributes() {
             context.set(&attr.path, attr.default_value);
         }
         
@@ -272,10 +272,10 @@ impl Analyzer {
         
         // 3. Validate overrides exist
         for mapping in &instance.attribute_mappings {
-            if !module_def.has_attribute_path(&mapping.path) {
+            if !entity_def.has_attribute_path(&mapping.path) {
                 self.error(format!(
-                    "Module '{}' has no attribute '{}'",
-                    module_def.name,
+                    "Entity '{}' has no attribute '{}'",
+                    entity_def.name,
                     mapping.path
                 ));
             }
@@ -289,7 +289,7 @@ impl Analyzer {
 ## Complete Example
 
 ```bhdl
-module UniversalBuckConverter {
+entity UniversalBuckConverter {
     pin VIN: power in;
     pin VOUT: power out;
     pin EN: digital in;
@@ -380,6 +380,6 @@ board PowerDistribution {
 3. **Deep Configuration**: Can reach into nested modules
 4. **Type Safety**: Attribute types are checked
 5. **Clear Separation**: Parameters (structural) vs attributes (configuration)
-6. **Inheritance**: Child modules can reference parent attributes
+6. **Inheritance**: Child entities can reference parent attributes
 
-This makes modules truly reusable - same module definition, different configurations per instance!
+This makes entities truly reusable - same entity definition, different configurations per instance!

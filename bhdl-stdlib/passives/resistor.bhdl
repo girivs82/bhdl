@@ -13,7 +13,7 @@ type ResistorParams = {
     impedance: ImpedanceCharacteristics,
 };
 
-module Res(
+entity Res(
     value: resistance, 
     tolerance: percentage = 5%, 
     package: string = "0805"

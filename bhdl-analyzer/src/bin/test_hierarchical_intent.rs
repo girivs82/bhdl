@@ -1,4 +1,4 @@
-// Test hierarchical intent propagation through module instances
+// Test hierarchical intent propagation through entity instances
 use bhdl_parser::parse;
 use bhdl_ast::{SourceFile, AstNode};
 use bhdl_analyzer::analyze;
@@ -7,8 +7,8 @@ fn main() {
     println!("Testing Hierarchical Intent Propagation\n");
     
     let test_bhdl = r#"
-// Module that will inherit intent from parent
-module Filter(cutoff: frequency) {
+// Entity that will inherit intent from parent
+entity Filter(cutoff: frequency) {
     pin IN: signal in;
     pin OUT: signal out;
     pin GND: signal inout;
@@ -18,8 +18,8 @@ module Filter(cutoff: frequency) {
     Cap(100nF).2 -> GND;
 }
 
-// Module with explicit intent
-module SignalProcessor() {
+// Entity with explicit intent
+entity SignalProcessor() {
     pin IN: signal in;
     pin OUT: signal out;
     pin GND: signal inout;
@@ -39,13 +39,13 @@ board AudioSystem {
     net audio_in: InputJack.signal -> Preamp.IN for digital();
     
     // This should inherit the digital intent from parent board
-    module sp: SignalProcessor();
+    entity sp: SignalProcessor();
     Preamp.OUT -> sp.IN;
     sp.OUT -> OutputJack.signal;
     
-    // Module instance with mixed-signal intent
+    // Entity instance with mixed-signal intent
     net mixed_path: Sensor.out -> ADC.in for mixed_signal(sample_rate: 48kHz);
-    module sp2: SignalProcessor();
+    entity sp2: SignalProcessor();
     ADC.out -> sp2.IN;
 }
 "#;
@@ -86,12 +86,12 @@ board AudioSystem {
         
         // Check if SignalProcessor instance inherits parent intent
         if let Some(mode) = flow_tracker.get_component_sim_mode("SignalProcessor") {
-            println!("SignalProcessor module instance sim mode: {:?}", mode);
+            println!("SignalProcessor entity instance sim mode: {:?}", mode);
         }
-        
+
         // Check if Filter inside SignalProcessor has its own intent
         if let Some(mode) = flow_tracker.get_component_sim_mode("Filter") {
-            println!("Filter module instance sim mode: {:?}", mode);
+            println!("Filter entity instance sim mode: {:?}", mode);
         }
         
         println!("\nRequired simulation mode: {:?}", flow_tracker.get_required_sim_mode());

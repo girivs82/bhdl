@@ -2,7 +2,7 @@
 // BHDL Standard Library - Passives
 
 // Resistor Module
-module Resistor(
+entity Resistor(
     value: resistance,
     power_rating: power = 250m,     // Default 250mW (1/4W) in EDA convention
     tolerance: real = 5.0,          // Default 5% tolerance
@@ -38,10 +38,10 @@ module Resistor(
 }
 
 // Alias for convenience
-module Res = Resistor;
+entity Res = Resistor;
 
 // Capacitor Module (Non-polarized)
-module Capacitor(
+entity Capacitor(
     value: capacitance, 
     voltage_rating: voltage = 50V,
     tolerance: real = 20.0
@@ -77,10 +77,10 @@ module Capacitor(
 }
 
 // Alias for convenience
-module Cap = Capacitor;
+entity Cap = Capacitor;
 
 // Polarized Capacitor (Electrolytic)
-module ElectrolyticCapacitor(value: capacitance, voltage: voltage) {
+entity ElectrolyticCapacitor(value: capacitance, voltage: voltage) {
     pin +: signal in;  // Positive terminal
     pin -: signal out; // Negative terminal
     
@@ -90,7 +90,7 @@ module ElectrolyticCapacitor(value: capacitance, voltage: voltage) {
 }
 
 // Inductor Module
-module Inductor(value: inductance) {
+entity Inductor(value: inductance) {
     pin 1: signal inout;
     pin 2: signal inout;
     
@@ -100,10 +100,10 @@ module Inductor(value: inductance) {
 }
 
 // Alias for convenience
-module L = Inductor;
+entity L = Inductor;
 
 // LED Module
-module LED(
+entity LED(
     color: string = "red",
     forward_current: current = 20m,  // Default 20mA in EDA convention
     power_rating: power = 100m       // Default 100mW
@@ -131,7 +131,7 @@ module LED(
 }
 
 // Diode Module
-module Diode(type: string = "1N4148") {
+entity Diode(type: string = "1N4148") {
     pin A: signal in;  // Anode
     pin K: signal out; // Cathode
     
@@ -142,7 +142,7 @@ module Diode(type: string = "1N4148") {
 }
 
 // Zener Diode Module
-module ZenerDiode(voltage: voltage) {
+entity ZenerDiode(voltage: voltage) {
     pin A: signal in;  // Anode
     pin K: signal out; // Cathode
     
@@ -153,7 +153,7 @@ module ZenerDiode(voltage: voltage) {
 }
 
 // Crystal Module
-module Crystal(frequency: frequency) {
+entity Crystal(frequency: frequency) {
     pin 1: signal inout;
     pin 2: signal inout;
     
@@ -164,7 +164,7 @@ module Crystal(frequency: frequency) {
 }
 
 // Button/Switch Module
-module Button() {
+entity Button() {
     pin 1: signal inout;
     pin 2: signal inout;
     
@@ -174,7 +174,7 @@ module Button() {
 }
 
 // Test Point Module
-module TestPoint() {
+entity TestPoint() {
     pin 1: signal inout;
     
     attribute component_class = "test_point";

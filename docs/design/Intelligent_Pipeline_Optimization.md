@@ -2,7 +2,7 @@
 
 ## Overview
 
-The pipeline should be smart about identical module instances to avoid redundant work and provide meaningful naming. This affects synthesis, analysis, and simulation.
+The pipeline should be smart about identical entity instances to avoid redundant work and provide meaningful naming. This affects synthesis, analysis, and simulation.
 
 ## 1. Reference Designator Intelligence
 
@@ -307,7 +307,7 @@ impl BehavioralSimulator {
 
 ### Array Instance Handling
 ```bhdl
-module MultiPhase(phases: int = 4) {
+entity MultiPhase(phases: int = 4) {
     generate for i in 0..phases {
         phase[i]: PhaseController { ... }
     }
@@ -385,11 +385,11 @@ pub struct IncrementalAnalyzer {
 
 ## Benefits
 
-1. **Performance**: Analyze each unique module once
+1. **Performance**: Analyze each unique entity once
 2. **Clarity**: R1_1, R1_2 clearly shows related components  
 3. **Debugging**: Easy to trace issues to specific instances
 4. **Memory**: Share analysis results and layouts
-5. **Correctness**: Consistent analysis for identical modules
+5. **Correctness**: Consistent analysis for identical entities
 
 ## Implementation Priority
 

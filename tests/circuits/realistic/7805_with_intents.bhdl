@@ -15,7 +15,7 @@ board LM7805_Regulator {
         for noise_filtering(cutoff: 100kHz, attenuation: 40dB);
 
     // Voltage regulation
-    module LM7805 {
+    entity LM7805 {
         pin VIN: power in;
         pin VOUT: power out;
         pin GND: ground inout;

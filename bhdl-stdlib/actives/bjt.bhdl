@@ -60,7 +60,7 @@ type BJTParams = {
     impedance: ImpedanceCharacteristics,
 };
 
-module BJT(part: string = "2N2222", package: string = "TO-92") {
+entity BJT(part: string = "2N2222", package: string = "TO-92") {
     pin C: signal inout;  // Collector
     pin B: signal inout;  // Base  
     pin E: signal inout;  // Emitter

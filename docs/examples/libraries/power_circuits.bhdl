@@ -12,7 +12,7 @@
 // ---------------------------------------------------------
 
 // Basic linear regulator module with decoupling
-module LinearRegulatorCircuit {
+entity LinearRegulatorCircuit {
   ports {
     IN_PWR: in power;
     OUT_PWR: out power;
@@ -41,7 +41,7 @@ module LinearRegulatorCircuit {
 }
 
 // Adjustable linear regulator module with feedback resistors
-module AdjustableLinearRegulatorCircuit {
+entity AdjustableLinearRegulatorCircuit {
   ports {
     IN_PWR: in power;
     OUT_PWR: out power;
@@ -93,7 +93,7 @@ module AdjustableLinearRegulatorCircuit {
 // ---------------------------------------------------------
 
 // Buck converter (step-down) module
-module BuckConverterCircuit {
+entity BuckConverterCircuit {
   ports {
     IN_PWR: in power;
     OUT_PWR: out power;
@@ -130,7 +130,7 @@ module BuckConverterCircuit {
 }
 
 // Boost converter (step-up) module
-module BoostConverterCircuit {
+entity BoostConverterCircuit {
   ports {
     IN_PWR: in power;
     OUT_PWR: out power;
@@ -174,7 +174,7 @@ module BoostConverterCircuit {
 // ---------------------------------------------------------
 
 // Reverse polarity protection with diode module
-module ReversePolarityProtectionDiode {
+entity ReversePolarityProtectionDiode {
   ports {
     INPUT: in power;
     OUTPUT: out power;
@@ -200,7 +200,7 @@ module ReversePolarityProtectionDiode {
 }
 
 // Reverse polarity protection with P-MOSFET module
-module ReversePolarityProtectionMosfet {
+entity ReversePolarityProtectionMosfet {
   ports {
     INPUT: in power;
     OUTPUT: out power;
@@ -232,7 +232,7 @@ module ReversePolarityProtectionMosfet {
 }
 
 // TVS protection for signal lines module
-module TVSProtectionSignal {
+entity TVSProtectionSignal {
   ports {
     SIGNAL_IN: inout signal; // Use inout as direction might vary
     SIGNAL_OUT: inout signal;

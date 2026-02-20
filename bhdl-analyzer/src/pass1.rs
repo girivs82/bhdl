@@ -6,9 +6,11 @@ use rowan::ast::AstNode;
 use bhdl_parser::{SyntaxKind, BhdlLanguage};
 use bhdl_ast::{
     SourceFile, HasName,
-    items::{Board, Module, ComponentDef, InterfaceDef, TypedefDef, ImportStmt},
+    items::{Board, Entity, ComponentDef, InterfaceDef, TypedefDef, ImportStmt},
+    enums::EnumDef,
+    traits::{TraitDef, TraitImpl},
     common::{ParamDecl, PortDecl, NetDecl, ComponentInst, NetRef, PinDecl}, // Added PinDecl for v2.0
-    hierarchical::ModuleInst,
+    hierarchical::EntityInst,
     v2_statements::ConnectionStmt,
     expr::{Expr, BinaryExpr},
     interfaces::{InterfaceSignal, InterfaceInst, SignalDirection},
@@ -18,16 +20,17 @@ use bhdl_ast::{
 use crate::symbol_table::{Symbol, SymbolKind, SymbolTable, PortDirectionKind}; // Use crate:: for local module
 use crate::helpers::parse_expr_as_i64; // Use helper from local module
 use crate::net_attributes::NetAttribute;
+use crate::scope_registry::{ScopeRegistry, ScopeId, ScopeKind};
 
-// --- Pass 1: Build Global Scope & Definition Scopes Map --- 
+// --- Pass 1: Build Global Scope & Definition Scopes Map ---
 
-// Pass 1 Context: Manages the stack *during* building and collects definition scopes
+// Pass 1 Context: Uses ScopeRegistry arena — scopes live in the registry
+// from the moment they are allocated, eliminating the old pattern of
+// moving completed scopes out of a stack into a HashMap.
 struct Pass1Context {
-    current_scope_stack: Vec<SymbolTable>,
-    definition_nodes: HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>,
-    current_definition_node: Option<SyntaxNodePtr<BhdlLanguage>>,
-    // Stack to track definition nodes for nested scopes
-    definition_node_stack: Vec<Option<SyntaxNodePtr<BhdlLanguage>>>,
+    registry: ScopeRegistry,
+    /// Stack of active scope IDs (current scope is last).
+    scope_stack: Vec<ScopeId>,
     // Track imported modules to avoid duplicate processing
     imported_modules: HashMap<String, ()>,
     // Base path for resolving relative imports
@@ -35,43 +38,44 @@ struct Pass1Context {
 }
 
 impl Pass1Context {
-    fn new() -> Self { 
+    fn new() -> Self {
+        let registry = ScopeRegistry::new();
+        let global_id = registry.global_id();
         Self {
-            current_scope_stack: vec![SymbolTable::default()], 
-            definition_nodes: HashMap::new(),
-            current_definition_node: None,
-            definition_node_stack: Vec::new(),
+            registry,
+            scope_stack: vec![global_id],
             imported_modules: HashMap::new(),
             base_path: PathBuf::from("."),
         }
     }
-    
+
     fn global_scope_mut(&mut self) -> &mut SymbolTable {
-        self.current_scope_stack.first_mut().expect("Global scope missing")
+        self.registry.global_scope_mut()
     }
 
-    fn current_scope_mut(&mut self) -> &mut SymbolTable { 
-        self.current_scope_stack.last_mut().expect("Scope stack empty during Pass 1") 
+    fn current_scope_id(&self) -> ScopeId {
+        *self.scope_stack.last().expect("Scope stack empty during Pass 1")
     }
-    
-    fn push_scope(&mut self, def_node_ptr: SyntaxNodePtr<BhdlLanguage>) { 
-        let new_scope = SymbolTable::default();
-        self.current_scope_stack.push(new_scope);
-        // Save the current definition node to the stack before updating
-        self.definition_node_stack.push(self.current_definition_node.clone());
-        self.current_definition_node = Some(def_node_ptr); 
+
+    fn current_scope_mut(&mut self) -> &mut SymbolTable {
+        let id = self.current_scope_id();
+        self.registry.table_mut(id)
     }
-    
-    fn pop_scope(&mut self) { 
-        if self.current_scope_stack.len() > 1 {
-            let completed_scope = self.current_scope_stack.pop().unwrap();
-            if let Some(def_node_ptr) = self.current_definition_node.take() { 
-                self.definition_nodes.insert(def_node_ptr, completed_scope);
-            } else {
-                 println!("Error: Popped scope without a current definition node.");
-            }
-            // Restore the previous definition node from the stack
-            self.current_definition_node = self.definition_node_stack.pop().flatten();
+
+    /// Allocate a new child scope under the current scope, register it
+    /// for the given definition AST node, and push it onto the stack.
+    fn push_scope(&mut self, def_node_ptr: SyntaxNodePtr<BhdlLanguage>, kind: ScopeKind) {
+        let parent = self.current_scope_id();
+        let child_id = self.registry.alloc_child(parent, kind);
+        self.registry.register_node(def_node_ptr, child_id);
+        self.scope_stack.push(child_id);
+    }
+
+    /// Pop the current scope off the stack. The scope remains in the
+    /// registry (arena-allocated) — nothing is moved or dropped.
+    fn pop_scope(&mut self) {
+        if self.scope_stack.len() > 1 {
+            self.scope_stack.pop();
         }
     }
 }
@@ -83,104 +87,47 @@ pub fn populate_global_scope_and_build_definition_scopes(source_file: &SourceFil
 
 // Populates global scope AND builds the map of definition_node -> its scope with specified base path
 pub fn populate_global_scope_and_build_definition_scopes_with_base(
-    source_file: &SourceFile, 
+    source_file: &SourceFile,
     base_path: &Path
 ) -> (SymbolTable, HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>) {
-    println!("Building global scope and definition scopes map (Pass 1)...");
+    let registry = build_scope_registry_with_base(source_file, base_path);
+    // Extract legacy data structures for backward compatibility
+    let global_scope = registry.extract_global_scope();
+    let definition_scopes = registry.extract_definition_scopes();
+    (global_scope, definition_scopes)
+}
+
+/// Build a `ScopeRegistry` from a source file. This is the primary
+/// entry point for Pass 1 — the tuple-returning functions above are
+/// backward-compatible wrappers.
+pub fn build_scope_registry(source_file: &SourceFile) -> ScopeRegistry {
+    build_scope_registry_with_base(source_file, Path::new("."))
+}
+
+/// Build a `ScopeRegistry` with a base path for import resolution.
+pub fn build_scope_registry_with_base(source_file: &SourceFile, base_path: &Path) -> ScopeRegistry {
+    println!("Building scope registry (Pass 1)...");
     let mut context = Pass1Context::new();
     context.base_path = base_path.to_path_buf();
 
-    let dummy_range = TextRange::new(0.into(), 0.into()); 
-    context.global_scope_mut().insert(Symbol {
-        name: "signal".to_string(),
-        kind: SymbolKind::Typedef, 
-        span: dummy_range,
-        instance_type_name: None,
-        definition_node_ptr: None, 
-        bus_high: None, 
-        bus_low: None,
-        direction: None, 
-        parameter_overrides: None,
-        net_attributes: None,
-    });
-    context.global_scope_mut().insert(Symbol {
-        name: "power".to_string(),
-        kind: SymbolKind::Typedef,
-        span: dummy_range,
-        instance_type_name: None,
-        definition_node_ptr: None,
-        bus_high: None, 
-        bus_low: None,
-        direction: None, 
-        parameter_overrides: None,
-        net_attributes: None,
-    });
-    
-    // Add common electrical types
-    context.global_scope_mut().insert(Symbol {
-        name: "frequency".to_string(),
-        kind: SymbolKind::Typedef,
-        span: dummy_range,
-        instance_type_name: None,
-        definition_node_ptr: None,
-        bus_high: None, 
-        bus_low: None,
-        direction: None, 
-        parameter_overrides: None,
-        net_attributes: None,
-    });
-    
-    context.global_scope_mut().insert(Symbol {
-        name: "voltage".to_string(),
-        kind: SymbolKind::Typedef,
-        span: dummy_range,
-        instance_type_name: None,
-        definition_node_ptr: None,
-        bus_high: None, 
-        bus_low: None,
-        direction: None, 
-        parameter_overrides: None,
-        net_attributes: None,
-    });
-    
-    context.global_scope_mut().insert(Symbol {
-        name: "resistance".to_string(),
-        kind: SymbolKind::Typedef,
-        span: dummy_range,
-        instance_type_name: None,
-        definition_node_ptr: None,
-        bus_high: None, 
-        bus_low: None,
-        direction: None, 
-        parameter_overrides: None,
-        net_attributes: None,
-    });
-    
-    context.global_scope_mut().insert(Symbol {
-        name: "percentage".to_string(),
-        kind: SymbolKind::Typedef,
-        span: dummy_range,
-        instance_type_name: None,
-        definition_node_ptr: None,
-        bus_high: None, 
-        bus_low: None,
-        direction: None, 
-        parameter_overrides: None,
-        net_attributes: None,
-    });
-    
-    context.global_scope_mut().insert(Symbol {
-        name: "int".to_string(),
-        kind: SymbolKind::Typedef,
-        span: dummy_range,
-        instance_type_name: None,
-        definition_node_ptr: None,
-        bus_high: None, 
-        bus_low: None,
-        direction: None, 
-        parameter_overrides: None,
-        net_attributes: None,
-    });
+    // Seed built-in types into the global scope
+    let dummy_range = TextRange::new(0.into(), 0.into());
+    for type_name in &["signal", "power", "frequency", "voltage", "resistance", "percentage", "int"] {
+        context.global_scope_mut().insert(Symbol {
+            name: type_name.to_string(),
+            kind: SymbolKind::Typedef,
+            span: dummy_range,
+            instance_type_name: None,
+            definition_node_ptr: None,
+            bus_high: None,
+            bus_low: None,
+            direction: None,
+            parameter_overrides: None,
+            net_attributes: None,
+            resolved_type: Some(bhdl_common::BhdlType::from_type_name(type_name, None)),
+            generic_params: None,
+        });
+    }
 
     // First pass: process imports
     for item in source_file.items() {
@@ -188,12 +135,14 @@ pub fn populate_global_scope_and_build_definition_scopes_with_base(
             process_import(&import, &mut context);
         }
     }
-    
+
     // Second pass: process the rest of the file
     visit_node_pass1_recursive(&source_file.syntax(), &mut context);
 
-    println!("Completed Pass 1. Total symbols added: {}", context.global_scope_mut().get_symbols().len());
-    (context.current_scope_stack.remove(0), context.definition_nodes)
+    println!("Completed Pass 1. Total symbols: {}, Scopes: {}",
+             context.global_scope_mut().get_symbols().len(),
+             context.registry.len());
+    context.registry
 }
 
 // Pass 1 recursive helper (takes Pass1Context)
@@ -209,28 +158,28 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                 if let Some(name_token) = def_node.name() {
                     let node_ptr = SyntaxNodePtr::new(node);
                     context.current_scope_mut().insert(Symbol::new_definition(
-                        name_token.text(), 
+                        name_token.text(),
                         SymbolKind::Board,
-                        name_token.text_range(), 
+                        name_token.text_range(),
                         &node_ptr
                     ));
-                    context.push_scope(node_ptr); 
+                    context.push_scope(node_ptr, ScopeKind::Board);
                     context.current_scope_mut().set_scope_name(name_token.text().to_string());
                     scope_pushed_for_this_node = true;
                 }
             }
         }
-        SyntaxKind::MODULE_DEF => {
-             if let Some(def_node) = Module::cast(node.clone()) {
+        SyntaxKind::ENTITY_DEF => {
+             if let Some(def_node) = Entity::cast(node.clone()) {
                 if let Some(name_token) = def_node.name() {
                     let node_ptr = SyntaxNodePtr::new(node);
                     context.current_scope_mut().insert(Symbol::new_definition(
-                        name_token.text(), 
-                        SymbolKind::Module,
-                        name_token.text_range(), 
+                        name_token.text(),
+                        SymbolKind::Entity,
+                        name_token.text_range(),
                         &node_ptr
                     ));
-                    context.push_scope(node_ptr);
+                    context.push_scope(node_ptr, ScopeKind::Entity);
                     context.current_scope_mut().set_scope_name(name_token.text().to_string());
                     scope_pushed_for_this_node = true;
                 }
@@ -241,12 +190,12 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                 if let Some(name_token) = def_node.name() {
                     let node_ptr = SyntaxNodePtr::new(node);
                     context.current_scope_mut().insert(Symbol::new_definition(
-                        name_token.text(), 
+                        name_token.text(),
                         SymbolKind::Component,
-                        name_token.text_range(), 
+                        name_token.text_range(),
                         &node_ptr
                     ));
-                    context.push_scope(node_ptr);
+                    context.push_scope(node_ptr, ScopeKind::Component);
                     context.current_scope_mut().set_scope_name(name_token.text().to_string());
                     scope_pushed_for_this_node = true;
                 }
@@ -257,12 +206,12 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                 if let Some(name_token) = def_node.name() {
                     let node_ptr = SyntaxNodePtr::new(node);
                     context.current_scope_mut().insert(Symbol::new_definition(
-                        name_token.text(), 
+                        name_token.text(),
                         SymbolKind::Interface,
-                        name_token.text_range(), 
+                        name_token.text_range(),
                         &node_ptr
                     ));
-                    context.push_scope(node_ptr);
+                    context.push_scope(node_ptr, ScopeKind::Interface);
                     context.current_scope_mut().set_scope_name(name_token.text().to_string());
                     scope_pushed_for_this_node = true;
                 }
@@ -273,13 +222,68 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                 if let Some(name_token) = def_node.name() {
                     let node_ptr = SyntaxNodePtr::new(node);
                     context.current_scope_mut().insert(Symbol::new_definition(
-                        name_token.text(), 
+                        name_token.text(),
                         SymbolKind::Typedef,
-                        name_token.text_range(), 
+                        name_token.text_range(),
                         &node_ptr
                     ));
                 }
             }
+        }
+        SyntaxKind::ENUM_DEF => {
+            if let Some(def_node) = EnumDef::cast(node.clone()) {
+                if let Some(name_token) = def_node.name() {
+                    let enum_name = name_token.text().to_string();
+                    let node_ptr = SyntaxNodePtr::new(node);
+
+                    // Register the enum type in the current scope
+                    let mut enum_sym = Symbol::new_definition(
+                        &enum_name,
+                        SymbolKind::Enum,
+                        name_token.text_range(),
+                        &node_ptr,
+                    );
+                    enum_sym.resolved_type = Some(bhdl_common::BhdlType::Enum(enum_name.clone()));
+                    context.current_scope_mut().insert(enum_sym);
+
+                    // Register each variant as a symbol in the current scope
+                    // Variants are accessible as EnumName::VariantName
+                    for variant in def_node.variants() {
+                        if let Some(variant_name_token) = variant.name() {
+                            let variant_ptr = SyntaxNodePtr::new(variant.syntax());
+                            let qualified_name = format!("{}::{}", enum_name, variant_name_token.text());
+                            context.current_scope_mut().insert(Symbol::new_definition(
+                                &qualified_name,
+                                SymbolKind::EnumVariant,
+                                variant_name_token.text_range(),
+                                &variant_ptr,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        SyntaxKind::TRAIT_DEF => {
+            if let Some(def_node) = TraitDef::cast(node.clone()) {
+                if let Some(name_token) = def_node.name() {
+                    let trait_name = name_token.text().to_string();
+                    let node_ptr = SyntaxNodePtr::new(node);
+
+                    // Register the trait as a type in the current scope
+                    let mut trait_sym = Symbol::new_definition(
+                        &trait_name,
+                        SymbolKind::Trait,
+                        name_token.text_range(),
+                        &node_ptr,
+                    );
+                    trait_sym.resolved_type = Some(bhdl_common::BhdlType::Trait(trait_name.clone()));
+                    context.current_scope_mut().insert(trait_sym);
+                }
+            }
+        }
+        SyntaxKind::TRAIT_IMPL => {
+            // Trait implementations are validated in Pass 2
+            // Here we just note them so the scope registry knows about them
         }
         SyntaxKind::PARAM_DECL | SyntaxKind::PARAM_ASSIGN => {
             if let Some(decl) = ParamDecl::cast(node.clone()) {
@@ -464,9 +468,9 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                 } 
             }
         }
-        SyntaxKind::MODULE_INST => {
-            if let Some(inst) = ModuleInst::cast(node.clone()) {
-                if let (Some(instance_name_token), Some(type_name_token)) = (inst.name(), inst.module_type()) {
+        SyntaxKind::ENTITY_INST => {
+            if let Some(inst) = EntityInst::cast(node.clone()) {
+                if let (Some(instance_name_token), Some(type_name_token)) = (inst.name(), inst.entity_type()) {
                     let instance_name = instance_name_token.text().to_string();
                     let type_name = type_name_token.text().to_string();
                     let mut instance_symbol = Symbol::new_instance(
@@ -480,7 +484,7 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                     // Handle parameter overrides
                     let mut overrides_map = HashMap::new();
                     if let Some(param_list) = inst.param_list() {
-                        // Process module parameters (both positional and named)
+                        // Process entity parameters (both positional and named)
                         for param_assign in param_list.params() {
                             if let Some(param_name_token) = param_assign.name() {
                                 let value_expr_node = param_assign.syntax().children_with_tokens()
@@ -504,8 +508,8 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                     
                     context.current_scope_mut().insert(instance_symbol);
                     
-                    // Push a new scope for the module instance body (port mappings)
-                    context.push_scope(SyntaxNodePtr::new(node));
+                    // Push a new scope for the entity instance body (port mappings)
+                    context.push_scope(SyntaxNodePtr::new(node), ScopeKind::EntityInstance);
                     context.current_scope_mut().set_scope_name(format!("{}::{}", instance_name, type_name));
                     scope_pushed_for_this_node = true;
                 } 
@@ -719,13 +723,13 @@ fn process_import(import: &ImportStmt, context: &mut Pass1Context) {
     // Load and parse the imported file
     match load_and_parse_module(&resolved_path) {
         Ok(imported_source) => {
-            // First, build a map of all modules in the file
-            let mut available_modules = std::collections::HashMap::new();
+            // First, build a map of all entities in the file
+            let mut available_entities = std::collections::HashMap::new();
             for item in imported_source.items() {
-                if let Some(module) = Module::cast(item.syntax().clone()) {
-                    if let Some(name_token) = module.name() {
-                        let module_name = name_token.text().to_string();
-                        available_modules.insert(module_name, module);
+                if let Some(entity) = Entity::cast(item.syntax().clone()) {
+                    if let Some(name_token) = entity.name() {
+                        let entity_name = name_token.text().to_string();
+                        available_entities.insert(entity_name, entity);
                     }
                 }
             }
@@ -765,25 +769,25 @@ fn process_import(import: &ImportStmt, context: &mut Pass1Context) {
             
             // Now process the imports
             if is_destructuring {
-                // Only import the requested modules and their aliases
+                // Only import the requested entities and their aliases
                 for requested_name in &imported_names {
                     // Check if it's an alias
                     if let Some(target_name) = aliases.get(requested_name) {
-                        // Import the target module under the alias name
-                        if let Some(module) = available_modules.get(target_name) {
-                            process_imported_module(module, requested_name, context);
+                        // Import the target entity under the alias name
+                        if let Some(entity) = available_entities.get(target_name) {
+                            process_imported_entity(entity, requested_name, context);
                         }
                     } else {
-                        // Direct module import
-                        if let Some(module) = available_modules.get(requested_name) {
-                            process_imported_module(module, requested_name, context);
+                        // Direct entity import
+                        if let Some(entity) = available_entities.get(requested_name) {
+                            process_imported_entity(entity, requested_name, context);
                         }
                     }
                 }
             } else {
-                // Import all modules (old behavior)
-                for (module_name, module) in available_modules {
-                    process_imported_module(&module, &module_name, context);
+                // Import all entities (old behavior)
+                for (entity_name, entity) in available_entities {
+                    process_imported_entity(&entity, &entity_name, context);
                 }
             }
             
@@ -804,11 +808,12 @@ fn process_import(import: &ImportStmt, context: &mut Pass1Context) {
                             symbol.definition_node_ptr = Some(node_ptr.clone());
                             context.global_scope_mut().insert(symbol);
                             
-                            // Create and populate component scope
-                            let mut component_scope = SymbolTable::default();
-                            component_scope.set_scope_name(name_token.text().to_string());
-                            // Component processing would go here
-                            context.definition_nodes.insert(node_ptr, component_scope);
+                            // Create and populate component scope in the registry
+                            let comp_scope_id = context.registry.alloc_child(
+                                context.registry.global_id(), ScopeKind::Component);
+                            context.registry.register_node(node_ptr, comp_scope_id);
+                            context.registry.table_mut(comp_scope_id)
+                                .set_scope_name(name_token.text().to_string());
                         }
                     }
                 }
@@ -854,39 +859,38 @@ fn load_and_parse_module(path: &Path) -> Result<SourceFile, String> {
         .ok_or_else(|| format!("Failed to cast to SourceFile for {:?}", path))
 }
 
-// Process an imported module and add it to the symbol table
-fn process_imported_module(module: &Module, name: &str, context: &mut Pass1Context) {
-    let node_ptr = SyntaxNodePtr::new(module.syntax());
-    
+// Process an imported entity and add it to the symbol table
+fn process_imported_entity(entity: &Entity, name: &str, context: &mut Pass1Context) {
+    let node_ptr = SyntaxNodePtr::new(entity.syntax());
+
     // Create symbol with the specified name (could be an alias)
     let mut symbol = Symbol::new_definition(
-        name, 
-        SymbolKind::Module,
-        module.syntax().text_range(), 
+        name,
+        SymbolKind::Entity,
+        entity.syntax().text_range(),
         &node_ptr
     );
-    
-    // Store the imported module definition node
+
+    // Store the imported entity definition node
     symbol.definition_node_ptr = Some(node_ptr.clone());
-    
+
     // Add to global scope
     context.global_scope_mut().insert(symbol);
-    
-    // Create a scope for this module definition
-    let mut module_scope = SymbolTable::default();
-    module_scope.set_scope_name(name.to_string());
-    
-    // Process module body to populate the scope
-    process_module_body(module, &mut module_scope);
-    
-    // Store the module's scope
-    context.definition_nodes.insert(node_ptr, module_scope);
+
+    // Create a scope for this entity definition in the registry
+    let entity_scope_id = context.registry.alloc_child(
+        context.registry.global_id(), ScopeKind::Entity);
+    context.registry.register_node(node_ptr, entity_scope_id);
+    context.registry.table_mut(entity_scope_id).set_scope_name(name.to_string());
+
+    // Process entity body to populate the scope
+    process_entity_body(entity, context.registry.table_mut(entity_scope_id));
 }
 
-// Process module body to extract pins, parameters, etc.
-fn process_module_body(module: &Module, scope: &mut SymbolTable) {
+// Process entity body to extract pins, parameters, etc.
+fn process_entity_body(entity: &Entity, scope: &mut SymbolTable) {
     // Process pins
-    for pin in module.pins() {
+    for pin in entity.pins() {
         if let Some(name) = pin.name() {
             let pin_symbol = Symbol {
                 name: name.text().to_string(),
@@ -899,13 +903,15 @@ fn process_module_body(module: &Module, scope: &mut SymbolTable) {
                 direction: None, // Would need to parse pin direction
                 parameter_overrides: None,
                 net_attributes: None,
+                resolved_type: None,
+                generic_params: None,
             };
             scope.insert(pin_symbol);
         }
     }
     
     // Process parameters
-    if let Some(param_list) = module.param_list() {
+    if let Some(param_list) = entity.param_list() {
         for param in param_list.param_defs() {
         if let Some(name) = param.name() {
             let param_symbol = Symbol {
@@ -919,6 +925,8 @@ fn process_module_body(module: &Module, scope: &mut SymbolTable) {
                 direction: None,
                 parameter_overrides: None,
                 net_attributes: None,
+                resolved_type: None,
+                generic_params: None,
             };
             scope.insert(param_symbol);
         }

@@ -142,27 +142,27 @@ pub enum Event {
 
 ## Phase 3: Behavioral Module Support (Priority: High)
 
-### 3.1 Module State Machine
-**Goal**: Support stateful behavioral modules
+### 3.1 Entity State Machine
+**Goal**: Support stateful behavioral entities
 
 **Tasks**:
-- [ ] Create module instance management
+- [ ] Create entity instance management
 - [ ] Implement state variable storage
-- [ ] Add module initialization
-- [ ] Handle module-level when blocks
-- [ ] Support hierarchical modules
+- [ ] Add entity initialization
+- [ ] Handle entity-level when blocks
+- [ ] Support hierarchical entities
 
 **Dependencies**: Phase 2 complete
 
-### 3.2 Inter-module Communication
-**Goal**: Enable modules to communicate during simulation
+### 3.2 Inter-entity Communication
+**Goal**: Enable entities to communicate during simulation
 
 **Tasks**:
-- [ ] Design module port connections
-- [ ] Implement signal passing between modules
-- [ ] Add timing control for module updates
+- [ ] Design entity port connections
+- [ ] Implement signal passing between entities
+- [ ] Add timing control for entity updates
 - [ ] Handle feedback loops
-- [ ] Implement module synchronization
+- [ ] Implement entity synchronization
 
 **Dependencies**: 3.1
 
@@ -354,7 +354,7 @@ pub struct Testbench {
 
 ### Milestone 3: Mixed-Signal Simulation (End of Phase 3)
 - Can simulate ADC/DAC interfaces
-- Behavioral modules work
+- Behavioral entities work
 - Complex circuits simulate correctly
 
 ### Milestone 4: Production Ready (End of Phase 4)

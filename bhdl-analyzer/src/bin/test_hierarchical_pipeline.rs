@@ -1,17 +1,17 @@
 use std::fs;
 use bhdl_parser::parse;
-use bhdl_ast::{AstNode, SourceFile, HasName, ModuleInst};
+use bhdl_ast::{AstNode, SourceFile, HasName, EntityInst};
 use bhdl_analyzer::analyze;
 
 fn main() {
-    println!("=== Testing Hierarchical Module Pipeline ===\n");
+    println!("=== Testing Hierarchical Entity Pipeline ===\n");
     
     // Read the test file
     let test_file = "tests/circuits/hierarchical/simple_hierarchy.bhdl";
     let code = fs::read_to_string(test_file)
         .expect("Failed to read test file");
     
-    println!("1. Parsing hierarchical module design...");
+    println!("1. Parsing hierarchical entity design...");
     let parse_result = parse(&code);
     
     if !parse_result.errors().is_empty() {
@@ -26,43 +26,43 @@ fn main() {
     let syntax = parse_result.syntax();
     let source_file = SourceFile::cast(syntax).expect("Failed to cast to SourceFile");
     
-    // Count modules and instances
-    let mut module_count = 0;
+    // Count entities and instances
+    let mut entity_count = 0;
     let mut instance_count = 0;
-    
+
     for item in source_file.items() {
         match item {
-            bhdl_ast::source_file::Item::Module(module) => {
-                module_count += 1;
-                println!("\n  Module: {}", module.name().map(|t| t.text().to_string()).unwrap_or_default());
-                
-                // Count module instances within this module
-                for inst in module.module_instances() {
+            bhdl_ast::source_file::Item::Entity(entity) => {
+                entity_count += 1;
+                println!("\n  Entity: {}", entity.name().map(|t| t.text().to_string()).unwrap_or_default());
+
+                // Count entity instances within this entity
+                for inst in entity.entity_instances() {
                     instance_count += 1;
-                    println!("    - Instance: {} of type {}", 
+                    println!("    - Instance: {} of type {}",
                         inst.name().map(|t| t.text().to_string()).unwrap_or_default(),
-                        inst.module_type().map(|t| t.text().to_string()).unwrap_or_default()
+                        inst.entity_type().map(|t| t.text().to_string()).unwrap_or_default()
                     );
                 }
             }
             bhdl_ast::source_file::Item::Board(board) => {
                 println!("\n  Board: {}", board.name().map(|t| t.text().to_string()).unwrap_or_default());
-                
-                // Count module instances within the board
-                for inst in board.module_instances() {
+
+                // Count entity instances within the board
+                for inst in board.entity_instances() {
                     instance_count += 1;
-                    println!("    - Instance: {} of type {}", 
+                    println!("    - Instance: {} of type {}",
                         inst.name().map(|t| t.text().to_string()).unwrap_or_default(),
-                        inst.module_type().map(|t| t.text().to_string()).unwrap_or_default()
+                        inst.entity_type().map(|t| t.text().to_string()).unwrap_or_default()
                     );
                 }
             }
             _ => {}
         }
     }
-    
-    println!("\n  Total modules defined: {}", module_count);
-    println!("  Total module instances: {}", instance_count);
+
+    println!("\n  Total entities defined: {}", entity_count);
+    println!("  Total entity instances: {}", instance_count);
     
     println!("\n2. Running semantic analysis...");
     let analysis_result = analyze(&source_file);
@@ -83,7 +83,7 @@ fn main() {
         analysis_result.definition_scopes.clone()
     );
     
-    // Register module instances (this would normally be done during analysis)
+    // Register entity instances (this would normally be done during analysis)
     // For now, just test the infrastructure
     
     let test_paths = vec![

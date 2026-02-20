@@ -52,7 +52,7 @@ fn main() {
     println!("  • Total instances registered: {}", analysis_result.instance_registry.len());
     for instance_name in analysis_result.instance_registry.get_instance_names() {
         if let Some(info) = analysis_result.instance_registry.get_instance(instance_name) {
-            println!("    - {} : {}", instance_name, info.component_type);
+            println!("    - {} : {}", instance_name, info.type_name);
         }
     }
     println!();

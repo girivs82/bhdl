@@ -46,7 +46,7 @@ impl<'t> Parser<'t> {
         // Now determine the type based on what follows
         if pos < self.tokens.len() {
             match self.tokens[pos].0 {
-                // Module/Component/Interface instance: name: TypeName(params) or name: TypeName { ... }
+                // Entity/Component/Interface instance: name: TypeName(params) or name: TypeName { ... }
                 SyntaxKind::IDENT => {
                     // Look ahead for what follows the type name
                     let mut next_pos = pos + 1;
@@ -74,7 +74,7 @@ impl<'t> Parser<'t> {
                                 // Check what follows the parentheses
                                 if after_paren < self.tokens.len() {
                                     match self.tokens[after_paren].0 {
-                                        SyntaxKind::L_BRACE => return NamedDeclarationType::ModuleInstance,
+                                        SyntaxKind::L_BRACE => return NamedDeclarationType::EntityInstance, // Entity instance with port mappings
                                         SyntaxKind::SEMI => return NamedDeclarationType::ComponentInstance,
                                         _ => return NamedDeclarationType::InterfaceInstance,
                                     }
@@ -83,7 +83,7 @@ impl<'t> Parser<'t> {
                             }
                             SyntaxKind::L_BRACE => {
                                 // Module instance without params
-                                return NamedDeclarationType::ModuleInstance;
+                                return NamedDeclarationType::EntityInstance;
                             }
                             _ => {}
                         }
@@ -190,6 +190,6 @@ pub(crate) enum NamedDeclarationType {
     None,
     FlowStatement,
     InterfaceInstance,
-    ModuleInstance,
+    EntityInstance,
     ComponentInstance,
 }

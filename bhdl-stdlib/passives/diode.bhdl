@@ -26,7 +26,7 @@ type DiodeParams = {
     nbv: float?,          // Breakdown knee exponent
 };
 
-module Diode(
+entity Diode(
     part: string = "1N4148",
     package: string = "auto"
 ) {

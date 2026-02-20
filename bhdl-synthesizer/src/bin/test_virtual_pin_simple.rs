@@ -13,7 +13,7 @@ async fn main() -> Result<()> {
     
     // Create a simple test module with virtual pins
     let simple_module = r#"
-module SimpleRegulator(vout: voltage = 5V) {
+entity SimpleRegulator(vout: voltage = 5V) {
     pin VIN: power in;
     pin VOUT: power out virtual;
     pin GND: ground inout;

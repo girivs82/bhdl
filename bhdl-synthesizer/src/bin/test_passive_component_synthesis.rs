@@ -41,7 +41,7 @@ board PassiveTestBoard {
     GND <-> motor.GND;
 }
 
-module FilterModule() {
+entity FilterModule() {
     pin VIN: power in;
     pin GND: ground inout;
     
@@ -49,12 +49,12 @@ module FilterModule() {
     pin VOUT: virtual power out;  // Should get appropriate decoupling caps
 }
 
-module PowerModule() {
+entity PowerModule() {
     pin VIN: power in;
     pin GND: ground inout;
 }
 
-module MotorModule() {
+entity MotorModule() {
     pin VIN: power in;
     pin GND: ground inout;
 }

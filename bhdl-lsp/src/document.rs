@@ -38,4 +38,12 @@ impl DocumentStore {
     pub fn get(&self, uri: &Url) -> Option<&Document> {
         self.documents.get(uri)
     }
+
+    /// Get all documents (for workspace-wide operations)
+    pub fn all_documents(&self) -> Vec<(Url, String)> {
+        self.documents
+            .iter()
+            .map(|(uri, doc)| (uri.clone(), doc.text.clone()))
+            .collect()
+    }
 }

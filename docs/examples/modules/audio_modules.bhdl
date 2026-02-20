@@ -2,7 +2,7 @@
 // Reusable audio circuit modules
 
 // Tone Control Module
-module ToneControl(
+entity ToneControl(
     type: string = "baxandall",
     bass_center: frequency = 100Hz,
     treble_center: frequency = 10kHz,
@@ -21,7 +21,7 @@ module ToneControl(
 }
 
 // Audio Preamplifier Module
-module AudioPreamp(gain: string = "20dB") {
+entity AudioPreamp(gain: string = "20dB") {
     pin IN: signal in;
     pin OUT: signal out;
     pin VCC: power in;
@@ -35,7 +35,7 @@ module AudioPreamp(gain: string = "20dB") {
 }
 
 // Microphone Preamplifier Module
-module MicPreamp(phantom_power: bool = false) {
+entity MicPreamp(phantom_power: bool = false) {
     pin MIC+: signal in;
     pin MIC-: signal in;
     pin OUT: signal out;
@@ -50,7 +50,7 @@ module MicPreamp(phantom_power: bool = false) {
 }
 
 // Active Filter Module
-module ActiveFilter(
+entity ActiveFilter(
     type: string = "lowpass",
     frequency: frequency = 1kHz,
     order: int = 2
@@ -69,7 +69,7 @@ module ActiveFilter(
 }
 
 // Audio Mixer Module
-module AudioMixer(channels: int = 4) {
+entity AudioMixer(channels: int = 4) {
     pin IN[1:channels]: signal in;
     pin OUT: signal out;
     pin LEVEL[1:channels]: signal in;  // Level controls
@@ -83,7 +83,7 @@ module AudioMixer(channels: int = 4) {
 }
 
 // Headphone Amplifier Module
-module HeadphoneAmp(impedance: resistance = 32Ω) {
+entity HeadphoneAmp(impedance: resistance = 32Ω) {
     pin IN_L: signal in;
     pin IN_R: signal in;
     pin OUT_L: signal out;
@@ -99,7 +99,7 @@ module HeadphoneAmp(impedance: resistance = 32Ω) {
 }
 
 // VU Meter Driver Module
-module VUMeterDriver(type: string = "LED") {
+entity VUMeterDriver(type: string = "LED") {
     pin IN: signal in;
     pin LED[1:10]: signal out when type == "LED";
     pin METER+: signal out when type == "analog";
@@ -113,7 +113,7 @@ module VUMeterDriver(type: string = "LED") {
 }
 
 // Audio Compressor Module
-module AudioCompressor(ratio: string = "4:1") {
+entity AudioCompressor(ratio: string = "4:1") {
     pin IN: signal in;
     pin OUT: signal out;
     pin THRESHOLD: signal in;
@@ -129,7 +129,7 @@ module AudioCompressor(ratio: string = "4:1") {
 }
 
 // Crossover Network Module
-module CrossoverNetwork(frequency: frequency = 3kHz) {
+entity CrossoverNetwork(frequency: frequency = 3kHz) {
     pin IN: signal in;
     pin LOW_OUT: signal out;   // Low frequency output
     pin HIGH_OUT: signal out;  // High frequency output

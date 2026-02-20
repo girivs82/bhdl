@@ -21,7 +21,7 @@ board PowerSupply {
 
 ### 2. Behavioral Attributes (New)
 ```bhdl
-module BuckController {
+entity BuckController {
     pin FB: analog in;
     pin PWM: digital out;
     
@@ -37,7 +37,7 @@ module BuckController {
 
 ### 3. Mutable Attributes (New)
 ```bhdl
-module SoftStart {
+entity SoftStart {
     pin ENABLE: digital in;
     pin VREF_OUT: analog out;
     
@@ -83,7 +83,7 @@ when (condition) {
 
 1. **Single keyword** - No param/attribute confusion
 2. **Backward compatible** - Existing attributes work unchanged
-3. **Clear semantics** - Attributes are "properties of this module"
+3. **Clear semantics** - Attributes are "properties of this entity"
 4. **Natural extension** - From static to dynamic naturally
 
 ## Complete Minimal Set (Revised)
@@ -131,7 +131,7 @@ value += rate * dt;
 
 ### Thermal LED Controller
 ```bhdl
-module ThermalLED {
+entity ThermalLED {
     pin TEMP: analog in;
     pin LED_DRIVE: current out;
     
@@ -147,7 +147,7 @@ module ThermalLED {
 
 ### Buck with Soft Start
 ```bhdl
-module SimpleBuck {
+entity SimpleBuck {
     pin ENABLE: digital in;
     pin FB: analog in;
     pin PWM: digital out;

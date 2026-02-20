@@ -187,7 +187,7 @@ generate for i in 0..7 {
 
 ## Component Libraries
 
-The `libraries/` directory contains standard component definitions using v2.0 module syntax:
+The `libraries/` directory contains standard component definitions using v2.0 entity syntax:
 
 - **passives.bhdl**: Basic passive components with intelligent defaults
 - **power.bhdl**: Linear and switching regulators, voltage references

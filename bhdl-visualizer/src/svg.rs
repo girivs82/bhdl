@@ -431,6 +431,49 @@ mod tests {
         assert!(svg_string.matches("line").count() > 10); // Should have many grid lines
     }
 }
+/// Filter out ALL text to see symbols clearly
+fn filter_large_text_labels(svg_content: &str) -> String {
+    // Remove ALL text elements to see if symbols are hidden beneath
+    let lines: Vec<&str> = svg_content.lines().collect();
+    let mut filtered = Vec::new();
+
+    for line in lines {
+        // Skip ALL text elements
+        if line.contains("<text") || line.contains("</text>") || line.contains("class=\"symbol-text\"") || line.contains("class=\"pin-text\"") {
+            continue;
+        }
+        filtered.push(line);
+    }
+
+    filtered.join("\n")
+}
+
+/// Fix stroke-widths to compensate for transform scaling
+/// When we apply scale(1000), stroke-width of 0.5 becomes 500 units - way too thick!
+/// Solution: scale down all stroke-widths by 1/scale_factor
+fn fix_stroke_widths(svg_content: &str, scale_factor: f64) -> String {
+    use regex::Regex;
+
+    // Match stroke-width="number" or stroke-width='number' (inline attributes)
+    let re_inline = Regex::new(r#"stroke-width=["']([0-9.]+)["']"#).unwrap();
+    let mut result = re_inline.replace_all(svg_content, |caps: &regex::Captures| {
+        let original_width: f64 = caps[1].parse().unwrap_or(1.0);
+        let adjusted_width = original_width / scale_factor; // Scale down to compensate
+        format!(r#"stroke-width="{}""#, adjusted_width)
+    }).to_string();
+
+    // ALSO fix CSS stroke-width properties (these override inline attributes!)
+    // Match: stroke-width: 1; or stroke-width: 0.5; in CSS
+    let re_css = Regex::new(r#"stroke-width:\s*([0-9.]+)"#).unwrap();
+    result = re_css.replace_all(&result, |caps: &regex::Captures| {
+        let original_width: f64 = caps[1].parse().unwrap_or(1.0);
+        let adjusted_width = original_width / scale_factor;
+        format!(r#"stroke-width: {}"#, adjusted_width)
+    }).to_string();
+
+    result
+}
+
 /// SVG renderer for circuit layouts
 pub struct SvgRenderer {
     show_grid: bool,
@@ -495,28 +538,37 @@ impl SvgRenderer {
                 svg_data.clone()
             };
             
-            // Scale up the SVG content
-            let scale_factor = 10.0; // Scale up 10x for better visibility
-            
+            // Scale up the SVG content for visibility
+            // KiCad symbols are ~0.5 units raw, need reasonable scaling
+            // LM7805 IC: 1.524 units × 100 = 152.4 pixels, LED: 0.254 units × 100 = 25.4 pixels
+            // This makes symbols properly sized for professional schematics
+            let scale_factor = 100.0; // 100x scale for reasonable symbol sizes (40-150px)
+
             // Wrap in group with transform including scale
             let mut group_content = String::new();
             writeln!(&mut group_content, "<g transform=\"{} scale({})\">", transform, scale_factor).unwrap();
-            writeln!(&mut group_content, "{}", inner_svg).unwrap();
+
+            // Filter out or reduce huge text labels that obscure symbols
+            let filtered_svg = filter_large_text_labels(&inner_svg);
+
+            // Fix stroke-widths: scale them down by 1/scale_factor to compensate for the transform scale
+            let stroke_adjusted_svg = fix_stroke_widths(&filtered_svg, scale_factor);
+            writeln!(&mut group_content, "{}", stroke_adjusted_svg).unwrap();
             
             // Don't add debug pin markers - the SVG from database already has proper pin representations
             
             writeln!(&mut group_content, "</g>").unwrap();
-            
+
             // Add directly as raw content (not using add_raw_svg which adds another group)
             doc.add_element(SvgElement::Group {
                 transform: None,
                 content: group_content,
             });
-            
-            // Add component label above the symbol
+
+            // Add component label ABOVE the symbol so user can identify it
             if let Some(label) = &component.label {
                 doc.add_text(
-                    pos.translate(0.0, -component.size.y / 2.0 - 20.0),
+                    pos.translate(0.0, -100.0),  // Position above the symbol
                     label.clone(),
                     Some("component-text")
                 );
@@ -565,15 +617,15 @@ impl SvgRenderer {
         for segment in &net.routing_segments {
             doc.add_routing_segment(segment, Some("net"));
         }
-        
-        // Add net label if present
-        if let Some(name) = &net.name {
-            if !net.connection_points.is_empty() {
-                let label_pos = net.connection_points[0];
-                doc.add_text(label_pos.translate(5.0, -5.0), name.clone(), Some("net-label"));
-            }
-        }
-        
+
+        // TEMPORARILY DISABLED: Net labels hidden to see symbols
+        // if let Some(name) = &net.name {
+        //     if !net.connection_points.is_empty() {
+        //         let label_pos = net.connection_points[0];
+        //         doc.add_text(label_pos.translate(5.0, -5.0), name.clone(), Some("net-label"));
+        //     }
+        // }
+
         Ok(())
     }
 }

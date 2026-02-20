@@ -240,7 +240,7 @@ LM7805 → Database lookup → Component with pins/footprint
 **Design Decision**: Same logical pin names across all packages
 
 ```bhdl
-module LM7805(package: string = "TO-220") {
+entity LM7805(package: string = "TO-220") {
     pin IN: power in;      // Same name for all packages
     pin GND: ground;
     pin OUT: power out;

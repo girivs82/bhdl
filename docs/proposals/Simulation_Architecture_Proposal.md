@@ -545,11 +545,11 @@ impl IntentBasedClassifier {
 The intent system should permeate the entire language design:
 
 ```bhdl
-// Intent-driven module definition
-module PowerSupply(vin: power) -> (vout: power) 
+// Intent-driven entity definition
+entity PowerSupply(vin: power) -> (vout: power)
     for regulation(5V, 1A, ripple < 50mV) {
-    
-    // Component selection guided by module intent
+
+    // Component selection guided by entity intent
     const reg = Regulator()
         meeting parent.intent.regulation;
     
@@ -732,9 +732,9 @@ Intent flows naturally through the design hierarchy, avoiding repetition:
 ```bhdl
 // Board-level intent applies to everything inside
 board AutomotiveECU for automotive_safety(ASIL::D) {
-    // All modules, nets, and components inherit ASIL-D requirements
-    
-    module PowerSupply(vin: power) -> (vout: power) {
+    // All entities, nets, and components inherit ASIL-D requirements
+
+    entity PowerSupply(vin: power) -> (vout: power) {
         // Inherits ASIL-D from board
         // No need to repeat on every net
         
@@ -742,8 +742,8 @@ board AutomotiveECU for automotive_safety(ASIL::D) {
         // Automatically checked against ASIL-D requirements
     }
     
-    module SensorInterface for sensor_acquisition(precision: 16bit) {
-        // Module adds its own intent on top of inherited ASIL-D
+    entity SensorInterface for sensor_acquisition(precision: 16bit) {
+        // Entity adds its own intent on top of inherited ASIL-D
         // Both intents apply to contents
         
         net filtered: sensor -> amp -> filter -> adc;
@@ -756,8 +756,8 @@ board AutomotiveECU for automotive_safety(ASIL::D) {
 }
 
 // Modules can declare required intent for instantiation
-module CriticalSensor() for requires(automotive_safety(ASIL::C+)) {
-    // This module can only be instantiated in ASIL-C or higher context
+entity CriticalSensor() for requires(automotive_safety(ASIL::C+)) {
+    // This entity can only be instantiated in ASIL-C or higher context
 }
 
 // Intent inheritance rules in stdlib
@@ -1157,7 +1157,7 @@ rule intent_composition {
 }
 
 // Module with multiple inherited intents
-module MedicalSensor() 
+entity MedicalSensor() 
     inherits parent.safety_intent,
     inherits parent.emc_intent,
     for biocompatible(ISO_10993) {
@@ -1431,7 +1431,7 @@ Create `bhdl-mixed-sim` with:
 - Enable custom domain-specific intent libraries
 - Generate documentation from intent definitions
 - Implement "one net, one intent" principle with net splitting for complex signal paths
-- Create hierarchical intent propagation (board -> module -> net)
+- Create hierarchical intent propagation (board -> entity -> net)
 - Support intent composition when multiple levels apply
 
 ### Example API
@@ -1676,7 +1676,7 @@ pub enum IntentPropagation {
 
 2. **Parameterized Intent Inheritance**
    ```bhdl
-   module PowerSupply() inherits parent.safety_intent {
+   entity PowerSupply() inherits parent.safety_intent {
        // How to parameterize inherited intents?
    }
    ```

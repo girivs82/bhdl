@@ -57,7 +57,7 @@ fn print_tree(node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>, indent: usize
     println!("{}{:?}: '{}'", indent_str, node.kind(), display_text.trim());
     
     // Show more detail for specific node types
-    if matches!(node.kind(), bhdl_parser::SyntaxKind::MODULE_INST | 
+    if matches!(node.kind(), bhdl_parser::SyntaxKind::ENTITY_INST | 
                              bhdl_parser::SyntaxKind::CONNECTION_STMT |
                              bhdl_parser::SyntaxKind::PORT_MAPPING) {
         for child in node.children_with_tokens() {

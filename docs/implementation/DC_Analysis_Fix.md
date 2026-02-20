@@ -5,16 +5,16 @@ This document describes the fix for DC analysis in the BHDL safety analyzer, whi
 
 ## Problem Statement
 The DC analysis was failing due to several interconnected issues:
-1. **Stdlib Module Loading**: The StdlibReader was reporting "Library loaded with 0 modules" due to outdated module alias syntax
+1. **Stdlib Entity Loading**: The StdlibReader was reporting "Library loaded with 0 entities" due to outdated entity alias syntax
 2. **Power Domain Creation**: Components were being incorrectly created as power domains
-3. **Component Recognition**: Module types were mismatched between BHDL and database representations
+3. **Component Recognition**: Entity types were mismatched between BHDL and database representations
 
 ## Root Cause Analysis
 
-### 1. Stdlib Module Alias Syntax
-The stdlib files were using the old v1.0 syntax for module aliases:
+### 1. Stdlib Entity Alias Syntax
+The stdlib files were using the old v1.0 syntax for entity aliases:
 ```bhdl
-module Resistor = Res;  // Old syntax
+entity Resistor = Res;  // Old syntax
 ```
 
 However, the parser was updated for v2.0 and expects:
@@ -22,7 +22,7 @@ However, the parser was updated for v2.0 and expects:
 alias Resistor = Res;   // New syntax
 ```
 
-This caused parse errors when loading stdlib files, resulting in 0 modules being loaded.
+This caused parse errors when loading stdlib files, resulting in 0 entities being loaded.
 
 ### 2. Power Domain Propagation
 The power analysis was creating spurious power domains from component instantiations:
@@ -106,7 +106,7 @@ Safety Violations:
 
 ## Testing
 Added comprehensive tests:
-- `test_module_parsing.rs`: Verifies correct parsing of module alias syntax
-- `test_stdlib_loading.rs`: Ensures all stdlib modules load correctly
+- `test_module_parsing.rs`: Verifies correct parsing of entity alias syntax
+- `test_stdlib_loading.rs`: Ensures all stdlib entities load correctly
 - `safe_led_demo.rs`: Tests safe LED circuit with current limiting
 - `pipeline_demo.rs`: Tests dangerous LED circuit detection

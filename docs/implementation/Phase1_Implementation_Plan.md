@@ -16,7 +16,7 @@
 2. ✅ **Flow Specification**: `power_flow: USB_5V |> regulation |> loads`
 3. ✅ **Basic Interface Declaration**: `main_i2c: I2C(3.3V, 400kHz)`
 4. ✅ **Conditional Logic**: `if (condition) { action }`
-5. ✅ **Module Definition**: `module PowerSupply(params) { implementation }`
+5. ✅ **Entity Definition**: `entity PowerSupply(params) { implementation }`
 
 **Priority 2 (Should Have)**:
 6. ✅ **Generate Constructs**: `generate for i in 0..7 { GPIO[i] -> LED[i]; }`
@@ -68,7 +68,7 @@ pub enum TokenKind {
     
     // New keywords for flow paradigm
     Board,
-    Module,
+    Entity,
     Generate,
     For,
     In,
@@ -176,7 +176,7 @@ impl Lexer {
 // Top level
 board := 'board' IDENT '{' board_body '}'
 board_body := board_item*
-board_item := connection_stmt | flow_stmt | interface_decl | module_decl | 
+board_item := connection_stmt | flow_stmt | interface_decl | entity_decl |
               generate_stmt | constrain_block
 
 // Core constructs
@@ -209,9 +209,9 @@ generate_body := (connection_stmt | flow_stmt)*
 conditional_expr := 'if' '(' condition ')' '{' expr '}' ('else' '{' expr '}')?
 condition := comparison_expr | boolean_expr
 
-// Module definitions
-module_decl := 'module' IDENT '(' parameter_list? ')' '{' module_body '}'
-module_body := (flow_stmt | connection_stmt | implementation_block)*
+// Entity definitions
+entity_decl := 'entity' IDENT '(' parameter_list? ')' '{' entity_body '}'
+entity_body := (flow_stmt | connection_stmt | implementation_block)*
 
 // Constraint blocks
 constrain_block := 'constrain' constraint_type '{' constraint_body '}'
@@ -238,7 +238,7 @@ pub enum Stmt {
     InterfaceDecl(InterfaceDecl),
     GenerateStmt(GenerateStmt),
     ConditionalStmt(ConditionalStmt),
-    ModuleDecl(ModuleDecl),
+    EntityDecl(EntityDecl),
     ConstrainBlock(ConstrainBlock),
 }
 

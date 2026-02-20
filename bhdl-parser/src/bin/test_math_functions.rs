@@ -15,10 +15,10 @@ fn main() {
         ("attribute power = abs(voltage) * current;", "abs in expression"),
         
         // Component with math in attributes
-        (r#"module TestComponent() {
+        (r#"entity TestComponent() {
             attribute value = sqrt(100);
             attribute tolerance = abs(-5) + 1%;
-        }"#, "module with math functions"),
+        }"#, "entity with math functions"),
     ];
     
     let mut all_passed = true;
@@ -43,7 +43,7 @@ fn main() {
     // Now test parsing the actual capacitor library file
     println!("\n=== Testing Capacitor Library ===");
     let capacitor_code = r#"
-module Capacitor(value: capacitance, voltage: voltage = 50V) {
+entity Capacitor(value: capacitance, voltage: voltage = 50V) {
     pin 1: signal inout;
     pin 2: signal inout;
     

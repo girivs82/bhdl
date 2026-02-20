@@ -1,6 +1,6 @@
 use crate::{SyntaxKind, BhdlLanguage, SyntaxNode};
 use rowan::ast::AstNode;
-use crate::items::{Board, Module, ComponentDef, InterfaceDef, TypedefDef, ImportStmt};
+use crate::items::{Board, Entity, ComponentDef, InterfaceDef, TypedefDef, ImportStmt};
 use crate::testbench::TestbenchDef;
 
 // Add definitions for top-level items later
@@ -46,9 +46,9 @@ impl SourceFile {
         self.0.children().filter_map(Board::cast)
     }
 
-    /// Returns an iterator over modules in the file.
-    pub fn modules(&self) -> impl Iterator<Item = Module> {
-        self.0.children().filter_map(Module::cast)
+    /// Returns an iterator over entities in the file.
+    pub fn entities(&self) -> impl Iterator<Item = Entity> {
+        self.0.children().filter_map(Entity::cast)
     }
 
     /// Returns an iterator over testbenches in the file.
@@ -64,7 +64,7 @@ impl SourceFile {
 pub enum Item {
     ImportStmt(ImportStmt),
     Board(Board),
-    Module(Module),
+    Entity(Entity),
     ComponentDef(ComponentDef),
     InterfaceDef(InterfaceDef),
     TypedefDef(TypedefDef),
@@ -76,14 +76,14 @@ impl AstNode for Item {
     type Language = BhdlLanguage;
 
     fn can_cast(kind: SyntaxKind) -> bool {
-        ImportStmt::can_cast(kind) || Board::can_cast(kind) || Module::can_cast(kind) || ComponentDef::can_cast(kind) ||
+        ImportStmt::can_cast(kind) || Board::can_cast(kind) || Entity::can_cast(kind) || ComponentDef::can_cast(kind) ||
         InterfaceDef::can_cast(kind) || TypedefDef::can_cast(kind) || TestbenchDef::can_cast(kind)
     }
 
     fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> {
         if ImportStmt::can_cast(syntax.kind()) { Some(Item::ImportStmt(ImportStmt::cast(syntax)?)) }
         else if Board::can_cast(syntax.kind()) { Some(Item::Board(Board::cast(syntax)?)) }
-        else if Module::can_cast(syntax.kind()) { Some(Item::Module(Module::cast(syntax)?)) }
+        else if Entity::can_cast(syntax.kind()) { Some(Item::Entity(Entity::cast(syntax)?)) }
         else if ComponentDef::can_cast(syntax.kind()) { Some(Item::ComponentDef(ComponentDef::cast(syntax)?)) }
         else if InterfaceDef::can_cast(syntax.kind()) { Some(Item::InterfaceDef(InterfaceDef::cast(syntax)?)) }
         else if TypedefDef::can_cast(syntax.kind()) { Some(Item::TypedefDef(TypedefDef::cast(syntax)?)) }
@@ -95,7 +95,7 @@ impl AstNode for Item {
         match self {
             Item::ImportStmt(i) => i.syntax(),
             Item::Board(i) => i.syntax(),
-            Item::Module(i) => i.syntax(),
+            Item::Entity(i) => i.syntax(),
             Item::ComponentDef(i) => i.syntax(),
             Item::InterfaceDef(i) => i.syntax(),
             Item::TypedefDef(i) => i.syntax(),

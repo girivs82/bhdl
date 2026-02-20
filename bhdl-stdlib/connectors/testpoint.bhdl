@@ -1,7 +1,7 @@
 // Test Point Component Module
 // For measurement and debugging access
 
-module TestPoint(style: string = "pad") {
+entity TestPoint(style: string = "pad") {
     pin 1: signal inout @metadata(
         function="TestPoint",
         description="Test point for measurement",

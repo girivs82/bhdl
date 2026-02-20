@@ -1,7 +1,7 @@
 // LM317 Adjustable Linear Voltage Regulator
 // 1.25V to 37V adjustable output, 1.5A current capability
 
-module LM317(
+entity LM317(
     vout: voltage = 5V,     // Target output voltage
     iout: current = 500mA   // Expected output current
 ) {

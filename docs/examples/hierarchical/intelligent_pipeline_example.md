@@ -3,7 +3,7 @@
 ## Scenario: Multi-Channel LED Driver
 
 ```bhdl
-module LEDChannel(max_current: current = 350mA) {
+entity LEDChannel(max_current: current = 350mA) {
     pin VIN: power in;
     pin LED_A: current out;
     pin LED_K: current in;
@@ -203,7 +203,7 @@ Component Summary:
 ## Advanced Example: Generated Arrays
 
 ```bhdl
-module ParallelDriverBank(channels: int = 8) {
+entity ParallelDriverBank(channels: int = 8) {
     generate for i in 0..channels {
         ch[i]: LEDChannel() { ... }
     }
@@ -243,7 +243,7 @@ Layout: Grid of 4x8 repeated modules
 3. **Accurate BOMs**: Same components grouped correctly
 4. **Smart Layout**: Template-based placement
 5. **Debugging**: Easy to trace issues to specific instances
-6. **Memory Efficient**: One module definition, many references
+6. **Memory Efficient**: One entity definition, many references
 
 ## Implementation Notes
 

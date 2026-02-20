@@ -48,7 +48,7 @@ board BuckConverterTPS54331 {
 }
 
 // Module definition for test point (simple)
-module TestPoint() {
+entity TestPoint() {
     pin 1: signal inout {
         description: "Test point connection"
     };

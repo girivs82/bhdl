@@ -25,7 +25,7 @@ While effective, this approach had limitations:
 Modules can now declare explicit pin functions using `@metadata` annotations:
 
 ```bhdl
-module BuckController() {
+entity BuckController() {
     pin SW: power out @metadata(
         function="SwitchNode",
         max_voltage="42V",
@@ -48,7 +48,7 @@ module BuckController() {
 The metadata flows through the BHDL pipeline as follows:
 
 1. **Parser**: Recognizes `@metadata(...)` syntax and creates AST nodes
-2. **Analyzer**: Extracts metadata into module definitions
+2. **Analyzer**: Extracts metadata into entity definitions
 3. **Synthesizer**: Preserves metadata in netlist generation
 4. **SPICE**: Uses metadata for component role detection
 
@@ -140,7 +140,7 @@ if let Some(func) = pin_function {
 ## Example Usage
 
 ```bhdl
-module BuckConverter() {
+entity BuckConverter() {
     pin SW: power out @metadata(function="SwitchNode");
     pin BST: power @metadata(function="Bootstrap");
     pin FB: signal in @metadata(function="Feedback");

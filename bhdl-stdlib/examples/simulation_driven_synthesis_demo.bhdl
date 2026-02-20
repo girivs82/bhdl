@@ -128,7 +128,7 @@ board PowerSupplyBoard {
 }
 
 // Demonstration of the feedback loop
-module SimulationFeedbackDemo {
+entity SimulationFeedbackDemo {
     
     // Show how simulation results drive synthesis decisions
     function demonstrate_feedback_loop() {
@@ -309,7 +309,7 @@ module SimulationFeedbackDemo {
 }
 
 // Show convergence behavior
-module ConvergenceBehavior {
+entity ConvergenceBehavior {
     
     function show_convergence() {
         println("=== CONVERGENCE BEHAVIOR ===\n");

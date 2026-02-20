@@ -2,7 +2,7 @@
 // Shows how scoped parameters solve actual design challenges
 
 // Generic adjustable regulator module
-module AdjustableRegulator {
+entity AdjustableRegulator {
     pin VIN: power in;
     pin VOUT: power out;
     pin EN: digital in;
@@ -57,7 +57,7 @@ module AdjustableRegulator {
 }
 
 // Voltage divider submodule
-module VoltageDivider {
+entity VoltageDivider {
     pin TOP: signal in;
     pin TAP: signal out;
     pin BOT: signal in;
@@ -77,7 +77,7 @@ module VoltageDivider {
 }
 
 // Output capacitor bank
-module OutputCapBank {
+entity OutputCapBank {
     pin IN: power in;
     pin GND: ground;
     
@@ -94,7 +94,7 @@ module OutputCapBank {
 }
 
 // Compensation network module
-module CompensationNetwork {
+entity CompensationNetwork {
     pin IN: signal in;
     pin OUT: signal out;
     

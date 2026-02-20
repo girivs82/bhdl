@@ -13,7 +13,7 @@ board BuckConverter {
     protected_vin -> Cap(0.1uF, ceramic).1 -> GND;
     
     // Buck controller IC (e.g., LM2596)
-    module BuckController {
+    entity BuckController {
         pin VIN: power in;
         pin SW: power out;      // Switch node
         pin FB: signal in;      // Feedback

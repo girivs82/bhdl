@@ -8,7 +8,7 @@ board USBDevice {
     ground GND;
     
     // The buck converter module contains embedded intelligence
-    module PowerSupply(
+    entity PowerSupply(
         vin: voltage = 5V,
         vout: voltage = 3.3V,
         iout_max: current = 200mA

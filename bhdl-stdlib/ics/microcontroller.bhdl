@@ -3,7 +3,7 @@
 
 import { PIN_MODEL_GPIO_3V3, PIN_MODEL_I2C_OPEN_DRAIN, PIN_MODEL_SPI_HIGH_SPEED } from "../pin_characteristics.bhdl";
 
-module MCU_GPIO(package: string = "QFN-32") {
+entity MCU_GPIO(package: string = "QFN-32") {
     // GPIO pins with different electrical models
     pin PA0: signal inout @metadata(
         function="GPIO",

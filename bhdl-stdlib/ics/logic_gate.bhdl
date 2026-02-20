@@ -20,7 +20,7 @@ type LogicDriveType = {
     impedance: ImpedanceCharacteristics,
 };
 
-module LogicGate(
+entity LogicGate(
     gate_type: string = "NAND",       // "NAND", "NOR", "AND", "OR", "NOT", "XOR", "XNOR"
     logic_family: string = "HC",       // "HC", "HCT", "AHC", "AHCT", "LVC", "LVT"
     num_inputs: int = 2,

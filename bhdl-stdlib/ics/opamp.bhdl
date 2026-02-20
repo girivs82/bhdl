@@ -19,7 +19,7 @@ type OpAmpParams = {
     impedance: ImpedanceCharacteristics,
 };
 
-module OpAmp(type: string = "LM358", package: string = "DIP-8") {
+entity OpAmp(type: string = "LM358", package: string = "DIP-8") {
     // Standard op-amp pinout
     pin V+: power in @metadata(
         function="PowerPositive",

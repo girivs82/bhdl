@@ -59,7 +59,7 @@ board NamedHandles {
 "#),
 
         ("Module instantiation", r#"
-module PowerSupply() {
+entity PowerSupply() {
     pin VIN: power in;
     pin VOUT: power out;
     pin GND: ground inout;
@@ -106,7 +106,7 @@ board InterfaceTest {
 "#),
 
         ("Conditional pins", r#"
-module ConditionalModule(has_enable: bool = true) {
+entity ConditionalModule(has_enable: bool = true) {
     pin VCC: power in;
     pin GND: ground inout;
     pin EN: signal in when has_enable;

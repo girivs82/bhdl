@@ -4,7 +4,7 @@
 import { resistance, power, voltage, current, temperature, frequency } from "../../../units.bhdl";
 
 // ==================== COMPONENT DEFINITION ====================
-module Resistor(
+entity Resistor(
     value: resistance,                  // Resistance value
     tolerance: float = 5%,              // Tolerance percentage
     power_rating: power = 0.25W,        // Power rating
@@ -20,8 +20,8 @@ module Resistor(
 }
 
 // Common aliases
-module Res = Resistor;
-module R = Resistor;
+entity Res = Resistor;
+entity R = Resistor;
 
 // ==================== ELECTRICAL CHARACTERISTICS ====================
 const RESISTOR_ELECTRICAL = {

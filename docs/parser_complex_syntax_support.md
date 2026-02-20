@@ -1,6 +1,6 @@
 # BHDL Parser Complex Syntax Support
 
-This document describes the complex syntax features added to the BHDL parser to support real-world component modules like LED and LM7805.
+This document describes the complex syntax features added to the BHDL parser to support real-world component entities like LED and LM7805.
 
 ## Overview
 
@@ -115,12 +115,12 @@ pin EN: signal in when package == "TO-220-5" || package == "TO-263-5";
 - Optional WHEN_KW followed by expression
 - Condition becomes part of PIN_DECL node
 
-### 5. Module Aliases
+### 5. Entity Aliases
 
 **Syntax:**
 ```bhdl
-alias new_name = existing_module;
-alias module new_name = existing_module;  // optional 'module' keyword
+alias new_name = existing_entity;
+alias entity new_name = existing_entity;  // optional 'entity' keyword
 ```
 
 **Example:**
@@ -199,7 +199,7 @@ import { LEDParams, LED_PARAMS_RED, LED_PARAMS_GREEN } from "../electrical_param
 ## Migration Notes
 
 ### For Existing BHDL Code:
-1. Replace `module Name = Target;` with `alias Name = Target;`
+1. Replace `entity Name = Target;` with `alias Name = Target;`
 2. Replace `or` operator with `||` in conditions
 3. Ensure const declarations include type annotations
 
@@ -216,7 +216,7 @@ import { LEDParams, LED_PARAMS_RED, LED_PARAMS_GREEN } from "../electrical_param
 3. Nullable types: `type?`
 4. Null literal: `null`
 
-These features are not currently used in stdlib modules but may be needed for future extensions.
+These features are not currently used in stdlib entities but may be needed for future extensions.
 
 ### Potential Improvements:
 1. Generalize PIN_REF to MEMBER_ACCESS for dot notation

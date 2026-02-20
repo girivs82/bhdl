@@ -2,9 +2,9 @@
 
 ## Overview
 
-Port mapping modules provide flexible interface adaptation, pin remapping, and protocol bridging. They're essential for:
+Port mapping entities provide flexible interface adaptation, pin remapping, and protocol bridging. They're essential for:
 - Adapting between different component packages
-- Creating reusable interface modules
+- Creating reusable interface entities
 - Handling pin multiplexing
 - Protocol translation
 
@@ -14,7 +14,7 @@ Port mapping modules provide flexible interface adaptation, pin remapping, and p
 
 ```bhdl
 // Simple 1:1 port mapping
-module UARTAdapter {
+entity UARTAdapter {
     // Left side - MCU interface
     pin MCU_TX: signal out;
     pin MCU_RX: signal in;
@@ -39,7 +39,7 @@ module UARTAdapter {
 
 ```bhdl
 // Configurable GPIO mapping
-module GPIOMapper(
+entity GPIOMapper(
     num_pins: int = 8,
     mapping: int[] = [0,1,2,3,4,5,6,7]  // Default 1:1
 ) {
@@ -66,7 +66,7 @@ board System {
 
 ```bhdl
 // SPI with optional pins
-module SPIInterface(
+entity SPIInterface(
     use_cs: bool = true,
     num_cs: int = 1,
     use_interrupt: bool = false
@@ -88,7 +88,7 @@ module SPIInterface(
 }
 
 // Adapter between different SPI variants
-module SPIAdapter {
+entity SPIAdapter {
     // Full-featured side
     spi_full: SPIInterface(use_cs=true, num_cs=4, use_interrupt=true) {
         // External connections
@@ -118,7 +118,7 @@ module SPIAdapter {
 
 ```bhdl
 // I2C to SPI bridge
-module I2CToSPIBridge {
+entity I2CToSPIBridge {
     // I2C slave interface
     pin SDA: signal inout;
     pin SCL: signal in;
@@ -148,7 +148,7 @@ module I2CToSPIBridge {
 ### 5. Differential to Single-Ended Mapping
 
 ```bhdl
-module DifferentialAdapter(
+entity DifferentialAdapter(
     num_pairs: int = 4,
     termination: resistance = 100
 ) {
@@ -181,7 +181,7 @@ module DifferentialAdapter(
 ### 6. Voltage Level Translation
 
 ```bhdl
-module LevelShifter(
+entity LevelShifter(
     channels: int = 8,
     vcc_a: voltage = 3.3V,
     vcc_b: voltage = 5V,
@@ -223,7 +223,7 @@ module LevelShifter(
 
 ```bhdl
 // Map logical functions to physical connector
-module ConnectorMapping {
+entity ConnectorMapping {
     // Logical interface
     pin POWER: power in;
     pin GND: ground;
@@ -273,7 +273,7 @@ module ConnectorMapping {
 
 ```bhdl
 // Multiplexed pin configuration
-module PinMux(
+entity PinMux(
     mode: string = "uart"  // "uart", "spi", "i2c", "gpio"
 ) {
     // Shared physical pins
@@ -334,7 +334,7 @@ module PinMux(
 
 ```bhdl
 // I2C GPIO expander for more pins
-module GPIOExpander(
+entity GPIOExpander(
     base_addr: int = 0x20,
     num_ports: int = 2  // 1 or 2
 ) {
@@ -384,7 +384,7 @@ module GPIOExpander(
 
 ```bhdl
 // Memory interface width adapter
-module MemoryAdapter(
+entity MemoryAdapter(
     width_in: int = 16,
     width_out: int = 8
 ) {
@@ -463,7 +463,7 @@ fn validate_array_connection(from_array: &PinArray, to_array: &PinArray) -> Resu
 ### 3. Mapping Tables
 ```bhdl
 // Support mapping tables as attributes
-module FlexibleMapper {
+entity FlexibleMapper {
     // Mapping as attribute array
     attribute pin_map = [
         (0, 7),  // A[0] -> B[7]
@@ -481,9 +481,9 @@ module FlexibleMapper {
 ## Benefits
 
 1. **Flexibility**: Adapt between different interfaces
-2. **Reusability**: Create universal adapter modules
+2. **Reusability**: Create universal adapter entities
 3. **Clarity**: Port mapping logic is explicit
 4. **Validation**: Type system ensures correct connections
-5. **Parameterization**: Configure mappings without new modules
+5. **Parameterization**: Configure mappings without new entities
 
-This completes our hierarchical module system with port mapping capabilities!
+This completes our hierarchical entity system with port mapping capabilities!

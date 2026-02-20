@@ -3,7 +3,7 @@ use bhdl_parser::{parse, SyntaxKind};
 fn main() {
     // Test if various keywords are recognized
     let tests = vec![
-        ("module test {}", "MODULE_KW"),
+        ("entity test {}", "ENTITY_KW"),
         ("with test {}", "WITH_KW"),  
         ("where test", "WHERE_KW"),
         ("if test", "IF_KW"),

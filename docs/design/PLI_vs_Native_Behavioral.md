@@ -138,7 +138,7 @@ def design_compensator(self):
 ### 4. **Loss of Integration**
 ```bhdl
 // Native approach - all in one place
-behavioral module BuckController {
+behavioral entity BuckController {
     state SOFT_START {
         vref = ramp(0, 3.3V, 10ms);
     }
@@ -160,7 +160,7 @@ controller: ExternalModel("buck_ctrl.py");
 ### Simple Built-in Behavioral
 ```bhdl
 // Keep simple behavioral constructs in BHDL
-module BuckController {
+entity BuckController {
     behavioral {
         // Simple equations and conditions
         vout_sense = adc_read(FB);

@@ -2,20 +2,20 @@
 
 ## Overview
 
-Enable modules to contain component instances, module instances, and connections - creating true hierarchical designs. This is a fundamental feature that must be implemented before behavioral modeling.
+Enable entities to contain component instances, entity instances, and connections - creating true hierarchical designs. This is a fundamental feature that must be implemented before behavioral modeling.
 
 ## Design Goals
 
-1. **Full Hierarchy**: Modules can contain components, other modules, and connections
+1. **Full Hierarchy**: Entities can contain components, other entities, and connections
 2. **Scoped Names**: Proper instance paths like `board.power.regulator.controller`
-3. **Reusability**: Create library modules that can be instantiated multiple times
+3. **Reusability**: Create library entities that can be instantiated multiple times
 4. **Clean Syntax**: Natural extension of existing BHDL v2.0 flow syntax
 
 ## Syntax Design
 
-### Current (Limited) Module Syntax
+### Current (Limited) Entity Syntax
 ```bhdl
-module BuckController {
+entity BuckController {
     pin VIN: power in;
     pin VOUT: power out;
     pin FB: analog in;
@@ -25,14 +25,14 @@ module BuckController {
 }
 ```
 
-### Proposed Hierarchical Module Syntax
+### Proposed Hierarchical Entity Syntax
 ```bhdl
-module BuckConverter(vout: voltage = 3.3V) {
+entity BuckConverter(vout: voltage = 3.3V) {
     pin VIN: power in;
     pin VOUT: power out;
     pin EN: digital in;
     
-    // Power and ground declarations (module-scoped)
+    // Power and ground declarations (entity-scoped)
     power VCC = VIN;  // Internal power net
     ground GND;
     
@@ -77,9 +77,9 @@ module BuckConverter(vout: voltage = 3.3V) {
 }
 ```
 
-### Nested Module Example
+### Nested Entity Example
 ```bhdl
-module PowerSupply {
+entity PowerSupply {
     pin VIN: power in;
     pin V3V3, V5V0, V1V2: power out;
     pin PGOOD: digital out;
@@ -134,8 +134,8 @@ module PowerSupply {
 
 **Changes needed:**
 ```rust
-// In grammar.rs - extend parse_module_body()
-fn parse_module_body(p: &mut Parser) {
+// In grammar.rs - extend parse_entity_body()
+fn parse_entity_body(p: &mut Parser) {
     p.expect(T!['{']);
     
     while !p.at(T!['}']) && !p.at(EOF) {
@@ -151,7 +151,7 @@ fn parse_module_body(p: &mut Parser) {
                 // - instance: Type()
                 // - instance: Type {}
                 // - net -> component
-                parse_instance_or_connection(p);     // NEW
+                parse_instance_or_connection(p);      // NEW
             }
             _ => {
                 // Connection statements
@@ -190,12 +190,12 @@ fn parse_instance_or_connection(p: &mut Parser) {
 
 **Changes needed:**
 ```rust
-// In items.rs - extend Module implementation
-impl Module {
+// In items.rs - extend Entity implementation
+impl Entity {
     // Existing
     pub fn pins(&self) -> impl Iterator<Item = PinDecl> { ... }
     pub fn attributes(&self) -> impl Iterator<Item = AttributeDecl> { ... }
-    
+
     // NEW - Add these methods
     pub fn power_decls(&self) -> impl Iterator<Item = PowerDecl> {
         self.0.children().filter_map(PowerDecl::cast)
@@ -233,7 +233,7 @@ impl AstNode for InstanceDecl {
 impl InstanceDecl {
     pub fn name(&self) -> Option<SyntaxToken<BhdlLanguage>> { ... }
     pub fn type_name(&self) -> Option<SyntaxToken<BhdlLanguage>> { ... }
-    pub fn is_module(&self) -> bool { ... }
+    pub fn is_entity(&self) -> bool { ... }
     pub fn is_component(&self) -> bool { ... }
     pub fn params(&self) -> Option<ParamList> { ... }
     pub fn connections(&self) -> impl Iterator<Item = ConnectionStmt> { ... }
@@ -258,7 +258,7 @@ pub struct SymbolTable {
     symbols: HashMap<String, Symbol>,
     
     // NEW - Support hierarchy
-    children: HashMap<String, SymbolTable>,  // Child scopes
+    children: HashMap<String, SymbolTable>,     // Child scopes
     parent: Option<Weak<RefCell<SymbolTable>>>,  // Parent scope
 }
 
@@ -291,14 +291,14 @@ pub struct HierarchicalScope {
 }
 
 impl HierarchicalScope {
-    pub fn enter_module(&mut self, name: String) {
+    pub fn enter_entity(&mut self, name: String) {
         self.path.push(name.clone());
         let table = self.symbol_table.borrow_mut();
         let child = table.add_child_scope(name);
         // Update current symbol table reference
     }
     
-    pub fn exit_module(&mut self) {
+    pub fn exit_entity(&mut self) {
         self.path.pop();
         // Restore parent symbol table reference
     }
@@ -313,27 +313,27 @@ impl HierarchicalScope {
 ```rust
 // In collect_definitions.rs
 impl Pass for CollectDefinitions {
-    fn visit_module(&mut self, module: &Module) {
-        // Create new scope for module
-        self.scope.enter_module(module.name());
+    fn visit_entity(&mut self, entity: &Entity) {
+        // Create new scope for entity
+        self.scope.enter_entity(entity.name());
         
         // Process module contents
-        for pin in module.pins() {
+        for pin in entity.pins() {
             self.add_pin_to_scope(pin);
         }
-        
+
         // NEW - Process instances
-        for instance in module.instances() {
+        for instance in entity.instances() {
             self.add_instance_to_scope(instance);
         }
-        
-        // NEW - Process module-level signals
-        for signal in module.signal_decls() {
+
+        // NEW - Process entity-level signals
+        for signal in entity.signal_decls() {
             self.add_signal_to_scope(signal);
         }
-        
-        // Exit module scope
-        self.scope.exit_module();
+
+        // Exit entity scope
+        self.scope.exit_entity();
     }
 }
 ```
@@ -392,12 +392,12 @@ pub struct NetlistBuilder {
 }
 
 impl NetlistBuilder {
-    pub fn enter_module_instance(&mut self, instance_name: String, module: &Module) {
+    pub fn enter_entity_instance(&mut self, instance_name: String, entity: &Entity) {
         self.current_path.push(instance_name.clone());
         
-        // Create module context
-        let context = ModuleContext {
-            module_def: module.clone(),
+        // Create entity context
+        let context = EntityContext {
+            entity_def: entity.clone(),
             instance_name,
             local_nets: HashMap::new(),
         };
@@ -405,7 +405,7 @@ impl NetlistBuilder {
         self.module_stack.push(context);
     }
     
-    pub fn exit_module_instance(&mut self) {
+    pub fn exit_entity_instance(&mut self) {
         self.current_path.pop();
         self.module_stack.pop();
     }
@@ -441,8 +441,8 @@ pub struct Instance {
     
     // NEW fields
     pub instance_path: String,  // Full hierarchical path
-    pub parent_module: Option<ModuleId>,  // Parent module instance
-    pub is_module_instance: bool,  // Module vs component
+    pub parent_module: Option<ModuleId>,  // Parent entity instance
+    pub is_entity_instance: bool,  // Entity vs component
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -452,7 +452,7 @@ pub struct Net {
     pub connections: Vec<Connection>,
     
     // NEW field
-    pub scope_path: String,  // Module scope this net belongs to
+    pub scope_path: String,  // Entity scope this net belongs to
 }
 ```
 
@@ -464,23 +464,23 @@ pub struct Net {
 
 **Changes needed:**
 
-#### 6.1 Module Symbol
+#### 6.1 Entity Symbol
 ```rust
-// NEW file: src/symbols/module_symbol.rs
-pub struct ModuleSymbol {
+// NEW file: src/symbols/entity_symbol.rs
+pub struct EntitySymbol {
     bounds: Rectangle,
     label: String,
     subcircuit: Option<Box<Layout>>,  // Nested layout
 }
 
-impl ModuleSymbol {
-    pub fn new(module_name: &str, contents: Layout) -> Self {
+impl EntitySymbol {
+    pub fn new(entity_name: &str, contents: Layout) -> Self {
         // Calculate bounds based on contents
         let bounds = contents.calculate_bounds().expand(20.0);
         
         Self {
             bounds,
-            label: module_name.to_string(),
+            label: entity_name.to_string(),
             subcircuit: Some(Box::new(contents)),
         }
     }
@@ -488,7 +488,7 @@ impl ModuleSymbol {
     pub fn render_svg(&self) -> svg::node::element::Group {
         let mut group = Group::new();
         
-        // Module box
+        // Entity box
         let rect = Rectangle::new()
             .set("x", self.bounds.x)
             .set("y", self.bounds.y)
@@ -498,7 +498,7 @@ impl ModuleSymbol {
             .set("stroke", "black")
             .set("stroke-width", 2);
             
-        // Module label
+        // Entity label
         let text = Text::new()
             .set("x", self.bounds.x + 5)
             .set("y", self.bounds.y - 5)
@@ -521,25 +521,25 @@ impl ModuleSymbol {
 // In semantic_layout.rs
 impl SemanticLayout {
     pub fn layout_hierarchical(&mut self, netlist: &Netlist) {
-        // Group instances by parent module
+        // Group instances by parent entity
         let hierarchy = self.build_hierarchy_tree(netlist);
-        
-        // Layout each module recursively
+
+        // Layout each entity recursively
         self.layout_module_recursive(&hierarchy.root);
     }
     
-    fn layout_module_recursive(&mut self, module: &ModuleNode) {
-        if module.children.is_empty() {
-            // Leaf module - layout components
-            self.layout_components(&module.instances);
+    fn layout_entity_recursive(&mut self, entity: &EntityNode) {
+        if entity.children.is_empty() {
+            // Leaf entity - layout components
+            self.layout_components(&entity.instances);
         } else {
-            // Layout child modules first
-            for child in &module.children {
-                self.layout_module_recursive(child);
+            // Layout child entities first
+            for child in &entity.children {
+                self.layout_entity_recursive(child);
             }
-            
-            // Then layout this module with children as blocks
-            self.layout_with_submodules(module);
+
+            // Then layout this entity with children as blocks
+            self.layout_with_subentities(entity);
         }
     }
 }
@@ -548,10 +548,10 @@ impl SemanticLayout {
 ## Implementation Phases
 
 ### Phase 1: Parser & AST (Week 1)
-1. Extend module grammar to support instances and connections
+1. Extend entity grammar to support instances and connections
 2. Add InstanceDecl AST node
 3. Update Module AST to expose new elements
-4. Write parser tests for hierarchical modules
+4. Write parser tests for hierarchical entities
 
 ### Phase 2: Analyzer Support (Week 2)
 1. Implement hierarchical symbol tables
@@ -562,21 +562,21 @@ impl SemanticLayout {
 ### Phase 3: Synthesis (Week 3)
 1. Implement instance path management
 2. Update netlist builder for hierarchy
-3. Handle module instantiation vs component instantiation
+3. Handle entity instantiation vs component instantiation
 4. Preserve hierarchy in netlist structure
 
 ### Phase 4: Visualization (Week 4)
-1. Create module symbol rendering
+1. Create entity symbol rendering
 2. Implement hierarchical layout algorithm
 3. Handle cross-hierarchy routing
-4. Add expand/collapse for module views
+4. Add expand/collapse for entity views
 
 ## Testing Strategy
 
 ### Parser Tests
 ```bhdl
-// Test nested module parsing
-module Parent {
+// Test nested entity parsing
+entity Parent {
     child1: Child {
         input -> .in;
         .out -> output;
@@ -591,7 +591,7 @@ module Parent {
 
 ### Analyzer Tests
 - Verify hierarchical symbol resolution
-- Test cross-module net connections
+- Test cross-entity net connections
 - Validate scope isolation
 
 ### End-to-End Tests
@@ -617,12 +617,12 @@ board TestBoard {
 
 ### For Existing BHDL Code
 - Boards remain unchanged
-- Flat modules remain valid
+- Flat entities remain valid
 - New hierarchical features are additive
 
 ### New Best Practices
-1. Group related components into modules
-2. Create reusable library modules
+1. Group related components into entities
+2. Create reusable library entities
 3. Use meaningful instance names
 4. Keep hierarchy depth reasonable (2-3 levels)
 
@@ -631,5 +631,5 @@ board TestBoard {
 1. **Reusability**: Write once, instantiate many times
 2. **Organization**: Logical grouping of functionality
 3. **Abstraction**: Hide implementation details
-4. **Scalability**: Build complex systems from simple modules
-5. **Testing**: Test modules in isolation
+4. **Scalability**: Build complex systems from simple entities
+5. **Testing**: Test entities in isolation

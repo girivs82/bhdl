@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use bhdl_parser::parse;
-use bhdl_ast::{SourceFile, AstNode, Module, HasName};
+use bhdl_ast::{SourceFile, AstNode, Entity, HasName};
 
 #[test]
 fn test_parse_actual_resistor_file() -> Result<()> {
@@ -28,20 +28,20 @@ fn test_parse_actual_resistor_file() -> Result<()> {
     let source_file = SourceFile::cast(syntax_node)
         .ok_or_else(|| anyhow::anyhow!("Failed to cast to SourceFile"))?;
     
-    // Find modules
-    let mut module_count = 0;
+    // Find entities
+    let mut entity_count = 0;
     for item in source_file.items() {
-        if let Some(module) = Module::cast(item.syntax().clone()) {
-            module_count += 1;
-            let name = module.name().map(|n| n.text().to_string()).unwrap_or_default();
-            println!("\nFound module: {}", name);
-            
-            // Print module syntax
-            let module_text = module.syntax().text().to_string();
-            println!("Module text (first 200 chars):\n{}", &module_text[..200.min(module_text.len())]);
-            
+        if let Some(entity) = Entity::cast(item.syntax().clone()) {
+            entity_count += 1;
+            let name = entity.name().map(|n| n.text().to_string()).unwrap_or_default();
+            println!("\nFound entity: {}", name);
+
+            // Print entity syntax
+            let entity_text = entity.syntax().text().to_string();
+            println!("Entity text (first 200 chars):\n{}", &entity_text[..200.min(entity_text.len())]);
+
             // Count pins
-            let pins: Vec<_> = module.pins().collect();
+            let pins: Vec<_> = entity.pins().collect();
             println!("Pin count: {}", pins.len());
             
             // Print each pin's syntax
@@ -54,7 +54,7 @@ fn test_parse_actual_resistor_file() -> Result<()> {
         }
     }
     
-    println!("\nTotal modules found: {}", module_count);
+    println!("\nTotal entities found: {}", entity_count);
     
     Ok(())
 }

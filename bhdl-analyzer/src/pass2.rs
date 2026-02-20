@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use rowan::{SyntaxNode, TextRange, ast::SyntaxNodePtr};
 use rowan::ast::AstNode;
 use bhdl_parser::{SyntaxKind, BhdlLanguage};
@@ -11,9 +10,10 @@ use bhdl_ast::{HasName,
     flow::{FlowExpr, FlowElement},
 };
 
-use crate::symbol_table::{Symbol, SymbolKind, SymbolTable, PortDirectionKind};
+use crate::symbol_table::{Symbol, SymbolKind, PortDirectionKind};
 use crate::types::{ResolvedTypeInfo, Diagnostic}; // Need ResolvedTypeInfo, Diagnostic - Removed ResolvedConstants
 use crate::builtin_variables::BuiltinVariableManager;
+use crate::scope_registry::{ScopeRegistry, ScopeId};
 
 // --- Pass 2: Check References --- 
 
@@ -36,16 +36,16 @@ pub(crate) fn resolve_node_type_info<'a>(
             let name = ident_token.text();
             // NetRef looks up in the net namespace
             match context.lookup_net(name) {
-                None => Err(Diagnostic { 
-                    message: format!("Undefined net: @{}", name), 
-                    range: ident_token.text_range() 
-                }),
+                None => Err(Diagnostic::new(
+                    format!("Undefined net: @{}", name),
+                    ident_token.text_range(),
+                )),
                 Some(symbol) => {
                     if symbol.kind != SymbolKind::Net {
-                        return Some(Err(Diagnostic { 
-                            message: format!("Symbol '@{}' is not a net (found {:?})", name, symbol.kind), 
-                            range: ident_token.text_range() 
-                        }));
+                        return Some(Err(Diagnostic::new(
+                            format!("Symbol '@{}' is not a net (found {:?})", name, symbol.kind),
+                            ident_token.text_range(),
+                        )));
                     }
                     symbol.definition_node_ptr.as_ref()
                         .and_then(|ptr| ptr.try_to_node(context.source_file_root))
@@ -97,17 +97,17 @@ pub(crate) fn resolve_node_type_info<'a>(
             // Regular identifiers look up in main symbol table (not nets)
             match context.lookup(name) {
                 None => {
-                    Err(Diagnostic { 
-                        message: format!("Undefined symbol: {}", name), 
-                        range: ident_token.text_range() 
-                    })
+                    Err(Diagnostic::new(
+                        format!("Undefined symbol: {}", name),
+                        ident_token.text_range(),
+                    ))
                 },
                 Some(symbol) => {
                     if symbol.kind != SymbolKind::Pin {
-                        return Some(Err(Diagnostic { 
-                            message: format!("Symbol '{}' is not a valid connection/assignment endpoint (found {:?})", name, symbol.kind), 
-                            range: ident_token.text_range() 
-                        }));
+                        return Some(Err(Diagnostic::new(
+                            format!("Symbol '{}' is not a valid connection/assignment endpoint (found {:?})", name, symbol.kind),
+                            ident_token.text_range(),
+                        )));
                     }
                     symbol.definition_node_ptr.as_ref()
                         .and_then(|ptr| ptr.try_to_node(context.source_file_root))
@@ -127,10 +127,10 @@ pub(crate) fn resolve_node_type_info<'a>(
                             };
                             Ok(ResolvedTypeInfo { base_type_name, bounds })
                         })
-                        .unwrap_or_else(|| Err(Diagnostic {
-                            message: format!("Internal error: Could not get type ref for symbol '{}'", name),
-                            range: ident_token.text_range(),
-                        }))
+                        .unwrap_or_else(|| Err(Diagnostic::new(
+                            format!("Internal error: Could not get type ref for symbol '{}'", name),
+                            ident_token.text_range(),
+                        )))
                 }
             }
         }
@@ -140,43 +140,43 @@ pub(crate) fn resolve_node_type_info<'a>(
             if let Some(inst_name_token) = pin_ref.instance_name() {
                 let inst_name = inst_name_token.text();
                 match context.lookup(inst_name) { 
-                    None => Err(Diagnostic { 
-                        message: format!("Undefined instance: {}", inst_name), 
-                        range: inst_name_token.text_range() 
-                    }),
+                    None => Err(Diagnostic::new(
+                        format!("Undefined instance: {}", inst_name),
+                        inst_name_token.text_range(),
+                    )),
                     Some(inst_symbol) => {
                         if inst_symbol.kind != SymbolKind::Instance {
-                            Err(Diagnostic { 
-                                message: format!("Symbol '{}' is not an instance (found {:?})", inst_name, inst_symbol.kind), 
-                                range: inst_name_token.text_range() 
-                            })
+                            Err(Diagnostic::new(
+                                format!("Symbol '{}' is not an instance (found {:?})", inst_name, inst_symbol.kind),
+                                inst_name_token.text_range(),
+                            ))
                         } else if let Some(type_name) = &inst_symbol.instance_type_name {
                              match context.lookup_global(type_name) {
-                                None => Err(Diagnostic { 
-                                    message: format!("Undefined component type: {}", type_name), 
-                                    range: inst_symbol.span 
-                                }),
+                                None => Err(Diagnostic::new(
+                                    format!("Undefined component type: {}", type_name),
+                                    inst_symbol.span,
+                                )),
                                 Some(type_symbol) => {
                                     if !type_symbol.kind.is_component_type_kind() {
-                                        Err(Diagnostic { 
-                                            message: format!("Symbol '{}' is not a component/module/board/interface type (found {:?})", type_name, type_symbol.kind), 
-                                            range: inst_symbol.span 
-                                        })
+                                        Err(Diagnostic::new(
+                                            format!("Symbol '{}' is not a component/entity/board/interface type (found {:?})", type_name, type_symbol.kind),
+                                            inst_symbol.span,
+                                        ))
                                     } else if let Some(def_node_ptr) = &type_symbol.definition_node_ptr {
-                                        if let Some(component_scope_table) = context.definition_scopes.get(def_node_ptr) {
+                                        if let Some(component_scope_table) = context.registry.scope_for_node(def_node_ptr) {
                                             if let Some(pin_name_token) = pin_ref.pin_name() {
                                                 let pin_name = pin_name_token.text();
                                                 match component_scope_table.lookup(pin_name) {
-                                                    None => Err(Diagnostic { 
-                                                        message: format!("Undefined pin '{}' in component type '{}'", pin_name, type_name), 
-                                                        range: pin_name_token.text_range() 
-                                                    }),
+                                                    None => Err(Diagnostic::new(
+                                                        format!("Undefined pin '{}' in component type '{}'", pin_name, type_name),
+                                                        pin_name_token.text_range(),
+                                                    )),
                                                     Some(pin_symbol) => {
                                                         if pin_symbol.kind != SymbolKind::Pin {
-                                                            return Some(Err(Diagnostic { 
-                                                                message: format!("Symbol '{}' in component type '{}' is not a pin (found {:?})", pin_name, type_name, pin_symbol.kind), 
-                                                                range: pin_name_token.text_range() 
-                                                            }));
+                                                            return Some(Err(Diagnostic::new(
+                                                                format!("Symbol '{}' in component type '{}' is not a pin (found {:?})", pin_name, type_name, pin_symbol.kind),
+                                                                pin_name_token.text_range(),
+                                                            )));
                                                         }
                                                         pin_symbol.definition_node_ptr.as_ref()
                                                             .and_then(|ptr| ptr.try_to_node(context.source_file_root))
@@ -196,25 +196,25 @@ pub(crate) fn resolve_node_type_info<'a>(
                                                                 };
                                                                 Ok(ResolvedTypeInfo { base_type_name, bounds })
                                                             })
-                                                            .unwrap_or_else(|| Err(Diagnostic {
-                                                                message: format!("Internal error: Could not get type ref for pin symbol '{}'", pin_name),
-                                                                range: pin_name_token.text_range(),
-                                                            }))
+                                                            .unwrap_or_else(|| Err(Diagnostic::new(
+                                                                format!("Internal error: Could not get type ref for pin symbol '{}'", pin_name),
+                                                                pin_name_token.text_range(),
+                                                            )))
                                                     }
                                                 }
                                             } else { 
-                                                 Err(Diagnostic { message: "Internal error: PinRef missing pin name".to_string(), range: node.text_range() })
+                                                 Err(Diagnostic::new("Internal error: PinRef missing pin name".to_string(), node.text_range()))
                                             }
                                         } else {
-                                            Err(Diagnostic { message: format!("Internal error: Scope not found for component type '{}'", type_name), range: inst_symbol.span })
+                                            Err(Diagnostic::new(format!("Internal error: Scope not found for component type '{}'", type_name), inst_symbol.span))
                                         }
                                     } else {
-                                        Err(Diagnostic { message: format!("Internal error: Definition node missing for component type '{}'", type_name), range: inst_symbol.span })
+                                        Err(Diagnostic::new(format!("Internal error: Definition node missing for component type '{}'", type_name), inst_symbol.span))
                                     }
                                 }
                              }
                         } else {
-                             Err(Diagnostic { message: format!("Internal error: Instance symbol '{}' missing type name", inst_name), range: inst_name_token.text_range() })
+                             Err(Diagnostic::new(format!("Internal error: Instance symbol '{}' missing type name", inst_name), inst_name_token.text_range()))
                         }
                     }
                 }
@@ -222,16 +222,16 @@ pub(crate) fn resolve_node_type_info<'a>(
             else if let Some(pin_name_token) = pin_ref.pin_name() {
                  let name = pin_name_token.text();
                  match context.lookup(name) { 
-                    None => Err(Diagnostic { 
-                        message: format!("Undefined symbol: {}", name), 
-                        range: pin_name_token.text_range() 
-                    }),
+                    None => Err(Diagnostic::new(
+                        format!("Undefined symbol: {}", name),
+                        pin_name_token.text_range(),
+                    )),
                     Some(symbol) => {
                         if symbol.kind != SymbolKind::Pin { 
-                             return Some(Err(Diagnostic { 
-                                message: format!("Symbol '{}' is not a pin/port (found {:?})", name, symbol.kind), 
-                                range: pin_name_token.text_range() 
-                            }));
+                             return Some(Err(Diagnostic::new(
+                                format!("Symbol '{}' is not a pin/port (found {:?})", name, symbol.kind),
+                                pin_name_token.text_range(),
+                            )));
                         }
                         symbol.definition_node_ptr.as_ref()
                             .and_then(|ptr| ptr.try_to_node(context.source_file_root))
@@ -251,14 +251,14 @@ pub(crate) fn resolve_node_type_info<'a>(
                                 };
                                 Ok(ResolvedTypeInfo { base_type_name, bounds })
                             })
-                            .unwrap_or_else(|| Err(Diagnostic {
-                                message: format!("Internal error: Could not get type ref for pin/port symbol '{}'", name),
-                                range: pin_name_token.text_range(),
-                            }))
+                            .unwrap_or_else(|| Err(Diagnostic::new(
+                                format!("Internal error: Could not get type ref for pin/port symbol '{}'", name),
+                                pin_name_token.text_range(),
+                            )))
                     }
                  }
             } else {
-                 Err(Diagnostic { message: "Malformed PinRef node".to_string(), range: node.text_range() })
+                 Err(Diagnostic::new("Malformed PinRef node".to_string(), node.text_range()))
             }
         }
         _ => return None, 
@@ -277,10 +277,10 @@ pub(crate) fn resolve_node_type_info<'a>(
 
             if let Some(suffix) = bus_suffix_node {
                 if declared_bounds.is_none() {
-                    Some(Err(Diagnostic { 
-                        message: format!("Symbol '{}' is not declared as a bus but used with a suffix", node.text()), 
-                        range: suffix.syntax().text_range(),
-                    }))
+                    Some(Err(Diagnostic::new(
+                        format!("Symbol '{}' is not declared as a bus but used with a suffix", node.text()),
+                        suffix.syntax().text_range(),
+                    )))
                 } else if suffix.index_expr_node().is_some() {
                     Some(Ok(ResolvedTypeInfo { base_type_name, bounds: None })) 
                 } else if suffix.range().is_some() {
@@ -311,10 +311,10 @@ pub(crate) fn resolve_expression_type_info<'a>(
         SyntaxKind::IDENT_REF |
         SyntaxKind::SIMPLE_IDENT_REF => {
             resolve_node_type_info(context, node, false)
-                .unwrap_or_else(|| Err(Diagnostic {
-                    message: format!("Internal error: Could not resolve node type info for reference kind {:?}", node.kind()),
-                    range: node.text_range(),
-                }))
+                .unwrap_or_else(|| Err(Diagnostic::new(
+                    format!("Internal error: Could not resolve node type info for reference kind {:?}", node.kind()),
+                    node.text_range(),
+                )))
         }
         SyntaxKind::VALUE => {
             Ok(ResolvedTypeInfo { base_type_name: "signal".to_string(), bounds: None })
@@ -341,124 +341,113 @@ pub(crate) fn resolve_expression_type_info<'a>(
                 let lhs_type = lhs_type_res?;
                 let rhs_type = rhs_type_res?;
                 if lhs_type.base_type_name != "signal" || rhs_type.base_type_name != "signal" {
-                    return Err(Diagnostic {
-                        message: format!(
+                    return Err(Diagnostic::new(
+                        format!(
                             "Operator '{}' not supported between types '{}' and '{}' (only 'signal' supported for now)",
-                            op.as_token().map(|t| t.text()).unwrap_or("?"), 
+                            op.as_token().map(|t| t.text()).unwrap_or("?"),
                             lhs_type.base_type_name, rhs_type.base_type_name
                         ),
-                        range: op.text_range(),
-                    });
+                        op.text_range(),
+                    ));
                 }
                 if lhs_type.width() != rhs_type.width() {
-                     return Err(Diagnostic {
-                        message: format!(
+                     return Err(Diagnostic::new(
+                        format!(
                             "Width mismatch for operator '{}': LHS width {:?} does not match RHS width {:?}",
-                            op.as_token().map(|t| t.text()).unwrap_or("?"), 
+                            op.as_token().map(|t| t.text()).unwrap_or("?"),
                             lhs_type.width(), rhs_type.width()
                         ),
-                        range: node.text_range(), 
-                    });
+                        node.text_range(),
+                    ));
                 }
                 Ok(ResolvedTypeInfo {
                     base_type_name: "signal".to_string(), 
                     bounds: lhs_type.bounds, 
                 })
             } else {
-                Err(Diagnostic {
-                    message: "Malformed binary expression".to_string(),
-                    range: node.text_range(),
-                })
+                Err(Diagnostic::new(
+                    "Malformed binary expression".to_string(),
+                    node.text_range(),
+                ))
             }
         }
         SyntaxKind::PREFIX_EXPR => {
-             Err(Diagnostic {
-                message: format!("Type checking for prefix expressions (like '{}') not yet implemented", node.text()),
-                range: node.text_range(),
-            })
+             Err(Diagnostic::new(
+                format!("Type checking for prefix expressions (like '{}') not yet implemented", node.text()),
+                node.text_range(),
+            ))
         }
-        _ => Err(Diagnostic {
-            message: format!("Internal error: Type checking not implemented for expression kind {:?}", node.kind()),
-            range: node.text_range(),
-        }),
+        _ => Err(Diagnostic::new(
+            format!("Internal error: Type checking not implemented for expression kind {:?}", node.kind()),
+            node.text_range(),
+        )),
     }
 }
 
 // Pass 2 Context: Holds analysis state for reference resolution
 #[derive(Debug)]
 pub(crate) struct Pass2Context<'a> {
-    global_scope: &'a SymbolTable,
-    // Stack of currently active scopes (references to scopes in the definition_scopes map)
-    current_scope_stack: Vec<&'a SymbolTable>,
-    // Map built in Pass 1: Definition Node -> Its SymbolTable
-    definition_scopes: &'a HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>,
+    registry: &'a ScopeRegistry,
+    scope_stack: Vec<ScopeId>,
     diagnostics: &'a mut Vec<Diagnostic>,
-    source_file_root: &'a SyntaxNode<BhdlLanguage>, // Added root node reference
-    pub(crate) builtin_manager: &'a BuiltinVariableManager, // Added for built-in variable support
+    source_file_root: &'a SyntaxNode<BhdlLanguage>,
+    pub(crate) builtin_manager: &'a BuiltinVariableManager,
 }
 
 impl<'a> Pass2Context<'a> {
-    // Constructor made public
     pub(crate) fn new(
-        global_scope: &'a SymbolTable, 
-        def_scopes: &'a HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>, 
-        source_file_root: &'a SyntaxNode<BhdlLanguage>, // Added parameter
-        diagnostics: &'a mut Vec<Diagnostic>, // Added parameter
-        builtin_manager: &'a BuiltinVariableManager, // Added parameter for built-in variables
+        registry: &'a ScopeRegistry,
+        source_file_root: &'a SyntaxNode<BhdlLanguage>,
+        diagnostics: &'a mut Vec<Diagnostic>,
+        builtin_manager: &'a BuiltinVariableManager,
     ) -> Self {
         Self {
-            global_scope,
-            current_scope_stack: vec![global_scope], // Start with global scope
-            definition_scopes: def_scopes,
-            diagnostics, // Assign passed-in mutable reference
-            source_file_root, // Store reference
-            builtin_manager, // Store built-in variable manager
+            registry,
+            scope_stack: vec![registry.global_id()],
+            diagnostics,
+            source_file_root,
+            builtin_manager,
         }
     }
 
-    // Add a diagnostic message (keep internal)
+    // Current scope ID
+    fn current_scope(&self) -> ScopeId {
+        *self.scope_stack.last().unwrap()
+    }
+
+    // Add a diagnostic message
     fn add_diagnostic(&mut self, message: String, range: TextRange) {
-        self.diagnostics.push(Diagnostic { message, range });
+        self.diagnostics.push(Diagnostic::new(message, range));
     }
 
-    // Lookup symbol by searching up the current scope stack (keep internal)
+    // Lookup symbol via parent-chain traversal
     fn lookup(&self, name: &str) -> Option<&Symbol> {
-        for scope in self.current_scope_stack.iter().rev() {
-            if let Some(symbol) = scope.lookup(name) {
-                return Some(symbol);
-            }
-        }
-        None 
+        self.registry.lookup(self.current_scope(), name)
     }
-    
-    // Lookup net by searching up the current scope stack
+
+    // Lookup net via parent-chain traversal
     fn lookup_net(&self, name: &str) -> Option<&Symbol> {
-        for scope in self.current_scope_stack.iter().rev() {
-            if let Some(symbol) = scope.lookup_net(name) {
-                return Some(symbol);
-            }
-        }
-        None 
+        self.registry.lookup_net(self.current_scope(), name)
     }
 
-    // Lookup symbol only in the global scope (keep internal)
+    // Lookup symbol only in the global scope
     fn lookup_global(&self, name: &str) -> Option<&Symbol> {
-        self.global_scope.lookup(name)
+        self.registry.lookup_global(name)
     }
 
-    // Push a scope onto the stack if it exists in the definition map (keep internal)
+    // Push a scope onto the stack
     fn push_scope(&mut self, node_ptr: &SyntaxNodePtr<BhdlLanguage>) {
-        if let Some(scope) = self.definition_scopes.get(node_ptr) {
-            self.current_scope_stack.push(scope);
+        if let Some(scope_id) = self.registry.scope_id_for_node(node_ptr) {
+            self.scope_stack.push(scope_id);
         } else {
             println!("Internal Error: Could not find scope for node {:?} during Pass 2 push.", node_ptr);
         }
     }
 
-    // Pop the current scope from the stack (if not the global) (keep internal)
+    // Pop the current scope from the stack (if not the global)
     fn pop_scope(&mut self) {
-       if self.current_scope_stack.len() > 1 {
-           self.current_scope_stack.pop();
+       if self.scope_stack.len() > 1 {
+           self.scope_stack.pop();
        }
     }
 }
@@ -470,7 +459,7 @@ pub fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mu
 
     match node.kind() {
         SyntaxKind::BOARD_DEF |
-        SyntaxKind::MODULE_DEF |
+        SyntaxKind::ENTITY_DEF |
         SyntaxKind::COMPONENT_DEF |
         SyntaxKind::INTERFACE_DEF => {
              let ptr = SyntaxNodePtr::new(node);
@@ -626,7 +615,7 @@ pub fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mu
                             if symbol.kind == SymbolKind::Interface {
                                 // Handle as interface instance
                                 if let Some(def_node_ptr) = &symbol.definition_node_ptr {
-                                    if let Some(interface_scope) = context.definition_scopes.get(def_node_ptr) {
+                                    if let Some(interface_scope) = context.registry.scope_for_node(def_node_ptr) {
                                         // Check for PARAM_LIST (interface instances) or PARAM_ASSIGN_BLOCK (components)
                                         if let Some(param_list) = inst.param_list() {
                                             // Handle PARAM_LIST for interface instances
@@ -677,7 +666,7 @@ pub fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mu
                             }
                             else {
                                 if let Some(def_node_ptr) = &symbol.definition_node_ptr {
-                                    if let Some(component_scope) = context.definition_scopes.get(def_node_ptr) {
+                                    if let Some(component_scope) = context.registry.scope_for_node(def_node_ptr) {
                                         if let Some(param_block) = inst.param_assign_block() {
                                             for param_assign in param_block.assignments() {
                                                     if let Some(param_name_token) = param_assign.name() {
@@ -745,7 +734,7 @@ pub fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mu
                             } else {
                                 // Check interface parameters if present
                                 if let Some(def_node_ptr) = &symbol.definition_node_ptr {
-                                    if let Some(interface_scope) = context.definition_scopes.get(def_node_ptr) {
+                                    if let Some(interface_scope) = context.registry.scope_for_node(def_node_ptr) {
                                         if let Some(params) = inst.params() {
                                             for param in params.params() {
                                                 if let Some(param_name_token) = param.name() {
@@ -881,9 +870,9 @@ pub fn visit_node_pass2_references(node: &SyntaxNode<BhdlLanguage>, context: &mu
                                         );
                                     }
                                     Some(symbol) => {
-                                        if !matches!(symbol.kind, SymbolKind::Component | SymbolKind::Module) {
+                                        if !matches!(symbol.kind, SymbolKind::Component | SymbolKind::Entity) {
                                             context.add_diagnostic(
-                                                format!("Symbol '{}' is not a component or module type (found {:?})", type_name, symbol.kind),
+                                                format!("Symbol '{}' is not a component or entity type (found {:?})", type_name, symbol.kind),
                                                 type_name_token.text_range(),
                                             );
                                         }
@@ -1012,7 +1001,7 @@ impl<'a> Pass2Context<'a> {
                          .and_then(|type_name| self.lookup_global(type_name))
                          .filter(|sym| sym.kind.is_component_type_kind())
                          .and_then(|type_sym| type_sym.definition_node_ptr.as_ref())
-                         .and_then(|ptr| self.definition_scopes.get(ptr))
+                         .and_then(|ptr| self.registry.scope_for_node(ptr))
                          .and_then(|scope| pin_ref.pin_name().and_then(|pin_token| scope.lookup(pin_token.text())))
                          .filter(|sym| sym.kind == SymbolKind::Pin)
                  } else {

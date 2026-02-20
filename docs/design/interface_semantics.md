@@ -15,8 +15,8 @@
 ### 2. Interface vs Module
 
 ```bhdl
-// MODULE: Creates components and internal connections
-module UARTTransceiver() {
+// ENTITY: Creates components and internal connections
+entity UARTTransceiver() {
     pin TX: signal out;
     pin RX: signal in;
     // Contains implementation with components

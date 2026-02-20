@@ -6,6 +6,7 @@ pub mod fmea_analysis;
 pub mod redundancy_analysis;
 pub mod instance_registry;
 pub mod power_domain_expansion;
+pub mod monomorphization;
 
 pub use safety_analysis::{
     analyze_safety,
@@ -54,4 +55,12 @@ pub use power_domain_expansion::{
     ExpandedConnection,
     DecouplingCapacitor,
     expand_power_domains,
+};
+
+pub use monomorphization::{
+    MonomorphizationResult,
+    SpecializedModule,
+    SpecializationKey,
+    run_monomorphization,
+    register_specializations,
 };

@@ -16,7 +16,7 @@ type LEDParams = {
     impedance: ImpedanceCharacteristics, // Impedance and power characteristics
 };
 
-module LED(color: string = "red", size: string = "5mm") {
+entity LED(color: string = "red", size: string = "5mm") {
     pin A: signal in @metadata(
         function="Anode",
         description="Positive terminal (Anode)",

@@ -12,7 +12,7 @@ Pin metadata originates from BHDL component definitions in the stdlib:
 
 ```bhdl
 // Example from bhdl-stdlib/regulators/lm7805.bhdl
-module LM7805(package: string = "TO-220") {
+entity LM7805(package: string = "TO-220") {
     pin IN: power in;     // Input voltage (7-35V)
     pin GND: ground;      // Ground
     pin OUT: power out;   // Regulated 5V output @ 1A

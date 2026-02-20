@@ -5,7 +5,7 @@ import { voltage, current, power, frequency, temperature, time, capacitance } fr
 import { ThermalModel, SimulationFeedback, SelectionConstraints } from "../simulation_knowledge.bhdl";
 
 // ==================== COMPONENT DEFINITION ====================
-module STM32F103C8T6() {
+entity STM32F103C8T6() {
     // Power pins with detailed metadata
     pin VDD1: power in {
         voltage_range: (2.0V, 3.6V),

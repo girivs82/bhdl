@@ -51,7 +51,7 @@ fn print_analysis_results(result: &bhdl_analyzer::types::AnalysisResult) {
     // Print symbol table summary
     println!("\nGlobal Scope:");
     // Since SymbolTable fields are not public, we can only report on what we can access
-    println!("  Child scopes: {}", result.global_scope.children.len());
+    println!("  Global symbols: {}", result.global_scope.get_symbols().len());
     
     // Print definition scopes
     println!("\nDefinition Scopes:");

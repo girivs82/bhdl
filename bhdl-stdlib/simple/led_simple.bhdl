@@ -1,0 +1,13 @@
+// Simplified LED - v2.0 compatible
+
+entity LED(color: string) {
+    pin A: signal in;
+    pin K: signal in;
+
+    attribute component_class = "led";
+    attribute color = color;
+    attribute forward_voltage = 2.0V;
+    attribute forward_current = 20mA;
+    attribute max_current = 30mA;
+    attribute kicad_symbol = "Device:LED";
+}

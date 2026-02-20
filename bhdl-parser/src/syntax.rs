@@ -61,10 +61,11 @@ pub enum SyntaxKind {
     // Keywords
     IMPORT_KW, // import
     BOARD_KW,  // board
-    MODULE_KW, // module
+    ENTITY_KW, // entity
     TYPEDEF_KW,   // typedef
     STRUCT_KW,    // struct
     ENUM_KW,      // enum
+    MATCH_KW,     // match
     INTERFACE_KW, // interface
     COMPONENT_KW, // component (for direct instantiation in v2.0)
     NET_KW,        // net
@@ -111,6 +112,10 @@ pub enum SyntaxKind {
     PERSPECTIVE_KW, // perspective (for interface perspectives)
     WHERE_KW,     // where (for connection constraints)
     WITH_KW,      // with (for grouped constraints)
+    TRAIT_KW,     // trait (for interface traits)
+    IMPL_KW,      // impl (for trait implementations on components)
+    SAFETY_GOAL_KW,   // safety_goal
+    FAULT_INJECT_KW,  // fault_inject
     SATISFIES_KW, // satisfies (for safety requirement compliance)
     VIA_KW,       // via (for satisfies declarations)
     
@@ -167,12 +172,24 @@ pub enum SyntaxKind {
     IMPORT_TARGET_GROUP, // { Item, Item ... }
     ALIAS,          // `as AliasName` part of import
     BOARD_DEF,      // board BoardName { ... }
-    MODULE_DEF,     // module ModuleName { ... }
+    ENTITY_DEF,     // entity EntityName { ... }
     COMPONENT_DEF,  // component ComponentName { ... }
     TYPEDEF_DEF,    // typedef TypeName [extends Base] { ... }
     TYPEDEF_BASE,   // Node wrapping the base type name after extends
     STRUCT_DEF,     // struct definition
     ENUM_DEF,       // enum definition
+    ENUM_VARIANT,   // variant within an enum (e.g., Overcurrent, Fault(FaultKind))
+    MATCH_EXPR,     // match expr { arms }
+    MATCH_ARM,      // pattern => body
+    MATCH_PATTERN,  // pattern in a match arm (literal, ident, path, wildcard)
+    GENERIC_PARAMS, // <T: Type, V: voltage where V > 0> generic parameter block
+    GENERIC_PARAM,  // Single generic parameter with optional type + constraints
+    WHERE_CLAUSE,   // where V_IN >= 4.5V && V_IN <= 40V
+    TRAIT_DEF,      // trait TraitName { pin ...; const ...; }
+    TRAIT_IMPL,     // impl TraitName for Component { ... }  or  component X impl Trait { ... }
+    TRAIT_PIN,      // pin declaration within a trait
+    TRAIT_CONST,    // const declaration within a trait
+    TRAIT_BOUND,    // T: TraitName (in generic param list)
     INTERFACE_DEF,  // interface InterfaceName { ... }
     INTERFACE_SIGNAL,    // signal name: direction optional?;
     INTERFACE_REQUIREMENT, // require pullup(SDA, 4.7k);
@@ -291,8 +308,8 @@ pub enum SyntaxKind {
     CONNECTION_LHS,    // Wrapper node for LHS refs
     CONNECTION_RHS,    // Wrapper node for RHS refs
 
-    // Hierarchical module support
-    MODULE_INST,       // Module instantiation within a module
+    // Hierarchical entity support
+    ENTITY_INST,       // Entity instantiation within an entity
     PORT_MAPPING,      // Single port mapping: PIN <- signal;
     ATTRIBUTE_DECL,    // Attribute declaration: attribute name = expression;
     WHEN_BLOCK,        // When block for behavioral conditions
@@ -316,6 +333,8 @@ pub enum SyntaxKind {
     
     // Hierarchical requirement nodes
     SAFETY_GOAL_DEF,    // safety_goal SG_001 { ... }
+    FAULT_INJECT_DEF,   // fault_inject short(a, b) -> verify { ... }
+    SAFETY_ATTR,        // #[safety(...)] or #[safety_mechanism(...)]
     FUNCTIONAL_REQ_DEF, // functional_requirement FSR_001 { ... }
     TECHNICAL_REQ_DEF,  // technical_requirement TSR_001 { ... }
     REQ_PROPERTY,       // property: value pairs in requirements

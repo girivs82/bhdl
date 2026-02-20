@@ -180,6 +180,7 @@ mod tests {
             crate::passes::power_domain_expansion::PowerDomainExpansion {
                 connections: Vec::new(),
                 decoupling_caps: Vec::new(),
+                diagnostics: Vec::new(),
             },
             super::super::DocumentationOptions::default(),
         );

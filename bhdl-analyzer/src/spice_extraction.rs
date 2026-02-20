@@ -1,11 +1,11 @@
 //! SPICE parameter extraction from BHDL component attributes
 
 
-/// Extract SPICE model parameters from module attributes
+/// Extract SPICE model parameters from entity attributes
 // Commented out to avoid cyclic dependency with bhdl_spice
 /*
-pub fn extract_spice_model_from_module(module: &Module) -> Option<ComponentModel> {
-    let attrs = extract_module_attributes(module);
+pub fn extract_spice_model_from_entity(entity: &Entity) -> Option<ComponentModel> {
+    let attrs = extract_module_attributes(entity);
     let spice_model = attrs.get("spice_model")?;
     
     match spice_model.as_str() {
@@ -342,14 +342,27 @@ pub fn parse_unit_value(value: &str) -> Option<f64> {
     // Extract number and unit parts
     let (num_str, unit_str) = value
         .char_indices()
-        .find(|(_, c)| c.is_alphabetic())
+        .find(|(_, c)| c.is_alphabetic() || *c == 'μ' || *c == 'Ω')
         .map(|(idx, _)| value.split_at(idx))
         .unwrap_or((value, ""));
-    
+
     let mut number: f64 = num_str.parse().ok()?;
-    
-    // Apply unit multiplier
-    match unit_str {
+
+    // Strip trailing base unit letters to isolate the SI prefix
+    let base_units: &[&str] = &["Hz", "ohm", "Ω", "V", "A", "W", "F", "H", "s"];
+    let prefix = {
+        let mut p = unit_str;
+        for bu in base_units {
+            if let Some(stripped) = p.strip_suffix(bu) {
+                p = stripped;
+                break;
+            }
+        }
+        p
+    };
+
+    // Apply SI prefix multiplier
+    match prefix {
         "T" => number *= 1e12,
         "G" => number *= 1e9,
         "M" | "MEG" => number *= 1e6,
@@ -359,11 +372,9 @@ pub fn parse_unit_value(value: &str) -> Option<f64> {
         "n" => number *= 1e-9,
         "p" => number *= 1e-12,
         "f" => number *= 1e-15,
-        // Unit suffixes (ignore for now)
-        "V" | "A" | "W" | "F" | "H" | "Ω" | "ohm" | "Hz" | "s" => {},
         _ => {},
     }
-    
+
     Some(number)
 }
 
@@ -371,14 +382,20 @@ pub fn parse_unit_value(value: &str) -> Option<f64> {
 mod tests {
     use super::*;
 
+    fn assert_approx(actual: Option<f64>, expected: f64) {
+        let v = actual.expect("expected Some");
+        assert!((v - expected).abs() < expected.abs() * 1e-12 + 1e-18,
+            "expected ~{}, got {}", expected, v);
+    }
+
     #[test]
     fn test_parse_unit_value() {
-        assert_eq!(parse_unit_value("10k"), Some(10_000.0));
-        assert_eq!(parse_unit_value("4.7k"), Some(4_700.0));
-        assert_eq!(parse_unit_value("100m"), Some(0.1));
-        assert_eq!(parse_unit_value("20mA"), Some(0.02));
-        assert_eq!(parse_unit_value("3.3V"), Some(3.3));
-        assert_eq!(parse_unit_value("1μF"), Some(1e-6));
-        assert_eq!(parse_unit_value("100nF"), Some(100e-9));
+        assert_approx(parse_unit_value("10k"), 10_000.0);
+        assert_approx(parse_unit_value("4.7k"), 4_700.0);
+        assert_approx(parse_unit_value("100m"), 0.1);
+        assert_approx(parse_unit_value("20mA"), 0.02);
+        assert_approx(parse_unit_value("3.3V"), 3.3);
+        assert_approx(parse_unit_value("1μF"), 1e-6);
+        assert_approx(parse_unit_value("100nF"), 100e-9);
     }
 }

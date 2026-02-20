@@ -307,7 +307,7 @@ impl<'t> ErrorRecovery for Parser<'t> {
             SyntaxKind::CONSTRAIN_KW => true,
             
             // Top-level item starts
-            SyntaxKind::BOARD_KW | SyntaxKind::MODULE_KW | SyntaxKind::COMPONENT_KW 
+            SyntaxKind::BOARD_KW | SyntaxKind::ENTITY_KW | SyntaxKind::COMPONENT_KW 
             | SyntaxKind::INTERFACE_KW => true,
             
             // Context-specific recovery points

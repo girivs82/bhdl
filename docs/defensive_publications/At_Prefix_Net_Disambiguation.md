@@ -118,8 +118,8 @@ board MainBoard {
     // Local net
     VCC -> @local_power -> subcircuit
     
-    module PowerSupply {
-        // Module-local net  
+    entity PowerSupply {
+        // Entity-local net
         input -> @filtered -> output
         
         // Reference parent net (requires qualification)

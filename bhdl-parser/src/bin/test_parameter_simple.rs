@@ -4,7 +4,7 @@ fn main() {
     println!("Testing parameter type annotations - simplified...");
     
     // Simple test case for mixed parameters
-    let input = "module OpAmp(
+    let input = "entity OpAmp(
         supply_voltage: voltage,
         gain: number = 1.0,
         bandwidth: frequency = 1MHz

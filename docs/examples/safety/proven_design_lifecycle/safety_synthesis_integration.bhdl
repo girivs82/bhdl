@@ -11,7 +11,7 @@ import stdlib.safety.*;
 // PROVEN DESIGN WITH EMBEDDED SAFETY ANALYSIS
 // ───────────────────────────────────────────────────────────────────
 
-module SoC_Core_Power_Safety_Proven(
+entity SoC_Core_Power_Safety_Proven(
     target_voltage: voltage = 0.85V,
     max_current: current = 15A
 ) {
@@ -372,7 +372,7 @@ safety_documentation_synthesis {
 // HIERARCHICAL SAFETY COMPOSITION
 // ───────────────────────────────────────────────────────────────────
 
-module Complete_Power_System_Safety() {
+entity Complete_Power_System_Safety() {
     // Compose safety-proven modules
     
     // Each subsystem brings its safety analysis

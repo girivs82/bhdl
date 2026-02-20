@@ -7,7 +7,7 @@ board TestBoard {
     ground GND;
     
     if (use_filter) {
-        module NoiseFilter(VCC, VCC_FILTERED, GND) {
+        entity NoiseFilter(VCC, VCC_FILTERED, GND) {
             flow: VCC |> filtering |> VCC_FILTERED;
         }
     }

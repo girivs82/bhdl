@@ -14,7 +14,7 @@ board BuckConverter {
         for noise_filtering(cutoff: 10kHz);
 
     // Buck converter controller
-    module TPS54302 {
+    entity TPS54302 {
         pin VIN: power in;
         pin SW: signal out;
         pin FB: signal in;

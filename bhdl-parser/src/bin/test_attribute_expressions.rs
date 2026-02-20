@@ -2,7 +2,7 @@ use bhdl_parser::{parse, BhdlLanguage, SyntaxKind};
 
 fn main() {
     let source = r#"
-module TestAttributeExpr() {
+entity TestAttributeExpr() {
     pin 1: signal inout;
     pin 2: signal inout;
     

@@ -2,14 +2,14 @@
 
 ## Overview
 
-Use the existing `attribute` keyword with scoped paths to configure nested module parameters, avoiding the need for new syntax.
+Use the existing `attribute` keyword with scoped paths to configure nested entity parameters, avoiding the need for new syntax.
 
 ## Design: Extending Attributes with Scopes
 
 ### Basic Scoped Attributes
 
 ```bhdl
-module AdjustableRegulator {
+entity AdjustableRegulator {
     pin VIN: power in;
     pin VOUT: power out;
     
@@ -33,7 +33,7 @@ board System {
     reg_5v: AdjustableRegulator {
         VIN -> .VIN;
         
-        // Override nested module attributes using dot notation
+        // Override nested entity attributes using dot notation
         attribute feedback.r_top = 10k;
         attribute feedback.r_bottom = 1.91k;  // For 5V output
     }
@@ -50,7 +50,7 @@ board System {
 ### Array Element Attributes
 
 ```bhdl
-module MultiChannelDriver(channels: int = 8) {
+entity MultiChannelDriver(channels: int = 8) {
     generate for i in 0..channels {
         ch[i]: ChannelDriver {
             attribute max_current = 350mA;  // Default
@@ -185,13 +185,13 @@ impl AttributeResolver {
 1. **No new keywords** - Keeps language minimal
 2. **Familiar syntax** - Users already know attributes
 3. **Natural extension** - Dot notation feels intuitive
-4. **Consistent semantics** - Attributes are module properties
+4. **Consistent semantics** - Attributes are entity properties
 
 ## Complete Example: Multi-Rail Power Supply
 
 ```bhdl
 // Reusable voltage regulator
-module VoltageRegulator {
+entity VoltageRegulator {
     pin VIN: power in;
     pin VOUT: power out;
     pin EN: digital in;
@@ -229,7 +229,7 @@ module VoltageRegulator {
 }
 
 // Feedback network submodule
-module FeedbackNetwork {
+entity FeedbackNetwork {
     pin in: signal in;
     pin tap: signal out;
     

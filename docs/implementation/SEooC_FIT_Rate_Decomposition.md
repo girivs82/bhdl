@@ -54,7 +54,7 @@ Map the **permanent die FIT rate** to functional failure modes based on componen
 
 ```bhdl
 // File: bhdl-stdlib/src/voltage_regulators/supervisors/ltc2954.bhdl
-module LTC2954 {
+entity LTC2954 {
     // Vendor SEooC data
     seooc_data {
         vendor: "Analog Devices";
@@ -276,7 +276,7 @@ package_failure_decomposition {
 
 ```bhdl
 // File: bhdl-stdlib/src/microcontrollers/stm32f103.bhdl
-module STM32F103 {
+entity STM32F103 {
     seooc_data {
         vendor: "STMicroelectronics";
         document: "STM32F103-SM Rev 3.1";

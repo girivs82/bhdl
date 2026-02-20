@@ -103,6 +103,7 @@ async fn main() -> Result<()> {
         include_component_inference: true,
         flatten_hierarchy: false,
         database_path: Some("/Users/girivs/src/bhdl-new/components.db".to_string()),
+        ..Default::default()
     };
     
     let mut generator = NetlistGenerator::with_config(config);

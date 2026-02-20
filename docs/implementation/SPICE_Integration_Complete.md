@@ -70,7 +70,7 @@ Fixed several issues that were causing unrealistic simulation results:
 ## Example BHDL Component with SPICE
 
 ```bhdl
-module BJT(part: string = "2N2222", package: string = "TO-92") {
+entity BJT(part: string = "2N2222", package: string = "TO-92") {
     pin C: signal inout;  // Collector
     pin B: signal in;     // Base  
     pin E: signal inout;  // Emitter
@@ -116,7 +116,7 @@ All components now show realistic values:
 2. **Type Safety**: Strongly typed parameters prevent errors
 3. **Realistic Simulations**: Accurate models based on manufacturer data
 4. **Extensible**: Easy to add new component types and parameters
-5. **Self-Contained**: Each component module includes all necessary data
+5. **Self-Contained**: Each component entity includes all necessary data
 
 ## Next Steps
 

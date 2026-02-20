@@ -6,7 +6,7 @@ import "../passives/capacitor.bhdl";
 import "../actives/opamp.bhdl";
 
 // Example 1: Simple constraints on individual connections
-module AnalogFrontEnd() {
+entity AnalogFrontEnd() {
     pin INPUT: signal in;
     pin OUTPUT: signal out;
     pin VCC: power in;
@@ -29,7 +29,7 @@ module AnalogFrontEnd() {
 }
 
 // Example 2: Grouped connections with shared constraints
-module HighSpeedADC() {
+entity HighSpeedADC() {
     pin AIN_P: signal in;
     pin AIN_N: signal in;
     pin D[0..7]: signal out;
@@ -55,7 +55,7 @@ module HighSpeedADC() {
 }
 
 // Example 3: Power distribution network
-module PowerDistribution() {
+entity PowerDistribution() {
     power VIN = 12V @ 5A;
     power VCC_3V3 = 3.3V @ 3A;
     power VCC_1V8 = 1.8V @ 2A;
@@ -83,7 +83,7 @@ module PowerDistribution() {
 }
 
 // Example 4: RF circuit with impedance control
-module RFAmplifier() {
+entity RFAmplifier() {
     pin RF_IN: signal in;
     pin RF_OUT: signal out;
     pin VDD: power in;
@@ -106,9 +106,9 @@ module RFAmplifier() {
 }
 
 // Example 5: Mixed signal with separate domains
-module MixedSignalSystem() {
+entity MixedSignalSystem() {
     // Analog section with quiet ground
-    module AnalogSection {
+    entity AnalogSection {
         with routing(ground_domain = "AGND", away_from = "digital_signals") {
             SENSOR.out -> AMP.in where shielded;
             AMP.out -> FILTER.in where guard_trace = "AGND";
@@ -117,7 +117,7 @@ module MixedSignalSystem() {
     }
     
     // Digital section with different constraints
-    module DigitalSection {
+    entity DigitalSection {
         with routing(ground_domain = "DGND", edge_rate < 1ns) {
             MCU.SPI_CLK -> ADC.SPI_CLK where length < 50mm;
             MCU.SPI_MOSI -> ADC.SPI_MOSI where length_match(SPI_CLK);
@@ -131,7 +131,7 @@ module MixedSignalSystem() {
 }
 
 // Example 6: Nested constraint groups
-module MemoryInterface() {
+entity MemoryInterface() {
     with routing(layer = "inner", reference_plane = "solid") {
         // Address bus group
         with group("address", impedance = 40Ω ± 10%) {
@@ -158,7 +158,7 @@ module MemoryInterface() {
 }
 
 // Example 7: Thermal management constraints
-module PowerAmplifier() {
+entity PowerAmplifier() {
     // High power transistor with thermal considerations
     @VCC -> Q1: PowerTransistor().collector where current_rating >= 10A;
     Q1.emitter -> R_SENSE: Res(0.1Ω, power = 5W).1 where thermal_relief;
@@ -172,7 +172,7 @@ module PowerAmplifier() {
 }
 
 // Supporting module definitions
-module OpAmp() {
+entity OpAmp() {
     pin IN_P: signal in;
     pin IN_N: signal in;
     pin OUT: signal out;
@@ -180,43 +180,43 @@ module OpAmp() {
     pin VEE: power in;
 }
 
-module ADC_IC() {
+entity ADC_IC() {
     pin IN_P: signal in;
     pin IN_N: signal in;
     pin D[0..7]: signal out;
     pin CLK: clock in;
 }
 
-module PowerSwitch() {
+entity PowerSwitch() {
     pin IN: power in;
     pin OUT: power out;
     pin EN: signal in;
 }
 
-module VoltageRegulator(vout: voltage) {
+entity VoltageRegulator(vout: voltage) {
     pin VIN: power in;
     pin VOUT: power out;
     pin GND: ground;
 }
 
-module RFAmp() {
+entity RFAmp() {
     pin IN: signal in;
     pin OUT: signal out;
 }
 
-module Inductor(value: inductance) {
+entity Inductor(value: inductance) {
     pin 1: signal;
     pin 2: signal;
     
     attribute Q: real;
 }
 
-module Bead(impedance: impedance @ frequency) {
+entity Bead(impedance: impedance @ frequency) {
     pin 1: signal;
     pin 2: signal;
 }
 
-module PowerTransistor() {
+entity PowerTransistor() {
     pin collector: power;
     pin base: signal in;
     pin emitter: power;

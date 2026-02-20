@@ -2,7 +2,7 @@
 // Shows the power of modular, reusable design
 
 // Reusable USB protection module
-module USBProtection {
+entity USBProtection {
     pin VBUS_IN: power in;
     pin VBUS_OUT: power out;
     pin D_P, D_N: signal inout;
@@ -41,7 +41,7 @@ module USBProtection {
 }
 
 // Battery charger module
-module BatteryCharger {
+entity BatteryCharger {
     pin VIN: power in;
     pin VBAT: power out;
     pin STAT: digital out;
@@ -82,7 +82,7 @@ module BatteryCharger {
 }
 
 // Power path management
-module PowerPath {
+entity PowerPath {
     pin VUSB: power in;
     pin VBAT: power in;
     pin VSYS: power out;
@@ -138,7 +138,7 @@ module PowerPath {
 }
 
 // Main system regulator module
-module SystemRegulator {
+entity SystemRegulator {
     pin VIN: power in;
     pin V3V3: power out;
     pin V1V8: power out;
@@ -238,7 +238,7 @@ board USBChargerSystem {
 }
 
 // Status LED module (reusable)
-module StatusLEDs {
+entity StatusLEDs {
     pin CHARGE, USB, POWER: digital in;
     pin VDD: power in;
     pin GND: ground;
@@ -269,7 +269,7 @@ module StatusLEDs {
 }
 
 // Reusable LED with resistor module
-module LEDWithResistor(color: string, r_value: resistance) {
+entity LEDWithResistor(color: string, r_value: resistance) {
     pin A: power in;
     pin K_OUT: signal out;
     pin GND: ground;

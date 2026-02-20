@@ -144,7 +144,7 @@ The parser uses context-aware tokenization to distinguish between units and iden
 pin A: signal in;    // 'A' is an identifier (pin name)
 const current = 2A;  // 'A' is a unit (Amperes)
 
-module F {           // 'F' is an identifier (module name)
+entity F {           // 'F' is an identifier (entity name)
     const cap = 1F;  // 'F' is a unit (Farads)
 }
 ```

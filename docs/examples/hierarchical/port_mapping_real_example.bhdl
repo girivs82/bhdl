@@ -2,7 +2,7 @@
 // Shows how port mapping modules solve pin conflict and routing issues
 
 // Generic MCU with multiplexed pins
-module MCU_STM32F4 {
+entity MCU_STM32F4 {
     // Power
     pin VDD: power in;
     pin VSS: ground;
@@ -27,7 +27,7 @@ module MCU_STM32F4 {
 }
 
 // Port mapping for Debug/Programming interface
-module DebugPortMapper {
+entity DebugPortMapper {
     // SWD interface pins
     pin SWDIO: signal inout;
     pin SWCLK: signal in;
@@ -55,7 +55,7 @@ module DebugPortMapper {
 }
 
 // Port mapping for sensor interfaces
-module SensorPortMapper {
+entity SensorPortMapper {
     // High-level sensor interfaces
     pin I2C_SDA: signal inout;
     pin I2C_SCL: signal out;
@@ -98,7 +98,7 @@ module SensorPortMapper {
 }
 
 // Flexible expansion connector mapping
-module ExpansionPortMapper(
+entity ExpansionPortMapper(
     mode: string = "gpio"  // "gpio", "spi", "i2c", "mixed"
 ) {
     // 20-pin expansion header
@@ -163,7 +163,7 @@ module ExpansionPortMapper(
 }
 
 // Complex example: Multi-protocol communication module
-module CommunicationHub {
+entity CommunicationHub {
     // External interfaces
     pin USB_DP: signal inout;
     pin USB_DM: signal inout;

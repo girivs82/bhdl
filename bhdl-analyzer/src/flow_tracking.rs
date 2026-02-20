@@ -98,10 +98,10 @@ impl FlowTracker {
                         flow_path.intent_result = Some(result);
                     }
                     Err(e) => {
-                        diagnostics.push(Diagnostic {
-                            message: format!("Failed to resolve intent: {}", e),
-                            range: rowan::TextRange::empty(rowan::TextSize::from(0)),
-                        });
+                        diagnostics.push(Diagnostic::new(
+                            format!("Failed to resolve intent: {}", e),
+                            rowan::TextRange::empty(rowan::TextSize::from(0)),
+                        ));
                     }
                 }
             }
@@ -283,8 +283,8 @@ impl FlowTracker {
                     }
                 }
             }
-            bhdl_ast::SyntaxKind::MODULE_INST => {
-                // Module instance - track as a component for hierarchical propagation
+            bhdl_ast::SyntaxKind::ENTITY_INST => {
+                // Entity instance - track as a component for hierarchical propagation
                 if let Some(instance_name) = node.children_with_tokens()
                     .filter_map(|e| e.into_token())
                     .find(|t| t.kind() == bhdl_ast::SyntaxKind::IDENT)

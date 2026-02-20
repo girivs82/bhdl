@@ -32,7 +32,7 @@ board TPS54302_Buck_Simple {
 }
 
 // Simplified component modules
-module TPS54302() {
+entity TPS54302() {
     pin VIN: power in;
     pin GND: ground;
     pin PH: power out;    // Phase/Switching node (connects to inductor)
@@ -41,17 +41,17 @@ module TPS54302() {
     pin BOOT: signal inout; // Bootstrap
 }
 
-module Cap(value: capacitance) {
+entity Cap(value: capacitance) {
     pin 1: signal inout;
     pin 2: signal inout;
 }
 
-module Res(value: resistance) {
+entity Res(value: resistance) {
     pin 1: signal inout;
     pin 2: signal inout;
 }
 
-module Ind(value: inductance) {
+entity Ind(value: inductance) {
     pin 1: signal inout;
     pin 2: signal inout;
 }

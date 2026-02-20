@@ -555,7 +555,7 @@ mod tests {
     #[test]
     fn test_adaptive_timestep() {
         let circuit = Circuit::new();
-        let solver = GlacierTransientSolver::new(&circuit);
+        let solver = GlacierTransientSolver::new(circuit);
         
         // Create state with some history
         let mut state = TransientState {

@@ -51,7 +51,7 @@ testbench LoadStep for BuckSupply {
 System-level simulation with behavioral models:
 
 ```bhdl
-behavioral module BuckWithController {
+behavioral entity BuckWithController {
     behavior {
         state SOFT_START {
             vref = ramp(0V, 3.3V, 10ms);

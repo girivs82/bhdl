@@ -1,0 +1,27 @@
+// Test enum types and match expressions
+
+enum FaultKind {
+    Overcurrent,
+    Overvoltage,
+    Overtemperature,
+    ShortCircuit,
+}
+
+enum PowerState {
+    Off,
+    Standby,
+    Active,
+    Fault(FaultKind),
+}
+
+enum ConnectorType {
+    USB_C,
+    USB_A,
+    HDMI,
+    BarrelJack(voltage, current),
+}
+
+board TestEnumBoard {
+    power VCC = 5V @ 1A;
+    ground GND;
+}

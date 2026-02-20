@@ -1,15 +1,15 @@
-# Module Parameterization Design
+# Entity Parameterization Design
 
 ## Overview
 
-Module parameterization allows modules to adapt their behavior, structure, and connections based on parameters passed during instantiation. This is essential for creating flexible, reusable library modules.
+Entity parameterization allows entities to adapt their behavior, structure, and connections based on parameters passed during instantiation. This is essential for creating flexible, reusable library entities.
 
 ## Parameterization Features
 
 ### 1. Value Parameters
 ```bhdl
-// Module definition with parameters
-module BuckConverter(
+// Entity definition with parameters
+entity BuckConverter(
     vout: voltage = 3.3V,
     fsw: frequency = 500kHz,
     imax: current = 2A
@@ -41,8 +41,8 @@ buck_3v3: BuckConverter() { ... }  // Uses defaults
 
 ### 2. Type Parameters
 ```bhdl
-// Generic module with type parameters
-module PowerStage<ControllerType, SwitchType>(
+// Generic entity with type parameters
+entity PowerStage<ControllerType, SwitchType>(
     vout: voltage,
     topology: string = "buck"
 ) {
@@ -61,7 +61,7 @@ stage: PowerStage<TPS54302, IRLZ44N>(vout=3.3V) { ... }
 
 ### 3. Conditional Structure
 ```bhdl
-module FlexibleRegulator(
+entity FlexibleRegulator(
     vout: voltage,
     imax: current,
     efficiency_priority: bool = true
@@ -88,7 +88,7 @@ module FlexibleRegulator(
 
 ### 4. Array/Generate Parameters
 ```bhdl
-module ParallelRegulators(
+entity ParallelRegulators(
     count: int = 2,
     vout: voltage = 3.3V,
     current_per_phase: current = 10A
@@ -123,7 +123,7 @@ module ParallelRegulators(
 
 ### 5. Computed Pins
 ```bhdl
-module FlexibleInterface(
+entity FlexibleInterface(
     data_width: int = 8,
     has_parity: bool = false,
     differential: bool = false
@@ -301,7 +301,7 @@ impl NetlistBuilder {
 
 ### 1. Parameter Constraints
 ```bhdl
-module SafeBuck(
+entity SafeBuck(
     vout: voltage = 3.3V where vout > 0.8V && vout < 5.5V,
     fsw: frequency = 500kHz where fsw >= 100kHz && fsw <= 2MHz
 ) {
@@ -311,7 +311,7 @@ module SafeBuck(
 
 ### 2. Computed Types
 ```bhdl
-module AdaptiveFilter(
+entity AdaptiveFilter(
     order: int = 2,
     topology: string = "butterworth"
 ) {
@@ -326,11 +326,11 @@ module AdaptiveFilter(
 
 ### 3. Parameter Inheritance
 ```bhdl
-module ComplexSystem(
+entity ComplexSystem(
     base_voltage: voltage = 3.3V,
     optimization: string = "power"
 ) {
-    // Child modules inherit parent parameters
+    // Child entities inherit parent parameters
     subsystem1: PowerSection(
         vcore = base_voltage * 0.8,
         optimization = optimization  // Inherited
@@ -340,7 +340,7 @@ module ComplexSystem(
 
 ### 4. Static Assertions
 ```bhdl
-module VerifiedBuck(vout: voltage, vin: voltage) {
+entity VerifiedBuck(vout: voltage, vin: voltage) {
     // Compile-time checks
     static_assert(vin > vout * 1.2, "Input voltage too low for buck topology");
     static_assert(vout >= 0.6V, "Output below reference voltage");
@@ -351,7 +351,7 @@ module VerifiedBuck(vout: voltage, vin: voltage) {
 
 ### Parameterized LED Driver
 ```bhdl
-module LEDDriver(
+entity LEDDriver(
     num_channels: int = 4,
     max_current: current = 350mA,
     dimming: bool = true
@@ -385,7 +385,7 @@ white_driver: LEDDriver(num_channels=1, max_current=700mA) { ... }
 
 ### Configurable Filter
 ```bhdl
-module EMIFilter(
+entity EMIFilter(
     topology: string = "pi",
     cutoff: frequency = 1MHz,
     impedance: resistance = 50
@@ -417,11 +417,11 @@ module EMIFilter(
 
 ## Benefits
 
-1. **True Reusability**: One module definition, many configurations
+1. **True Reusability**: One entity definition, many configurations
 2. **Design Space Exploration**: Easy to try different parameters
 3. **Validation**: Constraints ensure valid configurations
 4. **Library Development**: Create comprehensive component libraries
-5. **Reduced Duplication**: No need for multiple similar modules
+5. **Reduced Duplication**: No need for multiple similar entities
 
 ## Testing Strategy
 
@@ -429,4 +429,4 @@ module EMIFilter(
 2. **Conditional Structure**: Test when blocks with various conditions
 3. **Generate Expansion**: Test loops and conditional generation
 4. **Constraint Validation**: Test parameter constraints
-5. **Nested Parameters**: Test parameter passing to child modules
+5. **Nested Parameters**: Test parameter passing to child entities

@@ -4,7 +4,7 @@
 //! particularly from const declarations like TPS54331_VIRTUAL_PIN_EXPANSION.
 
 use anyhow::{Result, Context};
-use bhdl_ast::{Module, AstNode, HasName};
+use bhdl_ast::{Entity, AstNode, HasName};
 use bhdl_stdlib::virtual_pins::VirtualPinComponent;
 use std::collections::HashMap;
 use log::{info, debug, warn};
@@ -14,12 +14,12 @@ pub struct VirtualPinExtractor;
 
 impl VirtualPinExtractor {
     /// Extract virtual pin components from a module AST
-    pub fn extract_from_module(module: &Module) -> Option<Vec<VirtualPinComponent>> {
+    pub fn extract_from_entity(module: &Entity) -> Option<Vec<VirtualPinComponent>> {
         let module_name = module.name()?.text().to_string();
         info!("Extracting virtual pins from module: {}", module_name);
         
         // Look for virtual pin declarations in the module
-        let has_virtual_pins = Self::module_has_virtual_pins(module);
+        let has_virtual_pins = Self::entity_has_virtual_pins(module);
         if !has_virtual_pins {
             debug!("Module {} has no virtual pins", module_name);
             return None;
@@ -39,7 +39,7 @@ impl VirtualPinExtractor {
     }
     
     /// Check if module has any virtual pins
-    fn module_has_virtual_pins(module: &Module) -> bool {
+    fn entity_has_virtual_pins(module: &Entity) -> bool {
         // Look through pin declarations for 'virtual' keyword
         for child in module.syntax().children() {
             if child.kind() == bhdl_ast::SyntaxKind::PIN_DECL {
@@ -53,7 +53,7 @@ impl VirtualPinExtractor {
     }
     
     /// Find expansion const declaration in module
-    fn find_expansion_const(module: &Module, const_name: &str) -> Option<String> {
+    fn find_expansion_const(module: &Entity, const_name: &str) -> Option<String> {
         // Look for const declaration with the given name
         // This would need to parse the const value
         for child in module.syntax().children() {

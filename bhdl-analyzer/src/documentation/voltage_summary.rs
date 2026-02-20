@@ -140,9 +140,10 @@ mod tests {
 
     #[test]
     fn test_parse_capacitance() {
-        assert_eq!(parse_capacitance_value("100nF"), 100e-9);
-        assert_eq!(parse_capacitance_value("10µF"), 10e-6);
-        assert_eq!(parse_capacitance_value("1mF"), 1e-3);
+        let eps = 1e-18;
+        assert!((parse_capacitance_value("100nF") - 100e-9).abs() < eps);
+        assert!((parse_capacitance_value("10µF") - 10e-6).abs() < eps);
+        assert!((parse_capacitance_value("1mF") - 1e-3).abs() < eps);
     }
 
     #[test]

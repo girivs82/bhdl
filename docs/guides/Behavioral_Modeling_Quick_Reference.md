@@ -12,7 +12,7 @@
 
 ### Basic Expression Attribute
 ```bhdl
-module Comparator {
+entity Comparator {
     pin IN_P: analog in;
     pin IN_N: analog in;
     pin OUT: digital out;
@@ -24,7 +24,7 @@ module Comparator {
 
 ### Thermal Derating
 ```bhdl
-module ThermalLED {
+entity ThermalLED {
     pin TEMP: analog in;
     pin I_OUT: current out;
     
@@ -39,7 +39,7 @@ module ThermalLED {
 
 ### Time-Based Behavior
 ```bhdl
-module SoftStart {
+entity SoftStart {
     pin ENABLE: digital in;
     pin VREF: analog out;
     
@@ -59,7 +59,7 @@ module SoftStart {
 
 ### Simple Controller
 ```bhdl
-module BuckControl {
+entity BuckControl {
     pin FB: analog in;
     pin PWM: digital out;
     
@@ -75,7 +75,7 @@ module BuckControl {
 
 ### Basic PLI Module
 ```bhdl
-module USBController {
+entity USBController {
     pin D_P, D_N: analog inout;
     pin VBUS: power out;
     
@@ -85,7 +85,7 @@ module USBController {
 
 ### PLI with Parameters
 ```bhdl
-module MotorDrive(pwm_freq: frequency = 20kHz) {
+entity MotorDrive(pwm_freq: frequency = 20kHz) {
     pin PHASE_A, PHASE_B, PHASE_C: current out;
     
     @behavioral(

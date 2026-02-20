@@ -1,14 +1,14 @@
-// Test hierarchical intent propagation through module instances
+// Test hierarchical intent propagation through entity instances
 use bhdl_parser::parse;
 use bhdl_ast::{SourceFile, AstNode};
 use bhdl_analyzer::analyze;
 
 fn main() {
-    println!("Testing Hierarchical Intent Propagation with Modules\n");
+    println!("Testing Hierarchical Intent Propagation with Entities\n");
     
     let test_bhdl = r#"
-// Simple filter module
-module Filter(cutoff: frequency = 1kHz) {
+// Simple filter entity
+entity Filter(cutoff: frequency = 1kHz) {
     pin IN: signal in;
     pin OUT: signal out;
     pin GND: signal inout;
@@ -21,14 +21,14 @@ board TestBoard {
     power VCC = 5V @ 1A;
     ground GND;
     
-    // Module instance
+    // Entity instance
     filter1: Filter(cutoff=10kHz) {
         IN <- input_signal;
         OUT -> output_net;
         GND <- gnd_net;
     }
     
-    // Flow with intent that should propagate to module
+    // Flow with intent that should propagate to entity
     net signal_path: @VCC -> input_signal for analog(bandwidth: 20kHz);
     input_signal -> filter1.IN;
     
@@ -69,12 +69,12 @@ board TestBoard {
             }
         }
         
-        // Check if filter1 module instance has inherited intent
+        // Check if filter1 entity instance has inherited intent
         println!("\n=== Hierarchical Intent Check ===");
         if let Some(mode) = flow_tracker.get_component_sim_mode("filter1") {
-            println!("Module instance 'filter1' sim mode: {:?}", mode);
+            println!("Entity instance 'filter1' sim mode: {:?}", mode);
         } else {
-            println!("Module instance 'filter1' has no sim mode assigned");
+            println!("Entity instance 'filter1' has no sim mode assigned");
         }
         
         // Check for propagated flow paths

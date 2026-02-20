@@ -170,7 +170,7 @@ section amplification {
 #### Low-Level Component Details
 ```bhdl
 // Detailed implementation of preamp
-module OpAmp(gain: number) {
+entity OpAmp(gain: number) {
     pin IN+: signal in
     pin IN-: signal in  
     pin OUT: signal out
@@ -209,8 +209,8 @@ board PowerSupply {
     }
 }
 
-// Reusable module
-module switching_regulator(vout: voltage) {
+// Reusable entity
+entity switching_regulator(vout: voltage) {
     pin vin: power in
     pin vout: power out
     pin gnd: ground inout

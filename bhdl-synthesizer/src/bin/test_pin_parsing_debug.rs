@@ -6,7 +6,7 @@ fn main() {
     
     // Test with a simple module with multiple pins
     let test_code = r#"
-module TestModule() {
+entity TestModule() {
     pin VIN: power in;
     pin SW: switch out;
     pin GND: ground inout;
@@ -28,14 +28,14 @@ module TestModule() {
     let syntax = parse_result.syntax();
     let source_file = SourceFile::cast(syntax).expect("Failed to cast to SourceFile");
     
-    println!("\nModules found:");
-    for module in source_file.modules() {
-        if let Some(name) = module.name() {
-            println!("Module: {}", name.text());
-            
-            let pins: Vec<_> = module.pins().collect();
+    println!("\nEntities found:");
+    for entity in source_file.entities() {
+        if let Some(name) = entity.name() {
+            println!("Entity: {}", name.text());
+
+            let pins: Vec<_> = entity.pins().collect();
             println!("  Pins found: {}", pins.len());
-            
+
             for pin in pins {
                 if let Some(pin_name) = pin.name() {
                     println!("    - {}", pin_name.text());
@@ -48,7 +48,7 @@ module TestModule() {
     
     // Test with actual TPS54331 file content (first few pins)
     let tps_code = r#"
-module TPS54331(
+entity TPS54331(
     vout: voltage = 3.3V
 ) {
     pin VIN: power in {
@@ -90,14 +90,14 @@ module TPS54331(
     let syntax2 = parse_result2.syntax();
     let source_file2 = SourceFile::cast(syntax2).expect("Failed to cast to SourceFile");
     
-    println!("\nTPS54331 modules found:");
-    for module in source_file2.modules() {
-        if let Some(name) = module.name() {
-            println!("Module: {}", name.text());
-            
-            let pins: Vec<_> = module.pins().collect();
+    println!("\nTPS54331 entities found:");
+    for entity in source_file2.entities() {
+        if let Some(name) = entity.name() {
+            println!("Entity: {}", name.text());
+
+            let pins: Vec<_> = entity.pins().collect();
             println!("  Pins found: {}", pins.len());
-            
+
             for pin in pins {
                 if let Some(pin_name) = pin.name() {
                     println!("    - {}", pin_name.text());

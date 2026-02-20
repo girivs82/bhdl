@@ -1,71 +1,68 @@
 use bhdl_parser::{SyntaxKind, BhdlLanguage};
-use std::collections::HashMap;
 use rowan::{SyntaxNode, TextRange, ast::{AstNode, SyntaxNodePtr}};
 use bhdl_ast::common::{NetRef, PinRef};
 
-use crate::symbol_table::{Symbol, SymbolKind, SymbolTable};
+use crate::symbol_table::{Symbol, SymbolKind};
 use crate::types::{Diagnostic, ResolvedConstants};
+use crate::scope_registry::{ScopeRegistry, ScopeId};
 
 // --- Pass 4: Bounds Checks ---
 
 // Pass 4 Context: Holds state for bounds checking using resolved constants
 #[derive(Debug)]
 pub struct Pass4Context<'a> {
-    global_scope: &'a SymbolTable,
-    definition_scopes: &'a HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>,
+    registry: &'a ScopeRegistry,
     resolved_constants: &'a ResolvedConstants, // Read-only access to constants
     diagnostics: &'a mut Vec<Diagnostic>,     // Mutable vec to add bounds errors
-    current_scope_stack: Vec<&'a SymbolTable>, // Track current scope for lookups
+    scope_stack: Vec<ScopeId>, // Track current scope for lookups
 }
 
 impl<'a> Pass4Context<'a> {
      // Constructor made public
      pub fn new(
-        global_scope: &'a SymbolTable, 
-        def_scopes: &'a HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>, 
-        resolved_constants: &'a ResolvedConstants, 
+        registry: &'a ScopeRegistry,
+        resolved_constants: &'a ResolvedConstants,
         diagnostics: &'a mut Vec<Diagnostic>,
     ) -> Self {
         Self {
-            global_scope,
-            definition_scopes: def_scopes,
+            registry,
             resolved_constants,
             diagnostics,
-            current_scope_stack: vec![global_scope],
+            scope_stack: vec![registry.global_id()],
         }
+    }
+
+    // Current scope ID
+    fn current_scope(&self) -> ScopeId {
+        *self.scope_stack.last().unwrap()
     }
 
     // Add diagnostic (internal helper)
     fn add_diagnostic(&mut self, message: String, range: TextRange) {
-        self.diagnostics.push(Diagnostic { message, range });
+        self.diagnostics.push(Diagnostic::new(message, range));
     }
 
-    // Lookup symbol (internal helper)
+    // Lookup symbol via parent-chain traversal (internal helper)
     fn lookup(&self, name: &str) -> Option<&Symbol> {
-        for scope in self.current_scope_stack.iter().rev() {
-            if let Some(symbol) = scope.lookup(name) {
-                return Some(symbol);
-            }
-        }
-        None
+        self.registry.lookup(self.current_scope(), name)
     }
-    
+
     // Lookup global symbol (internal helper)
     fn lookup_global(&self, name: &str) -> Option<&Symbol> {
-        self.global_scope.lookup(name)
+        self.registry.lookup_global(name)
     }
 
     // Push scope (internal helper)
     fn push_scope(&mut self, node_ptr: &SyntaxNodePtr<BhdlLanguage>) {
-        if let Some(scope) = self.definition_scopes.get(node_ptr) {
-            self.current_scope_stack.push(scope);
+        if let Some(scope_id) = self.registry.scope_id_for_node(node_ptr) {
+            self.scope_stack.push(scope_id);
         }
     }
 
     // Pop scope (internal helper)
     fn pop_scope(&mut self) {
-       if self.current_scope_stack.len() > 1 {
-           self.current_scope_stack.pop();
+       if self.scope_stack.len() > 1 {
+           self.scope_stack.pop();
        }
     }
 }
@@ -76,7 +73,7 @@ pub fn visit_node_pass4_bounds_checks(node: &SyntaxNode<BhdlLanguage>, context: 
 
     match node.kind() {
         SyntaxKind::BOARD_DEF |
-        SyntaxKind::MODULE_DEF |
+        SyntaxKind::ENTITY_DEF |
         SyntaxKind::COMPONENT_DEF |
         SyntaxKind::INTERFACE_DEF => {
              let ptr = SyntaxNodePtr::new(node);
@@ -111,7 +108,7 @@ pub fn visit_node_pass4_bounds_checks(node: &SyntaxNode<BhdlLanguage>, context: 
                                          .and_then(|type_name| context.lookup_global(type_name))
                                          .filter(|sym| sym.kind.is_component_type_kind())
                                          .and_then(|type_sym| type_sym.definition_node_ptr.as_ref())
-                                         .and_then(|ptr| context.definition_scopes.get(ptr))
+                                         .and_then(|ptr| context.registry.scope_for_node(ptr))
                                          .and_then(|scope| pin_ref.pin_name().and_then(|pin_token| scope.lookup(pin_token.text())))
                                          .filter(|sym| sym.kind == SymbolKind::Pin)
                                  } else {
@@ -136,34 +133,33 @@ pub fn visit_node_pass4_bounds_checks(node: &SyntaxNode<BhdlLanguage>, context: 
 
                          if let Some(index_expr_node) = suffix.index_expr_node() {
                              let index_ptr = SyntaxNodePtr::new(&index_expr_node);
-                             if let Some(index_val) = context.resolved_constants.get(&index_ptr) {
-                                 if *index_val < declared_min || *index_val > declared_max {
+                             if let Some(index_val) = context.resolved_constants.get(&index_ptr).and_then(|cv| cv.as_i64()) {
+                                 if index_val < declared_min || index_val > declared_max {
                                      context.add_diagnostic(
                                          format!("Index '{}' is out of bounds for '{}' (declared as [{}:{}])", index_val, symbol.name, d_high, d_low),
                                          index_expr_node.text_range(),
                                      );
                                  }
-                             } 
-                         } 
+                             }
+                         }
                          else if let Some(range_expr) = suffix.range() {
                              let lhs_ptr = range_expr.lhs_node().map(|n| SyntaxNodePtr::new(&n));
                              let rhs_ptr = range_expr.rhs_node().map(|n| SyntaxNodePtr::new(&n));
 
                              if let (Some(h_ptr), Some(l_ptr)) = (lhs_ptr, rhs_ptr) {
-                                 if let (Some(h), Some(l)) = (
-                                     context.resolved_constants.get(&h_ptr),
-                                     context.resolved_constants.get(&l_ptr)
-                                 ) {
+                                 let h_val = context.resolved_constants.get(&h_ptr).and_then(|cv| cv.as_i64());
+                                 let l_val = context.resolved_constants.get(&l_ptr).and_then(|cv| cv.as_i64());
+                                 if let (Some(h), Some(l)) = (h_val, l_val) {
                                      let used_min = h.min(l);
                                      let used_max = h.max(l);
-                                     if *used_min < declared_min || *used_max > declared_max {
+                                     if used_min < declared_min || used_max > declared_max {
                                          context.add_diagnostic(
                                              format!("Range [{}:{}] is out of bounds for '{}' (declared as [{}:{}])", h, l, symbol.name, d_high, d_low),
                                              range_expr.syntax().text_range(),
                                          );
                                      }
-                                 } 
-                             } 
+                                 }
+                             }
                          }
                      } 
                  } 

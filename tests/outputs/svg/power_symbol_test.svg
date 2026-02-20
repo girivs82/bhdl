@@ -1,0 +1,360 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1621.27" height="1510.127" viewBox="-61.016 -460.127 1621.27 1510.127" xmlns="http://www.w3.org/2000/svg">
+<defs><style type="text/css"><![CDATA[
+.component { fill: white; stroke: black; stroke-width: 1.5; }
+.component-text { font-family: Arial, sans-serif; font-size: 10px; text-anchor: middle; fill: black; }
+.pin { fill: none; stroke: red; stroke-width: 1; }
+.pin-label { font-family: Arial, sans-serif; font-size: 6px; fill: black; }
+.pin-number { font-family: Arial, sans-serif; font-size: 5px; fill: #666; }
+.pin-name { font-family: Arial, sans-serif; font-size: 6px; fill: black; }
+.net { fill: none; stroke: blue; stroke-width: 1.2; }
+.net-power { fill: none; stroke: #c00; stroke-width: 2.5; }
+.net-ground { fill: none; stroke: #000; stroke-width: 2.0; }
+.net-label { font-family: Arial, sans-serif; font-size: 8px; fill: blue; }
+.grid { stroke: #f0f0f0; stroke-width: 0.5; opacity: 0.5; }
+]]></style></defs>
+<line x1="-100" y1="-460.127" x2="-100" y2="1050" class="grid"/>
+<line x1="-50" y1="-460.127" x2="-50" y2="1050" class="grid"/>
+<line x1="0" y1="-460.127" x2="0" y2="1050" class="grid"/>
+<line x1="50" y1="-460.127" x2="50" y2="1050" class="grid"/>
+<line x1="100" y1="-460.127" x2="100" y2="1050" class="grid"/>
+<line x1="150" y1="-460.127" x2="150" y2="1050" class="grid"/>
+<line x1="200" y1="-460.127" x2="200" y2="1050" class="grid"/>
+<line x1="250" y1="-460.127" x2="250" y2="1050" class="grid"/>
+<line x1="300" y1="-460.127" x2="300" y2="1050" class="grid"/>
+<line x1="350" y1="-460.127" x2="350" y2="1050" class="grid"/>
+<line x1="400" y1="-460.127" x2="400" y2="1050" class="grid"/>
+<line x1="450" y1="-460.127" x2="450" y2="1050" class="grid"/>
+<line x1="500" y1="-460.127" x2="500" y2="1050" class="grid"/>
+<line x1="550" y1="-460.127" x2="550" y2="1050" class="grid"/>
+<line x1="600" y1="-460.127" x2="600" y2="1050" class="grid"/>
+<line x1="650" y1="-460.127" x2="650" y2="1050" class="grid"/>
+<line x1="700" y1="-460.127" x2="700" y2="1050" class="grid"/>
+<line x1="750" y1="-460.127" x2="750" y2="1050" class="grid"/>
+<line x1="800" y1="-460.127" x2="800" y2="1050" class="grid"/>
+<line x1="850" y1="-460.127" x2="850" y2="1050" class="grid"/>
+<line x1="900" y1="-460.127" x2="900" y2="1050" class="grid"/>
+<line x1="950" y1="-460.127" x2="950" y2="1050" class="grid"/>
+<line x1="1000" y1="-460.127" x2="1000" y2="1050" class="grid"/>
+<line x1="1050" y1="-460.127" x2="1050" y2="1050" class="grid"/>
+<line x1="1100" y1="-460.127" x2="1100" y2="1050" class="grid"/>
+<line x1="1150" y1="-460.127" x2="1150" y2="1050" class="grid"/>
+<line x1="1200" y1="-460.127" x2="1200" y2="1050" class="grid"/>
+<line x1="1250" y1="-460.127" x2="1250" y2="1050" class="grid"/>
+<line x1="1300" y1="-460.127" x2="1300" y2="1050" class="grid"/>
+<line x1="1350" y1="-460.127" x2="1350" y2="1050" class="grid"/>
+<line x1="1400" y1="-460.127" x2="1400" y2="1050" class="grid"/>
+<line x1="1450" y1="-460.127" x2="1450" y2="1050" class="grid"/>
+<line x1="1500" y1="-460.127" x2="1500" y2="1050" class="grid"/>
+<line x1="1550" y1="-460.127" x2="1550" y2="1050" class="grid"/>
+<line x1="-61.016" y1="-500" x2="1560.254" y2="-500" class="grid"/>
+<line x1="-61.016" y1="-450" x2="1560.254" y2="-450" class="grid"/>
+<line x1="-61.016" y1="-400" x2="1560.254" y2="-400" class="grid"/>
+<line x1="-61.016" y1="-350" x2="1560.254" y2="-350" class="grid"/>
+<line x1="-61.016" y1="-300" x2="1560.254" y2="-300" class="grid"/>
+<line x1="-61.016" y1="-250" x2="1560.254" y2="-250" class="grid"/>
+<line x1="-61.016" y1="-200" x2="1560.254" y2="-200" class="grid"/>
+<line x1="-61.016" y1="-150" x2="1560.254" y2="-150" class="grid"/>
+<line x1="-61.016" y1="-100" x2="1560.254" y2="-100" class="grid"/>
+<line x1="-61.016" y1="-50" x2="1560.254" y2="-50" class="grid"/>
+<line x1="-61.016" y1="0" x2="1560.254" y2="0" class="grid"/>
+<line x1="-61.016" y1="50" x2="1560.254" y2="50" class="grid"/>
+<line x1="-61.016" y1="100" x2="1560.254" y2="100" class="grid"/>
+<line x1="-61.016" y1="150" x2="1560.254" y2="150" class="grid"/>
+<line x1="-61.016" y1="200" x2="1560.254" y2="200" class="grid"/>
+<line x1="-61.016" y1="250" x2="1560.254" y2="250" class="grid"/>
+<line x1="-61.016" y1="300" x2="1560.254" y2="300" class="grid"/>
+<line x1="-61.016" y1="350" x2="1560.254" y2="350" class="grid"/>
+<line x1="-61.016" y1="400" x2="1560.254" y2="400" class="grid"/>
+<line x1="-61.016" y1="450" x2="1560.254" y2="450" class="grid"/>
+<line x1="-61.016" y1="500" x2="1560.254" y2="500" class="grid"/>
+<line x1="-61.016" y1="550" x2="1560.254" y2="550" class="grid"/>
+<line x1="-61.016" y1="600" x2="1560.254" y2="600" class="grid"/>
+<line x1="-61.016" y1="650" x2="1560.254" y2="650" class="grid"/>
+<line x1="-61.016" y1="700" x2="1560.254" y2="700" class="grid"/>
+<line x1="-61.016" y1="750" x2="1560.254" y2="750" class="grid"/>
+<line x1="-61.016" y1="800" x2="1560.254" y2="800" class="grid"/>
+<line x1="-61.016" y1="850" x2="1560.254" y2="850" class="grid"/>
+<line x1="-61.016" y1="900" x2="1560.254" y2="900" class="grid"/>
+<line x1="-61.016" y1="950" x2="1560.254" y2="950" class="grid"/>
+<line x1="-61.016" y1="1000" x2="1560.254" y2="1000" class="grid"/>
+<line x1="-61.016" y1="1050" x2="1560.254" y2="1050" class="grid"/>
+<g><g transform="translate(0, -400) rotate(0) scale(100)">
+
+  <defs>
+    <style type="text/css"><![CDATA[
+      .pin-line { stroke: #000; stroke-width: 0.01; fill: none; }
+      .symbol-line { stroke: #000; stroke-width: 0.01; fill: none; }
+      .symbol-text { font-family: monospace; font-size: 5px; fill: #000; }
+      .pin-text { font-family: monospace; font-size: 4px; fill: #000; }
+    ]]></style>
+  </defs>
+  <polyline points="-0.254,0.127 -0.254,-0.127 0.254,0.127 0.254,-0.127 -0.254,0.127" stroke="#000" stroke-width="0.005" fill="none"/>
+  <polyline points="0.050800000000000005,0.127 0,0.127 0,-0.127 -0.050800000000000005,-0.127" stroke="#000" stroke-width="0.005" fill="none"/>
+  <polyline points="0.127,0 -0.127,0" stroke="#000" stroke-width="0.005" fill="none"/>
+  <line x1="-0.381" y1="0" x2="-0.127" y2="0" class="pin-line"/>
+  <line x1="0.381" y1="0" x2="0.127" y2="0" class="pin-line"/>
+</g>
+</g>
+<text x="0" y="-500" class="component-text">tvs</text>
+<g><g transform="translate(0, -100) rotate(90) scale(100)">
+
+  <defs>
+    <style type="text/css"><![CDATA[
+      .pin-line { stroke: #000; stroke-width: 0.01; fill: none; }
+      .symbol-line { stroke: #000; stroke-width: 0.01; fill: none; }
+      .symbol-text { font-family: monospace; font-size: 5px; fill: #000; }
+      .pin-text { font-family: monospace; font-size: 4px; fill: #000; }
+    ]]></style>
+  </defs>
+  <polyline points="-0.20320000000000002,0.0762 0.20320000000000002,0.0762" stroke="#000" stroke-width="0.005" fill="none"/>
+  <polyline points="-0.20320000000000002,-0.0762 0.20320000000000002,-0.0762" stroke="#000" stroke-width="0.005" fill="none"/>
+  <line x1="0" y1="0.381" x2="0" y2="0.10160000000000001" class="pin-line"/>
+  <line x1="0" y1="-0.381" x2="0" y2="-0.10160000000000001" class="pin-line"/>
+</g>
+</g>
+<text x="0" y="-200" class="component-text">c2</text>
+<g><g transform="translate(0, 100) rotate(0) scale(100)">
+
+  <defs>
+    <style type="text/css"><![CDATA[
+      .pin-line { stroke: #000; stroke-width: 0.01; fill: none; }
+      .symbol-line { stroke: #000; stroke-width: 0.01; fill: none; }
+      .symbol-text { font-family: monospace; font-size: 5px; fill: #000; }
+      .pin-text { font-family: monospace; font-size: 4px; fill: #000; }
+    ]]></style>
+  </defs>
+  <rect x="-0.10160000000000001" y="-0.254" width="0.20320000000000002" height="0.508" stroke="#000" stroke-width="0.005" fill="none"/>
+  <line x1="0" y1="0.381" x2="0" y2="0.254" class="pin-line"/>
+  <line x1="0" y1="-0.381" x2="0" y2="-0.254" class="pin-line"/>
+</g>
+</g>
+<text x="0" y="0" class="component-text">sense</text>
+<g><g transform="translate(900, -100) rotate(90) scale(100)">
+
+  <defs>
+    <style type="text/css"><![CDATA[
+      .pin-line { stroke: #000; stroke-width: 0.01; fill: none; }
+      .symbol-line { stroke: #000; stroke-width: 0.01; fill: none; }
+      .symbol-text { font-family: monospace; font-size: 5px; fill: #000; }
+      .pin-text { font-family: monospace; font-size: 4px; fill: #000; }
+    ]]></style>
+  </defs>
+  <polyline points="-0.20320000000000002,0.0762 0.20320000000000002,0.0762" stroke="#000" stroke-width="0.005" fill="none"/>
+  <polyline points="-0.20320000000000002,-0.0762 0.20320000000000002,-0.0762" stroke="#000" stroke-width="0.005" fill="none"/>
+  <line x1="0" y1="0.381" x2="0" y2="0.10160000000000001" class="pin-line"/>
+  <line x1="0" y1="-0.381" x2="0" y2="-0.10160000000000001" class="pin-line"/>
+</g>
+</g>
+<text x="900" y="-200" class="component-text">c2</text>
+<g><g transform="translate(1200, 100) rotate(0) scale(100)">
+
+  <defs>
+    <style type="text/css"><![CDATA[
+      .pin-line { stroke: #000; stroke-width: 0.01; fill: none; }
+      .symbol-line { stroke: #000; stroke-width: 0.01; fill: none; }
+      .symbol-text { font-family: monospace; font-size: 5px; fill: #000; }
+      .pin-text { font-family: monospace; font-size: 4px; fill: #000; }
+    ]]></style>
+  </defs>
+  <rect x="-0.508" y="-0.508" width="1.016" height="0.6985000000000001" stroke="#000" stroke-width="0.005" fill="none"/>
+  <line x1="-0.762" y1="0" x2="-0.508" y2="0" class="pin-line"/>
+  <line x1="0" y1="-0.762" x2="0" y2="-0.508" class="pin-line"/>
+  <line x1="0.762" y1="0" x2="0.508" y2="0" class="pin-line"/>
+</g>
+</g>
+<text x="1200" y="0" class="component-text">reg</text>
+<g><g transform="translate(900, 100) rotate(0) scale(100)">
+
+  <defs>
+    <style type="text/css"><![CDATA[
+      .pin-line { stroke: #000; stroke-width: 0.01; fill: none; }
+      .symbol-line { stroke: #000; stroke-width: 0.01; fill: none; }
+      .symbol-text { font-family: monospace; font-size: 5px; fill: #000; }
+      .pin-text { font-family: monospace; font-size: 4px; fill: #000; }
+    ]]></style>
+  </defs>
+  <rect x="-0.10160000000000001" y="-0.254" width="0.20320000000000002" height="0.508" stroke="#000" stroke-width="0.005" fill="none"/>
+  <line x1="0" y1="0.381" x2="0" y2="0.254" class="pin-line"/>
+  <line x1="0" y1="-0.381" x2="0" y2="-0.254" class="pin-line"/>
+</g>
+</g>
+<text x="900" y="0" class="component-text">sense</text>
+<g><g transform="translate(1200, -100) rotate(0) scale(100)">
+
+  <defs>
+    <style type="text/css"><![CDATA[
+      .pin-line { stroke: #000; stroke-width: 0.01; fill: none; }
+      .symbol-line { stroke: #000; stroke-width: 0.01; fill: none; }
+      .symbol-text { font-family: monospace; font-size: 5px; fill: #000; }
+      .pin-text { font-family: monospace; font-size: 4px; fill: #000; }
+    ]]></style>
+  </defs>
+  <polyline points="-0.254,0.127 -0.254,-0.127 0.254,0.127 0.254,-0.127 -0.254,0.127" stroke="#000" stroke-width="0.005" fill="none"/>
+  <polyline points="0.050800000000000005,0.127 0,0.127 0,-0.127 -0.050800000000000005,-0.127" stroke="#000" stroke-width="0.005" fill="none"/>
+  <polyline points="0.127,0 -0.127,0" stroke="#000" stroke-width="0.005" fill="none"/>
+  <line x1="-0.381" y1="0" x2="-0.127" y2="0" class="pin-line"/>
+  <line x1="0.381" y1="0" x2="0.127" y2="0" class="pin-line"/>
+</g>
+</g>
+<text x="1200" y="-200" class="component-text">tvs</text>
+<g><g transform="translate(1500, -100) rotate(0) scale(100)">
+
+  <defs>
+    <style type="text/css"><![CDATA[
+      .pin-line { stroke: #000; stroke-width: 0.01; fill: none; }
+      .symbol-line { stroke: #000; stroke-width: 0.01; fill: none; }
+      .symbol-text { font-family: monospace; font-size: 5px; fill: #000; }
+      .pin-text { font-family: monospace; font-size: 4px; fill: #000; }
+    ]]></style>
+  </defs>
+  <polyline points="0,0 0,-0.127 0.127,-0.127 0,-0.254 -0.127,-0.127 0,-0.127" stroke="#000" stroke-width="0.005" fill="none"/>
+  <line x1="0" y1="0" x2="0" y2="0" class="pin-line"/>
+</g>
+</g>
+<text x="1500" y="-200" class="component-text">GND</text>
+<g><g transform="translate(1500, 100) rotate(0) scale(100)">
+
+  <defs>
+    <style type="text/css"><![CDATA[
+      .pin-line { stroke: #000; stroke-width: 0.01; fill: none; }
+      .symbol-line { stroke: #000; stroke-width: 0.01; fill: none; }
+      .symbol-text { font-family: monospace; font-size: 5px; fill: #000; }
+      .pin-text { font-family: monospace; font-size: 4px; fill: #000; }
+    ]]></style>
+  </defs>
+  <polyline points="-0.0762,0.127 0,0.254" stroke="#000" stroke-width="0.005" fill="none"/>
+  <polyline points="0,0.254 0.0762,0.127" stroke="#000" stroke-width="0.005" fill="none"/>
+  <polyline points="0,0 0,0.254" stroke="#000" stroke-width="0.005" fill="none"/>
+  <line x1="0" y1="0" x2="0" y2="0" class="pin-line"/>
+</g>
+</g>
+<text x="1500" y="0" class="component-text">VOUT</text>
+<g><g transform="translate(0, 400) rotate(90) scale(100)">
+
+  <defs>
+    <style type="text/css"><![CDATA[
+      .pin-line { stroke: #000; stroke-width: 0.01; fill: none; }
+      .symbol-line { stroke: #000; stroke-width: 0.01; fill: none; }
+      .symbol-text { font-family: monospace; font-size: 5px; fill: #000; }
+      .pin-text { font-family: monospace; font-size: 4px; fill: #000; }
+    ]]></style>
+  </defs>
+  <polyline points="-0.3048,-0.0762 -0.45720000000000005,-0.22860000000000003 -0.381,-0.22860000000000003 -0.45720000000000005,-0.22860000000000003 -0.45720000000000005,-0.1524" stroke="#000" stroke-width="0.005" fill="none"/>
+  <polyline points="-0.1778,-0.0762 -0.33020000000000005,-0.22860000000000003 -0.254,-0.22860000000000003 -0.33020000000000005,-0.22860000000000003 -0.33020000000000005,-0.1524" stroke="#000" stroke-width="0.005" fill="none"/>
+  <polyline points="-0.127,0 0.127,0" stroke="#000" stroke-width="0.005" fill="none"/>
+  <polyline points="-0.127,-0.127 -0.127,0.127" stroke="#000" stroke-width="0.005" fill="none"/>
+  <polyline points="0.127,-0.127 0.127,0.127 -0.127,0 0.127,-0.127" stroke="#000" stroke-width="0.005" fill="none"/>
+  <line x1="-0.381" y1="0" x2="-0.127" y2="0" class="pin-line"/>
+  <line x1="0.381" y1="0" x2="0.127" y2="0" class="pin-line"/>
+</g>
+</g>
+<text x="0" y="300" class="component-text">led</text>
+<g><g transform="translate(0, -250) rotate(0) scale(100)">
+
+  <defs>
+    <style type="text/css"><![CDATA[
+      .pin-line { stroke: #000; stroke-width: 0.01; fill: none; }
+      .symbol-line { stroke: #000; stroke-width: 0.01; fill: none; }
+      .symbol-text { font-family: monospace; font-size: 5px; fill: #000; }
+      .pin-text { font-family: monospace; font-size: 4px; fill: #000; }
+    ]]></style>
+  </defs>
+  <rect x="-0.508" y="-0.508" width="1.016" height="0.6985000000000001" stroke="#000" stroke-width="0.005" fill="none"/>
+  <line x1="-0.762" y1="0" x2="-0.508" y2="0" class="pin-line"/>
+  <line x1="0" y1="-0.762" x2="0" y2="-0.508" class="pin-line"/>
+  <line x1="0.762" y1="0" x2="0.508" y2="0" class="pin-line"/>
+</g>
+</g>
+<text x="0" y="-350" class="component-text">reg</text>
+<g><g transform="translate(600, 0) rotate(90) scale(100)">
+
+  <defs>
+    <style type="text/css"><![CDATA[
+      .pin-line { stroke: #000; stroke-width: 0.01; fill: none; }
+      .symbol-line { stroke: #000; stroke-width: 0.01; fill: none; }
+      .symbol-text { font-family: monospace; font-size: 5px; fill: #000; }
+      .pin-text { font-family: monospace; font-size: 4px; fill: #000; }
+    ]]></style>
+  </defs>
+  <polyline points="-0.3048,-0.0762 -0.45720000000000005,-0.22860000000000003 -0.381,-0.22860000000000003 -0.45720000000000005,-0.22860000000000003 -0.45720000000000005,-0.1524" stroke="#000" stroke-width="0.005" fill="none"/>
+  <polyline points="-0.1778,-0.0762 -0.33020000000000005,-0.22860000000000003 -0.254,-0.22860000000000003 -0.33020000000000005,-0.22860000000000003 -0.33020000000000005,-0.1524" stroke="#000" stroke-width="0.005" fill="none"/>
+  <polyline points="-0.127,0 0.127,0" stroke="#000" stroke-width="0.005" fill="none"/>
+  <polyline points="-0.127,-0.127 -0.127,0.127" stroke="#000" stroke-width="0.005" fill="none"/>
+  <polyline points="0.127,-0.127 0.127,0.127 -0.127,0 0.127,-0.127" stroke="#000" stroke-width="0.005" fill="none"/>
+  <line x1="-0.381" y1="0" x2="-0.127" y2="0" class="pin-line"/>
+  <line x1="0.381" y1="0" x2="0.127" y2="0" class="pin-line"/>
+</g>
+</g>
+<text x="600" y="-100" class="component-text">led</text>
+<g><g transform="translate(300, 100) rotate(0) scale(100)">
+
+  <defs>
+    <style type="text/css"><![CDATA[
+      .pin-line { stroke: #000; stroke-width: 0.01; fill: none; }
+      .symbol-line { stroke: #000; stroke-width: 0.01; fill: none; }
+      .symbol-text { font-family: monospace; font-size: 5px; fill: #000; }
+      .pin-text { font-family: monospace; font-size: 4px; fill: #000; }
+    ]]></style>
+  </defs>
+  <polyline points="-0.0762,0.127 0,0.254" stroke="#000" stroke-width="0.005" fill="none"/>
+  <polyline points="0,0.254 0.0762,0.127" stroke="#000" stroke-width="0.005" fill="none"/>
+  <polyline points="0,0 0,0.254" stroke="#000" stroke-width="0.005" fill="none"/>
+  <line x1="0" y1="0" x2="0" y2="0" class="pin-line"/>
+</g>
+</g>
+<text x="300" y="0" class="component-text">VIN</text>
+<g><g transform="translate(300, -100) rotate(90) scale(100)">
+
+  <defs>
+    <style type="text/css"><![CDATA[
+      .pin-line { stroke: #000; stroke-width: 0.01; fill: none; }
+      .symbol-line { stroke: #000; stroke-width: 0.01; fill: none; }
+      .symbol-text { font-family: monospace; font-size: 5px; fill: #000; }
+      .pin-text { font-family: monospace; font-size: 4px; fill: #000; }
+    ]]></style>
+  </defs>
+  <polyline points="-0.20320000000000002,0.0762 0.20320000000000002,0.0762" stroke="#000" stroke-width="0.005" fill="none"/>
+  <polyline points="-0.20320000000000002,-0.0762 0.20320000000000002,-0.0762" stroke="#000" stroke-width="0.005" fill="none"/>
+  <line x1="0" y1="0.381" x2="0" y2="0.10160000000000001" class="pin-line"/>
+  <line x1="0" y1="-0.381" x2="0" y2="-0.10160000000000001" class="pin-line"/>
+</g>
+</g>
+<text x="300" y="-200" class="component-text">c2</text>
+<g><g transform="translate(0, 250) rotate(0) scale(100)">
+
+  <defs>
+    <style type="text/css"><![CDATA[
+      .pin-line { stroke: #000; stroke-width: 0.01; fill: none; }
+      .symbol-line { stroke: #000; stroke-width: 0.01; fill: none; }
+      .symbol-text { font-family: monospace; font-size: 5px; fill: #000; }
+      .pin-text { font-family: monospace; font-size: 4px; fill: #000; }
+    ]]></style>
+  </defs>
+  <rect x="-0.10160000000000001" y="-0.254" width="0.20320000000000002" height="0.508" stroke="#000" stroke-width="0.005" fill="none"/>
+  <line x1="0" y1="0.381" x2="0" y2="0.254" class="pin-line"/>
+  <line x1="0" y1="-0.381" x2="0" y2="-0.254" class="pin-line"/>
+</g>
+</g>
+<text x="0" y="150" class="component-text">sense</text>
+<line x1="200" y1="1000" x2="1300" y2="1000" class="net"/>
+<line x1="1200" y1="-100" x2="1200" y2="1000" class="net"/>
+<line x1="900" y1="-100" x2="900" y2="1000" class="net"/>
+<line x1="1200" y1="100" x2="1200" y2="1000" class="net"/>
+<line x1="300" y1="-100" x2="300" y2="1000" class="net"/>
+<line x1="600" y1="-0" x2="600" y2="1000" class="net"/>
+<line x1="300" y1="100" x2="1200" y2="100" class="net"/>
+<line x1="1200" y1="100" x2="1200" y2="-100" class="net"/>
+<line x1="0" y1="100" x2="1500" y2="100" class="net"/>
+<line x1="0" y1="250" x2="0" y2="100" class="net"/>
+<line x1="300" y1="-100" x2="300" y2="100" class="net"/>
+<line x1="1200" y1="-100" x2="900" y2="-100" class="net"/>
+<line x1="900" y1="-100" x2="1200" y2="-100" class="net"/>
+<line x1="1200" y1="-100" x2="1200" y2="100" class="net"/>
+<line x1="0" y1="250" x2="600" y2="250" class="net"/>
+<line x1="600" y1="250" x2="600" y2="0" class="net"/>
+<line x1="0" y1="250" x2="900" y2="250" class="net"/>
+<line x1="900" y1="250" x2="900" y2="100" class="net"/>
+<line x1="900" y1="100" x2="600" y2="100" class="net"/>
+<line x1="600" y1="100" x2="600" y2="0" class="net"/>
+</svg>

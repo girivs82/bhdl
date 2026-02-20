@@ -1,29 +1,29 @@
-// BHDL v2.0 Hierarchical Module AST Nodes
-// Support for modules containing modules and components
+// BHDL v2.0 Hierarchical Entity AST Nodes
+// Support for entities containing entities and components
 
 use crate::{SyntaxKind, BhdlLanguage, SyntaxNode, SyntaxToken, HasName};
 use rowan::ast::AstNode;
 use crate::items::ParamList;
 use crate::expr::Expr;
 
-/// Module instantiation within a module: instance_name: ModuleType(params) { port mappings }
+/// Entity instantiation within an entity: instance_name: EntityType(params) { port mappings }
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ModuleInst(pub(crate) SyntaxNode<BhdlLanguage>);
+pub struct EntityInst(pub(crate) SyntaxNode<BhdlLanguage>);
 
-impl AstNode for ModuleInst {
+impl AstNode for EntityInst {
     type Language = BhdlLanguage;
-    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::MODULE_INST }
-    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> { 
-        if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None } 
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::ENTITY_INST }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> {
+        if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None }
     }
     fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
 }
 
-impl HasName for ModuleInst {}
+impl HasName for EntityInst {}
 
-impl ModuleInst {
-    /// Get the module type name (e.g., "PWMController")
-    pub fn module_type(&self) -> Option<SyntaxToken<BhdlLanguage>> {
+impl EntityInst {
+    /// Get the entity type name (e.g., "PWMController")
+    pub fn entity_type(&self) -> Option<SyntaxToken<BhdlLanguage>> {
         let mut found_colon = false;
         self.0.children_with_tokens()
             .filter_map(|element| element.into_token())

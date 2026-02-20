@@ -2,19 +2,19 @@
 
 use anyhow::Result;
 use bhdl_parser::parse;
-use bhdl_ast::{SourceFile, AstNode, Module, HasName};
+use bhdl_ast::{SourceFile, AstNode, Entity, HasName};
 
 fn main() -> Result<()> {
     env_logger::init();
     
     let source = r#"
-module TestModule {
+entity TestModule {
     pin test_pin: signal inout;
     pin power_pin: power in;
     pin gnd_pin: ground;
 }
 
-module Resistor(value: resistance) {
+entity Resistor(value: resistance) {
     pin 1: signal inout;
     pin 2: signal inout;
 }
@@ -30,11 +30,11 @@ module Resistor(value: resistance) {
     
     // Find all modules
     for item in source_file.items() {
-        if let Some(module) = Module::cast(item.syntax().clone()) {
-            println!("\nModule: {}", module.name().map(|n| n.text().to_string()).unwrap_or_default());
-            
+        if let Some(entity) = Entity::cast(item.syntax().clone()) {
+            println!("\nEntity: {}", entity.name().map(|n| n.text().to_string()).unwrap_or_default());
+
             // Try to get pins
-            let pins: Vec<_> = module.pins().collect();
+            let pins: Vec<_> = entity.pins().collect();
             println!("  Found {} pins", pins.len());
             
             for pin in pins {
@@ -44,7 +44,7 @@ module Resistor(value: resistance) {
             }
             
             // Also try ports for comparison
-            let ports: Vec<_> = module.ports().collect();
+            let ports: Vec<_> = entity.ports().collect();
             println!("  Found {} ports", ports.len());
         }
     }

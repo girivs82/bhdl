@@ -42,14 +42,14 @@ board BuckConverterLM2596 {
 }
 
 // Module definition for test point
-module TestPoint() {
+entity TestPoint() {
     pin 1: signal inout {
         description: "Test point connection"
     };
 }
 
 // Module definition for resistor (if not already defined)
-module Res(value: resistance, wattage: power = 0.25W) {
+entity Res(value: resistance, wattage: power = 0.25W) {
     pin 1: signal inout;
     pin 2: signal inout;
 }

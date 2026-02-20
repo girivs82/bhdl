@@ -4,20 +4,20 @@ use bhdl_ast::{AstNode, SourceFile};
 use bhdl_analyzer::analyze;
 
 fn main() {
-    println!("=== Simple Hierarchical Module Test ===\n");
+    println!("=== Simple Hierarchical Entity Test ===\n");
     
-    // Test case: Simple hierarchy with module parameters
+    // Test case: Simple hierarchy with entity parameters
     let code = r#"
-module SimplePWM(frequency: frequency = 100kHz) {
+entity SimplePWM(frequency: frequency = 100kHz) {
     pin VCC: power in;
     pin OUT: signal out;
 }
 
-module SimpleRegulator {
+entity SimpleRegulator {
     pin VIN: power in;
     pin VOUT: power out;
-    
-    // Module instance with parameter override
+
+    // Entity instance with parameter override
     pwm1: SimplePWM(frequency=500kHz) {
         VCC <- VIN;
         OUT -> switch_node;

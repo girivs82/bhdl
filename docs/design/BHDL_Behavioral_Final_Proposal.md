@@ -9,7 +9,7 @@ Based on our analysis, BHDL needs only **6 new constructs** to enable powerful b
 ### 1. Mutable Parameters with Expressions
 
 ```bhdl
-module Controller {
+entity Controller {
     pin FB: analog in;
     pin PWM: digital out;
     
@@ -25,7 +25,7 @@ module Controller {
 ### 2. Time-Based Parameter Updates
 
 ```bhdl
-module SoftStart {
+entity SoftStart {
     pin ENABLE: digital in;
     
     // NEW: Mutable parameter
@@ -41,7 +41,7 @@ module SoftStart {
 ### 3. External Model Decorator
 
 ```bhdl
-module ComplexController {
+entity ComplexController {
     pin VIN: power in;
     pin VOUT: power out;
     
@@ -53,7 +53,7 @@ module ComplexController {
 ### 4. Parameter Passing to External Models
 
 ```bhdl
-module ParametricController(fsw: frequency = 500kHz) {
+entity ParametricController(fsw: frequency = 500kHz) {
     pin VIN: power in;
     pin VOUT: power out;
     
@@ -106,7 +106,7 @@ All complex features are handled by external models in Python/Rust/C++.
 
 ### Example 1: Thermal LED (Pure BHDL)
 ```bhdl
-module ThermalLED {
+entity ThermalLED {
     pin TEMP_SENSE: analog in;
     pin LED_DRIVE: current out;
     
@@ -122,7 +122,7 @@ module ThermalLED {
 
 ### Example 2: Buck with Soft Start (Pure BHDL)
 ```bhdl
-module SimpleBuck {
+entity SimpleBuck {
     pin ENABLE: digital in;
     pin FB: analog in;
     pin PWM: digital out;
@@ -142,7 +142,7 @@ module SimpleBuck {
 
 ### Example 3: Complex USB PD (PLI)
 ```bhdl
-module USBPD {
+entity USBPD {
     pin CC1, CC2: analog inout;
     pin VBUS: power out;
     
@@ -153,7 +153,7 @@ module USBPD {
 
 ### Example 4: Motor FOC (PLI)
 ```bhdl
-module MotorController {
+entity MotorController {
     pin PHASE_A, PHASE_B, PHASE_C: current in;
     pin PWM_A, PWM_B, PWM_C: digital out;
     

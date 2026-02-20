@@ -1,0 +1,21 @@
+// Simplified Protection Components - v2.0 compatible
+
+entity TVSDiode(voltage: voltage) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+
+    attribute component_class = "tvs_diode";
+    attribute breakdown_voltage = voltage;
+    attribute max_current = 1A;
+    attribute kicad_symbol = "Device:D_TVS";
+}
+
+entity Fuse(current: current) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+
+    attribute component_class = "fuse";
+    attribute rated_current = current;
+    attribute voltage_rating = 250V;
+    attribute kicad_symbol = "Device:Fuse";
+}

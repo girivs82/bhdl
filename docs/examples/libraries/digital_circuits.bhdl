@@ -13,7 +13,7 @@
 // ---------------------------------------------------------
 
 // Crystal oscillator module with load capacitors
-module CrystalOscillatorCircuit {
+entity CrystalOscillatorCircuit {
   ports {
     MCU_XTAL1: inout signal; // Connect to MCU XTAL1 pin
     MCU_XTAL2: inout signal; // Connect to MCU XTAL2 pin
@@ -47,7 +47,7 @@ module CrystalOscillatorCircuit {
 // ---------------------------------------------------------
 
 // Module for Power-on Reset using a Supervisor IC
-module PowerOnResetSupervisor {
+entity PowerOnResetSupervisor {
   ports {
     RESET_OUT: out signal; // Output reset signal (active low/high depends on supervisor)
     VCC_MONITOR: in power;
@@ -73,7 +73,7 @@ module PowerOnResetSupervisor {
 }
 
 // Module for Manual Reset Button (Active Low configuration)
-module ManualResetActiveLow {
+entity ManualResetActiveLow {
   ports {
     RESET_OUT: inout signal; // Connect to the IC's reset pin
     VCC: in power;
@@ -107,7 +107,7 @@ module ManualResetActiveLow {
 // ---------------------------------------------------------
 
 // Module for standard I2C Pull-up Resistors
-module I2CPullups {
+entity I2CPullups {
   ports {
     SCL: inout signal;
     SDA: inout signal;
@@ -129,7 +129,7 @@ module I2CPullups {
 }
 
 // Module for Series Termination
-module SeriesTermination {
+entity SeriesTermination {
   ports {
     SIGNAL_IN: in signal; // Driver output
     SIGNAL_OUT: out signal; // Trace input
@@ -147,7 +147,7 @@ module SeriesTermination {
 }
 
 // Module for Differential Termination (Resistor across pair)
-module DifferentialTermination {
+entity DifferentialTermination {
   ports {
     SIGNAL_P: inout signal;
     SIGNAL_N: inout signal;
@@ -177,7 +177,7 @@ module DifferentialTermination {
 // ---------------------------------------------------------
 
 // Module for Debounced Button Input (Active Low configuration)
-module DebouncedButtonActiveLow {
+entity DebouncedButtonActiveLow {
   ports {
     BUTTON_OUT: out signal; // Signal to the IC input pin
     BUTTON_IN_PORT: in signal; // Connection to the physical button switch
@@ -212,7 +212,7 @@ module DebouncedButtonActiveLow {
 // ---------------------------------------------------------
 
 // Module for LED Output Driver (Active Low drive pin)
-module LedOutputActiveLow {
+entity LedOutputActiveLow {
   ports {
     DRIVE_PIN: in signal; // Input signal from driver (e.g., MCU GPIO)
     VCC: in power;
@@ -233,7 +233,7 @@ module LedOutputActiveLow {
 }
 
 // Module for LED Output Driver (Active High drive pin)
-module LedOutputActiveHigh {
+entity LedOutputActiveHigh {
   ports {
     DRIVE_PIN: in signal; // Input signal from driver (e.g., MCU GPIO)
     GND: ground;

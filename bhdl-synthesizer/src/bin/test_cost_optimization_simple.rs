@@ -95,12 +95,12 @@ board SimpleCostBoard {
     ground GND;
     
     // Simple components that would benefit from cost optimization
-    module SimpleResistor(value: resistance) {
+    entity SimpleResistor(value: resistance) {
         pin 1: signal inout;
         pin 2: signal inout;
     }
     
-    module SimpleLED(color: string) {
+    entity SimpleLED(color: string) {
         pin A: signal in;
         pin K: signal out;
     }

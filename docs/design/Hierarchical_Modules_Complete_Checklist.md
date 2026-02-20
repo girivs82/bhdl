@@ -2,24 +2,24 @@
 
 ## Overview
 
-This checklist combines hierarchical module support with full parameterization capabilities.
+This checklist combines hierarchical entity support with full parameterization capabilities.
 
 ## Phase 1: Parser & AST Extensions
 
 ### Grammar Updates (`bhdl-parser/src/grammar.rs`)
 
-#### Module Definition
-- [ ] Parse module parameter list after module name
-  - [ ] `module Name(param: type = default, ...)`
+#### Entity Definition
+- [ ] Parse entity parameter list after entity name
+  - [ ] `entity Name(param: type = default, ...)`
   - [ ] Support type annotations
   - [ ] Support default values
   - [ ] Handle trailing commas
 
 #### Conditional Structures
-- [ ] Add `when` block parsing for modules
+- [ ] Add `when` block parsing for entities
   - [ ] `when (condition) { ... }`
   - [ ] `when (cond1) { ... } else when (cond2) { ... }`
-  - [ ] Support in module body context
+  - [ ] Support in entity body context
 
 #### Generate Constructs  
 - [ ] Add `generate` block parsing
@@ -94,7 +94,7 @@ This checklist combines hierarchical module support with full parameterization c
   3. [ ] Create parameter context
   4. [ ] Evaluate conditional blocks
   5. [ ] Expand generate blocks
-  6. [ ] Produce instantiated module body
+  6. [ ] Produce instantiated entity body
 
 ### Conditional Evaluation
 
@@ -158,8 +158,8 @@ This checklist combines hierarchical module support with full parameterization c
 ### Parser Tests
 
 ```bhdl
-// test_module_with_params
-module Configurable(width: int = 8, signed: bool = false) {
+// test_entity_with_params
+entity Configurable(width: int = 8, signed: bool = false) {
     pin DATA[width]: signal inout;
     when (signed) {
         pin SIGN: signal out;
@@ -167,7 +167,7 @@ module Configurable(width: int = 8, signed: bool = false) {
 }
 
 // test_conditional_components
-module Adaptive(use_external: bool) {
+entity Adaptive(use_external: bool) {
     when (use_external) {
         osc: ExternalOsc { ... }
     } else {
@@ -176,7 +176,7 @@ module Adaptive(use_external: bool) {
 }
 
 // test_generate_array
-module Parallel(n: int = 4) {
+entity Parallel(n: int = 4) {
     generate for i in 0..n {
         amp[i]: Amplifier { 
             IN -> .input;
@@ -217,7 +217,7 @@ fn test_generate_expansion() {
 ```bhdl
 // Parameterized power supply
 board TestBoard {
-    // Different configurations of same module
+    // Different configurations of same entity
     buck_5v: BuckConverter(vout=5V, imax=3A) { ... }
     buck_3v3: BuckConverter(vout=3.3V) { ... }
     buck_1v2: BuckConverter(vout=1.2V, fsw=1MHz) { ... }
@@ -250,12 +250,12 @@ board TestBoard {
 
 ## Success Criteria
 
-- [ ] Can define modules with typed parameters
+- [ ] Can define entities with typed parameters
 - [ ] Can instantiate with custom parameter values
 - [ ] Conditional blocks work correctly
 - [ ] Generate creates proper arrays
 - [ ] Parameter constraints are validated
-- [ ] Same module with different params → different netlists
+- [ ] Same entity with different params → different netlists
 - [ ] Performance acceptable for deep hierarchies
 - [ ] Clear error messages for parameter issues
 
@@ -270,7 +270,7 @@ board TestBoard {
 ## Example: Fully Parameterized Module
 
 ```bhdl
-module UniversalFilter(
+entity UniversalFilter(
     order: int = 2 where order >= 1 && order <= 8,
     topology: string = "butterworth",
     cutoff: frequency = 1kHz,
@@ -308,4 +308,4 @@ module UniversalFilter(
 }
 ```
 
-This comprehensive parameterization system will make BHDL modules as flexible as software functions!
+This comprehensive parameterization system will make BHDL entities as flexible as software functions!

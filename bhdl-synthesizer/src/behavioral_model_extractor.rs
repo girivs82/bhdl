@@ -2,7 +2,7 @@
 // Extracts behavioral models and optimization requirements from component definitions
 
 use anyhow::{Result, Context};
-use bhdl_ast::{SourceFile, Module, HasName};
+use bhdl_ast::{SourceFile, Entity, HasName};
 use bhdl_analyzer::AnalysisResult;
 use bhdl_simulation::{ModelMetadata, SimulationLevel};
 use rowan::ast::AstNode;
@@ -38,28 +38,28 @@ impl BehavioralModelExtractor {
     
     /// Extract behavioral models from AST and analysis
     pub fn extract_from_ast(&mut self, ast: &SourceFile, analysis: &AnalysisResult) -> Result<()> {
-        // Walk through all modules in the AST
-        for module in ast.modules() {
-            // Get module name from the name token
-            let module_name = if let Some(name_token) = module.name() {
+        // Walk through all entities in the AST
+        for entity in ast.entities() {
+            // Get entity name from the name token
+            let entity_name = if let Some(name_token) = entity.name() {
                 name_token.text().to_string()
             } else {
-                continue; // Skip modules without names
+                continue; // Skip entities without names
             };
-            
-            debug!("Extracting behavioral models from module: {}", module_name);
-            
+
+            debug!("Extracting behavioral models from entity: {}", entity_name);
+
             // Extract behavioral models
-            self.extract_module_behavioral_models(&module, &module_name)?;
-            
+            self.extract_entity_behavioral_models(&entity, &entity_name)?;
+
             // Extract optimization requirements
-            self.extract_optimization_requirements(&module, &module_name)?;
+            self.extract_optimization_requirements(&entity, &entity_name)?;
         }
         
         // Also check imported modules from the symbol table
         for (name, symbol) in analysis.global_scope.get_symbols() {
-            if symbol.kind == bhdl_analyzer::symbol_table::SymbolKind::Module {
-                // Check if this module has behavioral models in the library
+            if symbol.kind == bhdl_analyzer::symbol_table::SymbolKind::Entity {
+                // Check if this entity has behavioral models in the library
                 if let Some(models) = self.load_library_models(name) {
                     self.models.extend(models);
                 }
@@ -72,10 +72,10 @@ impl BehavioralModelExtractor {
         Ok(())
     }
     
-    /// Extract behavioral models from a module
-    fn extract_module_behavioral_models(&mut self, module: &Module, module_name: &str) -> Result<()> {
+    /// Extract behavioral models from an entity
+    fn extract_entity_behavioral_models(&mut self, entity: &Entity, module_name: &str) -> Result<()> {
         // Look for @behavioral_model annotations
-        let module_text = module.syntax().text().to_string();
+        let module_text = entity.syntax().text().to_string();
         
         // Parse @behavioral_model blocks (simplified - real implementation would use proper AST)
         if module_text.contains("@behavioral_model") {
@@ -117,8 +117,8 @@ impl BehavioralModelExtractor {
     }
     
     /// Extract optimization requirements from @optimization_strategy
-    fn extract_optimization_requirements(&mut self, module: &Module, module_name: &str) -> Result<()> {
-        let module_text = module.syntax().text().to_string();
+    fn extract_optimization_requirements(&mut self, entity: &Entity, module_name: &str) -> Result<()> {
+        let module_text = entity.syntax().text().to_string();
         
         if module_text.contains("@optimization_strategy") {
             let mut requirements = OptimizationRequirements {

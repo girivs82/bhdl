@@ -350,6 +350,10 @@ impl<'t> Parser<'t> {
                 // Struct literal: { field1: value1, field2: value2 }
                 self.parse_struct_literal_expr();
             }
+            Some(SyntaxKind::MATCH_KW) => {
+                // Match expression: match expr { arms }
+                self.parse_match_expr();
+            }
             Some(SyntaxKind::NULL_KW) => {
                 // null literal
                 self.builder.start_node(SyntaxKind::NULL_LITERAL.into());

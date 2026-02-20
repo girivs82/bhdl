@@ -19,7 +19,7 @@ This separation enables:
 
 ```bhdl
 // File: bhdl-stdlib/src/voltage_regulators/supervisors/ltc2954.bhdl
-module LTC2954 {
+entity LTC2954 {
     // Electrical and behavioral models (same as before)
     electrical_model { /* ... */ }
     behavioral_model { /* ... */ }
@@ -84,7 +84,7 @@ module LTC2954 {
 
 ```bhdl  
 // File: bhdl-stdlib/src/voltage_regulators/switching_regulators/lm2596.bhdl
-module LM2596(output_voltage: voltage = 5V, max_current: current = 3A) {
+entity LM2596(output_voltage: voltage = 5V, max_current: current = 3A) {
     // Electrical and behavioral models for simulation
     electrical_model { /* switching parameters, control loop, etc. */ }
     behavioral_model { /* PWM control, protection, startup */ }
@@ -423,7 +423,7 @@ context_sensitive_analysis {
 
 ```bhdl
 // File: bhdl-stdlib/src/passives/capacitors/electrolytic_capacitor.bhdl
-module ElectrolyticCap(value: capacitance, voltage_rating: voltage, esr: resistance = auto) {
+entity ElectrolyticCap(value: capacitance, voltage_rating: voltage, esr: resistance = auto) {
     electrical_model {
         capacitance: value;
         voltage_rating: voltage_rating;

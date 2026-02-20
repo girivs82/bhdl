@@ -20,7 +20,7 @@ type OpAmpParams = {
     impedance: ImpedanceCharacteristics,
 };
 
-module OpAmp(
+entity OpAmp(
     type: string = "general_purpose",  // "general_purpose", "precision", "high_speed", "low_power" 
     package: string = "SO8"
 ) {

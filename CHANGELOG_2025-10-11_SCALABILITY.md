@@ -250,7 +250,7 @@ fn is_wildcard_match(instance_name: &str, base_name: &str) -> bool {
 Potential additions for future development:
 
 1. **Generate Block Integration**: Wildcard expansion for generate-created instances
-2. **Module Hierarchy**: Expand wildcards across hierarchical module boundaries
+2. **Entity Hierarchy**: Expand wildcards across hierarchical entity boundaries
 3. **Advanced Patterns**: `sensor[even]`, `sensor[0,2,4]`, regex patterns
 4. **AI-Driven Decoupling**: Automatic value and placement optimization
 5. **Power Integrity Analysis**: PDN analysis using expansion data

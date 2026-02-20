@@ -17,7 +17,7 @@ board ForwardConverter {
     protected_vin -> Cap(10uF, ceramic).1 -> GND;
     
     // Forward controller
-    module ForwardController {
+    entity ForwardController {
         pin VIN: power in;
         pin DRV_HI: signal out;
         pin DRV_LO: signal out;
@@ -40,7 +40,7 @@ board ForwardConverter {
     MOSFET().S -> GND;
     
     // Forward transformer
-    module ForwardTransformer {
+    entity ForwardTransformer {
         pin PRI_DOT: power in;
         pin PRI: power in;
         pin SEC_DOT: power out;
@@ -74,7 +74,7 @@ board ForwardConverter {
     VOUT -> Cap(1uF, ceramic).1 -> GND;
     
     // Current sense transformer
-    module CurrentSenseXfmr {
+    entity CurrentSenseXfmr {
         pin PRI_IN: power in;
         pin PRI_OUT: power out;
         pin SEC_P: signal out;

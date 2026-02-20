@@ -10,7 +10,7 @@ type GroundParams = {
     impedance: ImpedanceCharacteristics,
 };
 
-module Ground() {
+entity Ground() {
     // Ground pin
     pin GND: ground @metadata(
         function="Ground",

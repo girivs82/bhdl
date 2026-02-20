@@ -5,7 +5,7 @@ import { SimulationLevel, BehavioralModel, OptimizationStrategy } from "./simula
 import { BuckConverter } from "../power/buck_converter_complete.bhdl";
 
 // Main simulation engine
-module SimulationEngine {
+entity SimulationEngine {
     
     // Run optimization using component's embedded strategy
     function optimize_component(
@@ -250,7 +250,7 @@ module SimulationEngine {
 }
 
 // Example: Optimizing a Buck Converter
-module BuckOptimizationExample {
+entity BuckOptimizationExample {
     
     function example_optimization() {
         // Create buck converter
@@ -300,7 +300,7 @@ module BuckOptimizationExample {
 }
 
 // Parallel simulation coordinator
-module ParallelSimulator {
+entity ParallelSimulator {
     
     // Run multiple simulations in parallel
     function parallel_sweep(

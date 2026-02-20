@@ -6,7 +6,7 @@ use bhdl_analyzer::analyze;
 fn main() {
     // Test case with invalid virtual pins that should generate warnings
     let content_with_errors = r#"
-module TestModule() {
+entity TestModule() {
     // Invalid: virtual pin with 'in' direction
     pin INPUT_VIRTUAL: virtual power in;
     
@@ -49,7 +49,7 @@ module TestModule() {
     // Test valid virtual pins
     println!("\nTesting valid virtual pins...");
     let content_valid = r#"
-module ValidModule() {
+entity ValidModule() {
     pin VOUT: virtual power out;
     pin CONTROL: virtual signal inout; 
     pin GND_REF: virtual ground out;

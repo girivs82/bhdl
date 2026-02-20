@@ -6,7 +6,7 @@
 - **Parser support** for `for` keyword on flow statements
 - **Intent resolution** with simulation mode determination
 - **Flow tracking** that identifies components in signal paths
-- **Hierarchical propagation** through module instances
+- **Hierarchical propagation** through entity instances
 - **Standard library** of intent functions
 
 ### 2. Simulation Coordinator

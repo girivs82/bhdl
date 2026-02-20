@@ -175,7 +175,7 @@ board MultiRailPowerSystem {
 }
 
 // Coupled optimization engine
-module CoupledSystemOptimizer {
+entity CoupledSystemOptimizer {
     
     // Optimize multiple converters with shared constraints
     function optimize_power_system(
@@ -334,7 +334,7 @@ type SystemConstraints = {
 };
 
 // Thermal co-simulation
-module ThermalCoSimulation {
+entity ThermalCoSimulation {
     
     // Simulate thermal interactions between converters
     function thermal_simulation(
@@ -385,7 +385,7 @@ module ThermalCoSimulation {
 }
 
 // EMI co-simulation
-module EMICoSimulation {
+entity EMICoSimulation {
     
     // Check for EMI interactions between switching converters
     function emi_analysis(converters: Converter[]) -> EMIResult {

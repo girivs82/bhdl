@@ -31,14 +31,3 @@ tokio = { version = "1.35", features = ["rt", "macros", "fs"] }
 name = "test_analyzer"
 path = "src/bin/test_analyzer.rs"
 
-[[bin]]
-name = "test_synthesizer"
-path = "src/bin/test_synthesizer.rs"
-
-[[bin]]
-name = "test_visualizer"
-path = "src/bin/test_visualizer.rs"
-
-[[bin]]
-name = "debug_connection"
-path = "src/bin/debug_connection.rs"

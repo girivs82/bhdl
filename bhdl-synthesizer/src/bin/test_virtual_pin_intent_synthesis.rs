@@ -12,7 +12,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     // Test module with virtual pins that should get intents from analyzer
     let content = r#"
-module VirtualPinModule() {
+entity VirtualPinModule() {
     // Regular pins
     pin VIN: power in;
     pin GND: ground inout;

@@ -1,7 +1,7 @@
 // Simplified Capacitor Component Module
 // Compatible with current BHDL parser
 
-module Capacitor(value: capacitance, voltage: voltage = 50V) {
+entity Capacitor(value: capacitance, voltage: voltage = 50V) {
     pin 1: signal inout;  // Terminal 1 
     pin 2: signal inout;  // Terminal 2
     

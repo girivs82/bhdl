@@ -3,7 +3,7 @@
 
 import { resistance, voltage, current, power, temperature, time } from "../../../units.bhdl";
 
-module Resistor(
+entity Resistor(
     value: resistance,
     tolerance: float = 5%,          // Default to 5% tolerance
     power_rating: power = 250mW,    // Default to 1/4 watt

@@ -13,32 +13,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Test BHDL circuit with various component types for manufacturing analysis
     let circuit = r#"
     // Define all components locally for testing
-    module Res(value: resistance) {
+    entity Res(value: resistance) {
         pin 1: signal inout;
         pin 2: signal inout;
     }
     
-    module Cap(value: capacitance) {
+    entity Cap(value: capacitance) {
         pin 1: signal inout;
         pin 2: signal inout;
     }
     
-    module LED(color: string) {
+    entity LED(color: string) {
+        pin A: signal in;
+        pin K: signal out;
+    }
+
+    entity Diode() {
         pin A: signal in;
         pin K: signal out;
     }
     
-    module Diode() {
-        pin A: signal in;
-        pin K: signal out;
-    }
-    
-    module IC_MCU() {
+    entity IC_MCU() {
         pin VDD: power in;
         pin VSS: ground in;
     }
     
-    module Res_TH(value: resistance) {
+    entity Res_TH(value: resistance) {
         pin 1: signal inout;
         pin 2: signal inout;
     }

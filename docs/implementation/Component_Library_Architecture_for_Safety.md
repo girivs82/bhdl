@@ -7,7 +7,7 @@ The BHDL safety analysis system uses structured component libraries instead of d
 
 ### Architecture Principles
 
-1. **Library-Based Component Models**: All component capabilities defined in structured BHDL modules
+1. **Library-Based Component Models**: All component capabilities defined in structured BHDL entities
 2. **Behavioral Simulation**: Functional models enable real performance calculation (ripple, response times, etc.)
 3. **Safety-Specific Attributes**: Failure modes, diagnostic coverage, and reliability data embedded in models
 4. **Hierarchical Libraries**: Standard library + vendor libraries + custom project libraries
@@ -52,14 +52,14 @@ bhdl-stdlib/src/
 
 ### Component Model Structure
 
-Each component library module contains four key sections:
+Each component library entity contains four key sections:
 
 #### 1. Electrical Model
 Physical parameters and specifications for circuit simulation:
 
 ```bhdl
 // File: bhdl-stdlib/src/voltage_regulators/supervisors/ltc2954.bhdl
-module LTC2954 {
+entity LTC2954 {
     // Pin definitions with electrical characteristics
     pin VIN: power in {
         voltage_range: 2.7V..28V;
@@ -288,7 +288,7 @@ Test and qualification information:
 
 ```bhdl
 // File: bhdl-stdlib/src/voltage_regulators/switching_regulators/lm2596.bhdl  
-module LM2596(output_voltage: voltage = 5V, max_current: current = 3A) {
+entity LM2596(output_voltage: voltage = 5V, max_current: current = 3A) {
     // Pin definitions
     pin VIN: power in {
         voltage_range: 4.75V..40V;
@@ -627,7 +627,7 @@ circuit_performance_simulation {
 
 ```bhdl
 // File: project_libs/automotive_bcm/custom_pressure_sensor_v3.bhdl
-module CustomPressureSensorV3 {
+entity CustomPressureSensorV3 {
     // Custom ASIC developed for this project
     pin VPOS: power in { voltage_range: 4.5V..5.5V; current: 8mA; }
     pin VNEG: power gnd;
@@ -809,7 +809,7 @@ module CustomPressureSensorV3 {
 // File: vendor_libs/analog_devices/adm708.bhdl
 // Provided by Analog Devices for integration into BHDL toolchain
 
-module ADM708 {
+entity ADM708 {
     // Official Analog Devices BHDL model
     attribute vendor = "Analog Devices";
     attribute part_number = "ADM708";

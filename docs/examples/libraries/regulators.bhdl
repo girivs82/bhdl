@@ -2,7 +2,7 @@
 // Standard linear and switching voltage regulators
 
 // LM7805 - 5V 1A Linear Regulator
-module LM7805(package: string = "TO-220") {
+entity LM7805(package: string = "TO-220") {
     // Universal pin names (same across all packages)
     pin IN: power in;
     pin GND: ground;
@@ -48,7 +48,7 @@ module LM7805(package: string = "TO-220") {
 }
 
 // LM7812 - 12V 1A Linear Regulator
-module LM7812(package: string = "TO-220") {
+entity LM7812(package: string = "TO-220") {
     pin IN: power in;
     pin GND: ground;
     pin OUT: power out;
@@ -67,7 +67,7 @@ module LM7812(package: string = "TO-220") {
 }
 
 // LM1117 - Low Dropout Regulator (multiple voltage options)
-module LM1117(
+entity LM1117(
     voltage: voltage = 3.3V,
     package: string = "SOT-223"
 ) {
@@ -102,7 +102,7 @@ module LM1117(
 }
 
 // LM317 - Adjustable Voltage Regulator
-module LM317(package: string = "TO-220") {
+entity LM317(package: string = "TO-220") {
     pin IN: power in;
     pin ADJ: signal inout;  // Adjust pin
     pin OUT: power out;
@@ -132,7 +132,7 @@ module LM317(package: string = "TO-220") {
 }
 
 // TPS7A47 - Ultra-Low Noise LDO
-module TPS7A47(
+entity TPS7A47(
     voltage: voltage = 3.3V,
     package: string = "MSOP-8"
 ) {
@@ -167,7 +167,7 @@ module TPS7A47(
 }
 
 // Switching Regulator Example
-module LM2596(package: string = "TO-220-5") {
+entity LM2596(package: string = "TO-220-5") {
     pin IN: power in;
     pin GND: ground;
     pin OUT: signal out;    // Switch output (to inductor)
@@ -195,7 +195,7 @@ module LM2596(package: string = "TO-220-5") {
 // High-level abstraction modules
 
 // Generic linear regulator - system will select specific part
-module LinearRegulator(
+entity LinearRegulator(
     output: voltage,
     current: current,
     dropout: voltage = 2V,
@@ -213,7 +213,7 @@ module LinearRegulator(
 }
 
 // Generic power supply - highest abstraction
-module PowerSupply(
+entity PowerSupply(
     output: voltage,
     current: current,
     ripple: voltage = 100mV,

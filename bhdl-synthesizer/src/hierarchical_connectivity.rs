@@ -1,21 +1,21 @@
 //! Hierarchical connectivity extraction for BHDL synthesizer
-//! 
+//!
 //! This module handles the extraction of connectivity information from
-//! hierarchical module designs, including:
-//! - Module definitions and their internal connections
-//! - Module instances and port mappings
+//! hierarchical entity designs, including:
+//! - Entity definitions and their internal connections
+//! - Entity instances and port mappings
 //! - Hierarchical net resolution
 //! - SPICE subcircuit generation
 
 use anyhow::Result;
 use std::collections::HashMap;
-use bhdl_ast::{AstNode, SyntaxKind, Module, ModuleInst, ConnectionStmt, HasName, BinaryExpr};
+use bhdl_ast::{AstNode, SyntaxKind, Entity, EntityInst, ConnectionStmt, HasName, BinaryExpr};
 use bhdl_analyzer::types::AnalysisResult;
 use bhdl_netlist::{Netlist, ModuleId, InstanceId, NetId, ConnectionPoint};
 use bhdl_parser::BhdlLanguage;
 use rowan::SyntaxNode;
 use log::{debug, info, warn};
-use crate::module_variants::ModuleVariantManager;
+use crate::entity_variants::EntityVariantManager;
 use crate::populate_instance_attributes;
 
 /// Context for hierarchical connectivity extraction
@@ -28,8 +28,8 @@ pub struct HierarchicalContext {
     instance_path_to_id: HashMap<String, InstanceId>,
     /// Current hierarchical path (e.g., "board.controller.pwm")
     current_path: Vec<String>,
-    /// Module variant manager for deduplication
-    variant_manager: ModuleVariantManager,
+    /// Entity variant manager for deduplication
+    variant_manager: EntityVariantManager,
     /// Component counters for reference designator generation
     component_counters: HashMap<String, usize>,
     /// Map from interface instance names to their generated instance names
@@ -56,7 +56,7 @@ impl HierarchicalContext {
             module_name_to_id: HashMap::new(),
             instance_path_to_id: HashMap::new(),
             current_path: Vec::new(),
-            variant_manager: ModuleVariantManager::new(),
+            variant_manager: EntityVariantManager::new(),
             component_counters: HashMap::new(),
             interface_instance_mapping: HashMap::new(),
         }
@@ -284,14 +284,14 @@ fn create_module_definitions(
     
     for item in ast.items() {
         match item {
-            Item::Module(module) => {
-                // Register module definition with variant manager
-                context.variant_manager.register_module_definition(&module);
-                
-                // Note: We don't create module definitions here anymore
+            Item::Entity(entity) => {
+                // Register entity definition with variant manager
+                context.variant_manager.register_entity_definition(&entity);
+
+                // Note: We don't create entity definitions here anymore
                 // They will be created on-demand when instances are processed
-                if let Some(name) = module.name() {
-                    debug!("Registered module definition: {}", name.text());
+                if let Some(name) = entity.name() {
+                    debug!("Registered entity definition: {}", name.text());
                 }
             }
             Item::Board(board) => {
@@ -329,12 +329,12 @@ fn process_module_hierarchy(
     
     for item in ast.items() {
         match item {
-            Item::Module(module) => {
-                if let Some(name) = module.name() {
-                    let module_name = name.text().to_string();
-                    if let Some(&module_id) = context.module_name_to_id.get(&module_name) {
-                        context.push_module(module_name, module_id);
-                        process_module_body(&module, analysis, netlist, context, import_preprocessor)?;
+            Item::Entity(entity) => {
+                if let Some(name) = entity.name() {
+                    let entity_name = name.text().to_string();
+                    if let Some(&module_id) = context.module_name_to_id.get(&entity_name) {
+                        context.push_module(entity_name, module_id);
+                        process_entity_body(&entity, analysis, netlist, context, import_preprocessor)?;
                         context.pop_module();
                     }
                 }
@@ -356,21 +356,21 @@ fn process_module_hierarchy(
     Ok(())
 }
 
-/// Process module body for instances and connections
-fn process_module_body(
-    module: &Module,
+/// Process entity body for instances and connections
+fn process_entity_body(
+    entity: &Entity,
     analysis: &AnalysisResult,
     netlist: &mut Netlist,
     context: &mut HierarchicalContext,
     import_preprocessor: Option<&crate::import_preprocessor::ImportPreprocessor>,
 ) -> Result<()> {
-    // Process module instances
-    for module_inst in module.module_instances() {
-        process_module_instance(&module_inst, netlist, context, analysis, import_preprocessor)?;
+    // Process entity instances
+    for entity_inst in entity.entity_instances() {
+        process_entity_instance(&entity_inst, netlist, context, analysis, import_preprocessor)?;
     }
-    
+
     // Process connections and extract component instances
-    for child in module.syntax().children() {
+    for child in entity.syntax().children() {
         match child.kind() {
             SyntaxKind::CONNECTION_STMT => {
                 if let Some(conn_stmt) = ConnectionStmt::cast(child) {
@@ -403,9 +403,9 @@ fn process_board_body(
 ) -> Result<()> {
     info!("=== Processing board body ===");
     
-    // Process module instances
-    for module_inst in board.module_instances() {
-        process_module_instance(&module_inst, netlist, context, analysis, import_preprocessor)?;
+    // Process entity instances
+    for entity_inst in board.entity_instances() {
+        process_entity_instance(&entity_inst, netlist, context, analysis, import_preprocessor)?;
     }
     
     // Process connections and extract component instances
@@ -447,25 +447,25 @@ fn process_board_body(
     Ok(())
 }
 
-/// Process a module instance
-fn process_module_instance(
-    module_inst: &ModuleInst,
+/// Process an entity instance
+fn process_entity_instance(
+    entity_inst: &EntityInst,
     netlist: &mut Netlist,
     context: &mut HierarchicalContext,
     analysis: &AnalysisResult,
     import_preprocessor: Option<&crate::import_preprocessor::ImportPreprocessor>,
 ) -> Result<()> {
-    let instance_name = module_inst.name()
+    let instance_name = entity_inst.name()
         .map(|t| t.text().to_string())
-        .ok_or_else(|| anyhow::anyhow!("Module instance missing name"))?;
-    
-    let module_type = module_inst.module_type()
+        .ok_or_else(|| anyhow::anyhow!("Entity instance missing name"))?;
+
+    let entity_type = entity_inst.entity_type()
         .map(|t| t.text().to_string())
-        .ok_or_else(|| anyhow::anyhow!("Module instance missing type"))?;
-    
-    // Get or create module variant based on parameters
+        .ok_or_else(|| anyhow::anyhow!("Entity instance missing type"))?;
+
+    // Get or create entity variant based on parameters
     let module_id = context.variant_manager.get_or_create_variant(
-        module_inst,
+        entity_inst,
         netlist,
         analysis
     )?;
@@ -490,27 +490,27 @@ fn process_module_instance(
     populate_instance_attributes(netlist, instance_id, &instance_name, analysis);
     
     // Process port mappings
-    for port_mapping in module_inst.port_mappings() {
+    for port_mapping in entity_inst.port_mappings() {
         process_port_mapping(&port_mapping, instance_id, netlist, context)?;
     }
-    
-    debug!("Created module instance: {} of type {}", instance_name, module_type);
-    
-    // Now process the module's internal components
-    // First, check if we have the module definition
-    let has_module_def = context.variant_manager.find_module_definition(&module_type).is_some();
-    
-    if has_module_def {
+
+    debug!("Created entity instance: {} of type {}", instance_name, entity_type);
+
+    // Now process the entity's internal components
+    // First, check if we have the entity definition
+    let has_entity_def = context.variant_manager.find_entity_definition(&entity_type).is_some();
+
+    if has_entity_def {
         // Push the instance context
         context.push_module(instance_name.clone(), module_id);
-        
-        // Clone the module definition to avoid borrow issues
-        let module_def = context.variant_manager.find_module_definition(&module_type)
+
+        // Clone the entity definition to avoid borrow issues
+        let entity_def = context.variant_manager.find_entity_definition(&entity_type)
             .unwrap()
             .clone();
-        
-        process_module_body(&module_def, analysis, netlist, context, import_preprocessor)?;
-        
+
+        process_entity_body(&entity_def, analysis, netlist, context, import_preprocessor)?;
+
         // Pop the instance context
         context.pop_module();
     }
@@ -600,17 +600,31 @@ fn process_connection_in_module(
                     
                     // Track the current net for this connection chain
                     let mut current_net_id: Option<NetId> = None;
-                    
-                    // For simple two-part connections where the right side is a net reference,
-                    // process the net first to avoid creating unnecessary unnamed nets
-                    if parts.len() == 2 {
-                        let right = parts[1].trim().trim_end_matches(';');
-                        if right.starts_with('@') {
-                            // Process right side (net) first
-                            let net_name = &right[1..];
-                            println!("DEBUG: Processing net reference @{} first", net_name);
+
+                    // FIRST PASS: Scan all endpoints to find existing net references
+                    // This prevents creating new nets when we should connect to existing ones
+                    for part in &parts {
+                        let endpoint = part.trim().trim_end_matches(';');
+
+                        // Check for @ prefixed net reference
+                        if endpoint.starts_with('@') {
+                            let net_name = &endpoint[1..];
+                            println!("DEBUG: First pass found net reference @{}", net_name);
                             let net_id = context.resolve_net(net_name, netlist)?;
                             current_net_id = Some(net_id);
+                            break; // Found a net, stop scanning
+                        }
+
+                        // Check for simple identifiers that might be power/ground nets
+                        // These are endpoints without dots (not pin references) and without @ prefix
+                        if !endpoint.contains('.') && !endpoint.contains(':') {
+                            // This might be a simple net name like GND, VIN, VOUT
+                            // Try to resolve it - if it exists, use it
+                            if let Ok(net_id) = context.resolve_net(endpoint, netlist) {
+                                println!("DEBUG: First pass found existing net '{}'", endpoint);
+                                current_net_id = Some(net_id);
+                                break; // Found a net, stop scanning
+                            }
                         }
                     }
                     
@@ -789,8 +803,8 @@ fn create_component_instance(
     }
     
     // Create or get the component module
-    let module_id = get_or_create_component_module(&component_type, netlist, import_preprocessor)?;
-    
+    let module_id = get_or_create_component_module(&component_type, netlist, context, import_preprocessor)?;
+
     // Create the instance
     let instance_id = netlist.add_instance(instance_name.clone(), module_id)
         .ok_or_else(|| anyhow::anyhow!("Failed to add component instance"))?;
@@ -811,6 +825,7 @@ fn create_component_instance(
 fn get_or_create_component_module(
     component_type: &str,
     netlist: &mut Netlist,
+    context: &HierarchicalContext,
     import_preprocessor: Option<&crate::import_preprocessor::ImportPreprocessor>,
 ) -> Result<ModuleId> {
     use bhdl_netlist::ModuleKind;
@@ -828,10 +843,10 @@ fn get_or_create_component_module(
     // Create new component module
     debug!("Creating new module for: {}", component_type);
     let module_id = netlist.add_module(component_type.to_string(), ModuleKind::PhysicalComponent);
-    
+
     // Add standard pins based on component type
-    add_component_pins(component_type, module_id, netlist, import_preprocessor)?;
-    
+    add_component_pins(component_type, module_id, netlist, context, import_preprocessor)?;
+
     Ok(module_id)
 }
 
@@ -840,21 +855,59 @@ fn add_component_pins(
     component_type: &str,
     module_id: ModuleId,
     netlist: &mut Netlist,
+    context: &HierarchicalContext,
     import_preprocessor: Option<&crate::import_preprocessor::ImportPreprocessor>,
 ) -> Result<()> {
     use bhdl_netlist::{PinDirection, PinType, PortDirection};
-    
+
     debug!("add_component_pins called for component_type: {}", component_type);
     debug!("import_preprocessor is_some: {}", import_preprocessor.is_some());
-    
-    // First check if this component is in the imported modules
+
+    // First check if this component is in the variant_manager (same-file entities)
+    if let Some(entity_ast) = context.variant_manager.find_entity_definition(component_type) {
+        debug!("Adding pins for locally-defined component: {}", component_type);
+
+        // Extract pins from the local entity definition
+        let pins: Vec<_> = entity_ast.pins().collect();
+        debug!("Total pins found in {}: {}", component_type, pins.len());
+        for pin in pins {
+            if let Some(pin_name) = pin.name() {
+                let pin_name_str = pin_name.text().to_string();
+                debug!("Adding pin '{}' for locally-defined component '{}'", pin_name_str, component_type);
+
+                // Convert pin direction from AST to netlist types
+                let direction_str = pin.direction().map(|t| t.text().to_string());
+                let (pin_direction, port_direction) = match direction_str.as_deref() {
+                    Some("in") => (PinDirection::In, PortDirection::Input),
+                    Some("out") => (PinDirection::Out, PortDirection::Output),
+                    Some("inout") => (PinDirection::InOut, PortDirection::InOut),
+                    _ => (PinDirection::InOut, PortDirection::InOut), // Default fallback
+                };
+
+                // Convert pin type from AST to netlist types
+                let pin_type_str = pin.pin_type().map(|t| t.text().to_string());
+                let pin_type = match pin_type_str.as_deref() {
+                    Some("power") => PinType::Power,
+                    Some("ground") => PinType::Ground,
+                    Some("signal") => PinType::Signal,
+                    _ => PinType::Signal, // Default fallback
+                };
+
+                netlist.add_port(module_id, pin_name_str.clone(), port_direction, None);
+                netlist.add_pin(module_id, pin_name_str, pin_direction, pin_type);
+            }
+        }
+        return Ok(());
+    }
+
+    // Next check if this component is in the imported modules
     if let Some(preprocessor) = import_preprocessor {
         debug!("Checking preprocessor for component: {}", component_type);
-        if let Some(module_ast) = preprocessor.get_imported_module(component_type) {
+        if let Some(entity_ast) = preprocessor.get_imported_entity(component_type) {
             debug!("Adding pins for imported component: {}", component_type);
-            
-            // Extract pins from the imported module definition
-            let pins: Vec<_> = module_ast.pins().collect();
+
+            // Extract pins from the imported entity definition
+            let pins: Vec<_> = entity_ast.pins().collect();
             debug!("Total pins found in {}: {}", component_type, pins.len());
             for pin in pins {
                 if let Some(pin_name) = pin.name() {
@@ -1141,9 +1194,16 @@ fn process_net_flow_statement(
         let parts = parse_connection_chain(&flow_text);
         println!("Parsed {} parts from flow expression", parts.len());
         info!("Parsed {} parts from flow expression", parts.len());
-        
+
+        // Create or resolve the named net from the NET_FLOW_STMT declaration
+        // This net will be used as the initial connection point for the first element in the flow
+        let declared_net_id = context.resolve_net(&net_name, netlist)?;
+        println!("Resolved declared net '{}' to {:?}", net_name, declared_net_id);
+        info!("Resolved declared net '{}' to {:?}", net_name, declared_net_id);
+
         // Process the flow by creating connections between adjacent elements
-        let mut last_net_id: Option<NetId> = None;
+        // Initialize last_net_id with the declared net so the first component pin has something to connect to
+        let mut last_net_id: Option<NetId> = Some(declared_net_id);
         let mut last_was_component_pin = false;
         
         for (i, part) in parts.iter().enumerate() {
@@ -1280,24 +1340,24 @@ fn process_net_flow_statement(
                 // Find the instance
                 if let Some(inst_id) = find_instance_by_name(netlist, instance_name) {
                     // Determine what net to connect to
-                    let net_id = if last_was_component_pin {
-                        // Need to create a new net between components
-                        let net_name = format!("net_{}_{}", 
+                    let net_id = if let Some(existing_net_id) = last_net_id {
+                        // Use the existing net from the previous element
+                        // This handles both:
+                        // 1. Component pin after another component pin (use same net)
+                        // 2. Component pin after a net or inline component (use that net)
+                        existing_net_id
+                    } else if last_was_component_pin {
+                        // Previous was a component pin but no net available
+                        // This shouldn't normally happen, but handle it gracefully
+                        let net_name = format!("net_{}_{}",
                             if i > 0 { parts[i-1].trim() } else { "start" },
                             endpoint
                         ).replace(".", "_").replace(":", "_");
                         let new_net_id = netlist.add_net(Some(net_name.clone()));
                         println!("  Created intermediate net '{}' ({:?})", net_name, new_net_id);
-                        
-                        // Connect previous component's output pin to this net
-                        // This happens naturally as we process the flow
-                        
                         new_net_id
-                    } else if let Some(net_id) = last_net_id {
-                        // Connect to the existing net
-                        net_id
                     } else {
-                        // Shouldn't happen in a well-formed flow
+                        // No previous connection point available
                         warn!("  No net available for connection");
                         continue;
                     };
@@ -1333,9 +1393,40 @@ fn process_net_flow_statement(
                     println!("  Instance {} not found", instance_name);
                     warn!("  Instance {} not found", instance_name);
                 }
+            } else {
+                // Simple identifier - could be a power/ground net name like VIN, VOUT, GND
+                // (without @ prefix)
+                println!("  Simple identifier: '{}'", endpoint);
+                info!("  Simple identifier: '{}'", endpoint);
+
+                // Try to resolve it as a net name
+                match context.resolve_net(endpoint, netlist) {
+                    Ok(resolved_net_id) => {
+                        // If there was a previous net (from a component pin), merge them
+                        if let Some(prev_net_id) = last_net_id {
+                            if prev_net_id != resolved_net_id {
+                                println!("  Merging previous net {:?} with resolved net {:?}", prev_net_id, resolved_net_id);
+                                info!("  Merging previous net {:?} with resolved net {:?}", prev_net_id, resolved_net_id);
+
+                                // Merge the previous intermediate net into the resolved net
+                                // This connects the component pin's net to the power/ground net
+                                merge_nets(resolved_net_id, prev_net_id, netlist)?;
+                            }
+                        }
+
+                        last_net_id = Some(resolved_net_id);
+                        last_was_component_pin = false;
+                        println!("  Resolved '{}' to net {:?}", endpoint, resolved_net_id);
+                        info!("  Resolved '{}' to net {:?}", endpoint, resolved_net_id);
+                    }
+                    Err(e) => {
+                        println!("  Warning: Could not resolve '{}' as net: {}", endpoint, e);
+                        warn!("  Could not resolve '{}' as net: {}", endpoint, e);
+                    }
+                }
             }
         }
-        
+
     } else {
         warn!("Failed to extract net name or flow expression from NET_FLOW_STMT");
     }
@@ -1360,8 +1451,8 @@ fn create_inline_component_instance(
     }
     
     // Create or get the component module
-    let module_id = get_or_create_component_module(component_type, netlist, import_preprocessor)?;
-    
+    let module_id = get_or_create_component_module(component_type, netlist, context, import_preprocessor)?;
+
     // Create the instance
     let instance_id = netlist.add_instance(instance_name.to_string(), module_id)
         .ok_or_else(|| anyhow::anyhow!("Failed to add component instance"))?;

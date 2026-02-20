@@ -58,7 +58,7 @@ type MOSFETParams = {
     impedance: ImpedanceCharacteristics,
 };
 
-module MOSFET(part: string = "2N7000", package: string = "TO-92") {
+entity MOSFET(part: string = "2N7000", package: string = "TO-92") {
     pin G: signal in;     // Gate
     pin D: signal inout;  // Drain
     pin S: signal inout;  // Source

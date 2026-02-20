@@ -30,6 +30,6 @@ board SpiceDualRoleDemo {
 }
 
 // Helper module for voltage reference
-module AnalogIn(voltage: voltage) {
+entity AnalogIn(voltage: voltage) {
     pin in: signal in;
 }

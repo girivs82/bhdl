@@ -618,7 +618,7 @@ generate for i in [0, 1, 4, 8, 16] {
 Expand wildcards across module boundaries with generate blocks:
 
 ```bhdl
-module SensorModule() {
+entity SensorModule() {
     generate for i in 0..3 {
         sensor[i]: TempSensor();
     }

@@ -85,7 +85,7 @@ board TestBadConnection {
 }
 
 // Test 9: Interface perspective in wrong context
-module TestModule {
+entity TestModule {
     pin VDD: power in;
     pin GND: ground;
     

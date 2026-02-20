@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use anyhow::{Result, Context as _};
 use bhdl_parser::parse;
-use bhdl_ast::{SourceFile, AstNode, Module, HasName};
+use bhdl_ast::{SourceFile, AstNode, Entity, HasName};
 use bhdl_ast::expr::Expr;
 
 /// Represents a value in the expression evaluator
@@ -50,7 +50,7 @@ impl Value {
 pub struct ExpressionEvaluator {
     /// Symbol table mapping names to values
     symbols: HashMap<String, Value>,
-    /// Cache of evaluated modules
+    /// Cache of evaluated entities
     module_cache: HashMap<String, HashMap<String, Value>>,
 }
 
@@ -68,21 +68,21 @@ impl ExpressionEvaluator {
         self.symbols.contains_key(name)
     }
     
-    /// Load a module and extract its constants
+    /// Load an entity and extract its constants
     pub fn load_module(&mut self, module_name: &str, module_content: &str) -> Result<()> {
-        // Parse the module
+        // Parse the entity
         let parse_result = parse(module_content);
         let syntax_node = parse_result.syntax();
         let source_file = SourceFile::cast(syntax_node)
             .ok_or_else(|| anyhow::anyhow!("Failed to cast to SourceFile"))?;
-        
-        // Find the module
+
+        // Find the entity
         for item in source_file.items() {
-            if let Some(module) = Module::cast(item.syntax().clone()) {
-                if let Some(name) = module.name() {
+            if let Some(entity) = Entity::cast(item.syntax().clone()) {
+                if let Some(name) = entity.name() {
                     if name.text() == module_name {
-                        // Extract constants from this module
-                        let constants = self.extract_module_constants(&module)?;
+                        // Extract constants from this entity
+                        let constants = self.extract_module_constants(&entity)?;
                         self.module_cache.insert(module_name.to_string(), constants.clone());
                         
                         // Also add to global symbols for easy access
@@ -91,7 +91,7 @@ impl ExpressionEvaluator {
                         }
                         
                         // Now handle any constant references like "const params = LM7805_PARAMS"
-                        self.resolve_const_references(&module)?;
+                        self.resolve_const_references(&entity)?;
                         
                         return Ok(());
                     }
@@ -99,11 +99,11 @@ impl ExpressionEvaluator {
             }
         }
         
-        Err(anyhow::anyhow!("Module {} not found", module_name))
+        Err(anyhow::anyhow!("Entity {} not found", module_name))
     }
     
-    /// Extract constants from a module
-    fn extract_module_constants(&self, module: &Module) -> Result<HashMap<String, Value>> {
+    /// Extract constants from an entity
+    fn extract_module_constants(&self, module: &Entity) -> Result<HashMap<String, Value>> {
         let mut constants = HashMap::new();
         
         // Since the parser uses PARAM_DECL for const declarations,
@@ -167,8 +167,8 @@ impl ExpressionEvaluator {
         None
     }
     
-    /// Resolve constant references in a module
-    fn resolve_const_references(&mut self, module: &Module) -> Result<()> {
+    /// Resolve constant references in an entity
+    fn resolve_const_references(&mut self, module: &Entity) -> Result<()> {
         let syntax = module.syntax();
         
         // Look for const declarations that reference other constants
@@ -503,7 +503,8 @@ mod tests {
         
         // Current tests
         assert_eq!(evaluator.parse_electrical_value("20mA").unwrap(), 0.02);
-        assert_eq!(evaluator.parse_electrical_value("5µA").unwrap(), 5e-6);
+        let val = evaluator.parse_electrical_value("5µA").unwrap();
+        assert!((val - 5e-6).abs() < 1e-18, "5µA should be ~5e-6, got {}", val);
         
         // Resistance tests
         assert_eq!(evaluator.parse_electrical_value("10kΩ").unwrap(), 10000.0);

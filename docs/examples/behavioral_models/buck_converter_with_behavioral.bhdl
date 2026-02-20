@@ -32,7 +32,7 @@ board BuckConverterDemo {
     enable_net -> Res(10k).1 -> GND;  // Pull-down
 }
 
-module BuckConverter {
+entity BuckConverter {
     pin VIN: power in;
     pin GND: ground;
     pin VOUT: power out;
@@ -124,7 +124,7 @@ module BuckConverter {
 }
 
 // The behavioral controller module
-module BuckController {
+entity BuckController {
     pin VIN: analog in;
     pin ENABLE: digital in;
     pin FB: analog in;

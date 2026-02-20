@@ -2,7 +2,7 @@
 
 ## Overview
 
-The analyzer must perform comprehensive checks on module connectivity, including electrical compatibility, pin direction conflicts, and voltage level mismatches. This leverages both static analysis and SPICE simulation.
+The analyzer must perform comprehensive checks on entity connectivity, including electrical compatibility, pin direction conflicts, and voltage level mismatches. This leverages both static analysis and SPICE simulation.
 
 ## Analysis Phases
 
@@ -25,7 +25,7 @@ match (source_dir, dest_dir) {
 #### 1.2 Open-Drain/Open-Collector Rules
 ```bhdl
 // Valid: Multiple open-drain outputs can share a net
-module I2CSystem {
+entity I2CSystem {
     signal sda_bus;
     
     // Pull-up required for open-drain
@@ -129,7 +129,7 @@ const LVTTL_3V3: VoltageLevel = VoltageLevel {
 #### 2.3 Level Shifter Insertion
 ```bhdl
 // Analyzer detects voltage mismatch and suggests fix
-module MixedVoltageSystem {
+entity MixedVoltageSystem {
     // 5V MCU output to 3.3V input - INVALID!
     mcu_5v: MCU_5V {
         GPIO -> fpga_3v3.INPUT;  // ERROR: 5V -> 3.3V

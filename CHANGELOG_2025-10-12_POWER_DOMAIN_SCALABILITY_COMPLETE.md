@@ -24,7 +24,7 @@ The Power Domain Scalability feature set is now complete, providing a comprehens
 4. **Explicit Lists** - Specific indices `[0,5,10,15]`
 5. **Even/Odd Keywords** - Filter by parity `[even]`, `[odd]`
 6. **Stepped Ranges** - Phased patterns `[0..11:3]`
-7. **Hierarchical Wildcards** - Cross module boundaries `module[*].component.pin`
+7. **Hierarchical Wildcards** - Cross module boundaries `entity[*].component.pin`
 8. **Suffix Wildcards** - Match by suffix `*sensor`
 9. **Automatic Decoupling** - Generate capacitors with placement constraints
 
@@ -384,7 +384,7 @@ power_domain @VCC_MEM_C = 3.3V @ 3A {
 **Solution**: Use hierarchical wildcards
 
 ```bhdl
-module SensorModule() {
+entity SensorModule() {
     sensor: TempSensor();
     buffer: OpAmp();
     filter: RCFilter();

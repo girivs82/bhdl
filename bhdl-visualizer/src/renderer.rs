@@ -3,6 +3,7 @@
 use anyhow::{Result, Context};
 use log::{debug, info};
 
+use bhdl_netlist::Netlist;
 use bhdl_synthesizer::DatabaseComponentInstance;
 use crate::types::{CircuitLayout, Component, Net, Point};
 use crate::svg::{SvgDocument, SvgElement};
@@ -67,6 +68,7 @@ impl CircuitRenderer {
         &self,
         layout: &CircuitLayout,
         components: &[DatabaseComponentInstance],
+        netlist: &Netlist,
     ) -> Result<String> {
         info!("Rendering circuit layout with {} components and {} nets", 
               layout.components.len(), layout.nets.len());
@@ -81,9 +83,9 @@ impl CircuitRenderer {
         
         // Render nets first (so they appear behind components)
         self.render_nets(&mut svg_doc, &layout.nets).await?;
-        
+
         // Render components
-        self.render_components(&mut svg_doc, &layout.components, components).await?;
+        self.render_components(&mut svg_doc, &layout.components, components, netlist).await?;
         
         // Add debug overlays if enabled
         if self.config.debug_mode {
@@ -150,25 +152,32 @@ impl CircuitRenderer {
         svg_doc: &mut SvgDocument,
         components: &[Component],
         db_components: &[DatabaseComponentInstance],
+        netlist: &Netlist,
     ) -> Result<()> {
         debug!("Rendering {} components", components.len());
-        
+
         // Create a map from instance names to database components for quick lookup
         let mut db_component_map = std::collections::HashMap::new();
         for db_comp in db_components {
             db_component_map.insert(db_comp.instance_name.clone(), db_comp);
         }
-        
-        // Match layout components to database components by index order
-        for (index, component) in components.iter().enumerate() {
-            let db_component = if index < db_components.len() {
-                Some(&db_components[index])
+
+        // Match layout components to database components by name (not index!)
+        for component in components {
+            // Get instance name from netlist using instance_id
+            let instance_name = netlist.get_instance(component.instance_id)
+                .map(|inst| inst.name.clone());
+
+            // Match database component by name
+            let db_component = if let Some(ref name) = instance_name {
+                db_component_map.get(name).copied()
             } else {
                 None
             };
+
             self.render_component(svg_doc, component, db_component).await?;
         }
-        
+
         Ok(())
     }
     
@@ -406,22 +415,24 @@ impl Default for CircuitRenderer {
 pub async fn render_circuit_svg(
     layout: &CircuitLayout,
     components: &[DatabaseComponentInstance],
+    netlist: &Netlist,
 ) -> Result<String> {
     let renderer = CircuitRenderer::new();
-    renderer.render_to_svg(layout, components).await
+    renderer.render_to_svg(layout, components, netlist).await
 }
 
 /// Render a circuit layout to SVG with debug information
 pub async fn render_circuit_svg_debug(
     layout: &CircuitLayout,
     components: &[DatabaseComponentInstance],
+    netlist: &Netlist,
 ) -> Result<String> {
     let mut config = RendererConfig::default();
     config.debug_mode = true;
     config.show_pins = true;
-    
+
     let renderer = CircuitRenderer::with_config(config);
-    renderer.render_to_svg(layout, components).await
+    renderer.render_to_svg(layout, components, netlist).await
 }
 
 #[cfg(test)]
@@ -442,20 +453,20 @@ mod tests {
     async fn test_simple_component_rendering() {
         let renderer = CircuitRenderer::new();
         let mut layout = CircuitLayout::new();
-        
+
         // Create proper InstanceId using a dummy netlist
         let mut netlist = bhdl_netlist::Netlist::new();
         let module_id = netlist.add_module("TestModule".to_string(), bhdl_netlist::ModuleKind::PhysicalComponent);
         let instance_id = netlist.add_instance("test".to_string(), module_id).unwrap();
-        
+
         let component = Component::new(instance_id, Point::new(50.0, 50.0))
             .with_svg("<rect x=\"-10\" y=\"-5\" width=\"20\" height=\"10\" fill=\"white\" stroke=\"black\"/>".to_string());
-        
+
         layout.add_component(component);
         layout.bounding_box = BoundingBox::new(0.0, 0.0, 100.0, 100.0);
-        
+
         let components = vec![create_test_component("R1", "Resistor")];
-        let svg = renderer.render_to_svg(&layout, &components).await.unwrap();
+        let svg = renderer.render_to_svg(&layout, &components, &netlist).await.unwrap();
         
         assert!(svg.contains("<svg"));
         assert!(svg.contains("</svg>"));
@@ -466,20 +477,20 @@ mod tests {
     async fn test_debug_rendering() {
         let mut renderer = CircuitRenderer::new();
         renderer.enable_debug();
-        
+
         let mut layout = CircuitLayout::new();
-        
+
         // Create proper InstanceId using a dummy netlist
         let mut netlist = bhdl_netlist::Netlist::new();
         let module_id = netlist.add_module("TestModule".to_string(), bhdl_netlist::ModuleKind::PhysicalComponent);
         let instance_id = netlist.add_instance("test".to_string(), module_id).unwrap();
-        
+
         let component = Component::new(instance_id, Point::new(50.0, 50.0));
         layout.add_component(component);
         layout.bounding_box = BoundingBox::new(0.0, 0.0, 100.0, 100.0);
-        
+
         let components = vec![create_test_component("R1", "Resistor")];
-        let svg = renderer.render_to_svg(&layout, &components).await.unwrap();
+        let svg = renderer.render_to_svg(&layout, &components, &netlist).await.unwrap();
         
         assert!(svg.contains("debug"));
         assert!(svg.contains("stroke-dasharray"));

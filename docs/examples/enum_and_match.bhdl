@@ -1,0 +1,45 @@
+// Example: Enum definitions and match expressions in BHDL
+// Demonstrates RFC Task 4 - Enum types with pattern matching
+
+// Define pin states for digital logic
+enum PinState {
+    High,
+    Low,
+    HighZ,
+    Unknown
+}
+
+// Define voltage domains
+enum VoltageDomain {
+    V1_8,
+    V2_5,
+    V3_3,
+    V5_0
+}
+
+// Module using enum parameters and match expressions
+entity LevelShifter(domain: VoltageDomain) {
+    pin A: signal inout;
+    pin B: signal inout;
+    pin VCC_A: power in;
+    pin VCC_B: power in;
+
+    // Use match to select voltage based on domain
+    const target_voltage = match domain {
+        VoltageDomain::V1_8 => 1.8V,
+        VoltageDomain::V2_5 => 2.5V,
+        VoltageDomain::V3_3 => 3.3V,
+        VoltageDomain::V5_0 => 5.0V
+    };
+}
+
+// Board using enums
+board DigitalInterface {
+    power VCC_3V3 = 3.3V @ 500mA;
+    power VCC_1V8 = 1.8V @ 200mA;
+    ground GND;
+
+    // Instantiate with enum value
+    @VCC_3V3 -> LevelShifter(VoltageDomain::V3_3).VCC_A;
+    @VCC_1V8 -> LevelShifter(VoltageDomain::V1_8).VCC_B;
+}

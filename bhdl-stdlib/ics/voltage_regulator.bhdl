@@ -44,7 +44,7 @@ type VoltageRegulatorParams = {
 };
 
 // 78xx series fixed voltage regulator
-module VReg78xx(voltage: voltage = 5V, package: string = "TO-220") {
+entity VReg78xx(voltage: voltage = 5V, package: string = "TO-220") {
     pin IN: power in;
     pin OUT: power out;
     pin GND: ground;
@@ -238,7 +238,7 @@ module VReg78xx(voltage: voltage = 5V, package: string = "TO-220") {
 }
 
 // LM317 adjustable voltage regulator
-module LM317(package: string = "TO-220") {
+entity LM317(package: string = "TO-220") {
     pin IN: power in;
     pin OUT: power out;
     pin ADJ: signal inout;
@@ -330,7 +330,7 @@ module LM317(package: string = "TO-220") {
 }
 
 // Low dropout regulator
-module LDO(voltage: voltage = 3.3V, current: current = 800mA, package: string = "SOT-223") {
+entity LDO(voltage: voltage = 3.3V, current: current = 800mA, package: string = "SOT-223") {
     pin IN: power in;
     pin OUT: power out;
     pin GND: ground;

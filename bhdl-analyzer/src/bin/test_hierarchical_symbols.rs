@@ -4,22 +4,22 @@ use bhdl_analyzer::{analyze, hierarchical_symbol_table::{HierarchicalSymbolTable
 
 fn main() {
     let test_code = r#"
-module PWMController(frequency: frequency = 100kHz) {
+entity PWMController(frequency: frequency = 100kHz) {
     pin VCC: power in;
     pin OUT: signal out;
     pin EN: signal in;
-    
+
     parameter duty_cycle: percentage = 50%;
 }
 
-module PowerRegulator(vin: voltage, vout: voltage = 3.3V) {
+entity PowerRegulator(vin: voltage, vout: voltage = 3.3V) {
     pin VIN: power in;
     pin VOUT: power out;
     pin EN: signal in;
-    
+
     parameter switching_freq: frequency = 500kHz;
-    
-    // Nested module instance
+
+    // Nested entity instance
     pwm: PWMController(frequency=switching_freq) {
         VCC <- VIN;
         OUT -> switch_node;
@@ -36,7 +36,7 @@ module PowerRegulator(vin: voltage, vout: voltage = 3.3V) {
 board TestBoard {
     power VIN_12V = 12V @ 3A;
     
-    // Module instance with parameters
+    // Entity instance with parameters
     reg1: PowerRegulator(vin=12V, vout=5V) {
         VIN <- VIN_12V;
         VOUT -> RAIL_5V;
@@ -122,7 +122,7 @@ board TestBoard {
     
     for path_str in hier_paths {
         let path = SymbolPath::from_str(path_str);
-        // Note: This won't resolve properly yet because we need to register module instances
+        // Note: This won't resolve properly yet because we need to register entity instances
         let result = hier_table.resolve_path(&path, None);
         match result {
             Some(symbol) => {
