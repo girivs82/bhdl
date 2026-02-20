@@ -1,0 +1,48 @@
+// Dual LED circuit with voltage regulator
+// 9V input → LM7805 → 5V → two parallel LED branches
+entity Res(value: resistance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+}
+
+entity Cap(value: capacitance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+}
+
+entity LED(color: string) {
+    pin A: signal in;
+    pin K: signal in;
+}
+
+entity LM7805 {
+    pin VI: power in;
+    pin GND: ground;
+    pin VO: power out;
+}
+
+board DualLedRegulator {
+    power VIN = 9V @ 500mA;
+    power VOUT = 5V @ 200mA;
+    ground GND;
+
+    // Input filter
+    VIN -> c_in: Cap(100µF).1 for noise_filtering(100Hz, 40dB);
+    c_in.2 -> GND;
+
+    // Voltage regulation
+    net vin_filt: c_in.1 -> reg: LM7805().VI -> reg.VO -> VOUT for voltage_regulation(5V, 9V);
+    reg.GND -> GND;
+
+    // Output filter
+    VOUT -> c_out: Cap(10µF).1 for noise_filtering(10kHz, 60dB);
+    c_out.2 -> GND;
+
+    // LED branch 1: red
+    net led1_path: VOUT -> r1: Res(220).1 -> r1.2 -> led_r: LED("red").A for current_limiting(20mA);
+    led_r.K -> GND;
+
+    // LED branch 2: green
+    net led2_path: VOUT -> r2: Res(150).1 -> r2.2 -> led_g: LED("green").A for current_limiting(20mA);
+    led_g.K -> GND;
+}

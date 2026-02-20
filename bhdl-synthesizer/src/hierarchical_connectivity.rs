@@ -369,27 +369,21 @@ fn process_entity_body(
         process_entity_instance(&entity_inst, netlist, context, analysis, import_preprocessor)?;
     }
 
-    // Process connections and extract component instances
+    // Process connections and flow statements
     for child in entity.syntax().children() {
         match child.kind() {
             SyntaxKind::CONNECTION_STMT => {
-                if let Some(conn_stmt) = ConnectionStmt::cast(child) {
-                    // Process the connection
-                    process_connection_in_module(&conn_stmt, netlist, context)?;
-                    
-                    // Extract and create component instances from the connection
-                    extract_component_instances_from_connection(&conn_stmt, netlist, context, analysis, import_preprocessor)?;
-                }
+                // Bare connection: process as flow (creates instances + wires in one pass)
+                process_connection_stmt_as_flow(&child, netlist, context, analysis, import_preprocessor)?;
             }
             SyntaxKind::NET_FLOW_STMT => {
-                // Handle net flow statements
                 debug!("Found NET_FLOW_STMT in module");
                 process_net_flow_statement(&child, netlist, context, analysis, import_preprocessor)?;
             }
             _ => {}
         }
     }
-    
+
     Ok(())
 }
 
@@ -426,13 +420,9 @@ fn process_board_body(
                 }
             }
             SyntaxKind::CONNECTION_STMT => {
-                if let Some(conn_stmt) = ConnectionStmt::cast(child) {
-                    // Process the connection
-                    process_connection_in_module(&conn_stmt, netlist, context)?;
-                    
-                    // Extract and create component instances from the connection
-                    extract_component_instances_from_connection(&conn_stmt, netlist, context, analysis, import_preprocessor)?;
-                }
+                // Bare connection like: VCC -> r1: Res(330).1 -> r1.2 -> led1: LED("red").A;
+                // Process like a NET_FLOW_STMT but without a declared net name
+                process_connection_stmt_as_flow(&child, netlist, context, analysis, import_preprocessor)?;
             }
             SyntaxKind::NET_FLOW_STMT => {
                 // Handle net flow statements like: net led_circuit: @VCC -> R1: Res(330).1 -> ...
@@ -443,7 +433,7 @@ fn process_board_body(
             _ => {}
         }
     }
-    
+
     Ok(())
 }
 
@@ -1196,241 +1186,283 @@ fn process_net_flow_statement(
         info!("Parsed {} parts from flow expression", parts.len());
 
         // Create or resolve the named net from the NET_FLOW_STMT declaration
-        // This net will be used as the initial connection point for the first element in the flow
         let declared_net_id = context.resolve_net(&net_name, netlist)?;
         println!("Resolved declared net '{}' to {:?}", net_name, declared_net_id);
         info!("Resolved declared net '{}' to {:?}", net_name, declared_net_id);
 
-        // Process the flow by creating connections between adjacent elements
-        // Initialize last_net_id with the declared net so the first component pin has something to connect to
-        let mut last_net_id: Option<NetId> = Some(declared_net_id);
-        let mut last_was_component_pin = false;
-        
-        for (i, part) in parts.iter().enumerate() {
-            let endpoint = part.trim();
-            println!("\nProcessing flow part {}: '{}'", i, endpoint);
-            info!("Processing flow part {}: '{}'", i, endpoint);
-            
-            if endpoint.starts_with('@') {
-                // This is a net reference like @VCC or @GND
-                let ref_net_name = &endpoint[1..];
-                let ref_net_id = context.resolve_net(ref_net_name, netlist)?;
-                println!("  Net reference: @{} (id: {:?})", ref_net_name, ref_net_id);
-                info!("  Net reference: @{} (id: {:?})", ref_net_name, ref_net_id);
-                
-                // If the last element was a component pin, don't create intermediate net
-                // The component pin will connect directly to this net
-                if last_was_component_pin {
-                    // Go back and connect the previous component pin to this net
-                    // This is a bit tricky since we already processed it
-                    // For now, we'll handle this by looking back
-                    if i > 0 {
-                        let prev_part = parts[i-1].trim();
-                        if let Some(dot_pos) = prev_part.find('.') {
-                            let inst_name = &prev_part[..dot_pos];
-                            let pin_name = &prev_part[dot_pos + 1..];
-                            
-                            // Find and connect this pin to the reference net
-                            if let Some(inst_id) = find_instance_by_name(netlist, inst_name) {
-                                if let Some(pin_inst_id) = netlist.find_pin_instance(inst_id, pin_name) {
-                                    // Remove the previous connection if it was to an intermediate net
-                                    // For now, just add the new connection
-                                    netlist.connect(ref_net_id, ConnectionPoint::PinInstance(pin_inst_id))
-                                        .map_err(|e| anyhow::anyhow!("Failed to connect pin: {}", e))?;
-                                    println!("  Connected {}.{} directly to @{}", inst_name, pin_name, ref_net_name);
-                                } else {
-                                    // Try alternatives for LED pins
-                                    let alt_pins = match pin_name {
-                                        "cathode" => vec!["K", "2", "-"],
-                                        "anode" => vec!["A", "1", "+"],
-                                        _ => vec![]
-                                    };
-                                    for alt in alt_pins {
-                                        if let Some(pin_inst_id) = netlist.find_pin_instance(inst_id, alt) {
-                                            netlist.connect(ref_net_id, ConnectionPoint::PinInstance(pin_inst_id))
-                                                .map_err(|e| anyhow::anyhow!("Failed to connect pin: {}", e))?;
-                                            println!("  Connected {}.{} directly to @{} (using '{}')", inst_name, pin_name, ref_net_name, alt);
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                // This net becomes the current connection point
-                last_net_id = Some(ref_net_id);
-                last_was_component_pin = false;
-                
-            } else if endpoint.contains(':') && endpoint.contains('(') {
-                // Inline component instantiation like "R1: Res(330).1"
-                if let Some(colon_pos) = endpoint.find(':') {
-                    let instance_name = endpoint[..colon_pos].trim();
-                    let after_colon = &endpoint[colon_pos + 1..].trim();
-                    
-                    // Extract component type and pin
-                    if let Some(paren_pos) = after_colon.find('(') {
-                        let component_type = after_colon[..paren_pos].trim();
-                        
-                        // Find the pin reference (after the last dot)
-                        let pin_name = if let Some(dot_pos) = endpoint.rfind('.') {
-                            endpoint[dot_pos + 1..].trim()
-                        } else {
-                            "1" // Default pin
-                        };
-                        
-                        println!("  Inline component: {} = {}(...).{}", instance_name, component_type, pin_name);
-                        info!("  Inline component: {} = {}(...).{}", instance_name, component_type, pin_name);
-                        
-                        // Create the component instance
-                        let inst_id = create_inline_component_instance(
-                            instance_name,
-                            component_type,
-                            endpoint,
-                            netlist,
-                            context,
-                            analysis,
-                            import_preprocessor
-                        )?;
-                        
-                        println!("  Created instance {:?} for {}", inst_id, instance_name);
-                        
-                        // Connect this pin to the last net
-                        if let Some(net_id) = last_net_id {
-                            if let Some(pin_inst_id) = netlist.find_pin_instance(inst_id, pin_name) {
-                                netlist.connect(net_id, ConnectionPoint::PinInstance(pin_inst_id))
-                                    .map_err(|e| anyhow::anyhow!("Failed to connect pin: {}", e))?;
-                                println!("  Connected {}.{} to previous net {:?}", instance_name, pin_name, net_id);
-                                info!("  Connected {}.{} to previous net {:?}", instance_name, pin_name, net_id);
-                            } else {
-                                // Try common pin name alternatives
-                                let alt_pins = match pin_name {
-                                    "anode" => vec!["A", "1", "+"],
-                                    "cathode" => vec!["K", "2", "-"],
-                                    _ => vec![]
-                                };
-                                for alt in alt_pins {
-                                    if let Some(pin_inst_id) = netlist.find_pin_instance(inst_id, alt) {
-                                        println!("  Found pin using alternative name '{}' instead of '{}'", alt, pin_name);
-                                        netlist.connect(net_id, ConnectionPoint::PinInstance(pin_inst_id))
-                                            .map_err(|e| anyhow::anyhow!("Failed to connect pin: {}", e))?;
-                                        println!("  Connected {}.{} to previous net {:?} (using pin '{}')", instance_name, pin_name, net_id, alt);
-                                        break;
-                                    }
-                                }
-                            }
-                        } else {
-                            println!("  Warning: No previous net to connect to");
-                        }
-                        
-                        // This pin is now the end of a component connection
-                        last_was_component_pin = true;
-                        last_net_id = None; // Reset - next connection will need a new net
-                    }
-                }
-            } else if let Some(dot_pos) = endpoint.find('.') {
-                // Component pin reference like "R1.2"
-                let instance_name = &endpoint[..dot_pos];
-                let pin_name = &endpoint[dot_pos + 1..];
-                
-                println!("  Component pin: {}.{}", instance_name, pin_name);
-                info!("  Component pin: {}.{}", instance_name, pin_name);
-                
-                // Find the instance
-                if let Some(inst_id) = find_instance_by_name(netlist, instance_name) {
-                    // Determine what net to connect to
-                    let net_id = if let Some(existing_net_id) = last_net_id {
-                        // Use the existing net from the previous element
-                        // This handles both:
-                        // 1. Component pin after another component pin (use same net)
-                        // 2. Component pin after a net or inline component (use that net)
-                        existing_net_id
-                    } else if last_was_component_pin {
-                        // Previous was a component pin but no net available
-                        // This shouldn't normally happen, but handle it gracefully
-                        let net_name = format!("net_{}_{}",
-                            if i > 0 { parts[i-1].trim() } else { "start" },
-                            endpoint
-                        ).replace(".", "_").replace(":", "_");
-                        let new_net_id = netlist.add_net(Some(net_name.clone()));
-                        println!("  Created intermediate net '{}' ({:?})", net_name, new_net_id);
-                        new_net_id
-                    } else {
-                        // No previous connection point available
-                        warn!("  No net available for connection");
-                        continue;
-                    };
-                    
-                    // Connect the pin
-                    if let Some(pin_inst_id) = netlist.find_pin_instance(inst_id, pin_name) {
-                        netlist.connect(net_id, ConnectionPoint::PinInstance(pin_inst_id))
-                            .map_err(|e| anyhow::anyhow!("Failed to connect pin: {}", e))?;
-                        println!("  Connected {}.{} to net {:?}", instance_name, pin_name, net_id);
-                        info!("  Connected {}.{} to net {:?}", instance_name, pin_name, net_id);
-                    } else {
-                        // Try common pin name alternatives
-                        let alt_pins = match pin_name {
-                            "anode" => vec!["A", "1", "+"],
-                            "cathode" => vec!["K", "2", "-"],
-                            _ => vec![]
-                        };
-                        for alt in alt_pins {
-                            if let Some(pin_inst_id) = netlist.find_pin_instance(inst_id, alt) {
-                                println!("  Found pin using alternative name '{}' instead of '{}'", alt, pin_name);
-                                netlist.connect(net_id, ConnectionPoint::PinInstance(pin_inst_id))
-                                    .map_err(|e| anyhow::anyhow!("Failed to connect pin: {}", e))?;
-                                println!("  Connected {}.{} to net {:?} (using pin '{}')", instance_name, pin_name, net_id, alt);
-                                break;
-                            }
-                        }
-                    }
-                    
-                    // Update state
-                    last_net_id = Some(net_id);
-                    last_was_component_pin = true;
-                } else {
-                    println!("  Instance {} not found", instance_name);
-                    warn!("  Instance {} not found", instance_name);
-                }
-            } else {
-                // Simple identifier - could be a power/ground net name like VIN, VOUT, GND
-                // (without @ prefix)
-                println!("  Simple identifier: '{}'", endpoint);
-                info!("  Simple identifier: '{}'", endpoint);
-
-                // Try to resolve it as a net name
-                match context.resolve_net(endpoint, netlist) {
-                    Ok(resolved_net_id) => {
-                        // If there was a previous net (from a component pin), merge them
-                        if let Some(prev_net_id) = last_net_id {
-                            if prev_net_id != resolved_net_id {
-                                println!("  Merging previous net {:?} with resolved net {:?}", prev_net_id, resolved_net_id);
-                                info!("  Merging previous net {:?} with resolved net {:?}", prev_net_id, resolved_net_id);
-
-                                // Merge the previous intermediate net into the resolved net
-                                // This connects the component pin's net to the power/ground net
-                                merge_nets(resolved_net_id, prev_net_id, netlist)?;
-                            }
-                        }
-
-                        last_net_id = Some(resolved_net_id);
-                        last_was_component_pin = false;
-                        println!("  Resolved '{}' to net {:?}", endpoint, resolved_net_id);
-                        info!("  Resolved '{}' to net {:?}", endpoint, resolved_net_id);
-                    }
-                    Err(e) => {
-                        println!("  Warning: Could not resolve '{}' as net: {}", endpoint, e);
-                        warn!("  Could not resolve '{}' as net: {}", endpoint, e);
-                    }
-                }
-            }
-        }
+        // Process the flow chain starting from the declared net
+        process_flow_parts(&parts, Some(declared_net_id), netlist, context, analysis, import_preprocessor)?;
 
     } else {
         warn!("Failed to extract net name or flow expression from NET_FLOW_STMT");
     }
-    
+
+    Ok(())
+}
+
+/// Process a bare CONNECTION_STMT (no `net` keyword) as a flow statement.
+/// e.g., `VCC -> r1: Res(330).1 -> r1.2 -> led1: LED("red").A;`
+fn process_connection_stmt_as_flow(
+    node: &SyntaxNode<BhdlLanguage>,
+    netlist: &mut Netlist,
+    context: &mut HierarchicalContext,
+    analysis: &AnalysisResult,
+    import_preprocessor: Option<&crate::import_preprocessor::ImportPreprocessor>,
+) -> Result<()> {
+    let full_text = node.text().to_string();
+    println!("=== Processing CONNECTION_STMT as flow ===");
+    info!("Processing CONNECTION_STMT as flow: '{}'", full_text);
+
+    // Strip trailing semicolon and any `for` clause
+    let text = full_text.trim();
+    let text = text.strip_suffix(';').unwrap_or(text);
+    let flow_end = text.find(" for ").unwrap_or(text.len());
+    let flow_text = text[..flow_end].trim();
+
+    if flow_text.is_empty() {
+        return Ok(());
+    }
+
+    let parts = parse_connection_chain(flow_text);
+    println!("Parsed {} parts from bare connection", parts.len());
+    info!("Parsed {} parts from bare connection", parts.len());
+
+    // Process with no initial net — the first element in the chain will establish it
+    process_flow_parts(&parts, None, netlist, context, analysis, import_preprocessor)?;
+
+    Ok(())
+}
+
+/// Shared flow processing logic used by both NET_FLOW_STMT and CONNECTION_STMT handlers.
+///
+/// Walks through flow parts left-to-right, creating inline instances and connecting pins.
+/// The key invariant: after processing each part, `last_net_id` holds the net that the
+/// NEXT element should connect to. For inline instantiations (`r1: Res(330).1`), we connect
+/// the specified pin to `last_net_id` and then set `last_net_id = None` — the next part
+/// (typically a pin-ref like `r1.2`) will create a fresh intermediate net.
+fn process_flow_parts(
+    parts: &[String],
+    initial_net_id: Option<NetId>,
+    netlist: &mut Netlist,
+    context: &mut HierarchicalContext,
+    analysis: &AnalysisResult,
+    import_preprocessor: Option<&crate::import_preprocessor::ImportPreprocessor>,
+) -> Result<()> {
+    let mut last_net_id: Option<NetId> = initial_net_id;
+    let mut last_was_component_pin = false;
+
+    for (i, part) in parts.iter().enumerate() {
+        let endpoint = part.trim();
+        println!("\nProcessing flow part {}: '{}'", i, endpoint);
+        info!("Processing flow part {}: '{}'", i, endpoint);
+
+        if endpoint.starts_with('@') {
+            // Net reference like @VCC or @GND
+            let ref_net_name = &endpoint[1..];
+            let ref_net_id = context.resolve_net(ref_net_name, netlist)?;
+            println!("  Net reference: @{} (id: {:?})", ref_net_name, ref_net_id);
+            info!("  Net reference: @{} (id: {:?})", ref_net_name, ref_net_id);
+
+            // If the previous part left a component pin dangling (last_net_id == None,
+            // last_was_component_pin == true), connect that pin to this net.
+            if last_was_component_pin && last_net_id.is_none() && i > 0 {
+                connect_previous_pin_to_net(parts, i, netlist, ref_net_id)?;
+            }
+
+            // Merge if there's an existing intermediate net
+            if let Some(prev_net_id) = last_net_id {
+                if prev_net_id != ref_net_id {
+                    merge_nets(ref_net_id, prev_net_id, netlist)?;
+                }
+            }
+
+            last_net_id = Some(ref_net_id);
+            last_was_component_pin = false;
+
+        } else if endpoint.contains(':') && endpoint.contains('(') {
+            // Inline component instantiation like "r1: Res(330).1"
+            if let Some(colon_pos) = endpoint.find(':') {
+                let instance_name = endpoint[..colon_pos].trim();
+                let after_colon = &endpoint[colon_pos + 1..].trim();
+
+                if let Some(paren_pos) = after_colon.find('(') {
+                    let component_type = after_colon[..paren_pos].trim();
+
+                    let pin_name = if let Some(dot_pos) = endpoint.rfind('.') {
+                        endpoint[dot_pos + 1..].trim()
+                    } else {
+                        "1"
+                    };
+
+                    println!("  Inline component: {} = {}(...).{}", instance_name, component_type, pin_name);
+                    info!("  Inline component: {} = {}(...).{}", instance_name, component_type, pin_name);
+
+                    let inst_id = create_inline_component_instance(
+                        instance_name,
+                        component_type,
+                        endpoint,
+                        netlist,
+                        context,
+                        analysis,
+                        import_preprocessor
+                    )?;
+
+                    println!("  Created instance {:?} for {}", inst_id, instance_name);
+
+                    if let Some(net_id) = last_net_id {
+                        connect_pin_to_net(netlist, inst_id, pin_name, net_id,
+                            &format!("{}.{}", instance_name, pin_name), "previous net")?;
+                    } else {
+                        println!("  Warning: No previous net to connect to for {}.{}", instance_name, pin_name);
+                    }
+
+                    // After an inline instantiation the specified pin is connected;
+                    // the *other* pin (e.g. r1.2) will be referenced explicitly later
+                    // and will need a new intermediate net.
+                    last_was_component_pin = true;
+                    last_net_id = None;
+                }
+            }
+        } else if let Some(dot_pos) = endpoint.find('.') {
+            // Component pin reference like "r1.2" or "led1.K"
+            let instance_name = &endpoint[..dot_pos];
+            let pin_name = &endpoint[dot_pos + 1..];
+
+            println!("  Component pin: {}.{}", instance_name, pin_name);
+            info!("  Component pin: {}.{}", instance_name, pin_name);
+
+            if let Some(inst_id) = find_instance_by_name(netlist, instance_name) {
+                let net_id = if let Some(existing_net_id) = last_net_id {
+                    // Use the existing net from the previous element
+                    existing_net_id
+                } else if last_was_component_pin {
+                    // Previous was an inline instantiation (last_net_id = None).
+                    // Create a fresh intermediate net for this new pin.
+                    // Do NOT re-connect the previous pin — it was already connected
+                    // to the correct net during its inline instantiation step.
+                    let net_name = format!("net_{}_{}",
+                        if i > 0 { parts[i-1].trim() } else { "start" },
+                        endpoint
+                    ).replace(".", "_").replace(":", "_");
+                    let new_net_id = netlist.add_net(Some(net_name.clone()));
+                    println!("  Created intermediate net '{}' ({:?})", net_name, new_net_id);
+                    new_net_id
+                } else {
+                    // First element in the chain is a pin reference (e.g. `led1.K -> GND`).
+                    // Create a temporary auto-net; it will be merged with the real net
+                    // when the next element (e.g. GND) is resolved.
+                    let net_name = format!("auto_{}", endpoint).replace(".", "_");
+                    let new_net_id = netlist.add_net(Some(net_name.clone()));
+                    println!("  Created auto-net '{}' ({:?}) for first-element pin", net_name, new_net_id);
+                    new_net_id
+                };
+
+                connect_pin_to_net(netlist, inst_id, pin_name, net_id,
+                    &format!("{}.{}", instance_name, pin_name), "net")?;
+
+                last_net_id = Some(net_id);
+                last_was_component_pin = true;
+            } else {
+                println!("  Instance {} not found", instance_name);
+                warn!("  Instance {} not found", instance_name);
+            }
+        } else {
+            // Simple identifier — power/ground net name like VCC, GND (without @ prefix)
+            println!("  Simple identifier: '{}'", endpoint);
+            info!("  Simple identifier: '{}'", endpoint);
+
+            match context.resolve_net(endpoint, netlist) {
+                Ok(resolved_net_id) => {
+                    // If there's an existing intermediate/auto net, merge it into the resolved net
+                    if let Some(prev_net_id) = last_net_id {
+                        if prev_net_id != resolved_net_id {
+                            println!("  Merging previous net {:?} with resolved net {:?}", prev_net_id, resolved_net_id);
+                            info!("  Merging previous net {:?} with resolved net {:?}", prev_net_id, resolved_net_id);
+                            merge_nets(resolved_net_id, prev_net_id, netlist)?;
+                        }
+                    }
+
+                    // If previous was an inline instantiation with dangling pin, connect it
+                    if last_was_component_pin && last_net_id.is_none() && i > 0 {
+                        connect_previous_pin_to_net(parts, i, netlist, resolved_net_id)?;
+                    }
+
+                    last_net_id = Some(resolved_net_id);
+                    last_was_component_pin = false;
+                    println!("  Resolved '{}' to net {:?}", endpoint, resolved_net_id);
+                    info!("  Resolved '{}' to net {:?}", endpoint, resolved_net_id);
+                }
+                Err(e) => {
+                    println!("  Warning: Could not resolve '{}' as net: {}", endpoint, e);
+                    warn!("  Could not resolve '{}' as net: {}", endpoint, e);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Helper: look back at parts[i-1] and connect its pin to the given net.
+/// Used when an inline instantiation leaves a dangling component pin.
+fn connect_previous_pin_to_net(
+    parts: &[String],
+    i: usize,
+    netlist: &mut Netlist,
+    net_id: NetId,
+) -> Result<()> {
+    if i == 0 { return Ok(()); }
+    let prev_part = parts[i-1].trim();
+    if let Some(prev_dot) = prev_part.rfind('.') {
+        let prev_inst_name = if prev_part.contains(':') {
+            prev_part.split(':').next().unwrap_or("").trim()
+        } else {
+            &prev_part[..prev_dot]
+        };
+        let prev_pin = &prev_part[prev_dot + 1..];
+        if let Some(prev_inst_id) = find_instance_by_name(netlist, prev_inst_name) {
+            connect_pin_to_net(netlist, prev_inst_id, prev_pin, net_id,
+                &format!("{}.{}", prev_inst_name, prev_pin), "resolved net")?;
+        }
+    }
+    Ok(())
+}
+
+/// Helper: connect a pin to a net, trying alternative pin names if needed
+fn connect_pin_to_net(
+    netlist: &mut Netlist,
+    inst_id: InstanceId,
+    pin_name: &str,
+    net_id: NetId,
+    desc: &str,
+    target_desc: &str,
+) -> Result<()> {
+    if let Some(pin_inst_id) = netlist.find_pin_instance(inst_id, pin_name) {
+        netlist.connect(net_id, ConnectionPoint::PinInstance(pin_inst_id))
+            .map_err(|e| anyhow::anyhow!("Failed to connect pin: {}", e))?;
+        println!("  Connected {} to {}", desc, target_desc);
+        info!("  Connected {} to {}", desc, target_desc);
+    } else {
+        let alt_pins = match pin_name {
+            "cathode" | "K" => vec!["K", "2", "-"],
+            "anode" | "A" => vec!["A", "1", "+"],
+            _ => vec![]
+        };
+        let mut connected = false;
+        for alt in alt_pins {
+            if let Some(pin_inst_id) = netlist.find_pin_instance(inst_id, alt) {
+                netlist.connect(net_id, ConnectionPoint::PinInstance(pin_inst_id))
+                    .map_err(|e| anyhow::anyhow!("Failed to connect pin: {}", e))?;
+                println!("  Connected {} to {} (using pin '{}')", desc, target_desc, alt);
+                info!("  Connected {} to {} (using pin '{}')", desc, target_desc, alt);
+                connected = true;
+                break;
+            }
+        }
+        if !connected {
+            warn!("  Could not find pin '{}' on instance", pin_name);
+        }
+    }
     Ok(())
 }
 

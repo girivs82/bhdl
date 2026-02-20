@@ -1313,7 +1313,7 @@ impl NetlistGenerator {
                     NetClass::Power(domain_info.voltage)
                 };
                 
-                let net_id = self.netlist.add_net_with_class(Some(domain_name.clone()), net_class.clone());
+                let net_id = self.find_or_create_net(domain_name, net_class.clone());
                 self.ast_to_net.insert(domain_name.clone(), net_id);
                 
                 debug!("Created power net '{}' with voltage {:?} and class {:?}", 
