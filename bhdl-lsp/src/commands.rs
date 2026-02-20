@@ -14,6 +14,7 @@ pub enum BhdlCommand {
     ShowPinCount,
     AnalyzePowerDomains,
     FormatAllDocuments,
+    GenerateSchematic,
 }
 
 impl BhdlCommand {
@@ -24,6 +25,7 @@ impl BhdlCommand {
             BhdlCommand::ShowPinCount => "bhdl.showPinCount",
             BhdlCommand::AnalyzePowerDomains => "bhdl.analyzePowerDomains",
             BhdlCommand::FormatAllDocuments => "bhdl.formatAllDocuments",
+            BhdlCommand::GenerateSchematic => "bhdl.generateSchematicJson",
         }
     }
 
@@ -34,6 +36,7 @@ impl BhdlCommand {
             BhdlCommand::ShowPinCount => "Show Pin Count",
             BhdlCommand::AnalyzePowerDomains => "Analyze Power Domains",
             BhdlCommand::FormatAllDocuments => "Format All BHDL Documents",
+            BhdlCommand::GenerateSchematic => "Generate Schematic JSON",
         }
     }
 
@@ -44,6 +47,7 @@ impl BhdlCommand {
             "bhdl.showPinCount" => Some(BhdlCommand::ShowPinCount),
             "bhdl.analyzePowerDomains" => Some(BhdlCommand::AnalyzePowerDomains),
             "bhdl.formatAllDocuments" => Some(BhdlCommand::FormatAllDocuments),
+            "bhdl.generateSchematicJson" => Some(BhdlCommand::GenerateSchematic),
             _ => None,
         }
     }
@@ -73,6 +77,9 @@ pub async fn execute_command(
         }
         BhdlCommand::FormatAllDocuments => {
             execute_format_all(client, arguments).await
+        }
+        BhdlCommand::GenerateSchematic => {
+            execute_generate_schematic(client, text).await
         }
     }
 }
@@ -330,6 +337,61 @@ async fn execute_format_all(
     Some(Value::Bool(true))
 }
 
+/// Generate SchematicData JSON for the current document.
+///
+/// Requires netlist synthesis which is async and uses non-Send types (rowan AST).
+/// Currently returns the schematic data by running parse → analyze → synthesize → extract
+/// synchronously in a blocking closure to avoid Send issues with tower-lsp.
+async fn execute_generate_schematic(
+    client: &Client,
+    text: Option<&str>,
+) -> Option<Value> {
+    let text = text?;
+    let text_owned = text.to_string();
+
+    // Run synthesis in a blocking task to avoid Send issues with rowan AST nodes.
+    // The synthesizer uses async internally for database operations, so we create
+    // a temporary runtime inside the blocking task.
+    let result = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, String> {
+        let parse_result = parse(&text_owned);
+        if !parse_result.errors().is_empty() {
+            return Err(format!("{} parse errors", parse_result.errors().len()));
+        }
+
+        let source_file = SourceFile::cast(parse_result.syntax())
+            .ok_or_else(|| "Failed to cast SourceFile".to_string())?;
+        let analysis = analyze(&source_file);
+
+        // Create a temporary runtime for the async synthesizer
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("runtime_error: {}", e))?;
+
+        let mut generator = bhdl_synthesizer::NetlistGenerator::new();
+        let netlist = rt.block_on(generator.generate_from_ast_and_analysis(&source_file, &analysis))
+            .map_err(|e| format!("synthesis_failed: {}", e))?;
+
+        let data = bhdl_schematic::extract_schematic_data(&netlist, Some(&analysis))
+            .map_err(|e| format!("extraction_failed: {}", e))?;
+
+        serde_json::to_value(&data)
+            .map_err(|e| format!("serialization_failed: {}", e))
+    }).await;
+
+    match result {
+        Ok(Ok(json)) => Some(json),
+        Ok(Err(e)) => {
+            client.show_message(MessageType::ERROR, format!("Schematic generation failed: {}", e)).await;
+            Some(serde_json::json!({ "error": e }))
+        }
+        Err(e) => {
+            client.show_message(MessageType::ERROR, format!("Task failed: {}", e)).await;
+            Some(serde_json::json!({ "error": format!("task_failed: {}", e) }))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -338,6 +400,7 @@ mod tests {
     fn test_command_as_str() {
         assert_eq!(BhdlCommand::ValidateDesign.as_str(), "bhdl.validateDesign");
         assert_eq!(BhdlCommand::ShowComponentCount.as_str(), "bhdl.showComponentCount");
+        assert_eq!(BhdlCommand::GenerateSchematic.as_str(), "bhdl.generateSchematicJson");
     }
 
     #[test]
@@ -350,6 +413,10 @@ mod tests {
             BhdlCommand::from_str("bhdl.showComponentCount"),
             Some(BhdlCommand::ShowComponentCount)
         ));
+        assert!(matches!(
+            BhdlCommand::from_str("bhdl.generateSchematicJson"),
+            Some(BhdlCommand::GenerateSchematic)
+        ));
         assert!(BhdlCommand::from_str("invalid.command").is_none());
     }
 
@@ -357,5 +424,6 @@ mod tests {
     fn test_command_title() {
         assert_eq!(BhdlCommand::ValidateDesign.title(), "Validate BHDL Design");
         assert_eq!(BhdlCommand::ShowComponentCount.title(), "Show Component Count");
+        assert_eq!(BhdlCommand::GenerateSchematic.title(), "Generate Schematic JSON");
     }
 }

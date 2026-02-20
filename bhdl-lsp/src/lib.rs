@@ -223,6 +223,7 @@ impl LanguageServer for BhdlLanguageServer {
                         commands::BhdlCommand::ShowPinCount.as_str().to_string(),
                         commands::BhdlCommand::AnalyzePowerDomains.as_str().to_string(),
                         commands::BhdlCommand::FormatAllDocuments.as_str().to_string(),
+                        commands::BhdlCommand::GenerateSchematic.as_str().to_string(),
                     ],
                     work_done_progress_options: WorkDoneProgressOptions::default(),
                 }),

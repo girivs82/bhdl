@@ -264,11 +264,11 @@ dependencies = [
  "bhdl-components",
  "bhdl-netlist",
  "bhdl-parser",
+ "bhdl-schematic",
  "bhdl-sim",
  "bhdl-spice",
  "bhdl-synthesizer",
  "bhdl-testbench",
- "bhdl-visualizer",
  "clap",
  "colored",
  "env_logger 0.10.2",
@@ -302,7 +302,7 @@ dependencies = [
  "indicatif",
  "log",
  "lru",
- "ordered-float 4.6.0",
+ "ordered-float",
  "reqwest",
  "rusqlite",
  "serde",
@@ -339,8 +339,11 @@ dependencies = [
  "bhdl-analyzer",
  "bhdl-ast",
  "bhdl-common",
+ "bhdl-netlist",
  "bhdl-parser",
+ "bhdl-schematic",
  "bhdl-stdlib",
+ "bhdl-synthesizer",
  "env_logger 0.10.2",
  "log",
  "rowan",
@@ -390,6 +393,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "bhdl-schematic"
+version = "0.1.0"
+dependencies = [
+ "bhdl-analyzer",
+ "bhdl-common",
+ "bhdl-netlist",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "bhdl-sim"
 version = "0.1.0"
 dependencies = [
@@ -409,7 +423,7 @@ dependencies = [
  "flate2",
  "indexmap",
  "insta",
- "ordered-float 4.6.0",
+ "ordered-float",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -559,37 +573,6 @@ dependencies = [
  "thiserror",
  "tokio",
  "vcd",
-]
-
-[[package]]
-name = "bhdl-visualizer"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bhdl-analyzer",
- "bhdl-ast",
- "bhdl-common",
- "bhdl-components",
- "bhdl-netlist",
- "bhdl-parser",
- "bhdl-synthesizer",
- "env_logger 0.10.2",
- "getrandom 0.2.15",
- "log",
- "ordered-float 2.10.1",
- "petgraph",
- "quick-xml",
- "rand",
- "rayon",
- "regex",
- "rusqlite",
- "serde",
- "serde_json",
- "slotmap",
- "svg",
- "tempfile",
- "tokio",
- "tokio-test",
 ]
 
 [[package]]
@@ -1311,10 +1294,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c4567c8db10ae91089c99af84c68c38da3ec2f087c3f82960bcdbf3656b6f4d7"
 dependencies = [
  "cfg-if",
- "js-sys",
  "libc",
  "wasi 0.11.0+wasi-snapshot-preview1",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -2350,15 +2331,6 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "ordered-float"
-version = "2.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68f19d67e5a2795c94e73e0bb1cc1a7edeb2e28efd39e2e1c9b7a40c1108b11c"
-dependencies = [
- "num-traits",
-]
-
-[[package]]
-name = "ordered-float"
 version = "4.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7bb71e1b3fa6ca1c61f383464aaf2bb0e2f8e772a1f01d486832464de363b951"
@@ -2546,16 +2518,6 @@ name = "profiling"
 version = "1.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3eb8486b569e12e2c32ad3e204dbaba5e4b5b216e9367044f25f1dba42341773"
-
-[[package]]
-name = "quick-xml"
-version = "0.31.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1004a344b30a54e2ee58d66a71b32d2db2feb0a31f9a2d302bf0536f15de2a33"
-dependencies = [
- "memchr",
- "serde",
-]
 
 [[package]]
 name = "quote"
@@ -3051,12 +3013,6 @@ name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
-
-[[package]]
-name = "svg"
-version = "0.16.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "583e1c5c326fd6fede8797006de3b95ad6bcd60a592952952c5ba7ddd7e84c83"
 
 [[package]]
 name = "syn"

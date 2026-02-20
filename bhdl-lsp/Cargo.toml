@@ -10,6 +10,9 @@ bhdl-ast = { path = "../bhdl-ast" }
 bhdl-analyzer = { path = "../bhdl-analyzer" }
 bhdl-common = { path = "../bhdl-common" }
 bhdl-stdlib = { path = "../bhdl-stdlib" }
+bhdl-schematic = { path = "../bhdl-schematic" }
+bhdl-synthesizer = { path = "../bhdl-synthesizer" }
+bhdl-netlist = { path = "../bhdl-netlist" }
 
 # LSP framework
 tower-lsp = "0.20"
