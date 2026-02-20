@@ -112,15 +112,11 @@
         if (!schematicData) return;
         layoutElements = [];
         layoutWires = [];
-
         const data = schematicData;
-        const inputPorts = data.ports.filter(p => p.direction === 'in');
-        const outputPorts = data.ports.filter(p => p.direction === 'out');
 
-        // ── Step 1: Identify PG symbols and GND nets ──
+        // ── 1. Identify PG symbols and GND nets ──
         const pgInstNames = new Set();
         const gndNetNames = new Set();
-
         for (const inst of data.instances) {
             if (isPowerGroundSymbol(inst)) pgInstNames.add(inst.name);
         }
@@ -128,119 +124,79 @@
             if (net.net_class === 'ground') gndNetNames.add(net.name);
         }
 
-        // ── Step 2: Process nets — remove PG symbol refs, reassign drivers ──
-        const powerSourceNodes = []; // synthetic VIN-like source nodes
+        // ── 2. Process nets: remove PG symbols, create synthetic power sources ──
+        const powerSourceNodes = [];
         let processedNets = [];
-
         for (const net of (data.nets || [])) {
-            if (net.net_class === 'ground') continue; // GND → stubs only
-
+            if (net.net_class === 'ground') continue;
             let driver = { ...net.driver };
             let sinks = net.sinks.map(s => ({ ...s }));
-            const driverIsPgSymbol = pgInstNames.has(driver.name);
+            const driverIsPg = pgInstNames.has(driver.name);
             sinks = sinks.filter(s => !pgInstNames.has(s.name));
-
-            if (driverIsPgSymbol) {
-                // Try to find regulator output as new driver
+            if (driverIsPg) {
+                // Promote regulator output to driver
                 const regIdx = sinks.findIndex(s => {
                     const inst = data.instances.find(i => i.name === s.name);
                     if (!inst || inst.category !== 'regulator') return false;
                     const up = s.port.toUpperCase();
                     return up === 'VO' || up === 'VOUT' || up === 'OUT' || up === 'OUTPUT';
                 });
-
                 if (regIdx >= 0) {
                     driver = sinks.splice(regIdx, 1)[0];
                 } else if (sinks.length > 0) {
-                    // Create synthetic power source node
                     const label = net.voltage != null ? `${net.name} (${net.voltage}V)` : net.name;
                     const sourceId = `__pwr_${net.name}__`;
                     powerSourceNodes.push({ id: sourceId, label, voltage: net.voltage });
                     driver = { type: 'power_source', name: sourceId, port: 'out' };
-                } else {
-                    continue;
-                }
+                } else { continue; }
             }
-
             if (sinks.length === 0) continue;
-
-            processedNets.push({
-                name: net.name, width: net.width || 1,
-                net_class: net.net_class, voltage: net.voltage,
-                driver, sinks
-            });
+            processedNets.push({ name: net.name, width: net.width || 1, net_class: net.net_class, voltage: net.voltage, driver, sinks });
         }
 
-        // ── Step 3: Identify shunt components and merge pass-through nets ──
-        // A shunt component has 1 signal pin + GND pin(s). Its signal pin
-        // may appear as both a net sink and a net driver (pass-through junction).
-        // Merging these nets reveals the correct topology where shunt components
-        // branch off the main wire rather than being inline.
-
+        // ── 3. Shunt detection + net merging ──
         const shuntPinKeys = new Set();
         for (const inst of data.instances) {
             if (pgInstNames.has(inst.name)) continue;
             const signalPorts = new Set();
             const gndPorts = new Set();
-            for (const conn of inst.connections) {
-                if (gndNetNames.has(conn.signal)) gndPorts.add(conn.port);
-                else signalPorts.add(conn.port);
+            for (const c of inst.connections) {
+                if (gndNetNames.has(c.signal)) gndPorts.add(c.port); else signalPorts.add(c.port);
             }
-            // 2-pin shunt: exactly 1 unique signal port + at least 1 GND port
-            if (signalPorts.size === 1 && gndPorts.size >= 1) {
-                const portName = signalPorts.values().next().value;
-                shuntPinKeys.add(`${inst.name}.${portName}`);
-            }
+            if (signalPorts.size === 1 && gndPorts.size >= 1) shuntPinKeys.add(`${inst.name}.${signalPorts.values().next().value}`);
         }
-
-        // Set of instance names that are shunt components (vertical top-bottom orientation)
         const shuntInstNames = new Set();
-        for (const key of shuntPinKeys) shuntInstNames.add(key.split('.')[0]);
+        for (const k of shuntPinKeys) shuntInstNames.add(k.split('.')[0]);
 
-        // Iteratively merge: if shunt pin X is sink of net A and driver of net B,
-        // merge A ← B (A absorbs B's sinks, X stays as branch sink of A)
         let mergeChanged = true;
         while (mergeChanged) {
             mergeChanged = false;
             for (const pinKey of shuntPinKeys) {
-                const downIdx = processedNets.findIndex(n =>
-                    n && n.driver.type !== 'power_source' &&
-                    `${n.driver.name}.${n.driver.port}` === pinKey);
+                const downIdx = processedNets.findIndex(n => n && n.driver.type !== 'power_source' && `${n.driver.name}.${n.driver.port}` === pinKey);
                 if (downIdx < 0) continue;
-
-                const upIdx = processedNets.findIndex(n =>
-                    n && n.sinks.some(s => `${s.name}.${s.port}` === pinKey));
+                const upIdx = processedNets.findIndex(n => n && n.sinks.some(s => `${s.name}.${s.port}` === pinKey));
                 if (upIdx < 0 || upIdx === downIdx) continue;
-
-                // Merge: upstream net absorbs downstream net's sinks
-                processedNets[upIdx].sinks = [
-                    ...processedNets[upIdx].sinks,
-                    ...processedNets[downIdx].sinks
-                ];
+                processedNets[upIdx].sinks = [...processedNets[upIdx].sinks, ...processedNets[downIdx].sinks];
                 processedNets.splice(downIdx, 1);
                 mergeChanged = true;
-                break; // restart after modification
+                break;
             }
         }
 
-        // ── Step 4: Collect GND stubs per instance (from ground nets) ──
+        // ── 4. Collect GND stubs ──
         const gndStubsByInst = new Map();
         for (const net of (data.nets || [])) {
             if (net.net_class !== 'ground') continue;
-            const allEps = [net.driver, ...net.sinks];
-            for (const ep of allEps) {
+            for (const ep of [net.driver, ...net.sinks]) {
                 if (!ep || ep.type === 'entity_port' || pgInstNames.has(ep.name)) continue;
                 if (!gndStubsByInst.has(ep.name)) gndStubsByInst.set(ep.name, []);
                 const arr = gndStubsByInst.get(ep.name);
-                if (!arr.some(s => s.port === ep.port)) {
-                    arr.push({ port: ep.port });
-                }
+                if (!arr.some(s => s.port === ep.port)) arr.push({ port: ep.port });
             }
         }
 
-        // ── Step 5: Build port info from processed nets ──
-        // For each instance port, determine if it's an input (WEST) or output (EAST)
-        const instPortRoles = new Map(); // "inst.port" -> Set('in'|'out')
+        // ── 5. Build port role map (inst.port → 'in'/'out' from processed nets) ──
+        const instPortRoles = new Map();
         for (const net of processedNets) {
             if (net.driver.type !== 'power_source') {
                 const dk = `${net.driver.name}.${net.driver.port}`;
@@ -254,303 +210,728 @@
             }
         }
 
-        // ── Step 6: Build ELK graph ──
-        const elkNodes = [];
-        const elkEdges = [];
-        const netWidthMap = new Map();
-        const netNameMap = new Map();
-        const netClassEdgeMap = new Map();
+        // ── 6. Classify instances by placement role ──
+        const instMap = new Map();
+        for (const inst of data.instances) {
+            if (!pgInstNames.has(inst.name)) instMap.set(inst.name, inst);
+        }
 
-        // Entity input port bar
+        const mainPathNames = new Set();
+        let shuntNames = [];        // {name, junctionName, junctionSide}
+        const decouplingNames = [];  // {name, junctionName, junctionSide}
+        let branchNames = [];        // {name}
+
+        for (const [name, inst] of instMap) {
+            const role = inst.placement_role;
+            if (role === 'shunt' || (!role && shuntInstNames.has(name))) {
+                shuntNames.push({ name });
+            } else if (role === 'branch') {
+                branchNames.push({ name });
+            } else if (role && typeof role === 'object' && role.decoupling != null) {
+                decouplingNames.push({ name, adjacentTo: role.decoupling.adjacent_to || '' });
+            } else {
+                mainPathNames.add(name);
+            }
+        }
+
+        // ── 6b. Extend main path through inline branch components ──
+        // A branch component with both signal inputs (from main-path) and signal outputs
+        // (to other components) is topologically inline — promote it to main path.
+        // This handles cases like series sense resistors classified as "branch" by intent.
+        {
+            let promoted = true;
+            while (promoted) {
+                promoted = false;
+                for (let i = branchNames.length - 1; i >= 0; i--) {
+                    const bName = branchNames[i].name;
+                    let hasInputFromMain = false;
+                    let hasSignalOutput = false;
+                    for (const net of processedNets) {
+                        // Check if this branch component receives input from a main-path or power source
+                        if (net.sinks.some(s => s.name === bName)) {
+                            if (mainPathNames.has(net.driver.name) || net.driver.type === 'power_source') {
+                                hasInputFromMain = true;
+                            }
+                        }
+                        // Check if this branch component drives a signal to other components
+                        if (net.driver.name === bName && net.sinks.length > 0) {
+                            // Has at least one non-GND sink
+                            hasSignalOutput = true;
+                        }
+                    }
+                    if (hasInputFromMain && hasSignalOutput) {
+                        mainPathNames.add(bName);
+                        branchNames.splice(i, 1);
+                        promoted = true;
+                    }
+                }
+            }
+        }
+
+        // ── 7. Order main path by traversal through graph ──
+        // Build adjacency including power sources, but only traverse to main path nodes
+        const allForward = new Map(); // name → [name] (neighbors via processed nets)
+        for (const net of processedNets) {
+            const dName = net.driver.name;
+            for (const s of net.sinks) {
+                if (!allForward.has(dName)) allForward.set(dName, []);
+                allForward.get(dName).push(s.name);
+            }
+        }
+
+        // BFS from power sources through main-path nodes
+        const mainPathOrder = [];
+        const mpVisited = new Set();
+        // Seed: power source nodes, then entity input ports
+        const seeds = powerSourceNodes.map(ps => ps.id);
+        // Also add main-path nodes that are driven only by power sources or entity ports
+        for (const net of processedNets) {
+            if (net.driver.type === 'power_source' || net.driver.type === 'entity_port') {
+                for (const s of net.sinks) {
+                    if (mainPathNames.has(s.name)) seeds.push(s.name);
+                }
+            }
+        }
+        const queue = [...seeds];
+        while (queue.length > 0) {
+            const cur = queue.shift();
+            if (mpVisited.has(cur)) continue;
+            mpVisited.add(cur);
+            if (mainPathNames.has(cur)) mainPathOrder.push(cur);
+            for (const neighbor of (allForward.get(cur) || [])) {
+                if (mainPathNames.has(neighbor) && !mpVisited.has(neighbor)) queue.push(neighbor);
+            }
+        }
+        // Add any remaining main path nodes not reached
+        for (const name of mainPathNames) {
+            if (!mpVisited.has(name)) mainPathOrder.push(name);
+        }
+
+        // ── 7b. Reclassify: shunts connected only to off-path → branch tail ──
+        // e.g., LED connected to sense (branch) should join the branch chain
+        for (let i = shuntNames.length - 1; i >= 0; i--) {
+            const item = shuntNames[i];
+            let connectsToMainOrPower = false;
+            for (const net of processedNets) {
+                const involved = net.sinks.some(s => s.name === item.name) || net.driver.name === item.name;
+                if (!involved) continue;
+                if (mainPathNames.has(net.driver.name) || net.driver.type === 'power_source') {
+                    connectsToMainOrPower = true; break;
+                }
+                for (const s of net.sinks) {
+                    if (mainPathNames.has(s.name)) { connectsToMainOrPower = true; break; }
+                }
+                if (connectsToMainOrPower) break;
+            }
+            if (!connectsToMainOrPower) {
+                branchNames.push({ name: item.name });
+                shuntNames.splice(i, 1);
+            }
+        }
+
+        // Off-path names (computed after reclassification)
+        const offPathNames = new Set([
+            ...shuntNames.map(s => s.name),
+            ...decouplingNames.map(d => d.name),
+            ...branchNames.map(b => b.name)
+        ]);
+
+        // ── 8. Build ELK graph for main-path layout ──
+        // ELK handles main-path positioning (layer assignment, spacing).
+        // Off-path components (shunts, branches) are placed manually below
+        // their junction points for the wire-down visual model.
+
+        function getInstPorts(inst) {
+            const inP = [], outP = [];
+            const seen = new Set();
+            for (const c of inst.connections) {
+                if (gndNetNames.has(c.signal)) continue;
+                const k = `${inst.name}.${c.port}`;
+                const r = instPortRoles.get(k);
+                if (!r) continue;
+                if (r.has('in') && !seen.has(c.port + '_in')) { seen.add(c.port + '_in'); inP.push(c.port); }
+                if (r.has('out') && !seen.has(c.port + '_out')) { seen.add(c.port + '_out'); outP.push(c.port); }
+            }
+            return { inP, outP };
+        }
+
+        function pId(nodeId, portName) { return `${nodeId}::${portName}`; }
+
+        const allNodePorts = new Map();
+        function ensurePort(nodeId, portName, side) {
+            if (!allNodePorts.has(nodeId)) allNodePorts.set(nodeId, new Map());
+            const pm = allNodePorts.get(nodeId);
+            if (!pm.has(portName)) pm.set(portName, side);
+            return pId(nodeId, portName);
+        }
+
+        const inputPorts = data.ports.filter(p => p.direction === 'in');
+        const outputPorts = data.ports.filter(p => p.direction === 'out');
+
+        // Collect ports only for main-path / power / entity nodes
+        for (const p of inputPorts) ensurePort('__entity_in__', p.name, 'EAST');
+        for (const p of outputPorts) ensurePort('__entity_out__', p.name, 'WEST');
+        for (const ps of powerSourceNodes) ensurePort(ps.id, 'out', 'EAST');
+
+        for (const net of processedNets) {
+            const dName = net.driver.name;
+            const dIsMainLike = net.driver.type === 'power_source' || net.driver.type === 'entity_port' || mainPathNames.has(dName);
+            if (dIsMainLike && net.driver.type !== 'power_source' && net.driver.type !== 'entity_port') {
+                ensurePort(dName, net.driver.port, 'EAST');
+            }
+            for (const s of net.sinks) {
+                if (s.type === 'entity_port') {
+                    ensurePort('__entity_out__', s.port, 'WEST');
+                } else if (mainPathNames.has(s.name)) {
+                    ensurePort(s.name, s.port, 'WEST');
+                }
+            }
+        }
+
+        function makeElkNode(id, w, h) {
+            const ports = [];
+            const pm = allNodePorts.get(id);
+            if (pm) {
+                for (const [portName, side] of pm) {
+                    ports.push({
+                        id: pId(id, portName),
+                        width: 5, height: 5,
+                        layoutOptions: { 'org.eclipse.elk.port.side': side }
+                    });
+                }
+            }
+            return { id, width: w, height: h, ports };
+        }
+
+        // ELK children: only main-path components (no shunts, no branches)
+        const elkChildren = [];
+        const elkEdges = [];
+        let edgeIdx = 0;
+
+        for (const ps of powerSourceNodes) {
+            const w = Math.max(80, measureTextWidth(ps.label, FONT_SIZE) + 24);
+            elkChildren.push(makeElkNode(ps.id, w, 28));
+        }
+
         if (inputPorts.length > 0) {
             const h = HEADER_HEIGHT + ENTITY_PADDING * 2 + inputPorts.length * PORT_SPACING;
             let maxW = 0;
             for (const p of inputPorts) maxW = Math.max(maxW, measureTextWidth(p.name, FONT_SIZE));
-            elkNodes.push({
-                id: '__entity_in__',
-                width: Math.max(ENTITY_BOX_MIN_WIDTH, maxW + 50), height: h,
-                layoutOptions: { 'elk.layered.layerConstraint': 'FIRST', 'elk.portConstraints': 'FIXED_ORDER' },
-                ports: inputPorts.map((p, i) => ({
-                    id: '__entity_in___' + p.name + '_out', width: 1, height: 1,
-                    layoutOptions: { 'elk.port.side': 'EAST', 'elk.port.index': String(i) }
-                }))
-            });
+            elkChildren.push(makeElkNode('__entity_in__', Math.max(ENTITY_BOX_MIN_WIDTH, maxW + 50), h));
         }
 
-        // Synthetic power source nodes (e.g., VIN)
-        for (const ps of powerSourceNodes) {
-            const w = Math.max(80, measureTextWidth(ps.label, FONT_SIZE) + 24);
-            elkNodes.push({
-                id: ps.id, width: w, height: 28,
-                layoutOptions: { 'elk.layered.layerConstraint': 'FIRST', 'elk.portConstraints': 'FIXED_ORDER' },
-                ports: [{
-                    id: ps.id + '_out', width: 1, height: 1,
-                    layoutOptions: { 'elk.port.side': 'EAST', 'elk.port.index': '0' }
-                }]
-            });
+        for (const name of mainPathOrder) {
+            const inst = instMap.get(name);
+            if (!inst) continue;
+            const { inP, outP } = getInstPorts(inst);
+            const size = computeBoxSize(name, inst.entity_type, inP, outP, inst.parameters);
+            elkChildren.push(makeElkNode(name, size.w, size.h));
         }
 
-        // Instance nodes (skip PG symbols)
-        for (const inst of data.instances) {
-            if (pgInstNames.has(inst.name)) continue;
-
-            // Build port list from net roles (not from instance connection data)
-            const portList = [];
-            const seenPortDir = new Set(); // "port_dir" dedup
-            const roles = new Map();
-
-            // Collect roles for this instance's ports
-            for (const conn of inst.connections) {
-                if (gndNetNames.has(conn.signal)) continue; // GND → stubs, not ports
-                const key = `${inst.name}.${conn.port}`;
-                const r = instPortRoles.get(key);
-                if (!r) continue;
-                roles.set(conn.port, r);
-            }
-
-            const inPorts = [];
-            const outPorts = [];
-            for (const [portName, dirs] of roles) {
-                if (dirs.has('in') && !seenPortDir.has(portName + '_in')) {
-                    seenPortDir.add(portName + '_in');
-                    inPorts.push(portName);
-                }
-                if (dirs.has('out') && !seenPortDir.has(portName + '_out')) {
-                    seenPortDir.add(portName + '_out');
-                    outPorts.push(portName);
-                }
-            }
-
-            const isShunt = shuntInstNames.has(inst.name) && inPorts.length >= 1 && outPorts.length === 0;
-            const size = computeBoxSize(inst.name, inst.entity_type, inPorts, outPorts, inst.parameters);
-            const ports = [];
-
-            if (isShunt) {
-                // Shunt component: signal port on NORTH (top-bottom orientation)
-                ports.push({
-                    id: inst.name + '_' + inPorts[0] + '_in', width: 1, height: 1,
-                    layoutOptions: { 'elk.port.side': 'NORTH', 'elk.port.index': '0' }
-                });
-            } else {
-                for (let j = 0; j < inPorts.length; j++) {
-                    ports.push({
-                        id: inst.name + '_' + inPorts[j] + '_in', width: 1, height: 1,
-                        layoutOptions: { 'elk.port.side': 'WEST', 'elk.port.index': String(j) }
-                    });
-                }
-                for (let j = 0; j < outPorts.length; j++) {
-                    ports.push({
-                        id: inst.name + '_' + outPorts[j] + '_out', width: 1, height: 1,
-                        layoutOptions: { 'elk.port.side': 'EAST', 'elk.port.index': String(j) }
-                    });
-                }
-            }
-
-            elkNodes.push({
-                id: inst.name, width: size.w, height: size.h, ports,
-                layoutOptions: { 'elk.portConstraints': 'FIXED_ORDER' }
-            });
-        }
-
-        // Entity output port bar
         if (outputPorts.length > 0) {
             const h = HEADER_HEIGHT + ENTITY_PADDING * 2 + outputPorts.length * PORT_SPACING;
             let maxW = 0;
             for (const p of outputPorts) maxW = Math.max(maxW, measureTextWidth(p.name, FONT_SIZE));
-            elkNodes.push({
-                id: '__entity_out__',
-                width: Math.max(ENTITY_BOX_MIN_WIDTH, maxW + 50), height: h,
-                layoutOptions: { 'elk.layered.layerConstraint': 'LAST', 'elk.portConstraints': 'FIXED_ORDER' },
-                ports: outputPorts.map((p, i) => ({
-                    id: '__entity_out___' + p.name + '_in', width: 1, height: 1,
-                    layoutOptions: { 'elk.port.side': 'WEST', 'elk.port.index': String(i) }
-                }))
-            });
+            elkChildren.push(makeElkNode('__entity_out__', Math.max(ENTITY_BOX_MIN_WIDTH, maxW + 50), h));
         }
 
-        // Valid port IDs for edge validation
-        const validPortIds = new Set();
-        for (const node of elkNodes) {
-            for (const port of (node.ports || [])) validPortIds.add(port.id);
-        }
-
-        // Nets → ELK edges
-        let edgeIdx = 0;
+        // ELK edges: only main-path ↔ main-path connections
         for (const net of processedNets) {
-            const driverPortId = net.driver.type === 'power_source'
-                ? net.driver.name + '_out'
-                : net.driver.type === 'entity_port'
-                    ? '__entity_in___' + net.driver.port + '_out'
-                    : net.driver.name + '_' + net.driver.port + '_out';
-
-            if (!validPortIds.has(driverPortId)) continue;
+            const driverElName = net.driver.type === 'power_source' ? net.driver.name
+                : net.driver.type === 'entity_port' ? '__entity_in__'
+                : net.driver.name;
+            const dIsMainLike = mainPathNames.has(driverElName) || net.driver.type === 'power_source' || driverElName === '__entity_in__';
+            if (!dIsMainLike) continue;
 
             for (const sink of net.sinks) {
-                const sinkPortId = sink.type === 'entity_port'
-                    ? '__entity_out___' + sink.port + '_in'
-                    : sink.name + '_' + sink.port + '_in';
+                const sinkElName = sink.type === 'entity_port' ? '__entity_out__' : sink.name;
+                if (sinkElName !== '__entity_out__' && !mainPathNames.has(sinkElName)) continue;
 
-                if (!validPortIds.has(sinkPortId)) continue;
-
-                const edgeId = 'e' + edgeIdx++;
-                netWidthMap.set(edgeId, net.width);
-                netNameMap.set(edgeId, net.name);
-                netClassEdgeMap.set(edgeId, net.net_class || 'signal');
-                elkEdges.push({ id: edgeId, sources: [driverPortId], targets: [sinkPortId] });
+                elkEdges.push({
+                    id: `e${edgeIdx++}`,
+                    sources: [pId(driverElName, net.driver.port)],
+                    targets: [pId(sinkElName, sink.port)],
+                    layoutOptions: { 'org.eclipse.elk.priority': '10' }
+                });
             }
         }
 
-        const graph = {
+        const elkGraph = {
             id: 'root',
             layoutOptions: {
-                'elk.algorithm': 'layered',
-                'elk.direction': 'RIGHT',
-                'elk.layered.spacing.nodeNodeBetweenLayers': String(COLUMN_GAP),
-                'elk.spacing.nodeNode': String(ROW_GAP),
-                'elk.edgeRouting': 'ORTHOGONAL',
-                'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
-                'elk.layered.nodePlacement.strategy': 'BRANDES_KOEPF',
-                'elk.spacing.portPort': String(PORT_SPACING),
-                'elk.layered.spacing.edgeEdgeBetweenLayers': '15',
-                'elk.layered.spacing.edgeNodeBetweenLayers': '20'
+                'algorithm': 'layered',
+                'org.eclipse.elk.direction': 'RIGHT',
+                'org.eclipse.elk.portConstraints': 'FIXED_SIDE',
+                'org.eclipse.elk.spacing.nodeNode': '50',
+                'org.eclipse.elk.layered.spacing.nodeNodeBetweenLayers': '100',
+                'org.eclipse.elk.edgeRouting': 'ORTHOGONAL',
+                'org.eclipse.elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
+                'org.eclipse.elk.layered.compaction.postCompaction.strategy': 'EDGE_LENGTH',
             },
-            children: elkNodes,
+            children: elkChildren,
             edges: elkEdges
         };
 
         const elk = new ELK();
-        let result;
-        try {
-            result = await elk.layout(graph);
-        } catch (err) {
-            console.error('ELK layout failed:', err);
-            return;
+        const elkResult = await elk.layout(elkGraph);
+
+        // ── 9. Extract main-path positions from ELK ──
+        const positions = new Map();
+        for (const child of elkResult.children) {
+            positions.set(child.id, { x: child.x, y: child.y, w: child.width, h: child.height });
         }
 
-        // ── Extract results ──
-        for (const child of (result.children || [])) {
-            const portMap = new Map();
-            for (const port of (child.ports || [])) {
-                portMap.set(port.id, { x: child.x + port.x, y: child.y + port.y });
+        // ── 9a. Align main-path nodes by first-port Y position ──
+        // ELK can produce slight Y offsets between layers. We force all
+        // main-band nodes to have their first port at the same Y so wires
+        // are perfectly horizontal through the main path.
+        // Instance first-port offset: HEADER_HEIGHT + INSTANCE_PADDING + 0.5 * PORT_SPACING
+        // Power source port offset: h / 2
+        {
+            const instPortOffset = HEADER_HEIGHT + INSTANCE_PADDING + 0.5 * PORT_SPACING;
+            // Compute the maximum first-port Y across all main-band nodes
+            let maxPortY = 0;
+            for (const ps of powerSourceNodes) {
+                const pos = positions.get(ps.id);
+                if (pos) maxPortY = Math.max(maxPortY, pos.y + pos.h / 2);
+            }
+            for (const name of mainPathOrder) {
+                const pos = positions.get(name);
+                if (pos) maxPortY = Math.max(maxPortY, pos.y + instPortOffset);
+            }
+            // Reposition each node so its first port is at maxPortY
+            for (const ps of powerSourceNodes) {
+                const pos = positions.get(ps.id);
+                if (pos) pos.y = maxPortY - pos.h / 2;
+            }
+            for (const name of mainPathOrder) {
+                const pos = positions.get(name);
+                if (pos) pos.y = maxPortY - instPortOffset;
+            }
+        }
+
+        // ── 10. Wire-down placement for off-path components ──
+
+        // Find which main-path node each off-path component connects to
+        function findJunction(offName, depth) {
+            if ((depth || 0) > 5) return null;
+            for (const net of processedNets) {
+                const isSink = net.sinks.some(s => s.name === offName);
+                const isDriver = net.driver.name === offName;
+                if (!isSink && !isDriver) continue;
+                if (mainPathNames.has(net.driver.name)) {
+                    return { name: net.driver.name, side: 'right', netName: net.name };
+                }
+                for (const s of net.sinks) {
+                    if (mainPathNames.has(s.name)) {
+                        const side = (net.driver.type === 'power_source') ? 'left' : 'right';
+                        return { name: s.name, side, netName: net.name };
+                    }
+                }
+                if (net.driver.type !== 'power_source' && net.driver.name !== offName && !mainPathNames.has(net.driver.name)) {
+                    const traced = findJunction(net.driver.name, (depth || 0) + 1);
+                    if (traced) return traced;
+                }
+                for (const s of net.sinks) {
+                    if (s.name !== offName && !mainPathNames.has(s.name)) {
+                        const traced = findJunction(s.name, (depth || 0) + 1);
+                        if (traced) return traced;
+                    }
+                }
+            }
+            return mainPathOrder.length > 0
+                ? { name: mainPathOrder[0], side: 'left', netName: '' }
+                : null;
+        }
+
+        for (const item of [...shuntNames, ...decouplingNames, ...branchNames]) {
+            const j = findJunction(item.name);
+            if (j) {
+                item.junctionName = j.name;
+                item.junctionSide = j.side;
+                item.junctionNet = j.netName;
+            }
+        }
+
+        // ── 9b. Gap expansion: ensure main-path gaps are wide enough for off-path items ──
+        // Pre-compute sizes of off-path items
+        const offPathSizes = new Map();
+        for (const item of [...shuntNames, ...decouplingNames, ...branchNames]) {
+            const inst = instMap.get(item.name);
+            if (!inst) continue;
+            const { inP, outP } = getInstPorts(inst);
+            offPathSizes.set(item.name, computeBoxSize(item.name, inst.entity_type, inP, outP, inst.parameters));
+        }
+
+        // Group shunts/decoupling by (junctionName, junctionSide) for gap computation
+        const verticalDropItems = [...shuntNames, ...decouplingNames];
+        const dropGroups = new Map();
+        for (const item of verticalDropItems) {
+            const key = `${item.junctionName || '__none__'}_${item.junctionSide || 'right'}`;
+            if (!dropGroups.has(key)) dropGroups.set(key, { junctionName: item.junctionName, side: item.junctionSide, items: [] });
+            dropGroups.get(key).items.push(item);
+        }
+
+        // Also group branches
+        const branchGroups = new Map();
+        for (const item of branchNames) {
+            const key = `${item.junctionName || '__none__'}_${item.junctionSide || 'right'}`;
+            if (!branchGroups.has(key)) branchGroups.set(key, { junctionName: item.junctionName, side: item.junctionSide, items: [] });
+            branchGroups.get(key).items.push(item);
+        }
+
+        // Compute total width needed at each gap between consecutive main-path nodes
+        // A "gap" is between mainPathOrder[i] and mainPathOrder[i+1].
+        // Items on 'right' side of node i and 'left' side of node i+1 share this gap.
+        const MIN_ITEM_GAP = 30;  // minimum gap between off-path items
+        const MIN_EDGE_PAD = 30;  // minimum padding from main-path node edges
+
+        // Compute total width needed for a group of off-path items
+        function groupTotalWidth(items) {
+            let total = 0;
+            for (const item of items) {
+                const sz = offPathSizes.get(item.name);
+                if (sz) total += sz.w;
+            }
+            // Add gaps between items
+            if (items.length > 1) total += (items.length - 1) * MIN_ITEM_GAP;
+            return total;
+        }
+
+        // For each pair of consecutive main-path nodes, compute space needed
+        // We'll iterate through mainPathOrder plus power sources (which are left of everything)
+        // Build ordered list of all main-band nodes as they appear left-to-right
+        const mainBandOrder = [];
+        // Power sources come first (already positioned by ELK)
+        for (const ps of powerSourceNodes) {
+            mainBandOrder.push(ps.id);
+        }
+        for (const name of mainPathOrder) {
+            mainBandOrder.push(name);
+        }
+
+        // For each gap, compute how much width is needed
+        for (let gi = 0; gi < mainBandOrder.length - 1; gi++) {
+            const leftNode = mainBandOrder[gi];
+            const rightNode = mainBandOrder[gi + 1];
+            const leftPos = positions.get(leftNode);
+            const rightPos = positions.get(rightNode);
+            if (!leftPos || !rightPos) continue;
+
+            const currentGap = rightPos.x - (leftPos.x + leftPos.w);
+
+            // Find all drop groups that need space in this gap
+            let neededWidth = 0;
+
+            for (const [, group] of dropGroups) {
+                // 'right' side of leftNode — items hanging right of leftNode
+                if (group.junctionName === leftNode && group.side === 'right') {
+                    neededWidth += groupTotalWidth(group.items) + MIN_EDGE_PAD * 2;
+                }
+                // 'left' side of rightNode — items hanging left of rightNode
+                if (group.junctionName === rightNode && group.side === 'left') {
+                    neededWidth += groupTotalWidth(group.items) + MIN_EDGE_PAD * 2;
+                }
             }
 
-            // Synthetic power source node
-            const psNode = powerSourceNodes.find(ps => ps.id === child.id);
-            if (psNode) {
-                const outPort = portMap.get(psNode.id + '_out');
-                layoutElements.push({
-                    x: child.x, y: child.y, w: child.width, h: child.height,
-                    name: psNode.id, type: 'power_source', label: psNode.label,
-                    inputPorts: [],
-                    outputPorts: outPort ? [{ name: 'out', x: outPort.x, y: outPort.y }] : [],
-                    gndStubs: [], pgStubs: []
-                });
-                continue;
+            // Branch chains also consume horizontal space in this gap
+            for (const [, group] of branchGroups) {
+                if (group.junctionName === leftNode && group.side === 'right') {
+                    neededWidth += groupTotalWidth(group.items) + MIN_EDGE_PAD * 2;
+                }
             }
 
-            if (child.id === '__entity_in__') {
-                const outP = [];
-                for (const p of inputPorts) {
-                    const pos = portMap.get('__entity_in___' + p.name + '_out');
-                    if (pos) outP.push({ name: p.name, x: pos.x, y: pos.y, isClock: p.type === 'clock', isReset: p.type === 'reset' });
+            // If gap is too small, expand by shifting rightNode and everything after it
+            if (neededWidth > currentGap) {
+                const shift = neededWidth - currentGap;
+                for (let si = gi + 1; si < mainBandOrder.length; si++) {
+                    const pos = positions.get(mainBandOrder[si]);
+                    if (pos) pos.x += shift;
                 }
-                layoutElements.push({
-                    x: child.x, y: child.y, w: child.width, h: child.height,
-                    name: data.entity_name, type: 'entity_in',
-                    inputPorts: [], outputPorts: outP, gndStubs: [], pgStubs: [],
-                    line: data.entity_line
-                });
-            } else if (child.id === '__entity_out__') {
-                const inP = [];
-                for (const p of outputPorts) {
-                    const pos = portMap.get('__entity_out___' + p.name + '_in');
-                    if (pos) inP.push({ name: p.name, x: pos.x, y: pos.y });
+            }
+        }
+
+        // Also handle items on the 'left' side of the first main-path node
+        // (items between power sources and first main-path component)
+        if (mainBandOrder.length > 0) {
+            const firstNode = mainBandOrder[0];
+            for (const [, group] of dropGroups) {
+                if (group.junctionName === firstNode && group.side === 'left') {
+                    const needed = groupTotalWidth(group.items) + MIN_EDGE_PAD * 2;
+                    // Check space from x=0 to firstNode
+                    const firstPos = positions.get(firstNode);
+                    if (firstPos && needed > firstPos.x - 40) {
+                        const shift = needed - (firstPos.x - 40);
+                        for (const name of mainBandOrder) {
+                            const pos = positions.get(name);
+                            if (pos) pos.x += shift;
+                        }
+                    }
                 }
-                layoutElements.push({
-                    x: child.x, y: child.y, w: child.width, h: child.height,
-                    name: data.entity_name, type: 'entity_out',
-                    inputPorts: inP, outputPorts: [], gndStubs: [], pgStubs: [],
-                    line: data.entity_line
-                });
+            }
+        }
+
+        // ── 10a. Compute main-path bottom edge for shunt placement ──
+        let mainBandBottom = 0;
+        for (const name of mainPathOrder) {
+            const pos = positions.get(name);
+            if (pos) mainBandBottom = Math.max(mainBandBottom, pos.y + pos.h);
+        }
+        for (const ps of powerSourceNodes) {
+            const pos = positions.get(ps.id);
+            if (pos) mainBandBottom = Math.max(mainBandBottom, pos.y + pos.h);
+        }
+        const SHUNT_DROP = 80;
+        const shuntY = mainBandBottom + SHUNT_DROP;
+
+        // ── 10b. Place shunts/decoupling with width-aware distribution ──
+        for (const [, group] of dropGroups) {
+            const jPos = positions.get(group.junctionName);
+            if (!jPos) continue;
+            const items = group.items;
+
+            // Compute total width of items in this group
+            let totalItemWidth = 0;
+            const itemSizes = [];
+            for (const item of items) {
+                const sz = offPathSizes.get(item.name) || { w: INSTANCE_BOX_MIN_WIDTH, h: 60 };
+                itemSizes.push(sz);
+                totalItemWidth += sz.w;
+            }
+
+            const SHUNT_PORT_OFFSET = 20; // offset from port dot so T-junction is clear
+            if (group.side === 'left') {
+                // Left side: rightmost item offset left of input port dot, grow left
+                const portDotX = jPos.x - PORT_STUB_LEN - SHUNT_PORT_OFFSET;
+                let rx = portDotX + itemSizes[items.length - 1].w / 2;
+                for (let i = items.length - 1; i >= 0; i--) {
+                    const sz = itemSizes[i];
+                    rx -= sz.w;
+                    positions.set(items[i].name, { x: rx, y: shuntY, w: sz.w, h: sz.h });
+                    rx -= MIN_ITEM_GAP;
+                }
             } else {
-                const inst = data.instances.find(i => i.name === child.id);
-                if (!inst) continue;
-                const roles = instPortRoles;
-
-                const instInPorts = [];
-                const instOutPorts = [];
-
-                // Build ports from net-derived roles
-                const seenIn = new Set(), seenOut = new Set();
-                for (const conn of inst.connections) {
-                    if (gndNetNames.has(conn.signal)) continue;
-                    const key = `${inst.name}.${conn.port}`;
-                    const r = roles.get(key);
-                    if (!r) continue;
-
-                    if (r.has('in') && !seenIn.has(conn.port)) {
-                        seenIn.add(conn.port);
-                        const pos = portMap.get(inst.name + '_' + conn.port + '_in');
-                        if (pos) {
-                            instInPorts.push({
-                                name: conn.port, x: pos.x, y: pos.y,
-                                pinType: getPortPinType(inst.name, conn.port),
-                                isClock: clockSignals.has(conn.signal),
-                                isReset: resetSignals.has(conn.signal)
-                            });
-                        }
-                    }
-                    if (r.has('out') && !seenOut.has(conn.port)) {
-                        seenOut.add(conn.port);
-                        const pos = portMap.get(inst.name + '_' + conn.port + '_out');
-                        if (pos) {
-                            instOutPorts.push({
-                                name: conn.port, x: pos.x, y: pos.y,
-                                pinType: getPortPinType(inst.name, conn.port)
-                            });
-                        }
-                    }
+                // Right side: leftmost item offset right of output port dot, grow right
+                const portDotX = jPos.x + jPos.w + PORT_STUB_LEN + SHUNT_PORT_OFFSET;
+                let lx = portDotX - itemSizes[0].w / 2;
+                for (let i = 0; i < items.length; i++) {
+                    const sz = itemSizes[i];
+                    positions.set(items[i].name, { x: lx, y: shuntY, w: sz.w, h: sz.h });
+                    lx += sz.w + MIN_ITEM_GAP;
                 }
-
-                const isShuntEl = shuntInstNames.has(inst.name) && instInPorts.length >= 1 && instOutPorts.length === 0;
-                layoutElements.push({
-                    x: child.x, y: child.y, w: child.width, h: child.height,
-                    name: inst.name, type: 'instance',
-                    entityType: inst.entity_type,
-                    parameters: inst.parameters,
-                    category: inst.category,
-                    isShunt: isShuntEl,
-                    inputPorts: instInPorts, outputPorts: instOutPorts,
-                    gndStubs: gndStubsByInst.get(inst.name) || [],
-                    pgStubs: [],
-                    line: inst.line
-                });
             }
         }
 
-        // Extract wire routing from ELK edges
-        for (const edge of (result.edges || [])) {
-            const segments = [];
-            let fromPt = null, toPt = null;
-            for (const section of (edge.sections || [])) {
-                const pts = [section.startPoint];
-                if (section.bendPoints) for (const bp of section.bendPoints) pts.push(bp);
-                pts.push(section.endPoint);
-                if (!fromPt) fromPt = { x: pts[0].x, y: pts[0].y };
-                toPt = { x: pts[pts.length - 1].x, y: pts[pts.length - 1].y };
-                for (let i = 0; i < pts.length - 1; i++) {
-                    segments.push({ x1: pts[i].x, y1: pts[i].y, x2: pts[i + 1].x, y2: pts[i + 1].y });
-                }
-            }
-            if (fromPt && toPt) {
-                layoutWires.push({
-                    from: fromPt, to: toPt, segments,
-                    width: netWidthMap.get(edge.id) || 1,
-                    netName: netNameMap.get(edge.id) || '',
-                    netClass: netClassEdgeMap.get(edge.id) || 'signal'
-                });
+        // Resolve overlaps among all shunt/decoupling items
+        // Sort by X and push rightward when items overlap
+        {
+            const allDrop = verticalDropItems.filter(i => positions.has(i.name));
+            allDrop.sort((a, b) => positions.get(a.name).x - positions.get(b.name).x);
+            for (let i = 1; i < allDrop.length; i++) {
+                const prev = positions.get(allDrop[i - 1].name);
+                const curr = positions.get(allDrop[i].name);
+                const minX = prev.x + prev.w + MIN_ITEM_GAP;
+                if (curr.x < minX) curr.x = minX;
             }
         }
+
+        // ── 10c. Place branches as horizontal chains ──
+        for (const [, group] of branchGroups) {
+            const jPos = positions.get(group.junctionName);
+            if (!jPos) continue;
+            const ordered = orderBranchChain(group.items, processedNets);
+
+            let bx;
+            if (group.side === 'left') {
+                bx = jPos.x - 200;
+            } else {
+                bx = jPos.x + jPos.w + 20;
+                for (const dItem of verticalDropItems) {
+                    if (dItem.junctionName === group.junctionName && dItem.junctionSide === group.side) {
+                        const dPos = positions.get(dItem.name);
+                        if (dPos) bx = Math.max(bx, dPos.x + dPos.w + 30);
+                    }
+                }
+            }
+
+            for (const item of ordered) {
+                const sz = offPathSizes.get(item.name) || { w: INSTANCE_BOX_MIN_WIDTH, h: 60 };
+                positions.set(item.name, { x: bx, y: shuntY, w: sz.w, h: sz.h });
+                bx += sz.w + 120;
+            }
+        }
+
+        // ── 11. Build layout elements ──
+
+        // Entity input
+        if (inputPorts.length > 0 && positions.has('__entity_in__')) {
+            const pos = positions.get('__entity_in__');
+            const outP = inputPorts.map((p, i) => ({
+                name: p.name, x: pos.x + pos.w, y: pos.y + HEADER_HEIGHT + ENTITY_PADDING + (i + 0.5) * PORT_SPACING,
+                isClock: p.type === 'clock', isReset: p.type === 'reset'
+            }));
+            layoutElements.push({ x: pos.x, y: pos.y, w: pos.w, h: pos.h, name: data.entity_name, type: 'entity_in', inputPorts: [], outputPorts: outP, gndStubs: [], pgStubs: [], line: data.entity_line });
+        }
+
+        // Power sources
+        for (const ps of powerSourceNodes) {
+            const pos = positions.get(ps.id);
+            if (!pos) continue;
+            layoutElements.push({ x: pos.x, y: pos.y, w: pos.w, h: pos.h, name: ps.id, type: 'power_source', label: ps.label, inputPorts: [], outputPorts: [{ name: 'out', x: pos.x + pos.w, y: pos.y + pos.h / 2 }], gndStubs: [], pgStubs: [] });
+        }
+
+        // Instances
+        for (const [name, inst] of instMap) {
+            const pos = positions.get(name);
+            if (!pos) continue;
+            const isShuntLike = offPathNames.has(name) && !branchNames.some(b => b.name === name);
+
+            const instInPorts = [], instOutPorts = [];
+            const seenIn = new Set(), seenOut = new Set();
+            for (const c of inst.connections) {
+                if (gndNetNames.has(c.signal)) continue;
+                const k = `${name}.${c.port}`;
+                const r = instPortRoles.get(k);
+                if (!r) continue;
+
+                if (isShuntLike) {
+                    // Signal port on NORTH (top center) — wire drops down from main path
+                    if (r.has('in') && !seenIn.has(c.port)) {
+                        seenIn.add(c.port);
+                        instInPorts.push({ name: c.port, x: pos.x + pos.w / 2, y: pos.y, pinType: getPortPinType(name, c.port) });
+                    }
+                } else {
+                    if (r.has('in') && !seenIn.has(c.port)) {
+                        seenIn.add(c.port);
+                        const py = pos.y + HEADER_HEIGHT + INSTANCE_PADDING + (instInPorts.length + 0.5) * PORT_SPACING;
+                        instInPorts.push({ name: c.port, x: pos.x, y: py, pinType: getPortPinType(name, c.port), isClock: clockSignals.has(c.signal), isReset: resetSignals.has(c.signal) });
+                    }
+                    if (r.has('out') && !seenOut.has(c.port)) {
+                        seenOut.add(c.port);
+                        const py = pos.y + HEADER_HEIGHT + INSTANCE_PADDING + (instOutPorts.length + 0.5) * PORT_SPACING;
+                        instOutPorts.push({ name: c.port, x: pos.x + pos.w, y: py, pinType: getPortPinType(name, c.port) });
+                    }
+                }
+            }
+            layoutElements.push({ x: pos.x, y: pos.y, w: pos.w, h: pos.h, name, type: 'instance', entityType: inst.entity_type, parameters: inst.parameters, category: inst.category, isShunt: isShuntLike, inputPorts: instInPorts, outputPorts: instOutPorts, gndStubs: gndStubsByInst.get(name) || [], pgStubs: [], line: inst.line });
+        }
+
+        // Entity output
+        if (outputPorts.length > 0 && positions.has('__entity_out__')) {
+            const pos = positions.get('__entity_out__');
+            const inP = outputPorts.map((p, i) => ({
+                name: p.name, x: pos.x, y: pos.y + HEADER_HEIGHT + ENTITY_PADDING + (i + 0.5) * PORT_SPACING
+            }));
+            layoutElements.push({ x: pos.x, y: pos.y, w: pos.w, h: pos.h, name: data.entity_name, type: 'entity_out', inputPorts: inP, outputPorts: [], gndStubs: [], pgStubs: [], line: data.entity_line });
+        }
+
+        // ── 12. Wire routing (custom L-route / Z-route) ──
+        const elByName = new Map();
+        for (const el of layoutElements) elByName.set(el.name, el);
+
+        function findPort(elName, portName, side) {
+            const el = elByName.get(elName);
+            if (!el) return null;
+            // Search expected list first, then fallback
+            const lists = side === 'out'
+                ? [el.outputPorts, el.inputPorts]
+                : [el.inputPorts, el.outputPorts];
+            const sides = side === 'out' ? ['out', 'in'] : ['in', 'out'];
+            for (let li = 0; li < lists.length; li++) {
+                const p = lists[li].find(p => p.name === portName);
+                if (!p) continue;
+                // Return the wire connection point (at the port dot, end of stub)
+                if (el.isShunt && sides[li] === 'in') {
+                    // NORTH port: dot is above the box
+                    return { x: p.x, y: p.y - PORT_STUB_LEN };
+                }
+                const dx = sides[li] === 'out' ? PORT_STUB_LEN : -PORT_STUB_LEN;
+                return { x: p.x + dx, y: p.y };
+            }
+            return null;
+        }
+
+        const junctionPoints = [];
+
+        for (const net of processedNets) {
+            const driverElName = net.driver.type === 'power_source' ? net.driver.name
+                : net.driver.type === 'entity_port' ? '__entity_in__'
+                : net.driver.name;
+            const fromPos = findPort(driverElName, net.driver.port, 'out');
+            if (!fromPos) continue;
+
+            for (const sink of net.sinks) {
+                const sinkElName = sink.type === 'entity_port' ? '__entity_out__' : sink.name;
+                const toPos = findPort(sinkElName, sink.port, 'in');
+                if (!toPos) continue;
+
+                const sinkEl = elByName.get(sinkElName);
+                const isShuntWire = sinkEl && sinkEl.isShunt;
+                const segments = [];
+
+                if (isShuntWire || toPos.y > fromPos.y + 20) {
+                    if (toPos.x >= fromPos.x - 2) {
+                        // Normal L-route: horizontal forward to shunt X, then vertical drop
+                        const jx = toPos.x;
+                        const jy = fromPos.y;
+                        junctionPoints.push({ x: jx, y: jy });
+                        if (Math.abs(fromPos.x - jx) > 2) {
+                            segments.push({ x1: fromPos.x, y1: fromPos.y, x2: jx, y2: jy });
+                        }
+                        segments.push({ x1: jx, y1: jy, x2: toPos.x, y2: toPos.y });
+                    } else {
+                        // Reverse L-route: shunt is behind driver port.
+                        // Drop straight down from driver, then horizontal back to shunt.
+                        junctionPoints.push({ x: fromPos.x, y: fromPos.y });
+                        segments.push({ x1: fromPos.x, y1: fromPos.y, x2: fromPos.x, y2: toPos.y });
+                        segments.push({ x1: fromPos.x, y1: toPos.y, x2: toPos.x, y2: toPos.y });
+                    }
+                } else if (Math.abs(fromPos.y - toPos.y) < 2) {
+                    // Horizontal
+                    segments.push({ x1: fromPos.x, y1: fromPos.y, x2: toPos.x, y2: toPos.y });
+                } else {
+                    // Z-route: horizontal → vertical → horizontal
+                    const midX = (fromPos.x + toPos.x) / 2;
+                    segments.push({ x1: fromPos.x, y1: fromPos.y, x2: midX, y2: fromPos.y });
+                    segments.push({ x1: midX, y1: fromPos.y, x2: midX, y2: toPos.y });
+                    segments.push({ x1: midX, y1: toPos.y, x2: toPos.x, y2: toPos.y });
+                }
+
+                layoutWires.push({ from: fromPos, to: toPos, segments, width: net.width || 1, netName: net.name, netClass: net.net_class || 'signal' });
+            }
+        }
+        layoutElements._junctionPoints = junctionPoints;
+    }
+
+    /** Order branch items by following net connections (graph chain) */
+    function orderBranchChain(items, processedNets) {
+        if (items.length <= 1) return items;
+        const nameSet = new Set(items.map(i => i.name));
+        const ordered = [];
+        const visited = new Set();
+        let start = items[0];
+        for (const net of processedNets) {
+            for (const s of net.sinks) {
+                if (nameSet.has(s.name) && !nameSet.has(net.driver.name)) { start = items.find(i => i.name === s.name) || start; break; }
+            }
+        }
+        let cur = start;
+        while (cur && !visited.has(cur.name)) {
+            visited.add(cur.name);
+            ordered.push(cur);
+            let next = null;
+            for (const net of processedNets) {
+                if (net.driver.name === cur.name) {
+                    for (const s of net.sinks) {
+                        if (nameSet.has(s.name) && !visited.has(s.name)) { next = items.find(i => i.name === s.name); break; }
+                    }
+                }
+                if (next) break;
+            }
+            cur = next;
+        }
+        for (const item of items) { if (!visited.has(item.name)) ordered.push(item); }
+        return ordered;
     }
 
     // ─────────── RENDERING ───────────
@@ -864,6 +1245,15 @@
                     ctx.fillText(wire.netName, lx, seg.y1 - 6);
                 }
             }
+        }
+
+        // Draw T-junction dots (where shunt/branch wires meet main path)
+        const junctionPts = layoutElements._junctionPoints || [];
+        ctx.fillStyle = COLORS.junctionDot;
+        for (const jp of junctionPts) {
+            ctx.beginPath();
+            ctx.arc(jp.x, jp.y, 4, 0, Math.PI * 2);
+            ctx.fill();
         }
     }
 
