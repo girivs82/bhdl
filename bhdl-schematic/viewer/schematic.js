@@ -280,6 +280,20 @@
                     if (signalPorts.size !== 2 || gndPorts.size > 0) continue;
 
                     // Check if this component drives a shunt
+                    // But don't chain-promote if the component's input comes directly
+                    // from a power source — that means it's the first inline component
+                    // (e.g., top resistor in a voltage divider), not a branch.
+                    let inputFromPowerSource = false;
+                    for (const net of processedNets) {
+                        if (net.sinks.some(s => s.name === inst.name)) {
+                            if (net.driver.type === 'power_source' || pgInstNames.has(net.driver.name)) {
+                                inputFromPowerSource = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (inputFromPowerSource) continue;
+
                     for (const net of processedNets) {
                         if (net.driver.name !== inst.name) continue;
                         const shuntSink = net.sinks.find(s => shuntInstNames.has(s.name));
