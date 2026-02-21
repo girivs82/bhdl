@@ -167,6 +167,7 @@ pub fn extract_schematic_data(
                 signal,
                 direction: direction.to_string(),
                 pin_type: pin_type_str.to_string(),
+                pin_direction: Some(raw_pin_dir_str(&pin_def.direction).to_string()),
             });
         }
 
@@ -206,6 +207,7 @@ pub fn extract_schematic_data(
                 signal,
                 direction: direction.to_string(),
                 pin_type: pin_type_str.to_string(),
+                pin_direction: Some(raw_pin_dir_str(&pin_def.direction).to_string()),
             });
         }
 
@@ -246,11 +248,18 @@ pub fn extract_schematic_data(
                     "signal"
                 };
 
+                let raw_dir = match port.direction {
+                    PortDirection::Input => "in",
+                    PortDirection::Output => "out",
+                    PortDirection::InOut => "inout",
+                    PortDirection::Internal => "in",
+                };
                 connections.push(SchematicConnection {
                     port: port.name.clone(),
                     signal,
                     direction: direction.to_string(),
                     pin_type: pin_type_str.to_string(),
+                    pin_direction: Some(raw_dir.to_string()),
                 });
             }
         }
@@ -405,7 +414,7 @@ pub fn extract_schematic_data(
     // --- 5b. Align instance connection directions with net roles ---
     // The viewer expects: net driver → _out port, net sink → _in port.
     // We must ensure instance connection directions match their net roles,
-    // otherwise ELK edges can't connect and components appear unconnected.
+    // otherwise edges can't connect and components appear unconnected.
     //
     // A pin can appear in multiple nets with different roles (e.g., tvs.K is
     // a sink of VIN and a driver of filtered_in). In that case, we need both
@@ -440,6 +449,7 @@ pub fn extract_schematic_data(
                         signal: conn.signal.clone(),
                         direction: "out".to_string(),
                         pin_type: conn.pin_type.clone(),
+                        pin_direction: conn.pin_direction.clone(),
                     });
                 } else if roles.contains("out") {
                     conn.direction = "out".to_string();
@@ -578,6 +588,18 @@ fn determine_pin_direction(
                 }
             }
         }
+    }
+}
+
+/// Convert raw PinDirection to a string (preserving the original declaration).
+fn raw_pin_dir_str(pin_dir: &PinDirection) -> &'static str {
+    match pin_dir {
+        PinDirection::In => "in",
+        PinDirection::Out => "out",
+        PinDirection::InOut => "inout",
+        PinDirection::Power => "power",
+        PinDirection::Ground => "ground",
+        PinDirection::Passive => "passive",
     }
 }
 
@@ -839,6 +861,8 @@ fn categorize_component(entity_type: &str, attrs: &HashMap<String, String>) -> S
         "oscillator".to_string()
     } else if lower.starts_with("conn") || lower.starts_with("header") || lower.starts_with("usb") {
         "connector".to_string()
+    } else if lower.starts_with("opamp") || lower.starts_with("op_amp") || lower.starts_with("op-amp") {
+        "opamp".to_string()
     } else if attrs.contains_key("value") {
         // Has a value → likely a passive
         "passive".to_string()
