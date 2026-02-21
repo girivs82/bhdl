@@ -113,11 +113,16 @@ pub struct SchematicConnection {
     pub port: String,
     /// Net name this pin connects to
     pub signal: String,
-    /// "in" | "out" — determines WEST vs EAST side in ELK layout
+    /// "in" | "out" — determines left vs right side in layout (from net role)
     pub direction: String,
     /// Pin type for coloring: "signal", "power", "ground", "clock", "reset", "passive"
     #[serde(default = "default_pin_type")]
     pub pin_type: String,
+    /// Original pin direction from the netlist: "in", "out", "inout", "power", "ground", "passive".
+    /// Unlike `direction` (which is overridden by net role), this reflects the component's
+    /// pin declaration (e.g., `pin VO: power out` → pin_direction = "out").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin_direction: Option<String>,
 }
 
 fn default_pin_type() -> String {

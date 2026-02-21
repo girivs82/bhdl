@@ -2440,7 +2440,7 @@ impl NetlistGenerator {
                         let (direction, pin_type) = if pin_text.contains("power in") {
                             (bhdl_netlist::types::PinDirection::Power, bhdl_netlist::types::PinType::Power)
                         } else if pin_text.contains("power out") {
-                            (bhdl_netlist::types::PinDirection::Power, bhdl_netlist::types::PinType::Power)
+                            (bhdl_netlist::types::PinDirection::Out, bhdl_netlist::types::PinType::Power)
                         } else if pin_text.contains("ground") {
                             (bhdl_netlist::types::PinDirection::Ground, bhdl_netlist::types::PinType::Ground)
                         } else if pin_text.contains("signal in") {
@@ -2484,7 +2484,7 @@ impl NetlistGenerator {
                     let (direction, pin_type) = if pin_text.contains("power in") {
                         (bhdl_netlist::types::PinDirection::Power, bhdl_netlist::types::PinType::Power)
                     } else if pin_text.contains("power out") {
-                        (bhdl_netlist::types::PinDirection::Power, bhdl_netlist::types::PinType::Power)
+                        (bhdl_netlist::types::PinDirection::Out, bhdl_netlist::types::PinType::Power)
                     } else if pin_text.contains("ground") {
                         (bhdl_netlist::types::PinDirection::Ground, bhdl_netlist::types::PinType::Ground)
                     } else if pin_text.contains("signal in") {

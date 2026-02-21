@@ -1,4 +1,4 @@
-// BHDL Schematic Viewer — Canvas-based circuit visualization with ELK layout
+// BHDL Schematic Viewer — Canvas-based circuit visualization with custom layout
 // Conventions: signal flow left-to-right, power north, ground south
 (function () {
     let vscodeApi = null;
@@ -33,6 +33,21 @@
     const GND_LINE_WIDTHS = [12, 8, 4];
     const GND_LINE_SPACING = 3;
 
+    // Professional symbol sizes: { bodyW, bodyH } = drawn symbol,
+    // { boundW, boundH } = total bounding box including lead stubs & label space
+    const SYMBOL_SIZES = {
+        resistor:   { bodyW: 40, bodyH: 12, boundW: 68, boundH: 44 },
+        capacitor:  { bodyW:  6, bodyH: 20, boundW: 34, boundH: 44 },
+        inductor:   { bodyW: 36, bodyH: 12, boundW: 64, boundH: 44 },
+        diode:      { bodyW: 10, bodyH: 14, boundW: 56, boundH: 44 },
+        protection: { bodyW: 12, bodyH: 14, boundW: 60, boundH: 44 },
+        opamp:      { bodyW: 50, bodyH: 44, boundW: 78, boundH: 60 },
+    };
+
+    function isSymbolCategory(cat) {
+        return cat in SYMBOL_SIZES;
+    }
+
     const COLORS = {
         entityBg: '#1e3a5f', entityBorder: '#4fc3f7', entityHeader: '#0d2137',
         instanceBg: '#2a2d2e', instanceBorder: '#555', instanceHeader: '#383b3d',
@@ -65,6 +80,27 @@
     }
 
     // ─────────── HELPERS ───────────
+
+    /** Format a parameter value using engineering notation (10k, 1M, 100n, etc.) */
+    function formatParamValue(val) {
+        if (val == null || val === '') return '';
+        // Already has a unit suffix or is non-numeric — return as-is
+        if (/[a-zA-Zµμ]/.test(val)) return val;
+        const num = parseFloat(val);
+        if (isNaN(num)) return val;
+        const abs = Math.abs(num);
+        if (abs === 0) return '0';
+        if (abs >= 1e12) return (num / 1e12) + 'T';
+        if (abs >= 1e9)  return (num / 1e9) + 'G';
+        if (abs >= 1e6)  return (num / 1e6) + 'M';
+        if (abs >= 1e3)  return (num / 1e3) + 'k';
+        if (abs >= 1)    return String(num);
+        if (abs >= 1e-3) return (num * 1e3) + 'm';
+        if (abs >= 1e-6) return (num * 1e6) + 'u';
+        if (abs >= 1e-9) return (num * 1e9) + 'n';
+        if (abs >= 1e-12) return (num * 1e12) + 'p';
+        return num.toExponential(1);
+    }
 
     function formatVoltage(v) {
         if (v == null) return '';
@@ -122,7 +158,11 @@
         return text.length * (fontSize * 0.62);
     }
 
-    function computeBoxSize(name, entityType, inPorts, outPorts, parameters) {
+    function computeBoxSize(name, entityType, inPorts, outPorts, parameters, category) {
+        if (category && isSymbolCategory(category)) {
+            const s = SYMBOL_SIZES[category];
+            return { w: s.boundW, h: s.boundH };
+        }
         const portCount = Math.max(inPorts.length, outPorts.length, 1);
         const paramLines = (parameters && parameters.length > 0) ? 1 : 0;
         const h = HEADER_HEIGHT + INSTANCE_PADDING * 2 + portCount * PORT_SPACING + paramLines * PARAM_ROW_HEIGHT;
@@ -135,7 +175,7 @@
         return { w, h };
     }
 
-    async function computeLayout() {
+    function computeLayout() {
         if (!schematicData) return;
         layoutElements = [];
         layoutWires = [];
@@ -164,9 +204,16 @@
                 // Promote regulator output to driver
                 const regIdx = sinks.findIndex(s => {
                     const inst = data.instances.find(i => i.name === s.name);
-                    if (!inst || inst.category !== 'regulator') return false;
+                    if (!inst) return false;
                     const up = s.port.toUpperCase();
-                    return up === 'VO' || up === 'VOUT' || up === 'OUT' || up === 'OUTPUT';
+                    if (!(up === 'VO' || up === 'VOUT' || up === 'OUT' || up === 'OUTPUT')) return false;
+                    if (inst.category === 'regulator') return true;
+                    // Fallback: detect regulator by pin structure (has both VI/VIN and VO/VOUT)
+                    const hasInputPin = inst.connections.some(c => {
+                        const p = c.port.toUpperCase();
+                        return p === 'VI' || p === 'VIN' || p === 'IN' || p === 'INPUT';
+                    });
+                    return hasInputPin;
                 });
                 if (regIdx >= 0) {
                     driver = sinks.splice(regIdx, 1)[0];
@@ -212,6 +259,45 @@
             }
         }
 
+        // ── 3b. Shunt chain extension ──
+        // When a dual-port component (2 signal ports, no GND) feeds directly
+        // into a shunt, both form a vertical shunt chain (power → R → LED → GND).
+        // Reclassify the upstream component as a shunt so the pair stacks vertically.
+        const shuntChainDown = new Map(); // parentName → childName
+        {
+            let extended = true;
+            while (extended) {
+                extended = false;
+                for (const inst of data.instances) {
+                    if (pgInstNames.has(inst.name)) continue;
+                    if (shuntInstNames.has(inst.name)) continue;
+                    const signalPorts = new Set();
+                    const gndPorts = new Set();
+                    for (const c of inst.connections) {
+                        if (gndNetNames.has(c.signal)) gndPorts.add(c.port);
+                        else signalPorts.add(c.port);
+                    }
+                    if (signalPorts.size !== 2 || gndPorts.size > 0) continue;
+
+                    // Check if this component drives a shunt
+                    for (const net of processedNets) {
+                        if (net.driver.name !== inst.name) continue;
+                        const shuntSink = net.sinks.find(s => shuntInstNames.has(s.name));
+                        if (!shuntSink) continue;
+                        const driverPort = net.driver.port;
+                        const inputPort = [...signalPorts].find(p => p !== driverPort);
+                        if (!inputPort) continue;
+                        shuntInstNames.add(inst.name);
+                        shuntPinKeys.add(`${inst.name}.${inputPort}`);
+                        shuntChainDown.set(inst.name, shuntSink.name);
+                        extended = true;
+                        break;
+                    }
+                    if (extended) break;
+                }
+            }
+        }
+
         // ── 4. Collect GND stubs ──
         const gndStubsByInst = new Map();
         for (const net of (data.nets || [])) {
@@ -221,6 +307,26 @@
                 if (!gndStubsByInst.has(ep.name)) gndStubsByInst.set(ep.name, []);
                 const arr = gndStubsByInst.get(ep.name);
                 if (!arr.some(s => s.port === ep.port)) arr.push({ port: ep.port });
+            }
+        }
+
+        // ── 4b. Collect power (VCC) stubs ──
+        // Only power INPUT pins get stubs — output power pins (e.g., regulator VO)
+        // are producers, not consumers, so they don't get a supply stub.
+        const pwrStubsByInst = new Map();
+        for (const net of (data.nets || [])) {
+            if (net.net_class !== 'power') continue;
+            for (const ep of net.sinks) {
+                if (!ep || ep.type === 'entity_port' || pgInstNames.has(ep.name)) continue;
+                const inst = data.instances.find(i => i.name === ep.name);
+                if (!inst) continue;
+                const conn = inst.connections.find(c => c.port === ep.port);
+                if (!conn || conn.pin_type !== 'power') continue;
+                // Skip power output pins — they produce the rail, not consume it
+                if (conn.pin_direction === 'out') continue;
+                if (!pwrStubsByInst.has(ep.name)) pwrStubsByInst.set(ep.name, []);
+                const arr = pwrStubsByInst.get(ep.name);
+                if (!arr.some(s => s.port === ep.port)) arr.push({ port: ep.port, netName: net.name, voltage: net.voltage });
             }
         }
 
@@ -252,7 +358,7 @@
 
         for (const [name, inst] of instMap) {
             const role = inst.placement_role;
-            if (role === 'shunt' || (!role && shuntInstNames.has(name))) {
+            if (role === 'shunt' || (!role && shuntInstNames.has(name)) || shuntChainDown.has(name)) {
                 shuntNames.push({ name });
             } else if (role === 'branch') {
                 branchNames.push({ name });
@@ -282,10 +388,12 @@
                                 hasInputFromMain = true;
                             }
                         }
-                        // Check if this branch component drives a signal to other components
+                        // Check if this branch component drives a non-shunt component
+                        // (shunt-only outputs mean this is a branch head, not inline)
                         if (net.driver.name === bName && net.sinks.length > 0) {
-                            // Has at least one non-GND sink
-                            hasSignalOutput = true;
+                            if (net.sinks.some(s => !shuntInstNames.has(s.name))) {
+                                hasSignalOutput = true;
+                            }
                         }
                     }
                     if (hasInputFromMain && hasSignalOutput) {
@@ -426,8 +534,12 @@
 
         // ── 7b. Reclassify: shunts connected only to off-path → branch tail ──
         // e.g., LED connected to sense (branch) should join the branch chain
+        // BUT: skip items that are children in a shunt chain — they connect to
+        // main path through their parent, so they must stay as shunts.
+        const shuntChainChildren = new Set(shuntChainDown.values());
         for (let i = shuntNames.length - 1; i >= 0; i--) {
             const item = shuntNames[i];
+            if (shuntChainChildren.has(item.name)) continue; // part of a vertical chain
             let connectsToMainOrPower = false;
             for (const net of processedNets) {
                 const involved = net.sinks.some(s => s.name === item.name) || net.driver.name === item.name;
@@ -446,15 +558,9 @@
             }
         }
 
-        // Off-path names (computed after reclassification)
-        const offPathNames = new Set([
-            ...shuntNames.map(s => s.name),
-            ...decouplingNames.map(d => d.name),
-            ...branchNames.map(b => b.name)
-        ]);
-
-        // ── 8. Build ELK graph for main-path layout ──
-        // ELK handles main-path positioning (layer assignment, spacing).
+        // ── 8. Topological placement for main-path nodes ──
+        // Topological sort of all main-band nodes (power sources, main-path
+        // instances, entity ports) then place sequentially L→R.
         // Off-path components (shunts, branches) are placed manually below
         // their junction points for the wire-down visual model.
 
@@ -472,136 +578,167 @@
             return { inP, outP };
         }
 
-        function pId(nodeId, portName) { return `${nodeId}::${portName}`; }
-
-        const allNodePorts = new Map();
-        function ensurePort(nodeId, portName, side) {
-            if (!allNodePorts.has(nodeId)) allNodePorts.set(nodeId, new Map());
-            const pm = allNodePorts.get(nodeId);
-            if (!pm.has(portName)) pm.set(portName, side);
-            return pId(nodeId, portName);
-        }
-
         const inputPorts = data.ports.filter(p => p.direction === 'in');
         const outputPorts = data.ports.filter(p => p.direction === 'out');
 
-        // Collect ports only for main-path / power / entity nodes
-        for (const p of inputPorts) ensurePort('__entity_in__', p.name, 'EAST');
-        for (const p of outputPorts) ensurePort('__entity_out__', p.name, 'WEST');
-        for (const ps of powerSourceNodes) ensurePort(ps.id, 'out', 'EAST');
+        // Build DAG over main-band nodes for topological ordering
+        const mainBandNodes = new Set();
+        for (const ps of powerSourceNodes) mainBandNodes.add(ps.id);
+        for (const name of mainPathOrder) mainBandNodes.add(name);
+        if (inputPorts.length > 0) mainBandNodes.add('__entity_in__');
+        if (outputPorts.length > 0) mainBandNodes.add('__entity_out__');
+
+        const mbForward = new Map();
+        const mbInDegree = new Map();
+        for (const n of mainBandNodes) { mbForward.set(n, []); mbInDegree.set(n, 0); }
 
         for (const net of processedNets) {
-            const dName = net.driver.name;
-            const dIsMainLike = net.driver.type === 'power_source' || net.driver.type === 'entity_port' || mainPathNames.has(dName);
-            if (dIsMainLike && net.driver.type !== 'power_source' && net.driver.type !== 'entity_port') {
-                ensurePort(dName, net.driver.port, 'EAST');
-            }
-            for (const s of net.sinks) {
-                if (s.type === 'entity_port') {
-                    ensurePort('__entity_out__', s.port, 'WEST');
-                } else if (mainPathNames.has(s.name)) {
-                    ensurePort(s.name, s.port, 'WEST');
-                }
-            }
-        }
-
-        function makeElkNode(id, w, h) {
-            const ports = [];
-            const pm = allNodePorts.get(id);
-            if (pm) {
-                for (const [portName, side] of pm) {
-                    ports.push({
-                        id: pId(id, portName),
-                        width: 5, height: 5,
-                        layoutOptions: { 'org.eclipse.elk.port.side': side }
-                    });
-                }
-            }
-            return { id, width: w, height: h, ports };
-        }
-
-        // ELK children: only main-path components (no shunts, no branches)
-        const elkChildren = [];
-        const elkEdges = [];
-        let edgeIdx = 0;
-
-        for (const ps of powerSourceNodes) {
-            const w = Math.max(80, measureTextWidth(ps.label, FONT_SIZE) + 24);
-            elkChildren.push(makeElkNode(ps.id, w, 28));
-        }
-
-        if (inputPorts.length > 0) {
-            const h = HEADER_HEIGHT + ENTITY_PADDING * 2 + inputPorts.length * PORT_SPACING;
-            let maxW = 0;
-            for (const p of inputPorts) maxW = Math.max(maxW, measureTextWidth(p.name, FONT_SIZE));
-            elkChildren.push(makeElkNode('__entity_in__', Math.max(ENTITY_BOX_MIN_WIDTH, maxW + 50), h));
-        }
-
-        for (const name of mainPathOrder) {
-            const inst = instMap.get(name);
-            if (!inst) continue;
-            const { inP, outP } = getInstPorts(inst);
-            const size = computeBoxSize(name, inst.entity_type, inP, outP, inst.parameters);
-            elkChildren.push(makeElkNode(name, size.w, size.h));
-        }
-
-        if (outputPorts.length > 0) {
-            const h = HEADER_HEIGHT + ENTITY_PADDING * 2 + outputPorts.length * PORT_SPACING;
-            let maxW = 0;
-            for (const p of outputPorts) maxW = Math.max(maxW, measureTextWidth(p.name, FONT_SIZE));
-            elkChildren.push(makeElkNode('__entity_out__', Math.max(ENTITY_BOX_MIN_WIDTH, maxW + 50), h));
-        }
-
-        // ELK edges: only main-path ↔ main-path connections
-        for (const net of processedNets) {
-            const driverElName = net.driver.type === 'power_source' ? net.driver.name
+            const dName = net.driver.type === 'power_source' ? net.driver.name
                 : net.driver.type === 'entity_port' ? '__entity_in__'
                 : net.driver.name;
-            const dIsMainLike = mainPathNames.has(driverElName) || net.driver.type === 'power_source' || driverElName === '__entity_in__';
-            if (!dIsMainLike) continue;
-
-            for (const sink of net.sinks) {
-                const sinkElName = sink.type === 'entity_port' ? '__entity_out__' : sink.name;
-                if (sinkElName !== '__entity_out__' && !mainPathNames.has(sinkElName)) continue;
-
-                elkEdges.push({
-                    id: `e${edgeIdx++}`,
-                    sources: [pId(driverElName, net.driver.port)],
-                    targets: [pId(sinkElName, sink.port)],
-                    layoutOptions: { 'org.eclipse.elk.priority': '10' }
-                });
+            if (!mainBandNodes.has(dName)) continue;
+            for (const s of net.sinks) {
+                const sName = s.type === 'entity_port' ? '__entity_out__' : s.name;
+                if (!mainBandNodes.has(sName) || dName === sName) continue;
+                mbForward.get(dName).push(sName);
+                mbInDegree.set(sName, mbInDegree.get(sName) + 1);
             }
         }
 
-        const elkGraph = {
-            id: 'root',
-            layoutOptions: {
-                'algorithm': 'layered',
-                'org.eclipse.elk.direction': 'RIGHT',
-                'org.eclipse.elk.portConstraints': 'FIXED_SIDE',
-                'org.eclipse.elk.spacing.nodeNode': '50',
-                'org.eclipse.elk.layered.spacing.nodeNodeBetweenLayers': '100',
-                'org.eclipse.elk.edgeRouting': 'ORTHOGONAL',
-                'org.eclipse.elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
-                'org.eclipse.elk.layered.compaction.postCompaction.strategy': 'EDGE_LENGTH',
-            },
-            children: elkChildren,
-            edges: elkEdges
-        };
+        // Recover implicit edges lost during PG filtering.
+        // When a regulator output drives a PG symbol (e.g., reg5.VO → V5),
+        // the PG sink is removed, losing the ordering constraint between
+        // the regulator and the downstream power source it feeds.
+        {
+            const pgToPowerSource = new Map();
+            for (const net of (data.nets || [])) {
+                if (net.net_class === 'ground') continue;
+                if (pgInstNames.has(net.driver?.name)) {
+                    const psId = `__pwr_${net.name}__`;
+                    if (mainBandNodes.has(psId)) {
+                        pgToPowerSource.set(net.driver.name, psId);
+                    }
+                }
+            }
+            for (const net of (data.nets || [])) {
+                if (net.net_class === 'ground') continue;
+                const dName = net.driver?.name;
+                if (!dName || !mainBandNodes.has(dName)) continue;
+                for (const s of (net.sinks || [])) {
+                    const psId = pgToPowerSource.get(s.name);
+                    if (psId && mainBandNodes.has(psId) && psId !== dName) {
+                        mbForward.get(dName).push(psId);
+                        mbInDegree.set(psId, mbInDegree.get(psId) + 1);
+                    }
+                }
+            }
+        }
 
-        const elk = new ELK();
-        const elkResult = await elk.layout(elkGraph);
+        // Kahn's topological sort
+        const mainBandOrder = [];
+        const topoQueue = [];
+        for (const [n, deg] of mbInDegree) { if (deg === 0) topoQueue.push(n); }
+        while (topoQueue.length > 0) {
+            const cur = topoQueue.shift();
+            mainBandOrder.push(cur);
+            for (const next of (mbForward.get(cur) || [])) {
+                const newDeg = mbInDegree.get(next) - 1;
+                mbInDegree.set(next, newDeg);
+                if (newDeg === 0) topoQueue.push(next);
+            }
+        }
+        // ── 8b. Detect feedback components among cycle-stuck nodes ──
+        // Nodes with remaining in-degree > 0 after Kahn's sort form cycles.
+        // A feedback component (e.g., R_fb from amp.OUT back to amp.INM)
+        // should be taken off the main path and placed near its junction.
+        const cycleStuck = new Set();
+        for (const n of mainBandNodes) {
+            if (!mainBandOrder.includes(n)) cycleStuck.add(n);
+        }
+        const feedbackNames = [];
+        if (cycleStuck.size > 0) {
+            // For each cycle-stuck node, count how many DISTINCT main-band
+            // neighbors it connects to (both forward and backward).
+            // The one with fewest distinct neighbors is the feedback element.
+            const neighborCount = new Map();
+            for (const n of cycleStuck) {
+                const neighbors = new Set();
+                for (const fwd of (mbForward.get(n) || [])) {
+                    if (mainBandNodes.has(fwd)) neighbors.add(fwd);
+                }
+                // Also check reverse edges
+                for (const [src, dsts] of mbForward) {
+                    if (dsts.includes(n) && mainBandNodes.has(src)) neighbors.add(src);
+                }
+                neighborCount.set(n, neighbors.size);
+            }
+            // Demote cycle-stuck nodes that connect to only 1 other node
+            // (classic feedback: r_fb connects only to amp via both edges)
+            for (const n of cycleStuck) {
+                if (neighborCount.get(n) <= 1) {
+                    // This is a feedback element — find which node it feeds back to
+                    const fwdTargets = (mbForward.get(n) || []).filter(t => mainBandNodes.has(t));
+                    const junctionName = fwdTargets.length > 0 ? fwdTargets[0] : null;
+                    feedbackNames.push({ name: n, junctionName, junctionSide: 'right' });
+                    mainPathNames.delete(n);
+                    const mpoIdx = mainPathOrder.indexOf(n);
+                    if (mpoIdx >= 0) mainPathOrder.splice(mpoIdx, 1);
+                } else {
+                    // Keep on main path
+                    mainBandOrder.push(n);
+                }
+            }
+        }
+        // Remaining cycle-stuck nodes (kept) were already added above
+        // Non-cycle-stuck nodes that weren't reached (shouldn't happen) go at end
+        for (const n of mainBandNodes) {
+            if (!mainBandOrder.includes(n) && !feedbackNames.some(f => f.name === n)) {
+                mainBandOrder.push(n);
+            }
+        }
 
-        // ── 9. Extract main-path positions from ELK ──
+        // Off-path names (computed after feedback reclassification)
+        const offPathNames = new Set([
+            ...shuntNames.map(s => s.name),
+            ...decouplingNames.map(d => d.name),
+            ...branchNames.map(b => b.name),
+            ...feedbackNames.map(f => f.name)
+        ]);
+
+        // ── 9. Sequential L→R placement ──
         const positions = new Map();
-        for (const child of elkResult.children) {
-            positions.set(child.id, { x: child.x, y: child.y, w: child.width, h: child.height });
+        let curX = 40;
+
+        for (const nodeId of mainBandOrder) {
+            let w, h;
+            const ps = powerSourceNodes.find(p => p.id === nodeId);
+            if (ps) {
+                w = Math.max(80, measureTextWidth(ps.label, FONT_SIZE) + 24);
+                h = 28;
+            } else if (nodeId === '__entity_in__') {
+                h = HEADER_HEIGHT + ENTITY_PADDING * 2 + inputPorts.length * PORT_SPACING;
+                let maxW = 0;
+                for (const p of inputPorts) maxW = Math.max(maxW, measureTextWidth(p.name, FONT_SIZE));
+                w = Math.max(ENTITY_BOX_MIN_WIDTH, maxW + 50);
+            } else if (nodeId === '__entity_out__') {
+                h = HEADER_HEIGHT + ENTITY_PADDING * 2 + outputPorts.length * PORT_SPACING;
+                let maxW = 0;
+                for (const p of outputPorts) maxW = Math.max(maxW, measureTextWidth(p.name, FONT_SIZE));
+                w = Math.max(ENTITY_BOX_MIN_WIDTH, maxW + 50);
+            } else {
+                const inst = instMap.get(nodeId);
+                if (!inst) continue;
+                const { inP, outP } = getInstPorts(inst);
+                const size = computeBoxSize(nodeId, inst.entity_type, inP, outP, inst.parameters, inst.category);
+                w = size.w; h = size.h;
+            }
+            positions.set(nodeId, { x: curX, y: 40, w, h });
+            curX += w + COLUMN_GAP;
         }
 
         // ── 9a. Align main-path nodes by first-port Y position ──
-        // ELK can produce slight Y offsets between layers. We force all
-        // main-band nodes to have their first port at the same Y so wires
-        // are perfectly horizontal through the main path.
+        // Ensure all main-band nodes have their first port at the same Y
+        // so wires are perfectly horizontal through the main path.
         // Instance first-port offset: HEADER_HEIGHT + INSTANCE_PADDING + 0.5 * PORT_SPACING
         // Power source port offset: h / 2
         {
@@ -614,7 +751,14 @@
             }
             for (const name of mainPathOrder) {
                 const pos = positions.get(name);
-                if (pos) maxPortY = Math.max(maxPortY, pos.y + instPortOffset);
+                if (!pos) continue;
+                const inst = instMap.get(name);
+                const cat = inst ? inst.category : '';
+                // Symbol categories use h/2 (port at center), box categories use header offset
+                // OpAmp: first input is at h/2 - 10, so align to that
+                const offset = cat === 'opamp' ? pos.h / 2 - 10
+                    : isSymbolCategory(cat) ? pos.h / 2 : instPortOffset;
+                maxPortY = Math.max(maxPortY, pos.y + offset);
             }
             // Reposition each node so its first port is at maxPortY
             for (const ps of powerSourceNodes) {
@@ -623,7 +767,12 @@
             }
             for (const name of mainPathOrder) {
                 const pos = positions.get(name);
-                if (pos) pos.y = maxPortY - instPortOffset;
+                if (!pos) continue;
+                const inst = instMap.get(name);
+                const cat = inst ? inst.category : '';
+                const offset = cat === 'opamp' ? pos.h / 2 - 10
+                    : isSymbolCategory(cat) ? pos.h / 2 : instPortOffset;
+                pos.y = maxPortY - offset;
             }
         }
 
@@ -674,11 +823,18 @@
         // ── 9b. Gap expansion: ensure main-path gaps are wide enough for off-path items ──
         // Pre-compute sizes of off-path items
         const offPathSizes = new Map();
-        for (const item of [...shuntNames, ...decouplingNames, ...branchNames]) {
+        for (const item of [...shuntNames, ...decouplingNames, ...branchNames, ...feedbackNames]) {
             const inst = instMap.get(item.name);
             if (!inst) continue;
             const { inP, outP } = getInstPorts(inst);
-            offPathSizes.set(item.name, computeBoxSize(item.name, inst.entity_type, inP, outP, inst.parameters));
+            const sz = computeBoxSize(item.name, inst.entity_type, inP, outP, inst.parameters, inst.category);
+            // Swap w/h for shunt symbol components (vertical orientation)
+            const isShunt = shuntInstNames.has(item.name);
+            if (isShunt && isSymbolCategory(inst.category)) {
+                offPathSizes.set(item.name, { w: sz.h, h: sz.w });
+            } else {
+                offPathSizes.set(item.name, sz);
+            }
         }
 
         // Group shunts/decoupling by (junctionName, junctionSide) for gap computation
@@ -718,15 +874,7 @@
 
         // For each pair of consecutive main-path nodes, compute space needed
         // We'll iterate through mainPathOrder plus power sources (which are left of everything)
-        // Build ordered list of all main-band nodes as they appear left-to-right
-        const mainBandOrder = [];
-        // Power sources come first (already positioned by ELK)
-        for (const ps of powerSourceNodes) {
-            mainBandOrder.push(ps.id);
-        }
-        for (const name of mainPathOrder) {
-            mainBandOrder.push(name);
-        }
+        // mainBandOrder was computed in step 8 (topological sort)
 
         // For each gap, compute how much width is needed
         for (let gi = 0; gi < mainBandOrder.length - 1; gi++) {
@@ -800,6 +948,16 @@
             if (pos) mainBandBottom = Math.max(mainBandBottom, pos.y + pos.h);
         }
         const SHUNT_DROP = 80;
+        // Normalize all shunt heights to the tallest so wires and GND stubs align
+        let maxShuntH = 0;
+        for (const item of verticalDropItems) {
+            const sz = offPathSizes.get(item.name);
+            if (sz) maxShuntH = Math.max(maxShuntH, sz.h);
+        }
+        for (const item of verticalDropItems) {
+            const sz = offPathSizes.get(item.name);
+            if (sz) sz.h = maxShuntH;
+        }
         const shuntY = mainBandBottom + SHUNT_DROP;
 
         // ── 10b. Place shunts/decoupling with width-aware distribution ──
@@ -851,6 +1009,19 @@
                 const minX = prev.x + prev.w + MIN_ITEM_GAP;
                 if (curr.x < minX) curr.x = minX;
             }
+        }
+
+        // Stack shunt chain members vertically (child centered below parent)
+        for (const [parent, child] of shuntChainDown) {
+            const parentPos = positions.get(parent);
+            if (!parentPos) continue;
+            const childSz = offPathSizes.get(child) || { w: INSTANCE_BOX_MIN_WIDTH, h: 60 };
+            const cx = parentPos.x + parentPos.w / 2;
+            positions.set(child, {
+                x: cx - childSz.w / 2,
+                y: parentPos.y + parentPos.h + PORT_STUB_LEN * 2 + 10,
+                w: childSz.w, h: childSz.h
+            });
         }
 
         // ── 10c. Place branches as horizontal chains ──
@@ -938,6 +1109,51 @@
             }
         }
 
+        // ── 10d-fb. Place feedback components below their junction ──
+        // Feedback resistors (e.g., R_fb from op-amp output to inverting input)
+        // are placed below the junction node.  Placing below keeps them out of
+        // the main-path horizontal wire corridor and minimises wire crossings
+        // (short L-routes from junction ports).
+        // Shift left if needed to avoid overlapping the shunt column.
+        const FEEDBACK_DROP = 40;
+        const feedbackNameSet = new Set(feedbackNames.map(f => f.name));
+        for (const fb of feedbackNames) {
+            const jPos = positions.get(fb.junctionName);
+            if (!jPos) continue;
+            const sz = offPathSizes.get(fb.name) || { w: INSTANCE_BOX_MIN_WIDTH, h: 60 };
+            const FB_GAP = 20;
+            // Default: center on junction
+            let fbX = jPos.x + jPos.w / 2 - sz.w / 2;
+            // If shunts/decoupling sit to the right of the junction center,
+            // pull feedback left so its right edge clears the shunt column.
+            let minShuntX = Infinity;
+            for (const item of [...shuntNames, ...decouplingNames]) {
+                const sp = positions.get(item.name);
+                if (sp && sp.x > jPos.x + jPos.w / 2) {
+                    minShuntX = Math.min(minShuntX, sp.x);
+                }
+            }
+            if (minShuntX < Infinity) {
+                fbX = Math.min(fbX, minShuntX - FB_GAP - sz.w);
+            }
+            let fbY = jPos.y + jPos.h + FEEDBACK_DROP;
+            // Scan down past collisions with already-placed components
+            let settled = false;
+            while (!settled) {
+                settled = true;
+                for (const [n, p] of positions) {
+                    if (n === fb.name) continue;
+                    if (fbX < p.x + p.w + FB_GAP && fbX + sz.w + FB_GAP > p.x &&
+                        fbY < p.y + p.h + FB_GAP && fbY + sz.h + FB_GAP > p.y) {
+                        fbY = p.y + p.h + FB_GAP;
+                        settled = false;
+                        break;
+                    }
+                }
+            }
+            positions.set(fb.name, { x: fbX, y: fbY, w: sz.w, h: sz.h });
+        }
+
         // ── 10b. Detect flipped instances (wire direction opposite to port side) ──
         // If a component's input source is to its right, or its output sink is
         // to its left, the normal L→R port assignment produces wires that cross
@@ -990,12 +1206,19 @@
                 flippedNames.add(name);
             }
         }
+        // Force-flip feedback components: their input comes from the junction's
+        // output (right) and their output goes to the junction's input (left).
+        for (const fb of feedbackNames) flippedNames.add(fb.name);
 
         // ── 10c. Reposition flipped components so wires don't cross through blocks ──
         // A flipped component has its input on the RIGHT. Position it so that right
         // edge aligns with where the input wire comes from (the driver's output side),
         // preventing wires from crossing intermediate blocks.
         for (const name of flippedNames) {
+            // Feedback components are already centered above their junction (step 10d-fb).
+            // Repositioning them here would break the vertical alignment needed for
+            // clean up/down wires between feedback and junction.
+            if (feedbackNames.some(f => f.name === name)) continue;
             const pos = positions.get(name);
             if (!pos) continue;
             const inst = instMap.get(name);
@@ -1035,8 +1258,9 @@
         {
             const GAP = 20; // minimum spacing between component bounding boxes
             const allNames = [...positions.keys()].filter(n => n !== '__entity_in__' && n !== '__entity_out__');
-            // Iterate off-path names; nudge them if they collide with anything
-            const offPath = allNames.filter(n => offPathNames.has(n));
+            // Iterate off-path names (excluding feedback, already scan-placed);
+            // nudge them if they collide with anything
+            const offPath = allNames.filter(n => offPathNames.has(n) && !feedbackNameSet.has(n));
             for (const name of offPath) {
                 let pos = positions.get(name);
                 let moved = true;
@@ -1085,10 +1309,12 @@
         for (const [name, inst] of instMap) {
             const pos = positions.get(name);
             if (!pos) continue;
-            const isShuntLike = offPathNames.has(name) && (shuntInstNames.has(name) || !branchNames.some(b => b.name === name));
+            const isFeedback = feedbackNames.some(f => f.name === name);
+            const isShuntLike = !isFeedback && offPathNames.has(name) && (shuntInstNames.has(name) || !branchNames.some(b => b.name === name));
 
             const instInPorts = [], instOutPorts = [];
             const seenIn = new Set(), seenOut = new Set();
+            const isSymbol = isSymbolCategory(inst.category);
             for (const c of inst.connections) {
                 if (gndNetNames.has(c.signal)) continue;
                 const k = `${name}.${c.port}`;
@@ -1100,6 +1326,44 @@
                     if (r.has('in') && !seenIn.has(c.port)) {
                         seenIn.add(c.port);
                         instInPorts.push({ name: c.port, x: pos.x + pos.w / 2, y: pos.y, pinType: getPortPinType(name, c.port) });
+                    }
+                    // Chain shunt: output port on SOUTH (bottom center) — wire continues down
+                    if (shuntChainDown.has(name) && r.has('out') && !seenOut.has(c.port)) {
+                        seenOut.add(c.port);
+                        instOutPorts.push({ name: c.port, x: pos.x + pos.w / 2, y: pos.y + pos.h, pinType: getPortPinType(name, c.port) });
+                    }
+                } else if (isSymbol && inst.category !== 'opamp') {
+                    // 2-pin symbol: input at left-center, output at right-center
+                    const isFlipped = flippedNames.has(name);
+                    const cy = pos.y + pos.h / 2;
+                    if (r.has('in') && !seenIn.has(c.port)) {
+                        seenIn.add(c.port);
+                        const px = isFlipped ? pos.x + pos.w : pos.x;
+                        instInPorts.push({ name: c.port, x: px, y: cy, pinType: getPortPinType(name, c.port), isClock: clockSignals.has(c.signal), isReset: resetSignals.has(c.signal) });
+                    }
+                    if (r.has('out') && !seenOut.has(c.port)) {
+                        seenOut.add(c.port);
+                        const px = isFlipped ? pos.x : pos.x + pos.w;
+                        instOutPorts.push({ name: c.port, x: px, y: cy, pinType: getPortPinType(name, c.port) });
+                    }
+                } else if (isSymbol && inst.category === 'opamp') {
+                    // OpAmp: INP/INM stacked on left, OUT on right-center
+                    const isFlipped = flippedNames.has(name);
+                    if (r.has('in') && !seenIn.has(c.port)) {
+                        seenIn.add(c.port);
+                        const pinType = getPortPinType(name, c.port);
+                        if (pinType === 'power' || pinType === 'ground') continue; // skip VCC/GND
+                        const py = pos.y + pos.h / 2 + (instInPorts.length === 0 ? -10 : 10);
+                        const px = isFlipped ? pos.x + pos.w : pos.x;
+                        instInPorts.push({ name: c.port, x: px, y: py, pinType, isClock: clockSignals.has(c.signal), isReset: resetSignals.has(c.signal) });
+                    }
+                    if (r.has('out') && !seenOut.has(c.port)) {
+                        seenOut.add(c.port);
+                        const pinType = getPortPinType(name, c.port);
+                        if (pinType === 'power' || pinType === 'ground') continue;
+                        const py = pos.y + pos.h / 2;
+                        const px = isFlipped ? pos.x : pos.x + pos.w;
+                        instOutPorts.push({ name: c.port, x: px, y: py, pinType });
                     }
                 } else {
                     const isFlipped = flippedNames.has(name);
@@ -1138,7 +1402,7 @@
                 }
                 if (found) simPowerW = total;
             }
-            layoutElements.push({ x: pos.x, y: pos.y, w: pos.w, h: pos.h, name, type: 'instance', entityType: inst.entity_type, parameters: inst.parameters, category: inst.category, isShunt: isShuntLike, isFlipped: flippedNames.has(name), inputPorts: instInPorts, outputPorts: instOutPorts, gndStubs: gndStubsByInst.get(name) || [], pgStubs: [], line: inst.line, simCurrent, simPower: simPowerW });
+            layoutElements.push({ x: pos.x, y: pos.y, w: pos.w, h: pos.h, name, type: 'instance', entityType: inst.entity_type, parameters: inst.parameters, category: inst.category, isShunt: isShuntLike, isFlipped: flippedNames.has(name), inputPorts: instInPorts, outputPorts: instOutPorts, gndStubs: gndStubsByInst.get(name) || [], pwrStubs: pwrStubsByInst.get(name) || [], pgStubs: [], line: inst.line, simCurrent, simPower: simPowerW });
         }
 
         // Entity output
@@ -1170,6 +1434,10 @@
                     // NORTH port: dot is above the box
                     return { x: p.x, y: p.y - PORT_STUB_LEN };
                 }
+                if (el.isShunt && sides[li] === 'out') {
+                    // SOUTH port: dot is below the box (chain shunt)
+                    return { x: p.x, y: p.y + PORT_STUB_LEN };
+                }
                 let dx;
                 if (el.isFlipped) {
                     dx = sides[li] === 'out' ? -PORT_STUB_LEN : PORT_STUB_LEN;
@@ -1185,6 +1453,35 @@
         }
 
         const junctionPoints = [];
+
+        // Obstacle avoidance: find a clear X for a vertical wire segment
+        // that doesn't intersect any component bounding box.
+        // direction: +1 = push right, -1 = push left
+        const WIRE_CLEARANCE = 8;
+        function clearVerticalX(startX, yMin, yMax, direction, excludeNames) {
+            let x = startX;
+            const excl = new Set(excludeNames || []);
+            for (let iter = 0; iter < 20; iter++) {
+                let blocked = false;
+                for (const el of layoutElements) {
+                    if (excl.has(el.name)) continue;
+                    if (el.type === 'power_source') continue;
+                    // Check if vertical line at x overlaps element's bounding box
+                    const elLeft = el.x - WIRE_CLEARANCE;
+                    const elRight = el.x + el.w + WIRE_CLEARANCE;
+                    const elTop = el.y - WIRE_CLEARANCE;
+                    const elBottom = el.y + el.h + WIRE_CLEARANCE;
+                    if (x > elLeft && x < elRight && yMax > elTop && yMin < elBottom) {
+                        // Push x outside the element
+                        x = direction > 0 ? elRight : elLeft;
+                        blocked = true;
+                        break;
+                    }
+                }
+                if (!blocked) break;
+            }
+            return x;
+        }
 
         for (const net of processedNets) {
             const driverElName = net.driver.type === 'power_source' ? net.driver.name
@@ -1206,7 +1503,9 @@
                 const fromDir = fromPos.dir || 1;   // driver output default: rightward
                 const toDir = toPos.dir || -1;       // sink input default: leftward
 
+
                 if (isShuntWire || (toPos.y > fromPos.y + 20 && toDir <= 0)) {
+
                     if (toPos.x >= fromPos.x - 2) {
                         // Normal L-route: horizontal forward to shunt X, then vertical drop
                         const jx = toPos.x;
@@ -1225,23 +1524,39 @@
                     }
                 } else if (toDir > 0 && toPos.y > fromPos.y + 20) {
                     // Flipped sink below driver: sink expects wire from the RIGHT.
-                    // Route: horizontal from driver to sink dot X, then vertical drop
-                    // to sink dot. The vertical is at the dot's X (outside the box).
-                    junctionPoints.push({ x: toPos.x, y: fromPos.y });
-                    if (Math.abs(fromPos.x - toPos.x) > 2) {
-                        segments.push({ x1: fromPos.x, y1: fromPos.y, x2: toPos.x, y2: fromPos.y });
+                    // Route vertical to the right, avoiding any component bounding boxes.
+                    const baseX = Math.max(fromPos.x, toPos.x);
+                    const yMin = Math.min(fromPos.y, toPos.y);
+                    const yMax = Math.max(fromPos.y, toPos.y);
+                    const routeX = clearVerticalX(baseX, yMin, yMax, +1, [driverElName, sinkElName]);
+                    junctionPoints.push({ x: routeX, y: fromPos.y });
+                    if (Math.abs(fromPos.x - routeX) > 2) {
+                        segments.push({ x1: fromPos.x, y1: fromPos.y, x2: routeX, y2: fromPos.y });
                     }
-                    segments.push({ x1: toPos.x, y1: fromPos.y, x2: toPos.x, y2: toPos.y });
+                    segments.push({ x1: routeX, y1: fromPos.y, x2: routeX, y2: toPos.y });
+                    if (Math.abs(routeX - toPos.x) > 2) {
+                        segments.push({ x1: routeX, y1: toPos.y, x2: toPos.x, y2: toPos.y });
+                    }
                 } else if (fromDir < 0 && toPos.y < fromPos.y - 20) {
                     // Flipped driver below sink: driver departs LEFT, sink is above.
-                    // Route: vertical up from driver dot (leftmost X, clear of blocks),
-                    // then horizontal right to sink dot.
-                    segments.push({ x1: fromPos.x, y1: fromPos.y, x2: fromPos.x, y2: toPos.y });
-                    segments.push({ x1: fromPos.x, y1: toPos.y, x2: toPos.x, y2: toPos.y });
+                    // Route vertical to the left, avoiding any component bounding boxes.
+                    const baseX = Math.min(fromPos.x, toPos.x);
+                    const yMin = Math.min(fromPos.y, toPos.y);
+                    const yMax = Math.max(fromPos.y, toPos.y);
+                    const routeX = clearVerticalX(baseX, yMin, yMax, -1, [driverElName, sinkElName]);
+                    if (Math.abs(fromPos.x - routeX) > 2) {
+                        segments.push({ x1: fromPos.x, y1: fromPos.y, x2: routeX, y2: fromPos.y });
+                    }
+                    segments.push({ x1: routeX, y1: fromPos.y, x2: routeX, y2: toPos.y });
+                    if (Math.abs(routeX - toPos.x) > 2) {
+                        segments.push({ x1: routeX, y1: toPos.y, x2: toPos.x, y2: toPos.y });
+                    }
                 } else if (Math.abs(fromPos.y - toPos.y) < 2) {
+
                     // Horizontal
                     segments.push({ x1: fromPos.x, y1: fromPos.y, x2: toPos.x, y2: toPos.y });
                 } else {
+
                     // Z-route: horizontal → vertical → horizontal
                     const midX = (fromPos.x + toPos.x) / 2;
                     segments.push({ x1: fromPos.x, y1: fromPos.y, x2: midX, y2: fromPos.y });
@@ -1337,11 +1652,13 @@
         for (const el of layoutElements) {
             if (el.type === 'entity_in' || el.type === 'entity_out') drawEntityBox(el);
             else if (el.type === 'power_source') drawPowerSourceNode(el);
+            else if (isSymbolCategory(el.category)) drawSymbolComponent(el);
             else drawInstanceBox(el);
         }
-        // Draw GND stubs on top
+        // Draw GND and power stubs on top
         for (const el of layoutElements) {
             if (el.gndStubs && el.gndStubs.length > 0) drawGndStubs(el);
+            if (el.pwrStubs && el.pwrStubs.length > 0) drawPowerStubs(el);
         }
 
         ctx.restore();
@@ -1509,14 +1826,14 @@
         if (el.parameters && el.parameters.length > 0) {
             ctx.fillStyle = COLORS.paramText;
             ctx.font = `${FONT_SIZE - 2}px monospace`;
-            const paramStr = el.parameters.filter(p => p[1]).map(p => p[1]).join(', ');
+            const paramStr = el.parameters.filter(p => p[1]).map(p => formatParamValue(p[1])).join(', ');
             if (paramStr) ctx.fillText(paramStr, el.x + el.w / 2, el.y + HEADER_HEIGHT + 22);
         }
 
         const showLabels = shouldShowPortLabels(el.category);
 
         if (el.isShunt) {
-            // Shunt component: single port on NORTH (top), GND stub on SOUTH (bottom)
+            // NORTH port: wire drops down from above
             for (const port of el.inputPorts) {
                 ctx.strokeStyle = COLORS.port;
                 ctx.lineWidth = 1.5;
@@ -1527,6 +1844,19 @@
                 ctx.fillStyle = COLORS.port;
                 ctx.beginPath();
                 ctx.arc(port.x, port.y - PORT_STUB_LEN, PORT_DOT_R, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            // SOUTH port: chain shunt output continues down to next component
+            for (const port of el.outputPorts) {
+                ctx.strokeStyle = COLORS.port;
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.moveTo(port.x, port.y);
+                ctx.lineTo(port.x, port.y + PORT_STUB_LEN);
+                ctx.stroke();
+                ctx.fillStyle = COLORS.port;
+                ctx.beginPath();
+                ctx.arc(port.x, port.y + PORT_STUB_LEN, PORT_DOT_R, 0, Math.PI * 2);
                 ctx.fill();
             }
             return; // Skip standard left/right port rendering
@@ -1588,6 +1918,422 @@
         }
     }
 
+    // ─────────── PROFESSIONAL SYMBOL RENDERING ───────────
+
+    function drawResistorSymbol(cx, cy, vertical) {
+        // European/IEC style: simple rectangle
+        const rw = 20, rh = 7;
+        if (vertical) {
+            ctx.strokeRect(cx - rh, cy - rw, rh * 2, rw * 2);
+        } else {
+            ctx.strokeRect(cx - rw, cy - rh, rw * 2, rh * 2);
+        }
+    }
+
+    function drawCapacitorSymbol(cx, cy, vertical) {
+        // Two parallel lines with a gap
+        const plateLen = 10, gap = 3;
+        if (vertical) {
+            // Plates are horizontal, stacked vertically
+            ctx.beginPath();
+            ctx.moveTo(cx - plateLen, cy - gap);
+            ctx.lineTo(cx + plateLen, cy - gap);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(cx - plateLen, cy + gap);
+            ctx.lineTo(cx + plateLen, cy + gap);
+            ctx.stroke();
+        } else {
+            // Plates are vertical, side by side
+            ctx.beginPath();
+            ctx.moveTo(cx - gap, cy - plateLen);
+            ctx.lineTo(cx - gap, cy + plateLen);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(cx + gap, cy - plateLen);
+            ctx.lineTo(cx + gap, cy + plateLen);
+            ctx.stroke();
+        }
+    }
+
+    function drawInductorSymbol(cx, cy, vertical) {
+        // Series of 4 semicircular humps
+        const humps = 4, humpR = 5;
+        const halfLen = humps * humpR;
+        if (vertical) {
+            const startY = cy - halfLen;
+            for (let i = 0; i < humps; i++) {
+                const hcy = startY + (i + 0.5) * (humpR * 2);
+                ctx.beginPath();
+                ctx.arc(cx, hcy, humpR, -Math.PI / 2, Math.PI / 2, false);
+                ctx.stroke();
+            }
+        } else {
+            const startX = cx - halfLen;
+            for (let i = 0; i < humps; i++) {
+                const hcx = startX + (i + 0.5) * (humpR * 2);
+                ctx.beginPath();
+                ctx.arc(hcx, cy, humpR, Math.PI, 0, false);
+                ctx.stroke();
+            }
+        }
+    }
+
+    function drawDiodeSymbol(cx, cy, vertical, isLED, isFlipped) {
+        // Triangle + bar, centered on (cx, cy)
+        const triW = 10, triH = 7;
+        const half = triW / 2; // center offset so symbol is symmetric about cx/cy
+        const dir = isFlipped ? -1 : 1;
+        if (vertical) {
+            const vdir = isFlipped ? -1 : 1;
+            // Triangle pointing down, centered vertically
+            const anode = cy - half * vdir;   // triangle base (anode side)
+            const cathode = cy + half * vdir; // triangle tip + bar (cathode side)
+            ctx.beginPath();
+            ctx.moveTo(cx - triH, anode);
+            ctx.lineTo(cx + triH, anode);
+            ctx.lineTo(cx, cathode);
+            ctx.closePath();
+            ctx.fill();
+            // Bar at cathode
+            ctx.beginPath();
+            ctx.moveTo(cx - triH, cathode);
+            ctx.lineTo(cx + triH, cathode);
+            ctx.stroke();
+        } else {
+            // Triangle pointing right (or left if flipped), centered horizontally
+            const anode = cx - half * dir;   // triangle base
+            const cathode = cx + half * dir; // triangle tip + bar
+            ctx.beginPath();
+            ctx.moveTo(anode, cy - triH);
+            ctx.lineTo(anode, cy + triH);
+            ctx.lineTo(cathode, cy);
+            ctx.closePath();
+            ctx.fill();
+            // Bar at cathode
+            ctx.beginPath();
+            ctx.moveTo(cathode, cy - triH);
+            ctx.lineTo(cathode, cy + triH);
+            ctx.stroke();
+        }
+        // LED photon emission arrows (two small arrows radiating away from junction)
+        if (isLED) {
+            ctx.lineWidth = 1;
+            const aLen = 8, headLen = 3;
+            if (vertical) {
+                // Arrows radiate to the right from the junction
+                for (let i = 0; i < 2; i++) {
+                    const ay = cy - 3 + i * 6;
+                    const ax = cx + triH + 2;
+                    // Shaft
+                    ctx.beginPath();
+                    ctx.moveTo(ax, ay);
+                    ctx.lineTo(ax + aLen, ay - aLen * 0.6);
+                    ctx.stroke();
+                    // Arrowhead
+                    const tipX = ax + aLen, tipY = ay - aLen * 0.6;
+                    ctx.beginPath();
+                    ctx.moveTo(tipX, tipY);
+                    ctx.lineTo(tipX - headLen, tipY + 1);
+                    ctx.moveTo(tipX, tipY);
+                    ctx.lineTo(tipX - 1, tipY + headLen);
+                    ctx.stroke();
+                }
+            } else {
+                // Arrows radiate upward from the junction
+                for (let i = 0; i < 2; i++) {
+                    const ax = cx - 3 * dir + i * 6 * dir;
+                    const ay = cy - triH - 2;
+                    // Shaft
+                    ctx.beginPath();
+                    ctx.moveTo(ax, ay);
+                    ctx.lineTo(ax + aLen * 0.4 * dir, ay - aLen);
+                    ctx.stroke();
+                    // Arrowhead
+                    const tipX = ax + aLen * 0.4 * dir, tipY = ay - aLen;
+                    ctx.beginPath();
+                    ctx.moveTo(tipX, tipY);
+                    ctx.lineTo(tipX - headLen * 0.5 * dir, tipY + headLen);
+                    ctx.moveTo(tipX, tipY);
+                    ctx.lineTo(tipX - headLen * dir, tipY + headLen * 0.5);
+                    ctx.stroke();
+                }
+            }
+        }
+    }
+
+    function drawTVSDiodeSymbol(cx, cy, vertical) {
+        // Bidirectional: two triangles pointing at each other
+        const triW = 6, triH = 7;
+        if (vertical) {
+            // Top triangle pointing down
+            ctx.beginPath();
+            ctx.moveTo(cx - triH, cy - triW);
+            ctx.lineTo(cx + triH, cy - triW);
+            ctx.lineTo(cx, cy);
+            ctx.closePath();
+            ctx.fill();
+            // Bottom triangle pointing up
+            ctx.beginPath();
+            ctx.moveTo(cx - triH, cy + triW);
+            ctx.lineTo(cx + triH, cy + triW);
+            ctx.lineTo(cx, cy);
+            ctx.closePath();
+            ctx.fill();
+            // Bars
+            ctx.beginPath();
+            ctx.moveTo(cx - triH, cy);
+            ctx.lineTo(cx + triH, cy);
+            ctx.stroke();
+        } else {
+            // Left triangle pointing right
+            ctx.beginPath();
+            ctx.moveTo(cx - triW, cy - triH);
+            ctx.lineTo(cx - triW, cy + triH);
+            ctx.lineTo(cx, cy);
+            ctx.closePath();
+            ctx.fill();
+            // Right triangle pointing left
+            ctx.beginPath();
+            ctx.moveTo(cx + triW, cy - triH);
+            ctx.lineTo(cx + triW, cy + triH);
+            ctx.lineTo(cx, cy);
+            ctx.closePath();
+            ctx.fill();
+            // Bar in center
+            ctx.beginPath();
+            ctx.moveTo(cx, cy - triH);
+            ctx.lineTo(cx, cy + triH);
+            ctx.stroke();
+        }
+    }
+
+    function drawOpAmpSymbol(cx, cy, isFlipped, boundH) {
+        // Triangle with +/- labels
+        const w = 25, h = 22;
+        const dir = isFlipped ? -1 : 1;
+        ctx.beginPath();
+        // Triangle: flat on left (input side), point on right (output)
+        ctx.moveTo(cx - w * dir, cy - h);
+        ctx.lineTo(cx - w * dir, cy + h);
+        ctx.lineTo(cx + w * dir, cy);
+        ctx.closePath();
+        ctx.stroke();
+
+        // Power/GND stub leads from triangle body to bounding box edge
+        // The triangle slopes linearly: at x=cx, the top edge is at cy - h/2
+        // and the bottom edge is at cy + h/2 (midpoint of sloped sides).
+        const triYAtCenter = h / 2;
+        const halfBound = boundH / 2;
+        // Bottom lead (GND): from triangle bottom edge at cx to bounding box bottom
+        ctx.beginPath();
+        ctx.moveTo(cx, cy + triYAtCenter);
+        ctx.lineTo(cx, cy + halfBound);
+        ctx.stroke();
+        // Top lead (VCC): from triangle top edge at cx to bounding box top
+        ctx.beginPath();
+        ctx.moveTo(cx, cy - triYAtCenter);
+        ctx.lineTo(cx, cy - halfBound);
+        ctx.stroke();
+
+        // +/- labels inside the triangle
+        ctx.fillStyle = COLORS.text;
+        ctx.font = `bold ${FONT_SIZE}px monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        const labelX = cx - w * dir * 0.5;
+        ctx.fillText('+', labelX, cy - 10);
+        ctx.fillText('\u2212', labelX, cy + 10);
+    }
+
+    function drawSymbolComponent(el) {
+        const isHovered = hoveredItem === el.name;
+        const cx = el.x + el.w / 2;
+        const cy = el.y + el.h / 2;
+        const cat = el.category;
+        const isFlipped = el.isFlipped;
+        const isVertical = el.isShunt;
+
+        // Symbol stroke color
+        const symbolColor = isHovered ? COLORS.highlight : '#c0c0c0';
+        ctx.strokeStyle = symbolColor;
+        ctx.fillStyle = symbolColor;
+        ctx.lineWidth = 1.5;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        // Lead lines from bounding box edge to symbol body
+        // When vertical, the symbol rotates so bodyW becomes the vertical extent
+        const ss = SYMBOL_SIZES[cat];
+        if (cat === 'opamp') {
+            // OpAmp: leads from box edges to triangle body
+            const w = 25, dir = isFlipped ? -1 : 1;
+            const inputX = cx - w * dir;  // flat side of triangle
+            const outputX = cx + w * dir; // tip of triangle
+            // Input leads (INP at cy-10, INM at cy+10)
+            for (const port of el.inputPorts) {
+                ctx.beginPath();
+                ctx.moveTo(port.x, port.y);
+                ctx.lineTo(inputX, port.y);
+                ctx.stroke();
+            }
+            // Output lead
+            for (const port of el.outputPorts) {
+                ctx.beginPath();
+                ctx.moveTo(outputX, port.y);
+                ctx.lineTo(port.x, port.y);
+                ctx.stroke();
+            }
+        } else {
+            const bodyLong = ss.bodyW, bodyShort = ss.bodyH;
+            if (isVertical) {
+                // Vertical: bodyW runs along Y axis
+                const bodyTop = cy - bodyLong / 2;
+                const bodyBot = cy + bodyLong / 2;
+                ctx.beginPath();
+                ctx.moveTo(cx, el.y);
+                ctx.lineTo(cx, bodyTop);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(cx, bodyBot);
+                ctx.lineTo(cx, el.y + el.h);
+                ctx.stroke();
+            } else {
+                // Horizontal: bodyW runs along X axis
+                const bodyLeft = cx - bodyLong / 2;
+                const bodyRight = cx + bodyLong / 2;
+                ctx.beginPath();
+                ctx.moveTo(el.x, cy);
+                ctx.lineTo(bodyLeft, cy);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(bodyRight, cy);
+                ctx.lineTo(el.x + el.w, cy);
+                ctx.stroke();
+            }
+        }
+
+        // Draw the actual symbol
+        if (cat === 'resistor') {
+            drawResistorSymbol(cx, cy, isVertical);
+        } else if (cat === 'capacitor') {
+            drawCapacitorSymbol(cx, cy, isVertical);
+        } else if (cat === 'inductor') {
+            drawInductorSymbol(cx, cy, isVertical);
+        } else if (cat === 'diode') {
+            const entityLower = (el.entityType || '').toLowerCase();
+            const isLED = entityLower.startsWith('led');
+            drawDiodeSymbol(cx, cy, isVertical, isLED, isFlipped);
+        } else if (cat === 'protection') {
+            drawTVSDiodeSymbol(cx, cy, isVertical);
+        } else if (cat === 'opamp') {
+            drawOpAmpSymbol(cx, cy, isFlipped, el.h);
+        }
+
+        // Port stubs and dots
+        if (el.isShunt) {
+            // Shunt: NORTH port (input from above)
+            for (const port of el.inputPorts) {
+                ctx.strokeStyle = COLORS.port;
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.moveTo(port.x, port.y);
+                ctx.lineTo(port.x, port.y - PORT_STUB_LEN);
+                ctx.stroke();
+                ctx.fillStyle = COLORS.port;
+                ctx.beginPath();
+                ctx.arc(port.x, port.y - PORT_STUB_LEN, PORT_DOT_R, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            // SOUTH port (chain shunt output)
+            for (const port of el.outputPorts) {
+                ctx.strokeStyle = COLORS.port;
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.moveTo(port.x, port.y);
+                ctx.lineTo(port.x, port.y + PORT_STUB_LEN);
+                ctx.stroke();
+                ctx.fillStyle = COLORS.port;
+                ctx.beginPath();
+                ctx.arc(port.x, port.y + PORT_STUB_LEN, PORT_DOT_R, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        } else {
+            // Horizontal: L/R port stubs
+            const inDir = isFlipped ? 1 : -1;
+            for (const port of el.inputPorts) {
+                ctx.strokeStyle = COLORS.port;
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.moveTo(port.x, port.y);
+                ctx.lineTo(port.x + inDir * PORT_STUB_LEN, port.y);
+                ctx.stroke();
+                ctx.fillStyle = COLORS.port;
+                ctx.beginPath();
+                ctx.arc(port.x + inDir * PORT_STUB_LEN, port.y, PORT_DOT_R, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            const outDir = isFlipped ? -1 : 1;
+            for (const port of el.outputPorts) {
+                ctx.strokeStyle = COLORS.port;
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.moveTo(port.x, port.y);
+                ctx.lineTo(port.x + outDir * PORT_STUB_LEN, port.y);
+                ctx.stroke();
+                ctx.fillStyle = COLORS.port;
+                ctx.beginPath();
+                ctx.arc(port.x + outDir * PORT_STUB_LEN, port.y, PORT_DOT_R, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        // Labels: name above, value below (or inside for resistors)
+        const paramStr = (el.parameters && el.parameters.length > 0)
+            ? el.parameters.filter(p => p[1]).map(p => formatParamValue(p[1])).join(', ') : '';
+        const valueInside = cat === 'resistor' && paramStr;
+
+        ctx.fillStyle = COLORS.text;
+        ctx.font = `bold ${FONT_SIZE - 1}px monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'bottom';
+        const labelAboveY = isVertical ? cy : el.y - 2;
+        const labelAboveX = isVertical ? el.x - 4 : cx;
+        if (isVertical) {
+            ctx.textAlign = 'right';
+            ctx.textBaseline = 'middle';
+        }
+        ctx.fillText(el.name, labelAboveX, labelAboveY);
+
+        // Value: inside the rectangle for resistors, below for others
+        if (valueInside) {
+            ctx.fillStyle = COLORS.text;
+            ctx.font = `${FONT_SIZE - 2}px monospace`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            if (isVertical) {
+                // Rotated text inside vertical resistor — place to the right instead
+                ctx.textAlign = 'left';
+                ctx.fillText(paramStr, el.x + el.w + 4, cy);
+            } else {
+                ctx.fillText(paramStr, cx, cy);
+            }
+        } else if (paramStr) {
+            ctx.fillStyle = COLORS.paramText;
+            ctx.font = `${FONT_SIZE - 2}px monospace`;
+            if (isVertical) {
+                ctx.textAlign = 'right';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(paramStr, el.x - 4, cy + FONT_SIZE + 2);
+            } else {
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'top';
+                ctx.fillText(paramStr, cx, el.y + el.h + 2);
+            }
+        }
+
+    }
+
     function drawGndStubs(el) {
         if (!el.gndStubs || el.gndStubs.length === 0) return;
         const count = el.gndStubs.length;
@@ -1619,6 +2365,48 @@
             ctx.fillStyle = COLORS.groundStub;
             ctx.beginPath();
             ctx.arc(cx, botY, 2, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+
+    function drawPowerStubs(el) {
+        if (!el.pwrStubs || el.pwrStubs.length === 0) return;
+        const count = el.pwrStubs.length;
+        const spacing = el.w / (count + 1);
+        const PWR_STUB_HEIGHT = 18;
+        const PWR_BAR_WIDTH = 12;
+
+        for (let i = 0; i < count; i++) {
+            const cx = el.x + spacing * (i + 1);
+            const topY = el.y;
+
+            // Vertical line up
+            ctx.strokeStyle = COLORS.portPower;
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(cx, topY);
+            ctx.lineTo(cx, topY - PWR_STUB_HEIGHT);
+            ctx.stroke();
+
+            // Power bar at top
+            ctx.beginPath();
+            ctx.moveTo(cx - PWR_BAR_WIDTH / 2, topY - PWR_STUB_HEIGHT);
+            ctx.lineTo(cx + PWR_BAR_WIDTH / 2, topY - PWR_STUB_HEIGHT);
+            ctx.stroke();
+
+            // Voltage label
+            const stub = el.pwrStubs[i];
+            const label = stub.voltage != null ? formatVoltage(stub.voltage) : (stub.netName || 'VCC');
+            ctx.fillStyle = COLORS.portPower;
+            ctx.font = `${FONT_SIZE - 2}px monospace`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'bottom';
+            ctx.fillText(label, cx, topY - PWR_STUB_HEIGHT - 2);
+
+            // Connection dot at box edge
+            ctx.fillStyle = COLORS.portPower;
+            ctx.beginPath();
+            ctx.arc(cx, topY, 2, 0, Math.PI * 2);
             ctx.fill();
         }
     }
@@ -1958,7 +2746,7 @@
         if (data.simulation && Array.isArray(data.simulation.power_nets)) {
             data.simulation.power_nets = new Set(data.simulation.power_nets);
         }
-        computeLayout().then(() => zoomToFit());
+        computeLayout(); zoomToFit();
     }
 
     window.addEventListener('message', (event) => {
