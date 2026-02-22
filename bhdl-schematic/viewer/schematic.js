@@ -1148,15 +1148,12 @@
                 // Name label extends LEFT from box: textAlign 'right' at el.x - 4
                 const nameW = measureTextWidth(itemName, FONT_SIZE - 1);
                 leftOverhang = Math.max(leftOverhang, nameW + 4);
-                // Value label for resistors extends RIGHT from box
+                // Value label: resistors have value rotated inside the box (no overhang).
+                // Non-resistor values extend LEFT (right-aligned at el.x - 4).
                 const paramStr = (inst.parameters || [])
                     .filter(p => p[1] && INLINE_PARAM_KEYS.has(p[0]))
                     .map(p => formatParamValue(p[1])).join(', ');
-                if (paramStr && inst.category === 'resistor') {
-                    const valW = measureTextWidth(paramStr, FONT_SIZE - 2);
-                    rightOverhang = Math.max(rightOverhang, valW + 4);
-                } else if (paramStr) {
-                    // Non-resistor value also extends LEFT
+                if (paramStr && inst.category !== 'resistor') {
                     const valW = measureTextWidth(paramStr, FONT_SIZE - 2);
                     leftOverhang = Math.max(leftOverhang, valW + 4);
                 }
@@ -2876,9 +2873,12 @@
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             if (isVertical) {
-                // Rotated text inside vertical resistor — place to the right instead
-                ctx.textAlign = 'left';
-                ctx.fillText(paramStr, el.x + el.w + 4, cy);
+                // Rotate text 90° and draw inside the vertical resistor body
+                ctx.save();
+                ctx.translate(cx, cy);
+                ctx.rotate(-Math.PI / 2);
+                ctx.fillText(paramStr, 0, 0);
+                ctx.restore();
             } else {
                 ctx.fillText(paramStr, cx, cy);
             }
