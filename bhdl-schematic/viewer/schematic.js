@@ -33,6 +33,9 @@
     const GND_LINE_WIDTHS = [12, 8, 4];
     const GND_LINE_SPACING = 3;
 
+    // Only these keys are shown inline on the component; everything else is hover-only
+    const INLINE_PARAM_KEYS = new Set(['value']);
+
     // Professional symbol sizes: { bodyW, bodyH } = drawn symbol,
     // { boundW, boundH } = total bounding box including lead stubs & label space
     const SYMBOL_SIZES = {
@@ -1682,18 +1685,25 @@
     }
 
     function drawSimTooltip() {
-        if (!schematicData?.simulation) return;
-        const sim = schematicData.simulation;
+        const sim = schematicData?.simulation;
         const lines = [];
 
         if (hoveredItem) {
             const el = layoutElements.find(e => e.name === hoveredItem);
             if (el && el.type === 'instance') {
                 lines.push(el.name + ' (' + (el.entityType || '') + ')');
-                if (el.simCurrent != null) lines.push('I = ' + formatCurrent(el.simCurrent));
-                if (el.simPower != null) lines.push('P = ' + formatPower(el.simPower));
+                if (sim) {
+                    if (el.simCurrent != null) lines.push('I = ' + formatCurrent(el.simCurrent));
+                    if (el.simPower != null) lines.push('P = ' + formatPower(el.simPower));
+                }
+                // Show non-inline params on hover
+                if (el.parameters) {
+                    for (const [k, v] of el.parameters) {
+                        if (!INLINE_PARAM_KEYS.has(k) && v) lines.push(k + ': ' + v);
+                    }
+                }
             }
-        } else if (hoveredNet) {
+        } else if (hoveredNet && sim) {
             lines.push(hoveredNet);
             const v = sim.net_voltages?.[hoveredNet];
             if (v != null) lines.push('V = ' + formatVoltage(v));
@@ -1836,11 +1846,11 @@
             ctx.fillText(el.entityType, el.x + el.w / 2, el.y + HEADER_HEIGHT + 10);
         }
 
-        // Parameters
+        // Parameters — only show value inline; rest on hover
         if (el.parameters && el.parameters.length > 0) {
             ctx.fillStyle = COLORS.paramText;
             ctx.font = `${FONT_SIZE - 2}px monospace`;
-            const paramStr = el.parameters.filter(p => p[1]).map(p => formatParamValue(p[1])).join(', ');
+            const paramStr = el.parameters.filter(p => p[1] && INLINE_PARAM_KEYS.has(p[0])).map(p => formatParamValue(p[1])).join(', ');
             if (paramStr) ctx.fillText(paramStr, el.x + el.w / 2, el.y + HEADER_HEIGHT + 22);
         }
 
@@ -2304,7 +2314,7 @@
 
         // Labels: name above, value below (or inside for resistors)
         const paramStr = (el.parameters && el.parameters.length > 0)
-            ? el.parameters.filter(p => p[1]).map(p => formatParamValue(p[1])).join(', ') : '';
+            ? el.parameters.filter(p => p[1] && INLINE_PARAM_KEYS.has(p[0])).map(p => formatParamValue(p[1])).join(', ') : '';
         const valueInside = cat === 'resistor' && paramStr;
 
         ctx.fillStyle = COLORS.text;
