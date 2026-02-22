@@ -330,6 +330,8 @@
         // ── 4b. Collect power (VCC) stubs ──
         // Only power INPUT pins get stubs — output power pins (e.g., regulator VO)
         // are producers, not consumers, so they don't get a supply stub.
+        // Regulators are skipped entirely: their power pins ARE the main signal
+        // path (VIN→VOUT), not secondary supply connections.
         const pwrStubsByInst = new Map();
         for (const net of (data.nets || [])) {
             if (net.net_class !== 'power') continue;
@@ -337,6 +339,8 @@
                 if (!ep || ep.type === 'entity_port' || pgInstNames.has(ep.name)) continue;
                 const inst = data.instances.find(i => i.name === ep.name);
                 if (!inst) continue;
+                // Regulators' power pins are inline — skip entirely
+                if (inst.category === 'regulator') continue;
                 const conn = inst.connections.find(c => c.port === ep.port);
                 if (!conn || conn.pin_type !== 'power') continue;
                 // Skip power output pins — they produce the rail, not consume it
