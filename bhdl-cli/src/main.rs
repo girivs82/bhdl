@@ -622,7 +622,7 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
     let analysis = analyze(source_file);
 
     let mut generator = NetlistGenerator::new();
-    let netlist = generator.generate_from_ast_and_analysis(source_file, &analysis).await?;
+    let mut netlist = generator.generate_from_ast_and_analysis(source_file, &analysis).await?;
 
     // Run GLACIER DC simulation for voltage/current annotation
     let sim_annotations = {
@@ -649,6 +649,20 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
             }
         }
     };
+
+    // Apply GLACIER-driven physical selection (package, voltage rating, etc.)
+    if let Some(ref annotations) = sim_annotations {
+        let results = bhdl_synthesizer::glacier_physical_selection::apply_glacier_physical_selection(
+            &mut netlist,
+            &annotations.instance_currents,
+            &annotations.instance_power,
+            &annotations.net_voltages,
+        );
+        if !results.is_empty() {
+            println!("  {} physical parameters selected for {} components",
+                "✓".green(), results.len());
+        }
+    }
 
     // Extract schematic data from netlist
     let schematic_data = bhdl_schematic::extract_schematic_data(&netlist, Some(&analysis), sim_annotations)

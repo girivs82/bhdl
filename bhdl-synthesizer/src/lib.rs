@@ -37,8 +37,11 @@ pub mod interface_synthesis;
 // Passive component calculation engine
 pub mod passive_component_calculator;
 
-// Package selection engine  
+// Package selection engine
 pub mod package_selector;
+
+// GLACIER-driven component physical selection
+pub mod glacier_physical_selection;
 
 // Import loader for handling BHDL imports
 pub mod import_loader;
