@@ -461,4 +461,40 @@ mod tests {
         let board = find_node(&result.syntax(), BOARD_DEF);
         assert!(board.is_some(), "Expected BOARD_DEF with safety_goal");
     }
+
+    #[test]
+    fn parse_generic_entity_with_alias() {
+        let input = r#"
+entity LinearRegulator<V_OUT: voltage>(dropout: voltage = 2V) {
+    pin VI: power in;
+    pin VO: power out;
+    pin GND: ground;
+    attribute component_class = "voltage_regulator";
+    attribute output_voltage = V_OUT;
+    attribute dropout_voltage = dropout;
+}
+alias LM7805 = LinearRegulator<5V>;
+alias LM1117_33 = LinearRegulator<3.3V>;
+        "#;
+        let result = parse(input);
+        for err in &result.errors {
+            eprintln!("Parse error: {}", err.message);
+        }
+        assert!(result.errors.is_empty(), "Expected no parse errors, got: {:?}", result.errors);
+
+        // Check entity definition
+        let entity = find_node(&result.syntax(), ENTITY_DEF);
+        assert!(entity.is_some(), "Expected ENTITY_DEF");
+
+        // Check generic params
+        let generic_params = find_node(&result.syntax(), GENERIC_PARAMS);
+        assert!(generic_params.is_some(), "Expected GENERIC_PARAMS");
+
+        // Check aliases with TYPE_ARGS
+        let aliases = find_all_nodes(&result.syntax(), ALIAS);
+        assert_eq!(aliases.len(), 2, "Expected 2 aliases");
+
+        let type_args = find_all_nodes(&result.syntax(), TYPE_ARGS);
+        assert_eq!(type_args.len(), 2, "Expected 2 TYPE_ARGS");
+    }
 }

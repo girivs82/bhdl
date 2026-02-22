@@ -62,7 +62,7 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
     let mut resolved_constants = ResolvedConstants::new();
 
     // Pass 1: Build scope registry with base path for imports
-    let mut scope_registry = pass1::build_scope_registry_with_base(source_file, base_path);
+    let (mut scope_registry, alias_specializations) = pass1::build_scope_registry_with_base(source_file, base_path);
     // Extract legacy data structures for backward compatibility with existing passes
     let global_scope = scope_registry.extract_global_scope();
     let definition_scopes = scope_registry.extract_definition_scopes();
@@ -97,30 +97,29 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
     visit_node_pass2_references(source_file.syntax(), &mut pass2_context);
     println!("Analyzer: Pass 2 complete. Diagnostics found so far: {}", diagnostics.len());
 
-    // Pass 2.5: Monomorphization
+    // Pass 3: Constant Evaluation (moved before Pass 2.5 so monomorphization has resolved constants)
+    println!("Analyzer: Starting Pass 3 - Constant Evaluation...");
+    let diag_count_before_pass3 = diagnostics.len();
+    let mut pass3_context = Pass3Context::new(
+        &scope_registry,
+        source_file.syntax(),
+        &mut resolved_constants,
+        &mut diagnostics,
+    );
+    visit_node_pass3_const_eval(source_file.syntax(), &mut pass3_context);
+    let pass3_diag_count = diagnostics.len() - diag_count_before_pass3;
+    println!("Analyzer: Pass 3 complete. Constants evaluated: {}, Diagnostics added in pass: {}",
+             resolved_constants.len(), pass3_diag_count);
+
+    // Pass 2.5: Monomorphization (after Pass 3 so type args like 5V are resolved)
     println!("Analyzer: Starting Pass 2.5 - Monomorphization...");
-    let mono_result = passes::run_monomorphization(&scope_registry, &resolved_constants);
+    let mono_result = passes::run_monomorphization(&scope_registry, &resolved_constants, alias_specializations);
     if !mono_result.specializations.is_empty() {
         passes::register_specializations(&mut scope_registry, &mono_result);
     }
     diagnostics.extend(mono_result.diagnostics.clone());
     println!("Analyzer: Pass 2.5 complete. Specializations: {}, Iterations: {}",
              mono_result.specializations.len(), mono_result.iterations);
-
-    // Pass 3: Constant Evaluation
-    println!("Analyzer: Starting Pass 3 - Constant Evaluation...");
-    // Pass diagnostics vec and resolved_constants map mutably
-    let diag_count_before_pass3 = diagnostics.len(); // Get length BEFORE creating context
-    let mut pass3_context = Pass3Context::new(
-        &scope_registry,
-        source_file.syntax(),
-        &mut resolved_constants,
-        &mut diagnostics, // Pass cumulative diagnostics vec
-    );
-    visit_node_pass3_const_eval(source_file.syntax(), &mut pass3_context);
-    let pass3_diag_count = diagnostics.len() - diag_count_before_pass3;
-    println!("Analyzer: Pass 3 complete. Constants evaluated: {}, Diagnostics added in pass: {}",
-             resolved_constants.len(), pass3_diag_count);
 
 
     // Pass 4: Bounds Checks

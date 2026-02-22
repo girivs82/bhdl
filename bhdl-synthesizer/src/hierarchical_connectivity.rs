@@ -463,7 +463,19 @@ fn process_entity_instance(
     // Create instance
     let instance_id = netlist.add_instance(instance_name.clone(), module_id)
         .ok_or_else(|| anyhow::anyhow!("Failed to add instance"))?;
-    
+
+    // Propagate module-level attributes (including component_class) to instance
+    if let Some(module) = netlist.modules.get(module_id) {
+        let module_attrs = module.attributes.clone();
+        if let Some(instance) = netlist.instances.get_mut(instance_id) {
+            for (key, value) in &module_attrs {
+                if !instance.attributes.contains_key(key) {
+                    instance.attributes.insert(key.clone(), value.clone());
+                }
+            }
+        }
+    }
+
     // Store instance path
     let instance_path = if context.current_path.is_empty() {
         instance_name.clone()
@@ -793,21 +805,33 @@ fn create_component_instance(
     }
     
     // Create or get the component module
-    let module_id = get_or_create_component_module(&component_type, netlist, context, import_preprocessor)?;
+    let module_id = get_or_create_component_module(&component_type, netlist, context, analysis, import_preprocessor)?;
 
     // Create the instance
     let instance_id = netlist.add_instance(instance_name.clone(), module_id)
         .ok_or_else(|| anyhow::anyhow!("Failed to add component instance"))?;
-    
+
+    // Propagate component_class from module definition to instance
+    if let Some(module) = netlist.modules.get(module_id) {
+        let module_attrs = module.attributes.clone();
+        if let Some(instance) = netlist.instances.get_mut(instance_id) {
+            for (key, value) in &module_attrs {
+                if !instance.attributes.contains_key(key) {
+                    instance.attributes.insert(key.clone(), value.clone());
+                }
+            }
+        }
+    }
+
     // Create pin instances
     netlist.create_pin_instances(instance_id)
         .map_err(|e| anyhow::anyhow!("Failed to create pin instances: {}", e))?;
-    
+
     // Transfer component parameters from analyzer to instance
     populate_instance_attributes(netlist, instance_id, &instance_name, analysis);
-    
+
     debug!("Created component instance: {} of type {}", instance_name, component_type);
-    
+
     Ok(())
 }
 
@@ -816,12 +840,13 @@ fn get_or_create_component_module(
     component_type: &str,
     netlist: &mut Netlist,
     context: &HierarchicalContext,
+    analysis: &AnalysisResult,
     import_preprocessor: Option<&crate::import_preprocessor::ImportPreprocessor>,
 ) -> Result<ModuleId> {
     use bhdl_netlist::ModuleKind;
-    
+
     debug!("get_or_create_component_module called for: {}", component_type);
-    
+
     // Check if module already exists
     for (module_id, module) in &netlist.modules {
         if module.name == component_type && module.kind == ModuleKind::PhysicalComponent {
@@ -829,13 +854,69 @@ fn get_or_create_component_module(
             return Ok(module_id);
         }
     }
-    
+
     // Create new component module
     debug!("Creating new module for: {}", component_type);
     let module_id = netlist.add_module(component_type.to_string(), ModuleKind::PhysicalComponent);
 
-    // Add standard pins based on component type
-    add_component_pins(component_type, module_id, netlist, context, import_preprocessor)?;
+    // Determine the actual entity to look up for attributes and pins.
+    // If this component_type is an alias specialization, look up the original generic entity.
+    let original_entity_name = analysis.monomorphization.alias_specializations.iter()
+        .find(|a| a.alias_name == component_type)
+        .map(|a| a.target_entity.clone());
+
+    // Extract entity attributes (including component_class) from AST definition
+    // and store them on the ModuleDefinition.
+    // Try original generic entity name first, then fall back to alias name.
+    let lookup_name = original_entity_name.as_deref().unwrap_or(component_type);
+    let entity_ast = context.variant_manager.find_entity_definition(lookup_name)
+        .cloned()
+        .or_else(|| import_preprocessor.and_then(|pp| pp.get_imported_entity(lookup_name).cloned()))
+        .or_else(|| {
+            // Fall back to looking up by alias name (import_loader stores under alias name)
+            if lookup_name != component_type {
+                context.variant_manager.find_entity_definition(component_type)
+                    .cloned()
+                    .or_else(|| import_preprocessor.and_then(|pp| pp.get_imported_entity(component_type).cloned()))
+            } else {
+                None
+            }
+        });
+    if let Some(ref entity) = entity_ast {
+        let mut entity_attrs = bhdl_analyzer::attribute_extraction::extract_module_attributes(entity);
+
+        // If this is an alias specialization, substitute generic param references
+        // in attribute values with concrete values (e.g., "V_OUT" → "5")
+        if let Some(alias_spec) = analysis.monomorphization.alias_specializations.iter()
+            .find(|a| a.alias_name == component_type)
+        {
+            if !alias_spec.concrete_params.is_empty() {
+                bhdl_analyzer::attribute_extraction::substitute_generic_params(
+                    &mut entity_attrs,
+                    &alias_spec.concrete_params,
+                );
+                debug!("Substituted generic params for alias '{}': {:?}",
+                       component_type, entity_attrs);
+            }
+        }
+
+        if !entity_attrs.is_empty() {
+            if let Some(module) = netlist.modules.get_mut(module_id) {
+                module.attributes = entity_attrs;
+                debug!("Propagated {} attributes from entity '{}' to module definition",
+                       module.attributes.len(), component_type);
+            }
+        }
+    }
+
+    // Add standard pins based on component type.
+    // Try original entity name first; fall back to alias name if needed.
+    let pin_result = add_component_pins(lookup_name, module_id, netlist, context, import_preprocessor);
+    if pin_result.is_err() && lookup_name != component_type {
+        add_component_pins(component_type, module_id, netlist, context, import_preprocessor)?;
+    } else {
+        pin_result?;
+    }
 
     Ok(module_id)
 }
@@ -1483,16 +1564,28 @@ fn create_inline_component_instance(
     }
     
     // Create or get the component module
-    let module_id = get_or_create_component_module(component_type, netlist, context, import_preprocessor)?;
+    let module_id = get_or_create_component_module(component_type, netlist, context, analysis, import_preprocessor)?;
 
     // Create the instance
     let instance_id = netlist.add_instance(instance_name.to_string(), module_id)
         .ok_or_else(|| anyhow::anyhow!("Failed to add component instance"))?;
-    
+
+    // Propagate module-level attributes (including component_class) to instance
+    if let Some(module) = netlist.modules.get(module_id) {
+        let module_attrs = module.attributes.clone();
+        if let Some(instance) = netlist.instances.get_mut(instance_id) {
+            for (key, value) in &module_attrs {
+                if !instance.attributes.contains_key(key) {
+                    instance.attributes.insert(key.clone(), value.clone());
+                }
+            }
+        }
+    }
+
     // Create pin instances
     netlist.create_pin_instances(instance_id)
         .map_err(|e| anyhow::anyhow!("Failed to create pin instances: {}", e))?;
-    
+
     // Extract and apply component parameters
     if let Some(paren_start) = full_text.find('(') {
         if let Some(paren_end) = full_text.find(')') {

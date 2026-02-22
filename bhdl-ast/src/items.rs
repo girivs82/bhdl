@@ -124,6 +124,16 @@ impl Entity {
         self.0.children().find_map(ParamList::cast)
     }
 
+    /// Get generic type parameters: `<T: Type, V: voltage, ...>`
+    pub fn generic_params(&self) -> Option<GenericParams> {
+        self.0.children().find_map(GenericParams::cast)
+    }
+
+    /// Get where clause constraints: `where V_IN >= 4.5V, V_OUT < V_IN`
+    pub fn where_clause(&self) -> Option<WhereClause> {
+        self.0.children().find_map(WhereClause::cast)
+    }
+
     // Hierarchical entity support
     pub fn entity_instances(&self) -> impl Iterator<Item = EntityInst> {
         self.0.children().filter_map(EntityInst::cast)
@@ -145,6 +155,116 @@ impl Entity {
     // Generate blocks for repetitive structures
     pub fn generate_blocks(&self) -> impl Iterator<Item = crate::blocks::GenerateBlock> {
         self.0.children().filter_map(crate::blocks::GenerateBlock::cast)
+    }
+}
+
+/// Generic type parameter list: `<T: Type, V: voltage, ...>`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct GenericParams(pub(crate) SyntaxNode<BhdlLanguage>);
+
+impl AstNode for GenericParams {
+    type Language = BhdlLanguage;
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::GENERIC_PARAMS }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> {
+        if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None }
+    }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+
+impl GenericParams {
+    /// Iterate over individual generic parameter declarations
+    pub fn params(&self) -> impl Iterator<Item = GenericParamNode> {
+        self.0.children().filter_map(GenericParamNode::cast)
+    }
+}
+
+/// A single generic parameter: `T`, `T: BoundType`, or `T: BoundType = default`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct GenericParamNode(pub(crate) SyntaxNode<BhdlLanguage>);
+
+impl AstNode for GenericParamNode {
+    type Language = BhdlLanguage;
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::GENERIC_PARAM }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> {
+        if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None }
+    }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+
+impl GenericParamNode {
+    /// Get the parameter name (e.g., "V_OUT", "T")
+    pub fn name(&self) -> Option<SyntaxToken<BhdlLanguage>> {
+        self.0.children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .find(|token| token.kind() == SyntaxKind::IDENT)
+    }
+
+    /// Get the type bound name (e.g., "voltage", "Passive")
+    /// This is the IDENT after the colon, if present.
+    pub fn type_bound(&self) -> Option<String> {
+        let mut found_colon = false;
+        for element in self.0.children_with_tokens() {
+            if let Some(token) = element.as_token() {
+                match token.kind() {
+                    SyntaxKind::COLON => { found_colon = true; }
+                    SyntaxKind::IDENT if found_colon => {
+                        return Some(token.text().to_string());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        None
+    }
+
+    /// Get the default value expression, if present (after `=`)
+    pub fn default_value(&self) -> Option<Expr> {
+        let mut found_eq = false;
+        for element in self.0.children_with_tokens() {
+            match element {
+                rowan::NodeOrToken::Token(token) if token.kind() == SyntaxKind::EQ => {
+                    found_eq = true;
+                }
+                rowan::NodeOrToken::Node(node) if found_eq => {
+                    return Expr::cast(node);
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+}
+
+/// Where clause: `where V_IN >= 4.5V, V_OUT < V_IN`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct WhereClause(pub(crate) SyntaxNode<BhdlLanguage>);
+
+impl AstNode for WhereClause {
+    type Language = BhdlLanguage;
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::WHERE_CLAUSE }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> {
+        if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None }
+    }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+
+/// Type argument list on alias or instantiation: `<5V, 3.3V>`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TypeArgs(pub(crate) SyntaxNode<BhdlLanguage>);
+
+impl AstNode for TypeArgs {
+    type Language = BhdlLanguage;
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::TYPE_ARGS }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> {
+        if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None }
+    }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+
+impl TypeArgs {
+    /// Get the type argument expressions
+    pub fn args(&self) -> impl Iterator<Item = Expr> {
+        self.0.children().filter_map(Expr::cast)
     }
 }
 

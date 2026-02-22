@@ -97,6 +97,21 @@ pub struct GenericModuleDef {
     pub scope_id: ScopeId,
 }
 
+/// An alias that maps to a generic entity with concrete type arguments.
+/// e.g., `alias LM7805 = LinearRegulator<5V>;` → AliasSpecialization { alias_name: "LM7805", target_entity: "LinearRegulator", type_arg_texts: ["5V"] }
+#[derive(Debug, Clone)]
+pub struct AliasSpecialization {
+    /// The alias name (e.g., "LM7805")
+    pub alias_name: String,
+    /// The target generic entity name (e.g., "LinearRegulator")
+    pub target_entity: String,
+    /// Raw text of each type argument (e.g., ["5V", "3.3V"])
+    pub type_arg_texts: Vec<String>,
+    /// Resolved concrete parameter values (populated during monomorphization)
+    /// Maps generic param name → concrete ConstValue
+    pub concrete_params: BTreeMap<String, ConstValue>,
+}
+
 /// Result of the monomorphization pass.
 #[derive(Debug, Clone)]
 pub struct MonomorphizationResult {
@@ -110,6 +125,8 @@ pub struct MonomorphizationResult {
     pub diagnostics: Vec<Diagnostic>,
     /// Number of fixed-point iterations performed.
     pub iterations: usize,
+    /// Alias specializations collected from Pass 1 (alias Name = Generic<args>)
+    pub alias_specializations: Vec<AliasSpecialization>,
 }
 
 impl Default for MonomorphizationResult {
@@ -120,6 +137,7 @@ impl Default for MonomorphizationResult {
             generic_modules: HashMap::new(),
             diagnostics: Vec::new(),
             iterations: 0,
+            alias_specializations: Vec::new(),
         }
     }
 }
@@ -168,8 +186,10 @@ impl MonomorphizationResult {
 pub fn run_monomorphization(
     scope_registry: &ScopeRegistry,
     resolved_constants: &crate::types::ResolvedConstants,
+    alias_specializations: Vec<AliasSpecialization>,
 ) -> MonomorphizationResult {
     let mut result = MonomorphizationResult::new();
+    result.alias_specializations = alias_specializations;
 
     // Step 1: Collect generic module definitions from the global scope
     collect_generic_modules(scope_registry, &mut result);
@@ -211,6 +231,9 @@ pub fn run_monomorphization(
 
     // Step 3: Register specialized modules in the global scope
     // (This is done by the caller, since we don't mutate the scope registry here)
+
+    // Step 3: Process alias specializations
+    process_alias_specializations(&mut result);
 
     println!(
         "Pass 2.5: Monomorphization complete. {} specialization(s) in {} iteration(s)",
@@ -453,6 +476,230 @@ fn format_si_value(value: f64, unit: &str) -> String {
     format!("{}{}{}", num_str, prefix, unit)
         .replace('.', "p")
         .replace('-', "neg")
+}
+
+/// Process alias specializations collected during Pass 1.
+///
+/// For each `alias LM7805 = LinearRegulator<5V>;`, resolve the type arg text
+/// to a ConstValue using the generic entity's param types, then create a
+/// `SpecializedModule` entry so the synthesizer can access concrete params.
+fn process_alias_specializations(result: &mut MonomorphizationResult) {
+    if result.alias_specializations.is_empty() {
+        return;
+    }
+
+    let alias_specs: Vec<AliasSpecialization> = result.alias_specializations.clone();
+
+    for alias in &alias_specs {
+        let generic_def = match result.generic_modules.get(&alias.target_entity) {
+            Some(def) => def.clone(),
+            None => {
+                println!(
+                    "Pass 2.5: Alias '{}' targets '{}' which is not a generic entity, skipping",
+                    alias.alias_name, alias.target_entity
+                );
+                continue;
+            }
+        };
+
+        // Match type args positionally to generic params
+        let mut concrete_params = BTreeMap::new();
+        for (i, param) in generic_def.params.iter().enumerate() {
+            if let Some(arg_text) = alias.type_arg_texts.get(i) {
+                // Parse the type arg text into a ConstValue based on the param type
+                if let Some(cv) = parse_type_arg_text(arg_text, &param.param_type) {
+                    concrete_params.insert(param.name.clone(), cv);
+                } else {
+                    println!(
+                        "Pass 2.5: Could not parse type arg '{}' for param '{}' in alias '{}'",
+                        arg_text, param.name, alias.alias_name
+                    );
+                }
+            } else if let Some(ref default) = param.default {
+                concrete_params.insert(param.name.clone(), default.clone());
+            }
+        }
+
+        if concrete_params.len() < generic_def.params.len() {
+            println!(
+                "Pass 2.5: Not all params resolved for alias '{}', skipping",
+                alias.alias_name
+            );
+            continue;
+        }
+
+        // Build specialization key
+        let key = SpecializationKey {
+            module_name: alias.target_entity.clone(),
+            params: concrete_params
+                .iter()
+                .map(|(k, v)| (k.clone(), ConstValueKey::from_const_value(v)))
+                .collect(),
+        };
+
+        // Check constraints
+        let mut constraint_errors = Vec::new();
+        for param in &generic_def.params {
+            for constraint in &param.constraints {
+                let resolve = |name: &str| -> Option<ConstValue> {
+                    concrete_params.get(name).cloned()
+                };
+                if let Err(msg) = constraint.check(&resolve) {
+                    constraint_errors.push(format!(
+                        "Constraint violated for '{}' in alias '{}': {}",
+                        param.name, alias.alias_name, msg
+                    ));
+                }
+            }
+        }
+
+        let constraints_satisfied = constraint_errors.is_empty();
+        if !constraints_satisfied {
+            for err_msg in &constraint_errors {
+                result.diagnostics.push(Diagnostic::new(
+                    err_msg.clone(),
+                    rowan::TextRange::new(0.into(), 0.into()),
+                ));
+            }
+        }
+
+        // Use the alias name directly (not a mangled name)
+        let specialized = SpecializedModule {
+            mangled_name: alias.alias_name.clone(),
+            original_name: alias.target_entity.clone(),
+            concrete_params: concrete_params.clone(),
+            constraints_satisfied,
+            constraint_errors,
+        };
+
+        if !result.specializations.contains_key(&key) {
+            result.name_to_key.insert(alias.alias_name.clone(), key.clone());
+            result.specializations.insert(key, specialized);
+            println!(
+                "Pass 2.5: Created alias specialization '{}' → '{}' with params {:?}",
+                alias.alias_name,
+                alias.target_entity,
+                concrete_params.keys().collect::<Vec<_>>()
+            );
+        }
+    }
+
+    // Update concrete_params on alias_specializations for downstream use
+    for alias in &mut result.alias_specializations {
+        if let Some(generic_def) = result.generic_modules.get(&alias.target_entity) {
+            for (i, param) in generic_def.params.iter().enumerate() {
+                if let Some(arg_text) = alias.type_arg_texts.get(i) {
+                    if let Some(cv) = parse_type_arg_text(arg_text, &param.param_type) {
+                        alias.concrete_params.insert(param.name.clone(), cv);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Parse a type argument text (e.g., "5V", "3.3V", "100") into a ConstValue
+/// based on the expected generic param type.
+fn parse_type_arg_text(
+    text: &str,
+    param_type: &bhdl_common::GenericParamType,
+) -> Option<ConstValue> {
+    let text = text.trim();
+    match param_type {
+        bhdl_common::GenericParamType::Const(bhdl_type) => {
+            match bhdl_type {
+                bhdl_common::BhdlType::Voltage(_) => {
+                    parse_value_with_unit(text, "V").map(ConstValue::Voltage)
+                }
+                bhdl_common::BhdlType::Current(_) => {
+                    parse_value_with_unit(text, "A").map(ConstValue::Current)
+                }
+                bhdl_common::BhdlType::Resistance(_) => {
+                    parse_value_with_unit(text, "Ω").or_else(|| parse_value_with_unit(text, "ohm"))
+                        .map(ConstValue::Resistance)
+                }
+                bhdl_common::BhdlType::Capacitance => {
+                    parse_value_with_unit(text, "F").map(ConstValue::Capacitance)
+                }
+                bhdl_common::BhdlType::Frequency => {
+                    parse_value_with_unit(text, "Hz").map(ConstValue::Frequency)
+                }
+                bhdl_common::BhdlType::Power => {
+                    parse_value_with_unit(text, "W").map(ConstValue::Power)
+                }
+                bhdl_common::BhdlType::Time => {
+                    parse_value_with_unit(text, "s").map(ConstValue::Time)
+                }
+                _ => {
+                    // Try plain number
+                    text.parse::<f64>().ok().map(ConstValue::Float)
+                }
+            }
+        }
+        bhdl_common::GenericParamType::Type | bhdl_common::GenericParamType::TypeBounded(_) => {
+            Some(ConstValue::String(text.to_string()))
+        }
+    }
+}
+
+/// Parse a value with optional SI prefix and unit suffix.
+/// e.g., "5V" → 5.0, "3.3V" → 3.3, "100mA" → 0.1, "10kΩ" → 10000.0
+fn parse_value_with_unit(text: &str, _expected_unit: &str) -> Option<f64> {
+    // Strip any unit suffixes and parse
+    let text = text.trim();
+
+    // Try to split into numeric part and unit part
+    let split_pos = text.find(|c: char| c.is_alphabetic() || c == 'Ω' || c == 'µ' || c == 'μ');
+
+    let (num_str, unit_str) = if let Some(pos) = split_pos {
+        (&text[..pos], &text[pos..])
+    } else {
+        (text, "")
+    };
+
+    let base_value = num_str.parse::<f64>().ok()?;
+
+    // Apply SI prefix multiplier
+    let multiplier = match unit_str {
+        // Voltage
+        "V" => 1.0,
+        "mV" => 0.001,
+        "kV" => 1000.0,
+        "µV" | "μV" | "uV" => 1e-6,
+        // Current
+        "A" => 1.0,
+        "mA" => 0.001,
+        "µA" | "μA" | "uA" => 1e-6,
+        // Resistance
+        "Ω" | "ohm" => 1.0,
+        "kΩ" | "kohm" | "kOhm" => 1000.0,
+        "MΩ" | "Mohm" | "MOhm" => 1e6,
+        "mΩ" | "mohm" => 0.001,
+        // Capacitance
+        "F" => 1.0,
+        "mF" => 0.001,
+        "µF" | "μF" | "uF" => 1e-6,
+        "nF" => 1e-9,
+        "pF" => 1e-12,
+        // Frequency
+        "Hz" => 1.0,
+        "kHz" => 1000.0,
+        "MHz" => 1e6,
+        "GHz" => 1e9,
+        // Power
+        "W" => 1.0,
+        "mW" => 0.001,
+        // Time
+        "s" => 1.0,
+        "ms" => 0.001,
+        "µs" | "μs" | "us" => 1e-6,
+        "ns" => 1e-9,
+        // No unit
+        "" => 1.0,
+        _ => 1.0,
+    };
+
+    Some(base_value * multiplier)
 }
 
 /// Register specialized entities into the scope registry.

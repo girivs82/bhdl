@@ -21,6 +21,7 @@ use crate::symbol_table::{Symbol, SymbolKind, SymbolTable, PortDirectionKind}; /
 use crate::helpers::parse_expr_as_i64; // Use helper from local module
 use crate::net_attributes::NetAttribute;
 use crate::scope_registry::{ScopeRegistry, ScopeId, ScopeKind};
+use bhdl_common::{GenericParam, GenericParamType, BhdlType};
 
 // --- Pass 1: Build Global Scope & Definition Scopes Map ---
 
@@ -35,6 +36,8 @@ struct Pass1Context {
     imported_modules: HashMap<String, ()>,
     // Base path for resolving relative imports
     base_path: PathBuf,
+    // Alias specializations (alias Name = Generic<args>) collected during import processing
+    alias_specializations: Vec<crate::passes::AliasSpecialization>,
 }
 
 impl Pass1Context {
@@ -46,6 +49,7 @@ impl Pass1Context {
             scope_stack: vec![global_id],
             imported_modules: HashMap::new(),
             base_path: PathBuf::from("."),
+            alias_specializations: Vec::new(),
         }
     }
 
@@ -90,7 +94,7 @@ pub fn populate_global_scope_and_build_definition_scopes_with_base(
     source_file: &SourceFile,
     base_path: &Path
 ) -> (SymbolTable, HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>) {
-    let registry = build_scope_registry_with_base(source_file, base_path);
+    let (registry, _alias_specializations) = build_scope_registry_with_base(source_file, base_path);
     // Extract legacy data structures for backward compatibility
     let global_scope = registry.extract_global_scope();
     let definition_scopes = registry.extract_definition_scopes();
@@ -101,11 +105,15 @@ pub fn populate_global_scope_and_build_definition_scopes_with_base(
 /// entry point for Pass 1 — the tuple-returning functions above are
 /// backward-compatible wrappers.
 pub fn build_scope_registry(source_file: &SourceFile) -> ScopeRegistry {
-    build_scope_registry_with_base(source_file, Path::new("."))
+    build_scope_registry_with_base(source_file, Path::new(".")).0
 }
 
 /// Build a `ScopeRegistry` with a base path for import resolution.
-pub fn build_scope_registry_with_base(source_file: &SourceFile, base_path: &Path) -> ScopeRegistry {
+/// Returns the scope registry and any alias specializations found during import processing.
+pub fn build_scope_registry_with_base(
+    source_file: &SourceFile,
+    base_path: &Path,
+) -> (ScopeRegistry, Vec<crate::passes::AliasSpecialization>) {
     println!("Building scope registry (Pass 1)...");
     let mut context = Pass1Context::new();
     context.base_path = base_path.to_path_buf();
@@ -142,7 +150,8 @@ pub fn build_scope_registry_with_base(source_file: &SourceFile, base_path: &Path
     println!("Completed Pass 1. Total symbols: {}, Scopes: {}",
              context.global_scope_mut().get_symbols().len(),
              context.registry.len());
-    context.registry
+    let alias_specializations = context.alias_specializations;
+    (context.registry, alias_specializations)
 }
 
 // Pass 1 recursive helper (takes Pass1Context)
@@ -173,12 +182,14 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
              if let Some(def_node) = Entity::cast(node.clone()) {
                 if let Some(name_token) = def_node.name() {
                     let node_ptr = SyntaxNodePtr::new(node);
-                    context.current_scope_mut().insert(Symbol::new_definition(
+                    let mut sym = Symbol::new_definition(
                         name_token.text(),
                         SymbolKind::Entity,
                         name_token.text_range(),
                         &node_ptr
-                    ));
+                    );
+                    sym.generic_params = extract_generic_params(&def_node);
+                    context.current_scope_mut().insert(sym);
                     context.push_scope(node_ptr, ScopeKind::Entity);
                     context.current_scope_mut().set_scope_name(name_token.text().to_string());
                     scope_pushed_for_this_node = true;
@@ -694,6 +705,40 @@ fn collect_net_refs_recursive(node: &SyntaxNode<BhdlLanguage>, net_refs: &mut Ve
     }
 }
 
+/// Extract generic parameters from an entity definition's AST.
+/// Maps type bound names (e.g., "voltage", "resistance") to BhdlType variants.
+fn extract_generic_params(entity: &Entity) -> Option<Vec<GenericParam>> {
+    let generic_params_node = entity.generic_params()?;
+    let params: Vec<GenericParam> = generic_params_node.params()
+        .filter_map(|param_node| {
+            let name = param_node.name()?.text().to_string();
+            let param_type = if let Some(bound) = param_node.type_bound() {
+                let bhdl_type = BhdlType::from_type_name(&bound, None);
+                if bhdl_type == BhdlType::Unknown {
+                    // Treat unknown bounds as trait bounds (e.g., "Passive")
+                    GenericParamType::TypeBounded(vec![bound])
+                } else {
+                    GenericParamType::Const(bhdl_type)
+                }
+            } else {
+                GenericParamType::Type
+            };
+            Some(GenericParam {
+                name,
+                param_type,
+                constraints: Vec::new(), // TODO: extract from where clause
+                default: None,           // TODO: extract default value expression
+            })
+        })
+        .collect();
+
+    if params.is_empty() {
+        None
+    } else {
+        Some(params)
+    }
+}
+
 // Process an import statement
 fn process_import(import: &ImportStmt, context: &mut Pass1Context) {
     // Get the import path
@@ -735,32 +780,53 @@ fn process_import(import: &ImportStmt, context: &mut Pass1Context) {
             }
             
             // Then, process aliases to find what maps to requested names
+            // alias_map: alias_name → target_name
+            // alias_type_args: alias_name → Vec<type_arg_text>
             let mut aliases = std::collections::HashMap::new();
+            let mut alias_type_args: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
             for child in imported_source.syntax().children() {
                 if child.kind() == SyntaxKind::ALIAS {
-                    // Parse alias: extract name and target
+                    // Parse alias: extract name, target, and optional type args
                     let mut alias_name = String::new();
                     let mut target_name = String::new();
                     let mut found_eq = false;
-                    
-                    for token in child.children_with_tokens() {
-                        if let Some(t) = token.as_token() {
-                            match t.kind() {
-                                SyntaxKind::IDENT => {
-                                    if !found_eq && alias_name.is_empty() {
-                                        alias_name = t.text().to_string();
-                                    } else if found_eq && target_name.is_empty() {
-                                        target_name = t.text().to_string();
+
+                    for element in child.children_with_tokens() {
+                        match element {
+                            rowan::NodeOrToken::Token(t) => {
+                                match t.kind() {
+                                    SyntaxKind::IDENT => {
+                                        if !found_eq && alias_name.is_empty() {
+                                            alias_name = t.text().to_string();
+                                        } else if found_eq && target_name.is_empty() {
+                                            target_name = t.text().to_string();
+                                        }
+                                    },
+                                    SyntaxKind::EQ => {
+                                        found_eq = true;
+                                    },
+                                    _ => {}
+                                }
+                            }
+                            rowan::NodeOrToken::Node(n) => {
+                                if n.kind() == SyntaxKind::TYPE_ARGS {
+                                    // Extract type arg expressions as text
+                                    let mut args = Vec::new();
+                                    for arg_child in n.children() {
+                                        // Each child expression is a type arg
+                                        let arg_text = arg_child.text().to_string().trim().to_string();
+                                        if !arg_text.is_empty() {
+                                            args.push(arg_text);
+                                        }
                                     }
-                                },
-                                SyntaxKind::EQ => {
-                                    found_eq = true;
-                                },
-                                _ => {}
+                                    if !args.is_empty() {
+                                        alias_type_args.insert(alias_name.clone(), args);
+                                    }
+                                }
                             }
                         }
                     }
-                    
+
                     if !alias_name.is_empty() && !target_name.is_empty() {
                         aliases.insert(alias_name, target_name);
                     }
@@ -773,9 +839,28 @@ fn process_import(import: &ImportStmt, context: &mut Pass1Context) {
                 for requested_name in &imported_names {
                     // Check if it's an alias
                     if let Some(target_name) = aliases.get(requested_name) {
-                        // Import the target entity under the alias name
                         if let Some(entity) = available_entities.get(target_name) {
-                            process_imported_entity(entity, requested_name, context);
+                            // Check if this alias has type args (e.g., alias LM7805 = LinearRegulator<5V>)
+                            if let Some(type_args) = alias_type_args.get(requested_name) {
+                                // Also import the generic entity under its own name
+                                if context.global_scope_mut().lookup(target_name).is_none() {
+                                    process_imported_entity(entity, target_name, context);
+                                }
+                                // Import under the alias name (non-generic copy)
+                                process_imported_entity(entity, requested_name, context);
+                                // Store alias specialization for monomorphization
+                                context.alias_specializations.push(
+                                    crate::passes::AliasSpecialization {
+                                        alias_name: requested_name.clone(),
+                                        target_entity: target_name.clone(),
+                                        type_arg_texts: type_args.clone(),
+                                        concrete_params: std::collections::BTreeMap::new(),
+                                    }
+                                );
+                            } else {
+                                // Simple alias without type args
+                                process_imported_entity(entity, requested_name, context);
+                            }
                         }
                     } else {
                         // Direct entity import
@@ -786,8 +871,29 @@ fn process_import(import: &ImportStmt, context: &mut Pass1Context) {
                 }
             } else {
                 // Import all entities (old behavior)
-                for (entity_name, entity) in available_entities {
-                    process_imported_entity(&entity, &entity_name, context);
+                for (entity_name, entity) in &available_entities {
+                    process_imported_entity(entity, entity_name, context);
+                }
+                // Also process aliases with type args from the file
+                for (alias_name, target_name) in &aliases {
+                    if let Some(type_args) = alias_type_args.get(alias_name) {
+                        if let Some(entity) = available_entities.get(target_name) {
+                            // Import under alias name
+                            process_imported_entity(entity, alias_name, context);
+                            // Store alias specialization
+                            context.alias_specializations.push(
+                                crate::passes::AliasSpecialization {
+                                    alias_name: alias_name.clone(),
+                                    target_entity: target_name.clone(),
+                                    type_arg_texts: type_args.clone(),
+                                    concrete_params: std::collections::BTreeMap::new(),
+                                }
+                            );
+                        }
+                    } else if let Some(entity) = available_entities.get(target_name) {
+                        // Simple alias
+                        process_imported_entity(entity, alias_name, context);
+                    }
                 }
             }
             
@@ -873,6 +979,9 @@ fn process_imported_entity(entity: &Entity, name: &str, context: &mut Pass1Conte
 
     // Store the imported entity definition node
     symbol.definition_node_ptr = Some(node_ptr.clone());
+
+    // Extract generic parameters if present
+    symbol.generic_params = extract_generic_params(entity);
 
     // Add to global scope
     context.global_scope_mut().insert(symbol);

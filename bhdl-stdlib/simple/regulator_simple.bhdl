@@ -1,14 +1,15 @@
-// Simplified Linear Regulator - v2.0 compatible
+// Simplified Linear Regulators - v2.0 compatible
+// Generic entity with alias specializations for common regulators
 
-entity LM7805 {
-    pin IN: power in;
-    pin OUT: power out;
+entity LinearRegulator<V_OUT: voltage>(dropout: voltage = 2V) {
+    pin VI: power in;
+    pin VO: power out;
     pin GND: ground;
 
     attribute component_class = "voltage_regulator";
-    attribute output_voltage = 5V;
-    attribute max_input_voltage = 35V;
-    attribute max_output_current = 1A;
-    attribute dropout_voltage = 2V;
-    attribute kicad_symbol = "Regulator_Linear:L7805";
+    attribute output_voltage = V_OUT;
+    attribute dropout_voltage = dropout;
 }
+
+alias LM7805 = LinearRegulator<5V>;
+alias LM1117_33 = LinearRegulator<3.3V>;

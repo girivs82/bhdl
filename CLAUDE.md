@@ -66,7 +66,7 @@ The toolchain follows a multi-stage pipeline:
 5. **bhdl-schematic**: Interactive schematic viewer (replaces bhdl-visualizer)
    - Rust extraction layer: Netlist → SchematicData JSON
    - TypeScript/Canvas renderer ported from SKALP's proven schematic viewer
-   - ELK.js (Sugiyama hierarchical layout) for orthogonal edge routing
+   - Custom topological placement with orthogonal wire routing
    - HTML5 Canvas interactive rendering (zoom, pan, hover)
    - Standalone HTML output or JSON for LSP/IDE integration
    - Power rail visualization, component parameter display
@@ -185,7 +185,7 @@ cargo run -p bhdl-components --example kicad_integration
 - `bhdl-spice/src/safety/` - Electrical safety analysis implementation
 - `bhdl-spice/src/bin/test_safety_with_dc.rs` - Complete safety analysis example
 - `bhdl-schematic/viewer/schematic.js` - Canvas-based schematic renderer (ported from SKALP)
-- `bhdl-schematic/viewer/elk.bundled.js` - Vendored ELK.js layout engine (EPL-2.0)
+- `bhdl-schematic/viewer/schematic.js` - Canvas-based schematic renderer with custom layout
 
 ## Development Reminders
 
@@ -225,7 +225,7 @@ r1.pins.insert("1", Point::new(-60.0, 0.0));
 // ✅ CORRECT - Use actual pipeline
 let netlist = synthesizer.generate_from_ast(&ast)?;
 let schematic = schematic_extractor.extract(&netlist)?;
-// Layout computed by ELK.js from SchematicData
+// Layout computed by custom placer from SchematicData
 ```
 
 ### Schematic Visualization Quality Control
@@ -240,7 +240,7 @@ let schematic = schematic_extractor.extract(&netlist)?;
 Common schematic issues to watch for:
 - Components rendered at same coordinates (overlapping)
 - Components missing from SchematicData JSON
-- Incorrect ELK layout calculations
+- Incorrect layout calculations
 - Missing or malformed component parameters
 - Routing edges that don't connect properly to ports
 
