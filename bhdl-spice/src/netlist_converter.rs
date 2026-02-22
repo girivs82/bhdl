@@ -9,6 +9,7 @@ use log::{debug, info, warn};
 
 use crate::{
     Circuit, ComponentModelExtractor, ExtractedModel,
+    circuit::{META_PARENT_INSTANCE, META_DECOMPOSITION_ROLE},
     model_factory::SpiceModelFactory,
     models::SpiceModel,
 };
@@ -525,13 +526,17 @@ impl NetlistToSpiceConverter {
 
             // Add voltage source on output: VOUT → GND = vout_voltage
             if let Some(vout_name) = &vout_net {
-                circuit.add_branch(
+                let mut vout_meta = HashMap::new();
+                vout_meta.insert(META_PARENT_INSTANCE.to_string(), instance_name.to_string());
+                vout_meta.insert(META_DECOMPOSITION_ROLE.to_string(), "vout".to_string());
+                circuit.add_branch_with_metadata(
                     format!("{}_vout", instance_name),
                     vout_name,
                     &gnd_node_name,
                     "VoltageSource".to_string(),
                     vout_voltage,
                     Some(instance_id),
+                    vout_meta,
                 );
                 info!("Added regulator {} output as VoltageSource {}V: {} -> {}",
                       instance_name, vout_voltage, vout_name, gnd_node_name);
@@ -546,13 +551,17 @@ impl NetlistToSpiceConverter {
             // but low enough for MNA numerical stability.
             if let (Some(vin_name), Some(vout_name)) = (&vin_net, &vout_net) {
                 let internal_resistance = 10_000.0; // 10kΩ — connectivity only, not a power path
-                circuit.add_branch(
+                let mut dropout_meta = HashMap::new();
+                dropout_meta.insert(META_PARENT_INSTANCE.to_string(), instance_name.to_string());
+                dropout_meta.insert(META_DECOMPOSITION_ROLE.to_string(), "dropout".to_string());
+                circuit.add_branch_with_metadata(
                     format!("{}_dropout", instance_name),
                     vin_name,
                     vout_name,
                     "Resistor".to_string(),
                     internal_resistance,
                     Some(instance_id),
+                    dropout_meta,
                 );
                 info!("Added regulator {} dropout path ({:.1}Ω): {} -> {}",
                       instance_name, internal_resistance, vin_name, vout_name);

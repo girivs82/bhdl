@@ -61,7 +61,7 @@ pub mod glacier_gpu;
 #[cfg(test)]
 mod test_unified;
 
-pub use circuit::{Circuit, Node, Branch, NodeId, ComponentId, Component};
+pub use circuit::{Circuit, Node, Branch, NodeId, ComponentId, Component, META_PARENT_INSTANCE, META_DECOMPOSITION_ROLE};
 pub use components::{ComponentModel, ElectricalLimits};
 pub use analysis::{DcAnalysis, AnalysisResult, NodeVoltages, BranchCurrents};
 pub use extended_analysis::{
