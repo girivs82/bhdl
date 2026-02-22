@@ -1107,31 +1107,93 @@ fn build_simulation_annotations(
     annotations.power_nets.remove("GND");
     annotations.power_nets.remove("0");
 
-    // Unify regulator decomposition: GLACIER decomposes regulators into
-    // name_vout (voltage source) + name_dropout (connectivity resistor).
-    // The voltage source current IS the load current flowing through the
-    // regulator. Merge them into a single entry under the original instance
-    // name so the schematic shows consistent I at input and output.
-    let vout_suffix = "_vout";
-    let dropout_suffix = "_dropout";
-    let vout_keys: Vec<String> = annotations.instance_currents.keys()
-        .filter(|k| k.ends_with(vout_suffix))
-        .cloned()
-        .collect();
-    for vout_key in vout_keys {
-        let base_name = &vout_key[..vout_key.len() - vout_suffix.len()];
-        let dropout_key = format!("{}{}", base_name, dropout_suffix);
+    // Unify regulator decomposition and cascade currents.
+    //
+    // GLACIER decomposes each regulator into name_vout (voltage source on
+    // VOUT→GND) + name_dropout (connectivity resistor on VIN→VOUT).
+    // The voltage source independently sources load current from GND, so
+    // downstream regulator loads don't appear at the upstream VIN — violating
+    // KCL for annotation purposes.
+    //
+    // Fix: collect each regulator's VOUT current, then cascade bottom-up so
+    // that an upstream regulator's current includes all downstream loads.
 
-        // Use voltage source current as the regulator's current
-        if let Some(&vsrc_current) = annotations.instance_currents.get(&vout_key) {
-            annotations.instance_currents.insert(base_name.to_string(), vsrc_current);
+    // 1. Collect regulator info from circuit graph
+    struct RegInfo {
+        base_name: String,
+        vout_current: f64,
+        vout_node: String,  // VOUT net name
+        vin_node: String,   // VIN net name
+    }
+    let mut regulators: Vec<RegInfo> = Vec::new();
+
+    for (edge_idx, current) in &dc_result.branch_currents {
+        if let Some(branch) = circuit.graph.edge_weight(*edge_idx) {
+            if branch.name.ends_with("_vout") {
+                let base = branch.name.strip_suffix("_vout").unwrap().to_string();
+                // _vout branch connects VOUT → GND
+                if let Some((src, _tgt)) = circuit.branch_nodes(*edge_idx) {
+                    let vout_node = circuit.get_node_name(src)
+                        .unwrap_or("").to_string();
+
+                    // Find the matching _dropout branch to get VIN node
+                    let dropout_name = format!("{}_dropout", base);
+                    let vin_node = dc_result.branch_currents.keys()
+                        .filter_map(|eidx| {
+                            let b = circuit.graph.edge_weight(*eidx)?;
+                            if b.name == dropout_name {
+                                let (s, _) = circuit.branch_nodes(*eidx)?;
+                                circuit.get_node_name(s).map(|n| n.to_string())
+                            } else {
+                                None
+                            }
+                        })
+                        .next()
+                        .unwrap_or_default();
+
+                    regulators.push(RegInfo {
+                        base_name: base,
+                        vout_current: current.abs(),
+                        vout_node,
+                        vin_node,
+                    });
+                }
+            }
         }
-        // Sum power from both sub-components
+    }
+
+    // 2. Cascade: a regulator's true current = its own vout_current +
+    //    sum of downstream regulators whose VIN is on this regulator's VOUT.
+    //    Process iteratively until stable (handles arbitrary cascade depth).
+    let mut reg_currents: HashMap<String, f64> = regulators.iter()
+        .map(|r| (r.base_name.clone(), r.vout_current))
+        .collect();
+
+    for _ in 0..regulators.len() {
+        let snapshot = reg_currents.clone();
+        for reg in &regulators {
+            let downstream_sum: f64 = regulators.iter()
+                .filter(|d| d.vin_node == reg.vout_node && d.base_name != reg.base_name)
+                .map(|d| snapshot.get(&d.base_name).copied().unwrap_or(0.0))
+                .sum();
+            reg_currents.insert(
+                reg.base_name.clone(),
+                reg.vout_current + downstream_sum,
+            );
+        }
+    }
+
+    // 3. Write unified entries and remove decomposed ones
+    for reg in &regulators {
+        let current = reg_currents.get(&reg.base_name).copied().unwrap_or(reg.vout_current);
+        annotations.instance_currents.insert(reg.base_name.clone(), current);
+
+        let vout_key = format!("{}_vout", reg.base_name);
+        let dropout_key = format!("{}_dropout", reg.base_name);
         let p_vout = annotations.instance_power.get(&vout_key).copied().unwrap_or(0.0);
         let p_drop = annotations.instance_power.get(&dropout_key).copied().unwrap_or(0.0);
-        annotations.instance_power.insert(base_name.to_string(), p_vout + p_drop);
+        annotations.instance_power.insert(reg.base_name.clone(), p_vout + p_drop);
 
-        // Remove decomposed entries — schematic only knows the original name
         annotations.instance_currents.remove(&vout_key);
         annotations.instance_currents.remove(&dropout_key);
         annotations.instance_power.remove(&vout_key);
