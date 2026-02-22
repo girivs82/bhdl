@@ -155,20 +155,24 @@ impl SpiceEquationSystem {
                         current: branch.value,
                     }
                 }
-                // Capacitor: DC open circuit (very small conductance for numerical stability)
+                // Capacitor: DC open circuit modeled as large leakage resistance.
+                // 1e-9 S (1 GΩ) — negligible current but avoids the extreme
+                // 10^18 conductance ratio that makes the Jacobian ill-conditioned.
                 "Capacitor" => {
-                    debug!("Capacitor {} modeled as DC open circuit (1e-12 S)", branch.name);
-                    ComponentEquation::Linear { conductance: 1e-12 }
+                    debug!("Capacitor {} modeled as DC open circuit (1e-9 S)", branch.name);
+                    ComponentEquation::Linear { conductance: 1e-9 }
                 }
-                // Inductor: DC short circuit (very large conductance / very small resistance)
+                // Inductor: DC short circuit modeled as small DCR (series resistance).
+                // 100 S (10 mΩ) — realistic DCR for power inductors, drops only
+                // 10 mV at 1 A.  Avoids the 1e6 S value that dominated Jacobians.
                 "Inductor" => {
-                    debug!("Inductor {} modeled as DC short circuit (1e6 S)", branch.name);
-                    ComponentEquation::Linear { conductance: 1e6 }
+                    debug!("Inductor {} modeled as DC short circuit (100 S / 10 mΩ DCR)", branch.name);
+                    ComponentEquation::Linear { conductance: 100.0 }
                 }
                 _ => {
                     warn!("Unknown component type: {}, treating as open circuit",
                           branch.component_type);
-                    ComponentEquation::Linear { conductance: 1e-12 }
+                    ComponentEquation::Linear { conductance: 1e-9 }
                 }
             };
             
@@ -213,7 +217,12 @@ impl SpiceEquationSystem {
                         
                         let space = if let Some(branch) = branch {
                             match branch.component_type.as_str() {
-                                "LED" | "Diode" => VariableSpace::Logarithmic,
+                                // LEDs are always forward-biased by design, so
+                                // log-space works well and avoids exponential
+                                // overflow.  Diodes (catch, TVS) can be reverse-
+                                // biased, where log(i) is undefined for i < 0;
+                                // use linear space for diodes.
+                                "LED" => VariableSpace::Logarithmic,
                                 _ => VariableSpace::Linear,
                             }
                         } else {

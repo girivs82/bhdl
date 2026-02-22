@@ -108,124 +108,103 @@ impl GlacierDcSolver {
         })
     }
     
-    /// Solve with ramping approach for difficult circuits
+    /// Solve with source-stepping continuation for nonlinear circuits.
+    ///
+    /// Uses adaptive source ramping where each converged solution becomes the
+    /// initial guess for the next ramp level.  When a step fails, the ramp
+    /// increment is halved and retried from the last converged point — this
+    /// is the standard SPICE "source stepping" homotopy with adaptive step
+    /// size control.
     fn solve_with_ramping(&self, circuit: Circuit) -> Result<DcAnalysisResult> {
-        info!("Starting ramped GLACIER DC analysis");
-        
-        // Ramp points to try
-        let ramp_points = vec![0.1, 0.2, 0.3, 0.5, 0.7, 0.9, 1.0];
-        let mut best_result = None;
-        let mut best_error = f64::INFINITY;
-        
-        for &ramp in &ramp_points {
-            debug!("Trying ramp = {:.1}", ramp);
-            
-            // Create equation system
-            let mut equation_system = SpiceEquationSystem::new(circuit.clone())?;
-            
-            // Set voltage ramp
-            equation_system.set_voltage_ramp(ramp);
-            
-            // Create variables
-            let mut variables = equation_system.create_variables();
-            
-            // Set initial guess with ramp
-            equation_system.get_initial_guess_with_ramp(&mut variables, ramp);
-            
-            // Create numerical solver with relaxed tolerance for intermediate steps
-            let mut config = self.config.clone();
-            if ramp < 1.0 {
-                config.tolerance *= 10.0; // Relax tolerance for intermediate steps
+        info!("Starting ramped GLACIER DC analysis (adaptive continuation)");
+
+        let mut equation_system = SpiceEquationSystem::new(circuit.clone())?;
+        let mut variables = equation_system.create_variables();
+
+        // Seed with a small initial ramp
+        let initial_ramp = 0.05;
+        equation_system.set_voltage_ramp(initial_ramp);
+        equation_system.get_initial_guess_with_ramp(&mut variables, initial_ramp);
+
+        let mut current_ramp = 0.0_f64;
+        let mut step_size = 0.05_f64; // Start with 5% steps
+        let min_step = 0.001; // Minimum 0.1% step
+        let mut total_iters: usize = 0;
+
+        while current_ramp < 1.0 {
+            let target_ramp = (current_ramp + step_size).min(1.0);
+            debug!("Continuation step: ramp = {:.4} (step = {:.4})", target_ramp, step_size);
+
+            equation_system.set_voltage_ramp(target_ramp);
+
+            // Save variable state so we can revert on failure
+            let saved_values: Vec<f64> = variables.iter().map(|v| v.value).collect();
+
+            let mut step_config = self.config.clone();
+            if target_ramp < 1.0 {
+                step_config.tolerance = (self.config.tolerance * 100.0).max(1e-6);
+                step_config.max_iterations = step_config.max_iterations.max(200);
             }
-            let mut solver = GenericGlacierSolver::new(config);
-            
-            // Try to solve
+            let mut solver = GenericGlacierSolver::new(step_config);
+
             match solver.solve(&mut variables, &equation_system) {
                 Ok(stats) => {
-                    info!("Converged at ramp = {:.1} with error {:.2e}", ramp, stats.final_error);
-                    
-                    // Only store as best result if it's at full voltage
-                    if ramp == 1.0 && stats.final_error < best_error {
-                        best_error = stats.final_error;
-                        
-                        // Extract solution
-                        let (node_voltages, branch_currents) = extract_solution(&equation_system, &variables);
-                        let total_power = calculate_total_power(&equation_system.circuit, 
-                                                               &node_voltages, 
-                                                               &branch_currents);
-                        
-                        best_result = Some(DcAnalysisResult {
+                    info!(
+                        "Converged at ramp = {:.4} in {} iters (error {:.2e})",
+                        target_ramp, stats.iterations, stats.final_error
+                    );
+                    total_iters += stats.iterations;
+                    current_ramp = target_ramp;
+
+                    // At full voltage — done!
+                    if current_ramp >= 1.0 {
+                        let (node_voltages, branch_currents) =
+                            extract_solution(&equation_system, &variables);
+                        let total_power = calculate_total_power(
+                            &equation_system.circuit,
+                            &node_voltages,
+                            &branch_currents,
+                        );
+                        return Ok(DcAnalysisResult {
                             node_voltages,
                             branch_currents,
                             total_power,
-                            iterations: stats.iterations,
+                            iterations: total_iters,
                             final_error: stats.final_error,
                         });
                     }
-                    
-                    // If we found a good solution at ramp < 1.0, use it as initial guess for full solve
-                    if ramp < 1.0 && stats.final_error < 1e-6 {
-                        debug!("Using ramp = {:.1} solution as initial guess for full solve", ramp);
-                        
-                        // Set full voltage ramp
-                        equation_system.set_voltage_ramp(1.0);
-                        
-                        // Create new variables for full solve
-                        let mut full_variables = equation_system.create_variables();
-                        
-                        // Copy converged values as initial guess
-                        for (i, var) in full_variables.iter_mut().enumerate() {
-                            var.value = variables[i].value;
-                        }
-                        
-                        // Solve at full voltage with tighter tolerance
-                        let mut full_solver = GenericGlacierSolver::new(self.config.clone());
-                        
-                        match full_solver.solve(&mut full_variables, &equation_system) {
-                            Ok(full_stats) => {
-                                info!("Full solve converged with error {:.2e}", full_stats.final_error);
-                                
-                                let (node_voltages, branch_currents) = extract_solution(&equation_system, &full_variables);
-                                let total_power = calculate_total_power(&equation_system.circuit, 
-                                                                       &node_voltages, 
-                                                                       &branch_currents);
-                                
-                                return Ok(DcAnalysisResult {
-                                    node_voltages,
-                                    branch_currents,
-                                    total_power,
-                                    iterations: full_stats.iterations,
-                                    final_error: full_stats.final_error,
-                                });
-                            }
-                            Err(e) => {
-                                debug!("Full solve failed: {}", e);
-                            }
-                        }
+
+                    // Success — try increasing step size for next iteration
+                    if stats.iterations <= 5 {
+                        step_size = (step_size * 1.5).min(0.10);
                     }
                 }
-                Err(e) => {
-                    debug!("Failed at ramp = {:.1}: {}", ramp, e);
-                    
-                    // If we fail at ramp=1.0 but had success at lower ramps, that's concerning
-                    if ramp == 1.0 && best_error < 1e-3 {
-                        warn!("Failed at full voltage despite converging at lower ramps");
+                Err(_e) => {
+                    // Revert to last converged state
+                    for (i, var) in variables.iter_mut().enumerate() {
+                        var.value = saved_values[i];
+                    }
+
+                    if step_size > min_step {
+                        // Halve the step and retry
+                        step_size *= 0.5;
+                        debug!(
+                            "Step failed at ramp = {:.4}, reducing step to {:.4}",
+                            target_ramp, step_size
+                        );
+                        continue;
+                    } else {
+                        warn!(
+                            "Failed at ramp = {:.4} with minimum step size {:.4}",
+                            target_ramp, min_step
+                        );
+                        break;
                     }
                 }
             }
         }
-        
-        // Return best result found, but only if it's at full voltage
-        if let Some(result) = best_result {
-            // Check if we have the full solution
-            if best_error < 1e-6 {
-                Ok(result)
-            } else {
-                Err(SpiceError::ConvergenceFailed(self.config.max_iterations))
-            }
-        } else {
-            Err(SpiceError::ConvergenceFailed(self.config.max_iterations))
-        }
+
+        Err(SpiceError::ConvergenceFailed(self.config.max_iterations))
     }
 }
 
