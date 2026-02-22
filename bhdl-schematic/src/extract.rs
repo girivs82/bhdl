@@ -161,9 +161,16 @@ pub fn extract_schematic_data(
 
             let pin_type_str = pin_type_to_str(&pin_def.pin_type);
 
+            // Check for display name override from virtual pin expansion
+            // (e.g. vpin_display_VOUT → "SW" means show "SW" instead of "VOUT")
+            let display_name = instance.attributes
+                .get(&format!("vpin_display_{}", pin_def.name))
+                .cloned()
+                .unwrap_or_else(|| pin_def.name.clone());
+
             found_pins.insert(pin_def.name.clone());
             connections.push(SchematicConnection {
-                port: pin_def.name.clone(),
+                port: display_name,
                 signal,
                 direction: direction.to_string(),
                 pin_type: pin_type_str.to_string(),
@@ -202,8 +209,13 @@ pub fn extract_schematic_data(
 
             let pin_type_str = pin_type_to_str(&pin_def.pin_type);
 
+            let display_name = instance.attributes
+                .get(&format!("vpin_display_{}", pin_def.name))
+                .cloned()
+                .unwrap_or_else(|| pin_def.name.clone());
+
             connections.push(SchematicConnection {
-                port: pin_def.name.clone(),
+                port: display_name,
                 signal,
                 direction: direction.to_string(),
                 pin_type: pin_type_str.to_string(),
@@ -270,18 +282,23 @@ pub fn extract_schematic_data(
         }
 
         // Extract meaningful parameters from instance attributes
-        // Filter out simulation/stress metadata — only show user-visible values
+        // Filter out simulation/stress metadata and expansion internals
         let parameters: Vec<(String, String)> = instance.attributes.iter()
             .filter(|(k, _)| {
                 // Keep: value, voltage, named component params
-                // Skip: sim_*, stress_*, calculation_method, simulation_enhanced, empty keys
+                // Skip: sim_*, stress_*, vpin_*, calculation_method, simulation_enhanced, empty keys
                 !k.starts_with("sim_") && !k.starts_with("stress_")
+                    && !k.starts_with("vpin_")
                     && k.as_str() != "calculation_method"
                     && k.as_str() != "simulation_enhanced"
                     && !k.is_empty()
             })
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
+
+        // Extract expansion metadata for virtual-pin expanded components
+        let expansion_parent = instance.attributes.get("vpin_parent").cloned();
+        let expansion_role = instance.attributes.get("vpin_role").cloned();
 
         instances.push(SchematicInstance {
             name: instance.name.clone(),
@@ -292,6 +309,8 @@ pub fn extract_schematic_data(
             placement_role: None,  // filled in by classify_placement_roles below
             intent: None,
             flow_ids: Vec::new(),
+            expansion_parent,
+            expansion_role,
             line: None,
         });
     }
@@ -332,10 +351,15 @@ pub fn extract_schematic_data(
                     if let Some(pi) = netlist.pin_instances.get(pi_id) {
                         if let Some(inst) = netlist.instances.get(pi.instance) {
                             if let Some(pin) = netlist.pins.get(pi.pin_def) {
+                                // Use display name override if set by virtual pin expansion
+                                let port_name = inst.attributes
+                                    .get(&format!("vpin_display_{}", pin.name))
+                                    .cloned()
+                                    .unwrap_or_else(|| pin.name.clone());
                                 let ep = SchematicEndpoint {
                                     endpoint_type: "instance".to_string(),
                                     name: inst.name.clone(),
-                                    port: pin.name.clone(),
+                                    port: port_name,
                                 };
                                 // A pin drives if its direction is Out, or if it's a
                                 // Power-typed pin that isn't explicitly an input
@@ -355,10 +379,14 @@ pub fn extract_schematic_data(
                 ConnectionPoint::InstancePin(inst_id, pin_id) => {
                     if let Some(inst) = netlist.instances.get(inst_id) {
                         if let Some(pin) = netlist.pins.get(pin_id) {
+                            let port_name = inst.attributes
+                                .get(&format!("vpin_display_{}", pin.name))
+                                .cloned()
+                                .unwrap_or_else(|| pin.name.clone());
                             let ep = SchematicEndpoint {
                                 endpoint_type: "instance".to_string(),
                                 name: inst.name.clone(),
-                                port: pin.name.clone(),
+                                port: port_name,
                             };
                             let is_driver = matches!(pin.direction, PinDirection::Out)
                                 || (matches!(pin.pin_type, PinType::Power)
@@ -435,10 +463,21 @@ pub fn extract_schematic_data(
         }
     }
 
-    // Apply roles: set direction, and duplicate connections for dual-role pins
+    // Apply roles: set direction, and duplicate connections for dual-role pins.
+    // For expansion series children, respect the declared pin direction (e.g.
+    // an inductor's OUT pin stays "out" even if it's a sink on a power net,
+    // because the inductor *creates* that power rail).
     for inst in instances.iter_mut() {
+        let is_series_expansion = inst.expansion_role.as_deref() == Some("series");
         let mut extra_connections = Vec::new();
         for conn in inst.connections.iter_mut() {
+            // If this is a series expansion child and the pin's declared direction
+            // is "out", keep it regardless of net role — the component drives
+            // into the power net even though a power symbol also claims driver.
+            if is_series_expansion && conn.pin_direction.as_deref() == Some("out") {
+                conn.direction = "out".to_string();
+                continue;
+            }
             let key = (inst.name.clone(), conn.port.clone());
             if let Some(roles) = pin_roles.get(&key) {
                 if roles.contains("out") && roles.contains("in") {
@@ -714,6 +753,17 @@ fn classify_placement_roles(
             if let Some(fp) = fps.iter().find(|fp| fp.intent_name.is_some()) {
                 inst.intent = fp.intent_name.clone();
             }
+        }
+
+        // EXPANSION ROLE OVERRIDE: virtual-pin expanded components get their role
+        // from the expander metadata, not from topology or intent heuristics.
+        if let Some(role) = inst.expansion_role.as_deref() {
+            inst.placement_role = Some(match role {
+                "series" => PlacementRole::MainPath,
+                "shunt" => PlacementRole::Shunt,
+                _ => PlacementRole::MainPath,
+            });
+            continue;
         }
 
         // TOPOLOGY FIRST: if the circuit structure clearly indicates a role, use it.

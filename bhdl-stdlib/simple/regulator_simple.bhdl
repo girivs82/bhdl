@@ -28,6 +28,7 @@ entity BuckRegulator<V_OUT: voltage>(dropout: voltage = 0.5V) {
 
     attribute component_class = "switching_regulator";
     attribute output_voltage = V_OUT;
+    attribute vpin_sw_name = "SW";
     attribute vpin_inductor = 33µH;
     attribute vpin_diode_vf = 0.5V;
     attribute vpin_cout = 470µF;

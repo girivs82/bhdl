@@ -62,36 +62,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             
-            // Look for component names that would indicate virtual pin expansion worked
-            // The synthesizer prefixes virtual pin components with the IC instance name
+            // Look for expansion children via vpin_parent attribute
             println!("\n{}", "=== Looking for Virtual Pin Expansion ===".bold().magenta());
-            let virtual_pin_components = vec![
-                "U1_L1",      // Inductor
-                "U1_D1",      // Schottky diode
-                "U1_C_OUT",   // Output capacitors
-                "U1_R_FB",    // Feedback resistors
-                "U1_C_FF",    // Feedforward capacitor
-            ];
-            
-            for comp in &virtual_pin_components {
-                let found = netlist.instances.values().any(|inst| {
-                    inst.name.contains(comp)
-                });
-                
-                if found {
-                    println!("  {} Found component containing '{}'", "✓".green(), comp);
-                } else {
-                    println!("  {} Component containing '{}' not found", "✗".red(), comp);
+
+            // Find the main regulator instance name
+            let reg_name = netlist.instances.values()
+                .find(|inst| inst.attributes.get("component_class").map(|s| s.as_str()) == Some("switching_regulator"))
+                .map(|inst| inst.name.clone());
+
+            if let Some(ref parent) = reg_name {
+                println!("  {} Found switching regulator '{}'", "✓".green(), parent);
+
+                let children: Vec<_> = netlist.instances.values()
+                    .filter(|inst| inst.attributes.get("vpin_parent").map(|s| s.as_str()) == Some(parent.as_str()))
+                    .collect();
+
+                let expected_roles = vec![
+                    ("series", "inductor"),
+                    ("shunt", "diode"),
+                    ("shunt", "capacitor"),
+                ];
+
+                for (role, class) in &expected_roles {
+                    let found = children.iter().any(|inst| {
+                        inst.attributes.get("vpin_role").map(|s| s.as_str()) == Some(*role)
+                            && inst.attributes.get("component_class").map(|s| s.as_str()) == Some(*class)
+                    });
+                    if found {
+                        println!("  {} Found expansion child: role={}, class={}", "✓".green(), role, class);
+                    } else {
+                        println!("  {} Missing expansion child: role={}, class={}", "✗".red(), role, class);
+                    }
                 }
+
+                println!("\n{}", "=== Virtual Pin Component Count ===".bold().blue());
+                println!("Total expansion children of '{}': {}", parent, children.len());
+            } else {
+                println!("  {} No switching regulator found", "✗".red());
             }
-            
-            // Count components by prefix
-            let u1_components = netlist.instances.values()
-                .filter(|inst| inst.name.starts_with("U1_"))
-                .count();
-            
-            println!("\n{}", "=== Virtual Pin Component Count ===".bold().blue());
-            println!("Total U1_ prefixed components: {}", u1_components);
             
             // Save netlist
             let output = "tests/outputs/netlists/buck_converter_lm2596.json";

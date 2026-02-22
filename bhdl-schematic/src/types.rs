@@ -101,6 +101,12 @@ pub struct SchematicInstance {
     /// IDs of flow paths this instance participates in
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub flow_ids: Vec<usize>,
+    /// Parent instance name for virtual-pin expanded components (e.g. "buck" for "buck_L1")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expansion_parent: Option<String>,
+    /// Role within expansion group: "series" (inline) or "shunt" (vertical drop)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expansion_role: Option<String>,
     /// Source line for click-to-navigate
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<usize>,
