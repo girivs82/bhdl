@@ -1107,5 +1107,36 @@ fn build_simulation_annotations(
     annotations.power_nets.remove("GND");
     annotations.power_nets.remove("0");
 
+    // Unify regulator decomposition: GLACIER decomposes regulators into
+    // name_vout (voltage source) + name_dropout (connectivity resistor).
+    // The voltage source current IS the load current flowing through the
+    // regulator. Merge them into a single entry under the original instance
+    // name so the schematic shows consistent I at input and output.
+    let vout_suffix = "_vout";
+    let dropout_suffix = "_dropout";
+    let vout_keys: Vec<String> = annotations.instance_currents.keys()
+        .filter(|k| k.ends_with(vout_suffix))
+        .cloned()
+        .collect();
+    for vout_key in vout_keys {
+        let base_name = &vout_key[..vout_key.len() - vout_suffix.len()];
+        let dropout_key = format!("{}{}", base_name, dropout_suffix);
+
+        // Use voltage source current as the regulator's current
+        if let Some(&vsrc_current) = annotations.instance_currents.get(&vout_key) {
+            annotations.instance_currents.insert(base_name.to_string(), vsrc_current);
+        }
+        // Sum power from both sub-components
+        let p_vout = annotations.instance_power.get(&vout_key).copied().unwrap_or(0.0);
+        let p_drop = annotations.instance_power.get(&dropout_key).copied().unwrap_or(0.0);
+        annotations.instance_power.insert(base_name.to_string(), p_vout + p_drop);
+
+        // Remove decomposed entries — schematic only knows the original name
+        annotations.instance_currents.remove(&vout_key);
+        annotations.instance_currents.remove(&dropout_key);
+        annotations.instance_power.remove(&vout_key);
+        annotations.instance_power.remove(&dropout_key);
+    }
+
     annotations
 }

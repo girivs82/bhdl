@@ -144,6 +144,7 @@ impl ComponentModelExtractor {
                     "capacitance" | "c" => { parameters.insert("capacitance".to_string(), num_value); }
                     "inductance" | "l" => { parameters.insert("inductance".to_string(), num_value); }
                     "voltage" | "v" => { parameters.insert("voltage".to_string(), num_value); }
+                    "output_voltage" => { parameters.insert("output_voltage".to_string(), num_value); }
                     "current" | "i" => { parameters.insert("current".to_string(), num_value); }
                     "power" | "p" => { parameters.insert("power_rating".to_string(), num_value); }
                     _ => {}

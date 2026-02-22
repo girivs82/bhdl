@@ -497,6 +497,7 @@ impl NetlistToSpiceConverter {
         // Use pin types from stdlib: power-in = VIN, power-out = VOUT, ground = GND
         if extracted_model.component_type == ComponentType::VoltageRegulator {
             let vout_voltage = extracted_model.parameters.get("vout").copied()
+                .or(extracted_model.parameters.get("output_voltage").copied())
                 .or(extracted_model.parameters.get("voltage").copied())
                 .unwrap_or(5.0);
 
