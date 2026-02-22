@@ -22,6 +22,7 @@ bhdl-common = { path = "../bhdl-common" }
 bhdl-stdlib = { path = "../bhdl-stdlib" }
 bhdl-safety = { path = "../bhdl-safety" }
 bhdl-spice = { path = "../bhdl-spice" }
+bhdl-schematic = { path = "../bhdl-schematic" }
 bhdl-simulation = { path = "../bhdl-simulation" }
 anyhow = "1.0"
 log = "0.4"

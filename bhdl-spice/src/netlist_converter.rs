@@ -107,6 +107,38 @@ impl NetlistToSpiceConverter {
             }
         }
 
+        // Step 2b: Propagate vsource_nodes through inductors from virtual pin
+        //          expansion.  After expansion, a buck's SW node is in vsource_nodes
+        //          but the original VOUT net (connected via inductor) is not.  We
+        //          need to mark those too so power symbols don't create redundant
+        //          voltage sources.
+        for (instance_id, instance) in &netlist.instances {
+            let module = netlist.modules.get(instance.definition);
+            let is_inductor = module.map(|m| {
+                m.name.contains("Inductor") || m.name.contains("Ind")
+                    || instance.attributes.get("component_class")
+                        .map(|c| c == "inductor")
+                        .unwrap_or(false)
+            }).unwrap_or(false);
+
+            if is_inductor {
+                let pin_nets = Self::get_pin_net_info(netlist, instance_id);
+                let net_names: Vec<String> = pin_nets.iter().map(|p| p.net_name.clone()).collect();
+                // If one end is already in vsource_nodes, add the other end too
+                for i in 0..net_names.len() {
+                    if vsource_nodes.contains(&net_names[i]) {
+                        for j in 0..net_names.len() {
+                            if i != j && !vsource_nodes.contains(&net_names[j]) {
+                                info!("Inductor {} propagates voltage-source-driven status: {} → {}",
+                                      instance.name, net_names[i], net_names[j]);
+                                vsource_nodes.insert(net_names[j].clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Step 3: Process remaining instances, skipping power symbols whose nets are
         //         already driven by a regulator voltage source
         for (instance_id, instance) in deferred {

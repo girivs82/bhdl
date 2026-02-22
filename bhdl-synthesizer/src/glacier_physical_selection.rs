@@ -209,10 +209,16 @@ fn compute_instance_max_voltages(
             None => continue,
         };
         for conn in &net.connections {
-            if let bhdl_netlist::ConnectionPoint::InstancePort(iid, _)
-                | bhdl_netlist::ConnectionPoint::InstancePin(iid, _) = conn
-            {
-                if let Some(inst) = netlist.instances.get(*iid) {
+            let inst_id = match conn {
+                bhdl_netlist::ConnectionPoint::InstancePort(iid, _)
+                | bhdl_netlist::ConnectionPoint::InstancePin(iid, _) => Some(*iid),
+                bhdl_netlist::ConnectionPoint::PinInstance(pi_id) => {
+                    netlist.pin_instances.get(*pi_id).map(|pi| pi.instance)
+                }
+                _ => None,
+            };
+            if let Some(iid) = inst_id {
+                if let Some(inst) = netlist.instances.get(iid) {
                     instance_nets
                         .entry(inst.name.clone())
                         .or_default()

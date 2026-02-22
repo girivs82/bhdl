@@ -15,6 +15,7 @@ entity LinearRegulator<V_OUT: voltage, HAS_EN: bool = false>(dropout: voltage = 
 
 alias LM7805 = LinearRegulator<5V>;
 alias LM1117_33 = LinearRegulator<3.3V>;
+alias LM1117_18 = LinearRegulator<1.8V>;
 alias LM1117_33_EN = LinearRegulator<3.3V, true>;
 
 // Simplified Buck (Switching) Regulators - v2.0 compatible

@@ -526,6 +526,7 @@ dependencies = [
  "bhdl-netlist",
  "bhdl-parser",
  "bhdl-safety",
+ "bhdl-schematic",
  "bhdl-simulation",
  "bhdl-spice",
  "bhdl-stdlib",

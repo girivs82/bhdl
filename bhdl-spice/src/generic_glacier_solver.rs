@@ -218,39 +218,148 @@ impl GenericGlacierSolver {
                 return Ok(stats);
             }
             
-            // Check for singular matrix
-            if jacobian.determinant().abs() < self.config.singular_perturbation {
-                debug!("Nearly singular Jacobian, adding perturbation");
-                for i in 0..jacobian.nrows() {
+            // Row + column equilibration scaling for numerical conditioning.
+            // Circuit Jacobians mix entries spanning many orders of magnitude
+            // (e.g. inductor 1e6 S vs capacitor 1e-12 S).  Without scaling the
+            // LU factorization loses all precision.  This is standard practice
+            // in production SPICE solvers.
+            let n = jacobian.nrows();
+
+            // Row scaling: divide each row so max |entry| = 1
+            let mut row_scale: Vec<f64> = Vec::with_capacity(n);
+            for i in 0..n {
+                let max_val = (0..n)
+                    .map(|j| jacobian[(i, j)].abs())
+                    .fold(0.0_f64, f64::max);
+                let s = if max_val > 1e-30 { 1.0 / max_val } else { 1.0 };
+                row_scale.push(s);
+                for j in 0..n {
+                    jacobian[(i, j)] *= s;
+                }
+            }
+
+            // Column scaling: divide each column so max |entry| = 1
+            let mut col_scale: Vec<f64> = Vec::with_capacity(n);
+            for j in 0..n {
+                let max_val = (0..n)
+                    .map(|i| jacobian[(i, j)].abs())
+                    .fold(0.0_f64, f64::max);
+                let s = if max_val > 1e-30 { 1.0 / max_val } else { 1.0 };
+                col_scale.push(s);
+                for i in 0..n {
+                    jacobian[(i, j)] *= s;
+                }
+            }
+
+            // Scale the right-hand side with row scaling
+            let scaled_rhs = DVector::from_fn(n, |i, _| -residual[i] * row_scale[i]);
+
+            // Add small diagonal perturbation for near-singular systems
+            for i in 0..n {
+                if jacobian[(i, i)].abs() < self.config.singular_perturbation {
                     jacobian[(i, i)] += self.config.singular_perturbation;
                 }
             }
-            
-            // Solve for Newton update
+
+            // Solve the scaled system
             let lu = jacobian.lu();
-            let delta = lu.solve(&(-residual))
+            let scaled_delta = lu.solve(&scaled_rhs)
                 .ok_or(SpiceError::SingularMatrix)?;
+
+            // Unscale the solution (column scaling affects the solution)
+            let delta = DVector::from_fn(n, |j, _| scaled_delta[j] * col_scale[j]);
             
-            // Compute damping
-            let damping = if self.config.use_adaptive_damping {
-                let gradient = self.estimate_gradient(variables, &delta);
-                self.adaptive_control.adapt(gradient);
-                self.adaptive_control.compute_damping(error, 1.0)
-                    .clamp(self.config.min_damping, self.config.max_damping)
-            } else {
-                1.0  // Full Newton step
-            };
-            
-            stats.damping_history.push(damping);
-            
-            // Update variables
-            self.apply_update(variables, &delta, damping);
-            
+            // Backtracking line search with steepest-descent fallback.
+            //
+            // Try the full Newton step first; if the residual increases,
+            // halve the step.  If Newton direction is completely wrong
+            // (all step sizes increase error), fall back to a steepest-
+            // descent step using the negative gradient direction.
+            let saved: Vec<f64> = variables.iter().map(|v| v.value).collect();
+            let mut alpha = 1.0_f64;
+            let min_alpha = 1.0 / 128.0; // 7 halvings
+            let mut used_gradient_fallback = false;
+
+            loop {
+                for (i, var) in variables.iter_mut().enumerate() {
+                    var.value = saved[i] + alpha * delta[i];
+                    if var.space == VariableSpace::Logarithmic && var.value < -700.0 {
+                        var.value = -700.0;
+                    }
+                }
+
+                let new_residual = system.evaluate_residuals(variables);
+                let new_error = new_residual.norm();
+
+                if new_error < error {
+                    break;
+                }
+
+                if alpha <= min_alpha {
+                    // Newton direction is bad.  Try steepest-descent
+                    // (negative gradient of 0.5*||r||^2 = J^T * r).
+                    // Recompute with the original (unscaled) Jacobian.
+                    let jac_orig = system.build_jacobian(variables);
+                    let grad = jac_orig.transpose() * &residual;
+                    let grad_norm = grad.norm();
+
+                    if grad_norm > 1e-30 {
+                        // Steepest-descent direction, normalized
+                        let sd_dir = -&grad / grad_norm;
+
+                        // Try a few step sizes along the gradient
+                        let mut best_err = error;
+                        let mut best_alpha_sd = 0.0;
+                        for k in 0..10 {
+                            let a = 0.1 / (1 << k) as f64; // 0.1, 0.05, 0.025, ...
+                            for (i, var) in variables.iter_mut().enumerate() {
+                                var.value = saved[i] + a * sd_dir[i];
+                                if var.space == VariableSpace::Logarithmic && var.value < -700.0 {
+                                    var.value = -700.0;
+                                }
+                            }
+                            let sd_err = system.evaluate_residuals(variables).norm();
+                            if sd_err < best_err {
+                                best_err = sd_err;
+                                best_alpha_sd = a;
+                            }
+                        }
+
+                        if best_alpha_sd > 0.0 {
+                            // Apply the best gradient step
+                            for (i, var) in variables.iter_mut().enumerate() {
+                                var.value = saved[i] + best_alpha_sd * sd_dir[i];
+                                if var.space == VariableSpace::Logarithmic && var.value < -700.0 {
+                                    var.value = -700.0;
+                                }
+                            }
+                            used_gradient_fallback = true;
+                            alpha = best_alpha_sd;
+                            break;
+                        }
+                    }
+
+                    // Even gradient didn't help — accept min-alpha Newton
+                    for (i, var) in variables.iter_mut().enumerate() {
+                        var.value = saved[i] + min_alpha * delta[i];
+                        if var.space == VariableSpace::Logarithmic && var.value < -700.0 {
+                            var.value = -700.0;
+                        }
+                    }
+                    break;
+                }
+
+                alpha *= 0.5;
+            }
+
+            stats.damping_history.push(alpha);
+
             iteration += 1;
-            
+
             if iteration % 10 == 0 {
-                debug!("Iteration {}: error = {:.2e}, damping = {:.3}", 
-                       iteration, error, damping);
+                debug!("Iteration {}: error = {:.2e}, alpha = {:.3}{}",
+                       iteration, error, alpha,
+                       if used_gradient_fallback { " (gradient)" } else { "" });
             }
         }
         
