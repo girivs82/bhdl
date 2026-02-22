@@ -1,0 +1,30 @@
+// Buck Converter with Virtual Pin Expansion Test
+// The BuckRegulator's VOUT is marked `virtual` — the toolchain
+// auto-expands an inductor, catch diode, and output capacitor.
+
+import { Res } from "bhdl-stdlib/simple/resistor_simple.bhdl";
+import { Cap } from "bhdl-stdlib/simple/capacitor_simple.bhdl";
+import { LED } from "bhdl-stdlib/simple/led_simple.bhdl";
+import { LM2596_5V } from "bhdl-stdlib/simple/regulator_simple.bhdl";
+
+board SimpleBuck {
+    power VIN = 12V @ 3A;
+    power V5 = 5V @ 2A;
+    ground GND;
+
+    // Input filter capacitor
+    VIN -> c_in: Cap(100µF).1;
+    c_in.2 -> GND;
+
+    // Buck converter — VOUT virtual pin auto-expands inductor, diode, cap
+    c_in.1 -> buck: LM2596_5V().VIN;
+    buck.VOUT -> V5;
+    buck.GND -> GND;
+
+    // 5V indicator LED
+    V5 -> r_led: Res(220).1 -> r_led.2 -> led: LED("green").A;
+    led.K -> GND;
+
+    // Load resistor (2A at 5V = 2.5Ω)
+    V5 -> r_load: Res(2.5).1 -> r_load.2 -> GND;
+}
