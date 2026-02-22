@@ -1,38 +1,11 @@
 // Sensor interface: regulated power + signal conditioning + protection
 // Tests: mixed topology — series chain, shunts, and branches
-entity Res(value: resistance) {
-    pin 1: signal inout;
-    pin 2: signal inout;
-}
-
-entity Cap(value: capacitance) {
-    pin 1: signal inout;
-    pin 2: signal inout;
-}
-
-entity LED(color: string) {
-    pin A: signal in;
-    pin K: signal in;
-}
-
-entity TVSDiode(voltage: voltage) {
-    pin A: signal in;
-    pin K: signal in;
-}
-
-entity LM7805 {
-    pin VI: power in;
-    pin GND: ground;
-    pin VO: power out;
-}
-
-entity OpAmp {
-    pin INP: signal in;
-    pin INM: signal in;
-    pin OUT: signal out;
-    pin VCC: power in;
-    pin GND: ground;
-}
+import { Res } from "bhdl-stdlib/simple/resistor_simple.bhdl";
+import { Cap } from "bhdl-stdlib/simple/capacitor_simple.bhdl";
+import { LED } from "bhdl-stdlib/simple/led_simple.bhdl";
+import { TVSDiode } from "bhdl-stdlib/simple/protection_simple.bhdl";
+import { LM7805 } from "bhdl-stdlib/simple/regulator_simple.bhdl";
+import { OpAmp } from "bhdl-stdlib/simple/opamp_simple.bhdl";
 
 board SensorInterface {
     power VIN = 12V @ 500mA;

@@ -1,31 +1,9 @@
-// Simple intent-driven layout demo without imports
-// Defines modules inline to avoid stdlib parsing issues
-
-entity Res(value: resistance) {
-    pin 1: signal inout;
-    pin 2: signal inout;
-}
-
-entity Cap(value: capacitance) {
-    pin 1: signal inout;
-    pin 2: signal inout;
-}
-
-entity LED(color: string) {
-    pin A: signal in;
-    pin K: signal in;
-}
-
-entity TVSDiode(voltage: voltage) {
-    pin K: signal in;
-    pin A: signal in;
-}
-
-entity RegulatorIC {
-    pin VIN: power in;
-    pin VOUT: power out;
-    pin GND: ground;
-}
+// Simple intent-driven layout demo
+import { Res } from "bhdl-stdlib/simple/resistor_simple.bhdl";
+import { Cap } from "bhdl-stdlib/simple/capacitor_simple.bhdl";
+import { LED } from "bhdl-stdlib/simple/led_simple.bhdl";
+import { TVSDiode } from "bhdl-stdlib/simple/protection_simple.bhdl";
+import { LM7805 } from "bhdl-stdlib/simple/regulator_simple.bhdl";
 
 board IntentLayoutDemo {
     power VIN = 12V @ 500mA;
@@ -41,7 +19,7 @@ board IntentLayoutDemo {
     c1.2 -> GND;
 
     // TOP ZONE: Voltage regulation
-    net regulated: c1.1 -> reg: RegulatorIC().VIN -> reg.VOUT -> VOUT for voltage_regulation(5V, 12V);
+    net regulated: c1.1 -> reg: LM7805().VI -> reg.VO -> VOUT for voltage_regulation(5V, 12V);
     reg.GND -> GND;
 
     // CENTER ZONE: Output filtering

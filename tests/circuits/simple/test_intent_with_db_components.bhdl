@@ -1,32 +1,10 @@
 // Intent-driven layout demo using actual database components
 // This version uses components from the KiCad database
-
-entity Res(value: resistance) {
-    pin 1: signal inout;
-    pin 2: signal inout;
-}
-
-entity Cap(value: capacitance) {
-    pin 1: signal inout;
-    pin 2: signal inout;
-}
-
-entity LED(color: string) {
-    pin A: signal in;
-    pin K: signal in;
-}
-
-entity TVSDiode(voltage: voltage) {
-    pin K: signal in;
-    pin A: signal in;
-}
-
-// Use actual LM7805 voltage regulator from database
-entity LM7805 {
-    pin VIN: power in;
-    pin GND: ground;
-    pin VOUT: power out;
-}
+import { Res } from "bhdl-stdlib/simple/resistor_simple.bhdl";
+import { Cap } from "bhdl-stdlib/simple/capacitor_simple.bhdl";
+import { LED } from "bhdl-stdlib/simple/led_simple.bhdl";
+import { TVSDiode } from "bhdl-stdlib/simple/protection_simple.bhdl";
+import { LM7805 } from "bhdl-stdlib/simple/regulator_simple.bhdl";
 
 board IntentLayoutDemo {
     // LEFT ZONE: Input protection
@@ -38,11 +16,11 @@ board IntentLayoutDemo {
     c1.2 -> gnd2: GND();
 
     // TOP ZONE: Voltage regulation
-    net regulated: c1.1 -> reg: LM7805().VIN for voltage_regulation(5V, 12V);
+    net regulated: c1.1 -> reg: LM7805().VI for voltage_regulation(5V, 12V);
     reg.GND -> gnd3: GND();
 
     // CENTER ZONE: Output filtering
-    net filtered_out: reg.VOUT -> c2: Cap(10µF).1 for noise_filtering(10kHz, 60dB);
+    net filtered_out: reg.VO -> c2: Cap(10µF).1 for noise_filtering(10kHz, 60dB);
     c2.2 -> gnd4: GND();
 
     // RIGHT ZONE: LED indicator

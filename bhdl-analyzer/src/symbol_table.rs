@@ -67,6 +67,10 @@ pub struct Symbol {
     pub resolved_type: Option<bhdl_common::BhdlType>,
     /// Generic parameter declarations with constraints (for modules/components with `where` clauses).
     pub generic_params: Option<Vec<bhdl_common::GenericParam>>,
+    /// When condition text for conditional pins (e.g., "HAS_EN" from `pin EN: signal in when HAS_EN;`).
+    pub when_condition: Option<String>,
+    /// Generic parameter name for parameterized bus size (e.g., "CHANNELS" from `pin INP[CHANNELS]`).
+    pub bus_size_param: Option<String>,
 }
 
 impl Symbol {
@@ -90,6 +94,8 @@ impl Symbol {
             net_attributes: None,
             resolved_type: None,
             generic_params: None,
+            when_condition: None,
+            bus_size_param: None,
         }
     }
 
@@ -116,6 +122,8 @@ impl Symbol {
             net_attributes: None,
             resolved_type: None,
             generic_params: None,
+            when_condition: None,
+            bus_size_param: None,
         }
     }
 
@@ -139,6 +147,8 @@ impl Symbol {
             net_attributes: None,
             resolved_type: None,
             generic_params: None,
+            when_condition: None,
+            bus_size_param: None,
         }
     }
 }

@@ -98,10 +98,10 @@ impl ComponentModelExtractor {
         let mut parameters = HashMap::new();
         
         // Use registry's default parameters as base
-        if let Some(spice_model) = self.component_registry.get_spice_model(
-            &self.component_registry.get_component_class(&module_type, &data)
-                .unwrap_or_else(|| module_type.clone())
-        ) {
+        let component_class = data.get("component_class")
+            .cloned()
+            .unwrap_or_else(|| module_type.clone());
+        if let Some(spice_model) = self.component_registry.get_spice_model(&component_class) {
             // Get default parameters based on SPICE model type
             match spice_model {
                 "resistor" => {
@@ -442,10 +442,10 @@ impl ComponentModelExtractor {
     
     /// Parse component type from string
     fn parse_component_type(&self, type_str: &str) -> Result<ComponentType> {
-        // Create a dummy attributes map with component_type
+        // Create attributes map with component_class for registry lookup
         let mut attrs = HashMap::new();
-        attrs.insert("component_type".to_string(), type_str.to_string());
-        
+        attrs.insert("component_class".to_string(), type_str.to_string());
+
         // Use registry to parse
         self.component_registry.get_component_type(type_str, &attrs)
             .ok_or_else(|| anyhow::anyhow!("Unknown component type: {}", type_str))

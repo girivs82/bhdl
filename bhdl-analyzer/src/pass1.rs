@@ -134,6 +134,8 @@ pub fn build_scope_registry_with_base(
             net_attributes: None,
             resolved_type: Some(bhdl_common::BhdlType::from_type_name(type_name, None)),
             generic_params: None,
+            when_condition: None,
+            bus_size_param: None,
         });
     }
 
@@ -296,6 +298,81 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
             // Trait implementations are validated in Pass 2
             // Here we just note them so the scope registry knows about them
         }
+        SyntaxKind::ALIAS => {
+            // Handle same-file alias declarations: alias LM7805 = LinearRegulator<5V>;
+            let mut alias_name = String::new();
+            let mut target_name = String::new();
+            let mut found_eq = false;
+            let mut type_args = Vec::new();
+
+            for element in node.children_with_tokens() {
+                match element {
+                    rowan::NodeOrToken::Token(t) => {
+                        match t.kind() {
+                            SyntaxKind::IDENT | SyntaxKind::NUMBER => {
+                                if !found_eq && alias_name.is_empty() {
+                                    alias_name = t.text().to_string();
+                                } else if found_eq && target_name.is_empty() {
+                                    target_name = t.text().to_string();
+                                }
+                            },
+                            SyntaxKind::EQ => {
+                                found_eq = true;
+                            },
+                            _ => {}
+                        }
+                    },
+                    rowan::NodeOrToken::Node(n) => {
+                        if n.kind() == SyntaxKind::TYPE_ARGS {
+                            // Extract type argument texts from TYPE_ARGS node
+                            for arg_element in n.children_with_tokens() {
+                                if let rowan::NodeOrToken::Node(arg_node) = &arg_element {
+                                    let text = arg_node.text().to_string().trim().to_string();
+                                    if !text.is_empty() {
+                                        type_args.push(text);
+                                    }
+                                } else if let rowan::NodeOrToken::Token(arg_token) = &arg_element {
+                                    match arg_token.kind() {
+                                        SyntaxKind::TRUE_KW | SyntaxKind::FALSE_KW => {
+                                            type_args.push(arg_token.text().to_string());
+                                        }
+                                        SyntaxKind::NUMBER | SyntaxKind::IDENT => {
+                                            // Standalone number or ident that isn't inside a VALUE node
+                                            // (shouldn't normally happen since parse_value wraps these)
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !alias_name.is_empty() && !target_name.is_empty() {
+                // Register the alias as an entity-like symbol in the global scope
+                let node_ptr = SyntaxNodePtr::new(node);
+                let sym = Symbol::new_definition(
+                    &alias_name,
+                    SymbolKind::Entity,
+                    TextRange::new(0.into(), 0.into()),
+                    &node_ptr,
+                );
+                context.current_scope_mut().insert(sym);
+
+                // If this alias has type args, store it as an alias specialization
+                if !type_args.is_empty() {
+                    context.alias_specializations.push(
+                        crate::passes::AliasSpecialization {
+                            alias_name: alias_name.clone(),
+                            target_entity: target_name.clone(),
+                            type_arg_texts: type_args,
+                            concrete_params: std::collections::BTreeMap::new(),
+                        }
+                    );
+                }
+            }
+        }
         SyntaxKind::PARAM_DECL | SyntaxKind::PARAM_ASSIGN => {
             if let Some(decl) = ParamDecl::cast(node.clone()) {
                 if let Some(name_token) = decl.name() {
@@ -337,17 +414,34 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                }
            }
         }
-        SyntaxKind::PIN_DECL => { 
+        SyntaxKind::PIN_DECL => {
             if let Some(decl) = PinDecl::cast(node.clone()) {
                 if let Some(name_token) = decl.name() {
-                    let (bus_high, bus_low) = decl.bus_suffix()
-                        .and_then(|suffix| suffix.range())
-                        .map(|range_expr| (
-                            range_expr.lhs().and_then(|v| parse_expr_as_i64(&v)),
-                            range_expr.rhs().and_then(|v| parse_expr_as_i64(&v))
-                        ))
-                        .unwrap_or((None, None));
-                    
+                    let mut bus_high = None;
+                    let mut bus_low = None;
+                    let mut bus_size_param = None;
+
+                    if let Some(suffix) = decl.bus_suffix() {
+                        if let Some(range_expr) = suffix.range() {
+                            // Range-based bus: [high:low]
+                            bus_high = range_expr.lhs().and_then(|v| parse_expr_as_i64(&v));
+                            bus_low = range_expr.rhs().and_then(|v| parse_expr_as_i64(&v));
+                        } else if let Some(index_expr) = suffix.index_expr() {
+                            // Single expression bus: [N] or [4]
+                            if let Some(n) = parse_expr_as_i64(&index_expr) {
+                                // Literal integer: pin X[4] means bus_high = n-1, bus_low = 0
+                                bus_high = Some(n - 1);
+                                bus_low = Some(0);
+                            } else {
+                                // Non-literal (e.g., IDENT like CHANNELS) → parameterized bus size
+                                let text = index_expr.syntax().text().to_string().trim().to_string();
+                                if !text.is_empty() {
+                                    bus_size_param = Some(text);
+                                }
+                            }
+                        }
+                    }
+
                     // Get pin direction from AST
                     let direction = decl.direction()
                         .map(|token| match token.kind() {
@@ -356,23 +450,30 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                             SyntaxKind::INOUT_KW => PortDirectionKind::InOut,
                             _ => PortDirectionKind::In, // Default
                         });
-                    
+
                     // Check if this is a virtual pin
                     let symbol_kind = if decl.is_virtual() {
                         SymbolKind::VirtualPin
                     } else {
                         SymbolKind::Pin
                     };
-                    
-                    context.current_scope_mut().insert(Symbol::new_decl(
-                        name_token.text(), 
+
+                    // Extract when condition for conditional pins
+                    let when_condition = decl.when_condition_text();
+
+                    let mut sym = Symbol::new_decl(
+                        name_token.text(),
                         symbol_kind,
-                        name_token.text_range(), 
+                        name_token.text_range(),
                         node,
-                        bus_high, 
+                        bus_high,
                         bus_low,
-                        direction, 
-                    ));
+                        direction,
+                    );
+                    sym.when_condition = when_condition;
+                    sym.bus_size_param = bus_size_param;
+
+                    context.current_scope_mut().insert(sym);
                 }
             }
         }
@@ -723,11 +824,27 @@ fn extract_generic_params(entity: &Entity) -> Option<Vec<GenericParam>> {
             } else {
                 GenericParamType::Type
             };
+            // Extract default value if present
+            let default = param_node.default_value().and_then(|expr| {
+                match &expr {
+                    Expr::Value(val) => crate::helpers::parse_value_as_const(val),
+                    _ => {
+                        // For non-Value expressions, try to get the text
+                        let text = expr.syntax().text().to_string();
+                        match text.trim() {
+                            "true" => Some(bhdl_common::ConstValue::Bool(true)),
+                            "false" => Some(bhdl_common::ConstValue::Bool(false)),
+                            other => other.parse::<i64>().ok().map(bhdl_common::ConstValue::Integer),
+                        }
+                    }
+                }
+            });
+
             Some(GenericParam {
                 name,
                 param_type,
                 constraints: Vec::new(), // TODO: extract from where clause
-                default: None,           // TODO: extract default value expression
+                default,
             })
         })
         .collect();
@@ -1001,7 +1118,7 @@ fn process_entity_body(entity: &Entity, scope: &mut SymbolTable) {
     // Process pins
     for pin in entity.pins() {
         if let Some(name) = pin.name() {
-            let pin_symbol = Symbol {
+            let mut pin_symbol = Symbol {
                 name: name.text().to_string(),
                 kind: SymbolKind::Pin,
                 span: name.text_range(),
@@ -1014,7 +1131,23 @@ fn process_entity_body(entity: &Entity, scope: &mut SymbolTable) {
                 net_attributes: None,
                 resolved_type: None,
                 generic_params: None,
+                when_condition: None,
+                bus_size_param: None,
             };
+            // Extract when condition and bus size param for imported entities
+            pin_symbol.when_condition = pin.when_condition_text();
+            if let Some(suffix) = pin.bus_suffix() {
+                if suffix.range().is_none() {
+                    if let Some(index_expr) = suffix.index_expr() {
+                        if crate::helpers::parse_expr_as_i64(&index_expr).is_none() {
+                            let text = index_expr.syntax().text().to_string().trim().to_string();
+                            if !text.is_empty() {
+                                pin_symbol.bus_size_param = Some(text);
+                            }
+                        }
+                    }
+                }
+            }
             scope.insert(pin_symbol);
         }
     }
@@ -1036,6 +1169,8 @@ fn process_entity_body(entity: &Entity, scope: &mut SymbolTable) {
                 net_attributes: None,
                 resolved_type: None,
                 generic_params: None,
+                when_condition: None,
+                bus_size_param: None,
             };
             scope.insert(param_symbol);
         }

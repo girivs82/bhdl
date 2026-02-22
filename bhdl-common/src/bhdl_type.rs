@@ -66,6 +66,12 @@ pub enum BhdlType {
     /// Const parameter placeholder (e.g., `N` in `module Foo<N: nat>`).
     ConstParam(String),
 
+    // --- Scalar value types ---
+    /// Integer type (for generic const params like pin counts).
+    Integer,
+    /// Boolean type (for generic const params like feature flags).
+    Bool,
+
     // --- Special ---
     /// Unknown or unresolved type (used during type inference).
     Unknown,
@@ -209,6 +215,8 @@ impl BhdlType {
             "temperature" => BhdlType::Temperature,
             "time" => BhdlType::Time,
             "differential" => BhdlType::Differential,
+            "integer" | "int" => BhdlType::Integer,
+            "bool" | "boolean" => BhdlType::Bool,
             _ => BhdlType::Unknown,
         };
 
@@ -263,6 +271,8 @@ impl fmt::Display for BhdlType {
             BhdlType::Trait(name) => write!(f, "trait {}", name),
             BhdlType::TypeParam(name) => write!(f, "{}", name),
             BhdlType::ConstParam(name) => write!(f, "{}", name),
+            BhdlType::Integer => write!(f, "integer"),
+            BhdlType::Bool => write!(f, "bool"),
             BhdlType::Unknown => write!(f, "unknown"),
             BhdlType::Error => write!(f, "<error>"),
         }
@@ -329,5 +339,19 @@ mod tests {
             format!("{}", BhdlType::array(BhdlType::Signal(None), 4)),
             "signal[4]"
         );
+    }
+
+    #[test]
+    fn test_integer_and_bool_types() {
+        assert_eq!(BhdlType::from_type_name("integer", None), BhdlType::Integer);
+        assert_eq!(BhdlType::from_type_name("int", None), BhdlType::Integer);
+        assert_eq!(BhdlType::from_type_name("bool", None), BhdlType::Bool);
+        assert_eq!(BhdlType::from_type_name("boolean", None), BhdlType::Bool);
+        assert!(!BhdlType::Integer.is_electrical());
+        assert!(!BhdlType::Bool.is_electrical());
+        assert!(!BhdlType::Integer.is_signal());
+        assert!(!BhdlType::Bool.is_signal());
+        assert_eq!(format!("{}", BhdlType::Integer), "integer");
+        assert_eq!(format!("{}", BhdlType::Bool), "bool");
     }
 }

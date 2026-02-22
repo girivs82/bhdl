@@ -1,31 +1,10 @@
 // Test circuit for intent-driven spatial layout
 // This circuit demonstrates all 5 spatial zones
-
-entity TVSDiode(voltage: voltage) {
-    pin K: signal in;
-    pin A: signal in;
-}
-
-entity Res(value: resistance) {
-    pin 1: signal inout;
-    pin 2: signal inout;
-}
-
-entity Cap(value: capacitance) {
-    pin 1: signal inout;
-    pin 2: signal inout;
-}
-
-entity LM7805 {
-    pin VIN: power in;
-    pin VOUT: power out;
-    pin GND: ground;
-}
-
-entity LED(color: string) {
-    pin A: signal in;
-    pin K: signal in;
-}
+import { Res } from "bhdl-stdlib/simple/resistor_simple.bhdl";
+import { Cap } from "bhdl-stdlib/simple/capacitor_simple.bhdl";
+import { LED } from "bhdl-stdlib/simple/led_simple.bhdl";
+import { TVSDiode } from "bhdl-stdlib/simple/protection_simple.bhdl";
+import { LM7805 } from "bhdl-stdlib/simple/regulator_simple.bhdl";
 
 board IntentLayoutDemo {
     power VCC = 12V @ 500mA;
@@ -37,7 +16,7 @@ board IntentLayoutDemo {
         for input_protection(15V, 100mA);
 
     // TOP ZONE: Power regulation
-    net power_regulated: @VCC -> reg: LM7805().VIN -> reg.VOUT -> @VCC5V
+    net power_regulated: @VCC -> reg: LM7805().VI -> reg.VO -> @VCC5V
         for voltage_regulation(5V, 12V);
 
     // CENTER ZONE: Signal processing / filtering

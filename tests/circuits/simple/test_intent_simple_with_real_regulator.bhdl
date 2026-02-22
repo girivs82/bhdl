@@ -1,33 +1,10 @@
 // Simple intent-driven layout demo with real voltage regulator
 // Uses LM7805 from the component database
-
-entity Res(value: resistance) {
-    pin 1: signal inout;
-    pin 2: signal inout;
-}
-
-entity Cap(value: capacitance) {
-    pin 1: signal inout;
-    pin 2: signal inout;
-}
-
-entity LED(color: string) {
-    pin A: signal in;
-    pin K: signal in;
-}
-
-entity TVSDiode(voltage: voltage) {
-    pin A: signal in;   // Anode (ground-side terminal)
-    pin K: signal out;  // Cathode (protected-line terminal)
-}
-
-// LM7805 voltage regulator - matches database component
-// Database pins: 1=VI, 2=GND, 3=VO
-entity LM7805 {
-    pin VI: power in;      // Input voltage (pin 1)
-    pin GND: ground;       // Ground (pin 2)
-    pin VO: power out;     // Regulated 5V output (pin 3)
-}
+import { Res } from "bhdl-stdlib/simple/resistor_simple.bhdl";
+import { Cap } from "bhdl-stdlib/simple/capacitor_simple.bhdl";
+import { LED } from "bhdl-stdlib/simple/led_simple.bhdl";
+import { TVSDiode } from "bhdl-stdlib/simple/protection_simple.bhdl";
+import { LM7805 } from "bhdl-stdlib/simple/regulator_simple.bhdl";
 
 board IntentLayoutDemo {
     power VIN = 12V @ 500mA;

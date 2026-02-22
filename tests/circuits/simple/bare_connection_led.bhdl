@@ -1,13 +1,6 @@
 // Test bare CONNECTION_STMT syntax (no net keyword)
-entity Res(value: resistance) {
-    pin 1: signal inout;
-    pin 2: signal inout;
-}
-
-entity LED(color: string) {
-    pin A: signal in;
-    pin K: signal in;
-}
+import { Res } from "bhdl-stdlib/simple/resistor_simple.bhdl";
+import { LED } from "bhdl-stdlib/simple/led_simple.bhdl";
 
 board BareLED {
     power VCC = 5V @ 100mA;
