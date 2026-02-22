@@ -55,6 +55,9 @@ pub mod synthesis_knowledge;
 // Virtual pin extraction from AST
 pub mod virtual_pin_extractor;
 
+// Virtual pin expansion (post-synthesis wiring of inductor/diode/cap)
+pub mod virtual_pin_expander;
+
 // Intent-aware component generator
 pub mod intent_aware_generator;
 

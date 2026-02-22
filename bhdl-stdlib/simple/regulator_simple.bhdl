@@ -16,3 +16,23 @@ entity LinearRegulator<V_OUT: voltage, HAS_EN: bool = false>(dropout: voltage = 
 alias LM7805 = LinearRegulator<5V>;
 alias LM1117_33 = LinearRegulator<3.3V>;
 alias LM1117_33_EN = LinearRegulator<3.3V, true>;
+
+// Simplified Buck (Switching) Regulators - v2.0 compatible
+// VOUT is marked `virtual` to trigger auto-expansion of inductor, catch diode, and output cap
+
+entity BuckRegulator<V_OUT: voltage>(dropout: voltage = 0.5V) {
+    pin VIN: power in;
+    pin VOUT: power out virtual;
+    pin GND: ground;
+
+    attribute component_class = "switching_regulator";
+    attribute output_voltage = V_OUT;
+    attribute vpin_inductor = 33µH;
+    attribute vpin_diode_vf = 0.5V;
+    attribute vpin_cout = 470µF;
+    attribute vpin_has_diode = true;
+}
+
+// LM2596: 150kHz switching, 3A output
+alias LM2596_5V = BuckRegulator<5V>;
+alias LM2596_3V3 = BuckRegulator<3.3V>;
