@@ -372,7 +372,7 @@ async fn execute_generate_schematic(
         let netlist = rt.block_on(generator.generate_from_ast_and_analysis(&source_file, &analysis))
             .map_err(|e| format!("synthesis_failed: {}", e))?;
 
-        let data = bhdl_schematic::extract_schematic_data(&netlist, Some(&analysis), None)
+        let data = bhdl_schematic::extract_schematic_data(&netlist, Some(&analysis), None, None)
             .map_err(|e| format!("extraction_failed: {}", e))?;
 
         serde_json::to_value(&data)

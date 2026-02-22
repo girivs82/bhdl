@@ -5,6 +5,7 @@
 //! we extract `SchematicData` directly from the netlist slotmaps.
 
 use std::collections::HashMap;
+use std::path::Path;
 
 use bhdl_netlist::{
     Netlist, ConnectionPoint, NetClass, PinDirection, PinType, PortDirection,
@@ -12,17 +13,22 @@ use bhdl_netlist::{
 };
 
 use crate::types::*;
+use crate::refdes::{RefDesLut, category_to_prefix};
 
 /// Extract a `SchematicData` from a BHDL `Netlist` and optional analysis result.
 ///
 /// If `simulation` is provided (from GLACIER DC solver), it is attached to the
 /// output `SchematicData` for the JS renderer to use for wire coloring and annotations.
 ///
+/// If `source_path` is provided, a sidecar `.refdes` file is read/written alongside
+/// the BHDL source to persist stable reference designator assignments.
+///
 /// This is the main public API for the Rust extraction layer.
 pub fn extract_schematic_data(
     netlist: &Netlist,
     analysis: Option<&bhdl_analyzer::AnalysisResult>,
     simulation: Option<SimulationAnnotations>,
+    source_path: Option<&Path>,
 ) -> Result<SchematicData, String> {
     let top_module_id = netlist.top_level_module
         .ok_or_else(|| "No top-level module in netlist".to_string())?;
@@ -302,6 +308,7 @@ pub fn extract_schematic_data(
 
         instances.push(SchematicInstance {
             name: instance.name.clone(),
+            refdes: None,  // assigned in refdes post-pass below
             entity_type: module_def.name.clone(),
             category,
             connections,
@@ -313,6 +320,25 @@ pub fn extract_schematic_data(
             expansion_role,
             line: None,
         });
+    }
+
+    // --- 4b. Assign reference designators using persistent LUT ---
+    let lut_path = source_path.map(|p| p.with_extension("bhdl.refdes"));
+    let mut lut = lut_path.as_ref()
+        .map(|p| RefDesLut::load(p))
+        .unwrap_or_default();
+    lut.version = 1;
+
+    for inst in &mut instances {
+        let prefix = category_to_prefix(&inst.category);
+        inst.refdes = Some(lut.assign(prefix, &inst.name));
+    }
+
+    // Persist updated LUT
+    if let Some(ref path) = lut_path {
+        if let Err(e) = lut.save(path) {
+            log::warn!("Failed to write refdes LUT: {}", e);
+        }
     }
 
     // --- 5. Build nets ---
@@ -1007,7 +1033,7 @@ mod tests {
     #[test]
     fn test_extract_basic() {
         let nl = make_test_netlist();
-        let data = extract_schematic_data(&nl, None, None).unwrap();
+        let data = extract_schematic_data(&nl, None, None, None).unwrap();
 
         assert_eq!(data.entity_name, "TestBoard");
         assert_eq!(data.ports.len(), 2);
@@ -1051,7 +1077,7 @@ mod tests {
 
         nl.connect(vcc_net, ConnectionPoint::PinInstance(r1_pins[0])).unwrap();
 
-        let data = extract_schematic_data(&nl, None, None).unwrap();
+        let data = extract_schematic_data(&nl, None, None, None).unwrap();
         assert_eq!(data.power_rails.len(), 1);
         assert_eq!(data.power_rails[0].name, "VCC");
         assert_eq!(data.power_rails[0].voltage, 5.0);

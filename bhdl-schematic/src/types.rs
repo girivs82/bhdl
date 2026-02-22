@@ -81,8 +81,11 @@ pub struct SchematicFlowPath {
 /// A component instance rendered as a box with ports.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SchematicInstance {
-    /// Instance name, e.g. "R1", "U1", "C_in"
+    /// Instance name (user handle or auto-generated), e.g. "r_load", "c_in", "buck_L"
     pub name: String,
+    /// Reference designator, e.g. "R1", "L2", "C3". Persisted in sidecar .refdes file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refdes: Option<String>,
     /// Entity/component type, e.g. "Res", "LM7805", "Cap"
     pub entity_type: String,
     /// Component category for rendering hints: "resistor", "capacitor", "regulator", "ic", etc.
