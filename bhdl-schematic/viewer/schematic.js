@@ -1822,7 +1822,7 @@
             const simPowerW = data.simulation?.instance_power?.[name];
             const refdes = inst.refdes || null;
             const displayName = refdes && refdesChk?.checked ? refdes : name;
-            layoutElements.push({ x: pos.x, y: pos.y, w: pos.w, h: pos.h, name, refdes, displayName, type: 'instance', entityType: inst.entity_type, parameters: inst.parameters, category: inst.category, isShunt: isShuntLike, isFlipped: flippedNames.has(name), inputPorts: instInPorts, outputPorts: instOutPorts, gndStubs: gndStubsByInst.get(name) || [], pwrStubs: pwrStubsByInst.get(name) || [], pgStubs: [], line: inst.line, simCurrent, simPower: simPowerW, gndTargetY: pos.gndTargetY });
+            layoutElements.push({ x: pos.x, y: pos.y, w: pos.w, h: pos.h, name, refdes, displayName, type: 'instance', entityType: inst.entity_type, parameters: inst.parameters, category: inst.category, isShunt: isShuntLike, isFlipped: flippedNames.has(name), inputPorts: instInPorts, outputPorts: instOutPorts, gndStubs: gndStubsByInst.get(name) || [], pwrStubs: pwrStubsByInst.get(name) || [], pgStubs: [], line: inst.line, simCurrent, simPower: simPowerW, gndTargetY: pos.gndTargetY, _connections: inst.connections });
         }
 
         // Entity output
@@ -2792,6 +2792,19 @@
         }
 
         // Draw the actual symbol
+        // For vertical shunt diodes, determine orientation from pin_direction:
+        // if the top (input) port is the cathode (pin_direction "out"), the
+        // symbol must be flipped so the bar is at the top (cathode up, anode down).
+        let diodeFlip = isFlipped;
+        if (isVertical && (cat === 'diode' || cat === 'protection')) {
+            const topPort = el.inputPorts[0];
+            if (topPort) {
+                // Find the connection whose port matches the top port name
+                const conn = (el._connections || []).find(c => c.port === topPort.name);
+                if (conn && conn.pin_direction === 'out') diodeFlip = !diodeFlip;
+            }
+        }
+
         if (cat === 'resistor') {
             drawResistorSymbol(cx, cy, isVertical);
         } else if (cat === 'capacitor') {
@@ -2801,7 +2814,7 @@
         } else if (cat === 'diode') {
             const entityLower = (el.entityType || '').toLowerCase();
             const isLED = entityLower.startsWith('led');
-            drawDiodeSymbol(cx, cy, isVertical, isLED, isFlipped);
+            drawDiodeSymbol(cx, cy, isVertical, isLED, diodeFlip);
         } else if (cat === 'protection') {
             drawTVSDiodeSymbol(cx, cy, isVertical);
         } else if (cat === 'opamp') {
