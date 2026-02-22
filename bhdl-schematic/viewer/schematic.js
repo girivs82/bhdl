@@ -1157,7 +1157,9 @@
             const isSymbol = isShunt && isSymbolCategory(inst.category);
             if (isSymbol) {
                 // Name label extends LEFT from box: textAlign 'right' at el.x - 4
-                const nameW = measureTextWidth(itemName, FONT_SIZE - 1);
+                // Use the shorter of handle/refdes so layout stays compact
+                const labelForLayout = inst.refdes && inst.refdes.length < itemName.length ? inst.refdes : itemName;
+                const nameW = measureTextWidth(labelForLayout, FONT_SIZE - 1);
                 leftOverhang = Math.max(leftOverhang, nameW + 4);
                 // Value label: resistors have value rotated inside the box (no overhang).
                 // Non-resistor values extend LEFT (right-aligned at el.x - 4).
