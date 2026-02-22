@@ -548,6 +548,7 @@ async fn main() -> Result<()> {
         &netlist,
         Some(&analysis),
         Some(annotations),
+        None,
     )
     .map_err(|e| anyhow::anyhow!("Schematic extraction failed: {}", e))?;
 

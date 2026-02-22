@@ -13,6 +13,17 @@
     if (debugChk) debugChk.addEventListener('change', () => {
         if (debugPanel) debugPanel.style.display = debugChk.checked ? 'block' : 'none';
     });
+    const refdesChk = document.getElementById('chk-refdes');
+    if (refdesChk) refdesChk.addEventListener('change', () => {
+        // Update displayName on all instance elements and re-render
+        const useRefDes = refdesChk.checked;
+        for (const el of layoutElements) {
+            if (el.type === 'instance' && el.refdes) {
+                el.displayName = useRefDes ? el.refdes : el.name;
+            }
+        }
+        render();
+    });
 
     let schematicData = null;
     let panX = 0, panY = 0;
@@ -1807,7 +1818,9 @@
             // into a single entry per instance, so direct lookup is sufficient.
             const simCurrent = data.simulation?.instance_currents?.[name];
             const simPowerW = data.simulation?.instance_power?.[name];
-            layoutElements.push({ x: pos.x, y: pos.y, w: pos.w, h: pos.h, name, type: 'instance', entityType: inst.entity_type, parameters: inst.parameters, category: inst.category, isShunt: isShuntLike, isFlipped: flippedNames.has(name), inputPorts: instInPorts, outputPorts: instOutPorts, gndStubs: gndStubsByInst.get(name) || [], pwrStubs: pwrStubsByInst.get(name) || [], pgStubs: [], line: inst.line, simCurrent, simPower: simPowerW, gndTargetY: pos.gndTargetY });
+            const refdes = inst.refdes || null;
+            const displayName = refdes && refdesChk?.checked ? refdes : name;
+            layoutElements.push({ x: pos.x, y: pos.y, w: pos.w, h: pos.h, name, refdes, displayName, type: 'instance', entityType: inst.entity_type, parameters: inst.parameters, category: inst.category, isShunt: isShuntLike, isFlipped: flippedNames.has(name), inputPorts: instInPorts, outputPorts: instOutPorts, gndStubs: gndStubsByInst.get(name) || [], pwrStubs: pwrStubsByInst.get(name) || [], pgStubs: [], line: inst.line, simCurrent, simPower: simPowerW, gndTargetY: pos.gndTargetY });
         }
 
         // Entity output
@@ -2228,7 +2241,9 @@
         if (hoveredItem) {
             const el = layoutElements.find(e => e.name === hoveredItem);
             if (el && el.type === 'instance') {
-                lines.push(el.name + ' (' + (el.entityType || '') + ')');
+                // Show both user handle and refdes in hover
+                const nameLabel = el.refdes ? el.name + '  [' + el.refdes + ']' : el.name;
+                lines.push(nameLabel + ' (' + (el.entityType || '') + ')');
                 if (sim) {
                     if (el.simCurrent != null) lines.push('I = ' + formatCurrent(el.simCurrent));
                     if (el.simPower != null) lines.push('P = ' + formatPower(el.simPower));
@@ -2369,12 +2384,12 @@
         ctx.fill();
         ctx.restore();
 
-        // Instance name
+        // Instance name (uses displayName which toggles between user handle and refdes)
         ctx.fillStyle = COLORS.text;
         ctx.font = `bold ${FONT_SIZE}px monospace`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(el.name, el.x + el.w / 2, el.y + HEADER_HEIGHT / 2);
+        ctx.fillText(el.displayName || el.name, el.x + el.w / 2, el.y + HEADER_HEIGHT / 2);
 
         // Entity type
         if (el.entityType) {
@@ -2864,7 +2879,7 @@
             ctx.textAlign = 'right';
             ctx.textBaseline = 'middle';
         }
-        ctx.fillText(el.name, labelAboveX, labelAboveY);
+        ctx.fillText(el.displayName || el.name, labelAboveX, labelAboveY);
 
         // Value: inside the rectangle for resistors, below for others
         if (valueInside) {

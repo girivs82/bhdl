@@ -48,15 +48,10 @@ pub fn expand_virtual_pins(netlist: &mut Netlist) -> Vec<ExpansionResult> {
 
     info!("Virtual pin expansion: {} candidate(s) found", candidates.len());
 
-    // Build ref-des counters from existing instances to avoid name collisions.
-    // Scans all instance names for patterns like "L3", "D1", "C12" and seeds
-    // counters so new instances get the next available number.
-    let mut refdes_counters = RefDesCounters::from_netlist(netlist);
-
     let mut results = Vec::new();
 
     for cand in candidates {
-        match expand_one(netlist, &cand, &mut refdes_counters) {
+        match expand_one(netlist, &cand) {
             Ok(result) => {
                 info!("Expanded virtual pin for {} → L={}, D={:?}, COUT={}",
                       result.regulator_name, result.inductor_name,
@@ -70,56 +65,6 @@ pub fn expand_virtual_pins(netlist: &mut Netlist) -> Vec<ExpansionResult> {
     }
 
     results
-}
-
-// ── Reference designator generation ─────────────────────────────────────
-
-/// Tracks per-prefix counters to generate unique reference designators
-/// (L1, L2, D1, C1, ...) consistent with the hierarchical ref-des system.
-struct RefDesCounters {
-    counters: HashMap<String, usize>,
-}
-
-impl RefDesCounters {
-    /// Scan existing instance names for ref-des patterns and seed counters.
-    fn from_netlist(netlist: &Netlist) -> Self {
-        let mut counters: HashMap<String, usize> = HashMap::new();
-        for (_, inst) in &netlist.instances {
-            // Match names like "L3", "D1", "C12", or suffixed like "buck_L1"
-            if let Some((prefix, num)) = parse_refdes(&inst.name) {
-                let entry = counters.entry(prefix).or_insert(0);
-                *entry = (*entry).max(num);
-            }
-        }
-        Self { counters }
-    }
-
-    /// Allocate the next reference designator for a given prefix (e.g. "L" → "L1", "L2", ...).
-    fn next(&mut self, prefix: &str) -> String {
-        let count = self.counters.entry(prefix.to_string()).or_insert(0);
-        *count += 1;
-        format!("{}{}", prefix, count)
-    }
-}
-
-/// Extract (prefix, number) from a reference designator string.
-/// Handles both bare "L3" and suffixed "buck_L1" patterns.
-fn parse_refdes(name: &str) -> Option<(String, usize)> {
-    // Try the last segment after '_' first (for "buck_L1" → "L1")
-    let segment = name.rsplit('_').next().unwrap_or(name);
-    // Find where the trailing digits start
-    let digit_start = segment.rfind(|c: char| !c.is_ascii_digit())?;
-    let prefix = &segment[..=digit_start];
-    let num_str = &segment[digit_start + 1..];
-    if prefix.is_empty() || num_str.is_empty() {
-        return None;
-    }
-    // Only match single-letter prefixes (L, D, C, R, U, etc.)
-    if prefix.len() == 1 && prefix.chars().next()?.is_ascii_uppercase() {
-        num_str.parse::<usize>().ok().map(|n| (prefix.to_string(), n))
-    } else {
-        None
-    }
 }
 
 // ── Candidate discovery ─────────────────────────────────────────────────
@@ -232,7 +177,7 @@ fn find_candidates(netlist: &Netlist) -> Vec<Candidate> {
 
 // ── Single-instance expansion ───────────────────────────────────────────
 
-fn expand_one(netlist: &mut Netlist, cand: &Candidate, refdes: &mut RefDesCounters) -> Result<ExpansionResult, String> {
+fn expand_one(netlist: &mut Netlist, cand: &Candidate) -> Result<ExpansionResult, String> {
     let base = &cand.instance_name; // e.g. "buck"
 
     // Re-resolve nets by scanning all nets for ones that contain our pin instances.
@@ -287,7 +232,7 @@ fn expand_one(netlist: &mut Netlist, cand: &Candidate, refdes: &mut RefDesCounte
     let cap_mod = find_or_create_module(netlist, "Cap", &[("1", true), ("2", true)]);
 
     // --- Inductor: pin 1 → SW, pin 2 → VOUT ---
-    let ind_name = refdes.next("L");
+    let ind_name = format!("{}_L", base);
     let ind_id = create_instance(netlist, &ind_name, ind_mod, &[
         ("component_class", "inductor"),
         ("value", &cand.inductor_value),
@@ -304,7 +249,7 @@ fn expand_one(netlist: &mut Netlist, cand: &Candidate, refdes: &mut RefDesCounte
     // --- Diode (optional): A → GND, K → SW ---
     let diode_name = if cand.has_diode {
         let diode_mod = find_or_create_module(netlist, "Diode", &[("A", false), ("K", false)]);
-        let d_name = refdes.next("D");
+        let d_name = format!("{}_D", base);
         let d_id = create_instance(netlist, &d_name, diode_mod, &[
             ("component_class", "diode"),
             ("forward_voltage", &cand.diode_vf),
@@ -321,7 +266,7 @@ fn expand_one(netlist: &mut Netlist, cand: &Candidate, refdes: &mut RefDesCounte
     };
 
     // --- Output cap: pin 1 → VOUT, pin 2 → GND ---
-    let cout_name = refdes.next("C");
+    let cout_name = format!("{}_Cout", base);
     let cout_id = create_instance(netlist, &cout_name, cap_mod, &[
         ("component_class", "capacitor"),
         ("value", &cand.cout_value),
@@ -517,9 +462,9 @@ mod tests {
         assert_eq!(results.len(), 1, "should expand exactly one regulator");
         let r = &results[0];
         assert_eq!(r.regulator_name, "buck");
-        assert!(r.inductor_name.starts_with("L"), "inductor should get L ref-des, got {}", r.inductor_name);
-        assert!(r.diode_name.as_ref().unwrap().starts_with("D"), "diode should get D ref-des");
-        assert!(r.output_cap_name.starts_with("C"), "cap should get C ref-des, got {}", r.output_cap_name);
+        assert!(r.inductor_name.contains("_L"), "inductor should have _L suffix, got {}", r.inductor_name);
+        assert!(r.diode_name.as_ref().unwrap().contains("_D"), "diode should have _D suffix");
+        assert!(r.output_cap_name.contains("_Cout"), "cap should have _Cout suffix, got {}", r.output_cap_name);
         assert!(r.sw_net_name.contains("SW"));
 
         // 3 new instances (L, D, C)
@@ -558,7 +503,7 @@ mod tests {
 
         let inductor = children.iter().find(|(_, i)| i.attributes.get("vpin_role").map(|s| s.as_str()) == Some("series")).unwrap().1;
         assert_eq!(inductor.attributes.get("component_class").map(|s| s.as_str()), Some("inductor"));
-        assert!(inductor.name.starts_with("L"));
+        assert!(inductor.name.contains("_L"), "inductor name should have _L suffix, got {}", inductor.name);
 
         let shunts: Vec<_> = children.iter()
             .filter(|(_, i)| i.attributes.get("vpin_role").map(|s| s.as_str()) == Some("shunt"))
@@ -657,7 +602,7 @@ mod tests {
             let inductor = children.iter()
                 .find(|(_, i)| i.attributes.get("vpin_role").map(|s| s.as_str()) == Some("series"))
                 .unwrap().1;
-            assert!(inductor.name.starts_with("L"), "inductor ref-des should start with L, got {}", inductor.name);
+            assert!(inductor.name.contains("_L"), "inductor name should have _L suffix, got {}", inductor.name);
 
             let shunts: Vec<_> = children.iter()
                 .filter(|(_, i)| i.attributes.get("vpin_role").map(|s| s.as_str()) == Some("shunt"))
@@ -665,12 +610,12 @@ mod tests {
             assert_eq!(shunts.len(), 2, "{} should have 2 shunt children", prefix);
         }
 
-        // Verify unique ref-des: all L instances should have distinct names
+        // Verify unique names: all inductor instances should have distinct names
         let l_names: Vec<_> = nl.instances.iter()
-            .filter(|(_, i)| i.name.starts_with("L"))
+            .filter(|(_, i)| i.name.contains("_L"))
             .map(|(_, i)| i.name.clone())
             .collect();
         assert_eq!(l_names.len(), 2);
-        assert_ne!(l_names[0], l_names[1], "inductors should have distinct ref-des");
+        assert_ne!(l_names[0], l_names[1], "inductors should have distinct names");
     }
 }

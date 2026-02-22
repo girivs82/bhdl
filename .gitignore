@@ -22,6 +22,9 @@ bhdl-components/test_*.db
 # KiCad symbol cache
 kicad_symbol_cache/
 *.kicad_sym.cache
+# Reference designator sidecar files (generated per-circuit)
+*.bhdl.refdes
+
 # Test scratch directory
 tests/scratch/
 

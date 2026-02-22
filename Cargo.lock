@@ -399,6 +399,7 @@ dependencies = [
  "bhdl-analyzer",
  "bhdl-common",
  "bhdl-netlist",
+ "log",
  "serde",
  "serde_json",
 ]

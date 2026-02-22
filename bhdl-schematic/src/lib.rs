@@ -7,7 +7,9 @@
 pub mod types;
 pub mod extract;
 pub mod html_bundle;
+pub mod refdes;
 
 pub use types::*;
 pub use extract::extract_schematic_data;
 pub use html_bundle::generate_standalone_html;
+pub use refdes::{RefDesLut, category_to_prefix};

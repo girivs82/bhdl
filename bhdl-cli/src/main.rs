@@ -12,7 +12,7 @@ use clap::{Parser, Subcommand};
 use anyhow::{Result, Context};
 use colored::*;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 use log::info;
 
@@ -233,7 +233,7 @@ async fn main() -> Result<()> {
         }
         
         Some(Commands::Visualize { output, json }) => {
-            run_visualization(&source_file, output, json).await?;
+            run_visualization(&source_file, output, json, &cli.input).await?;
         }
         
         Some(Commands::Spice { analysis, output, use_metadata }) => {
@@ -617,7 +617,7 @@ async fn run_synthesis(source_file: &SourceFile, output: Option<PathBuf>, format
     Ok(())
 }
 
-async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, json_output: bool) -> Result<()> {
+async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, json_output: bool, source_path: &Path) -> Result<()> {
     // Run full pipeline to get netlist
     let analysis = analyze(source_file);
 
@@ -671,8 +671,8 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
         }
     }
 
-    // Extract schematic data from netlist
-    let schematic_data = bhdl_schematic::extract_schematic_data(&netlist, Some(&analysis), sim_annotations)
+    // Extract schematic data from netlist (with sidecar .refdes LUT for stable reference designators)
+    let schematic_data = bhdl_schematic::extract_schematic_data(&netlist, Some(&analysis), sim_annotations, Some(source_path))
         .map_err(|e| anyhow::anyhow!("Schematic extraction failed: {}", e))?;
 
     if json_output {
@@ -778,7 +778,7 @@ async fn run_pipeline(source_file: &SourceFile, _input_path: &PathBuf, output_di
     if !no_viz {
         println!("\n{}", "3. Visualization".blue().bold());
 
-        let schematic_data = bhdl_schematic::extract_schematic_data(&netlist, Some(&analysis), None)
+        let schematic_data = bhdl_schematic::extract_schematic_data(&netlist, Some(&analysis), None, None)
             .map_err(|e| anyhow::anyhow!("Schematic extraction failed: {}", e))?;
         let html = bhdl_schematic::generate_standalone_html(&schematic_data);
 
