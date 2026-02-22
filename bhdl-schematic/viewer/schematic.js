@@ -1847,7 +1847,7 @@
                 // per instance, so direct lookup is sufficient.
                 const current = data.simulation?.instance_currents?.[sink.name];
                 const driverIsPowerSource = net.driver.type === 'power_source';
-                layoutWires.push({ from: fromPos, to: toPos, segments, width: net.width || 1, netName: net.name, netClass: net.net_class || 'signal', isPower: isPowerNet, voltage, current, driverIsPowerSource });
+                layoutWires.push({ from: fromPos, to: toPos, sinkElName, segments, width: net.width || 1, netName: net.name, netClass: net.net_class || 'signal', isPower: isPowerNet, voltage, current, driverIsPowerSource });
             }
         }
         layoutElements._junctionPoints = junctionPoints;
@@ -2738,6 +2738,9 @@
     }
 
     function drawWires() {
+        const voltageAnnotatedNets = new Set(); // deduplicate voltage labels per net
+        const wireElByName = new Map();
+        for (const el of layoutElements) wireElByName.set(el.name, el);
         for (const wire of layoutWires) {
             const isBus = wire.width > 1;
             const isHighlighted = hoveredNet === wire.netName;
@@ -2791,19 +2794,33 @@
             ctx.fill();
 
             // ── Voltage & Current annotations ──
-            // Find the longest segment (prefer horizontal) for annotation placement.
-            // Voltage above the wire, current below, both at the same X for alignment.
+            // Find the longest segment for annotation placement.
+            // For shunt wires, prefer vertical segment so labels don't overlap
+            // with the main-path horizontal wire they branch from.
+            const sinkEl = wireElByName.get(wire.sinkElName || '');
+            const isShuntLikeWire = sinkEl && sinkEl.isShunt;
             let bestSeg = null, bestLen = 0;
             if (wire.segments.length > 0) {
                 for (const s of wire.segments) {
                     const hLen = Math.abs(s.x2 - s.x1);
                     const vLen = Math.abs(s.y2 - s.y1);
+                    const isVert = vLen > hLen;
                     const len = Math.max(hLen, vLen);
-                    if (len > bestLen) { bestLen = len; bestSeg = s; }
+                    // For shunt wires, prefer vertical segments to avoid
+                    // overlapping annotations with the main-path wire
+                    const score = (isShuntLikeWire && isVert) ? len + 10000 : len;
+                    if (score > bestLen) { bestLen = score; bestSeg = s; }
                 }
+                // Restore bestLen to actual length for threshold checks
+                bestLen = bestSeg ? Math.max(Math.abs(bestSeg.x2 - bestSeg.x1), Math.abs(bestSeg.y2 - bestSeg.y1)) : 0;
             }
 
-            if (wire.voltage != null && bestSeg && bestLen > 20) {
+            // Show voltage once per net: always on non-shunt wires, skip shunt
+            // wires if the net was already annotated (avoids overlapping labels)
+            const alreadyAnnotated = voltageAnnotatedNets.has(wire.netName);
+            const showVoltage = wire.voltage != null && (!alreadyAnnotated || !isShuntLikeWire);
+            if (showVoltage && bestSeg && bestLen > 20) {
+                voltageAnnotatedNets.add(wire.netName);
                 const segIsHoriz = Math.abs(bestSeg.x2 - bestSeg.x1) >= Math.abs(bestSeg.y2 - bestSeg.y1);
                 ctx.font = `${FONT_SIZE - 2}px monospace`;
                 ctx.fillStyle = isPower ? COLORS.portPower
@@ -2820,8 +2837,9 @@
                     ctx.textBaseline = 'middle';
                     ctx.fillText(formatVoltage(wire.voltage), bestSeg.x1 - 6, cy);
                 }
-            } else if (!wire.driverIsPowerSource && wire.segments.length > 0) {
+            } else if (!wire.driverIsPowerSource && !voltageAnnotatedNets.has(wire.netName) && wire.segments.length > 0) {
                 // No simulation voltage — show net name on first long horizontal segment
+                voltageAnnotatedNets.add(wire.netName);
                 const seg = wire.segments.find(s => Math.abs(s.x2 - s.x1) > 60);
                 if (seg) {
                     const lx = (seg.x1 + seg.x2) / 2;
@@ -2833,7 +2851,10 @@
                 }
             }
 
-            if (wire.current != null && Math.abs(wire.current) > 1e-9 && bestSeg && bestLen > 20) {
+            // Skip current on shunt wires from same net to avoid overlapping labels
+            // on the shared horizontal segment from the power source
+            const skipCurrent = isShuntLikeWire && voltageAnnotatedNets.has(wire.netName);
+            if (wire.current != null && Math.abs(wire.current) > 1e-9 && !skipCurrent && bestSeg && bestLen > 20) {
                 const segIsHoriz = Math.abs(bestSeg.x2 - bestSeg.x1) >= Math.abs(bestSeg.y2 - bestSeg.y1);
                 ctx.font = `${FONT_SIZE - 2}px monospace`;
                 ctx.fillStyle = '#8bc34a';
@@ -2844,7 +2865,7 @@
                     ctx.textBaseline = 'top';
                     ctx.fillText(formatCurrent(Math.abs(wire.current)), lx, bestSeg.y1 + 4);
                 } else {
-                    // Vertical: place below voltage label on same side
+                    // Vertical: place to the right of the segment
                     const cy = (bestSeg.y1 + bestSeg.y2) / 2;
                     ctx.textAlign = 'left';
                     ctx.textBaseline = 'middle';
@@ -2862,40 +2883,7 @@
             ctx.fill();
         }
 
-        // Draw total current at driver side for multi-sink nets (junction total)
-        if (schematicData.simulation?.instance_currents) {
-            // Group wires by net name to find multi-sink nets
-            const wiresByNet = new Map();
-            for (const wire of layoutWires) {
-                if (wire.current != null && Math.abs(wire.current) > 1e-9) {
-                    if (!wiresByNet.has(wire.netName)) wiresByNet.set(wire.netName, []);
-                    wiresByNet.get(wire.netName).push(wire);
-                }
-            }
-            for (const [netName, wires] of wiresByNet) {
-                if (wires.length < 2) continue; // only annotate junctions
-                // Total current = sum of branch currents
-                const totalCurrent = wires.reduce((sum, w) => sum + Math.abs(w.current), 0);
-                if (totalCurrent < 1e-9) continue;
-                // Use the driver current if available (more accurate)
-                const net = (schematicData.nets || []).find(n => n.name === netName);
-                const driverCurrent = net?.driver ? schematicData.simulation.instance_currents[net.driver.name] : null;
-                const displayCurrent = driverCurrent != null ? Math.abs(driverCurrent) : totalCurrent;
-                // Find the shared driver-side horizontal segment (first segment of first wire)
-                const firstWire = wires[0];
-                if (firstWire.segments.length > 1) {
-                    const seg = firstWire.segments[0];
-                    if (Math.abs(seg.x2 - seg.x1) > 30) {
-                        const cx = (seg.x1 + seg.x2) / 2;
-                        ctx.font = `${FONT_SIZE - 2}px monospace`;
-                        ctx.textAlign = 'center';
-                        ctx.textBaseline = 'top';
-                        ctx.fillStyle = '#8bc34a';
-                        ctx.fillText(formatCurrent(displayCurrent), cx, seg.y1 + 4);
-                    }
-                }
-            }
-        }
+        // (Per-wire current annotations above are sufficient; no separate junction-total pass needed)
     }
 
     function drawRoundedRect(ctx, x, y, w, h, r, fill, stroke, lineWidth) {
