@@ -25,7 +25,9 @@
     const PORT_STUB_LEN = 14;
     const ENTITY_PADDING = 16;
     const INSTANCE_PADDING = 12;
-    const COLUMN_GAP = 140;
+    const BASE_GAP = PORT_STUB_LEN * 2 + 16;  // 44px — minimum gap (stubs + margin)
+    const MAX_GAP = 200;                       // cap to prevent overly long wires
+    const ANNOTATION_PAD = 12;                 // extra padding around annotation text
     const ROW_GAP = 50;
     const HEADER_HEIGHT = 22;
     const FONT_SIZE = 11;
@@ -599,6 +601,60 @@
             }
         }
 
+        // ── 7d. Demote dead-end main-path loads to shunts ──
+        // When a net has 2+ non-PG sinks and a main-path sink whose forward chain
+        // doesn't reach other main-path nodes (depth 0), it's a load branch
+        // (e.g., r_led→LED→GND), not a main signal continuation. Demote to shunt
+        // so parallel loads (r_led, r_load) both render as vertical drops.
+        {
+            for (const net of processedNets) {
+                // Count all non-PG sinks
+                const nonPgSinks = net.sinks.filter(s =>
+                    !pgInstNames.has(s.name) && s.type !== 'entity_port'
+                );
+                if (nonPgSinks.length < 2) continue;
+
+                // Find main-path sinks on this net
+                const mpSinks = nonPgSinks.filter(s => mainPathNames.has(s.name));
+                if (mpSinks.length === 0) continue;
+
+                for (const s of mpSinks) {
+                    const inst = instMap.get(s.name);
+                    // Don't demote expansion series children
+                    if (inst && inst.expansion_role === 'series') continue;
+
+                    // Check forward depth: does this sink reach other main-path nodes?
+                    const fwd = allForward.get(s.name) || [];
+                    const reachesMainPath = fwd.some(n => mainPathNames.has(n) && n !== s.name);
+                    if (reachesMainPath) continue;
+
+                    // Dead-end: demote to shunt
+                    mainPathNames.delete(s.name);
+                    const idx = mainPathOrder.indexOf(s.name);
+                    if (idx >= 0) mainPathOrder.splice(idx, 1);
+
+                    // Find the driver (junction point) for the shunt
+                    const driverName = net.driver.type === 'power_source' ? null : net.driver.name;
+                    const junctionName = driverName && mainPathNames.has(driverName) ? driverName : null;
+
+                    shuntNames.push({
+                        name: s.name,
+                        junctionName,
+                        junctionSide: 'right'
+                    });
+
+                    // Move downstream shunts of the demoted component into shunt chains
+                    for (const downName of (allForward.get(s.name) || [])) {
+                        const si = shuntNames.findIndex(sh => sh.name === downName);
+                        if (si >= 0) {
+                            // Update to chain under the newly demoted parent
+                            shuntChainDown.set(s.name, downName);
+                        }
+                    }
+                }
+            }
+        }
+
         // (flippedNames computed after positioning in step 10b)
 
         // ── 7b. Reclassify: shunts connected only to off-path → branch tail ──
@@ -804,9 +860,23 @@
             ...feedbackNames.map(f => f.name)
         ]);
 
-        // ── 9. Sequential L→R placement ──
+        // ── 9. Sequential L→R placement with adaptive gaps ──
         const positions = new Map();
         let curX = 40;
+
+        // Pre-compute annotation text widths for adaptive gap sizing
+        const sim = data.simulation || {};
+        const netVoltages = sim.net_voltages || {};
+        const instCurrents = sim.instance_currents || {};
+
+        function annotationGap(netName, driverInst) {
+            let maxTextW = 0;
+            const v = netVoltages[netName];
+            if (v != null) maxTextW = Math.max(maxTextW, measureTextWidth(formatVoltage(v), FONT_SIZE - 2));
+            const a = instCurrents[driverInst];
+            if (a != null) maxTextW = Math.max(maxTextW, measureTextWidth(formatCurrent(Math.abs(a)), FONT_SIZE - 2));
+            return maxTextW > 0 ? maxTextW + ANNOTATION_PAD * 2 : 0;
+        }
 
         for (const nodeId of mainBandOrder) {
             let w, h;
@@ -832,7 +902,22 @@
                 w = size.w; h = size.h;
             }
             positions.set(nodeId, { x: curX, y: 40, w, h });
-            curX += w + COLUMN_GAP;
+
+            // Adaptive gap: widen only when annotation text needs room
+            let gap = BASE_GAP;
+            const idx = mainBandOrder.indexOf(nodeId);
+            if (idx + 1 < mainBandOrder.length) {
+                const nextNode = mainBandOrder[idx + 1];
+                for (const net of processedNets) {
+                    const isDriver = net.driver.name === nodeId;
+                    const isSink = net.sinks.some(s => s.name === nextNode);
+                    if (isDriver && isSink) {
+                        gap = Math.max(gap, annotationGap(net.name, nodeId));
+                        break;
+                    }
+                }
+            }
+            curX += w + Math.min(gap, MAX_GAP);
         }
 
         // ── 9a. Align main-path nodes by first-port Y position ──
@@ -990,6 +1075,12 @@
                     if (idx >= 0 && idx + 1 < mainPathOrder.length) {
                         item.junctionName = mainPathOrder[idx + 1];
                         item.junctionSide = 'right';
+                    } else {
+                        // Series child is last on main path — use a virtual post-expansion
+                        // junction so placement puts this shunt outside the expansion group.
+                        item.junctionName = '__post_expansion_' + parentName + '__';
+                        item.junctionSide = 'right';
+                        item._postExpansionParent = parentName;
                     }
                 }
             }
@@ -1004,7 +1095,9 @@
             const { inP, outP } = getInstPorts(inst);
             const sz = computeBoxSize(item.name, inst.entity_type, inP, outP, inst.parameters, inst.category);
             // Swap w/h for shunt symbol components (vertical orientation)
-            const isShunt = shuntInstNames.has(item.name);
+            // Check both the early shuntInstNames set AND the shuntNames list
+            // (which includes components demoted to shunt in section 7d)
+            const isShunt = shuntInstNames.has(item.name) || shuntNames.some(s => s.name === item.name);
             if (isShunt && isSymbolCategory(inst.category)) {
                 offPathSizes.set(item.name, { w: sz.h, h: sz.w });
             } else {
@@ -1032,8 +1125,68 @@
         // Compute total width needed at each gap between consecutive main-path nodes
         // A "gap" is between mainPathOrder[i] and mainPathOrder[i+1].
         // Items on 'right' side of node i and 'left' side of node i+1 share this gap.
-        const MIN_ITEM_GAP = 30;  // minimum gap between off-path items
+        const MIN_ITEM_GAP_BASE = 30;  // minimum gap between off-path items
         const MIN_EDGE_PAD = 30;  // minimum padding from main-path node edges
+
+        // Compute how far a shunt item's visuals extend beyond its box edges.
+        // For vertical symbol components, labels are drawn:
+        //   name:  right-aligned at (el.x - 4, cy)  → extends LEFT
+        //   value: left-aligned  at (el.x + w + 4, cy) → extends RIGHT (resistors)
+        //          right-aligned at (el.x - 4, cy+offset) → extends LEFT (others)
+        // Wire annotations on vertical segments:
+        //   voltage: right-aligned at wire.x - 6  → extends LEFT
+        //   current: left-aligned  at wire.x + 6  → extends RIGHT
+        // Returns { left, right } overhang beyond the component box edges.
+        function shuntItemOverhang(itemName) {
+            let leftOverhang = 0, rightOverhang = 0;
+            const inst = instMap.get(itemName);
+            const sz = offPathSizes.get(itemName);
+            if (!inst || !sz) return { left: 0, right: 0 };
+            const isShunt = shuntInstNames.has(itemName) || shuntNames.some(s => s.name === itemName);
+            const isSymbol = isShunt && isSymbolCategory(inst.category);
+            if (isSymbol) {
+                // Name label extends LEFT from box: textAlign 'right' at el.x - 4
+                const nameW = measureTextWidth(itemName, FONT_SIZE - 1);
+                leftOverhang = Math.max(leftOverhang, nameW + 4);
+                // Value label for resistors extends RIGHT from box
+                const paramStr = (inst.parameters || [])
+                    .filter(p => p[1] && INLINE_PARAM_KEYS.has(p[0]))
+                    .map(p => formatParamValue(p[1])).join(', ');
+                if (paramStr && inst.category === 'resistor') {
+                    const valW = measureTextWidth(paramStr, FONT_SIZE - 2);
+                    rightOverhang = Math.max(rightOverhang, valW + 4);
+                } else if (paramStr) {
+                    // Non-resistor value also extends LEFT
+                    const valW = measureTextWidth(paramStr, FONT_SIZE - 2);
+                    leftOverhang = Math.max(leftOverhang, valW + 4);
+                }
+            }
+            // Wire annotation extents (voltage LEFT, current RIGHT of wire center)
+            for (const net of processedNets) {
+                const isSink = net.sinks.some(s => s.name === itemName);
+                if (!isSink) continue;
+                const v = netVoltages[net.name];
+                if (v != null) {
+                    const vw = measureTextWidth(formatVoltage(v), FONT_SIZE - 2) + 6;
+                    // Voltage is at wire center (≈ box center), extends left;
+                    // overhang beyond box left edge = vw - box.w/2
+                    leftOverhang = Math.max(leftOverhang, vw - sz.w / 2);
+                }
+                const a = instCurrents[itemName];
+                if (a != null) {
+                    const cw = measureTextWidth(formatCurrent(Math.abs(a)), FONT_SIZE - 2) + 6;
+                    rightOverhang = Math.max(rightOverhang, cw - sz.w / 2);
+                }
+                break;
+            }
+            return { left: Math.max(0, leftOverhang), right: Math.max(0, rightOverhang) };
+        }
+
+        // Max single-side overhang (for gap sizing in groupTotalWidth and placement loops)
+        function shuntAnnotationWidth(itemName) {
+            const ext = shuntItemOverhang(itemName);
+            return Math.max(ext.left, ext.right);
+        }
 
         // Compute total width needed for a group of off-path items
         function groupTotalWidth(items) {
@@ -1042,8 +1195,19 @@
                 const sz = offPathSizes.get(item.name);
                 if (sz) total += sz.w;
             }
-            // Add gaps between items
-            if (items.length > 1) total += (items.length - 1) * MIN_ITEM_GAP;
+            // Add adaptive gaps between consecutive items using directional overhangs
+            if (items.length > 1) {
+                for (let i = 0; i < items.length - 1; i++) {
+                    const thisOH = shuntItemOverhang(items[i].name);
+                    const nextOH = shuntItemOverhang(items[i + 1].name);
+                    total += Math.max(MIN_ITEM_GAP_BASE, thisOH.right + nextOH.left + ANNOTATION_PAD);
+                }
+            }
+            // Also account for first item's left overhang and last item's right overhang
+            if (items.length > 0) {
+                total += shuntItemOverhang(items[0].name).left;
+                total += shuntItemOverhang(items[items.length - 1].name).right;
+            }
             return total;
         }
 
@@ -1135,6 +1299,28 @@
         }
         const shuntY = mainBandBottom + SHUNT_DROP;
 
+        // Create virtual positions for post-expansion junction points.
+        // These represent a point just past the expansion group's rightmost element.
+        for (const item of verticalDropItems) {
+            if (!item._postExpansionParent) continue;
+            const parentName = item._postExpansionParent;
+            const vKey = item.junctionName; // '__post_expansion_<parent>__'
+            if (positions.has(vKey)) continue;
+            // Find rightmost position of any expansion group member (parent + children)
+            let maxRight = 0;
+            const parentPos = positions.get(parentName);
+            if (parentPos) maxRight = parentPos.x + parentPos.w;
+            const group = expansionGroups.get(parentName);
+            if (group) {
+                for (const cn of [...group.series, ...group.shunt]) {
+                    const cp = positions.get(cn);
+                    if (cp) maxRight = Math.max(maxRight, cp.x + cp.w);
+                }
+            }
+            // Place virtual junction past the expansion group
+            positions.set(vKey, { x: maxRight + PORT_STUB_LEN * 2, y: mainBandBottom - 20, w: 0, h: 0 });
+        }
+
         // ── 10b. Place shunts/decoupling with width-aware distribution ──
         for (const [, group] of dropGroups) {
             const jPos = positions.get(group.junctionName);
@@ -1159,7 +1345,10 @@
                     const sz = itemSizes[i];
                     rx -= sz.w;
                     positions.set(items[i].name, { x: rx, y: shuntY, w: sz.w, h: sz.h });
-                    rx -= MIN_ITEM_GAP;
+                    // Gap accounts for this item's left label overhang + next item's right
+                    const thisOH = shuntItemOverhang(items[i].name);
+                    const nextOH = i > 0 ? shuntItemOverhang(items[i - 1].name) : { left: 0, right: 0 };
+                    rx -= Math.max(MIN_ITEM_GAP_BASE, thisOH.left + nextOH.right + ANNOTATION_PAD);
                 }
             } else {
                 // Right side: leftmost item offset right of output port dot, grow right
@@ -1168,7 +1357,10 @@
                 for (let i = 0; i < items.length; i++) {
                     const sz = itemSizes[i];
                     positions.set(items[i].name, { x: lx, y: shuntY, w: sz.w, h: sz.h });
-                    lx += sz.w + MIN_ITEM_GAP;
+                    // Gap accounts for this item's right overhang + next item's left overhang
+                    const thisOH = shuntItemOverhang(items[i].name);
+                    const nextOH = i + 1 < items.length ? shuntItemOverhang(items[i + 1].name) : { left: 0, right: 0 };
+                    lx += sz.w + Math.max(MIN_ITEM_GAP_BASE, thisOH.right + nextOH.left + ANNOTATION_PAD);
                 }
             }
         }
@@ -1181,7 +1373,13 @@
             for (let i = 1; i < allDrop.length; i++) {
                 const prev = positions.get(allDrop[i - 1].name);
                 const curr = positions.get(allDrop[i].name);
-                const minX = prev.x + prev.w + MIN_ITEM_GAP;
+                // Account for labels + wire annotation overhang on both sides:
+                // prev's right overhang (value label for resistors, current annotation)
+                // curr's left overhang (name label, voltage annotation)
+                const prevOH = shuntItemOverhang(allDrop[i - 1].name);
+                const currOH = shuntItemOverhang(allDrop[i].name);
+                const effectiveGap = Math.max(MIN_ITEM_GAP_BASE, prevOH.right + currOH.left + ANNOTATION_PAD);
+                const minX = prev.x + prev.w + effectiveGap;
                 if (curr.x < minX) curr.x = minX;
             }
         }
@@ -1211,6 +1409,43 @@
                 y: childY,
                 w: childSz.w, h: childSz.h
             });
+        }
+
+        // ── 10b-post. Align all shunt column bottoms to the same Y ──
+        // Find the lowest bottom Y across all shunt columns (including chain children),
+        // then store a common gndTargetY on each shunt element so GND stubs align.
+        {
+            // Build column bottom map: for each shunt root, find the lowest child bottom
+            const shuntChainParents = new Set(shuntChainDown.keys());
+            const shuntChainChildSet = new Set(shuntChainDown.values());
+            let maxBottomY = 0;
+            for (const item of verticalDropItems) {
+                const pos = positions.get(item.name);
+                if (!pos) continue;
+                let bottomY = pos.y + pos.h;
+                // If this item has a chain child, the child's bottom is the column bottom
+                if (shuntChainDown.has(item.name)) {
+                    const childPos = positions.get(shuntChainDown.get(item.name));
+                    if (childPos) bottomY = childPos.y + childPos.h;
+                }
+                // If this item IS a chain child, its bottom is the column bottom
+                if (shuntChainChildSet.has(item.name)) {
+                    bottomY = pos.y + pos.h;
+                }
+                maxBottomY = Math.max(maxBottomY, bottomY);
+            }
+            // Store gndTargetY on positions so GND stubs extend to common bottom
+            if (maxBottomY > 0) {
+                for (const item of verticalDropItems) {
+                    const pos = positions.get(item.name);
+                    if (pos) pos.gndTargetY = maxBottomY;
+                    // Also set on chain children
+                    if (shuntChainDown.has(item.name)) {
+                        const childPos = positions.get(shuntChainDown.get(item.name));
+                        if (childPos) childPos.gndTargetY = maxBottomY;
+                    }
+                }
+            }
         }
 
         // ── 10c. Place branches as horizontal chains ──
@@ -1575,7 +1810,7 @@
             // into a single entry per instance, so direct lookup is sufficient.
             const simCurrent = data.simulation?.instance_currents?.[name];
             const simPowerW = data.simulation?.instance_power?.[name];
-            layoutElements.push({ x: pos.x, y: pos.y, w: pos.w, h: pos.h, name, type: 'instance', entityType: inst.entity_type, parameters: inst.parameters, category: inst.category, isShunt: isShuntLike, isFlipped: flippedNames.has(name), inputPorts: instInPorts, outputPorts: instOutPorts, gndStubs: gndStubsByInst.get(name) || [], pwrStubs: pwrStubsByInst.get(name) || [], pgStubs: [], line: inst.line, simCurrent, simPower: simPowerW });
+            layoutElements.push({ x: pos.x, y: pos.y, w: pos.w, h: pos.h, name, type: 'instance', entityType: inst.entity_type, parameters: inst.parameters, category: inst.category, isShunt: isShuntLike, isFlipped: flippedNames.has(name), inputPorts: instInPorts, outputPorts: instOutPorts, gndStubs: gndStubsByInst.get(name) || [], pwrStubs: pwrStubsByInst.get(name) || [], pgStubs: [], line: inst.line, simCurrent, simPower: simPowerW, gndTargetY: pos.gndTargetY });
         }
 
         // Entity output
@@ -1846,8 +2081,11 @@
                 // build_simulation_annotations() unifies decomposed branches into a single entry
                 // per instance, so direct lookup is sufficient.
                 const current = data.simulation?.instance_currents?.[sink.name];
+                // Driver current: total current leaving the driver into this net.
+                // Used for the shared horizontal trunk segment on fan-out nets.
+                const driverCurrent = data.simulation?.instance_currents?.[driverElName];
                 const driverIsPowerSource = net.driver.type === 'power_source';
-                layoutWires.push({ from: fromPos, to: toPos, sinkElName, segments, width: net.width || 1, netName: net.name, netClass: net.net_class || 'signal', isPower: isPowerNet, voltage, current, driverIsPowerSource });
+                layoutWires.push({ from: fromPos, to: toPos, sinkElName, segments, width: net.width || 1, netName: net.name, netClass: net.net_class || 'signal', isPower: isPowerNet, voltage, current, driverCurrent, driverIsPowerSource });
             }
         }
         layoutElements._junctionPoints = junctionPoints;
@@ -2668,19 +2906,22 @@
         for (let i = 0; i < count; i++) {
             const cx = el.x + spacing * (i + 1);
             const botY = el.y + el.h;
+            // If gndTargetY is set, extend the stub wire to reach the common bottom
+            const targetY = el.gndTargetY || botY;
+            const stubStartY = Math.max(botY, targetY);
 
-            // Vertical line down
+            // Vertical line down (may be extended to align with other columns)
             ctx.strokeStyle = COLORS.groundStub;
             ctx.lineWidth = 1.5;
             ctx.beginPath();
             ctx.moveTo(cx, botY);
-            ctx.lineTo(cx, botY + GND_STUB_HEIGHT);
+            ctx.lineTo(cx, stubStartY + GND_STUB_HEIGHT);
             ctx.stroke();
 
             // Ground symbol: 3 narrowing horizontal lines
             for (let g = 0; g < GND_LINE_WIDTHS.length; g++) {
                 const lw = GND_LINE_WIDTHS[g];
-                const ly = botY + GND_STUB_HEIGHT + g * GND_LINE_SPACING;
+                const ly = stubStartY + GND_STUB_HEIGHT + g * GND_LINE_SPACING;
                 ctx.beginPath();
                 ctx.moveTo(cx - lw / 2, ly);
                 ctx.lineTo(cx + lw / 2, ly);
@@ -2815,27 +3056,42 @@
                 bestLen = bestSeg ? Math.max(Math.abs(bestSeg.x2 - bestSeg.x1), Math.abs(bestSeg.y2 - bestSeg.y1)) : 0;
             }
 
-            // Show voltage once per net: always on non-shunt wires, skip shunt
-            // wires if the net was already annotated (avoids overlapping labels)
+            // ── Voltage annotation ──
+            // Show voltage once per net. For shunt wires, show on the first wire's
+            // longest horizontal segment (the shared "trunk" from the driver).
             const alreadyAnnotated = voltageAnnotatedNets.has(wire.netName);
             const showVoltage = wire.voltage != null && (!alreadyAnnotated || !isShuntLikeWire);
+
+            // Find the longest horizontal segment for trunk annotations
+            const horizSeg = wire.segments.reduce((best, s) => {
+                const len = Math.abs(s.x2 - s.x1);
+                return (len > Math.abs(s.y2 - s.y1) && len > (best ? Math.abs(best.x2 - best.x1) : 0)) ? s : best;
+            }, null);
+            // Find the longest vertical segment for branch annotations
+            const vertSeg = wire.segments.reduce((best, s) => {
+                const len = Math.abs(s.y2 - s.y1);
+                return (len > Math.abs(s.x2 - s.x1) && len > (best ? Math.abs(best.y2 - best.y1) : 0)) ? s : best;
+            }, null);
+
             if (showVoltage && bestSeg && bestLen > 20) {
                 voltageAnnotatedNets.add(wire.netName);
-                const segIsHoriz = Math.abs(bestSeg.x2 - bestSeg.x1) >= Math.abs(bestSeg.y2 - bestSeg.y1);
+                // For shunt wires, prefer the horizontal trunk segment for voltage
+                const vSeg = (isShuntLikeWire && horizSeg && Math.abs(horizSeg.x2 - horizSeg.x1) > 30) ? horizSeg : bestSeg;
+                const segIsHoriz = Math.abs(vSeg.x2 - vSeg.x1) >= Math.abs(vSeg.y2 - vSeg.y1);
                 ctx.font = `${FONT_SIZE - 2}px monospace`;
                 ctx.fillStyle = isPower ? COLORS.portPower
                     : isHighlighted ? COLORS.wireHighlight
                     : '#90caf9';
                 if (segIsHoriz) {
-                    const lx = (bestSeg.x1 + bestSeg.x2) / 2;
+                    const lx = (vSeg.x1 + vSeg.x2) / 2;
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'bottom';
-                    ctx.fillText(formatVoltage(wire.voltage), lx, bestSeg.y1 - 5);
+                    ctx.fillText(formatVoltage(wire.voltage), lx, vSeg.y1 - 5);
                 } else {
-                    const cy = (bestSeg.y1 + bestSeg.y2) / 2;
+                    const cy = (vSeg.y1 + vSeg.y2) / 2;
                     ctx.textAlign = 'right';
                     ctx.textBaseline = 'middle';
-                    ctx.fillText(formatVoltage(wire.voltage), bestSeg.x1 - 6, cy);
+                    ctx.fillText(formatVoltage(wire.voltage), vSeg.x1 - 6, cy);
                 }
             } else if (!wire.driverIsPowerSource && !voltageAnnotatedNets.has(wire.netName) && wire.segments.length > 0) {
                 // No simulation voltage — show net name on first long horizontal segment
@@ -2851,21 +3107,42 @@
                 }
             }
 
-            // Skip current on shunt wires from same net to avoid overlapping labels
-            // on the shared horizontal segment from the power source
-            const skipCurrent = isShuntLikeWire && voltageAnnotatedNets.has(wire.netName);
-            if (wire.current != null && Math.abs(wire.current) > 1e-9 && !skipCurrent && bestSeg && bestLen > 20) {
+            // ── Current annotations ──
+            // For shunt fan-out wires: show DRIVER current on the horizontal trunk
+            // (once per net) and SINK current on the vertical drop (per wire).
+            // For non-shunt wires: show sink current on the best segment.
+            if (isShuntLikeWire) {
+                // Trunk: driver's total current on horizontal segment (once per net)
+                const trunkCurrent = wire.driverCurrent;
+                if (!alreadyAnnotated && trunkCurrent != null && Math.abs(trunkCurrent) > 1e-3
+                    && horizSeg && Math.abs(horizSeg.x2 - horizSeg.x1) > 30) {
+                    const lx = (horizSeg.x1 + horizSeg.x2) / 2;
+                    ctx.font = `${FONT_SIZE - 2}px monospace`;
+                    ctx.fillStyle = '#8bc34a';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'top';
+                    ctx.fillText(formatCurrent(Math.abs(trunkCurrent)), lx, horizSeg.y1 + 4);
+                }
+                // Branch: sink's individual current on vertical segment
+                if (wire.current != null && Math.abs(wire.current) > 1e-3
+                    && vertSeg && Math.abs(vertSeg.y2 - vertSeg.y1) > 20) {
+                    const cy = (vertSeg.y1 + vertSeg.y2) / 2;
+                    ctx.font = `${FONT_SIZE - 2}px monospace`;
+                    ctx.fillStyle = '#8bc34a';
+                    ctx.textAlign = 'left';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(formatCurrent(Math.abs(wire.current)), vertSeg.x1 + 6, cy);
+                }
+            } else if (wire.current != null && Math.abs(wire.current) > 1e-3 && bestSeg && bestLen > 20) {
                 const segIsHoriz = Math.abs(bestSeg.x2 - bestSeg.x1) >= Math.abs(bestSeg.y2 - bestSeg.y1);
                 ctx.font = `${FONT_SIZE - 2}px monospace`;
                 ctx.fillStyle = '#8bc34a';
                 if (segIsHoriz) {
-                    // Same X as voltage (midpoint), but below the wire
                     const lx = (bestSeg.x1 + bestSeg.x2) / 2;
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'top';
                     ctx.fillText(formatCurrent(Math.abs(wire.current)), lx, bestSeg.y1 + 4);
                 } else {
-                    // Vertical: place to the right of the segment
                     const cy = (bestSeg.y1 + bestSeg.y2) / 2;
                     ctx.textAlign = 'left';
                     ctx.textBaseline = 'middle';
