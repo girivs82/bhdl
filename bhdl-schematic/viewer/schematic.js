@@ -3074,10 +3074,9 @@
             }
 
             // ── Voltage annotation ──
-            // Show voltage once per net. For shunt wires, show on the first wire's
-            // longest horizontal segment (the shared "trunk" from the driver).
+            // Show voltage once per net — the first wire to claim the net wins.
             const alreadyAnnotated = voltageAnnotatedNets.has(wire.netName);
-            const showVoltage = wire.voltage != null && (!alreadyAnnotated || !isShuntLikeWire);
+            const showVoltage = wire.voltage != null && !alreadyAnnotated;
 
             // Find the longest horizontal segment for trunk annotations
             const horizSeg = wire.segments.reduce((best, s) => {
