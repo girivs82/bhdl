@@ -434,8 +434,17 @@ This ensures we build a robust, production-ready toolchain rather than a demo wi
   - Scope registry, rich const eval, dimensional analysis
   - Enums/match, structured diagnostics, parameterized types
   - Typed generics, monomorphization, traits, safety annotations
+- **GLACIER-Driven Component Physical Selection** (PLANNED)
+  - User specifies only electrical values: `Res(10k)`, `Cap(100nF)`
+  - GLACIER DC simulation computes operating point (V, I, P at every node)
+  - Post-simulation pass in Pass 6 (Component Inference) selects physical parameters:
+    - **Resistor**: P = V×I → power rating → package size (0402 ≤ 1/16W, 0603 ≤ 1/10W, 0805 ≤ 1/8W, 1206 ≤ 1/4W)
+    - **Capacitor**: V across → voltage rating (2× derating) → dielectric (C0G for small/precision, X7R for bulk) → package
+    - **LED**: I through → package size
+    - **TVS**: clamping voltage + peak current → package
+  - Physical parameters stored as attributes on netlist instances for BOM/layout
+  - Stdlib stays clean (electrical intent only); toolchain determines physical realization
 - VSCode extension for schematic webview (Phase 2)
-- Additional manufacturer datasheet values in stdlib
 - Further simulation tool integration
 
 ### Test Commands
