@@ -418,12 +418,12 @@ fn compute_net_load_currents(
 /// - Power dissipation: I² × DCR
 /// - Package size by current rating
 ///
-/// For expanded buck inductors (name matching `*_L1`), GLACIER reports 0A
-/// because both terminals sit at the same DC voltage. In this case, we find
-/// the VOUT-side net and use the total load current on that net — which is
-/// exactly what the inductor must carry. The cascade fixup in
-/// `build_simulation_annotations()` ensures that power sources on the VOUT net
-/// already include all downstream regulator loads.
+/// For expanded buck inductors (identified by `vpin_role = "series"`),
+/// GLACIER reports 0A because both terminals sit at the same DC voltage.
+/// In this case, we find the VOUT-side net and use the total load current
+/// on that net — which is exactly what the inductor must carry. The cascade
+/// fixup in `build_simulation_annotations()` ensures that power sources on
+/// the VOUT net already include all downstream regulator loads.
 fn select_inductor_physical(
     inst_name: &str,
     inst_id: bhdl_netlist::InstanceId,
@@ -443,9 +443,9 @@ fn select_inductor_physical(
         .unwrap_or(0.0)
         .abs();
 
-    // For expanded buck inductors (e.g. "buck_L1"), the DC inductor current is 0
-    // because both sides sit at the same voltage. Infer the actual current from
-    // the VOUT-side net's total load current.
+    // For expanded buck inductors, the DC inductor current is 0 because both
+    // sides sit at the same voltage. Infer the actual current from the
+    // VOUT-side net's total load current.
     //
     // The inductor connects SW (pin 1) → VOUT (pin 2). Pin 2's net carries
     // the load current we need.
@@ -526,9 +526,9 @@ fn find_inductor_vout_net_current(
     let instance = netlist.instances.get(inst_id)?;
     let module_def = netlist.modules.get(instance.definition)?;
 
-    // Find pin "2" (VOUT side) of the inductor
+    // Find the VOUT-side pin of the inductor ("OUT" for expansion inductors, "2" for legacy)
     let pin2_id = module_def.pins.iter()
-        .find(|&&pid| netlist.pins.get(pid).map(|p| p.name == "2").unwrap_or(false))
+        .find(|&&pid| netlist.pins.get(pid).map(|p| p.name == "OUT" || p.name == "2").unwrap_or(false))
         .copied()?;
 
     // Find the pin instance for (this instance, pin 2)

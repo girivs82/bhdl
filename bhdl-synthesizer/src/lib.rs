@@ -1044,26 +1044,30 @@ impl NetlistGenerator {
             info!("  Supporting component: {} -> {:?}", name, id);
         }
         
-        // Group components by IC they belong to
+        // Group components by the IC they belong to.
+        // Prefer vpin_parent attribute; fall back to name prefix for legacy components.
         let mut components_by_ic: HashMap<String, Vec<(String, InstanceId)>> = HashMap::new();
         for (name, id) in &self.supporting_component_instances {
-            if let Some(ic_prefix) = name.split('_').next() {
-                components_by_ic.entry(ic_prefix.to_string())
+            let ic_prefix = self.netlist.instances.get(*id)
+                .and_then(|inst| inst.attributes.get("vpin_parent").cloned())
+                .or_else(|| name.split('_').next().map(|s| s.to_string()));
+            if let Some(prefix) = ic_prefix {
+                components_by_ic.entry(prefix)
                     .or_insert_with(Vec::new)
                     .push((name.clone(), *id));
             }
         }
-        
+
         // Create connections for each IC's supporting components
         for (ic_name, components) in components_by_ic {
             info!("Creating connections for IC {} supporting components ({} components)", ic_name, components.len());
-            
+
             // Find relevant nets - we need SW, VOUT, GND, FB nets
             let sw_net = self.find_or_create_net(&format!("{}_SW", ic_name), NetClass::Signal);
             let vout_net = self.find_or_create_net("VOUT", NetClass::Power(5.0)); // TODO: Get actual voltage
             let gnd_net = self.find_or_create_net("GND", NetClass::Ground);
             let fb_net = self.find_or_create_net(&format!("{}_FB", ic_name), NetClass::Signal);
-            
+
             for (comp_name, comp_id) in components {
                 // Get the module for this component to create pins
                 let module_id = if let Some(inst) = self.netlist.instances.get(comp_id) {
@@ -1071,139 +1075,116 @@ impl NetlistGenerator {
                 } else {
                     continue;
                 };
-                
-                // Parse component type and number from name (e.g., "U1_L1" -> "L", "1")
-                let comp_parts: Vec<&str> = comp_name.split('_').collect();
-                if comp_parts.len() < 2 {
-                    continue;
-                }
-                
-                let comp_type_str = comp_parts[1];
-                let comp_type = comp_type_str.chars().next().unwrap_or('?');
-                
-                // Create pins if they don't exist and connect based on component type
-                match comp_type {
-                    'L' if comp_type_str == "L1" => {
-                        // Inductor: SW -> L1.1, L1.2 -> VOUT
-                        info!("Connecting inductor {}", comp_name);
-                        let pin1 = self.get_or_create_pin(module_id, "1", PinDirection::In);
-                        let pin2 = self.get_or_create_pin(module_id, "2", PinDirection::Out);
-                        
-                        // Create pin instances and connect
-                        let pin_inst1 = self.netlist.pin_instances.insert_with_key(|id| PinInstance {
-                            id,
-                            pin_def: pin1,
-                            instance: comp_id,
-                            net: Some(sw_net),
-                            connection_name: None,
-                        });
-                        let pin_inst2 = self.netlist.pin_instances.insert_with_key(|id| PinInstance {
-                            id,
-                            pin_def: pin2,
-                            instance: comp_id,
-                            net: Some(vout_net),
-                            connection_name: None,
-                        });
-                        
-                        // Add connections to nets
-                        self.netlist.connect(sw_net, ConnectionPoint::PinInstance(pin_inst1)).ok();
-                        self.netlist.connect(vout_net, ConnectionPoint::PinInstance(pin_inst2)).ok();
-                    },
-                    'C' => {
-                        // Capacitor: Typically VOUT -> C.1, C.2 -> GND
-                        info!("Connecting capacitor {}", comp_name);
-                        let pin1 = self.get_or_create_pin(module_id, "1", PinDirection::In);
-                        let pin2 = self.get_or_create_pin(module_id, "2", PinDirection::In);
-                        
-                        // Determine which nets to connect based on capacitor position
-                        let (net1, net2) = if comp_name.contains("C1") || comp_name.contains("C2") {
-                            // Bootstrap or output capacitors
-                            (vout_net, gnd_net)
-                        } else {
-                            // Other capacitors default to VOUT/GND
-                            (vout_net, gnd_net)
-                        };
-                        
-                        let pin_inst1 = self.netlist.pin_instances.insert_with_key(|id| PinInstance {
-                            id,
-                            pin_def: pin1,
-                            instance: comp_id,
-                            net: Some(net1),
-                            connection_name: None,
-                        });
-                        let pin_inst2 = self.netlist.pin_instances.insert_with_key(|id| PinInstance {
-                            id,
-                            pin_def: pin2,
-                            instance: comp_id,
-                            net: Some(net2),
-                            connection_name: None,
-                        });
-                        
-                        self.netlist.connect(net1, ConnectionPoint::PinInstance(pin_inst1)).ok();
-                        self.netlist.connect(net2, ConnectionPoint::PinInstance(pin_inst2)).ok();
-                    },
-                    'R' => {
-                        // Resistor: Feedback divider typically VOUT -> R1.1, R1.2 -> FB, FB -> R2.1, R2.2 -> GND
-                        info!("Connecting resistor {}", comp_name);
-                        let pin1 = self.get_or_create_pin(module_id, "1", PinDirection::In);
-                        let pin2 = self.get_or_create_pin(module_id, "2", PinDirection::Out);
-                        
-                        let (net1, net2) = if comp_name.contains("R1") {
-                            // Top feedback resistor: VOUT -> R1.1, R1.2 -> FB
-                            (vout_net, fb_net)
-                        } else if comp_name.contains("R2") {
-                            // Bottom feedback resistor: FB -> R2.1, R2.2 -> GND
-                            (fb_net, gnd_net)
-                        } else {
-                            // Other resistors default
-                            (vout_net, gnd_net)
-                        };
-                        
-                        let pin_inst1 = self.netlist.pin_instances.insert_with_key(|id| PinInstance {
-                            id,
-                            pin_def: pin1,
-                            instance: comp_id,
-                            net: Some(net1),
-                            connection_name: None,
-                        });
-                        let pin_inst2 = self.netlist.pin_instances.insert_with_key(|id| PinInstance {
-                            id,
-                            pin_def: pin2,
-                            instance: comp_id,
-                            net: Some(net2),
-                            connection_name: None,
-                        });
-                        
-                        self.netlist.connect(net1, ConnectionPoint::PinInstance(pin_inst1)).ok();
-                        self.netlist.connect(net2, ConnectionPoint::PinInstance(pin_inst2)).ok();
-                    },
-                    'D' if comp_type_str == "D1" => {
-                        // Diode: GND -> D.A (anode), D.K (cathode) -> SW
-                        info!("Connecting diode {}", comp_name);
-                        let pin_a = self.get_or_create_pin(module_id, "A", PinDirection::In);
-                        let pin_k = self.get_or_create_pin(module_id, "K", PinDirection::Out);
-                        
-                        let pin_inst_a = self.netlist.pin_instances.insert_with_key(|id| PinInstance {
-                            id,
-                            pin_def: pin_a,
-                            instance: comp_id,
-                            net: Some(gnd_net),
-                            connection_name: None,
-                        });
-                        let pin_inst_k = self.netlist.pin_instances.insert_with_key(|id| PinInstance {
-                            id,
-                            pin_def: pin_k,
-                            instance: comp_id,
-                            net: Some(sw_net),
-                            connection_name: None,
-                        });
-                        
-                        self.netlist.connect(gnd_net, ConnectionPoint::PinInstance(pin_inst_a)).ok();
-                        self.netlist.connect(sw_net, ConnectionPoint::PinInstance(pin_inst_k)).ok();
-                    },
-                    _ => {
-                        info!("Unknown component type for {} (type={}, char={})", comp_name, comp_type_str, comp_type);
-                    }
+
+                // Determine component role from attributes, then fall back to name parsing.
+                let (comp_class, comp_role) = {
+                    let inst = self.netlist.instances.get(comp_id);
+                    let class = inst.and_then(|i| i.attributes.get("component_class").cloned());
+                    let role = inst.and_then(|i| i.attributes.get("vpin_role").cloned());
+                    (class.unwrap_or_default(), role.unwrap_or_default())
+                };
+
+                // Classify by component_class + vpin_role, fall back to name heuristic
+                let is_inductor = comp_class == "inductor" || comp_name.starts_with("L");
+                let is_capacitor = comp_class == "capacitor" || comp_name.starts_with("C");
+                let is_resistor = comp_class == "resistor" || comp_name.starts_with("R");
+                let is_diode = comp_class == "diode" || comp_name.starts_with("D");
+
+                if is_inductor && comp_role != "shunt" {
+                    // Inductor (series): SW -> IN, OUT -> VOUT
+                    info!("Connecting inductor {}", comp_name);
+                    let pin1 = self.get_or_create_pin(module_id, "IN", PinDirection::In);
+                    let pin2 = self.get_or_create_pin(module_id, "OUT", PinDirection::Out);
+
+                    let pin_inst1 = self.netlist.pin_instances.insert_with_key(|id| PinInstance {
+                        id,
+                        pin_def: pin1,
+                        instance: comp_id,
+                        net: Some(sw_net),
+                        connection_name: None,
+                    });
+                    let pin_inst2 = self.netlist.pin_instances.insert_with_key(|id| PinInstance {
+                        id,
+                        pin_def: pin2,
+                        instance: comp_id,
+                        net: Some(vout_net),
+                        connection_name: None,
+                    });
+
+                    self.netlist.connect(sw_net, ConnectionPoint::PinInstance(pin_inst1)).ok();
+                    self.netlist.connect(vout_net, ConnectionPoint::PinInstance(pin_inst2)).ok();
+                } else if is_capacitor {
+                    // Capacitor: VOUT -> pin 1, pin 2 -> GND
+                    info!("Connecting capacitor {}", comp_name);
+                    let pin1 = self.get_or_create_pin(module_id, "1", PinDirection::In);
+                    let pin2 = self.get_or_create_pin(module_id, "2", PinDirection::In);
+
+                    let pin_inst1 = self.netlist.pin_instances.insert_with_key(|id| PinInstance {
+                        id,
+                        pin_def: pin1,
+                        instance: comp_id,
+                        net: Some(vout_net),
+                        connection_name: None,
+                    });
+                    let pin_inst2 = self.netlist.pin_instances.insert_with_key(|id| PinInstance {
+                        id,
+                        pin_def: pin2,
+                        instance: comp_id,
+                        net: Some(gnd_net),
+                        connection_name: None,
+                    });
+
+                    self.netlist.connect(vout_net, ConnectionPoint::PinInstance(pin_inst1)).ok();
+                    self.netlist.connect(gnd_net, ConnectionPoint::PinInstance(pin_inst2)).ok();
+                } else if is_resistor {
+                    // Resistor: default VOUT -> pin 1, pin 2 -> GND
+                    // (feedback divider wiring would need more context)
+                    info!("Connecting resistor {}", comp_name);
+                    let pin1 = self.get_or_create_pin(module_id, "1", PinDirection::In);
+                    let pin2 = self.get_or_create_pin(module_id, "2", PinDirection::Out);
+
+                    let pin_inst1 = self.netlist.pin_instances.insert_with_key(|id| PinInstance {
+                        id,
+                        pin_def: pin1,
+                        instance: comp_id,
+                        net: Some(vout_net),
+                        connection_name: None,
+                    });
+                    let pin_inst2 = self.netlist.pin_instances.insert_with_key(|id| PinInstance {
+                        id,
+                        pin_def: pin2,
+                        instance: comp_id,
+                        net: Some(gnd_net),
+                        connection_name: None,
+                    });
+
+                    self.netlist.connect(vout_net, ConnectionPoint::PinInstance(pin_inst1)).ok();
+                    self.netlist.connect(gnd_net, ConnectionPoint::PinInstance(pin_inst2)).ok();
+                } else if is_diode {
+                    // Diode: GND -> D.A (anode), D.K (cathode) -> SW
+                    info!("Connecting diode {}", comp_name);
+                    let pin_a = self.get_or_create_pin(module_id, "A", PinDirection::In);
+                    let pin_k = self.get_or_create_pin(module_id, "K", PinDirection::Out);
+
+                    let pin_inst_a = self.netlist.pin_instances.insert_with_key(|id| PinInstance {
+                        id,
+                        pin_def: pin_a,
+                        instance: comp_id,
+                        net: Some(gnd_net),
+                        connection_name: None,
+                    });
+                    let pin_inst_k = self.netlist.pin_instances.insert_with_key(|id| PinInstance {
+                        id,
+                        pin_def: pin_k,
+                        instance: comp_id,
+                        net: Some(sw_net),
+                        connection_name: None,
+                    });
+
+                    self.netlist.connect(gnd_net, ConnectionPoint::PinInstance(pin_inst_a)).ok();
+                    self.netlist.connect(sw_net, ConnectionPoint::PinInstance(pin_inst_k)).ok();
+                } else {
+                    info!("Unknown supporting component type for {} (class={}, role={})", comp_name, comp_class, comp_role);
                 }
             }
         }

@@ -68,26 +68,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             
-            // Look for component names that would indicate virtual pin expansion worked
-            // The synthesizer prefixes virtual pin components with the IC instance name
-            let virtual_pin_components = vec![
-                "U1_L1",    // Inductor
-                "U1_C",     // Capacitors (multiple)
-                "U1_R",     // Resistors (multiple)
-                "U1_D",     // Diode
-                "U1_LED",   // Status LED
-            ];
-            
-            for comp in &virtual_pin_components {
-                let found = netlist.instances.values().any(|inst| {
-                    inst.name.contains(comp)
-                });
-                
-                if found {
-                    println!("  {} Found component containing '{}'", "✓".green(), comp);
-                } else {
-                    println!("  {} Component containing '{}' not found", "✗".red(), comp);
+            // Look for expansion children via vpin_parent attribute
+            let reg_name = netlist.instances.values()
+                .find(|inst| inst.attributes.get("component_class").map(|s| s.as_str()) == Some("switching_regulator"))
+                .map(|inst| inst.name.clone());
+
+            if let Some(ref parent) = reg_name {
+                println!("  {} Found switching regulator '{}'", "✓".green(), parent);
+
+                let children: Vec<_> = netlist.instances.values()
+                    .filter(|inst| inst.attributes.get("vpin_parent").map(|s| s.as_str()) == Some(parent.as_str()))
+                    .collect();
+
+                for child in &children {
+                    let role = child.attributes.get("vpin_role").map(|s| s.as_str()).unwrap_or("?");
+                    let class = child.attributes.get("component_class").map(|s| s.as_str()).unwrap_or("?");
+                    println!("  {} Found expansion child '{}': role={}, class={}", "✓".green(), child.name, role, class);
                 }
+
+                if children.is_empty() {
+                    println!("  {} No expansion children found for '{}'", "✗".red(), parent);
+                }
+            } else {
+                println!("  {} No switching regulator found", "✗".red());
             }
             
             // Save netlist

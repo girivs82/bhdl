@@ -8,6 +8,11 @@
     const ctx = canvas.getContext('2d');
     const entityNameEl = document.getElementById('entity-name');
     const statsEl = document.getElementById('stats');
+    const debugPanel = document.getElementById('debug-panel');
+    const debugChk = document.getElementById('chk-debug');
+    if (debugChk) debugChk.addEventListener('change', () => {
+        if (debugPanel) debugPanel.style.display = debugChk.checked ? 'block' : 'none';
+    });
 
     let schematicData = null;
     let panX = 0, panY = 0;
@@ -274,6 +279,9 @@
                 for (const inst of data.instances) {
                     if (pgInstNames.has(inst.name)) continue;
                     if (shuntInstNames.has(inst.name)) continue;
+                    // Never chain-promote series expansion children (e.g., inductor
+                    // from virtual pin expansion) — they must stay inline.
+                    if (inst.expansion_role === 'series') continue;
                     const signalPorts = new Set();
                     const gndPorts = new Set();
                     for (const c of inst.connections) {
@@ -366,10 +374,42 @@
             }
         }
 
+        // ── 5b. Fix port roles for series expansion children ──
+        // A series expansion child (e.g., inductor) has its output pin
+        // connected to a power net where the PG symbol is the driver.
+        // The net role makes both pins "in", but the declared pin direction
+        // says the output pin is "out".  Override so the component gets
+        // left/right ports and routes inline.
+        for (const inst of data.instances) {
+            if (inst.expansion_role !== 'series') continue;
+            for (const c of inst.connections) {
+                if (c.pin_direction === 'out') {
+                    const k = `${inst.name}.${c.port}`;
+                    // Replace the "in" role with "out" (don't keep both)
+                    instPortRoles.set(k, new Set(['out']));
+                }
+            }
+        }
+
         // ── 6. Classify instances by placement role ──
         const instMap = new Map();
         for (const inst of data.instances) {
             if (!pgInstNames.has(inst.name)) instMap.set(inst.name, inst);
+        }
+
+        // ── 6a-exp. Build expansion group map ──
+        // Groups virtual-pin expanded components by their parent regulator.
+        // expansionGroups: parentName → { series: [names], shunt: [names] }
+        const expansionGroups = new Map();
+        for (const [name, inst] of instMap) {
+            if (inst.expansion_parent) {
+                if (!expansionGroups.has(inst.expansion_parent)) {
+                    expansionGroups.set(inst.expansion_parent, { series: [], shunt: [] });
+                }
+                const group = expansionGroups.get(inst.expansion_parent);
+                if (inst.expansion_role === 'series') group.series.push(name);
+                else if (inst.expansion_role === 'shunt') group.shunt.push(name);
+            }
         }
 
         const mainPathNames = new Set();
@@ -379,7 +419,7 @@
 
         for (const [name, inst] of instMap) {
             const role = inst.placement_role;
-            if (role === 'shunt' || (!role && shuntInstNames.has(name)) || shuntChainDown.has(name)) {
+            if (role === 'shunt' || (!role && shuntInstNames.has(name)) || (!role && shuntChainDown.has(name))) {
                 shuntNames.push({ name });
             } else if (role === 'branch') {
                 branchNames.push({ name });
@@ -501,6 +541,13 @@
                     })
                     .map(s => s.name);
                 if (mainSinks.length <= 1) continue;
+                // Never demote series expansion children — they must stay inline
+                // with their parent on the main path.
+                const nonDemotable = new Set();
+                for (const n of mainSinks) {
+                    const inst = instMap.get(n);
+                    if (inst && inst.expansion_role === 'series') nonDemotable.add(n);
+                }
 
                 // Score each sink: longest forward chain wins, prefer non-cyclic paths
                 const driverName = net.driver.type === 'power_source' ? null : net.driver.name;
@@ -517,6 +564,7 @@
 
                 for (let i = 1; i < scored.length; i++) {
                     const demotedName = scored[i].name;
+                    if (nonDemotable.has(demotedName)) continue;
                     mainPathNames.delete(demotedName);
                     const idx = mainPathOrder.indexOf(demotedName);
                     if (idx >= 0) mainPathOrder.splice(idx, 1);
@@ -651,6 +699,36 @@
                         mbForward.get(dName).push(psId);
                         mbInDegree.set(psId, mbInDegree.get(psId) + 1);
                     }
+                }
+            }
+        }
+
+        // Add explicit edges from parent → series expansion children
+        // so they are ordered consecutively in the topological sort.
+        // Also remove edges from power sources → series children, because
+        // the series child's output *feeds* the power net (e.g. inductor
+        // smooths SW to create VOUT); the power source edge would force
+        // the child after the power symbol it actually supplies.
+        const seriesChildNames = new Set();
+        for (const [parentName, group] of expansionGroups) {
+            if (!mainBandNodes.has(parentName)) continue;
+            for (const childName of group.series) {
+                if (!mainBandNodes.has(childName)) continue;
+                seriesChildNames.add(childName);
+                if (!mbForward.get(parentName).includes(childName)) {
+                    mbForward.get(parentName).push(childName);
+                    mbInDegree.set(childName, mbInDegree.get(childName) + 1);
+                }
+            }
+        }
+        // Remove power-source → series-child edges (they invert the real flow)
+        for (const psNode of powerSourceNodes) {
+            const fwd = mbForward.get(psNode.id);
+            if (!fwd) continue;
+            for (let i = fwd.length - 1; i >= 0; i--) {
+                if (seriesChildNames.has(fwd[i])) {
+                    mbInDegree.set(fwd[i], mbInDegree.get(fwd[i]) - 1);
+                    fwd.splice(i, 1);
                 }
             }
         }
@@ -833,11 +911,87 @@
 
         for (const item of [...shuntNames, ...decouplingNames, ...branchNames]) {
             if (item.junctionName) continue; // Pre-set by parallel branch detection
+
+            // For expansion shunt children, use the series sibling as junction.
+            // Determine left/right based on which net the shunt shares with
+            // the series child: input-side net → left, output-side net → right.
+            const inst = instMap.get(item.name);
+            if (inst && inst.expansion_parent && inst.expansion_role === 'shunt') {
+                const group = expansionGroups.get(inst.expansion_parent);
+                if (group && group.series.length > 0) {
+                    const seriesName = group.series[0];
+                    const seriesInst = instMap.get(seriesName);
+                    item.junctionName = seriesName;
+                    // Default to right; override to left if shunt shares the
+                    // series child's input net (e.g., catch diode on SW node).
+                    item.junctionSide = 'right';
+                    if (seriesInst) {
+                        const seriesInputNets = new Set();
+                        for (const c of seriesInst.connections) {
+                            if (c.pin_direction === 'in' || c.direction === 'in')
+                                seriesInputNets.add(c.signal);
+                        }
+                        const shuntNets = inst.connections
+                            .filter(c => !gndNetNames.has(c.signal))
+                            .map(c => c.signal);
+                        if (shuntNets.some(n => seriesInputNets.has(n))) {
+                            item.junctionSide = 'left';
+                        }
+                    }
+                    continue;
+                }
+            }
+
             const j = findJunction(item.name);
             if (j) {
                 item.junctionName = j.name;
                 item.junctionSide = j.side;
                 item.junctionNet = j.netName;
+            }
+        }
+
+        // Redirect non-expansion shunts away from series expansion children.
+        // If a regular shunt/decoupling junctions at a series child (e.g., L1),
+        // move it past the expansion group so it doesn't overlap visually.
+        // Shunts on the output net go to the next main-path node's RIGHT side
+        // (end of chain); shunts on the input net go to the parent's RIGHT side.
+        {
+            const seriesChildSet = new Map(); // childName → parentName
+            for (const [parentName, group] of expansionGroups) {
+                for (const s of group.series) seriesChildSet.set(s, parentName);
+            }
+            for (const item of [...shuntNames, ...decouplingNames, ...branchNames]) {
+                if (!item.junctionName || !seriesChildSet.has(item.junctionName)) continue;
+                const inst = instMap.get(item.name);
+                if (inst && inst.expansion_parent) continue; // expansion children stay
+                const seriesChild = item.junctionName;
+                const parentName = seriesChildSet.get(seriesChild);
+                const seriesInst = instMap.get(seriesChild);
+                // Determine if shunt connects to series child's input or output net
+                let onInputNet = false;
+                if (seriesInst && inst) {
+                    const seriesInputNets = new Set();
+                    for (const c of seriesInst.connections) {
+                        if (c.pin_direction === 'in' || c.direction === 'in')
+                            seriesInputNets.add(c.signal);
+                    }
+                    const shuntNets = inst.connections
+                        .filter(c => !gndNetNames.has(c.signal))
+                        .map(c => c.signal);
+                    onInputNet = shuntNets.some(n => seriesInputNets.has(n));
+                }
+                if (onInputNet && parentName) {
+                    // Input-net shunt → junction at parent's right side
+                    item.junctionName = parentName;
+                    item.junctionSide = 'right';
+                } else {
+                    // Output-net shunt → junction at next main-path node's right side
+                    const idx = mainPathOrder.indexOf(seriesChild);
+                    if (idx >= 0 && idx + 1 < mainPathOrder.length) {
+                        item.junctionName = mainPathOrder[idx + 1];
+                        item.junctionSide = 'right';
+                    }
+                }
             }
         }
 
@@ -1037,7 +1191,17 @@
             const parentPos = positions.get(parent);
             if (!parentPos) continue;
             const childSz = offPathSizes.get(child) || { w: INSTANCE_BOX_MIN_WIDTH, h: 60 };
-            const cx = parentPos.x + parentPos.w / 2;
+            // If parent is on the main path (horizontal), align child under
+            // the output port so the shunt drop wire is straight vertical.
+            // If parent is a shunt (vertical), center under the parent.
+            const parentIsMainPath = mainPathNames.has(parent);
+            let cx;
+            if (parentIsMainPath) {
+                // Output port is at the right edge; stub extends PORT_STUB_LEN further
+                cx = parentPos.x + parentPos.w + PORT_STUB_LEN;
+            } else {
+                cx = parentPos.x + parentPos.w / 2;
+            }
             positions.set(child, {
                 x: cx - childSz.w / 2,
                 y: parentPos.y + parentPos.h + PORT_STUB_LEN * 2 + 10,
@@ -1419,6 +1583,51 @@
             layoutElements.push({ x: pos.x, y: pos.y, w: pos.w, h: pos.h, name: data.entity_name, type: 'entity_out', inputPorts: inP, outputPorts: [], gndStubs: [], pgStubs: [], line: data.entity_line });
         }
 
+        // Populate debug panel (visible when "Debug" checkbox is checked)
+        if (debugPanel) {
+            const dbg = [];
+            dbg.push('=== PROCESSED NETS ===');
+            for (const net of processedNets) {
+                dbg.push(`  ${net.name}: driver=${net.driver.name}.${net.driver.port} (type=${net.driver.type||'inst'}) sinks=[${net.sinks.map(s=>s.name+'.'+s.port).join(', ')}]`);
+            }
+            dbg.push('=== PG INSTANCES ===');
+            dbg.push(`  ${[...pgInstNames].join(', ')}`);
+            dbg.push('=== SHUNT INST NAMES (section 3) ===');
+            dbg.push(`  ${[...shuntInstNames].join(', ')}`);
+            dbg.push('=== CLASSIFICATION ===');
+            dbg.push(`  mainPathNames: [${[...mainPathNames].join(', ')}]`);
+            dbg.push(`  shuntNames: [${shuntNames.map(s=>s.name).join(', ')}]`);
+            dbg.push(`  decouplingNames: [${decouplingNames.map(d=>d.name).join(', ')}]`);
+            dbg.push(`  branchNames: [${branchNames.map(b=>b.name).join(', ')}]`);
+            dbg.push(`  offPathNames: [${[...offPathNames].join(', ')}]`);
+            dbg.push('=== MAIN BAND ORDER ===');
+            dbg.push(`  [${mainBandOrder.join(', ')}]`);
+            dbg.push('=== POSITIONS ===');
+            for (const [name, pos] of positions) {
+                dbg.push(`  ${name}: x=${pos.x.toFixed(0)} y=${pos.y.toFixed(0)} w=${pos.w.toFixed(0)} h=${pos.h.toFixed(0)}`);
+            }
+            dbg.push('=== INST PORT ROLES ===');
+            for (const [k, v] of instPortRoles) {
+                dbg.push(`  ${k}: {${[...v].join(',')}}`);
+            }
+            dbg.push('=== LAYOUT ELEMENTS ===');
+            for (const el of layoutElements) {
+                if (el.type !== 'instance') continue;
+                dbg.push(`  ${el.name}: x=${el.x.toFixed(0)} y=${el.y.toFixed(0)} w=${el.w.toFixed(0)} h=${el.h.toFixed(0)} isShunt=${el.isShunt} isFlipped=${el.isFlipped} cat=${el.category}`);
+                dbg.push(`    inPorts: [${el.inputPorts.map(p=>p.name+'@'+p.x.toFixed(0)+','+p.y.toFixed(0)).join('; ')}]`);
+                dbg.push(`    outPorts: [${el.outputPorts.map(p=>p.name+'@'+p.x.toFixed(0)+','+p.y.toFixed(0)).join('; ')}]`);
+            }
+            dbg.push('=== EXPANSION GROUPS ===');
+            for (const [pname, group] of expansionGroups) {
+                dbg.push(`  ${pname}: series=[${group.series.join(',')}] shunt=[${group.shunt.join(',')}]`);
+            }
+            dbg.push('=== SHUNT JUNCTIONS ===');
+            for (const item of [...shuntNames, ...decouplingNames]) {
+                dbg.push(`  ${item.name}: junction=${item.junctionName} side=${item.junctionSide}`);
+            }
+            debugPanel.textContent = dbg.join('\n');
+        }
+
         // ── 12. Wire routing (custom L-route / Z-route) ──
         const elByName = new Map();
         for (const el of layoutElements) elByName.set(el.name, el);
@@ -1488,6 +1697,14 @@
             return x;
         }
 
+        // Build shunt junction lookup for wire routing: shunt name → {junctionName, junctionSide}
+        const shuntJunctionLookup = new Map();
+        for (const item of [...shuntNames, ...decouplingNames]) {
+            if (item.junctionName) {
+                shuntJunctionLookup.set(item.name, { junctionName: item.junctionName, junctionSide: item.junctionSide });
+            }
+        }
+
         for (const net of processedNets) {
             const driverElName = net.driver.type === 'power_source' ? net.driver.name
                 : net.driver.type === 'entity_port' ? '__entity_in__'
@@ -1508,24 +1725,57 @@
                 const fromDir = fromPos.dir || 1;   // driver output default: rightward
                 const toDir = toPos.dir || -1;       // sink input default: leftward
 
+                // For shunt wires, use the junction point on the main path as the
+                // origin for the vertical drop, rather than routing from the driver.
+                // This prevents wires from cutting through intermediate components.
+                let shuntFromPos = fromPos;
+                if (isShuntWire) {
+                    const jInfo = shuntJunctionLookup.get(sinkElName);
+                    if (jInfo) {
+                        const jEl = elByName.get(jInfo.junctionName);
+                        if (jEl) {
+                            const jx = jInfo.junctionSide === 'right'
+                                ? jEl.x + jEl.w + PORT_STUB_LEN
+                                : jEl.x - PORT_STUB_LEN;
+                            const jy = jEl.y + jEl.h / 2;
+                            // Only override when the shunt is past the junction
+                            // element's far edge — meaning the default wire from
+                            // driver would cut through intermediate main-path
+                            // components to reach the shunt.
+                            const jElFarEdge = jEl.x + jEl.w;
+                            if (jx > fromPos.x && toPos.x > jElFarEdge) {
+                                shuntFromPos = { x: jx, y: fromPos.y, dir: 1 };
+                            }
+                        }
+                    }
+                }
 
                 if (isShuntWire || (toPos.y > fromPos.y + 20 && toDir <= 0)) {
 
-                    if (toPos.x >= fromPos.x - 2) {
-                        // Normal L-route: horizontal forward to shunt X, then vertical drop
+                    if (toPos.x >= shuntFromPos.x - 2) {
+                        // Normal L-route: horizontal from junction to shunt X, then vertical drop
                         const jx = toPos.x;
-                        const jy = fromPos.y;
+                        const jy = shuntFromPos.y;
                         junctionPoints.push({ x: jx, y: jy });
-                        if (Math.abs(fromPos.x - jx) > 2) {
-                            segments.push({ x1: fromPos.x, y1: fromPos.y, x2: jx, y2: jy });
+                        if (Math.abs(shuntFromPos.x - jx) > 2) {
+                            segments.push({ x1: shuntFromPos.x, y1: shuntFromPos.y, x2: jx, y2: jy });
                         }
                         segments.push({ x1: jx, y1: jy, x2: toPos.x, y2: toPos.y });
                     } else {
-                        // Reverse L-route: shunt is behind driver port.
-                        // Drop straight down from driver, then horizontal back to shunt.
-                        junctionPoints.push({ x: fromPos.x, y: fromPos.y });
-                        segments.push({ x1: fromPos.x, y1: fromPos.y, x2: fromPos.x, y2: toPos.y });
-                        segments.push({ x1: fromPos.x, y1: toPos.y, x2: toPos.x, y2: toPos.y });
+                        // Reverse L-route: shunt port is left of the driver port.
+                        // Drop down from driver stub, then horizontal back to shunt.
+                        // Use clearVerticalX to avoid cutting through components.
+                        const yMin = Math.min(fromPos.y, toPos.y);
+                        const yMax = Math.max(fromPos.y, toPos.y);
+                        const vx = clearVerticalX(fromPos.x, yMin, yMax, +1, [driverElName, sinkElName]);
+                        junctionPoints.push({ x: vx, y: fromPos.y });
+                        if (Math.abs(fromPos.x - vx) > 2) {
+                            segments.push({ x1: fromPos.x, y1: fromPos.y, x2: vx, y2: fromPos.y });
+                        }
+                        segments.push({ x1: vx, y1: fromPos.y, x2: vx, y2: toPos.y });
+                        if (Math.abs(vx - toPos.x) > 2) {
+                            segments.push({ x1: vx, y1: toPos.y, x2: toPos.x, y2: toPos.y });
+                        }
                     }
                 } else if (toDir > 0 && toPos.y > fromPos.y + 20) {
                     // Flipped sink below driver: sink expects wire from the RIGHT.
@@ -1630,6 +1880,72 @@
 
     // ─────────── RENDERING ───────────
 
+    /** Draw dashed-border group outlines around virtual-pin expansion groups */
+    function drawExpansionGroups() {
+        if (!schematicData) return;
+        const PAD = 12;
+        const LABEL_H = 14;
+        // Collect groups: parent → [element bounding boxes]
+        const groups = new Map();
+        for (const el of layoutElements) {
+            if (el.type !== 'instance') continue;
+            const inst = schematicData.instances.find(i => i.name === el.name);
+            if (!inst) continue;
+            const parentName = inst.expansion_parent;
+            if (!parentName) {
+                // Check if this instance IS a parent (has expansion children)
+                const hasChildren = schematicData.instances.some(
+                    i => i.expansion_parent === el.name
+                );
+                if (!hasChildren) continue;
+                if (!groups.has(el.name)) groups.set(el.name, []);
+                groups.get(el.name).push(el);
+            } else {
+                if (!groups.has(parentName)) groups.set(parentName, []);
+                groups.get(parentName).push(el);
+            }
+        }
+
+        for (const [parentName, elements] of groups) {
+            if (elements.length < 2) continue; // need parent + at least one child
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            for (const el of elements) {
+                minX = Math.min(minX, el.x - PAD);
+                minY = Math.min(minY, el.y - PAD - LABEL_H);
+                maxX = Math.max(maxX, el.x + el.w + PAD);
+                maxY = Math.max(maxY, el.y + el.h + PAD);
+            }
+            // Draw dashed rounded rectangle
+            const r = 8;
+            ctx.save();
+            ctx.setLineDash([6, 4]);
+            ctx.strokeStyle = '#555';
+            ctx.lineWidth = 1;
+            ctx.globalAlpha = 0.6;
+            ctx.beginPath();
+            ctx.moveTo(minX + r, minY);
+            ctx.lineTo(maxX - r, minY);
+            ctx.arcTo(maxX, minY, maxX, minY + r, r);
+            ctx.lineTo(maxX, maxY - r);
+            ctx.arcTo(maxX, maxY, maxX - r, maxY, r);
+            ctx.lineTo(minX + r, maxY);
+            ctx.arcTo(minX, maxY, minX, maxY - r, r);
+            ctx.lineTo(minX, minY + r);
+            ctx.arcTo(minX, minY, minX + r, minY, r);
+            ctx.closePath();
+            ctx.stroke();
+            // Label
+            ctx.setLineDash([]);
+            ctx.globalAlpha = 0.5;
+            ctx.font = `${FONT_SIZE - 1}px monospace`;
+            ctx.fillStyle = COLORS.textDim;
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'bottom';
+            ctx.fillText(parentName + ' expansion', minX + 6, minY + LABEL_H - 2);
+            ctx.restore();
+        }
+    }
+
     function render() {
         if (!ctx || !schematicData) return;
         const dpr = window.devicePixelRatio || 1;
@@ -1644,6 +1960,7 @@
         ctx.translate(panX, panY);
         ctx.scale(zoomLevel, zoomLevel);
 
+        drawExpansionGroups();
         drawWires();
         for (const el of layoutElements) {
             if (el.type === 'entity_in' || el.type === 'entity_out') drawEntityBox(el);
