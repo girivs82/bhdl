@@ -61,6 +61,7 @@ pub use monomorphization::{
     MonomorphizationResult,
     SpecializedModule,
     SpecializationKey,
+    AliasSpecialization,
     run_monomorphization,
     register_specializations,
 };

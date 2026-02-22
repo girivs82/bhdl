@@ -189,6 +189,7 @@ pub enum SyntaxKind {
     TRAIT_IMPL,     // impl TraitName for Component { ... }  or  component X impl Trait { ... }
     TRAIT_PIN,      // pin declaration within a trait
     TRAIT_CONST,    // const declaration within a trait
+    TYPE_ARGS,      // <5V, 3.3V> type argument list on alias/instantiation
     TRAIT_BOUND,    // T: TraitName (in generic param list)
     INTERFACE_DEF,  // interface InterfaceName { ... }
     INTERFACE_SIGNAL,    // signal name: direction optional?;

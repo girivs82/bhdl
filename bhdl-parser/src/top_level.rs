@@ -687,26 +687,72 @@ impl<'t> Parser<'t> {
         self.builder.finish_node();
     }
 
-    // Parse alias statement: alias Name = Target;
+    // Parse alias statement: alias Name = Target; or alias Name = Target<5V, 3.3V>;
     fn parse_alias_stmt(&mut self) {
         self.builder.start_node(SyntaxKind::ALIAS.into());
         self.expect(SyntaxKind::ALIAS_KW);
-        
+
         // Optional: alias entity Name = Target;
         if self.peek() == Some(SyntaxKind::ENTITY_KW) {
             self.bump(); // Consume 'entity'
         }
-        
+
         // Alias name can be IDENT or NUMBER (e.g., "7805", "LM7805")
         if self.peek() == Some(SyntaxKind::IDENT) || self.peek() == Some(SyntaxKind::NUMBER) {
             self.bump();
         } else {
             self.error("Expected alias name (identifier or number)".to_string());
         }
-        
+
         self.expect(SyntaxKind::EQ);
         self.expect(SyntaxKind::IDENT); // Target name
+
+        // Optional type arguments: <5V, 3.3V>
+        if self.peek() == Some(SyntaxKind::L_ANGLE) {
+            self.parse_type_args();
+        }
+
         self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+
+    // Parse type argument list: <value, value, ...>
+    // Uses parse_value() instead of parse_expression() because `>` and `<` are
+    // comparison operators in the expression parser. Type args are simple values
+    // (e.g., 5V, 3.3V, "red") not full expressions.
+    fn parse_type_args(&mut self) {
+        self.builder.start_node(SyntaxKind::TYPE_ARGS.into());
+        self.expect(SyntaxKind::L_ANGLE);
+
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_ANGLE) | None => break,
+                Some(SyntaxKind::NUMBER) | Some(SyntaxKind::STRING) |
+                Some(SyntaxKind::TRUE_KW) | Some(SyntaxKind::FALSE_KW) |
+                Some(SyntaxKind::MINUS) | Some(SyntaxKind::PLUS) => {
+                    self.parse_value();
+                    self.skip_trivia();
+                    if self.peek() == Some(SyntaxKind::COMMA) {
+                        self.bump();
+                    }
+                }
+                Some(SyntaxKind::IDENT) => {
+                    // Could be a type name or identifier reference
+                    self.bump();
+                    self.skip_trivia();
+                    if self.peek() == Some(SyntaxKind::COMMA) {
+                        self.bump();
+                    }
+                }
+                _ => {
+                    // Unknown token — skip it and hope to recover
+                    self.bump();
+                }
+            }
+        }
+
+        self.expect(SyntaxKind::R_ANGLE);
         self.builder.finish_node();
     }
 
