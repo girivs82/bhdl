@@ -840,6 +840,27 @@ fn find_adjacent_ic(
 
 /// Categorize a component by its entity type name and attributes.
 fn categorize_component(entity_type: &str, attrs: &HashMap<String, String>) -> String {
+    // Primary: use component_class attribute from entity metadata (flows from stdlib)
+    if let Some(class) = attrs.get("component_class") {
+        return match class.as_str() {
+            "resistor" => "resistor",
+            "capacitor" | "capacitor_polarized" => "capacitor",
+            "inductor" => "inductor",
+            "led" => "diode",
+            "diode" => "diode",
+            "tvs_diode" => "protection",
+            "voltage_regulator" | "linear_regulator" | "switching_regulator" => "regulator",
+            "opamp" | "op_amp" | "operational_amplifier" => "opamp",
+            "buffer" => "buffer",
+            "oscillator" => "oscillator",
+            "connector" | "test_point" => "connector",
+            "fuse" => "resistor",
+            "microcontroller" | "microcontroller_multi_domain" | "logic_gate" => "ic",
+            _ => "ic",
+        }.to_string();
+    }
+
+    // Fallback: name-based heuristics (for entities without component_class)
     let lower = entity_type.to_lowercase();
     if lower.starts_with("res") || lower == "r" {
         "resistor".to_string()
@@ -864,7 +885,6 @@ fn categorize_component(entity_type: &str, attrs: &HashMap<String, String>) -> S
     } else if lower.starts_with("opamp") || lower.starts_with("op_amp") || lower.starts_with("op-amp") {
         "opamp".to_string()
     } else if attrs.contains_key("value") {
-        // Has a value → likely a passive
         "passive".to_string()
     } else {
         "ic".to_string()

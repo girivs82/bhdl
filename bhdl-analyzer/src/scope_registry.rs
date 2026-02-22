@@ -237,6 +237,8 @@ mod tests {
             net_attributes: None,
             resolved_type: None,
             generic_params: None,
+            when_condition: None,
+            bus_size_param: None,
         });
 
         // Create a board scope under global
@@ -254,6 +256,8 @@ mod tests {
             net_attributes: None,
             resolved_type: None,
             generic_params: None,
+            when_condition: None,
+            bus_size_param: None,
         });
 
         // Lookup "my_pin" from board scope — should find it
@@ -285,6 +289,8 @@ mod tests {
             net_attributes: None,
             resolved_type: None,
             generic_params: None,
+            when_condition: None,
+            bus_size_param: None,
         });
 
         let child_id = reg.alloc_child(reg.global_id(), ScopeKind::Board);

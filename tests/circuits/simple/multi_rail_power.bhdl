@@ -1,31 +1,9 @@
 // Multi-rail power supply: 12V → 5V → 3.3V with indicator LEDs on each rail
 // Tests: cascaded regulators, parallel branches at each rail, multiple shunts
-entity Res(value: resistance) {
-    pin 1: signal inout;
-    pin 2: signal inout;
-}
-
-entity Cap(value: capacitance) {
-    pin 1: signal inout;
-    pin 2: signal inout;
-}
-
-entity LED(color: string) {
-    pin A: signal in;
-    pin K: signal in;
-}
-
-entity LM7805 {
-    pin VI: power in;
-    pin GND: ground;
-    pin VO: power out;
-}
-
-entity LM1117_33 {
-    pin VI: power in;
-    pin GND: ground;
-    pin VO: power out;
-}
+import { Res } from "bhdl-stdlib/simple/resistor_simple.bhdl";
+import { Cap } from "bhdl-stdlib/simple/capacitor_simple.bhdl";
+import { LED } from "bhdl-stdlib/simple/led_simple.bhdl";
+import { LM7805, LM1117_33 } from "bhdl-stdlib/simple/regulator_simple.bhdl";
 
 board MultiRailPower {
     power VIN = 12V @ 1A;

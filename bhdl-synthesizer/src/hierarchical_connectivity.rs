@@ -909,64 +909,124 @@ fn get_or_create_component_module(
         }
     }
 
+    // Look up pin specialization info for this component type (excluded pins, bus sizes)
+    let specialized_module = analysis.monomorphization.alias_specializations.iter()
+        .find(|a| a.alias_name == component_type)
+        .and_then(|alias| {
+            let key = bhdl_analyzer::passes::monomorphization::SpecializationKey {
+                module_name: alias.target_entity.clone(),
+                params: alias.concrete_params.iter()
+                    .map(|(k, v)| (k.clone(), bhdl_analyzer::passes::monomorphization::ConstValueKey::from_const_value(v)))
+                    .collect(),
+            };
+            analysis.monomorphization.specializations.get(&key)
+        })
+        .or_else(|| analysis.monomorphization.get_by_mangled_name(component_type));
+
     // Add standard pins based on component type.
-    // Try original entity name first; fall back to alias name if needed.
-    let pin_result = add_component_pins(lookup_name, module_id, netlist, context, import_preprocessor);
-    if pin_result.is_err() && lookup_name != component_type {
-        add_component_pins(component_type, module_id, netlist, context, import_preprocessor)?;
+    // Determine the best name for pin lookup: try original entity name first,
+    // then alias name. The import preprocessor stores entities under the
+    // alias name (e.g., "LM7805"), not the generic entity name ("LinearRegulator").
+    let pin_lookup_name = if lookup_name != component_type {
+        // Check if the original entity name is available in the preprocessor
+        let found_original = import_preprocessor
+            .and_then(|pp| pp.get_imported_entity(lookup_name))
+            .is_some()
+            || context.variant_manager.find_entity_definition(lookup_name).is_some();
+        if found_original {
+            lookup_name
+        } else {
+            component_type
+        }
     } else {
-        pin_result?;
-    }
+        lookup_name
+    };
+    add_component_pins(pin_lookup_name, module_id, netlist, context, import_preprocessor, specialized_module)?;
 
     Ok(module_id)
 }
 
-/// Add pins to a component module based on its type
+/// Add pins to a component module based on its type.
+/// If `specialized_module` is provided, applies pin specialization:
+/// - Excludes pins whose `when` condition evaluated to false
+/// - Expands parameterized bus pins to concrete sizes
 fn add_component_pins(
     component_type: &str,
     module_id: ModuleId,
     netlist: &mut Netlist,
     context: &HierarchicalContext,
     import_preprocessor: Option<&crate::import_preprocessor::ImportPreprocessor>,
+    specialized_module: Option<&bhdl_analyzer::passes::monomorphization::SpecializedModule>,
 ) -> Result<()> {
     use bhdl_netlist::{PinDirection, PinType, PortDirection};
 
     debug!("add_component_pins called for component_type: {}", component_type);
     debug!("import_preprocessor is_some: {}", import_preprocessor.is_some());
 
+    // Helper closure: add a single pin (with bus expansion if needed) to the netlist
+    let add_pin_to_netlist = |pin: &bhdl_ast::common::PinDecl,
+                              module_id: ModuleId,
+                              netlist: &mut Netlist,
+                              specialized: Option<&bhdl_analyzer::passes::monomorphization::SpecializedModule>| {
+        let pin_name = match pin.name() {
+            Some(n) => n,
+            None => return,
+        };
+        let pin_name_str = pin_name.text().to_string();
+
+        // Check if this pin is excluded by a `when` condition
+        if let Some(spec) = specialized {
+            if spec.excluded_pins.contains(&pin_name_str) {
+                debug!("Skipping excluded pin '{}' for specialized component", pin_name_str);
+                return;
+            }
+        }
+
+        // Convert pin direction from AST to netlist types
+        let direction_str = pin.direction().map(|t| t.text().to_string());
+        let (pin_direction, port_direction) = match direction_str.as_deref() {
+            Some("in") => (PinDirection::In, PortDirection::Input),
+            Some("out") => (PinDirection::Out, PortDirection::Output),
+            Some("inout") => (PinDirection::InOut, PortDirection::InOut),
+            _ => (PinDirection::InOut, PortDirection::InOut),
+        };
+
+        // Convert pin type from AST to netlist types
+        let pin_type_str = pin.pin_type().map(|t| t.text().to_string());
+        let pin_type = match pin_type_str.as_deref() {
+            Some("power") => PinType::Power,
+            Some("ground") => PinType::Ground,
+            Some("signal") => PinType::Signal,
+            _ => PinType::Signal,
+        };
+
+        // Check if this pin has a resolved bus size from generics
+        if let Some(spec) = specialized {
+            if let Some(&bus_size) = spec.resolved_bus_sizes.get(&pin_name_str) {
+                // Expand parameterized bus pin into indexed pins
+                for i in 0..bus_size {
+                    let indexed_name = format!("{}[{}]", pin_name_str, i);
+                    debug!("Adding expanded bus pin '{}' for component '{}'", indexed_name, component_type);
+                    netlist.add_port(module_id, indexed_name.clone(), port_direction, None);
+                    netlist.add_pin(module_id, indexed_name, pin_direction, pin_type);
+                }
+                return;
+            }
+        }
+
+        debug!("Adding pin '{}' for component '{}'", pin_name_str, component_type);
+        netlist.add_port(module_id, pin_name_str.clone(), port_direction, None);
+        netlist.add_pin(module_id, pin_name_str, pin_direction, pin_type);
+    };
+
     // First check if this component is in the variant_manager (same-file entities)
     if let Some(entity_ast) = context.variant_manager.find_entity_definition(component_type) {
         debug!("Adding pins for locally-defined component: {}", component_type);
 
-        // Extract pins from the local entity definition
         let pins: Vec<_> = entity_ast.pins().collect();
         debug!("Total pins found in {}: {}", component_type, pins.len());
-        for pin in pins {
-            if let Some(pin_name) = pin.name() {
-                let pin_name_str = pin_name.text().to_string();
-                debug!("Adding pin '{}' for locally-defined component '{}'", pin_name_str, component_type);
-
-                // Convert pin direction from AST to netlist types
-                let direction_str = pin.direction().map(|t| t.text().to_string());
-                let (pin_direction, port_direction) = match direction_str.as_deref() {
-                    Some("in") => (PinDirection::In, PortDirection::Input),
-                    Some("out") => (PinDirection::Out, PortDirection::Output),
-                    Some("inout") => (PinDirection::InOut, PortDirection::InOut),
-                    _ => (PinDirection::InOut, PortDirection::InOut), // Default fallback
-                };
-
-                // Convert pin type from AST to netlist types
-                let pin_type_str = pin.pin_type().map(|t| t.text().to_string());
-                let pin_type = match pin_type_str.as_deref() {
-                    Some("power") => PinType::Power,
-                    Some("ground") => PinType::Ground,
-                    Some("signal") => PinType::Signal,
-                    _ => PinType::Signal, // Default fallback
-                };
-
-                netlist.add_port(module_id, pin_name_str.clone(), port_direction, None);
-                netlist.add_pin(module_id, pin_name_str, pin_direction, pin_type);
-            }
+        for pin in &pins {
+            add_pin_to_netlist(pin, module_id, netlist, specialized_module);
         }
         return Ok(());
     }
@@ -977,35 +1037,10 @@ fn add_component_pins(
         if let Some(entity_ast) = preprocessor.get_imported_entity(component_type) {
             debug!("Adding pins for imported component: {}", component_type);
 
-            // Extract pins from the imported entity definition
             let pins: Vec<_> = entity_ast.pins().collect();
             debug!("Total pins found in {}: {}", component_type, pins.len());
-            for pin in pins {
-                if let Some(pin_name) = pin.name() {
-                    let pin_name_str = pin_name.text().to_string();
-                    debug!("Adding pin '{}' for imported component '{}'", pin_name_str, component_type);
-                    
-                    // Convert pin direction from AST to netlist types
-                    let direction_str = pin.direction().map(|t| t.text().to_string());
-                    let (pin_direction, port_direction) = match direction_str.as_deref() {
-                        Some("in") => (PinDirection::In, PortDirection::Input),
-                        Some("out") => (PinDirection::Out, PortDirection::Output),
-                        Some("inout") => (PinDirection::InOut, PortDirection::InOut),
-                        _ => (PinDirection::InOut, PortDirection::InOut), // Default fallback
-                    };
-                    
-                    // Convert pin type from AST to netlist types
-                    let pin_type_str = pin.pin_type().map(|t| t.text().to_string());
-                    let pin_type = match pin_type_str.as_deref() {
-                        Some("power") => PinType::Power,
-                        Some("ground") => PinType::Ground,
-                        Some("signal") => PinType::Signal,
-                        _ => PinType::Signal, // Default fallback
-                    };
-                    
-                    netlist.add_port(module_id, pin_name_str.clone(), port_direction, None);
-                    netlist.add_pin(module_id, pin_name_str, pin_direction, pin_type);
-                }
+            for pin in &pins {
+                add_pin_to_netlist(pin, module_id, netlist, specialized_module);
             }
             return Ok(());
         }

@@ -84,6 +84,10 @@ pub struct SpecializedModule {
     pub constraints_satisfied: bool,
     /// Any constraint violation messages.
     pub constraint_errors: Vec<String>,
+    /// Pins excluded by `when` conditions evaluating to false.
+    pub excluded_pins: HashSet<String>,
+    /// Resolved bus sizes for parameterized array pins (pin_name → concrete size).
+    pub resolved_bus_sizes: HashMap<String, i64>,
 }
 
 /// Registry of generic module definitions.
@@ -233,7 +237,7 @@ pub fn run_monomorphization(
     // (This is done by the caller, since we don't mutate the scope registry here)
 
     // Step 3: Process alias specializations
-    process_alias_specializations(&mut result);
+    process_alias_specializations(scope_registry, &mut result);
 
     println!(
         "Pass 2.5: Monomorphization complete. {} specialization(s) in {} iteration(s)",
@@ -398,6 +402,8 @@ fn try_specialize(
         concrete_params,
         constraints_satisfied,
         constraint_errors,
+        excluded_pins: HashSet::new(),
+        resolved_bus_sizes: HashMap::new(),
     };
 
     result.name_to_key.insert(mangled, key.clone());
@@ -483,7 +489,11 @@ fn format_si_value(value: f64, unit: &str) -> String {
 /// For each `alias LM7805 = LinearRegulator<5V>;`, resolve the type arg text
 /// to a ConstValue using the generic entity's param types, then create a
 /// `SpecializedModule` entry so the synthesizer can access concrete params.
-fn process_alias_specializations(result: &mut MonomorphizationResult) {
+/// Also resolves pin specialization: conditional pins (`when`) and parameterized bus sizes.
+fn process_alias_specializations(
+    scope_registry: &ScopeRegistry,
+    result: &mut MonomorphizationResult,
+) {
     if result.alias_specializations.is_empty() {
         return;
     }
@@ -563,6 +573,13 @@ fn process_alias_specializations(result: &mut MonomorphizationResult) {
             }
         }
 
+        // Resolve pin specialization by scanning the generic entity's scope for pin symbols
+        let (excluded_pins, resolved_bus_sizes) = resolve_pin_specialization(
+            scope_registry,
+            &generic_def,
+            &concrete_params,
+        );
+
         // Use the alias name directly (not a mangled name)
         let specialized = SpecializedModule {
             mangled_name: alias.alias_name.clone(),
@@ -570,21 +587,32 @@ fn process_alias_specializations(result: &mut MonomorphizationResult) {
             concrete_params: concrete_params.clone(),
             constraints_satisfied,
             constraint_errors,
+            excluded_pins: excluded_pins.clone(),
+            resolved_bus_sizes: resolved_bus_sizes.clone(),
         };
 
         if !result.specializations.contains_key(&key) {
             result.name_to_key.insert(alias.alias_name.clone(), key.clone());
             result.specializations.insert(key, specialized);
+            let mut pin_info = String::new();
+            if !excluded_pins.is_empty() {
+                pin_info.push_str(&format!(", excluded_pins: {:?}", excluded_pins));
+            }
+            if !resolved_bus_sizes.is_empty() {
+                pin_info.push_str(&format!(", bus_sizes: {:?}", resolved_bus_sizes));
+            }
             println!(
-                "Pass 2.5: Created alias specialization '{}' → '{}' with params {:?}",
+                "Pass 2.5: Created alias specialization '{}' → '{}' with params {:?}{}",
                 alias.alias_name,
                 alias.target_entity,
-                concrete_params.keys().collect::<Vec<_>>()
+                concrete_params.keys().collect::<Vec<_>>(),
+                pin_info
             );
         }
     }
 
     // Update concrete_params on alias_specializations for downstream use
+    // Include both explicitly provided type args AND defaults
     for alias in &mut result.alias_specializations {
         if let Some(generic_def) = result.generic_modules.get(&alias.target_entity) {
             for (i, param) in generic_def.params.iter().enumerate() {
@@ -592,6 +620,10 @@ fn process_alias_specializations(result: &mut MonomorphizationResult) {
                     if let Some(cv) = parse_type_arg_text(arg_text, &param.param_type) {
                         alias.concrete_params.insert(param.name.clone(), cv);
                     }
+                } else if let Some(ref default) = param.default {
+                    // Fill in default values for params not explicitly provided
+                    alias.concrete_params.entry(param.name.clone())
+                        .or_insert_with(|| default.clone());
                 }
             }
         }
@@ -629,6 +661,16 @@ fn parse_type_arg_text(
                 }
                 bhdl_common::BhdlType::Time => {
                     parse_value_with_unit(text, "s").map(ConstValue::Time)
+                }
+                bhdl_common::BhdlType::Bool => {
+                    match text {
+                        "true" => Some(ConstValue::Bool(true)),
+                        "false" => Some(ConstValue::Bool(false)),
+                        _ => None,
+                    }
+                }
+                bhdl_common::BhdlType::Integer => {
+                    text.parse::<i64>().ok().map(ConstValue::Integer)
                 }
                 _ => {
                     // Try plain number
@@ -702,6 +744,75 @@ fn parse_value_with_unit(text: &str, _expected_unit: &str) -> Option<f64> {
     Some(base_value * multiplier)
 }
 
+/// Resolve pin specialization for a concrete set of parameters.
+///
+/// Scans the generic entity's scope for pin symbols with:
+/// - `when_condition`: If condition references a bool param that is false, exclude the pin.
+/// - `bus_size_param`: If it references an integer param, resolve the concrete bus size.
+fn resolve_pin_specialization(
+    scope_registry: &ScopeRegistry,
+    generic_def: &GenericModuleDef,
+    concrete_params: &BTreeMap<String, ConstValue>,
+) -> (HashSet<String>, HashMap<String, i64>) {
+    let mut excluded_pins = HashSet::new();
+    let mut resolved_bus_sizes = HashMap::new();
+
+    // Find the scope for this generic entity definition
+    let scope = scope_registry.table(generic_def.scope_id);
+
+    // Scan all symbols in the entity's scope for pins
+    for sym in scope.iter() {
+        if sym.kind != SymbolKind::Pin && sym.kind != SymbolKind::VirtualPin {
+            continue;
+        }
+
+        // Check when_condition for conditional pins
+        if let Some(ref condition) = sym.when_condition {
+            let condition = condition.trim();
+            // Handle negated conditions: `!PARAM_NAME`
+            let (is_negated, param_name) = if let Some(stripped) = condition.strip_prefix('!') {
+                (true, stripped.trim())
+            } else {
+                (false, condition)
+            };
+
+            if let Some(cv) = concrete_params.get(param_name) {
+                let is_true = match cv {
+                    ConstValue::Bool(b) => *b,
+                    ConstValue::Integer(n) => *n != 0,
+                    _ => true, // Non-bool/int params are considered truthy
+                };
+                let include = if is_negated { !is_true } else { is_true };
+                if !include {
+                    excluded_pins.insert(sym.name.clone());
+                    println!(
+                        "Pass 2.5: Pin '{}' excluded (when {} = {:?})",
+                        sym.name, condition, cv
+                    );
+                }
+            }
+        }
+
+        // Check bus_size_param for parameterized array pins
+        if let Some(ref param_name) = sym.bus_size_param {
+            if let Some(cv) = concrete_params.get(param_name) {
+                let size = match cv {
+                    ConstValue::Integer(n) => *n,
+                    ConstValue::Float(f) => *f as i64,
+                    _ => continue,
+                };
+                resolved_bus_sizes.insert(sym.name.clone(), size);
+                println!(
+                    "Pass 2.5: Pin '{}' bus size resolved to {} (from param '{}')",
+                    sym.name, size, param_name
+                );
+            }
+        }
+    }
+
+    (excluded_pins, resolved_bus_sizes)
+}
+
 /// Register specialized entities into the scope registry.
 /// Called after monomorphization to make specialized names available for later passes.
 pub fn register_specializations(
@@ -733,6 +844,8 @@ pub fn register_specializations(
             net_attributes: None,
             resolved_type: None,
             generic_params: None,
+            when_condition: None,
+            bus_size_param: None,
         };
 
         scope_registry.global_scope_mut().insert(sym);
@@ -877,6 +990,8 @@ mod tests {
             concrete_params: concrete,
             constraints_satisfied: true,
             constraint_errors: vec![],
+            excluded_pins: HashSet::new(),
+            resolved_bus_sizes: HashMap::new(),
         };
 
         result.name_to_key.insert(spec.mangled_name.clone(), key.clone());
@@ -930,5 +1045,187 @@ mod tests {
         assert_eq!(format_si_value(1000.0, "R"), "1kR");
         assert_eq!(format_si_value(0.0000001, "F"), "100nF");
         assert_eq!(format_si_value(1000000.0, "Hz"), "1MHz");
+    }
+
+    #[test]
+    fn test_parse_type_arg_bool() {
+        let bool_type = bhdl_common::GenericParamType::Const(bhdl_common::BhdlType::Bool);
+        assert_eq!(
+            parse_type_arg_text("true", &bool_type),
+            Some(ConstValue::Bool(true))
+        );
+        assert_eq!(
+            parse_type_arg_text("false", &bool_type),
+            Some(ConstValue::Bool(false))
+        );
+        assert_eq!(parse_type_arg_text("maybe", &bool_type), None);
+    }
+
+    #[test]
+    fn test_parse_type_arg_integer() {
+        let int_type = bhdl_common::GenericParamType::Const(bhdl_common::BhdlType::Integer);
+        assert_eq!(
+            parse_type_arg_text("4", &int_type),
+            Some(ConstValue::Integer(4))
+        );
+        assert_eq!(
+            parse_type_arg_text("1", &int_type),
+            Some(ConstValue::Integer(1))
+        );
+        assert_eq!(parse_type_arg_text("abc", &int_type), None);
+    }
+
+    #[test]
+    fn test_pin_exclusion_when_false() {
+        use crate::scope_registry::{ScopeKind};
+
+        let mut registry = ScopeRegistry::new();
+        let entity_scope = registry.alloc_child(registry.global_id(), ScopeKind::Entity);
+
+        // Add pins: VI, VO, GND (unconditional), EN (when HAS_EN)
+        let dummy_range = rowan::TextRange::new(0.into(), 0.into());
+        for pin_name in &["VI", "VO", "GND"] {
+            registry.table_mut(entity_scope).insert(Symbol {
+                name: pin_name.to_string(),
+                kind: SymbolKind::Pin,
+                span: dummy_range,
+                instance_type_name: None,
+                definition_node_ptr: None,
+                bus_high: None,
+                bus_low: None,
+                direction: None,
+                parameter_overrides: None,
+                net_attributes: None,
+                resolved_type: None,
+                generic_params: None,
+                when_condition: None,
+                bus_size_param: None,
+            });
+        }
+        registry.table_mut(entity_scope).insert(Symbol {
+            name: "EN".to_string(),
+            kind: SymbolKind::Pin,
+            span: dummy_range,
+            instance_type_name: None,
+            definition_node_ptr: None,
+            bus_high: None,
+            bus_low: None,
+            direction: None,
+            parameter_overrides: None,
+            net_attributes: None,
+            resolved_type: None,
+            generic_params: None,
+            when_condition: Some("HAS_EN".to_string()),
+            bus_size_param: None,
+        });
+
+        let generic_def = GenericModuleDef {
+            name: "LinearRegulator".to_string(),
+            params: vec![
+                GenericParam {
+                    name: "V_OUT".to_string(),
+                    param_type: bhdl_common::GenericParamType::Const(bhdl_common::BhdlType::Voltage(None)),
+                    constraints: vec![],
+                    default: None,
+                },
+                GenericParam {
+                    name: "HAS_EN".to_string(),
+                    param_type: bhdl_common::GenericParamType::Const(bhdl_common::BhdlType::Bool),
+                    constraints: vec![],
+                    default: Some(ConstValue::Bool(false)),
+                },
+            ],
+            scope_id: entity_scope,
+        };
+
+        // Test with HAS_EN = false → EN should be excluded
+        let mut params_no_en = BTreeMap::new();
+        params_no_en.insert("V_OUT".to_string(), ConstValue::Voltage(5.0));
+        params_no_en.insert("HAS_EN".to_string(), ConstValue::Bool(false));
+        let (excluded, _bus_sizes) = resolve_pin_specialization(&registry, &generic_def, &params_no_en);
+        assert!(excluded.contains("EN"), "EN should be excluded when HAS_EN=false");
+        assert_eq!(excluded.len(), 1, "Only EN should be excluded");
+
+        // Test with HAS_EN = true → EN should be included
+        let mut params_with_en = BTreeMap::new();
+        params_with_en.insert("V_OUT".to_string(), ConstValue::Voltage(3.3));
+        params_with_en.insert("HAS_EN".to_string(), ConstValue::Bool(true));
+        let (excluded, _bus_sizes) = resolve_pin_specialization(&registry, &generic_def, &params_with_en);
+        assert!(excluded.is_empty(), "No pins should be excluded when HAS_EN=true");
+    }
+
+    #[test]
+    fn test_bus_size_resolution() {
+        use crate::scope_registry::ScopeKind;
+
+        let mut registry = ScopeRegistry::new();
+        let entity_scope = registry.alloc_child(registry.global_id(), ScopeKind::Entity);
+
+        let dummy_range = rowan::TextRange::new(0.into(), 0.into());
+        // Add VCC and GND (unconditional, no bus)
+        for pin_name in &["VCC", "GND"] {
+            registry.table_mut(entity_scope).insert(Symbol {
+                name: pin_name.to_string(),
+                kind: SymbolKind::Pin,
+                span: dummy_range,
+                instance_type_name: None,
+                definition_node_ptr: None,
+                bus_high: None,
+                bus_low: None,
+                direction: None,
+                parameter_overrides: None,
+                net_attributes: None,
+                resolved_type: None,
+                generic_params: None,
+                when_condition: None,
+                bus_size_param: None,
+            });
+        }
+        // Add INP, INM, OUT with bus_size_param = "CHANNELS"
+        for pin_name in &["INP", "INM", "OUT"] {
+            registry.table_mut(entity_scope).insert(Symbol {
+                name: pin_name.to_string(),
+                kind: SymbolKind::Pin,
+                span: dummy_range,
+                instance_type_name: None,
+                definition_node_ptr: None,
+                bus_high: None,
+                bus_low: None,
+                direction: None,
+                parameter_overrides: None,
+                net_attributes: None,
+                resolved_type: None,
+                generic_params: None,
+                when_condition: None,
+                bus_size_param: Some("CHANNELS".to_string()),
+            });
+        }
+
+        let generic_def = GenericModuleDef {
+            name: "OpAmp".to_string(),
+            params: vec![GenericParam {
+                name: "CHANNELS".to_string(),
+                param_type: bhdl_common::GenericParamType::Const(bhdl_common::BhdlType::Integer),
+                constraints: vec![],
+                default: Some(ConstValue::Integer(1)),
+            }],
+            scope_id: entity_scope,
+        };
+
+        // Test with CHANNELS = 2
+        let mut params = BTreeMap::new();
+        params.insert("CHANNELS".to_string(), ConstValue::Integer(2));
+        let (_excluded, bus_sizes) = resolve_pin_specialization(&registry, &generic_def, &params);
+        assert_eq!(bus_sizes.get("INP"), Some(&2));
+        assert_eq!(bus_sizes.get("INM"), Some(&2));
+        assert_eq!(bus_sizes.get("OUT"), Some(&2));
+        assert_eq!(bus_sizes.get("VCC"), None);
+
+        // Test with CHANNELS = 4
+        let mut params4 = BTreeMap::new();
+        params4.insert("CHANNELS".to_string(), ConstValue::Integer(4));
+        let (_excluded, bus_sizes4) = resolve_pin_specialization(&registry, &generic_def, &params4);
+        assert_eq!(bus_sizes4.get("INP"), Some(&4));
+        assert_eq!(bus_sizes4.get("OUT"), Some(&4));
     }
 }

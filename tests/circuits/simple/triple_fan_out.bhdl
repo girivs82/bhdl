@@ -1,25 +1,9 @@
 // Triple fan-out: regulator output drives 3 parallel LED branches
 // Tests: 3-way parallel detection, multiple demoted branches
-entity Res(value: resistance) {
-    pin 1: signal inout;
-    pin 2: signal inout;
-}
-
-entity Cap(value: capacitance) {
-    pin 1: signal inout;
-    pin 2: signal inout;
-}
-
-entity LED(color: string) {
-    pin A: signal in;
-    pin K: signal in;
-}
-
-entity LM7805 {
-    pin VI: power in;
-    pin GND: ground;
-    pin VO: power out;
-}
+import { Res } from "bhdl-stdlib/simple/resistor_simple.bhdl";
+import { Cap } from "bhdl-stdlib/simple/capacitor_simple.bhdl";
+import { LED } from "bhdl-stdlib/simple/led_simple.bhdl";
+import { LM7805 } from "bhdl-stdlib/simple/regulator_simple.bhdl";
 
 board TripleFanOut {
     power VIN = 9V @ 500mA;

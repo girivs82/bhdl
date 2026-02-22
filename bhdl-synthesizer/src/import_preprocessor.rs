@@ -61,6 +61,8 @@ impl ImportPreprocessor {
                 net_attributes: None,
                 resolved_type: None,
                 generic_params: None,
+                when_condition: None,
+                bus_size_param: None,
             };
 
             symbol_table.insert(symbol);

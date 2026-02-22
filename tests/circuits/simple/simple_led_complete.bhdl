@@ -1,13 +1,6 @@
-// Simple LED circuit — self-contained with all entity definitions
-entity Res(value: resistance) {
-    pin 1: signal inout;
-    pin 2: signal inout;
-}
-
-entity LED(color: string) {
-    pin A: signal in;
-    pin K: signal in;
-}
+// Simple LED circuit
+import { Res } from "bhdl-stdlib/simple/resistor_simple.bhdl";
+import { LED } from "bhdl-stdlib/simple/led_simple.bhdl";
 
 board SimpleLED {
     power VCC = 5V @ 100mA;

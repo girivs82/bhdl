@@ -392,8 +392,18 @@ impl NetlistGenerator {
             if let Err(e) = self.import_loader.process_imports(ast) {
                 warn!("Failed to process some imports: {}", e);
             }
+
+            // Build import preprocessor from loaded entities so that
+            // hierarchical_connectivity can find imported entity definitions
+            // (needed for attribute extraction and pin definitions)
+            if self.import_preprocessor.is_none() && !self.import_loader.loaded_entities().is_empty() {
+                let mut preprocessor = ImportPreprocessor::new(".");
+                preprocessor.preprocess_imports(ast).ok();
+                self.import_preprocessor = Some(preprocessor);
+                info!("Created import preprocessor with {} entities", self.import_loader.loaded_entities().len());
+            }
         }
-        
+
         // The analyzer has already processed imports and populated the global symbol table
         // We can now check for component definitions directly in the symbol table
         info!("Using analyzer's symbol table with {} symbols", analysis.global_scope.get_symbols().len());
@@ -685,11 +695,23 @@ impl NetlistGenerator {
                         instance_name.clone(),
                         module_id
                     ).expect("Failed to add instance");
-                    
+
+                    // Propagate module-level attributes (including component_class) to instance
+                    if let Some(module) = self.netlist.modules.get(module_id) {
+                        let module_attrs = module.attributes.clone();
+                        if let Some(instance) = self.netlist.instances.get_mut(instance_id) {
+                            for (key, value) in &module_attrs {
+                                if !instance.attributes.contains_key(key) {
+                                    instance.attributes.insert(key.clone(), value.clone());
+                                }
+                            }
+                        }
+                    }
+
                     // Create pin instances for this component instance
                     self.netlist.create_pin_instances(instance_id)
                         .map_err(|e| anyhow::anyhow!("Failed to create pin instances: {}", e))?;
-                    
+
                     // Transfer component parameters from analyzer to instance attributes
                     println!("DEBUG: Calling populate_instance_attributes for instance '{}' (id: {:?})", instance_name, instance_id);
                     populate_instance_attributes(&mut self.netlist, instance_id, &instance_name, analysis);

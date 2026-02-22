@@ -242,14 +242,19 @@ impl<'t> Parser<'t> {
     fn parse_entity_pin_decl(&mut self) {
         self.builder.start_node(SyntaxKind::PIN_DECL.into());
         self.expect(SyntaxKind::PIN_KW);
-        
+
         // Pin name can be IDENT or NUMBER (e.g., "pin 1:", "pin VCC:")
         if self.peek() == Some(SyntaxKind::IDENT) || self.peek() == Some(SyntaxKind::NUMBER) {
             self.bump();
         } else {
             self.error("Expected pin name (identifier or number)".to_string());
         }
-        
+
+        // Optional bus suffix: [N] or [high:low] for array pins
+        if self.peek() == Some(SyntaxKind::L_BRACKET) {
+            self.parse_bus_suffix();
+        }
+
         self.expect(SyntaxKind::COLON);
         
         // Parse pin type (signal, power, ground, switch, feedback)
@@ -1651,9 +1656,11 @@ impl<'t> Parser<'t> {
         }
 
         // Optional default: `= value`
+        // Use parse_value() instead of parse_expression() to avoid consuming '>'
+        // as a comparison operator (which would eat the closing angle bracket).
         if self.peek() == Some(SyntaxKind::EQ) {
             self.bump(); // consume '='
-            self.parse_expression();
+            self.parse_value();
         }
 
         self.builder.finish_node();

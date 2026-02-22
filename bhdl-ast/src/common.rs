@@ -232,6 +232,53 @@ impl PinDecl {
             .filter_map(|element| element.into_token())
             .find(|token| matches!(token.kind(), SyntaxKind::SIGNAL_KW | SyntaxKind::POWER_KW | SyntaxKind::GROUND_KW))
     }
+
+    /// Get the 'when' condition expression (for conditional pins).
+    /// e.g., `pin EN: signal in when HAS_EN;` returns the expression for `HAS_EN`.
+    pub fn when_clause(&self) -> Option<Expr> {
+        let mut found_when = false;
+        for element in self.0.children_with_tokens() {
+            if let Some(token) = element.as_token() {
+                if token.kind() == SyntaxKind::WHEN_KW {
+                    found_when = true;
+                }
+            }
+            if found_when {
+                if let Some(node) = element.as_node() {
+                    if let Some(expr) = Expr::cast(node.clone()) {
+                        return Some(expr);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Get the raw text of the 'when' condition (fallback for simple identifier conditions).
+    /// Returns the text after WHEN_KW up to the semicolon.
+    pub fn when_condition_text(&self) -> Option<String> {
+        // First try the structured Expr extraction
+        if let Some(expr) = self.when_clause() {
+            return Some(expr.syntax().text().to_string());
+        }
+        // Fallback: look for IDENT token after WHEN_KW
+        let mut found_when = false;
+        for element in self.0.children_with_tokens() {
+            if let Some(token) = element.as_token() {
+                if token.kind() == SyntaxKind::WHEN_KW {
+                    found_when = true;
+                    continue;
+                }
+                if found_when && token.kind() == SyntaxKind::IDENT {
+                    return Some(token.text().to_string());
+                }
+                if found_when && token.kind() == SyntaxKind::SEMI {
+                    break;
+                }
+            }
+        }
+        None
+    }
 }
 
 // --- Net Declaration ---
