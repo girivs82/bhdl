@@ -624,6 +624,13 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
     let mut generator = NetlistGenerator::new();
     let mut netlist = generator.generate_from_ast_and_analysis(source_file, &analysis).await?;
 
+    // Expand virtual pins (e.g. buck regulator VOUT → inductor + diode + cap)
+    let expansion_results = bhdl_synthesizer::virtual_pin_expander::expand_virtual_pins(&mut netlist);
+    if !expansion_results.is_empty() {
+        println!("  {} virtual pins expanded for {} component(s)",
+            "✓".green(), expansion_results.len());
+    }
+
     // Run GLACIER DC simulation for voltage/current annotation
     let sim_annotations = {
         let mut converter = NetlistToSpiceConverter::new();
@@ -1109,16 +1116,17 @@ fn build_simulation_annotations(
 
     // Unify regulator decomposition and cascade currents.
     //
-    // GLACIER decomposes each regulator into name_vout (voltage source on
-    // VOUT→GND) + name_dropout (connectivity resistor on VIN→VOUT).
-    // The voltage source independently sources load current from GND, so
-    // downstream regulator loads don't appear at the upstream VIN — violating
-    // KCL for annotation purposes.
+    // GLACIER decomposes each regulator into two branches with structured
+    // metadata (parent_instance + decomposition_role) rather than relying
+    // on name suffixes. The voltage source independently sources load
+    // current from GND, so downstream regulator loads don't appear at the
+    // upstream VIN — violating KCL for annotation purposes.
     //
-    // Fix: collect each regulator's VOUT current, then cascade bottom-up so
-    // that an upstream regulator's current includes all downstream loads.
+    // Fix: collect each regulator's VOUT current via metadata, then cascade
+    // bottom-up so that an upstream regulator's current includes all
+    // downstream loads.
 
-    // 1. Collect regulator info from circuit graph
+    // 1. Collect regulator info from circuit graph using structured metadata
     struct RegInfo {
         base_name: String,
         vout_current: f64,
@@ -1129,19 +1137,26 @@ fn build_simulation_annotations(
 
     for (edge_idx, current) in &dc_result.branch_currents {
         if let Some(branch) = circuit.graph.edge_weight(*edge_idx) {
-            if branch.name.ends_with("_vout") {
-                let base = branch.name.strip_suffix("_vout").unwrap().to_string();
+            let is_vout = branch.metadata
+                .get(bhdl_spice::META_DECOMPOSITION_ROLE)
+                .map(|r| r.as_str()) == Some("vout");
+            if is_vout {
+                let base = branch.metadata
+                    .get(bhdl_spice::META_PARENT_INSTANCE)
+                    .cloned()
+                    .unwrap_or_default();
                 // _vout branch connects VOUT → GND
                 if let Some((src, _tgt)) = circuit.branch_nodes(*edge_idx) {
                     let vout_node = circuit.get_node_name(src)
                         .unwrap_or("").to_string();
 
-                    // Find the matching _dropout branch to get VIN node
-                    let dropout_name = format!("{}_dropout", base);
+                    // Find the matching dropout branch by metadata
                     let vin_node = dc_result.branch_currents.keys()
                         .filter_map(|eidx| {
                             let b = circuit.graph.edge_weight(*eidx)?;
-                            if b.name == dropout_name {
+                            if b.metadata.get(bhdl_spice::META_PARENT_INSTANCE).map(|s| s.as_str()) == Some(&base)
+                                && b.metadata.get(bhdl_spice::META_DECOMPOSITION_ROLE).map(|s| s.as_str()) == Some("dropout")
+                            {
                                 let (s, _) = circuit.branch_nodes(*eidx)?;
                                 circuit.get_node_name(s).map(|n| n.to_string())
                             } else {
@@ -1183,21 +1198,34 @@ fn build_simulation_annotations(
         }
     }
 
-    // 3. Write unified entries and remove decomposed ones
+    // 3. Write unified entries and remove decomposed ones (found by metadata scan)
     for reg in &regulators {
         let current = reg_currents.get(&reg.base_name).copied().unwrap_or(reg.vout_current);
         annotations.instance_currents.insert(reg.base_name.clone(), current);
 
-        let vout_key = format!("{}_vout", reg.base_name);
-        let dropout_key = format!("{}_dropout", reg.base_name);
-        let p_vout = annotations.instance_power.get(&vout_key).copied().unwrap_or(0.0);
-        let p_drop = annotations.instance_power.get(&dropout_key).copied().unwrap_or(0.0);
-        annotations.instance_power.insert(reg.base_name.clone(), p_vout + p_drop);
+        // Find all decomposed branch names for this regulator by metadata
+        let decomposed_keys: Vec<String> = dc_result.branch_currents.keys()
+            .filter_map(|eidx| {
+                let b = circuit.graph.edge_weight(*eidx)?;
+                if b.metadata.get(bhdl_spice::META_PARENT_INSTANCE).map(|s| s.as_str()) == Some(&reg.base_name) {
+                    Some(b.name.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
 
-        annotations.instance_currents.remove(&vout_key);
-        annotations.instance_currents.remove(&dropout_key);
-        annotations.instance_power.remove(&vout_key);
-        annotations.instance_power.remove(&dropout_key);
+        // Aggregate power from all decomposed branches
+        let total_power: f64 = decomposed_keys.iter()
+            .filter_map(|key| annotations.instance_power.get(key).copied())
+            .sum();
+        annotations.instance_power.insert(reg.base_name.clone(), total_power);
+
+        // Remove decomposed entries
+        for key in &decomposed_keys {
+            annotations.instance_currents.remove(key);
+            annotations.instance_power.remove(key);
+        }
     }
 
     annotations

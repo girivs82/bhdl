@@ -298,6 +298,15 @@ impl DcAnalysisBuilder {
 mod tests {
     use super::*;
     use crate::Circuit;
+    use crate::circuit::{META_PARENT_INSTANCE, META_DECOMPOSITION_ROLE};
+
+    /// Helper: build metadata for a decomposed regulator branch
+    fn reg_meta(parent: &str, role: &str) -> HashMap<String, String> {
+        let mut m = HashMap::new();
+        m.insert(META_PARENT_INSTANCE.to_string(), parent.to_string());
+        m.insert(META_DECOMPOSITION_ROLE.to_string(), role.to_string());
+        m
+    }
     
     #[test]
     fn test_regulator_circuit_with_diodes() {
@@ -316,10 +325,10 @@ mod tests {
 
         // Voltage sources
         circuit.add_branch("VIN".into(), "regulated", "GND", "VoltageSource".into(), 12.0, None);
-        circuit.add_branch("reg_vout".into(), "VOUT", "GND", "VoltageSource".into(), 5.0, None);
+        circuit.add_branch_with_metadata("reg_vout".into(), "VOUT", "GND", "VoltageSource".into(), 5.0, None, reg_meta("reg", "vout"));
 
         // Regulator dropout path
-        circuit.add_branch("reg_dropout".into(), "regulated", "VOUT", "Resistor".into(), 4.0, None);
+        circuit.add_branch_with_metadata("reg_dropout".into(), "regulated", "VOUT", "Resistor".into(), 4.0, None, reg_meta("reg", "dropout"));
 
         // TVS diode: anode=GND, cathode=regulated (reverse biased)
         circuit.add_branch("tvs".into(), "GND", "regulated", "Diode".into(), 1.0, None);
@@ -361,8 +370,8 @@ mod tests {
         let mut circuit = Circuit::new();
 
         circuit.add_branch("VIN".into(), "regulated", "GND", "VoltageSource".into(), 12.0, None);
-        circuit.add_branch("reg_vout".into(), "VOUT", "GND", "VoltageSource".into(), 5.0, None);
-        circuit.add_branch("reg_dropout".into(), "regulated", "VOUT", "Resistor".into(), 4.0, None);
+        circuit.add_branch_with_metadata("reg_vout".into(), "VOUT", "GND", "VoltageSource".into(), 5.0, None, reg_meta("reg", "vout"));
+        circuit.add_branch_with_metadata("reg_dropout".into(), "regulated", "VOUT", "Resistor".into(), 4.0, None, reg_meta("reg", "dropout"));
         circuit.add_branch("r1".into(), "VOUT", "sensed", "Resistor".into(), 330.0, None);
         circuit.add_branch("sense".into(), "sensed", "net_sense", "Resistor".into(), 0.1, None);
         // Replace LED with a resistor to get equivalent load
@@ -384,8 +393,8 @@ mod tests {
         let mut circuit = Circuit::new();
 
         circuit.add_branch("VIN".into(), "regulated", "GND", "VoltageSource".into(), 12.0, None);
-        circuit.add_branch("reg_vout".into(), "VOUT", "GND", "VoltageSource".into(), 5.0, None);
-        circuit.add_branch("reg_dropout".into(), "regulated", "VOUT", "Resistor".into(), 4.0, None);
+        circuit.add_branch_with_metadata("reg_vout".into(), "VOUT", "GND", "VoltageSource".into(), 5.0, None, reg_meta("reg", "vout"));
+        circuit.add_branch_with_metadata("reg_dropout".into(), "regulated", "VOUT", "Resistor".into(), 4.0, None, reg_meta("reg", "dropout"));
         circuit.add_branch("r1".into(), "VOUT", "sensed", "Resistor".into(), 330.0, None);
         circuit.add_branch("sense".into(), "sensed", "net_sense", "Resistor".into(), 0.1, None);
         circuit.add_branch("led".into(), "net_sense", "GND", "LED".into(), 1.0, None);
@@ -410,8 +419,8 @@ mod tests {
         let mut circuit = Circuit::new();
 
         circuit.add_branch("VIN".into(), "regulated", "GND", "VoltageSource".into(), 12.0, None);
-        circuit.add_branch("reg_vout".into(), "VOUT", "GND", "VoltageSource".into(), 5.0, None);
-        circuit.add_branch("reg_dropout".into(), "regulated", "VOUT", "Resistor".into(), 1000.0, None);
+        circuit.add_branch_with_metadata("reg_vout".into(), "VOUT", "GND", "VoltageSource".into(), 5.0, None, reg_meta("reg", "vout"));
+        circuit.add_branch_with_metadata("reg_dropout".into(), "regulated", "VOUT", "Resistor".into(), 1000.0, None, reg_meta("reg", "dropout"));
         circuit.add_branch("tvs".into(), "GND", "regulated", "Diode".into(), 1.0, None);
         circuit.add_branch("c1".into(), "regulated", "GND", "Capacitor".into(), 100.0, None);
         circuit.add_branch("c2".into(), "VOUT", "GND", "Capacitor".into(), 10.0, None);

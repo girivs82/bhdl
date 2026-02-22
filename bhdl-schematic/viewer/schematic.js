@@ -1402,27 +1402,11 @@
                     }
                 }
             }
-            // Attach simulation annotations (current, power) if available
-            // GLACIER decomposes some components (e.g. regulators → name_dropout + name_vout),
-            // so fall back to aggregating sub-component values when no exact match exists.
-            let simCurrent = data.simulation?.instance_currents?.[name];
-            let simPowerW = data.simulation?.instance_power?.[name];
-            if (simCurrent == null && data.simulation?.instance_currents) {
-                let maxAbs = 0;
-                for (const [key, val] of Object.entries(data.simulation.instance_currents)) {
-                    if (key.startsWith(name + '_') && Math.abs(val) > maxAbs) {
-                        maxAbs = Math.abs(val);
-                        simCurrent = val;
-                    }
-                }
-            }
-            if (simPowerW == null && data.simulation?.instance_power) {
-                let total = 0, found = false;
-                for (const [key, val] of Object.entries(data.simulation.instance_power)) {
-                    if (key.startsWith(name + '_')) { total += val; found = true; }
-                }
-                if (found) simPowerW = total;
-            }
+            // Attach simulation annotations (current, power) if available.
+            // build_simulation_annotations() unifies decomposed branches (e.g. regulators)
+            // into a single entry per instance, so direct lookup is sufficient.
+            const simCurrent = data.simulation?.instance_currents?.[name];
+            const simPowerW = data.simulation?.instance_power?.[name];
             layoutElements.push({ x: pos.x, y: pos.y, w: pos.w, h: pos.h, name, type: 'instance', entityType: inst.entity_type, parameters: inst.parameters, category: inst.category, isShunt: isShuntLike, isFlipped: flippedNames.has(name), inputPorts: instInPorts, outputPorts: instOutPorts, gndStubs: gndStubsByInst.get(name) || [], pwrStubs: pwrStubsByInst.get(name) || [], pgStubs: [], line: inst.line, simCurrent, simPower: simPowerW });
         }
 
@@ -1602,19 +1586,10 @@
 
                 // Gather simulation annotations for this wire
                 const voltage = data.simulation?.net_voltages?.[net.name];
-                // Current: use the sink component's current (current flowing into it through this wire)
-                // GLACIER decomposes some components (e.g. regulators → name_dropout + name_vout),
-                // so fall back to the sub-component with the largest absolute current.
-                let current = data.simulation?.instance_currents?.[sink.name];
-                if (current == null && data.simulation?.instance_currents) {
-                    let maxAbs = 0;
-                    for (const [key, val] of Object.entries(data.simulation.instance_currents)) {
-                        if (key.startsWith(sink.name + '_') && Math.abs(val) > maxAbs) {
-                            maxAbs = Math.abs(val);
-                            current = val;
-                        }
-                    }
-                }
+                // Current: use the sink component's current (current flowing into it through this wire).
+                // build_simulation_annotations() unifies decomposed branches into a single entry
+                // per instance, so direct lookup is sufficient.
+                const current = data.simulation?.instance_currents?.[sink.name];
                 const driverIsPowerSource = net.driver.type === 'power_source';
                 layoutWires.push({ from: fromPos, to: toPos, segments, width: net.width || 1, netName: net.name, netClass: net.net_class || 'signal', isPower: isPowerNet, voltage, current, driverIsPowerSource });
             }

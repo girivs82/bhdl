@@ -11,6 +11,11 @@ pub type NodeId = NodeIndex;
 pub type ComponentId = EdgeIndex;
 pub type Component = Branch;
 
+/// Metadata key: parent instance name for decomposed branches
+pub const META_PARENT_INSTANCE: &str = "parent_instance";
+/// Metadata key: role within decomposition ("vout" or "dropout")
+pub const META_DECOMPOSITION_ROLE: &str = "decomposition_role";
+
 /// Electrical node in the circuit
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Node {
@@ -39,9 +44,17 @@ pub struct Branch {
     pub current: Option<f64>,
     /// Connected nodes (for safety analysis)
     pub nodes: Vec<NodeId>,
+    /// Structured metadata for semantic relationships (e.g. decomposition role)
+    pub metadata: HashMap<String, String>,
 }
 
 impl Branch {
+    /// Builder-style method to add a metadata key-value pair
+    pub fn with_metadata(mut self, key: &str, value: &str) -> Self {
+        self.metadata.insert(key.to_string(), value.to_string());
+        self
+    }
+
     /// Get component name
     pub fn name(&self) -> &str {
         &self.name
@@ -181,8 +194,40 @@ impl Circuit {
             value,
             current: None,
             nodes: vec![n1, n2],
+            metadata: HashMap::new(),
         };
-        
+
+        let idx = self.graph.add_edge(n1, n2, branch);
+        self.branch_map.insert(name, idx);
+        idx
+    }
+
+    /// Add a component (branch) between two nodes with structured metadata
+    pub fn add_branch_with_metadata(
+        &mut self,
+        name: String,
+        node1: &str,
+        node2: &str,
+        component_type: String,
+        value: f64,
+        instance_id: Option<InstanceId>,
+        metadata: HashMap<String, String>,
+    ) -> EdgeIndex {
+        let n1 = self.node_map.get(node1).copied()
+            .unwrap_or_else(|| self.add_node(node1.to_string(), None));
+        let n2 = self.node_map.get(node2).copied()
+            .unwrap_or_else(|| self.add_node(node2.to_string(), None));
+
+        let branch = Branch {
+            name: name.clone(),
+            instance_id,
+            component_type,
+            value,
+            current: None,
+            nodes: vec![n1, n2],
+            metadata,
+        };
+
         let idx = self.graph.add_edge(n1, n2, branch);
         self.branch_map.insert(name, idx);
         idx
