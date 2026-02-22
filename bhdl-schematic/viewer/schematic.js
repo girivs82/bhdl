@@ -25,7 +25,7 @@
     const PORT_STUB_LEN = 14;
     const ENTITY_PADDING = 16;
     const INSTANCE_PADDING = 12;
-    const COLUMN_GAP = 220;
+    const COLUMN_GAP = 140;
     const ROW_GAP = 50;
     const HEADER_HEIGHT = 22;
     const FONT_SIZE = 11;
@@ -1202,9 +1202,13 @@
             } else {
                 cx = parentPos.x + parentPos.w / 2;
             }
+            // Use common shuntY for main-path children so all shunts align vertically.
+            // For shunt-under-shunt chains, stack below the parent.
+            const childY = parentIsMainPath ? shuntY
+                : parentPos.y + parentPos.h + PORT_STUB_LEN * 2 + 10;
             positions.set(child, {
                 x: cx - childSz.w / 2,
-                y: parentPos.y + parentPos.h + PORT_STUB_LEN * 2 + 10,
+                y: childY,
                 w: childSz.w, h: childSz.h
             });
         }
@@ -1825,8 +1829,10 @@
                 const simPower = data.simulation?.power_nets;
                 let isPowerNet;
                 if (simPower) {
-                    // Simulation available: a net is power if GLACIER says so
-                    isPowerNet = simPower instanceof Set ? simPower.has(net.name) : !!simPower[net.name];
+                    // Simulation available: a net is power if GLACIER says so,
+                    // or if the driver is a power source symbol (always power)
+                    isPowerNet = (simPower instanceof Set ? simPower.has(net.name) : !!simPower[net.name])
+                        || net.driver.type === 'power_source';
                 } else {
                     // Fallback: driver pin_type heuristic
                     const driverPinType = net.driver.type === 'power_source' ? 'power'
@@ -2784,35 +2790,35 @@
             ctx.arc(wire.to.x, wire.to.y, isBus ? 3 : 2, 0, Math.PI * 2);
             ctx.fill();
 
-            // ── Voltage annotation ──
-            // Show node voltage on any wire that has simulation data.
-            // Find the longest segment to place the label on.
-            if (wire.voltage != null && wire.segments.length > 0) {
-                // Find best segment: prefer horizontal, pick longest
-                let bestSeg = null, bestLen = 0;
+            // ── Voltage & Current annotations ──
+            // Find the longest segment (prefer horizontal) for annotation placement.
+            // Voltage above the wire, current below, both at the same X for alignment.
+            let bestSeg = null, bestLen = 0;
+            if (wire.segments.length > 0) {
                 for (const s of wire.segments) {
                     const hLen = Math.abs(s.x2 - s.x1);
                     const vLen = Math.abs(s.y2 - s.y1);
                     const len = Math.max(hLen, vLen);
                     if (len > bestLen) { bestLen = len; bestSeg = s; }
                 }
-                if (bestSeg && bestLen > 20) {
-                    const segIsHoriz = Math.abs(bestSeg.x2 - bestSeg.x1) >= Math.abs(bestSeg.y2 - bestSeg.y1);
-                    ctx.font = `${FONT_SIZE - 2}px monospace`;
-                    ctx.fillStyle = isPower ? COLORS.portPower
-                        : isHighlighted ? COLORS.wireHighlight
-                        : '#90caf9';
-                    if (segIsHoriz) {
-                        const lx = (bestSeg.x1 + bestSeg.x2) / 2;
-                        ctx.textAlign = 'center';
-                        ctx.textBaseline = 'bottom';
-                        ctx.fillText(formatVoltage(wire.voltage), lx, bestSeg.y1 - 6);
-                    } else {
-                        const cy = (bestSeg.y1 + bestSeg.y2) / 2;
-                        ctx.textAlign = 'right';
-                        ctx.textBaseline = 'middle';
-                        ctx.fillText(formatVoltage(wire.voltage), bestSeg.x1 - 6, cy);
-                    }
+            }
+
+            if (wire.voltage != null && bestSeg && bestLen > 20) {
+                const segIsHoriz = Math.abs(bestSeg.x2 - bestSeg.x1) >= Math.abs(bestSeg.y2 - bestSeg.y1);
+                ctx.font = `${FONT_SIZE - 2}px monospace`;
+                ctx.fillStyle = isPower ? COLORS.portPower
+                    : isHighlighted ? COLORS.wireHighlight
+                    : '#90caf9';
+                if (segIsHoriz) {
+                    const lx = (bestSeg.x1 + bestSeg.x2) / 2;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'bottom';
+                    ctx.fillText(formatVoltage(wire.voltage), lx, bestSeg.y1 - 5);
+                } else {
+                    const cy = (bestSeg.y1 + bestSeg.y2) / 2;
+                    ctx.textAlign = 'right';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(formatVoltage(wire.voltage), bestSeg.x1 - 6, cy);
                 }
             } else if (!wire.driverIsPowerSource && wire.segments.length > 0) {
                 // No simulation voltage — show net name on first long horizontal segment
@@ -2823,48 +2829,26 @@
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'bottom';
                     ctx.fillStyle = COLORS.textMuted;
-                    ctx.fillText(wire.netName, lx, seg.y1 - 6);
+                    ctx.fillText(wire.netName, lx, seg.y1 - 5);
                 }
             }
 
-            // ── Current annotation ──
-            // Show branch current on every wire, placed near the SINK end
-            // so labels don't get hidden behind intermediate component boxes.
-            if (wire.current != null && Math.abs(wire.current) > 1e-9 && wire.segments.length > 0) {
+            if (wire.current != null && Math.abs(wire.current) > 1e-9 && bestSeg && bestLen > 20) {
+                const segIsHoriz = Math.abs(bestSeg.x2 - bestSeg.x1) >= Math.abs(bestSeg.y2 - bestSeg.y1);
                 ctx.font = `${FONT_SIZE - 2}px monospace`;
                 ctx.fillStyle = '#8bc34a';
-                const lastSeg = wire.segments[wire.segments.length - 1];
-                const lastH = Math.abs(lastSeg.x2 - lastSeg.x1);
-                const lastV = Math.abs(lastSeg.y2 - lastSeg.y1);
-                if (lastH > lastV && lastH > 25) {
-                    // Last segment is horizontal — label near the sink (75% toward end)
-                    const cx = lastSeg.x1 + (lastSeg.x2 - lastSeg.x1) * 0.75;
+                if (segIsHoriz) {
+                    // Same X as voltage (midpoint), but below the wire
+                    const lx = (bestSeg.x1 + bestSeg.x2) / 2;
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'top';
-                    ctx.fillText(formatCurrent(Math.abs(wire.current)), cx, lastSeg.y1 + 4);
-                } else if (lastV > 8) {
-                    // Last segment is vertical — label to the right, near sink end
-                    const cy = lastSeg.y1 + (lastSeg.y2 - lastSeg.y1) * 0.65;
+                    ctx.fillText(formatCurrent(Math.abs(wire.current)), lx, bestSeg.y1 + 4);
+                } else {
+                    // Vertical: place below voltage label on same side
+                    const cy = (bestSeg.y1 + bestSeg.y2) / 2;
                     ctx.textAlign = 'left';
                     ctx.textBaseline = 'middle';
-                    ctx.fillText(formatCurrent(Math.abs(wire.current)), lastSeg.x1 + 6, cy);
-                } else {
-                    // Very short last segment — use any segment, label near sink end
-                    for (let si = wire.segments.length - 1; si >= 0; si--) {
-                        const s = wire.segments[si];
-                        const h = Math.abs(s.x2 - s.x1), v = Math.abs(s.y2 - s.y1);
-                        if (h > v && h > 25) {
-                            const cx = s.x1 + (s.x2 - s.x1) * 0.75;
-                            ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-                            ctx.fillText(formatCurrent(Math.abs(wire.current)), cx, s.y1 + 4);
-                            break;
-                        } else if (v > 8) {
-                            const cy = s.y1 + (s.y2 - s.y1) * 0.65;
-                            ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-                            ctx.fillText(formatCurrent(Math.abs(wire.current)), s.x1 + 6, cy);
-                            break;
-                        }
-                    }
+                    ctx.fillText(formatCurrent(Math.abs(wire.current)), bestSeg.x1 + 6, cy);
                 }
             }
         }
