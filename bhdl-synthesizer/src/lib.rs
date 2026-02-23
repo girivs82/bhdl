@@ -58,6 +58,12 @@ pub mod virtual_pin_extractor;
 // Virtual pin expansion (post-synthesis wiring of inductor/diode/cap)
 pub mod virtual_pin_expander;
 
+// Ripple-aware multi-tier capacitor bank computation
+pub mod ripple_calculator;
+
+// Intent attribute stamper (bridges FlowTracker intents → netlist attributes)
+pub mod intent_attribute_stamper;
+
 // Intent-aware component generator
 pub mod intent_aware_generator;
 

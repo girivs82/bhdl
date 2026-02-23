@@ -22,6 +22,8 @@ use bhdl_netlist::{
     ConnectionPoint, InstanceId, ModuleId, ModuleKind, NetId, Netlist,
     PinDirection, PinInstanceId, PinType,
 };
+use bhdl_analyzer::spice_extraction::parse_unit_value;
+use crate::ripple_calculator::compute_ripple_bank;
 
 /// Summary of one virtual-pin expansion.
 #[derive(Debug)]
@@ -34,6 +36,8 @@ pub struct ExpansionResult {
     pub sw_net_name: String,
     /// Switching node pin name from library (e.g. "SW", "LX", "PH")
     pub sw_pin_name: String,
+    /// Additional output capacitor names (for multi-tier ripple banks)
+    pub additional_output_caps: Vec<String>,
 }
 
 /// Expand all virtual pins in the netlist.
@@ -265,27 +269,96 @@ fn expand_one(netlist: &mut Netlist, cand: &Candidate) -> Result<ExpansionResult
         None
     };
 
-    // --- Output cap: pin 1 → VOUT, pin 2 → GND ---
-    let cout_name = format!("{}_Cout", base);
-    let cout_id = create_instance(netlist, &cout_name, cap_mod, &[
-        ("component_class", "capacitor"),
-        ("value", &cand.cout_value),
-        ("vpin_parent", base),
-        ("vpin_role", "shunt"),
-    ]);
-    let cout_pins = netlist.create_pin_instances(cout_id)
-        .map_err(|e| format!("create cout pins: {}", e))?;
-    connect_pin_instance_by_name(netlist, cout_id, &cout_pins, "1", vout_net)?;
-    connect_pin_instance_by_name(netlist, cout_id, &cout_pins, "2", gnd_net)?;
+    // --- Output capacitor(s): VOUT → GND ---
+    // Check for intent-driven ripple target on the regulator instance
+    let inst_attrs = netlist.instances.get(cand.instance_id)
+        .map(|i| i.attributes.clone())
+        .unwrap_or_default();
 
-    Ok(ExpansionResult {
-        regulator_name: base.clone(),
-        inductor_name: ind_name,
-        diode_name,
-        output_cap_name: cout_name,
-        sw_net_name,
-        sw_pin_name: cand.sw_name.clone(),
-    })
+    let max_ripple = inst_attrs.get("intent_max_ripple")
+        .and_then(|v| parse_unit_value(v));
+    let f_sw = inst_attrs.get("f_sw")
+        .and_then(|v| parse_unit_value(v))
+        .unwrap_or(500e3); // default 500kHz
+
+    let mut additional_caps = Vec::new();
+
+    if let Some(ripple_target) = max_ripple {
+        // Intent-driven multi-tier capacitor bank
+        let v_out = inst_attrs.get("output_voltage")
+            .and_then(|v| parse_unit_value(v))
+            .unwrap_or(5.0);
+        // Estimate v_in from the VIN net voltage or use a safe default
+        // We don't have GLACIER results yet, so use 2× v_out as a conservative estimate
+        let v_in = v_out * 2.0; // Will be refined post-GLACIER
+        let inductance = parse_unit_value(&cand.inductor_value).unwrap_or(33e-6);
+        // Conservative load current estimate (will be refined by GLACIER physical selection)
+        let i_load = 1.0;
+
+        let bank = compute_ripple_bank(v_in, v_out, i_load, f_sw, inductance, ripple_target);
+
+        info!("Ripple-aware bank for {}: {} tiers, est. ripple {:.2}mV (target {:.2}mV)",
+            base, bank.tiers.len(), bank.estimated_ripple_v * 1e3, ripple_target * 1e3);
+
+        let mut first_cap_name = String::new();
+        for tier in &bank.tiers {
+            for i in 0..tier.count {
+                let cap_name = format!("{}_{}_{}", base, tier.role, i + 1);
+                let cap_value = format_cap_value_for_attr(tier.capacitance);
+                let cap_id = create_instance(netlist, &cap_name, cap_mod, &[
+                    ("component_class", "capacitor"),
+                    ("value", &cap_value),
+                    ("vpin_parent", base),
+                    ("vpin_role", &format!("output_{}", tier.role)),
+                    ("dielectric_hint", tier.dielectric_hint),
+                    ("ripple_tier", tier.role),
+                ]);
+                let cap_pins = netlist.create_pin_instances(cap_id)
+                    .map_err(|e| format!("create {} cap pins: {}", cap_name, e))?;
+                connect_pin_instance_by_name(netlist, cap_id, &cap_pins, "1", vout_net)?;
+                connect_pin_instance_by_name(netlist, cap_id, &cap_pins, "2", gnd_net)?;
+
+                if first_cap_name.is_empty() {
+                    first_cap_name = cap_name;
+                } else {
+                    additional_caps.push(cap_name);
+                }
+            }
+        }
+
+        Ok(ExpansionResult {
+            regulator_name: base.clone(),
+            inductor_name: ind_name,
+            diode_name,
+            output_cap_name: first_cap_name,
+            sw_net_name,
+            sw_pin_name: cand.sw_name.clone(),
+            additional_output_caps: additional_caps,
+        })
+    } else {
+        // Existing single-cap path (no intent)
+        let cout_name = format!("{}_Cout", base);
+        let cout_id = create_instance(netlist, &cout_name, cap_mod, &[
+            ("component_class", "capacitor"),
+            ("value", &cand.cout_value),
+            ("vpin_parent", base),
+            ("vpin_role", "shunt"),
+        ]);
+        let cout_pins = netlist.create_pin_instances(cout_id)
+            .map_err(|e| format!("create cout pins: {}", e))?;
+        connect_pin_instance_by_name(netlist, cout_id, &cout_pins, "1", vout_net)?;
+        connect_pin_instance_by_name(netlist, cout_id, &cout_pins, "2", gnd_net)?;
+
+        Ok(ExpansionResult {
+            regulator_name: base.clone(),
+            inductor_name: ind_name,
+            diode_name,
+            output_cap_name: cout_name,
+            sw_net_name,
+            sw_pin_name: cand.sw_name.clone(),
+            additional_output_caps: Vec::new(),
+        })
+    }
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────
@@ -309,7 +382,7 @@ fn find_net_for_pin_instance(netlist: &Netlist, pi_id: PinInstanceId) -> Option<
 /// Find an existing module definition by name, or create one with the given pins.
 /// `pins` is a slice of (name, is_passive): passive pins get InOut/Passive,
 /// non-passive get In/Signal or Out/Signal based on name convention (A=In, K=Out).
-fn find_or_create_module(
+pub(crate) fn find_or_create_module(
     netlist: &mut Netlist,
     name: &str,
     pins: &[(&str, bool)],
@@ -353,7 +426,7 @@ fn find_or_create_module(
 }
 
 /// Create a component instance with the given attributes.
-fn create_instance(
+pub(crate) fn create_instance(
     netlist: &mut Netlist,
     name: &str,
     module_id: ModuleId,
@@ -383,7 +456,7 @@ fn disconnect_pin_from_net(netlist: &mut Netlist, pi_id: PinInstanceId, net_id: 
 }
 
 /// Connect a named pin of an instance to a net.
-fn connect_pin_instance_by_name(
+pub(crate) fn connect_pin_instance_by_name(
     netlist: &mut Netlist,
     inst_id: InstanceId,
     pin_instances: &[PinInstanceId],
@@ -401,6 +474,24 @@ fn connect_pin_instance_by_name(
         }
     }
     Err(format!("pin '{}' not found on instance {:?}", pin_name, inst_id))
+}
+
+/// Format a capacitance value (in farads) as a human-readable string for attributes.
+fn format_cap_value_for_attr(farads: f64) -> String {
+    if farads >= 1e-3 {
+        format!("{:.0}mF", farads * 1e3)
+    } else if farads >= 1e-6 {
+        let uf = farads * 1e6;
+        if (uf - uf.round()).abs() < 0.05 {
+            format!("{:.0}µF", uf)
+        } else {
+            format!("{:.1}µF", uf)
+        }
+    } else if farads >= 1e-9 {
+        format!("{:.0}nF", farads * 1e9)
+    } else {
+        format!("{:.0}pF", farads * 1e12)
+    }
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────
@@ -617,5 +708,84 @@ mod tests {
             .collect();
         assert_eq!(l_names.len(), 2);
         assert_ne!(l_names[0], l_names[1], "inductors should have distinct names");
+    }
+
+    #[test]
+    fn test_intent_driven_multi_tier_expansion() {
+        let mut nl = make_buck_netlist();
+
+        // Add intent attributes to the buck instance (as if stamped by intent_attribute_stamper)
+        for (_, inst) in &mut nl.instances {
+            if inst.name == "buck" {
+                inst.attributes.insert("intent_name".to_string(), "output_filtering".to_string());
+                inst.attributes.insert("intent_max_ripple".to_string(), "5mV".to_string());
+                inst.attributes.insert("f_sw".to_string(), "500kHz".to_string());
+            }
+        }
+
+        let initial_instances = nl.instances.len();
+        let results = expand_virtual_pins(&mut nl);
+
+        assert_eq!(results.len(), 1, "should expand exactly one regulator");
+        let r = &results[0];
+
+        // With intent, should create multi-tier caps (not single _Cout)
+        // The first cap becomes output_cap_name, rest go into additional_output_caps
+        let total_output_caps = 1 + r.additional_output_caps.len();
+        assert!(total_output_caps >= 3,
+            "multi-tier bank should have >= 3 output caps (hf + mid + bulk), got {}",
+            total_output_caps);
+
+        // Verify all output cap instances have ripple_tier attribute
+        let cap_children: Vec<_> = nl.instances.iter()
+            .filter(|(_, i)| {
+                i.attributes.get("vpin_parent").map(|s| s.as_str()) == Some("buck")
+                    && i.attributes.get("component_class").map(|s| s.as_str()) == Some("capacitor")
+            })
+            .collect();
+
+        assert!(cap_children.len() >= 3,
+            "should have >= 3 cap children, got {}", cap_children.len());
+
+        // Check that we have all three tiers
+        let tiers: Vec<&str> = cap_children.iter()
+            .filter_map(|(_, i)| i.attributes.get("ripple_tier").map(|s| s.as_str()))
+            .collect();
+        assert!(tiers.contains(&"hf_bypass"), "should have hf_bypass tier");
+        assert!(tiers.contains(&"mid_freq"), "should have mid_freq tier");
+        assert!(tiers.contains(&"bulk"), "should have bulk tier");
+
+        // Check dielectric hints are set correctly
+        for (_, inst) in &cap_children {
+            if let Some(tier) = inst.attributes.get("ripple_tier") {
+                let hint = inst.attributes.get("dielectric_hint").map(|s| s.as_str());
+                match tier.as_str() {
+                    "hf_bypass" => assert_eq!(hint, Some("C0G")),
+                    "mid_freq" => assert_eq!(hint, Some("X7R")),
+                    "bulk" => assert_eq!(hint, Some("X5R")),
+                    _ => panic!("unexpected tier: {}", tier),
+                }
+            }
+        }
+
+        // Total instances: buck + L + D + N caps
+        assert!(nl.instances.len() > initial_instances + 3,
+            "multi-tier should create more instances than single-cap path");
+    }
+
+    #[test]
+    fn test_no_intent_falls_back_to_single_cap() {
+        // Without intent attrs, should use existing single-cap path
+        let mut nl = make_buck_netlist();
+
+        let results = expand_virtual_pins(&mut nl);
+        assert_eq!(results.len(), 1);
+        let r = &results[0];
+
+        // Should use single _Cout, no additional caps
+        assert!(r.output_cap_name.contains("_Cout"),
+            "without intent should use single _Cout, got {}", r.output_cap_name);
+        assert!(r.additional_output_caps.is_empty(),
+            "without intent should have no additional caps");
     }
 }
