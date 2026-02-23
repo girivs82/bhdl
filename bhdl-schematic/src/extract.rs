@@ -793,7 +793,9 @@ fn classify_placement_roles(
         if let Some(role) = inst.expansion_role.as_deref() {
             inst.placement_role = Some(match role {
                 "series" => PlacementRole::MainPath,
-                "shunt" => PlacementRole::Shunt,
+                // "shunt" and all "output_*" roles (multi-tier ripple caps)
+                // are vertical drops to ground
+                s if s == "shunt" || s.starts_with("output_") => PlacementRole::Shunt,
                 _ => PlacementRole::MainPath,
             });
             continue;

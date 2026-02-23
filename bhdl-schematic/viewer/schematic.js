@@ -19,7 +19,8 @@
         const useRefDes = refdesChk.checked;
         for (const el of layoutElements) {
             if (el.type === 'instance' && el.refdes) {
-                el.displayName = useRefDes ? el.refdes : el.name;
+                // Expansion shunt children always use refdes (compact labels)
+                el.displayName = (useRefDes || el._isExpShunt) ? el.refdes : el.name;
             }
         }
         render();
@@ -245,6 +246,10 @@
                     const up = s.port.toUpperCase();
                     if (!(up === 'VO' || up === 'VOUT' || up === 'OUT' || up === 'OUTPUT')) return false;
                     if (inst.category === 'regulator') return true;
+                    // Passive components (inductor, capacitor, resistor, diode) are never
+                    // regulators, even if they happen to have IN/OUT pin names.
+                    const passiveCats = ['inductor', 'capacitor', 'resistor', 'diode'];
+                    if (passiveCats.includes(inst.category)) return false;
                     // Fallback: detect regulator by pin structure (has both VI/VIN and VO/VOUT)
                     const hasInputPin = inst.connections.some(c => {
                         const p = c.port.toUpperCase();
@@ -437,7 +442,7 @@
                 }
                 const group = expansionGroups.get(inst.expansion_parent);
                 if (inst.expansion_role === 'series') group.series.push(name);
-                else if (inst.expansion_role === 'shunt') group.shunt.push(name);
+                else if (inst.expansion_role === 'shunt' || (inst.expansion_role && inst.expansion_role.startsWith('output_'))) group.shunt.push(name);
             }
         }
 
@@ -805,13 +810,21 @@
             }
         }
         // Remove power-source → series-child edges (they invert the real flow)
+        // and add the REVERSE edge (series-child → power-source) since the
+        // child's output feeds that power net (e.g., inductor output → VOUT).
         for (const psNode of powerSourceNodes) {
             const fwd = mbForward.get(psNode.id);
             if (!fwd) continue;
             for (let i = fwd.length - 1; i >= 0; i--) {
                 if (seriesChildNames.has(fwd[i])) {
-                    mbInDegree.set(fwd[i], mbInDegree.get(fwd[i]) - 1);
+                    const childName = fwd[i];
+                    mbInDegree.set(childName, mbInDegree.get(childName) - 1);
                     fwd.splice(i, 1);
+                    // Add reverse edge: series child → power source
+                    if (!mbForward.get(childName).includes(psNode.id)) {
+                        mbForward.get(childName).push(psNode.id);
+                        mbInDegree.set(psNode.id, mbInDegree.get(psNode.id) + 1);
+                    }
                 }
             }
         }
@@ -1028,7 +1041,7 @@
             // Determine left/right based on which net the shunt shares with
             // the series child: input-side net → left, output-side net → right.
             const inst = instMap.get(item.name);
-            if (inst && inst.expansion_parent && inst.expansion_role === 'shunt') {
+            if (inst && inst.expansion_parent && (inst.expansion_role === 'shunt' || (inst.expansion_role && inst.expansion_role.startsWith('output_')))) {
                 const group = expansionGroups.get(inst.expansion_parent);
                 if (group && group.series.length > 0) {
                     const seriesName = group.series[0];
@@ -1097,14 +1110,17 @@
                     item.junctionName = parentName;
                     item.junctionSide = 'right';
                 } else {
-                    // Output-net shunt → junction at next main-path node's right side
-                    const idx = mainPathOrder.indexOf(seriesChild);
-                    if (idx >= 0 && idx + 1 < mainPathOrder.length) {
-                        item.junctionName = mainPathOrder[idx + 1];
+                    // Output-net shunt → junction at next node in mainBandOrder.
+                    // Use mainBandOrder (topological sort) rather than mainPathOrder
+                    // (BFS) because mainPathOrder can be in wrong order when multiple
+                    // power sources seed the BFS in arbitrary net-list order.
+                    // mainBandOrder is always correct and includes power source nodes.
+                    const mbIdx = mainBandOrder.indexOf(seriesChild);
+                    if (mbIdx >= 0 && mbIdx + 1 < mainBandOrder.length) {
+                        item.junctionName = mainBandOrder[mbIdx + 1];
                         item.junctionSide = 'right';
                     } else {
-                        // Series child is last on main path — use a virtual post-expansion
-                        // junction so placement puts this shunt outside the expansion group.
+                        // Last resort: virtual post-expansion junction
                         item.junctionName = '__post_expansion_' + parentName + '__';
                         item.junctionSide = 'right';
                         item._postExpansionParent = parentName;
@@ -1218,6 +1234,15 @@
             for (const item of items) {
                 const sz = offPathSizes.get(item.name);
                 if (sz) total += sz.w;
+            }
+            // Expansion shunt children use compact spacing (no annotation overhang)
+            const allExpansion = items.every(item => {
+                const inst = instMap.get(item.name);
+                return inst && inst.expansion_parent;
+            });
+            if (allExpansion) {
+                if (items.length > 1) total += MIN_ITEM_GAP_BASE * (items.length - 1);
+                return total;
             }
             // Add adaptive gaps between consecutive items using directional overhangs
             if (items.length > 1) {
@@ -1360,6 +1385,13 @@
                 totalItemWidth += sz.w;
             }
 
+            // Expansion shunt children (multi-tier caps) use compact spacing
+            // since they share the same junction and are inside an expansion box.
+            const allExpansion = items.every(item => {
+                const inst = instMap.get(item.name);
+                return inst && inst.expansion_parent;
+            });
+
             const SHUNT_PORT_OFFSET = 20; // offset from port dot so T-junction is clear
             if (group.side === 'left') {
                 // Left side: rightmost item offset left of input port dot, grow left
@@ -1369,10 +1401,13 @@
                     const sz = itemSizes[i];
                     rx -= sz.w;
                     positions.set(items[i].name, { x: rx, y: shuntY, w: sz.w, h: sz.h });
-                    // Gap accounts for this item's left label overhang + next item's right
-                    const thisOH = shuntItemOverhang(items[i].name);
-                    const nextOH = i > 0 ? shuntItemOverhang(items[i - 1].name) : { left: 0, right: 0 };
-                    rx -= Math.max(MIN_ITEM_GAP_BASE, thisOH.left + nextOH.right + ANNOTATION_PAD);
+                    if (allExpansion) {
+                        rx -= MIN_ITEM_GAP_BASE;
+                    } else {
+                        const thisOH = shuntItemOverhang(items[i].name);
+                        const nextOH = i > 0 ? shuntItemOverhang(items[i - 1].name) : { left: 0, right: 0 };
+                        rx -= Math.max(MIN_ITEM_GAP_BASE, thisOH.left + nextOH.right + ANNOTATION_PAD);
+                    }
                 }
             } else {
                 // Right side: leftmost item offset right of output port dot, grow right
@@ -1381,10 +1416,13 @@
                 for (let i = 0; i < items.length; i++) {
                     const sz = itemSizes[i];
                     positions.set(items[i].name, { x: lx, y: shuntY, w: sz.w, h: sz.h });
-                    // Gap accounts for this item's right overhang + next item's left overhang
-                    const thisOH = shuntItemOverhang(items[i].name);
-                    const nextOH = i + 1 < items.length ? shuntItemOverhang(items[i + 1].name) : { left: 0, right: 0 };
-                    lx += sz.w + Math.max(MIN_ITEM_GAP_BASE, thisOH.right + nextOH.left + ANNOTATION_PAD);
+                    if (allExpansion) {
+                        lx += sz.w + MIN_ITEM_GAP_BASE;
+                    } else {
+                        const thisOH = shuntItemOverhang(items[i].name);
+                        const nextOH = i + 1 < items.length ? shuntItemOverhang(items[i + 1].name) : { left: 0, right: 0 };
+                        lx += sz.w + Math.max(MIN_ITEM_GAP_BASE, thisOH.right + nextOH.left + ANNOTATION_PAD);
+                    }
                 }
             }
         }
@@ -1397,12 +1435,20 @@
             for (let i = 1; i < allDrop.length; i++) {
                 const prev = positions.get(allDrop[i - 1].name);
                 const curr = positions.get(allDrop[i].name);
-                // Account for labels + wire annotation overhang on both sides:
-                // prev's right overhang (value label for resistors, current annotation)
-                // curr's left overhang (name label, voltage annotation)
-                const prevOH = shuntItemOverhang(allDrop[i - 1].name);
-                const currOH = shuntItemOverhang(allDrop[i].name);
-                const effectiveGap = Math.max(MIN_ITEM_GAP_BASE, prevOH.right + currOH.left + ANNOTATION_PAD);
+                // Expansion children use compact spacing (no annotation overhang)
+                const prevInst = instMap.get(allDrop[i - 1].name);
+                const currInst = instMap.get(allDrop[i].name);
+                const bothExpansion = prevInst && prevInst.expansion_parent
+                    && currInst && currInst.expansion_parent
+                    && prevInst.expansion_parent === currInst.expansion_parent;
+                let effectiveGap;
+                if (bothExpansion) {
+                    effectiveGap = MIN_ITEM_GAP_BASE;
+                } else {
+                    const prevOH = shuntItemOverhang(allDrop[i - 1].name);
+                    const currOH = shuntItemOverhang(allDrop[i].name);
+                    effectiveGap = Math.max(MIN_ITEM_GAP_BASE, prevOH.right + currOH.left + ANNOTATION_PAD);
+                }
                 const minX = prev.x + prev.w + effectiveGap;
                 if (curr.x < minX) curr.x = minX;
             }
@@ -1835,8 +1881,14 @@
             const simCurrent = data.simulation?.instance_currents?.[name];
             const simPowerW = data.simulation?.instance_power?.[name];
             const refdes = inst.refdes || null;
-            const displayName = refdes && refdesChk?.checked ? refdes : name;
-            layoutElements.push({ x: pos.x, y: pos.y, w: pos.w, h: pos.h, name, refdes, displayName, type: 'instance', entityType: inst.entity_type, parameters: inst.parameters, category: inst.category, isShunt: isShuntLike, isFlipped: flippedNames.has(name), inputPorts: instInPorts, outputPorts: instOutPorts, gndStubs: gndStubsByInst.get(name) || [], pwrStubs: pwrStubsByInst.get(name) || [], pgStubs: [], line: inst.line, simCurrent, simPower: simPowerW, gndTargetY: pos.gndTargetY, _connections: inst.connections });
+            // Expansion shunt children (e.g., buck_hf_bypass_1) have long
+            // auto-generated names that overlap in compact spacing.  Default
+            // to the short refdes (C3, C4, C5) for these; the user can
+            // toggle the checkbox to switch all names to refdes or back.
+            const isExpShunt = inst.expansion_parent
+                && inst.expansion_role && inst.expansion_role !== 'series';
+            const displayName = refdes && (refdesChk?.checked || isExpShunt) ? refdes : name;
+            layoutElements.push({ x: pos.x, y: pos.y, w: pos.w, h: pos.h, name, refdes, displayName, _isExpShunt: !!isExpShunt, type: 'instance', entityType: inst.entity_type, parameters: inst.parameters, category: inst.category, isShunt: isShuntLike, isFlipped: flippedNames.has(name), inputPorts: instInPorts, outputPorts: instOutPorts, gndStubs: gndStubsByInst.get(name) || [], pwrStubs: pwrStubsByInst.get(name) || [], pgStubs: [], line: inst.line, simCurrent, simPower: simPowerW, gndTargetY: pos.gndTargetY, _connections: inst.connections });
         }
 
         // Entity output
@@ -2003,22 +2055,36 @@
                                 ? jEl.x + jEl.w + PORT_STUB_LEN
                                 : jEl.x - PORT_STUB_LEN;
                             const jy = jEl.y + jEl.h / 2;
-                            // Only override when the shunt is past the junction
-                            // element's far edge — meaning the default wire from
-                            // driver would cut through intermediate main-path
-                            // components to reach the shunt.
-                            const jElFarEdge = jEl.x + jEl.w;
-                            if (jx > fromPos.x && toPos.x > jElFarEdge) {
-                                shuntFromPos = { x: jx, y: fromPos.y, dir: 1 };
+                            // Expansion shunt children (caps inside a virtual pin
+                            // expansion group) always route from their junction
+                            // (the series sibling, e.g. inductor), not from the
+                            // power source.  They tap the net at the junction.
+                            const sinkInst = instMap.get(sinkElName);
+                            if (sinkInst && sinkInst.expansion_parent) {
+                                const dir = jInfo.junctionSide === 'right' ? 1 : -1;
+                                shuntFromPos = { x: jx, y: fromPos.y, dir };
+                            } else {
+                                // Only override when the shunt is past the junction
+                                // element's far edge — meaning the default wire from
+                                // driver would cut through intermediate main-path
+                                // components to reach the shunt.
+                                const jElFarEdge = jEl.x + jEl.w;
+                                if (jx > fromPos.x && toPos.x > jElFarEdge) {
+                                    shuntFromPos = { x: jx, y: fromPos.y, dir: 1 };
+                                }
                             }
                         }
                     }
                 }
 
                 if (isShuntWire || (toPos.y > fromPos.y + 20 && toDir <= 0)) {
+                    // Expansion shunt children always use the L-route pattern
+                    // (horizontal from junction to shunt X, then vertical drop)
+                    // regardless of left/right side, for a clean T-junction.
+                    const sinkIsExpShunt = instMap.get(sinkElName)?.expansion_parent;
 
-                    if (toPos.x >= shuntFromPos.x - 2) {
-                        // Normal L-route: horizontal from junction to shunt X, then vertical drop
+                    if (sinkIsExpShunt || toPos.x >= shuntFromPos.x - 2) {
+                        // L-route: horizontal from junction to shunt X, then vertical drop
                         const jx = toPos.x;
                         const jy = shuntFromPos.y;
                         junctionPoints.push({ x: jx, y: jy });
@@ -2027,17 +2093,19 @@
                         }
                         segments.push({ x1: jx, y1: jy, x2: toPos.x, y2: toPos.y });
                     } else {
-                        // Reverse L-route: shunt port is left of the driver port.
-                        // Drop down from driver stub, then horizontal back to shunt.
-                        // Use clearVerticalX to avoid cutting through components.
-                        const yMin = Math.min(fromPos.y, toPos.y);
-                        const yMax = Math.max(fromPos.y, toPos.y);
-                        const vx = clearVerticalX(fromPos.x, yMin, yMax, +1, [driverElName, sinkElName]);
-                        junctionPoints.push({ x: vx, y: fromPos.y });
-                        if (Math.abs(fromPos.x - vx) > 2) {
-                            segments.push({ x1: fromPos.x, y1: fromPos.y, x2: vx, y2: fromPos.y });
+                        // Reverse L-route: shunt port is left of the origin.
+                        // Drop down from origin, then horizontal back to shunt.
+                        // Use shuntFromPos (which may be overridden to the junction
+                        // point for expansion children) instead of fromPos so the
+                        // wire drops from the junction, not the distant driver.
+                        const yMin = Math.min(shuntFromPos.y, toPos.y);
+                        const yMax = Math.max(shuntFromPos.y, toPos.y);
+                        const vx = clearVerticalX(shuntFromPos.x, yMin, yMax, -1, [driverElName, sinkElName]);
+                        junctionPoints.push({ x: vx, y: shuntFromPos.y });
+                        if (Math.abs(shuntFromPos.x - vx) > 2) {
+                            segments.push({ x1: shuntFromPos.x, y1: shuntFromPos.y, x2: vx, y2: shuntFromPos.y });
                         }
-                        segments.push({ x1: vx, y1: fromPos.y, x2: vx, y2: toPos.y });
+                        segments.push({ x1: vx, y1: shuntFromPos.y, x2: vx, y2: toPos.y });
                         if (Math.abs(vx - toPos.x) > 2) {
                             segments.push({ x1: vx, y1: toPos.y, x2: toPos.x, y2: toPos.y });
                         }
