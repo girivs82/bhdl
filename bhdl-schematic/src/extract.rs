@@ -287,6 +287,13 @@ pub fn extract_schematic_data(
             continue;
         }
 
+        // Skip bank-split child instances — the original capacitor already
+        // displays "value ×N" via bank_count; showing all N parallel copies
+        // in the schematic would bloat the expansion box and overlap neighbors.
+        if instance.attributes.contains_key("bank_parent") {
+            continue;
+        }
+
         // Extract meaningful parameters from instance attributes
         // Filter out simulation/stress metadata and expansion internals
         let parameters: Vec<(String, String)> = instance.attributes.iter()

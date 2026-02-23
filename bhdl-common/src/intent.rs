@@ -184,3 +184,62 @@ impl Default for IntentRegistry {
         Self::new()
     }
 }
+
+// ── Built-in intent functions ────────────────────────────────────────────
+
+/// `output_filtering` intent — drives multi-tier capacitor bank generation
+/// for switching regulator outputs.
+///
+/// Parameters:
+///   - `max_ripple` (voltage, required): Maximum peak-to-peak output ripple
+///   - `bandwidth` (frequency, optional): Target filter bandwidth
+pub struct OutputFilteringIntent;
+
+impl IntentFunction for OutputFilteringIntent {
+    fn name(&self) -> &str {
+        "output_filtering"
+    }
+
+    fn resolve(&self, params: &[IntentParam]) -> Result<IntentResult, String> {
+        // Validate max_ripple is present
+        let has_max_ripple = params.iter().any(|p| match p {
+            IntentParam::Named(name, _) => name == "max_ripple",
+            IntentParam::Positional(_) => true, // first positional = max_ripple
+        });
+
+        if !has_max_ripple {
+            return Err("output_filtering requires 'max_ripple' parameter".to_string());
+        }
+
+        Ok(IntentResult {
+            sim_mode: SimMode::MixedSignal,
+            synthesis_hints: vec![
+                SynthesisHint::Custom("multi_tier_cap_bank".to_string()),
+            ],
+            validation_rules: vec![
+                ValidationRule {
+                    condition: "max_ripple > 0".to_string(),
+                    error_message: "max_ripple must be positive".to_string(),
+                },
+            ],
+            tool_scope: ToolScope::All,
+        })
+    }
+
+    fn param_metadata(&self) -> Vec<ParamMetadata> {
+        vec![
+            ParamMetadata {
+                name: "max_ripple".to_string(),
+                param_type: ParamType::Voltage,
+                required: true,
+                default_value: None,
+            },
+            ParamMetadata {
+                name: "bandwidth".to_string(),
+                param_type: ParamType::Frequency,
+                required: false,
+                default_value: None,
+            },
+        ]
+    }
+}

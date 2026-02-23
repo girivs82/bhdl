@@ -123,6 +123,22 @@
         return num.toExponential(1);
     }
 
+    /** Build inline parameter display string (value + optional bank count annotation). */
+    function buildInlineParamStr(params) {
+        if (!params || params.length === 0) return '';
+        const valStr = params
+            .filter(p => p[1] && INLINE_PARAM_KEYS.has(p[0]))
+            .map(p => formatParamValue(p[1]))
+            .join(', ');
+        if (!valStr) return '';
+        // If this is a bank-split capacitor, append ×N
+        const bankEntry = params.find(p => p[0] === 'bank_count');
+        if (bankEntry && bankEntry[1] && parseInt(bankEntry[1]) > 1) {
+            return valStr + ' \u00d7' + bankEntry[1];
+        }
+        return valStr;
+    }
+
     function formatVoltage(v) {
         if (v == null) return '';
         const abs = Math.abs(v);
@@ -1163,9 +1179,7 @@
                 leftOverhang = Math.max(leftOverhang, nameW + 4);
                 // Value label: resistors have value rotated inside the box (no overhang).
                 // Non-resistor values extend LEFT (right-aligned at el.x - 4).
-                const paramStr = (inst.parameters || [])
-                    .filter(p => p[1] && INLINE_PARAM_KEYS.has(p[0]))
-                    .map(p => formatParamValue(p[1])).join(', ');
+                const paramStr = buildInlineParamStr(inst.parameters);
                 if (paramStr && inst.category !== 'resistor') {
                     const valW = measureTextWidth(paramStr, FONT_SIZE - 2);
                     leftOverhang = Math.max(leftOverhang, valW + 4);
@@ -2404,7 +2418,7 @@
         if (el.parameters && el.parameters.length > 0) {
             ctx.fillStyle = COLORS.paramText;
             ctx.font = `${FONT_SIZE - 2}px monospace`;
-            const paramStr = el.parameters.filter(p => p[1] && INLINE_PARAM_KEYS.has(p[0])).map(p => formatParamValue(p[1])).join(', ');
+            const paramStr = buildInlineParamStr(el.parameters);
             if (paramStr) ctx.fillText(paramStr, el.x + el.w / 2, el.y + HEADER_HEIGHT + 22);
         }
 
@@ -2880,8 +2894,7 @@
         }
 
         // Labels: name above, value below (or inside for resistors)
-        const paramStr = (el.parameters && el.parameters.length > 0)
-            ? el.parameters.filter(p => p[1] && INLINE_PARAM_KEYS.has(p[0])).map(p => formatParamValue(p[1])).join(', ') : '';
+        const paramStr = buildInlineParamStr(el.parameters);
         const valueInside = cat === 'resistor' && paramStr;
 
         ctx.fillStyle = COLORS.text;

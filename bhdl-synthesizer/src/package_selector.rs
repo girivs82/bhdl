@@ -87,6 +87,37 @@ impl Default for ApplicationRequirements {
     }
 }
 
+impl DielectricType {
+    /// Parse a dielectric type from its display string (e.g. "C0G/NP0", "X7R").
+    pub fn from_display_str(s: &str) -> Option<Self> {
+        match s {
+            "C0G/NP0" | "C0G" | "NP0" => Some(DielectricType::C0G),
+            "X7R" => Some(DielectricType::X7R),
+            "X5R" => Some(DielectricType::X5R),
+            "Y5V" => Some(DielectricType::Y5V),
+            _ => None,
+        }
+    }
+}
+
+impl PackageSize {
+    /// Parse a package size from its string representation (e.g. "0603", "1210", "THT").
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "0201" => Some(PackageSize::_0201),
+            "0402" => Some(PackageSize::_0402),
+            "0603" => Some(PackageSize::_0603),
+            "0805" => Some(PackageSize::_0805),
+            "1206" => Some(PackageSize::_1206),
+            "1210" => Some(PackageSize::_1210),
+            "2010" => Some(PackageSize::_2010),
+            "2512" => Some(PackageSize::_2512),
+            "THT" => Some(PackageSize::THT),
+            _ => None,
+        }
+    }
+}
+
 /// Main package selection engine
 pub struct PackageSelector;
 
@@ -94,6 +125,42 @@ impl PackageSelector {
     /// Create new package selector
     pub fn new() -> Self {
         Self
+    }
+
+    /// Maximum realizable capacitance for a given dielectric + package combination.
+    /// Based on AECQ-grade MLCC availability at ≤50V.
+    pub fn max_realizable_capacitance(dielectric: DielectricType, package: PackageSize) -> f64 {
+        match (dielectric, package) {
+            // C0G — very limited density
+            (DielectricType::C0G, PackageSize::_0402) => 100e-12,
+            (DielectricType::C0G, PackageSize::_0603) => 1e-9,
+            (DielectricType::C0G, PackageSize::_0805) => 10e-9,
+            (DielectricType::C0G, _) => 100e-9, // 1206+ max out at 100nF
+
+            // X7R — workhorse
+            (DielectricType::X7R, PackageSize::_0402) => 100e-9,
+            (DielectricType::X7R, PackageSize::_0603) => 1e-6,
+            (DielectricType::X7R, PackageSize::_0805) => 2.2e-6,
+            (DielectricType::X7R, PackageSize::_1206) => 10e-6,
+            (DielectricType::X7R, PackageSize::_1210) => 10e-6,
+            (DielectricType::X7R, _) => 22e-6,
+
+            // X5R — high density
+            (DielectricType::X5R, PackageSize::_0402) => 1e-6,
+            (DielectricType::X5R, PackageSize::_0603) => 2.2e-6,
+            (DielectricType::X5R, PackageSize::_0805) => 10e-6,
+            (DielectricType::X5R, PackageSize::_1206) => 22e-6,
+            (DielectricType::X5R, PackageSize::_1210) => 47e-6,
+            (DielectricType::X5R, _) => 100e-6,
+
+            // Y5V — maximum density, poor stability
+            (DielectricType::Y5V, PackageSize::_0402) => 1e-6,
+            (DielectricType::Y5V, PackageSize::_0603) => 4.7e-6,
+            (DielectricType::Y5V, PackageSize::_0805) => 22e-6,
+            (DielectricType::Y5V, PackageSize::_1206) => 47e-6,
+            (DielectricType::Y5V, PackageSize::_1210) => 100e-6,
+            (DielectricType::Y5V, _) => 220e-6,
+        }
     }
     
     /// Select appropriate resistor specification
@@ -216,6 +283,21 @@ impl PackageSelector {
         }
     }
     
+    /// Select a capacitor package for a specific dielectric type.
+    ///
+    /// Used by the physical selection pass when a `dielectric_hint` attribute
+    /// overrides the default dielectric selection (e.g. from multi-tier ripple banks).
+    pub fn select_capacitor_package_for_dielectric(
+        &self,
+        capacitance: f64,
+        voltage_rating: VoltageRating,
+        dielectric: DielectricType,
+        requirements: &ApplicationRequirements,
+    ) -> Option<String> {
+        let pkg = self.select_capacitor_package(capacitance, voltage_rating, dielectric, requirements);
+        Some(pkg.to_string())
+    }
+
     /// Select capacitor package based on capacitance, voltage, and dielectric
     fn select_capacitor_package(
         &self,

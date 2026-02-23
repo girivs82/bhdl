@@ -624,11 +624,24 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
     let mut generator = NetlistGenerator::new();
     let mut netlist = generator.generate_from_ast_and_analysis(source_file, &analysis).await?;
 
+    // Stamp intent attributes from FlowTracker onto netlist instances
+    // (bridges analyzer intents → synthesizer attributes for downstream passes)
+    if let Some(ref flow_tracker) = analysis.flow_tracker {
+        bhdl_synthesizer::intent_attribute_stamper::stamp_intent_attributes(&mut netlist, flow_tracker);
+    }
+
     // Expand virtual pins (e.g. buck regulator VOUT → inductor + diode + cap)
+    // If intent_max_ripple was stamped, this creates multi-tier cap banks
     let expansion_results = bhdl_synthesizer::virtual_pin_expander::expand_virtual_pins(&mut netlist);
     if !expansion_results.is_empty() {
         println!("  {} virtual pins expanded for {} component(s)",
             "✓".green(), expansion_results.len());
+        for r in &expansion_results {
+            if !r.additional_output_caps.is_empty() {
+                println!("    {} multi-tier cap bank: {} output caps (ripple-aware)",
+                    "→".cyan(), 1 + r.additional_output_caps.len());
+            }
+        }
     }
 
     // Run GLACIER DC simulation for voltage/current annotation

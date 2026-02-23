@@ -10,9 +10,9 @@
 use std::collections::HashMap;
 use log::{debug, info};
 use bhdl_analyzer::spice_extraction::parse_unit_value;
-use bhdl_netlist::Netlist;
+use bhdl_netlist::{ConnectionPoint, NetId, Netlist};
 
-use crate::passive_component_calculator::PassiveComponentCalculator;
+use crate::passive_component_calculator::{DielectricType, PackageSize, PassiveComponentCalculator};
 use crate::package_selector::{PackageSelector, ApplicationRequirements};
 
 /// Summary of a single component's physical selection result.
@@ -24,6 +24,78 @@ pub struct PhysicalSelectionResult {
     pub power_rating: Option<String>,
     pub voltage_rating: Option<String>,
     pub dielectric: Option<String>,
+}
+
+/// Describes a capacitor that must be split into a parallel bank.
+#[derive(Debug)]
+struct BankSplit {
+    original_id: bhdl_netlist::InstanceId,
+    original_name: String,
+    count: usize,
+    per_unit_value: String,
+    package: String,
+    voltage_rating: Option<String>,
+    dielectric: Option<String>,
+    /// Propagated from original instance so bank children stay grouped
+    /// with their virtual-pin expansion parent in the schematic layout.
+    vpin_parent: Option<String>,
+    vpin_role: Option<String>,
+}
+
+/// Format a capacitance value in Farads as a human-readable string.
+fn format_cap_value(farads: f64) -> String {
+    if farads >= 1e-3 {
+        format!("{:.0}mF", farads * 1e3)
+    } else if farads >= 1e-6 {
+        let uf = farads * 1e6;
+        if (uf - uf.round()).abs() < 0.05 {
+            format!("{:.0}µF", uf)
+        } else {
+            format!("{:.1}µF", uf)
+        }
+    } else if farads >= 1e-9 {
+        format!("{:.0}nF", farads * 1e9)
+    } else {
+        format!("{:.0}pF", farads * 1e12)
+    }
+}
+
+/// Find the two nets connected to an instance's pins (pin 1 and pin 2).
+/// Returns (net_for_pin1, net_for_pin2) by scanning the netlist connections.
+fn find_instance_nets(
+    netlist: &Netlist,
+    inst_id: bhdl_netlist::InstanceId,
+) -> (Option<NetId>, Option<NetId>) {
+    let instance = match netlist.instances.get(inst_id) {
+        Some(i) => i,
+        None => return (None, None),
+    };
+    let module_def = match netlist.modules.get(instance.definition) {
+        Some(d) => d,
+        None => return (None, None),
+    };
+
+    // Collect pin instances for this instance, ordered by pin definition
+    let mut pin_nets: Vec<Option<NetId>> = Vec::new();
+    for &pin_id in &module_def.pins {
+        // Find the pin instance for (this instance, this pin_def)
+        let pi_id = netlist.pin_instances.iter()
+            .find(|(_, pi)| pi.instance == inst_id && pi.pin_def == pin_id)
+            .map(|(id, _)| id);
+
+        let net_id = pi_id.and_then(|pi_id| {
+            // Scan nets for one containing this pin instance (authoritative)
+            let target = ConnectionPoint::PinInstance(pi_id);
+            netlist.nets.iter()
+                .find(|(_, net)| net.connections.contains(&target))
+                .map(|(nid, _)| nid)
+        });
+        pin_nets.push(net_id);
+    }
+
+    let net1 = pin_nets.first().copied().flatten();
+    let net2 = pin_nets.get(1).copied().flatten();
+    (net1, net2)
 }
 
 /// Apply GLACIER simulation results to select physical parameters for passive components.
@@ -54,6 +126,10 @@ pub fn apply_glacier_physical_selection(
 
     // Collect instance IDs first to avoid borrow conflicts
     let instance_ids: Vec<_> = netlist.instances.keys().collect();
+
+    // Bank splits collected during the loop, applied afterwards to avoid
+    // mutating the netlist while iterating over instances.
+    let mut bank_splits: Vec<BankSplit> = Vec::new();
 
     for inst_id in instance_ids {
         let inst = &netlist.instances[inst_id];
@@ -96,15 +172,80 @@ pub fn apply_glacier_physical_selection(
                     &selector,
                     &requirements,
                 ) {
-                    let inst_mut = &mut netlist.instances[inst_id];
-                    inst_mut.attributes.insert("package".to_string(), result.package.clone());
-                    if let Some(ref vr) = result.voltage_rating {
-                        inst_mut.attributes.insert("voltage_rating".to_string(), vr.clone());
+                    // Check if the capacitance exceeds what's realizable in one part
+                    let capacitance = attrs.get("value")
+                        .and_then(|v| parse_unit_value(v));
+                    let max_per_unit = result.dielectric.as_ref()
+                        .and_then(|d| DielectricType::from_display_str(d))
+                        .and_then(|dt| PackageSize::from_str(&result.package).map(|ps| (dt, ps)))
+                        .map(|(dt, ps)| PackageSelector::max_realizable_capacitance(dt, ps));
+
+                    let needs_split = match (capacitance, max_per_unit) {
+                        (Some(c), Some(max)) => c > max * 1.05,
+                        _ => false,
+                    };
+
+                    if needs_split {
+                        let c = capacitance.unwrap();
+                        let max = max_per_unit.unwrap();
+                        let count = (c / max).ceil() as usize;
+                        let per_unit = c / count as f64;
+                        let per_unit_str = format_cap_value(per_unit);
+                        let total_str = format_cap_value(c);
+
+                        info!(
+                            "Capacitor bank split: {} ({}) → {}× {}",
+                            inst_name, total_str, count, per_unit_str
+                        );
+
+                        // Update original instance to per-unit value
+                        let inst_mut = &mut netlist.instances[inst_id];
+                        inst_mut.attributes.insert("value".to_string(), per_unit_str.clone());
+                        inst_mut.attributes.insert("bank_count".to_string(), count.to_string());
+                        inst_mut.attributes.insert("bank_total".to_string(), total_str);
+                        inst_mut.attributes.insert("package".to_string(), result.package.clone());
+                        if let Some(ref vr) = result.voltage_rating {
+                            inst_mut.attributes.insert("voltage_rating".to_string(), vr.clone());
+                        }
+                        if let Some(ref di) = result.dielectric {
+                            inst_mut.attributes.insert("dielectric".to_string(), di.clone());
+                        }
+
+                        // Schedule creation of (count - 1) additional parallel instances.
+                        // Propagate vpin_parent/vpin_role so bank children stay grouped
+                        // with their expansion parent in the schematic layout.
+                        bank_splits.push(BankSplit {
+                            original_id: inst_id,
+                            original_name: inst_name.clone(),
+                            count,
+                            per_unit_value: per_unit_str,
+                            package: result.package.clone(),
+                            voltage_rating: result.voltage_rating.clone(),
+                            dielectric: result.dielectric.clone(),
+                            vpin_parent: attrs.get("vpin_parent").cloned(),
+                            vpin_role: attrs.get("vpin_role").cloned(),
+                        });
+
+                        results.push(PhysicalSelectionResult {
+                            instance_name: inst_name,
+                            component_type: "capacitor".to_string(),
+                            package: result.package,
+                            power_rating: None,
+                            voltage_rating: result.voltage_rating,
+                            dielectric: result.dielectric,
+                        });
+                    } else {
+                        // Normal single-cap path
+                        let inst_mut = &mut netlist.instances[inst_id];
+                        inst_mut.attributes.insert("package".to_string(), result.package.clone());
+                        if let Some(ref vr) = result.voltage_rating {
+                            inst_mut.attributes.insert("voltage_rating".to_string(), vr.clone());
+                        }
+                        if let Some(ref di) = result.dielectric {
+                            inst_mut.attributes.insert("dielectric".to_string(), di.clone());
+                        }
+                        results.push(result);
                     }
-                    if let Some(ref di) = result.dielectric {
-                        inst_mut.attributes.insert("dielectric".to_string(), di.clone());
-                    }
-                    results.push(result);
                 }
             }
             Some("inductor") => {
@@ -135,6 +276,67 @@ pub fn apply_glacier_physical_selection(
                 // Not a passive component we handle — skip
             }
         }
+    }
+
+    // ── Phase 2: create additional parallel instances for bank splits ────
+    for split in &bank_splits {
+        let (net_pin1, net_pin2) = find_instance_nets(netlist, split.original_id);
+
+        // Find or create a Cap module with pins "1" and "2"
+        let cap_mod = crate::virtual_pin_expander::find_or_create_module(
+            netlist, "Cap", &[("1", true), ("2", true)],
+        );
+
+        for i in 1..split.count {
+            let name = format!("{}_{}", split.original_name, i + 1);
+            let count_str = split.count.to_string();
+            let mut attrs: Vec<(&str, &str)> = vec![
+                ("component_class", "capacitor"),
+                ("value", &split.per_unit_value),
+                ("bank_count", &count_str),
+                ("bank_parent", &split.original_name),
+                ("package", &split.package),
+            ];
+
+            if let Some(ref vr) = split.voltage_rating {
+                attrs.push(("voltage_rating", vr));
+            }
+            if let Some(ref di) = split.dielectric {
+                attrs.push(("dielectric", di));
+            }
+            // Propagate expansion metadata so schematic groups bank children
+            // with the virtual-pin parent (e.g. buck regulator)
+            if let Some(ref vp) = split.vpin_parent {
+                attrs.push(("vpin_parent", vp));
+            }
+            if let Some(ref vr) = split.vpin_role {
+                attrs.push(("vpin_role", vr));
+            }
+
+            let new_id = crate::virtual_pin_expander::create_instance(
+                netlist, &name, cap_mod, &attrs,
+            );
+            let pins = netlist.create_pin_instances(new_id)
+                .unwrap_or_default();
+
+            // Connect pins to the same nets as the original capacitor
+            if let Some(n1) = net_pin1 {
+                let _ = crate::virtual_pin_expander::connect_pin_instance_by_name(
+                    netlist, new_id, &pins, "1", n1,
+                );
+            }
+            if let Some(n2) = net_pin2 {
+                let _ = crate::virtual_pin_expander::connect_pin_instance_by_name(
+                    netlist, new_id, &pins, "2", n2,
+                );
+            }
+
+            debug!("  Created bank instance {} on same nets as {}", name, split.original_name);
+        }
+    }
+
+    if !bank_splits.is_empty() {
+        info!("Capacitor bank splitting: {} capacitor(s) split into parallel banks", bank_splits.len());
     }
 
     if !results.is_empty() {
@@ -312,6 +514,11 @@ fn select_resistor_physical(
 }
 
 /// Select physical parameters for a capacitor instance.
+///
+/// If the instance has a `dielectric_hint` attribute (e.g. from multi-tier
+/// ripple bank generation), that dielectric is used instead of the default
+/// selection. This ensures bulk caps get X5R, mid-freq caps get X7R, and
+/// HF bypass caps get C0G.
 fn select_capacitor_physical(
     inst_name: &str,
     attrs: &HashMap<String, String>,
@@ -335,23 +542,52 @@ fn select_capacitor_physical(
 
     let spec = selector.select_capacitor_spec(capacitance, voltage_rating, requirements);
 
+    // If a dielectric_hint is set (from multi-tier ripple bank), override the default
+    let dielectric = if let Some(hint) = attrs.get("dielectric_hint") {
+        debug!("Capacitor {}: using dielectric_hint={} (from ripple tier)",
+            inst_name, hint);
+        hint.clone()
+    } else {
+        spec.dielectric.to_string()
+    };
+
+    // Re-select package if dielectric was overridden (different dielectrics
+    // have different max capacitance per package)
+    let package = if attrs.contains_key("dielectric_hint") {
+        // Use the dielectric-specific package selection
+        let dt = DielectricType::from_display_str(&dielectric);
+        if let Some(dt) = dt {
+            selector.select_capacitor_package_for_dielectric(capacitance, voltage_rating, dt, requirements)
+                .unwrap_or_else(|| spec.package.to_string())
+        } else {
+            spec.package.to_string()
+        }
+    } else {
+        spec.package.to_string()
+    };
+
     debug!(
-        "Capacitor {}: C={:.3e}F, Vmax={:.2}V → {} / {} / {}",
+        "Capacitor {}: C={:.3e}F, Vmax={:.2}V → {} / {} / {}{}",
         inst_name,
         capacitance,
         max_voltage,
-        spec.package,
+        package,
         spec.voltage_rating,
-        spec.dielectric
+        dielectric,
+        if attrs.contains_key("ripple_tier") {
+            format!(" [tier: {}]", attrs.get("ripple_tier").unwrap())
+        } else {
+            String::new()
+        },
     );
 
     Some(PhysicalSelectionResult {
         instance_name: inst_name.to_string(),
         component_type: "capacitor".to_string(),
-        package: spec.package.to_string(),
+        package,
         power_rating: None,
         voltage_rating: Some(spec.voltage_rating.to_string()),
-        dielectric: Some(spec.dielectric.to_string()),
+        dielectric: Some(dielectric),
     })
 }
 
@@ -845,5 +1081,224 @@ mod tests {
         let ind_result = results.iter().find(|r| r.instance_name == "L_big").unwrap();
         assert_eq!(ind_result.package, "THT",
             "8A inductor should get THT package, got {}", ind_result.package);
+    }
+
+    // ── Capacitor bank splitting tests ──────────────────────────────────
+
+    /// Create a capacitor-only test netlist with the given capacitance value string.
+    /// Returns (netlist, cap_id, net1_id, net2_id).
+    fn make_cap_netlist(cap_value: &str) -> (Netlist, bhdl_netlist::InstanceId, bhdl_netlist::NetId, bhdl_netlist::NetId) {
+        let mut netlist = Netlist::default();
+
+        // Create Cap module with two passive pins using the proper API
+        let cap_mod_id = netlist.add_module("Cap".to_string(), bhdl_netlist::ModuleKind::PhysicalComponent);
+        netlist.add_pin(cap_mod_id, "1".to_string(), bhdl_netlist::PinDirection::InOut, bhdl_netlist::PinType::Passive);
+        netlist.add_pin(cap_mod_id, "2".to_string(), bhdl_netlist::PinDirection::InOut, bhdl_netlist::PinType::Passive);
+
+        let mut cap_attrs = HashMap::new();
+        cap_attrs.insert("value".to_string(), cap_value.to_string());
+        cap_attrs.insert("component_class".to_string(), "capacitor".to_string());
+        let cap_id = netlist.instances.insert(bhdl_netlist::Instance {
+            name: "C1".to_string(),
+            definition: cap_mod_id,
+            attributes: cap_attrs,
+        });
+
+        // Create pin instances
+        let pin_insts = netlist.create_pin_instances(cap_id).unwrap();
+
+        // Create two nets and connect the cap
+        let net1 = netlist.add_net(Some("VOUT".to_string()));
+        let net2 = netlist.add_net(Some("GND".to_string()));
+        netlist.connect(net1, bhdl_netlist::ConnectionPoint::PinInstance(pin_insts[0])).unwrap();
+        netlist.connect(net2, bhdl_netlist::ConnectionPoint::PinInstance(pin_insts[1])).unwrap();
+
+        (netlist, cap_id, net1, net2)
+    }
+
+    #[test]
+    fn test_capacitor_bank_split_needed() {
+        // 470µF X5R/1210 should split: max per unit = 47µF → 10× 47µF
+        let (mut netlist, cap_id, _, _) = make_cap_netlist("470µF");
+
+        // 5V across the cap
+        let mut net_voltages = HashMap::new();
+        net_voltages.insert("VOUT".to_string(), 5.0);
+        net_voltages.insert("GND".to_string(), 0.0);
+
+        let initial_instances = netlist.instances.len();
+
+        let results = apply_glacier_physical_selection(
+            &mut netlist,
+            &HashMap::new(),
+            &HashMap::new(),
+            &net_voltages,
+        );
+
+        // Should have a result for C1
+        let cap_result = results.iter().find(|r| r.instance_name == "C1");
+        assert!(cap_result.is_some(), "C1 should have physical selection");
+
+        // Original instance should have bank_count attribute
+        let orig = &netlist.instances[cap_id];
+        assert!(orig.attributes.contains_key("bank_count"),
+            "Original cap should have bank_count attr");
+        let count: usize = orig.attributes.get("bank_count").unwrap().parse().unwrap();
+        assert!(count > 1, "bank_count should be > 1 for 470µF, got {}", count);
+
+        // Should have created (count - 1) additional instances
+        let total = netlist.instances.len();
+        assert_eq!(total, initial_instances + count - 1,
+            "Expected {} total instances ({} original + {} new), got {}",
+            initial_instances + count - 1, initial_instances, count - 1, total);
+
+        // Original should have updated value (per-unit, not total)
+        let per_unit_value = orig.attributes.get("value").unwrap();
+        assert_ne!(per_unit_value, "470µF",
+            "Original value should be updated to per-unit value, got {}", per_unit_value);
+
+        // bank_total should record the original total
+        assert!(orig.attributes.contains_key("bank_total"),
+            "Original cap should have bank_total attr");
+    }
+
+    #[test]
+    fn test_capacitor_bank_no_split() {
+        // 100nF X7R should NOT split (well under max for any package)
+        let (mut netlist, cap_id, _, _) = make_cap_netlist("100nF");
+
+        let mut net_voltages = HashMap::new();
+        net_voltages.insert("VOUT".to_string(), 3.3);
+        net_voltages.insert("GND".to_string(), 0.0);
+
+        let initial_instances = netlist.instances.len();
+
+        let results = apply_glacier_physical_selection(
+            &mut netlist,
+            &HashMap::new(),
+            &HashMap::new(),
+            &net_voltages,
+        );
+
+        let cap_result = results.iter().find(|r| r.instance_name == "C1");
+        assert!(cap_result.is_some(), "C1 should have physical selection");
+
+        // No additional instances should be created
+        assert_eq!(netlist.instances.len(), initial_instances,
+            "100nF cap should not be split");
+
+        // Should NOT have bank_count attribute
+        let inst = &netlist.instances[cap_id];
+        assert!(!inst.attributes.contains_key("bank_count"),
+            "100nF cap should not have bank_count");
+    }
+
+    #[test]
+    fn test_capacitor_bank_moderate() {
+        // 100µF X5R/1206 should split: max per unit = 22µF → ceil(100/22) = 5× 20µF
+        let (mut netlist, cap_id, _, _) = make_cap_netlist("100µF");
+
+        let mut net_voltages = HashMap::new();
+        net_voltages.insert("VOUT".to_string(), 3.3);
+        net_voltages.insert("GND".to_string(), 0.0);
+
+        let results = apply_glacier_physical_selection(
+            &mut netlist,
+            &HashMap::new(),
+            &HashMap::new(),
+            &net_voltages,
+        );
+
+        let cap_result = results.iter().find(|r| r.instance_name == "C1");
+        assert!(cap_result.is_some(), "C1 should have physical selection");
+
+        let orig = &netlist.instances[cap_id];
+        assert!(orig.attributes.contains_key("bank_count"),
+            "100µF cap should be split into a bank");
+        let count: usize = orig.attributes.get("bank_count").unwrap().parse().unwrap();
+        assert!(count >= 2 && count <= 10,
+            "100µF should split into 2-10 units, got {}", count);
+    }
+
+    #[test]
+    fn test_bank_instances_connected() {
+        // Verify that new bank instances are connected to the same nets
+        let (mut netlist, _cap_id, net1, net2) = make_cap_netlist("470µF");
+
+        let mut net_voltages = HashMap::new();
+        net_voltages.insert("VOUT".to_string(), 5.0);
+        net_voltages.insert("GND".to_string(), 0.0);
+
+        let _results = apply_glacier_physical_selection(
+            &mut netlist,
+            &HashMap::new(),
+            &HashMap::new(),
+            &net_voltages,
+        );
+
+        // Find all bank child instances (name starts with "C1_")
+        let bank_children: Vec<_> = netlist.instances.iter()
+            .filter(|(_, i)| i.name.starts_with("C1_"))
+            .collect();
+
+        assert!(!bank_children.is_empty(), "Should have bank child instances");
+
+        // Each child should be connected to both nets
+        for (child_id, child) in &bank_children {
+            let (child_net1, child_net2) = find_instance_nets(&netlist, *child_id);
+            assert!(child_net1.is_some() && child_net2.is_some(),
+                "Bank child {} should be connected to two nets", child.name);
+            assert_eq!(child_net1.unwrap(), net1,
+                "Bank child {} pin 1 should be on VOUT net", child.name);
+            assert_eq!(child_net2.unwrap(), net2,
+                "Bank child {} pin 2 should be on GND net", child.name);
+        }
+    }
+
+    #[test]
+    fn test_format_cap_value() {
+        assert_eq!(format_cap_value(470e-6), "470µF");
+        assert_eq!(format_cap_value(47e-6), "47µF");
+        assert_eq!(format_cap_value(100e-9), "100nF");
+        assert_eq!(format_cap_value(10e-12), "10pF");
+        assert_eq!(format_cap_value(2.2e-6), "2.2µF");
+        assert_eq!(format_cap_value(1e-3), "1mF");
+    }
+
+    #[test]
+    fn test_dielectric_hint_respected() {
+        // A capacitor with dielectric_hint="C0G" should get C0G, not the default
+        let (mut netlist, cap_id, _, _) = make_cap_netlist("100nF");
+
+        // Set dielectric_hint as if placed by multi-tier ripple bank
+        netlist.instances[cap_id].attributes.insert(
+            "dielectric_hint".to_string(), "C0G".to_string(),
+        );
+        netlist.instances[cap_id].attributes.insert(
+            "ripple_tier".to_string(), "hf_bypass".to_string(),
+        );
+
+        let mut net_voltages = HashMap::new();
+        net_voltages.insert("VOUT".to_string(), 5.0);
+        net_voltages.insert("GND".to_string(), 0.0);
+
+        let results = apply_glacier_physical_selection(
+            &mut netlist,
+            &HashMap::new(),
+            &HashMap::new(),
+            &net_voltages,
+        );
+
+        let cap_result = results.iter().find(|r| r.instance_name == "C1");
+        assert!(cap_result.is_some(), "C1 should have physical selection");
+        let cap_result = cap_result.unwrap();
+
+        // Dielectric should be C0G (from hint), not the default X7R
+        assert_eq!(cap_result.dielectric.as_deref(), Some("C0G"),
+            "dielectric_hint=C0G should be respected, got {:?}", cap_result.dielectric);
+
+        // Verify the attribute was written to the instance
+        let inst = &netlist.instances[cap_id];
+        assert_eq!(inst.attributes.get("dielectric").map(|s| s.as_str()), Some("C0G"));
     }
 }
