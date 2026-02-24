@@ -921,8 +921,8 @@
             let w, h;
             const ps = powerSourceNodes.find(p => p.id === nodeId);
             if (ps) {
-                w = Math.max(80, measureTextWidth(ps.label, FONT_SIZE) + 24);
-                h = 28;
+                w = 12;   // Minimal width — just the flag stub
+                h = 20;   // Shorter height for the flag symbol
             } else if (nodeId === '__entity_in__') {
                 h = HEADER_HEIGHT + ENTITY_PADDING * 2 + inputPorts.length * PORT_SPACING;
                 let maxW = 0;
@@ -2294,7 +2294,7 @@
         drawWires();
         for (const el of layoutElements) {
             if (el.type === 'entity_in' || el.type === 'entity_out') drawEntityBox(el);
-            else if (el.type === 'power_source') drawPowerSourceNode(el);
+            else if (el.type === 'power_source') drawPowerRailFlag(el);
             else if (isSymbolCategory(el.category)) drawSymbolComponent(el);
             else drawInstanceBox(el);
         }
@@ -2371,26 +2371,41 @@
 
     let tooltipScreenX = 0, tooltipScreenY = 0;
 
-    function drawPowerSourceNode(el) {
-        drawRoundedRect(ctx, el.x, el.y, el.w, el.h, 3, COLORS.powerSrcBg, COLORS.powerSrcBorder, 1.5);
-        ctx.fillStyle = COLORS.powerSrcText;
-        ctx.font = `bold ${FONT_SIZE}px monospace`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(el.label, el.x + el.w / 2, el.y + el.h / 2);
+    function drawPowerRailFlag(el) {
+        const port = el.outputPorts[0];
+        const px = port ? port.x : (el.x + el.w);
+        const py = port ? port.y : (el.y + el.h / 2);
 
-        for (const port of el.outputPorts) {
-            ctx.strokeStyle = COLORS.powerSrcBorder;
-            ctx.lineWidth = 1.5;
-            ctx.beginPath();
-            ctx.moveTo(port.x, port.y);
-            ctx.lineTo(port.x + PORT_STUB_LEN, port.y);
-            ctx.stroke();
-            ctx.fillStyle = COLORS.powerSrcBorder;
-            ctx.beginPath();
-            ctx.arc(port.x + PORT_STUB_LEN, port.y, PORT_DOT_R, 0, Math.PI * 2);
-            ctx.fill();
-        }
+        // Wire connection point is at stub end (where findPort returns)
+        const cx = px + PORT_STUB_LEN;
+
+        // Horizontal bar (power flag symbol — like KiCad VCC)
+        const barW = 14;
+        ctx.strokeStyle = COLORS.powerSrcBorder;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(cx - barW / 2, py - 10);
+        ctx.lineTo(cx + barW / 2, py - 10);
+        ctx.stroke();
+
+        // Vertical stub from bar down to wire level
+        ctx.beginPath();
+        ctx.moveTo(cx, py - 10);
+        ctx.lineTo(cx, py);
+        ctx.stroke();
+
+        // Rail name + voltage above the bar
+        ctx.fillStyle = COLORS.powerSrcText;
+        ctx.font = `bold ${FONT_SIZE - 1}px monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(el.label, cx, py - 12);
+
+        // Junction dot at wire connection point
+        ctx.fillStyle = COLORS.powerSrcBorder;
+        ctx.beginPath();
+        ctx.arc(cx, py, PORT_DOT_R, 0, Math.PI * 2);
+        ctx.fill();
     }
 
     function drawEntityBox(el) {
