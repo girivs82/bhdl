@@ -9,7 +9,7 @@ use log::{debug, info, warn};
 
 use crate::{
     Circuit, ComponentModelExtractor, ExtractedModel,
-    circuit::{META_PARENT_INSTANCE, META_DECOMPOSITION_ROLE},
+    circuit::{META_PARENT_INSTANCE, META_DECOMPOSITION_ROLE, META_COMPONENT_CLASS, META_RDS_ON, META_F_SW, META_T_SW, META_I_QUIESCENT},
     model_factory::SpiceModelFactory,
     models::SpiceModel,
 };
@@ -556,11 +556,36 @@ impl NetlistToSpiceConverter {
             info!("Regulator {} decomposition (from pin types): VIN={:?}, VOUT={:?}, GND={}, vout_voltage={}V",
                   instance_name, vin_net, vout_net, gnd_node_name, vout_voltage);
 
+            // Determine regulator type and extract loss model parameters
+            let component_class = extracted_model.attributes.get("component_class")
+                .cloned()
+                .unwrap_or_default();
+            let is_switching = component_class == "switching_regulator";
+
+            // Helper: read a parameter from extracted_model (f64) or attributes (string)
+            let read_param = |name: &str, default: f64| -> f64 {
+                extracted_model.parameters.get(name).copied()
+                    .or_else(|| extracted_model.attributes.get(name)
+                        .and_then(|s| s.parse::<f64>().ok()))
+                    .unwrap_or(default)
+            };
+
             // Add voltage source on output: VOUT → GND = vout_voltage
             if let Some(vout_name) = &vout_net {
                 let mut vout_meta = HashMap::new();
                 vout_meta.insert(META_PARENT_INSTANCE.to_string(), instance_name.to_string());
                 vout_meta.insert(META_DECOMPOSITION_ROLE.to_string(), "vout".to_string());
+                if !component_class.is_empty() {
+                    vout_meta.insert(META_COMPONENT_CLASS.to_string(), component_class.clone());
+                }
+                // For switching regulators, store device loss model parameters
+                // so post-simulation power can be computed from physics, not efficiency.
+                if is_switching {
+                    vout_meta.insert(META_RDS_ON.to_string(), read_param("rds_on", 0.2).to_string());
+                    vout_meta.insert(META_F_SW.to_string(), read_param("f_sw", 500e3).to_string());
+                    vout_meta.insert(META_T_SW.to_string(), read_param("t_sw", 80e-9).to_string());
+                    vout_meta.insert(META_I_QUIESCENT.to_string(), read_param("i_quiescent", 5e-3).to_string());
+                }
                 circuit.add_branch_with_metadata(
                     format!("{}_vout", instance_name),
                     vout_name,
