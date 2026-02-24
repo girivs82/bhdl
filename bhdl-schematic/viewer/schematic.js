@@ -828,17 +828,25 @@
             }
         }
 
-        // Kahn's topological sort
+        // Kahn's topological sort — DFS-like (LIFO) to follow chains before siblings.
+        // This ensures parallel branches (e.g., buck chain vs reg5aux chain from VIN)
+        // are laid out sequentially rather than interleaved.
         const mainBandOrder = [];
-        const topoQueue = [];
-        for (const [n, deg] of mbInDegree) { if (deg === 0) topoQueue.push(n); }
-        while (topoQueue.length > 0) {
-            const cur = topoQueue.shift();
+        const topoStack = [];
+        for (const [n, deg] of mbInDegree) { if (deg === 0) topoStack.push(n); }
+        while (topoStack.length > 0) {
+            const cur = topoStack.pop();  // LIFO — follow chain before siblings
             mainBandOrder.push(cur);
+            const ready = [];
             for (const next of (mbForward.get(cur) || [])) {
                 const newDeg = mbInDegree.get(next) - 1;
                 mbInDegree.set(next, newDeg);
-                if (newDeg === 0) topoQueue.push(next);
+                if (newDeg === 0) ready.push(next);
+            }
+            // Push in reverse order so the first forward neighbor ends up on
+            // top of the stack and is processed next (DFS prefers first child).
+            for (let i = ready.length - 1; i >= 0; i--) {
+                topoStack.push(ready[i]);
             }
         }
         // ── 8b. Detect feedback components among cycle-stuck nodes ──
@@ -921,7 +929,9 @@
             let w, h;
             const ps = powerSourceNodes.find(p => p.id === nodeId);
             if (ps) {
-                w = 12;   // Minimal width — just the flag stub
+                // Width reserves space for the label text (layout spacing),
+                // even though the visual rendering is just a small flag symbol.
+                w = Math.max(20, measureTextWidth(ps.label, FONT_SIZE - 1) + 12);
                 h = 20;   // Shorter height for the flag symbol
             } else if (nodeId === '__entity_in__') {
                 h = HEADER_HEIGHT + ENTITY_PADDING * 2 + inputPorts.length * PORT_SPACING;
@@ -2025,6 +2035,34 @@
                 const sinkElName = sink.type === 'entity_port' ? '__entity_out__' : sink.name;
                 const toPos = findPort(sinkElName, sink.port, 'in');
                 if (!toPos) continue;
+
+                // Skip long wires from power sources to distant main-band sinks
+                // that would cross through intermediate components. Instead, add a
+                // power stub at the sink (KiCad convention for shared power rails).
+                if (net.driver.type === 'power_source') {
+                    const driverIdx = mainBandOrder.indexOf(driverElName);
+                    const sinkIdx = mainBandOrder.indexOf(sinkElName);
+                    if (driverIdx >= 0 && sinkIdx >= 0 && sinkIdx > driverIdx) {
+                        const netSinkNames = new Set(net.sinks.map(s => s.name));
+                        let crossings = 0;
+                        for (let i = driverIdx + 1; i < sinkIdx; i++) {
+                            if (!netSinkNames.has(mainBandOrder[i])) crossings++;
+                        }
+                        if (crossings > 0) {
+                            const sinkLayout = elByName.get(sinkElName);
+                            if (sinkLayout) {
+                                if (!sinkLayout.pwrStubs) sinkLayout.pwrStubs = [];
+                                const psNode = powerSourceNodes.find(ps => ps.id === driverElName);
+                                sinkLayout.pwrStubs.push({
+                                    port: sink.port,
+                                    netName: net.name,
+                                    voltage: psNode ? psNode.voltage : net.voltage
+                                });
+                            }
+                            continue;
+                        }
+                    }
+                }
 
                 const sinkEl = elByName.get(sinkElName);
                 const isShuntWire = sinkEl && sinkEl.isShunt;
