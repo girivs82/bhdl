@@ -1143,10 +1143,22 @@ fn build_simulation_annotations(
     struct RegInfo {
         base_name: String,
         vout_current: f64,
-        vout_node: String,  // VOUT net name
-        vin_node: String,   // VIN net name
+        vout_node: String,      // VOUT net name
+        vin_node: String,       // VIN net name
+        is_switching: bool,     // switching_regulator vs linear
+        // Switching regulator loss model parameters (from device datasheet)
+        rds_on: f64,            // MOSFET on-resistance (Ω)
+        f_sw: f64,              // switching frequency (Hz)
+        t_sw: f64,              // switching transition time (s)
+        i_quiescent: f64,       // controller quiescent current (A)
     }
     let mut regulators: Vec<RegInfo> = Vec::new();
+
+    let read_meta_f64 = |branch: &bhdl_spice::Branch, key: &str, default: f64| -> f64 {
+        branch.metadata.get(key)
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(default)
+    };
 
     for (edge_idx, current) in &dc_result.branch_currents {
         if let Some(branch) = circuit.graph.edge_weight(*edge_idx) {
@@ -1158,6 +1170,13 @@ fn build_simulation_annotations(
                     .get(bhdl_spice::META_PARENT_INSTANCE)
                     .cloned()
                     .unwrap_or_default();
+
+                let component_class = branch.metadata
+                    .get(bhdl_spice::META_COMPONENT_CLASS)
+                    .cloned()
+                    .unwrap_or_default();
+                let is_switching = component_class == "switching_regulator";
+
                 // _vout branch connects VOUT → GND
                 if let Some((src, _tgt)) = circuit.branch_nodes(*edge_idx) {
                     let vout_node = circuit.get_node_name(src)
@@ -1184,6 +1203,11 @@ fn build_simulation_annotations(
                         vout_current: current.abs(),
                         vout_node,
                         vin_node,
+                        is_switching,
+                        rds_on: read_meta_f64(branch, bhdl_spice::META_RDS_ON, 0.2),
+                        f_sw: read_meta_f64(branch, bhdl_spice::META_F_SW, 500e3),
+                        t_sw: read_meta_f64(branch, bhdl_spice::META_T_SW, 80e-9),
+                        i_quiescent: read_meta_f64(branch, bhdl_spice::META_I_QUIESCENT, 5e-3),
                     });
                 }
             }
@@ -1228,10 +1252,34 @@ fn build_simulation_annotations(
             })
             .collect();
 
-        // Aggregate power from all decomposed branches
-        let total_power: f64 = decomposed_keys.iter()
-            .filter_map(|key| annotations.instance_power.get(key).copied())
-            .sum();
+        // Regulator power dissipation — depends on type:
+        //
+        // LINEAR:    P = (V_IN - V_OUT) × I_through
+        //            All excess voltage is dissipated as heat.
+        //
+        // SWITCHING: Computed from device loss model parameters + simulation
+        //            operating point. The simulation gives V_IN, V_OUT, I_OUT;
+        //            device parameters (Rds_on, f_sw, t_sw, I_q) come from the
+        //            component model. No external efficiency estimate needed.
+        //
+        //            P_conduction = I_OUT² × Rds_on × D    (MOSFET resistive loss)
+        //            P_switching  = V_IN × I_OUT × f_sw × t_sw / 2  (transition loss)
+        //            P_quiescent  = V_IN × I_q              (controller self-consumption)
+        //            P_total_ic   = P_conduction + P_switching + P_quiescent
+        //
+        //            Note: diode and inductor losses are separate components
+        //            with their own power from the simulation.
+        let v_in = annotations.net_voltages.get(&reg.vin_node).copied().unwrap_or(0.0);
+        let v_out = annotations.net_voltages.get(&reg.vout_node).copied().unwrap_or(0.0);
+        let total_power = if reg.is_switching && v_in > 0.0 {
+            let d = v_out / v_in;  // duty cycle (CCM)
+            let p_conduction = current * current * reg.rds_on * d;
+            let p_switching = v_in * current * reg.f_sw * reg.t_sw / 2.0;
+            let p_quiescent = v_in * reg.i_quiescent;
+            p_conduction + p_switching + p_quiescent
+        } else {
+            (v_in - v_out).abs() * current
+        };
         annotations.instance_power.insert(reg.base_name.clone(), total_power);
 
         // Remove decomposed entries

@@ -15,6 +15,13 @@ pub type Component = Branch;
 pub const META_PARENT_INSTANCE: &str = "parent_instance";
 /// Metadata key: role within decomposition ("vout" or "dropout")
 pub const META_DECOMPOSITION_ROLE: &str = "decomposition_role";
+/// Metadata key: component class of the parent regulator (e.g., "switching_regulator", "voltage_regulator")
+pub const META_COMPONENT_CLASS: &str = "component_class";
+/// Metadata keys: switching regulator loss model parameters (from device datasheet)
+pub const META_RDS_ON: &str = "rds_on";
+pub const META_F_SW: &str = "f_sw";
+pub const META_T_SW: &str = "t_sw";
+pub const META_I_QUIESCENT: &str = "i_quiescent";
 
 /// Electrical node in the circuit
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
