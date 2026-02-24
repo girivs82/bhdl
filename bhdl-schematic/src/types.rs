@@ -110,6 +110,9 @@ pub struct SchematicInstance {
     /// Role within expansion group: "series" (inline) or "shunt" (vertical drop)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expansion_role: Option<String>,
+    /// Parent instance name for bank-split capacitors (e.g. "c_in" for "c_in_2")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bank_parent: Option<String>,
     /// Source line for click-to-navigate
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<usize>,

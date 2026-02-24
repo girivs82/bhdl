@@ -19,8 +19,7 @@
         const useRefDes = refdesChk.checked;
         for (const el of layoutElements) {
             if (el.type === 'instance' && el.refdes) {
-                // Expansion shunt children always use refdes (compact labels)
-                el.displayName = (useRefDes || el._isExpShunt) ? el.refdes : el.name;
+                el.displayName = useRefDes ? el.refdes : (el.handleName || el.name);
             }
         }
         render();
@@ -39,7 +38,7 @@
     const INSTANCE_PADDING = 12;
     const BASE_GAP = PORT_STUB_LEN * 2 + 16;  // 44px — minimum gap (stubs + margin)
     const MAX_GAP = 200;                       // cap to prevent overly long wires
-    const ANNOTATION_PAD = 12;                 // extra padding around annotation text
+    const ANNOTATION_PAD = 20;                 // extra padding around annotation text
     const ROW_GAP = 50;
     const HEADER_HEIGHT = 22;
     const FONT_SIZE = 11;
@@ -131,13 +130,7 @@
             .filter(p => p[1] && INLINE_PARAM_KEYS.has(p[0]))
             .map(p => formatParamValue(p[1]))
             .join(', ');
-        if (!valStr) return '';
-        // If this is a bank-split capacitor, append ×N
-        const bankEntry = params.find(p => p[0] === 'bank_count');
-        if (bankEntry && bankEntry[1] && parseInt(bankEntry[1]) > 1) {
-            return valStr + ' \u00d7' + bankEntry[1];
-        }
-        return valStr;
+        return valStr || '';
     }
 
     function formatVoltage(v) {
@@ -450,6 +443,12 @@
         let shuntNames = [];        // {name, junctionName, junctionSide}
         const decouplingNames = [];  // {name, junctionName, junctionSide}
         let branchNames = [];        // {name}
+
+        // Track which instances are bank parents (have bank children referencing them)
+        const bankParentNames = new Set();
+        for (const [, inst] of instMap) {
+            if (inst.bank_parent) bankParentNames.add(inst.bank_parent);
+        }
 
         for (const [name, inst] of instMap) {
             const role = inst.placement_role;
@@ -1129,6 +1128,25 @@
             }
         }
 
+        // Also redirect non-expansion shunts away from expansion parent nodes.
+        // Input caps (c_in bank) junction at the regulator (e.g., buck) but should
+        // be placed to the left, at the preceding power source node.
+        {
+            const expParentSet = new Set(expansionGroups.keys());
+            for (const item of [...shuntNames, ...decouplingNames, ...branchNames]) {
+                if (!item.junctionName || !expParentSet.has(item.junctionName)) continue;
+                const inst = instMap.get(item.name);
+                if (inst && inst.expansion_parent) continue; // expansion children stay
+                const parentName = item.junctionName;
+                // Find the previous node in mainBandOrder → redirect left
+                const mbIdx = mainBandOrder.indexOf(parentName);
+                if (mbIdx > 0) {
+                    item.junctionName = mainBandOrder[mbIdx - 1];
+                    item.junctionSide = 'right';
+                }
+            }
+        }
+
         // ── 9b. Gap expansion: ensure main-path gaps are wide enough for off-path items ──
         // Pre-compute sizes of off-path items
         const offPathSizes = new Map();
@@ -1151,6 +1169,7 @@
         // Group shunts/decoupling by (junctionName, junctionSide) for gap computation
         const verticalDropItems = [...shuntNames, ...decouplingNames];
         const dropGroups = new Map();
+        const shuntGroupSide = new Map(); // itemName → 'left' | 'right'
         for (const item of verticalDropItems) {
             const key = `${item.junctionName || '__none__'}_${item.junctionSide || 'right'}`;
             if (!dropGroups.has(key)) dropGroups.set(key, { junctionName: item.junctionName, side: item.junctionSide, items: [] });
@@ -1188,17 +1207,21 @@
             const isShunt = shuntInstNames.has(itemName) || shuntNames.some(s => s.name === itemName);
             const isSymbol = isShunt && isSymbolCategory(inst.category);
             if (isSymbol) {
-                // Name label extends LEFT from box: textAlign 'right' at el.x - 4
-                // Use the shorter of handle/refdes so layout stays compact
-                const labelForLayout = inst.refdes && inst.refdes.length < itemName.length ? inst.refdes : itemName;
+                // Use the handle name (with _1 suffix for bank parents) since that's the default display
+                let labelForLayout = itemName;
+                if (bankParentNames.has(itemName)) labelForLayout = itemName + '_1';
                 const nameW = measureTextWidth(labelForLayout, FONT_SIZE - 1);
-                leftOverhang = Math.max(leftOverhang, nameW + 4);
-                // Value label: resistors have value rotated inside the box (no overhang).
-                // Non-resistor values extend LEFT (right-aligned at el.x - 4).
                 const paramStr = buildInlineParamStr(inst.parameters);
-                if (paramStr && inst.category !== 'resistor') {
-                    const valW = measureTextWidth(paramStr, FONT_SIZE - 2);
-                    leftOverhang = Math.max(leftOverhang, valW + 4);
+                const valW = (paramStr && inst.category !== 'resistor') ? measureTextWidth(paramStr, FONT_SIZE - 2) : 0;
+                const side = shuntGroupSide.get(itemName) || 'left';
+                if (side === 'right') {
+                    // Right-group: name RIGHT, value LEFT
+                    rightOverhang = Math.max(rightOverhang, nameW + 4);
+                    if (valW > 0) leftOverhang = Math.max(leftOverhang, valW + 4);
+                } else {
+                    // Left-group (default): name LEFT, value RIGHT
+                    leftOverhang = Math.max(leftOverhang, nameW + 4);
+                    if (valW > 0) rightOverhang = Math.max(rightOverhang, valW + 4);
                 }
             }
             // Wire annotation extents (voltage LEFT, current RIGHT of wire center)
@@ -1234,15 +1257,6 @@
             for (const item of items) {
                 const sz = offPathSizes.get(item.name);
                 if (sz) total += sz.w;
-            }
-            // Expansion shunt children use compact spacing (no annotation overhang)
-            const allExpansion = items.every(item => {
-                const inst = instMap.get(item.name);
-                return inst && inst.expansion_parent;
-            });
-            if (allExpansion) {
-                if (items.length > 1) total += MIN_ITEM_GAP_BASE * (items.length - 1);
-                return total;
             }
             // Add adaptive gaps between consecutive items using directional overhangs
             if (items.length > 1) {
@@ -1385,12 +1399,9 @@
                 totalItemWidth += sz.w;
             }
 
-            // Expansion shunt children (multi-tier caps) use compact spacing
-            // since they share the same junction and are inside an expansion box.
-            const allExpansion = items.every(item => {
-                const inst = instMap.get(item.name);
-                return inst && inst.expansion_parent;
-            });
+            // Record which side of the junction each shunt is on,
+            // so the renderer can place labels on the outward-facing side.
+            for (const item of items) shuntGroupSide.set(item.name, group.side || 'right');
 
             const SHUNT_PORT_OFFSET = 20; // offset from port dot so T-junction is clear
             if (group.side === 'left') {
@@ -1401,13 +1412,9 @@
                     const sz = itemSizes[i];
                     rx -= sz.w;
                     positions.set(items[i].name, { x: rx, y: shuntY, w: sz.w, h: sz.h });
-                    if (allExpansion) {
-                        rx -= MIN_ITEM_GAP_BASE;
-                    } else {
-                        const thisOH = shuntItemOverhang(items[i].name);
-                        const nextOH = i > 0 ? shuntItemOverhang(items[i - 1].name) : { left: 0, right: 0 };
-                        rx -= Math.max(MIN_ITEM_GAP_BASE, thisOH.left + nextOH.right + ANNOTATION_PAD);
-                    }
+                    const thisOH = shuntItemOverhang(items[i].name);
+                    const nextOH = i > 0 ? shuntItemOverhang(items[i - 1].name) : { left: 0, right: 0 };
+                    rx -= Math.max(MIN_ITEM_GAP_BASE, thisOH.left + nextOH.right + ANNOTATION_PAD);
                 }
             } else {
                 // Right side: leftmost item offset right of output port dot, grow right
@@ -1416,13 +1423,9 @@
                 for (let i = 0; i < items.length; i++) {
                     const sz = itemSizes[i];
                     positions.set(items[i].name, { x: lx, y: shuntY, w: sz.w, h: sz.h });
-                    if (allExpansion) {
-                        lx += sz.w + MIN_ITEM_GAP_BASE;
-                    } else {
-                        const thisOH = shuntItemOverhang(items[i].name);
-                        const nextOH = i + 1 < items.length ? shuntItemOverhang(items[i + 1].name) : { left: 0, right: 0 };
-                        lx += sz.w + Math.max(MIN_ITEM_GAP_BASE, thisOH.right + nextOH.left + ANNOTATION_PAD);
-                    }
+                    const thisOH = shuntItemOverhang(items[i].name);
+                    const nextOH = i + 1 < items.length ? shuntItemOverhang(items[i + 1].name) : { left: 0, right: 0 };
+                    lx += sz.w + Math.max(MIN_ITEM_GAP_BASE, thisOH.right + nextOH.left + ANNOTATION_PAD);
                 }
             }
         }
@@ -1435,20 +1438,9 @@
             for (let i = 1; i < allDrop.length; i++) {
                 const prev = positions.get(allDrop[i - 1].name);
                 const curr = positions.get(allDrop[i].name);
-                // Expansion children use compact spacing (no annotation overhang)
-                const prevInst = instMap.get(allDrop[i - 1].name);
-                const currInst = instMap.get(allDrop[i].name);
-                const bothExpansion = prevInst && prevInst.expansion_parent
-                    && currInst && currInst.expansion_parent
-                    && prevInst.expansion_parent === currInst.expansion_parent;
-                let effectiveGap;
-                if (bothExpansion) {
-                    effectiveGap = MIN_ITEM_GAP_BASE;
-                } else {
-                    const prevOH = shuntItemOverhang(allDrop[i - 1].name);
-                    const currOH = shuntItemOverhang(allDrop[i].name);
-                    effectiveGap = Math.max(MIN_ITEM_GAP_BASE, prevOH.right + currOH.left + ANNOTATION_PAD);
-                }
+                const prevOH = shuntItemOverhang(allDrop[i - 1].name);
+                const currOH = shuntItemOverhang(allDrop[i].name);
+                const effectiveGap = Math.max(MIN_ITEM_GAP_BASE, prevOH.right + currOH.left + ANNOTATION_PAD);
                 const minX = prev.x + prev.w + effectiveGap;
                 if (curr.x < minX) curr.x = minX;
             }
@@ -1881,14 +1873,14 @@
             const simCurrent = data.simulation?.instance_currents?.[name];
             const simPowerW = data.simulation?.instance_power?.[name];
             const refdes = inst.refdes || null;
-            // Expansion shunt children (e.g., buck_hf_bypass_1) have long
-            // auto-generated names that overlap in compact spacing.  Default
-            // to the short refdes (C3, C4, C5) for these; the user can
-            // toggle the checkbox to switch all names to refdes or back.
+            // Bank parent gets _1 suffix in display name (c_in → c_in_1)
+            let handleName = name;
+            if (bankParentNames.has(name)) handleName = name + '_1';
+            const displayName = refdes && refdesChk?.checked ? refdes : handleName;
             const isExpShunt = inst.expansion_parent
                 && inst.expansion_role && inst.expansion_role !== 'series';
-            const displayName = refdes && (refdesChk?.checked || isExpShunt) ? refdes : name;
-            layoutElements.push({ x: pos.x, y: pos.y, w: pos.w, h: pos.h, name, refdes, displayName, _isExpShunt: !!isExpShunt, type: 'instance', entityType: inst.entity_type, parameters: inst.parameters, category: inst.category, isShunt: isShuntLike, isFlipped: flippedNames.has(name), inputPorts: instInPorts, outputPorts: instOutPorts, gndStubs: gndStubsByInst.get(name) || [], pwrStubs: pwrStubsByInst.get(name) || [], pgStubs: [], line: inst.line, simCurrent, simPower: simPowerW, gndTargetY: pos.gndTargetY, _connections: inst.connections });
+            const shuntSide = shuntGroupSide.get(name) || null;
+            layoutElements.push({ x: pos.x, y: pos.y, w: pos.w, h: pos.h, name, handleName, refdes, displayName, _isExpShunt: !!isExpShunt, shuntSide, type: 'instance', entityType: inst.entity_type, parameters: inst.parameters, category: inst.category, isShunt: isShuntLike, isFlipped: flippedNames.has(name), inputPorts: instInPorts, outputPorts: instOutPorts, gndStubs: gndStubsByInst.get(name) || [], pwrStubs: pwrStubsByInst.get(name) || [], pgStubs: [], line: inst.line, simCurrent, simPower: simPowerW, gndTargetY: pos.gndTargetY, _connections: inst.connections });
         }
 
         // Entity output
@@ -2965,15 +2957,29 @@
         const paramStr = buildInlineParamStr(el.parameters);
         const valueInside = cat === 'resistor' && paramStr;
 
+        // For vertical shunts, place labels on the outward-facing side:
+        //   Left-group shunts:  name LEFT  (right-aligned), value RIGHT (left-aligned)
+        //   Right-group shunts: name RIGHT (left-aligned),  value LEFT  (right-aligned)
+        // This keeps labels growing away from the junction, not toward neighbors.
+        const nameOnRight = isVertical && el.shuntSide === 'right';
+
         ctx.fillStyle = COLORS.text;
         ctx.font = `bold ${FONT_SIZE - 1}px monospace`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'bottom';
         const labelAboveY = isVertical ? cy : el.y - 2;
-        const labelAboveX = isVertical ? el.x - 4 : cx;
+        let labelAboveX;
         if (isVertical) {
-            ctx.textAlign = 'right';
             ctx.textBaseline = 'middle';
+            if (nameOnRight) {
+                ctx.textAlign = 'left';
+                labelAboveX = el.x + el.w + 4;
+            } else {
+                ctx.textAlign = 'right';
+                labelAboveX = el.x - 4;
+            }
+        } else {
+            labelAboveX = cx;
         }
         ctx.fillText(el.displayName || el.name, labelAboveX, labelAboveY);
 
@@ -2997,9 +3003,16 @@
             ctx.fillStyle = COLORS.paramText;
             ctx.font = `${FONT_SIZE - 2}px monospace`;
             if (isVertical) {
-                ctx.textAlign = 'right';
-                ctx.textBaseline = 'middle';
-                ctx.fillText(paramStr, el.x - 4, cy + FONT_SIZE + 2);
+                // Value on the opposite side from the name
+                if (nameOnRight) {
+                    ctx.textAlign = 'right';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(paramStr, el.x - 4, cy);
+                } else {
+                    ctx.textAlign = 'left';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(paramStr, el.x + el.w + 4, cy);
+                }
             } else {
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'top';
