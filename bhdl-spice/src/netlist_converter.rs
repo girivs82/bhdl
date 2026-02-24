@@ -578,13 +578,14 @@ impl NetlistToSpiceConverter {
                 if !component_class.is_empty() {
                     vout_meta.insert(META_COMPONENT_CLASS.to_string(), component_class.clone());
                 }
-                // For switching regulators, store device loss model parameters
-                // so post-simulation power can be computed from physics, not efficiency.
+                // Store device loss model parameters for post-simulation power
+                // computation from physics, not lumped estimates.
+                // I_quiescent applies to both linear and switching regulators.
+                vout_meta.insert(META_I_QUIESCENT.to_string(), read_param("i_quiescent", 5e-3).to_string());
                 if is_switching {
                     vout_meta.insert(META_RDS_ON.to_string(), read_param("rds_on", 0.2).to_string());
                     vout_meta.insert(META_F_SW.to_string(), read_param("f_sw", 500e3).to_string());
                     vout_meta.insert(META_T_SW.to_string(), read_param("t_sw", 80e-9).to_string());
-                    vout_meta.insert(META_I_QUIESCENT.to_string(), read_param("i_quiescent", 5e-3).to_string());
                 }
                 circuit.add_branch_with_metadata(
                     format!("{}_vout", instance_name),

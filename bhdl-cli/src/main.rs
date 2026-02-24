@@ -1146,11 +1146,11 @@ fn build_simulation_annotations(
         vout_node: String,      // VOUT net name
         vin_node: String,       // VIN net name
         is_switching: bool,     // switching_regulator vs linear
-        // Switching regulator loss model parameters (from device datasheet)
-        rds_on: f64,            // MOSFET on-resistance (Ω)
-        f_sw: f64,              // switching frequency (Hz)
-        t_sw: f64,              // switching transition time (s)
-        i_quiescent: f64,       // controller quiescent current (A)
+        // Device loss model parameters (from datasheet, stored in metadata)
+        i_quiescent: f64,       // regulator quiescent current (A) — applies to all types
+        rds_on: f64,            // MOSFET on-resistance (Ω) — switching only
+        f_sw: f64,              // switching frequency (Hz) — switching only
+        t_sw: f64,              // switching transition time (s) — switching only
     }
     let mut regulators: Vec<RegInfo> = Vec::new();
 
@@ -1252,33 +1252,31 @@ fn build_simulation_annotations(
             })
             .collect();
 
-        // Regulator power dissipation — depends on type:
+        // Regulator power dissipation from device parameters + simulation
+        // operating point. Both types include quiescent current draw.
         //
-        // LINEAR:    P = (V_IN - V_OUT) × I_through
-        //            All excess voltage is dissipated as heat.
+        // LINEAR:
+        //   P_pass      = (V_IN - V_OUT) × I_load   (pass transistor heat)
+        //   P_quiescent = V_IN × I_q                 (internal bias circuits)
+        //   P_total     = P_pass + P_quiescent
         //
-        // SWITCHING: Computed from device loss model parameters + simulation
-        //            operating point. The simulation gives V_IN, V_OUT, I_OUT;
-        //            device parameters (Rds_on, f_sw, t_sw, I_q) come from the
-        //            component model. No external efficiency estimate needed.
-        //
-        //            P_conduction = I_OUT² × Rds_on × D    (MOSFET resistive loss)
-        //            P_switching  = V_IN × I_OUT × f_sw × t_sw / 2  (transition loss)
-        //            P_quiescent  = V_IN × I_q              (controller self-consumption)
-        //            P_total_ic   = P_conduction + P_switching + P_quiescent
-        //
-        //            Note: diode and inductor losses are separate components
-        //            with their own power from the simulation.
+        // SWITCHING:
+        //   P_conduction = I_OUT² × Rds_on × D       (MOSFET resistive loss)
+        //   P_switching  = V_IN × I_OUT × f_sw × t_sw / 2  (transition loss)
+        //   P_quiescent  = V_IN × I_q                (controller self-consumption)
+        //   P_total      = P_conduction + P_switching + P_quiescent
+        //   (diode and inductor losses are separate components)
         let v_in = annotations.net_voltages.get(&reg.vin_node).copied().unwrap_or(0.0);
         let v_out = annotations.net_voltages.get(&reg.vout_node).copied().unwrap_or(0.0);
+        let p_quiescent = v_in * reg.i_quiescent;
         let total_power = if reg.is_switching && v_in > 0.0 {
             let d = v_out / v_in;  // duty cycle (CCM)
             let p_conduction = current * current * reg.rds_on * d;
             let p_switching = v_in * current * reg.f_sw * reg.t_sw / 2.0;
-            let p_quiescent = v_in * reg.i_quiescent;
             p_conduction + p_switching + p_quiescent
         } else {
-            (v_in - v_out).abs() * current
+            let p_pass = (v_in - v_out).abs() * current;
+            p_pass + p_quiescent
         };
         annotations.instance_power.insert(reg.base_name.clone(), total_power);
 
