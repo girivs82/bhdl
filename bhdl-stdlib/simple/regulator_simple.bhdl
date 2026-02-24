@@ -2,7 +2,10 @@
 // Generic entity with alias specializations for common regulators
 // Supports conditional enable pin via HAS_EN bool parameter
 
-entity LinearRegulator<V_OUT: voltage, HAS_EN: bool = false>(dropout: voltage = 2V) {
+entity LinearRegulator<V_OUT: voltage, HAS_EN: bool = false>(
+    dropout: voltage = 2V,
+    i_quiescent: current = 5mA
+) {
     pin VI: power in;
     pin VO: power out;
     pin GND: ground;
@@ -11,6 +14,7 @@ entity LinearRegulator<V_OUT: voltage, HAS_EN: bool = false>(dropout: voltage = 
     attribute component_class = "voltage_regulator";
     attribute output_voltage = V_OUT;
     attribute dropout_voltage = dropout;
+    attribute i_quiescent = i_quiescent;
 }
 
 alias LM7805 = LinearRegulator<5V>;
