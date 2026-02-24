@@ -4,7 +4,7 @@
 //! a fully synthesized `Netlist` with explicit nets, instances, and pins, so
 //! we extract `SchematicData` directly from the netlist slotmaps.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use bhdl_netlist::{
@@ -287,13 +287,6 @@ pub fn extract_schematic_data(
             continue;
         }
 
-        // Skip bank-split child instances — the original capacitor already
-        // displays "value ×N" via bank_count; showing all N parallel copies
-        // in the schematic would bloat the expansion box and overlap neighbors.
-        if instance.attributes.contains_key("bank_parent") {
-            continue;
-        }
-
         // Extract meaningful parameters from instance attributes
         // Filter out simulation/stress metadata and expansion internals
         let parameters: Vec<(String, String)> = instance.attributes.iter()
@@ -302,6 +295,7 @@ pub fn extract_schematic_data(
                 // Skip: sim_*, stress_*, vpin_*, calculation_method, simulation_enhanced, empty keys
                 !k.starts_with("sim_") && !k.starts_with("stress_")
                     && !k.starts_with("vpin_")
+                    && !k.starts_with("bank_")
                     && k.as_str() != "calculation_method"
                     && k.as_str() != "simulation_enhanced"
                     && !k.is_empty()
@@ -312,6 +306,8 @@ pub fn extract_schematic_data(
         // Extract expansion metadata for virtual-pin expanded components
         let expansion_parent = instance.attributes.get("vpin_parent").cloned();
         let expansion_role = instance.attributes.get("vpin_role").cloned();
+        // Bank-split child → links back to original cap for layout grouping
+        let bank_parent = instance.attributes.get("bank_parent").cloned();
 
         instances.push(SchematicInstance {
             name: instance.name.clone(),
@@ -325,6 +321,7 @@ pub fn extract_schematic_data(
             flow_ids: Vec::new(),
             expansion_parent,
             expansion_role,
+            bank_parent,
             line: None,
         });
     }
@@ -762,6 +759,12 @@ fn classify_placement_roles(
         })
         .collect();
 
+    // Collect bank parent names (instances that have bank children)
+    let bank_parent_names: HashSet<String> = instances
+        .iter()
+        .filter_map(|inst| inst.bank_parent.clone())
+        .collect();
+
     // Build component → flow path mapping
     let mut component_flows: HashMap<&str, Vec<&SchematicFlowPath>> = HashMap::new();
     for fp in flow_paths {
@@ -798,6 +801,13 @@ fn classify_placement_roles(
                 s if s == "shunt" || s.starts_with("output_") => PlacementRole::Shunt,
                 _ => PlacementRole::MainPath,
             });
+            continue;
+        }
+
+        // BANK OVERRIDE: bank-split children and their parent cap are all
+        // placed as shunts so the layout groups them as a tight vertical drop.
+        if inst.bank_parent.is_some() || bank_parent_names.contains(&inst.name) {
+            inst.placement_role = Some(PlacementRole::Shunt);
             continue;
         }
 
