@@ -2196,10 +2196,7 @@
                 // Skip long wires from power sources to distant main-band sinks
                 // that would cross through intermediate components. Instead, add a
                 // power stub at the sink (KiCad convention for shared power rails).
-                // Exception: regulators' VIN pins are the main signal path, not
-                // secondary supply — they always get a real wire, never a stub.
-                const sinkInst = instMap.get(sinkElName);
-                if (net.driver.type === 'power_source' && !(sinkInst && sinkInst.category === 'regulator')) {
+                if (net.driver.type === 'power_source') {
                     const driverIdx = mainBandOrder.indexOf(driverElName);
                     const sinkIdx = mainBandOrder.indexOf(sinkElName);
                     if (driverIdx >= 0 && sinkIdx >= 0 && sinkIdx > driverIdx) {
