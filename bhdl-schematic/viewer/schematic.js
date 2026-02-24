@@ -1261,27 +1261,48 @@
             return Math.max(ext.left, ext.right);
         }
 
-        // Compute total width needed for a group of off-path items
+        // Multi-row shunt layout: max items per row before wrapping
+        const MAX_SHUNT_PER_ROW = 5;
+
+        function splitIntoRows(items, maxPerRow) {
+            if (items.length <= maxPerRow) return [items];
+            const rows = [];
+            for (let i = 0; i < items.length; i += maxPerRow) {
+                rows.push(items.slice(i, i + maxPerRow));
+            }
+            // Orphan control: if last row has just 1 item, merge into previous row
+            if (rows.length > 1 && rows[rows.length - 1].length === 1) {
+                const orphan = rows.pop()[0];
+                rows[rows.length - 1].push(orphan);
+            }
+            return rows;
+        }
+
+        // Compute total width needed for a group of off-path items.
+        // With multi-row support, returns the width of the widest row.
         function groupTotalWidth(items) {
-            let total = 0;
-            for (const item of items) {
-                const sz = offPathSizes.get(item.name);
-                if (sz) total += sz.w;
-            }
-            // Add adaptive gaps between consecutive items using directional overhangs
-            if (items.length > 1) {
-                for (let i = 0; i < items.length - 1; i++) {
-                    const thisOH = shuntItemOverhang(items[i].name);
-                    const nextOH = shuntItemOverhang(items[i + 1].name);
-                    total += Math.max(MIN_ITEM_GAP_BASE, thisOH.right + nextOH.left + ANNOTATION_PAD);
+            const rows = splitIntoRows(items, MAX_SHUNT_PER_ROW);
+            let maxRowWidth = 0;
+            for (const row of rows) {
+                let rowTotal = 0;
+                for (const item of row) {
+                    const sz = offPathSizes.get(item.name);
+                    if (sz) rowTotal += sz.w;
                 }
+                if (row.length > 1) {
+                    for (let i = 0; i < row.length - 1; i++) {
+                        const thisOH = shuntItemOverhang(row[i].name);
+                        const nextOH = shuntItemOverhang(row[i + 1].name);
+                        rowTotal += Math.max(MIN_ITEM_GAP_BASE, thisOH.right + nextOH.left + ANNOTATION_PAD);
+                    }
+                }
+                if (row.length > 0) {
+                    rowTotal += shuntItemOverhang(row[0].name).left;
+                    rowTotal += shuntItemOverhang(row[row.length - 1].name).right;
+                }
+                maxRowWidth = Math.max(maxRowWidth, rowTotal);
             }
-            // Also account for first item's left overhang and last item's right overhang
-            if (items.length > 0) {
-                total += shuntItemOverhang(items[0].name).left;
-                total += shuntItemOverhang(items[items.length - 1].name).right;
-            }
-            return total;
+            return maxRowWidth;
         }
 
         // For each pair of consecutive main-path nodes, compute space needed
@@ -1395,64 +1416,172 @@
         }
 
         // ── 10b. Place shunts/decoupling with width-aware distribution ──
+        // Multi-row: groups with >MAX_SHUNT_PER_ROW items wrap into rows
         for (const [, group] of dropGroups) {
             const jPos = positions.get(group.junctionName);
             if (!jPos) continue;
             const items = group.items;
-
-            // Compute total width of items in this group
-            let totalItemWidth = 0;
-            const itemSizes = [];
-            for (const item of items) {
-                const sz = offPathSizes.get(item.name) || { w: INSTANCE_BOX_MIN_WIDTH, h: 60 };
-                itemSizes.push(sz);
-                totalItemWidth += sz.w;
-            }
+            const rows = splitIntoRows(items, MAX_SHUNT_PER_ROW);
 
             // Record which side of the junction each shunt is on,
             // so the renderer can place labels on the outward-facing side.
             for (const item of items) shuntGroupSide.set(item.name, group.side || 'right');
 
             const SHUNT_PORT_OFFSET = 20; // offset from port dot so T-junction is clear
-            if (group.side === 'left') {
-                // Left side: rightmost item offset left of input port dot, grow left
-                const portDotX = jPos.x - PORT_STUB_LEN - SHUNT_PORT_OFFSET;
-                let rx = portDotX + itemSizes[items.length - 1].w / 2;
-                for (let i = items.length - 1; i >= 0; i--) {
-                    const sz = itemSizes[i];
-                    rx -= sz.w;
-                    positions.set(items[i].name, { x: rx, y: shuntY, w: sz.w, h: sz.h });
-                    const thisOH = shuntItemOverhang(items[i].name);
-                    const nextOH = i > 0 ? shuntItemOverhang(items[i - 1].name) : { left: 0, right: 0 };
-                    rx -= Math.max(MIN_ITEM_GAP_BASE, thisOH.left + nextOH.right + ANNOTATION_PAD);
+            // Compute row stride: must accommodate GND stubs + clearance + matching drop-down.
+            // Row 0's drop-down from rail to cap top = shuntY - (jPos.y + jPos.h/2).
+            // For visual consistency, row 1+ should have the same drop from feed wire to cap top.
+            const tallestH = Math.max(...items.map(it => (offPathSizes.get(it.name) || { h: 60 }).h));
+            const gndSpace = GND_STUB_HEIGHT + GND_LINE_SPACING * 3;
+            const row0Drop = shuntY - (jPos.y + jPos.h / 2); // ~118px
+            const GND_CLEARANCE = 15;
+            const ROW_STRIDE = rows.length > 1
+                ? tallestH + gndSpace + GND_CLEARANCE + row0Drop
+                : tallestH + gndSpace + 30;
+
+            // Bus X position for multi-row vertical bus wire
+            const busX = group.side === 'left'
+                ? jPos.x - PORT_STUB_LEN
+                : jPos.x + jPos.w + PORT_STUB_LEN;
+
+            // Boustrophedon (alternating direction) placement:
+            // Row 0: left→right, Row 1: right→left, Row 2: left→right, ...
+            // Each row transition is a simple L-bend (no U-turns).
+            const rowExtentsForGroup = [];
+
+            for (let rowIdx = 0; rowIdx < rows.length; rowIdx++) {
+                const row = rows[rowIdx];
+                const rowY = shuntY + rowIdx * ROW_STRIDE;
+                const itemSizes = row.map(it => offPathSizes.get(it.name) || { w: INSTANCE_BOX_MIN_WIDTH, h: 60 });
+                const busYForRow = rowIdx > 0 ? rowY : undefined;
+
+                // Determine direction: even rows follow group.side,
+                // odd rows go in the opposite direction.
+                const isReversedRow = rowIdx % 2 === 1;
+
+                if (group.side === 'left') {
+                    // Base direction: grow left. Reversed: grow right.
+                    if (!isReversedRow) {
+                        // Row 0: center last cap on port dot.
+                        // Row 2+: align right edge with previous row's right edge.
+                        let rx;
+                        if (rowIdx === 0) {
+                            const portDotX = jPos.x - PORT_STUB_LEN - SHUNT_PORT_OFFSET;
+                            rx = portDotX + itemSizes[row.length - 1].w / 2;
+                        } else {
+                            rx = rowExtentsForGroup[rowIdx - 1].maxX;
+                        }
+                        for (let i = row.length - 1; i >= 0; i--) {
+                            const sz = itemSizes[i];
+                            rx -= sz.w;
+                            positions.set(row[i].name, { x: rx, y: rowY, w: sz.w, h: sz.h, _rowIdx: rowIdx, _busX: busX, _busY: busYForRow });
+                            const thisOH = shuntItemOverhang(row[i].name);
+                            const nextOH = i > 0 ? shuntItemOverhang(row[i - 1].name) : { left: 0, right: 0 };
+                            rx -= Math.max(MIN_ITEM_GAP_BASE, thisOH.left + nextOH.right + ANNOTATION_PAD);
+                        }
+                    } else {
+                        // Reversed: grow right from prev row's leftmost X
+                        const prevExt = rowExtentsForGroup[rowIdx - 1];
+                        let lx = prevExt ? prevExt.minX : jPos.x - PORT_STUB_LEN - SHUNT_PORT_OFFSET;
+                        for (let i = 0; i < row.length; i++) {
+                            const sz = itemSizes[i];
+                            positions.set(row[i].name, { x: lx, y: rowY, w: sz.w, h: sz.h, _rowIdx: rowIdx, _busX: busX, _busY: busYForRow });
+                            const thisOH = shuntItemOverhang(row[i].name);
+                            const nextOH = i + 1 < row.length ? shuntItemOverhang(row[i + 1].name) : { left: 0, right: 0 };
+                            lx += sz.w + Math.max(MIN_ITEM_GAP_BASE, thisOH.right + nextOH.left + ANNOTATION_PAD);
+                        }
+                    }
+                } else {
+                    // Base direction: grow right. Reversed: grow left.
+                    if (!isReversedRow) {
+                        // Row 0, 2, 4...: grow right from port dot
+                        // Row 0: center first cap on port dot.
+                        // Row 2+: align left edge with previous row's left edge.
+                        let lx;
+                        if (rowIdx === 0) {
+                            const portDotX = jPos.x + jPos.w + PORT_STUB_LEN + SHUNT_PORT_OFFSET;
+                            lx = portDotX - itemSizes[0].w / 2;
+                        } else {
+                            lx = rowExtentsForGroup[rowIdx - 1].minX;
+                        }
+                        for (let i = 0; i < row.length; i++) {
+                            const sz = itemSizes[i];
+                            positions.set(row[i].name, { x: lx, y: rowY, w: sz.w, h: sz.h, _rowIdx: rowIdx, _busX: busX, _busY: busYForRow });
+                            const thisOH = shuntItemOverhang(row[i].name);
+                            const nextOH = i + 1 < row.length ? shuntItemOverhang(row[i + 1].name) : { left: 0, right: 0 };
+                            lx += sz.w + Math.max(MIN_ITEM_GAP_BASE, thisOH.right + nextOH.left + ANNOTATION_PAD);
+                        }
+                    } else {
+                        // Row 1, 3, 5...: grow left from prev row's rightmost edge
+                        const prevExt = rowExtentsForGroup[rowIdx - 1];
+                        let rx = prevExt ? prevExt.maxX : 0;
+                        for (let i = row.length - 1; i >= 0; i--) {
+                            const sz = itemSizes[i];
+                            rx -= sz.w;
+                            positions.set(row[i].name, { x: rx, y: rowY, w: sz.w, h: sz.h, _rowIdx: rowIdx, _busX: busX, _busY: busYForRow });
+                            const thisOH = shuntItemOverhang(row[i].name);
+                            const nextOH = i > 0 ? shuntItemOverhang(row[i - 1].name) : { left: 0, right: 0 };
+                            rx -= Math.max(MIN_ITEM_GAP_BASE, thisOH.left + nextOH.right + ANNOTATION_PAD);
+                        }
+                    }
                 }
-            } else {
-                // Right side: leftmost item offset right of output port dot, grow right
-                const portDotX = jPos.x + jPos.w + PORT_STUB_LEN + SHUNT_PORT_OFFSET;
-                let lx = portDotX - itemSizes[0].w / 2;
-                for (let i = 0; i < items.length; i++) {
-                    const sz = itemSizes[i];
-                    positions.set(items[i].name, { x: lx, y: shuntY, w: sz.w, h: sz.h });
-                    const thisOH = shuntItemOverhang(items[i].name);
-                    const nextOH = i + 1 < items.length ? shuntItemOverhang(items[i + 1].name) : { left: 0, right: 0 };
-                    lx += sz.w + Math.max(MIN_ITEM_GAP_BASE, thisOH.right + nextOH.left + ANNOTATION_PAD);
+
+                // Collect row extents
+                let minX = Infinity, maxX = -Infinity;
+                for (const item of row) {
+                    const p = positions.get(item.name);
+                    if (p) { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x + p.w); }
                 }
+                rowExtentsForGroup.push({ minX, maxX, rowY });
+            }
+
+            // Store row info for wire routing (vertical bus between rows)
+            if (rows.length > 1) {
+                group._rows = rows;
+                group._rowStride = ROW_STRIDE;
+                group._row0Drop = row0Drop;
+                group._busX = busX;
+                group._rowExtents = rowExtentsForGroup;
+                // Junction Y = where the power rail wire is (for serpentine start)
+                group._junctionY = jPos.y + jPos.h / 2;
+                // Bounding box of the entire multi-row group (for obstacle avoidance)
+                let bboxMinX = Infinity, bboxMaxX = -Infinity;
+                for (const ext of rowExtentsForGroup) {
+                    bboxMinX = Math.min(bboxMinX, ext.minX);
+                    bboxMaxX = Math.max(bboxMaxX, ext.maxX);
+                }
+                const lastRowY = rowExtentsForGroup[rowExtentsForGroup.length - 1].rowY;
+                const tallest = Math.max(...items.map(it => (offPathSizes.get(it.name) || { h: 60 }).h));
+                group._bbox = {
+                    x: bboxMinX - 20, // padding
+                    y: shuntY - PORT_STUB_LEN - 10, // above first row port stubs
+                    w: (bboxMaxX - bboxMinX) + 40,
+                    h: (lastRowY + tallest + GND_STUB_HEIGHT + GND_LINE_SPACING * 3) - (shuntY - PORT_STUB_LEN - 10) + 20
+                };
             }
         }
 
-        // Resolve overlaps among all shunt/decoupling items
-        // Sort by X and push rightward when items overlap
+        // Resolve overlaps among all shunt/decoupling items.
+        // Group by Y coordinate (row) so items in different rows don't push each other.
         {
             const allDrop = verticalDropItems.filter(i => positions.has(i.name));
-            allDrop.sort((a, b) => positions.get(a.name).x - positions.get(b.name).x);
-            for (let i = 1; i < allDrop.length; i++) {
-                const prev = positions.get(allDrop[i - 1].name);
-                const curr = positions.get(allDrop[i].name);
-                const prevOH = shuntItemOverhang(allDrop[i - 1].name);
-                const currOH = shuntItemOverhang(allDrop[i].name);
-                const effectiveGap = Math.max(MIN_ITEM_GAP_BASE, prevOH.right + currOH.left + ANNOTATION_PAD);
-                const minX = prev.x + prev.w + effectiveGap;
-                if (curr.x < minX) curr.x = minX;
+            const byRow = new Map();
+            for (const item of allDrop) {
+                const y = Math.round(positions.get(item.name).y);
+                if (!byRow.has(y)) byRow.set(y, []);
+                byRow.get(y).push(item);
+            }
+            for (const [, rowItems] of byRow) {
+                rowItems.sort((a, b) => positions.get(a.name).x - positions.get(b.name).x);
+                for (let i = 1; i < rowItems.length; i++) {
+                    const prev = positions.get(rowItems[i - 1].name);
+                    const curr = positions.get(rowItems[i].name);
+                    const prevOH = shuntItemOverhang(rowItems[i - 1].name);
+                    const currOH = shuntItemOverhang(rowItems[i].name);
+                    const effectiveGap = Math.max(MIN_ITEM_GAP_BASE, prevOH.right + currOH.left + ANNOTATION_PAD);
+                    const minX = prev.x + prev.w + effectiveGap;
+                    if (curr.x < minX) curr.x = minX;
+                }
             }
         }
 
@@ -1484,37 +1613,65 @@
         }
 
         // ── 10b-post. Align all shunt column bottoms to the same Y ──
-        // Find the lowest bottom Y across all shunt columns (including chain children),
-        // then store a common gndTargetY on each shunt element so GND stubs align.
+        // Multi-row group items get per-row GND alignment (within their group).
+        // Non-multi-row items use Y-bucket alignment as before.
         {
-            // Build column bottom map: for each shunt root, find the lowest child bottom
-            const shuntChainParents = new Set(shuntChainDown.keys());
             const shuntChainChildSet = new Set(shuntChainDown.values());
-            let maxBottomY = 0;
-            for (const item of verticalDropItems) {
-                const pos = positions.get(item.name);
-                if (!pos) continue;
-                let bottomY = pos.y + pos.h;
-                // If this item has a chain child, the child's bottom is the column bottom
-                if (shuntChainDown.has(item.name)) {
-                    const childPos = positions.get(shuntChainDown.get(item.name));
-                    if (childPos) bottomY = childPos.y + childPos.h;
+            const allDrop = verticalDropItems.filter(i => positions.has(i.name));
+
+            // Separate multi-row items (have _rowIdx) from regular items
+            const multiRowHandled = new Set();
+            for (const [, group] of dropGroups) {
+                if (!group._rows || group._rows.length <= 1) continue;
+                // Per-row GND alignment within this multi-row group
+                for (const row of group._rows) {
+                    let maxBottomY = 0;
+                    for (const item of row) {
+                        const pos = positions.get(item.name);
+                        if (!pos) continue;
+                        maxBottomY = Math.max(maxBottomY, pos.y + pos.h);
+                        multiRowHandled.add(item.name);
+                    }
+                    if (maxBottomY > 0) {
+                        for (const item of row) {
+                            const pos = positions.get(item.name);
+                            if (pos) pos.gndTargetY = maxBottomY;
+                        }
+                    }
                 }
-                // If this item IS a chain child, its bottom is the column bottom
-                if (shuntChainChildSet.has(item.name)) {
-                    bottomY = pos.y + pos.h;
-                }
-                maxBottomY = Math.max(maxBottomY, bottomY);
             }
-            // Store gndTargetY on positions so GND stubs extend to common bottom
-            if (maxBottomY > 0) {
-                for (const item of verticalDropItems) {
+
+            // Regular items (not in multi-row groups): Y-bucket alignment
+            const regularDrop = allDrop.filter(i => !multiRowHandled.has(i.name));
+            const byRow = new Map();
+            for (const item of regularDrop) {
+                const y = Math.round(positions.get(item.name).y);
+                if (!byRow.has(y)) byRow.set(y, []);
+                byRow.get(y).push(item);
+            }
+            for (const [, rowItems] of byRow) {
+                let maxBottomY = 0;
+                for (const item of rowItems) {
                     const pos = positions.get(item.name);
-                    if (pos) pos.gndTargetY = maxBottomY;
-                    // Also set on chain children
+                    if (!pos) continue;
+                    let bottomY = pos.y + pos.h;
                     if (shuntChainDown.has(item.name)) {
                         const childPos = positions.get(shuntChainDown.get(item.name));
-                        if (childPos) childPos.gndTargetY = maxBottomY;
+                        if (childPos) bottomY = childPos.y + childPos.h;
+                    }
+                    if (shuntChainChildSet.has(item.name)) {
+                        bottomY = pos.y + pos.h;
+                    }
+                    maxBottomY = Math.max(maxBottomY, bottomY);
+                }
+                if (maxBottomY > 0) {
+                    for (const item of rowItems) {
+                        const pos = positions.get(item.name);
+                        if (pos) pos.gndTargetY = maxBottomY;
+                        if (shuntChainDown.has(item.name)) {
+                            const childPos = positions.get(shuntChainDown.get(item.name));
+                            if (childPos) childPos.gndTargetY = maxBottomY;
+                        }
                     }
                 }
             }
@@ -1890,7 +2047,7 @@
             const isExpShunt = inst.expansion_parent
                 && inst.expansion_role && inst.expansion_role !== 'series';
             const shuntSide = shuntGroupSide.get(name) || null;
-            layoutElements.push({ x: pos.x, y: pos.y, w: pos.w, h: pos.h, name, handleName, refdes, displayName, _isExpShunt: !!isExpShunt, shuntSide, type: 'instance', entityType: inst.entity_type, parameters: inst.parameters, category: inst.category, isShunt: isShuntLike, isFlipped: flippedNames.has(name), inputPorts: instInPorts, outputPorts: instOutPorts, gndStubs: gndStubsByInst.get(name) || [], pwrStubs: pwrStubsByInst.get(name) || [], pgStubs: [], line: inst.line, simCurrent, simPower: simPowerW, gndTargetY: pos.gndTargetY, _connections: inst.connections });
+            layoutElements.push({ x: pos.x, y: pos.y, w: pos.w, h: pos.h, name, handleName, refdes, displayName, _isExpShunt: !!isExpShunt, shuntSide, type: 'instance', entityType: inst.entity_type, parameters: inst.parameters, category: inst.category, isShunt: isShuntLike, isFlipped: flippedNames.has(name), inputPorts: instInPorts, outputPorts: instOutPorts, gndStubs: gndStubsByInst.get(name) || [], pwrStubs: pwrStubsByInst.get(name) || [], pgStubs: [], line: inst.line, simCurrent, simPower: simPowerW, gndTargetY: pos.gndTargetY, _rowIdx: pos._rowIdx || 0, _busX: pos._busX, _busY: pos._busY, _busLeftX: pos._busLeftX, _connections: inst.connections });
         }
 
         // Entity output
@@ -2068,6 +2225,13 @@
                 const isShuntWire = sinkEl && sinkEl.isShunt;
                 const segments = [];
 
+                // Multi-row shunt: row 1+ items are connected via the
+                // L-bend bus wire — skip ALL individual wire routing.
+                // Check this BEFORE any other routing logic.
+                if (sinkEl && sinkEl._rowIdx > 0 && sinkEl._busY != null) {
+                    continue; // L-bend bus handles this connection
+                }
+
                 // dir: +1 = wire extends right from dot, -1 = wire extends left
                 const fromDir = fromPos.dir || 1;   // driver output default: rightward
                 const toDir = toPos.dir || -1;       // sink input default: leftward
@@ -2077,30 +2241,32 @@
                 // This prevents wires from cutting through intermediate components.
                 let shuntFromPos = fromPos;
                 if (isShuntWire) {
-                    const jInfo = shuntJunctionLookup.get(sinkElName);
-                    if (jInfo) {
-                        const jEl = elByName.get(jInfo.junctionName);
-                        if (jEl) {
-                            const jx = jInfo.junctionSide === 'right'
-                                ? jEl.x + jEl.w + PORT_STUB_LEN
-                                : jEl.x - PORT_STUB_LEN;
-                            const jy = jEl.y + jEl.h / 2;
-                            // Expansion shunt children (caps inside a virtual pin
-                            // expansion group) always route from their junction
-                            // (the series sibling, e.g. inductor), not from the
-                            // power source.  They tap the net at the junction.
-                            const sinkInst = instMap.get(sinkElName);
-                            if (sinkInst && sinkInst.expansion_parent) {
-                                const dir = jInfo.junctionSide === 'right' ? 1 : -1;
-                                shuntFromPos = { x: jx, y: fromPos.y, dir };
-                            } else {
-                                // Only override when the shunt is past the junction
-                                // element's far edge — meaning the default wire from
-                                // driver would cut through intermediate main-path
-                                // components to reach the shunt.
-                                const jElFarEdge = jEl.x + jEl.w;
-                                if (jx > fromPos.x && toPos.x > jElFarEdge) {
-                                    shuntFromPos = { x: jx, y: fromPos.y, dir: 1 };
+                    {
+                        const jInfo = shuntJunctionLookup.get(sinkElName);
+                        if (jInfo) {
+                            const jEl = elByName.get(jInfo.junctionName);
+                            if (jEl) {
+                                const jx = jInfo.junctionSide === 'right'
+                                    ? jEl.x + jEl.w + PORT_STUB_LEN
+                                    : jEl.x - PORT_STUB_LEN;
+                                const jy = jEl.y + jEl.h / 2;
+                                // Expansion shunt children (caps inside a virtual pin
+                                // expansion group) always route from their junction
+                                // (the series sibling, e.g. inductor), not from the
+                                // power source.  They tap the net at the junction.
+                                const sinkInst = instMap.get(sinkElName);
+                                if (sinkInst && sinkInst.expansion_parent) {
+                                    const dir = jInfo.junctionSide === 'right' ? 1 : -1;
+                                    shuntFromPos = { x: jx, y: fromPos.y, dir };
+                                } else {
+                                    // Only override when the shunt is past the junction
+                                    // element's far edge — meaning the default wire from
+                                    // driver would cut through intermediate main-path
+                                    // components to reach the shunt.
+                                    const jElFarEdge = jEl.x + jEl.w;
+                                    if (jx > fromPos.x && toPos.x > jElFarEdge) {
+                                        shuntFromPos = { x: jx, y: fromPos.y, dir: 1 };
+                                    }
                                 }
                             }
                         }
@@ -2213,6 +2379,117 @@
             }
         }
         layoutElements._junctionPoints = junctionPoints;
+
+        // Collect multi-row group bounding boxes for wire routing obstacle avoidance.
+        // Must be computed BEFORE the obstacle avoidance pass below.
+        const multiRowObstacles = [];
+        const multiRowItemNames = new Set();
+        for (const [, group] of dropGroups) {
+            if (!group._bbox) continue;
+            multiRowObstacles.push(group._bbox);
+            for (const row of group._rows) {
+                for (const item of row) multiRowItemNames.add(item.name);
+            }
+        }
+
+        // Post-process: reroute wire segments that cross through multi-row
+        // cap bank bounding boxes. For any horizontal segment that falls within
+        // a multi-row bbox, detour it below the bbox.
+        if (multiRowObstacles.length > 0) {
+            for (const wire of layoutWires) {
+                // Skip wires TO multi-row items (they use L-bend bus)
+                if (multiRowItemNames.has(wire.sinkElName)) continue;
+                if (wire.segments.length === 0) continue;
+
+                let modified = false;
+                for (const obs of multiRowObstacles) {
+                    // Check each segment for crossing
+                    const newSegs = [];
+                    for (const seg of wire.segments) {
+                        const isHoriz = Math.abs(seg.y1 - seg.y2) < 2;
+                        if (isHoriz) {
+                            const segMinX = Math.min(seg.x1, seg.x2);
+                            const segMaxX = Math.max(seg.x1, seg.x2);
+                            const obsRight = obs.x + obs.w;
+                            const obsBottom = obs.y + obs.h;
+                            // Does this horizontal segment cross through the obstacle?
+                            if (seg.y1 > obs.y && seg.y1 < obsBottom &&
+                                segMaxX > obs.x && segMinX < obsRight) {
+                                // Reroute: go down to below obstacle, across, then back up
+                                const detourY = obsBottom + 15;
+                                // Vertical down to detour level
+                                newSegs.push({ x1: seg.x1, y1: seg.y1, x2: seg.x1, y2: detourY });
+                                // Horizontal across below obstacle
+                                newSegs.push({ x1: seg.x1, y1: detourY, x2: seg.x2, y2: detourY });
+                                // Vertical back up to original level
+                                newSegs.push({ x1: seg.x2, y1: detourY, x2: seg.x2, y2: seg.y2 });
+                                modified = true;
+                                continue;
+                            }
+                        }
+                        newSegs.push(seg);
+                    }
+                    if (modified) {
+                        wire.segments.length = 0;
+                        wire.segments.push(...newSegs);
+                        // Update wire to/from Y for endpoint rendering
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Store multi-row serpentine bus wire data for rendering.
+        // Serpentine routing: after the last cap in row N, wire goes down past
+        // GND stubs, left back to first cap X, down a bit, then right feeding row N+1.
+        const multiRowBusWires = [];
+        for (const [, group] of dropGroups) {
+            if (!group._rows || group._rows.length <= 1) continue;
+            if (!group._rowExtents) continue;
+
+            // L-bend bus wire data for boustrophedon layout.
+            // Each row transition is a simple L-bend:
+            //   Even→Odd: vertical down from right end, horizontal left (feed)
+            //   Odd→Even: vertical down from left end, horizontal right (feed)
+            const lbends = [];
+            const rowExtents = group._rowExtents;
+            for (let ri = 0; ri < group._rows.length - 1; ri++) {
+                const curr = rowExtents[ri];
+                const next = rowExtents[ri + 1];
+                const isEvenToOdd = ri % 2 === 0;
+                // L-bend corner: at the END of current row's feed direction
+                const cornerX = isEvenToOdd ? curr.maxX : curr.minX;
+                // Feed wire at same drop distance as row 0 (rail → cap top)
+                // so per-cap stubs are visually consistent across rows
+                const feedY = next.rowY - (group._row0Drop || 80);
+                const cornerY = feedY;
+                // Feed extends to center of the far-end cap (not the row edge)
+                const nextRow = group._rows[ri + 1];
+                const farCap = isEvenToOdd ? nextRow[0] : nextRow[nextRow.length - 1];
+                const farCapPos = positions.get(farCap.name);
+                const feedEndX = farCapPos ? farCapPos.x + farCapPos.w / 2 : (isEvenToOdd ? next.minX : next.maxX);
+                lbends.push({ cornerX, cornerY, feedEndX, feedY, isEvenToOdd });
+            }
+
+            // Find the net name from wires targeting items in this group
+            let busNetName = null;
+            const firstItemName = group._rows[0][0].name;
+            for (const wire of layoutWires) {
+                if (wire.sinkElName === firstItemName) { busNetName = wire.netName; break; }
+            }
+
+            multiRowBusWires.push({
+                side: group.side,
+                rowExtents,
+                lbends,
+                rows: group._rows,
+                junctionY: group._junctionY,
+                netName: busNetName
+            });
+        }
+        layoutElements._multiRowBusWires = multiRowBusWires;
+        layoutElements._multiRowObstacles = multiRowObstacles;
+        layoutElements._multiRowItemNames = multiRowItemNames;
     }
 
     /** Order branch items by following net connections (graph chain) */
@@ -2330,6 +2607,7 @@
 
         drawExpansionGroups();
         drawWires();
+        drawMultiRowBusWires();
         for (const el of layoutElements) {
             if (el.type === 'entity_in' || el.type === 'entity_out') drawEntityBox(el);
             else if (el.type === 'power_source') drawPowerRailFlag(el);
@@ -2539,17 +2817,21 @@
 
         if (el.isShunt) {
             // NORTH port: wire drops down from above
-            for (const port of el.inputPorts) {
-                ctx.strokeStyle = COLORS.port;
-                ctx.lineWidth = 1.5;
-                ctx.beginPath();
-                ctx.moveTo(port.x, port.y);
-                ctx.lineTo(port.x, port.y - PORT_STUB_LEN);
-                ctx.stroke();
-                ctx.fillStyle = COLORS.port;
-                ctx.beginPath();
-                ctx.arc(port.x, port.y - PORT_STUB_LEN, PORT_DOT_R, 0, Math.PI * 2);
-                ctx.fill();
+            // For multi-row row 1+ items, the L-bend bus wire connects
+            // directly to the cap top — skip port stubs to avoid double dots.
+            if (!el._rowIdx || el._rowIdx === 0) {
+                for (const port of el.inputPorts) {
+                    ctx.strokeStyle = COLORS.port;
+                    ctx.lineWidth = 1.5;
+                    ctx.beginPath();
+                    ctx.moveTo(port.x, port.y);
+                    ctx.lineTo(port.x, port.y - PORT_STUB_LEN);
+                    ctx.stroke();
+                    ctx.fillStyle = COLORS.port;
+                    ctx.beginPath();
+                    ctx.arc(port.x, port.y - PORT_STUB_LEN, PORT_DOT_R, 0, Math.PI * 2);
+                    ctx.fill();
+                }
             }
             // SOUTH port: chain shunt output continues down to next component
             for (const port of el.outputPorts) {
@@ -2951,17 +3233,20 @@
         // Port stubs and dots
         if (el.isShunt) {
             // Shunt: NORTH port (input from above)
-            for (const port of el.inputPorts) {
-                ctx.strokeStyle = COLORS.port;
-                ctx.lineWidth = 1.5;
-                ctx.beginPath();
-                ctx.moveTo(port.x, port.y);
-                ctx.lineTo(port.x, port.y - PORT_STUB_LEN);
-                ctx.stroke();
-                ctx.fillStyle = COLORS.port;
-                ctx.beginPath();
-                ctx.arc(port.x, port.y - PORT_STUB_LEN, PORT_DOT_R, 0, Math.PI * 2);
-                ctx.fill();
+            // Skip for multi-row row 1+ items (L-bend bus handles connection)
+            if (!el._rowIdx || el._rowIdx === 0) {
+                for (const port of el.inputPorts) {
+                    ctx.strokeStyle = COLORS.port;
+                    ctx.lineWidth = 1.5;
+                    ctx.beginPath();
+                    ctx.moveTo(port.x, port.y);
+                    ctx.lineTo(port.x, port.y - PORT_STUB_LEN);
+                    ctx.stroke();
+                    ctx.fillStyle = COLORS.port;
+                    ctx.beginPath();
+                    ctx.arc(port.x, port.y - PORT_STUB_LEN, PORT_DOT_R, 0, Math.PI * 2);
+                    ctx.fill();
+                }
             }
             // SOUTH port (chain shunt output)
             for (const port of el.outputPorts) {
@@ -3339,6 +3624,75 @@
         // (Per-wire current annotations above are sufficient; no separate junction-total pass needed)
     }
 
+    /** Draw L-bend bus wires for boustrophedon multi-row shunt groups.
+     *
+     *  Layout (right-side group):
+     *    ═══ power rail ═══ [Cap1] [Cap2] ... [Cap5]
+     *                                             │ ← L-bend down
+     *                  [Cap10] [Cap9] ... [Cap6] ←┘ ← feed right-to-left
+     *                    │
+     *                    └→ [Cap11] ...                ← next L-bend
+     */
+    function drawMultiRowBusWires() {
+        const busWires = layoutElements._multiRowBusWires;
+        if (!busWires || busWires.length === 0) return;
+        ctx.setLineDash([]);
+
+        for (const bus of busWires) {
+            const isHighlighted = hoveredNet && bus.netName === hoveredNet;
+            const wireColor = isHighlighted ? COLORS.wireHighlight : COLORS.wire;
+            const dotColor = isHighlighted ? COLORS.wireHighlight : (COLORS.junctionDot || COLORS.wire);
+
+            for (let li = 0; li < bus.lbends.length; li++) {
+                const lb = bus.lbends[li];
+                const currExt = bus.rowExtents[li];
+
+                // Vertical start: tap from the power rail Y (for first bend)
+                // or from the previous row's Y (for subsequent bends)
+                const startY = li === 0 ? (bus.junctionY || currExt.rowY) : currExt.rowY;
+
+                // Draw L-bend: vertical down + horizontal feed
+                ctx.strokeStyle = wireColor;
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.moveTo(lb.cornerX, startY);      // start at end of current row
+                ctx.lineTo(lb.cornerX, lb.cornerY);   // vertical down to next row Y
+                ctx.lineTo(lb.feedEndX, lb.feedY);     // horizontal feed across next row
+                ctx.stroke();
+
+                // Junction dot at tap point
+                ctx.fillStyle = dotColor;
+                ctx.beginPath();
+                ctx.arc(lb.cornerX, startY, 3, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Per-cap vertical stubs from feed wire to each cap's top pin
+                const nextRow = bus.rows[li + 1];
+                if (nextRow) {
+                    ctx.strokeStyle = wireColor;
+                    ctx.lineWidth = 1.5;
+                    for (const item of nextRow) {
+                        const el = layoutElements.find(e => e.name === item.name);
+                        if (!el) continue;
+                        const stubX = el.x + el.w / 2;
+                        // Stub from feed wire down to cap top
+                        if (Math.abs(lb.feedY - el.y) > 2) {
+                            ctx.beginPath();
+                            ctx.moveTo(stubX, lb.feedY);
+                            ctx.lineTo(stubX, el.y);
+                            ctx.stroke();
+                        }
+                        // Junction dot on feed wire
+                        ctx.fillStyle = dotColor;
+                        ctx.beginPath();
+                        ctx.arc(stubX, lb.feedY, 3, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+            }
+        }
+    }
+
     function drawRoundedRect(ctx, x, y, w, h, r, fill, stroke, lineWidth) {
         ctx.beginPath();
         ctx.moveTo(x + r, y);
@@ -3422,6 +3776,34 @@
                     }
                 }
                 if (foundNet) break;
+            }
+            // Also check multi-row bus wire segments
+            if (!foundNet) {
+                const busWires = layoutElements._multiRowBusWires || [];
+                for (const bus of busWires) {
+                    if (!bus.netName) continue;
+                    for (const lb of bus.lbends) {
+                        const startY = bus.junctionY || bus.rowExtents[0].rowY;
+                        // Vertical segment
+                        if (pointToSegmentDist(mx, my, lb.cornerX, startY, lb.cornerX, lb.cornerY) < hitDist) { foundNet = bus.netName; break; }
+                        // Horizontal feed
+                        if (pointToSegmentDist(mx, my, lb.cornerX, lb.feedY, lb.feedEndX, lb.feedY) < hitDist) { foundNet = bus.netName; break; }
+                    }
+                    if (foundNet) break;
+                    // Per-cap stubs
+                    for (let ri = 1; ri < bus.rows.length; ri++) {
+                        const lb = bus.lbends[ri - 1];
+                        if (!lb) continue;
+                        for (const item of bus.rows[ri]) {
+                            const el = layoutElements.find(e => e.name === item.name);
+                            if (!el) continue;
+                            const stubX = el.x + el.w / 2;
+                            if (pointToSegmentDist(mx, my, stubX, lb.feedY, stubX, el.y) < hitDist) { foundNet = bus.netName; break; }
+                        }
+                        if (foundNet) break;
+                    }
+                    if (foundNet) break;
+                }
             }
         }
         let needsRedraw = false;
