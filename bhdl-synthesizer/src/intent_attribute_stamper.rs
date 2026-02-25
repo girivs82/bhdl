@@ -13,7 +13,7 @@
 
 use std::collections::HashMap;
 use log::{debug, info};
-use bhdl_analyzer::flow_tracking::FlowTracker;
+use bhdl_analyzer::flow_tracking::{FlowTracker, RailStageMap};
 use bhdl_common::intent::IntentParam;
 use bhdl_netlist::Netlist;
 
@@ -22,7 +22,7 @@ use bhdl_netlist::Netlist;
 /// For each flow path with an intent:
 /// 1. Find all component names in the flow
 /// 2. Match them to netlist instances
-/// 3. For switching regulators: stamp `intent_name`, `intent_max_ripple`, etc.
+/// 3. Stamp `intent_name`, `stage_name`, `stage_rail`, `stage_order` and all intent params
 ///
 /// This must be called **after synthesis** (netlist exists) and **before**
 /// virtual pin expansion (which reads these attributes).
@@ -31,6 +31,7 @@ pub fn stamp_intent_attributes(
     flow_tracker: &FlowTracker,
 ) {
     let flow_paths = flow_tracker.get_flow_paths();
+    let rail_stage_map = flow_tracker.get_rail_stage_map();
     let mut stamped = 0usize;
 
     for flow in flow_paths {
@@ -45,29 +46,31 @@ pub fn stamp_intent_attributes(
         // Build a map of intent parameter name → value string
         let param_map = extract_intent_params(&intent.params);
 
+        // Resolve stage metadata: find which rail and what order this intent maps to
+        let (stage_rail, stage_order) = resolve_stage_info(&intent.name, &flow.nets, rail_stage_map);
+
         // Find all netlist instances whose names appear in this flow's component list
-        // or whose names match net names in the flow (for implicit components).
         let matching_instances: Vec<_> = netlist.instances.iter()
             .filter(|(_, inst)| {
                 flow.components.iter().any(|c| c == &inst.name)
             })
-            .map(|(id, inst)| (id, inst.name.clone(), inst.attributes.clone()))
+            .map(|(id, inst)| (id, inst.name.clone()))
             .collect();
 
-        for (inst_id, inst_name, attrs) in matching_instances {
-            let is_switching_reg = attrs.get("component_class")
-                .map(|c| c == "switching_regulator")
-                .unwrap_or(false);
-
-            if !is_switching_reg {
-                // For now, only stamp switching regulators.
-                // Other component types can be added as needed.
-                continue;
-            }
+        for (inst_id, inst_name) in matching_instances {
+            let inst = &mut netlist.instances[inst_id];
 
             // Stamp intent name
-            let inst = &mut netlist.instances[inst_id];
             inst.attributes.insert("intent_name".to_string(), intent.name.clone());
+
+            // Stamp stage metadata (from power domain stage chain)
+            inst.attributes.insert("stage_name".to_string(), intent.name.clone());
+            if let Some(ref rail) = stage_rail {
+                inst.attributes.insert("stage_rail".to_string(), rail.clone());
+            }
+            if let Some(order) = stage_order {
+                inst.attributes.insert("stage_order".to_string(), order.to_string());
+            }
 
             // Stamp all intent parameters with "intent_" prefix
             for (key, value) in &param_map {
@@ -77,8 +80,8 @@ pub fn stamp_intent_attributes(
                 );
             }
 
-            debug!("Stamped intent '{}' on switching regulator '{}'",
-                intent.name, inst_name);
+            debug!("Stamped intent '{}' (stage_order={:?}) on '{}'",
+                intent.name, stage_order, inst_name);
             stamped += 1;
         }
 
@@ -93,6 +96,32 @@ pub fn stamp_intent_attributes(
     if stamped > 0 {
         info!("Intent attribute stamper: stamped {} instance(s)", stamped);
     }
+}
+
+/// Resolve the rail name and stage order for an intent from the RailStageMap.
+/// Returns (Some(rail_name), Some(order)) if the intent name matches a declared stage.
+fn resolve_stage_info(
+    intent_name: &str,
+    flow_nets: &[String],
+    rail_stage_map: &RailStageMap,
+) -> (Option<String>, Option<usize>) {
+    // Check each rail's stage list for a match with the intent name
+    for (rail_name, stages) in rail_stage_map {
+        // The flow must be connected to this rail (rail name appears in flow nets)
+        let rail_match = flow_nets.iter().any(|n| n == rail_name);
+        if !rail_match {
+            continue;
+        }
+
+        for (order, (stage_name, _)) in stages.iter().enumerate() {
+            if stage_name == intent_name {
+                return (Some(rail_name.clone()), Some(order));
+            }
+        }
+    }
+
+    // No match in any rail's stage chain
+    (None, None)
 }
 
 /// For `output_filtering` intents: find switching regulators whose output nets

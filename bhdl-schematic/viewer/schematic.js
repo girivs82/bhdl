@@ -1456,6 +1456,24 @@
             branchGroups.get(key).items.push(item);
         }
 
+        // ── Stage-order sort: within each group, sort by stage_order (from staged power flow).
+        // Components with stage_order come first (sorted numerically), then those without
+        // retain their original order.
+        const stageOrderSort = (a, b) => {
+            const instA = instMap.get(a.name);
+            const instB = instMap.get(b.name);
+            const soA = instA && instA.stage_order != null ? instA.stage_order : Infinity;
+            const soB = instB && instB.stage_order != null ? instB.stage_order : Infinity;
+            if (soA !== soB) return soA - soB;
+            return 0; // preserve original order for equal/unset stage_order
+        };
+        for (const [, group] of dropGroups) {
+            group.items.sort(stageOrderSort);
+        }
+        for (const [, group] of branchGroups) {
+            group.items.sort(stageOrderSort);
+        }
+
         // Compute total width needed at each gap between consecutive main-path nodes
         // A "gap" is between mainPathOrder[i] and mainPathOrder[i+1].
         // Items on 'right' side of node i and 'left' side of node i+1 share this gap.

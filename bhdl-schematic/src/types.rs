@@ -113,6 +113,15 @@ pub struct SchematicInstance {
     /// Parent instance name for bank-split capacitors (e.g. "c_in" for "c_in_2")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bank_parent: Option<String>,
+    /// Stage name from staged power flow (e.g. "input_protection")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage_name: Option<String>,
+    /// Numeric order of this stage within its rail's stage chain (0-based)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage_order: Option<usize>,
+    /// Name of the power rail this stage belongs to
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage_rail: Option<String>,
     /// Source line for click-to-navigate
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<usize>,
@@ -202,4 +211,7 @@ pub struct PowerRail {
     pub max_current: f64,
     /// Names of instances connected to this rail
     pub connected_instances: Vec<String>,
+    /// Ordered stage names declared on this rail (from `|>` chain)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stages: Vec<String>,
 }

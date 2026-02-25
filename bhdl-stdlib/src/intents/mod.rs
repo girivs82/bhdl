@@ -14,7 +14,8 @@ pub mod digital_timing;
 pub mod advanced;
 pub mod specialized;
 
-use bhdl_common::{IntentRegistry, IntentFunction, OutputFilteringIntent};
+use bhdl_common::{IntentRegistry, IntentFunction, OutputFilteringIntent,
+    InputFilteringIntent, RegulationIntent, LoadingIntent};
 
 /// Register all standard intent functions
 pub fn register_stdlib_intents(registry: &mut IntentRegistry) {
@@ -73,6 +74,11 @@ pub fn register_stdlib_intents(registry: &mut IntentRegistry) {
 
     // Register output filtering intent (ripple-aware cap bank generation)
     registry.register(Box::new(OutputFilteringIntent));
+
+    // Register power stage intents (staged power flow)
+    registry.register(Box::new(InputFilteringIntent));
+    registry.register(Box::new(RegulationIntent));
+    registry.register(Box::new(LoadingIntent));
 
     // Register specialized intents
     registry.register(Box::new(specialized::VoltageRegulationIntent));

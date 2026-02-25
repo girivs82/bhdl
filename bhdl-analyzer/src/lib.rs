@@ -266,7 +266,7 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
     let mut flow_tracker_opt = None;
     for item in source_file.items() {
         if let Some(board) = bhdl_ast::Board::cast(item.syntax().clone()) {
-            let flow_diagnostics = flow_tracker.analyze_board(&board, &global_scope);
+            let flow_diagnostics = flow_tracker.analyze_board_with_scopes(&board, &global_scope, &definition_scopes);
             diagnostics.extend(flow_diagnostics);
             flow_tracker_opt = Some(flow_tracker);
             break; // Process first board only for now

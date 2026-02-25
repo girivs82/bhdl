@@ -187,6 +187,120 @@ impl Default for IntentRegistry {
 
 // ── Built-in intent functions ────────────────────────────────────────────
 
+/// `input_filtering` intent — bulk or precision filtering on a power rail input.
+///
+/// Parameters:
+///   - `bulk` (boolean, optional): true for bulk electrolytic-style filtering
+///   - `max_esr` (resistance, optional): maximum ESR for filter capacitor
+pub struct InputFilteringIntent;
+
+impl IntentFunction for InputFilteringIntent {
+    fn name(&self) -> &str {
+        "input_filtering"
+    }
+
+    fn resolve(&self, _params: &[IntentParam]) -> Result<IntentResult, String> {
+        Ok(IntentResult {
+            sim_mode: SimMode::MixedSignal,
+            synthesis_hints: vec![
+                SynthesisHint::Custom("bulk_decoupling_capacitor".to_string()),
+            ],
+            validation_rules: Vec::new(),
+            tool_scope: ToolScope::All,
+        })
+    }
+
+    fn param_metadata(&self) -> Vec<ParamMetadata> {
+        vec![
+            ParamMetadata {
+                name: "bulk".to_string(),
+                param_type: ParamType::Boolean,
+                required: false,
+                default_value: Some(IntentValue::Boolean(false)),
+            },
+            ParamMetadata {
+                name: "max_esr".to_string(),
+                param_type: ParamType::Number,
+                required: false,
+                default_value: None,
+            },
+        ]
+    }
+}
+
+/// `regulation` intent — marks a component as performing voltage regulation on a rail.
+///
+/// Parameters:
+///   - `soft_start` (duration, optional): soft-start ramp time
+///   - `dropout` (voltage, optional): regulator dropout voltage
+pub struct RegulationIntent;
+
+impl IntentFunction for RegulationIntent {
+    fn name(&self) -> &str {
+        "regulation"
+    }
+
+    fn resolve(&self, _params: &[IntentParam]) -> Result<IntentResult, String> {
+        Ok(IntentResult {
+            sim_mode: SimMode::MixedSignal,
+            synthesis_hints: vec![
+                SynthesisHint::Custom("voltage_regulation".to_string()),
+            ],
+            validation_rules: Vec::new(),
+            tool_scope: ToolScope::All,
+        })
+    }
+
+    fn param_metadata(&self) -> Vec<ParamMetadata> {
+        vec![
+            ParamMetadata {
+                name: "soft_start".to_string(),
+                param_type: ParamType::Duration,
+                required: false,
+                default_value: None,
+            },
+            ParamMetadata {
+                name: "dropout".to_string(),
+                param_type: ParamType::Voltage,
+                required: false,
+                default_value: None,
+            },
+        ]
+    }
+}
+
+/// `loading` intent — marks a component as a load on a power rail.
+///
+/// Parameters:
+///   - `purpose` (string, optional): description of the load's role
+pub struct LoadingIntent;
+
+impl IntentFunction for LoadingIntent {
+    fn name(&self) -> &str {
+        "loading"
+    }
+
+    fn resolve(&self, _params: &[IntentParam]) -> Result<IntentResult, String> {
+        Ok(IntentResult {
+            sim_mode: SimMode::PureDigital,
+            synthesis_hints: Vec::new(),
+            validation_rules: Vec::new(),
+            tool_scope: ToolScope::All,
+        })
+    }
+
+    fn param_metadata(&self) -> Vec<ParamMetadata> {
+        vec![
+            ParamMetadata {
+                name: "purpose".to_string(),
+                param_type: ParamType::String,
+                required: false,
+                default_value: None,
+            },
+        ]
+    }
+}
+
 /// `output_filtering` intent — drives multi-tier capacitor bank generation
 /// for switching regulator outputs.
 ///

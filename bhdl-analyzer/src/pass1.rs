@@ -658,8 +658,16 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                     );
                     
                     // Add power domain attributes
-                    power_symbol.net_attributes = Some(NetAttribute::new_power_domain(voltage, current));
-                    
+                    let mut attr = NetAttribute::new_power_domain(voltage, current);
+
+                    // Extract stage chain: |> stage1 |> stage2
+                    let stages = power_decl.stage_names();
+                    if !stages.is_empty() {
+                        attr.set_stages(stages);
+                    }
+
+                    power_symbol.net_attributes = Some(attr);
+
                     context.current_scope_mut().insert(power_symbol);
                 }
             }
