@@ -407,7 +407,7 @@ fn expand_one(netlist: &mut Netlist, cand: &Candidate) -> Result<ExpansionResult
 
 /// Find the net that contains a given pin instance by scanning all nets' connection lists.
 /// This is more reliable than `pin_instance.net` which can be stale after net merges.
-fn find_net_for_pin_instance(netlist: &Netlist, pi_id: PinInstanceId) -> Option<NetId> {
+pub(crate) fn find_net_for_pin_instance(netlist: &Netlist, pi_id: PinInstanceId) -> Option<NetId> {
     let target = ConnectionPoint::PinInstance(pi_id);
     for (net_id, net) in &netlist.nets {
         if net.connections.contains(&target) {
@@ -519,7 +519,7 @@ pub(crate) fn connect_pin_instance_by_name(
 }
 
 /// Format a capacitance value (in farads) as a human-readable string for attributes.
-fn format_cap_value_for_attr(farads: f64) -> String {
+pub(crate) fn format_cap_value_for_attr(farads: f64) -> String {
     if farads >= 1e-3 {
         format!("{:.0}mF", farads * 1e3)
     } else if farads >= 1e-6 {

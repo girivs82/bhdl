@@ -91,6 +91,11 @@ pub fn stamp_intent_attributes(
         if intent.name == "output_filtering" {
             stamp_regulators_on_flow_nets(netlist, &flow.nets, &intent.name, &param_map, &mut stamped);
         }
+
+        // For input_filtering: stamp capacitors connected to flow nets
+        if intent.name == "input_filtering" {
+            stamp_input_caps_on_flow_nets(netlist, &flow.nets, &intent.name, &param_map, &mut stamped);
+        }
     }
 
     if stamped > 0 {
@@ -194,6 +199,75 @@ fn stamp_regulators_on_flow_nets(
                     intent_name, inst_name, net_name);
                 *stamped += 1;
             }
+        }
+    }
+}
+
+/// For `input_filtering` intents: find capacitors whose connected nets overlap
+/// with the flow path's net list, and stamp them with intent attributes.
+fn stamp_input_caps_on_flow_nets(
+    netlist: &mut Netlist,
+    flow_nets: &[String],
+    intent_name: &str,
+    param_map: &HashMap<String, String>,
+    stamped: &mut usize,
+) {
+    let flow_net_set: std::collections::HashSet<&str> = flow_nets.iter().map(|s| s.as_str()).collect();
+
+    // Find capacitor instances not already stamped
+    let cap_instances: Vec<_> = netlist.instances.iter()
+        .filter(|(_, inst)| {
+            let is_cap = inst.attributes.get("component_class")
+                .map(|c| c == "capacitor")
+                .unwrap_or(false)
+                || netlist.modules.get(inst.definition)
+                    .map(|m| m.name.starts_with("Cap"))
+                    .unwrap_or(false);
+            is_cap && !inst.attributes.contains_key("intent_name")
+        })
+        .map(|(id, inst)| (id, inst.name.clone()))
+        .collect();
+
+    for (inst_id, inst_name) in cap_instances {
+        // Find nets connected to this capacitor's pins
+        let instance = &netlist.instances[inst_id];
+        let module_def = match netlist.modules.get(instance.definition) {
+            Some(d) => d,
+            None => continue,
+        };
+
+        let mut connected_net_name: Option<String> = None;
+        for &pin_id in &module_def.pins {
+            let pi_id = netlist.pin_instances.iter()
+                .find(|(_, pi)| pi.instance == inst_id && pi.pin_def == pin_id)
+                .map(|(id, _)| id);
+            if let Some(pi_id) = pi_id {
+                let net_name = netlist.nets.iter()
+                    .find(|(_, net)| {
+                        net.connections.contains(&bhdl_netlist::ConnectionPoint::PinInstance(pi_id))
+                    })
+                    .and_then(|(_, net)| net.name.clone());
+                if let Some(ref name) = net_name {
+                    if flow_net_set.contains(name.as_str()) {
+                        connected_net_name = Some(name.clone());
+                        break;
+                    }
+                }
+            }
+        }
+
+        if let Some(ref net_name) = connected_net_name {
+            let inst = &mut netlist.instances[inst_id];
+            inst.attributes.insert("intent_name".to_string(), intent_name.to_string());
+            for (key, value) in param_map {
+                inst.attributes.insert(
+                    format!("intent_{}", key),
+                    value.clone(),
+                );
+            }
+            debug!("Stamped intent '{}' on capacitor '{}' via flow net '{}'",
+                intent_name, inst_name, net_name);
+            *stamped += 1;
         }
     }
 }

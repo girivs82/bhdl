@@ -670,6 +670,21 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
         }
     };
 
+    // Size input filter caps using actual GLACIER cascade-corrected currents
+    if let Some(ref annotations) = sim_annotations {
+        let input_sizing_results = bhdl_synthesizer::input_cap_sizer::size_input_filter_caps(
+            &mut netlist, annotations,
+        );
+        if !input_sizing_results.is_empty() {
+            println!("  {} input caps sized for {} rail(s)",
+                "✓".green(), input_sizing_results.len());
+            for r in &input_sizing_results {
+                println!("    {} {}: {:.0}µF bulk (computed from {:.0}mA across {} regulators, ripple target: {:.0}mV)",
+                    "→".cyan(), r.cap_name, r.computed_bulk_uf, r.total_load_ma, r.regulator_count, r.ripple_target_mv);
+            }
+        }
+    }
+
     // Apply GLACIER-driven physical selection (package, voltage rating, etc.)
     if let Some(ref annotations) = sim_annotations {
         let results = bhdl_synthesizer::glacier_physical_selection::apply_glacier_physical_selection(

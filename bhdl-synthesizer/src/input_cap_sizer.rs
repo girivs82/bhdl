@@ -1,0 +1,624 @@
+// Input Capacitor Sizer — post-GLACIER orchestration pass
+//
+// Uses actual cascade-corrected currents from SimulationAnnotations to size
+// input filter capacitor banks. Runs AFTER GLACIER DC (cap values don't
+// affect DC operating point) and BEFORE glacier_physical_selection.
+//
+// Algorithm:
+// 1. Find cap instances with `intent_name = "input_filtering"` and `intent_max_ripple`
+// 2. For each, find the power rail net (pin "1") and discover downstream regulators
+// 3. Look up actual cascade-corrected currents from SimulationAnnotations
+// 4. Compute multi-tier input bank via compute_input_bank()
+// 5. Update user's cap value if computed bulk > user-specified; create sibling caps
+
+use log::{debug, info};
+use bhdl_analyzer::spice_extraction::parse_unit_value;
+use bhdl_netlist::{ConnectionPoint, InstanceId, NetId, Netlist, PinInstanceId};
+use bhdl_schematic::SimulationAnnotations;
+
+use crate::input_cap_calculator::{compute_input_bank, DownstreamRegulator, RegulatorType};
+use crate::virtual_pin_expander::{
+    find_or_create_module, create_instance, connect_pin_instance_by_name,
+    find_net_for_pin_instance, format_cap_value_for_attr,
+};
+
+/// Summary of one input cap sizing result.
+#[derive(Debug)]
+pub struct InputCapSizingResult {
+    pub cap_name: String,
+    pub computed_bulk_uf: f64,
+    pub total_load_ma: f64,
+    pub regulator_count: usize,
+    pub ripple_target_mv: f64,
+    pub rms_current_ma: f64,
+    pub siblings_created: usize,
+}
+
+/// Size input filter caps using actual GLACIER simulation data.
+///
+/// Must be called **after** `build_simulation_annotations()` (which includes
+/// cascade current fixup) and **before** `glacier_physical_selection()`.
+pub fn size_input_filter_caps(
+    netlist: &mut Netlist,
+    annotations: &SimulationAnnotations,
+) -> Vec<InputCapSizingResult> {
+    // Phase 1: Find candidate input caps (immutable scan)
+    let candidates = find_input_cap_candidates(netlist);
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+
+    info!("Input cap sizer: {} candidate(s) found", candidates.len());
+
+    let mut results = Vec::new();
+
+    for cand in candidates {
+        match size_one_input_cap(netlist, annotations, &cand) {
+            Ok(result) => {
+                info!("Sized input cap '{}': {:.0}µF bulk, {:.1}mA load, {} regulators",
+                    result.cap_name, result.computed_bulk_uf, result.total_load_ma, result.regulator_count);
+                results.push(result);
+            }
+            Err(e) => {
+                log::warn!("Input cap sizing failed for '{}': {}", cand.instance_name, e);
+            }
+        }
+    }
+
+    results
+}
+
+// ── Candidate discovery ─────────────────────────────────────────────────
+
+struct InputCapCandidate {
+    instance_id: InstanceId,
+    instance_name: String,
+    #[allow(dead_code)]
+    pin1_pi: PinInstanceId,
+    pin1_net: NetId,
+    #[allow(dead_code)]
+    pin2_pi: PinInstanceId,
+    pin2_net: NetId,
+    max_ripple_v: f64,
+    user_cap_value: Option<f64>,
+    /// Stage/intent metadata to propagate to sibling caps
+    stage_name: Option<String>,
+    stage_order: Option<String>,
+    stage_rail: Option<String>,
+}
+
+fn find_input_cap_candidates(netlist: &Netlist) -> Vec<InputCapCandidate> {
+    let mut candidates = Vec::new();
+
+    for (inst_id, inst) in &netlist.instances {
+        // Must have input_filtering intent
+        match inst.attributes.get("intent_name") {
+            Some(name) if name == "input_filtering" => {}
+            _ => continue,
+        }
+
+        // Must have max_ripple
+        let max_ripple_str = match inst.attributes.get("intent_max_ripple") {
+            Some(v) => v.clone(),
+            None => continue,
+        };
+
+        let max_ripple_v = match parse_unit_value(&max_ripple_str) {
+            Some(v) if v > 0.0 => v,
+            _ => {
+                debug!("Skipping '{}': could not parse max_ripple '{}'", inst.name, max_ripple_str);
+                continue;
+            }
+        };
+
+        // Must be a capacitor
+        let is_cap = inst.attributes.get("component_class")
+            .map(|c| c == "capacitor")
+            .unwrap_or(false)
+            || netlist.modules.get(inst.definition)
+                .map(|m| m.name.starts_with("Cap"))
+                .unwrap_or(false);
+        if !is_cap {
+            debug!("Skipping '{}': not a capacitor", inst.name);
+            continue;
+        }
+
+        // Find pin instances for this cap (pin "1" and pin "2")
+        let pin_instances: Vec<_> = netlist.pin_instances.iter()
+            .filter(|(_, pi)| pi.instance == inst_id)
+            .collect();
+
+        let mut pin1_pi = None;
+        let mut pin2_pi = None;
+
+        for (pi_id, pi) in &pin_instances {
+            if let Some(pin) = netlist.pins.get(pi.pin_def) {
+                match pin.name.as_str() {
+                    "1" => pin1_pi = Some(*pi_id),
+                    "2" => pin2_pi = Some(*pi_id),
+                    _ => {}
+                }
+            }
+        }
+
+        let (pin1_pi, pin2_pi) = match (pin1_pi, pin2_pi) {
+            (Some(a), Some(b)) => (a, b),
+            _ => {
+                debug!("Skipping '{}': could not find pin 1 and pin 2", inst.name);
+                continue;
+            }
+        };
+
+        // Find nets
+        let pin1_net = match find_net_for_pin_instance(netlist, pin1_pi) {
+            Some(n) => n,
+            None => continue,
+        };
+        let pin2_net = match find_net_for_pin_instance(netlist, pin2_pi) {
+            Some(n) => n,
+            None => continue,
+        };
+
+        // Parse user's cap value
+        let user_cap_value = inst.attributes.get("value")
+            .and_then(|v| parse_unit_value(v));
+
+        candidates.push(InputCapCandidate {
+            instance_id: inst_id,
+            instance_name: inst.name.clone(),
+            pin1_pi,
+            pin1_net,
+            pin2_pi,
+            pin2_net,
+            max_ripple_v,
+            user_cap_value,
+            stage_name: inst.attributes.get("stage_name").cloned(),
+            stage_order: inst.attributes.get("stage_order").cloned(),
+            stage_rail: inst.attributes.get("stage_rail").cloned(),
+        });
+    }
+
+    candidates
+}
+
+// ── Per-candidate sizing ────────────────────────────────────────────────
+
+fn size_one_input_cap(
+    netlist: &mut Netlist,
+    annotations: &SimulationAnnotations,
+    cand: &InputCapCandidate,
+) -> Result<InputCapSizingResult, String> {
+    // pin "1" connects to the power rail; find regulators on that rail
+    let rail_net = cand.pin1_net;
+    let gnd_net = cand.pin2_net;
+
+    // Get rail voltage from annotations
+    let rail_name = netlist.nets.get(rail_net)
+        .and_then(|n| n.name.clone())
+        .unwrap_or_default();
+    let v_in = annotations.net_voltages.get(&rail_name).copied().unwrap_or(0.0);
+
+    if v_in <= 0.0 {
+        return Err(format!("Rail '{}' has no voltage in simulation", rail_name));
+    }
+
+    // Find downstream regulators on this rail
+    let regulators = find_regulators_on_rail(netlist, annotations, rail_net);
+
+    if regulators.is_empty() {
+        return Err(format!("No regulators found on rail '{}'", rail_name));
+    }
+
+    let total_load: f64 = regulators.iter().map(|r| r.i_load).sum();
+
+    // Compute input bank
+    let bank = compute_input_bank(v_in, &regulators, cand.max_ripple_v);
+
+    // Find the bulk tier capacitance
+    let bulk_tier = bank.tiers.iter().find(|t| t.role == "bulk");
+    let computed_bulk_f = bulk_tier
+        .map(|t| t.capacitance * t.count as f64)
+        .unwrap_or(100e-6);
+
+    // Determine effective bulk value: max(computed, user-specified)
+    let user_bulk_f = cand.user_cap_value.unwrap_or(0.0);
+    let effective_bulk_f = computed_bulk_f.max(user_bulk_f);
+
+    // Update the original cap's value if computed > user
+    if computed_bulk_f > user_bulk_f * 1.05 {
+        if let Some(bulk_t) = bulk_tier {
+            let inst = &mut netlist.instances[cand.instance_id];
+            let value_str = format_cap_value_for_attr(bulk_t.capacitance);
+            inst.attributes.insert("value".to_string(), value_str);
+            if bulk_t.count > 1 {
+                inst.attributes.insert("bank_count".to_string(), bulk_t.count.to_string());
+                inst.attributes.insert("bank_total".to_string(),
+                    format_cap_value_for_attr(bulk_t.capacitance * bulk_t.count as f64));
+            }
+            inst.attributes.insert("dielectric_hint".to_string(), bulk_t.dielectric_hint.to_string());
+            inst.attributes.insert("input_bank_computed".to_string(), "true".to_string());
+            debug!("Updated '{}' value to {} (was {})",
+                cand.instance_name,
+                format_cap_value_for_attr(bulk_t.capacitance),
+                cand.user_cap_value.map(|v| format_cap_value_for_attr(v)).unwrap_or_default());
+        }
+    }
+
+    // Create sibling caps for non-bulk tiers (HF bypass, mid-freq)
+    let mut siblings_created = 0;
+    let base_name = &cand.instance_name;
+
+    // Build stage attrs for siblings
+    let cap_mod = find_or_create_module(netlist, "Cap", &[("1", true), ("2", true)]);
+
+    for tier in &bank.tiers {
+        if tier.role == "bulk" {
+            // Bulk tier updates the original cap (already handled above)
+            // But if count > 1, create additional bulk instances
+            if let Some(bulk_t) = bulk_tier {
+                if bulk_t.count > 1 {
+                    for i in 1..bulk_t.count {
+                        let sibling_name = format!("{}_bulk_{}", base_name, i + 1);
+                        let created = create_sibling_cap(
+                            netlist, &sibling_name, cap_mod,
+                            rail_net, gnd_net,
+                            bulk_t.capacitance, bulk_t.dielectric_hint,
+                            "bulk", base_name, cand,
+                        )?;
+                        if created {
+                            siblings_created += 1;
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+
+        // For HF bypass and mid-freq, create the required number of sibling instances
+        for i in 0..tier.count {
+            let suffix = if tier.count == 1 {
+                format!("{}_{}", base_name, tier.role)
+            } else {
+                format!("{}_{}_{}", base_name, tier.role, i + 1)
+            };
+            let created = create_sibling_cap(
+                netlist, &suffix, cap_mod,
+                rail_net, gnd_net,
+                tier.capacitance, tier.dielectric_hint,
+                tier.role, base_name, cand,
+            )?;
+            if created {
+                siblings_created += 1;
+            }
+        }
+    }
+
+    Ok(InputCapSizingResult {
+        cap_name: cand.instance_name.clone(),
+        computed_bulk_uf: effective_bulk_f * 1e6,
+        total_load_ma: total_load * 1e3,
+        regulator_count: regulators.len(),
+        ripple_target_mv: cand.max_ripple_v * 1e3,
+        rms_current_ma: bank.rms_current * 1e3,
+        siblings_created,
+    })
+}
+
+// ── Regulator discovery on a rail ───────────────────────────────────────
+
+fn find_regulators_on_rail(
+    netlist: &Netlist,
+    annotations: &SimulationAnnotations,
+    rail_net_id: NetId,
+) -> Vec<DownstreamRegulator> {
+    let mut regs = Vec::new();
+
+    let rail_net = match netlist.nets.get(rail_net_id) {
+        Some(n) => n,
+        None => return regs,
+    };
+
+    // Scan all connections on the rail net for regulator input pins
+    for conn in &rail_net.connections {
+        let pi_id = match conn {
+            ConnectionPoint::PinInstance(pi) => *pi,
+            _ => continue,
+        };
+
+        let pi = match netlist.pin_instances.get(pi_id) {
+            Some(pi) => pi,
+            None => continue,
+        };
+
+        let inst_id = pi.instance;
+        let inst = match netlist.instances.get(inst_id) {
+            Some(i) => i,
+            None => continue,
+        };
+
+        // Is this a regulator?
+        let component_class = inst.attributes.get("component_class").map(|s| s.as_str());
+        let is_regulator = matches!(component_class, Some("switching_regulator") | Some("voltage_regulator"));
+        if !is_regulator {
+            continue;
+        }
+
+        // Is this the input power pin?
+        let pin = match netlist.pins.get(pi.pin_def) {
+            Some(p) => p,
+            None => continue,
+        };
+        let pin_name_upper = pin.name.to_uppercase();
+        let is_input_pin = pin_name_upper == "VIN" || pin_name_upper == "VI" || pin_name_upper == "IN";
+        if !is_input_pin {
+            continue;
+        }
+
+        // Get actual cascade-corrected current from GLACIER annotations
+        let i_load = annotations.instance_currents.get(&inst.name)
+            .copied()
+            .unwrap_or(0.0)
+            .abs();
+
+        if i_load < 1e-6 {
+            debug!("Skipping regulator '{}': negligible current ({:.6}A)", inst.name, i_load);
+            continue;
+        }
+
+        // Find VOUT net and voltage
+        let v_out = find_regulator_vout_voltage(netlist, annotations, inst_id);
+
+        // Determine regulator type and switching frequency
+        let reg_type = if component_class == Some("switching_regulator") {
+            RegulatorType::Switching
+        } else {
+            RegulatorType::Linear
+        };
+
+        let f_sw = inst.attributes.get("f_sw")
+            .and_then(|v| parse_unit_value(v))
+            .unwrap_or(500e3); // default 500kHz
+
+        debug!("Found regulator '{}' on rail: type={:?}, I={:.3}A, Vout={:.2}V, f_sw={:.0}kHz",
+            inst.name, reg_type, i_load, v_out, f_sw / 1e3);
+
+        regs.push(DownstreamRegulator {
+            name: inst.name.clone(),
+            reg_type,
+            v_out,
+            i_load,
+            f_sw,
+        });
+    }
+
+    regs
+}
+
+/// Find the output voltage of a regulator by looking at its VOUT/VO pin's net
+/// and reading the voltage from annotations.
+fn find_regulator_vout_voltage(
+    netlist: &Netlist,
+    annotations: &SimulationAnnotations,
+    inst_id: InstanceId,
+) -> f64 {
+    let inst = match netlist.instances.get(inst_id) {
+        Some(i) => i,
+        None => return 0.0,
+    };
+
+    // Find VOUT pin instance
+    for (pi_id, pi) in &netlist.pin_instances {
+        if pi.instance != inst_id {
+            continue;
+        }
+        let pin = match netlist.pins.get(pi.pin_def) {
+            Some(p) => p,
+            None => continue,
+        };
+        let pin_upper = pin.name.to_uppercase();
+        if pin_upper != "VOUT" && pin_upper != "VO" && pin_upper != "OUT" {
+            continue;
+        }
+
+        // Find the net this pin connects to
+        if let Some(net_id) = find_net_for_pin_instance(netlist, pi_id) {
+            if let Some(net) = netlist.nets.get(net_id) {
+                if let Some(ref name) = net.name {
+                    if let Some(&voltage) = annotations.net_voltages.get(name) {
+                        return voltage;
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback: try to read from instance attributes (e.g. "output_voltage")
+    inst.attributes.get("output_voltage")
+        .and_then(|v| parse_unit_value(v))
+        .unwrap_or(0.0)
+}
+
+// ── Sibling cap creation ────────────────────────────────────────────────
+
+fn create_sibling_cap(
+    netlist: &mut Netlist,
+    name: &str,
+    cap_mod_id: bhdl_netlist::ModuleId,
+    rail_net: NetId,
+    gnd_net: NetId,
+    capacitance: f64,
+    dielectric: &str,
+    role: &str,
+    parent_name: &str,
+    cand: &InputCapCandidate,
+) -> Result<bool, String> {
+    // Build attributes
+    let value_str = format_cap_value_for_attr(capacitance);
+    let mut attrs: Vec<(&str, String)> = vec![
+        ("component_class", "capacitor".to_string()),
+        ("value", value_str),
+        ("dielectric_hint", dielectric.to_string()),
+        ("input_bank_role", role.to_string()),
+        ("input_bank_parent", parent_name.to_string()),
+        ("vpin_role", "shunt".to_string()),
+        ("intent_name", "input_filtering".to_string()),
+    ];
+
+    if let Some(ref stage_name) = cand.stage_name {
+        attrs.push(("stage_name", stage_name.clone()));
+    }
+    if let Some(ref stage_order) = cand.stage_order {
+        attrs.push(("stage_order", stage_order.clone()));
+    }
+    if let Some(ref stage_rail) = cand.stage_rail {
+        attrs.push(("stage_rail", stage_rail.clone()));
+    }
+
+    let attr_refs: Vec<(&str, &str)> = attrs.iter()
+        .map(|(k, v)| (*k, v.as_str()))
+        .collect();
+
+    let inst_id = create_instance(netlist, name, cap_mod_id, &attr_refs);
+    let pins = netlist.create_pin_instances(inst_id)
+        .map_err(|e| format!("create pins for {}: {}", name, e))?;
+
+    // Pin 1 → rail net, Pin 2 → GND net
+    connect_pin_instance_by_name(netlist, inst_id, &pins, "1", rail_net)?;
+    connect_pin_instance_by_name(netlist, inst_id, &pins, "2", gnd_net)?;
+
+    debug!("Created input bank sibling '{}': {} {} on rail", name, format_cap_value_for_attr(capacitance), dielectric);
+
+    Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::{HashMap, HashSet};
+    use bhdl_netlist::{ModuleKind, PinDirection, PinType};
+
+    /// Build a minimal netlist with a cap on a power rail with a regulator.
+    fn make_test_netlist() -> (Netlist, InstanceId, NetId, NetId) {
+        let mut nl = Netlist::default();
+
+        // Cap module
+        let cap_mod = nl.add_module("Cap".to_string(), ModuleKind::PhysicalComponent);
+        nl.add_pin(cap_mod, "1".to_string(), PinDirection::InOut, PinType::Passive);
+        nl.add_pin(cap_mod, "2".to_string(), PinDirection::InOut, PinType::Passive);
+
+        // Regulator module
+        let reg_mod = nl.add_module("BuckRegulator".to_string(), ModuleKind::PhysicalComponent);
+        nl.add_pin(reg_mod, "VIN".to_string(), PinDirection::In, PinType::Power);
+        nl.add_pin(reg_mod, "VOUT".to_string(), PinDirection::Out, PinType::Power);
+        nl.add_pin(reg_mod, "GND".to_string(), PinDirection::Ground, PinType::Ground);
+
+        // Nets
+        let vin_net = nl.add_net(Some("VIN".to_string()));
+        let gnd_net = nl.add_net(Some("GND".to_string()));
+        let vout_net = nl.add_net(Some("V5_BUCK".to_string()));
+
+        // Cap instance: c_in on VIN with input_filtering intent
+        let mut cap_attrs = HashMap::new();
+        cap_attrs.insert("component_class".to_string(), "capacitor".to_string());
+        cap_attrs.insert("value".to_string(), "100µF".to_string());
+        cap_attrs.insert("intent_name".to_string(), "input_filtering".to_string());
+        cap_attrs.insert("intent_max_ripple".to_string(), "0.05V".to_string());
+
+        let cap_id = nl.instances.insert(bhdl_netlist::Instance {
+            name: "c_in".to_string(),
+            definition: cap_mod,
+            attributes: cap_attrs,
+        });
+        let cap_pins = nl.create_pin_instances(cap_id).unwrap();
+        nl.connect(vin_net, ConnectionPoint::PinInstance(cap_pins[0])).unwrap(); // pin 1 → VIN
+        nl.connect(gnd_net, ConnectionPoint::PinInstance(cap_pins[1])).unwrap(); // pin 2 → GND
+
+        // Regulator instance: buck on VIN→V5_BUCK
+        let mut reg_attrs = HashMap::new();
+        reg_attrs.insert("component_class".to_string(), "switching_regulator".to_string());
+        reg_attrs.insert("f_sw".to_string(), "500kHz".to_string());
+
+        let reg_id = nl.instances.insert(bhdl_netlist::Instance {
+            name: "buck".to_string(),
+            definition: reg_mod,
+            attributes: reg_attrs,
+        });
+        let reg_pins = nl.create_pin_instances(reg_id).unwrap();
+        nl.connect(vin_net, ConnectionPoint::PinInstance(reg_pins[0])).unwrap(); // VIN
+        nl.connect(vout_net, ConnectionPoint::PinInstance(reg_pins[1])).unwrap(); // VOUT
+        nl.connect(gnd_net, ConnectionPoint::PinInstance(reg_pins[2])).unwrap(); // GND
+
+        (nl, cap_id, vin_net, gnd_net)
+    }
+
+    fn make_test_annotations() -> SimulationAnnotations {
+        let mut ann = SimulationAnnotations {
+            net_voltages: HashMap::new(),
+            instance_currents: HashMap::new(),
+            instance_power: HashMap::new(),
+            power_nets: HashSet::new(),
+        };
+        ann.net_voltages.insert("VIN".to_string(), 24.0);
+        ann.net_voltages.insert("V5_BUCK".to_string(), 5.0);
+        ann.net_voltages.insert("GND".to_string(), 0.0);
+        ann.instance_currents.insert("buck".to_string(), 0.5085);
+        ann.instance_power.insert("buck".to_string(), 9.66);
+        ann
+    }
+
+    #[test]
+    fn test_find_input_cap_candidates() {
+        let (nl, _cap_id, _vin, _gnd) = make_test_netlist();
+        let candidates = find_input_cap_candidates(&nl);
+        assert_eq!(candidates.len(), 1, "should find 1 input cap candidate");
+        assert_eq!(candidates[0].instance_name, "c_in");
+        assert!((candidates[0].max_ripple_v - 0.05).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_find_regulators_on_rail() {
+        let (nl, _cap_id, vin_net, _gnd) = make_test_netlist();
+        let ann = make_test_annotations();
+        let regs = find_regulators_on_rail(&nl, &ann, vin_net);
+        assert_eq!(regs.len(), 1, "should find 1 regulator on VIN");
+        assert_eq!(regs[0].name, "buck");
+        assert_eq!(regs[0].reg_type, RegulatorType::Switching);
+        assert!((regs[0].i_load - 0.5085).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_size_input_filter_caps_creates_siblings() {
+        let (mut nl, _cap_id, _vin, _gnd) = make_test_netlist();
+        let ann = make_test_annotations();
+
+        let initial_count = nl.instances.len();
+        let results = size_input_filter_caps(&mut nl, &ann);
+
+        assert_eq!(results.len(), 1, "should size 1 input cap");
+        let r = &results[0];
+        assert_eq!(r.cap_name, "c_in");
+        assert!(r.computed_bulk_uf > 0.0, "should compute nonzero bulk");
+        assert_eq!(r.regulator_count, 1);
+        assert!(r.total_load_ma > 500.0, "should see ~508mA load");
+        assert!(r.siblings_created > 0, "should create HF bypass + mid-freq siblings");
+
+        // Should have created new instances
+        let final_count = nl.instances.len();
+        assert!(final_count > initial_count,
+            "should have more instances: {} → {}", initial_count, final_count);
+    }
+
+    #[test]
+    fn test_no_intent_no_sizing() {
+        let mut nl = Netlist::default();
+        // Empty netlist — no candidates
+        let ann = SimulationAnnotations {
+            net_voltages: HashMap::new(),
+            instance_currents: HashMap::new(),
+            instance_power: HashMap::new(),
+            power_nets: HashSet::new(),
+        };
+        let results = size_input_filter_caps(&mut nl, &ann);
+        assert!(results.is_empty(), "no candidates = no results");
+    }
+}

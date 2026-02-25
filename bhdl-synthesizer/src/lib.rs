@@ -64,6 +64,12 @@ pub mod ripple_calculator;
 // Intent attribute stamper (bridges FlowTracker intents → netlist attributes)
 pub mod intent_attribute_stamper;
 
+// Input capacitor bank physics computation
+pub mod input_cap_calculator;
+
+// Post-GLACIER input capacitor sizing pass
+pub mod input_cap_sizer;
+
 // Intent-aware component generator
 pub mod intent_aware_generator;
 

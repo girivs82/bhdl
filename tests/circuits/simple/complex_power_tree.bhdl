@@ -51,7 +51,7 @@ board ComplexPowerTree {
     tvs.A -> GND;
 
     // Input filter capacitor
-    VIN -> c_in: Cap(100µF).1 for input_filtering(bulk: true);
+    VIN -> c_in: Cap(100µF).1 for input_filtering(max_ripple: 50mV);
     c_in.2 -> GND;
 
     // === Branch 1: Buck Converter Path ===
