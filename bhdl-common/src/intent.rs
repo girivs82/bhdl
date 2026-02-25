@@ -153,6 +153,18 @@ impl IntentRegistry {
     }
 }
 
+impl std::fmt::Display for IntentValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IntentValue::Number(n, Some(unit)) => write!(f, "{}{}", n, unit),
+            IntentValue::Number(n, None) => write!(f, "{}", n),
+            IntentValue::String(s) => write!(f, "{}", s),
+            IntentValue::Boolean(b) => write!(f, "{}", b),
+            IntentValue::Identifier(id) => write!(f, "{}", id),
+        }
+    }
+}
+
 /// Helper to parse intent value from string
 impl IntentValue {
     pub fn parse_with_unit(s: &str) -> Self {

@@ -40,6 +40,11 @@ struct BankSplit {
     /// with their virtual-pin expansion parent in the schematic layout.
     vpin_parent: Option<String>,
     vpin_role: Option<String>,
+    /// Propagated stage/intent metadata so bank children share their
+    /// parent's stage coloring and intent in the schematic viewer.
+    stage_name: Option<String>,
+    stage_order: Option<String>,
+    stage_rail: Option<String>,
 }
 
 /// Format a capacitance value in Farads as a human-readable string.
@@ -224,6 +229,9 @@ pub fn apply_glacier_physical_selection(
                             dielectric: result.dielectric.clone(),
                             vpin_parent: attrs.get("vpin_parent").cloned(),
                             vpin_role: attrs.get("vpin_role").cloned(),
+                            stage_name: attrs.get("stage_name").cloned(),
+                            stage_order: attrs.get("stage_order").cloned(),
+                            stage_rail: attrs.get("stage_rail").cloned(),
                         });
 
                         results.push(PhysicalSelectionResult {
@@ -311,6 +319,17 @@ pub fn apply_glacier_physical_selection(
             }
             if let Some(ref vr) = split.vpin_role {
                 attrs.push(("vpin_role", vr));
+            }
+            // Propagate stage/intent metadata so bank children share
+            // parent's stage coloring in the schematic viewer
+            if let Some(ref sn) = split.stage_name {
+                attrs.push(("stage_name", sn));
+            }
+            if let Some(ref so) = split.stage_order {
+                attrs.push(("stage_order", so));
+            }
+            if let Some(ref sr) = split.stage_rail {
+                attrs.push(("stage_rail", sr));
             }
 
             let new_id = crate::virtual_pin_expander::create_instance(
