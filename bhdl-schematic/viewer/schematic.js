@@ -611,8 +611,175 @@
                 }
             }
 
+            // ── 7c-b. Demote secondary regulator chains from shared power sources ──
+            // When a power source (VIN) feeds multiple main-path regulators via
+            // power pins, keep the longest-chain regulator on the main band and
+            // demote the rest to parallel branches below the main path.
+
+            // Count downstream regulators reachable from a starting regulator,
+            // bridging through power source nodes (e.g., buck→buck_L→V5_BUCK→reg33).
+            function regulatorCascadeDepth(startReg) {
+                let depth = 0;
+                const visited = new Set([startReg]);
+                const queue = [startReg];
+                while (queue.length > 0) {
+                    const cur = queue.shift();
+                    // Follow allForward edges (direct driver→sink connections)
+                    for (const next of (allForward.get(cur) || [])) {
+                        if (visited.has(next)) continue;
+                        visited.add(next);
+                        const inst = instMap.get(next);
+                        if (inst && inst.category === 'regulator') {
+                            depth++;
+                            queue.push(next);
+                        } else if (inst && inst.category === 'inductor') {
+                            // Follow through inductors (buck expansion: buck→L→power net)
+                            queue.push(next);
+                        }
+                    }
+                    // Bridge through power source nodes: if cur is a sink on a
+                    // power-source-driven net, follow to other sinks on that net
+                    for (const pNet of processedNets) {
+                        if (pNet.driver.type !== 'power_source') continue;
+                        if (!pNet.sinks.some(s => s.name === cur)) continue;
+                        for (const sink of pNet.sinks) {
+                            if (visited.has(sink.name)) continue;
+                            visited.add(sink.name);
+                            const inst = instMap.get(sink.name);
+                            if (inst && inst.category === 'regulator') {
+                                depth++;
+                                queue.push(sink.name);
+                            } else if (inst && inst.category === 'inductor') {
+                                queue.push(sink.name);
+                            }
+                        }
+                    }
+                }
+                return depth;
+            }
+
+            for (const psNode of powerSourceNodes) {
+                const psNet = processedNets.find(net =>
+                    net.driver.type === 'power_source' && net.driver.name === psNode.id
+                );
+                if (!psNet) continue;
+
+                const regSinks = psNet.sinks.filter(s => {
+                    if (!mainPathNames.has(s.name)) return false;
+                    const inst = instMap.get(s.name);
+                    return inst && inst.category === 'regulator';
+                }).map(s => s.name);
+
+                if (regSinks.length <= 1) continue;
+
+                // Score by regulator cascade depth (downstream regulators reachable)
+                // Tiebreaker: earlier in mainPathOrder = more primary (BFS visit order)
+                const scored = regSinks.map(name => {
+                    const depth = regulatorCascadeDepth(name);
+                    return { name, depth };
+                });
+                scored.sort((a, b) => {
+                    if (b.depth !== a.depth) return b.depth - a.depth;
+                    return mainPathOrder.indexOf(a.name) - mainPathOrder.indexOf(b.name);
+                });
+                const keepName = scored[0].name;
+
+                for (let i = 1; i < scored.length; i++) {
+                    const demotedName = scored[i].name;
+                    mainPathNames.delete(demotedName);
+                    const idx = mainPathOrder.indexOf(demotedName);
+                    if (idx >= 0) mainPathOrder.splice(idx, 1);
+                    // Junction is the power source node — branches are placed
+                    // near the power source they fan out from, not near keepName.
+                    parallelBranchJunctions.set(demotedName, psNode.id);
+                    branchNames.push({
+                        name: demotedName,
+                        junctionName: psNode.id,
+                        junctionSide: 'left',
+                        isParallel: true
+                    });
+                }
+            }
+
+            // ── 7c-c. Cascade demotion for downstream nodes of power-source-demoted regulators ──
+            // When a regulator is demoted (e.g., reg5aux), its downstream chain
+            // (__pwr_V5_AUX__ → reg18 → ...) must also leave the main band.
+            for (const [demotedName, keepName] of parallelBranchJunctions) {
+                const inst = instMap.get(demotedName);
+                if (!(inst && inst.category === 'regulator')) continue;
+
+                const toVisit = [demotedName];
+                const visited = new Set([demotedName]);
+                while (toVisit.length > 0) {
+                    const cur = toVisit.pop();
+                    for (const next of (allForward.get(cur) || [])) {
+                        if (visited.has(next)) continue;
+                        visited.add(next);
+                        // Demote if still on main band (components or power sources)
+                        if (mainPathNames.has(next) && next !== keepName) {
+                            mainPathNames.delete(next);
+                            const idx = mainPathOrder.indexOf(next);
+                            if (idx >= 0) mainPathOrder.splice(idx, 1);
+                            // Cascade-demoted regulators become sub-heads in branch layout
+                            const nextInst = instMap.get(next);
+                            if (nextInst && nextInst.category === 'regulator') {
+                                parallelBranchJunctions.set(next, demotedName);
+                            }
+                            branchNames.push({
+                                name: next,
+                                junctionName: keepName,
+                                junctionSide: 'left',
+                                isParallel: true
+                            });
+                        }
+                        // Always continue walking — path may go through intermediate
+                        // nodes (power sources) not in mainPathNames but leading to
+                        // downstream main-path nodes.
+                        toVisit.push(next);
+                    }
+                }
+            }
+
+            // ── 7c-d. Demote power source nodes of cascade-demoted regulators ──
+            // allForward doesn't have edges from reg → __pwr_RAIL__ (power source
+            // is the net driver, not the regulator). Explicitly find and demote the
+            // output power source nodes so step 7e can move their sinks to branches.
+            {
+                const cascadeDemoted = new Set(branchNames.filter(b => {
+                    const inst = instMap.get(b.name);
+                    return inst && inst.category === 'regulator';
+                }).map(b => b.name));
+                for (const regName of cascadeDemoted) {
+                    const regBranch = branchNames.find(b => b.name === regName);
+                    if (!regBranch) continue;
+                    // Find power source net-drivers where reg is a sink
+                    for (const net of processedNets) {
+                        if (net.driver.type !== 'power_source') continue;
+                        if (!net.sinks.some(s => s.name === regName)) continue;
+                        const driverName = net.driver.name;
+                        // Only demote if still on main band (guard prevents double-demotion)
+                        if (!mainPathNames.has(driverName)) continue;
+                        mainPathNames.delete(driverName);
+                        const idx = mainPathOrder.indexOf(driverName);
+                        if (idx >= 0) mainPathOrder.splice(idx, 1);
+                        branchNames.push({
+                            name: driverName,
+                            junctionName: regBranch.junctionName,
+                            junctionSide: 'left',
+                            isParallel: true
+                        });
+                    }
+                }
+            }
+
             // Move downstream shunts of demoted components into the branch group
             for (const [demotedName, keepName] of parallelBranchJunctions) {
+                // Use the demoted component's own branch junction (e.g., reg18's
+                // junction is __pwr_VIN__), not keepName which is the cascade parent
+                // (e.g., reg5aux).  This ensures children end up in the same
+                // top-level branch group as their regulator.
+                const demotedBranch = branchNames.find(b => b.name === demotedName);
+                const childJunction = demotedBranch ? demotedBranch.junctionName : keepName;
                 for (let si = shuntNames.length - 1; si >= 0; si--) {
                     const shunt = shuntNames[si];
                     const isDriven = processedNets.some(net =>
@@ -623,13 +790,14 @@
                         shuntNames.splice(si, 1);
                         branchNames.push({
                             name: shunt.name,
-                            junctionName: keepName,
+                            junctionName: childJunction,
                             junctionSide: 'left',
                             isParallel: true
                         });
                     }
                 }
             }
+
         }
 
         // ── 7d. Demote dead-end main-path loads to shunts ──
@@ -653,6 +821,8 @@
                     const inst = instMap.get(s.name);
                     // Don't demote expansion series children
                     if (inst && inst.expansion_role === 'series') continue;
+                    // Don't demote regulators — they define power domains and belong on main path
+                    if (inst && inst.category === 'regulator') continue;
 
                     // Check forward depth: does this sink reach other main-path nodes?
                     const fwd = allForward.get(s.name) || [];
@@ -665,8 +835,9 @@
                     if (idx >= 0) mainPathOrder.splice(idx, 1);
 
                     // Find the driver (junction point) for the shunt
-                    const driverName = net.driver.type === 'power_source' ? null : net.driver.name;
-                    const junctionName = driverName && mainPathNames.has(driverName) ? driverName : null;
+                    const junctionName = net.driver.type === 'power_source'
+                        ? net.driver.name
+                        : (mainPathNames.has(net.driver.name) ? net.driver.name : null);
 
                     shuntNames.push({
                         name: s.name,
@@ -711,6 +882,76 @@
             if (!connectsToMainOrPower) {
                 branchNames.push({ name: item.name });
                 shuntNames.splice(i, 1);
+            }
+        }
+
+        // ── 7e. Propagate branch membership through net drivers ──
+        // Components driven by branch members should also be in the branch group.
+        // E.g., reg5aux (branch) drives c5a → c5a should be branch too.
+        // Also fix undefined junctions on existing branch members.
+        // Repeat until stable (handles chains like reg5aux → reg18 → c18).
+        {
+            const branchSet = new Set(branchNames.map(b => b.name));
+            const branchJunctionFor = new Map(branchNames.map(b => [b.name, b.junctionName]));
+            const chainChildren = new Set(shuntChainDown.values());
+            let changed = true;
+            while (changed) {
+                changed = false;
+                for (const net of processedNets) {
+                    if (!branchSet.has(net.driver.name)) continue;
+                    const driverJunction = branchJunctionFor.get(net.driver.name);
+                    if (!driverJunction) continue;
+
+                    for (const sink of net.sinks) {
+                        // Skip shuntChainDown children — they'll be positioned
+                        // by the post-branch stacking pass, not branch chain ordering
+                        if (chainChildren.has(sink.name)) continue;
+
+                        if (branchSet.has(sink.name)) {
+                            // Already in branch; fix undefined junction
+                            const existing = branchNames.find(b => b.name === sink.name);
+                            if (existing && !existing.junctionName) {
+                                existing.junctionName = driverJunction;
+                                existing.junctionSide = 'left';
+                                existing.isParallel = true;
+                                branchJunctionFor.set(sink.name, driverJunction);
+                                changed = true;
+                            }
+                            continue;
+                        }
+
+                        // Move from shuntNames
+                        const si = shuntNames.findIndex(s => s.name === sink.name);
+                        if (si >= 0) {
+                            shuntNames.splice(si, 1);
+                            branchNames.push({
+                                name: sink.name,
+                                junctionName: driverJunction,
+                                junctionSide: 'left',
+                                isParallel: true
+                            });
+                            branchSet.add(sink.name);
+                            branchJunctionFor.set(sink.name, driverJunction);
+                            changed = true;
+                            continue;
+                        }
+
+                        // Move from decouplingNames
+                        const di = decouplingNames.findIndex(d => d.name === sink.name);
+                        if (di >= 0) {
+                            decouplingNames.splice(di, 1);
+                            branchNames.push({
+                                name: sink.name,
+                                junctionName: driverJunction,
+                                junctionSide: 'left',
+                                isParallel: true
+                            });
+                            branchSet.add(sink.name);
+                            branchJunctionFor.set(sink.name, driverJunction);
+                            changed = true;
+                        }
+                    }
+                }
             }
         }
 
@@ -1084,6 +1325,22 @@
             }
         }
 
+        // Bank children inherit their parent's junction so siblings stay grouped
+        {
+            const itemByName = new Map();
+            for (const item of [...shuntNames, ...decouplingNames]) itemByName.set(item.name, item);
+            for (const item of [...shuntNames, ...decouplingNames]) {
+                const inst = instMap.get(item.name);
+                if (!inst || !inst.bank_parent) continue;
+                const parentItem = itemByName.get(inst.bank_parent);
+                if (parentItem && parentItem.junctionName) {
+                    item.junctionName = parentItem.junctionName;
+                    item.junctionSide = parentItem.junctionSide || 'right';
+                    item.junctionNet = parentItem.junctionNet;
+                }
+            }
+        }
+
         // Redirect non-expansion shunts away from series expansion children.
         // If a regular shunt/decoupling junctions at a series child (e.g., L1),
         // move it past the expansion group so it doesn't overlap visually.
@@ -1176,8 +1433,13 @@
             }
         }
 
-        // Group shunts/decoupling by (junctionName, junctionSide) for gap computation
-        const verticalDropItems = [...shuntNames, ...decouplingNames];
+        // Group shunts/decoupling by (junctionName, junctionSide) for gap computation.
+        // Exclude shuntChainDown children — they'll be positioned by the chain stacking
+        // pass (line ~1803), not by boustrophedon placement.
+        const chainChildSet = new Set(shuntChainDown.values());
+        const verticalDropItems = [...shuntNames, ...decouplingNames].filter(
+            item => !chainChildSet.has(item.name)
+        );
         const dropGroups = new Map();
         const shuntGroupSide = new Map(); // itemName → 'left' | 'right'
         for (const item of verticalDropItems) {
@@ -1641,17 +1903,26 @@
                 }
             }
 
-            // Regular items (not in multi-row groups): Y-bucket alignment
+            // Regular items (not in multi-row groups): per-drop-group GND alignment
+            // (Grouping by Y-bucket caused VIN shunts to get the same gndTargetY
+            //  as V5_BUCK shunts with chain children, making GND bars cross through
+            //  branch regulators below the VIN shunt row.)
             const regularDrop = allDrop.filter(i => !multiRowHandled.has(i.name));
-            const byRow = new Map();
-            for (const item of regularDrop) {
-                const y = Math.round(positions.get(item.name).y);
-                if (!byRow.has(y)) byRow.set(y, []);
-                byRow.get(y).push(item);
+            const itemToGroupKey = new Map();
+            for (const [key, group] of dropGroups) {
+                for (const item of group.items) {
+                    itemToGroupKey.set(item.name, key);
+                }
             }
-            for (const [, rowItems] of byRow) {
+            const byGroup = new Map();
+            for (const item of regularDrop) {
+                const key = itemToGroupKey.get(item.name) || '__ungrouped__';
+                if (!byGroup.has(key)) byGroup.set(key, []);
+                byGroup.get(key).push(item);
+            }
+            for (const [, groupItems] of byGroup) {
                 let maxBottomY = 0;
-                for (const item of rowItems) {
+                for (const item of groupItems) {
                     const pos = positions.get(item.name);
                     if (!pos) continue;
                     let bottomY = pos.y + pos.h;
@@ -1665,7 +1936,7 @@
                     maxBottomY = Math.max(maxBottomY, bottomY);
                 }
                 if (maxBottomY > 0) {
-                    for (const item of rowItems) {
+                    for (const item of groupItems) {
                         const pos = positions.get(item.name);
                         if (pos) pos.gndTargetY = maxBottomY;
                         if (shuntChainDown.has(item.name)) {
@@ -1712,38 +1983,114 @@
             }
 
             if (isParallel) {
-                // Parallel sub-chains: each head (from parallelBranchJunctions) starts a new row
-                // at the same X, stacked vertically. Shunt tails drop below their head.
-                let chainX = bx;
-                let chainY = by;
-                let prevPos = null;
-                let maxBottom = by;
+                // Parallel sub-chains: each head (from parallelBranchJunctions) starts
+                // a new row. Shunt children of each head are placed HORIZONTALLY in a
+                // row below the head, like main-band shunts (not stacked vertically).
 
-                for (const item of ordered) {
-                    const sz = offPathSizes.get(item.name) || { w: INSTANCE_BOX_MIN_WIDTH, h: 60 };
-                    const isHead = parallelBranchJunctions.has(item.name);
+                // Group items by which head drives them (via allForward reachability)
+                const heads = group.items.filter(i => parallelBranchJunctions.has(i.name));
+                const nonHeads = group.items.filter(i => !parallelBranchJunctions.has(i.name));
 
-                    if (isHead) {
-                        // New sub-chain row
-                        if (prevPos) chainY = maxBottom + 60;
-                        chainX = bx;
-                        positions.set(item.name, { x: chainX, y: chainY, w: sz.w, h: sz.h });
-                        prevPos = { x: chainX, y: chainY, w: sz.w, h: sz.h };
-                        maxBottom = Math.max(maxBottom, chainY + sz.h);
-                        chainX += sz.w + 120;
-                    } else if (shuntInstNames.has(item.name) && prevPos) {
-                        const portDotX = prevPos.x + prevPos.w + PORT_STUB_LEN + 20;
-                        const dropX = portDotX - sz.w / 2;
-                        const dropY = prevPos.y + prevPos.h + SHUNT_DROP;
-                        positions.set(item.name, { x: dropX, y: dropY, w: sz.w, h: sz.h });
-                        maxBottom = Math.max(maxBottom, dropY + sz.h);
-                    } else {
-                        positions.set(item.name, { x: chainX, y: chainY, w: sz.w, h: sz.h });
-                        prevPos = { x: chainX, y: chainY, w: sz.w, h: sz.h };
-                        maxBottom = Math.max(maxBottom, chainY + sz.h);
-                        chainX += sz.w + 120;
+                // No heads: place items horizontally below the junction node
+                if (heads.length === 0) {
+                    const shuntRowY = by;
+                    let sx = bx;
+                    for (const item of nonHeads) {
+                        const sz = offPathSizes.get(item.name) || { w: INSTANCE_BOX_MIN_WIDTH, h: 60 };
+                        positions.set(item.name, { x: sx, y: shuntRowY, w: sz.w, h: sz.h });
+                        const thisOH = shuntItemOverhang(item.name);
+                        sx += sz.w + Math.max(MIN_ITEM_GAP_BASE, thisOH.right + ANNOTATION_PAD);
+                    }
+                } else {
+
+                // Build head→children mapping: BFS through allForward (transitive reachability)
+                const headChildren = new Map(); // headName → [items]
+                const itemOwner = new Map(); // itemName → headName
+                for (const h of heads) {
+                    headChildren.set(h.name, []);
+                }
+                const nonHeadNames = new Set(nonHeads.map(i => i.name));
+                const headSet = new Set(heads.map(h => h.name));
+                for (const h of heads) {
+                    const queue = [h.name];
+                    const seen = new Set([h.name]);
+                    while (queue.length > 0) {
+                        const cur = queue.shift();
+                        for (const next of (allForward.get(cur) || [])) {
+                            if (seen.has(next)) continue;
+                            seen.add(next);
+                            if (nonHeadNames.has(next) && !itemOwner.has(next)) {
+                                itemOwner.set(next, h.name);
+                                headChildren.get(h.name).push(nonHeads.find(i => i.name === next));
+                            }
+                            // Don't cross into other heads' territory
+                            if (!headSet.has(next)) queue.push(next);
+                        }
                     }
                 }
+                // Orphan items: assign to closest head (if any)
+                for (const item of nonHeads) {
+                    if (!itemOwner.has(item.name) && heads.length > 0) {
+                        const lastHead = heads[heads.length - 1];
+                        headChildren.get(lastHead.name).push(item);
+                    }
+                }
+
+                // Order heads by topology (first head in processedNets order)
+                const headOrder = [];
+                // Simple: use the net-connectivity order from processedNets
+                const visited = new Set();
+                for (const h of heads) {
+                    if (visited.has(h.name)) continue;
+                    visited.add(h.name);
+                    headOrder.push(h);
+                    // If this head's forward chain contains another head, that head comes after
+                    for (const fwd of (allForward.get(h.name) || [])) {
+                        if (headSet.has(fwd) && !visited.has(fwd)) {
+                            visited.add(fwd);
+                            headOrder.push(heads.find(hh => hh.name === fwd));
+                        }
+                    }
+                }
+                // Add remaining heads
+                for (const h of heads) {
+                    if (!visited.has(h.name)) headOrder.push(h);
+                }
+
+                // Position heads HORIZONTALLY (like a mini main-band) with
+                // children as vertical drops below each head — mirrors the
+                // clean main-band pattern of reg33/buck.
+                let hx = bx;
+                for (const head of headOrder) {
+                    const headSz = offPathSizes.get(head.name) || { w: INSTANCE_BOX_MIN_WIDTH, h: 60 };
+                    positions.set(head.name, { x: hx, y: by, w: headSz.w, h: headSz.h });
+
+                    // Children drop vertically below this head, like main-band shunts
+                    const children = headChildren.get(head.name) || [];
+                    if (children.length > 0) {
+                        const dropY = by + headSz.h + SHUNT_DROP;
+                        // Center first child under head's output port
+                        const portX = hx + headSz.w + PORT_STUB_LEN;
+                        let sx = portX - (offPathSizes.get(children[0].name) || { w: INSTANCE_BOX_MIN_WIDTH }).w / 2;
+                        for (let si = 0; si < children.length; si++) {
+                            const shItem = children[si];
+                            const sz = offPathSizes.get(shItem.name) || { w: INSTANCE_BOX_MIN_WIDTH, h: 60 };
+                            positions.set(shItem.name, { x: sx, y: dropY, w: sz.w, h: sz.h });
+                            const thisOH = shuntItemOverhang(shItem.name);
+                            const nextOH = si + 1 < children.length ? shuntItemOverhang(children[si + 1].name) : { left: 0, right: 0 };
+                            sx += sz.w + Math.max(MIN_ITEM_GAP_BASE, thisOH.right + nextOH.left + ANNOTATION_PAD);
+                        }
+                        // Advance hx past the rightmost child
+                        const lastChild = children[children.length - 1];
+                        const lastSz = offPathSizes.get(lastChild.name) || { w: INSTANCE_BOX_MIN_WIDTH };
+                        const lastPos = positions.get(lastChild.name);
+                        const lastOH = shuntItemOverhang(lastChild.name);
+                        hx = Math.max(hx + headSz.w, lastPos.x + lastSz.w + lastOH.right) + 60;
+                    } else {
+                        hx += headSz.w + 60;
+                    }
+                }
+                } // end else (has heads)
             } else {
                 let prevBranchPos = null;
                 for (const item of ordered) {
@@ -1758,6 +2105,90 @@
                         prevBranchPos = { x: bx, y: by, w: sz.w, h: sz.h };
                         bx += sz.w + 120;
                     }
+                }
+            }
+        }
+
+        // ── 10c-fix. Push main-band right if branches extend into next element ──
+        // After branch placement, some branch children (e.g., reg18's children)
+        // may extend past the next main-band element (e.g., into buck expansion).
+        // Detect this and shift main-band elements right to avoid overlap.
+        {
+            // For each branch group, find rightmost position of any branch child
+            // (including chain children below branch items).
+            for (const [, group] of branchGroups) {
+                let branchRight = 0;
+                for (const item of group.items) {
+                    const pos = positions.get(item.name);
+                    if (!pos) continue;
+                    branchRight = Math.max(branchRight, pos.x + pos.w);
+                    // Include chain children
+                    let cur = item.name;
+                    while (shuntChainDown.has(cur)) {
+                        cur = shuntChainDown.get(cur);
+                        const cPos = positions.get(cur);
+                        if (cPos) branchRight = Math.max(branchRight, cPos.x + cPos.w);
+                    }
+                }
+                if (branchRight === 0) continue;
+
+                // Also account for annotation overhang of rightmost items
+                for (const item of group.items) {
+                    const pos = positions.get(item.name);
+                    if (!pos) continue;
+                    const oh = shuntItemOverhang(item.name);
+                    branchRight = Math.max(branchRight, pos.x + pos.w + oh.right);
+                }
+
+                // Find the junction's position in mainBandOrder to locate next node
+                const jIdx = mainBandOrder.indexOf(group.junctionName);
+                if (jIdx < 0) continue;
+
+                // Find the next main-band element (or power source) to the right
+                const BRANCH_MAIN_PAD = 40;
+                for (let ni = jIdx + 1; ni < mainBandOrder.length; ni++) {
+                    const nextPos = positions.get(mainBandOrder[ni]);
+                    if (!nextPos) continue;
+                    // Also check for local power sources positioned before this node
+                    let leftEdge = nextPos.x;
+                    for (const ps of powerSourceNodes) {
+                        const psPos = positions.get(ps.id);
+                        if (psPos && psPos.x < nextPos.x && psPos.x > branchRight - BRANCH_MAIN_PAD) {
+                            leftEdge = Math.min(leftEdge, psPos.x);
+                        }
+                    }
+
+                    if (branchRight + BRANCH_MAIN_PAD > leftEdge) {
+                        const shift = branchRight + BRANCH_MAIN_PAD - leftEdge;
+                        // Shift this node and everything after it to the right
+                        for (let si = ni; si < mainBandOrder.length; si++) {
+                            const pos = positions.get(mainBandOrder[si]);
+                            if (pos) pos.x += shift;
+                        }
+                        // Also shift power sources that are at or after this position
+                        for (const ps of powerSourceNodes) {
+                            const psPos = positions.get(ps.id);
+                            if (psPos && psPos.x >= leftEdge) {
+                                psPos.x += shift;
+                            }
+                        }
+                        // Also shift off-path items attached to shifted nodes
+                        for (const item of [...shuntNames, ...decouplingNames]) {
+                            const shiftedNodes = new Set(mainBandOrder.slice(ni));
+                            if (shiftedNodes.has(item.junctionName)) {
+                                const iPos = positions.get(item.name);
+                                if (iPos) iPos.x += shift;
+                                // Chain children too
+                                let cur = item.name;
+                                while (shuntChainDown.has(cur)) {
+                                    cur = shuntChainDown.get(cur);
+                                    const cPos = positions.get(cur);
+                                    if (cPos) cPos.x += shift;
+                                }
+                            }
+                        }
+                    }
+                    break; // only check next neighbor
                 }
             }
         }
@@ -1936,6 +2367,28 @@
                         }
                     }
                 }
+            }
+        }
+
+        // ── 10e. Re-stack shuntChainDown children of branch members ──
+        // The initial stacking pass (before branch positioning) skips children
+        // whose parents weren't positioned yet. Now that branches are placed and
+        // overlap resolution has finalized parent positions, re-stack children
+        // below their branch-member parents.
+        {
+            const branchNameSet = new Set(branchNames.map(b => b.name));
+            for (const [parent, child] of shuntChainDown) {
+                if (!branchNameSet.has(parent)) continue;
+                const parentPos = positions.get(parent);
+                if (!parentPos) continue;
+                const childSz = offPathSizes.get(child) || { w: INSTANCE_BOX_MIN_WIDTH, h: 60 };
+                const cx = parentPos.x + parentPos.w / 2;
+                positions.set(child, {
+                    x: cx - childSz.w / 2,
+                    y: parentPos.y + parentPos.h + SHUNT_DROP,
+                    w: childSz.w,
+                    h: childSz.h
+                });
             }
         }
 
@@ -2207,15 +2660,94 @@
                         }
                         if (crossings > 0) {
                             const sinkLayout = elByName.get(sinkElName);
-                            if (sinkLayout) {
+                            const sinkInst = instMap.get(sinkElName);
+                            const psNode = powerSourceNodes.find(ps => ps.id === driverElName);
+
+                            // Regulators: create a local power source symbol to the
+                            // left of the VIN pin with a short wire, identical to how
+                            // the original power source feeds nearby regulators.
+                            if (sinkInst && sinkInst.category === 'regulator' && sinkLayout && toPos) {
+                                const label = psNode ? psNode.label : (net.name || 'VCC');
+                                const voltage = psNode ? psNode.voltage : net.voltage;
+                                // Size matches original power source nodes
+                                const localPsW = measureTextWidth(label, FONT_SIZE) + 20;
+                                const localPsH = 30;
+                                const localPsX = toPos.x - PORT_STUB_LEN - localPsW;
+                                const localPsY = toPos.y - localPsH / 2;
+                                const localPsName = `__local_pwr_${net.name}_${sinkElName}__`;
+                                const outPort = { name: 'out', x: localPsX + localPsW, y: toPos.y };
+                                layoutElements.push({
+                                    x: localPsX, y: localPsY, w: localPsW, h: localPsH,
+                                    name: localPsName, type: 'power_source', label,
+                                    inputPorts: [], outputPorts: [outPort],
+                                    gndStubs: [], pgStubs: [], pwrStubs: []
+                                });
+                                elByName.set(localPsName, layoutElements[layoutElements.length - 1]);
+                                // Short wire: local power source → regulator VIN
+                                const localFrom = { x: outPort.x, y: outPort.y };
+                                const localTo = { x: toPos.x, y: toPos.y };
+                                layoutWires.push({
+                                    from: localFrom, to: localTo,
+                                    netName: net.name, isPower: true, width: 1,
+                                    netClass: net.net_class || 'power',
+                                    sinkElName, sourceElName: localPsName,
+                                    driverIsPowerSource: true,
+                                    segments: [{ x1: outPort.x, y1: outPort.y, x2: toPos.x, y2: toPos.y }]
+                                });
+                            } else if (sinkLayout) {
+                                // Non-regulators: power stub flag on top of component
                                 if (!sinkLayout.pwrStubs) sinkLayout.pwrStubs = [];
-                                const psNode = powerSourceNodes.find(ps => ps.id === driverElName);
                                 sinkLayout.pwrStubs.push({
                                     port: sink.port,
                                     netName: net.name,
                                     voltage: psNode ? psNode.voltage : net.voltage
                                 });
                             }
+                            continue;
+                        }
+                    }
+
+                    // Distance-based: power source far from regulator → local power source
+                    // when branch elements (other regulators) occupy the gap between them.
+                    // Pure shunt gaps (cap banks on the same net) don't trigger this.
+                    // Also: branch regulators (off main band) always get a local power
+                    // source — their wire would cross through the shunt row.
+                    const sinkInst2 = instMap.get(sinkElName);
+                    const sinkLayout2 = elByName.get(sinkElName);
+                    if (sinkInst2 && sinkInst2.category === 'regulator' && sinkLayout2 && toPos) {
+                        const isBranchReg = !mainBandNodes.has(sinkElName);
+                        const xDist = Math.abs(toPos.x - fromPos.x);
+                        const minX2 = Math.min(fromPos.x, toPos.x);
+                        const maxX2 = Math.max(fromPos.x, toPos.x);
+                        const hasBranchBetween = branchNames.some(b => {
+                            const pos = positions.get(b.name);
+                            return pos && pos.x > minX2 && pos.x < maxX2;
+                        });
+                        if (isBranchReg || (xDist > 200 && hasBranchBetween)) {
+                            const psNode = powerSourceNodes.find(ps => ps.id === driverElName);
+                            const label = psNode ? psNode.label : (net.name || 'VCC');
+                            const localPsW = measureTextWidth(label, FONT_SIZE) + 20;
+                            const localPsH = 30;
+                            const localPsX = toPos.x - PORT_STUB_LEN - localPsW;
+                            const localPsY = toPos.y - localPsH / 2;
+                            const localPsName = `__local_pwr_${net.name}_${sinkElName}__`;
+                            const outPort = { name: 'out', x: localPsX + localPsW, y: toPos.y };
+                            layoutElements.push({
+                                x: localPsX, y: localPsY, w: localPsW, h: localPsH,
+                                name: localPsName, type: 'power_source', label,
+                                inputPorts: [], outputPorts: [outPort],
+                                gndStubs: [], pgStubs: [], pwrStubs: []
+                            });
+                            elByName.set(localPsName, layoutElements[layoutElements.length - 1]);
+                            layoutWires.push({
+                                from: { x: outPort.x, y: outPort.y },
+                                to: { x: toPos.x, y: toPos.y },
+                                netName: net.name, isPower: true, width: 1,
+                                netClass: net.net_class || 'power',
+                                sinkElName, sourceElName: localPsName,
+                                driverIsPowerSource: true,
+                                segments: [{ x1: outPort.x, y1: outPort.y, x2: toPos.x, y2: toPos.y }]
+                            });
                             continue;
                         }
                     }
