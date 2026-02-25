@@ -86,10 +86,31 @@
         groundStub: '#888888'
     };
 
+    const STAGE_COLORS = {
+        input_protection: '#FF9800', overvoltage_protection: '#FF9800',
+        esd_protection: '#FF9800', overvoltage_clamp: '#FF9800',
+        input_filtering: '#42A5F5', output_filtering: '#42A5F5',
+        noise_filtering: '#42A5F5', anti_alias: '#42A5F5', emi_filtering: '#42A5F5',
+        regulation: '#66BB6A',
+        signal_buffering: '#26C6DA', level_shifting: '#26C6DA',
+        precision_measurement: '#AB47BC', control_loop: '#AB47BC',
+        current_limiting: '#FFA726',
+        loading: '#8D6E63',
+    };
+    function getStageColor(el) {
+        if (el.intent && STAGE_COLORS[el.intent]) return STAGE_COLORS[el.intent];
+        if (el.stageName && STAGE_COLORS[el.stageName]) return STAGE_COLORS[el.stageName];
+        if (el.category === 'regulator') return STAGE_COLORS.regulation;
+        return null;
+    }
+
     let clockSignals = new Set();
     let resetSignals = new Set();
     let layoutElements = [];
     let layoutWires = [];
+    let layoutStageZones = [];
+    let activeFlowSet = null;
+    let activeFlowNets = null;
 
     function resizeCanvas() {
         const w = canvas.clientWidth, h = canvas.clientHeight;
@@ -2518,7 +2539,7 @@
             const isExpShunt = inst.expansion_parent
                 && inst.expansion_role && inst.expansion_role !== 'series';
             const shuntSide = shuntGroupSide.get(name) || null;
-            layoutElements.push({ x: pos.x, y: pos.y, w: pos.w, h: pos.h, name, handleName, refdes, displayName, _isExpShunt: !!isExpShunt, shuntSide, type: 'instance', entityType: inst.entity_type, parameters: inst.parameters, category: inst.category, isShunt: isShuntLike, isFlipped: flippedNames.has(name), inputPorts: instInPorts, outputPorts: instOutPorts, gndStubs: gndStubsByInst.get(name) || [], pwrStubs: pwrStubsByInst.get(name) || [], pgStubs: [], line: inst.line, simCurrent, simPower: simPowerW, gndTargetY: pos.gndTargetY, _rowIdx: pos._rowIdx || 0, _busX: pos._busX, _busY: pos._busY, _busLeftX: pos._busLeftX, _connections: inst.connections });
+            layoutElements.push({ x: pos.x, y: pos.y, w: pos.w, h: pos.h, name, handleName, refdes, displayName, _isExpShunt: !!isExpShunt, shuntSide, type: 'instance', entityType: inst.entity_type, parameters: inst.parameters, category: inst.category, isShunt: isShuntLike, isFlipped: flippedNames.has(name), inputPorts: instInPorts, outputPorts: instOutPorts, gndStubs: gndStubsByInst.get(name) || [], pwrStubs: pwrStubsByInst.get(name) || [], pgStubs: [], line: inst.line, simCurrent, simPower: simPowerW, gndTargetY: pos.gndTargetY, _rowIdx: pos._rowIdx || 0, _busX: pos._busX, _busY: pos._busY, _busLeftX: pos._busLeftX, _connections: inst.connections, stageName: inst.stage_name || null, stageOrder: inst.stage_order != null ? inst.stage_order : null, stageRail: inst.stage_rail || null, intent: inst.intent || null, flowIds: inst.flow_ids || [] });
         }
 
         // Entity output
@@ -3040,6 +3061,9 @@
         layoutElements._multiRowBusWires = multiRowBusWires;
         layoutElements._multiRowObstacles = multiRowObstacles;
         layoutElements._multiRowItemNames = multiRowItemNames;
+
+        // Build stage zone bounding regions for rendering
+        buildStageZones();
     }
 
     /** Order branch items by following net connections (graph chain) */
@@ -3071,6 +3095,72 @@
         }
         for (const item of items) { if (!visited.has(item.name)) ordered.push(item); }
         return ordered;
+    }
+
+    /** Build stage zone bounding regions from layoutElements with stage data. */
+    function buildStageZones() {
+        layoutStageZones = [];
+        const groups = new Map(); // key: "rail|stageName" → { els, order, color }
+        for (const el of layoutElements) {
+            if (el.type !== 'instance' || !el.stageName || !el.stageRail) continue;
+            const key = el.stageRail + '|' + el.stageName;
+            if (!groups.has(key)) {
+                const color = getStageColor(el) || '#888';
+                groups.set(key, { els: [], order: el.stageOrder || 0, rail: el.stageRail, name: el.stageName, color });
+            }
+            groups.get(key).els.push(el);
+        }
+        const PAD = 18;
+        for (const [, g] of groups) {
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            for (const el of g.els) {
+                minX = Math.min(minX, el.x);
+                minY = Math.min(minY, el.y);
+                maxX = Math.max(maxX, el.x + el.w);
+                maxY = Math.max(maxY, el.y + el.h);
+                // Include GND stubs in bounding box
+                if (el.gndStubs) for (const s of el.gndStubs) {
+                    maxY = Math.max(maxY, s.y + GND_STUB_HEIGHT + GND_LINE_SPACING * 3);
+                }
+            }
+            layoutStageZones.push({
+                x: minX - PAD, y: minY - PAD - 14,
+                w: maxX - minX + PAD * 2, h: maxY - minY + PAD * 2 + 14,
+                label: g.name.replace(/_/g, ' '),
+                rail: g.rail, order: g.order, color: g.color,
+            });
+        }
+        // Sort by order so lower stages draw first (left-to-right visual)
+        layoutStageZones.sort((a, b) => a.order - b.order);
+    }
+
+    /** Draw stage zone backgrounds behind components. Called before expansion groups. */
+    function drawStageZones() {
+        if (layoutStageZones.length === 0) return;
+        for (const zone of layoutStageZones) {
+            // Filled background
+            ctx.save();
+            ctx.globalAlpha = 0.06;
+            ctx.fillStyle = zone.color;
+            ctx.beginPath();
+            ctx.roundRect(zone.x, zone.y, zone.w, zone.h, 8);
+            ctx.fill();
+            // Dashed border
+            ctx.globalAlpha = 0.2;
+            ctx.strokeStyle = zone.color;
+            ctx.lineWidth = 1;
+            ctx.setLineDash([4, 4]);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            // Stage label at top-left
+            ctx.globalAlpha = 0.5;
+            ctx.fillStyle = zone.color;
+            ctx.font = `${FONT_SIZE - 1}px monospace`;
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'bottom';
+            ctx.fillText(zone.label, zone.x + 6, zone.y + 12);
+            ctx.restore();
+        }
     }
 
     // ─────────── RENDERING ───────────
@@ -3155,56 +3245,82 @@
         ctx.translate(panX, panY);
         ctx.scale(zoomLevel, zoomLevel);
 
+        drawStageZones();
         drawExpansionGroups();
         drawWires();
         drawMultiRowBusWires();
         for (const el of layoutElements) {
+            // Flow-path dimming: dim components not in the active flow
+            if (activeFlowSet && el.type === 'instance') {
+                ctx.globalAlpha = activeFlowSet.has(el.name) ? 1.0 : 0.15;
+            }
             if (el.type === 'entity_in' || el.type === 'entity_out') drawEntityBox(el);
             else if (el.type === 'power_source') drawPowerRailFlag(el);
             else if (isSymbolCategory(el.category)) drawSymbolComponent(el);
             else drawInstanceBox(el);
+            ctx.globalAlpha = 1.0;
         }
         // Draw GND and power stubs on top
         for (const el of layoutElements) {
+            if (activeFlowSet && el.type === 'instance') {
+                ctx.globalAlpha = activeFlowSet.has(el.name) ? 1.0 : 0.15;
+            }
             if (el.gndStubs && el.gndStubs.length > 0) drawGndStubs(el);
             if (el.pwrStubs && el.pwrStubs.length > 0) drawPowerStubs(el);
+            ctx.globalAlpha = 1.0;
         }
 
         ctx.restore();
 
-        // Draw simulation tooltip for hovered items (in screen space)
+        // Draw simulation tooltip and legend for hovered items (in screen space)
         drawSimTooltip();
+        drawLegend();
     }
 
     function drawSimTooltip() {
         const sim = schematicData?.simulation;
-        const lines = [];
+        const lines = []; // { text, color? }
 
         if (hoveredItem) {
             const el = layoutElements.find(e => e.name === hoveredItem);
             if (el && el.type === 'instance') {
                 // Show both user handle and refdes in hover
                 const nameLabel = el.refdes ? el.name + '  [' + el.refdes + ']' : el.name;
-                lines.push(nameLabel + ' (' + (el.entityType || '') + ')');
+                lines.push({ text: nameLabel + ' (' + (el.entityType || '') + ')' });
                 if (sim) {
-                    if (el.simCurrent != null) lines.push('I = ' + formatCurrent(el.simCurrent));
-                    if (el.simPower != null) lines.push('P = ' + formatPower(el.simPower));
+                    if (el.simCurrent != null) lines.push({ text: 'I = ' + formatCurrent(el.simCurrent) });
+                    if (el.simPower != null) lines.push({ text: 'P = ' + formatPower(el.simPower) });
                 }
                 // Show non-inline params on hover
                 if (el.parameters) {
                     for (const [k, v] of el.parameters) {
-                        if (!INLINE_PARAM_KEYS.has(k) && v) lines.push(k + ': ' + v);
+                        if (!INLINE_PARAM_KEYS.has(k) && v) lines.push({ text: k + ': ' + v });
                     }
+                }
+                // Stage position (colored by stage color)
+                const sc = getStageColor(el);
+                if (el.stageName) {
+                    let label = 'Stage: ' + el.stageName.replace(/_/g, ' ');
+                    const rail = schematicData.power_rails?.find(r => r.name === el.stageRail);
+                    if (rail?.stages?.length) label += ' (' + (el.stageOrder + 1) + '/' + rail.stages.length + ' on ' + el.stageRail + ')';
+                    lines.push({ text: label, color: sc });
+                }
+                // Intent with params (colored by stage color)
+                if (el.intent) {
+                    const fp = (schematicData.flow_paths || []).find(f => (el.flowIds || []).includes(f.id));
+                    let str = 'Intent: ' + el.intent;
+                    if (fp?.intent_params?.length) str += '(' + fp.intent_params.map(([k, v]) => k + ': ' + v).join(', ') + ')';
+                    lines.push({ text: str, color: sc });
                 }
             }
         } else if (hoveredNet && sim) {
-            lines.push(hoveredNet);
+            lines.push({ text: hoveredNet });
             const v = sim.net_voltages?.[hoveredNet];
-            if (v != null) lines.push('V = ' + formatVoltage(v));
+            if (v != null) lines.push({ text: 'V = ' + formatVoltage(v) });
             const isPwr = sim.power_nets && (
                 sim.power_nets instanceof Set ? sim.power_nets.has(hoveredNet) : !!sim.power_nets[hoveredNet]
             );
-            lines.push(isPwr ? 'Class: power' : 'Class: signal');
+            lines.push({ text: isPwr ? 'Class: power' : 'Class: signal' });
         }
 
         if (lines.length === 0) return;
@@ -3213,7 +3329,7 @@
         const padX = 8, padY = 5;
         ctx.font = `${FONT_SIZE - 1}px monospace`;
         let maxW = 0;
-        for (const l of lines) maxW = Math.max(maxW, ctx.measureText(l).width);
+        for (const l of lines) maxW = Math.max(maxW, ctx.measureText(l.text).width);
         const boxW = maxW + padX * 2;
         const boxH = lines.length * (FONT_SIZE + 2) + padY * 2;
         const bx = px + 12, by = py - boxH - 4;
@@ -3226,16 +3342,71 @@
         ctx.fill();
         ctx.stroke();
 
-        ctx.fillStyle = '#ddd';
         ctx.textAlign = 'left';
         ctx.textBaseline = 'top';
         for (let i = 0; i < lines.length; i++) {
-            ctx.fillStyle = i === 0 ? '#fff' : '#bbb';
-            ctx.fillText(lines[i], bx + padX, by + padY + i * (FONT_SIZE + 2));
+            ctx.fillStyle = lines[i].color || (i === 0 ? '#fff' : '#bbb');
+            ctx.fillText(lines[i].text, bx + padX, by + padY + i * (FONT_SIZE + 2));
         }
     }
 
     let tooltipScreenX = 0, tooltipScreenY = 0;
+
+    /** Draw a compact color legend in the bottom-left corner (screen space). */
+    function drawLegend() {
+        if (layoutStageZones.length === 0) return;
+        // Collect unique (stageName, color) pairs sorted by order
+        const seen = new Set();
+        const entries = [];
+        for (const el of layoutElements) {
+            if (el.type !== 'instance' || !el.stageName) continue;
+            if (seen.has(el.stageName)) continue;
+            seen.add(el.stageName);
+            const c = getStageColor(el);
+            if (c) entries.push({ name: el.stageName.replace(/_/g, ' '), color: c, order: el.stageOrder || 0 });
+        }
+        if (entries.length === 0) return;
+        entries.sort((a, b) => a.order - b.order);
+
+        const padX = 10, padY = 8, dotR = 5, rowH = 18;
+        const titleH = 16;
+        ctx.font = `${FONT_SIZE - 1}px monospace`;
+        let maxW = ctx.measureText('Stages').width;
+        for (const e of entries) maxW = Math.max(maxW, ctx.measureText(e.name).width);
+        const boxW = padX * 2 + dotR * 2 + 8 + maxW;
+        const boxH = padY * 2 + titleH + entries.length * rowH;
+        const bx = 12, by = canvas.clientHeight - boxH - 12;
+
+        ctx.fillStyle = 'rgba(20,20,20,0.8)';
+        ctx.strokeStyle = '#555';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(bx, by, boxW, boxH, 6);
+        ctx.fill();
+        ctx.stroke();
+
+        // Title
+        ctx.fillStyle = '#ccc';
+        ctx.font = `bold ${FONT_SIZE - 1}px monospace`;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        ctx.fillText('Stages', bx + padX, by + padY);
+
+        // Entries
+        ctx.font = `${FONT_SIZE - 1}px monospace`;
+        for (let i = 0; i < entries.length; i++) {
+            const ey = by + padY + titleH + i * rowH;
+            // Colored dot
+            ctx.fillStyle = entries[i].color;
+            ctx.beginPath();
+            ctx.arc(bx + padX + dotR, ey + rowH / 2, dotR, 0, Math.PI * 2);
+            ctx.fill();
+            // Label
+            ctx.fillStyle = '#bbb';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(entries[i].name, bx + padX + dotR * 2 + 8, ey + rowH / 2);
+        }
+    }
 
     function drawPowerRailFlag(el) {
         const port = el.outputPorts[0];
@@ -3321,7 +3492,8 @@
 
     function drawInstanceBox(el) {
         const isHovered = hoveredItem === el.name;
-        const borderColor = isHovered ? COLORS.highlight : COLORS.instanceBorder;
+        const stageColor = getStageColor(el);
+        const borderColor = isHovered ? COLORS.highlight : (stageColor || COLORS.instanceBorder);
         const lw = isHovered ? 2 : 1;
 
         drawRoundedRect(ctx, el.x, el.y, el.w, el.h, BORDER_RADIUS, COLORS.instanceBg, borderColor, lw);
@@ -3339,6 +3511,9 @@
         ctx.closePath();
         ctx.fillStyle = COLORS.instanceHeader;
         ctx.fill();
+        if (stageColor && !isHovered) {
+            ctx.fillStyle = stageColor; ctx.globalAlpha = 0.15; ctx.fill(); ctx.globalAlpha = 1.0;
+        }
         ctx.restore();
 
         // Instance name (uses displayName which toggles between user handle and refdes)
@@ -3691,8 +3866,9 @@
         const isFlipped = el.isFlipped;
         const isVertical = el.isShunt;
 
-        // Symbol stroke color
-        const symbolColor = isHovered ? COLORS.highlight : '#c0c0c0';
+        // Symbol stroke color — tinted by stage/intent when available
+        const stageColor = getStageColor(el);
+        const symbolColor = isHovered ? COLORS.highlight : (stageColor || '#c0c0c0');
         ctx.strokeStyle = symbolColor;
         ctx.fillStyle = symbolColor;
         ctx.lineWidth = 1.5;
@@ -3995,6 +4171,10 @@
         const wireElByName = new Map();
         for (const el of layoutElements) wireElByName.set(el.name, el);
         for (const wire of layoutWires) {
+            // Flow-path dimming: dim wires not in the active flow
+            if (activeFlowNets) {
+                ctx.globalAlpha = activeFlowNets.has(wire.netName) ? 1.0 : 0.15;
+            }
             const isBus = wire.width > 1;
             const isHighlighted = hoveredNet === wire.netName;
             const isPower = wire.isPower;
@@ -4160,6 +4340,7 @@
                     ctx.fillText(formatCurrent(Math.abs(wire.current)), bestSeg.x1 + 6, cy);
                 }
             }
+            ctx.globalAlpha = 1.0;
         }
 
         // Draw T-junction dots (where shunt/branch wires meet main path)
@@ -4359,6 +4540,25 @@
         let needsRedraw = false;
         if (foundItem !== hoveredItem) { hoveredItem = foundItem; canvas.style.cursor = foundItem ? 'pointer' : 'default'; needsRedraw = true; }
         if (foundNet !== hoveredNet) { hoveredNet = foundNet; if (!foundItem) canvas.style.cursor = foundNet ? 'crosshair' : 'default'; needsRedraw = true; }
+        // Compute active flow set for flow-path highlighting
+        let newFlowSet = null, newFlowNets = null;
+        if (foundItem && schematicData?.flow_paths?.length) {
+            const el = layoutElements.find(e => e.name === foundItem);
+            if (el && el.flowIds && el.flowIds.length > 0) {
+                newFlowSet = new Set();
+                newFlowNets = new Set();
+                for (const fp of schematicData.flow_paths) {
+                    if (el.flowIds.includes(fp.id)) {
+                        for (const c of fp.components) newFlowSet.add(c);
+                        for (const n of fp.nets) newFlowNets.add(n);
+                    }
+                }
+            }
+        }
+        const flowChanged = (newFlowSet !== activeFlowSet);
+        activeFlowSet = newFlowSet;
+        activeFlowNets = newFlowNets;
+        if (flowChanged) needsRedraw = true;
         if (needsRedraw) render();
     });
 

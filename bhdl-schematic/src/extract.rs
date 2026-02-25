@@ -740,10 +740,10 @@ fn extract_flow_paths(
                         .iter()
                         .filter_map(|p| match p {
                             bhdl_common::intent::IntentParam::Named(k, v) => {
-                                Some((k.clone(), format!("{:?}", v)))
+                                Some((k.clone(), format!("{}", v)))
                             }
                             bhdl_common::intent::IntentParam::Positional(v) => {
-                                Some(("_".to_string(), format!("{:?}", v)))
+                                Some(("_".to_string(), format!("{}", v)))
                             }
                         })
                         .collect::<Vec<_>>()
@@ -888,6 +888,27 @@ fn classify_placement_roles(
 
         // No intent, topology says MainPath — use it
         inst.placement_role = Some(topo_role);
+    }
+
+    // Post-pass: propagate intent and flow_ids from bank parents to children.
+    // Bank children are created by capacitor bank splitting and won't appear in
+    // any flow path, but they share their parent's functional role.
+    let parent_intent: HashMap<String, (Option<String>, Vec<usize>)> = instances
+        .iter()
+        .filter(|inst| bank_parent_names.contains(&inst.name))
+        .map(|inst| (inst.name.clone(), (inst.intent.clone(), inst.flow_ids.clone())))
+        .collect();
+    for inst in instances.iter_mut() {
+        if let Some(ref parent_name) = inst.bank_parent {
+            if let Some((ref intent, ref fids)) = parent_intent.get(parent_name.as_str()) {
+                if inst.intent.is_none() {
+                    inst.intent = intent.clone();
+                }
+                if inst.flow_ids.is_empty() {
+                    inst.flow_ids = fids.clone();
+                }
+            }
+        }
     }
 }
 
