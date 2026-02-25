@@ -39,9 +39,9 @@ import { LM2596_5V, LM7805, LM1117_33, LM1117_18 } from "bhdl-stdlib/simple/regu
 board ComplexPowerTree {
     power VIN = 24V @ 5A |> input_protection |> input_filtering |> regulation;
     power V5_BUCK = 5V @ 2A |> output_filtering |> loading;
-    power V3_3 = 3.3V @ 300mA;
-    power V5_AUX = 5V @ 500mA;
-    power V1_8 = 1.8V @ 200mA;
+    power V3_3 = 3.3V @ 300mA |> output_filtering |> loading;
+    power V5_AUX = 5V @ 500mA |> output_filtering |> loading;
+    power V1_8 = 1.8V @ 200mA |> output_filtering |> loading;
     ground GND;
 
     // === Input Stage ===
@@ -70,23 +70,23 @@ board ComplexPowerTree {
     led5b.K -> GND;
 
     // 5V buck load (10Ω ≈ 500mA)
-    V5_BUCK -> r_load5b: Res(10).1 -> r_load5b.2 -> GND;
+    V5_BUCK -> r_load5b: Res(10).1 -> r_load5b.2 -> GND for loading(purpose: "main load");
 
     // Cascade: 5V → 3.3V
-    V5_BUCK -> reg33: LM1117_33().VI;
+    V5_BUCK -> reg33: LM1117_33().VI for regulation();
     reg33.VO -> V3_3;
     reg33.GND -> GND;
 
     // 3.3V output filter
-    V3_3 -> c33: Cap(10µF).1;
+    V3_3 -> c33: Cap(10µF).1 for output_filtering();
     c33.2 -> GND;
 
     // 3.3V indicator LED (blue)
-    V3_3 -> r_led33: Res(150).1 -> r_led33.2 -> led33: LED("blue").A;
+    V3_3 -> r_led33: Res(150).1 -> r_led33.2 -> led33: LED("blue").A for loading(purpose: "indicator");
     led33.K -> GND;
 
     // 3.3V load (330Ω ≈ 10mA)
-    V3_3 -> r_load33: Res(330).1 -> r_load33.2 -> GND;
+    V3_3 -> r_load33: Res(330).1 -> r_load33.2 -> GND for loading(purpose: "load");
 
     // === Branch 2: Linear Regulator Path ===
 
@@ -96,26 +96,26 @@ board ComplexPowerTree {
     reg5aux.GND -> GND;
 
     // 5V aux output filter
-    V5_AUX -> c5a: Cap(10µF).1;
+    V5_AUX -> c5a: Cap(10µF).1 for output_filtering();
     c5a.2 -> GND;
 
     // 5V aux indicator LED (red)
-    V5_AUX -> r_led5a: Res(470).1 -> r_led5a.2 -> led5a: LED("red").A;
+    V5_AUX -> r_led5a: Res(470).1 -> r_led5a.2 -> led5a: LED("red").A for loading(purpose: "indicator");
     led5a.K -> GND;
 
     // Cascade: 5V aux → 1.8V (3 levels deep from VIN)
-    V5_AUX -> reg18: LM1117_18().VI;
+    V5_AUX -> reg18: LM1117_18().VI for regulation();
     reg18.VO -> V1_8;
     reg18.GND -> GND;
 
     // 1.8V output filter
-    V1_8 -> c18: Cap(10µF).1;
+    V1_8 -> c18: Cap(10µF).1 for output_filtering();
     c18.2 -> GND;
 
     // 1.8V load (18Ω ≈ 100mA)
-    V1_8 -> r_load18: Res(18).1 -> r_load18.2 -> GND;
+    V1_8 -> r_load18: Res(18).1 -> r_load18.2 -> GND for loading(purpose: "main load");
 
     // 1.8V indicator LED (yellow)
-    V1_8 -> r_led18: Res(56).1 -> r_led18.2 -> led18: LED("yellow").A;
+    V1_8 -> r_led18: Res(56).1 -> r_led18.2 -> led18: LED("yellow").A for loading(purpose: "indicator");
     led18.K -> GND;
 }

@@ -235,14 +235,53 @@ fn expand_one(netlist: &mut Netlist, cand: &Candidate) -> Result<ExpansionResult
     let ind_mod = find_or_create_module(netlist, "Ind", &[("IN", false), ("OUT", false)]);
     let cap_mod = find_or_create_module(netlist, "Cap", &[("1", true), ("2", true)]);
 
+    // Read parent instance attributes early (also used later for ripple/intent)
+    let inst_attrs = netlist.instances.get(cand.instance_id)
+        .map(|i| i.attributes.clone())
+        .unwrap_or_default();
+
+    // Stamp intent and stage attributes on expansion children.
+    // Inductor and diode are part of regulation; output caps are output_filtering.
+    let parent_stage_name = inst_attrs.get("stage_name").cloned().unwrap_or_default();
+    let parent_stage_order = inst_attrs.get("stage_order").cloned().unwrap_or_default();
+    let parent_stage_rail = inst_attrs.get("stage_rail").cloned().unwrap_or_default();
+    let parent_intent = inst_attrs.get("intent").cloned()
+        .unwrap_or_else(|| "regulation".to_string());
+    let mut stage_attrs: Vec<(&str, &str)> = vec![
+        ("intent", &parent_intent),
+    ];
+    if !parent_stage_name.is_empty() {
+        stage_attrs.push(("stage_name", &parent_stage_name));
+        stage_attrs.push(("stage_order", &parent_stage_order));
+        stage_attrs.push(("stage_rail", &parent_stage_rail));
+    }
+
+    // Output caps belong to the VOUT rail's output_filtering stage.
+    let vout_rail_name = netlist.nets.get(vout_net)
+        .and_then(|n| n.name.clone())
+        .unwrap_or_default();
+    let cap_stage_name = "output_filtering".to_string();
+    let cap_stage_order = "0".to_string();
+    let cap_intent = "output_filtering".to_string();
+    let mut cap_stage_attrs: Vec<(&str, &str)> = vec![
+        ("intent", &cap_intent),
+    ];
+    if !parent_stage_name.is_empty() {
+        cap_stage_attrs.push(("stage_name", &cap_stage_name));
+        cap_stage_attrs.push(("stage_order", &cap_stage_order));
+        cap_stage_attrs.push(("stage_rail", &vout_rail_name));
+    }
+
     // --- Inductor: pin 1 → SW, pin 2 → VOUT ---
     let ind_name = format!("{}_L", base);
-    let ind_id = create_instance(netlist, &ind_name, ind_mod, &[
+    let mut ind_attrs: Vec<(&str, &str)> = vec![
         ("component_class", "inductor"),
         ("value", &cand.inductor_value),
         ("vpin_parent", base),
         ("vpin_role", "series"),
-    ]);
+    ];
+    ind_attrs.extend_from_slice(&stage_attrs);
+    let ind_id = create_instance(netlist, &ind_name, ind_mod, &ind_attrs);
     let ind_pins = netlist.create_pin_instances(ind_id)
         .map_err(|e| format!("create inductor pins: {}", e))?;
     // IN → SW net
@@ -254,12 +293,14 @@ fn expand_one(netlist: &mut Netlist, cand: &Candidate) -> Result<ExpansionResult
     let diode_name = if cand.has_diode {
         let diode_mod = find_or_create_module(netlist, "Diode", &[("A", false), ("K", false)]);
         let d_name = format!("{}_D", base);
-        let d_id = create_instance(netlist, &d_name, diode_mod, &[
+        let mut d_attrs: Vec<(&str, &str)> = vec![
             ("component_class", "diode"),
             ("forward_voltage", &cand.diode_vf),
             ("vpin_parent", base),
             ("vpin_role", "shunt"),
-        ]);
+        ];
+        d_attrs.extend_from_slice(&stage_attrs);
+        let d_id = create_instance(netlist, &d_name, diode_mod, &d_attrs);
         let d_pins = netlist.create_pin_instances(d_id)
             .map_err(|e| format!("create diode pins: {}", e))?;
         connect_pin_instance_by_name(netlist, d_id, &d_pins, "A", gnd_net)?;
@@ -271,10 +312,6 @@ fn expand_one(netlist: &mut Netlist, cand: &Candidate) -> Result<ExpansionResult
 
     // --- Output capacitor(s): VOUT → GND ---
     // Check for intent-driven ripple target on the regulator instance
-    let inst_attrs = netlist.instances.get(cand.instance_id)
-        .map(|i| i.attributes.clone())
-        .unwrap_or_default();
-
     let max_ripple = inst_attrs.get("intent_max_ripple")
         .and_then(|v| parse_unit_value(v));
     let f_sw = inst_attrs.get("f_sw")
@@ -305,14 +342,17 @@ fn expand_one(netlist: &mut Netlist, cand: &Candidate) -> Result<ExpansionResult
             for i in 0..tier.count {
                 let cap_name = format!("{}_{}_{}", base, tier.role, i + 1);
                 let cap_value = format_cap_value_for_attr(tier.capacitance);
-                let cap_id = create_instance(netlist, &cap_name, cap_mod, &[
+                let vpin_role_str = format!("output_{}", tier.role);
+                let mut cap_attrs: Vec<(&str, &str)> = vec![
                     ("component_class", "capacitor"),
                     ("value", &cap_value),
                     ("vpin_parent", base),
-                    ("vpin_role", &format!("output_{}", tier.role)),
+                    ("vpin_role", &vpin_role_str),
                     ("dielectric_hint", tier.dielectric_hint),
                     ("ripple_tier", tier.role),
-                ]);
+                ];
+                cap_attrs.extend_from_slice(&cap_stage_attrs);
+                let cap_id = create_instance(netlist, &cap_name, cap_mod, &cap_attrs);
                 let cap_pins = netlist.create_pin_instances(cap_id)
                     .map_err(|e| format!("create {} cap pins: {}", cap_name, e))?;
                 connect_pin_instance_by_name(netlist, cap_id, &cap_pins, "1", vout_net)?;
@@ -338,12 +378,14 @@ fn expand_one(netlist: &mut Netlist, cand: &Candidate) -> Result<ExpansionResult
     } else {
         // Existing single-cap path (no intent)
         let cout_name = format!("{}_Cout", base);
-        let cout_id = create_instance(netlist, &cout_name, cap_mod, &[
+        let mut cout_attrs: Vec<(&str, &str)> = vec![
             ("component_class", "capacitor"),
             ("value", &cand.cout_value),
             ("vpin_parent", base),
             ("vpin_role", "shunt"),
-        ]);
+        ];
+        cout_attrs.extend_from_slice(&cap_stage_attrs);
+        let cout_id = create_instance(netlist, &cout_name, cap_mod, &cout_attrs);
         let cout_pins = netlist.create_pin_instances(cout_id)
             .map_err(|e| format!("create cout pins: {}", e))?;
         connect_pin_instance_by_name(netlist, cout_id, &cout_pins, "1", vout_net)?;

@@ -314,6 +314,9 @@ pub fn extract_schematic_data(
         let stage_order = instance.attributes.get("stage_order")
             .and_then(|s| s.parse::<usize>().ok());
         let stage_rail = instance.attributes.get("stage_rail").cloned();
+        // Intent from attributes (expansion children get this from the expander);
+        // flow-path lookup in classify_placement_roles may override.
+        let intent = instance.attributes.get("intent").cloned();
 
         instances.push(SchematicInstance {
             name: instance.name.clone(),
@@ -323,7 +326,7 @@ pub fn extract_schematic_data(
             connections,
             parameters,
             placement_role: None,  // filled in by classify_placement_roles below
-            intent: None,
+            intent,
             flow_ids: Vec::new(),
             expansion_parent,
             expansion_role,
