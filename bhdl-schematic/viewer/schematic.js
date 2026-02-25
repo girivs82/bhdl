@@ -89,7 +89,7 @@
     const STAGE_COLORS = {
         input_protection: '#FF9800', overvoltage_protection: '#FF9800',
         esd_protection: '#FF9800', overvoltage_clamp: '#FF9800',
-        input_filtering: '#42A5F5', output_filtering: '#42A5F5',
+        input_filtering: '#42A5F5', output_filtering: '#7E57C2',
         noise_filtering: '#42A5F5', anti_alias: '#42A5F5', emi_filtering: '#42A5F5',
         regulation: '#66BB6A',
         signal_buffering: '#26C6DA', level_shifting: '#26C6DA',
