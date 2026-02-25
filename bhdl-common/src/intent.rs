@@ -199,11 +199,12 @@ impl Default for IntentRegistry {
 
 // ── Built-in intent functions ────────────────────────────────────────────
 
-/// `input_filtering` intent — bulk or precision filtering on a power rail input.
+/// `input_filtering` intent — drives input capacitor bank sizing based on
+/// downstream regulator characteristics and actual GLACIER-simulated currents.
 ///
 /// Parameters:
-///   - `bulk` (boolean, optional): true for bulk electrolytic-style filtering
-///   - `max_esr` (resistance, optional): maximum ESR for filter capacitor
+///   - `max_ripple` (voltage, required): Maximum peak-to-peak input ripple
+///   - `max_esr` (resistance, optional): Maximum ESR for filter capacitor
 pub struct InputFilteringIntent;
 
 impl IntentFunction for InputFilteringIntent {
@@ -211,13 +212,27 @@ impl IntentFunction for InputFilteringIntent {
         "input_filtering"
     }
 
-    fn resolve(&self, _params: &[IntentParam]) -> Result<IntentResult, String> {
+    fn resolve(&self, params: &[IntentParam]) -> Result<IntentResult, String> {
+        let has_max_ripple = params.iter().any(|p| match p {
+            IntentParam::Named(name, _) => name == "max_ripple",
+            IntentParam::Positional(_) => true, // first positional = max_ripple
+        });
+
+        if !has_max_ripple {
+            return Err("input_filtering requires 'max_ripple' parameter".to_string());
+        }
+
         Ok(IntentResult {
             sim_mode: SimMode::MixedSignal,
             synthesis_hints: vec![
-                SynthesisHint::Custom("bulk_decoupling_capacitor".to_string()),
+                SynthesisHint::Custom("input_cap_bank".to_string()),
             ],
-            validation_rules: Vec::new(),
+            validation_rules: vec![
+                ValidationRule {
+                    condition: "max_ripple > 0".to_string(),
+                    error_message: "max_ripple must be positive".to_string(),
+                },
+            ],
             tool_scope: ToolScope::All,
         })
     }
@@ -225,10 +240,10 @@ impl IntentFunction for InputFilteringIntent {
     fn param_metadata(&self) -> Vec<ParamMetadata> {
         vec![
             ParamMetadata {
-                name: "bulk".to_string(),
-                param_type: ParamType::Boolean,
-                required: false,
-                default_value: Some(IntentValue::Boolean(false)),
+                name: "max_ripple".to_string(),
+                param_type: ParamType::Voltage,
+                required: true,
+                default_value: None,
             },
             ParamMetadata {
                 name: "max_esr".to_string(),

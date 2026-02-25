@@ -36,7 +36,7 @@ pub struct RippleBankSpec {
 
 /// Typical ESR values (mΩ) for common dielectric/package combinations.
 /// Used to estimate ESR contribution to ripple voltage.
-fn typical_esr_mohm(dielectric: &str, package: &str) -> f64 {
+pub fn typical_esr_mohm(dielectric: &str, package: &str) -> f64 {
     match (dielectric, package) {
         ("C0G", "0402") => 50.0,
         ("C0G", "0603") => 30.0,
@@ -177,7 +177,7 @@ pub fn compute_ripple_bank(
 
 /// Round a bulk capacitance up to standard values and split into multiple units
 /// if a single cap would be impractically large for MLCC.
-fn standardize_bulk_cap(c_farads: f64) -> (f64, usize) {
+pub fn standardize_bulk_cap(c_farads: f64) -> (f64, usize) {
     // Standard MLCC cap values in the E6 series (µF)
     let standards_uf: &[f64] = &[1.0, 2.2, 4.7, 10.0, 22.0, 47.0, 100.0];
 
