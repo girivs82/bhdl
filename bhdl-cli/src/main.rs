@@ -1235,6 +1235,33 @@ fn build_simulation_annotations(
         }
     }
 
+    // 2b. Propagate cascaded regulator currents back to power symbols.
+    // Power symbols (voltage sources) in GLACIER only see tiny dropout-resistor
+    // current. The actual current they source = sum of all top-level regulators
+    // whose VIN connects to that power net.
+    {
+        // Collect all power net names that regulators draw from
+        let mut power_net_current: HashMap<String, f64> = HashMap::new();
+        for reg in &regulators {
+            let current = reg_currents.get(&reg.base_name).copied().unwrap_or(reg.vout_current);
+            // Only count regulators whose VIN is a power net (top-level feed),
+            // not regulators cascading from another regulator's VOUT.
+            let fed_by_regulator = regulators.iter().any(|r| r.vout_node == reg.vin_node);
+            if !fed_by_regulator {
+                *power_net_current.entry(reg.vin_node.clone()).or_insert(0.0) += current;
+            }
+        }
+        // Update power symbol instance currents
+        for (net_name, total_current) in &power_net_current {
+            // Power symbol instance name typically matches the net name
+            if annotations.instance_currents.contains_key(net_name) {
+                annotations.instance_currents.insert(net_name.clone(), *total_current);
+                // Power symbol dissipates nothing (ideal source)
+                annotations.instance_power.insert(net_name.clone(), 0.0);
+            }
+        }
+    }
+
     // 3. Write unified entries and remove decomposed ones (found by metadata scan)
     for reg in &regulators {
         let current = reg_currents.get(&reg.base_name).copied().unwrap_or(reg.vout_current);

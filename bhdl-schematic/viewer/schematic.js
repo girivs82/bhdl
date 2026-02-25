@@ -1191,10 +1191,11 @@
             let w, h;
             const ps = powerSourceNodes.find(p => p.id === nodeId);
             if (ps) {
-                // Width reserves space for the label text (layout spacing),
-                // even though the visual rendering is just a small flag symbol.
-                w = Math.max(20, measureTextWidth(ps.label, FONT_SIZE - 1) + 12);
-                h = 20;   // Shorter height for the flag symbol
+                // Power sources take zero width in the main band — they render
+                // as inline flags on the wire start, not as separate boxes.
+                // The gap computation for shunt children will provide spacing.
+                w = 0;
+                h = 20;
             } else if (nodeId === '__entity_in__') {
                 h = HEADER_HEIGHT + ENTITY_PADDING * 2 + inputPorts.length * PORT_SPACING;
                 let maxW = 0;
@@ -2944,7 +2945,9 @@
                 const current = data.simulation?.instance_currents?.[sink.name];
                 // Driver current: total current leaving the driver into this net.
                 // Used for the shared horizontal trunk segment on fan-out nets.
-                const driverCurrent = data.simulation?.instance_currents?.[driverElName];
+                // Power source IDs use __pwr_<name>__ format; strip to match simulation keys.
+                const driverSimKey = driverElName.startsWith('__pwr_') ? driverElName.slice(6, -2) : driverElName;
+                const driverCurrent = data.simulation?.instance_currents?.[driverSimKey];
                 const driverIsPowerSource = net.driver.type === 'power_source';
                 layoutWires.push({ from: fromPos, to: toPos, sinkElName, segments, width: net.width || 1, netName: net.name, netClass: net.net_class || 'signal', isPower: isPowerNet, voltage, current, driverCurrent, driverIsPowerSource });
             }
@@ -4168,6 +4171,7 @@
 
     function drawWires() {
         const voltageAnnotatedNets = new Set(); // deduplicate voltage labels per net
+        const currentAnnotatedNets = new Set(); // deduplicate trunk current labels per net
         const wireElByName = new Map();
         for (const el of layoutElements) wireElByName.set(el.name, el);
         for (const wire of layoutWires) {
@@ -4305,8 +4309,10 @@
             if (isShuntLikeWire) {
                 // Trunk: driver's total current on horizontal segment (once per net)
                 const trunkCurrent = wire.driverCurrent;
-                if (!alreadyAnnotated && trunkCurrent != null && Math.abs(trunkCurrent) > 1e-3
+                const currentAlreadyAnnotated = currentAnnotatedNets.has(wire.netName);
+                if (!currentAlreadyAnnotated && trunkCurrent != null && Math.abs(trunkCurrent) > 1e-3
                     && horizSeg && Math.abs(horizSeg.x2 - horizSeg.x1) > 30) {
+                    currentAnnotatedNets.add(wire.netName);
                     const lx = (horizSeg.x1 + horizSeg.x2) / 2;
                     ctx.font = `${FONT_SIZE - 2}px monospace`;
                     ctx.fillStyle = '#8bc34a';
