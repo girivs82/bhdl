@@ -5,17 +5,29 @@ use crate::syntax::SyntaxKind;
 use super::core::{Parser, SyntaxKindExt};
 
 impl<'t> Parser<'t> {
-    /// Parse power declaration: power VIN = 12V @ 1A;
+    /// Parse power declaration: power VIN = 12V @ 1A |> stage1 |> stage2;
     pub(crate) fn parse_power_decl(&mut self) {
         self.builder.start_node(SyntaxKind::POWER_DECL.into());
         self.expect(SyntaxKind::POWER_KW);
         self.expect(SyntaxKind::IDENT); // Power domain name
-        
+
         if self.peek() == Some(SyntaxKind::EQ) {
             self.bump();
             self.parse_power_spec();
         }
-        
+
+        // Optional stage chain: |> stage1 |> stage2 |> ...
+        if self.peek() == Some(SyntaxKind::FLOW_OP) {
+            self.builder.start_node(SyntaxKind::POWER_STAGE_CHAIN.into());
+            while self.peek() == Some(SyntaxKind::FLOW_OP) {
+                self.bump(); // consume |>
+                self.builder.start_node(SyntaxKind::STAGE_NAME.into());
+                self.expect(SyntaxKind::IDENT); // stage name
+                self.builder.finish_node();
+            }
+            self.builder.finish_node();
+        }
+
         self.expect(SyntaxKind::SEMI);
         self.builder.finish_node();
     }

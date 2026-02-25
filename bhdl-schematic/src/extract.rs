@@ -309,6 +309,12 @@ pub fn extract_schematic_data(
         // Bank-split child → links back to original cap for layout grouping
         let bank_parent = instance.attributes.get("bank_parent").cloned();
 
+        // Extract stage metadata from netlist instance attributes
+        let stage_name = instance.attributes.get("stage_name").cloned();
+        let stage_order = instance.attributes.get("stage_order")
+            .and_then(|s| s.parse::<usize>().ok());
+        let stage_rail = instance.attributes.get("stage_rail").cloned();
+
         instances.push(SchematicInstance {
             name: instance.name.clone(),
             refdes: None,  // assigned in refdes post-pass below
@@ -322,6 +328,9 @@ pub fn extract_schematic_data(
             expansion_parent,
             expansion_role,
             bank_parent,
+            stage_name,
+            stage_order,
+            stage_rail,
             line: None,
         });
     }
@@ -585,11 +594,32 @@ pub fn extract_schematic_data(
 
             // Only include power rails that connect to actual schematic instances
             if !connected.is_empty() {
+                // Look up stage chain from analysis result (power domain NetAttribute)
+                // Power domains are in the board scope (a definition_scope), not the global scope
+                let stages: Vec<String> = analysis
+                    .and_then(|a| {
+                        // Search global scope first, then all definition scopes
+                        let find_stages = |st: &bhdl_analyzer::symbol_table::SymbolTable| -> Option<Vec<String>> {
+                            st.get_nets().iter()
+                                .find(|(_, sym)| sym.name == net_name)
+                                .and_then(|(_, sym)| sym.net_attributes.as_ref())
+                                .map(|attr| attr.stages().to_vec())
+                                .filter(|v| !v.is_empty())
+                        };
+                        find_stages(&a.global_scope)
+                            .or_else(|| {
+                                a.definition_scopes.values()
+                                    .find_map(|scope| find_stages(scope))
+                            })
+                    })
+                    .unwrap_or_default();
+
                 power_rails.push(PowerRail {
                     name: net_name,
                     voltage,
                     max_current: 0.0, // TODO: extract from analysis if available
                     connected_instances: connected,
+                    stages,
                 });
             }
         }

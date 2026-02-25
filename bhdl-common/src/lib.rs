@@ -24,7 +24,8 @@ pub use analysis_interface::{
 pub use intent::{
     SimMode, IntentCall, IntentParam, IntentValue, IntentResult,
     IntentFunction, IntentRegistry, SynthesisHint, ValidationRule,
-    ToolScope, ParamMetadata, ParamType, OutputFilteringIntent
+    ToolScope, ParamMetadata, ParamType, OutputFilteringIntent,
+    InputFilteringIntent, RegulationIntent, LoadingIntent
 };
 pub use expression_evaluator::{ExpressionEvaluator, Value};
 pub use const_value::{ConstValue, EvalError};

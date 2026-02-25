@@ -14,6 +14,8 @@ pub enum NetAttribute {
         startup_delay_ms: f64,
         sequence_priority: u32,
         dependencies: Vec<String>,
+        /// Ordered stage names from `|> stage1 |> stage2` chain
+        stages: Vec<String>,
     },
     /// Ground domain (0V reference)
     GroundDomain,
@@ -33,6 +35,7 @@ impl NetAttribute {
             startup_delay_ms: 1.0,
             sequence_priority: 100,
             dependencies: Vec::new(),
+            stages: Vec::new(),
         }
     }
     
@@ -55,6 +58,21 @@ impl NetAttribute {
         }
     }
     
+    /// Set stage chain on a power domain
+    pub fn set_stages(&mut self, new_stages: Vec<String>) {
+        if let NetAttribute::PowerDomain { stages, .. } = self {
+            *stages = new_stages;
+        }
+    }
+
+    /// Get stage chain from a power domain (empty slice if not a power domain or no stages)
+    pub fn stages(&self) -> &[String] {
+        match self {
+            NetAttribute::PowerDomain { stages, .. } => stages,
+            _ => &[],
+        }
+    }
+
     /// Get max current if this is a power domain
     pub fn max_current(&self) -> Option<f64> {
         match self {

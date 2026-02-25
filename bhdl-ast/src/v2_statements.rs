@@ -115,6 +115,28 @@ impl PowerDecl {
         }
     }
     
+    /// Get stage names from the `|> stage1 |> stage2` chain (empty if no chain).
+    pub fn stage_names(&self) -> Vec<String> {
+        // Find child node of kind POWER_STAGE_CHAIN
+        let chain_node = self.syntax().children()
+            .find(|n| n.kind() == SyntaxKind::POWER_STAGE_CHAIN);
+        match chain_node {
+            Some(chain) => {
+                // Within the chain, each STAGE_NAME wraps an IDENT token
+                chain.children()
+                    .filter(|n| n.kind() == SyntaxKind::STAGE_NAME)
+                    .filter_map(|stage| {
+                        stage.children_with_tokens()
+                            .filter_map(|e| e.into_token())
+                            .find(|t| t.kind() == SyntaxKind::IDENT)
+                            .map(|t| t.text().to_string())
+                    })
+                    .collect()
+            }
+            None => Vec::new(),
+        }
+    }
+
     /// Get the current value (e.g., "1A")
     pub fn current(&self) -> Option<String> {
         // Find NUMBER and UNIT after @ sign

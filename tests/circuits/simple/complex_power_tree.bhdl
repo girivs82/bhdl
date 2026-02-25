@@ -27,7 +27,8 @@
 //                     └─ LED indicator (yellow, 56Ω)
 //
 // Exercises: metadata regulator decomposition, multi-level cascade current fixup,
-// virtual pin expansion, GLACIER DC with nonlinear elements, physical selection
+// virtual pin expansion, GLACIER DC with nonlinear elements, physical selection,
+// staged power flow ordering
 
 import { Res } from "bhdl-stdlib/simple/resistor_simple.bhdl";
 import { Cap } from "bhdl-stdlib/simple/capacitor_simple.bhdl";
@@ -36,8 +37,8 @@ import { TVSDiode } from "bhdl-stdlib/simple/protection_simple.bhdl";
 import { LM2596_5V, LM7805, LM1117_33, LM1117_18 } from "bhdl-stdlib/simple/regulator_simple.bhdl";
 
 board ComplexPowerTree {
-    power VIN = 24V @ 5A;
-    power V5_BUCK = 5V @ 2A;
+    power VIN = 24V @ 5A |> input_protection |> input_filtering |> regulation;
+    power V5_BUCK = 5V @ 2A |> output_filtering |> loading;
     power V3_3 = 3.3V @ 300mA;
     power V5_AUX = 5V @ 500mA;
     power V1_8 = 1.8V @ 200mA;
@@ -46,26 +47,26 @@ board ComplexPowerTree {
     // === Input Stage ===
 
     // TVS protection across input (cathode to VIN, anode to GND)
-    VIN -> tvs: TVSDiode(15V).K;
+    VIN -> tvs: TVSDiode(15V).K for input_protection(clamp: 15V);
     tvs.A -> GND;
 
     // Input filter capacitor
-    VIN -> c_in: Cap(100µF).1;
+    VIN -> c_in: Cap(100µF).1 for input_filtering(bulk: true);
     c_in.2 -> GND;
 
     // === Branch 1: Buck Converter Path ===
 
     // Buck: 24V → 5V (virtual pin auto-expands inductor, catch diode, output cap)
-    VIN -> buck: LM2596_5V().VIN;
+    VIN -> buck: LM2596_5V().VIN for regulation();
     buck.VOUT -> V5_BUCK;
     buck.GND -> GND;
 
     // 5V buck output filter
-    V5_BUCK -> c5b: Cap(10µF).1;
+    V5_BUCK -> c5b: Cap(10µF).1 for output_filtering(max_ripple: 50mV);
     c5b.2 -> GND;
 
     // 5V buck indicator LED (green)
-    V5_BUCK -> r_led5b: Res(330).1 -> r_led5b.2 -> led5b: LED("green").A;
+    V5_BUCK -> r_led5b: Res(330).1 -> r_led5b.2 -> led5b: LED("green").A for loading(purpose: "indicator");
     led5b.K -> GND;
 
     // 5V buck load (10Ω ≈ 500mA)
@@ -90,7 +91,7 @@ board ComplexPowerTree {
     // === Branch 2: Linear Regulator Path ===
 
     // Linear: 24V → 5V aux
-    VIN -> reg5aux: LM7805().VI;
+    VIN -> reg5aux: LM7805().VI for regulation();
     reg5aux.VO -> V5_AUX;
     reg5aux.GND -> GND;
 

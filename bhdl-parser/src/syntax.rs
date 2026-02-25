@@ -245,6 +245,8 @@ pub enum SyntaxKind {
     
     // Individual statements for linear regulator syntax
     POWER_DECL,         // power VIN = 12V @ 2A;
+    POWER_STAGE_CHAIN,  // |> protection |> filtering |> regulation (stage chain on power decl)
+    STAGE_NAME,         // Single stage name node (wraps IDENT)
     GROUND_DECL,        // ground GND;
     CONNECTION_TARGET,  // U1.input or vin_rail
 

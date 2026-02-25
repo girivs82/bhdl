@@ -522,7 +522,7 @@ fn load_power_domains_from_symbols(context: &mut PowerAnalysisContext, symbol_ta
         if symbol.kind == SymbolKind::Net {
             if let Some(net_attr) = &symbol.net_attributes {
                 match net_attr {
-                    NetAttribute::PowerDomain { voltage, max_current, tolerance, controllable, enable_signal, startup_delay_ms, sequence_priority, dependencies } => {
+                    NetAttribute::PowerDomain { voltage, max_current, tolerance, controllable, enable_signal, startup_delay_ms, sequence_priority, dependencies, .. } => {
                         let mut domain = PowerDomain::new(name.clone(), *voltage);
                         domain.max_current = *max_current;
                         domain.tolerance = *tolerance;
