@@ -123,7 +123,7 @@ The toolchain follows a multi-stage pipeline:
 BHDL v2.0 uses a flow-based syntax for intuitive circuit description:
 - **Structure**: boards with direct flow connections, entities with inline pins
 - **Flow operators**: `->` (connection), `<->` (bidirectional), `|>` (flow), `<=>` (interface)
-- **Power/Ground**: Explicit declarations `power VCC = 5V @ 1A;` and `ground GND;`
+- **Power/Ground**: Explicit declarations `power VCC = 5V @ 1A;` and `ground GND;` with optional stage chains `|> stage(params)`
 - **Direct instantiation**: `VCC -> Res(10k).1 -> LED(red).A;`
 - **Net assignments**: `protected_vin: TVSDiode(15V).K` creates net and implicit handle
 - **Entity definition**: `entity Name(params) { pin name: type direction; ... }`
@@ -256,6 +256,7 @@ Common schematic issues to watch for:
 - Direct component instantiation: `VCC -> Res(4.7kΩ).1 -> LED(red).A;`
 - Generate constructs: `generate for i in 0..7 { ... }`
 - Flow specifications: `power_flow: USB_5V |> regulation |> distribution;`
+- Parameterized stage chains: `power VIN = 24V @ 5A |> input_filtering(max_ripple: 50mV) |> regulation;`
 - Power/ground declarations: `power VCC = 5V @ 1A;`
 - Entity syntax with inline pins: `entity Res(value: resistance) { pin 1: signal inout; ... }`
 
@@ -305,6 +306,13 @@ This ensures we build a robust, production-ready toolchain rather than a demo wi
 ## Current Pipeline Status
 
 ### Recent Major Advances
+
+16. **Parameterized Stage Chains** (2026-02): ✅ COMPLETED
+    - Stage chains on power decls accept key-value params: `|> input_filtering(max_ripple: 50mV)`
+    - Reuses `parse_intent_params()` — same `INTENT_PARAMS`/`INTENT_NAMED_PARAM` syntax nodes
+    - `NetAttribute.stages` carries `Vec<(name, HashMap<param, value>)>`; FlowTracker exposes `get_stage_params(rail, stage)`
+    - Priority chain in input cap sizer: stage chain params > flow intent params > 1% default
+    - complex_power_tree.bhdl: 50mV stage param → 47µF bulk (was 240mV/10µF with 1% default)
 
 15. **SKALP RFC Language Infrastructure** (2026-02): ✅ ALL 10 TASKS COMPLETED
     - **Scope Registry** (Task 1): Arena-based scope storage with parent-chain lookup in `scope_registry.rs`
@@ -434,16 +442,12 @@ This ensures we build a robust, production-ready toolchain rather than a demo wi
   - Scope registry, rich const eval, dimensional analysis
   - Enums/match, structured diagnostics, parameterized types
   - Typed generics, monomorphization, traits, safety annotations
-- **GLACIER-Driven Component Physical Selection** (PLANNED)
+- **GLACIER-Driven Component Physical Selection**: ✅ COMPLETED
   - User specifies only electrical values: `Res(10k)`, `Cap(100nF)`
   - GLACIER DC simulation computes operating point (V, I, P at every node)
-  - Post-simulation pass in Pass 6 (Component Inference) selects physical parameters:
-    - **Resistor**: P = V×I → power rating → package size (0402 ≤ 1/16W, 0603 ≤ 1/10W, 0805 ≤ 1/8W, 1206 ≤ 1/4W)
-    - **Capacitor**: V across → voltage rating (2× derating) → dielectric (C0G for small/precision, X7R for bulk) → package
-    - **LED**: I through → package size
-    - **TVS**: clamping voltage + peak current → package
-  - Physical parameters stored as attributes on netlist instances for BOM/layout
-  - Stdlib stays clean (electrical intent only); toolchain determines physical realization
+  - Post-simulation pass selects physical parameters (package, rating, dielectric)
+  - Includes input cap bank auto-creation from `|> input_filtering(max_ripple: 50mV)` stage chains
+  - Capacitor bank splitting for large values (470µF → parallel MLCCs)
 - VSCode extension for schematic webview (Phase 2)
 - Further simulation tool integration
 
@@ -488,11 +492,12 @@ net measure: @protected -> filter -> adc
 
 ### Intent Implementation Status:
 - [x] Parser support for `for` keyword on flow statements
+- [x] Parameterized stage chains: `|> stage_name(param: value)` on power decls
 - [x] Stdlib intent function framework with standard intents
 - [x] Flow tracking engine with component identification
 - [x] Hierarchical intent propagation through entities
 - [x] Net syntax consistency with @ prefix requirement
-- [ ] Tool integration (partial - simulation coordinator ready)
+- [x] Tool integration: input cap sizer reads stage chain params for ripple targets
 - [x] Documentation and examples
 
 ### Key Principle: "One Flow, One Intent"
