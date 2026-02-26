@@ -186,6 +186,7 @@ impl<'t> Parser<'t> {
                 Some(SyntaxKind::GENERATE_KW) => self.parse_generate_block(),
                 Some(SyntaxKind::WITH_KW) => self.parse_with_block(),
                 Some(SyntaxKind::SATISFIES_KW) => self.parse_satisfies_block(),
+                Some(SyntaxKind::EXPANSION_KW) => self.parse_expansion_block(),
                 Some(SyntaxKind::IDENT) => {
                     // Check if this is an entity instantiation or connection
                     // Entity instantiation: instance_name: EntityType(params) { ... }
@@ -1405,6 +1406,70 @@ impl<'t> Parser<'t> {
         }
 
         self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
+    // Parse expansion block inside entity definitions
+    // expansion { internal sw: net; VOUT -> L: Ind(33µH).1 -> L.2 -> sw; ... }
+    fn parse_expansion_block(&mut self) {
+        self.builder.start_node(SyntaxKind::EXPANSION_BLOCK.into());
+        self.expect(SyntaxKind::EXPANSION_KW);
+        self.expect(SyntaxKind::L_BRACE);
+
+        // Parse expansion contents — same as board contents but also allows
+        // `internal name: net;` declarations for expansion-local nets
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) => break,
+                Some(SyntaxKind::INTERNAL_KW) => self.parse_expansion_internal_net(),
+                Some(SyntaxKind::CONST_KW) => self.parse_const_decl(),
+                Some(SyntaxKind::POWER_KW) => self.parse_power_decl(),
+                Some(SyntaxKind::GROUND_KW) => self.parse_ground_decl(),
+                Some(SyntaxKind::NET_KW) => self.parse_net_flow_stmt(),
+                Some(SyntaxKind::GENERATE_KW) => self.parse_generate_block(),
+                Some(SyntaxKind::ATTRIBUTE_KW) => self.parse_attribute_decl(),
+                Some(SyntaxKind::IDENT) => {
+                    // Connection statement or component instantiation
+                    self.parse_connection_or_flow_stmt();
+                }
+                Some(SyntaxKind::AT) => {
+                    // Net reference in connection
+                    self.parse_connection_or_flow_stmt();
+                }
+                Some(_) => {
+                    self.error("Unexpected token in expansion block".to_string());
+                    self.bump_any();
+                }
+                None => {
+                    self.error("Unexpected end of file in expansion block".to_string());
+                    break;
+                }
+            }
+        }
+
+        self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
+    // Parse internal net declaration: internal name: net;
+    fn parse_expansion_internal_net(&mut self) {
+        self.builder.start_node(SyntaxKind::EXPANSION_INTERNAL_NET.into());
+        self.expect(SyntaxKind::INTERNAL_KW);
+        self.expect(SyntaxKind::IDENT); // Net name
+        self.expect(SyntaxKind::COLON);
+
+        // Expect 'net' keyword (contextual — parsed as IDENT since it's NET_KW)
+        if self.peek() == Some(SyntaxKind::NET_KW) {
+            self.bump();
+        } else if self.peek() == Some(SyntaxKind::IDENT) {
+            // Accept 'net' as an identifier too
+            self.bump();
+        } else {
+            self.error("Expected 'net' after internal net name".to_string());
+        }
+
+        self.expect(SyntaxKind::SEMI);
         self.builder.finish_node();
     }
 

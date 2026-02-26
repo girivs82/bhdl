@@ -62,7 +62,7 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
     let mut resolved_constants = ResolvedConstants::new();
 
     // Pass 1: Build scope registry with base path for imports
-    let (mut scope_registry, alias_specializations) = pass1::build_scope_registry_with_base(source_file, base_path);
+    let (mut scope_registry, alias_specializations, imported_expansion_recipes) = pass1::build_scope_registry_with_base(source_file, base_path);
     // Extract legacy data structures for backward compatibility with existing passes
     let global_scope = scope_registry.extract_global_scope();
     let definition_scopes = scope_registry.extract_definition_scopes();
@@ -256,6 +256,15 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
         ));
     }
 
+    // Pass 8.5: Expansion Recipe Extraction
+    // Merge recipes from imported files (Pass 1) with recipes from main source file
+    println!("Analyzer: Starting Pass 8.5 - Expansion Recipe Extraction...");
+    let mut expansion_recipes = imported_expansion_recipes;
+    let main_file_recipes = extract_expansion_recipes(source_file);
+    expansion_recipes.extend(main_file_recipes);
+    let expansion_count = expansion_recipes.len();
+    println!("Analyzer: Pass 8.5 complete. Expansion recipes found: {}", expansion_count);
+
     // Pass 9: Flow Tracking and Intent Resolution
     println!("Analyzer: Starting Pass 9 - Flow Tracking and Intent Resolution...");
     let mut intent_registry = IntentRegistry::new();
@@ -394,6 +403,7 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
         instance_registry, // Move ownership (Phase 2: Pass 1.25)
         power_domain_expansion, // Move ownership (Phase 1: Scalability)
         monomorphization: mono_result, // Move ownership (Pass 2.5)
+        expansion_recipes, // Move ownership (Pass 8.5)
     }
 }
 
@@ -1344,6 +1354,220 @@ fn generate_power_sequences(
     if let Err(error) = power_sequencing.generate_sequences() {
         power_sequencing.warnings.push(format!("Sequence generation error: {}", error));
     }
+}
+
+/// Extract expansion recipes from all entity definitions in the source file.
+///
+/// Walks the AST looking for entity definitions that contain `expansion { }`
+/// blocks. For each one, parses the expansion body into a structured
+/// `ExpansionRecipe` suitable for the synthesizer's expansion interpreter.
+pub fn extract_expansion_recipes(
+    source_file: &SourceFile,
+) -> std::collections::HashMap<String, bhdl_common::ExpansionRecipe> {
+    use bhdl_common::{ExpansionRecipe, ExpansionInstance, ExpansionConnection, ExpansionEndpoint};
+    use bhdl_ast::{Entity, HasName, SyntaxKind};
+    use rowan::ast::AstNode;
+
+    let mut recipes = std::collections::HashMap::new();
+
+    // Walk all top-level items looking for entity definitions
+    for item in source_file.items() {
+        if let Some(entity) = Entity::cast(item.syntax().clone()) {
+            if let Some(expansion_block) = entity.expansion_block() {
+                let entity_name = entity.name()
+                    .map(|t| t.text().to_string())
+                    .unwrap_or_default();
+
+                if entity_name.is_empty() {
+                    continue;
+                }
+
+                let mut recipe = ExpansionRecipe::new(entity_name.clone());
+
+                // Extract internal net declarations
+                recipe.internal_nets = expansion_block.internal_nets();
+
+                // Extract instances and connections from connection statements
+                for conn_stmt in expansion_block.connection_stmts() {
+                    parse_expansion_connection_stmt(
+                        conn_stmt.syntax(),
+                        &mut recipe,
+                        &entity,
+                    );
+                }
+
+                if !recipe.instances.is_empty() || !recipe.connections.is_empty() {
+                    println!("  Extracted expansion recipe for '{}': {} instances, {} connections, {} internal nets",
+                        entity_name, recipe.instances.len(), recipe.connections.len(), recipe.internal_nets.len());
+                    recipes.insert(entity_name, recipe);
+                }
+            }
+        }
+    }
+
+    recipes
+}
+
+/// Parse a single CONNECTION_STMT inside an expansion block into instances and connections.
+///
+/// Handles flow chains like: `VOUT -> L: Ind(l_value).1 -> L.2 -> sw;`
+/// This creates:
+///   - Instance: L of type Ind with param l_value
+///   - Connections: ParentPin("VOUT") → InstancePin("L", "1"),
+///                  InstancePin("L", "2") → InternalNet("sw")
+fn parse_expansion_connection_stmt(
+    node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>,
+    recipe: &mut bhdl_common::ExpansionRecipe,
+    entity: &bhdl_ast::Entity,
+) {
+    use bhdl_common::{ExpansionInstance, ExpansionConnection, ExpansionEndpoint};
+    use bhdl_ast::SyntaxKind;
+
+    // Collect all known entity pin names
+    let entity_pins: Vec<String> = entity.pins()
+        .filter_map(|p| {
+            use bhdl_ast::HasName;
+            p.name().map(|t| t.text().to_string())
+        })
+        .collect();
+
+    // Collect known instance names to avoid duplicates
+    let known_instance_names: std::collections::HashSet<String> = recipe.instances.iter()
+        .map(|i| i.name.clone())
+        .collect();
+
+    // Walk through the flow chain elements in order.
+    // The chain is a sequence of endpoints separated by ARROW tokens.
+    // Each endpoint can be:
+    //   - A bare identifier (entity pin or internal net)
+    //   - handle: Type(params).pin  (inline instantiation)
+    //   - handle.pin  (reference to already-instantiated child)
+    let text = node.text().to_string();
+    let text = text.trim().trim_end_matches(';').trim();
+
+    // Split by " -> " to get the chain elements
+    let elements: Vec<&str> = text.split("->").map(|s| s.trim()).collect();
+
+    // Track last endpoint for chaining
+    let mut prev_endpoint: Option<ExpansionEndpoint> = None;
+
+    for element in &elements {
+        let element = element.trim();
+        if element.is_empty() {
+            continue;
+        }
+
+        // Check for "handle: Type(params).pin" pattern
+        let (endpoint, maybe_instance) = parse_expansion_element(
+            element,
+            &entity_pins,
+            &recipe.internal_nets,
+        );
+
+        // Register the instance if it's new
+        if let Some(inst) = maybe_instance {
+            if !known_instance_names.contains(&inst.name)
+                && !recipe.instances.iter().any(|i| i.name == inst.name)
+            {
+                recipe.instances.push(inst);
+            }
+        }
+
+        // Create connection from previous endpoint to this one
+        if let (Some(from), Some(ref to)) = (&prev_endpoint, &endpoint) {
+            recipe.connections.push(ExpansionConnection {
+                from: from.clone(),
+                to: to.clone(),
+            });
+        }
+
+        prev_endpoint = endpoint;
+    }
+}
+
+/// Parse a single element in an expansion flow chain.
+/// Returns the endpoint and optionally a new instance to create.
+fn parse_expansion_element(
+    text: &str,
+    entity_pins: &[String],
+    internal_nets: &[String],
+) -> (Option<bhdl_common::ExpansionEndpoint>, Option<bhdl_common::ExpansionInstance>) {
+    use bhdl_common::{ExpansionEndpoint, ExpansionInstance};
+
+    let text = text.trim();
+
+    // Check for "handle: Type(params).pin" pattern (inline instantiation)
+    if let Some(colon_pos) = text.find(':') {
+        let handle = text[..colon_pos].trim();
+        let rest = text[colon_pos + 1..].trim();
+
+        // Parse "Type(params).pin"
+        if let Some(paren_start) = rest.find('(') {
+            let comp_type = rest[..paren_start].trim();
+            if let Some(paren_end) = rest.find(')') {
+                let params_str = rest[paren_start + 1..paren_end].trim();
+                let params: Vec<String> = if params_str.is_empty() {
+                    Vec::new()
+                } else {
+                    params_str.split(',').map(|s| s.trim().to_string()).collect()
+                };
+
+                // Check for ".pin" after the params
+                let after_paren = rest[paren_end + 1..].trim();
+                let pin = if after_paren.starts_with('.') {
+                    Some(after_paren[1..].trim().to_string())
+                } else {
+                    None
+                };
+
+                let instance = ExpansionInstance {
+                    name: handle.to_string(),
+                    component_type: comp_type.to_string(),
+                    params,
+                    attributes: std::collections::HashMap::new(),
+                };
+
+                let endpoint = pin.map(|p| ExpansionEndpoint::InstancePin(handle.to_string(), p));
+                return (endpoint, Some(instance));
+            }
+        }
+    }
+
+    // Check for "instance.pin" pattern (reference to existing child)
+    if let Some(dot_pos) = text.find('.') {
+        let left = text[..dot_pos].trim();
+        let pin = text[dot_pos + 1..].trim();
+
+        // If left matches an entity pin, this is "ParentPin.something" — unlikely but handle
+        if entity_pins.contains(&left.to_string()) {
+            return (Some(ExpansionEndpoint::ParentPin(left.to_string())), None);
+        }
+
+        return (
+            Some(ExpansionEndpoint::InstancePin(left.to_string(), pin.to_string())),
+            None,
+        );
+    }
+
+    // Bare identifier — check if it's an entity pin or internal net
+    if entity_pins.contains(&text.to_string()) {
+        return (Some(ExpansionEndpoint::ParentPin(text.to_string())), None);
+    }
+
+    if internal_nets.contains(&text.to_string()) {
+        return (Some(ExpansionEndpoint::InternalNet(text.to_string())), None);
+    }
+
+    // Unknown — treat as internal net (could be a net reference like @GND)
+    // or an entity pin not yet seen
+    // For robustness, try stripping @ prefix
+    if text.starts_with('@') {
+        let net_name = &text[1..];
+        return (Some(ExpansionEndpoint::ParentPin(net_name.to_string())), None);
+    }
+
+    // Default: assume it's an entity pin (e.g., "GND", "VIN")
+    (Some(ExpansionEndpoint::ParentPin(text.to_string())), None)
 }
 
 // Remove the test module declaration as tests are now in the tests/ directory

@@ -630,7 +630,23 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
         bhdl_synthesizer::intent_attribute_stamper::stamp_intent_attributes(&mut netlist, flow_tracker);
     }
 
-    // Expand virtual pins (e.g. buck regulator VOUT → inductor + diode + cap)
+    // Expand entity instances via expansion { } blocks (new declarative approach)
+    // Runs BEFORE legacy vpin expander so it takes priority
+    let recipe_results = bhdl_synthesizer::expansion_interpreter::expand_entity_instances(
+        &mut netlist,
+        &analysis.expansion_recipes,
+    );
+    if !recipe_results.is_empty() {
+        println!("  {} expansion blocks applied for {} entity instance(s)",
+            "✓".green(), recipe_results.len());
+        for r in &recipe_results {
+            println!("    {} {} → {} child instance(s)",
+                "→".cyan(), r.parent_instance, r.child_instances.len());
+        }
+    }
+
+    // Expand virtual pins (legacy vpin_* attribute approach)
+    // Skips instances already expanded by the expansion interpreter above
     // If intent_max_ripple was stamped, this creates multi-tier cap banks
     let expansion_results = bhdl_synthesizer::virtual_pin_expander::expand_virtual_pins(&mut netlist);
     if !expansion_results.is_empty() {

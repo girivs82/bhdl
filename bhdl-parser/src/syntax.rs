@@ -118,7 +118,9 @@ pub enum SyntaxKind {
     FAULT_INJECT_KW,  // fault_inject
     SATISFIES_KW, // satisfies (for safety requirement compliance)
     VIA_KW,       // via (for satisfies declarations)
-    
+    EXPANSION_KW, // expansion (for entity expansion blocks)
+    INTERNAL_KW,  // internal (for expansion-local nets)
+
     // Testbench keywords
     TESTBENCH_KW,    // testbench
     SIMULATION_KW,   // simulation
@@ -327,6 +329,10 @@ pub enum SyntaxKind {
     INTENT_PARAMS,     // (param1, param2: value, ...)
     INTENT_NAMED_PARAM,// name: value in intent parameters
     NET_FLOW_STMT,     // net name: flow_expr for intent;
+
+    // Expansion block nodes (entity-level application circuit recipes)
+    EXPANSION_BLOCK,       // expansion { ... }
+    EXPANSION_INTERNAL_NET, // internal name: net;
 
     // Safety compliance nodes
     SATISFIES_BLOCK,   // satisfies { ... }

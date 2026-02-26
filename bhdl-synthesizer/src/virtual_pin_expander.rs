@@ -97,6 +97,11 @@ fn find_candidates(netlist: &Netlist) -> Vec<Candidate> {
             continue;
         }
 
+        // Skip instances already expanded by the expansion interpreter
+        if inst.attributes.contains_key("expansion_applied") {
+            continue;
+        }
+
         // Read expansion attributes (with defaults)
         let sw_name = inst.attributes.get("vpin_sw_name")
             .cloned().unwrap_or_else(|| "SW".to_string());

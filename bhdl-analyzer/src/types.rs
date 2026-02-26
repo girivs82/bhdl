@@ -452,6 +452,8 @@ pub struct AnalysisResult {
     pub power_domain_expansion: crate::passes::PowerDomainExpansion,
     /// Monomorphization results (Pass 2.5: generic specialization)
     pub monomorphization: crate::passes::MonomorphizationResult,
+    /// Expansion recipes extracted from entity `expansion { }` blocks
+    pub expansion_recipes: HashMap<String, bhdl_common::ExpansionRecipe>,
 }
 
 impl Default for AnalysisResult {
@@ -479,6 +481,7 @@ impl Default for AnalysisResult {
             instance_registry: crate::passes::InstanceRegistry::new(),
             power_domain_expansion: crate::passes::PowerDomainExpansion::new(),
             monomorphization: crate::passes::MonomorphizationResult::new(),
+            expansion_recipes: HashMap::new(),
         }
     }
 } 
