@@ -38,7 +38,7 @@ import { LM2596_5V, LM7805, LM1117_33, LM1117_18 } from "bhdl-stdlib/simple/regu
 
 board ComplexPowerTree {
     power VIN = 24V @ 5A |> input_protection |> input_filtering(max_ripple: 50mV) |> regulation;
-    power V5_BUCK = 5V @ 2A |> output_filtering |> loading;
+    power V5_BUCK = 5V @ 2A |> output_filtering(max_ripple: 50mV) |> loading;
     power V3_3 = 3.3V @ 300mA |> output_filtering |> loading;
     power V5_AUX = 5V @ 500mA |> output_filtering |> loading;
     power V1_8 = 1.8V @ 200mA |> output_filtering |> loading;
@@ -60,9 +60,7 @@ board ComplexPowerTree {
     buck.VOUT -> V5_BUCK;
     buck.GND -> GND;
 
-    // 5V buck output filter
-    V5_BUCK -> c5b: Cap(10µF).1 for output_filtering(max_ripple: 50mV);
-    c5b.2 -> GND;
+    // Output filter cap auto-created from |> output_filtering(max_ripple: 50mV) on V5_BUCK
 
     // 5V buck indicator LED (green)
     V5_BUCK -> r_led5b: Res(330).1 -> r_led5b.2 -> led5b: LED("green").A for loading(purpose: "indicator");
@@ -76,9 +74,7 @@ board ComplexPowerTree {
     reg33.VO -> V3_3;
     reg33.GND -> GND;
 
-    // 3.3V output filter
-    V3_3 -> c33: Cap(10µF).1 for output_filtering();
-    c33.2 -> GND;
+    // Output filter cap auto-created from |> output_filtering on V3_3
 
     // 3.3V indicator LED (blue)
     V3_3 -> r_led33: Res(150).1 -> r_led33.2 -> led33: LED("blue").A for loading(purpose: "indicator");
@@ -94,9 +90,7 @@ board ComplexPowerTree {
     reg5aux.VO -> V5_AUX;
     reg5aux.GND -> GND;
 
-    // 5V aux output filter
-    V5_AUX -> c5a: Cap(10µF).1 for output_filtering();
-    c5a.2 -> GND;
+    // Output filter cap auto-created from |> output_filtering on V5_AUX
 
     // 5V aux indicator LED (red)
     V5_AUX -> r_led5a: Res(470).1 -> r_led5a.2 -> led5a: LED("red").A for loading(purpose: "indicator");
@@ -107,9 +101,7 @@ board ComplexPowerTree {
     reg18.VO -> V1_8;
     reg18.GND -> GND;
 
-    // 1.8V output filter
-    V1_8 -> c18: Cap(10µF).1 for output_filtering();
-    c18.2 -> GND;
+    // Output filter cap auto-created from |> output_filtering on V1_8
 
     // 1.8V load (18Ω ≈ 100mA)
     V1_8 -> r_load18: Res(18).1 -> r_load18.2 -> GND for loading(purpose: "main load");

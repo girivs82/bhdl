@@ -701,6 +701,37 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
         }
     }
 
+    // Auto-create output filter caps for rails with |> output_filtering in stage chain
+    if let Some(ref flow_tracker) = analysis.flow_tracker {
+        let output_specs = bhdl_synthesizer::output_cap_sizer::collect_rails_needing_output_filter(
+            flow_tracker, &analysis,
+        );
+        if !output_specs.is_empty() {
+            let auto_names = bhdl_synthesizer::output_cap_sizer::auto_create_output_filter_caps(
+                &mut netlist, &output_specs,
+            );
+            if !auto_names.is_empty() {
+                println!("  {} auto-created output filter caps: {}",
+                    "✓".green(), auto_names.join(", "));
+            }
+        }
+    }
+
+    // Size output filter caps using GLACIER data
+    if let Some(ref annotations) = sim_annotations {
+        let output_sizing = bhdl_synthesizer::output_cap_sizer::size_output_filter_caps(
+            &mut netlist, annotations,
+        );
+        if !output_sizing.is_empty() {
+            println!("  {} output caps sized for {} rail(s)",
+                "✓".green(), output_sizing.len());
+            for r in &output_sizing {
+                println!("    {} {}: {:.0}µF (load {:.0}mA, ripple target: {:.0}mV, type: {})",
+                    "→".cyan(), r.cap_name, r.computed_cap_uf, r.load_current_ma, r.ripple_target_mv, r.regulator_type);
+            }
+        }
+    }
+
     // Apply GLACIER-driven physical selection (package, voltage rating, etc.)
     if let Some(ref annotations) = sim_annotations {
         let results = bhdl_synthesizer::glacier_physical_selection::apply_glacier_physical_selection(
