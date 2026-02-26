@@ -1006,6 +1006,30 @@
             }
         }
 
+        // ── 7f. Rescue orphan chain children whose parents moved to branches ──
+        // shuntChainDown links (e.g., r_led5a→led5a) are created in section 3b.
+        // If the parent (r_led5a) was later moved to branches by 7e, the child
+        // (led5a) is left as an orphan shunt with wrong junction because 7e
+        // skips chainChildren. Move these orphans to branches under their parent.
+        {
+            const branchSet = new Set(branchNames.map(b => b.name));
+            for (const [parent, child] of shuntChainDown) {
+                if (!branchSet.has(parent)) continue;
+                const ci = shuntNames.findIndex(s => s.name === child);
+                if (ci < 0) continue;
+                // Find parent's branch junction
+                const parentBranch = branchNames.find(b => b.name === parent);
+                const junction = parentBranch ? parentBranch.junctionName : undefined;
+                shuntNames.splice(ci, 1);
+                branchNames.push({
+                    name: child,
+                    junctionName: junction,
+                    junctionSide: 'left',
+                    isParallel: true
+                });
+            }
+        }
+
         // ── 8. Topological placement for main-path nodes ──
         // Topological sort of all main-band nodes (power sources, main-path
         // instances, entity ports) then place sequentially L→R.
@@ -2220,27 +2244,47 @@
                     const headSz = offPathSizes.get(head.name) || { w: INSTANCE_BOX_MIN_WIDTH, h: 60 };
                     positions.set(head.name, { x: hx, y: by, w: headSz.w, h: headSz.h });
 
-                    // Children drop vertically below this head, like main-band shunts
+                    // Children drop vertically below this head, like main-band shunts.
+                    // Multi-row layout: wrap into rows when children exceed MAX_SHUNT_PER_ROW.
+                    // All rows grow RIGHT from the head's port (no boustrophedon) to keep
+                    // wire routing simple — wires go right+down from the bus point,
+                    // never crossing back through the head.
                     const children = headChildren.get(head.name) || [];
                     if (children.length > 0) {
+                        const rows = splitIntoRows(children, MAX_SHUNT_PER_ROW);
                         const dropY = by + headSz.h + SHUNT_DROP;
                         // Center first child under head's output port
                         const portX = hx + headSz.w + PORT_STUB_LEN;
-                        let sx = portX - (offPathSizes.get(children[0].name) || { w: INSTANCE_BOX_MIN_WIDTH }).w / 2;
-                        for (let si = 0; si < children.length; si++) {
-                            const shItem = children[si];
-                            const sz = offPathSizes.get(shItem.name) || { w: INSTANCE_BOX_MIN_WIDTH, h: 60 };
-                            positions.set(shItem.name, { x: sx, y: dropY, w: sz.w, h: sz.h });
-                            const thisOH = shuntItemOverhang(shItem.name);
-                            const nextOH = si + 1 < children.length ? shuntItemOverhang(children[si + 1].name) : { left: 0, right: 0 };
-                            sx += sz.w + Math.max(MIN_ITEM_GAP_BASE, thisOH.right + nextOH.left + ANNOTATION_PAD);
+                        // Compute row stride (like main-band multi-row shunts)
+                        const tallestH = Math.max(...children.map(c => (offPathSizes.get(c.name) || { h: 60 }).h));
+                        const gndSpace = GND_STUB_HEIGHT + GND_LINE_SPACING * 3;
+                        const GND_CLEARANCE = 15;
+                        const rowDrop = dropY - (by + headSz.h / 2);
+                        const ROW_STRIDE = rows.length > 1
+                            ? tallestH + gndSpace + GND_CLEARANCE + rowDrop
+                            : tallestH + gndSpace + 30;
+
+                        let maxRowRight = hx + headSz.w;
+                        const firstRowStartX = portX - (offPathSizes.get(rows[0][0].name) || { w: INSTANCE_BOX_MIN_WIDTH }).w / 2;
+
+                        for (let rowIdx = 0; rowIdx < rows.length; rowIdx++) {
+                            const row = rows[rowIdx];
+                            const rowY = dropY + rowIdx * ROW_STRIDE;
+                            // All rows grow right, starting at the same left edge
+                            let sx = firstRowStartX;
+                            for (let si = 0; si < row.length; si++) {
+                                const shItem = row[si];
+                                const sz = offPathSizes.get(shItem.name) || { w: INSTANCE_BOX_MIN_WIDTH, h: 60 };
+                                positions.set(shItem.name, { x: sx, y: rowY, w: sz.w, h: sz.h });
+                                const thisOH = shuntItemOverhang(shItem.name);
+                                const nextOH = si + 1 < row.length ? shuntItemOverhang(row[si + 1].name) : { left: 0, right: 0 };
+                                maxRowRight = Math.max(maxRowRight, sx + sz.w + thisOH.right);
+                                sx += sz.w + Math.max(MIN_ITEM_GAP_BASE, thisOH.right + nextOH.left + ANNOTATION_PAD);
+                            }
                         }
-                        // Advance hx past the rightmost child
-                        const lastChild = children[children.length - 1];
-                        const lastSz = offPathSizes.get(lastChild.name) || { w: INSTANCE_BOX_MIN_WIDTH };
-                        const lastPos = positions.get(lastChild.name);
-                        const lastOH = shuntItemOverhang(lastChild.name);
-                        hx = Math.max(hx + headSz.w, lastPos.x + lastSz.w + lastOH.right) + 60;
+
+                        // Advance hx past the widest row
+                        hx = maxRowRight + 60;
                     } else {
                         hx += headSz.w + 60;
                     }
@@ -3245,6 +3289,74 @@
                         newSegs.push({ x1: seg.x1, y1: seg.y1, x2: seg.x1, y2: detourY });
                         newSegs.push({ x1: seg.x1, y1: detourY, x2: seg.x2, y2: detourY });
                         newSegs.push({ x1: seg.x2, y1: detourY, x2: seg.x2, y2: seg.y2 });
+                        modified = true;
+                    } else {
+                        newSegs.push(seg);
+                    }
+                }
+                if (modified) {
+                    wire.segments.length = 0;
+                    wire.segments.push(...newSegs);
+                }
+            }
+        }
+
+        // Post-process: reroute vertical wire segments that pass through
+        // non-endpoint component bounding boxes. Detour to the right of the
+        // obstacle. When the segment's start point is inside the obstacle
+        // (e.g., bus wire originating near a component), first go up to
+        // clear the top of the obstacle before detouring right.
+        {
+            const DETOUR_MARGIN = 12;
+            for (const wire of layoutWires) {
+                if (wire.segments.length === 0) continue;
+                const excludeSet = new Set([wire.sourceElName, wire.sinkElName]);
+                let modified = false;
+                const newSegs = [];
+                for (const seg of wire.segments) {
+                    const isVert = Math.abs(seg.x1 - seg.x2) < 2;
+                    if (!isVert) { newSegs.push(seg); continue; }
+                    const segMinY = Math.min(seg.y1, seg.y2);
+                    const segMaxY = Math.max(seg.y1, seg.y2);
+                    let blocked = null;
+                    for (const el of layoutElements) {
+                        if (el.type !== 'instance') continue;
+                        if (excludeSet.has(el.name)) continue;
+                        const elRight = el.x + el.w;
+                        const elBottom = el.y + el.h;
+                        if (seg.x1 > el.x && seg.x1 < elRight &&
+                            segMaxY > el.y && segMinY < elBottom) {
+                            blocked = el;
+                            break;
+                        }
+                    }
+                    if (blocked) {
+                        const detourX = blocked.x + blocked.w + DETOUR_MARGIN;
+                        const goingDown = seg.y2 > seg.y1;
+                        if (goingDown) {
+                            // Segment goes downward through obstacle.
+                            // Route: up to top of obstacle → right → down past bottom → left back
+                            const clearTopY = blocked.y - DETOUR_MARGIN;
+                            const clearBotY = Math.max(seg.y2, blocked.y + blocked.h + DETOUR_MARGIN);
+                            if (seg.y1 > blocked.y) {
+                                // Start is inside obstacle — go up first
+                                newSegs.push({ x1: seg.x1, y1: seg.y1, x2: seg.x1, y2: clearTopY });
+                            }
+                            const startY = Math.min(seg.y1, clearTopY);
+                            newSegs.push({ x1: seg.x1, y1: startY, x2: detourX, y2: startY });
+                            newSegs.push({ x1: detourX, y1: startY, x2: detourX, y2: seg.y2 });
+                            newSegs.push({ x1: detourX, y1: seg.y2, x2: seg.x2, y2: seg.y2 });
+                        } else {
+                            // Segment goes upward through obstacle.
+                            const clearBotY = blocked.y + blocked.h + DETOUR_MARGIN;
+                            if (seg.y1 < blocked.y + blocked.h) {
+                                newSegs.push({ x1: seg.x1, y1: seg.y1, x2: seg.x1, y2: clearBotY });
+                            }
+                            const startY = Math.max(seg.y1, clearBotY);
+                            newSegs.push({ x1: seg.x1, y1: startY, x2: detourX, y2: startY });
+                            newSegs.push({ x1: detourX, y1: startY, x2: detourX, y2: seg.y2 });
+                            newSegs.push({ x1: detourX, y1: seg.y2, x2: seg.x2, y2: seg.y2 });
+                        }
                         modified = true;
                     } else {
                         newSegs.push(seg);
