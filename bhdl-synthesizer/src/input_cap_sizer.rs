@@ -164,7 +164,7 @@ pub fn auto_create_input_filter_caps(
 }
 
 /// Look up rail voltage from net attributes in analysis symbol tables.
-fn find_rail_voltage(rail_name: &str, analysis: &AnalysisResult) -> f64 {
+pub(crate) fn find_rail_voltage(rail_name: &str, analysis: &AnalysisResult) -> f64 {
     // Check global scope nets
     if let Some(sym) = analysis.global_scope.get_nets().get(rail_name) {
         if sym.kind == SymbolKind::Net {
@@ -236,7 +236,7 @@ fn find_max_ripple_for_rail(rail_name: &str, flow_tracker: &FlowTracker) -> Opti
 }
 
 /// Find a net by name in the netlist.
-fn find_net_by_name(netlist: &Netlist, name: &str) -> Option<NetId> {
+pub(crate) fn find_net_by_name(netlist: &Netlist, name: &str) -> Option<NetId> {
     for (net_id, net) in &netlist.nets {
         if net.name.as_deref() == Some(name) {
             return Some(net_id);
@@ -246,7 +246,7 @@ fn find_net_by_name(netlist: &Netlist, name: &str) -> Option<NetId> {
 }
 
 /// Find the GND net in the netlist (name "GND" or "0").
-fn find_gnd_net(netlist: &Netlist) -> Option<NetId> {
+pub(crate) fn find_gnd_net(netlist: &Netlist) -> Option<NetId> {
     for (net_id, net) in &netlist.nets {
         match net.name.as_deref() {
             Some("GND") | Some("0") => return Some(net_id),

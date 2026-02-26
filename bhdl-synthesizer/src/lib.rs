@@ -70,6 +70,9 @@ pub mod input_cap_calculator;
 // Post-GLACIER input capacitor sizing pass
 pub mod input_cap_sizer;
 
+// Post-GLACIER output capacitor sizing pass
+pub mod output_cap_sizer;
+
 // Intent-aware component generator
 pub mod intent_aware_generator;
 
