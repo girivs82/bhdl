@@ -14,6 +14,8 @@ pub mod diagnostic;
 pub mod generics;
 pub mod safety;
 pub mod expansion;
+pub mod symbol;
+pub mod layout_meta;
 
 pub use component_types::{ComponentType, ComponentTypeMapper};
 pub use pin_metadata::{PinMetadata, PinFunction, ModulePinMetadata};
@@ -41,3 +43,5 @@ pub use safety::{
 pub use expansion::{
     ExpansionRecipe, ExpansionInstance, ExpansionConnection, ExpansionEndpoint,
 };
+pub use symbol::{SymbolDefinition, SymbolSide as CommonSymbolSide, PinSide, SideEntry};
+pub use layout_meta::LayoutDefinition;

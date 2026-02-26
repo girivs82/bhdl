@@ -120,6 +120,16 @@ pub enum SyntaxKind {
     VIA_KW,       // via (for satisfies declarations)
     EXPANSION_KW, // expansion (for entity expansion blocks)
     INTERNAL_KW,  // internal (for expansion-local nets)
+    SYMBOL_KW,    // symbol (for schematic symbol definitions)
+    LAYOUT_KW,    // layout (for PCB layout definitions)
+    BODY_KW,      // body (for symbol body hint)
+    LEFT_KW,      // left (symbol pin side)
+    RIGHT_KW,     // right (symbol pin side)
+    TOP_KW,       // top (symbol pin side)
+    BOTTOM_KW,    // bottom (symbol pin side)
+    GROUP_KW,     // group (symbol pin group)
+    PART_KW,      // part (multi-part symbol)
+    PACKAGE_KW,   // package (layout package)
 
     // Testbench keywords
     TESTBENCH_KW,    // testbench
@@ -333,6 +343,15 @@ pub enum SyntaxKind {
     // Expansion block nodes (entity-level application circuit recipes)
     EXPANSION_BLOCK,       // expansion { ... }
     EXPANSION_INTERNAL_NET, // internal name: net;
+
+    // Symbol and layout definition nodes
+    SYMBOL_DEF,            // symbol EntityName { ... }
+    SYMBOL_BODY_HINT,      // body rectangle;
+    SYMBOL_SIDE,           // left { pin1, pin2 } or right { group ... }
+    SYMBOL_GROUP,          // group "label" { pin1, pin2 }
+    SYMBOL_PART,           // part "label" { side ... } (Phase 2 stub)
+    LAYOUT_DEF,            // layout EntityName { ... }
+    LAYOUT_PACKAGE,        // package HTSSOP-16;
 
     // Safety compliance nodes
     SATISFIES_BLOCK,   // satisfies { ... }

@@ -40,6 +40,10 @@ struct Pass1Context {
     alias_specializations: Vec<crate::passes::AliasSpecialization>,
     // Expansion recipes extracted from imported entity definitions
     expansion_recipes: HashMap<String, bhdl_common::ExpansionRecipe>,
+    // Symbol definitions extracted from imported files
+    symbol_definitions: HashMap<String, bhdl_common::SymbolDefinition>,
+    // Layout definitions extracted from imported files
+    layout_definitions: HashMap<String, bhdl_common::LayoutDefinition>,
 }
 
 impl Pass1Context {
@@ -53,6 +57,8 @@ impl Pass1Context {
             base_path: PathBuf::from("."),
             alias_specializations: Vec::new(),
             expansion_recipes: HashMap::new(),
+            symbol_definitions: HashMap::new(),
+            layout_definitions: HashMap::new(),
         }
     }
 
@@ -97,7 +103,7 @@ pub fn populate_global_scope_and_build_definition_scopes_with_base(
     source_file: &SourceFile,
     base_path: &Path
 ) -> (SymbolTable, HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>) {
-    let (registry, _alias_specializations, _expansion_recipes) = build_scope_registry_with_base(source_file, base_path);
+    let (registry, _alias_specializations, _expansion_recipes, _symbol_defs, _layout_defs) = build_scope_registry_with_base(source_file, base_path);
     // Extract legacy data structures for backward compatibility
     let global_scope = registry.extract_global_scope();
     let definition_scopes = registry.extract_definition_scopes();
@@ -116,7 +122,13 @@ pub fn build_scope_registry(source_file: &SourceFile) -> ScopeRegistry {
 pub fn build_scope_registry_with_base(
     source_file: &SourceFile,
     base_path: &Path,
-) -> (ScopeRegistry, Vec<crate::passes::AliasSpecialization>, HashMap<String, bhdl_common::ExpansionRecipe>) {
+) -> (
+    ScopeRegistry,
+    Vec<crate::passes::AliasSpecialization>,
+    HashMap<String, bhdl_common::ExpansionRecipe>,
+    HashMap<String, bhdl_common::SymbolDefinition>,
+    HashMap<String, bhdl_common::LayoutDefinition>,
+) {
     println!("Building scope registry (Pass 1)...");
     let mut context = Pass1Context::new();
     context.base_path = base_path.to_path_buf();
@@ -157,7 +169,9 @@ pub fn build_scope_registry_with_base(
              context.registry.len());
     let alias_specializations = context.alias_specializations;
     let expansion_recipes = context.expansion_recipes;
-    (context.registry, alias_specializations, expansion_recipes)
+    let symbol_definitions = context.symbol_definitions;
+    let layout_definitions = context.layout_definitions;
+    (context.registry, alias_specializations, expansion_recipes, symbol_definitions, layout_definitions)
 }
 
 // Pass 1 recursive helper (takes Pass1Context)
@@ -901,6 +915,16 @@ fn process_import(import: &ImportStmt, context: &mut Pass1Context) {
             let imported_recipes = crate::extract_expansion_recipes(&imported_source);
             for (name, recipe) in imported_recipes {
                 context.expansion_recipes.insert(name, recipe);
+            }
+
+            // Extract symbol and layout definitions from imported files
+            let imported_symbols = crate::extract_symbol_definitions(&imported_source);
+            for (name, sym) in imported_symbols {
+                context.symbol_definitions.insert(name, sym);
+            }
+            let imported_layouts = crate::extract_layout_definitions(&imported_source);
+            for (name, lay) in imported_layouts {
+                context.layout_definitions.insert(name, lay);
             }
 
             // First, build a map of all entities in the file

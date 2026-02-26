@@ -210,11 +210,41 @@
         return text.length * (fontSize * 0.62);
     }
 
-    function computeBoxSize(name, entityType, inPorts, outPorts, parameters, category) {
+    function computeBoxSize(name, entityType, inPorts, outPorts, parameters, category, symbolHint) {
         if (category && isSymbolCategory(category)) {
+            // If symbol hint says "triangle" body, use opamp symbol size
+            if (symbolHint && symbolHint.body === 'triangle') {
+                const s = SYMBOL_SIZES['opamp'];
+                return { w: s.boundW, h: s.boundH };
+            }
             const s = SYMBOL_SIZES[category];
             return { w: s.boundW, h: s.boundH };
         }
+
+        // For IC boxes with symbol hints, count pins per side for accurate sizing
+        if (symbolHint && Object.keys(symbolHint.pin_sides).length > 0) {
+            let leftCount = 0, rightCount = 0, topCount = 0, bottomCount = 0;
+            let maxLeftW = 0, maxRightW = 0, maxTopW = 0, maxBottomW = 0;
+            for (const [pin, side] of Object.entries(symbolHint.pin_sides)) {
+                const tw = measureTextWidth(pin, FONT_SIZE);
+                if (side === 'left') { leftCount++; maxLeftW = Math.max(maxLeftW, tw); }
+                else if (side === 'right') { rightCount++; maxRightW = Math.max(maxRightW, tw); }
+                else if (side === 'top') { topCount++; maxTopW = Math.max(maxTopW, tw); }
+                else if (side === 'bottom') { bottomCount++; maxBottomW = Math.max(maxBottomW, tw); }
+            }
+            // Account for group separator gaps
+            const groupGaps = symbolHint.groups ? symbolHint.groups.length * 8 : 0;
+            const vertPortCount = Math.max(leftCount, rightCount, 1);
+            const paramLines = (parameters && parameters.length > 0) ? 1 : 0;
+            const h = HEADER_HEIGHT + INSTANCE_PADDING * 2 + vertPortCount * PORT_SPACING + paramLines * PARAM_ROW_HEIGHT + groupGaps;
+            const horizPortCount = Math.max(topCount, bottomCount, 0);
+            const displayLabel = entityType || name;
+            const nameW = measureTextWidth(displayLabel, FONT_SIZE + 1);
+            const minWidthFromHPorts = horizPortCount > 0 ? horizPortCount * PORT_SPACING + 40 : 0;
+            const w = Math.max(INSTANCE_BOX_MIN_WIDTH, maxLeftW + maxRightW + 40, nameW + 30, minWidthFromHPorts);
+            return { w, h };
+        }
+
         const portCount = Math.max(inPorts.length, outPorts.length, 1);
         const paramLines = (parameters && parameters.length > 0) ? 1 : 0;
         const h = HEADER_HEIGHT + INSTANCE_PADDING * 2 + portCount * PORT_SPACING + paramLines * PARAM_ROW_HEIGHT;
@@ -1210,7 +1240,7 @@
                 const inst = instMap.get(nodeId);
                 if (!inst) continue;
                 const { inP, outP } = getInstPorts(inst);
-                const size = computeBoxSize(nodeId, inst.entity_type, inP, outP, inst.parameters, inst.category);
+                const size = computeBoxSize(nodeId, inst.entity_type, inP, outP, inst.parameters, inst.category, inst.symbol);
                 w = size.w; h = size.h;
             }
             positions.set(nodeId, { x: curX, y: 40, w, h });
@@ -2458,7 +2488,7 @@
             const isFeedback = feedbackNames.some(f => f.name === name);
             const isShuntLike = !isFeedback && offPathNames.has(name) && (shuntInstNames.has(name) || !branchNames.some(b => b.name === name));
 
-            const instInPorts = [], instOutPorts = [];
+            const instInPorts = [], instOutPorts = [], instTopPorts = [], instBottomPorts = [];
             const seenIn = new Set(), seenOut = new Set();
             const isSymbol = isSymbolCategory(inst.category);
             for (const c of inst.connections) {
@@ -2511,6 +2541,41 @@
                         const px = isFlipped ? pos.x : pos.x + pos.w;
                         instOutPorts.push({ name: c.port, x: px, y: py, pinType });
                     }
+                } else if (inst.symbol && Object.keys(inst.symbol.pin_sides).length > 0) {
+                    // IC box with symbol hints — use pin_sides for side assignment
+                    const isFlipped = flippedNames.has(name);
+                    const pinSide = inst.symbol.pin_sides[c.port];
+                    if (!pinSide) {
+                        // Pin not in symbol definition — fall back to heuristic
+                        if (r.has('in') && !seenIn.has(c.port)) {
+                            seenIn.add(c.port);
+                            instInPorts.push({ name: c.port, x: 0, y: 0, pinType: getPortPinType(name, c.port), isClock: clockSignals.has(c.signal), isReset: resetSignals.has(c.signal), _side: 'left' });
+                        }
+                        if (r.has('out') && !seenOut.has(c.port)) {
+                            seenOut.add(c.port);
+                            instOutPorts.push({ name: c.port, x: 0, y: 0, pinType: getPortPinType(name, c.port), _side: 'right' });
+                        }
+                    } else if (pinSide === 'left') {
+                        if (!seenIn.has(c.port)) {
+                            seenIn.add(c.port);
+                            instInPorts.push({ name: c.port, x: 0, y: 0, pinType: getPortPinType(name, c.port), isClock: clockSignals.has(c.signal), isReset: resetSignals.has(c.signal), _side: 'left' });
+                        }
+                    } else if (pinSide === 'right') {
+                        if (!seenOut.has(c.port)) {
+                            seenOut.add(c.port);
+                            instOutPorts.push({ name: c.port, x: 0, y: 0, pinType: getPortPinType(name, c.port), _side: 'right' });
+                        }
+                    } else if (pinSide === 'top') {
+                        if (!seenIn.has(c.port) && !seenOut.has(c.port)) {
+                            seenIn.add(c.port); // prevent duplicate
+                            instTopPorts.push({ name: c.port, x: 0, y: 0, pinType: getPortPinType(name, c.port), _side: 'top' });
+                        }
+                    } else if (pinSide === 'bottom') {
+                        if (!seenIn.has(c.port) && !seenOut.has(c.port)) {
+                            seenOut.add(c.port); // prevent duplicate
+                            instBottomPorts.push({ name: c.port, x: 0, y: 0, pinType: getPortPinType(name, c.port), _side: 'bottom' });
+                        }
+                    }
                 } else {
                     const isFlipped = flippedNames.has(name);
                     if (r.has('in') && !seenIn.has(c.port)) {
@@ -2527,6 +2592,40 @@
                     }
                 }
             }
+            // Compute coordinates for symbol-hint ports (pushed with placeholder x:0, y:0)
+            if (inst.symbol && Object.keys(inst.symbol.pin_sides).length > 0) {
+                const isFlipped = flippedNames.has(name);
+                // Left-side ports: spaced vertically on left (or right if flipped)
+                let leftIdx = 0;
+                for (const p of instInPorts) {
+                    if (p._side === 'left' || !p._side) {
+                        p.y = pos.y + HEADER_HEIGHT + INSTANCE_PADDING + (leftIdx + 0.5) * PORT_SPACING;
+                        p.x = isFlipped ? pos.x + pos.w : pos.x;
+                        leftIdx++;
+                    }
+                }
+                // Right-side ports: spaced vertically on right (or left if flipped)
+                let rightIdx = 0;
+                for (const p of instOutPorts) {
+                    if (p._side === 'right' || !p._side) {
+                        p.y = pos.y + HEADER_HEIGHT + INSTANCE_PADDING + (rightIdx + 0.5) * PORT_SPACING;
+                        p.x = isFlipped ? pos.x : pos.x + pos.w;
+                        rightIdx++;
+                    }
+                }
+                // Top ports: spaced horizontally along the top edge
+                for (let i = 0; i < instTopPorts.length; i++) {
+                    const p = instTopPorts[i];
+                    p.x = pos.x + (pos.w / (instTopPorts.length + 1)) * (i + 1);
+                    p.y = pos.y;
+                }
+                // Bottom ports: spaced horizontally along the bottom edge
+                for (let i = 0; i < instBottomPorts.length; i++) {
+                    const p = instBottomPorts[i];
+                    p.x = pos.x + (pos.w / (instBottomPorts.length + 1)) * (i + 1);
+                    p.y = pos.y + pos.h;
+                }
+            }
             // Attach simulation annotations (current, power) if available.
             // build_simulation_annotations() unifies decomposed branches (e.g. regulators)
             // into a single entry per instance, so direct lookup is sufficient.
@@ -2540,7 +2639,7 @@
             const isExpShunt = inst.expansion_parent
                 && inst.expansion_role && inst.expansion_role !== 'series';
             const shuntSide = shuntGroupSide.get(name) || null;
-            layoutElements.push({ x: pos.x, y: pos.y, w: pos.w, h: pos.h, name, handleName, refdes, displayName, _isExpShunt: !!isExpShunt, shuntSide, type: 'instance', entityType: inst.entity_type, parameters: inst.parameters, category: inst.category, isShunt: isShuntLike, isFlipped: flippedNames.has(name), inputPorts: instInPorts, outputPorts: instOutPorts, gndStubs: gndStubsByInst.get(name) || [], pwrStubs: pwrStubsByInst.get(name) || [], pgStubs: [], line: inst.line, simCurrent, simPower: simPowerW, gndTargetY: pos.gndTargetY, _rowIdx: pos._rowIdx || 0, _busX: pos._busX, _busY: pos._busY, _busLeftX: pos._busLeftX, _connections: inst.connections, stageName: inst.stage_name || null, stageOrder: inst.stage_order != null ? inst.stage_order : null, stageRail: inst.stage_rail || null, intent: inst.intent || null, flowIds: inst.flow_ids || [] });
+            layoutElements.push({ x: pos.x, y: pos.y, w: pos.w, h: pos.h, name, handleName, refdes, displayName, _isExpShunt: !!isExpShunt, shuntSide, type: 'instance', entityType: inst.entity_type, parameters: inst.parameters, category: inst.category, isShunt: isShuntLike, isFlipped: flippedNames.has(name), inputPorts: instInPorts, outputPorts: instOutPorts, topPorts: instTopPorts, bottomPorts: instBottomPorts, symbolHint: inst.symbol || null, gndStubs: gndStubsByInst.get(name) || [], pwrStubs: pwrStubsByInst.get(name) || [], pgStubs: [], line: inst.line, simCurrent, simPower: simPowerW, gndTargetY: pos.gndTargetY, _rowIdx: pos._rowIdx || 0, _busX: pos._busX, _busY: pos._busY, _busLeftX: pos._busLeftX, _connections: inst.connections, stageName: inst.stage_name || null, stageOrder: inst.stage_order != null ? inst.stage_order : null, stageRail: inst.stage_rail || null, intent: inst.intent || null, flowIds: inst.flow_ids || [] });
         }
 
         // Entity output
@@ -2585,6 +2684,8 @@
                 dbg.push(`  ${el.name}: x=${el.x.toFixed(0)} y=${el.y.toFixed(0)} w=${el.w.toFixed(0)} h=${el.h.toFixed(0)} isShunt=${el.isShunt} isFlipped=${el.isFlipped} cat=${el.category}`);
                 dbg.push(`    inPorts: [${el.inputPorts.map(p=>p.name+'@'+p.x.toFixed(0)+','+p.y.toFixed(0)).join('; ')}]`);
                 dbg.push(`    outPorts: [${el.outputPorts.map(p=>p.name+'@'+p.x.toFixed(0)+','+p.y.toFixed(0)).join('; ')}]`);
+                if (el.topPorts && el.topPorts.length > 0) dbg.push(`    topPorts: [${el.topPorts.map(p=>p.name+'@'+p.x.toFixed(0)+','+p.y.toFixed(0)).join('; ')}]`);
+                if (el.bottomPorts && el.bottomPorts.length > 0) dbg.push(`    bottomPorts: [${el.bottomPorts.map(p=>p.name+'@'+p.x.toFixed(0)+','+p.y.toFixed(0)).join('; ')}]`);
             }
             dbg.push('=== EXPANSION GROUPS ===');
             for (const [pname, group] of expansionGroups) {
@@ -2604,6 +2705,15 @@
         function findPort(elName, portName, side) {
             const el = elByName.get(elName);
             if (!el) return null;
+            // Check top/bottom ports first (symbol-hint IC)
+            if (el.topPorts) {
+                const tp = el.topPorts.find(p => p.name === portName);
+                if (tp) return { x: tp.x, y: tp.y - PORT_STUB_LEN, dir: 0, _vertical: -1 };
+            }
+            if (el.bottomPorts) {
+                const bp = el.bottomPorts.find(p => p.name === portName);
+                if (bp) return { x: bp.x, y: bp.y + PORT_STUB_LEN, dir: 0, _vertical: 1 };
+            }
             // Search expected list first, then fallback
             const lists = side === 'out'
                 ? [el.outputPorts, el.inputPorts]
@@ -3630,6 +3740,88 @@
                 const labelX = el.isFlipped ? port.x + 4 : port.x - 4;
                 ctx.fillText(port.name, labelX, port.y);
             }
+        }
+
+        // Top ports (symbol hint) — stub goes upward
+        if (el.topPorts) {
+            for (const port of el.topPorts) {
+                const pc = portColor(port);
+                ctx.strokeStyle = pc;
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.moveTo(port.x, port.y);
+                ctx.lineTo(port.x, port.y - PORT_STUB_LEN);
+                ctx.stroke();
+                ctx.fillStyle = pc;
+                ctx.beginPath();
+                ctx.arc(port.x, port.y - PORT_STUB_LEN, PORT_DOT_R - 0.5, 0, Math.PI * 2);
+                ctx.fill();
+                if (showLabels) {
+                    ctx.fillStyle = COLORS.text;
+                    ctx.font = `${FONT_SIZE - 1}px monospace`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'bottom';
+                    ctx.fillText(port.name, port.x, port.y - PORT_STUB_LEN - 3);
+                }
+            }
+        }
+
+        // Bottom ports (symbol hint) — stub goes downward
+        if (el.bottomPorts) {
+            for (const port of el.bottomPorts) {
+                const pc = portColor(port);
+                ctx.strokeStyle = pc;
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.moveTo(port.x, port.y);
+                ctx.lineTo(port.x, port.y + PORT_STUB_LEN);
+                ctx.stroke();
+                ctx.fillStyle = pc;
+                ctx.beginPath();
+                ctx.arc(port.x, port.y + PORT_STUB_LEN, PORT_DOT_R - 0.5, 0, Math.PI * 2);
+                ctx.fill();
+                if (showLabels) {
+                    ctx.fillStyle = COLORS.text;
+                    ctx.font = `${FONT_SIZE - 1}px monospace`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'top';
+                    ctx.fillText(port.name, port.x, port.y + PORT_STUB_LEN + 3);
+                }
+            }
+        }
+
+        // Group separators (symbol hint) — dim lines between pin groups
+        if (el.symbolHint && el.symbolHint.groups && el.symbolHint.groups.length > 0) {
+            ctx.save();
+            ctx.strokeStyle = COLORS.textDim;
+            ctx.lineWidth = 0.5;
+            ctx.setLineDash([2, 2]);
+            // Track cumulative pin count per side to know where separator lines go
+            const sidePinCounts = { left: 0, right: 0 };
+            for (const group of el.symbolHint.groups) {
+                const s = group.side;
+                if (s !== 'left' && s !== 'right') continue;
+                if (sidePinCounts[s] > 0) {
+                    // Draw separator line
+                    const sepY = el.y + HEADER_HEIGHT + INSTANCE_PADDING + sidePinCounts[s] * PORT_SPACING;
+                    const x1 = s === 'left' ? el.x + 4 : el.x + el.w / 2;
+                    const x2 = s === 'left' ? el.x + el.w / 2 : el.x + el.w - 4;
+                    ctx.beginPath();
+                    ctx.moveTo(x1, sepY);
+                    ctx.lineTo(x2, sepY);
+                    ctx.stroke();
+                    // Group label
+                    ctx.fillStyle = COLORS.textDim;
+                    ctx.font = `${FONT_SIZE - 3}px monospace`;
+                    ctx.textAlign = s === 'left' ? 'left' : 'right';
+                    ctx.textBaseline = 'bottom';
+                    const labelX = s === 'left' ? el.x + 6 : el.x + el.w - 6;
+                    ctx.fillText(group.label, labelX, sepY - 1);
+                }
+                sidePinCounts[s] += group.pins.length;
+            }
+            ctx.setLineDash([]);
+            ctx.restore();
         }
     }
 

@@ -66,6 +66,16 @@ pub fn lex_ident_or_kw(lex: &mut Lexer<LexerToken>) -> KeywordOrIdent {
         "fault_inject" => SyntaxKind::FAULT_INJECT_KW,
         "expansion" => SyntaxKind::EXPANSION_KW,
         "internal" => SyntaxKind::INTERNAL_KW,
+        "symbol" => SyntaxKind::SYMBOL_KW,
+        "layout" => SyntaxKind::LAYOUT_KW,
+        "body" => SyntaxKind::BODY_KW,
+        "left" => SyntaxKind::LEFT_KW,
+        "right" => SyntaxKind::RIGHT_KW,
+        "top" => SyntaxKind::TOP_KW,
+        "bottom" => SyntaxKind::BOTTOM_KW,
+        "group" => SyntaxKind::GROUP_KW,
+        "part" => SyntaxKind::PART_KW,
+        "package" => SyntaxKind::PACKAGE_KW,
         _ => SyntaxKind::IDENT,
     };
     KeywordOrIdent { kind, text: slice.into() }
@@ -294,6 +304,16 @@ fn keyword_or_ident_callback(lex: &mut Lexer<LexerToken>) -> KeywordOrIdent {
         "fault_inject" => SyntaxKind::FAULT_INJECT_KW,
         "expansion" => SyntaxKind::EXPANSION_KW,
         "internal" => SyntaxKind::INTERNAL_KW,
+        "symbol" => SyntaxKind::SYMBOL_KW,
+        "layout" => SyntaxKind::LAYOUT_KW,
+        "body" => SyntaxKind::BODY_KW,
+        "left" => SyntaxKind::LEFT_KW,
+        "right" => SyntaxKind::RIGHT_KW,
+        "top" => SyntaxKind::TOP_KW,
+        "bottom" => SyntaxKind::BOTTOM_KW,
+        "group" => SyntaxKind::GROUP_KW,
+        "part" => SyntaxKind::PART_KW,
+        "package" => SyntaxKind::PACKAGE_KW,
 
         // Power domain keywords (Phase 1: Scalability)
         "power_domain" => SyntaxKind::POWER_DOMAIN_KW,

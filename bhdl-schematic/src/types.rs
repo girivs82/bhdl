@@ -122,9 +122,35 @@ pub struct SchematicInstance {
     /// Name of the power rail this stage belongs to
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stage_rail: Option<String>,
+    /// Symbol hint for pin placement on IC body (from `symbol` definition)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<SchematicSymbolHint>,
     /// Source line for click-to-navigate
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<usize>,
+}
+
+/// Rendering hints from a `symbol` definition — tells the JS renderer
+/// which side each pin goes on and how pins are grouped.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SchematicSymbolHint {
+    /// Body shape: "rectangle" (default), "triangle" (op-amp), etc.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    /// Pin name → side assignment: "left" | "right" | "top" | "bottom"
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub pin_sides: HashMap<String, String>,
+    /// Ordered groups for rendering separators between pin clusters
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<SchematicPinGroup>,
+}
+
+/// A labeled group of pins on one side of an IC body.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SchematicPinGroup {
+    pub side: String,
+    pub label: String,
+    pub pins: Vec<String>,
 }
 
 /// A connection (port) on an instance.

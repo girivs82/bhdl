@@ -62,7 +62,7 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
     let mut resolved_constants = ResolvedConstants::new();
 
     // Pass 1: Build scope registry with base path for imports
-    let (mut scope_registry, alias_specializations, imported_expansion_recipes) = pass1::build_scope_registry_with_base(source_file, base_path);
+    let (mut scope_registry, alias_specializations, imported_expansion_recipes, imported_symbol_definitions, imported_layout_definitions) = pass1::build_scope_registry_with_base(source_file, base_path);
     // Extract legacy data structures for backward compatibility with existing passes
     let global_scope = scope_registry.extract_global_scope();
     let definition_scopes = scope_registry.extract_definition_scopes();
@@ -256,14 +256,25 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
         ));
     }
 
-    // Pass 8.5: Expansion Recipe Extraction
+    // Pass 8.5: Expansion Recipe + Symbol/Layout Extraction
     // Merge recipes from imported files (Pass 1) with recipes from main source file
-    println!("Analyzer: Starting Pass 8.5 - Expansion Recipe Extraction...");
+    println!("Analyzer: Starting Pass 8.5 - Expansion Recipe + Symbol/Layout Extraction...");
     let mut expansion_recipes = imported_expansion_recipes;
     let main_file_recipes = extract_expansion_recipes(source_file);
     expansion_recipes.extend(main_file_recipes);
     let expansion_count = expansion_recipes.len();
-    println!("Analyzer: Pass 8.5 complete. Expansion recipes found: {}", expansion_count);
+
+    // Extract symbol and layout definitions (from imported files + main file)
+    let mut symbol_definitions = imported_symbol_definitions;
+    let main_file_symbols = extract_symbol_definitions(source_file);
+    symbol_definitions.extend(main_file_symbols);
+
+    let mut layout_definitions = imported_layout_definitions;
+    let main_file_layouts = extract_layout_definitions(source_file);
+    layout_definitions.extend(main_file_layouts);
+
+    println!("Analyzer: Pass 8.5 complete. Expansion recipes: {}, Symbol defs: {}, Layout defs: {}",
+        expansion_count, symbol_definitions.len(), layout_definitions.len());
 
     // Pass 9: Flow Tracking and Intent Resolution
     println!("Analyzer: Starting Pass 9 - Flow Tracking and Intent Resolution...");
@@ -404,6 +415,8 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
         power_domain_expansion, // Move ownership (Phase 1: Scalability)
         monomorphization: mono_result, // Move ownership (Pass 2.5)
         expansion_recipes, // Move ownership (Pass 8.5)
+        symbol_definitions, // Move ownership (Pass 8.5)
+        layout_definitions, // Move ownership (Pass 8.5)
     }
 }
 
@@ -1568,6 +1581,99 @@ fn parse_expansion_element(
 
     // Default: assume it's an entity pin (e.g., "GND", "VIN")
     (Some(ExpansionEndpoint::ParentPin(text.to_string())), None)
+}
+
+/// Extract symbol definitions from a parsed source file.
+///
+/// Walks the AST looking for `symbol EntityName { ... }` top-level items
+/// and converts them into `SymbolDefinition` data structures.
+pub fn extract_symbol_definitions(
+    source_file: &SourceFile,
+) -> std::collections::HashMap<String, bhdl_common::SymbolDefinition> {
+    use bhdl_ast::{SymbolDef, HasName};
+    use bhdl_common::symbol::{SymbolDefinition, SymbolSide, PinSide, SideEntry};
+
+    let mut definitions = std::collections::HashMap::new();
+
+    for sym_def in source_file.symbols() {
+        let entity_name = sym_def.name()
+            .map(|t| t.text().to_string())
+            .unwrap_or_default();
+
+        if entity_name.is_empty() {
+            continue;
+        }
+
+        let body_hint = sym_def.body_hint();
+
+        let mut sides = Vec::new();
+        for ast_side in sym_def.sides() {
+            let side_name = match ast_side.side() {
+                Some(s) => s,
+                None => continue,
+            };
+            let pin_side = match PinSide::from_str(&side_name) {
+                Some(s) => s,
+                None => continue,
+            };
+
+            let mut entries = Vec::new();
+
+            // Collect bare pins
+            for pin in ast_side.pins() {
+                entries.push(SideEntry::Pin { name: pin });
+            }
+
+            // Collect groups
+            for group in ast_side.groups() {
+                let label = group.label().unwrap_or_default();
+                let pins = group.pins();
+                entries.push(SideEntry::Group { label, pins });
+            }
+
+            sides.push(SymbolSide { side: pin_side, entries });
+        }
+
+        definitions.insert(entity_name.clone(), SymbolDefinition {
+            entity_name,
+            body_hint,
+            sides,
+        });
+    }
+
+    definitions
+}
+
+/// Extract layout definitions from a parsed source file.
+///
+/// Walks the AST looking for `layout EntityName { ... }` top-level items
+/// and converts them into `LayoutDefinition` data structures.
+pub fn extract_layout_definitions(
+    source_file: &SourceFile,
+) -> std::collections::HashMap<String, bhdl_common::LayoutDefinition> {
+    use bhdl_ast::{LayoutDef, HasName};
+    use bhdl_common::layout_meta::LayoutDefinition;
+
+    let mut definitions = std::collections::HashMap::new();
+
+    for layout_def in source_file.layouts() {
+        let entity_name = layout_def.name()
+            .map(|t| t.text().to_string())
+            .unwrap_or_default();
+
+        if entity_name.is_empty() {
+            continue;
+        }
+
+        let package = layout_def.package();
+
+        definitions.insert(entity_name.clone(), LayoutDefinition {
+            entity_name,
+            package,
+        });
+    }
+
+    definitions
 }
 
 // Remove the test module declaration as tests are now in the tests/ directory

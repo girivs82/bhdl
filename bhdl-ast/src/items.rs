@@ -1168,3 +1168,212 @@ impl CapSpec {
         exprs.next()  // Return count
     }
 }
+
+// =================================
+// Symbol and Layout Definitions
+// =================================
+
+/// Symbol definition: `symbol EntityName { body rectangle; left { VIN, EN } ... }`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SymbolDef(pub(crate) SyntaxNode<BhdlLanguage>);
+
+impl AstNode for SymbolDef {
+    type Language = BhdlLanguage;
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::SYMBOL_DEF }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> {
+        if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None }
+    }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+
+impl HasName for SymbolDef {}
+
+impl SymbolDef {
+    /// Get the body hint (e.g., "rectangle", "triangle")
+    pub fn body_hint(&self) -> Option<String> {
+        self.0.children()
+            .find(|n| n.kind() == SyntaxKind::SYMBOL_BODY_HINT)
+            .and_then(|n| {
+                n.children_with_tokens()
+                    .filter_map(|e| e.into_token())
+                    .find(|t| t.kind() == SyntaxKind::IDENT)
+                    .map(|t| t.text().to_string())
+            })
+    }
+
+    /// Get all side definitions
+    pub fn sides(&self) -> impl Iterator<Item = SymbolSide> {
+        self.0.children().filter_map(SymbolSide::cast)
+    }
+
+    /// Get all part definitions (Phase 2 multi-part symbols)
+    pub fn parts(&self) -> impl Iterator<Item = SymbolPart> {
+        self.0.children().filter_map(SymbolPart::cast)
+    }
+}
+
+/// A side in a symbol definition: `left { VIN, EN }` or `left { group "Power" { ... } }`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SymbolSide(pub(crate) SyntaxNode<BhdlLanguage>);
+
+impl AstNode for SymbolSide {
+    type Language = BhdlLanguage;
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::SYMBOL_SIDE }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> {
+        if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None }
+    }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+
+impl SymbolSide {
+    /// Get the side keyword text: "left", "right", "top", "bottom"
+    pub fn side(&self) -> Option<String> {
+        self.0.children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .find(|t| matches!(t.kind(),
+                SyntaxKind::LEFT_KW | SyntaxKind::RIGHT_KW |
+                SyntaxKind::TOP_KW | SyntaxKind::BOTTOM_KW))
+            .map(|t| t.text().to_string())
+    }
+
+    /// Get bare pin names (not inside groups)
+    pub fn pins(&self) -> Vec<String> {
+        let mut pins = Vec::new();
+        let mut in_group = false;
+        for element in self.0.children_with_tokens() {
+            match element {
+                rowan::NodeOrToken::Node(ref n) if n.kind() == SyntaxKind::SYMBOL_GROUP => {
+                    in_group = true;
+                }
+                rowan::NodeOrToken::Token(ref t) if t.kind() == SyntaxKind::IDENT && !in_group => {
+                    pins.push(t.text().to_string());
+                }
+                rowan::NodeOrToken::Token(ref t) if t.kind() == SyntaxKind::NUMBER && !in_group => {
+                    pins.push(t.text().to_string());
+                }
+                _ => {}
+            }
+            // Reset in_group after processing a group node
+            if let rowan::NodeOrToken::Node(ref n) = element {
+                if n.kind() == SyntaxKind::SYMBOL_GROUP {
+                    in_group = false;
+                }
+            }
+        }
+        pins
+    }
+
+    /// Get all pin names on this side (including those inside groups)
+    pub fn all_pins(&self) -> Vec<String> {
+        let mut pins = self.pins();
+        for group in self.groups() {
+            pins.extend(group.pins());
+        }
+        pins
+    }
+
+    /// Get group definitions on this side
+    pub fn groups(&self) -> impl Iterator<Item = SymbolGroup> {
+        self.0.children().filter_map(SymbolGroup::cast)
+    }
+}
+
+/// A group within a symbol side: `group "Power" { VDD, VDDA, VBAT }`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SymbolGroup(pub(crate) SyntaxNode<BhdlLanguage>);
+
+impl AstNode for SymbolGroup {
+    type Language = BhdlLanguage;
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::SYMBOL_GROUP }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> {
+        if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None }
+    }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+
+impl SymbolGroup {
+    /// Get the group label (e.g., "Power", "SPI1")
+    pub fn label(&self) -> Option<String> {
+        self.0.children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .find(|t| t.kind() == SyntaxKind::STRING)
+            .map(|t| t.text().trim_matches('"').to_string())
+    }
+
+    /// Get pin names in this group
+    pub fn pins(&self) -> Vec<String> {
+        self.0.children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .filter(|t| t.kind() == SyntaxKind::IDENT || t.kind() == SyntaxKind::NUMBER)
+            .map(|t| t.text().to_string())
+            .collect()
+    }
+}
+
+/// A part in a multi-part symbol: `part "Power" { left { ... } bottom { ... } }`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SymbolPart(pub(crate) SyntaxNode<BhdlLanguage>);
+
+impl AstNode for SymbolPart {
+    type Language = BhdlLanguage;
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::SYMBOL_PART }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> {
+        if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None }
+    }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+
+impl SymbolPart {
+    /// Get the part label
+    pub fn label(&self) -> Option<String> {
+        self.0.children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .find(|t| t.kind() == SyntaxKind::STRING)
+            .map(|t| t.text().trim_matches('"').to_string())
+    }
+
+    /// Get sides within this part
+    pub fn sides(&self) -> impl Iterator<Item = SymbolSide> {
+        self.0.children().filter_map(SymbolSide::cast)
+    }
+}
+
+/// Layout definition: `layout EntityName { package HTSSOP-16; }`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct LayoutDef(pub(crate) SyntaxNode<BhdlLanguage>);
+
+impl AstNode for LayoutDef {
+    type Language = BhdlLanguage;
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::LAYOUT_DEF }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> {
+        if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None }
+    }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+
+impl HasName for LayoutDef {}
+
+impl LayoutDef {
+    /// Get the package name (e.g., "HTSSOP-16", "QFN-48")
+    pub fn package(&self) -> Option<String> {
+        self.0.children()
+            .find(|n| n.kind() == SyntaxKind::LAYOUT_PACKAGE)
+            .map(|n| {
+                // Collect all tokens after PACKAGE_KW and before SEMI
+                let mut found_pkg = false;
+                let mut name_parts = Vec::new();
+                for element in n.children_with_tokens() {
+                    if let Some(token) = element.as_token() {
+                        if token.kind() == SyntaxKind::PACKAGE_KW {
+                            found_pkg = true;
+                        } else if token.kind() == SyntaxKind::SEMI {
+                            break;
+                        } else if found_pkg && token.kind() != SyntaxKind::WHITESPACE {
+                            name_parts.push(token.text().to_string());
+                        }
+                    }
+                }
+                name_parts.join("")
+            })
+    }
+}
