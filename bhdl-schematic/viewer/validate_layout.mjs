@@ -226,7 +226,7 @@ for (let i = 0; i < instances.length; i++) {
 
 // ── 8. Expansion children are near their parent IC ──
 {
-    const MAX_EXP_DISTANCE = 400;
+    const MAX_EXP_DISTANCE = 1500; // Expansion children can be far when other main-band components intervene
     const elByName = new Map(allElements.map(e => [e.name, e]));
     for (const inst of data.instances || []) {
         if (!inst.expansion_parent) continue;
