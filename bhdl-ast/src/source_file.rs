@@ -1,6 +1,6 @@
 use crate::{SyntaxKind, BhdlLanguage, SyntaxNode};
 use rowan::ast::AstNode;
-use crate::items::{Board, Entity, ComponentDef, InterfaceDef, TypedefDef, ImportStmt};
+use crate::items::{Board, Entity, ComponentDef, InterfaceDef, TypedefDef, ImportStmt, SymbolDef, LayoutDef};
 use crate::testbench::TestbenchDef;
 
 // Add definitions for top-level items later
@@ -56,7 +56,15 @@ impl SourceFile {
         self.0.children().filter_map(TestbenchDef::cast)
     }
 
-    // Add more specific accessors as needed
+    /// Returns an iterator over symbol definitions in the file.
+    pub fn symbols(&self) -> impl Iterator<Item = SymbolDef> {
+        self.0.children().filter_map(SymbolDef::cast)
+    }
+
+    /// Returns an iterator over layout definitions in the file.
+    pub fn layouts(&self) -> impl Iterator<Item = LayoutDef> {
+        self.0.children().filter_map(LayoutDef::cast)
+    }
 }
 
 // Enum to represent any top-level item
@@ -69,7 +77,8 @@ pub enum Item {
     InterfaceDef(InterfaceDef),
     TypedefDef(TypedefDef),
     TestbenchDef(TestbenchDef),
-    // Add others like StructDef, EnumDef
+    SymbolDef(SymbolDef),
+    LayoutDef(LayoutDef),
 }
 
 impl AstNode for Item {
@@ -77,7 +86,8 @@ impl AstNode for Item {
 
     fn can_cast(kind: SyntaxKind) -> bool {
         ImportStmt::can_cast(kind) || Board::can_cast(kind) || Entity::can_cast(kind) || ComponentDef::can_cast(kind) ||
-        InterfaceDef::can_cast(kind) || TypedefDef::can_cast(kind) || TestbenchDef::can_cast(kind)
+        InterfaceDef::can_cast(kind) || TypedefDef::can_cast(kind) || TestbenchDef::can_cast(kind) ||
+        SymbolDef::can_cast(kind) || LayoutDef::can_cast(kind)
     }
 
     fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> {
@@ -88,6 +98,8 @@ impl AstNode for Item {
         else if InterfaceDef::can_cast(syntax.kind()) { Some(Item::InterfaceDef(InterfaceDef::cast(syntax)?)) }
         else if TypedefDef::can_cast(syntax.kind()) { Some(Item::TypedefDef(TypedefDef::cast(syntax)?)) }
         else if TestbenchDef::can_cast(syntax.kind()) { Some(Item::TestbenchDef(TestbenchDef::cast(syntax)?)) }
+        else if SymbolDef::can_cast(syntax.kind()) { Some(Item::SymbolDef(SymbolDef::cast(syntax)?)) }
+        else if LayoutDef::can_cast(syntax.kind()) { Some(Item::LayoutDef(LayoutDef::cast(syntax)?)) }
         else { None }
     }
 
@@ -100,6 +112,8 @@ impl AstNode for Item {
             Item::InterfaceDef(i) => i.syntax(),
             Item::TypedefDef(i) => i.syntax(),
             Item::TestbenchDef(i) => i.syntax(),
+            Item::SymbolDef(i) => i.syntax(),
+            Item::LayoutDef(i) => i.syntax(),
         }
     }
 } 

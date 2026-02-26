@@ -14,10 +14,13 @@ entity TPS54331<V_OUT: voltage>(
     r_fb_top: resistance = 31.6kΩ,
     r_fb_bot: resistance = 10kΩ
 ) {
-    pin VIN: power in;
+    pin VIN:  power in;
     pin VOUT: power out;
-    pin GND: ground;
-    pin EN: signal in;
+    pin SW:   switch out;
+    pin FB:   feedback in;
+    pin BOOT: signal inout;
+    pin EN:   signal in;
+    pin GND:  ground;
 
     attribute component_class = "switching_regulator";
     attribute output_voltage = V_OUT;
@@ -27,16 +30,25 @@ entity TPS54331<V_OUT: voltage>(
     attribute i_quiescent = i_quiescent;
 
     expansion {
-        internal sw: net;
-        internal fb_int: net;
-
-        VOUT -> L_out: Ind(l_value).1; L_out.2 -> sw;
-        sw -> D_catch: Diode(diode_vf).K; D_catch.A -> GND;
+        // All connections go through real IC pins — no internal nets needed
+        SW -> L_out: Ind(l_value).1; L_out.2 -> VOUT;
+        GND -> D_catch: Diode(diode_vf).A; D_catch.K -> SW;
         VOUT -> C_out: Cap(c_out).1; C_out.2 -> GND;
-        VOUT -> R_top: Res(r_fb_top).1; R_top.2 -> fb_int;
-        fb_int -> R_bot: Res(r_fb_bot).1; R_bot.2 -> GND;
+        VOUT -> R_top: Res(r_fb_top).1; R_top.2 -> FB;
+        FB -> R_bot: Res(r_fb_bot).1; R_bot.2 -> GND;
+        BOOT -> C_boot: Cap(100nF).1; C_boot.2 -> SW;
     }
 }
 
 alias TPS54331_3V3 = TPS54331<3.3V>;
 alias TPS54331_5V = TPS54331<5V>;
+
+symbol TPS54331 {
+    left   { VIN, EN, BOOT }
+    right  { VOUT, SW }
+    bottom { GND, FB }
+}
+
+layout TPS54331 {
+    package HTSSOP-16;
+}

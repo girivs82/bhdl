@@ -26,6 +26,8 @@ impl<'t> Parser<'t> {
                 SyntaxKind::IMPL_KW => self.parse_trait_impl(),
                 SyntaxKind::SAFETY_GOAL_KW => self.parse_safety_goal_def(),
                 SyntaxKind::FAULT_INJECT_KW => self.parse_fault_inject_def(),
+                SyntaxKind::SYMBOL_KW => self.parse_symbol_def(),
+                SyntaxKind::LAYOUT_KW => self.parse_layout_def(),
                 _ => {
                     // Handle unexpected tokens at the top level
                     self.error(format!("Expected a top-level item (e.g., 'board', 'entity', 'interface', 'testbench', etc.), found {:?}", kind));
@@ -2103,6 +2105,194 @@ impl<'t> Parser<'t> {
             self.expect(SyntaxKind::R_BRACE);
         }
 
+        self.builder.finish_node();
+    }
+
+    // ── Symbol and layout definitions ────────────────────────────
+
+    /// Parse a symbol definition:
+    /// ```bhdl
+    /// symbol TPS54331 {
+    ///     body rectangle;
+    ///     left   { VIN, EN, BOOT }
+    ///     right  { VOUT, SW }
+    ///     bottom { GND, FB }
+    /// }
+    /// ```
+    pub(crate) fn parse_symbol_def(&mut self) {
+        self.builder.start_node(SyntaxKind::SYMBOL_DEF.into());
+        self.expect(SyntaxKind::SYMBOL_KW);
+        self.expect(SyntaxKind::IDENT); // Entity name this symbol is for
+
+        self.expect(SyntaxKind::L_BRACE);
+
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) | None => break,
+                Some(SyntaxKind::BODY_KW) => self.parse_symbol_body_hint(),
+                Some(SyntaxKind::LEFT_KW) | Some(SyntaxKind::RIGHT_KW) |
+                Some(SyntaxKind::TOP_KW) | Some(SyntaxKind::BOTTOM_KW) => {
+                    self.parse_symbol_side();
+                }
+                Some(SyntaxKind::PART_KW) => self.parse_symbol_part(),
+                _ => {
+                    self.error("Expected 'body', 'left', 'right', 'top', 'bottom', or 'part' in symbol definition".to_string());
+                    self.bump_any();
+                }
+            }
+        }
+
+        self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
+    /// Parse body hint: `body rectangle;`
+    fn parse_symbol_body_hint(&mut self) {
+        self.builder.start_node(SyntaxKind::SYMBOL_BODY_HINT.into());
+        self.expect(SyntaxKind::BODY_KW);
+        self.expect(SyntaxKind::IDENT); // "rectangle", "triangle", etc.
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+
+    /// Parse a symbol side: `left { VIN, EN }` or `left { group "Power" { VDD, VDDA } }`
+    fn parse_symbol_side(&mut self) {
+        self.builder.start_node(SyntaxKind::SYMBOL_SIDE.into());
+
+        // Consume the side keyword (left/right/top/bottom)
+        self.bump();
+
+        self.expect(SyntaxKind::L_BRACE);
+
+        // Determine if this side has groups or bare pin lists
+        // Peek: if we see GROUP_KW, parse groups; otherwise parse comma-separated IDENTs
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) | None => break,
+                Some(SyntaxKind::GROUP_KW) => self.parse_symbol_group(),
+                Some(SyntaxKind::IDENT) | Some(SyntaxKind::NUMBER) => {
+                    // Bare pin name (identifier or number)
+                    self.bump();
+                    // Optional trailing comma
+                    if self.peek() == Some(SyntaxKind::COMMA) {
+                        self.bump();
+                    }
+                }
+                _ => {
+                    self.error("Expected pin name or 'group' in symbol side".to_string());
+                    self.bump_any();
+                }
+            }
+        }
+
+        self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
+    /// Parse a symbol group: `group "Power" { VDD, VDDA, VBAT }`
+    fn parse_symbol_group(&mut self) {
+        self.builder.start_node(SyntaxKind::SYMBOL_GROUP.into());
+        self.expect(SyntaxKind::GROUP_KW);
+        self.expect(SyntaxKind::STRING); // Group label
+
+        self.expect(SyntaxKind::L_BRACE);
+
+        // Parse comma-separated pin names
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) | None => break,
+                Some(SyntaxKind::IDENT) | Some(SyntaxKind::NUMBER) => {
+                    self.bump();
+                    if self.peek() == Some(SyntaxKind::COMMA) {
+                        self.bump();
+                    }
+                }
+                _ => {
+                    self.error("Expected pin name in symbol group".to_string());
+                    self.bump_any();
+                }
+            }
+        }
+
+        self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
+    /// Parse a symbol part (Phase 2 stub): `part "Power" { left { ... } bottom { ... } }`
+    fn parse_symbol_part(&mut self) {
+        self.builder.start_node(SyntaxKind::SYMBOL_PART.into());
+        self.expect(SyntaxKind::PART_KW);
+        self.expect(SyntaxKind::STRING); // Part label
+
+        self.expect(SyntaxKind::L_BRACE);
+
+        // Parse sides within the part
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) | None => break,
+                Some(SyntaxKind::LEFT_KW) | Some(SyntaxKind::RIGHT_KW) |
+                Some(SyntaxKind::TOP_KW) | Some(SyntaxKind::BOTTOM_KW) => {
+                    self.parse_symbol_side();
+                }
+                _ => {
+                    self.error("Expected side keyword in symbol part".to_string());
+                    self.bump_any();
+                }
+            }
+        }
+
+        self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
+    /// Parse a layout definition:
+    /// ```bhdl
+    /// layout TPS54331 {
+    ///     package HTSSOP-16;
+    /// }
+    /// ```
+    pub(crate) fn parse_layout_def(&mut self) {
+        self.builder.start_node(SyntaxKind::LAYOUT_DEF.into());
+        self.expect(SyntaxKind::LAYOUT_KW);
+        self.expect(SyntaxKind::IDENT); // Entity name this layout is for
+
+        self.expect(SyntaxKind::L_BRACE);
+
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) | None => break,
+                Some(SyntaxKind::PACKAGE_KW) => self.parse_layout_package(),
+                _ => {
+                    self.error("Expected 'package' in layout definition".to_string());
+                    self.bump_any();
+                }
+            }
+        }
+
+        self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
+    /// Parse layout package: `package HTSSOP-16;`
+    /// Package name can include hyphens, so we consume tokens until semicolon.
+    fn parse_layout_package(&mut self) {
+        self.builder.start_node(SyntaxKind::LAYOUT_PACKAGE.into());
+        self.expect(SyntaxKind::PACKAGE_KW);
+
+        // Package name — can be a single IDENT, or IDENT-NUMBER sequences
+        // (e.g., "HTSSOP-16", "QFN-48"). Consume all tokens until semicolon.
+        while self.peek() != Some(SyntaxKind::SEMI) &&
+              self.peek() != Some(SyntaxKind::R_BRACE) &&
+              self.peek().is_some() {
+            self.bump_any();
+        }
+
+        self.expect(SyntaxKind::SEMI);
         self.builder.finish_node();
     }
 }

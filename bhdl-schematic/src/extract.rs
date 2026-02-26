@@ -318,6 +318,43 @@ pub fn extract_schematic_data(
         // flow-path lookup in classify_placement_roles may override.
         let intent = instance.attributes.get("intent").cloned();
 
+        // Build symbol hint from analysis result symbol definitions
+        let symbol_hint = analysis.and_then(|a| {
+            // Try exact entity type name first, then strip generic suffix (e.g., "TPS54331_3V3" → "TPS54331")
+            let sym_def = a.symbol_definitions.get(&module_def.name)
+                .or_else(|| {
+                    // Check if any symbol definition's entity_name is a prefix of this module name
+                    // (handles monomorphized types like TPS54331<3.3V> which become TPS54331_3V3)
+                    a.symbol_definitions.values().find(|sd| {
+                        module_def.name.starts_with(&sd.entity_name)
+                    })
+                });
+            sym_def.map(|sd| {
+                use bhdl_common::symbol::{SideEntry, PinSide};
+                let pin_sides: HashMap<String, String> = sd.pin_sides()
+                    .into_iter()
+                    .map(|(name, side)| (name, side.to_string()))
+                    .collect();
+                let mut groups = Vec::new();
+                for sym_side in &sd.sides {
+                    for entry in &sym_side.entries {
+                        if let SideEntry::Group { label, pins } = entry {
+                            groups.push(SchematicPinGroup {
+                                side: sym_side.side.to_string(),
+                                label: label.clone(),
+                                pins: pins.clone(),
+                            });
+                        }
+                    }
+                }
+                SchematicSymbolHint {
+                    body: sd.body_hint.clone(),
+                    pin_sides,
+                    groups,
+                }
+            })
+        });
+
         instances.push(SchematicInstance {
             name: instance.name.clone(),
             refdes: None,  // assigned in refdes post-pass below
@@ -334,6 +371,7 @@ pub fn extract_schematic_data(
             stage_name,
             stage_order,
             stage_rail,
+            symbol: symbol_hint,
             line: None,
         });
     }
