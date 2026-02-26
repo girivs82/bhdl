@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // validate_layout.mjs — Geometric validation of schematic layouts
 //
-// Reads SchematicData JSON, runs the layout engine, then checks 12
-// geometric invariants.  Outputs results as JSON to stdout.
+// Reads SchematicData JSON, runs the layout engine, then checks 14
+// geometric invariants (including path-box overlap).  Outputs results as JSON to stdout.
 //
 // Usage:
 //   node validate_layout.mjs <schematic-data.json>
@@ -18,7 +18,7 @@ if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
     console.error(`Usage: node validate_layout.mjs <schematic-data.json>
 
 Runs the schematic layout engine on a SchematicData JSON file and checks
-12 geometric invariants.  Outputs validation results as JSON to stdout.
+14 geometric invariants.  Outputs validation results as JSON to stdout.
 
 Options:
   --verbose, -v    Show detailed per-check output on stderr
@@ -348,6 +348,24 @@ for (let i = 0; i < instances.length; i++) {
     }
 }
 
+// ── 14. Path bounding box overlap check ──
+// Uses the path bounds computed by the layout engine to detect overlapping groups.
+{
+    const pathBounds = layout.pathBounds || [];
+    for (let i = 0; i < pathBounds.length; i++) {
+        for (let j = i + 1; j < pathBounds.length; j++) {
+            const a = pathBounds[i], b = pathBounds[j];
+            // Skip main_band — shunts are supposed to be below it
+            if (a.type === 'main_band' || b.type === 'main_band') continue;
+            // Skip same-junction same-side pairs (they're the same group)
+            if (a.junctionName === b.junctionName && a.side === b.side) continue;
+            if (rectsOverlap(a, b)) {
+                warnings.push(`PATH_OVERLAP: "${a.name}" (${a.type}, ${a.x.toFixed(0)},${a.y.toFixed(0)} ${a.w.toFixed(0)}x${a.h.toFixed(0)}) overlaps "${b.name}" (${b.type}, ${b.x.toFixed(0)},${b.y.toFixed(0)} ${b.w.toFixed(0)}x${b.h.toFixed(0)})`);
+            }
+        }
+    }
+}
+
 // ═══════════════════ OUTPUT ═══════════════════
 
 const result = {
@@ -358,6 +376,7 @@ const result = {
         instances: instances.length,
         wires: layout.wires.length,
         stageZones: layout.stageZones.length,
+        pathBounds: (layout.pathBounds || []).length,
         overlaps: errors.filter(e => e.startsWith('OVERLAP')).length,
         wireThroughBox: errors.filter(e => e.startsWith('WIRE_THROUGH')).length,
         diagonals: errors.filter(e => e.startsWith('DIAGONAL')).length,

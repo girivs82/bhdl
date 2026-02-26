@@ -109,6 +109,7 @@
     let layoutElements = [];
     let layoutWires = [];
     let layoutStageZones = [];
+    let layoutPathBounds = [];
     let activeFlowSet = null;
     let activeFlowNets = null;
 
@@ -1655,6 +1656,62 @@
             return Math.max(ext.left, ext.right);
         }
 
+        // Compute bounding box for a layout group (shunt or branch) covering
+        // ALL visual elements: component boxes, GND stubs, chain children, labels.
+        // Returns {name, type, junctionName, side, x, y, w, h} or null if empty.
+        function computeGroupBounds(group, groupKey, groupType) {
+            const PADDING = 5;
+            const gndStubTotal = GND_STUB_HEIGHT + GND_LINE_SPACING * GND_LINE_WIDTHS.length;
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+            function expandItem(itemName) {
+                const pos = positions.get(itemName);
+                if (!pos || (pos.w === 0 && pos.h === 0)) return; // skip virtual nodes
+                // Component box
+                minX = Math.min(minX, pos.x);
+                minY = Math.min(minY, pos.y);
+                maxX = Math.max(maxX, pos.x + pos.w);
+                // GND visual zone below component
+                const gndBottom = Math.max(pos.y + pos.h, pos.gndTargetY || pos.y + pos.h) + gndStubTotal;
+                maxY = Math.max(maxY, gndBottom);
+                // Label overhang
+                const oh = shuntItemOverhang(itemName);
+                minX = Math.min(minX, pos.x - oh.left);
+                maxX = Math.max(maxX, pos.x + pos.w + oh.right);
+                // Walk shuntChainDown children
+                let cur = itemName;
+                while (shuntChainDown.has(cur)) {
+                    cur = shuntChainDown.get(cur);
+                    expandItem(cur);
+                }
+            }
+
+            for (const item of group.items) {
+                expandItem(item.name);
+            }
+
+            // Multi-row bbox override (if present, union with computed)
+            if (group._bbox) {
+                const bb = group._bbox;
+                minX = Math.min(minX, bb.x);
+                minY = Math.min(minY, bb.y);
+                maxX = Math.max(maxX, bb.x + bb.w);
+                maxY = Math.max(maxY, bb.y + bb.h);
+            }
+
+            if (minX === Infinity) return null;
+            return {
+                name: groupKey,
+                type: groupType,
+                junctionName: group.junctionName,
+                side: group.side || 'right',
+                x: minX - PADDING,
+                y: minY - PADDING,
+                w: (maxX - minX) + PADDING * 2,
+                h: (maxY - minY) + PADDING * 2,
+            };
+        }
+
         // Multi-row shunt layout: max items per row before wrapping
         const MAX_SHUNT_PER_ROW = 5;
 
@@ -2127,7 +2184,15 @@
             }
         }
 
+        // ── 10b-bounds. Compute shunt group bounding boxes ──
+        const shuntGroupBoundsMap = new Map();
+        for (const [key, group] of dropGroups) {
+            const bounds = computeGroupBounds(group, key, 'shunt_group');
+            if (bounds) { shuntGroupBoundsMap.set(key, bounds); layoutPathBounds.push(bounds); }
+        }
+
         // ── 10c. Place branches as horizontal chains ──
+        const branchMultiRowData = []; // collect multi-row metadata for bus wire routing
         for (const [, group] of branchGroups) {
             const jPos = positions.get(group.junctionName);
             if (!jPos) continue;
@@ -2138,15 +2203,14 @@
             if (isParallel) {
                 // Parallel branch: start at junction's X (aligned with main-path sibling)
                 bx = jPos.x;
-                // Place below any shunts at this junction
+                // Place below shunt group bounding boxes at this junction
                 let maxYBelow = shuntY;
-                for (const dItem of verticalDropItems) {
-                    if (dItem.junctionName === group.junctionName) {
-                        const dPos = positions.get(dItem.name);
-                        if (dPos) maxYBelow = Math.max(maxYBelow, dPos.y + dPos.h);
+                for (const [, bounds] of shuntGroupBoundsMap) {
+                    if (bounds.junctionName === group.junctionName) {
+                        maxYBelow = Math.max(maxYBelow, bounds.y + bounds.h);
                     }
                 }
-                by = maxYBelow + 60;
+                by = maxYBelow + 40; // 40px comfort gap between path boxes
             } else if (group.side === 'left') {
                 bx = jPos.x - 200;
                 by = shuntY;
@@ -2236,54 +2300,220 @@
                     if (!visited.has(h.name)) headOrder.push(h);
                 }
 
-                // Position heads HORIZONTALLY (like a mini main-band) with
-                // children as vertical drops below each head — mirrors the
-                // clean main-band pattern of reg33/buck.
+                // Position heads HORIZONTALLY with children as vertical drops.
+                // Children sorted: caps first (LEFT, output_filtering), then
+                // loads after (RIGHT, loading) — following flow statement order.
+
+                // Filter out shuntChainDown children — they get stacked below
+                // their parent by the chain stacking pass, not placed in rows.
+                const chainChildSet = new Set(shuntChainDown.values());
+                for (const [hName, hChildren] of headChildren) {
+                    headChildren.set(hName, hChildren.filter(c => !chainChildSet.has(c.name)));
+                }
+
+                // Normalize children heights and sort: caps LEFT, loads RIGHT
+                let globalMaxChildH = 0;
+                for (const head of headOrder) {
+                    const children = headChildren.get(head.name) || [];
+                    for (const c of children) {
+                        const sz = offPathSizes.get(c.name);
+                        if (sz) globalMaxChildH = Math.max(globalMaxChildH, sz.h);
+                    }
+                    // Sort: capacitors first (LEFT), everything else after (RIGHT)
+                    children.sort((a, b) => {
+                        const catA = instMap.get(a.name)?.category || '';
+                        const catB = instMap.get(b.name)?.category || '';
+                        return (catA === 'capacitor' ? 0 : 1) - (catB === 'capacitor' ? 0 : 1);
+                    });
+                }
+                // Normalize all children to the global tallest height
+                for (const head of headOrder) {
+                    for (const c of (headChildren.get(head.name) || [])) {
+                        const sz = offPathSizes.get(c.name);
+                        if (sz) sz.h = globalMaxChildH;
+                    }
+                }
+
                 let hx = bx;
                 for (const head of headOrder) {
                     const headSz = offPathSizes.get(head.name) || { w: INSTANCE_BOX_MIN_WIDTH, h: 60 };
                     positions.set(head.name, { x: hx, y: by, w: headSz.w, h: headSz.h });
 
-                    // Children drop vertically below this head, like main-band shunts.
-                    // Multi-row layout: wrap into rows when children exceed MAX_SHUNT_PER_ROW.
-                    // All rows grow RIGHT from the head's port (no boustrophedon) to keep
-                    // wire routing simple — wires go right+down from the bus point,
-                    // never crossing back through the head.
                     const children = headChildren.get(head.name) || [];
                     if (children.length > 0) {
-                        const rows = splitIntoRows(children, MAX_SHUNT_PER_ROW);
+                        // Separate caps and loads — only caps form serpentine rows.
+                        // Loads always go in row 0 after caps (individual wire routing).
+                        const caps = children.filter(c => (instMap.get(c.name)?.category || '') === 'capacitor');
+                        const loads = children.filter(c => (instMap.get(c.name)?.category || '') !== 'capacitor');
+
+                        const capRows = caps.length > 0 ? splitIntoRows(caps, MAX_SHUNT_PER_ROW) : [];
                         const dropY = by + headSz.h + SHUNT_DROP;
-                        // Center first child under head's output port
                         const portX = hx + headSz.w + PORT_STUB_LEN;
-                        // Compute row stride (like main-band multi-row shunts)
-                        const tallestH = Math.max(...children.map(c => (offPathSizes.get(c.name) || { h: 60 }).h));
+                        const busX = portX;
                         const gndSpace = GND_STUB_HEIGHT + GND_LINE_SPACING * 3;
                         const GND_CLEARANCE = 15;
                         const rowDrop = dropY - (by + headSz.h / 2);
-                        const ROW_STRIDE = rows.length > 1
-                            ? tallestH + gndSpace + GND_CLEARANCE + rowDrop
-                            : tallestH + gndSpace + 30;
+                        const ROW_STRIDE = capRows.length > 1
+                            ? globalMaxChildH + gndSpace + GND_CLEARANCE + rowDrop
+                            : globalMaxChildH + gndSpace + 30;
 
                         let maxRowRight = hx + headSz.w;
-                        const firstRowStartX = portX - (offPathSizes.get(rows[0][0].name) || { w: INSTANCE_BOX_MIN_WIDTH }).w / 2;
+                        const rowExtents = [];
 
-                        for (let rowIdx = 0; rowIdx < rows.length; rowIdx++) {
-                            const row = rows[rowIdx];
+                        // Place caps in serpentine rows (with bus wire metadata)
+                        for (let rowIdx = 0; rowIdx < capRows.length; rowIdx++) {
+                            const row = capRows[rowIdx];
                             const rowY = dropY + rowIdx * ROW_STRIDE;
-                            // All rows grow right, starting at the same left edge
-                            let sx = firstRowStartX;
-                            for (let si = 0; si < row.length; si++) {
-                                const shItem = row[si];
-                                const sz = offPathSizes.get(shItem.name) || { w: INSTANCE_BOX_MIN_WIDTH, h: 60 };
-                                positions.set(shItem.name, { x: sx, y: rowY, w: sz.w, h: sz.h });
-                                const thisOH = shuntItemOverhang(shItem.name);
-                                const nextOH = si + 1 < row.length ? shuntItemOverhang(row[si + 1].name) : { left: 0, right: 0 };
-                                maxRowRight = Math.max(maxRowRight, sx + sz.w + thisOH.right);
-                                sx += sz.w + Math.max(MIN_ITEM_GAP_BASE, thisOH.right + nextOH.left + ANNOTATION_PAD);
+                            const isReversed = rowIdx % 2 === 1;
+                            const busYForRow = rowIdx > 0 ? rowY : undefined;
+
+                            if (!isReversed) {
+                                let lx;
+                                if (rowIdx === 0) {
+                                    lx = portX - (offPathSizes.get(row[0].name) || { w: INSTANCE_BOX_MIN_WIDTH }).w / 2;
+                                } else {
+                                    lx = rowExtents[rowIdx - 1].minX;
+                                }
+                                for (let si = 0; si < row.length; si++) {
+                                    const shItem = row[si];
+                                    const sz = offPathSizes.get(shItem.name) || { w: INSTANCE_BOX_MIN_WIDTH, h: 60 };
+                                    positions.set(shItem.name, { x: lx, y: rowY, w: sz.w, h: sz.h, _rowIdx: rowIdx, _busX: busX, _busY: busYForRow });
+                                    const thisOH = shuntItemOverhang(shItem.name);
+                                    const nextOH = si + 1 < row.length ? shuntItemOverhang(row[si + 1].name) : { left: 0, right: 0 };
+                                    lx += sz.w + Math.max(MIN_ITEM_GAP_BASE, thisOH.right + nextOH.left + ANNOTATION_PAD);
+                                }
+                            } else {
+                                // Offset odd rows by half the previous row's inter-cap
+                                // pitch so vertical stubs land in gaps between row 0 caps
+                                // (not through cap bodies).
+                                const prevExt = rowExtents[rowIdx - 1];
+                                const prevRow = capRows[rowIdx - 1];
+                                const prevPitch = prevRow.length > 1
+                                    ? (prevExt.maxX - prevExt.minX) / (prevRow.length - 1)
+                                    : 0;
+                                let rx = prevExt.maxX - prevPitch / 2;
+                                for (let si = row.length - 1; si >= 0; si--) {
+                                    const shItem = row[si];
+                                    const sz = offPathSizes.get(shItem.name) || { w: INSTANCE_BOX_MIN_WIDTH, h: 60 };
+                                    rx -= sz.w;
+                                    positions.set(shItem.name, { x: rx, y: rowY, w: sz.w, h: sz.h, _rowIdx: rowIdx, _busX: busX, _busY: busYForRow });
+                                    const thisOH = shuntItemOverhang(shItem.name);
+                                    const nextOH = si > 0 ? shuntItemOverhang(row[si - 1].name) : { left: 0, right: 0 };
+                                    rx -= Math.max(MIN_ITEM_GAP_BASE, thisOH.left + nextOH.right + ANNOTATION_PAD);
+                                }
+                            }
+
+                            let minX = Infinity, maxX = -Infinity;
+                            for (const shItem of row) {
+                                const p = positions.get(shItem.name);
+                                if (p) { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x + p.w); }
+                            }
+                            rowExtents.push({ minX, maxX, rowY });
+                            maxRowRight = Math.max(maxRowRight, maxX);
+
+                            // Align GND targets within this cap row
+                            let maxBottomY = 0;
+                            for (const shItem of row) {
+                                const pos = positions.get(shItem.name);
+                                if (pos) {
+                                    let bottomY = pos.y + pos.h;
+                                    let cur = shItem.name;
+                                    while (shuntChainDown.has(cur)) {
+                                        cur = shuntChainDown.get(cur);
+                                        const cPos = positions.get(cur);
+                                        if (cPos) bottomY = Math.max(bottomY, cPos.y + cPos.h);
+                                    }
+                                    maxBottomY = Math.max(maxBottomY, bottomY);
+                                }
+                            }
+                            if (maxBottomY > 0) {
+                                for (const shItem of row) {
+                                    const pos = positions.get(shItem.name);
+                                    if (pos) pos.gndTargetY = maxBottomY;
+                                }
                             }
                         }
 
-                        // Advance hx past the widest row
+                        // Place loads in row 0 after last cap (no bus metadata — individual wires)
+                        if (loads.length > 0) {
+                            let lx;
+                            if (rowExtents.length > 0 && capRows[0] && capRows[0].length > 0) {
+                                const lastCapOH = shuntItemOverhang(capRows[0][capRows[0].length - 1].name);
+                                const firstLoadOH = shuntItemOverhang(loads[0].name);
+                                lx = rowExtents[0].maxX + Math.max(MIN_ITEM_GAP_BASE, lastCapOH.right + firstLoadOH.left + ANNOTATION_PAD);
+                            } else {
+                                lx = portX - (offPathSizes.get(loads[0].name) || { w: INSTANCE_BOX_MIN_WIDTH }).w / 2;
+                            }
+                            for (let li = 0; li < loads.length; li++) {
+                                const loadItem = loads[li];
+                                const sz = offPathSizes.get(loadItem.name) || { w: INSTANCE_BOX_MIN_WIDTH, h: 60 };
+                                positions.set(loadItem.name, { x: lx, y: dropY, w: sz.w, h: sz.h });
+                                const thisOH = shuntItemOverhang(loadItem.name);
+                                const nextOH = li + 1 < loads.length ? shuntItemOverhang(loads[li + 1].name) : { left: 0, right: 0 };
+                                lx += sz.w + Math.max(MIN_ITEM_GAP_BASE, thisOH.right + nextOH.left + ANNOTATION_PAD);
+                            }
+                            // Update maxRowRight for loads
+                            for (const loadItem of loads) {
+                                const lp = positions.get(loadItem.name);
+                                if (lp) maxRowRight = Math.max(maxRowRight, lp.x + lp.w);
+                            }
+                            // GND alignment for loads only (independent from caps).
+                            // Caps keep their own per-row GND alignment from the
+                            // boustrophedon loop — syncing with load chain children
+                            // (e.g., led18 below r_led18) would extend cap GND stubs
+                            // through the serpentine feed wire.
+                            let loadMaxBottom = 0;
+                            for (const loadItem of loads) {
+                                const pos = positions.get(loadItem.name);
+                                if (pos) {
+                                    let bottomY = pos.y + pos.h;
+                                    let cur = loadItem.name;
+                                    while (shuntChainDown.has(cur)) {
+                                        cur = shuntChainDown.get(cur);
+                                        const cPos = positions.get(cur);
+                                        if (cPos) bottomY = Math.max(bottomY, cPos.y + cPos.h);
+                                    }
+                                    loadMaxBottom = Math.max(loadMaxBottom, bottomY);
+                                }
+                            }
+                            if (loadMaxBottom > 0) {
+                                for (const loadItem of loads) {
+                                    const pos = positions.get(loadItem.name);
+                                    if (pos) pos.gndTargetY = loadMaxBottom;
+                                }
+                            }
+                        }
+
+                        // Store multi-row metadata for bus wire routing (cap-only rows)
+                        if (capRows.length > 1) {
+                            let bboxMinX = Infinity, bboxMaxX = -Infinity;
+                            for (const ext of rowExtents) {
+                                bboxMinX = Math.min(bboxMinX, ext.minX);
+                                bboxMaxX = Math.max(bboxMaxX, ext.maxX);
+                            }
+                            // Include loads in bbox width
+                            for (const loadItem of loads) {
+                                const lp = positions.get(loadItem.name);
+                                if (lp) { bboxMinX = Math.min(bboxMinX, lp.x); bboxMaxX = Math.max(bboxMaxX, lp.x + lp.w); }
+                            }
+                            const lastRowY = rowExtents[rowExtents.length - 1].rowY;
+                            branchMultiRowData.push({
+                                headName: head.name,
+                                rows: capRows, // cap-only rows for bus wire routing
+                                rowStride: ROW_STRIDE,
+                                row0Drop: rowDrop,
+                                busX,
+                                rowExtents,
+                                junctionY: by + headSz.h / 2,
+                                bbox: {
+                                    x: bboxMinX - 20,
+                                    y: dropY - PORT_STUB_LEN - 10,
+                                    w: (bboxMaxX - bboxMinX) + 40,
+                                    h: (lastRowY + globalMaxChildH + gndSpace) - (dropY - PORT_STUB_LEN - 10) + 20
+                                }
+                            });
+                        }
+
                         hx = maxRowRight + 60;
                     } else {
                         hx += headSz.w + 60;
@@ -2306,6 +2536,12 @@
                     }
                 }
             }
+        }
+
+        // ── 10c-bounds. Compute branch group bounding boxes ──
+        for (const [key, group] of branchGroups) {
+            const bounds = computeGroupBounds(group, key, 'branch_group');
+            if (bounds) layoutPathBounds.push(bounds);
         }
 
         // ── 10c-fix. Push main-band right if branches extend into next element ──
@@ -2394,6 +2630,39 @@
                     }
                     break; // only check next neighbor
                 }
+            }
+        }
+
+        // ── 10c-mainband-bounds. Compute main-band bounding box ──
+        {
+            let mbMinX = Infinity, mbMinY = Infinity, mbMaxX = -Infinity, mbMaxY = -Infinity;
+            for (const name of mainBandOrder) {
+                const pos = positions.get(name);
+                if (!pos || (pos.w === 0 && pos.h === 0)) continue;
+                mbMinX = Math.min(mbMinX, pos.x);
+                mbMinY = Math.min(mbMinY, pos.y);
+                mbMaxX = Math.max(mbMaxX, pos.x + pos.w + PORT_STUB_LEN);
+                mbMaxY = Math.max(mbMaxY, pos.y + pos.h);
+            }
+            for (const ps of powerSourceNodes) {
+                const pos = positions.get(ps.id);
+                if (!pos) continue;
+                mbMinX = Math.min(mbMinX, pos.x);
+                mbMinY = Math.min(mbMinY, pos.y);
+                mbMaxX = Math.max(mbMaxX, pos.x + pos.w);
+                mbMaxY = Math.max(mbMaxY, pos.y + pos.h);
+            }
+            if (mbMinX !== Infinity) {
+                layoutPathBounds.push({
+                    name: '__main_band__',
+                    type: 'main_band',
+                    junctionName: null,
+                    side: null,
+                    x: mbMinX - 5,
+                    y: mbMinY - 5,
+                    w: (mbMaxX - mbMinX) + 10,
+                    h: (mbMaxY - mbMinY) + 10,
+                });
             }
         }
 
@@ -3209,6 +3478,14 @@
                 for (const item of row) multiRowItemNames.add(item.name);
             }
         }
+        // Also include branch multi-row group obstacles
+        for (const brData of branchMultiRowData) {
+            if (!brData.bbox) continue;
+            multiRowObstacles.push(brData.bbox);
+            for (const row of brData.rows) {
+                for (const item of row) multiRowItemNames.add(item.name);
+            }
+        }
 
         // Post-process: reroute wire segments that cross through multi-row
         // cap bank bounding boxes. For any horizontal segment that falls within
@@ -3414,6 +3691,47 @@
                 lbends,
                 rows: group._rows,
                 junctionY: group._junctionY,
+                netName: busNetName
+            });
+        }
+        // Build bus wires for branch multi-row groups (same L-bend pattern)
+        // The vertical bus segment must route PAST the row edge (not through
+        // a cap center) so the wire doesn't cut through row 0 caps. We place
+        // the corner 20px past the row edge — this sits on the power wire
+        // that continues from the head's VO to the loads further right.
+        for (const brData of branchMultiRowData) {
+            if (!brData.rows || brData.rows.length <= 1) continue;
+            const lbends = [];
+            const brRowExtents = brData.rowExtents;
+            for (let ri = 0; ri < brData.rows.length - 1; ri++) {
+                const next = brRowExtents[ri + 1];
+                const isEvenToOdd = ri % 2 === 0;
+                // L-bend corner: PAST the row edge so the vertical bus wire
+                // doesn't pass through any cap body. +20px clears the cap edge.
+                const BUS_WIRE_PAD = 20;
+                const cornerX = isEvenToOdd
+                    ? brRowExtents[ri].maxX + BUS_WIRE_PAD
+                    : brRowExtents[ri].minX - BUS_WIRE_PAD;
+                const feedY = next.rowY - (brData.row0Drop || 80);
+                const cornerY = feedY;
+                const nextRow = brData.rows[ri + 1];
+                const farCap = isEvenToOdd ? nextRow[0] : nextRow[nextRow.length - 1];
+                const farCapPos = positions.get(farCap.name);
+                const feedEndX = farCapPos ? farCapPos.x + farCapPos.w / 2 : (isEvenToOdd ? next.minX : next.maxX);
+                lbends.push({ cornerX, cornerY, feedEndX, feedY, isEvenToOdd });
+            }
+            // Find net name from wires targeting items in this group
+            let busNetName = null;
+            const firstItemName = brData.rows[0][0].name;
+            for (const wire of layoutWires) {
+                if (wire.sinkElName === firstItemName) { busNetName = wire.netName; break; }
+            }
+            multiRowBusWires.push({
+                side: 'right',
+                rowExtents: brRowExtents,
+                lbends,
+                rows: brData.rows,
+                junctionY: brData.junctionY,
                 netName: busNetName
             });
         }

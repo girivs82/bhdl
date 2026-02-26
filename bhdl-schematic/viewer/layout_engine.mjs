@@ -48,6 +48,7 @@ if (__inputData) {
     __output.elements = layoutElements;
     __output.wires = layoutWires;
     __output.stageZones = layoutStageZones;
+    __output.pathBounds = layoutPathBounds;
 }
 `;
 
@@ -59,7 +60,7 @@ if (__inputData) {
 
 function createSandbox(inputData) {
     const noop = () => {};
-    const output = { elements: null, wires: null, stageZones: null };
+    const output = { elements: null, wires: null, stageZones: null, pathBounds: null };
 
     // Minimal mock of the browser objects schematic.js touches at init time
     const mockCtx = {
@@ -150,7 +151,7 @@ function createSandbox(inputData) {
  * Run the schematic layout engine on a SchematicData JSON object.
  *
  * @param {object} schematicData — the full SchematicData structure from Rust CLI
- * @returns {{ elements: Array, wires: Array, stageZones: Array }}
+ * @returns {{ elements: Array, wires: Array, stageZones: Array, pathBounds: Array }}
  */
 export function computeLayout(schematicData) {
     // Deep clone so we don't mutate the caller's object
@@ -166,6 +167,7 @@ export function computeLayout(schematicData) {
         elements: output.elements || [],
         wires: output.wires || [],
         stageZones: output.stageZones || [],
+        pathBounds: output.pathBounds || [],
     };
 }
 
@@ -182,4 +184,6 @@ export const LAYOUT_CONSTANTS = {
     ENTITY_BOX_MIN_WIDTH: 180,
     INSTANCE_BOX_MIN_WIDTH: 120,
     GND_STUB_HEIGHT: 18,
+    GND_LINE_SPACING: 3,
+    GND_LINE_COUNT: 3,
 };
