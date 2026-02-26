@@ -307,6 +307,14 @@ This ensures we build a robust, production-ready toolchain rather than a demo wi
 
 ### Recent Major Advances
 
+17. **Auto-Created Output Filter Caps** (2026-02): ✅ COMPLETED
+    - Output caps auto-created from `|> output_filtering(max_ripple: 50mV)` stage chains on power declarations
+    - Mirrors input cap auto-creation pattern: `output_cap_sizer.rs` with collect → auto-create → size pipeline
+    - Skip logic: virtual pin expansion caps (`vpin_parent` attr) and existing user-placed output_filtering caps
+    - Sizing: multi-tier ripple bank for switching regulators, `C = I_load × Δt_response / ΔV_ripple` for linear (Δt ≈ 25µs LDO)
+    - Pipeline order: stamp intents → expand vpins → GLACIER → input caps → **output caps** → physical selection
+    - complex_power_tree.bhdl: 4 explicit cap pairs removed; 3 auto-created (V3_3, V5_AUX, V1_8), V5_BUCK skipped (vpin expansion)
+
 16. **Parameterized Stage Chains** (2026-02): ✅ COMPLETED
     - Stage chains on power decls accept key-value params: `|> input_filtering(max_ripple: 50mV)`
     - Reuses `parse_intent_params()` — same `INTENT_PARAMS`/`INTENT_NAMED_PARAM` syntax nodes
@@ -447,6 +455,7 @@ This ensures we build a robust, production-ready toolchain rather than a demo wi
   - GLACIER DC simulation computes operating point (V, I, P at every node)
   - Post-simulation pass selects physical parameters (package, rating, dielectric)
   - Includes input cap bank auto-creation from `|> input_filtering(max_ripple: 50mV)` stage chains
+  - Includes output cap auto-creation from `|> output_filtering(max_ripple: 50mV)` stage chains
   - Capacitor bank splitting for large values (470µF → parallel MLCCs)
 - VSCode extension for schematic webview (Phase 2)
 - Further simulation tool integration
@@ -498,6 +507,7 @@ net measure: @protected -> filter -> adc
 - [x] Hierarchical intent propagation through entities
 - [x] Net syntax consistency with @ prefix requirement
 - [x] Tool integration: input cap sizer reads stage chain params for ripple targets
+- [x] Tool integration: output cap sizer auto-creates and sizes caps from `|> output_filtering` stage chains
 - [x] Documentation and examples
 
 ### Key Principle: "One Flow, One Intent"
