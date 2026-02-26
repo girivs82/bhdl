@@ -92,12 +92,23 @@ fn find_expansion_candidates(
         };
 
         // Check if this module's name matches any recipe.
-        // Also check the base type name from `component_class` or the module name directly.
+        // Also check the base type name from `component_type` attr or prefix matching
+        // for monomorphized types (e.g., "TPS54331_3V3" → recipe "TPS54331").
         let recipe = recipes.get(&mod_def.name)
             .or_else(|| {
                 // Try matching by the original entity type stored in component_type attr
                 inst.attributes.get("component_type")
                     .and_then(|ct| recipes.get(ct))
+            })
+            .or_else(|| {
+                // Prefix match for monomorphized aliases: "TPS54331_3V3" matches recipe "TPS54331"
+                recipes.iter()
+                    .find(|(recipe_name, _)| {
+                        mod_def.name.starts_with(recipe_name.as_str())
+                            && mod_def.name.len() > recipe_name.len()
+                            && mod_def.name.as_bytes()[recipe_name.len()] == b'_'
+                    })
+                    .map(|(_, r)| r)
             });
 
         let recipe = match recipe {
@@ -188,9 +199,27 @@ fn expand_one_instance(
             attrs.push(("value", resolved));
         }
 
+        // Determine expansion role from connection topology
+        // A child is "shunt" if any of its connections touch GND; otherwise "series"
+        let is_shunt = cand.recipe.connections.iter().any(|conn| {
+            let touches_child = |ep: &ExpansionEndpoint| match ep {
+                ExpansionEndpoint::InstancePin(n, _) => n == &exp_inst.name,
+                _ => false,
+            };
+            let touches_gnd = |ep: &ExpansionEndpoint| match ep {
+                ExpansionEndpoint::ParentPin(p) => p.to_uppercase() == "GND",
+                _ => false,
+            };
+            (touches_child(&conn.from) && touches_gnd(&conn.to))
+                || (touches_child(&conn.to) && touches_gnd(&conn.from))
+        });
+        let expansion_role = if is_shunt { "shunt" } else { "series" };
+
         // Propagate parent attributes
         attrs.push(("expansion_parent", base.to_string()));
+        attrs.push(("expansion_role", expansion_role.to_string()));
         attrs.push(("vpin_parent", base.to_string()));
+        attrs.push(("vpin_role", expansion_role.to_string()));
         if let Some(intent) = parent_attrs.get("intent") {
             attrs.push(("intent", intent.clone()));
         }
@@ -213,7 +242,12 @@ fn expand_one_instance(
     }
 
     // 3. Wire connections
+    // Track auto-created nets for unconnected parent pins (e.g. SW, FB, BOOT)
+    let mut auto_parent_nets: HashMap<String, NetId> = HashMap::new();
+    let mut conn_idx_counter = 0usize;
+
     for conn in &cand.recipe.connections {
+        conn_idx_counter += 1;
         let from_net = resolve_endpoint_net(
             netlist, &conn.from, cand, &child_instance_map, &internal_net_map,
         )?;
@@ -223,10 +257,42 @@ fn expand_one_instance(
 
         // The connection is: connect from_endpoint to to_endpoint.
         // Both should end up on the same net.
-        // Strategy: connect both endpoints' pin instances to the "from" net,
-        // unless they already share a net.
-        let target_net = from_net.or(to_net)
-            .ok_or_else(|| format!("No net for connection {:?} -> {:?}", conn.from, conn.to))?;
+        // When neither endpoint has a net yet (e.g. parent pin SW has no board-level
+        // connection, and child L_out.1 is brand new), create a new net.
+        let target_net = match from_net.or(to_net) {
+            Some(net) => net,
+            None => {
+                // Check if we already auto-created a net for this parent pin
+                let auto_key = match &conn.from {
+                    ExpansionEndpoint::ParentPin(p) => Some(p.clone()),
+                    _ => match &conn.to {
+                        ExpansionEndpoint::ParentPin(p) => Some(p.clone()),
+                        _ => None,
+                    },
+                };
+                if let Some(ref key) = auto_key {
+                    if let Some(&existing) = auto_parent_nets.get(key) {
+                        existing
+                    } else {
+                        let net_name = format!("{}_{}", base, key);
+                        let net_id = netlist.add_net(Some(net_name.clone()));
+                        debug!("Auto-created net '{}' for unconnected parent pin '{}'", net_name, key);
+                        auto_parent_nets.insert(key.clone(), net_id);
+                        // Also connect the parent's pin instance to this new net
+                        if let Some(&pi_id) = cand.pin_instances.get(key) {
+                            netlist.connect(net_id, ConnectionPoint::PinInstance(pi_id))
+                                .map_err(|e| format!("connect parent pin '{}': {}", key, e))?;
+                        }
+                        net_id
+                    }
+                } else {
+                    // Neither endpoint is a parent pin — create an anonymous net
+                    let net_name = format!("{}_auto_{}", base, conn_idx_counter);
+                    let net_id = netlist.add_net(Some(net_name));
+                    net_id
+                }
+            }
+        };
 
         // Connect the "from" side's pin instance to the target net
         connect_endpoint_to_net(
