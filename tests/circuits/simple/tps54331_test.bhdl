@@ -1,0 +1,23 @@
+import { Res } from "bhdl-stdlib/simple/resistor_simple.bhdl";
+import { Cap } from "bhdl-stdlib/simple/capacitor_simple.bhdl";
+import { LED } from "bhdl-stdlib/simple/led_simple.bhdl";
+import { Ind } from "bhdl-stdlib/simple/inductor_simple.bhdl";
+import { Diode } from "bhdl-stdlib/simple/diode_simple.bhdl";
+import { TPS54331_3V3 } from "bhdl-stdlib/simple/regulator_simple.bhdl";
+
+board TPS54331Test {
+    power VIN = 12V @ 3A;
+    power V3_3 = 3.3V @ 2A |> output_filtering(max_ripple: 10mV);
+    ground GND;
+
+    VIN -> c_in: Cap(10µF).1; c_in.2 -> GND;
+
+    c_in.1 -> buck: TPS54331_3V3().VIN;
+    buck.VOUT -> V3_3;
+    buck.GND -> GND;
+    buck.EN -> VIN;
+
+    V3_3 -> r_led: Res(120).1 -> r_led.2 -> led: LED("green").A;
+    led.K -> GND;
+    V3_3 -> r_load: Res(1.65).1 -> r_load.2 -> GND;
+}
