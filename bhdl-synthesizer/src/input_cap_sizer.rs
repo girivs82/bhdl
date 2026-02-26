@@ -12,7 +12,10 @@
 // 5. Update user's cap value if computed bulk > user-specified; create sibling caps
 
 use log::{debug, info};
+use bhdl_analyzer::AnalysisResult;
+use bhdl_analyzer::flow_tracking::FlowTracker;
 use bhdl_analyzer::spice_extraction::parse_unit_value;
+use bhdl_analyzer::symbol_table::SymbolKind;
 use bhdl_netlist::{ConnectionPoint, InstanceId, NetId, Netlist, PinInstanceId};
 use bhdl_schematic::SimulationAnnotations;
 
@@ -21,6 +24,271 @@ use crate::virtual_pin_expander::{
     find_or_create_module, create_instance, connect_pin_instance_by_name,
     find_net_for_pin_instance, format_cap_value_for_attr,
 };
+
+// ── Auto-creation of input filter caps from stage chains ────────────────
+
+/// Specification for a rail that needs an auto-created input filter cap.
+#[derive(Debug)]
+pub struct RailFilteringSpec {
+    pub rail_name: String,
+    pub rail_voltage: f64,
+    /// From FlowTracker flow paths or default (1% of rail voltage)
+    pub max_ripple_v: f64,
+    pub stage_order: usize,
+}
+
+/// Scan the FlowTracker rail stage map for rails with `input_filtering` stage
+/// and collect their voltage + ripple specs from the analysis result.
+///
+/// The voltage comes from the net attribute on the power domain symbol.
+/// The ripple target comes from any `input_filtering` intent on flow paths
+/// for this rail, falling back to 1% of rail voltage (standard practice).
+pub fn collect_rails_needing_input_filter(
+    flow_tracker: &FlowTracker,
+    analysis: &AnalysisResult,
+) -> Vec<RailFilteringSpec> {
+    let rail_stage_map = flow_tracker.get_rail_stage_map();
+    let mut specs = Vec::new();
+
+    for (rail_name, stages) in rail_stage_map {
+        // Check if this rail has an "input_filtering" stage
+        let stage_idx = stages.iter().position(|(name, _)| name == "input_filtering");
+        let stage_order = match stage_idx {
+            Some(idx) => idx,
+            None => continue,
+        };
+
+        // Get rail voltage from net attributes in symbol tables
+        let rail_voltage = find_rail_voltage(rail_name, analysis);
+        if rail_voltage <= 0.0 {
+            debug!("Skipping rail '{}': no positive voltage found", rail_name);
+            continue;
+        }
+
+        // Get max_ripple: stage chain params > flow intent params > 1% default
+        let max_ripple_v = flow_tracker
+            .get_stage_params(rail_name, "input_filtering")
+            .and_then(|p| p.get("max_ripple"))
+            .and_then(|v| parse_unit_value(v))
+            .or_else(|| find_max_ripple_for_rail(rail_name, flow_tracker))
+            .unwrap_or(rail_voltage * 0.01); // default 1%
+
+        specs.push(RailFilteringSpec {
+            rail_name: rail_name.clone(),
+            rail_voltage,
+            max_ripple_v,
+            stage_order,
+        });
+    }
+
+    specs
+}
+
+/// Auto-create seed input filter cap instances for rails that need them.
+///
+/// For each spec, checks if a cap with `intent_name = "input_filtering"` already
+/// exists on the rail net. If not, creates a seed Cap instance connected to
+/// rail and GND. The subsequent `size_input_filter_caps()` will size it properly.
+///
+/// Returns the names of auto-created instances.
+pub fn auto_create_input_filter_caps(
+    netlist: &mut Netlist,
+    specs: &[RailFilteringSpec],
+) -> Vec<String> {
+    let mut created = Vec::new();
+
+    for spec in specs {
+        // Find rail net by name
+        let rail_net = match find_net_by_name(netlist, &spec.rail_name) {
+            Some(id) => id,
+            None => {
+                debug!("auto_create: rail net '{}' not found in netlist", spec.rail_name);
+                continue;
+            }
+        };
+
+        // Check if any cap on this net already has input_filtering intent → skip
+        if has_input_filtering_cap(netlist, rail_net) {
+            debug!("auto_create: rail '{}' already has input_filtering cap, skipping", spec.rail_name);
+            continue;
+        }
+
+        // Find GND net
+        let gnd_net = match find_gnd_net(netlist) {
+            Some(id) => id,
+            None => {
+                debug!("auto_create: GND net not found");
+                continue;
+            }
+        };
+
+        // Create seed Cap instance
+        let cap_mod = find_or_create_module(netlist, "Cap", &[("1", true), ("2", true)]);
+        let inst_name = format!("auto_c_in_{}", spec.rail_name);
+        let ripple_str = format!("{}V", spec.max_ripple_v);
+        let attrs: Vec<(&str, &str)> = vec![
+            ("component_class", "capacitor"),
+            ("value", "10µF"), // placeholder — sized by size_input_filter_caps()
+            ("intent_name", "input_filtering"),
+            ("intent_max_ripple", &ripple_str),
+            ("stage_name", "input_filtering"),
+            ("stage_rail", &spec.rail_name),
+            ("vpin_role", "shunt"),
+            ("auto_created", "true"),
+        ];
+        let inst_id = create_instance(netlist, &inst_name, cap_mod, &attrs);
+        let pins = match netlist.create_pin_instances(inst_id) {
+            Ok(p) => p,
+            Err(e) => {
+                log::warn!("auto_create: failed to create pins for '{}': {}", inst_name, e);
+                continue;
+            }
+        };
+
+        // Pin 1 → rail, Pin 2 → GND
+        if let Err(e) = connect_pin_instance_by_name(netlist, inst_id, &pins, "1", rail_net) {
+            log::warn!("auto_create: connect pin 1 failed for '{}': {}", inst_name, e);
+            continue;
+        }
+        if let Err(e) = connect_pin_instance_by_name(netlist, inst_id, &pins, "2", gnd_net) {
+            log::warn!("auto_create: connect pin 2 failed for '{}': {}", inst_name, e);
+            continue;
+        }
+
+        info!("Auto-created input filter cap '{}' on rail '{}' (ripple target: {:.1}mV)",
+            inst_name, spec.rail_name, spec.max_ripple_v * 1e3);
+        created.push(inst_name);
+    }
+
+    created
+}
+
+/// Look up rail voltage from net attributes in analysis symbol tables.
+fn find_rail_voltage(rail_name: &str, analysis: &AnalysisResult) -> f64 {
+    // Check global scope nets
+    if let Some(sym) = analysis.global_scope.get_nets().get(rail_name) {
+        if sym.kind == SymbolKind::Net {
+            if let Some(ref attr) = sym.net_attributes {
+                if let Some(v) = attr.voltage() {
+                    return v;
+                }
+            }
+        }
+    }
+
+    // Check definition scopes (power domains are typically in board scope)
+    for (_, scope) in &analysis.definition_scopes {
+        if let Some(sym) = scope.get_nets().get(rail_name) {
+            if sym.kind == SymbolKind::Net {
+                if let Some(ref attr) = sym.net_attributes {
+                    if let Some(v) = attr.voltage() {
+                        return v;
+                    }
+                }
+            }
+        }
+    }
+
+    0.0
+}
+
+/// Find max_ripple parameter from flow paths with input_filtering intent on a rail.
+fn find_max_ripple_for_rail(rail_name: &str, flow_tracker: &FlowTracker) -> Option<f64> {
+    for flow in flow_tracker.get_flow_paths() {
+        let intent_matches = flow.intent.as_ref()
+            .map(|i| i.name == "input_filtering")
+            .unwrap_or(false);
+        if !intent_matches {
+            continue;
+        }
+
+        let rail_matches = flow.nets.iter().any(|n| n == rail_name);
+        if !rail_matches {
+            continue;
+        }
+
+        // Extract max_ripple from intent params
+        if let Some(ref intent) = flow.intent {
+            for param in &intent.params {
+                match param {
+                    bhdl_common::IntentParam::Named(name, value) if name == "max_ripple" => {
+                        if let bhdl_common::IntentValue::Number(v, _) = value {
+                            return Some(*v);
+                        }
+                        // Try parsing string representation
+                        if let bhdl_common::IntentValue::String(s) = value {
+                            if let Some(v) = parse_unit_value(s) {
+                                return Some(v);
+                            }
+                        }
+                    }
+                    bhdl_common::IntentParam::Positional(value) => {
+                        if let bhdl_common::IntentValue::Number(v, _) = value {
+                            return Some(*v);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Find a net by name in the netlist.
+fn find_net_by_name(netlist: &Netlist, name: &str) -> Option<NetId> {
+    for (net_id, net) in &netlist.nets {
+        if net.name.as_deref() == Some(name) {
+            return Some(net_id);
+        }
+    }
+    None
+}
+
+/// Find the GND net in the netlist (name "GND" or "0").
+fn find_gnd_net(netlist: &Netlist) -> Option<NetId> {
+    for (net_id, net) in &netlist.nets {
+        match net.name.as_deref() {
+            Some("GND") | Some("0") => return Some(net_id),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Check if any capacitor on the given net already has `intent_name = "input_filtering"`.
+fn has_input_filtering_cap(netlist: &Netlist, rail_net: NetId) -> bool {
+    let net = match netlist.nets.get(rail_net) {
+        Some(n) => n,
+        None => return false,
+    };
+
+    for conn in &net.connections {
+        let pi_id = match conn {
+            ConnectionPoint::PinInstance(pi) => *pi,
+            _ => continue,
+        };
+        let pi = match netlist.pin_instances.get(pi_id) {
+            Some(pi) => pi,
+            None => continue,
+        };
+        let inst = match netlist.instances.get(pi.instance) {
+            Some(i) => i,
+            None => continue,
+        };
+        if inst.attributes.get("intent_name").map(|s| s.as_str()) == Some("input_filtering") {
+            let is_cap = inst.attributes.get("component_class").map(|s| s.as_str()) == Some("capacitor")
+                || netlist.modules.get(inst.definition)
+                    .map(|m| m.name.starts_with("Cap"))
+                    .unwrap_or(false);
+            if is_cap {
+                return true;
+            }
+        }
+    }
+
+    false
+}
 
 /// Summary of one input cap sizing result.
 #[derive(Debug)]
@@ -620,5 +888,109 @@ mod tests {
         };
         let results = size_input_filter_caps(&mut nl, &ann);
         assert!(results.is_empty(), "no candidates = no results");
+    }
+
+    // ── Auto-creation tests ─────────────────────────────────────────────
+
+    /// Build a netlist with a regulator on VIN but NO input filter cap.
+    fn make_netlist_without_input_cap() -> (Netlist, NetId, NetId) {
+        let mut nl = Netlist::default();
+
+        // Cap module (needed for auto-creation to find_or_create)
+        let _cap_mod = nl.add_module("Cap".to_string(), ModuleKind::PhysicalComponent);
+        nl.add_pin(_cap_mod, "1".to_string(), PinDirection::InOut, PinType::Passive);
+        nl.add_pin(_cap_mod, "2".to_string(), PinDirection::InOut, PinType::Passive);
+
+        // Regulator module
+        let reg_mod = nl.add_module("BuckRegulator".to_string(), ModuleKind::PhysicalComponent);
+        nl.add_pin(reg_mod, "VIN".to_string(), PinDirection::In, PinType::Power);
+        nl.add_pin(reg_mod, "VOUT".to_string(), PinDirection::Out, PinType::Power);
+        nl.add_pin(reg_mod, "GND".to_string(), PinDirection::Ground, PinType::Ground);
+
+        // Nets
+        let vin_net = nl.add_net(Some("VIN".to_string()));
+        let gnd_net = nl.add_net(Some("GND".to_string()));
+        let vout_net = nl.add_net(Some("V5_BUCK".to_string()));
+
+        // Regulator instance only — no input cap
+        let mut reg_attrs = HashMap::new();
+        reg_attrs.insert("component_class".to_string(), "switching_regulator".to_string());
+
+        let reg_id = nl.instances.insert(bhdl_netlist::Instance {
+            name: "buck".to_string(),
+            definition: reg_mod,
+            attributes: reg_attrs,
+        });
+        let reg_pins = nl.create_pin_instances(reg_id).unwrap();
+        nl.connect(vin_net, ConnectionPoint::PinInstance(reg_pins[0])).unwrap();
+        nl.connect(vout_net, ConnectionPoint::PinInstance(reg_pins[1])).unwrap();
+        nl.connect(gnd_net, ConnectionPoint::PinInstance(reg_pins[2])).unwrap();
+
+        (nl, vin_net, gnd_net)
+    }
+
+    #[test]
+    fn test_auto_create_input_filter_cap() {
+        let (mut nl, _vin, _gnd) = make_netlist_without_input_cap();
+        let initial_count = nl.instances.len();
+
+        let specs = vec![RailFilteringSpec {
+            rail_name: "VIN".to_string(),
+            rail_voltage: 24.0,
+            max_ripple_v: 0.24, // 1% of 24V
+            stage_order: 1,
+        }];
+
+        let created = auto_create_input_filter_caps(&mut nl, &specs);
+
+        assert_eq!(created.len(), 1, "should create 1 auto cap");
+        assert_eq!(created[0], "auto_c_in_VIN");
+
+        // Check instance was created
+        assert_eq!(nl.instances.len(), initial_count + 1);
+
+        // Find the auto-created instance and verify attributes
+        let auto_inst = nl.instances.values()
+            .find(|i| i.name == "auto_c_in_VIN")
+            .expect("auto_c_in_VIN should exist");
+        assert_eq!(auto_inst.attributes.get("intent_name").map(|s| s.as_str()), Some("input_filtering"));
+        assert_eq!(auto_inst.attributes.get("component_class").map(|s| s.as_str()), Some("capacitor"));
+        assert_eq!(auto_inst.attributes.get("auto_created").map(|s| s.as_str()), Some("true"));
+    }
+
+    #[test]
+    fn test_auto_create_skips_existing_cap() {
+        // Use the standard netlist that already has c_in with input_filtering
+        let (mut nl, _cap_id, _vin, _gnd) = make_test_netlist();
+        let initial_count = nl.instances.len();
+
+        let specs = vec![RailFilteringSpec {
+            rail_name: "VIN".to_string(),
+            rail_voltage: 24.0,
+            max_ripple_v: 0.24,
+            stage_order: 1,
+        }];
+
+        let created = auto_create_input_filter_caps(&mut nl, &specs);
+
+        assert!(created.is_empty(), "should skip — cap already exists");
+        assert_eq!(nl.instances.len(), initial_count, "no new instances");
+    }
+
+    #[test]
+    fn test_auto_create_no_gnd_net() {
+        let mut nl = Netlist::default();
+        // Only a VIN net, no GND
+        let _vin = nl.add_net(Some("VIN".to_string()));
+
+        let specs = vec![RailFilteringSpec {
+            rail_name: "VIN".to_string(),
+            rail_voltage: 12.0,
+            max_ripple_v: 0.12,
+            stage_order: 0,
+        }];
+
+        let created = auto_create_input_filter_caps(&mut nl, &specs);
+        assert!(created.is_empty(), "should skip — no GND net");
     }
 }

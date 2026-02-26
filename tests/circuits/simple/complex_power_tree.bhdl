@@ -37,7 +37,7 @@ import { TVSDiode } from "bhdl-stdlib/simple/protection_simple.bhdl";
 import { LM2596_5V, LM7805, LM1117_33, LM1117_18 } from "bhdl-stdlib/simple/regulator_simple.bhdl";
 
 board ComplexPowerTree {
-    power VIN = 24V @ 5A |> input_protection |> input_filtering |> regulation;
+    power VIN = 24V @ 5A |> input_protection |> input_filtering(max_ripple: 50mV) |> regulation;
     power V5_BUCK = 5V @ 2A |> output_filtering |> loading;
     power V3_3 = 3.3V @ 300mA |> output_filtering |> loading;
     power V5_AUX = 5V @ 500mA |> output_filtering |> loading;
@@ -50,9 +50,8 @@ board ComplexPowerTree {
     VIN -> tvs: TVSDiode(15V).K for input_protection(clamp: 15V);
     tvs.A -> GND;
 
-    // Input filter capacitor
-    VIN -> c_in: Cap(100µF).1 for input_filtering(max_ripple: 50mV);
-    c_in.2 -> GND;
+    // Input filter cap is auto-created from |> input_filtering(max_ripple: 50mV) in stage chain
+    // (no explicit cap needed — ripple target specified on stage chain)
 
     // === Branch 1: Buck Converter Path ===
 

@@ -14,8 +14,8 @@ pub enum NetAttribute {
         startup_delay_ms: f64,
         sequence_priority: u32,
         dependencies: Vec<String>,
-        /// Ordered stage names from `|> stage1 |> stage2` chain
-        stages: Vec<String>,
+        /// Ordered stage calls: (stage_name, {param_name: param_value_text})
+        stages: Vec<(String, HashMap<String, String>)>,
     },
     /// Ground domain (0V reference)
     GroundDomain,
@@ -58,18 +58,39 @@ impl NetAttribute {
         }
     }
     
-    /// Set stage chain on a power domain
-    pub fn set_stages(&mut self, new_stages: Vec<String>) {
+    /// Set stage chain on a power domain (with params)
+    pub fn set_stages(&mut self, new_stages: Vec<(String, HashMap<String, String>)>) {
         if let NetAttribute::PowerDomain { stages, .. } = self {
             *stages = new_stages;
         }
     }
 
-    /// Get stage chain from a power domain (empty slice if not a power domain or no stages)
-    pub fn stages(&self) -> &[String] {
+    /// Get stage names from a power domain (empty slice if not a power domain or no stages).
+    /// Backward-compatible accessor that returns just the names.
+    pub fn stage_names(&self) -> Vec<String> {
+        match self {
+            NetAttribute::PowerDomain { stages, .. } => stages.iter().map(|(n, _)| n.clone()).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Get full stage calls with params from a power domain.
+    pub fn stage_calls(&self) -> &[(String, HashMap<String, String>)] {
         match self {
             NetAttribute::PowerDomain { stages, .. } => stages,
             _ => &[],
+        }
+    }
+
+    /// Get params for a specific stage by name.
+    pub fn stage_params(&self, stage_name: &str) -> Option<&HashMap<String, String>> {
+        match self {
+            NetAttribute::PowerDomain { stages, .. } => {
+                stages.iter()
+                    .find(|(n, _)| n == stage_name)
+                    .map(|(_, p)| p)
+            }
+            _ => None,
         }
     }
 

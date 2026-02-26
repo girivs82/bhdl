@@ -606,7 +606,7 @@ pub fn extract_schematic_data(
                             st.get_nets().iter()
                                 .find(|(_, sym)| sym.name == net_name)
                                 .and_then(|(_, sym)| sym.net_attributes.as_ref())
-                                .map(|attr| attr.stages().to_vec())
+                                .map(|attr| attr.stage_names())
                                 .filter(|v| !v.is_empty())
                         };
                         find_stages(&a.global_scope)

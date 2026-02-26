@@ -213,13 +213,20 @@ impl IntentFunction for InputFilteringIntent {
     }
 
     fn resolve(&self, params: &[IntentParam]) -> Result<IntentResult, String> {
+        // max_ripple is optional — when triggered by stage chain only (no explicit
+        // cap), the toolchain defaults to 1% of rail voltage.
+        let mut validation_rules = Vec::new();
+
         let has_max_ripple = params.iter().any(|p| match p {
             IntentParam::Named(name, _) => name == "max_ripple",
             IntentParam::Positional(_) => true, // first positional = max_ripple
         });
 
-        if !has_max_ripple {
-            return Err("input_filtering requires 'max_ripple' parameter".to_string());
+        if has_max_ripple {
+            validation_rules.push(ValidationRule {
+                condition: "max_ripple > 0".to_string(),
+                error_message: "max_ripple must be positive".to_string(),
+            });
         }
 
         Ok(IntentResult {
@@ -227,12 +234,7 @@ impl IntentFunction for InputFilteringIntent {
             synthesis_hints: vec![
                 SynthesisHint::Custom("input_cap_bank".to_string()),
             ],
-            validation_rules: vec![
-                ValidationRule {
-                    condition: "max_ripple > 0".to_string(),
-                    error_message: "max_ripple must be positive".to_string(),
-                },
-            ],
+            validation_rules,
             tool_scope: ToolScope::All,
         })
     }
@@ -242,7 +244,7 @@ impl IntentFunction for InputFilteringIntent {
             ParamMetadata {
                 name: "max_ripple".to_string(),
                 param_type: ParamType::Voltage,
-                required: true,
+                required: false,
                 default_value: None,
             },
             ParamMetadata {

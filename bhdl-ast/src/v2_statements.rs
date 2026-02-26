@@ -1,5 +1,6 @@
 // AST nodes for BHDL v2.0 statements
 
+use std::collections::HashMap;
 use crate::{SyntaxKind, BhdlLanguage, SyntaxNode, SyntaxToken};
 use rowan::ast::AstNode;
 
@@ -117,19 +118,45 @@ impl PowerDecl {
     
     /// Get stage names from the `|> stage1 |> stage2` chain (empty if no chain).
     pub fn stage_names(&self) -> Vec<String> {
-        // Find child node of kind POWER_STAGE_CHAIN
+        self.stages_with_params().into_iter().map(|(name, _)| name).collect()
+    }
+
+    /// Get stages with their key-value parameters from the `|> stage1(k: v) |> stage2` chain.
+    /// Returns Vec<(stage_name, HashMap<param_name, param_value_text>)>.
+    pub fn stages_with_params(&self) -> Vec<(String, HashMap<String, String>)> {
         let chain_node = self.syntax().children()
             .find(|n| n.kind() == SyntaxKind::POWER_STAGE_CHAIN);
         match chain_node {
             Some(chain) => {
-                // Within the chain, each STAGE_NAME wraps an IDENT token
                 chain.children()
                     .filter(|n| n.kind() == SyntaxKind::STAGE_NAME)
                     .filter_map(|stage| {
-                        stage.children_with_tokens()
+                        // Extract IDENT token → stage name
+                        let name = stage.children_with_tokens()
                             .filter_map(|e| e.into_token())
-                            .find(|t| t.kind() == SyntaxKind::IDENT)
-                            .map(|t| t.text().to_string())
+                            .find(|t| t.kind() == SyntaxKind::IDENT)?
+                            .text().to_string();
+
+                        // Extract params from INTENT_PARAMS child (if present)
+                        let mut params = HashMap::new();
+                        if let Some(params_node) = stage.children()
+                            .find(|n| n.kind() == SyntaxKind::INTENT_PARAMS) {
+                            for named_param in params_node.children()
+                                .filter(|n| n.kind() == SyntaxKind::INTENT_NAMED_PARAM) {
+                                // Use full text of the named param node: "name: value"
+                                // parse_expr creates nested nodes, so walk text not tokens
+                                let full_text = named_param.text().to_string();
+                                if let Some(colon_pos) = full_text.find(':') {
+                                    let param_name = full_text[..colon_pos].trim().to_string();
+                                    let param_value = full_text[colon_pos + 1..].trim().to_string();
+                                    if !param_name.is_empty() && !param_value.is_empty() {
+                                        params.insert(param_name, param_value);
+                                    }
+                                }
+                            }
+                        }
+
+                        Some((name, params))
                     })
                     .collect()
             }
