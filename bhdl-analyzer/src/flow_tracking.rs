@@ -32,6 +32,9 @@ pub struct FlowPath {
 /// Each entry is (stage_name, Vec<component_name>).
 pub type RailStageMap = HashMap<String, Vec<(String, Vec<String>)>>;
 
+/// Mapping from (rail_name, stage_name) to the stage's parameters.
+pub type RailStageParamMap = HashMap<(String, String), HashMap<String, String>>;
+
 /// Flow tracking context
 pub struct FlowTracker {
     /// All discovered flow paths
@@ -46,6 +49,8 @@ pub struct FlowTracker {
     next_flow_id: usize,
     /// Stage assignments: rail_name → [(stage_name, [component_names])]
     rail_stage_map: RailStageMap,
+    /// Stage parameters: (rail_name, stage_name) → {param_name: param_value}
+    rail_stage_params: RailStageParamMap,
 }
 
 impl std::fmt::Debug for FlowTracker {
@@ -56,6 +61,7 @@ impl std::fmt::Debug for FlowTracker {
             .field("component_to_flows", &self.component_to_flows)
             .field("next_flow_id", &self.next_flow_id)
             .field("rail_stage_map", &self.rail_stage_map)
+            .field("rail_stage_params", &self.rail_stage_params)
             .finish()
     }
 }
@@ -69,6 +75,7 @@ impl FlowTracker {
             intent_registry,
             next_flow_id: 0,
             rail_stage_map: HashMap::new(),
+            rail_stage_params: HashMap::new(),
         }
     }
 
@@ -407,22 +414,32 @@ impl FlowTracker {
         let mut rail_stages: HashMap<String, Vec<String>> = HashMap::new();
 
         // Helper closure to collect from a symbol table
-        let mut collect = |st: &SymbolTable| {
+        let mut collect = |st: &SymbolTable, stage_params: &mut RailStageParamMap| {
             for (_name, symbol) in st.get_nets() {
                 if symbol.kind == SymbolKind::Net {
                     if let Some(ref attr) = symbol.net_attributes {
-                        let stages = attr.stages();
-                        if !stages.is_empty() {
-                            rail_stages.insert(symbol.name.clone(), stages.to_vec());
+                        let calls = attr.stage_calls();
+                        if !calls.is_empty() {
+                            let names: Vec<String> = calls.iter().map(|(n, _)| n.clone()).collect();
+                            // Store params for each stage
+                            for (stage_name, params) in calls {
+                                if !params.is_empty() {
+                                    stage_params.insert(
+                                        (symbol.name.clone(), stage_name.clone()),
+                                        params.clone(),
+                                    );
+                                }
+                            }
+                            rail_stages.insert(symbol.name.clone(), names);
                         }
                     }
                 }
             }
         };
 
-        collect(symbol_table);
+        collect(symbol_table, &mut self.rail_stage_params);
         for (_, scope) in definition_scopes {
-            collect(scope);
+            collect(scope, &mut self.rail_stage_params);
         }
 
         // For each rail with stages, group flow paths by their intent name
@@ -707,6 +724,11 @@ impl FlowTracker {
     /// Get the rail → stage → component map
     pub fn get_rail_stage_map(&self) -> &RailStageMap {
         &self.rail_stage_map
+    }
+
+    /// Get parameters for a specific stage on a specific rail.
+    pub fn get_stage_params(&self, rail_name: &str, stage_name: &str) -> Option<&HashMap<String, String>> {
+        self.rail_stage_params.get(&(rail_name.to_string(), stage_name.to_string()))
     }
 
     /// Get the most demanding simulation mode across all flows

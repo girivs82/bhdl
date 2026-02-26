@@ -32,7 +32,7 @@ impl<'t> Parser<'t> {
     }
     
     /// Parse intent parameters: (param1, param2: value, ...)
-    fn parse_intent_params(&mut self) {
+    pub(crate) fn parse_intent_params(&mut self) {
         self.builder.start_node(SyntaxKind::INTENT_PARAMS.into());
         self.expect(SyntaxKind::L_PAREN);
         

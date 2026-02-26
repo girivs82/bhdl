@@ -670,6 +670,22 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
         }
     };
 
+    // Auto-create input filter caps for rails with |> input_filtering in stage chain
+    if let Some(ref flow_tracker) = analysis.flow_tracker {
+        let rail_specs = bhdl_synthesizer::input_cap_sizer::collect_rails_needing_input_filter(
+            flow_tracker, &analysis,
+        );
+        if !rail_specs.is_empty() {
+            let auto_names = bhdl_synthesizer::input_cap_sizer::auto_create_input_filter_caps(
+                &mut netlist, &rail_specs,
+            );
+            if !auto_names.is_empty() {
+                println!("  {} auto-created input filter caps: {}",
+                    "✓".green(), auto_names.join(", "));
+            }
+        }
+    }
+
     // Size input filter caps using actual GLACIER cascade-corrected currents
     if let Some(ref annotations) = sim_annotations {
         let input_sizing_results = bhdl_synthesizer::input_cap_sizer::size_input_filter_caps(

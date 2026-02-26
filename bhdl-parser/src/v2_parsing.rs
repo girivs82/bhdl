@@ -23,6 +23,10 @@ impl<'t> Parser<'t> {
                 self.bump(); // consume |>
                 self.builder.start_node(SyntaxKind::STAGE_NAME.into());
                 self.expect(SyntaxKind::IDENT); // stage name
+                // Optional parameters: |> input_filtering(max_ripple: 50mV)
+                if self.peek() == Some(SyntaxKind::L_PAREN) {
+                    self.parse_intent_params();
+                }
                 self.builder.finish_node();
             }
             self.builder.finish_node();
