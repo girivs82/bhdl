@@ -13,6 +13,7 @@ pub mod bhdl_type;
 pub mod diagnostic;
 pub mod generics;
 pub mod safety;
+pub mod expansion;
 
 pub use component_types::{ComponentType, ComponentTypeMapper};
 pub use pin_metadata::{PinMetadata, PinFunction, ModulePinMetadata};
@@ -36,4 +37,7 @@ pub use safety::{
     AsilLevel, SilLevel, SafetyGoal, SafetyMechanism, DetectionMode,
     FaultInjection, FaultType, SafetyAssertion, DeratingAnnotation,
     RedundancyAnnotation, VotingScheme, StandbyMode,
+};
+pub use expansion::{
+    ExpansionRecipe, ExpansionInstance, ExpansionConnection, ExpansionEndpoint,
 };

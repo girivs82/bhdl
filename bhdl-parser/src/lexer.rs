@@ -64,6 +64,8 @@ pub fn lex_ident_or_kw(lex: &mut Lexer<LexerToken>) -> KeywordOrIdent {
         "impl" => SyntaxKind::IMPL_KW,
         "safety_goal" => SyntaxKind::SAFETY_GOAL_KW,
         "fault_inject" => SyntaxKind::FAULT_INJECT_KW,
+        "expansion" => SyntaxKind::EXPANSION_KW,
+        "internal" => SyntaxKind::INTERNAL_KW,
         _ => SyntaxKind::IDENT,
     };
     KeywordOrIdent { kind, text: slice.into() }
@@ -290,6 +292,8 @@ fn keyword_or_ident_callback(lex: &mut Lexer<LexerToken>) -> KeywordOrIdent {
         "impl" => SyntaxKind::IMPL_KW,
         "safety_goal" => SyntaxKind::SAFETY_GOAL_KW,
         "fault_inject" => SyntaxKind::FAULT_INJECT_KW,
+        "expansion" => SyntaxKind::EXPANSION_KW,
+        "internal" => SyntaxKind::INTERNAL_KW,
 
         // Power domain keywords (Phase 1: Scalability)
         "power_domain" => SyntaxKind::POWER_DOMAIN_KW,

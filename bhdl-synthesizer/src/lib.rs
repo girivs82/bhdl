@@ -64,6 +64,9 @@ pub mod ripple_calculator;
 // Intent attribute stamper (bridges FlowTracker intents → netlist attributes)
 pub mod intent_attribute_stamper;
 
+// Generic expansion interpreter (replaces attribute-driven virtual_pin_expander)
+pub mod expansion_interpreter;
+
 // Input capacitor bank physics computation
 pub mod input_cap_calculator;
 

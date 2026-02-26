@@ -38,6 +38,8 @@ struct Pass1Context {
     base_path: PathBuf,
     // Alias specializations (alias Name = Generic<args>) collected during import processing
     alias_specializations: Vec<crate::passes::AliasSpecialization>,
+    // Expansion recipes extracted from imported entity definitions
+    expansion_recipes: HashMap<String, bhdl_common::ExpansionRecipe>,
 }
 
 impl Pass1Context {
@@ -50,6 +52,7 @@ impl Pass1Context {
             imported_modules: HashMap::new(),
             base_path: PathBuf::from("."),
             alias_specializations: Vec::new(),
+            expansion_recipes: HashMap::new(),
         }
     }
 
@@ -94,7 +97,7 @@ pub fn populate_global_scope_and_build_definition_scopes_with_base(
     source_file: &SourceFile,
     base_path: &Path
 ) -> (SymbolTable, HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>) {
-    let (registry, _alias_specializations) = build_scope_registry_with_base(source_file, base_path);
+    let (registry, _alias_specializations, _expansion_recipes) = build_scope_registry_with_base(source_file, base_path);
     // Extract legacy data structures for backward compatibility
     let global_scope = registry.extract_global_scope();
     let definition_scopes = registry.extract_definition_scopes();
@@ -109,11 +112,11 @@ pub fn build_scope_registry(source_file: &SourceFile) -> ScopeRegistry {
 }
 
 /// Build a `ScopeRegistry` with a base path for import resolution.
-/// Returns the scope registry and any alias specializations found during import processing.
+/// Returns the scope registry, alias specializations, and expansion recipes from imported entities.
 pub fn build_scope_registry_with_base(
     source_file: &SourceFile,
     base_path: &Path,
-) -> (ScopeRegistry, Vec<crate::passes::AliasSpecialization>) {
+) -> (ScopeRegistry, Vec<crate::passes::AliasSpecialization>, HashMap<String, bhdl_common::ExpansionRecipe>) {
     println!("Building scope registry (Pass 1)...");
     let mut context = Pass1Context::new();
     context.base_path = base_path.to_path_buf();
@@ -153,7 +156,8 @@ pub fn build_scope_registry_with_base(
              context.global_scope_mut().get_symbols().len(),
              context.registry.len());
     let alias_specializations = context.alias_specializations;
-    (context.registry, alias_specializations)
+    let expansion_recipes = context.expansion_recipes;
+    (context.registry, alias_specializations, expansion_recipes)
 }
 
 // Pass 1 recursive helper (takes Pass1Context)
@@ -893,6 +897,12 @@ fn process_import(import: &ImportStmt, context: &mut Pass1Context) {
     // Load and parse the imported file
     match load_and_parse_module(&resolved_path) {
         Ok(imported_source) => {
+            // Extract expansion recipes from imported entities
+            let imported_recipes = crate::extract_expansion_recipes(&imported_source);
+            for (name, recipe) in imported_recipes {
+                context.expansion_recipes.insert(name, recipe);
+            }
+
             // First, build a map of all entities in the file
             let mut available_entities = std::collections::HashMap::new();
             for item in imported_source.items() {
@@ -958,6 +968,17 @@ fn process_import(import: &ImportStmt, context: &mut Pass1Context) {
                 }
             }
             
+            // Register expansion recipes under alias names too.
+            // e.g., if BuckRegulator has a recipe and alias LM2596_5V = BuckRegulator<5V>,
+            // register the recipe under "LM2596_5V" as well.
+            for (alias_name, target_name) in &aliases {
+                if let Some(recipe) = context.expansion_recipes.get(target_name) {
+                    let mut alias_recipe = recipe.clone();
+                    alias_recipe.entity_name = alias_name.clone();
+                    context.expansion_recipes.insert(alias_name.clone(), alias_recipe);
+                }
+            }
+
             // Now process the imports
             if is_destructuring {
                 // Only import the requested entities and their aliases

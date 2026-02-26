@@ -23,17 +23,21 @@ alias LM1117_18 = LinearRegulator<1.8V>;
 alias LM1117_33_EN = LinearRegulator<3.3V, true>;
 
 // Simplified Buck (Switching) Regulators - v2.0 compatible
-// VOUT is marked `virtual` to trigger auto-expansion of inductor, catch diode, and output cap
+// Uses expansion block to declaratively specify inductor, catch diode, and output cap
 
 entity BuckRegulator<V_OUT: voltage>(
     dropout: voltage = 0.5V,
     f_sw: frequency = 500kHz,
     rds_on: resistance = 200mΩ,
     t_sw: time = 80ns,
-    i_quiescent: current = 5mA
+    i_quiescent: current = 5mA,
+    l_value: inductance = 33µH,
+    c_out: capacitance = 470µF,
+    diode_vf: voltage = 0.5V,
+    has_diode: bool = true
 ) {
     pin VIN: power in;
-    pin VOUT: power out virtual;
+    pin VOUT: power out;
     pin GND: ground;
 
     attribute component_class = "switching_regulator";
@@ -42,11 +46,13 @@ entity BuckRegulator<V_OUT: voltage>(
     attribute rds_on = rds_on;
     attribute t_sw = t_sw;
     attribute i_quiescent = i_quiescent;
-    attribute vpin_sw_name = "SW";
-    attribute vpin_inductor = 33µH;
-    attribute vpin_diode_vf = 0.5V;
-    attribute vpin_cout = 470µF;
-    attribute vpin_has_diode = true;
+
+    expansion {
+        internal sw: net;
+        VOUT -> L: Ind(l_value).1; L.2 -> sw;
+        sw -> D: Diode(diode_vf).K; D.A -> GND;
+        VOUT -> C_out: Cap(c_out).1; C_out.2 -> GND;
+    }
 }
 
 // LM2596: 150kHz fixed, Rds_on ~200mΩ, t_sw ~80ns, I_q ~5mA

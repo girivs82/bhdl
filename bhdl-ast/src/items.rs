@@ -156,6 +156,63 @@ impl Entity {
     pub fn generate_blocks(&self) -> impl Iterator<Item = crate::blocks::GenerateBlock> {
         self.0.children().filter_map(crate::blocks::GenerateBlock::cast)
     }
+
+    /// Get the expansion block, if present
+    pub fn expansion_block(&self) -> Option<ExpansionBlock> {
+        self.0.children().find_map(ExpansionBlock::cast)
+    }
+}
+
+/// Expansion block inside an entity definition.
+/// Contains flow statements, internal net declarations, and component instantiations
+/// that describe the entity's "typical application circuit".
+///
+/// ```bhdl
+/// entity BuckRegulator<V_OUT: voltage>(...) {
+///     ...
+///     expansion {
+///         internal sw: net;
+///         VOUT -> L: Ind(l_value).1 -> L.2 -> sw;
+///         sw -> D: Diode(diode_vf).K; D.A -> GND;
+///         VOUT -> C_out: Cap(c_out).1; C_out.2 -> GND;
+///     }
+/// }
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ExpansionBlock(pub(crate) SyntaxNode<BhdlLanguage>);
+
+impl AstNode for ExpansionBlock {
+    type Language = BhdlLanguage;
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::EXPANSION_BLOCK }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> {
+        if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None }
+    }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+
+impl ExpansionBlock {
+    /// Get all connection statements in the expansion block
+    pub fn connection_stmts(&self) -> impl Iterator<Item = ConnectionStmt> {
+        self.0.children().filter_map(ConnectionStmt::cast)
+    }
+
+    /// Get all internal net declarations
+    pub fn internal_nets(&self) -> Vec<String> {
+        self.0.children()
+            .filter(|n| n.kind() == SyntaxKind::EXPANSION_INTERNAL_NET)
+            .filter_map(|n| {
+                n.children_with_tokens()
+                    .filter_map(|e| e.into_token())
+                    .find(|t| t.kind() == SyntaxKind::IDENT)
+                    .map(|t| t.text().to_string())
+            })
+            .collect()
+    }
+
+    /// Get the raw text of the expansion block body (for debugging)
+    pub fn body_text(&self) -> String {
+        self.0.text().to_string()
+    }
 }
 
 /// Generic type parameter list: `<T: Type, V: voltage, ...>`
