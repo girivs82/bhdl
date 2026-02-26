@@ -1353,9 +1353,19 @@
                     // series child's input net (e.g., catch diode on SW node).
                     item.junctionSide = 'right';
                     if (seriesInst) {
+                        // Determine the series child's "input" net:
+                        // the signal net NOT shared with the expansion parent.
+                        // This correctly handles inductors (all 'inout' pins).
+                        const parentInst2 = instMap.get(inst.expansion_parent);
+                        const parentSignalNets = new Set();
+                        if (parentInst2) {
+                            for (const c of parentInst2.connections) {
+                                if (!gndNetNames.has(c.signal)) parentSignalNets.add(c.signal);
+                            }
+                        }
                         const seriesInputNets = new Set();
                         for (const c of seriesInst.connections) {
-                            if (c.pin_direction === 'in' || c.direction === 'in')
+                            if (!gndNetNames.has(c.signal) && !parentSignalNets.has(c.signal))
                                 seriesInputNets.add(c.signal);
                         }
                         const shuntNets = inst.connections
@@ -1410,12 +1420,21 @@
                 const seriesChild = item.junctionName;
                 const parentName = seriesChildSet.get(seriesChild);
                 const seriesInst = instMap.get(seriesChild);
-                // Determine if shunt connects to series child's input or output net
+                // Determine if shunt connects to series child's input or output net.
+                // "Input" = net NOT shared with the expansion parent (internal net).
+                // This handles inductors with all 'inout' pin_direction correctly.
                 let onInputNet = false;
                 if (seriesInst && inst) {
+                    const expParentInst = instMap.get(parentName);
+                    const parentSignalNets = new Set();
+                    if (expParentInst) {
+                        for (const c of expParentInst.connections) {
+                            if (!gndNetNames.has(c.signal)) parentSignalNets.add(c.signal);
+                        }
+                    }
                     const seriesInputNets = new Set();
                     for (const c of seriesInst.connections) {
-                        if (c.pin_direction === 'in' || c.direction === 'in')
+                        if (!gndNetNames.has(c.signal) && !parentSignalNets.has(c.signal))
                             seriesInputNets.add(c.signal);
                     }
                     const shuntNets = inst.connections
@@ -1447,9 +1466,11 @@
             }
         }
 
-        // Also redirect non-expansion shunts away from expansion parent nodes.
-        // Input caps (c_in bank) junction at the regulator (e.g., buck) but should
-        // be placed to the left, at the preceding power source node.
+        // Also redirect non-expansion shunts away from expansion parent nodes,
+        // but ONLY if the shunt is on the parent's INPUT net (e.g., input caps
+        // that should be placed to the left, at the preceding power source node).
+        // Shunts on the OUTPUT net (e.g., load resistors, LEDs) must stay at the
+        // expansion parent — they're output loads, not input filtering.
         {
             const expParentSet = new Set(expansionGroups.keys());
             for (const item of [...shuntNames, ...decouplingNames, ...branchNames]) {
@@ -1457,6 +1478,23 @@
                 const inst = instMap.get(item.name);
                 if (inst && inst.expansion_parent) continue; // expansion children stay
                 const parentName = item.junctionName;
+                const parentInst = instMap.get(parentName);
+                // Only redirect if shunt connects to the parent's input net.
+                // Use pin_direction (from entity pin declaration), NOT direction
+                // (which has a different meaning and may be 'in' for all ports).
+                let onInputNet = false;
+                if (parentInst && inst) {
+                    const parentInputNets = new Set();
+                    for (const c of parentInst.connections) {
+                        if (c.pin_direction === 'in')
+                            parentInputNets.add(c.signal);
+                    }
+                    const shuntNets = inst.connections
+                        .filter(c => !gndNetNames.has(c.signal))
+                        .map(c => c.signal);
+                    onInputNet = shuntNets.some(n => parentInputNets.has(n));
+                }
+                if (!onInputNet) continue;
                 // Find the previous node in mainBandOrder → redirect left
                 const mbIdx = mainBandOrder.indexOf(parentName);
                 if (mbIdx > 0) {
@@ -2289,9 +2327,14 @@
                                 psPos.x += shift;
                             }
                         }
-                        // Also shift off-path items attached to shifted nodes
+                        // Also shift off-path items attached to shifted nodes.
+                        // Skip chain children (shuntChainDown values) — they will
+                        // be shifted via their parent's chain walk below, preventing
+                        // double-shifting when the child also has a matching junction.
+                        const shiftedNodes = new Set(mainBandOrder.slice(ni));
+                        const chainChildrenSet = new Set(shuntChainDown.values());
                         for (const item of [...shuntNames, ...decouplingNames]) {
-                            const shiftedNodes = new Set(mainBandOrder.slice(ni));
+                            if (chainChildrenSet.has(item.name)) continue;
                             if (shiftedNodes.has(item.junctionName)) {
                                 const iPos = positions.get(item.name);
                                 if (iPos) iPos.x += shift;
@@ -3166,6 +3209,50 @@
                         // Update wire to/from Y for endpoint rendering
                         break;
                     }
+                }
+            }
+        }
+
+        // Post-process: reroute horizontal wire segments that pass through
+        // main-band component bounding boxes. Detour above the obstacle.
+        {
+            const DETOUR_MARGIN = 12;
+            for (const wire of layoutWires) {
+                if (wire.segments.length === 0) continue;
+                const excludeSet = new Set([wire.sourceElName, wire.sinkElName]);
+                let modified = false;
+                const newSegs = [];
+                for (const seg of wire.segments) {
+                    const isHoriz = Math.abs(seg.y1 - seg.y2) < 2;
+                    if (!isHoriz) { newSegs.push(seg); continue; }
+                    const segMinX = Math.min(seg.x1, seg.x2);
+                    const segMaxX = Math.max(seg.x1, seg.x2);
+                    let blocked = null;
+                    for (const el of layoutElements) {
+                        if (el.type !== 'instance') continue;
+                        if (excludeSet.has(el.name)) continue;
+                        const elRight = el.x + el.w;
+                        const elBottom = el.y + el.h;
+                        if (seg.y1 > el.y && seg.y1 < elBottom &&
+                            segMaxX > el.x && segMinX < elRight) {
+                            blocked = el;
+                            break;
+                        }
+                    }
+                    if (blocked) {
+                        // Detour above the blocked component
+                        const detourY = blocked.y - DETOUR_MARGIN;
+                        newSegs.push({ x1: seg.x1, y1: seg.y1, x2: seg.x1, y2: detourY });
+                        newSegs.push({ x1: seg.x1, y1: detourY, x2: seg.x2, y2: detourY });
+                        newSegs.push({ x1: seg.x2, y1: detourY, x2: seg.x2, y2: seg.y2 });
+                        modified = true;
+                    } else {
+                        newSegs.push(seg);
+                    }
+                }
+                if (modified) {
+                    wire.segments.length = 0;
+                    wire.segments.push(...newSegs);
                 }
             }
         }
