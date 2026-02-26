@@ -1,6 +1,6 @@
 // Test bare CONNECTION_STMT syntax (no net keyword)
-import { Res } from "bhdl-stdlib/simple/resistor_simple.bhdl";
-import { LED } from "bhdl-stdlib/simple/led_simple.bhdl";
+import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
 
 board BareLED {
     power VCC = 5V @ 100mA;

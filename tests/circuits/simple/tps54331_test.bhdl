@@ -1,9 +1,9 @@
-import { Res } from "bhdl-stdlib/simple/resistor_simple.bhdl";
-import { Cap } from "bhdl-stdlib/simple/capacitor_simple.bhdl";
-import { LED } from "bhdl-stdlib/simple/led_simple.bhdl";
-import { Ind } from "bhdl-stdlib/simple/inductor_simple.bhdl";
-import { Diode } from "bhdl-stdlib/simple/diode_simple.bhdl";
-import { TPS54331_3V3 } from "bhdl-stdlib/simple/regulator_simple.bhdl";
+import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passive/capacitor.bhdl";
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
+import { Ind } from "bhdl-stdlib/passive/inductor.bhdl";
+import { Diode } from "bhdl-stdlib/passive/diode.bhdl";
+import { TPS54331_3V3 } from "bhdl-stdlib/power/tps54331.bhdl";
 
 board TPS54331Test {
     power VIN = 12V @ 3A;

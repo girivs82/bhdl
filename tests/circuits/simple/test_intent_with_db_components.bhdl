@@ -1,10 +1,10 @@
 // Intent-driven layout demo using actual database components
 // This version uses components from the KiCad database
-import { Res } from "bhdl-stdlib/simple/resistor_simple.bhdl";
-import { Cap } from "bhdl-stdlib/simple/capacitor_simple.bhdl";
-import { LED } from "bhdl-stdlib/simple/led_simple.bhdl";
-import { TVSDiode } from "bhdl-stdlib/simple/protection_simple.bhdl";
-import { LM7805 } from "bhdl-stdlib/simple/regulator_simple.bhdl";
+import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passive/capacitor.bhdl";
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
+import { TVSDiode } from "bhdl-stdlib/protection/tvs.bhdl";
+import { LM7805 } from "bhdl-stdlib/power/regulator.bhdl";
 
 board IntentLayoutDemo {
     // LEFT ZONE: Input protection

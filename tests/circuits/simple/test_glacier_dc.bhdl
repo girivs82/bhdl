@@ -1,7 +1,7 @@
 // Minimal circuit for GLACIER DC simulation testing
 // Uses only resistors + voltage source (no caps/regulators/LEDs)
 // Expected: VIN=12V, V(mid)~8V (divider), I~1.2mA
-import { Res } from "bhdl-stdlib/simple/resistor_simple.bhdl";
+import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
 
 board GlacierDCTest {
     power VIN = 12V @ 100mA;

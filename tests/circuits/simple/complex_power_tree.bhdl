@@ -30,11 +30,11 @@
 // virtual pin expansion, GLACIER DC with nonlinear elements, physical selection,
 // staged power flow ordering
 
-import { Res } from "bhdl-stdlib/simple/resistor_simple.bhdl";
-import { Cap } from "bhdl-stdlib/simple/capacitor_simple.bhdl";
-import { LED } from "bhdl-stdlib/simple/led_simple.bhdl";
-import { TVSDiode } from "bhdl-stdlib/simple/protection_simple.bhdl";
-import { LM2596_5V, LM7805, LM1117_33, LM1117_18 } from "bhdl-stdlib/simple/regulator_simple.bhdl";
+import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passive/capacitor.bhdl";
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
+import { TVSDiode } from "bhdl-stdlib/protection/tvs.bhdl";
+import { LM2596_5V, LM7805, LM1117_33, LM1117_18 } from "bhdl-stdlib/power/regulator.bhdl";
 
 board ComplexPowerTree {
     power VIN = 24V @ 5A |> input_protection |> input_filtering(max_ripple: 50mV) |> regulation;
