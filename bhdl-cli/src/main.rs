@@ -85,6 +85,14 @@ enum Commands {
         /// Output raw SchematicData JSON instead of HTML
         #[arg(long)]
         json: bool,
+
+        /// Run layout validation checks (requires Node.js)
+        #[arg(long)]
+        validate: bool,
+
+        /// Print ASCII schematic to terminal (requires Node.js)
+        #[arg(long)]
+        ascii: bool,
     },
     
     /// Run SPICE analysis
@@ -232,8 +240,8 @@ async fn main() -> Result<()> {
             run_synthesis(&source_file, output, &format).await?;
         }
         
-        Some(Commands::Visualize { output, json }) => {
-            run_visualization(&source_file, output, json, &cli.input).await?;
+        Some(Commands::Visualize { output, json, validate, ascii }) => {
+            run_visualization(&source_file, output, json, validate, ascii, &cli.input).await?;
         }
         
         Some(Commands::Spice { analysis, output, use_metadata }) => {
@@ -617,7 +625,7 @@ async fn run_synthesis(source_file: &SourceFile, output: Option<PathBuf>, format
     Ok(())
 }
 
-async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, json_output: bool, source_path: &Path) -> Result<()> {
+async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, json_output: bool, validate: bool, ascii: bool, source_path: &Path) -> Result<()> {
     // Run full pipeline to get netlist
     let analysis = analyze(source_file);
 
@@ -766,15 +774,81 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
     let schematic_data = bhdl_schematic::extract_schematic_data(&netlist, Some(&analysis), sim_annotations, Some(source_path))
         .map_err(|e| anyhow::anyhow!("Schematic extraction failed: {}", e))?;
 
+    // Run layout validation and/or ASCII rendering if requested (requires Node.js)
+    if validate || ascii {
+        // Write SchematicData JSON to temp file for Node.js scripts
+        let json_path = std::env::temp_dir().join("bhdl_validate.json");
+        let json = serde_json::to_string_pretty(&schematic_data)?;
+        fs::write(&json_path, &json)?;
+
+        // Locate the viewer scripts directory
+        let viewer_dir = {
+            let candidates = vec![
+                PathBuf::from("bhdl-schematic/viewer"),
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../bhdl-schematic/viewer"),
+            ];
+            candidates.into_iter().find(|p| p.join("layout_engine.mjs").exists())
+                .ok_or_else(|| anyhow::anyhow!(
+                    "Cannot find bhdl-schematic/viewer/ directory (layout_engine.mjs not found). \
+                     Run from the workspace root or set the correct path."
+                ))?
+        };
+
+        if validate {
+            let script = viewer_dir.join("validate_layout.mjs");
+            println!("\n{}", "Running layout validation...".cyan());
+            let result = std::process::Command::new("node")
+                .arg(&script)
+                .arg("--verbose")
+                .arg(&json_path)
+                .status();
+            match result {
+                Ok(status) => {
+                    if status.success() {
+                        println!("{}", "✓ Layout validation passed".green().bold());
+                    } else {
+                        println!("{}", "✗ Layout validation found errors".red().bold());
+                    }
+                }
+                Err(e) => {
+                    eprintln!("{}", format!("  Failed to run node: {} (is Node.js installed?)", e).yellow());
+                }
+            }
+        }
+
+        if ascii {
+            let script = viewer_dir.join("ascii_schematic.mjs");
+            println!("\n{}", "ASCII Schematic:".cyan());
+            let result = std::process::Command::new("node")
+                .arg(&script)
+                .arg(&json_path)
+                .status();
+            match result {
+                Ok(status) => {
+                    if !status.success() {
+                        eprintln!("{}", "  ASCII renderer exited with error".yellow());
+                    }
+                }
+                Err(e) => {
+                    eprintln!("{}", format!("  Failed to run node: {} (is Node.js installed?)", e).yellow());
+                }
+            }
+        }
+
+        // Clean up temp file
+        let _ = fs::remove_file(&json_path);
+    }
+
+    // Output file generation:
+    // --json       → write JSON file
+    // (default)    → write HTML file (unless --validate/--ascii was used standalone)
     if json_output {
-        // Output raw JSON for tooling/debugging
         let json = serde_json::to_string_pretty(&schematic_data)?;
         let output_path = output.unwrap_or_else(|| PathBuf::from("circuit.json"));
         fs::write(&output_path, &json)?;
         println!("{}", "✓ Schematic JSON generated".green().bold());
         println!("  Output: {}", output_path.display());
-    } else {
-        // Generate standalone HTML with interactive Canvas viewer
+    } else if !validate && !ascii {
         let html = bhdl_schematic::generate_standalone_html(&schematic_data);
         let output_path = output.unwrap_or_else(|| PathBuf::from("circuit.html"));
         fs::write(&output_path, &html)?;

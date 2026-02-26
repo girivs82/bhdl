@@ -2016,6 +2016,53 @@
                     }
                 }
             }
+
+            // Cross-group GND alignment: shunts in the same Y-row should share
+            // the same gndTargetY so GND symbols form a clean horizontal line
+            // across input caps, output caps, and other shunts in that row.
+            // Only extend if there's no obstacle (branch regulator, etc.)
+            // between the shunt and the new GND level.
+            {
+                const Y_BUCKET_TOL = 20; // px tolerance for "same row"
+                const byYBucket = new Map();
+                for (const item of regularDrop) {
+                    const pos = positions.get(item.name);
+                    if (!pos || pos.gndTargetY == null) continue;
+                    const bucket = Math.round(pos.y / Y_BUCKET_TOL) * Y_BUCKET_TOL;
+                    if (!byYBucket.has(bucket)) byYBucket.set(bucket, []);
+                    byYBucket.get(bucket).push(item);
+                }
+                for (const [, bucketItems] of byYBucket) {
+                    if (bucketItems.length < 2) continue;
+                    const maxGndY = Math.max(...bucketItems.map(b => positions.get(b.name).gndTargetY));
+                    for (const item of bucketItems) {
+                        const pos = positions.get(item.name);
+                        if (pos.gndTargetY >= maxGndY) continue;
+                        // Check for obstacles: any non-shunt positioned component
+                        // vertically between the current gndTargetY and the new maxGndY
+                        // at this shunt's X location.
+                        const shuntCx = pos.x + pos.w / 2;
+                        let blocked = false;
+                        for (const [oName, oPos] of positions) {
+                            if (offPathNames.has(oName)) continue; // skip other shunts/branches
+                            if (oName.startsWith('__')) continue;  // skip virtual nodes
+                            // Is this component under the shunt's GND extension?
+                            if (shuntCx >= oPos.x - 10 && shuntCx <= oPos.x + oPos.w + 10 &&
+                                oPos.y + oPos.h > pos.gndTargetY && oPos.y < maxGndY) {
+                                blocked = true;
+                                break;
+                            }
+                        }
+                        if (!blocked) {
+                            pos.gndTargetY = maxGndY;
+                            if (shuntChainDown.has(item.name)) {
+                                const childPos = positions.get(shuntChainDown.get(item.name));
+                                if (childPos) childPos.gndTargetY = maxGndY;
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // ── 10c. Place branches as horizontal chains ──
