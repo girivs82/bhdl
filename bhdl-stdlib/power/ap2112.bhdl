@@ -1,0 +1,39 @@
+// AP2112K: Diodes Inc 600mA LDO with enable pin
+// Low dropout (250mV @ 600mA), ultralow Iq (55µA)
+// Available in 1.2V, 1.5V, 1.8V, 2.5V, 2.8V, 3.0V, 3.3V fixed outputs
+
+entity AP2112K<V_OUT: voltage>(
+    dropout: voltage = 250mV,
+    i_quiescent: current = 55µA,
+    c_in: capacitance = 1µF,
+    c_out: capacitance = 1µF
+) {
+    pin VIN:  power in;
+    pin VOUT: power out;
+    pin EN:   signal in;
+    pin GND:  ground;
+
+    attribute component_class = "voltage_regulator";
+    attribute output_voltage = V_OUT;
+    attribute dropout_voltage = dropout;
+    attribute i_quiescent = i_quiescent;
+
+    expansion {
+        VIN -> C_in: Cap(c_in).1; C_in.2 -> GND;
+        VOUT -> C_out: Cap(c_out).1; C_out.2 -> GND;
+    }
+}
+
+alias AP2112K_3V3 = AP2112K<3.3V>;
+alias AP2112K_2V5 = AP2112K<2.5V>;
+alias AP2112K_1V8 = AP2112K<1.8V>;
+
+symbol AP2112K {
+    left   { VIN, EN }
+    right  { VOUT }
+    bottom { GND }
+}
+
+layout AP2112K {
+    package SOT-23-5;
+}

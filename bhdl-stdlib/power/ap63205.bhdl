@@ -1,0 +1,45 @@
+// AP63205WU: Diodes Inc 2A synchronous step-down converter
+// Wide input (3.8V-32V), fixed 5V output, integrated MOSFETs (no catch diode)
+// Datasheet: AP63200/AP63201/AP63203/AP63205 series
+
+entity AP63205(
+    f_sw: frequency = 500kHz,
+    rds_on: resistance = 120mΩ,
+    t_sw: time = 15ns,
+    i_quiescent: current = 22µA,
+    l_value: inductance = 4.7µH,
+    c_out: capacitance = 22µF,
+    c_in: capacitance = 10µF
+) {
+    pin VIN:  power in;
+    pin VOUT: power out;
+    pin EN:   signal in;
+    pin BST:  signal inout;
+    pin SW:   switch out;
+    pin GND:  ground;
+
+    attribute component_class = "switching_regulator";
+    attribute output_voltage = 5V;
+    attribute f_sw = f_sw;
+    attribute rds_on = rds_on;
+    attribute t_sw = t_sw;
+    attribute i_quiescent = i_quiescent;
+
+    expansion {
+        // Synchronous — no catch diode (integrated low-side FET)
+        SW -> L_out: Ind(l_value).1; L_out.2 -> VOUT;
+        VOUT -> C_out: Cap(c_out).1; C_out.2 -> GND;
+        VIN -> C_in: Cap(c_in).1; C_in.2 -> GND;
+        BST -> C_bst: Cap(100nF).1; C_bst.2 -> SW;
+    }
+}
+
+symbol AP63205 {
+    left   { VIN, EN, BST }
+    right  { VOUT, SW }
+    bottom { GND }
+}
+
+layout AP63205 {
+    package TSOT-26;
+}
