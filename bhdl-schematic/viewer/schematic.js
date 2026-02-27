@@ -2669,8 +2669,12 @@
                             const pos = positions.get(mainBandOrder[si]);
                             if (pos) pos.x += shift;
                         }
-                        // Also shift power sources that are at or after this position
+                        // Also shift power sources that are at or after this position.
+                        // Skip power sources already in mainBandOrder[ni..] — they
+                        // were already shifted above, and shifting again is a double-shift bug.
+                        const alreadyShiftedMB = new Set(mainBandOrder.slice(ni));
                         for (const ps of powerSourceNodes) {
+                            if (alreadyShiftedMB.has(ps.id)) continue;
                             const psPos = positions.get(ps.id);
                             if (psPos && psPos.x >= leftEdge) {
                                 psPos.x += shift;
