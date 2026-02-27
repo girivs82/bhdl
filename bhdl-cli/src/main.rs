@@ -1538,5 +1538,54 @@ fn build_simulation_annotations(
         }
     }
 
+    // 4. Update instance currents for DC-short components (inductors, 0Ω jumpers).
+    //    These components bridge two DC-equivalent nodes.  Their raw GLACIER current
+    //    only reflects the loads on the far side, missing cascaded regulator loads.
+    //    Replace with the regulator's cascaded current since the component is just
+    //    a DC pass-through.
+    for edge in circuit.graph.edge_indices() {
+        if let Some(branch) = circuit.graph.edge_weight(edge) {
+            let is_dc_short = match branch.component_type.as_str() {
+                "Inductor" => true,
+                "Resistor" => branch.value < DC_SHORT_THRESHOLD,
+                _ => false,
+            };
+            if !is_dc_short { continue; }
+            if let Some((src, tgt)) = circuit.branch_nodes(edge) {
+                let src_name = circuit.get_node_name(src).unwrap_or("").to_string();
+                let tgt_name = circuit.get_node_name(tgt).unwrap_or("").to_string();
+                // Check if either end is a regulator's vout_node
+                for reg in &regulators {
+                    if reg.vout_node == src_name || reg.vout_node == tgt_name {
+                        let cascaded = reg_currents.get(&reg.base_name).copied()
+                            .unwrap_or(reg.vout_current);
+                        if let Some(inst_name) = &branch.instance_id {
+                            // Find the instance name from the branch
+                            let name = branch.name.clone();
+                            if annotations.instance_currents.contains_key(&name) {
+                                info!("DC-short {} current updated: {:.3}mA → {:.3}mA (cascaded from {})",
+                                      name, annotations.instance_currents[&name] * 1000.0,
+                                      cascaded * 1000.0, reg.base_name);
+                                annotations.instance_currents.insert(name, cascaded);
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // 5. Mark internal DC-equivalent nets so the renderer can suppress their
+    //    annotations.  Internal nets (e.g. buck_sw) are GLACIER artifacts from
+    //    virtual pin expansion; the canonical net (V5_BUCK) carries the annotations.
+    for (internal, canonical) in &dc_equiv {
+        if internal != canonical {
+            annotations.net_voltages.remove(internal);
+            annotations.power_nets.remove(internal);
+            annotations.internal_nets.insert(internal.clone());
+        }
+    }
+
     annotations
 }

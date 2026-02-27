@@ -5137,6 +5137,7 @@
     function drawWires() {
         const voltageAnnotatedNets = new Set(); // deduplicate voltage labels per net
         const currentAnnotatedNets = new Set(); // deduplicate trunk current labels per net
+        const internalNets = new Set(schematicData?.simulation?.internal_nets || []); // DC-equivalent internal nets — suppress annotations
         const wireElByName = new Map();
         for (const el of layoutElements) wireElByName.set(el.name, el);
         for (const wire of layoutWires) {
@@ -5217,10 +5218,14 @@
                 bestLen = bestSeg ? Math.max(Math.abs(bestSeg.x2 - bestSeg.x1), Math.abs(bestSeg.y2 - bestSeg.y1)) : 0;
             }
 
+            // Skip annotations on internal DC-equivalent nets (e.g. buck_sw ≡ V5_BUCK).
+            // The canonical net carries the annotations; internal nets would overlap.
+            const isInternalNet = internalNets.has(wire.netName);
+
             // ── Voltage annotation ──
             // Show voltage once per net — the first wire to claim the net wins.
             const alreadyAnnotated = voltageAnnotatedNets.has(wire.netName);
-            const showVoltage = wire.voltage != null && !alreadyAnnotated;
+            const showVoltage = wire.voltage != null && !alreadyAnnotated && !isInternalNet;
 
             // Find the longest horizontal segment for trunk annotations
             const horizSeg = wire.segments.reduce((best, s) => {
@@ -5271,7 +5276,9 @@
             // For shunt fan-out wires: show DRIVER current on the horizontal trunk
             // (once per net) and SINK current on the vertical drop (per wire).
             // For non-shunt wires: show sink current on the best segment.
-            if (isShuntLikeWire) {
+            if (isInternalNet) {
+                // Skip — canonical net carries the annotation
+            } else if (isShuntLikeWire) {
                 // Trunk: driver's total current on horizontal segment (once per net)
                 const trunkCurrent = wire.driverCurrent;
                 const currentAlreadyAnnotated = currentAnnotatedNets.has(wire.netName);
@@ -5295,7 +5302,10 @@
                     ctx.textBaseline = 'middle';
                     ctx.fillText(formatCurrent(Math.abs(wire.current)), vertSeg.x1 + 6, cy);
                 }
-            } else if (wire.current != null && Math.abs(wire.current) > 1e-3 && bestSeg && bestLen > 20) {
+            } else if (wire.current != null && Math.abs(wire.current) > 1e-3 && bestSeg && bestLen > 20
+                       // Skip if this wire carries the full net current (≈ driverCurrent) —
+                       // the shunt trunk annotation already shows it.
+                       && !(wire.driverCurrent != null && Math.abs(Math.abs(wire.current) - Math.abs(wire.driverCurrent)) < 1e-3)) {
                 const segIsHoriz = Math.abs(bestSeg.x2 - bestSeg.x1) >= Math.abs(bestSeg.y2 - bestSeg.y1);
                 ctx.font = `${FONT_SIZE - 2}px monospace`;
                 ctx.fillStyle = '#8bc34a';

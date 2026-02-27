@@ -224,6 +224,10 @@ pub struct SimulationAnnotations {
     /// Nets classified as power (|current| > threshold through any connected branch)
     #[serde(default, skip_serializing_if = "HashSet::is_empty")]
     pub power_nets: HashSet<String>,
+    /// Internal nets that are DC-equivalent to a user-visible net (e.g. buck_sw ≡ V5_BUCK).
+    /// The renderer should suppress annotations on these to avoid overlapping labels.
+    #[serde(default, skip_serializing_if = "HashSet::is_empty")]
+    pub internal_nets: HashSet<String>,
 }
 
 /// A power rail shown at the top/bottom of the schematic.
