@@ -573,6 +573,36 @@ for (let i = 0; i < instances.length; i++) {
             }
         }
 
+        // Helper: check if a component body sits between two X/Y ranges,
+        // meaning a Z-route detour is necessary (obstacle avoidance, not a loop).
+        const wireElNames = new Set([wire.sourceElName, wire.sinkElName].filter(Boolean));
+        function hasObstacleBetweenX(x1, x2, yMin, yMax) {
+            // Is there a component between x1 and x2 that overlaps [yMin, yMax]?
+            const minX = Math.min(x1, x2);
+            const maxX = Math.max(x1, x2);
+            for (const el of instances) {
+                if (wireElNames.has(el.name)) continue;
+                if (el.x + el.w > minX && el.x < maxX &&
+                    el.y + el.h > yMin && el.y < yMax) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        function hasObstacleBetweenY(y1, y2, xMin, xMax) {
+            // Is there a component between y1 and y2 that overlaps [xMin, xMax]?
+            const minY = Math.min(y1, y2);
+            const maxY = Math.max(y1, y2);
+            for (const el of instances) {
+                if (wireElNames.has(el.name)) continue;
+                if (el.y + el.h > minY && el.y < maxY &&
+                    el.x + el.w > xMin && el.x < xMax) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         // Check for horizontal overlap at different Y levels
         const yLevels = [...horizByY.keys()].sort((a, b) => a - b);
         for (let i = 0; i < yLevels.length; i++) {
@@ -586,6 +616,10 @@ for (let i = 0; i < instances.length; i++) {
                         const overlapEnd = Math.min(segA.maxX, segB.maxX);
                         const overlapLen = overlapEnd - overlapStart;
                         if (overlapLen > 10) { // >10px overlap = real detour, not just rounding
+                            // Allow Z-routes that avoid obstacles: if a component body
+                            // sits between y1 and y2 within the overlap X range, the
+                            // detour is necessary (obstacle avoidance, not a loop).
+                            if (hasObstacleBetweenY(y1, y2, overlapStart, overlapEnd)) continue;
                             errors.push(`WIRE_LOOP: net "${wire.netName}" has horizontal segments at y=${y1} and y=${y2} with ${overlapLen.toFixed(0)}px X-overlap [${overlapStart.toFixed(0)}..${overlapEnd.toFixed(0)}] — detour/U-turn`);
                         }
                     }
@@ -605,6 +639,10 @@ for (let i = 0; i < instances.length; i++) {
                         const overlapEnd = Math.min(segA.maxY, segB.maxY);
                         const overlapLen = overlapEnd - overlapStart;
                         if (overlapLen > 10) {
+                            // Allow Z-routes that avoid obstacles: if a component body
+                            // sits between x1 and x2 within the overlap Y range, the
+                            // detour is necessary (obstacle avoidance, not a loop).
+                            if (hasObstacleBetweenX(x1, x2, overlapStart, overlapEnd)) continue;
                             errors.push(`WIRE_LOOP: net "${wire.netName}" has vertical segments at x=${x1} and x=${x2} with ${overlapLen.toFixed(0)}px Y-overlap [${overlapStart.toFixed(0)}..${overlapEnd.toFixed(0)}] — detour/U-turn`);
                         }
                     }
