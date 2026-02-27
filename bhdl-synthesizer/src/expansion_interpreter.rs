@@ -199,6 +199,11 @@ fn expand_one_instance(
             attrs.push(("value", resolved));
         }
 
+        // Set component_class from the component type so GLACIER can identify
+        // these children (the component registry only looks at this attribute).
+        let comp_class = component_type_to_class(&exp_inst.component_type);
+        attrs.push(("component_class", comp_class.to_string()));
+
         // Determine expansion role from connection topology
         // A child is "shunt" if any of its connections touch GND; otherwise "series"
         let is_shunt = cand.recipe.connections.iter().any(|conn| {
@@ -387,6 +392,21 @@ fn resolve_param_expression(
 }
 
 /// Determine the standard pin layout for a component type.
+/// Map expansion component type name to its `component_class` attribute value.
+/// This must match the keys in `bhdl_spice::component_registry::class_to_component_type`
+/// so that GLACIER can identify these components for DC simulation.
+fn component_type_to_class(component_type: &str) -> &'static str {
+    match component_type {
+        "Ind" | "Inductor" => "inductor",
+        "Cap" | "Capacitor" => "capacitor",
+        "Res" | "Resistor" => "resistor",
+        "Diode" => "diode",
+        "TVSDiode" => "tvs_diode",
+        "LED" => "led",
+        _ => "passive", // generic fallback
+    }
+}
+
 fn component_type_pins(component_type: &str) -> Vec<(&'static str, bool)> {
     match component_type {
         "Ind" | "Inductor" => vec![("1", true), ("2", true)],
