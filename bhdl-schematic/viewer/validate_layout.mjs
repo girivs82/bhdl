@@ -420,19 +420,58 @@ for (let i = 0; i < instances.length; i++) {
             const lb = bus.lbends[li];
             const row = bus.rows[li]; // current row (source of L-bend)
             if (!row || row.length === 0) continue;
-            // Compute actual row extent from element positions
-            let rowMinX = Infinity, rowMaxX = -Infinity;
+            // Compute actual extent from BOTH current and next row element
+            // positions — the corner intentionally extends past the current
+            // row when the next row is wider (after clamping).
+            let combinedMinX = Infinity, combinedMaxX = -Infinity;
             for (const item of row) {
                 const el = elByName.get(item.name);
                 if (!el || (el.w === 0 && el.h === 0)) continue;
-                rowMinX = Math.min(rowMinX, el.x);
-                rowMaxX = Math.max(rowMaxX, el.x + el.w);
+                combinedMinX = Math.min(combinedMinX, el.x);
+                combinedMaxX = Math.max(combinedMaxX, el.x + el.w);
             }
-            if (rowMinX === Infinity) continue;
-            // cornerX should be near the row edge (within pad tolerance)
+            const nextRow = bus.rows[li + 1];
+            if (nextRow) {
+                for (const item of nextRow) {
+                    const el = elByName.get(item.name);
+                    if (!el || (el.w === 0 && el.h === 0)) continue;
+                    combinedMinX = Math.min(combinedMinX, el.x);
+                    combinedMaxX = Math.max(combinedMaxX, el.x + el.w);
+                }
+            }
+            if (combinedMinX === Infinity) continue;
+            // cornerX should be near the combined row edge (within pad tolerance)
             const BUS_PAD = 30; // allow some padding past row edge
-            if (lb.cornerX < rowMinX - BUS_PAD || lb.cornerX > rowMaxX + BUS_PAD) {
-                errors.push(`BUS_STALE: net "${bus.netName}" L-bend ${li} cornerX=${lb.cornerX.toFixed(0)} is outside row bounds [${rowMinX.toFixed(0)}, ${rowMaxX.toFixed(0)}] — stale row extents?`);
+            if (lb.cornerX < combinedMinX - BUS_PAD || lb.cornerX > combinedMaxX + BUS_PAD) {
+                errors.push(`BUS_STALE: net "${bus.netName}" L-bend ${li} cornerX=${lb.cornerX.toFixed(0)} is outside row bounds [${combinedMinX.toFixed(0)}, ${combinedMaxX.toFixed(0)}] — stale row extents?`);
+            }
+            // Check that all next-row cap stubs fall within the feed wire range
+            if (nextRow) {
+                const feedMinX = Math.min(lb.cornerX, lb.feedEndX);
+                const feedMaxX = Math.max(lb.cornerX, lb.feedEndX);
+                for (const item of nextRow) {
+                    const el = elByName.get(item.name);
+                    if (!el || (el.w === 0 && el.h === 0)) continue;
+                    const stubX = el.x + el.w / 2;
+                    if (stubX < feedMinX - 5 || stubX > feedMaxX + 5) {
+                        errors.push(`BUS_DANGLING: net "${bus.netName}" L-bend ${li} stub for "${item.name}" at x=${stubX.toFixed(0)} outside feed wire [${feedMinX.toFixed(0)}, ${feedMaxX.toFixed(0)}]`);
+                    }
+                }
+            }
+            // Check inter-L-bend connectivity: L-bend li>0 must connect
+            // to the previous feed wire (cornerX within prev feed range,
+            // startY == prev feedY)
+            if (li > 0) {
+                const prevLb = bus.lbends[li - 1];
+                const prevFeedMinX = Math.min(prevLb.cornerX, prevLb.feedEndX);
+                const prevFeedMaxX = Math.max(prevLb.cornerX, prevLb.feedEndX);
+                if (lb.cornerX < prevFeedMinX - 5 || lb.cornerX > prevFeedMaxX + 5) {
+                    errors.push(`BUS_DISCONNECT: net "${bus.netName}" L-bend ${li} cornerX=${lb.cornerX.toFixed(0)} not on prev feed wire [${prevFeedMinX.toFixed(0)}, ${prevFeedMaxX.toFixed(0)}]`);
+                }
+                const startY = lb.startY != null ? lb.startY : bus.rowExtents[li]?.rowY;
+                if (startY != null && Math.abs(startY - prevLb.feedY) > 5) {
+                    errors.push(`BUS_DISCONNECT: net "${bus.netName}" L-bend ${li} startY=${startY.toFixed(0)} != prev feedY=${prevLb.feedY.toFixed(0)} (gap of ${Math.abs(startY - prevLb.feedY).toFixed(0)}px)`);
+                }
             }
         }
     }
@@ -591,6 +630,8 @@ const result = {
         wireThroughSeries: errors.filter(e => e.startsWith('WIRE_THROUGH_SERIES')).length,
         chainMisalign: errors.filter(e => e.startsWith('CHAIN_MISALIGN')).length,
         busStale: errors.filter(e => e.startsWith('BUS_STALE')).length,
+        busDangling: errors.filter(e => e.startsWith('BUS_DANGLING')).length,
+        busDisconnect: errors.filter(e => e.startsWith('BUS_DISCONNECT')).length,
         wireLoops: errors.filter(e => e.startsWith('WIRE_LOOP')).length,
         diagonals: errors.filter(e => e.startsWith('DIAGONAL')).length,
     },

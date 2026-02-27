@@ -1930,6 +1930,9 @@
 
                 if (group.side === 'left') {
                     // Base direction: grow left. Reversed: grow right.
+                    // Left-side boundary: reversed rows must not extend past
+                    // the junction's left edge.
+                    const junctionLeftX = jPos.x;
                     if (!isReversedRow) {
                         // Row 0: center last cap on port dot.
                         // Row 2+: align right edge with previous row's right edge.
@@ -1938,7 +1941,7 @@
                             const portDotX = jPos.x - PORT_STUB_LEN - SHUNT_PORT_OFFSET;
                             rx = portDotX + itemSizes[row.length - 1].w / 2;
                         } else {
-                            rx = rowExtentsForGroup[rowIdx - 1].maxX;
+                            rx = Math.min(junctionLeftX, rowExtentsForGroup[rowIdx - 1].maxX);
                         }
                         for (let i = row.length - 1; i >= 0; i--) {
                             const sz = itemSizes[i];
@@ -1959,9 +1962,27 @@
                             const nextOH = i + 1 < row.length ? shuntItemOverhang(row[i + 1].name) : { left: 0, right: 0 };
                             lx += sz.w + Math.max(MIN_ITEM_GAP_BASE, thisOH.right + nextOH.left + ANNOTATION_PAD);
                         }
+                        // Clamp: if the reversed row extends past the junction,
+                        // shift the entire row left so items stay on the input side.
+                        let rowMaxX = -Infinity;
+                        for (const item of row) {
+                            const p = positions.get(item.name);
+                            if (p) rowMaxX = Math.max(rowMaxX, p.x + p.w);
+                        }
+                        if (rowMaxX > junctionLeftX) {
+                            const shift = rowMaxX - junctionLeftX;
+                            for (const item of row) {
+                                const p = positions.get(item.name);
+                                if (p) p.x -= shift;
+                            }
+                        }
                     }
                 } else {
                     // Base direction: grow right. Reversed: grow left.
+                    // Right-side boundary: reversed rows must not extend past
+                    // the junction's right edge (output caps should stay right
+                    // of the regulator they belong to).
+                    const junctionRightX = jPos.x + jPos.w;
                     if (!isReversedRow) {
                         // Row 0, 2, 4...: grow right from port dot
                         // Row 0: center first cap on port dot.
@@ -1971,7 +1992,7 @@
                             const portDotX = jPos.x + jPos.w + PORT_STUB_LEN + SHUNT_PORT_OFFSET;
                             lx = portDotX - itemSizes[0].w / 2;
                         } else {
-                            lx = rowExtentsForGroup[rowIdx - 1].minX;
+                            lx = Math.max(junctionRightX, rowExtentsForGroup[rowIdx - 1].minX);
                         }
                         for (let i = 0; i < row.length; i++) {
                             const sz = itemSizes[i];
@@ -1991,6 +2012,20 @@
                             const thisOH = shuntItemOverhang(row[i].name);
                             const nextOH = i > 0 ? shuntItemOverhang(row[i - 1].name) : { left: 0, right: 0 };
                             rx -= Math.max(MIN_ITEM_GAP_BASE, thisOH.left + nextOH.right + ANNOTATION_PAD);
+                        }
+                        // Clamp: if the reversed row extends past the junction,
+                        // shift the entire row right so items stay on the output side.
+                        let rowMinX = Infinity;
+                        for (const item of row) {
+                            const p = positions.get(item.name);
+                            if (p) rowMinX = Math.min(rowMinX, p.x);
+                        }
+                        if (rowMinX < junctionRightX) {
+                            const shift = junctionRightX - rowMinX;
+                            for (const item of row) {
+                                const p = positions.get(item.name);
+                                if (p) p.x += shift;
+                            }
                         }
                     }
                 }
@@ -2390,7 +2425,7 @@
                                 if (rowIdx === 0) {
                                     lx = portX - (offPathSizes.get(row[0].name) || { w: INSTANCE_BOX_MIN_WIDTH }).w / 2;
                                 } else {
-                                    lx = rowExtents[rowIdx - 1].minX;
+                                    lx = Math.max(hx + headSz.w, rowExtents[rowIdx - 1].minX);
                                 }
                                 for (let si = 0; si < row.length; si++) {
                                     const shItem = row[si];
@@ -2418,6 +2453,22 @@
                                     const thisOH = shuntItemOverhang(shItem.name);
                                     const nextOH = si > 0 ? shuntItemOverhang(row[si - 1].name) : { left: 0, right: 0 };
                                     rx -= Math.max(MIN_ITEM_GAP_BASE, thisOH.left + nextOH.right + ANNOTATION_PAD);
+                                }
+                                // Clamp: reversed rows must not extend past the
+                                // head element's right edge (output caps stay
+                                // right of the regulator that produces them).
+                                const clampMinX = hx + headSz.w;
+                                let branchRowMinX = Infinity;
+                                for (const it of row) {
+                                    const p = positions.get(it.name);
+                                    if (p) branchRowMinX = Math.min(branchRowMinX, p.x);
+                                }
+                                if (branchRowMinX < clampMinX) {
+                                    const shift = clampMinX - branchRowMinX;
+                                    for (const it of row) {
+                                        const p = positions.get(it.name);
+                                        if (p) p.x += shift;
+                                    }
                                 }
                             }
 
@@ -3838,8 +3889,9 @@
                 const curr = rowExtents[ri];
                 const next = rowExtents[ri + 1];
                 const isEvenToOdd = ri % 2 === 0;
-                // L-bend corner: at the END of current row's feed direction
-                const cornerX = isEvenToOdd ? curr.maxX : curr.minX;
+                // L-bend corner: past the END of both rows so the feed wire
+                // covers all caps (next row may extend past current after clamping)
+                const cornerX = isEvenToOdd ? Math.max(curr.maxX, next.maxX) : Math.min(curr.minX, next.minX);
                 // Feed wire at same drop distance as row 0 (rail → cap top)
                 // so per-cap stubs are visually consistent across rows
                 const feedY = next.rowY - (group._row0Drop || 80);
@@ -3850,6 +3902,18 @@
                 const farCapPos = positions.get(farCap.name);
                 const feedEndX = farCapPos ? farCapPos.x + farCapPos.w / 2 : (isEvenToOdd ? next.minX : next.maxX);
                 lbends.push({ cornerX, cornerY, feedEndX, feedY, isEvenToOdd });
+            }
+
+            // Fix chain connectivity (same as branch groups above)
+            for (let li = 1; li < lbends.length; li++) {
+                const prevLb = lbends[li - 1];
+                const lb = lbends[li];
+                if (prevLb.isEvenToOdd) {
+                    prevLb.feedEndX = Math.min(prevLb.feedEndX, lb.cornerX);
+                } else {
+                    prevLb.feedEndX = Math.max(prevLb.feedEndX, lb.cornerX);
+                }
+                lb.startY = prevLb.feedY;
             }
 
             // Find the net name from wires targeting items in this group
@@ -3903,8 +3967,8 @@
                 // doesn't pass through any cap body. +20px clears the cap edge.
                 const BUS_WIRE_PAD = 20;
                 const cornerX = isEvenToOdd
-                    ? brRowExtents[ri].maxX + BUS_WIRE_PAD
-                    : brRowExtents[ri].minX - BUS_WIRE_PAD;
+                    ? Math.max(brRowExtents[ri].maxX, next.maxX) + BUS_WIRE_PAD
+                    : Math.min(brRowExtents[ri].minX, next.minX) - BUS_WIRE_PAD;
                 const feedY = next.rowY - (brData.row0Drop || 80);
                 const cornerY = feedY;
                 const nextRow = brData.rows[ri + 1];
@@ -3912,6 +3976,27 @@
                 const farCapPos = positions.get(farCap.name);
                 const feedEndX = farCapPos ? farCapPos.x + farCapPos.w / 2 : (isEvenToOdd ? next.minX : next.maxX);
                 lbends.push({ cornerX, cornerY, feedEndX, feedY, isEvenToOdd });
+            }
+
+            // Fix chain connectivity: each L-bend li>0 must connect to the
+            // previous feed wire.  Two adjustments:
+            // 1. Extend the previous feed wire to reach this L-bend's cornerX.
+            // 2. Record startY = previous feedY so the vertical extends up to
+            //    the previous feed wire (not just from the current row Y).
+            for (let li = 1; li < lbends.length; li++) {
+                const prevLb = lbends[li - 1];
+                const lb = lbends[li];
+                // Extend previous feed wire to reach this L-bend's corner
+                if (prevLb.isEvenToOdd) {
+                    // Previous feed goes left: extend further left if needed
+                    prevLb.feedEndX = Math.min(prevLb.feedEndX, lb.cornerX);
+                } else {
+                    // Previous feed goes right: extend further right if needed
+                    prevLb.feedEndX = Math.max(prevLb.feedEndX, lb.cornerX);
+                }
+                // Store startY so the renderer draws the vertical from
+                // the previous feed wire, not from the current row Y
+                lb.startY = prevLb.feedY;
             }
 
             // Snap junctionY to the closest point on existing net wire segments.
@@ -5360,8 +5445,9 @@
                 const currExt = bus.rowExtents[li];
 
                 // Vertical start: tap from the power rail Y (for first bend)
-                // or from the previous row's Y (for subsequent bends)
-                const startY = li === 0 ? (bus.junctionY || currExt.rowY) : currExt.rowY;
+                // or from the previous feed wire Y (for subsequent bends)
+                const startY = lb.startY != null ? lb.startY
+                    : li === 0 ? (bus.junctionY || currExt.rowY) : currExt.rowY;
 
                 // Draw L-bend: vertical down + horizontal feed
                 ctx.strokeStyle = wireColor;
@@ -5494,8 +5580,10 @@
                 const busWires = layoutElements._multiRowBusWires || [];
                 for (const bus of busWires) {
                     if (!bus.netName) continue;
-                    for (const lb of bus.lbends) {
-                        const startY = bus.junctionY || bus.rowExtents[0].rowY;
+                    for (let bli = 0; bli < bus.lbends.length; bli++) {
+                        const lb = bus.lbends[bli];
+                        const startY = lb.startY != null ? lb.startY
+                            : bli === 0 ? (bus.junctionY || bus.rowExtents[0].rowY) : bus.rowExtents[bli].rowY;
                         // Vertical segment
                         if (pointToSegmentDist(mx, my, lb.cornerX, startY, lb.cornerX, lb.cornerY) < hitDist) { foundNet = bus.netName; break; }
                         // Horizontal feed
