@@ -3416,6 +3416,44 @@
                         }
                     }
 
+                    // Distant-shunt check: a power trunk extending far to the right
+                    // can cross through main-band components (e.g., expansion children
+                    // of a downstream regulator). Detect this and use a power stub
+                    // instead of a long crossing trunk.
+                    {
+                        const sinkLayout3 = elByName.get(sinkElName);
+                        if (sinkLayout3 && sinkLayout3.isShunt) {
+                            const trunkY = fromPos.y;
+                            const trunkMinX = Math.min(fromPos.x, toPos.x);
+                            const trunkMaxX = Math.max(fromPos.x, toPos.x);
+                            const netSinkNames3 = new Set(net.sinks.map(s => s.name));
+                            let trunkBlocked = false;
+                            for (const el of layoutElements) {
+                                if (el.type !== 'instance') continue;
+                                if (el.isShunt) continue;
+                                if (netSinkNames3.has(el.name)) continue;
+                                const elRight = el.x + el.w;
+                                const elBottom = el.y + el.h;
+                                // Does the trunk at trunkY pass through this component?
+                                if (trunkY > el.y && trunkY < elBottom &&
+                                    trunkMaxX > el.x && trunkMinX < elRight) {
+                                    trunkBlocked = true;
+                                    break;
+                                }
+                            }
+                            if (trunkBlocked) {
+                                const psNode = powerSourceNodes.find(ps => ps.id === driverElName);
+                                if (!sinkLayout3.pwrStubs) sinkLayout3.pwrStubs = [];
+                                sinkLayout3.pwrStubs.push({
+                                    port: sink.port,
+                                    netName: net.name,
+                                    voltage: psNode ? psNode.voltage : net.voltage
+                                });
+                                continue;
+                            }
+                        }
+                    }
+
                     // Distance-based: power source far from regulator → local power source
                     // when branch elements (other regulators) occupy the gap between them.
                     // Pure shunt gaps (cap banks on the same net) don't trigger this.
@@ -3473,39 +3511,6 @@
                     continue; // L-bend bus handles this connection
                 }
 
-                // Power-net shunt sinks that are distant from the power source
-                // and would require the trunk wire to cross through series
-                // (main-band) component bodies: add a power stub instead of
-                // routing a long wire. This prevents WIRE_THROUGH_SERIES errors.
-                if (net.driver.type === 'power_source' && isShuntWire && sinkEl) {
-                    const dx = Math.abs(toPos.x - fromPos.x);
-                    if (dx > 200) {
-                        const minX = Math.min(fromPos.x, toPos.x);
-                        const maxX = Math.max(fromPos.x, toPos.x);
-                        // Check if any series (main-band) component lies between source and sink
-                        let seriesBetween = false;
-                        for (const el of layoutElements) {
-                            if (el.isShunt || el.type === 'power_source') continue;
-                            if (el.name === sinkElName) continue;
-                            const elMidX = el.x + el.w / 2;
-                            if (elMidX > minX && elMidX < maxX) {
-                                seriesBetween = true;
-                                break;
-                            }
-                        }
-                        if (seriesBetween) {
-                            if (!sinkEl.pwrStubs) sinkEl.pwrStubs = [];
-                            const psNode = powerSourceNodes.find(ps => ps.id === driverElName);
-                            sinkEl.pwrStubs.push({
-                                port: sink.port,
-                                netName: net.name,
-                                voltage: psNode ? psNode.voltage : net.voltage
-                            });
-                            continue;
-                        }
-                    }
-                }
-
                 // dir: +1 = wire extends right from dot, -1 = wire extends left
                 const fromDir = fromPos.dir || 1;   // driver output default: rightward
                 const toDir = toPos.dir || -1;       // sink input default: leftward
@@ -3553,41 +3558,10 @@
                             }
                         }
                     }
-                    // Route orthogonally from closest/projected point to sink.
-                    // If the trunk extension passes through a series component
-                    // body, jog the extension above or below the obstacle.
+                    // Route orthogonally from closest/projected point to sink
                     if (trunkExtSeg) {
-                        const extMinX = Math.min(trunkExtSeg.x1, trunkExtSeg.x2);
-                        const extMaxX = Math.max(trunkExtSeg.x1, trunkExtSeg.x2);
-                        const extY = trunkExtSeg.y1;
-                        // Build exclude set: all elements on this net
-                        const netElNames = new Set();
-                        for (const s of net.sinks) netElNames.add(s.name);
-                        netElNames.add(driverElName);
-                        netElNames.add(sinkElName);
-                        let obstacle = null;
-                        for (const el of layoutElements) {
-                            if (el.isShunt || el.type === 'power_source') continue;
-                            if (netElNames.has(el.name)) continue;
-                            if (el.x + el.w > extMinX && el.x < extMaxX &&
-                                el.y < extY + WIRE_CLEARANCE && el.y + el.h > extY - WIRE_CLEARANCE) {
-                                obstacle = el;
-                                break;
-                            }
-                        }
-                        if (obstacle) {
-                            // Jog above the obstacle
-                            const jogY = obstacle.y - WIRE_CLEARANCE * 2;
-                            segments.push({ x1: trunkExtSeg.x1, y1: extY, x2: trunkExtSeg.x1, y2: jogY });
-                            segments.push({ x1: trunkExtSeg.x1, y1: jogY, x2: trunkExtSeg.x2, y2: jogY });
-                            segments.push({ x1: trunkExtSeg.x2, y1: jogY, x2: trunkExtSeg.x2, y2: extY });
-                            junctionPoints.push({ x: trunkExtSeg.x1, y: extY });
-                            bestCy = extY;
-                            bestCx = trunkExtSeg.x2;
-                        } else {
-                            segments.push(trunkExtSeg);
-                            junctionPoints.push({ x: trunkExtSeg.x1, y: trunkExtSeg.y1 });
-                        }
+                        segments.push(trunkExtSeg);
+                        junctionPoints.push({ x: trunkExtSeg.x1, y: trunkExtSeg.y1 });
                     }
                     junctionPoints.push({ x: bestCx, y: bestCy });
                     const dxAbs = Math.abs(bestCx - toPos.x);
@@ -3598,30 +3572,8 @@
                         // Same X: single vertical segment
                         segments.push({ x1: bestCx, y1: bestCy, x2: toPos.x, y2: toPos.y });
                     } else if (dyAbs < 2) {
-                        // Same Y: single horizontal segment.
-                        // Check if it would pass through a series component body.
-                        const hMinX = Math.min(bestCx, toPos.x);
-                        const hMaxX = Math.max(bestCx, toPos.x);
-                        const hY = bestCy;
-                        let hObstacle = null;
-                        for (const el of layoutElements) {
-                            if (el.isShunt || el.type === 'power_source') continue;
-                            if (el.name === sinkElName || el.name === driverElName) continue;
-                            if (el.x + el.w > hMinX && el.x < hMaxX &&
-                                el.y < hY + WIRE_CLEARANCE && el.y + el.h > hY - WIRE_CLEARANCE) {
-                                hObstacle = el;
-                                break;
-                            }
-                        }
-                        if (hObstacle) {
-                            // Jog above the obstacle
-                            const jogY = hObstacle.y - WIRE_CLEARANCE * 2;
-                            segments.push({ x1: bestCx, y1: bestCy, x2: bestCx, y2: jogY });
-                            segments.push({ x1: bestCx, y1: jogY, x2: toPos.x, y2: jogY });
-                            segments.push({ x1: toPos.x, y1: jogY, x2: toPos.x, y2: toPos.y });
-                        } else {
-                            segments.push({ x1: bestCx, y1: bestCy, x2: toPos.x, y2: toPos.y });
-                        }
+                        // Same Y: single horizontal segment
+                        segments.push({ x1: bestCx, y1: bestCy, x2: toPos.x, y2: toPos.y });
                     } else {
                         // L-route from closest point: horizontal then vertical
                         segments.push({ x1: bestCx, y1: bestCy, x2: toPos.x, y2: bestCy });
