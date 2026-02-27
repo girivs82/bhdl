@@ -1,0 +1,36 @@
+// XC6206: Torex 200mA ultra-low quiescent current LDO
+// 1µA Iq, 250mV dropout, SOT-23 (3-pin, no EN)
+
+entity XC6206<V_OUT: voltage>(
+    dropout: voltage = 250mV,
+    i_quiescent: current = 1µA,
+    c_in: capacitance = 1µF,
+    c_out: capacitance = 1µF
+) {
+    pin VIN:  power in;
+    pin VOUT: power out;
+    pin GND:  ground;
+
+    attribute component_class = "voltage_regulator";
+    attribute output_voltage = V_OUT;
+    attribute dropout_voltage = dropout;
+    attribute i_quiescent = i_quiescent;
+
+    expansion {
+        VIN -> C_in: Cap(c_in).1; C_in.2 -> GND;
+        VOUT -> C_out: Cap(c_out).1; C_out.2 -> GND;
+    }
+}
+
+alias XC6206P332 = XC6206<3.3V>;
+alias XC6206P182 = XC6206<1.8V>;
+
+symbol XC6206 {
+    left   { VIN }
+    right  { VOUT }
+    bottom { GND }
+}
+
+layout XC6206 {
+    package SOT-23;
+}

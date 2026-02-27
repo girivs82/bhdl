@@ -1,8 +1,14 @@
 //! Complex Multi-Level Parallel Power Tree — automated pipeline test.
 //!
-//! Exercises: metadata-based regulator decomposition, multi-level cascade
-//! current fixup, virtual pin expansion, GLACIER DC with nonlinear elements
-//! (LEDs, TVS), and physical selection across ~20 components.
+//! Uses realistic, currently-available ICs:
+//!   AP63205 (2A sync buck, Diodes Inc) — 24V→5V main
+//!   TPS54331 (3A buck, TI) — 24V→5V aux
+//!   AP2112K (600mA LDO, Diodes Inc) — 5V→3.3V
+//!   XC6206 (200mA ultra-low-Iq LDO, Torex) — 5V→1.8V
+//!
+//! Exercises: expansion block expansion, multi-level cascade current fixup,
+//! GLACIER DC with nonlinear elements (LEDs, TVS), and physical selection
+//! across ~24 components.
 //!
 //! Run:  cargo run -p bhdl-synthesizer --bin test_complex_power_tree
 
@@ -269,10 +275,10 @@ async fn main() -> Result<()> {
         netlist.nets.len()
     );
 
-    // We expect at least 15 instances before virtual-pin expansion:
-    // tvs, c_in, buck, c5b, r_led5b, led5b, r_load5b, reg33, c33, r_led33,
-    // led33, r_load33, reg5aux, c5a, r_led5a, led5a, reg18, c18, r_load18,
-    // r_led18, led18
+    // We expect at least 15 instances before expansion:
+    // tvs, buck, r_led5b, led5b, r_load5b, reg33, r_led33,
+    // led33, r_load33, reg5aux, r_led5a, led5a, reg18, r_load18,
+    // r_led18, led18 (LDO C_in/C_out and buck L/C come from expansion)
     assert!(
         pre_expansion_instances >= 15,
         "Expected ≥15 instances before expansion, got {}",
@@ -285,32 +291,53 @@ async fn main() -> Result<()> {
     );
 
     // -----------------------------------------------------------------------
-    // 3. Virtual pin expansion
+    // 3. Expansion (entity expansion blocks + legacy vpin)
     // -----------------------------------------------------------------------
-    println!("\n{}", "--- Step 3: Virtual Pin Expansion ---".bold());
+    println!("\n{}", "--- Step 3: Entity Expansion ---".bold());
 
-    let expansion_results =
+    // Step 3a: Expand entity expansion { } blocks (AP63205, TPS54331, AP2112K, XC6206)
+    let recipe_results = bhdl_synthesizer::expansion_interpreter::expand_entity_instances(
+        &mut netlist,
+        &analysis.expansion_recipes,
+    );
+
+    let post_recipe_instances = netlist.instances.len();
+    let recipe_expanded = post_recipe_instances - pre_expansion_instances;
+
+    println!(
+        "  {} {} expansion block(s) applied for {} entity instance(s)",
+        "✓".green(),
+        recipe_expanded,
+        recipe_results.len()
+    );
+
+    // Step 3b: Legacy virtual pin expansion (catches any remaining switching regulators)
+    let vpin_results =
         bhdl_synthesizer::virtual_pin_expander::expand_virtual_pins(&mut netlist);
 
     let post_expansion_instances = netlist.instances.len();
+    let vpin_expanded = post_expansion_instances - post_recipe_instances;
     let expanded_count = post_expansion_instances - pre_expansion_instances;
 
-    println!(
-        "  {} {} virtual-pin expansion(s) for {} regulator(s)",
-        "✓".green(),
-        expanded_count,
-        expansion_results.len()
-    );
+    if !vpin_results.is_empty() {
+        println!(
+            "  {} {} legacy vpin expansion(s) for {} regulator(s)",
+            "✓".green(),
+            vpin_expanded,
+            vpin_results.len()
+        );
+    }
 
-    // Buck should expand into at least 2 components (inductor + output cap;
-    // catch diode is optional depending on vpin_has_diode)
+    // All 4 regulators have expansion blocks:
+    // AP63205: L+C_out+C_in+C_bst (4), TPS54331: L+D+C_out+R_fb×2+C_boot (6),
+    // AP2112K: C_in+C_out (2), XC6206: C_in+C_out (2) = 14 total
     assert!(
-        expanded_count >= 2,
-        "Expected ≥2 expanded components from buck, got {}",
+        expanded_count >= 10,
+        "Expected ≥10 expanded components from 4 regulators, got {}",
         expanded_count
     );
     println!(
-        "  {} Post-expansion instances: {} (+{} from buck)",
+        "  {} Post-expansion instances: {} (+{} from expansion blocks)",
         "✓".green(),
         post_expansion_instances,
         expanded_count
@@ -398,7 +425,7 @@ async fn main() -> Result<()> {
     }
     println!();
 
-    // LM2596 (buck) feeds V5_BUCK → reg33 + loads;
+    // AP63205 (buck) feeds V5_BUCK → reg33 + loads;
     // its current must exceed reg33's current
     let i_buck = annotations
         .instance_currents
@@ -433,7 +460,7 @@ async fn main() -> Result<()> {
         );
     }
 
-    // LM7805 (reg5aux) feeds V5_AUX → reg18 + loads;
+    // TPS54331 (reg5aux) feeds V5_AUX → reg18 + loads;
     // its current must exceed reg18's current
     let i_reg5aux = annotations
         .instance_currents
@@ -593,7 +620,7 @@ async fn main() -> Result<()> {
         post_expansion_instances, pre_expansion_instances, expanded_count
     );
     println!(
-        "  Regulators: 4 (buck×1 + linear×3)"
+        "  Regulators: 4 (buck×2 + LDO×2)"
     );
     println!(
         "  Physical selections: {}",
