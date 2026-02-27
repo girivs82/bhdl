@@ -1366,8 +1366,53 @@ fn build_simulation_annotations(
         }
     }
 
+    // 1b. Build DC node equivalence classes.
+    //     At DC, inductors are short circuits (modeled with small DCR in GLACIER).
+    //     Any branch with impedance below a threshold creates a DC-equivalent pair.
+    //     This lets the cascade match through internal switching nodes (e.g.
+    //     buck_sw ≡ V5_BUCK via inductor DCR) without special-casing component types.
+    const DC_SHORT_THRESHOLD: f64 = 1.0; // Ω — branches below this are DC shorts
+    let mut dc_equiv: HashMap<String, String> = HashMap::new(); // node → canonical representative
+    for edge in circuit.graph.edge_indices() {
+        if let Some(branch) = circuit.graph.edge_weight(edge) {
+            let is_dc_short = match branch.component_type.as_str() {
+                "Inductor" => true, // always a DC short regardless of modeled DCR
+                "Resistor" => branch.value < DC_SHORT_THRESHOLD,
+                _ => false,
+            };
+            if is_dc_short {
+                if let Some((src, tgt)) = circuit.branch_nodes(edge) {
+                    let src_name = circuit.get_node_name(src).unwrap_or("").to_string();
+                    let tgt_name = circuit.get_node_name(tgt).unwrap_or("").to_string();
+                    if !src_name.is_empty() && !tgt_name.is_empty()
+                        && src_name != "GND" && src_name != "0"
+                        && tgt_name != "GND" && tgt_name != "0"
+                    {
+                        // Union: both map to the same canonical name.
+                        // Prefer the name that doesn't look like an internal node (no '_sw' suffix).
+                        let canonical = if src_name.ends_with("_sw") || src_name.ends_with("_SW") {
+                            &tgt_name
+                        } else {
+                            &src_name
+                        };
+                        let resolve = |n: &str| dc_equiv.get(n).cloned().unwrap_or_else(|| n.to_string());
+                        let canon = resolve(canonical);
+                        dc_equiv.insert(src_name.clone(), canon.clone());
+                        dc_equiv.insert(tgt_name.clone(), canon.clone());
+                        info!("DC equivalence: {} ≡ {} (via {} {:.3}Ω)",
+                              src_name, tgt_name, branch.component_type, branch.value);
+                    }
+                }
+            }
+        }
+    }
+    let dc_resolve = |node: &str| -> String {
+        dc_equiv.get(node).cloned().unwrap_or_else(|| node.to_string())
+    };
+
     // 2. Cascade: a regulator's true current = its own vout_current +
     //    sum of downstream regulators whose VIN is on this regulator's VOUT.
+    //    Uses DC equivalence so that e.g. buck_sw matches V5_BUCK through inductor.
     //    Process iteratively until stable (handles arbitrary cascade depth).
     let mut reg_currents: HashMap<String, f64> = regulators.iter()
         .map(|r| (r.base_name.clone(), r.vout_current))
@@ -1376,8 +1421,9 @@ fn build_simulation_annotations(
     for _ in 0..regulators.len() {
         let snapshot = reg_currents.clone();
         for reg in &regulators {
+            let reg_vout = dc_resolve(&reg.vout_node);
             let downstream_sum: f64 = regulators.iter()
-                .filter(|d| d.vin_node == reg.vout_node && d.base_name != reg.base_name)
+                .filter(|d| dc_resolve(&d.vin_node) == reg_vout && d.base_name != reg.base_name)
                 .map(|d| snapshot.get(&d.base_name).copied().unwrap_or(0.0))
                 .sum();
             reg_currents.insert(
@@ -1398,7 +1444,7 @@ fn build_simulation_annotations(
             let current = reg_currents.get(&reg.base_name).copied().unwrap_or(reg.vout_current);
             // Only count regulators whose VIN is a power net (top-level feed),
             // not regulators cascading from another regulator's VOUT.
-            let fed_by_regulator = regulators.iter().any(|r| r.vout_node == reg.vin_node);
+            let fed_by_regulator = regulators.iter().any(|r| dc_resolve(&r.vout_node) == dc_resolve(&reg.vin_node));
             if !fed_by_regulator {
                 *power_net_current.entry(reg.vin_node.clone()).or_insert(0.0) += current;
             }
