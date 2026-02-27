@@ -16,7 +16,7 @@ use bhdl_netlist::{
 use bhdl_analyzer::spice_extraction::parse_unit_value;
 use crate::virtual_pin_expander::{
     find_net_for_pin_instance, find_or_create_module, create_instance,
-    connect_pin_instance_by_name,
+    connect_pin_instance_by_name, disconnect_pin_from_net,
 };
 
 /// Summary of one entity expansion.
@@ -195,7 +195,7 @@ fn expand_one_instance(
 
         // Set value attribute from first param
         if let Some(first_param) = exp_inst.params.first() {
-            let resolved = resolve_param_expression(first_param, &cand.param_values);
+            let resolved = resolve_param_expression(first_param, &cand.param_values, &cand.recipe.param_defaults);
             attrs.push(("value", resolved));
         }
 
@@ -241,7 +241,47 @@ fn expand_one_instance(
         child_names.push(child_name);
     }
 
-    // 3. Wire connections
+    // 3. Apply interposition rewiring
+    //
+    // Detect the pattern: ParentPin(P) → Child.pin_a, Child.pin_b → InternalNet(N)
+    // This means the child interposes between the parent pin's board net and the
+    // internal net.  We disconnect P from its board net, reconnect P to the
+    // internal net, and record the original net so subsequent ParentPin(P)
+    // references resolve to the board-level net (not the now-rewired pin net).
+    let interpositions = detect_interpositions(&cand.recipe);
+    let mut rewired_original_nets: HashMap<String, NetId> = HashMap::new();
+
+    for (pin_name, internal_net_name) in &interpositions {
+        if let Some(&pi_id) = cand.pin_instances.get(pin_name) {
+            if let Some(original_net) = find_net_for_pin_instance(netlist, pi_id) {
+                let internal_net = *internal_net_map.get(internal_net_name)
+                    .ok_or_else(|| format!("Internal net '{}' not found for interposition", internal_net_name))?;
+
+                // Disconnect parent pin from its board net
+                disconnect_pin_from_net(netlist, pi_id, original_net);
+                // Reconnect parent pin to the internal net
+                netlist.connect(internal_net, ConnectionPoint::PinInstance(pi_id))
+                    .map_err(|e| format!("rewire pin '{}' to internal net '{}': {}", pin_name, internal_net_name, e))?;
+
+                // Save the original net for later connection resolution
+                rewired_original_nets.insert(pin_name.clone(), original_net);
+
+                // Set display name override so schematic shows the internal net name
+                // (e.g. "SW" instead of "VOUT")
+                if let Some(inst) = netlist.instances.get_mut(cand.instance_id) {
+                    inst.attributes.insert(
+                        format!("vpin_display_{}", pin_name),
+                        internal_net_name.to_uppercase(),
+                    );
+                }
+
+                info!("Interposition: rewired '{}'.{} from board net to internal '{}' (display: {})",
+                    base, pin_name, internal_net_name, internal_net_name.to_uppercase());
+            }
+        }
+    }
+
+    // 4. Wire connections
     // Track auto-created nets for unconnected parent pins (e.g. SW, FB, BOOT)
     let mut auto_parent_nets: HashMap<String, NetId> = HashMap::new();
     let mut conn_idx_counter = 0usize;
@@ -250,9 +290,11 @@ fn expand_one_instance(
         conn_idx_counter += 1;
         let from_net = resolve_endpoint_net(
             netlist, &conn.from, cand, &child_instance_map, &internal_net_map,
+            &rewired_original_nets,
         )?;
         let to_net = resolve_endpoint_net(
             netlist, &conn.to, cand, &child_instance_map, &internal_net_map,
+            &rewired_original_nets,
         )?;
 
         // The connection is: connect from_endpoint to to_endpoint.
@@ -320,18 +362,24 @@ fn expand_one_instance(
 }
 
 /// Resolve a parameter expression by substituting entity parameter values.
-/// For Phase 1, this is simple string lookup; Phase 2 will add const-eval.
+/// Checks instance attributes first, then falls back to recipe param_defaults.
 fn resolve_param_expression(
     expr: &str,
     param_values: &HashMap<String, String>,
+    param_defaults: &HashMap<String, String>,
 ) -> String {
     let trimmed = expr.trim();
-    // Try direct lookup
+    // Try direct lookup in instance attributes
     if let Some(val) = param_values.get(trimmed) {
         return val.clone();
     }
     // Try with common attribute prefixes
     if let Some(val) = param_values.get(&format!("vpin_{}", trimmed)) {
+        return val.clone();
+    }
+    // Fall back to recipe's entity parameter defaults
+    if let Some(val) = param_defaults.get(trimmed) {
+        debug!("Using recipe default for param '{}': {}", trimmed, val);
         return val.clone();
     }
     // Return as-is (it might be a literal like "33µH")
@@ -359,17 +407,59 @@ fn create_child_pin_instances(
         .map_err(|e| format!("create pin instances: {}", e))
 }
 
+/// Detect interposition patterns in the expansion recipe.
+///
+/// An interposition occurs when a parent pin connects to one side of a child,
+/// and the child's other side connects to an internal net. This means the child
+/// is "interposed" between the parent pin's board net and the internal net.
+///
+/// Returns: Vec<(parent_pin_name, internal_net_name)> for pins that should be rewired.
+fn detect_interpositions(recipe: &ExpansionRecipe) -> Vec<(String, String)> {
+    let mut result = Vec::new();
+
+    for conn_a in &recipe.connections {
+        if let ExpansionEndpoint::ParentPin(pin) = &conn_a.from {
+            if let ExpansionEndpoint::InstancePin(child, _child_pin_a) = &conn_a.to {
+                // Look for another connection from a DIFFERENT pin of the same child → InternalNet
+                for conn_b in &recipe.connections {
+                    if let ExpansionEndpoint::InstancePin(child2, child_pin_b) = &conn_b.from {
+                        if child2 == child && child_pin_b != _child_pin_a {
+                            if let ExpansionEndpoint::InternalNet(net) = &conn_b.to {
+                                // Found interposition: ParentPin(P) → Child.a, Child.b → InternalNet(N)
+                                if !result.iter().any(|(p, _)| p == pin) {
+                                    debug!("Detected interposition: parent pin '{}' → internal net '{}' via child '{}'",
+                                        pin, net, child);
+                                    result.push((pin.clone(), net.clone()));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    result
+}
+
 /// Resolve an endpoint to its associated net (if any already exists).
+/// When a parent pin has been rewired (interposition), returns the ORIGINAL net
+/// so that expansion connections referencing that pin connect to the board-level net.
 fn resolve_endpoint_net(
     netlist: &Netlist,
     endpoint: &ExpansionEndpoint,
     cand: &ExpansionCandidate,
     children: &HashMap<String, (InstanceId, Vec<PinInstanceId>)>,
     internal_nets: &HashMap<String, NetId>,
+    rewired_original_nets: &HashMap<String, NetId>,
 ) -> Result<Option<NetId>, String> {
     match endpoint {
         ExpansionEndpoint::ParentPin(pin_name) => {
-            // Find the net connected to the parent's pin
+            // If this pin was rewired, return the ORIGINAL board net
+            if let Some(&original_net) = rewired_original_nets.get(pin_name) {
+                return Ok(Some(original_net));
+            }
+            // Normal path: find the net connected to the parent's pin
             if let Some(&pi_id) = cand.pin_instances.get(pin_name) {
                 Ok(find_net_for_pin_instance(netlist, pi_id))
             } else {

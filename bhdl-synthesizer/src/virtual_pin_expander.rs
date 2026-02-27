@@ -489,7 +489,7 @@ pub(crate) fn create_instance(
 
 /// Disconnect a pin instance from a specific net (remove from net's connection list,
 /// clear the pin instance's net reference).
-fn disconnect_pin_from_net(netlist: &mut Netlist, pi_id: PinInstanceId, net_id: NetId) {
+pub(crate) fn disconnect_pin_from_net(netlist: &mut Netlist, pi_id: PinInstanceId, net_id: NetId) {
     // Remove from net's connections
     if let Some(net) = netlist.nets.get_mut(net_id) {
         net.connections.retain(|c| *c != ConnectionPoint::PinInstance(pi_id));

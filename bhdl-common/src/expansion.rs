@@ -17,6 +17,9 @@ pub struct ExpansionRecipe {
     pub connections: Vec<ExpansionConnection>,
     /// Expansion-local net names (from `internal name: net;`)
     pub internal_nets: Vec<String>,
+    /// Default parameter values from the entity definition (param_name → value string).
+    /// Used by the expansion interpreter when instance attributes don't contain the param.
+    pub param_defaults: HashMap<String, String>,
 }
 
 /// A component instance to create during expansion.
@@ -62,6 +65,7 @@ impl ExpansionRecipe {
             instances: Vec::new(),
             connections: Vec::new(),
             internal_nets: Vec::new(),
+            param_defaults: HashMap::new(),
         }
     }
 }

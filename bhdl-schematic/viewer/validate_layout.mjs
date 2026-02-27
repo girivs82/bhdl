@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 // validate_layout.mjs — Geometric validation of schematic layouts
 //
-// Reads SchematicData JSON, runs the layout engine, then checks 14
-// geometric invariants (including path-box overlap).  Outputs results as JSON to stdout.
+// Reads SchematicData JSON, runs the layout engine, then checks 17
+// geometric invariants (including path-box overlap, chain alignment,
+// bus wire consistency, and series component wire-through).
+// Outputs results as JSON to stdout.
 //
 // Usage:
 //   node validate_layout.mjs <schematic-data.json>
@@ -18,7 +20,7 @@ if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
     console.error(`Usage: node validate_layout.mjs <schematic-data.json>
 
 Runs the schematic layout engine on a SchematicData JSON file and checks
-14 geometric invariants.  Outputs validation results as JSON to stdout.
+17 geometric invariants.  Outputs validation results as JSON to stdout.
 
 Options:
   --verbose, -v    Show detailed per-check output on stderr
@@ -139,11 +141,23 @@ for (let i = 0; i < instances.length; i++) {
 
 // ── 3. No wire segments pass through component bounding boxes ──
 {
+    // Build per-net element sets: components that are source or sink on a net
+    // share its trunk wire and should not trigger WIRE_THROUGH against each other.
+    const netElSets = new Map();
     for (const wire of layout.wires) {
+        const net = wire.netName;
+        if (!net) continue;
+        if (!netElSets.has(net)) netElSets.set(net, new Set());
+        const s = netElSets.get(net);
+        if (wire.sourceElName) s.add(wire.sourceElName);
+        if (wire.sinkElName) s.add(wire.sinkElName);
+    }
+    for (const wire of layout.wires) {
+        const sameNetEls = netElSets.get(wire.netName) || new Set();
         for (const seg of (wire.segments || [])) {
             for (const el of instances) {
-                // Skip source and sink components
-                if (el.name === wire.sourceElName || el.name === wire.sinkElName) continue;
+                // Skip components on the same net (trunk passes through their port area)
+                if (sameNetEls.has(el.name)) continue;
                 // Skip power source elements (they're inline flags, not boxes)
                 const fullEl = allElements.find(e => e.name === el.name);
                 if (fullEl && fullEl.type === 'power_source') continue;
@@ -366,6 +380,118 @@ for (let i = 0; i < instances.length; i++) {
     }
 }
 
+// ── 15. Shunt chain vertical alignment ──
+// Parent→child chains (e.g., r_led→led) should be vertically aligned.
+// If the child's center X differs from the parent's, connecting wires get
+// unnecessary L-bends instead of clean vertical drops.
+{
+    const elByName = new Map(allElements.map(e => [e.name, e]));
+    // Detect chains: parent has output port, child has input port, connected via wire
+    // with exactly 1 segment (vertical) or 2 segments (L-bend = misalignment).
+    for (const wire of layout.wires) {
+        if (!wire.sourceElName || !wire.sinkElName) continue;
+        const srcEl = elByName.get(wire.sourceElName);
+        const sinkEl = elByName.get(wire.sinkElName);
+        if (!srcEl || !sinkEl) continue;
+        // Both must be shunt items in a vertical chain (sink below source)
+        if (!srcEl.isShunt || !sinkEl.isShunt) continue;
+        if (sinkEl.y <= srcEl.y) continue; // sink must be below source
+        // Check center X alignment
+        const srcCx = srcEl.x + srcEl.w / 2;
+        const sinkCx = sinkEl.x + sinkEl.w / 2;
+        const ALIGN_TOL = 3; // px tolerance
+        if (Math.abs(srcCx - sinkCx) > ALIGN_TOL) {
+            errors.push(`CHAIN_MISALIGN: "${srcEl.name}" center X=${srcCx.toFixed(0)} vs "${sinkEl.name}" center X=${sinkCx.toFixed(0)} (offset ${Math.abs(srcCx - sinkCx).toFixed(0)}px, causes L-bend)`);
+        }
+    }
+}
+
+// ── 16. Multi-row bus wire consistency ──
+// Serpentine/L-bend bus wires connect row N to row N+1 in multi-row groups.
+// The bus cornerX must be within or near the actual element X bounds of the
+// row it starts from — stale row extents cause the bus wire to go to the
+// wrong location.
+{
+    const busWires = layout.elements._multiRowBusWires || [];
+    const elByName = new Map(allElements.map(e => [e.name, e]));
+    for (const bus of busWires) {
+        if (!bus.rows || !bus.lbends) continue;
+        for (let li = 0; li < bus.lbends.length; li++) {
+            const lb = bus.lbends[li];
+            const row = bus.rows[li]; // current row (source of L-bend)
+            if (!row || row.length === 0) continue;
+            // Compute actual row extent from element positions
+            let rowMinX = Infinity, rowMaxX = -Infinity;
+            for (const item of row) {
+                const el = elByName.get(item.name);
+                if (!el || (el.w === 0 && el.h === 0)) continue;
+                rowMinX = Math.min(rowMinX, el.x);
+                rowMaxX = Math.max(rowMaxX, el.x + el.w);
+            }
+            if (rowMinX === Infinity) continue;
+            // cornerX should be near the row edge (within pad tolerance)
+            const BUS_PAD = 30; // allow some padding past row edge
+            if (lb.cornerX < rowMinX - BUS_PAD || lb.cornerX > rowMaxX + BUS_PAD) {
+                errors.push(`BUS_STALE: net "${bus.netName}" L-bend ${li} cornerX=${lb.cornerX.toFixed(0)} is outside row bounds [${rowMinX.toFixed(0)}, ${rowMaxX.toFixed(0)}] — stale row extents?`);
+            }
+        }
+    }
+}
+
+// ── 17. No wire through series (non-shunt) same-net components ──
+// The trunk wire for a net may pass through shunt items' port areas (they
+// T-junction from the trunk), but it should NOT pass through the body of
+// series (main-band) components even if they're on the same net. The wire
+// should route around them.
+{
+    // Build per-net SHUNT-ONLY exclude sets (not all same-net elements)
+    const netShuntExclude = new Map();
+    const netAllEls = new Map();
+    for (const wire of layout.wires) {
+        const net = wire.netName;
+        if (!net) continue;
+        if (!netShuntExclude.has(net)) netShuntExclude.set(net, new Set());
+        if (!netAllEls.has(net)) netAllEls.set(net, new Set());
+        const s = netShuntExclude.get(net);
+        const a = netAllEls.get(net);
+        if (wire.sourceElName) { s.add(wire.sourceElName); a.add(wire.sourceElName); }
+        if (wire.sinkElName) {
+            a.add(wire.sinkElName);
+            const el = instances.find(e => e.name === wire.sinkElName);
+            if (el && el.isShunt) s.add(wire.sinkElName);
+        }
+    }
+    for (const wire of layout.wires) {
+        const shuntExclude = netShuntExclude.get(wire.netName) || new Set();
+        const allOnNet = netAllEls.get(wire.netName) || new Set();
+        for (const seg of (wire.segments || [])) {
+            for (const el of instances) {
+                // Skip elements excluded by shunt-only logic
+                if (shuntExclude.has(el.name)) continue;
+                // Skip elements NOT on this net (they're checked by check 3)
+                if (!allOnNet.has(el.name)) continue;
+                // Skip power source elements
+                const fullEl = allElements.find(e => e.name === el.name);
+                if (fullEl && fullEl.type === 'power_source') continue;
+                if (!segmentIntersectsRect(seg, el)) continue;
+                // For the wire's own source/sink: only flag if the segment PASSES
+                // THROUGH the component (both endpoints far outside the rect).
+                // A segment that terminates at or near the component is a
+                // legitimate port connection (port stubs extend ~14px past the rect).
+                if (el.name === wire.sourceElName || el.name === wire.sinkElName) {
+                    const STUB = 16; // PORT_STUB_LEN + tolerance
+                    const p1Near = seg.x1 >= el.x - STUB && seg.x1 <= el.x + el.w + STUB &&
+                                   seg.y1 >= el.y - STUB && seg.y1 <= el.y + el.h + STUB;
+                    const p2Near = seg.x2 >= el.x - STUB && seg.x2 <= el.x + el.w + STUB &&
+                                   seg.y2 >= el.y - STUB && seg.y2 <= el.y + el.h + STUB;
+                    if (p1Near || p2Near) continue; // terminates at component — OK
+                }
+                errors.push(`WIRE_THROUGH_SERIES: net "${wire.netName}" segment (${seg.x1.toFixed(0)},${seg.y1.toFixed(0)})→(${seg.x2.toFixed(0)},${seg.y2.toFixed(0)}) passes through series component "${el.name}"`);
+            }
+        }
+    }
+}
+
 // ═══════════════════ OUTPUT ═══════════════════
 
 const result = {
@@ -378,7 +504,10 @@ const result = {
         stageZones: layout.stageZones.length,
         pathBounds: (layout.pathBounds || []).length,
         overlaps: errors.filter(e => e.startsWith('OVERLAP')).length,
-        wireThroughBox: errors.filter(e => e.startsWith('WIRE_THROUGH')).length,
+        wireThroughBox: errors.filter(e => e.startsWith('WIRE_THROUGH:')).length,
+        wireThroughSeries: errors.filter(e => e.startsWith('WIRE_THROUGH_SERIES')).length,
+        chainMisalign: errors.filter(e => e.startsWith('CHAIN_MISALIGN')).length,
+        busStale: errors.filter(e => e.startsWith('BUS_STALE')).length,
         diagonals: errors.filter(e => e.startsWith('DIAGONAL')).length,
     },
     pass: errors.length === 0,
