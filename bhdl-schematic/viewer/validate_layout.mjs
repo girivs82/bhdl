@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // validate_layout.mjs — Geometric validation of schematic layouts
 //
-// Reads SchematicData JSON, runs the layout engine, then checks 17
+// Reads SchematicData JSON, runs the layout engine, then checks 18
 // geometric invariants (including path-box overlap, chain alignment,
-// bus wire consistency, and series component wire-through).
+// bus wire consistency, series component wire-through, and wire loops).
 // Outputs results as JSON to stdout.
 //
 // Usage:
@@ -20,7 +20,7 @@ if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
     console.error(`Usage: node validate_layout.mjs <schematic-data.json>
 
 Runs the schematic layout engine on a SchematicData JSON file and checks
-17 geometric invariants.  Outputs validation results as JSON to stdout.
+18 geometric invariants.  Outputs validation results as JSON to stdout.
 
 Options:
   --verbose, -v    Show detailed per-check output on stderr
@@ -492,6 +492,89 @@ for (let i = 0; i < instances.length; i++) {
     }
 }
 
+// ── 18. Wire loop / U-turn detection ──
+// A wire loop occurs when a single wire (source→sink route) has two
+// horizontal segments at different Y levels whose X projections overlap,
+// or two vertical segments at different X levels whose Y projections
+// overlap.  This indicates an unnecessary detour — the wire went out of
+// its way and came back, creating a rectangular loop that could have been
+// a straight or single-bend route.
+{
+    for (const wire of layout.wires) {
+        const segs = wire.segments || [];
+        if (segs.length < 3) continue; // need at least 3 segments for a loop
+
+        // Collect horizontal segments grouped by Y
+        const horizByY = new Map(); // roundedY → [{x1, x2, idx}]
+        // Collect vertical segments grouped by X
+        const vertByX = new Map();  // roundedX → [{y1, y2, idx}]
+
+        for (let i = 0; i < segs.length; i++) {
+            const seg = segs[i];
+            const isHoriz = Math.abs(seg.y1 - seg.y2) < 2;
+            const isVert = Math.abs(seg.x1 - seg.x2) < 2;
+
+            if (isHoriz) {
+                const y = Math.round(seg.y1);
+                if (!horizByY.has(y)) horizByY.set(y, []);
+                horizByY.get(y).push({
+                    minX: Math.min(seg.x1, seg.x2),
+                    maxX: Math.max(seg.x1, seg.x2),
+                    idx: i
+                });
+            }
+            if (isVert) {
+                const x = Math.round(seg.x1);
+                if (!vertByX.has(x)) vertByX.set(x, []);
+                vertByX.get(x).push({
+                    minY: Math.min(seg.y1, seg.y2),
+                    maxY: Math.max(seg.y1, seg.y2),
+                    idx: i
+                });
+            }
+        }
+
+        // Check for horizontal overlap at different Y levels
+        const yLevels = [...horizByY.keys()].sort((a, b) => a - b);
+        for (let i = 0; i < yLevels.length; i++) {
+            for (let j = i + 1; j < yLevels.length; j++) {
+                const y1 = yLevels[i], y2 = yLevels[j];
+                if (Math.abs(y1 - y2) < 4) continue; // same level (rounding)
+                for (const segA of horizByY.get(y1)) {
+                    for (const segB of horizByY.get(y2)) {
+                        // Check X-range overlap (both segments must span a shared range)
+                        const overlapStart = Math.max(segA.minX, segB.minX);
+                        const overlapEnd = Math.min(segA.maxX, segB.maxX);
+                        const overlapLen = overlapEnd - overlapStart;
+                        if (overlapLen > 10) { // >10px overlap = real detour, not just rounding
+                            errors.push(`WIRE_LOOP: net "${wire.netName}" has horizontal segments at y=${y1} and y=${y2} with ${overlapLen.toFixed(0)}px X-overlap [${overlapStart.toFixed(0)}..${overlapEnd.toFixed(0)}] — detour/U-turn`);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Check for vertical overlap at different X levels
+        const xLevels = [...vertByX.keys()].sort((a, b) => a - b);
+        for (let i = 0; i < xLevels.length; i++) {
+            for (let j = i + 1; j < xLevels.length; j++) {
+                const x1 = xLevels[i], x2 = xLevels[j];
+                if (Math.abs(x1 - x2) < 4) continue;
+                for (const segA of vertByX.get(x1)) {
+                    for (const segB of vertByX.get(x2)) {
+                        const overlapStart = Math.max(segA.minY, segB.minY);
+                        const overlapEnd = Math.min(segA.maxY, segB.maxY);
+                        const overlapLen = overlapEnd - overlapStart;
+                        if (overlapLen > 10) {
+                            errors.push(`WIRE_LOOP: net "${wire.netName}" has vertical segments at x=${x1} and x=${x2} with ${overlapLen.toFixed(0)}px Y-overlap [${overlapStart.toFixed(0)}..${overlapEnd.toFixed(0)}] — detour/U-turn`);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ═══════════════════ OUTPUT ═══════════════════
 
 const result = {
@@ -508,6 +591,7 @@ const result = {
         wireThroughSeries: errors.filter(e => e.startsWith('WIRE_THROUGH_SERIES')).length,
         chainMisalign: errors.filter(e => e.startsWith('CHAIN_MISALIGN')).length,
         busStale: errors.filter(e => e.startsWith('BUS_STALE')).length,
+        wireLoops: errors.filter(e => e.startsWith('WIRE_LOOP')).length,
         diagonals: errors.filter(e => e.startsWith('DIAGONAL')).length,
     },
     pass: errors.length === 0,
