@@ -1397,6 +1397,19 @@ pub fn extract_expansion_recipes(
 
                 let mut recipe = ExpansionRecipe::new(entity_name.clone());
 
+                // Extract entity parameter defaults (e.g., l_value = 33µH)
+                if let Some(param_list) = entity.param_list() {
+                    for param_def in param_list.param_defs() {
+                        if let Some(name) = param_def.name() {
+                            let param_name = name.text().to_string();
+                            if let Some(default_val) = param_def.default_value() {
+                                let val_text = default_val.syntax().text().to_string().trim().to_string();
+                                recipe.param_defaults.insert(param_name, val_text);
+                            }
+                        }
+                    }
+                }
+
                 // Extract internal net declarations
                 recipe.internal_nets = expansion_block.internal_nets();
 
@@ -1410,8 +1423,8 @@ pub fn extract_expansion_recipes(
                 }
 
                 if !recipe.instances.is_empty() || !recipe.connections.is_empty() {
-                    println!("  Extracted expansion recipe for '{}': {} instances, {} connections, {} internal nets",
-                        entity_name, recipe.instances.len(), recipe.connections.len(), recipe.internal_nets.len());
+                    println!("  Extracted expansion recipe for '{}': {} instances, {} connections, {} internal nets, {} param defaults",
+                        entity_name, recipe.instances.len(), recipe.connections.len(), recipe.internal_nets.len(), recipe.param_defaults.len());
                     recipes.insert(entity_name, recipe);
                 }
             }
