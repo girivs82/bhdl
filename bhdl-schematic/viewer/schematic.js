@@ -1109,19 +1109,35 @@
 
         // Add explicit edges from parent → series expansion children
         // so they are ordered consecutively in the topological sort.
-        // Also remove edges from power sources → series children, because
-        // the series child's output *feeds* the power net (e.g. inductor
-        // smooths SW to create VOUT); the power source edge would force
-        // the child after the power symbol it actually supplies.
+        // The series child (e.g., inductor in a buck converter) is physically
+        // in series between the parent's output and downstream consumers,
+        // so all of the parent's non-series forward edges must be rerouted
+        // through the series child:  parent → child → downstream.
         const seriesChildNames = new Set();
         for (const [parentName, group] of expansionGroups) {
             if (!mainBandNodes.has(parentName)) continue;
             for (const childName of group.series) {
                 if (!mainBandNodes.has(childName)) continue;
                 seriesChildNames.add(childName);
+                // Ensure parent → series child edge
                 if (!mbForward.get(parentName).includes(childName)) {
                     mbForward.get(parentName).push(childName);
                     mbInDegree.set(childName, mbInDegree.get(childName) + 1);
+                }
+                // Reroute: move non-series forward edges from parent to child.
+                // e.g., buck → [buck_L, reg33] becomes buck → buck_L → reg33
+                const parentFwd = mbForward.get(parentName);
+                const childFwd = mbForward.get(childName);
+                for (let i = parentFwd.length - 1; i >= 0; i--) {
+                    const target = parentFwd[i];
+                    if (target === childName) continue;     // keep parent → child
+                    if (seriesChildNames.has(target)) continue; // other series children
+                    parentFwd.splice(i, 1);
+                    mbInDegree.set(target, mbInDegree.get(target) - 1);
+                    if (!childFwd.includes(target)) {
+                        childFwd.push(target);
+                        mbInDegree.set(target, mbInDegree.get(target) + 1);
+                    }
                 }
             }
         }
@@ -3187,6 +3203,12 @@
             }
         }
 
+        // Accumulated wire segments per net for closest-point routing.
+        // As wires are routed, their segments are added here so subsequent
+        // wires on the same net can snap to the nearest existing segment
+        // instead of routing all the way back to the driver.
+        const netAccumSegs = new Map();
+
         for (const net of processedNets) {
             const driverElName = net.driver.type === 'power_source' ? net.driver.name
                 : net.driver.type === 'entity_port' ? '__entity_in__'
@@ -3194,7 +3216,20 @@
             const fromPos = findPort(driverElName, net.driver.port, 'out');
             if (!fromPos) continue;
 
-            for (const sink of net.sinks) {
+            // Sort sinks: farthest from driver first. This ensures the first
+            // wire creates the longest possible horizontal trunk, so all
+            // subsequent wires can snap to it with short perpendicular taps.
+            const sortedSinks = [...net.sinks].sort((a, b) => {
+                const aName = a.type === 'entity_port' ? '__entity_out__' : a.name;
+                const bName = b.type === 'entity_port' ? '__entity_out__' : b.name;
+                const aPos = findPort(aName, a.port, 'in');
+                const bPos = findPort(bName, b.port, 'in');
+                const aDist = aPos ? Math.hypot(aPos.x - fromPos.x, aPos.y - fromPos.y) : 0;
+                const bDist = bPos ? Math.hypot(bPos.x - fromPos.x, bPos.y - fromPos.y) : 0;
+                return bDist - aDist;
+            });
+
+            for (const sink of sortedSinks) {
                 const sinkElName = sink.type === 'entity_port' ? '__entity_out__' : sink.name;
                 const toPos = findPort(sinkElName, sink.port, 'in');
                 if (!toPos) continue;
@@ -3321,76 +3356,52 @@
                 const fromDir = fromPos.dir || 1;   // driver output default: rightward
                 const toDir = toPos.dir || -1;       // sink input default: leftward
 
-                // For shunt wires, use the junction point on the main path as the
-                // origin for the vertical drop, rather than routing from the driver.
-                // This prevents wires from cutting through intermediate components.
-                let shuntFromPos = fromPos;
-                if (isShuntWire) {
-                    {
-                        const jInfo = shuntJunctionLookup.get(sinkElName);
-                        if (jInfo) {
-                            const jEl = elByName.get(jInfo.junctionName);
-                            if (jEl) {
-                                const jx = jInfo.junctionSide === 'right'
-                                    ? jEl.x + jEl.w + PORT_STUB_LEN
-                                    : jEl.x - PORT_STUB_LEN;
-                                const jy = jEl.y + jEl.h / 2;
-                                // Expansion shunt children (caps inside a virtual pin
-                                // expansion group) always route from their junction
-                                // (the series sibling, e.g. inductor), not from the
-                                // power source.  They tap the net at the junction.
-                                const sinkInst = instMap.get(sinkElName);
-                                if (sinkInst && sinkInst.expansion_parent) {
-                                    const dir = jInfo.junctionSide === 'right' ? 1 : -1;
-                                    shuntFromPos = { x: jx, y: fromPos.y, dir };
-                                } else {
-                                    // Only override when the shunt is past the junction
-                                    // element's far edge — meaning the default wire from
-                                    // driver would cut through intermediate main-path
-                                    // components to reach the shunt.
-                                    const jElFarEdge = jEl.x + jEl.w;
-                                    if (jx > fromPos.x && toPos.x > jElFarEdge) {
-                                        shuntFromPos = { x: jx, y: fromPos.y, dir: 1 };
-                                    }
-                                }
-                            }
-                        }
+                // ── Closest-point routing for shunt/drop wires ──
+                // Instead of case-based junction overrides, find the nearest
+                // existing wire segment on this net and route orthogonally
+                // from it. The shortest distance from a point to a line
+                // segment is always perpendicular, giving a clean T-junction.
+                const existingSegs = netAccumSegs.get(net.name) || [];
+
+                if ((isShuntWire || (toPos.y > fromPos.y + 20 && toDir <= 0))
+                    && existingSegs.length > 0) {
+                    // Find closest point on any existing segment to the sink
+                    let bestDist = Infinity, bestCx = fromPos.x, bestCy = fromPos.y;
+                    for (const seg of existingSegs) {
+                        const dx = seg.x2 - seg.x1, dy = seg.y2 - seg.y1;
+                        const lenSq = dx * dx + dy * dy;
+                        if (lenSq < 1) continue;
+                        const t = Math.max(0, Math.min(1,
+                            ((toPos.x - seg.x1) * dx + (toPos.y - seg.y1) * dy) / lenSq));
+                        const cx = seg.x1 + t * dx, cy = seg.y1 + t * dy;
+                        const dist = Math.hypot(toPos.x - cx, toPos.y - cy);
+                        if (dist < bestDist) { bestDist = dist; bestCx = cx; bestCy = cy; }
                     }
-                }
-
-                if (isShuntWire || (toPos.y > fromPos.y + 20 && toDir <= 0)) {
-                    // Expansion shunt children always use the L-route pattern
-                    // (horizontal from junction to shunt X, then vertical drop)
-                    // regardless of left/right side, for a clean T-junction.
-                    const sinkIsExpShunt = instMap.get(sinkElName)?.expansion_parent;
-
-                    if (sinkIsExpShunt || toPos.x >= shuntFromPos.x - 2) {
-                        // L-route: horizontal from junction to shunt X, then vertical drop
-                        const jx = toPos.x;
-                        const jy = shuntFromPos.y;
-                        junctionPoints.push({ x: jx, y: jy });
-                        if (Math.abs(shuntFromPos.x - jx) > 2) {
-                            segments.push({ x1: shuntFromPos.x, y1: shuntFromPos.y, x2: jx, y2: jy });
-                        }
-                        segments.push({ x1: jx, y1: jy, x2: toPos.x, y2: toPos.y });
+                    // Route orthogonally from closest point to sink
+                    junctionPoints.push({ x: bestCx, y: bestCy });
+                    const dxAbs = Math.abs(bestCx - toPos.x);
+                    const dyAbs = Math.abs(bestCy - toPos.y);
+                    if (dxAbs < 2 && dyAbs < 2) {
+                        // Already at destination (shouldn't happen, but guard)
+                    } else if (dxAbs < 2) {
+                        // Same X: single vertical segment
+                        segments.push({ x1: bestCx, y1: bestCy, x2: toPos.x, y2: toPos.y });
+                    } else if (dyAbs < 2) {
+                        // Same Y: single horizontal segment
+                        segments.push({ x1: bestCx, y1: bestCy, x2: toPos.x, y2: toPos.y });
                     } else {
-                        // Reverse L-route: shunt port is left of the origin.
-                        // Drop down from origin, then horizontal back to shunt.
-                        // Use shuntFromPos (which may be overridden to the junction
-                        // point for expansion children) instead of fromPos so the
-                        // wire drops from the junction, not the distant driver.
-                        const yMin = Math.min(shuntFromPos.y, toPos.y);
-                        const yMax = Math.max(shuntFromPos.y, toPos.y);
-                        const vx = clearVerticalX(shuntFromPos.x, yMin, yMax, -1, [driverElName, sinkElName]);
-                        junctionPoints.push({ x: vx, y: shuntFromPos.y });
-                        if (Math.abs(shuntFromPos.x - vx) > 2) {
-                            segments.push({ x1: shuntFromPos.x, y1: shuntFromPos.y, x2: vx, y2: shuntFromPos.y });
-                        }
-                        segments.push({ x1: vx, y1: shuntFromPos.y, x2: vx, y2: toPos.y });
-                        if (Math.abs(vx - toPos.x) > 2) {
-                            segments.push({ x1: vx, y1: toPos.y, x2: toPos.x, y2: toPos.y });
-                        }
+                        // L-route from closest point: horizontal then vertical
+                        segments.push({ x1: bestCx, y1: bestCy, x2: toPos.x, y2: bestCy });
+                        segments.push({ x1: toPos.x, y1: bestCy, x2: toPos.x, y2: toPos.y });
                     }
+                } else if (isShuntWire || (toPos.y > fromPos.y + 20 && toDir <= 0)) {
+                    // First shunt wire on this net — no existing segments.
+                    // L-route from driver: horizontal trunk, then vertical drop.
+                    junctionPoints.push({ x: toPos.x, y: fromPos.y });
+                    if (Math.abs(fromPos.x - toPos.x) > 2) {
+                        segments.push({ x1: fromPos.x, y1: fromPos.y, x2: toPos.x, y2: fromPos.y });
+                    }
+                    segments.push({ x1: toPos.x, y1: fromPos.y, x2: toPos.x, y2: toPos.y });
                 } else if (toDir > 0 && toPos.y > fromPos.y + 20) {
                     // Flipped sink below driver: sink expects wire from the RIGHT.
                     // Route vertical to the right, avoiding any component bounding boxes.
@@ -3463,6 +3474,12 @@
                 const driverCurrent = data.simulation?.instance_currents?.[driverSimKey];
                 const driverIsPowerSource = net.driver.type === 'power_source';
                 layoutWires.push({ from: fromPos, to: toPos, sinkElName, segments, width: net.width || 1, netName: net.name, netClass: net.net_class || 'signal', isPower: isPowerNet, voltage, current, driverCurrent, driverIsPowerSource });
+
+                // Accumulate segments for closest-point routing of later wires
+                if (segments.length > 0) {
+                    if (!netAccumSegs.has(net.name)) netAccumSegs.set(net.name, []);
+                    netAccumSegs.get(net.name).push(...segments);
+                }
             }
         }
         layoutElements._junctionPoints = junctionPoints;
@@ -3703,6 +3720,24 @@
             if (!brData.rows || brData.rows.length <= 1) continue;
             const lbends = [];
             const brRowExtents = brData.rowExtents;
+
+            // Find net name from wires targeting items in this group
+            let busNetName = null;
+            const firstItemName = brData.rows[0][0].name;
+            for (const wire of layoutWires) {
+                if (wire.sinkElName === firstItemName) { busNetName = wire.netName; break; }
+            }
+
+            // Collect all wire segments on this net for closest-point snapping
+            const netSegments = [];
+            if (busNetName) {
+                for (const wire of layoutWires) {
+                    if (wire.netName === busNetName) {
+                        for (const seg of wire.segments) netSegments.push(seg);
+                    }
+                }
+            }
+
             for (let ri = 0; ri < brData.rows.length - 1; ri++) {
                 const next = brRowExtents[ri + 1];
                 const isEvenToOdd = ri % 2 === 0;
@@ -3720,18 +3755,34 @@
                 const feedEndX = farCapPos ? farCapPos.x + farCapPos.w / 2 : (isEvenToOdd ? next.minX : next.maxX);
                 lbends.push({ cornerX, cornerY, feedEndX, feedY, isEvenToOdd });
             }
-            // Find net name from wires targeting items in this group
-            let busNetName = null;
-            const firstItemName = brData.rows[0][0].name;
-            for (const wire of layoutWires) {
-                if (wire.sinkElName === firstItemName) { busNetName = wire.netName; break; }
+
+            // Snap junctionY to the closest point on existing net wire segments.
+            // Shortest distance from a point to a line segment is orthogonal,
+            // so the bus wire taps exactly onto the power wire.
+            let junctionY = brData.junctionY; // fallback: head center
+            if (netSegments.length > 0 && lbends.length > 0) {
+                const px = lbends[0].cornerX;
+                let bestDist = Infinity;
+                for (const seg of netSegments) {
+                    // Closest point on segment (seg.x1,seg.y1)-(seg.x2,seg.y2) to point (px, py=junctionY)
+                    const dx = seg.x2 - seg.x1, dy = seg.y2 - seg.y1;
+                    const lenSq = dx * dx + dy * dy;
+                    if (lenSq < 1) continue; // degenerate segment
+                    // Project point onto segment line, clamp to [0,1]
+                    const t = Math.max(0, Math.min(1,
+                        ((px - seg.x1) * dx + (junctionY - seg.y1) * dy) / lenSq));
+                    const cx = seg.x1 + t * dx, cy = seg.y1 + t * dy;
+                    const dist = Math.hypot(px - cx, junctionY - cy);
+                    if (dist < bestDist) { bestDist = dist; junctionY = cy; }
+                }
             }
+
             multiRowBusWires.push({
                 side: 'right',
                 rowExtents: brRowExtents,
                 lbends,
                 rows: brData.rows,
-                junctionY: brData.junctionY,
+                junctionY,
                 netName: busNetName
             });
         }
