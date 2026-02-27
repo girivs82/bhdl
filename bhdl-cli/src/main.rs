@@ -1406,13 +1406,27 @@ fn build_simulation_annotations(
             }
         }
     }
+    // Resolve each regulator's vout_node/vin_node to canonical form so that
+    // all downstream code (cascade, power symbol propagation, voltage lookup)
+    // uses the user-visible net names.
     let dc_resolve = |node: &str| -> String {
         dc_equiv.get(node).cloned().unwrap_or_else(|| node.to_string())
     };
+    for reg in &mut regulators {
+        let resolved = dc_resolve(&reg.vout_node);
+        if resolved != reg.vout_node {
+            info!("Cascade: {} vout_node {} → {} (DC equivalent)", reg.base_name, reg.vout_node, resolved);
+            reg.vout_node = resolved;
+        }
+        let resolved = dc_resolve(&reg.vin_node);
+        if resolved != reg.vin_node {
+            info!("Cascade: {} vin_node {} → {} (DC equivalent)", reg.base_name, reg.vin_node, resolved);
+            reg.vin_node = resolved;
+        }
+    }
 
     // 2. Cascade: a regulator's true current = its own vout_current +
     //    sum of downstream regulators whose VIN is on this regulator's VOUT.
-    //    Uses DC equivalence so that e.g. buck_sw matches V5_BUCK through inductor.
     //    Process iteratively until stable (handles arbitrary cascade depth).
     let mut reg_currents: HashMap<String, f64> = regulators.iter()
         .map(|r| (r.base_name.clone(), r.vout_current))
@@ -1421,9 +1435,8 @@ fn build_simulation_annotations(
     for _ in 0..regulators.len() {
         let snapshot = reg_currents.clone();
         for reg in &regulators {
-            let reg_vout = dc_resolve(&reg.vout_node);
             let downstream_sum: f64 = regulators.iter()
-                .filter(|d| dc_resolve(&d.vin_node) == reg_vout && d.base_name != reg.base_name)
+                .filter(|d| d.vin_node == reg.vout_node && d.base_name != reg.base_name)
                 .map(|d| snapshot.get(&d.base_name).copied().unwrap_or(0.0))
                 .sum();
             reg_currents.insert(
@@ -1444,7 +1457,7 @@ fn build_simulation_annotations(
             let current = reg_currents.get(&reg.base_name).copied().unwrap_or(reg.vout_current);
             // Only count regulators whose VIN is a power net (top-level feed),
             // not regulators cascading from another regulator's VOUT.
-            let fed_by_regulator = regulators.iter().any(|r| dc_resolve(&r.vout_node) == dc_resolve(&reg.vin_node));
+            let fed_by_regulator = regulators.iter().any(|r| r.vout_node == reg.vin_node);
             if !fed_by_regulator {
                 *power_net_current.entry(reg.vin_node.clone()).or_insert(0.0) += current;
             }
@@ -1509,6 +1522,19 @@ fn build_simulation_annotations(
         for key in &decomposed_keys {
             annotations.instance_currents.remove(key);
             annotations.instance_power.remove(key);
+        }
+
+        // Also set current on the VOUT power symbol if it exists.
+        // When GLACIER skips a power symbol (net already regulator-driven),
+        // the power symbol has no instance_currents entry but the schematic
+        // renderer uses it as the net driver for current annotations.
+        if !annotations.instance_currents.contains_key(&reg.vout_node) {
+            // Check if there's actually a power symbol for this net
+            // (power symbols have the same name as the net they drive)
+            if annotations.net_voltages.contains_key(&reg.vout_node) {
+                annotations.instance_currents.insert(reg.vout_node.clone(), current);
+                annotations.instance_power.insert(reg.vout_node.clone(), 0.0);
+            }
         }
     }
 
