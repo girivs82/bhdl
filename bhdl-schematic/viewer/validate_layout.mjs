@@ -480,51 +480,45 @@ for (let i = 0; i < instances.length; i++) {
 // ── 17. No wire through series (non-shunt) same-net components ──
 // The trunk wire for a net may pass through shunt items' port areas (they
 // T-junction from the trunk), but it should NOT pass through the body of
-// series (main-band) components even if they're on the same net. The wire
-// should route around them.
+// series (main-band) components on the same net.  Exception: if the trunk
+// is a closest-point extension through an intermediate series component
+// (the component is between the driver and sink in the signal chain),
+// that's a valid trunk wire, not a routing bug.  We detect this by
+// checking whether a segment endpoint is near the component's ports —
+// if so, the wire connects through the component as part of the trunk.
 {
-    // Build per-net SHUNT-ONLY exclude sets (not all same-net elements)
-    const netShuntExclude = new Map();
+    // Build per-net element sets: all elements on each net
     const netAllEls = new Map();
     for (const wire of layout.wires) {
         const net = wire.netName;
         if (!net) continue;
-        if (!netShuntExclude.has(net)) netShuntExclude.set(net, new Set());
         if (!netAllEls.has(net)) netAllEls.set(net, new Set());
-        const s = netShuntExclude.get(net);
         const a = netAllEls.get(net);
-        if (wire.sourceElName) { s.add(wire.sourceElName); a.add(wire.sourceElName); }
-        if (wire.sinkElName) {
-            a.add(wire.sinkElName);
-            const el = instances.find(e => e.name === wire.sinkElName);
-            if (el && el.isShunt) s.add(wire.sinkElName);
-        }
+        if (wire.sourceElName) a.add(wire.sourceElName);
+        if (wire.sinkElName) a.add(wire.sinkElName);
     }
     for (const wire of layout.wires) {
-        const shuntExclude = netShuntExclude.get(wire.netName) || new Set();
         const allOnNet = netAllEls.get(wire.netName) || new Set();
         for (const seg of (wire.segments || [])) {
             for (const el of instances) {
-                // Skip elements excluded by shunt-only logic
-                if (shuntExclude.has(el.name)) continue;
-                // Skip elements NOT on this net (they're checked by check 3)
+                // Skip elements NOT on this net (checked by check 3)
                 if (!allOnNet.has(el.name)) continue;
+                // Skip shunt elements (T-junction from trunk is expected)
+                if (el.isShunt) continue;
                 // Skip power source elements
                 const fullEl = allElements.find(e => e.name === el.name);
                 if (fullEl && fullEl.type === 'power_source') continue;
                 if (!segmentIntersectsRect(seg, el)) continue;
-                // For the wire's own source/sink: only flag if the segment PASSES
-                // THROUGH the component (both endpoints far outside the rect).
+                // For any same-net component: only flag if the segment truly
+                // PASSES THROUGH (both endpoints far outside the rect).
                 // A segment that terminates at or near the component is a
-                // legitimate port connection (port stubs extend ~14px past the rect).
-                if (el.name === wire.sourceElName || el.name === wire.sinkElName) {
-                    const STUB = 16; // PORT_STUB_LEN + tolerance
-                    const p1Near = seg.x1 >= el.x - STUB && seg.x1 <= el.x + el.w + STUB &&
-                                   seg.y1 >= el.y - STUB && seg.y1 <= el.y + el.h + STUB;
-                    const p2Near = seg.x2 >= el.x - STUB && seg.x2 <= el.x + el.w + STUB &&
-                                   seg.y2 >= el.y - STUB && seg.y2 <= el.y + el.h + STUB;
-                    if (p1Near || p2Near) continue; // terminates at component — OK
-                }
+                // legitimate port connection or trunk extension.
+                const STUB = 16; // PORT_STUB_LEN + tolerance
+                const p1Near = seg.x1 >= el.x - STUB && seg.x1 <= el.x + el.w + STUB &&
+                               seg.y1 >= el.y - STUB && seg.y1 <= el.y + el.h + STUB;
+                const p2Near = seg.x2 >= el.x - STUB && seg.x2 <= el.x + el.w + STUB &&
+                               seg.y2 >= el.y - STUB && seg.y2 <= el.y + el.h + STUB;
+                if (p1Near || p2Near) continue; // terminates near component — OK
                 errors.push(`WIRE_THROUGH_SERIES: net "${wire.netName}" segment (${seg.x1.toFixed(0)},${seg.y1.toFixed(0)})→(${seg.x2.toFixed(0)},${seg.y2.toFixed(0)}) passes through series component "${el.name}"`);
             }
         }
@@ -538,7 +532,39 @@ for (let i = 0; i < instances.length; i++) {
 // overlap.  This indicates an unnecessary detour — the wire went out of
 // its way and came back, creating a rectangular loop that could have been
 // a straight or single-bend route.
+//
+// Exception: Z-routes around obstacles are valid detours.  If an instance
+// bounding box sits inside the rectangular area between two parallel
+// segments, the loop is a legitimate obstacle avoidance, not a bug.
 {
+    // Build a name set for all elements on each net (to exclude from obstacle check)
+    const netElNames = new Map();
+    for (const w of layout.wires) {
+        if (!w.netName) continue;
+        if (!netElNames.has(w.netName)) netElNames.set(w.netName, new Set());
+        const s = netElNames.get(w.netName);
+        if (w.sourceElName) s.add(w.sourceElName);
+        if (w.sinkElName) s.add(w.sinkElName);
+    }
+    const instances = layout.elements.filter(e => e.type === 'instance');
+
+    // Check if an obstacle exists in the rectangle between two parallel segments.
+    // For horizontal segments at different Y levels: rectangle is [overlapStartX, overlapEndX] × [minY, maxY]
+    // For vertical segments at different X levels:    rectangle is [minX, maxX] × [overlapStartY, overlapEndY]
+    function hasObstacleBetween(netName, minX, maxX, minY, maxY) {
+        const excluded = netElNames.get(netName) || new Set();
+        for (const el of instances) {
+            if (excluded.has(el.name)) continue;
+            const elR = el.x + el.w;
+            const elB = el.y + el.h;
+            // Check bounding box overlap with the rectangle
+            if (elR > minX && el.x < maxX && elB > minY && el.y < maxY) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     for (const wire of layout.wires) {
         const segs = wire.segments || [];
         if (segs.length < 3) continue; // need at least 3 segments for a loop
@@ -573,36 +599,6 @@ for (let i = 0; i < instances.length; i++) {
             }
         }
 
-        // Helper: check if a component body sits between two X/Y ranges,
-        // meaning a Z-route detour is necessary (obstacle avoidance, not a loop).
-        const wireElNames = new Set([wire.sourceElName, wire.sinkElName].filter(Boolean));
-        function hasObstacleBetweenX(x1, x2, yMin, yMax) {
-            // Is there a component between x1 and x2 that overlaps [yMin, yMax]?
-            const minX = Math.min(x1, x2);
-            const maxX = Math.max(x1, x2);
-            for (const el of instances) {
-                if (wireElNames.has(el.name)) continue;
-                if (el.x + el.w > minX && el.x < maxX &&
-                    el.y + el.h > yMin && el.y < yMax) {
-                    return true;
-                }
-            }
-            return false;
-        }
-        function hasObstacleBetweenY(y1, y2, xMin, xMax) {
-            // Is there a component between y1 and y2 that overlaps [xMin, xMax]?
-            const minY = Math.min(y1, y2);
-            const maxY = Math.max(y1, y2);
-            for (const el of instances) {
-                if (wireElNames.has(el.name)) continue;
-                if (el.y + el.h > minY && el.y < maxY &&
-                    el.x + el.w > xMin && el.x < xMax) {
-                    return true;
-                }
-            }
-            return false;
-        }
-
         // Check for horizontal overlap at different Y levels
         const yLevels = [...horizByY.keys()].sort((a, b) => a - b);
         for (let i = 0; i < yLevels.length; i++) {
@@ -616,10 +612,8 @@ for (let i = 0; i < instances.length; i++) {
                         const overlapEnd = Math.min(segA.maxX, segB.maxX);
                         const overlapLen = overlapEnd - overlapStart;
                         if (overlapLen > 10) { // >10px overlap = real detour, not just rounding
-                            // Allow Z-routes that avoid obstacles: if a component body
-                            // sits between y1 and y2 within the overlap X range, the
-                            // detour is necessary (obstacle avoidance, not a loop).
-                            if (hasObstacleBetweenY(y1, y2, overlapStart, overlapEnd)) continue;
+                            // Check if there's an obstacle in the rectangle between the segments
+                            if (hasObstacleBetween(wire.netName, overlapStart, overlapEnd, Math.min(y1, y2), Math.max(y1, y2))) continue;
                             errors.push(`WIRE_LOOP: net "${wire.netName}" has horizontal segments at y=${y1} and y=${y2} with ${overlapLen.toFixed(0)}px X-overlap [${overlapStart.toFixed(0)}..${overlapEnd.toFixed(0)}] — detour/U-turn`);
                         }
                     }
@@ -639,10 +633,8 @@ for (let i = 0; i < instances.length; i++) {
                         const overlapEnd = Math.min(segA.maxY, segB.maxY);
                         const overlapLen = overlapEnd - overlapStart;
                         if (overlapLen > 10) {
-                            // Allow Z-routes that avoid obstacles: if a component body
-                            // sits between x1 and x2 within the overlap Y range, the
-                            // detour is necessary (obstacle avoidance, not a loop).
-                            if (hasObstacleBetweenX(x1, x2, overlapStart, overlapEnd)) continue;
+                            // Check if there's an obstacle in the rectangle between the segments
+                            if (hasObstacleBetween(wire.netName, Math.min(x1, x2), Math.max(x1, x2), overlapStart, overlapEnd)) continue;
                             errors.push(`WIRE_LOOP: net "${wire.netName}" has vertical segments at x=${x1} and x=${x2} with ${overlapLen.toFixed(0)}px Y-overlap [${overlapStart.toFixed(0)}..${overlapEnd.toFixed(0)}] — detour/U-turn`);
                         }
                     }
