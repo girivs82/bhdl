@@ -15,7 +15,7 @@ entity TPS54331<V_OUT: voltage>(
     r_fb_bot: resistance = 10kΩ
 ) {
     pin VIN:  power in;
-    pin VOUT: power out;
+    pin VOUT: power out virtual;
     pin SW:   switch out;
     pin FB:   feedback in;
     pin BOOT: signal inout;
@@ -45,7 +45,7 @@ alias TPS54331_5V = TPS54331<5V>;
 
 symbol TPS54331 {
     left   { VIN, EN, BOOT }
-    right  { VOUT, SW }
+    right  { SW }
     bottom { GND, FB }
 }
 

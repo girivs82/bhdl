@@ -1016,7 +1016,15 @@ fn add_component_pins(
 
         debug!("Adding pin '{}' for component '{}'", pin_name_str, component_type);
         netlist.add_port(module_id, pin_name_str.clone(), port_direction, None);
-        netlist.add_pin(module_id, pin_name_str, pin_direction, pin_type);
+        let pin_id = netlist.add_pin(module_id, pin_name_str, pin_direction, pin_type);
+        // Propagate virtual flag from AST pin declaration
+        if pin.is_virtual() {
+            if let Some(pid) = pin_id {
+                if let Some(p) = netlist.pins.get_mut(pid) {
+                    p.is_virtual = true;
+                }
+            }
+        }
     };
 
     // First check if this component is in the variant_manager (same-file entities)

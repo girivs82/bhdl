@@ -1246,6 +1246,7 @@ impl NetlistGenerator {
             pin_type: PinType::Signal,
             module: module_id,
             description: None,
+            is_virtual: false,
         });
         
         // Add pin to module
@@ -2565,12 +2566,19 @@ impl NetlistGenerator {
                 // For now, we still add the pin but mark it for expansion
             }
             
-            self.netlist.add_pin(
-                module_id, 
-                pin_def.name.clone(), 
-                pin_def.direction, 
+            let pin_id = self.netlist.add_pin(
+                module_id,
+                pin_def.name.clone(),
+                pin_def.direction,
                 pin_def.pin_type
             );
+            if pin_def.is_virtual {
+                if let Some(pid) = pin_id {
+                    if let Some(pin) = self.netlist.pins.get_mut(pid) {
+                        pin.is_virtual = true;
+                    }
+                }
+            }
         }
         
         Ok(())

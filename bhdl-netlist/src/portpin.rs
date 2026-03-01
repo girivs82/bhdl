@@ -22,6 +22,8 @@ pub struct Pin {
     pub pin_type: PinType,       // signal, power, ground, clock, etc.
     pub module: ModuleId,        // Back-reference to the module definition
     pub description: Option<String>, // Optional description
+    #[serde(default)]
+    pub is_virtual: bool,        // Virtual pins don't appear on IC body in schematics
 }
 
 // Represents a pin instance on a component instance
