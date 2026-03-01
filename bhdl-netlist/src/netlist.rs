@@ -222,6 +222,7 @@ impl Netlist {
                 pin_type,
                 module: module_id,
                 description: None,
+                is_virtual: false,
             });
             module_def.pins.push(pin_id);
             Some(pin_id)

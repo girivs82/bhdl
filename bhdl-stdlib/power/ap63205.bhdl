@@ -12,7 +12,7 @@ entity AP63205(
     c_in: capacitance = 10µF
 ) {
     pin VIN:  power in;
-    pin VOUT: power out;
+    pin VOUT: power out virtual;
     pin EN:   signal in;
     pin BST:  signal inout;
     pin SW:   switch out;
@@ -36,7 +36,7 @@ entity AP63205(
 
 symbol AP63205 {
     left   { VIN, EN, BST }
-    right  { VOUT, SW }
+    right  { SW }
     bottom { GND }
 }
 

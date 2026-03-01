@@ -143,6 +143,11 @@ pub fn extract_schematic_data(
                 None => continue,
             };
 
+            // Virtual pins don't appear on IC body in schematics
+            if pin_def.is_virtual {
+                continue;
+            }
+
             // Find which net this pin instance is connected to.
             // Prefer the map (built from net.connections) over pi.net,
             // because pi.net can reference stale/merged net IDs.
@@ -190,6 +195,11 @@ pub fn extract_schematic_data(
                 Some(p) => p,
                 None => continue,
             };
+
+            // Virtual pins don't appear on IC body in schematics
+            if pin_def.is_virtual {
+                continue;
+            }
 
             // Skip pins already found via Method 1
             if found_pins.contains(&pin_def.name) {
@@ -306,6 +316,7 @@ pub fn extract_schematic_data(
         // Extract expansion metadata for virtual-pin expanded components
         let expansion_parent = instance.attributes.get("vpin_parent").cloned();
         let expansion_role = instance.attributes.get("vpin_role").cloned();
+        let schematic_placement = instance.attributes.get("schematic_placement").cloned();
         // Bank-split child → links back to original cap for layout grouping
         let bank_parent = instance.attributes.get("bank_parent").cloned();
 
@@ -367,6 +378,7 @@ pub fn extract_schematic_data(
             flow_ids: Vec::new(),
             expansion_parent,
             expansion_role,
+            schematic_placement,
             bank_parent,
             stage_name,
             stage_order,
