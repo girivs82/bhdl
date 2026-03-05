@@ -225,12 +225,14 @@ impl PinDecl {
             .find(|token| matches!(token.kind(), SyntaxKind::IN_KW | SyntaxKind::OUT_KW | SyntaxKind::INOUT_KW))
     }
     
-    /// Get the pin type (signal, power, ground)
+    /// Get the pin type (signal, power, ground, switch, feedback)
     pub fn pin_type(&self) -> Option<SyntaxToken<BhdlLanguage>> {
         self.0
             .children_with_tokens()
             .filter_map(|element| element.into_token())
-            .find(|token| matches!(token.kind(), SyntaxKind::SIGNAL_KW | SyntaxKind::POWER_KW | SyntaxKind::GROUND_KW))
+            .find(|token| matches!(token.kind(),
+                SyntaxKind::SIGNAL_KW | SyntaxKind::POWER_KW | SyntaxKind::GROUND_KW |
+                SyntaxKind::SWITCH_KW | SyntaxKind::FEEDBACK_KW))
     }
 
     /// Get the 'when' condition expression (for conditional pins).

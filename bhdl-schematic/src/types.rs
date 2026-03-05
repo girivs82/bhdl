@@ -110,6 +110,11 @@ pub struct SchematicInstance {
     /// Role within expansion group: "series" (inline) or "shunt" (vertical drop)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expansion_role: Option<String>,
+    /// Datasheet-informed schematic placement hint from expansion topology analysis.
+    /// Values: main_path, input_shunt, output_shunt, switching_shunt, bootstrap,
+    /// feedback_high, feedback_low, shunt, series
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schematic_placement: Option<String>,
     /// Parent instance name for bank-split capacitors (e.g. "c_in" for "c_in_2")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bank_parent: Option<String>,
@@ -122,9 +127,16 @@ pub struct SchematicInstance {
     /// Name of the power rail this stage belongs to
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stage_rail: Option<String>,
+    /// Symbol variant for rendering: "schottky", "zener", "led", "polarized", "ferrite_bead"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol_variant: Option<String>,
     /// Symbol hint for pin placement on IC body (from `symbol` definition)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub symbol: Option<SchematicSymbolHint>,
+    /// Pre-laid-out sub-schematic for expansion blocks or cap banks.
+    /// When present, this instance is rendered as an opaque box with internal components.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sub_schematic: Option<SubSchematic>,
     /// Source line for click-to-navigate
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<usize>,
@@ -244,4 +256,136 @@ pub struct PowerRail {
     /// Ordered stage names declared on this rail (from `|>` chain)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stages: Vec<String>,
+}
+
+// ─── Sub-Schematic Types ───────────────────────────────────────────────────
+
+/// A pre-laid-out, pre-routed subcircuit block.
+/// Two flavors: expansion blocks (IC + children) and cap banks (intent-grouped caps).
+/// The JS renderer treats these as opaque boxes with external port stubs,
+/// drawing internal components only when rendering the block's interior.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubSchematic {
+    /// What kind of sub-schematic this is
+    pub kind: SubSchematicKind,
+    /// Display label: "TPS54331", "input_filtering", etc.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Bounding box width (px)
+    pub width: f64,
+    /// Bounding box height (px)
+    pub height: f64,
+    /// External connection points at bounding box edges
+    pub ports: Vec<SubPort>,
+    /// Positioned internal components
+    pub components: Vec<SubComponent>,
+    /// Pre-routed internal wire segments
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wires: Vec<SubWire>,
+    /// Internal GND connection stubs
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gnd_stubs: Vec<SubGndStub>,
+}
+
+/// Flavor of sub-schematic block.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SubSchematicKind {
+    /// IC + expansion children (L, D, feedback, bootstrap)
+    Expansion,
+    /// Intent-grouped capacitor bank (input_filtering, output_filtering, etc.)
+    CapBank,
+}
+
+/// External connection point on a sub-schematic's bounding box edge.
+/// Global routing connects to these stubs instead of reaching inside.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubPort {
+    /// Matches parent pin or net name: "VIN", "VOUT", "GND", "signal"
+    pub name: String,
+    /// Edge of the bounding box: "left" | "right" | "top" | "bottom"
+    pub side: String,
+    /// X offset from bounding box origin (0,0 = top-left)
+    pub x: f64,
+    /// Y offset from bounding box origin
+    pub y: f64,
+    /// Pin classification: "power", "ground", "signal", "feedback"
+    pub pin_type: String,
+}
+
+/// A positioned component inside a sub-schematic.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubComponent {
+    /// Local name within the expansion: "L_out", "D_catch", "c_in_1"
+    pub name: String,
+    /// Global reference designator: "L1", "C3"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refdes: Option<String>,
+    /// Entity type: "Ind", "Diode", "Cap", "Res"
+    pub component_type: String,
+    /// Rendering category: "inductor", "capacitor", "resistor", "diode", "protection"
+    pub category: String,
+    /// X position within sub-schematic (relative to bbox origin)
+    pub x: f64,
+    /// Y position within sub-schematic
+    pub y: f64,
+    /// Component width
+    pub width: f64,
+    /// Component height
+    pub height: f64,
+    /// Whether this component is oriented vertically (shunt orientation)
+    #[serde(default)]
+    pub is_vertical: bool,
+    /// Symbol variant for rendering: "schottky", "zener", "led", "polarized", "ferrite_bead"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol_variant: Option<String>,
+    /// Display value: "10uH", "22uF", "10k"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    /// Connection ports on this component (relative to component origin)
+    #[serde(default)]
+    pub ports: Vec<SubComponentPort>,
+    /// DC simulation: branch current (A)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sim_current: Option<f64>,
+    /// DC simulation: power dissipation (W)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sim_power: Option<f64>,
+}
+
+/// A pre-routed wire segment inside a sub-schematic.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubWire {
+    /// Orthogonal segments: (x1, y1, x2, y2)
+    pub segments: Vec<(f64, f64, f64, f64)>,
+    /// Net name this wire belongs to
+    pub net_name: String,
+    /// Whether this is a power net (for thicker/colored rendering)
+    #[serde(default)]
+    pub is_power: bool,
+    /// Voltage level for power wires
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voltage: Option<f64>,
+}
+
+/// A ground connection stub inside a sub-schematic.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubGndStub {
+    /// X position within sub-schematic
+    pub x: f64,
+    /// Y position within sub-schematic
+    pub y: f64,
+}
+
+/// A connection port on a sub-component (relative to the component's origin).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubComponentPort {
+    /// Pin name: "1", "2", "A", "K", "IN", "OUT"
+    pub name: String,
+    /// X offset from component origin
+    pub x: f64,
+    /// Y offset from component origin
+    pub y: f64,
+    /// Pin direction for routing: "in" | "out" | "passive"
+    pub direction: String,
 }

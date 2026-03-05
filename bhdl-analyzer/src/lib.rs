@@ -1410,6 +1410,20 @@ pub fn extract_expansion_recipes(
                     }
                 }
 
+                // Extract pin type and direction info for schematic placement hints
+                for pin_def in entity.pins() {
+                    if let Some(pin_name) = pin_def.name() {
+                        let name = pin_name.text().to_string();
+                        let pin_type = pin_def.pin_type()
+                            .map(|t| t.text().to_string())
+                            .unwrap_or_else(|| "signal".to_string());
+                        let direction = pin_def.direction()
+                            .map(|t| t.text().to_string())
+                            .unwrap_or_else(|| "inout".to_string());
+                        recipe.pin_info.insert(name, (pin_type, direction));
+                    }
+                }
+
                 // Extract internal net declarations
                 recipe.internal_nets = expansion_block.internal_nets();
 
