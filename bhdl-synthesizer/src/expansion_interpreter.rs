@@ -220,6 +220,20 @@ fn expand_one_instance(
         });
         let expansion_role = if is_shunt { "shunt" } else { "series" };
 
+        // Compute schematic placement hint from connection topology + pin types
+        // These hints encode datasheet application note conventions for layout:
+        //   main_path     — on the horizontal power path (e.g. output inductor)
+        //   input_shunt   — input decoupling cap (left of regulator)
+        //   output_shunt  — output filtering cap (right of inductor / at output)
+        //   switching_shunt — at the switching node (catch diode, left of inductor)
+        //   bootstrap     — bootstrap cap floating between two non-GND pins
+        //   feedback_high — top resistor of feedback divider (chains to feedback_low)
+        //   feedback_low  — bottom resistor of feedback divider
+        let placement = determine_schematic_placement(
+            exp_inst, &cand.recipe, is_shunt,
+        );
+        attrs.push(("schematic_placement", placement));
+
         // Propagate parent attributes
         attrs.push(("expansion_parent", base.to_string()));
         attrs.push(("expansion_role", expansion_role.to_string()));
@@ -537,6 +551,113 @@ fn connect_endpoint_to_net(
             Ok(())
         }
     }
+}
+
+/// Determine schematic placement hint for an expansion child based on
+/// its connection topology and the parent entity's pin types.
+///
+/// Returns a role string matching datasheet application-note conventions:
+///   - `main_path`       — series element on the power path (inductor SW→VOUT)
+///   - `input_shunt`     — input decoupling cap (VIN→GND)
+///   - `output_shunt`    — output filtering cap (VOUT→GND)
+///   - `switching_shunt` — catch element at switching node (SW→GND)
+///   - `bootstrap`       — bootstrap cap between two non-GND pins (BOOT↔SW)
+///   - `feedback_high`   — top resistor in feedback divider (VOUT→FB)
+///   - `feedback_low`    — bottom resistor in feedback divider (FB→GND)
+///   - `shunt`           — generic shunt (fallback)
+///   - `series`          — generic series (fallback)
+fn determine_schematic_placement(
+    child: &bhdl_common::ExpansionInstance,
+    recipe: &ExpansionRecipe,
+    is_shunt: bool,
+) -> String {
+    // Collect parent pins this child connects to
+    let mut parent_pins: Vec<String> = Vec::new();
+    for conn in &recipe.connections {
+        let (child_ep, parent_ep) = match (&conn.from, &conn.to) {
+            (ExpansionEndpoint::InstancePin(n, _), ExpansionEndpoint::ParentPin(p))
+                if n == &child.name => (true, Some(p.clone())),
+            (ExpansionEndpoint::ParentPin(p), ExpansionEndpoint::InstancePin(n, _))
+                if n == &child.name => (true, Some(p.clone())),
+            _ => (false, None),
+        };
+        if child_ep {
+            if let Some(pin) = parent_ep {
+                if !parent_pins.contains(&pin) {
+                    parent_pins.push(pin);
+                }
+            }
+        }
+    }
+
+    let connects_gnd = parent_pins.iter().any(|p| p.to_uppercase() == "GND");
+    let non_gnd: Vec<&String> = parent_pins.iter()
+        .filter(|p| p.to_uppercase() != "GND")
+        .collect();
+
+    // Helper: look up pin type from recipe's pin_info
+    let pin_type = |name: &str| -> &str {
+        recipe.pin_info.get(name)
+            .map(|(t, _)| t.as_str())
+            .unwrap_or("signal")
+    };
+    let pin_dir = |name: &str| -> &str {
+        recipe.pin_info.get(name)
+            .map(|(_, d)| d.as_str())
+            .unwrap_or("inout")
+    };
+
+    // Classify based on connections + pin types
+    if !connects_gnd && non_gnd.len() >= 2 {
+        // Two or more non-GND parent pins
+        let has_feedback = non_gnd.iter().any(|p| pin_type(p) == "feedback");
+        let has_switch = non_gnd.iter().any(|p| pin_type(p) == "switch");
+        let has_output = non_gnd.iter().any(|p|
+            pin_type(p) == "power" && pin_dir(p) == "out");
+        if has_feedback && has_output {
+            return "feedback_high".to_string();
+        }
+        // Inductor: switch pin → output pin (main power path)
+        if has_switch && has_output {
+            return "main_path".to_string();
+        }
+        // Bootstrap/bridge cap (e.g., BOOT↔SW)
+        return "bootstrap".to_string();
+    }
+
+    if !connects_gnd {
+        // No GND, single non-GND pin
+        if non_gnd.len() == 1 {
+            let has_output = pin_type(non_gnd[0]) == "power" && pin_dir(non_gnd[0]) == "out";
+            if has_output {
+                return "main_path".to_string();
+            }
+        }
+        return "series".to_string();
+    }
+
+    // connects_gnd is true from here — shunt classification
+    if non_gnd.len() == 1 {
+        let p = non_gnd[0];
+        let pt = pin_type(p);
+        let pd = pin_dir(p);
+
+        if pt == "feedback" {
+            return "feedback_low".to_string();
+        }
+        if pt == "switch" {
+            return "switching_shunt".to_string();
+        }
+        if pt == "power" && pd == "out" {
+            return "output_shunt".to_string();
+        }
+        if pt == "power" && pd == "in" {
+            return "input_shunt".to_string();
+        }
+    }
+
+    // Fallback
+    if is_shunt { "shunt".to_string() } else { "series".to_string() }
 }
 
 #[cfg(test)]

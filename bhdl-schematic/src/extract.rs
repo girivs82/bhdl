@@ -14,6 +14,7 @@ use bhdl_netlist::{
 
 use crate::types::*;
 use crate::refdes::{RefDesLut, category_to_prefix};
+use crate::sub_layout::{compute_expansion_sub_schematic, compute_cap_bank_sub_schematic, CapBankMember};
 
 /// Extract a `SchematicData` from a BHDL `Netlist` and optional analysis result.
 ///
@@ -366,6 +367,12 @@ pub fn extract_schematic_data(
             })
         });
 
+        // Compute symbol variant from component_class for specialized rendering
+        let symbol_variant = compute_symbol_variant(
+            instance.attributes.get("component_class").map(|s| s.as_str()),
+            &module_def.name,
+        );
+
         instances.push(SchematicInstance {
             name: instance.name.clone(),
             refdes: None,  // assigned in refdes post-pass below
@@ -383,7 +390,9 @@ pub fn extract_schematic_data(
             stage_name,
             stage_order,
             stage_rail,
+            symbol_variant,
             symbol: symbol_hint,
+            sub_schematic: None,
             line: None,
         });
     }
@@ -407,11 +416,338 @@ pub fn extract_schematic_data(
         }
     }
 
+    // --- 4c. Build sub-schematics for expansion blocks and cap banks ---
+    let mut sub_schematic_children: HashSet<String> = HashSet::new();
+    let mut sub_schematic_internal_nets: HashSet<String> = HashSet::new();
+    // Computed sub-schematics to attach: parent_name → SubSchematic
+    let mut pending_sub_schematics: HashMap<String, SubSchematic> = HashMap::new();
+
+    // Get expansion recipes from analysis result (use empty map as default)
+    let empty_recipes = HashMap::new();
+    let expansion_recipes = analysis
+        .map(|a| &a.expansion_recipes)
+        .unwrap_or(&empty_recipes);
+
+    if !expansion_recipes.is_empty() {
+        // Find expansion parents: instances that have children pointing at them
+        let expansion_parents: Vec<(String, String)> = {
+            let child_parents: HashSet<String> = instances.iter()
+                .filter_map(|c| c.expansion_parent.clone())
+                .collect();
+            instances.iter()
+                .filter(|inst| child_parents.contains(&inst.name))
+                .map(|inst| (inst.name.clone(), inst.entity_type.clone()))
+                .collect()
+        };
+
+        for (parent_name, parent_entity_type) in &expansion_parents {
+            // Find the recipe for this parent's entity type
+            let recipe = expansion_recipes.get(parent_entity_type)
+                .or_else(|| {
+                    // Prefix match for monomorphized types (e.g., "TPS54331_3V3" → "TPS54331")
+                    expansion_recipes.iter()
+                        .find(|(recipe_name, _)| {
+                            parent_entity_type.starts_with(recipe_name.as_str())
+                                && parent_entity_type.len() > recipe_name.len()
+                                && parent_entity_type.as_bytes()[recipe_name.len()] == b'_'
+                        })
+                        .map(|(_, r)| r)
+                });
+
+            let recipe = match recipe {
+                Some(r) => r,
+                None => continue,
+            };
+
+            // Collect child attributes and refdes
+            let prefix = format!("{}_", parent_name);
+            let mut child_attrs: HashMap<String, HashMap<String, String>> = HashMap::new();
+            let mut child_refdes: HashMap<String, String> = HashMap::new();
+
+            for child in instances.iter().filter(|c| c.expansion_parent.as_deref() == Some(parent_name.as_str())) {
+                let local_name = child.name.strip_prefix(&prefix)
+                    .unwrap_or(&child.name)
+                    .to_string();
+
+                let mut attrs = HashMap::new();
+                for (k, v) in &child.parameters {
+                    attrs.insert(k.clone(), v.clone());
+                }
+                if let Some(sp) = &child.schematic_placement {
+                    attrs.insert("schematic_placement".to_string(), sp.clone());
+                }
+                child_attrs.insert(local_name.clone(), attrs);
+
+                if let Some(ref rd) = child.refdes {
+                    child_refdes.insert(local_name, rd.clone());
+                }
+
+                sub_schematic_children.insert(child.name.clone());
+            }
+
+            // Collect parent parameters
+            let parent_attrs: HashMap<String, String> = instances.iter()
+                .find(|i| i.name == *parent_name)
+                .map(|i| i.parameters.iter().cloned().collect())
+                .unwrap_or_default();
+
+            let sub = compute_expansion_sub_schematic(
+                recipe,
+                &parent_attrs,
+                &child_attrs,
+                &child_refdes,
+                simulation.as_ref(),
+                parent_name,
+            );
+
+            pending_sub_schematics.insert(parent_name.clone(), sub);
+
+            // Collect internal nets
+            for (_, net) in netlist.nets.iter() {
+                if let Some(ref name) = net.name {
+                    if name.starts_with(&prefix) {
+                        let all_internal = net.connections.iter().all(|conn| {
+                            match conn {
+                                ConnectionPoint::PinInstance(pi_id) => {
+                                    netlist.pin_instances.get(*pi_id)
+                                        .and_then(|pi| netlist.instances.get(pi.instance))
+                                        .map(|inst| {
+                                            sub_schematic_children.contains(&inst.name)
+                                                || inst.name == *parent_name
+                                        })
+                                        .unwrap_or(true)
+                                }
+                                ConnectionPoint::InstancePin(inst_id, _) => {
+                                    netlist.instances.get(*inst_id)
+                                        .map(|inst| {
+                                            sub_schematic_children.contains(&inst.name)
+                                                || inst.name == *parent_name
+                                        })
+                                        .unwrap_or(true)
+                                }
+                                _ => false,
+                            }
+                        });
+                        if all_internal {
+                            sub_schematic_internal_nets.insert(name.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Build cap bank sub-schematics
+    {
+        // Group caps by stage_name + stage_rail
+        let mut cap_groups: HashMap<(String, String), Vec<usize>> = HashMap::new();
+        for (idx, inst) in instances.iter().enumerate() {
+            if sub_schematic_children.contains(&inst.name) { continue; }
+            if inst.category != "capacitor" { continue; }
+            if let (Some(stage), Some(rail)) = (&inst.stage_name, &inst.stage_rail) {
+                cap_groups.entry((stage.clone(), rail.clone()))
+                    .or_default()
+                    .push(idx);
+            }
+        }
+
+        // Also group bank children with their parents
+        let mut bank_groups: HashMap<String, Vec<usize>> = HashMap::new();
+        for (idx, inst) in instances.iter().enumerate() {
+            if sub_schematic_children.contains(&inst.name) { continue; }
+            if let Some(ref bp) = inst.bank_parent {
+                bank_groups.entry(bp.clone()).or_default().push(idx);
+            }
+        }
+
+        // For each cap group with 2+ members, create a cap bank sub-schematic
+        for ((stage_name, _rail), indices) in &cap_groups {
+            if indices.len() < 2 { continue; }
+
+            // Collect all caps in this group (including bank children)
+            let mut all_indices: Vec<usize> = indices.clone();
+            for &idx in indices {
+                let inst_name = &instances[idx].name;
+                if let Some(children) = bank_groups.get(inst_name) {
+                    for &child_idx in children {
+                        if !all_indices.contains(&child_idx) {
+                            all_indices.push(child_idx);
+                        }
+                    }
+                }
+            }
+
+            // Build CapBankMember list
+            let caps: Vec<CapBankMember> = all_indices.iter()
+                .map(|&idx| {
+                    let inst = &instances[idx];
+                    CapBankMember {
+                        name: inst.name.clone(),
+                        value: inst.parameters.iter()
+                            .find(|(k, _)| k == "value")
+                            .map(|(_, v)| v.clone()),
+                        refdes: inst.refdes.clone(),
+                        is_parent: inst.bank_parent.is_none(),
+                        bank_parent: inst.bank_parent.clone(),
+                    }
+                })
+                .collect();
+
+            let sub = compute_cap_bank_sub_schematic(&caps, stage_name, simulation.as_ref());
+
+            // Attach sub-schematic to the first cap (lead instance)
+            let lead_name = instances[all_indices[0]].name.clone();
+            pending_sub_schematics.insert(lead_name, sub);
+
+            // Mark all other caps as absorbed children
+            for &idx in &all_indices[1..] {
+                sub_schematic_children.insert(instances[idx].name.clone());
+            }
+        }
+    }
+
+    // Rename cap bank lead instance connections to match sub-schematic port names.
+    // Cap banks have ports named "signal" and "GND", but the lead cap's connections
+    // use pin names "1" and "2". We need them to match so wire routing can find ports.
+    let gnd_net_names: HashSet<String> = netlist.nets.iter()
+        .filter(|(_, n)| matches!(n.net_class, NetClass::Ground))
+        .filter_map(|(nid, _)| net_names.get(&nid).cloned())
+        .collect();
+    for (lead_name, sub) in &pending_sub_schematics {
+        if sub.kind != SubSchematicKind::CapBank { continue; }
+        if let Some(inst) = instances.iter_mut().find(|i| i.name == *lead_name) {
+            for conn in &mut inst.connections {
+                if conn.pin_type == "ground" || gnd_net_names.contains(&conn.signal) {
+                    conn.port = "GND".to_string();
+                } else {
+                    conn.port = "signal".to_string();
+                }
+            }
+        }
+    }
+
+    // Build a set of instance names that will have sub-schematics (for net endpoint remapping)
+    let sub_schematic_parents: HashSet<String> = pending_sub_schematics.keys().cloned().collect();
+
+    // Build child → parent mapping for net endpoint remapping.
+    // When a child's connection to an external net is removed, we remap it to
+    // the parent instance at the corresponding sub-schematic port.
+    let mut child_to_parent: HashMap<String, String> = HashMap::new();
+    for inst in instances.iter() {
+        if let Some(ref parent) = inst.expansion_parent {
+            if sub_schematic_children.contains(&inst.name) {
+                child_to_parent.insert(inst.name.clone(), parent.clone());
+            }
+        }
+        if let Some(ref bp) = inst.bank_parent {
+            if sub_schematic_children.contains(&inst.name) {
+                child_to_parent.insert(inst.name.clone(), bp.clone());
+            }
+        }
+    }
+
+    // Build net → sub-schematic port mapping.
+    // For each parent with a sub-schematic, figure out which global nets correspond
+    // to which external ports. We do this by looking at the parent IC's connections:
+    // the parent connects to some nets directly. Then children extend connections
+    // to additional external nets (e.g., inductor output → VOUT rail).
+    // The mapping: (parent_name, net_name) → port_name
+    let mut parent_net_to_port: HashMap<(String, String), String> = HashMap::new();
+    {
+        // First: map parent IC's own connections
+        let parent_names: HashSet<String> = instances.iter()
+            .filter(|i| pending_sub_schematics.contains_key(&i.name) || i.sub_schematic.is_some())
+            .map(|i| i.name.clone())
+            .collect();
+        for inst in instances.iter() {
+            if !parent_names.contains(&inst.name) { continue; }
+            for conn in &inst.connections {
+                parent_net_to_port.insert(
+                    (inst.name.clone(), conn.signal.clone()),
+                    conn.port.clone(),
+                );
+            }
+        }
+
+        // Second: for children's external-facing connections, find which sub-schematic
+        // port they map to. The port is determined by the net's role:
+        // - GND net → "GND" port
+        // - Same as parent's VIN → "VIN" port
+        // - Otherwise (output rail) → "VOUT" port
+        let gnd_nets: HashSet<String> = netlist.nets.iter()
+            .filter(|(_, n)| matches!(n.net_class, NetClass::Ground))
+            .filter_map(|(nid, _)| net_names.get(&nid).cloned())
+            .collect();
+
+        for child in instances.iter() {
+            let parent_name = match child_to_parent.get(&child.name) {
+                Some(p) => p.clone(),
+                None => continue,
+            };
+            for conn in &child.connections {
+                let net_name = &conn.signal;
+                // Skip internal nets
+                if sub_schematic_internal_nets.contains(net_name) { continue; }
+                // Skip if parent already has this net mapped
+                let key = (parent_name.clone(), net_name.clone());
+                if parent_net_to_port.contains_key(&key) { continue; }
+
+                // Determine port name
+                let port_name = if gnd_nets.contains(net_name) {
+                    "GND".to_string()
+                } else if parent_net_to_port.values().any(|p| p == "VIN")
+                    && parent_net_to_port.iter().any(|(k, v)| k.0 == parent_name && v == "VIN" && k.1 == *net_name) {
+                    "VIN".to_string()
+                } else {
+                    // External net not on parent → likely output rail → VOUT
+                    "VOUT".to_string()
+                };
+
+                parent_net_to_port.insert(key, port_name);
+            }
+        }
+    }
+
+    // Apply computed sub-schematics to their parent instances
+    for inst in instances.iter_mut() {
+        if let Some(sub) = pending_sub_schematics.remove(&inst.name) {
+            inst.sub_schematic = Some(sub);
+        }
+    }
+
+    // Add synthetic connections to parent instances for external nets from children
+    for inst in instances.iter_mut() {
+        if inst.sub_schematic.is_none() { continue; }
+        for ((pname, net_name), port_name) in &parent_net_to_port {
+            if *pname != inst.name { continue; }
+            // Only add if parent doesn't already have this connection
+            let already_has = inst.connections.iter()
+                .any(|c| c.signal == *net_name);
+            if already_has { continue; }
+            inst.connections.push(SchematicConnection {
+                port: port_name.clone(),
+                signal: net_name.clone(),
+                direction: if port_name == "VOUT" { "out".to_string() } else { "in".to_string() },
+                pin_type: if port_name == "GND" { "ground".to_string() } else { "power".to_string() },
+                pin_direction: Some(if port_name == "VOUT" { "out".to_string() } else { "in".to_string() }),
+            });
+        }
+    }
+
+    // Remove sub-schematic children from the instance list
+    instances.retain(|inst| !sub_schematic_children.contains(&inst.name));
+
     // --- 5. Build nets ---
     let mut nets = Vec::new();
 
     for (net_id, net) in netlist.nets.iter() {
         let net_name = net_names.get(&net_id).cloned().unwrap_or_default();
+
+        // Skip nets that are internal to a sub-schematic
+        if sub_schematic_internal_nets.contains(&net_name) {
+            continue;
+        }
+
         let (net_class_str, voltage) = classify_net(&net.net_class);
 
         // Determine driver and sinks from connection points
@@ -442,12 +778,42 @@ pub fn extract_schematic_data(
                 ConnectionPoint::PinInstance(pi_id) => {
                     if let Some(pi) = netlist.pin_instances.get(pi_id) {
                         if let Some(inst) = netlist.instances.get(pi.instance) {
+                            // Remap sub-schematic children to their parent instance
+                            if sub_schematic_children.contains(&inst.name) {
+                                if let Some(parent_name) = child_to_parent.get(&inst.name) {
+                                    let key = (parent_name.clone(), net_name.clone());
+                                    if let Some(port) = parent_net_to_port.get(&key) {
+                                        // Only add if parent not already present as endpoint
+                                        let parent_already = driver.as_ref().map_or(false, |d| d.name == *parent_name && d.port == *port)
+                                            || sinks.iter().any(|s| s.name == *parent_name && s.port == *port);
+                                        if !parent_already {
+                                            let ep = SchematicEndpoint {
+                                                endpoint_type: "instance".to_string(),
+                                                name: parent_name.clone(),
+                                                port: port.clone(),
+                                            };
+                                            sinks.push(ep);
+                                        }
+                                    }
+                                }
+                                continue;
+                            }
                             if let Some(pin) = netlist.pins.get(pi.pin_def) {
+                                if pin.is_virtual {
+                                    continue; // Virtual pins don't appear as net endpoints
+                                }
                                 // Use display name override if set by virtual pin expansion
                                 let port_name = inst.attributes
                                     .get(&format!("vpin_display_{}", pin.name))
                                     .cloned()
                                     .unwrap_or_else(|| pin.name.clone());
+                                // For sub-schematic parents, remap pin names to sub-schematic port names
+                                let port_name = if sub_schematic_parents.contains(&inst.name) {
+                                    let key = (inst.name.clone(), net_name.clone());
+                                    parent_net_to_port.get(&key).cloned().unwrap_or(port_name)
+                                } else {
+                                    port_name
+                                };
                                 let ep = SchematicEndpoint {
                                     endpoint_type: "instance".to_string(),
                                     name: inst.name.clone(),
@@ -470,11 +836,40 @@ pub fn extract_schematic_data(
                 }
                 ConnectionPoint::InstancePin(inst_id, pin_id) => {
                     if let Some(inst) = netlist.instances.get(inst_id) {
+                        // Remap sub-schematic children to their parent
+                        if sub_schematic_children.contains(&inst.name) {
+                            if let Some(parent_name) = child_to_parent.get(&inst.name) {
+                                let key = (parent_name.clone(), net_name.clone());
+                                if let Some(port) = parent_net_to_port.get(&key) {
+                                    let parent_already = driver.as_ref().map_or(false, |d| d.name == *parent_name && d.port == *port)
+                                        || sinks.iter().any(|s| s.name == *parent_name && s.port == *port);
+                                    if !parent_already {
+                                        let ep = SchematicEndpoint {
+                                            endpoint_type: "instance".to_string(),
+                                            name: parent_name.clone(),
+                                            port: port.clone(),
+                                        };
+                                        sinks.push(ep);
+                                    }
+                                }
+                            }
+                            continue;
+                        }
                         if let Some(pin) = netlist.pins.get(pin_id) {
+                            if pin.is_virtual {
+                                continue; // Virtual pins don't appear as net endpoints
+                            }
                             let port_name = inst.attributes
                                 .get(&format!("vpin_display_{}", pin.name))
                                 .cloned()
                                 .unwrap_or_else(|| pin.name.clone());
+                            // For sub-schematic parents, remap pin names to sub-schematic port names
+                            let port_name = if sub_schematic_parents.contains(&inst.name) {
+                                let key = (inst.name.clone(), net_name.clone());
+                                parent_net_to_port.get(&key).cloned().unwrap_or(port_name)
+                            } else {
+                                port_name
+                            };
                             let ep = SchematicEndpoint {
                                 endpoint_type: "instance".to_string(),
                                 name: inst.name.clone(),
@@ -493,6 +888,25 @@ pub fn extract_schematic_data(
                 }
                 ConnectionPoint::InstancePort(inst_id, port_id) => {
                     if let Some(inst) = netlist.instances.get(inst_id) {
+                        // Remap sub-schematic children to their parent
+                        if sub_schematic_children.contains(&inst.name) {
+                            if let Some(parent_name) = child_to_parent.get(&inst.name) {
+                                let key = (parent_name.clone(), net_name.clone());
+                                if let Some(port) = parent_net_to_port.get(&key) {
+                                    let parent_already = driver.as_ref().map_or(false, |d| d.name == *parent_name && d.port == *port)
+                                        || sinks.iter().any(|s| s.name == *parent_name && s.port == *port);
+                                    if !parent_already {
+                                        let ep = SchematicEndpoint {
+                                            endpoint_type: "instance".to_string(),
+                                            name: parent_name.clone(),
+                                            port: port.clone(),
+                                        };
+                                        sinks.push(ep);
+                                    }
+                                }
+                            }
+                            continue;
+                        }
                         if let Some(port) = netlist.ports.get(port_id) {
                             let ep = SchematicEndpoint {
                                 endpoint_type: "instance".to_string(),
@@ -1038,7 +1452,7 @@ fn find_adjacent_ic(
 }
 
 /// Categorize a component by its entity type name and attributes.
-fn categorize_component(entity_type: &str, attrs: &HashMap<String, String>) -> String {
+pub fn categorize_component(entity_type: &str, attrs: &HashMap<String, String>) -> String {
     // Primary: use component_class attribute from entity metadata (flows from stdlib)
     if let Some(class) = attrs.get("component_class") {
         return match class.as_str() {
@@ -1087,6 +1501,33 @@ fn categorize_component(entity_type: &str, attrs: &HashMap<String, String>) -> S
         "passive".to_string()
     } else {
         "ic".to_string()
+    }
+}
+
+/// Compute the symbol variant for specialized rendering from component_class / entity_type.
+///
+/// Returns `Some("schottky")`, `Some("zener")`, `Some("led")`, `Some("polarized")`,
+/// `Some("ferrite_bead")`, etc. for known variants; `None` for default rendering.
+fn compute_symbol_variant(component_class: Option<&str>, entity_type: &str) -> Option<String> {
+    let lower_entity = entity_type.to_lowercase();
+    match component_class {
+        Some("led") => Some("led".to_string()),
+        Some("capacitor_polarized") => Some("polarized".to_string()),
+        Some("ferrite_bead") => Some("ferrite_bead".to_string()),
+        Some(cls) if cls.contains("schottky") || cls.contains("Schottky") => Some("schottky".to_string()),
+        Some(cls) if cls.contains("zener") || cls.contains("Zener") => Some("zener".to_string()),
+        _ => {
+            // Fallback: check entity_type name
+            if lower_entity.starts_with("led") {
+                Some("led".to_string())
+            } else if lower_entity.contains("schottky") {
+                Some("schottky".to_string())
+            } else if lower_entity.contains("zener") {
+                Some("zener".to_string())
+            } else {
+                None
+            }
+        }
     }
 }
 

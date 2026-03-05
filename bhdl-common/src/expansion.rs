@@ -20,6 +20,11 @@ pub struct ExpansionRecipe {
     /// Default parameter values from the entity definition (param_name → value string).
     /// Used by the expansion interpreter when instance attributes don't contain the param.
     pub param_defaults: HashMap<String, String>,
+    /// Pin type and direction from entity definition (pin_name → (pin_type, direction)).
+    /// Used by the expansion interpreter to compute schematic placement hints.
+    /// pin_type: "power", "ground", "switch", "feedback", "signal"
+    /// direction: "in", "out", "inout"
+    pub pin_info: HashMap<String, (String, String)>,
 }
 
 /// A component instance to create during expansion.
@@ -66,6 +71,7 @@ impl ExpansionRecipe {
             connections: Vec::new(),
             internal_nets: Vec::new(),
             param_defaults: HashMap::new(),
+            pin_info: HashMap::new(),
         }
     }
 }

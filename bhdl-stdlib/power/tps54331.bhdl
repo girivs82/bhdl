@@ -45,8 +45,8 @@ alias TPS54331_5V = TPS54331<5V>;
 
 symbol TPS54331 {
     left   { VIN, EN, BOOT }
-    right  { SW }
-    bottom { GND, FB }
+    right  { SW, FB }
+    bottom { GND }
 }
 
 layout TPS54331 {
