@@ -17,6 +17,7 @@ new_key_type! {
 // ── Board ──────────────────────────────────────────────────────────────
 
 /// Top-level board with resolved layer stack, components, and nets.
+#[derive(Clone)]
 pub struct Board {
     pub config: BoardConfig,
     pub layer_stack: LayerStack,
@@ -337,6 +338,7 @@ pub struct ViaSpec {
 // ── Component ──────────────────────────────────────────────────────────
 
 /// Component to be placed on the board.
+#[derive(Clone)]
 pub struct Component {
     pub id: ComponentId,
     pub name: String,
@@ -405,6 +407,7 @@ impl PlacementConstraint {
 }
 
 /// Pin location relative to component origin.
+#[derive(Clone)]
 pub struct PinPosition {
     pub pin_id: PinId,
     pub name: String,
@@ -488,6 +491,7 @@ impl LayerConstraint {
 // ── Functional groups ──────────────────────────────────────────────────
 
 /// Functional group (e.g., expansion block children).
+#[derive(Clone)]
 pub struct FunctionalGroup {
     pub id: GroupId,
     pub name: String,
@@ -554,6 +558,7 @@ pub struct RouteVia {
 // ── P&R configuration ──────────────────────────────────────────────────
 
 /// Top-level configuration for the place & route engine.
+#[derive(Clone)]
 pub struct PnrConfig {
     pub board: BoardConfig,
     pub placement: PlacementConfig,
@@ -576,6 +581,7 @@ impl Default for PnrConfig {
     }
 }
 
+#[derive(Clone)]
 pub struct PlacementConfig {
     pub position_lr: f64,
     pub rotation_lr: f64,
@@ -602,6 +608,7 @@ impl Default for PlacementConfig {
     }
 }
 
+#[derive(Clone)]
 pub struct RoutingSchedule {
     pub first_route_iter: usize,
     pub coarse_interval: usize,
@@ -643,6 +650,7 @@ impl RoutingSchedule {
     }
 }
 
+#[derive(Clone)]
 pub struct OptimizerConfig {
     pub beta1: f64,
     pub beta2: f64,
@@ -659,6 +667,7 @@ impl Default for OptimizerConfig {
     }
 }
 
+#[derive(Clone)]
 pub struct ConvergenceConfig {
     pub window_size: usize,
     pub wl_tolerance: f64,
@@ -678,6 +687,7 @@ impl Default for ConvergenceConfig {
 // ── P&R result ─────────────────────────────────────────────────────────
 
 /// Result of place & route.
+#[derive(Clone)]
 pub struct PnrResult {
     pub board: Board,
     pub routes: Vec<Route>,
@@ -685,6 +695,7 @@ pub struct PnrResult {
     pub drc_violations: Vec<DrcViolation>,
 }
 
+#[derive(Clone)]
 pub struct PnrMetrics {
     pub hpwl_mm: f64,
     pub total_routed_length_mm: f64,
@@ -694,14 +705,14 @@ pub struct PnrMetrics {
     pub iterations: usize,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct DrcViolation {
     pub kind: DrcViolationKind,
     pub location: (f64, f64),
     pub description: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum DrcViolationKind {
     Spacing,
     Clearance,

@@ -48,11 +48,45 @@ use routing::grid::RoutingGrid;
 use routing::pathfinder;
 use types::*;
 
+/// Run multiple placement+routing trials with different initializations,
+/// return the best result (highest routability, then lowest HPWL).
+pub fn place_and_route_best_of(
+    board: Board,
+    config: PnrConfig,
+    trials: usize,
+) -> Result<PnrResult> {
+    let mut best: Option<PnrResult> = None;
+
+    for trial in 0..trials {
+        info!("=== Trial {}/{} ===", trial + 1, trials);
+        let trial_board = board.clone();
+        let result = place_and_route(trial_board, config.clone(), trial as u64)?;
+
+        let dominated = best.as_ref().map_or(false, |b| {
+            // Better = more routed nets, or same routed but lower HPWL
+            let b_routed = b.routes.iter().filter(|r| !r.is_empty()).count();
+            let r_routed = result.routes.iter().filter(|r| !r.is_empty()).count();
+            r_routed < b_routed || (r_routed == b_routed && result.metrics.hpwl_mm >= b.metrics.hpwl_mm)
+        });
+
+        if !dominated {
+            let routed = result.routes.iter().filter(|r| !r.is_empty()).count();
+            info!(
+                "Trial {} is new best: {} routed, HPWL={:.1}mm",
+                trial + 1, routed, result.metrics.hpwl_mm
+            );
+            best = Some(result);
+        }
+    }
+
+    best.ok_or_else(|| anyhow::anyhow!("No trials completed"))
+}
+
 /// Run the concurrent place & route loop.
 ///
 /// Input: a fully constructed `Board` (from semantic preprocessing).
 /// Output: `PnrResult` with final placement, routes, metrics, and DRC.
-pub fn place_and_route(mut board: Board, config: PnrConfig) -> Result<PnrResult> {
+pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result<PnrResult> {
     let n = board.components.len();
     info!(
         "Starting P&R: {} components, {} nets, {} layers",
@@ -61,8 +95,8 @@ pub fn place_and_route(mut board: Board, config: PnrConfig) -> Result<PnrResult>
         board.layer_stack.layers.len()
     );
 
-    // 1. Initialize placement
-    placement::initialize(&mut board);
+    // 1. Initialize placement (seed controls component order on grid)
+    placement::initialize(&mut board, seed);
 
     // 2. Set up optimizer state
     let mut adam = AdamState::new(n);

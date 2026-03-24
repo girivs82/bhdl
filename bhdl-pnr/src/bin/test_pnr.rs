@@ -154,7 +154,7 @@ async fn main() -> Result<()> {
         max_iterations: 200,
         ..PnrConfig::default()
     };
-    let result = bhdl_pnr::place_and_route(board, config)?;
+    let result = bhdl_pnr::place_and_route_best_of(board, config, 5)?;
 
     // 8. Results
     println!("\n=== PnR Results ===");
