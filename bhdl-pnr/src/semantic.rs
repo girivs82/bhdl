@@ -333,6 +333,7 @@ pub fn build_board(
         );
 
         let intent = extract_net_intent(net, netlist, &id_map);
+        let layer_constraint = layer_constraint_for_net(&pnr_class);
 
         let net_idx = nets.len();
         id_map.net_to_idx.insert(nl_net_id, net_idx);
@@ -344,7 +345,7 @@ pub fn build_board(
             net_class: pnr_class,
             weight: 1.0,
             required_trace_width_mm: trace_width,
-            layer_constraint: LayerConstraint::Any,
+            layer_constraint,
             intent,
         });
     }
@@ -828,6 +829,23 @@ fn perimeter_point(dist: f64, w: f64, h: f64) -> (f64, f64) {
         (hw - (d - w - h), hh) // bottom edge, right to left
     } else {
         (-hw, hh - (d - 2.0 * w - h)) // left edge, bottom to top
+    }
+}
+
+// ── Layer constraint assignment ───────────────────────────────────────
+
+/// Assign layer constraints based on net class.
+///
+/// - High-speed / differential pairs: adjacent-to-ground for impedance control
+/// - Power nets: any signal layer (wide traces, routed like signals)
+/// - Ground: any signal layer (plane-connected when ground layer exists, else routed)
+/// - Signal: any signal layer
+fn layer_constraint_for_net(net_class: &PnrNetClass) -> LayerConstraint {
+    match net_class {
+        PnrNetClass::HighSpeed { .. } | PnrNetClass::DifferentialPair { .. } => {
+            LayerConstraint::AdjacentToGround
+        }
+        _ => LayerConstraint::Any,
     }
 }
 
