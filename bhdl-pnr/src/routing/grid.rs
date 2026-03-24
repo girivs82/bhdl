@@ -1,8 +1,10 @@
-//! 3D routing grid construction from component boundaries.
+//! 3D routing grid for PathFinder negotiated congestion router.
 //!
-//! Grid resolution is component-pitch: for ~50 components at ~5mm pitch,
-//! roughly 30×30×N_layers = 3,600-7,200 cells. Tiny enough for CPU PathFinder
-//! to run in milliseconds.
+//! Two grid modes:
+//! - **Uniform**: Fixed cell size (default 1.0mm) — gives the router maximum
+//!   freedom to find paths. For ~50 components on a 55mm board, this creates
+//!   a ~55×55×N_layers grid (~12,000 cells for 4 layers).
+//! - **Adaptive**: Component-edge cut lines — coarser but faster.
 
 use crate::types::*;
 
@@ -46,117 +48,98 @@ pub struct CellCoord {
 }
 
 impl RoutingGrid {
-    /// Build a coarse routing grid from board state.
+    /// Build a uniform routing grid with the given cell size.
+    ///
+    /// Default cell_size_mm = 1.0 gives good results for PCB placement.
+    /// Smaller cells → better routing quality but more memory/time.
     pub fn build(board: &Board) -> Self {
+        Self::build_uniform(board, 1.0)
+    }
+
+    /// Build a uniform grid with specified cell size.
+    pub fn build_uniform(board: &Board, cell_size_mm: f64) -> Self {
         let outline_w = board.config.outline.width();
         let outline_h = board.config.outline.height();
-
-        // 1. Collect all component edges as grid cut lines
-        let mut x_cuts: Vec<f64> = vec![0.0, outline_w];
-        let mut y_cuts: Vec<f64> = vec![0.0, outline_h];
-
-        for comp in &board.components {
-            let (bw, bh) = comp.rotated_bbox();
-            x_cuts.push(comp.x - bw / 2.0);
-            x_cuts.push(comp.x + bw / 2.0);
-            y_cuts.push(comp.y - bh / 2.0);
-            y_cuts.push(comp.y + bh / 2.0);
-        }
-
-        // 2. Sort and deduplicate (merge cuts within 0.1mm)
-        x_cuts.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        x_cuts.dedup_by(|a, b| (*a - *b).abs() < 0.1);
-        y_cuts.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        y_cuts.dedup_by(|a, b| (*a - *b).abs() < 0.1);
-
-        // Clamp to board boundaries
-        x_cuts.retain(|&x| x >= 0.0 && x <= outline_w);
-        y_cuts.retain(|&y| y >= 0.0 && y <= outline_h);
-
-        let cols = x_cuts.len().saturating_sub(1).max(1);
-        let rows = y_cuts.len().saturating_sub(1).max(1);
         let num_layers = board.layer_stack.layers.len();
 
-        // 3. Create 3D grid
-        let mut cells =
-            vec![vec![vec![GridCell::default(); cols]; rows]; num_layers];
+        // Create uniform grid coordinates
+        let cols = (outline_w / cell_size_mm).ceil() as usize;
+        let rows = (outline_h / cell_size_mm).ceil() as usize;
 
-        // 4. Mark blocked cells (component footprints on their placement layer)
+        let x_coords: Vec<f64> = (0..=cols).map(|i| (i as f64 * cell_size_mm).min(outline_w)).collect();
+        let y_coords: Vec<f64> = (0..=rows).map(|i| (i as f64 * cell_size_mm).min(outline_h)).collect();
+
+        let mut grid = RoutingGrid {
+            cells: vec![vec![vec![GridCell::default(); cols]; rows]; num_layers],
+            x_coords,
+            y_coords,
+            num_layers,
+            via_cost: 2.0 + board.layer_stack.via_blockage_mm2() * 10.0,
+        };
+
+        // Set per-layer capacity from stackup
+        for (l, layer) in board.layer_stack.layers.iter().enumerate() {
+            let base_cap = match layer.kind {
+                LayerKind::Ground | LayerKind::Power => 0,
+                LayerKind::Signal => {
+                    // Capacity proportional to cell size: wider cells hold more traces
+                    // A 1mm cell with 0.15mm trace + 0.15mm spacing fits ~3 traces
+                    let traces_per_cell = (cell_size_mm / (board.config.min_trace_width_mm + board.config.min_spacing_mm)).floor() as usize;
+                    traces_per_cell.max(1)
+                }
+                LayerKind::Mixed => {
+                    let traces = (cell_size_mm / (board.config.min_trace_width_mm + board.config.min_spacing_mm)).floor() as usize;
+                    (traces / 2).max(1)
+                }
+            };
+            for row in &mut grid.cells[l] {
+                for cell in row.iter_mut() {
+                    cell.capacity = (base_cap as f64 * layer.capacity_factor) as usize;
+                }
+            }
+        }
+
+        // Mark blocked cells for component footprints
         for comp in &board.components {
             let layer_idx = match comp.side {
                 BoardSide::Top => 0,
                 BoardSide::Bottom => num_layers - 1,
             };
             let (bw, bh) = comp.rotated_bbox();
-            let x_min = comp.x - bw / 2.0;
-            let x_max = comp.x + bw / 2.0;
-            let y_min = comp.y - bh / 2.0;
-            let y_max = comp.y + bh / 2.0;
-
             mark_rect_blocked(
-                &mut cells[layer_idx],
-                x_min, y_min, x_max, y_max,
-                &x_cuts, &y_cuts,
+                &mut grid.cells[layer_idx],
+                comp.x - bw / 2.0, comp.y - bh / 2.0,
+                comp.x + bw / 2.0, comp.y + bh / 2.0,
+                &grid.x_coords, &grid.y_coords,
             );
         }
 
-        // 5. Set per-layer capacity from stackup
-        for (l, layer) in board.layer_stack.layers.iter().enumerate() {
-            let base_cap = match layer.kind {
-                LayerKind::Ground | LayerKind::Power => 0,
-                LayerKind::Signal => 4,
-                LayerKind::Mixed => 2,
-            };
-            for row in &mut cells[l] {
-                for cell in row.iter_mut() {
-                    if !cell.blocked {
-                        cell.capacity =
-                            (base_cap as f64 * layer.capacity_factor) as usize;
-                    }
-                }
-            }
-        }
-
-        // 6. Block cells for mounting holes (all layers)
+        // Block cells for mounting holes (all layers)
         for hole in &board.config.mounting_holes {
             let r = hole.drill_mm / 2.0 + hole.keepout_mm;
             for l in 0..num_layers {
                 mark_circle_blocked(
-                    &mut cells[l],
+                    &mut grid.cells[l],
                     hole.x_mm, hole.y_mm, r,
-                    &x_cuts, &y_cuts,
+                    &grid.x_coords, &grid.y_coords,
                 );
             }
         }
 
-        // 7. Block cells for keepout zones
+        // Block cells for keepout zones
         for zone in &board.config.keepout_zones {
-            match zone.applies_to {
-                KeepoutTarget::All | KeepoutTarget::RoutingOnly => {
-                    for l in 0..num_layers {
-                        mark_shape_blocked(
-                            &mut cells[l],
-                            &zone.shape,
-                            &x_cuts, &y_cuts,
-                        );
-                    }
-                }
-                KeepoutTarget::ComponentsOnly => {
-                    // Routing is OK through component-only keepouts
+            if matches!(zone.applies_to, KeepoutTarget::All | KeepoutTarget::RoutingOnly) {
+                for l in 0..num_layers {
+                    mark_shape_blocked(
+                        &mut grid.cells[l],
+                        &zone.shape,
+                        &grid.x_coords, &grid.y_coords,
+                    );
                 }
             }
         }
 
-        // 8. Via cost from stackup
-        let via_cost = 2.0 + board.layer_stack.via_blockage_mm2() * 10.0;
-
-        RoutingGrid {
-            cells,
-            x_coords: x_cuts,
-            y_coords: y_cuts,
-            num_layers,
-            via_cost,
-        }
+        grid
     }
 
     pub fn rows(&self) -> usize {
@@ -233,8 +216,12 @@ impl RoutingGrid {
 
     /// Map a physical (x, y, layer) position to the nearest grid cell.
     pub fn point_to_cell(&self, x: f64, y: f64, layer: usize) -> CellCoord {
-        let col = self.x_coords.partition_point(|&cx| cx < x).saturating_sub(1).min(self.cols().saturating_sub(1));
-        let row = self.y_coords.partition_point(|&cy| cy < y).saturating_sub(1).min(self.rows().saturating_sub(1));
+        let col = self.x_coords.partition_point(|&cx| cx < x)
+            .saturating_sub(1)
+            .min(self.cols().saturating_sub(1));
+        let row = self.y_coords.partition_point(|&cy| cy < y)
+            .saturating_sub(1)
+            .min(self.rows().saturating_sub(1));
         CellCoord { layer, row, col }
     }
 
@@ -252,12 +239,40 @@ impl RoutingGrid {
         };
         (x, y)
     }
+
+    /// Enumerate all cells along a straight line between two cells on the same layer.
+    /// Uses Bresenham-style stepping through the grid.
+    pub fn cells_between(&self, a: CellCoord, b: CellCoord) -> Vec<CellCoord> {
+        if a.layer != b.layer {
+            return vec![a, b];
+        }
+
+        let mut cells = Vec::new();
+        let dc = b.col as i64 - a.col as i64;
+        let dr = b.row as i64 - a.row as i64;
+        let steps = dc.abs().max(dr.abs());
+
+        if steps == 0 {
+            cells.push(a);
+            return cells;
+        }
+
+        for s in 0..=steps {
+            let col = (a.col as i64 + dc * s / steps) as usize;
+            let row = (a.row as i64 + dr * s / steps) as usize;
+            let coord = CellCoord { layer: a.layer, row, col };
+            if cells.last() != Some(&coord) {
+                cells.push(coord);
+            }
+        }
+        cells
+    }
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
 fn mark_rect_blocked(
-    layer_cells: &mut Vec<Vec<GridCell>>,
+    layer_cells: &mut [Vec<GridCell>],
     x_min: f64, y_min: f64, x_max: f64, y_max: f64,
     x_coords: &[f64], y_coords: &[f64],
 ) {
@@ -280,7 +295,7 @@ fn mark_rect_blocked(
 }
 
 fn mark_circle_blocked(
-    layer_cells: &mut Vec<Vec<GridCell>>,
+    layer_cells: &mut [Vec<GridCell>],
     cx: f64, cy: f64, radius: f64,
     x_coords: &[f64], y_coords: &[f64],
 ) {
@@ -303,7 +318,7 @@ fn mark_circle_blocked(
 }
 
 fn mark_shape_blocked(
-    layer_cells: &mut Vec<Vec<GridCell>>,
+    layer_cells: &mut [Vec<GridCell>],
     shape: &ZoneShape,
     x_coords: &[f64], y_coords: &[f64],
 ) {
@@ -315,7 +330,6 @@ fn mark_shape_blocked(
             mark_circle_blocked(layer_cells, *x, *y, *r, x_coords, y_coords);
         }
         ZoneShape::Polygon(_) => {
-            // For polygon keepouts, check each cell center against polygon
             let rows = y_coords.len().saturating_sub(1);
             let cols = x_coords.len().saturating_sub(1);
             for r in 0..rows {
