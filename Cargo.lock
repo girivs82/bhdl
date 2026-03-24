@@ -373,6 +373,7 @@ dependencies = [
  "bhdl-synthesizer",
  "env_logger 0.10.2",
  "log",
+ "rustdct",
  "rustfft",
  "serde",
  "serde_json",
@@ -2753,6 +2754,15 @@ name = "rustc-hash"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "08d43f7aa6b08d49f382cde6a7982047c3426db949b1424bc4b7ec9ae12c6ce2"
+
+[[package]]
+name = "rustdct"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b61555105d6a9bf98797c063c362a1d24ed8ab0431655e38f1cf51e52089551"
+dependencies = [
+ "rustfft",
+]
 
 [[package]]
 name = "rustfft"

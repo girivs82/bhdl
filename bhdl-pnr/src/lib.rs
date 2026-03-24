@@ -81,12 +81,15 @@ pub fn place_and_route(mut board: Board, config: PnrConfig) -> Result<PnrResult>
         // Compute placement forces
         let (wl, wl_forces) = analytical::compute_wirelength(&board, gamma);
 
+        let (density_forces, density_overflow) =
+            placement::density::compute_density_forces(&board);
         let group_forces = grouping::compute_group_cohesion(&board);
         let thermal_forces = grouping::compute_thermal_spreading(&board, 0.1);
         let region_forces = grouping::compute_region_preference(&board);
 
         // Combine forces
         let mut forces = wl_forces;
+        forces.accumulate(&density_forces, config.placement.lambda_density);
         forces.accumulate(&group_forces, config.placement.lambda_group);
         forces.accumulate(&thermal_forces, config.placement.lambda_thermal);
         forces.accumulate(&region_forces, config.placement.lambda_region);
@@ -134,8 +137,8 @@ pub fn place_and_route(mut board: Board, config: PnrConfig) -> Result<PnrResult>
                 let total_vias: usize = routes.iter().map(|r| r.via_count()).sum();
                 let overflow = grid.as_ref().map_or(0, |g| g.max_overflow());
                 info!(
-                    "Iter {}: WL={:.1}, vias={}, overflow={}",
-                    iteration, wl, total_vias, overflow
+                    "Iter {}: WL={:.1}, density_overflow={:.3}, vias={}, routing_overflow={}",
+                    iteration, wl, density_overflow, total_vias, overflow
                 );
             }
         }

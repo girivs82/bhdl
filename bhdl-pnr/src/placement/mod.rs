@@ -5,6 +5,7 @@
 //! edge constraints, keepout zones.
 
 pub mod analytical;
+pub mod density;
 pub mod optimizer;
 pub mod rotation;
 pub mod grouping;
