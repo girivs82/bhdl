@@ -90,8 +90,12 @@ pub fn legalize(board: &mut Board, snap_grid_mm: f64) {
 fn resolve_overlaps(board: &mut Board) {
     let n = board.components.len();
 
-    // Simple iterative: push overlapping free components apart
-    for _pass in 0..20 {
+    let ec = board.config.edge_clearance_mm;
+    let bw = board.config.outline.width();
+    let bh = board.config.outline.height();
+
+    // Iterative pairwise push — more passes for convergence
+    for _pass in 0..50 {
         let mut any_overlap = false;
 
         for i in 0..n {
@@ -115,7 +119,7 @@ fn resolve_overlaps(board: &mut Board) {
                     let j_fixed = board.components[j].placement.is_fixed();
 
                     if overlap_x < overlap_y {
-                        let push = overlap_x / 2.0 + 0.1;
+                        let push = overlap_x * 0.6 + 0.2;
                         let sign = if dx >= 0.0 { 1.0 } else { -1.0 };
                         if !i_fixed && !j_fixed {
                             board.components[i].x -= sign * push;
@@ -126,7 +130,7 @@ fn resolve_overlaps(board: &mut Board) {
                             board.components[i].x -= sign * push * 2.0;
                         }
                     } else {
-                        let push = overlap_y / 2.0 + 0.1;
+                        let push = overlap_y * 0.6 + 0.2;
                         let sign = if dy >= 0.0 { 1.0 } else { -1.0 };
                         if !i_fixed && !j_fixed {
                             board.components[i].y -= sign * push;
@@ -138,6 +142,14 @@ fn resolve_overlaps(board: &mut Board) {
                         }
                     }
                 }
+            }
+        }
+
+        // Re-clamp to board after each pass
+        for comp in board.components.iter_mut() {
+            if !comp.placement.is_fixed() {
+                comp.x = comp.x.clamp(ec, bw - ec);
+                comp.y = comp.y.clamp(ec, bh - ec);
             }
         }
 

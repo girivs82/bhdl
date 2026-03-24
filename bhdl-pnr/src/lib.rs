@@ -105,6 +105,17 @@ pub fn place_and_route(mut board: Board, config: PnrConfig) -> Result<PnrResult>
             let _ = g; // congestion inflation already applied to density_inflation
         }
 
+        // Log force magnitudes periodically
+        if iteration % 50 == 0 {
+            let wl_mag: f64 = forces.dx.iter().zip(forces.dy.iter())
+                .map(|(x, y)| (x * x + y * y).sqrt())
+                .sum::<f64>() / n as f64;
+            info!(
+                "Iter {}: WL={:.1}, density_ovf={:.3}, avg_force_mag={:.4}",
+                iteration, wl, density_overflow, wl_mag
+            );
+        }
+
         // Update positions (constraint-aware)
         optimizer::adam_step(
             &mut board,

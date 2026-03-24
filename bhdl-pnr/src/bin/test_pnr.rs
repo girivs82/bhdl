@@ -188,6 +188,9 @@ async fn main() -> Result<()> {
             let min_dy = (a.height_mm + b.height_mm) / 2.0;
             if dx < min_dx * 0.9 && dy < min_dy * 0.9 {
                 overlaps += 1;
+                println!("    OVERLAP: {} ({:.1}x{:.1}) at ({:.1},{:.1}) vs {} ({:.1}x{:.1}) at ({:.1},{:.1})",
+                    a.refdes, a.width_mm, a.height_mm, a.x, a.y,
+                    b.refdes, b.width_mm, b.height_mm, b.x, b.y);
             }
         }
     }
