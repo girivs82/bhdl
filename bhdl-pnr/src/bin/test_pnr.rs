@@ -150,11 +150,13 @@ async fn main() -> Result<()> {
 
     // 7. Place & Route
     println!("place_and_route...");
+    // Use proposal-recommended iterations (800 default with tiered routing
+    // at 100/400 boundaries). Run 3 trials to find best placement.
     let config = PnrConfig {
-        max_iterations: 200,
+        max_iterations: 600, // enough for coarse+fine routing phases
         ..PnrConfig::default()
     };
-    let result = bhdl_pnr::place_and_route_best_of(board, config, 5)?;
+    let result = bhdl_pnr::place_and_route_best_of(board, config, 3)?;
 
     // 8. Results
     println!("\n=== PnR Results ===");

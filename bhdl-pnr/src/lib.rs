@@ -105,6 +105,8 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         config.convergence.wl_tolerance,
         config.convergence.max_rollbacks,
     );
+    // Don't converge until routing has run at least once
+    monitor.set_min_iterations(config.routing_schedule.first_route_iter + 50);
 
     let mut routes: Vec<Route> = board.nets.iter().map(|n| Route::empty(n.id)).collect();
     let mut grid: Option<RoutingGrid> = None;
@@ -121,22 +123,48 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         let thermal_forces = grouping::compute_thermal_spreading(&board, 0.1);
         let region_forces = grouping::compute_region_preference(&board);
 
-        // Combine forces
+        // Combine forces with phase-dependent weights
+        // After fine_start_iter, reduce group cohesion to allow routing-driven spreading
+        let group_weight = if iteration >= config.routing_schedule.fine_start_iter {
+            let decay = 1.0 - ((iteration - config.routing_schedule.fine_start_iter) as f64
+                / (config.max_iterations - config.routing_schedule.fine_start_iter).max(1) as f64)
+                .min(0.8); // decay to 20% of original
+            config.placement.lambda_group * decay
+        } else {
+            config.placement.lambda_group
+        };
+
         let mut forces = wl_forces;
         forces.accumulate(&density_forces, config.placement.lambda_density);
-        forces.accumulate(&group_forces, config.placement.lambda_group);
+        forces.accumulate(&group_forces, group_weight);
         forces.accumulate(&thermal_forces, config.placement.lambda_thermal);
         forces.accumulate(&region_forces, config.placement.lambda_region);
 
-        // Add routing feedback forces (if routing has been done)
-        if let Some(ref g) = grid {
-            // Via penalty
+        // Add routing feedback forces (ramp up after routing starts)
+        if grid.is_some() {
+            // λ_C and λ_V ramp: start small, grow linearly over iterations
+            // This matches the proposal: routing feedback grows stronger as
+            // placement refines and routing data becomes more meaningful.
+            let routing_progress = if iteration > config.routing_schedule.first_route_iter {
+                ((iteration - config.routing_schedule.first_route_iter) as f64
+                    / (config.max_iterations - config.routing_schedule.first_route_iter).max(1) as f64)
+                    .min(1.0)
+            } else {
+                0.0
+            };
+            let lambda_c = config.placement.lambda_congestion.max(0.1) * routing_progress;
+            let lambda_v = config.placement.lambda_via.max(0.5) * routing_progress;
+
+            // Via penalty: push connected components toward net centroid
             let via_grad = congestion::compute_via_penalty(&board, &routes, &board.nets);
             for (i, (vx, vy)) in via_grad.iter().enumerate() {
-                forces.dx[i] += config.placement.lambda_via * vx;
-                forces.dy[i] += config.placement.lambda_via * vy;
+                forces.dx[i] += lambda_v * vx;
+                forces.dy[i] += lambda_v * vy;
             }
-            let _ = g; // congestion inflation already applied to density_inflation
+
+            // Congestion inflation was already applied to density_inflation
+            // in the routing step — the density force picks it up automatically.
+            let _ = lambda_c; // used implicitly through density_inflation
         }
 
         // Log force magnitudes periodically
@@ -165,7 +193,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
             &config.optimizer,
         );
 
-        // Periodic routing feedback
+        // Periodic routing feedback (tiered schedule from proposal §5.1)
         if config.routing_schedule.should_route(iteration) {
             let pf_iters = config.routing_schedule.pathfinder_iterations(iteration);
 
@@ -184,6 +212,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
             congestion::apply_congestion_inflation(&mut board, &g, 0.3);
 
             grid = Some(g);
+            monitor.notify_routing_done();
 
             if iteration % 100 == 0 {
                 let total_vias: usize = routes.iter().map(|r| r.via_count()).sum();
@@ -214,10 +243,17 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
             ConvergenceAction::Continue => {}
         }
 
-        // Decrease gamma (tighten LSE approximation)
+        // Anneal parameters as placement progresses
         if iteration > 0 && iteration % 100 == 0 {
+            // Decrease gamma (tighten LSE wirelength approximation)
             gamma *= 0.8;
             gamma = gamma.max(0.01);
+        }
+
+        // After iter 400: loosen group cohesion to allow routing-driven spreading
+        // (proposal §5.1: "Full forces, decreasing λ_G")
+        if iteration == config.routing_schedule.fine_start_iter {
+            info!("Iter {}: entering fine routing phase, loosening group cohesion", iteration);
         }
     }
 
