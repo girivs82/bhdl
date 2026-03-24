@@ -74,7 +74,9 @@ impl RoutingGrid {
             x_coords,
             y_coords,
             num_layers,
-            via_cost: 2.0 + board.layer_stack.via_blockage_mm2() * 10.0,
+            // Via cost: base cost + area penalty. Should be modest enough
+            // to encourage layer changes when routing is congested on one layer.
+            via_cost: 2.0 + board.layer_stack.via_blockage_mm2() * 3.0,
         };
 
         // Set per-layer capacity from stackup
@@ -219,14 +221,16 @@ impl RoutingGrid {
         nbrs
     }
 
-    /// 2 vertical neighbors (layer change = via).
+    /// Vertical neighbors (through-via model: can reach any other layer).
+    ///
+    /// In a real PCB, a plated through-hole via connects all layers.
+    /// The Dijkstra layer constraint check filters out non-signal layers.
     pub fn vertical_neighbors(&self, c: CellCoord) -> Vec<CellCoord> {
-        let mut nbrs = Vec::with_capacity(2);
-        if c.layer > 0 {
-            nbrs.push(CellCoord { layer: c.layer - 1, ..c });
-        }
-        if c.layer + 1 < self.num_layers {
-            nbrs.push(CellCoord { layer: c.layer + 1, ..c });
+        let mut nbrs = Vec::with_capacity(self.num_layers);
+        for l in 0..self.num_layers {
+            if l != c.layer {
+                nbrs.push(CellCoord { layer: l, ..c });
+            }
         }
         nbrs
     }
