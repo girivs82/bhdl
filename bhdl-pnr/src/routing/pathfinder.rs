@@ -215,8 +215,8 @@ fn dijkstra_to_any(
             }
         }
 
-        // Expand planar neighbors
-        for nbr in grid.planar_neighbors(cell) {
+        // Expand planar neighbors (4 cardinal + 4 diagonal)
+        for (nbr, move_cost) in grid.planar_neighbors(cell) {
             let gc = grid.get(nbr);
             if gc.blocked {
                 continue;
@@ -224,7 +224,7 @@ fn dijkstra_to_any(
 
             let edge_cost = cell_cost(gc, history_factor, present_factor);
             let width_factor = (net.required_trace_width_mm / 0.2).max(1.0);
-            let new_cost = cost + edge_cost * width_factor;
+            let new_cost = cost + edge_cost * width_factor * move_cost;
 
             if new_cost < *dist.get(&nbr).unwrap_or(&f64::INFINITY) {
                 dist.insert(nbr, new_cost);

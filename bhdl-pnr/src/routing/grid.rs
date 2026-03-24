@@ -184,21 +184,38 @@ impl RoutingGrid {
         max
     }
 
-    /// 4 cardinal planar neighbors of a cell.
-    pub fn planar_neighbors(&self, c: CellCoord) -> Vec<CellCoord> {
-        let mut nbrs = Vec::with_capacity(4);
-        if c.row > 0 {
-            nbrs.push(CellCoord { row: c.row - 1, ..c });
+    /// 8-connected planar neighbors (4 cardinal + 4 diagonal).
+    ///
+    /// Returns `(CellCoord, cost_multiplier)` where diagonals cost √2.
+    pub fn planar_neighbors(&self, c: CellCoord) -> Vec<(CellCoord, f64)> {
+        let mut nbrs = Vec::with_capacity(8);
+        let r = c.row;
+        let co = c.col;
+        let max_r = self.rows();
+        let max_c = self.cols();
+
+        // 4 cardinal (cost = 1.0)
+        if r > 0     { nbrs.push((CellCoord { row: r - 1, col: co, ..c }, 1.0)); }
+        if r + 1 < max_r { nbrs.push((CellCoord { row: r + 1, col: co, ..c }, 1.0)); }
+        if co > 0    { nbrs.push((CellCoord { row: r, col: co - 1, ..c }, 1.0)); }
+        if co + 1 < max_c { nbrs.push((CellCoord { row: r, col: co + 1, ..c }, 1.0)); }
+
+        // 4 diagonal (cost = √2 ≈ 1.414)
+        // Only allow diagonal if both adjacent cardinal cells are passable (no corner cutting)
+        let diag = std::f64::consts::SQRT_2;
+        if r > 0 && co > 0 && !self.cells[c.layer][r-1][co].blocked && !self.cells[c.layer][r][co-1].blocked {
+            nbrs.push((CellCoord { row: r-1, col: co-1, ..c }, diag));
         }
-        if c.row + 1 < self.rows() {
-            nbrs.push(CellCoord { row: c.row + 1, ..c });
+        if r > 0 && co + 1 < max_c && !self.cells[c.layer][r-1][co].blocked && !self.cells[c.layer][r][co+1].blocked {
+            nbrs.push((CellCoord { row: r-1, col: co+1, ..c }, diag));
         }
-        if c.col > 0 {
-            nbrs.push(CellCoord { col: c.col - 1, ..c });
+        if r + 1 < max_r && co > 0 && !self.cells[c.layer][r+1][co].blocked && !self.cells[c.layer][r][co-1].blocked {
+            nbrs.push((CellCoord { row: r+1, col: co-1, ..c }, diag));
         }
-        if c.col + 1 < self.cols() {
-            nbrs.push(CellCoord { col: c.col + 1, ..c });
+        if r + 1 < max_r && co + 1 < max_c && !self.cells[c.layer][r+1][co].blocked && !self.cells[c.layer][r][co+1].blocked {
+            nbrs.push((CellCoord { row: r+1, col: co+1, ..c }, diag));
         }
+
         nbrs
     }
 
