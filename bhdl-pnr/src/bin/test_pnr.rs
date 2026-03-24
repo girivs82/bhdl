@@ -121,8 +121,12 @@ async fn main() -> Result<()> {
     let mut netlist = gen.generate_from_ast_and_analysis(&sf, &analysis).await?;
     println!("OK ({} instances)", netlist.instances.len());
 
-    // 3. Expand
-    print!("Expand... ");
+    // 3. Stamp intents + Expand
+    print!("Stamp intents + Expand... ");
+    // Stamp intent attributes from flow tracker (must happen before expansion)
+    if let Some(ref flow_tracker) = analysis.flow_tracker {
+        bhdl_synthesizer::intent_attribute_stamper::stamp_intent_attributes(&mut netlist, flow_tracker);
+    }
     bhdl_synthesizer::expansion_interpreter::expand_entity_instances(&mut netlist, &analysis.expansion_recipes);
     bhdl_synthesizer::virtual_pin_expander::expand_virtual_pins(&mut netlist);
     println!("OK ({} instances)", netlist.instances.len());
@@ -197,6 +201,19 @@ async fn main() -> Result<()> {
         }
     }
     println!("  Overlapping pairs: {}", overlaps);
+
+    // Print nets with intent-driven weights
+    println!("\n=== Nets (intent-driven weights) ===");
+    for net in &result.board.nets {
+        if net.pins.len() >= 2 {
+            let intent_str = net.intent.as_deref().unwrap_or("-");
+            let routed = result.routes.iter()
+                .any(|r| r.net_id == net.id && !r.is_empty());
+            println!("  {} w={:.1} intent={} {:?} [{}]",
+                net.name, net.weight, intent_str, net.layer_constraint,
+                if routed { "routed" } else if net.is_plane_connected(&result.board.layer_stack) { "plane" } else { "UNROUTED" });
+        }
+    }
 
     // Print component positions
     println!("\n=== Component Positions ===");
