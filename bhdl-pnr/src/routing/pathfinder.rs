@@ -311,12 +311,12 @@ fn path_to_segments(
 
 fn add_route_demand(grid: &mut RoutingGrid, route: &Route) {
     for seg in &route.segments {
-        // Add demand to cells along segment (simplified: just endpoints)
+        // Add demand to ALL cells along the segment path
         let start = grid.point_to_cell(seg.start.0, seg.start.1, seg.layer);
         let end = grid.point_to_cell(seg.end.0, seg.end.1, seg.layer);
-        grid.get_mut(start).demand += 1;
-        if start != end {
-            grid.get_mut(end).demand += 1;
+        let path = grid.cells_between(start, end);
+        for cell in &path {
+            grid.get_mut(*cell).demand += 1;
         }
     }
     for via in &route.vias {
@@ -331,9 +331,9 @@ fn remove_route_demand(grid: &mut RoutingGrid, route: &Route) {
     for seg in &route.segments {
         let start = grid.point_to_cell(seg.start.0, seg.start.1, seg.layer);
         let end = grid.point_to_cell(seg.end.0, seg.end.1, seg.layer);
-        grid.get_mut(start).demand = grid.get_mut(start).demand.saturating_sub(1);
-        if start != end {
-            grid.get_mut(end).demand = grid.get_mut(end).demand.saturating_sub(1);
+        let path = grid.cells_between(start, end);
+        for cell in &path {
+            grid.get_mut(*cell).demand = grid.get_mut(*cell).demand.saturating_sub(1);
         }
     }
     for via in &route.vias {
