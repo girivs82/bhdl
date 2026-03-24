@@ -21,6 +21,10 @@ pub struct ConvergenceMonitor {
     window_size: usize,
     wl_tolerance: f64,
     max_rollbacks: usize,
+    /// Minimum iteration before convergence is allowed.
+    /// Prevents premature convergence before routing feedback kicks in.
+    min_iterations: usize,
+    routing_has_run: bool,
 }
 
 impl ConvergenceMonitor {
@@ -35,7 +39,19 @@ impl ConvergenceMonitor {
             window_size,
             wl_tolerance,
             max_rollbacks,
+            min_iterations: 0,
+            routing_has_run: false,
         }
+    }
+
+    /// Set minimum iterations before convergence (should be after first routing pass).
+    pub fn set_min_iterations(&mut self, min: usize) {
+        self.min_iterations = min;
+    }
+
+    /// Notify that routing has run at least once.
+    pub fn notify_routing_done(&mut self) {
+        self.routing_has_run = true;
     }
 
     /// Check convergence and return action.
@@ -88,8 +104,9 @@ impl ConvergenceMonitor {
             }
         }
 
-        // Convergence: WL stable and no overflow
-        if max_overflow == 0 && self.wl_stable() {
+        // Convergence: WL stable, no overflow, AND routing has had a chance
+        let past_minimum = self.wl_history.len() > self.min_iterations;
+        if max_overflow == 0 && self.wl_stable() && past_minimum && self.routing_has_run {
             return ConvergenceAction::Converged;
         }
 
