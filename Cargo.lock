@@ -315,23 +315,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bhdl-layout"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bhdl-analyzer",
- "bhdl-ast",
- "bhdl-netlist",
- "bhdl-parser",
- "bhdl-synthesizer",
- "env_logger 0.10.2",
- "log",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "bhdl-lsp"
 version = "0.1.0"
 dependencies = [
@@ -372,6 +355,30 @@ dependencies = [
  "num-traits",
  "rowan",
  "smol_str",
+]
+
+[[package]]
+name = "bhdl-pnr"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bhdl-analyzer",
+ "bhdl-ast",
+ "bhdl-common",
+ "bhdl-components",
+ "bhdl-netlist",
+ "bhdl-parser",
+ "bhdl-schematic",
+ "bhdl-spice",
+ "bhdl-synthesizer",
+ "env_logger 0.10.2",
+ "log",
+ "rustfft",
+ "serde",
+ "serde_json",
+ "slotmap",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]
@@ -2507,6 +2514,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "primal-check"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc0d895b311e3af9902528fbb8f928688abbd95872819320517cc24ca6b2bd08"
+dependencies = [
+ "num-integer",
+]
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.94"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2737,6 +2753,20 @@ name = "rustc-hash"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "08d43f7aa6b08d49f382cde6a7982047c3426db949b1424bc4b7ec9ae12c6ce2"
+
+[[package]]
+name = "rustfft"
+version = "6.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21db5f9893e91f41798c88680037dba611ca6674703c1a18601b01a72c8adb89"
+dependencies = [
+ "num-complex",
+ "num-integer",
+ "num-traits",
+ "primal-check",
+ "strength_reduce",
+ "transpose",
+]
 
 [[package]]
 name = "rustix"
@@ -3009,6 +3039,12 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "strength_reduce"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe895eb47f22e2ddd4dabc02bce419d2e643c8e3b585c78158b349195bc24d82"
 
 [[package]]
 name = "strsim"
@@ -3350,6 +3386,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9d12581f227e93f094d3af2ae690a574abb8a2b9b7a96e7cfe9647b2b617678"
 dependencies = [
  "once_cell",
+]
+
+[[package]]
+name = "transpose"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ad61aed86bc3faea4300c7aee358b4c6d0c8d6ccc36524c96e4c92ccf26e77e"
+dependencies = [
+ "num-integer",
+ "strength_reduce",
 ]
 
 [[package]]

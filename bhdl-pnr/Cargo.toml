@@ -1,0 +1,25 @@
+[package]
+name = "bhdl-pnr"
+version = "0.1.0"
+edition = "2021"
+description = "Concurrent semantically-aware PCB place & route engine for BHDL"
+
+[dependencies]
+bhdl-netlist = { path = "../bhdl-netlist" }
+bhdl-analyzer = { path = "../bhdl-analyzer" }
+bhdl-common = { path = "../bhdl-common" }
+bhdl-schematic = { path = "../bhdl-schematic" }
+bhdl-components = { path = "../bhdl-components" }
+bhdl-parser = { path = "../bhdl-parser" }
+bhdl-ast = { path = "../bhdl-ast" }
+bhdl-synthesizer = { path = "../bhdl-synthesizer" }
+bhdl-spice = { path = "../bhdl-spice" }
+anyhow = "1.0"
+thiserror = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+log = "0.4"
+env_logger = "0.10"
+rustfft = "6.2"
+slotmap = "1.0"
+tokio = { version = "1", features = ["full"] }
