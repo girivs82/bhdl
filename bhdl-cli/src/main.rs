@@ -176,6 +176,10 @@ enum Commands {
         /// Maximum placement iterations per trial
         #[arg(long, default_value = "600")]
         max_iterations: usize,
+
+        /// Also generate interactive HTML board visualization
+        #[arg(long)]
+        html: bool,
     },
 
     /// Generate power domain documentation
@@ -271,8 +275,8 @@ async fn main() -> Result<()> {
             run_simulation(&source_file, testbench, output, &format).await?;
         }
 
-        Some(Commands::Layout { output, trials, max_iterations }) => {
-            run_layout(&source_file, output, trials, max_iterations, &cli.input).await?;
+        Some(Commands::Layout { output, trials, max_iterations, html }) => {
+            run_layout(&source_file, output, trials, max_iterations, html, &cli.input).await?;
         }
 
         Some(Commands::Doc { output, bom_only, budget_only, no_tree, no_patterns }) => {
@@ -884,6 +888,7 @@ async fn run_layout(
     output: Option<PathBuf>,
     trials: usize,
     max_iterations: usize,
+    html: bool,
     source_path: &Path,
 ) -> Result<()> {
     use bhdl_pnr::semantic::{self, SemanticConfig};
@@ -978,6 +983,14 @@ async fn run_layout(
     });
     std::fs::write(&output_path, &pcb)?;
     println!("\n  {} KiCad PCB: {} ({} bytes)", "✓".green(), output_path.display(), pcb.len());
+
+    // HTML visualization (always generate, or only with --html flag)
+    if html {
+        let html_content = bhdl_pnr::output::html::export_html(&result.board, &result.routes, &result.metrics);
+        let html_path = output_path.with_extension("html");
+        std::fs::write(&html_path, &html_content)?;
+        println!("  {} HTML board: {} ({} bytes)", "✓".green(), html_path.display(), html_content.len());
+    }
 
     Ok(())
 }
