@@ -48,14 +48,19 @@ impl Forces {
 }
 
 /// Initialize component positions based on constraints.
-/// `seed` controls the order in which free components are placed on the grid.
-/// Different seeds produce different initial layouts for multi-trial optimization.
+///
+/// Uses connectivity-aware ordering: BFS from a seed component places
+/// connected components in adjacent grid cells. The `seed` parameter
+/// selects which component starts the BFS, creating different but
+/// connectivity-coherent layouts for multi-trial optimization.
 pub fn initialize(board: &mut Board, seed: u64) {
+    use std::collections::{HashMap, HashSet, VecDeque};
+
     let width = board.config.outline.width();
     let height = board.config.outline.height();
 
-    // Collect free component indices and shuffle based on seed
-    let mut free_indices: Vec<usize> = board
+    // Collect free component indices
+    let free_set: HashSet<usize> = board
         .components
         .iter()
         .enumerate()
@@ -63,9 +68,8 @@ pub fn initialize(board: &mut Board, seed: u64) {
         .map(|(i, _)| i)
         .collect();
 
-    let free_count = free_indices.len();
+    let free_count = free_set.len();
     if free_count == 0 {
-        // Still initialize fixed/edge/region components
         for comp in board.components.iter_mut() {
             if let PlacementConstraint::Fixed { x, y, theta } = &comp.placement {
                 comp.x = *x; comp.y = *y; comp.theta = *theta;
@@ -74,23 +78,79 @@ pub fn initialize(board: &mut Board, seed: u64) {
         return;
     }
 
-    // Simple deterministic shuffle using seed (Fisher-Yates with LCG)
-    let mut rng = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-    for i in (1..free_indices.len()).rev() {
-        rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-        let j = (rng >> 33) as usize % (i + 1);
-        free_indices.swap(i, j);
+    // Build adjacency: component index → set of connected component indices
+    let comp_id_to_idx: HashMap<ComponentId, usize> = board
+        .components
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.id, i))
+        .collect();
+
+    let mut adjacency: HashMap<usize, HashSet<usize>> = HashMap::new();
+    for net in &board.nets {
+        let comp_indices: Vec<usize> = net.pins.iter()
+            .filter_map(|(cid, _)| comp_id_to_idx.get(cid).copied())
+            .filter(|idx| free_set.contains(idx))
+            .collect();
+        for &a in &comp_indices {
+            for &b in &comp_indices {
+                if a != b {
+                    adjacency.entry(a).or_default().insert(b);
+                }
+            }
+        }
     }
 
+    // BFS ordering from a seed component — connected components get adjacent grid cells
+    let free_vec: Vec<usize> = free_set.iter().copied().collect();
+    let start_idx = free_vec[(seed as usize) % free_vec.len()];
+
+    let mut ordered = Vec::with_capacity(free_count);
+    let mut visited = HashSet::new();
+    let mut queue = VecDeque::new();
+
+    queue.push_back(start_idx);
+    visited.insert(start_idx);
+
+    while let Some(idx) = queue.pop_front() {
+        ordered.push(idx);
+
+        // Visit neighbors sorted by connection count (highest-connected first)
+        if let Some(neighbors) = adjacency.get(&idx) {
+            let mut nbrs: Vec<usize> = neighbors.iter()
+                .filter(|n| !visited.contains(n))
+                .copied()
+                .collect();
+            // Sort by degree (more connections = place sooner for better locality)
+            nbrs.sort_by(|a, b| {
+                let da = adjacency.get(a).map_or(0, |s| s.len());
+                let db = adjacency.get(b).map_or(0, |s| s.len());
+                db.cmp(&da)
+            });
+            for n in nbrs {
+                if visited.insert(n) {
+                    queue.push_back(n);
+                }
+            }
+        }
+    }
+
+    // Add any disconnected components not reached by BFS
+    for &idx in &free_vec {
+        if !visited.contains(&idx) {
+            ordered.push(idx);
+        }
+    }
+
+    // Place ordered components on grid (BFS order → connected components are adjacent)
     let cols = (free_count as f64).sqrt().ceil() as usize;
-    let rows = (free_count + cols - 1) / cols;
     let cell_w = (width - 2.0 * board.config.edge_clearance_mm) / cols as f64;
-    let cell_h = (height - 2.0 * board.config.edge_clearance_mm) / rows as f64;
+    let cell_h = (height - 2.0 * board.config.edge_clearance_mm)
+        / ((free_count + cols - 1) / cols) as f64;
     let x0 = board.config.edge_clearance_mm + cell_w / 2.0;
     let y0 = board.config.edge_clearance_mm + cell_h / 2.0;
 
-    // Place shuffled free components on grid
-    for (grid_idx, &comp_idx) in free_indices.iter().enumerate() {
+    for (grid_idx, &comp_idx) in ordered.iter().enumerate() {
         let col = grid_idx % cols;
         let row = grid_idx / cols;
         board.components[comp_idx].x = x0 + col as f64 * cell_w;
