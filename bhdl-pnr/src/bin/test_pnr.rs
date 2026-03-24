@@ -222,6 +222,15 @@ async fn main() -> Result<()> {
             comp.refdes, comp.name, comp.x, comp.y, comp.theta.to_degrees());
     }
 
+    // 9. KiCad PCB export
+    let pcb = bhdl_pnr::output::kicad::export_kicad_pcb(&result.board, &result.routes);
+    let pcb_path = "tests/outputs/pnr/complex_power_tree.kicad_pcb";
+    if let Some(parent) = std::path::Path::new(pcb_path).parent() {
+        fs::create_dir_all(parent).ok();
+    }
+    fs::write(pcb_path, &pcb)?;
+    println!("\n  KiCad PCB: {} ({} bytes)", pcb_path, pcb.len());
+
     println!("\nDone.");
     Ok(())
 }
