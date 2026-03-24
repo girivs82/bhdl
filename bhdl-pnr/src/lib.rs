@@ -191,7 +191,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig) -> Result<PnrResult>
         &mut final_grid,
         &board.nets,
         &board,
-        50, // more iterations for final routing
+        100, // more iterations for final routing on fine grid
         1.0,
         1.0,
     );
