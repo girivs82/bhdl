@@ -427,6 +427,23 @@ pub struct PnrNet {
     pub intent: Option<String>,
 }
 
+impl PnrNet {
+    /// Whether this net connects via a dedicated copper plane rather than routed traces.
+    ///
+    /// Only GND gets a plane (when a dedicated ground layer exists in the stackup).
+    /// Power nets are routed as traces since a 4-layer board has at most 1 power
+    /// plane but typically multiple power rails (VIN, 5V, 3.3V, 1.8V, etc.).
+    /// On 1-layer or 2-layer boards (no dedicated ground layer), even GND is routed.
+    pub fn is_plane_connected(&self, stack: &LayerStack) -> bool {
+        match &self.net_class {
+            PnrNetClass::Ground => {
+                stack.layers.iter().any(|l| l.kind == LayerKind::Ground)
+            }
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PnrNetClass {
     Signal,

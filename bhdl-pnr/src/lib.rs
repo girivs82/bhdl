@@ -204,19 +204,23 @@ pub fn place_and_route(mut board: Board, config: PnrConfig) -> Result<PnrResult>
     let total_length: f64 = final_routes.iter().map(|r| r.total_length()).sum();
     let total_vias: usize = final_routes.iter().map(|r| r.via_count()).sum();
     let routed_count = final_routes.iter().filter(|r| !r.is_empty()).count();
-    let total_nets = board.nets.iter().filter(|n| n.pins.len() >= 2).count();
+    let plane_nets = board.nets.iter()
+        .filter(|n| n.pins.len() >= 2 && n.is_plane_connected(&board.layer_stack))
+        .count();
+    let total_nets = board.nets.iter()
+        .filter(|n| n.pins.len() >= 2 && !n.is_plane_connected(&board.layer_stack))
+        .count();
+
+    let routability = if total_nets > 0 {
+        routed_count as f64 / total_nets as f64 * 100.0
+    } else {
+        100.0
+    };
 
     info!(
-        "P&R complete: HPWL={:.1}mm, routed length={:.1}mm, vias={}, routability={:.0}%, DRC violations={}",
-        hpwl,
-        total_length,
-        total_vias,
-        if total_nets > 0 {
-            routed_count as f64 / total_nets as f64 * 100.0
-        } else {
-            100.0
-        },
-        drc_violations.len()
+        "P&R complete: HPWL={:.1}mm, routed={:.1}mm, vias={}, routability={:.0}% ({}/{} signal, {} plane), DRC={}",
+        hpwl, total_length, total_vias, routability,
+        routed_count, total_nets, plane_nets, drc_violations.len()
     );
 
     Ok(PnrResult {
@@ -228,7 +232,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig) -> Result<PnrResult>
             via_count: total_vias,
             max_congestion: final_grid.max_overflow() as f64,
             routability_pct: if total_nets > 0 {
-                routed_count as f64 / total_nets as f64 * 100.0
+                routability
             } else {
                 100.0
             },

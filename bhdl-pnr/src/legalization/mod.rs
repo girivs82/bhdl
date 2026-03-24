@@ -235,9 +235,9 @@ pub fn check_drc(board: &Board, routes: &[Route]) -> Vec<DrcViolation> {
         }
     }
 
-    // Check for unrouted nets
+    // Check for unrouted nets (skip plane-connected power/ground)
     for (i, net) in board.nets.iter().enumerate() {
-        if net.pins.len() >= 2 {
+        if net.pins.len() >= 2 && !net.is_plane_connected(&board.layer_stack) {
             if i >= routes.len() || routes[i].is_empty() {
                 violations.push(DrcViolation {
                     kind: DrcViolationKind::UnroutedNet,

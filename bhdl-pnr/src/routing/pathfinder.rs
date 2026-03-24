@@ -46,6 +46,11 @@ pub fn pathfinder_route(
                 continue;
             }
 
+            // Power/ground nets use copper planes when dedicated layers exist
+            if net.is_plane_connected(&board.layer_stack) {
+                continue;
+            }
+
             // Rip up previous route
             if !routes[net_idx].is_empty() {
                 remove_route_demand(grid, &routes[net_idx]);
