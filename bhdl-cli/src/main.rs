@@ -163,6 +163,21 @@ enum Commands {
         format: String,
     },
 
+    /// Run PCB place & route and export KiCad PCB
+    Layout {
+        /// Output .kicad_pcb file
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Number of placement trials (best-of-N selection)
+        #[arg(short, long, default_value = "3")]
+        trials: usize,
+
+        /// Maximum placement iterations per trial
+        #[arg(long, default_value = "600")]
+        max_iterations: usize,
+    },
+
     /// Generate power domain documentation
     Doc {
         /// Output file path
@@ -254,6 +269,10 @@ async fn main() -> Result<()> {
         
         Some(Commands::Simulate { testbench, output, format, verbose: _verbose }) => {
             run_simulation(&source_file, testbench, output, &format).await?;
+        }
+
+        Some(Commands::Layout { output, trials, max_iterations }) => {
+            run_layout(&source_file, output, trials, max_iterations, &cli.input).await?;
         }
 
         Some(Commands::Doc { output, bom_only, budget_only, no_tree, no_patterns }) => {
@@ -856,6 +875,109 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
         println!("  Output: {}", output_path.display());
         println!("  Open in a browser for interactive viewing (zoom, pan, hover)");
     }
+
+    Ok(())
+}
+
+async fn run_layout(
+    source_file: &SourceFile,
+    output: Option<PathBuf>,
+    trials: usize,
+    max_iterations: usize,
+    source_path: &Path,
+) -> Result<()> {
+    use bhdl_pnr::semantic::{self, SemanticConfig};
+    use bhdl_pnr::types::PnrConfig;
+
+    println!("{}", "PCB Place & Route".bold().cyan());
+
+    // 1. Analyze
+    let analysis = analyze(source_file);
+    println!("  {} Analysis complete ({} diagnostics)", "✓".green(), analysis.diagnostics.len());
+
+    // 2. Synthesize
+    let mut generator = NetlistGenerator::new();
+    let mut netlist = generator.generate_from_ast_and_analysis(source_file, &analysis).await?;
+    println!("  {} Synthesis: {} instances", "✓".green(), netlist.instances.len());
+
+    // 3. Stamp intents
+    if let Some(ref flow_tracker) = analysis.flow_tracker {
+        bhdl_synthesizer::intent_attribute_stamper::stamp_intent_attributes(&mut netlist, flow_tracker);
+    }
+
+    // 4. Expand
+    bhdl_synthesizer::expansion_interpreter::expand_entity_instances(
+        &mut netlist, &analysis.expansion_recipes,
+    );
+    bhdl_synthesizer::virtual_pin_expander::expand_virtual_pins(&mut netlist);
+    println!("  {} Expansion: {} instances", "✓".green(), netlist.instances.len());
+
+    // 5. GLACIER DC
+    let sim_annotations = {
+        let mut converter = bhdl_spice::NetlistToSpiceConverter::new();
+        match converter.convert(&netlist) {
+            Ok(circuit) => {
+                let circuit_ref = circuit.clone();
+                let solver = bhdl_spice::GlacierDcSolver::new();
+                match solver.solve(circuit) {
+                    Ok(result) => {
+                        println!("  {} GLACIER DC: {} iterations", "✓".green(), result.iterations);
+                        Some(build_simulation_annotations(&result, &circuit_ref))
+                    }
+                    Err(e) => {
+                        eprintln!("  {} GLACIER DC failed: {}", "⚠".yellow(), e);
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("  {} Circuit conversion failed: {}", "⚠".yellow(), e);
+                None
+            }
+        }
+    };
+
+    // 6. Physical selection
+    if let Some(ref ann) = sim_annotations {
+        let phys = bhdl_synthesizer::glacier_physical_selection::apply_glacier_physical_selection(
+            &mut netlist, &ann.instance_currents, &ann.instance_power, &ann.net_voltages,
+        );
+        println!("  {} Physical selection: {} components", "✓".green(), phys.len());
+    }
+
+    // 7. Build PnR board
+    let board = semantic::build_board(
+        &netlist,
+        sim_annotations.as_ref(),
+        SemanticConfig::default(),
+    ).map_err(|e| anyhow::anyhow!("Board construction failed: {}", e))?;
+    println!("  {} Board: {} components, {} nets, {} groups",
+        "✓".green(), board.components.len(), board.nets.len(), board.groups.len());
+
+    // 8. Place & Route (best of N trials)
+    println!("  {} Running {} placement trial(s)...", "→".cyan(), trials);
+    let config = PnrConfig {
+        max_iterations,
+        ..PnrConfig::default()
+    };
+    let result = bhdl_pnr::place_and_route_best_of(board, config, trials)?;
+
+    // 9. Results
+    println!("\n{}", "PnR Results".bold().cyan());
+    println!("  HPWL:          {:.1} mm", result.metrics.hpwl_mm);
+    println!("  Routed length: {:.1} mm", result.metrics.total_routed_length_mm);
+    println!("  Via count:     {}", result.metrics.via_count);
+    println!("  Routability:   {:.1}%", result.metrics.routability_pct);
+    println!("  DRC violations: {}", result.drc_violations.len());
+
+    // 10. Export KiCad PCB
+    let pcb = bhdl_pnr::output::kicad::export_kicad_pcb(&result.board, &result.routes);
+    let output_path = output.unwrap_or_else(|| {
+        let stem = source_path.file_stem().unwrap_or_default().to_string_lossy();
+        PathBuf::from(format!("{}.kicad_pcb", stem))
+    });
+    std::fs::write(&output_path, &pcb)?;
+    println!("\n  {} KiCad PCB: {} ({} bytes)", "✓".green(), output_path.display(), pcb.len());
 
     Ok(())
 }
