@@ -333,7 +333,15 @@ pub fn build_board(
         );
 
         let intent = extract_net_intent(net, netlist, &id_map);
-        let layer_constraint = layer_constraint_for_net(&pnr_class);
+
+        // Intent-driven weight and layer constraint (Phase 4: semantic integration)
+        let (intent_weight, intent_layer) = intent_routing_constraints(intent.as_deref());
+        let base_layer = layer_constraint_for_net(&pnr_class);
+        // Intent layer overrides net-class default if more specific
+        let layer_constraint = match (&intent_layer, &base_layer) {
+            (LayerConstraint::Any, other) => other.clone(),
+            (specific, _) => specific.clone(),
+        };
 
         let net_idx = nets.len();
         id_map.net_to_idx.insert(nl_net_id, net_idx);
@@ -341,9 +349,9 @@ pub fn build_board(
         nets.push(PnrNet {
             id: NetId::default(),
             name: net_name,
-            pins: Vec::new(), // filled after ID assignment
+            pins: Vec::new(),
             net_class: pnr_class,
-            weight: 1.0,
+            weight: intent_weight,
             required_trace_width_mm: trace_width,
             layer_constraint,
             intent,
@@ -607,7 +615,8 @@ fn extract_net_intent(
     netlist: &Netlist,
     id_map: &IdMap,
 ) -> Option<String> {
-    // Look for "intent" attribute on any instance connected to this net
+    // Look for intent on any instance connected to this net.
+    // Intents may be stored as "intent", "intent_name", or "stage_name" attributes.
     for conn in &net.connections {
         let inst_id = match conn {
             ConnectionPoint::PinInstance(pi_id) => {
@@ -620,7 +629,11 @@ fn extract_net_intent(
         if let Some(iid) = inst_id {
             if id_map.inst_to_idx.contains_key(&iid) {
                 if let Some(inst) = netlist.instances.get(iid) {
-                    if let Some(intent) = inst.attributes.get("intent") {
+                    // Check multiple attribute names for intent
+                    if let Some(intent) = inst.attributes.get("intent")
+                        .or_else(|| inst.attributes.get("intent_name"))
+                        .or_else(|| inst.attributes.get("stage_name"))
+                    {
                         return Some(intent.clone());
                     }
                 }
@@ -833,6 +846,59 @@ fn perimeter_point(dist: f64, w: f64, h: f64) -> (f64, f64) {
 }
 
 // ── Layer constraint assignment ───────────────────────────────────────
+
+/// Map intent annotations to routing constraints (weight, layer preference).
+///
+/// Higher weight = routed first by PathFinder (higher priority).
+/// Layer constraint = which layers the net can use.
+///
+/// Based on PCB_Routing_Best_Practices.md §8 (Intent-Driven Routing).
+fn intent_routing_constraints(intent: Option<&str>) -> (f64, LayerConstraint) {
+    match intent {
+        // Critical signals: route first, controlled impedance
+        Some("clock_distribution") => (10.0, LayerConstraint::AdjacentToGround),
+        Some("precision_measurement") => (10.0, LayerConstraint::AdjacentToGround),
+        Some("communication_interface") => (8.0, LayerConstraint::AdjacentToGround),
+
+        // Protection: route early (short paths to connector)
+        Some("input_protection") => (5.0, LayerConstraint::Any),
+        Some("esd_protection") => (5.0, LayerConstraint::Any),
+        Some("overvoltage_protection") => (5.0, LayerConstraint::Any),
+
+        // Regulation: important power path
+        Some("regulation") => (5.0, LayerConstraint::Any),
+
+        // Signal processing: moderate priority, good ground reference
+        Some("anti_alias") => (5.0, LayerConstraint::AdjacentToGround),
+        Some("noise_filtering") => (5.0, LayerConstraint::AdjacentToGround),
+        Some("low_noise") => (5.0, LayerConstraint::AdjacentToGround),
+
+        // Analog: moderate priority
+        Some("signal_amplification") => (3.0, LayerConstraint::AdjacentToGround),
+        Some("current_limiting") => (3.0, LayerConstraint::Any),
+        Some("level_shifting") => (3.0, LayerConstraint::Any),
+
+        // Digital: standard priority
+        Some("signal_buffering") => (2.0, LayerConstraint::Any),
+        Some("output_buffering") => (2.0, LayerConstraint::Any),
+        Some("signal_distribution") => (2.0, LayerConstraint::Any),
+
+        // Power filtering: already handled by cap sizer, low routing priority
+        Some("input_filtering") => (1.0, LayerConstraint::Any),
+        Some("output_filtering") => (1.0, LayerConstraint::Any),
+
+        // Loading: low priority (LEDs, test loads)
+        Some("loading") => (0.5, LayerConstraint::Any),
+
+        // Safety: high priority, any layer
+        Some("automotive_safety") => (8.0, LayerConstraint::Any),
+        Some("medical_safety") => (8.0, LayerConstraint::Any),
+        Some("industrial_control") => (5.0, LayerConstraint::Any),
+
+        // No intent or unknown: default
+        _ => (1.0, LayerConstraint::Any),
+    }
+}
 
 /// Assign layer constraints based on net class.
 ///
