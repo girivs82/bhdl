@@ -137,6 +137,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig) -> Result<PnrResult>
                 pf_iters,
                 0.5,
                 1.0,
+                false, // no vias during placement feedback (single-layer)
             );
 
             // Apply congestion inflation
@@ -184,17 +185,93 @@ pub fn place_and_route(mut board: Board, config: PnrConfig) -> Result<PnrResult>
     info!("Legalizing placement...");
     legalization::legalize(&mut board, 0.1);
 
-    // 5. Final detailed routing
-    info!("Final routing...");
+    // 5. Final routing — two-pass strategy (route like a human)
+    //    Pass 1: single-layer routing (no vias) — maximize what can be routed flat
+    //    Pass 2: remaining unrouted nets get vias to escape to other layers
+    info!("Final routing pass 1 (single-layer, no vias)...");
     let mut final_grid = RoutingGrid::build(&board);
-    let final_routes = pathfinder::pathfinder_route(
+    let mut final_routes = pathfinder::pathfinder_route(
         &mut final_grid,
         &board.nets,
         &board,
-        100, // more iterations for final routing on fine grid
+        100,
         1.0,
         1.0,
+        false, // no vias
     );
+
+    let routed_pass1 = final_routes.iter().filter(|r| !r.is_empty()).count();
+    let needs_via: Vec<usize> = final_routes.iter().enumerate()
+        .filter(|(i, r)| {
+            r.is_empty()
+                && board.nets.get(*i).map_or(false, |n| n.pins.len() >= 2)
+                && !board.nets.get(*i).map_or(false, |n| n.is_plane_connected(&board.layer_stack))
+        })
+        .map(|(i, _)| i)
+        .collect();
+
+    if !needs_via.is_empty() {
+        info!("Final routing pass 2 (with vias for {} remaining nets)...", needs_via.len());
+
+        // Build a fresh grid; reduce capacity where pass 1 routes exist
+        let mut via_grid = RoutingGrid::build(&board);
+        for route in &final_routes {
+            if !route.is_empty() {
+                for seg in &route.segments {
+                    let start = via_grid.point_to_cell(seg.start.0, seg.start.1, seg.layer);
+                    let end = via_grid.point_to_cell(seg.end.0, seg.end.1, seg.layer);
+                    for cell in via_grid.cells_between(start, end) {
+                        let gc = via_grid.get_mut(cell);
+                        gc.capacity = gc.capacity.saturating_sub(1);
+                    }
+                }
+            }
+        }
+
+        // Route ONLY the unrouted nets with a separate PathFinder run.
+        // Power nets get higher weight so they route first (they benefit most
+        // from B.Cu — wider traces, many pins spread across the board).
+        let filtered_nets: Vec<PnrNet> = board.nets.iter().enumerate()
+            .map(|(i, net)| {
+                if needs_via.contains(&i) {
+                    let mut n = net.clone();
+                    // Boost power net priority in pass 2
+                    if matches!(n.net_class, PnrNetClass::Power { .. }) {
+                        n.weight = 10.0; // route power first
+                    }
+                    n
+                } else {
+                    PnrNet {
+                        pins: Vec::new(),
+                        ..net.clone()
+                    }
+                }
+            })
+            .collect();
+
+        let via_routes = pathfinder::pathfinder_route(
+            &mut via_grid,
+            &filtered_nets,
+            &board,
+            100,
+            1.0,
+            1.0,
+            true, // vias allowed
+        );
+
+        let mut pass2_routed = 0;
+        for &idx in &needs_via {
+            if !via_routes[idx].is_empty() {
+                final_routes[idx] = via_routes[idx].clone();
+                pass2_routed += 1;
+            }
+        }
+        info!("Pass 2 routed {} additional nets with vias", pass2_routed);
+        final_grid = via_grid;
+    }
+
+    info!("Routing complete: {} pass1, {} pass2",
+        routed_pass1, final_routes.iter().filter(|r| !r.is_empty()).count() - routed_pass1);
 
     // 6. DRC
     let drc_violations = legalization::check_drc(&board, &final_routes);

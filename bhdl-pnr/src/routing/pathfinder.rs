@@ -11,6 +11,9 @@ use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
 /// Route all nets using PathFinder negotiated congestion.
+///
+/// When `allow_vias` is false, routing is confined to each pin's starting
+/// layer (single-layer routing). Set to true for multi-layer routing.
 pub fn pathfinder_route(
     grid: &mut RoutingGrid,
     nets: &[PnrNet],
@@ -18,6 +21,7 @@ pub fn pathfinder_route(
     max_iterations: usize,
     history_factor: f64,
     present_factor: f64,
+    allow_vias: bool,
 ) -> Vec<Route> {
     let mut routes: Vec<Route> = nets.iter().map(|n| Route::empty(n.id)).collect();
 
@@ -64,6 +68,7 @@ pub fn pathfinder_route(
                 &comp_idx,
                 history_factor,
                 present_factor,
+                allow_vias,
             );
 
             // Add route demand
@@ -99,6 +104,7 @@ fn shortest_path_3d(
     comp_idx: &HashMap<ComponentId, usize>,
     history_factor: f64,
     present_factor: f64,
+    allow_vias: bool,
 ) -> Route {
     if net.pins.len() < 2 {
         return Route::empty(net.id);
@@ -152,6 +158,7 @@ fn shortest_path_3d(
             &board.layer_stack,
             history_factor,
             present_factor,
+            allow_vias,
         );
 
         match result {
@@ -186,6 +193,7 @@ fn dijkstra_to_any(
     stack: &LayerStack,
     history_factor: f64,
     present_factor: f64,
+    allow_vias: bool,
 ) -> Option<(Vec<CellCoord>, CellCoord)> {
     let mut dist: HashMap<CellCoord, f64> = HashMap::new();
     let mut prev: HashMap<CellCoord, CellCoord> = HashMap::new();
@@ -241,24 +249,26 @@ fn dijkstra_to_any(
             }
         }
 
-        // Expand vertical neighbors (via)
-        for nbr in grid.vertical_neighbors(cell) {
-            if !net.layer_constraint.allows(nbr.layer, stack) {
-                continue;
-            }
-            let gc = grid.get(nbr);
-            if gc.blocked {
-                continue;
-            }
+        // Expand vertical neighbors (via) — only when vias are allowed
+        if allow_vias {
+            for nbr in grid.vertical_neighbors(cell) {
+                if !net.layer_constraint.allows(nbr.layer, stack) {
+                    continue;
+                }
+                let gc = grid.get(nbr);
+                if gc.blocked {
+                    continue;
+                }
 
-            let new_cost = cost + grid.via_cost;
-            if new_cost < *dist.get(&nbr).unwrap_or(&f64::INFINITY) {
-                dist.insert(nbr, new_cost);
-                prev.insert(nbr, cell);
-                heap.push(DijkState {
-                    cost: new_cost,
-                    cell: nbr,
-                });
+                let new_cost = cost + grid.via_cost;
+                if new_cost < *dist.get(&nbr).unwrap_or(&f64::INFINITY) {
+                    dist.insert(nbr, new_cost);
+                    prev.insert(nbr, cell);
+                    heap.push(DijkState {
+                        cost: new_cost,
+                        cell: nbr,
+                    });
+                }
             }
         }
     }

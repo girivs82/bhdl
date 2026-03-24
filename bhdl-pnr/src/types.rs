@@ -416,6 +416,7 @@ pub struct PinPosition {
 // ── Net ────────────────────────────────────────────────────────────────
 
 /// Net with semantic metadata from BHDL analysis.
+#[derive(Clone)]
 pub struct PnrNet {
     pub id: NetId,
     pub name: String,
