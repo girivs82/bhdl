@@ -144,9 +144,15 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
             let wl_mag: f64 = forces.dx.iter().zip(forces.dy.iter())
                 .map(|(x, y)| (x * x + y * y).sqrt())
                 .sum::<f64>() / n as f64;
+            let avg_theta: f64 = board.components.iter()
+                .map(|c| c.theta.to_degrees().abs())
+                .sum::<f64>() / n as f64;
+            let theta_force: f64 = forces.d_theta.iter()
+                .map(|t| t.abs())
+                .sum::<f64>() / n as f64;
             info!(
-                "Iter {}: WL={:.1}, density_ovf={:.3}, avg_force_mag={:.4}",
-                iteration, wl, density_overflow, wl_mag
+                "Iter {}: WL={:.1}, density_ovf={:.3}, force={:.4}, avg_θ={:.1}°, θ_force={:.4}",
+                iteration, wl, density_overflow, wl_mag, avg_theta, theta_force
             );
         }
 

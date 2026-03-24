@@ -25,13 +25,15 @@ pub fn legalize(board: &mut Board, snap_grid_mm: f64) {
         comp.y = (comp.y / snap_grid_mm).round() * snap_grid_mm;
     }
 
-    // 2. Snap rotation to nearest 45° (manufacturing convenience)
+    // 2. Snap rotation to nearest 90° (standard PCB manufacturing)
+    //    The continuous rotation optimizer finds the best angle; we snap
+    //    to the nearest manufacturing-friendly orientation.
     for comp in board.components.iter_mut() {
         if comp.placement.is_fixed() {
             continue;
         }
         let deg = comp.theta.to_degrees().rem_euclid(360.0);
-        comp.theta = ((deg / 45.0).round() * 45.0).to_radians();
+        comp.theta = ((deg / 90.0).round() * 90.0).to_radians();
     }
 
     // 3. Resolve overlaps (greedy displacement — fixed components are obstacles)
