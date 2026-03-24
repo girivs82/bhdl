@@ -48,19 +48,38 @@ impl Forces {
 }
 
 /// Initialize component positions based on constraints.
-pub fn initialize(board: &mut Board) {
+/// `seed` controls the order in which free components are placed on the grid.
+/// Different seeds produce different initial layouts for multi-trial optimization.
+pub fn initialize(board: &mut Board, seed: u64) {
     let width = board.config.outline.width();
     let height = board.config.outline.height();
 
-    // Assign positions to free components: scatter in a grid
-    let free_count = board
+    // Collect free component indices and shuffle based on seed
+    let mut free_indices: Vec<usize> = board
         .components
         .iter()
-        .filter(|c| c.placement.is_free())
-        .count();
+        .enumerate()
+        .filter(|(_, c)| c.placement.is_free())
+        .map(|(i, _)| i)
+        .collect();
 
+    let free_count = free_indices.len();
     if free_count == 0 {
+        // Still initialize fixed/edge/region components
+        for comp in board.components.iter_mut() {
+            if let PlacementConstraint::Fixed { x, y, theta } = &comp.placement {
+                comp.x = *x; comp.y = *y; comp.theta = *theta;
+            }
+        }
         return;
+    }
+
+    // Simple deterministic shuffle using seed (Fisher-Yates with LCG)
+    let mut rng = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    for i in (1..free_indices.len()).rev() {
+        rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let j = (rng >> 33) as usize % (i + 1);
+        free_indices.swap(i, j);
     }
 
     let cols = (free_count as f64).sqrt().ceil() as usize;
@@ -70,7 +89,16 @@ pub fn initialize(board: &mut Board) {
     let x0 = board.config.edge_clearance_mm + cell_w / 2.0;
     let y0 = board.config.edge_clearance_mm + cell_h / 2.0;
 
-    let mut idx = 0;
+    // Place shuffled free components on grid
+    for (grid_idx, &comp_idx) in free_indices.iter().enumerate() {
+        let col = grid_idx % cols;
+        let row = grid_idx / cols;
+        board.components[comp_idx].x = x0 + col as f64 * cell_w;
+        board.components[comp_idx].y = y0 + row as f64 * cell_h;
+        board.components[comp_idx].theta = 0.0;
+    }
+
+    // Initialize constrained components (Free already placed above)
     for comp in board.components.iter_mut() {
         match &comp.placement {
             PlacementConstraint::Fixed { x, y, theta } => {
@@ -81,7 +109,6 @@ pub fn initialize(board: &mut Board) {
             PlacementConstraint::FixedPosition { x, y } => {
                 comp.x = *x;
                 comp.y = *y;
-                // theta free, start at 0
             }
             PlacementConstraint::Edge { edge, offset } => {
                 let ec = board.config.edge_clearance_mm;
@@ -105,7 +132,6 @@ pub fn initialize(board: &mut Board) {
                 }
             }
             PlacementConstraint::PreferRegion { region_name } => {
-                // Place at region centroid if found
                 if let Some(region) = board
                     .config
                     .placement_regions
@@ -115,21 +141,11 @@ pub fn initialize(board: &mut Board) {
                     let (cx, cy) = region_centroid(&region.shape);
                     comp.x = cx;
                     comp.y = cy;
-                } else {
-                    // Fallback to grid
-                    let col = idx % cols;
-                    let row = idx / cols;
-                    comp.x = x0 + col as f64 * cell_w;
-                    comp.y = y0 + row as f64 * cell_h;
-                    idx += 1;
                 }
+                // else: already placed on grid via free_indices shuffle
             }
             PlacementConstraint::Free => {
-                let col = idx % cols;
-                let row = idx / cols;
-                comp.x = x0 + col as f64 * cell_w;
-                comp.y = y0 + row as f64 * cell_h;
-                idx += 1;
+                // Already placed above via shuffled grid
             }
         }
     }
