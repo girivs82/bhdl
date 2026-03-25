@@ -232,7 +232,9 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                 let min_dx = (board.components[i].width_mm + board.components[j].width_mm) / 2.0 + 0.5;
                 let min_dy = (board.components[i].height_mm + board.components[j].height_mm) / 2.0 + 0.5;
                 if dx.abs() < min_dx && dy.abs() < min_dy {
-                    let push = 0.3; // mm per iteration
+                    // Push proportional to overlap — larger overlaps get stronger push
+                    let overlap = ((min_dx - dx.abs()) + (min_dy - dy.abs())) / 2.0;
+                    let push = (overlap * 0.5).max(0.2); // at least 0.2mm, scales with overlap
                     let sign_x = if dx >= 0.0 { 1.0 } else { -1.0 };
                     let sign_y = if dy >= 0.0 { 1.0 } else { -1.0 };
                     if !freezer.is_frozen(i) && !freezer.is_frozen(j) {
