@@ -3,35 +3,40 @@
 //! Like FPGA CLB packing: related components are absorbed into blocks,
 //! blocks are placed on the board, then components are detailed within blocks.
 //!
-//! Block types:
-//! - **Expansion block**: IC + expansion children (L, D, C for buck regulator)
-//! - **Singleton block**: standalone component (LED, load resistor)
+//! Internal block layout is netlist-driven:
+//! - Children placed on the side of the IC where their connecting pin is
+//! - Children oriented so connecting pins face the IC
+//! - Shared-net components aligned on their shared pin
 //!
-//! Flow:
-//! 1. Form blocks from functional groups + standalone components
-//! 2. Layout within each block (IC center, caps flanking, known patterns)
-//! 3. Place blocks on board (simple problem: ~8-10 blocks)
-//! 4. Stamp block positions back to components
+//! This follows the vendor app note approach: place components relative to
+//! the IC pins they connect to.
 
 use std::collections::{HashMap, HashSet};
 use crate::types::*;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Side { Left, Right, Top, Bottom }
+
+struct ChildPlacement {
+    local_idx: usize,
+    side: Side,
+    ic_pin_dx: f64,
+    ic_pin_dy: f64,
+    child_pin_dx: f64,
+    child_pin_dy: f64,
+}
 
 /// A placement block containing one or more components.
 #[derive(Debug, Clone)]
 pub struct PlacementBlock {
     pub name: String,
-    /// Component indices (into Board.components)
     pub members: Vec<usize>,
-    /// The "anchor" component (IC/main component), if any
     pub anchor: Option<usize>,
-    /// Block bounding box after internal layout (width, height in mm)
     pub width: f64,
     pub height: f64,
-    /// Block position on board (center)
     pub x: f64,
     pub y: f64,
-    /// Internal component positions relative to block center
-    pub internal_positions: Vec<(f64, f64, f64)>, // (dx, dy, theta) per member
+    pub internal_positions: Vec<(f64, f64, f64)>,
 }
 
 /// Form blocks from the board's functional groups and standalone components.
@@ -44,7 +49,7 @@ pub fn form_blocks(board: &Board) -> Vec<PlacementBlock> {
         .map(|(i, c)| (c.id, i))
         .collect();
 
-    // 1. Create blocks from functional groups (expansion blocks)
+    // 1. Create blocks from functional groups
     for group in &board.groups {
         let member_indices: Vec<usize> = group.members.iter()
             .filter_map(|id| comp_id_to_idx.get(id).copied())
@@ -52,7 +57,6 @@ pub fn form_blocks(board: &Board) -> Vec<PlacementBlock> {
 
         if member_indices.is_empty() { continue; }
 
-        // Find the anchor (parent IC — largest component or the one named by group)
         let anchor = group.parent
             .and_then(|pid| comp_id_to_idx.get(&pid).copied())
             .or_else(|| {
@@ -78,37 +82,37 @@ pub fn form_blocks(board: &Board) -> Vec<PlacementBlock> {
             internal_positions: Vec::new(),
         };
 
-        layout_expansion_block(&mut block, board);
+        layout_block_netlist_driven(&mut block, board);
         blocks.push(block);
     }
 
-    // 2. Create singleton blocks for unassigned components
+    // 2. Singleton blocks for unassigned components
     for (i, comp) in board.components.iter().enumerate() {
         if assigned.contains(&i) { continue; }
-        let block = PlacementBlock {
+        blocks.push(PlacementBlock {
             name: comp.name.clone(),
             members: vec![i],
             anchor: Some(i),
-            width: comp.width_mm + 2.0, // add routing margin
+            width: comp.width_mm + 2.0,
             height: comp.height_mm + 2.0,
             x: 0.0,
             y: 0.0,
             internal_positions: vec![(0.0, 0.0, 0.0)],
-        };
-        blocks.push(block);
+        });
     }
 
     blocks
 }
 
-/// Layout components within an expansion block.
+/// Netlist-driven internal block layout.
 ///
-/// Pattern: IC at center, passive children arranged around it.
-/// - Caps: flanking the IC on the side nearest their connecting pin
-/// - Inductors: above or below the IC
-/// - Diodes: next to the inductor
-/// - Resistors: on the feedback/sense side
-fn layout_expansion_block(block: &mut PlacementBlock, board: &Board) {
+/// Algorithm:
+/// 1. IC at center
+/// 2. For each child, find which IC pin it connects to
+/// 3. Place child on the side of IC where that pin is (left/right/top/bottom)
+/// 4. Orient child so its connecting pin faces the IC
+/// 5. Stack multiple children on the same side with spacing
+fn layout_block_netlist_driven(block: &mut PlacementBlock, board: &Board) {
     let n = block.members.len();
     if n == 0 { return; }
 
@@ -120,95 +124,115 @@ fn layout_expansion_block(block: &mut PlacementBlock, board: &Board) {
         return;
     }
 
-    // Separate anchor (IC) from children (passives)
     let anchor_idx = block.anchor.unwrap_or(block.members[0]);
     let anchor_local = block.members.iter().position(|&m| m == anchor_idx).unwrap_or(0);
     let anchor_comp = &board.components[anchor_idx];
+    let ic_w = anchor_comp.width_mm;
+    let ic_h = anchor_comp.height_mm;
 
-    // Classify children by component type
-    let mut caps: Vec<usize> = Vec::new();    // local indices
-    let mut inductors: Vec<usize> = Vec::new();
-    let mut diodes: Vec<usize> = Vec::new();
-    let mut resistors: Vec<usize> = Vec::new();
-    let mut others: Vec<usize> = Vec::new();
+    // Build a map: for each child, which IC pin(s) does it connect to?
+    let comp_id_to_idx: HashMap<ComponentId, usize> = board.components.iter()
+        .enumerate()
+        .map(|(i, c)| (c.id, i))
+        .collect();
+
+    // For each child, determine which side of the IC it should be placed on
+    // by looking at which IC pin it shares a net with
+    let mut child_placements: Vec<ChildPlacement> = Vec::new();
 
     for (local_i, &global_i) in block.members.iter().enumerate() {
         if global_i == anchor_idx { continue; }
-        let cat = board.components[global_i].name.to_lowercase();
-        let cls = board.components[global_i].package.as_str();
-        if cat.contains("_c_") || cat.contains("cap") || cat.starts_with("c") {
-            caps.push(local_i);
-        } else if cat.contains("_l_") || cat.contains("ind") || cat.starts_with("l") {
-            inductors.push(local_i);
-        } else if cat.contains("_d_") || cat.contains("diode") || cat.starts_with("d") {
-            diodes.push(local_i);
-        } else if cat.contains("_r_") || cat.contains("res") || cat.starts_with("r") {
-            resistors.push(local_i);
+
+        let child_comp = &board.components[global_i];
+
+        // Find a net connecting this child to the anchor IC
+        let mut best_ic_pin: Option<(f64, f64)> = None;
+        let mut best_child_pin: Option<(f64, f64)> = None;
+
+        for net in &board.nets {
+            let has_anchor = net.pins.iter().any(|(cid, _)| {
+                comp_id_to_idx.get(cid).copied() == Some(anchor_idx)
+            });
+            let has_child = net.pins.iter().any(|(cid, _)| {
+                comp_id_to_idx.get(cid).copied() == Some(global_i)
+            });
+
+            if has_anchor && has_child {
+                // Find the IC pin and child pin on this net
+                for &(cid, pid) in &net.pins {
+                    if let Some(&ci) = comp_id_to_idx.get(&cid) {
+                        if ci == anchor_idx {
+                            if let Some(pin) = anchor_comp.pins.iter().find(|p| p.pin_id == pid) {
+                                // Skip GND pins for side determination (GND is everywhere)
+                                if pin.name != "GND" && pin.name != "2" || best_ic_pin.is_none() {
+                                    best_ic_pin = Some((pin.dx, pin.dy));
+                                }
+                            }
+                        }
+                        if ci == global_i {
+                            if let Some(pin) = child_comp.pins.iter().find(|p| p.pin_id == pid) {
+                                best_child_pin = Some((pin.dx, pin.dy));
+                            }
+                        }
+                    }
+                }
+                if best_ic_pin.is_some() && best_child_pin.is_some() {
+                    break; // Found a non-GND connection
+                }
+            }
+        }
+
+        let (ic_dx, ic_dy) = best_ic_pin.unwrap_or((0.0, 0.0));
+        let (ch_dx, ch_dy) = best_child_pin.unwrap_or((0.0, 0.0));
+
+        // Determine side based on IC pin position relative to IC center
+        let side = if ic_dx.abs() > ic_dy.abs() {
+            if ic_dx < 0.0 { Side::Left } else { Side::Right }
         } else {
-            others.push(local_i);
+            if ic_dy < 0.0 { Side::Top } else { Side::Bottom }
+        };
+
+        child_placements.push(ChildPlacement {
+            local_idx: local_i,
+            side,
+            ic_pin_dx: ic_dx,
+            ic_pin_dy: ic_dy,
+            child_pin_dx: ch_dx,
+            child_pin_dy: ch_dy,
+        });
+    }
+
+    // Group children by side
+    let mut left:   Vec<&ChildPlacement> = Vec::new();
+    let mut right:  Vec<&ChildPlacement> = Vec::new();
+    let mut top:    Vec<&ChildPlacement> = Vec::new();
+    let mut bottom: Vec<&ChildPlacement> = Vec::new();
+
+    for cp in &child_placements {
+        match cp.side {
+            Side::Left   => left.push(cp),
+            Side::Right  => right.push(cp),
+            Side::Top    => top.push(cp),
+            Side::Bottom => bottom.push(cp),
         }
     }
 
-    // Layout: IC at center, children arranged around it
-    let ic_w = anchor_comp.width_mm;
-    let ic_h = anchor_comp.height_mm;
-    let spacing = 1.5; // mm between components within block
-
+    // Place children
     let mut positions = vec![(0.0, 0.0, 0.0); n];
     positions[anchor_local] = (0.0, 0.0, 0.0); // IC at center
+    let gap = 1.5; // mm between IC and children
 
-    // Place caps on left/right sides of IC (input caps left, output caps right)
-    let cap_x_start = ic_w / 2.0 + spacing;
-    let mut left_y = -(caps.len() as f64 * 2.0) / 2.0;
-    let mut right_y = left_y;
-    let mut left_side = true;
+    // Place children on each side, stacked along the side's axis
+    place_side_children(&left, &block.members, board, &mut positions,
+        -(ic_w / 2.0 + gap), true, ic_h);
+    place_side_children(&right, &block.members, board, &mut positions,
+        ic_w / 2.0 + gap, true, ic_h);
+    place_side_children(&top, &block.members, board, &mut positions,
+        -(ic_h / 2.0 + gap), false, ic_w);
+    place_side_children(&bottom, &block.members, board, &mut positions,
+        ic_h / 2.0 + gap, false, ic_w);
 
-    for &local_i in &caps {
-        let comp = &board.components[block.members[local_i]];
-        let ch = comp.height_mm;
-        if left_side {
-            positions[local_i] = (-cap_x_start - comp.width_mm / 2.0, left_y, 0.0);
-            left_y += ch + spacing;
-        } else {
-            positions[local_i] = (cap_x_start + comp.width_mm / 2.0, right_y, 0.0);
-            right_y += ch + spacing;
-        }
-        left_side = !left_side;
-    }
-
-    // Place inductors above IC
-    let mut ind_x = -(inductors.len() as f64 * 4.0) / 2.0;
-    for &local_i in &inductors {
-        let comp = &board.components[block.members[local_i]];
-        positions[local_i] = (ind_x, -(ic_h / 2.0 + spacing + comp.height_mm / 2.0), 0.0);
-        ind_x += comp.width_mm + spacing;
-    }
-
-    // Place diodes next to inductors
-    let mut diode_x = ind_x;
-    for &local_i in &diodes {
-        let comp = &board.components[block.members[local_i]];
-        positions[local_i] = (diode_x, -(ic_h / 2.0 + spacing + comp.height_mm / 2.0), 0.0);
-        diode_x += comp.width_mm + spacing;
-    }
-
-    // Place resistors below IC
-    let mut res_x = -(resistors.len() as f64 * 3.0) / 2.0;
-    for &local_i in &resistors {
-        let comp = &board.components[block.members[local_i]];
-        positions[local_i] = (res_x, ic_h / 2.0 + spacing + comp.height_mm / 2.0, 0.0);
-        res_x += comp.width_mm + spacing;
-    }
-
-    // Place others in remaining spots
-    let mut other_x = res_x;
-    for &local_i in &others {
-        let comp = &board.components[block.members[local_i]];
-        positions[local_i] = (other_x, ic_h / 2.0 + spacing + comp.height_mm / 2.0, 0.0);
-        other_x += comp.width_mm + spacing;
-    }
-
-    // Compute block bounding box from all internal positions
+    // Compute block bounding box
     let mut min_x = f64::INFINITY;
     let mut max_x = f64::NEG_INFINITY;
     let mut min_y = f64::INFINITY;
@@ -222,12 +246,10 @@ fn layout_expansion_block(block: &mut PlacementBlock, board: &Board) {
         max_y = max_y.max(dy + comp.height_mm / 2.0);
     }
 
-    // Add margin for internal routing
     let margin = 2.0;
     block.width = (max_x - min_x) + margin * 2.0;
     block.height = (max_y - min_y) + margin * 2.0;
 
-    // Center the internal positions within the block
     let cx = (min_x + max_x) / 2.0;
     let cy = (min_y + max_y) / 2.0;
     for pos in &mut positions {
@@ -238,13 +260,79 @@ fn layout_expansion_block(block: &mut PlacementBlock, board: &Board) {
     block.internal_positions = positions;
 }
 
-/// Place blocks on the board using a simple grid layout.
-/// Blocks are ordered by size (largest first) and placed in a grid.
+/// Place children along one side of the IC.
+///
+/// `offset`: distance from IC center to this side (negative = left/top)
+/// `horizontal`: if true, offset is along X and children stack along Y
+///               if false, offset is along Y and children stack along X
+/// `span`: how much space along the stacking axis (IC dimension)
+fn place_side_children(
+    children: &[&ChildPlacement],
+    members: &[usize],
+    board: &Board,
+    positions: &mut [(f64, f64, f64)],
+    offset: f64,
+    horizontal: bool, // offset direction is X (left/right sides)
+    span: f64,
+) {
+    if children.is_empty() { return; }
+
+    let spacing = 1.0;
+    let total_children = children.len();
+
+    // Distribute children evenly along the side
+    let start = -(total_children as f64 - 1.0) * spacing * 1.5;
+
+    for (i, cp) in children.iter().enumerate() {
+        let comp = &board.components[members[cp.local_idx]];
+        let stack_pos = start + i as f64 * (comp.height_mm.max(comp.width_mm) + spacing);
+
+        let (x, y, theta) = if horizontal {
+            // Left/Right side: offset along X, stack along Y
+            let child_w = comp.width_mm;
+            let x = if offset < 0.0 {
+                offset - child_w / 2.0 // left side
+            } else {
+                offset + child_w / 2.0 // right side
+            };
+            // Orient child: if on left side, rotate 180° so pins face right (toward IC)
+            // if on right side, keep at 0° (pins face left toward IC)
+            let theta = if offset < 0.0 && cp.child_pin_dx > 0.0 {
+                std::f64::consts::PI // flip so connecting pin faces IC
+            } else if offset > 0.0 && cp.child_pin_dx < 0.0 {
+                std::f64::consts::PI
+            } else {
+                0.0
+            };
+            (x, stack_pos, theta)
+        } else {
+            // Top/Bottom side: offset along Y, stack along X
+            let child_h = comp.height_mm;
+            let y = if offset < 0.0 {
+                offset - child_h / 2.0
+            } else {
+                offset + child_h / 2.0
+            };
+            let theta = if offset < 0.0 && cp.child_pin_dy > 0.0 {
+                std::f64::consts::PI
+            } else if offset > 0.0 && cp.child_pin_dy < 0.0 {
+                std::f64::consts::PI
+            } else {
+                0.0
+            };
+            (stack_pos, y, theta)
+        };
+
+        positions[cp.local_idx] = (x, y, theta);
+    }
+}
+
+/// Place blocks on the board using shelf packing.
 pub fn place_blocks(blocks: &mut [PlacementBlock], board_w: f64, board_h: f64, ec: f64, seed: u64) {
     let n = blocks.len();
     if n == 0 { return; }
 
-    // Sort blocks by area (largest first) for stable placement
+    // Sort by area (largest first)
     let mut order: Vec<usize> = (0..n).collect();
     order.sort_by(|&a, &b| {
         let area_a = blocks[a].width * blocks[a].height;
@@ -252,12 +340,10 @@ pub fn place_blocks(blocks: &mut [PlacementBlock], board_w: f64, board_h: f64, e
         area_b.partial_cmp(&area_a).unwrap()
     });
 
-    // Use seed to vary the initial rotation of the order
     let rotate_by = (seed as usize) % n.max(1);
     order.rotate_left(rotate_by.min(n.saturating_sub(1)));
 
-    // Simple shelf packing: place blocks left-to-right, top-to-bottom
-    let usable_w = board_w - 2.0 * ec;
+    // Shelf packing
     let mut shelf_x = ec;
     let mut shelf_y = ec;
     let mut shelf_height = 0.0_f64;
@@ -266,22 +352,20 @@ pub fn place_blocks(blocks: &mut [PlacementBlock], board_w: f64, board_h: f64, e
         let bw = blocks[idx].width;
         let bh = blocks[idx].height;
 
-        // Wrap to next shelf if needed
         if shelf_x + bw > board_w - ec {
             shelf_x = ec;
-            shelf_y += shelf_height + 2.0; // gap between shelves
+            shelf_y += shelf_height + 3.0; // routing channel between shelves
             shelf_height = 0.0;
         }
 
         blocks[idx].x = shelf_x + bw / 2.0;
         blocks[idx].y = shelf_y + bh / 2.0;
-        shelf_x += bw + 2.0; // gap between blocks on shelf
+        shelf_x += bw + 3.0; // routing channel between blocks
         shelf_height = shelf_height.max(bh);
     }
 }
 
 /// Stamp block positions back to components.
-/// Each component's global position = block position + internal offset.
 pub fn stamp_positions(blocks: &[PlacementBlock], board: &mut Board) {
     for block in blocks {
         for (local_i, &comp_idx) in block.members.iter().enumerate() {
