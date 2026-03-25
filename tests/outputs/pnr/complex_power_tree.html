@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>BHDL PCB Layout</title>
+<style>
+  body { margin: 0; background: #1a1a2e; color: #eee; font-family: 'Segoe UI', system-ui, sans-serif; }
+  #toolbar { padding: 8px 16px; background: #16213e; display: flex; gap: 16px; align-items: center; font-size: 13px; }
+  #toolbar .metric { background: #0f3460; padding: 4px 10px; border-radius: 4px; }
+  #toolbar .metric b { color: #e94560; }
+  #info { position: fixed; bottom: 8px; left: 8px; font-size: 12px; opacity: 0.6; }
+  canvas { display: block; cursor: crosshair; }
+</style>
+</head>
+<body>
+<div id="toolbar">
+  <span style="font-weight:bold; color:#e94560;">BHDL PCB Layout</span>
+  <span class="metric">HPWL: <b>357.0</b> mm</span>
+  <span class="metric">Routed: <b>148.6</b> mm</span>
+  <span class="metric">Vias: <b>11</b></span>
+  <span class="metric">Routability: <b>50%</b></span>
+  <span class="metric">DRC: <b>0</b></span>
+  <span class="metric">Board: <b>36.8 × 36.8</b> mm</span>
+</div>
+<canvas id="c"></canvas>
+<div id="info">Scroll to zoom · Drag to pan · Hover for info</div>
+<script>
+"use strict";
+const BOARD_W = 36.806928695559485;
+const BOARD_H = 36.806928695559485;
+const COMPONENTS = [{"x":36.307,"y":36.307,"w":2.900,"h":1.300,"theta":3.1416,"refdes":"D1","name":"tvs","pkg":"SOT-23","cat":"diode","intent":null,"group":null,"pins":[{"dx":-0.925,"dy":-0.475,"pw":1.350,"ph":0.500,"name":"A"},{"dx":-0.925,"dy":0.475,"pw":1.350,"ph":0.500,"name":"K"}]},
+{"x":36.307,"y":7.958,"w":4.900,"h":3.900,"theta":0.0000,"refdes":"X1","name":"buck","pkg":"SOIC-8","cat":"voltage_regulator","intent":null,"group":"buck","pins":[{"dx":-2.475,"dy":-1.905,"pw":1.850,"ph":0.500,"name":"VIN"},{"dx":-2.475,"dy":-0.635,"pw":1.850,"ph":0.500,"name":"EN"},{"dx":-2.475,"dy":0.635,"pw":1.850,"ph":0.500,"name":"BST"},{"dx":-2.475,"dy":1.905,"pw":1.850,"ph":0.500,"name":"SW"},{"dx":2.475,"dy":1.905,"pw":1.850,"ph":0.500,"name":"GND"}]},
+{"x":36.307,"y":24.179,"w":1.600,"h":0.800,"theta":3.1416,"refdes":"R1","name":"r_led5b","pkg":"0603","cat":"resistor","intent":null,"group":null,"pins":[{"dx":-0.825,"dy":0.000,"pw":0.750,"ph":0.900,"name":"1"},{"dx":0.825,"dy":0.000,"pw":0.750,"ph":0.900,"name":"2"}]},
+{"x":36.307,"y":31.668,"w":2.900,"h":1.300,"theta":0.0000,"refdes":"D2","name":"led5b","pkg":"SOT-23","cat":"led","intent":null,"group":null,"pins":[{"dx":-0.925,"dy":-0.475,"pw":1.350,"ph":0.500,"name":"A"},{"dx":-0.925,"dy":0.475,"pw":1.350,"ph":0.500,"name":"K"}]},
+{"x":19.912,"y":30.781,"w":5.000,"h":5.000,"theta":1.5708,"refdes":"R2","name":"r_load5b","pkg":"THT","cat":"ic","intent":null,"group":null,"pins":[{"dx":-2.500,"dy":0.000,"pw":0.500,"ph":0.300,"name":"1"},{"dx":2.500,"dy":0.000,"pw":0.500,"ph":0.300,"name":"2"}]},
+{"x":26.196,"y":26.203,"w":6.500,"h":3.500,"theta":1.5708,"refdes":"U1","name":"reg33","pkg":"SOT-223","cat":"voltage_regulator","intent":null,"group":"reg33","pins":[{"dx":-2.625,"dy":-2.300,"pw":2.550,"ph":0.800,"name":"VIN"},{"dx":-2.625,"dy":0.000,"pw":2.550,"ph":0.800,"name":"VOUT"},{"dx":-2.625,"dy":2.300,"pw":2.550,"ph":0.800,"name":"EN"},{"dx":2.625,"dy":0.000,"pw":2.550,"ph":2.100,"name":"GND"}]},
+{"x":28.278,"y":32.823,"w":1.600,"h":0.800,"theta":1.5708,"refdes":"R3","name":"r_led33","pkg":"0603","cat":"resistor","intent":null,"group":null,"pins":[{"dx":-0.825,"dy":0.000,"pw":0.750,"ph":0.900,"name":"1"},{"dx":0.825,"dy":0.000,"pw":0.750,"ph":0.900,"name":"2"}]},
+{"x":36.307,"y":16.779,"w":2.900,"h":1.300,"theta":6.2832,"refdes":"D3","name":"led33","pkg":"SOT-23","cat":"led","intent":null,"group":null,"pins":[{"dx":-0.925,"dy":-0.475,"pw":1.350,"ph":0.500,"name":"A"},{"dx":-0.925,"dy":0.475,"pw":1.350,"ph":0.500,"name":"K"}]},
+{"x":31.955,"y":24.916,"w":1.600,"h":0.800,"theta":1.5708,"refdes":"R4","name":"r_load33","pkg":"0603","cat":"resistor","intent":null,"group":null,"pins":[{"dx":-0.825,"dy":0.000,"pw":0.750,"ph":0.900,"name":"1"},{"dx":0.825,"dy":0.000,"pw":0.750,"ph":0.900,"name":"2"}]},
+{"x":29.756,"y":36.307,"w":4.900,"h":3.900,"theta":3.1416,"refdes":"X2","name":"reg5aux","pkg":"SOIC-8","cat":"voltage_regulator","intent":null,"group":"reg5aux","pins":[{"dx":-2.475,"dy":-1.905,"pw":1.850,"ph":0.500,"name":"VIN"},{"dx":-2.475,"dy":-0.635,"pw":1.850,"ph":0.500,"name":"SW"},{"dx":-2.475,"dy":0.635,"pw":1.850,"ph":0.500,"name":"FB"},{"dx":-2.475,"dy":1.905,"pw":1.850,"ph":0.500,"name":"BOOT"},{"dx":2.475,"dy":1.905,"pw":1.850,"ph":0.500,"name":"EN"},{"dx":2.475,"dy":0.635,"pw":1.850,"ph":0.500,"name":"GND"}]},
+{"x":21.578,"y":35.123,"w":1.600,"h":0.800,"theta":0.0000,"refdes":"R5","name":"r_led5a","pkg":"0603","cat":"resistor","intent":null,"group":null,"pins":[{"dx":-0.825,"dy":0.000,"pw":0.750,"ph":0.900,"name":"1"},{"dx":0.825,"dy":0.000,"pw":0.750,"ph":0.900,"name":"2"}]},
+{"x":36.307,"y":11.952,"w":2.900,"h":1.300,"theta":1.5708,"refdes":"D4","name":"led5a","pkg":"SOT-23","cat":"led","intent":null,"group":null,"pins":[{"dx":-0.925,"dy":-0.475,"pw":1.350,"ph":0.500,"name":"A"},{"dx":-0.925,"dy":0.475,"pw":1.350,"ph":0.500,"name":"K"}]},
+{"x":36.307,"y":19.700,"w":6.500,"h":3.500,"theta":6.2832,"refdes":"U2","name":"reg18","pkg":"SOT-223","cat":"voltage_regulator","intent":null,"group":"reg18","pins":[{"dx":-2.625,"dy":-2.300,"pw":2.550,"ph":0.800,"name":"VIN"},{"dx":-2.625,"dy":0.000,"pw":2.550,"ph":0.800,"name":"VOUT"},{"dx":-2.625,"dy":2.300,"pw":2.550,"ph":0.800,"name":"GND"}]},
+{"x":36.307,"y":25.777,"w":5.000,"h":2.500,"theta":6.2832,"refdes":"R6","name":"r_load18","pkg":"2010","cat":"resistor","intent":null,"group":null,"pins":[{"dx":-2.425,"dy":0.000,"pw":1.000,"ph":2.650,"name":"1"},{"dx":2.425,"dy":0.000,"pw":1.000,"ph":2.650,"name":"2"}]},
+{"x":33.631,"y":30.779,"w":1.600,"h":0.800,"theta":4.7124,"refdes":"R7","name":"r_led18","pkg":"0603","cat":"resistor","intent":null,"group":null,"pins":[{"dx":-0.825,"dy":0.000,"pw":0.750,"ph":0.900,"name":"1"},{"dx":0.825,"dy":0.000,"pw":0.750,"ph":0.900,"name":"2"}]},
+{"x":36.307,"y":32.695,"w":2.900,"h":1.300,"theta":0.0000,"refdes":"D5","name":"led18","pkg":"SOT-23","cat":"led","intent":null,"group":null,"pins":[{"dx":-0.925,"dy":-0.475,"pw":1.350,"ph":0.500,"name":"A"},{"dx":-0.925,"dy":0.475,"pw":1.350,"ph":0.500,"name":"K"}]},
+{"x":36.307,"y":29.303,"w":3.200,"h":2.500,"theta":6.2832,"refdes":"L1","name":"buck_L_out","pkg":"1210","cat":"inductor","intent":null,"group":"buck","pins":[{"dx":-1.525,"dy":0.000,"pw":1.000,"ph":2.650,"name":"1"},{"dx":1.525,"dy":0.000,"pw":1.000,"ph":2.650,"name":"2"}]},
+{"x":23.775,"y":33.549,"w":3.200,"h":1.600,"theta":1.5708,"refdes":"C1","name":"buck_C_out","pkg":"1206","cat":"resistor","intent":null,"group":"buck","pins":[{"dx":-1.525,"dy":0.000,"pw":1.000,"ph":1.750,"name":"1"},{"dx":1.525,"dy":0.000,"pw":1.000,"ph":1.750,"name":"2"}]},
+{"x":31.217,"y":20.972,"w":5.000,"h":2.500,"theta":1.5708,"refdes":"C2","name":"buck_C_in","pkg":"2010","cat":"resistor","intent":null,"group":"buck","pins":[{"dx":-2.425,"dy":0.000,"pw":1.000,"ph":2.650,"name":"1"},{"dx":2.425,"dy":0.000,"pw":1.000,"ph":2.650,"name":"2"}]},
+{"x":36.307,"y":35.213,"w":3.200,"h":1.600,"theta":0.0000,"refdes":"C3","name":"buck_C_bst","pkg":"1206","cat":"resistor","intent":null,"group":"buck","pins":[{"dx":-1.525,"dy":0.000,"pw":1.000,"ph":1.750,"name":"1"},{"dx":1.525,"dy":0.000,"pw":1.000,"ph":1.750,"name":"2"}]},
+{"x":29.435,"y":27.802,"w":3.200,"h":1.600,"theta":1.5708,"refdes":"C4","name":"reg33_C_in","pkg":"1206","cat":"resistor","intent":null,"group":"reg33","pins":[{"dx":-1.525,"dy":0.000,"pw":1.000,"ph":1.750,"name":"1"},{"dx":1.525,"dy":0.000,"pw":1.000,"ph":1.750,"name":"2"}]},
+{"x":25.962,"y":33.056,"w":3.200,"h":1.600,"theta":1.5708,"refdes":"C5","name":"reg33_C_out","pkg":"1206","cat":"resistor","intent":null,"group":"reg33","pins":[{"dx":-1.525,"dy":0.000,"pw":1.000,"ph":1.750,"name":"1"},{"dx":1.525,"dy":0.000,"pw":1.000,"ph":1.750,"name":"2"}]},
+{"x":26.082,"y":36.307,"w":2.000,"h":1.250,"theta":4.7124,"refdes":"L2","name":"reg5aux_L_out","pkg":"0805","cat":"inductor","intent":null,"group":"reg5aux","pins":[{"dx":-0.975,"dy":0.000,"pw":0.850,"ph":1.350,"name":"1"},{"dx":0.975,"dy":0.000,"pw":0.850,"ph":1.350,"name":"2"}]},
+{"x":33.456,"y":36.307,"w":2.900,"h":1.300,"theta":4.7124,"refdes":"D6","name":"reg5aux_D_catch","pkg":"SOT-23","cat":"diode","intent":null,"group":"reg5aux","pins":[{"dx":-0.925,"dy":-0.475,"pw":1.350,"ph":0.500,"name":"A"},{"dx":-0.925,"dy":0.475,"pw":1.350,"ph":0.500,"name":"K"}]},
+{"x":32.203,"y":32.969,"w":3.200,"h":1.600,"theta":0.0000,"refdes":"C6","name":"reg5aux_C_out","pkg":"1206","cat":"resistor","intent":null,"group":"reg5aux","pins":[{"dx":-1.525,"dy":0.000,"pw":1.000,"ph":1.750,"name":"1"},{"dx":1.525,"dy":0.000,"pw":1.000,"ph":1.750,"name":"2"}]},
+{"x":35.890,"y":22.833,"w":1.600,"h":0.800,"theta":0.0000,"refdes":"R8","name":"reg5aux_R_top","pkg":"0603","cat":"resistor","intent":null,"group":"reg5aux","pins":[{"dx":-0.825,"dy":0.000,"pw":0.750,"ph":0.900,"name":"1"},{"dx":0.825,"dy":0.000,"pw":0.750,"ph":0.900,"name":"2"}]},
+{"x":24.055,"y":36.307,"w":1.600,"h":0.800,"theta":3.1416,"refdes":"R9","name":"reg5aux_R_bot","pkg":"0603","cat":"resistor","intent":null,"group":"reg5aux","pins":[{"dx":-0.825,"dy":0.000,"pw":0.750,"ph":0.900,"name":"1"},{"dx":0.825,"dy":0.000,"pw":0.750,"ph":0.900,"name":"2"}]},
+{"x":31.725,"y":27.883,"w":3.200,"h":1.600,"theta":1.5708,"refdes":"C7","name":"reg5aux_C_boot","pkg":"1206","cat":"resistor","intent":null,"group":"reg5aux","pins":[{"dx":-1.525,"dy":0.000,"pw":1.000,"ph":1.750,"name":"1"},{"dx":1.525,"dy":0.000,"pw":1.000,"ph":1.750,"name":"2"}]},
+{"x":36.288,"y":14.778,"w":3.200,"h":1.600,"theta":0.0000,"refdes":"C8","name":"reg18_C_in","pkg":"1206","cat":"resistor","intent":null,"group":"reg18","pins":[{"dx":-1.525,"dy":0.000,"pw":1.000,"ph":1.750,"name":"1"},{"dx":1.525,"dy":0.000,"pw":1.000,"ph":1.750,"name":"2"}]},
+{"x":30.954,"y":30.791,"w":3.200,"h":1.600,"theta":6.2832,"refdes":"C9","name":"reg18_C_out","pkg":"1206","cat":"resistor","intent":null,"group":"reg18","pins":[{"dx":-1.525,"dy":0.000,"pw":1.000,"ph":1.750,"name":"1"},{"dx":1.525,"dy":0.000,"pw":1.000,"ph":1.750,"name":"2"}]}];
+const ROUTES = [{"segments":[{"x1":36.403,"y1":35.500,"x2":35.500,"y2":35.500,"layer":5,"width":0.426},{"x1":35.500,"y1":35.500,"x2":34.500,"y2":35.500,"layer":5,"width":0.426},{"x1":34.500,"y1":35.500,"x2":33.500,"y2":35.500,"layer":5,"width":0.426},{"x1":33.500,"y1":35.500,"x2":32.500,"y2":36.403,"layer":5,"width":0.426},{"x1":34.500,"y1":35.500,"x2":34.500,"y2":34.500,"layer":5,"width":0.426},{"x1":34.500,"y1":34.500,"x2":34.500,"y2":33.500,"layer":5,"width":0.426},{"x1":34.500,"y1":33.500,"x2":34.500,"y2":32.500,"layer":5,"width":0.426},{"x1":34.500,"y1":32.500,"x2":34.500,"y2":31.500,"layer":5,"width":0.426},{"x1":34.500,"y1":31.500,"x2":34.500,"y2":30.500,"layer":5,"width":0.426},{"x1":34.500,"y1":30.500,"x2":34.500,"y2":29.500,"layer":5,"width":0.426},{"x1":34.500,"y1":29.500,"x2":34.500,"y2":28.500,"layer":5,"width":0.426},{"x1":34.500,"y1":28.500,"x2":34.500,"y2":27.500,"layer":5,"width":0.426},{"x1":34.500,"y1":27.500,"x2":34.500,"y2":26.500,"layer":5,"width":0.426},{"x1":34.500,"y1":26.500,"x2":34.500,"y2":25.500,"layer":5,"width":0.426},{"x1":34.500,"y1":25.500,"x2":34.500,"y2":24.500,"layer":5,"width":0.426},{"x1":34.500,"y1":24.500,"x2":34.500,"y2":23.500,"layer":5,"width":0.426},{"x1":34.500,"y1":23.500,"x2":34.500,"y2":22.500,"layer":5,"width":0.426},{"x1":34.500,"y1":22.500,"x2":34.500,"y2":21.500,"layer":5,"width":0.426},{"x1":34.500,"y1":21.500,"x2":34.500,"y2":20.500,"layer":5,"width":0.426},{"x1":34.500,"y1":20.500,"x2":34.500,"y2":19.500,"layer":5,"width":0.426},{"x1":34.500,"y1":19.500,"x2":34.500,"y2":18.500,"layer":5,"width":0.426},{"x1":34.500,"y1":18.500,"x2":34.500,"y2":17.500,"layer":5,"width":0.426},{"x1":34.500,"y1":17.500,"x2":34.500,"y2":16.500,"layer":5,"width":0.426},{"x1":34.500,"y1":16.500,"x2":34.500,"y2":15.500,"layer":5,"width":0.426},{"x1":34.500,"y1":15.500,"x2":34.500,"y2":14.500,"layer":5,"width":0.426},{"x1":34.500,"y1":14.500,"x2":34.500,"y2":13.500,"layer":5,"width":0.426},{"x1":34.500,"y1":13.500,"x2":34.500,"y2":12.500,"layer":5,"width":0.426},{"x1":34.500,"y1":12.500,"x2":34.500,"y2":11.500,"layer":5,"width":0.426},{"x1":34.500,"y1":11.500,"x2":34.500,"y2":10.500,"layer":5,"width":0.426},{"x1":34.500,"y1":10.500,"x2":34.500,"y2":9.500,"layer":5,"width":0.426},{"x1":34.500,"y1":9.500,"x2":34.500,"y2":8.500,"layer":5,"width":0.426},{"x1":34.500,"y1":8.500,"x2":34.500,"y2":7.500,"layer":5,"width":0.426},{"x1":34.500,"y1":7.500,"x2":33.500,"y2":6.500,"layer":5,"width":0.426}],"vias":[{"x":36.403,"y":35.500},{"x":32.500,"y":36.403},{"x":33.500,"y":6.500}]},
+{"segments":[{"x1":36.403,"y1":24.500,"x2":35.500,"y2":24.500,"layer":3,"width":0.426},{"x1":35.500,"y1":24.500,"x2":34.500,"y2":24.500,"layer":3,"width":0.426},{"x1":34.500,"y1":24.500,"x2":33.500,"y2":24.500,"layer":3,"width":0.426},{"x1":33.500,"y1":24.500,"x2":32.500,"y2":24.500,"layer":3,"width":0.426},{"x1":32.500,"y1":24.500,"x2":31.500,"y2":24.500,"layer":3,"width":0.426},{"x1":31.500,"y1":24.500,"x2":30.500,"y2":24.500,"layer":3,"width":0.426},{"x1":30.500,"y1":24.500,"x2":29.500,"y2":24.500,"layer":3,"width":0.426},{"x1":29.500,"y1":24.500,"x2":28.500,"y2":23.500,"layer":3,"width":0.426}],"vias":[{"x":36.403,"y":24.500},{"x":28.500,"y":23.500}]},
+{"segments":[{"x1":33.500,"y1":19.500,"x2":33.500,"y2":20.500,"layer":2,"width":0.426},{"x1":33.500,"y1":20.500,"x2":33.500,"y2":21.500,"layer":2,"width":0.426},{"x1":33.500,"y1":21.500,"x2":33.500,"y2":22.500,"layer":2,"width":0.426},{"x1":33.500,"y1":22.500,"x2":33.500,"y2":23.500,"layer":2,"width":0.426},{"x1":33.500,"y1":23.500,"x2":33.500,"y2":24.500,"layer":2,"width":0.426},{"x1":33.500,"y1":24.500,"x2":33.500,"y2":25.500,"layer":2,"width":0.426}],"vias":[{"x":33.500,"y":19.500},{"x":33.500,"y":25.500}]},
+{"segments":[{"x1":20.500,"y1":35.500,"x2":19.500,"y2":35.500,"layer":0,"width":0.426},{"x1":19.500,"y1":35.500,"x2":18.500,"y2":34.500,"layer":0,"width":0.426},{"x1":18.500,"y1":34.500,"x2":17.500,"y2":33.500,"layer":0,"width":0.426},{"x1":17.500,"y1":33.500,"x2":16.500,"y2":33.500,"layer":0,"width":0.426},{"x1":16.500,"y1":33.500,"x2":16.500,"y2":32.500,"layer":0,"width":0.426},{"x1":16.500,"y1":32.500,"x2":16.500,"y2":31.500,"layer":0,"width":0.426},{"x1":16.500,"y1":31.500,"x2":16.500,"y2":30.500,"layer":0,"width":0.426},{"x1":16.500,"y1":30.500,"x2":16.500,"y2":29.500,"layer":0,"width":0.426},{"x1":16.500,"y1":29.500,"x2":16.500,"y2":28.500,"layer":0,"width":0.426},{"x1":16.500,"y1":28.500,"x2":16.500,"y2":27.500,"layer":0,"width":0.426},{"x1":16.500,"y1":27.500,"x2":17.500,"y2":27.500,"layer":0,"width":0.426},{"x1":17.500,"y1":27.500,"x2":18.500,"y2":26.500,"layer":0,"width":0.426},{"x1":18.500,"y1":26.500,"x2":19.500,"y2":25.500,"layer":0,"width":0.426},{"x1":19.500,"y1":25.500,"x2":20.500,"y2":24.500,"layer":0,"width":0.426},{"x1":20.500,"y1":24.500,"x2":21.500,"y2":23.500,"layer":0,"width":0.426},{"x1":21.500,"y1":23.500,"x2":22.500,"y2":22.500,"layer":0,"width":0.426},{"x1":22.500,"y1":22.500,"x2":23.500,"y2":21.500,"layer":0,"width":0.426},{"x1":23.500,"y1":21.500,"x2":24.500,"y2":21.500,"layer":0,"width":0.426},{"x1":24.500,"y1":21.500,"x2":25.500,"y2":21.500,"layer":0,"width":0.426},{"x1":25.500,"y1":21.500,"x2":26.500,"y2":20.500,"layer":0,"width":0.426},{"x1":26.500,"y1":20.500,"x2":27.500,"y2":19.500,"layer":0,"width":0.426},{"x1":27.500,"y1":19.500,"x2":28.500,"y2":18.500,"layer":0,"width":0.426},{"x1":28.500,"y1":18.500,"x2":29.500,"y2":17.500,"layer":0,"width":0.426},{"x1":29.500,"y1":17.500,"x2":30.500,"y2":17.500,"layer":0,"width":0.426},{"x1":30.500,"y1":17.500,"x2":31.500,"y2":17.500,"layer":0,"width":0.426},{"x1":31.500,"y1":17.500,"x2":32.500,"y2":17.500,"layer":0,"width":0.426},{"x1":32.500,"y1":17.500,"x2":33.500,"y2":17.500,"layer":0,"width":0.426},{"x1":33.500,"y1":17.500,"x2":33.500,"y2":16.500,"layer":0,"width":0.426},{"x1":33.500,"y1":16.500,"x2":33.500,"y2":15.500,"layer":0,"width":0.426},{"x1":33.500,"y1":15.500,"x2":34.500,"y2":14.500,"layer":0,"width":0.426}],"vias":[]},
+{"segments":[{"x1":26.500,"y1":23.500,"x2":26.500,"y2":22.500,"layer":0,"width":0.426},{"x1":26.500,"y1":22.500,"x2":25.500,"y2":22.500,"layer":0,"width":0.426},{"x1":25.500,"y1":22.500,"x2":24.500,"y2":22.500,"layer":0,"width":0.426},{"x1":24.500,"y1":22.500,"x2":23.500,"y2":22.500,"layer":0,"width":0.426},{"x1":23.500,"y1":22.500,"x2":23.500,"y2":23.500,"layer":0,"width":0.426},{"x1":23.500,"y1":23.500,"x2":23.500,"y2":24.500,"layer":0,"width":0.426},{"x1":23.500,"y1":24.500,"x2":23.500,"y2":25.500,"layer":0,"width":0.426},{"x1":23.500,"y1":25.500,"x2":23.500,"y2":26.500,"layer":0,"width":0.426},{"x1":23.500,"y1":26.500,"x2":23.500,"y2":27.500,"layer":0,"width":0.426},{"x1":23.500,"y1":27.500,"x2":23.500,"y2":28.500,"layer":0,"width":0.426},{"x1":23.500,"y1":28.500,"x2":23.500,"y2":29.500,"layer":0,"width":0.426},{"x1":23.500,"y1":29.500,"x2":23.500,"y2":30.500,"layer":0,"width":0.426},{"x1":23.500,"y1":30.500,"x2":24.500,"y2":30.500,"layer":0,"width":0.426},{"x1":24.500,"y1":30.500,"x2":25.500,"y2":30.500,"layer":0,"width":0.426},{"x1":25.500,"y1":30.500,"x2":26.500,"y2":30.500,"layer":0,"width":0.426},{"x1":26.500,"y1":30.500,"x2":27.500,"y2":30.500,"layer":0,"width":0.426},{"x1":27.500,"y1":30.500,"x2":28.500,"y2":31.500,"layer":0,"width":0.426}],"vias":[]},
+{"segments":[{"x1":33.500,"y1":9.500,"x2":33.500,"y2":10.500,"layer":2,"width":0.150},{"x1":33.500,"y1":10.500,"x2":33.500,"y2":11.500,"layer":2,"width":0.150},{"x1":33.500,"y1":11.500,"x2":33.500,"y2":12.500,"layer":2,"width":0.150},{"x1":33.500,"y1":12.500,"x2":33.500,"y2":13.500,"layer":2,"width":0.150},{"x1":33.500,"y1":13.500,"x2":33.500,"y2":14.500,"layer":2,"width":0.150},{"x1":33.500,"y1":14.500,"x2":33.500,"y2":15.500,"layer":2,"width":0.150},{"x1":33.500,"y1":15.500,"x2":33.500,"y2":16.500,"layer":2,"width":0.150},{"x1":33.500,"y1":16.500,"x2":33.500,"y2":17.500,"layer":2,"width":0.150},{"x1":33.500,"y1":17.500,"x2":33.500,"y2":18.500,"layer":2,"width":0.150},{"x1":33.500,"y1":18.500,"x2":33.500,"y2":19.500,"layer":2,"width":0.150},{"x1":33.500,"y1":19.500,"x2":33.500,"y2":20.500,"layer":2,"width":0.150},{"x1":33.500,"y1":20.500,"x2":33.500,"y2":21.500,"layer":2,"width":0.150},{"x1":33.500,"y1":21.500,"x2":33.500,"y2":22.500,"layer":2,"width":0.150},{"x1":33.500,"y1":22.500,"x2":33.500,"y2":23.500,"layer":2,"width":0.150},{"x1":33.500,"y1":23.500,"x2":33.500,"y2":24.500,"layer":2,"width":0.150},{"x1":33.500,"y1":24.500,"x2":33.500,"y2":25.500,"layer":2,"width":0.150},{"x1":33.500,"y1":25.500,"x2":33.500,"y2":26.500,"layer":2,"width":0.150},{"x1":33.500,"y1":26.500,"x2":33.500,"y2":27.500,"layer":2,"width":0.150},{"x1":33.500,"y1":27.500,"x2":33.500,"y2":28.500,"layer":2,"width":0.150},{"x1":33.500,"y1":28.500,"x2":34.500,"y2":29.500,"layer":0,"width":0.150}],"vias":[{"x":33.500,"y":9.500},{"x":33.500,"y":28.500}]},
+{"segments":[{"x1":33.500,"y1":8.500,"x2":33.500,"y2":9.500,"layer":0,"width":0.150},{"x1":33.500,"y1":9.500,"x2":33.500,"y2":10.500,"layer":3,"width":0.150},{"x1":33.500,"y1":10.500,"x2":33.500,"y2":11.500,"layer":3,"width":0.150},{"x1":33.500,"y1":11.500,"x2":33.500,"y2":12.500,"layer":3,"width":0.150},{"x1":33.500,"y1":12.500,"x2":33.500,"y2":13.500,"layer":3,"width":0.150},{"x1":33.500,"y1":13.500,"x2":33.500,"y2":14.500,"layer":3,"width":0.150},{"x1":33.500,"y1":14.500,"x2":33.500,"y2":15.500,"layer":3,"width":0.150},{"x1":33.500,"y1":15.500,"x2":33.500,"y2":16.500,"layer":3,"width":0.150},{"x1":33.500,"y1":16.500,"x2":33.500,"y2":17.500,"layer":3,"width":0.150},{"x1":33.500,"y1":17.500,"x2":33.500,"y2":18.500,"layer":3,"width":0.150},{"x1":33.500,"y1":18.500,"x2":33.500,"y2":19.500,"layer":3,"width":0.150},{"x1":33.500,"y1":19.500,"x2":33.500,"y2":20.500,"layer":3,"width":0.150},{"x1":33.500,"y1":20.500,"x2":33.500,"y2":21.500,"layer":3,"width":0.150},{"x1":33.500,"y1":21.500,"x2":33.500,"y2":22.500,"layer":3,"width":0.150},{"x1":33.500,"y1":22.500,"x2":33.500,"y2":23.500,"layer":3,"width":0.150},{"x1":33.500,"y1":23.500,"x2":33.500,"y2":24.500,"layer":0,"width":0.150},{"x1":33.500,"y1":24.500,"x2":33.500,"y2":25.500,"layer":0,"width":0.150},{"x1":33.500,"y1":25.500,"x2":33.500,"y2":26.500,"layer":0,"width":0.150},{"x1":33.500,"y1":26.500,"x2":33.500,"y2":27.500,"layer":0,"width":0.150},{"x1":33.500,"y1":27.500,"x2":34.500,"y2":28.500,"layer":0,"width":0.150},{"x1":34.500,"y1":28.500,"x2":34.500,"y2":29.500,"layer":0,"width":0.150},{"x1":34.500,"y1":29.500,"x2":34.500,"y2":30.500,"layer":0,"width":0.150},{"x1":34.500,"y1":30.500,"x2":34.500,"y2":31.500,"layer":0,"width":0.150},{"x1":34.500,"y1":31.500,"x2":34.500,"y2":32.500,"layer":0,"width":0.150},{"x1":34.500,"y1":32.500,"x2":34.500,"y2":33.500,"layer":0,"width":0.150},{"x1":34.500,"y1":33.500,"x2":34.500,"y2":34.500,"layer":0,"width":0.150},{"x1":34.500,"y1":34.500,"x2":34.500,"y2":35.500,"layer":0,"width":0.150}],"vias":[{"x":33.500,"y":9.500},{"x":33.500,"y":23.500}]}];
+const GROUPS = [{"name":"buck","members":[1,16,17,18,19]},{"name":"reg33","members":[5,20,21]},{"name":"reg18","members":[12,28,29]},{"name":"reg5aux","members":[9,22,23,24,25,26,27]}];
+const NETS = [{"name":"GND","weight":5.0},{"name":"VIN","weight":5.0},{"name":"V5_BUCK","weight":5.0},{"name":"V1_8","weight":5.0},{"name":"V5_AUX","weight":5.0},{"name":"V3_3","weight":5.0},{"name":"net_r_led5b_ Res(330)_1_r_led5b_2","weight":0.5},{"name":"net_r_led33_ Res(150)_1_r_led33_2","weight":0.5},{"name":"net_r_led5a_ Res(470)_1_r_led5a_2","weight":0.5},{"name":"net_r_led18_ Res(56)_1_r_led18_2","weight":0.5},{"name":"buck_SW","weight":5.0},{"name":"buck_BST","weight":5.0},{"name":"reg5aux_SW","weight":5.0},{"name":"reg5aux_FB","weight":5.0},{"name":"reg5aux_BOOT","weight":5.0}];
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+let scale = 1, offsetX = 0, offsetY = 0;
+let isDragging = false, dragStartX = 0, dragStartY = 0;
+let hoverComp = null;
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight - 36;
+  const sx = (canvas.width - 40) / BOARD_W;
+  const sy = (canvas.height - 40) / BOARD_H;
+  scale = Math.min(sx, sy);
+  offsetX = (canvas.width - BOARD_W * scale) / 2;
+  offsetY = (canvas.height - BOARD_H * scale) / 2;
+  draw();
+}
+
+function toScreen(x, y) { return [offsetX + x * scale, offsetY + y * scale]; }
+function toBoard(sx, sy) { return [(sx - offsetX) / scale, (sy - offsetY) / scale]; }
+
+const LAYER_COLORS = {
+  0: '#e94560',  // F.Cu — red
+  1: '#4ecca3',  // In1 — teal
+  2: '#f9a825',  // In2 — amber
+  3: '#42a5f5',  // In3 — blue
+  4: '#ab47bc',  // In4 — purple
+  5: '#66bb6a',  // B.Cu — green
+};
+
+const CAT_COLORS = {
+  resistor: '#8d6e63', capacitor: '#5c6bc0', inductor: '#26a69a',
+  diode: '#ef5350', led: '#ffee58', voltage_regulator: '#42a5f5',
+  ic: '#7e57c2', opamp: '#7e57c2', tvs_diode: '#ff7043',
+  connector: '#78909c', ferrite_bead: '#8d6e63',
+};
+
+function compColor(comp) {
+  return CAT_COLORS[comp.cat] || '#9e9e9e';
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Board outline
+  const [bx, by] = toScreen(0, 0);
+  ctx.strokeStyle = '#e94560';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(bx, by, BOARD_W * scale, BOARD_H * scale);
+
+  // Grid (1mm)
+  ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+  ctx.lineWidth = 0.5;
+  for (let x = 0; x <= BOARD_W; x += 1) {
+    const [sx] = toScreen(x, 0);
+    ctx.beginPath(); ctx.moveTo(sx, by); ctx.lineTo(sx, by + BOARD_H * scale); ctx.stroke();
+  }
+  for (let y = 0; y <= BOARD_H; y += 1) {
+    const [, sy] = toScreen(0, y);
+    ctx.beginPath(); ctx.moveTo(bx, sy); ctx.lineTo(bx + BOARD_W * scale, sy); ctx.stroke();
+  }
+
+  // Functional groups (background)
+  for (const g of GROUPS) {
+    if (g.members.length < 2) continue;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const idx of g.members) {
+      const c = COMPONENTS[idx];
+      if (!c) continue;
+      minX = Math.min(minX, c.x - c.w/2);
+      minY = Math.min(minY, c.y - c.h/2);
+      maxX = Math.max(maxX, c.x + c.w/2);
+      maxY = Math.max(maxY, c.y + c.h/2);
+    }
+    const [sx, sy] = toScreen(minX - 1, minY - 1);
+    const sw = (maxX - minX + 2) * scale;
+    const sh = (maxY - minY + 2) * scale;
+    ctx.fillStyle = 'rgba(76, 175, 80, 0.08)';
+    ctx.fillRect(sx, sy, sw, sh);
+    ctx.strokeStyle = 'rgba(76, 175, 80, 0.3)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.strokeRect(sx, sy, sw, sh);
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(76, 175, 80, 0.5)';
+    ctx.font = `${Math.max(9, 10 * scale / 8)}px sans-serif`;
+    ctx.fillText(g.name, sx + 3, sy - 3);
+  }
+
+  // Routes
+  for (const r of ROUTES) {
+    for (const seg of r.segments) {
+      const [x1, y1] = toScreen(seg.x1, seg.y1);
+      const [x2, y2] = toScreen(seg.x2, seg.y2);
+      ctx.strokeStyle = LAYER_COLORS[seg.layer] || '#888';
+      ctx.lineWidth = Math.max(1, seg.width * scale);
+      ctx.globalAlpha = 0.7;
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+    for (const v of r.vias) {
+      const [vx, vy] = toScreen(v.x, v.y);
+      const vr = Math.max(2, 0.3 * scale);
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.arc(vx, vy, vr, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#e94560';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+  }
+
+  // Components
+  for (let i = 0; i < COMPONENTS.length; i++) {
+    const c = COMPONENTS[i];
+    const [cx, cy] = toScreen(c.x, c.y);
+    const sw = c.w * scale;
+    const sh = c.h * scale;
+
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(c.theta);
+
+    // Body
+    const color = compColor(c);
+    ctx.fillStyle = (hoverComp === i) ? '#fff' : color;
+    ctx.globalAlpha = (hoverComp === i) ? 0.3 : 0.6;
+    ctx.fillRect(-sw/2, -sh/2, sw, sh);
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = (hoverComp === i) ? '#fff' : color;
+    ctx.lineWidth = (hoverComp === i) ? 2 : 1;
+    ctx.strokeRect(-sw/2, -sh/2, sw, sh);
+
+    // Pads (actual IPC-7351B dimensions)
+    ctx.fillStyle = '#ffd54f';
+    for (const pin of c.pins) {
+      const px = pin.dx * scale;
+      const py = pin.dy * scale;
+      const pw = Math.max(1.5, (pin.pw || 0.5) * scale);
+      const ph = Math.max(1.5, (pin.ph || 0.3) * scale);
+      ctx.fillRect(px - pw/2, py - ph/2, pw, ph);
+    }
+
+    // Label
+    if (scale > 4) {
+      ctx.fillStyle = '#fff';
+      ctx.font = `${Math.max(8, 1.5 * scale)}px monospace`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(c.refdes, 0, 0);
+    } else if (scale > 2) {
+      ctx.fillStyle = '#fff';
+      ctx.font = '8px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(c.refdes, 0, -sh/2 - 2);
+    }
+
+    ctx.restore();
+  }
+
+  // Hover tooltip
+  if (hoverComp !== null) {
+    const c = COMPONENTS[hoverComp];
+    const [tx, ty] = toScreen(c.x, c.y);
+    const lines = [
+      `${c.refdes} (${c.name})`,
+      `${c.pkg} ${c.w.toFixed(1)}×${c.h.toFixed(1)}mm`,
+      `${c.pins.length} pins`,
+      c.intent ? `intent: ${c.intent}` : '',
+      c.group ? `group: ${c.group}` : '',
+    ].filter(Boolean);
+    const tw = Math.max(...lines.map(l => ctx.measureText(l).width)) + 16;
+    const th = lines.length * 16 + 8;
+    const ttx = Math.min(tx + 10, canvas.width - tw - 4);
+    const tty = Math.min(ty + 10, canvas.height - th - 4);
+    ctx.fillStyle = 'rgba(0,0,0,0.85)';
+    ctx.fillRect(ttx, tty, tw, th);
+    ctx.fillStyle = '#fff';
+    ctx.font = '12px monospace';
+    ctx.textAlign = 'left';
+    lines.forEach((l, i) => ctx.fillText(l, ttx + 8, tty + 16 + i * 16));
+  }
+}
+
+// Hit test
+function hitTest(mx, my) {
+  const [bx, by] = toBoard(mx, my);
+  for (let i = COMPONENTS.length - 1; i >= 0; i--) {
+    const c = COMPONENTS[i];
+    if (Math.abs(bx - c.x) < c.w/2 + 0.5 && Math.abs(by - c.y) < c.h/2 + 0.5) return i;
+  }
+  return null;
+}
+
+canvas.addEventListener('mousemove', e => {
+  if (isDragging) {
+    offsetX += e.clientX - dragStartX;
+    offsetY += e.clientY - dragStartY;
+    dragStartX = e.clientX;
+    dragStartY = e.clientY;
+    draw();
+  } else {
+    const prev = hoverComp;
+    hoverComp = hitTest(e.clientX, e.clientY - 36);
+    if (hoverComp !== prev) draw();
+  }
+});
+
+canvas.addEventListener('mousedown', e => {
+  isDragging = true; dragStartX = e.clientX; dragStartY = e.clientY;
+});
+canvas.addEventListener('mouseup', () => { isDragging = false; });
+canvas.addEventListener('mouseleave', () => { isDragging = false; });
+
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const [bx, by] = toBoard(e.clientX, e.clientY - 36);
+  const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+  scale *= factor;
+  offsetX = e.clientX - bx * scale;
+  offsetY = (e.clientY - 36) - by * scale;
+  draw();
+}, { passive: false });
+
+window.addEventListener('resize', resize);
+resize();
+</script>
+</body>
+</html>

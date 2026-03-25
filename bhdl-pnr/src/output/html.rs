@@ -8,6 +8,7 @@
 //! - Functional group boundaries
 //! - Net names on hover
 
+use crate::ipc7351;
 use crate::types::*;
 
 /// Export board and routes to a standalone interactive HTML file.
@@ -189,13 +190,14 @@ function draw() {{
     ctx.lineWidth = (hoverComp === i) ? 2 : 1;
     ctx.strokeRect(-sw/2, -sh/2, sw, sh);
 
-    // Pads
+    // Pads (actual IPC-7351B dimensions)
     ctx.fillStyle = '#ffd54f';
     for (const pin of c.pins) {{
       const px = pin.dx * scale;
       const py = pin.dy * scale;
-      const ps = Math.max(1.5, 0.25 * scale);
-      ctx.fillRect(px - ps/2, py - ps/2, ps, ps);
+      const pw = Math.max(1.5, (pin.pw || 0.5) * scale);
+      const ph = Math.max(1.5, (pin.ph || 0.3) * scale);
+      ctx.fillRect(px - pw/2, py - ph/2, pw, ph);
     }}
 
     // Label
@@ -313,8 +315,18 @@ fn board_components_json(board: &Board) -> String {
                 .unwrap_or_else(|| "null".to_string())
         }).unwrap_or_else(|| "null".to_string());
 
+        // Get pad dimensions from IPC footprint (or default 0.5×0.3mm)
+        let footprint = ipc7351::standard_package(&comp.package)
+            .map(|f| ipc7351::generate_footprint(&f, ipc7351::DensityLevel::Nominal));
         let pins_json: Vec<String> = comp.pins.iter()
-            .map(|p| format!("{{\"dx\":{:.3},\"dy\":{:.3},\"name\":\"{}\"}}", p.dx, p.dy, p.name))
+            .enumerate()
+            .map(|(i, p)| {
+                let (pw, ph) = footprint.as_ref()
+                    .and_then(|fp| fp.pads.get(i))
+                    .map(|pad| (pad.width, pad.height))
+                    .unwrap_or((0.5, 0.3));
+                format!("{{\"dx\":{:.3},\"dy\":{:.3},\"pw\":{:.3},\"ph\":{:.3},\"name\":\"{}\"}}", p.dx, p.dy, pw, ph, p.name)
+            })
             .collect();
 
         items.push(format!(
