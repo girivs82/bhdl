@@ -596,7 +596,7 @@ pub struct PlacementConfig {
 impl Default for PlacementConfig {
     fn default() -> Self {
         PlacementConfig {
-            position_lr: 0.5,   // mm per Adam step — ~1% of typical board size
+            position_lr: 2.0,   // mm per Adam step — components need to move significantly
             rotation_lr: 0.02,  // radians per Adam step — ~1° per step
             lambda_density: 2.0, // strong density to spread components
             lambda_group: 10.0,

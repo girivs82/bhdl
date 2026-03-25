@@ -112,7 +112,8 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
 
     let mut routes: Vec<Route> = board.nets.iter().map(|n| Route::empty(n.id)).collect();
     let mut grid: Option<RoutingGrid> = None;
-    let mut gamma = 0.5; // LSE smoothness parameter
+    let mut gamma = 2.0; // Start moderately smooth, anneal down to 0.1
+    let mut lambda_density = 0.0; // Auto-calibrated on first iteration
 
     // 3. Main iterative loop
     for iteration in 0..config.max_iterations {
@@ -125,19 +126,43 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         let thermal_forces = grouping::compute_thermal_spreading(&board, 0.1);
         let region_forces = grouping::compute_region_preference(&board);
 
+        // Auto-calibrate density weight on first iteration (ePlace approach):
+        // Set λ_D so that ||∇_WL|| ≈ ||λ_D · ∇_D||
+        if iteration == 0 {
+            let wl_norm: f64 = wl_forces.dx.iter().zip(wl_forces.dy.iter())
+                .map(|(x, y)| x * x + y * y)
+                .sum::<f64>()
+                .sqrt();
+            let d_norm: f64 = density_forces.dx.iter().zip(density_forces.dy.iter())
+                .map(|(x, y)| x * x + y * y)
+                .sum::<f64>()
+                .sqrt();
+            lambda_density = if d_norm > 1e-10 {
+                config.placement.lambda_density * (wl_norm / d_norm)
+            } else {
+                config.placement.lambda_density
+            };
+            info!("Auto-calibrated λ_density = {:.4} (WL_norm={:.1}, D_norm={:.1})",
+                lambda_density, wl_norm, d_norm);
+        }
+
+        // Gradually increase density weight (ePlace: lambda grows ~1.05× per iter)
+        if iteration > 0 && iteration % 10 == 0 {
+            lambda_density *= 1.02;
+        }
+
         // Combine forces with phase-dependent weights
-        // After fine_start_iter, reduce group cohesion to allow routing-driven spreading
         let group_weight = if iteration >= config.routing_schedule.fine_start_iter {
             let decay = 1.0 - ((iteration - config.routing_schedule.fine_start_iter) as f64
                 / (config.max_iterations - config.routing_schedule.fine_start_iter).max(1) as f64)
-                .min(0.8); // decay to 20% of original
+                .min(0.8);
             config.placement.lambda_group * decay
         } else {
             config.placement.lambda_group
         };
 
         let mut forces = wl_forces;
-        forces.accumulate(&density_forces, config.placement.lambda_density);
+        forces.accumulate(&density_forces, lambda_density);
         forces.accumulate(&group_forces, group_weight);
         forces.accumulate(&thermal_forces, config.placement.lambda_thermal);
         forces.accumulate(&region_forces, config.placement.lambda_region);
@@ -196,6 +221,45 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
             Some(&freezer.frozen),
         );
 
+        // Direct overlap resolution every iteration (mini-legalization)
+        // This ensures overlapping components get pushed apart immediately,
+        // not just through gradient descent which Adam normalizes away.
+        for i in 0..n {
+            for j in (i + 1)..n {
+                if freezer.is_frozen(i) && freezer.is_frozen(j) { continue; }
+                let dx = board.components[j].x - board.components[i].x;
+                let dy = board.components[j].y - board.components[i].y;
+                let min_dx = (board.components[i].width_mm + board.components[j].width_mm) / 2.0 + 0.5;
+                let min_dy = (board.components[i].height_mm + board.components[j].height_mm) / 2.0 + 0.5;
+                if dx.abs() < min_dx && dy.abs() < min_dy {
+                    let push = 0.3; // mm per iteration
+                    let sign_x = if dx >= 0.0 { 1.0 } else { -1.0 };
+                    let sign_y = if dy >= 0.0 { 1.0 } else { -1.0 };
+                    if !freezer.is_frozen(i) && !freezer.is_frozen(j) {
+                        if (min_dx - dx.abs()) < (min_dy - dy.abs()) {
+                            board.components[i].x -= sign_x * push;
+                            board.components[j].x += sign_x * push;
+                        } else {
+                            board.components[i].y -= sign_y * push;
+                            board.components[j].y += sign_y * push;
+                        }
+                    } else if !freezer.is_frozen(j) {
+                        if (min_dx - dx.abs()) < (min_dy - dy.abs()) {
+                            board.components[j].x += sign_x * push * 2.0;
+                        } else {
+                            board.components[j].y += sign_y * push * 2.0;
+                        }
+                    } else if !freezer.is_frozen(i) {
+                        if (min_dx - dx.abs()) < (min_dy - dy.abs()) {
+                            board.components[i].x -= sign_x * push * 2.0;
+                        } else {
+                            board.components[i].y -= sign_y * push * 2.0;
+                        }
+                    }
+                }
+            }
+        }
+
         // Progressive freezing: lock components that have stabilized
         let newly_frozen = freezer.update(&board, anchor_idx);
         if newly_frozen > 0 && iteration % 50 == 0 {
@@ -253,11 +317,11 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
             ConvergenceAction::Continue => {}
         }
 
-        // Anneal parameters as placement progresses
-        if iteration > 0 && iteration % 100 == 0 {
-            // Decrease gamma (tighten LSE wirelength approximation)
-            gamma *= 0.8;
-            gamma = gamma.max(0.01);
+        // Anneal gamma: tighten LSE wirelength approximation over time
+        // ePlace approach: gamma shrinks as density overflow decreases
+        if iteration > 0 && iteration % 20 == 0 {
+            gamma *= 0.9;
+            gamma = gamma.max(0.1);
         }
 
         // After iter 400: loosen group cohesion to allow routing-driven spreading

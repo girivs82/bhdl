@@ -244,7 +244,12 @@ pub fn initialize(board: &mut Board, seed: u64) {
 
             // Place the new component offset from the average pin position
             // in the direction the pins point (outward from the placed component)
-            let offset = comp_w.max(comp_h) + 2.0; // spacing
+            // Place far enough for routing channels (component + 2× clearance)
+            let placed_comp_size = {
+                let pc = &board.components[connections[0].from_comp];
+                pc.width_mm.max(pc.height_mm)
+            };
+            let offset = (comp_w.max(comp_h) + placed_comp_size) / 2.0 + 4.0;
             let place_x = avg_pin_x + (dir_x / dir_len) * offset;
             let place_y = avg_pin_y + (dir_y / dir_len) * offset;
 
@@ -431,8 +436,8 @@ impl ProgressiveFreezer {
             prev_positions: vec![(0.0, 0.0); n],
             stable_count: vec![0; n],
             frozen: vec![false; n],
-            freeze_threshold: 50,
-            stability_tolerance: 0.1, // 0.1mm
+            freeze_threshold: 200, // only freeze after very stable
+            stability_tolerance: 0.05, // 0.05mm — tight tolerance
         }
     }
 
