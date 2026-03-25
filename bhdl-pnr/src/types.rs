@@ -598,7 +598,7 @@ impl Default for PlacementConfig {
         PlacementConfig {
             position_lr: 0.5,   // mm per Adam step — ~1% of typical board size
             rotation_lr: 0.02,  // radians per Adam step — ~1° per step
-            lambda_density: 0.5,
+            lambda_density: 2.0, // strong density to spread components
             lambda_group: 10.0,
             lambda_thermal: 0.1,
             lambda_congestion: 0.0, // starts at 0, grows after routing begins

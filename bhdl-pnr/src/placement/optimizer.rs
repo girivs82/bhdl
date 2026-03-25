@@ -29,12 +29,14 @@ impl AdamState {
 }
 
 /// Apply one Adam update step, respecting placement constraints.
+/// `frozen` optionally marks components that have been progressively frozen.
 pub fn adam_step(
     board: &mut Board,
     forces: &Forces,
     state: &mut AdamState,
     config: &PlacementConfig,
     opt: &OptimizerConfig,
+    frozen: Option<&[bool]>,
 ) {
     state.t += 1;
     let t = state.t as f64;
@@ -47,6 +49,11 @@ pub fn adam_step(
     let ec = board.config.edge_clearance_mm;
 
     for (i, comp) in board.components.iter_mut().enumerate() {
+        // Skip progressively frozen components
+        if frozen.map_or(false, |f| f.get(i).copied().unwrap_or(false)) {
+            continue;
+        }
+
         match &comp.placement {
             PlacementConstraint::Fixed { .. } => {
                 // Completely frozen — skip
@@ -150,9 +157,11 @@ pub fn adam_step(
                 comp.y -= config.position_lr * step_y;
                 comp.theta -= config.rotation_lr * step_t;
 
-                // Clamp to board
-                comp.x = comp.x.clamp(ec, board_w - ec);
-                comp.y = comp.y.clamp(ec, board_h - ec);
+                // Clamp to board (account for component half-width so edges stay inside)
+                let hw = comp.width_mm / 2.0;
+                let hh = comp.height_mm / 2.0;
+                comp.x = comp.x.clamp(ec + hw, board_w - ec - hw);
+                comp.y = comp.y.clamp(ec + hh, board_h - ec - hh);
             }
         }
     }

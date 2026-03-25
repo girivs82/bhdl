@@ -3,6 +3,9 @@
 //! Forces: wirelength (LSE), density (FFT electrostatic), group cohesion,
 //! thermal spreading, region preference. Constrained by fixed components,
 //! edge constraints, keepout zones.
+//!
+//! Center-out placement: most-connected component anchored at board center,
+//! neighbors placed radially. Progressive freezing locks stable components.
 
 pub mod analytical;
 pub mod density;
@@ -10,6 +13,7 @@ pub mod optimizer;
 pub mod rotation;
 pub mod grouping;
 
+use std::collections::{HashMap, HashSet, VecDeque};
 use crate::types::*;
 
 /// Placement state snapshot for convergence monitoring / rollback.
@@ -47,17 +51,17 @@ impl Forces {
     }
 }
 
-/// Initialize component positions based on constraints.
+/// Initialize component positions: center-out radial placement.
 ///
-/// Uses connectivity-aware ordering: BFS from a seed component places
-/// connected components in adjacent grid cells. The `seed` parameter
-/// selects which component starts the BFS, creating different but
-/// connectivity-coherent layouts for multi-trial optimization.
+/// 1. Find the most-connected free component → place at board center (anchor)
+/// 2. BFS from anchor, place neighbors in a spiral around the center
+/// 3. `seed` varies the BFS neighbor ordering for multi-trial exploration
 pub fn initialize(board: &mut Board, seed: u64) {
-    use std::collections::{HashMap, HashSet, VecDeque};
-
     let width = board.config.outline.width();
     let height = board.config.outline.height();
+    let cx = width / 2.0;
+    let cy = height / 2.0;
+    let ec = board.config.edge_clearance_mm;
 
     // Collect free component indices
     let free_set: HashSet<usize> = board
@@ -70,15 +74,11 @@ pub fn initialize(board: &mut Board, seed: u64) {
 
     let free_count = free_set.len();
     if free_count == 0 {
-        for comp in board.components.iter_mut() {
-            if let PlacementConstraint::Fixed { x, y, theta } = &comp.placement {
-                comp.x = *x; comp.y = *y; comp.theta = *theta;
-            }
-        }
+        init_constrained(board);
         return;
     }
 
-    // Build adjacency: component index → set of connected component indices
+    // Build adjacency with connection weights
     let comp_id_to_idx: HashMap<ComponentId, usize> = board
         .components
         .iter()
@@ -87,12 +87,14 @@ pub fn initialize(board: &mut Board, seed: u64) {
         .collect();
 
     let mut adjacency: HashMap<usize, HashSet<usize>> = HashMap::new();
+    let mut degree: HashMap<usize, usize> = HashMap::new();
     for net in &board.nets {
         let comp_indices: Vec<usize> = net.pins.iter()
             .filter_map(|(cid, _)| comp_id_to_idx.get(cid).copied())
             .filter(|idx| free_set.contains(idx))
             .collect();
         for &a in &comp_indices {
+            *degree.entry(a).or_insert(0) += comp_indices.len() - 1;
             for &b in &comp_indices {
                 if a != b {
                     adjacency.entry(a).or_default().insert(b);
@@ -101,31 +103,37 @@ pub fn initialize(board: &mut Board, seed: u64) {
         }
     }
 
-    // BFS ordering from a seed component — connected components get adjacent grid cells
+    // Find most-connected component (anchor)
     let free_vec: Vec<usize> = free_set.iter().copied().collect();
-    let start_idx = free_vec[(seed as usize) % free_vec.len()];
+    let anchor = *free_vec.iter()
+        .max_by_key(|&&idx| degree.get(&idx).unwrap_or(&0))
+        .unwrap_or(&free_vec[0]);
 
+    // BFS from anchor — seed varies neighbor order
     let mut ordered = Vec::with_capacity(free_count);
     let mut visited = HashSet::new();
     let mut queue = VecDeque::new();
 
-    queue.push_back(start_idx);
-    visited.insert(start_idx);
+    queue.push_back(anchor);
+    visited.insert(anchor);
 
     while let Some(idx) = queue.pop_front() {
         ordered.push(idx);
 
-        // Visit neighbors sorted by connection count (highest-connected first)
         if let Some(neighbors) = adjacency.get(&idx) {
             let mut nbrs: Vec<usize> = neighbors.iter()
                 .filter(|n| !visited.contains(n))
                 .copied()
                 .collect();
-            // Sort by degree (more connections = place sooner for better locality)
+            // Sort by degree descending, break ties by index XOR seed
             nbrs.sort_by(|a, b| {
-                let da = adjacency.get(a).map_or(0, |s| s.len());
-                let db = adjacency.get(b).map_or(0, |s| s.len());
-                db.cmp(&da)
+                let da = degree.get(a).unwrap_or(&0);
+                let db = degree.get(b).unwrap_or(&0);
+                db.cmp(da).then_with(|| {
+                    let ha = (*a as u64).wrapping_mul(seed.wrapping_add(1));
+                    let hb = (*b as u64).wrapping_mul(seed.wrapping_add(1));
+                    ha.cmp(&hb)
+                })
             });
             for n in nbrs {
                 if visited.insert(n) {
@@ -135,30 +143,85 @@ pub fn initialize(board: &mut Board, seed: u64) {
         }
     }
 
-    // Add any disconnected components not reached by BFS
+    // Add disconnected components
     for &idx in &free_vec {
         if !visited.contains(&idx) {
             ordered.push(idx);
         }
     }
 
-    // Place ordered components on grid (BFS order → connected components are adjacent)
-    let cols = (free_count as f64).sqrt().ceil() as usize;
-    let cell_w = (width - 2.0 * board.config.edge_clearance_mm) / cols as f64;
-    let cell_h = (height - 2.0 * board.config.edge_clearance_mm)
-        / ((free_count + cols - 1) / cols) as f64;
-    let x0 = board.config.edge_clearance_mm + cell_w / 2.0;
-    let y0 = board.config.edge_clearance_mm + cell_h / 2.0;
+    // Place anchor at board center
+    board.components[anchor].x = cx;
+    board.components[anchor].y = cy;
+    board.components[anchor].theta = 0.0;
 
-    for (grid_idx, &comp_idx) in ordered.iter().enumerate() {
-        let col = grid_idx % cols;
-        let row = grid_idx / cols;
-        board.components[comp_idx].x = x0 + col as f64 * cell_w;
-        board.components[comp_idx].y = y0 + row as f64 * cell_h;
+    // Place remaining components in a spiral around center
+    // Spiral: increasing radius, evenly spaced angles per ring
+    let spacing = 8.0_f64; // mm between spiral rings
+    let mut ring = 1;
+    let mut ring_idx = 0;
+    let mut ring_count = 6; // components per ring (grows with radius)
+
+    for &comp_idx in ordered.iter().skip(1) { // skip anchor
+        if comp_idx == anchor { continue; }
+
+        let radius = ring as f64 * spacing;
+        let angle = 2.0 * std::f64::consts::PI * ring_idx as f64 / ring_count as f64;
+
+        let mut px = cx + radius * angle.cos();
+        let mut py = cy + radius * angle.sin();
+
+        // Clamp to board (account for component size)
+        let hw = board.components[comp_idx].width_mm / 2.0;
+        let hh = board.components[comp_idx].height_mm / 2.0;
+        px = px.clamp(ec + hw, width - ec - hw);
+        py = py.clamp(ec + hh, height - ec - hh);
+
+        board.components[comp_idx].x = px;
+        board.components[comp_idx].y = py;
         board.components[comp_idx].theta = 0.0;
+
+        ring_idx += 1;
+        if ring_idx >= ring_count {
+            ring += 1;
+            ring_idx = 0;
+            ring_count = (6.0 * ring as f64).ceil() as usize; // more slots per ring
+        }
     }
 
-    // Initialize constrained components (Free already placed above)
+    // Initialize constrained components
+    init_constrained(board);
+}
+
+/// Find the index of the most-connected component (the center anchor).
+/// Returns None if no free components.
+pub fn find_anchor(board: &Board) -> Option<usize> {
+    let comp_id_to_idx: HashMap<ComponentId, usize> = board
+        .components
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.id, i))
+        .collect();
+
+    let mut degree: HashMap<usize, usize> = HashMap::new();
+    for net in &board.nets {
+        let comp_indices: Vec<usize> = net.pins.iter()
+            .filter_map(|(cid, _)| comp_id_to_idx.get(cid).copied())
+            .filter(|&idx| board.components[idx].placement.is_free())
+            .collect();
+        for &a in &comp_indices {
+            *degree.entry(a).or_insert(0) += comp_indices.len() - 1;
+        }
+    }
+
+    degree.into_iter().max_by_key(|(_, d)| *d).map(|(idx, _)| idx)
+}
+
+/// Initialize only constrained components (Fixed, Edge, PreferRegion).
+fn init_constrained(board: &mut Board) {
+    let width = board.config.outline.width();
+    let height = board.config.outline.height();
+
     for comp in board.components.iter_mut() {
         match &comp.placement {
             PlacementConstraint::Fixed { x, y, theta } => {
@@ -198,14 +261,13 @@ pub fn initialize(board: &mut Board, seed: u64) {
                     .iter()
                     .find(|r| &r.name == region_name)
                 {
-                    let (cx, cy) = region_centroid(&region.shape);
-                    comp.x = cx;
-                    comp.y = cy;
+                    let (rx, ry) = region_centroid(&region.shape);
+                    comp.x = rx;
+                    comp.y = ry;
                 }
-                // else: already placed on grid via free_indices shuffle
             }
             PlacementConstraint::Free => {
-                // Already placed above via shuffled grid
+                // Already placed above
             }
         }
     }
@@ -233,7 +295,7 @@ pub fn snapshot(board: &Board) -> PlacementSnapshot {
             .iter()
             .map(|c| (c.x, c.y, c.theta))
             .collect(),
-        wirelength: 0.0,   // filled by caller
+        wirelength: 0.0,
         density_overflow: 0.0,
         iteration: 0,
     }
@@ -247,5 +309,75 @@ pub fn restore(board: &mut Board, snap: &PlacementSnapshot) {
             comp.y = y;
             comp.theta = theta;
         }
+    }
+}
+
+/// Progressive freezing: track position stability and freeze settled components.
+pub struct ProgressiveFreezer {
+    /// Previous positions per component
+    prev_positions: Vec<(f64, f64)>,
+    /// How many consecutive iterations each component has been stable
+    stable_count: Vec<usize>,
+    /// Which components are frozen (treated as fixed obstacles)
+    pub frozen: Vec<bool>,
+    /// Threshold: freeze after this many stable iterations
+    freeze_threshold: usize,
+    /// Position change below this = "stable" (mm)
+    stability_tolerance: f64,
+}
+
+impl ProgressiveFreezer {
+    pub fn new(n: usize) -> Self {
+        ProgressiveFreezer {
+            prev_positions: vec![(0.0, 0.0); n],
+            stable_count: vec![0; n],
+            frozen: vec![false; n],
+            freeze_threshold: 50,
+            stability_tolerance: 0.1, // 0.1mm
+        }
+    }
+
+    /// Update after each placement iteration. Returns number of newly frozen.
+    pub fn update(&mut self, board: &Board, anchor_idx: Option<usize>) -> usize {
+        let mut newly_frozen = 0;
+        for (i, comp) in board.components.iter().enumerate() {
+            if self.frozen[i] || comp.placement.is_fixed() {
+                continue;
+            }
+            // Anchor is always frozen
+            if Some(i) == anchor_idx {
+                if !self.frozen[i] {
+                    self.frozen[i] = true;
+                    newly_frozen += 1;
+                }
+                continue;
+            }
+
+            let dx = (comp.x - self.prev_positions[i].0).abs();
+            let dy = (comp.y - self.prev_positions[i].1).abs();
+
+            if dx < self.stability_tolerance && dy < self.stability_tolerance {
+                self.stable_count[i] += 1;
+                if self.stable_count[i] >= self.freeze_threshold {
+                    self.frozen[i] = true;
+                    newly_frozen += 1;
+                }
+            } else {
+                self.stable_count[i] = 0;
+            }
+
+            self.prev_positions[i] = (comp.x, comp.y);
+        }
+        newly_frozen
+    }
+
+    /// Check if a component is frozen.
+    pub fn is_frozen(&self, idx: usize) -> bool {
+        self.frozen[idx]
+    }
+
+    /// Count of frozen components.
+    pub fn frozen_count(&self) -> usize {
+        self.frozen.iter().filter(|&&f| f).count()
     }
 }

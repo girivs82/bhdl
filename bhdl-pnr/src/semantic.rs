@@ -408,7 +408,12 @@ pub fn build_board(
                 .iter()
                 .map(|c| c.width_mm * c.height_mm)
                 .sum();
-            let side = (total_area.sqrt() * 2.5).max(20.0);
+            // Board needs enough space for components + routing channels.
+            // Estimate: sum of component areas needs 5-6× for routing.
+            // Also consider that components have courtyard around them.
+            let n_comps = components.len() as f64;
+            let avg_dim = (total_area / n_comps.max(1.0)).sqrt();
+            let side = ((n_comps.sqrt().ceil() + 2.0) * (avg_dim + 2.0)).max(50.0);
             BoardOutline::Rectangle {
                 width_mm: side,
                 height_mm: side,

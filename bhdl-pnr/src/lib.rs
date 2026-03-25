@@ -95,11 +95,13 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         board.layer_stack.layers.len()
     );
 
-    // 1. Initialize placement (seed controls component order on grid)
+    // 1. Initialize placement (center-out spiral from most-connected anchor)
     placement::initialize(&mut board, seed);
+    let anchor_idx = placement::find_anchor(&board);
 
-    // 2. Set up optimizer state
+    // 2. Set up optimizer state + progressive freezer
     let mut adam = AdamState::new(n);
+    let mut freezer = placement::ProgressiveFreezer::new(n);
     let mut monitor = ConvergenceMonitor::new(
         config.convergence.window_size,
         config.convergence.wl_tolerance,
@@ -184,14 +186,22 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
             );
         }
 
-        // Update positions (constraint-aware)
+        // Update positions (constraint-aware, skip frozen components)
         optimizer::adam_step(
             &mut board,
             &forces,
             &mut adam,
             &config.placement,
             &config.optimizer,
+            Some(&freezer.frozen),
         );
+
+        // Progressive freezing: lock components that have stabilized
+        let newly_frozen = freezer.update(&board, anchor_idx);
+        if newly_frozen > 0 && iteration % 50 == 0 {
+            info!("Iter {}: froze {} components ({} total frozen)",
+                iteration, newly_frozen, freezer.frozen_count());
+        }
 
         // Periodic routing feedback (tiered schedule from proposal §5.1)
         if config.routing_schedule.should_route(iteration) {
