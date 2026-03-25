@@ -74,10 +74,9 @@ impl DensityGrid {
 
 // ── Public API ───────────────────────────────────────────────────────
 
-/// Compute electrostatic density forces for all components.
+/// Compute density forces: FFT electrostatic + direct pairwise overlap repulsion.
 ///
-/// Returns `(forces, overflow_ratio)` where overflow_ratio ∈ [0, ∞).
-/// An overflow_ratio < 0.1 indicates good spreading.
+/// Returns `(forces, overlap_count)`.
 pub fn compute_density_forces(board: &Board) -> (Forces, f64) {
     let n = board.components.len();
     if n == 0 {
@@ -99,9 +98,14 @@ pub fn compute_density_forces(board: &Board) -> (Forces, f64) {
     let overflow = compute_overflow(&grid);
 
     // 5. Gather per-component forces from the electric field
-    let forces = gather_forces(&grid, board);
+    let mut forces = gather_forces(&grid, board);
 
-    (forces, overflow)
+    // 6. Direct pairwise overlap repulsion (O(n²) — fine for PCB with <100 components)
+    // This supplements the FFT density for resolving individual component overlaps
+    // that the coarse grid can't distinguish.
+    let overlap_count = add_pairwise_repulsion(&mut forces, board);
+
+    (forces, overlap_count as f64)
 }
 
 // ── Density map construction ─────────────────────────────────────────
@@ -193,9 +197,15 @@ fn poisson_solve(grid: &mut DensityGrid) {
     let dx = grid.bin_w;
     let dy = grid.bin_h;
 
-    // Subtract target density to get charge density
+    // Quadratic penalty: charge = (ρ - ρ_target) · |ρ - ρ_target|
+    // This makes the repulsive force grow quadratically with overlap:
+    // small overlap → gentle push, large overlap → strong push.
+    // Matches ePlace's quadratic density penalty.
     let mut rho_centered: Vec<f64> = grid.rho.iter()
-        .map(|&r| r - grid.rho_target)
+        .map(|&r| {
+            let excess = r - grid.rho_target;
+            excess * excess.abs().max(0.1) // quadratic but keeps sign
+        })
         .collect();
 
     // Forward DCT-II (2D, separable: rows then columns)
@@ -385,6 +395,51 @@ fn gather_forces(grid: &DensityGrid, board: &Board) -> Forces {
     }
 
     forces
+}
+
+/// Direct pairwise overlap repulsion.
+///
+/// For each pair of overlapping components, compute a repulsive force
+/// proportional to the overlap area. This is O(n²) but n < 100 for PCB.
+fn add_pairwise_repulsion(forces: &mut Forces, board: &Board) -> usize {
+    let n = board.components.len();
+    let clearance = 1.0; // mm clearance between components
+    let mut overlap_count = 0;
+
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let a = &board.components[i];
+            let b = &board.components[j];
+
+            let dx = b.x - a.x;
+            let dy = b.y - a.y;
+            let min_dx = (a.width_mm + b.width_mm) / 2.0 + clearance;
+            let min_dy = (a.height_mm + b.height_mm) / 2.0 + clearance;
+
+            let overlap_x = (min_dx - dx.abs()).max(0.0);
+            let overlap_y = (min_dy - dy.abs()).max(0.0);
+
+            if overlap_x > 0.0 && overlap_y > 0.0 {
+                overlap_count += 1;
+
+                // Repulsive force proportional to overlap area (quadratic)
+                let overlap_area = overlap_x * overlap_y;
+                let force_magnitude = overlap_area * 5.0; // strong repulsion
+
+                // Push along the axis with less overlap (easier to resolve)
+                if overlap_x < overlap_y {
+                    let sign = if dx >= 0.0 { 1.0 } else { -1.0 };
+                    forces.dx[i] -= sign * force_magnitude;
+                    forces.dx[j] += sign * force_magnitude;
+                } else {
+                    let sign = if dy >= 0.0 { 1.0 } else { -1.0 };
+                    forces.dy[i] -= sign * force_magnitude;
+                    forces.dy[j] += sign * force_magnitude;
+                }
+            }
+        }
+    }
+    overlap_count
 }
 
 /// Compute density overflow ratio (excludes obstacle cells).
