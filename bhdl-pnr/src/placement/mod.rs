@@ -60,7 +60,7 @@ impl Forces {
 /// 4. Stamp block positions to components
 ///
 /// `seed` varies the block order for multi-trial exploration.
-pub fn initialize(board: &mut Board, seed: u64) {
+pub fn initialize(board: &mut Board, seed: u64, placement_recipes: &std::collections::HashMap<String, bhdl_common::PlacementRecipe>) {
     let width = board.config.outline.width();
     let height = board.config.outline.height();
     let ec = board.config.edge_clearance_mm;
@@ -70,7 +70,7 @@ pub fn initialize(board: &mut Board, seed: u64) {
     // 2. Layout components within each block (IC center, passives around it)
     // 3. Place blocks on board (shelf packing, seed varies order)
     // 4. Stamp block positions to components
-    let mut blks = blocks::form_blocks(board);
+    let mut blks = blocks::form_blocks(board, placement_recipes);
 
     log::info!("Block placement: {} blocks from {} components",
         blks.len(), board.components.len());

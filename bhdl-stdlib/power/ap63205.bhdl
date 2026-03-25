@@ -32,6 +32,17 @@ entity AP63205(
         VIN -> C_in: Cap(c_in).1; C_in.2 -> GND;
         BST -> C_bst: Cap(100nF).1; C_bst.2 -> SW;
     }
+
+    // PCB layout from AP63205 datasheet Figure 5 (Typical Application)
+    // Coordinates in mm relative to IC center
+    // Reference: https://www.diodes.com/assets/Datasheets/AP63200-AP63201-AP63203-AP63205.pdf
+    placement {
+        reference "AP63205 Datasheet Fig.5";
+        L_out at (0.0, -6.0) rot 0;
+        C_out at (6.0, 0.0) rot 90;
+        C_in  at (-6.0, 0.0) rot 90;
+        C_bst at (3.5, -4.5) rot 0;
+    }
 }
 
 symbol AP63205 {

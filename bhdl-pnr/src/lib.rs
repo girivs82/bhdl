@@ -95,8 +95,9 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         board.layer_stack.layers.len()
     );
 
-    // 1. Initialize placement (center-out spiral from most-connected anchor)
-    placement::initialize(&mut board, seed);
+    // 1. Initialize placement (block-based with datasheet patterns)
+    let recipes = board.placement_recipes.clone();
+    placement::initialize(&mut board, seed, &recipes);
     let anchor_idx = placement::find_anchor(&board);
 
     // 2. Set up optimizer state + progressive freezer

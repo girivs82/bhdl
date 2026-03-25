@@ -433,6 +433,7 @@ pub fn build_board(
         components,
         nets,
         groups,
+        placement_recipes: std::collections::HashMap::new(), // populated by caller
     })
 }
 

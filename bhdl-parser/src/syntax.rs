@@ -120,6 +120,7 @@ pub enum SyntaxKind {
     VIA_KW,       // via (for satisfies declarations)
     EXPANSION_KW, // expansion (for entity expansion blocks)
     INTERNAL_KW,  // internal (for expansion-local nets)
+    PLACEMENT_KW, // placement (for entity placement blocks)
     SYMBOL_KW,    // symbol (for schematic symbol definitions)
     LAYOUT_KW,    // layout (for PCB layout definitions)
     BODY_KW,      // body (for symbol body hint)
@@ -352,6 +353,11 @@ pub enum SyntaxKind {
     SYMBOL_PART,           // part "label" { side ... } (Phase 2 stub)
     LAYOUT_DEF,            // layout EntityName { ... }
     LAYOUT_PACKAGE,        // package HTSSOP-16;
+
+    // Placement block nodes (entity-level PCB placement recipes)
+    PLACEMENT_BLOCK,       // placement { ... }
+    PLACEMENT_ITEM,        // name at (x, y) rot deg;
+    PLACEMENT_REFERENCE,   // reference "datasheet ref";
 
     // Safety compliance nodes
     SATISFIES_BLOCK,   // satisfies { ... }

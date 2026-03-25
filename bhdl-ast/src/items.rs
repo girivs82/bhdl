@@ -161,6 +161,11 @@ impl Entity {
     pub fn expansion_block(&self) -> Option<ExpansionBlock> {
         self.0.children().find_map(ExpansionBlock::cast)
     }
+
+    /// Get the placement block, if present
+    pub fn placement_block(&self) -> Option<PlacementBlock> {
+        self.0.children().find_map(PlacementBlock::cast)
+    }
 }
 
 /// Expansion block inside an entity definition.
@@ -212,6 +217,137 @@ impl ExpansionBlock {
     /// Get the raw text of the expansion block body (for debugging)
     pub fn body_text(&self) -> String {
         self.0.text().to_string()
+    }
+}
+
+/// Placement block inside an entity definition.
+/// Contains placement positions for child components from expansion blocks,
+/// typically referencing datasheet recommended layouts.
+///
+/// ```bhdl
+/// entity BuckRegulator(...) {
+///     ...
+///     placement {
+///         reference "AP63205 Datasheet Fig.5";
+///         L_out at (-0.5, -5.0) rot 0;
+///         C_out at (5.5, -2.0) rot 90;
+///     }
+/// }
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PlacementBlock(pub(crate) SyntaxNode<BhdlLanguage>);
+
+impl AstNode for PlacementBlock {
+    type Language = BhdlLanguage;
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::PLACEMENT_BLOCK }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> {
+        if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None }
+    }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+
+impl PlacementBlock {
+    /// Get all placement items in the block
+    pub fn placement_items(&self) -> Vec<PlacementItem> {
+        self.0.children()
+            .filter_map(PlacementItem::cast)
+            .collect()
+    }
+
+    /// Get the reference text (e.g., datasheet figure reference)
+    pub fn reference_text(&self) -> Option<String> {
+        self.0.children()
+            .find(|n| n.kind() == SyntaxKind::PLACEMENT_REFERENCE)
+            .and_then(|n| n.children_with_tokens()
+                .find_map(|t| if t.kind() == SyntaxKind::STRING {
+                    Some(t.as_token()?.text().trim_matches('"').to_string())
+                } else { None }))
+    }
+}
+
+/// A single placement item: `NAME at (x, y) rot deg;`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PlacementItem(pub(crate) SyntaxNode<BhdlLanguage>);
+
+impl AstNode for PlacementItem {
+    type Language = BhdlLanguage;
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::PLACEMENT_ITEM }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> {
+        if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None }
+    }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+
+impl PlacementItem {
+    /// Get the component name
+    pub fn component_name(&self) -> Option<String> {
+        self.0.children_with_tokens()
+            .find_map(|t| if t.kind() == SyntaxKind::IDENT {
+                Some(t.as_token()?.text().to_string())
+            } else { None })
+    }
+
+    /// Extract x and y coordinates from the placement item.
+    /// Handles negative numbers by looking for MINUS + NUMBER pairs via expression nodes.
+    pub fn coordinates(&self) -> Option<(f64, f64)> {
+        let numbers = self.collect_signed_numbers();
+        if numbers.len() >= 2 { Some((numbers[0], numbers[1])) } else { None }
+    }
+
+    /// Extract rotation in degrees (the third number, if present after `rot`)
+    pub fn rotation_deg(&self) -> Option<f64> {
+        let numbers = self.collect_signed_numbers();
+        if numbers.len() >= 3 { Some(numbers[2]) } else { None }
+    }
+
+    /// Collect all signed numbers from descendant tokens.
+    /// Handles PREFIX_EXPR with MINUS for negative numbers.
+    fn collect_signed_numbers(&self) -> Vec<f64> {
+        let mut numbers = Vec::new();
+        // Walk all descendant nodes/tokens to find numbers
+        // PREFIX_EXPR nodes contain a MINUS followed by a NUMBER
+        // Regular NUMBER tokens are positive values
+        self.collect_numbers_recursive(&self.0, &mut numbers);
+        numbers
+    }
+
+    fn collect_numbers_recursive(&self, node: &SyntaxNode<BhdlLanguage>, numbers: &mut Vec<f64>) {
+        for child in node.children_with_tokens() {
+            match child {
+                rowan::NodeOrToken::Node(n) => {
+                    if n.kind() == SyntaxKind::PREFIX_EXPR {
+                        // Check if this is a negation: MINUS NUMBER
+                        let has_minus = n.children_with_tokens()
+                            .any(|t| t.kind() == SyntaxKind::MINUS);
+                        let num_val = n.descendants_with_tokens()
+                            .filter_map(|t| t.into_token())
+                            .find(|t| t.kind() == SyntaxKind::NUMBER)
+                            .and_then(|t| t.text().parse::<f64>().ok());
+                        if let Some(val) = num_val {
+                            numbers.push(if has_minus { -val } else { val });
+                        }
+                    } else if n.kind() == SyntaxKind::EXPRESSION {
+                        // Recurse into EXPRESSION nodes
+                        self.collect_numbers_recursive(&n, numbers);
+                    } else {
+                        // For other node types, also recurse
+                        self.collect_numbers_recursive(&n, numbers);
+                    }
+                }
+                rowan::NodeOrToken::Token(t) => {
+                    if t.kind() == SyntaxKind::NUMBER {
+                        // Direct NUMBER token (not inside PREFIX_EXPR)
+                        // Check parent is not PREFIX_EXPR (already handled)
+                        let parent_is_prefix = node.kind() == SyntaxKind::PREFIX_EXPR;
+                        if !parent_is_prefix {
+                            if let Ok(val) = t.text().parse::<f64>() {
+                                numbers.push(val);
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
