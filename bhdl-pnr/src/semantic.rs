@@ -157,9 +157,10 @@ pub fn build_board(
         let footprint = ipc7351::standard_package(&package)
             .map(|family| ipc7351::generate_footprint(&family, config.density_level));
 
+        // Use full footprint extent (body + pad protrusion), not just body
         let (width, height) = footprint
             .as_ref()
-            .map(|fp| (fp.body_width, fp.body_height))
+            .map(|fp| footprint_extent(fp))
             .unwrap_or((5.0, 5.0));
 
         // Build pin positions from footprint pads
@@ -176,76 +177,26 @@ pub fn build_board(
             })
             .collect();
 
-        // If module has no pin definitions (e.g., expansion-created instances),
-        // count pin_instances belonging to this instance instead
-        let pin_instance_count = if pin_defs.is_empty() {
-            netlist
-                .pin_instances
-                .values()
-                .filter(|pi| pi.instance == inst_id)
-                .count()
-        } else {
-            0
-        };
-
-        let effective_pin_count = if !pin_defs.is_empty() {
-            pin_defs.len()
-        } else if pin_instance_count > 0 {
-            pin_instance_count
-        } else {
-            // Infer from component category (passives = 2 pins)
-            let cat = categorize_component(&module_def.name, &instance.attributes);
-            match cat.as_str() {
-                "resistor" | "capacitor" | "inductor" | "diode" | "led" | "ferrite_bead" => 2,
-                _ => 0,
-            }
-        };
-
         let pins: Vec<PinPosition> = if let Some(ref fp) = footprint {
-            // Use real pad positions from IPC-7351B
-            if !pin_defs.is_empty() {
-                pin_defs
-                    .iter()
-                    .enumerate()
-                    .map(|(i, &pid)| {
-                        let pin_name = netlist
-                            .pins
-                            .get(pid)
-                            .map(|p| p.name.clone())
-                            .unwrap_or_else(|| (i + 1).to_string());
-                        let (dx, dy) = fp
-                            .pads
-                            .get(i)
-                            .map(|pad| (pad.x_position, pad.y_position))
-                            .unwrap_or((0.0, 0.0));
-                        PinPosition {
-                            pin_id: PinId::default(),
-                            name: pin_name,
-                            dx,
-                            dy,
-                            net: None,
-                        }
-                    })
-                    .collect()
-            } else {
-                // No module pin defs — use footprint pad count up to effective_pin_count
-                (0..effective_pin_count)
-                    .map(|i| {
-                        let (dx, dy) = fp
-                            .pads
-                            .get(i)
-                            .map(|pad| (pad.x_position, pad.y_position))
-                            .unwrap_or((0.0, 0.0));
-                        PinPosition {
-                            pin_id: PinId::default(),
-                            name: (i + 1).to_string(),
-                            dx,
-                            dy,
-                            net: None,
-                        }
-                    })
-                    .collect()
-            }
+            // Use ALL footprint pads as pin positions (authoritative source).
+            // Match pad index to module pin def by position for naming.
+            fp.pads.iter().enumerate()
+                .map(|(i, pad)| {
+                    // Try to get pin name from module definition
+                    let pin_name = pin_defs
+                        .get(i)
+                        .and_then(|&pid| netlist.pins.get(pid))
+                        .map(|p| p.name.clone())
+                        .unwrap_or_else(|| pad.pad_number.clone());
+                    PinPosition {
+                        pin_id: PinId::default(),
+                        name: pin_name,
+                        dx: pad.x_position,
+                        dy: pad.y_position,
+                        net: None,
+                    }
+                })
+                .collect()
         } else {
             // Fallback: estimate pin positions
             estimate_pin_positions(&pin_defs, netlist, width, height)
@@ -720,6 +671,30 @@ fn extract_groups(
 }
 
 // ── Component categorization ─────────────────────────────────────────
+
+/// Compute the full footprint extent encompassing body and all pads.
+///
+/// For gull-wing packages (SOIC, SOT), pads extend beyond the IC body.
+/// The component outline should encompass everything.
+fn footprint_extent(fp: &bhdl_components::ComponentFootprint) -> (f64, f64) {
+    if fp.pads.is_empty() {
+        return (fp.body_width, fp.body_height);
+    }
+
+    let mut x_min = -fp.body_width / 2.0;
+    let mut x_max = fp.body_width / 2.0;
+    let mut y_min = -fp.body_height / 2.0;
+    let mut y_max = fp.body_height / 2.0;
+
+    for pad in &fp.pads {
+        x_min = x_min.min(pad.x_position - pad.width / 2.0);
+        x_max = x_max.max(pad.x_position + pad.width / 2.0);
+        y_min = y_min.min(pad.y_position - pad.height / 2.0);
+        y_max = y_max.max(pad.y_position + pad.height / 2.0);
+    }
+
+    (x_max - x_min, y_max - y_min)
+}
 
 /// Check if an instance is a power/ground symbol (not a physical component).
 ///
