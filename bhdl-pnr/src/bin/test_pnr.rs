@@ -222,7 +222,11 @@ async fn main() -> Result<()> {
             comp.refdes, comp.name, comp.x, comp.y, comp.theta.to_degrees());
     }
 
-    // 9. KiCad PCB export
+    // 9. Verification report
+    let report = bhdl_pnr::output::verify::verify(&result.board, &result.routes);
+    bhdl_pnr::output::verify::print_report(&report);
+
+    // 10. KiCad PCB export
     let pcb = bhdl_pnr::output::kicad::export_kicad_pcb(&result.board, &result.routes);
     let pcb_path = "tests/outputs/pnr/complex_power_tree.kicad_pcb";
     if let Some(parent) = std::path::Path::new(pcb_path).parent() {
