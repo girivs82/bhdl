@@ -8,6 +8,7 @@
 //! neighbors placed radially. Progressive freezing locks stable components.
 
 pub mod analytical;
+pub mod blocks;
 pub mod density;
 pub mod optimizer;
 pub mod rotation;
@@ -51,135 +52,35 @@ impl Forces {
     }
 }
 
-/// Initialize component positions: center-out radial placement.
+/// Initialize component positions using hierarchical block placement.
 ///
-/// 1. Find the most-connected free component → place at board center (anchor)
-/// 2. BFS from anchor, place neighbors in a spiral around the center
-/// 3. `seed` varies the BFS neighbor ordering for multi-trial exploration
+/// 1. Form blocks from functional groups + standalone components
+/// 2. Layout components within each block (IC center, passives around it)
+/// 3. Place blocks on board using shelf packing
+/// 4. Stamp block positions to components
+///
+/// `seed` varies the block order for multi-trial exploration.
 pub fn initialize(board: &mut Board, seed: u64) {
     let width = board.config.outline.width();
     let height = board.config.outline.height();
-    let cx = width / 2.0;
-    let cy = height / 2.0;
     let ec = board.config.edge_clearance_mm;
 
-    // Collect free component indices
-    let free_set: HashSet<usize> = board
-        .components
-        .iter()
-        .enumerate()
-        .filter(|(_, c)| c.placement.is_free())
-        .map(|(i, _)| i)
-        .collect();
+    // Hierarchical block placement:
+    // 1. Form blocks from functional groups + standalone components
+    // 2. Layout components within each block (IC center, passives around it)
+    // 3. Place blocks on board (shelf packing, seed varies order)
+    // 4. Stamp block positions to components
+    let mut blks = blocks::form_blocks(board);
 
-    let free_count = free_set.len();
-    if free_count == 0 {
-        init_constrained(board);
-        return;
+    log::info!("Block placement: {} blocks from {} components",
+        blks.len(), board.components.len());
+    for b in &blks {
+        log::info!("  Block '{}': {} members, {:.1}x{:.1}mm",
+            b.name, b.members.len(), b.width, b.height);
     }
 
-    // Build adjacency with connection weights
-    let comp_id_to_idx: HashMap<ComponentId, usize> = board
-        .components
-        .iter()
-        .enumerate()
-        .map(|(i, c)| (c.id, i))
-        .collect();
-
-    let mut adjacency: HashMap<usize, HashSet<usize>> = HashMap::new();
-    let mut degree: HashMap<usize, usize> = HashMap::new();
-    for net in &board.nets {
-        let comp_indices: Vec<usize> = net.pins.iter()
-            .filter_map(|(cid, _)| comp_id_to_idx.get(cid).copied())
-            .filter(|idx| free_set.contains(idx))
-            .collect();
-        for &a in &comp_indices {
-            *degree.entry(a).or_insert(0) += comp_indices.len() - 1;
-            for &b in &comp_indices {
-                if a != b {
-                    adjacency.entry(a).or_default().insert(b);
-                }
-            }
-        }
-    }
-
-    // Find most-connected component (anchor)
-    let free_vec: Vec<usize> = free_set.iter().copied().collect();
-    let anchor = *free_vec.iter()
-        .max_by_key(|&&idx| degree.get(&idx).unwrap_or(&0))
-        .unwrap_or(&free_vec[0]);
-
-    // BFS from anchor — seed varies neighbor order
-    let mut ordered = Vec::with_capacity(free_count);
-    let mut visited = HashSet::new();
-    let mut queue = VecDeque::new();
-
-    queue.push_back(anchor);
-    visited.insert(anchor);
-
-    while let Some(idx) = queue.pop_front() {
-        ordered.push(idx);
-
-        if let Some(neighbors) = adjacency.get(&idx) {
-            let mut nbrs: Vec<usize> = neighbors.iter()
-                .filter(|n| !visited.contains(n))
-                .copied()
-                .collect();
-            // Sort by degree descending, break ties by index XOR seed
-            nbrs.sort_by(|a, b| {
-                let da = degree.get(a).unwrap_or(&0);
-                let db = degree.get(b).unwrap_or(&0);
-                db.cmp(da).then_with(|| {
-                    let ha = (*a as u64).wrapping_mul(seed.wrapping_add(1));
-                    let hb = (*b as u64).wrapping_mul(seed.wrapping_add(1));
-                    ha.cmp(&hb)
-                })
-            });
-            for n in nbrs {
-                if visited.insert(n) {
-                    queue.push_back(n);
-                }
-            }
-        }
-    }
-
-    // Add disconnected components
-    for &idx in &free_vec {
-        if !visited.contains(&idx) {
-            ordered.push(idx);
-        }
-    }
-
-    // Spread components across the entire board in a grid.
-    // BFS order ensures connected components are in adjacent grid cells.
-    // Start spread out — let wirelength pull them together while density
-    // prevents overlap. This is the correct ePlace approach: converge
-    // from spread to tight, not from tight to spread.
-    let cols = (free_count as f64).sqrt().ceil() as usize;
-    let rows = (free_count + cols - 1) / cols;
-    let usable_w = width - 2.0 * ec;
-    let usable_h = height - 2.0 * ec;
-    // Account for component sizes in cell spacing
-    let max_comp_w: f64 = ordered.iter()
-        .map(|&i| board.components[i].width_mm)
-        .fold(0.0_f64, f64::max);
-    let max_comp_h: f64 = ordered.iter()
-        .map(|&i| board.components[i].height_mm)
-        .fold(0.0_f64, f64::max);
-    let cell_w = usable_w / cols as f64;
-    let cell_h = usable_h / rows.max(1) as f64;
-
-    for (grid_idx, &comp_idx) in ordered.iter().enumerate() {
-        let col = grid_idx % cols;
-        let row = grid_idx / cols;
-        let hw = board.components[comp_idx].width_mm / 2.0;
-        let hh = board.components[comp_idx].height_mm / 2.0;
-        let px = ec + cell_w * (col as f64 + 0.5);
-        let py = ec + cell_h * (row as f64 + 0.5);
-        board.components[comp_idx].x = px.clamp(ec + hw, width - ec - hw);
-        board.components[comp_idx].y = py.clamp(ec + hh, height - ec - hh);
-        board.components[comp_idx].theta = 0.0;
-    }
+    blocks::place_blocks(&mut blks, width, height, ec, seed);
+    blocks::stamp_positions(&blks, board);
 
     // Initialize constrained components
     init_constrained(board);
