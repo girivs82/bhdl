@@ -101,22 +101,34 @@ impl RoutingGrid {
             }
         }
 
-        // Mark blocked cells for component footprints (with clearance)
-        let clearance = board.config.min_spacing_mm;
+        // Mark blocked cells around component PADS (not the entire body).
+        // Traces can run between pads on the same layer — standard PCB practice.
+        // Only the pad areas + keepaway are actually unroutable.
+        let pad_keepaway = board.config.min_spacing_mm + 0.1; // pad clearance
         for comp in &board.components {
             let layer_idx = match comp.side {
                 BoardSide::Top => 0,
                 BoardSide::Bottom => num_layers - 1,
             };
-            let (bw, bh) = comp.rotated_bbox();
-            mark_rect_blocked(
-                &mut grid.cells[layer_idx],
-                comp.x - bw / 2.0 - clearance,
-                comp.y - bh / 2.0 - clearance,
-                comp.x + bw / 2.0 + clearance,
-                comp.y + bh / 2.0 + clearance,
-                &grid.x_coords, &grid.y_coords,
-            );
+            let cos_t = comp.theta.cos();
+            let sin_t = comp.theta.sin();
+
+            for pin in &comp.pins {
+                // Global pad position
+                let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
+                let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+
+                // Block a small area around each pad (pad size + keepaway)
+                // Use a generous pad size estimate (actual IPC pad is ~0.5-1.5mm)
+                let pad_w = 1.0 + pad_keepaway;
+                let pad_h = 0.6 + pad_keepaway;
+                mark_rect_blocked(
+                    &mut grid.cells[layer_idx],
+                    gx - pad_w / 2.0, gy - pad_h / 2.0,
+                    gx + pad_w / 2.0, gy + pad_h / 2.0,
+                    &grid.x_coords, &grid.y_coords,
+                );
+            }
         }
 
         // Block cells for mounting holes (all layers)
