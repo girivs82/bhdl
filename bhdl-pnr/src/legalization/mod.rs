@@ -83,8 +83,10 @@ pub fn legalize(board: &mut Board, snap_grid_mm: f64) {
         if comp.placement.is_fixed() {
             continue;
         }
-        comp.x = comp.x.clamp(ec, bw - ec);
-        comp.y = comp.y.clamp(ec, bh - ec);
+        let hw = comp.width_mm / 2.0;
+        let hh = comp.height_mm / 2.0;
+        comp.x = comp.x.clamp(ec + hw, bw - ec - hw);
+        comp.y = comp.y.clamp(ec + hh, bh - ec - hh);
     }
 }
 
@@ -147,11 +149,13 @@ fn resolve_overlaps(board: &mut Board) {
             }
         }
 
-        // Re-clamp to board after each pass
+        // Re-clamp to board after each pass (account for component size)
         for comp in board.components.iter_mut() {
             if !comp.placement.is_fixed() {
-                comp.x = comp.x.clamp(ec, bw - ec);
-                comp.y = comp.y.clamp(ec, bh - ec);
+                let hw = comp.width_mm / 2.0;
+                let hh = comp.height_mm / 2.0;
+                comp.x = comp.x.clamp(ec + hw, bw - ec - hw);
+                comp.y = comp.y.clamp(ec + hh, bh - ec - hh);
             }
         }
 
