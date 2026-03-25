@@ -101,7 +101,8 @@ impl RoutingGrid {
             }
         }
 
-        // Mark blocked cells for component footprints
+        // Mark blocked cells for component footprints (with clearance)
+        let clearance = board.config.min_spacing_mm;
         for comp in &board.components {
             let layer_idx = match comp.side {
                 BoardSide::Top => 0,
@@ -110,8 +111,10 @@ impl RoutingGrid {
             let (bw, bh) = comp.rotated_bbox();
             mark_rect_blocked(
                 &mut grid.cells[layer_idx],
-                comp.x - bw / 2.0, comp.y - bh / 2.0,
-                comp.x + bw / 2.0, comp.y + bh / 2.0,
+                comp.x - bw / 2.0 - clearance,
+                comp.y - bh / 2.0 - clearance,
+                comp.x + bw / 2.0 + clearance,
+                comp.y + bh / 2.0 + clearance,
                 &grid.x_coords, &grid.y_coords,
             );
         }

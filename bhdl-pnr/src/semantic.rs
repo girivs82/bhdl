@@ -135,6 +135,13 @@ pub fn build_board(
             None => continue,
         };
 
+        // Skip power/ground symbol instances — these are netlist-level
+        // constructs (power rails, ground symbols), not physical components.
+        // They have no package and shouldn't appear on the PCB.
+        if is_power_symbol(module_def, instance) {
+            continue;
+        }
+
         // Resolve package string
         let package = config
             .package_overrides
@@ -713,6 +720,27 @@ fn extract_groups(
 }
 
 // ── Component categorization ─────────────────────────────────────────
+
+/// Check if an instance is a power/ground symbol (not a physical component).
+///
+/// Real physical components have `component_class` set by the synthesizer
+/// (e.g., "resistor", "capacitor", "voltage_regulator"). Power symbols don't.
+fn is_power_symbol(
+    _module_def: &bhdl_netlist::ModuleDefinition,
+    instance: &bhdl_netlist::Instance,
+) -> bool {
+    // Physical components always have component_class from the synthesizer
+    if instance.attributes.contains_key("component_class") {
+        // But "power_source" / "ground_symbol" classes ARE power symbols
+        let cc = instance.attributes.get("component_class").unwrap();
+        return cc == "power_source" || cc == "ground_symbol";
+    }
+
+    // No component_class = not a physical component = power/ground symbol
+    // Real components (Res, Cap, LED, AP63205, etc.) always get component_class
+    // set during synthesis/GLACIER physical selection
+    true
+}
 
 fn categorize_component(entity_type: &str, attrs: &HashMap<String, String>) -> String {
     // Prefer component_class attribute (set by GLACIER physical selection)
