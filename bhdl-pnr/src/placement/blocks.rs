@@ -12,6 +12,7 @@
 //! the IC pins they connect to.
 
 use std::collections::{HashMap, HashSet};
+use bhdl_common::PlacementRecipe;
 use crate::types::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -40,7 +41,12 @@ pub struct PlacementBlock {
 }
 
 /// Form blocks from the board's functional groups and standalone components.
-pub fn form_blocks(board: &Board) -> Vec<PlacementBlock> {
+/// If `placement_recipes` contains a recipe for an expansion block's entity type,
+/// the exact datasheet coordinates are used instead of the netlist-driven heuristic.
+pub fn form_blocks(
+    board: &Board,
+    placement_recipes: &HashMap<String, PlacementRecipe>,
+) -> Vec<PlacementBlock> {
     let mut blocks = Vec::new();
     let mut assigned: HashSet<usize> = HashSet::new();
 
@@ -82,7 +88,15 @@ pub fn form_blocks(board: &Board) -> Vec<PlacementBlock> {
             internal_positions: Vec::new(),
         };
 
-        layout_block_netlist_driven(&mut block, board);
+        // Try datasheet placement recipe first, fall back to netlist-driven
+        let anchor_name = &board.components[anchor.unwrap_or(block.members[0])].name;
+        if let Some(recipe) = find_recipe_for_block(anchor_name, board, &block.members, placement_recipes) {
+            apply_placement_recipe(&mut block, board, recipe);
+            log::info!("  Block '{}': using datasheet layout ({})",
+                block.name, recipe.reference.as_deref().unwrap_or(""));
+        } else {
+            layout_block_netlist_driven(&mut block, board);
+        }
         blocks.push(block);
     }
 
@@ -104,14 +118,13 @@ pub fn form_blocks(board: &Board) -> Vec<PlacementBlock> {
     blocks
 }
 
-/// Netlist-driven internal block layout.
+/// Internal block layout — tries datasheet pattern first, falls back to netlist-driven.
 ///
-/// Algorithm:
-/// 1. IC at center
-/// 2. For each child, find which IC pin it connects to
-/// 3. Place child on the side of IC where that pin is (left/right/top/bottom)
-/// 4. Orient child so its connecting pin faces the IC
-/// 5. Stack multiple children on the same side with spacing
+/// Datasheet pattern: reads `layout_<child>_dx/dy/rot` attributes from the
+/// anchor component (set in stdlib from vendor datasheet layout figures).
+/// These are exact coordinates relative to IC center.
+///
+/// Netlist-driven fallback: infers placement from pin connections.
 fn layout_block_netlist_driven(block: &mut PlacementBlock, board: &Board) {
     let n = block.members.len();
     if n == 0 { return; }
@@ -363,6 +376,115 @@ pub fn place_blocks(blocks: &mut [PlacementBlock], board_w: f64, board_h: f64, e
         shelf_x += bw + 3.0; // routing channel between blocks
         shelf_height = shelf_height.max(bh);
     }
+}
+
+/// Find a placement recipe that matches this block's anchor component.
+///
+/// Matches by looking at the anchor component's entity type name against
+/// the recipe's entity_name. For example, if the anchor is an instance
+/// of "AP63205", it matches the recipe with entity_name "AP63205".
+fn find_recipe_for_block<'a>(
+    anchor_name: &str,
+    board: &Board,
+    members: &[usize],
+    recipes: &'a HashMap<String, PlacementRecipe>,
+) -> Option<&'a PlacementRecipe> {
+    // Try matching by the anchor component's name or package/entity type
+    // The recipe key is the entity name (e.g., "AP63205")
+    for (entity_name, recipe) in recipes {
+        // Check if this block's group name contains the entity name,
+        // or if the anchor component's name matches
+        if anchor_name.contains(entity_name.as_str())
+            || entity_name.contains(anchor_name)
+        {
+            return Some(recipe);
+        }
+    }
+    // Also check by looking at component names in the block
+    // Expansion children are named like "buck_L_out" where "buck" is the instance name
+    // The recipe has children named "L_out", "C_out", etc.
+    for (_, recipe) in recipes {
+        let recipe_child_names: HashSet<&str> = recipe.positions.iter()
+            .map(|p| p.name.as_str())
+            .collect();
+        let block_child_suffixes: HashSet<String> = members.iter()
+            .map(|&idx| {
+                let name = &board.components[idx].name;
+                // Extract suffix after instance prefix: "buck_L_out" → "L_out"
+                name.split_once('_').map(|(_, s)| s.to_string())
+                    .unwrap_or_else(|| name.clone())
+            })
+            .collect();
+        // If most recipe children match block suffixes, it's a match
+        let matches = recipe_child_names.iter()
+            .filter(|&&rn| block_child_suffixes.iter().any(|bs| bs.contains(rn)))
+            .count();
+        if matches >= recipe.positions.len() / 2 {
+            return Some(recipe);
+        }
+    }
+    None
+}
+
+/// Apply exact datasheet coordinates from a PlacementRecipe.
+fn apply_placement_recipe(
+    block: &mut PlacementBlock,
+    board: &Board,
+    recipe: &PlacementRecipe,
+) {
+    let n = block.members.len();
+    let anchor_idx = block.anchor.unwrap_or(block.members[0]);
+    let anchor_local = block.members.iter().position(|&m| m == anchor_idx).unwrap_or(0);
+
+    let mut positions = vec![(0.0, 0.0, 0.0); n];
+    positions[anchor_local] = (0.0, 0.0, 0.0); // IC at center
+
+    // Match recipe children to block members by name suffix
+    for pos in &recipe.positions {
+        for (local_i, &global_i) in block.members.iter().enumerate() {
+            if global_i == anchor_idx { continue; }
+            let comp_name = &board.components[global_i].name;
+            // Match: "buck_L_out" ends with "L_out", recipe has "L_out"
+            if comp_name.ends_with(&pos.name)
+                || comp_name == &pos.name
+                || comp_name.contains(&pos.name)
+            {
+                positions[local_i] = (
+                    pos.dx_mm,
+                    pos.dy_mm,
+                    pos.rotation_deg.to_radians(),
+                );
+                break;
+            }
+        }
+    }
+
+    // Compute block bounding box
+    let mut min_x = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+
+    for (local_i, &(dx, dy, _)) in positions.iter().enumerate() {
+        let comp = &board.components[block.members[local_i]];
+        min_x = min_x.min(dx - comp.width_mm / 2.0);
+        max_x = max_x.max(dx + comp.width_mm / 2.0);
+        min_y = min_y.min(dy - comp.height_mm / 2.0);
+        max_y = max_y.max(dy + comp.height_mm / 2.0);
+    }
+
+    let margin = 2.0;
+    block.width = (max_x - min_x) + margin * 2.0;
+    block.height = (max_y - min_y) + margin * 2.0;
+
+    let cx = (min_x + max_x) / 2.0;
+    let cy = (min_y + max_y) / 2.0;
+    for p in &mut positions {
+        p.0 -= cx;
+        p.1 -= cy;
+    }
+
+    block.internal_positions = positions;
 }
 
 /// Stamp block positions back to components.

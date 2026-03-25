@@ -264,6 +264,7 @@ dependencies = [
  "bhdl-components",
  "bhdl-netlist",
  "bhdl-parser",
+ "bhdl-pnr",
  "bhdl-schematic",
  "bhdl-sim",
  "bhdl-spice",

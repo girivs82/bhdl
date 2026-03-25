@@ -454,6 +454,8 @@ pub struct AnalysisResult {
     pub monomorphization: crate::passes::MonomorphizationResult,
     /// Expansion recipes extracted from entity `expansion { }` blocks
     pub expansion_recipes: HashMap<String, bhdl_common::ExpansionRecipe>,
+    /// Placement recipes extracted from entity `placement { }` blocks
+    pub placement_recipes: HashMap<String, bhdl_common::PlacementRecipe>,
     /// Symbol definitions extracted from `symbol EntityName { }` blocks
     pub symbol_definitions: HashMap<String, bhdl_common::SymbolDefinition>,
     /// Layout definitions extracted from `layout EntityName { }` blocks
@@ -486,6 +488,7 @@ impl Default for AnalysisResult {
             power_domain_expansion: crate::passes::PowerDomainExpansion::new(),
             monomorphization: crate::passes::MonomorphizationResult::new(),
             expansion_recipes: HashMap::new(),
+            placement_recipes: HashMap::new(),
             symbol_definitions: HashMap::new(),
             layout_definitions: HashMap::new(),
         }

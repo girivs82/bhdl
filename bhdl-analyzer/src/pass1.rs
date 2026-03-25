@@ -44,6 +44,8 @@ struct Pass1Context {
     symbol_definitions: HashMap<String, bhdl_common::SymbolDefinition>,
     // Layout definitions extracted from imported files
     layout_definitions: HashMap<String, bhdl_common::LayoutDefinition>,
+    // Placement recipes extracted from imported files
+    placement_recipes: HashMap<String, bhdl_common::PlacementRecipe>,
 }
 
 impl Pass1Context {
@@ -59,6 +61,7 @@ impl Pass1Context {
             expansion_recipes: HashMap::new(),
             symbol_definitions: HashMap::new(),
             layout_definitions: HashMap::new(),
+            placement_recipes: HashMap::new(),
         }
     }
 
@@ -103,7 +106,7 @@ pub fn populate_global_scope_and_build_definition_scopes_with_base(
     source_file: &SourceFile,
     base_path: &Path
 ) -> (SymbolTable, HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>) {
-    let (registry, _alias_specializations, _expansion_recipes, _symbol_defs, _layout_defs) = build_scope_registry_with_base(source_file, base_path);
+    let (registry, _alias_specializations, _expansion_recipes, _symbol_defs, _layout_defs, _placement_recipes) = build_scope_registry_with_base(source_file, base_path);
     // Extract legacy data structures for backward compatibility
     let global_scope = registry.extract_global_scope();
     let definition_scopes = registry.extract_definition_scopes();
@@ -128,6 +131,7 @@ pub fn build_scope_registry_with_base(
     HashMap<String, bhdl_common::ExpansionRecipe>,
     HashMap<String, bhdl_common::SymbolDefinition>,
     HashMap<String, bhdl_common::LayoutDefinition>,
+    HashMap<String, bhdl_common::PlacementRecipe>,
 ) {
     println!("Building scope registry (Pass 1)...");
     let mut context = Pass1Context::new();
@@ -171,7 +175,8 @@ pub fn build_scope_registry_with_base(
     let expansion_recipes = context.expansion_recipes;
     let symbol_definitions = context.symbol_definitions;
     let layout_definitions = context.layout_definitions;
-    (context.registry, alias_specializations, expansion_recipes, symbol_definitions, layout_definitions)
+    let placement_recipes = context.placement_recipes;
+    (context.registry, alias_specializations, expansion_recipes, symbol_definitions, layout_definitions, placement_recipes)
 }
 
 // Pass 1 recursive helper (takes Pass1Context)
@@ -925,6 +930,10 @@ fn process_import(import: &ImportStmt, context: &mut Pass1Context) {
             let imported_layouts = crate::extract_layout_definitions(&imported_source);
             for (name, lay) in imported_layouts {
                 context.layout_definitions.insert(name, lay);
+            }
+            let imported_placements = crate::extract_placement_recipes(&imported_source);
+            for (name, pr) in imported_placements {
+                context.placement_recipes.insert(name, pr);
             }
 
             // First, build a map of all entities in the file

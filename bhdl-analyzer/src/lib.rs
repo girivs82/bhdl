@@ -62,7 +62,7 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
     let mut resolved_constants = ResolvedConstants::new();
 
     // Pass 1: Build scope registry with base path for imports
-    let (mut scope_registry, alias_specializations, imported_expansion_recipes, imported_symbol_definitions, imported_layout_definitions) = pass1::build_scope_registry_with_base(source_file, base_path);
+    let (mut scope_registry, alias_specializations, imported_expansion_recipes, imported_symbol_definitions, imported_layout_definitions, imported_placement_recipes) = pass1::build_scope_registry_with_base(source_file, base_path);
     // Extract legacy data structures for backward compatibility with existing passes
     let global_scope = scope_registry.extract_global_scope();
     let definition_scopes = scope_registry.extract_definition_scopes();
@@ -273,8 +273,13 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
     let main_file_layouts = extract_layout_definitions(source_file);
     layout_definitions.extend(main_file_layouts);
 
-    println!("Analyzer: Pass 8.5 complete. Expansion recipes: {}, Symbol defs: {}, Layout defs: {}",
-        expansion_count, symbol_definitions.len(), layout_definitions.len());
+    // Merge placement recipes from imported files + main source file
+    let mut placement_recipes = imported_placement_recipes;
+    let main_file_placements = extract_placement_recipes(source_file);
+    placement_recipes.extend(main_file_placements);
+
+    println!("Analyzer: Pass 8.5 complete. Expansion recipes: {}, Placement recipes: {}, Symbol defs: {}, Layout defs: {}",
+        expansion_count, placement_recipes.len(), symbol_definitions.len(), layout_definitions.len());
 
     // Pass 9: Flow Tracking and Intent Resolution
     println!("Analyzer: Starting Pass 9 - Flow Tracking and Intent Resolution...");
@@ -415,6 +420,7 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
         power_domain_expansion, // Move ownership (Phase 1: Scalability)
         monomorphization: mono_result, // Move ownership (Pass 2.5)
         expansion_recipes, // Move ownership (Pass 8.5)
+        placement_recipes, // Move ownership (Pass 8.5)
         symbol_definitions, // Move ownership (Pass 8.5)
         layout_definitions, // Move ownership (Pass 8.5)
     }
@@ -1608,6 +1614,61 @@ fn parse_expansion_element(
 
     // Default: assume it's an entity pin (e.g., "GND", "VIN")
     (Some(ExpansionEndpoint::ParentPin(text.to_string())), None)
+}
+
+/// Extract placement recipes from all entity definitions in the source file.
+///
+/// Walks the AST looking for entity definitions that contain `placement { }`
+/// blocks. For each one, parses the placement body into a structured
+/// `PlacementRecipe` suitable for the PnR engine.
+pub fn extract_placement_recipes(
+    source_file: &SourceFile,
+) -> std::collections::HashMap<String, bhdl_common::PlacementRecipe> {
+    use bhdl_common::{PlacementRecipe, ChildPosition};
+    use bhdl_ast::{Entity, HasName};
+    use rowan::ast::AstNode;
+
+    let mut recipes = std::collections::HashMap::new();
+
+    // Walk all top-level items looking for entity definitions
+    for item in source_file.items() {
+        if let Some(entity) = Entity::cast(item.syntax().clone()) {
+            if let Some(placement_block) = entity.placement_block() {
+                let entity_name = entity.name()
+                    .map(|t| t.text().to_string())
+                    .unwrap_or_default();
+
+                if entity_name.is_empty() {
+                    continue;
+                }
+
+                let mut recipe = PlacementRecipe::new(entity_name.clone());
+                recipe.reference = placement_block.reference_text();
+
+                for item in placement_block.placement_items() {
+                    if let Some(name) = item.component_name() {
+                        if let Some((x, y)) = item.coordinates() {
+                            let rotation = item.rotation_deg().unwrap_or(0.0);
+                            recipe.positions.push(ChildPosition {
+                                name,
+                                dx_mm: x,
+                                dy_mm: y,
+                                rotation_deg: rotation,
+                            });
+                        }
+                    }
+                }
+
+                if !recipe.positions.is_empty() || recipe.reference.is_some() {
+                    println!("  Extracted placement recipe for '{}': {} positions, ref: {:?}",
+                        entity_name, recipe.positions.len(), recipe.reference);
+                    recipes.insert(entity_name, recipe);
+                }
+            }
+        }
+    }
+
+    recipes
 }
 
 /// Extract symbol definitions from a parsed source file.

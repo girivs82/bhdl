@@ -951,11 +951,16 @@ async fn run_layout(
     }
 
     // 7. Build PnR board
-    let board = semantic::build_board(
+    let mut board = semantic::build_board(
         &netlist,
         sim_annotations.as_ref(),
         SemanticConfig::default(),
     ).map_err(|e| anyhow::anyhow!("Board construction failed: {}", e))?;
+    // Attach placement recipes from analyzer (vendor datasheet layouts)
+    board.placement_recipes = analysis.placement_recipes.clone();
+    if !board.placement_recipes.is_empty() {
+        println!("  {} Placement recipes: {} entities", "✓".green(), board.placement_recipes.len());
+    }
     println!("  {} Board: {} components, {} nets, {} groups",
         "✓".green(), board.components.len(), board.nets.len(), board.groups.len());
 

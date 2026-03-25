@@ -14,6 +14,7 @@ pub mod diagnostic;
 pub mod generics;
 pub mod safety;
 pub mod expansion;
+pub mod placement_recipe;
 pub mod symbol;
 pub mod layout_meta;
 
@@ -43,5 +44,6 @@ pub use safety::{
 pub use expansion::{
     ExpansionRecipe, ExpansionInstance, ExpansionConnection, ExpansionEndpoint,
 };
+pub use placement_recipe::{PlacementRecipe, ChildPosition};
 pub use symbol::{SymbolDefinition, SymbolSide as CommonSymbolSide, PinSide, SideEntry};
 pub use layout_meta::LayoutDefinition;

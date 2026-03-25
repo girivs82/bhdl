@@ -24,6 +24,8 @@ pub struct Board {
     pub components: Vec<Component>,
     pub nets: Vec<PnrNet>,
     pub groups: Vec<FunctionalGroup>,
+    /// Placement recipes from stdlib (vendor datasheet layout recommendations)
+    pub placement_recipes: std::collections::HashMap<String, bhdl_common::PlacementRecipe>,
 }
 
 // ── Board configuration ────────────────────────────────────────────────

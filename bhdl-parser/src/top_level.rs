@@ -189,6 +189,7 @@ impl<'t> Parser<'t> {
                 Some(SyntaxKind::WITH_KW) => self.parse_with_block(),
                 Some(SyntaxKind::SATISFIES_KW) => self.parse_satisfies_block(),
                 Some(SyntaxKind::EXPANSION_KW) => self.parse_expansion_block(),
+                Some(SyntaxKind::PLACEMENT_KW) => self.parse_placement_block(),
                 Some(SyntaxKind::IDENT) => {
                     // Check if this is an entity instantiation or connection
                     // Entity instantiation: instance_name: EntityType(params) { ... }
@@ -1469,6 +1470,82 @@ impl<'t> Parser<'t> {
             self.bump();
         } else {
             self.error("Expected 'net' after internal net name".to_string());
+        }
+
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+
+    // Parse placement block inside entity definitions
+    // placement { reference "AP63205 Datasheet Fig.5"; L_out at (-0.5, -5.0) rot 0; ... }
+    fn parse_placement_block(&mut self) {
+        self.builder.start_node(SyntaxKind::PLACEMENT_BLOCK.into());
+        self.expect(SyntaxKind::PLACEMENT_KW);
+        self.expect(SyntaxKind::L_BRACE);
+
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) => break,
+                Some(SyntaxKind::IDENT) => {
+                    // Check if this is "reference" or a placement item
+                    if self.peek_text().as_deref() == Some("reference") {
+                        self.parse_placement_reference();
+                    } else {
+                        self.parse_placement_item();
+                    }
+                }
+                Some(_) => {
+                    self.error("Unexpected token in placement block".to_string());
+                    self.bump_any();
+                }
+                None => {
+                    self.error("Unexpected end of file in placement block".to_string());
+                    break;
+                }
+            }
+        }
+
+        self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
+    // Parse placement reference: reference "AP63205 Datasheet Fig.5";
+    fn parse_placement_reference(&mut self) {
+        self.builder.start_node(SyntaxKind::PLACEMENT_REFERENCE.into());
+        self.bump(); // consume "reference" IDENT
+        if self.peek() == Some(SyntaxKind::STRING) {
+            self.bump(); // consume string literal
+        } else {
+            self.error("Expected string after 'reference'".to_string());
+        }
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+
+    // Parse placement item: NAME at ( EXPR , EXPR ) rot EXPR ;
+    fn parse_placement_item(&mut self) {
+        self.builder.start_node(SyntaxKind::PLACEMENT_ITEM.into());
+        self.expect(SyntaxKind::IDENT); // component name
+
+        // Expect "at" as contextual keyword (parsed as IDENT)
+        if self.peek_text().as_deref() == Some("at") {
+            self.bump(); // consume "at"
+        } else {
+            self.error("Expected 'at' after component name in placement item".to_string());
+        }
+
+        self.expect(SyntaxKind::L_PAREN);
+        self.parse_expression(); // x coordinate (handles negative via PREFIX_EXPR)
+        self.expect(SyntaxKind::COMMA);
+        self.parse_expression(); // y coordinate
+        self.expect(SyntaxKind::R_PAREN);
+
+        // Optional "rot EXPR"
+        self.skip_trivia();
+        if self.peek_text().as_deref() == Some("rot") {
+            self.bump(); // consume "rot"
+            self.parse_expression(); // rotation degrees
         }
 
         self.expect(SyntaxKind::SEMI);
