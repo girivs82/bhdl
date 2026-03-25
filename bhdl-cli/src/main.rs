@@ -976,6 +976,10 @@ async fn run_layout(
     println!("  DRC violations: {}", result.drc_violations.len());
 
     // 10. Export KiCad PCB
+    // Verification report
+    let report = bhdl_pnr::output::verify::verify(&result.board, &result.routes);
+    bhdl_pnr::output::verify::print_report(&report);
+
     let pcb = bhdl_pnr::output::kicad::export_kicad_pcb(&result.board, &result.routes);
     let output_path = output.unwrap_or_else(|| {
         let stem = source_path.file_stem().unwrap_or_default().to_string_lossy();

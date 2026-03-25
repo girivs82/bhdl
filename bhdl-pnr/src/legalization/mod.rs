@@ -36,57 +36,55 @@ pub fn legalize(board: &mut Board, snap_grid_mm: f64) {
         comp.theta = ((deg / 90.0).round() * 90.0).to_radians();
     }
 
-    // 3. Resolve overlaps (greedy displacement — fixed components are obstacles)
-    resolve_overlaps(board);
+    // 3. Resolve overlaps + boundary clamp (iterated until stable)
+    //    The overlap resolver can push components outside the board,
+    //    and the boundary clamp can create new overlaps. Run both
+    //    in a loop until neither makes changes.
+    for _outer in 0..10 {
+        resolve_overlaps(board);
 
-    // 4. Enforce keepout zones
-    for comp in board.components.iter_mut() {
-        if comp.placement.is_fixed() {
-            continue;
-        }
-        for zone in &board.config.keepout_zones {
-            if matches!(zone.applies_to, KeepoutTarget::All | KeepoutTarget::ComponentsOnly) {
-                if zone.shape.contains(comp.x, comp.y) {
-                    push_out_of_shape(comp, &zone.shape);
+        // Enforce keepout zones
+        for comp in board.components.iter_mut() {
+            if comp.placement.is_fixed() { continue; }
+            for zone in &board.config.keepout_zones {
+                if matches!(zone.applies_to, KeepoutTarget::All | KeepoutTarget::ComponentsOnly) {
+                    if zone.shape.contains(comp.x, comp.y) {
+                        push_out_of_shape(comp, &zone.shape);
+                    }
                 }
             }
         }
-    }
 
-    // 5. Enforce mounting hole clearance
-    for comp in board.components.iter_mut() {
-        if comp.placement.is_fixed() {
-            continue;
-        }
-        for hole in &board.config.mounting_holes {
-            let clearance = hole.drill_mm / 2.0 + hole.keepout_mm;
-            let (bw, bh) = comp.rotated_bbox();
-            let comp_radius = bw.max(bh) / 2.0;
-            let dx = comp.x - hole.x_mm;
-            let dy = comp.y - hole.y_mm;
-            let dist = (dx * dx + dy * dy).sqrt();
-            let min_dist = clearance + comp_radius;
-
-            if dist < min_dist && dist > 1e-6 {
-                let scale = min_dist / dist;
-                comp.x = hole.x_mm + dx * scale;
-                comp.y = hole.y_mm + dy * scale;
+        // Enforce mounting hole clearance
+        for comp in board.components.iter_mut() {
+            if comp.placement.is_fixed() { continue; }
+            for hole in &board.config.mounting_holes {
+                let clearance = hole.drill_mm / 2.0 + hole.keepout_mm;
+                let (cbw, cbh) = comp.rotated_bbox();
+                let comp_radius = cbw.max(cbh) / 2.0;
+                let dx = comp.x - hole.x_mm;
+                let dy = comp.y - hole.y_mm;
+                let dist = (dx * dx + dy * dy).sqrt();
+                let min_dist = clearance + comp_radius;
+                if dist < min_dist && dist > 1e-6 {
+                    let scale = min_dist / dist;
+                    comp.x = hole.x_mm + dx * scale;
+                    comp.y = hole.y_mm + dy * scale;
+                }
             }
         }
-    }
 
-    // 6. Clamp to board boundary
-    let ec = board.config.edge_clearance_mm;
-    let bw = board.config.outline.width();
-    let bh = board.config.outline.height();
-    for comp in board.components.iter_mut() {
-        if comp.placement.is_fixed() {
-            continue;
+        // Clamp to board boundary (account for component size)
+        let ec = board.config.edge_clearance_mm;
+        let bw = board.config.outline.width();
+        let bh = board.config.outline.height();
+        for comp in board.components.iter_mut() {
+            if comp.placement.is_fixed() { continue; }
+            let hw = comp.width_mm / 2.0;
+            let hh = comp.height_mm / 2.0;
+            comp.x = comp.x.clamp(ec + hw, bw - ec - hw);
+            comp.y = comp.y.clamp(ec + hh, bh - ec - hh);
         }
-        let hw = comp.width_mm / 2.0;
-        let hh = comp.height_mm / 2.0;
-        comp.x = comp.x.clamp(ec + hw, bw - ec - hw);
-        comp.y = comp.y.clamp(ec + hh, bh - ec - hh);
     }
 }
 
@@ -121,13 +119,20 @@ fn resolve_overlaps(board: &mut Board) {
 
                     let i_fixed = board.components[i].placement.is_fixed();
                     let j_fixed = board.components[j].placement.is_fixed();
+                    let board_cx = bw / 2.0;
+                    let board_cy = bh / 2.0;
 
                     if overlap_x < overlap_y {
                         let push = overlap_x * 0.6 + 0.2;
+                        // Push toward board center when near edges
                         let sign = if dx >= 0.0 { 1.0 } else { -1.0 };
                         if !i_fixed && !j_fixed {
-                            board.components[i].x -= sign * push;
-                            board.components[j].x += sign * push;
+                            // Bias: component further from center moves more
+                            let di = (board.components[i].x - board_cx).abs();
+                            let dj = (board.components[j].x - board_cx).abs();
+                            let ratio_i = dj / (di + dj + 0.01);
+                            board.components[i].x -= sign * push * ratio_i * 2.0;
+                            board.components[j].x += sign * push * (1.0 - ratio_i) * 2.0;
                         } else if !j_fixed {
                             board.components[j].x += sign * push * 2.0;
                         } else if !i_fixed {
@@ -137,8 +142,11 @@ fn resolve_overlaps(board: &mut Board) {
                         let push = overlap_y * 0.6 + 0.2;
                         let sign = if dy >= 0.0 { 1.0 } else { -1.0 };
                         if !i_fixed && !j_fixed {
-                            board.components[i].y -= sign * push;
-                            board.components[j].y += sign * push;
+                            let di = (board.components[i].y - board_cy).abs();
+                            let dj = (board.components[j].y - board_cy).abs();
+                            let ratio_i = dj / (di + dj + 0.01);
+                            board.components[i].y -= sign * push * ratio_i * 2.0;
+                            board.components[j].y += sign * push * (1.0 - ratio_i) * 2.0;
                         } else if !j_fixed {
                             board.components[j].y += sign * push * 2.0;
                         } else if !i_fixed {

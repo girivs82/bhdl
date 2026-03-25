@@ -2,3 +2,4 @@
 
 pub mod html;
 pub mod kicad;
+pub mod verify;

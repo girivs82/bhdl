@@ -150,43 +150,142 @@ pub fn initialize(board: &mut Board, seed: u64) {
         }
     }
 
+    // Build pin-level connectivity: which pins on comp A connect to which pins on comp B
+    // net_idx → Vec<(comp_idx, pin_idx_in_comp)>
+    let comp_id_to_idx_map: HashMap<ComponentId, usize> = board.components.iter()
+        .enumerate()
+        .map(|(i, c)| (c.id, i))
+        .collect();
+
+    // For each pair of connected components, record the connecting pin positions
+    struct PinConnection {
+        from_comp: usize,
+        from_pin_dx: f64,
+        from_pin_dy: f64,
+        to_comp: usize,
+        to_pin_dx: f64,
+        to_pin_dy: f64,
+    }
+    let mut pin_connections: Vec<PinConnection> = Vec::new();
+    for net in &board.nets {
+        let pins_on_net: Vec<(usize, f64, f64)> = net.pins.iter()
+            .filter_map(|(cid, pid)| {
+                let ci = *comp_id_to_idx_map.get(cid)?;
+                let pin = board.components[ci].pins.iter().find(|p| p.pin_id == *pid)?;
+                Some((ci, pin.dx, pin.dy))
+            })
+            .collect();
+        for i in 0..pins_on_net.len() {
+            for j in (i+1)..pins_on_net.len() {
+                let (ci, pdx_i, pdy_i) = pins_on_net[i];
+                let (cj, pdx_j, pdy_j) = pins_on_net[j];
+                pin_connections.push(PinConnection {
+                    from_comp: ci, from_pin_dx: pdx_i, from_pin_dy: pdy_i,
+                    to_comp: cj, to_pin_dx: pdx_j, to_pin_dy: pdy_j,
+                });
+                pin_connections.push(PinConnection {
+                    from_comp: cj, from_pin_dx: pdx_j, from_pin_dy: pdy_j,
+                    to_comp: ci, to_pin_dx: pdx_i, to_pin_dy: pdy_i,
+                });
+            }
+        }
+    }
+
     // Place anchor at board center
     board.components[anchor].x = cx;
     board.components[anchor].y = cy;
     board.components[anchor].theta = 0.0;
 
-    // Place remaining components in a spiral around center
-    // Spiral: increasing radius, evenly spaced angles per ring
-    let spacing = 8.0_f64; // mm between spiral rings
-    let mut ring = 1;
-    let mut ring_idx = 0;
-    let mut ring_count = 6; // components per ring (grows with radius)
+    let placed: std::cell::RefCell<HashSet<usize>> = std::cell::RefCell::new(HashSet::new());
+    placed.borrow_mut().insert(anchor);
 
-    for &comp_idx in ordered.iter().skip(1) { // skip anchor
+    // Place remaining components based on pin connectivity to already-placed components
+    for &comp_idx in ordered.iter().skip(1) {
         if comp_idx == anchor { continue; }
 
-        let radius = ring as f64 * spacing;
-        let angle = 2.0 * std::f64::consts::PI * ring_idx as f64 / ring_count as f64;
+        let comp_w = board.components[comp_idx].width_mm;
+        let comp_h = board.components[comp_idx].height_mm;
+        let hw = comp_w / 2.0;
+        let hh = comp_h / 2.0;
 
-        let mut px = cx + radius * angle.cos();
-        let mut py = cy + radius * angle.sin();
+        // Find all pin connections to already-placed components
+        let connections: Vec<&PinConnection> = pin_connections.iter()
+            .filter(|pc| pc.to_comp == comp_idx && placed.borrow().contains(&pc.from_comp))
+            .collect();
 
-        // Clamp to board (account for component size)
-        let hw = board.components[comp_idx].width_mm / 2.0;
-        let hh = board.components[comp_idx].height_mm / 2.0;
-        px = px.clamp(ec + hw, width - ec - hw);
-        py = py.clamp(ec + hh, height - ec - hh);
+        let (px, py, theta) = if !connections.is_empty() {
+            // Compute weighted average position: place near the connecting pins
+            // of already-placed components, offset in the direction of those pins
+            let mut sum_x = 0.0;
+            let mut sum_y = 0.0;
+            let mut sum_dx = 0.0; // average pin direction on placed components
+            let mut sum_dy = 0.0;
+            let n = connections.len() as f64;
 
-        board.components[comp_idx].x = px;
-        board.components[comp_idx].y = py;
-        board.components[comp_idx].theta = 0.0;
+            for pc in &connections {
+                let placed_comp = &board.components[pc.from_comp];
+                let cos_t = placed_comp.theta.cos();
+                let sin_t = placed_comp.theta.sin();
+                // Global position of the connecting pin on the placed component
+                let pin_gx = placed_comp.x + pc.from_pin_dx * cos_t - pc.from_pin_dy * sin_t;
+                let pin_gy = placed_comp.y + pc.from_pin_dx * sin_t + pc.from_pin_dy * cos_t;
+                sum_x += pin_gx;
+                sum_y += pin_gy;
+                // Pin direction relative to placed component center
+                sum_dx += pc.from_pin_dx;
+                sum_dy += pc.from_pin_dy;
+            }
 
-        ring_idx += 1;
-        if ring_idx >= ring_count {
-            ring += 1;
-            ring_idx = 0;
-            ring_count = (6.0 * ring as f64).ceil() as usize; // more slots per ring
-        }
+            let avg_pin_x = sum_x / n;
+            let avg_pin_y = sum_y / n;
+            let dir_x = sum_dx / n;
+            let dir_y = sum_dy / n;
+            let dir_len = (dir_x * dir_x + dir_y * dir_y).sqrt().max(0.01);
+
+            // Place the new component offset from the average pin position
+            // in the direction the pins point (outward from the placed component)
+            let offset = comp_w.max(comp_h) + 2.0; // spacing
+            let place_x = avg_pin_x + (dir_x / dir_len) * offset;
+            let place_y = avg_pin_y + (dir_y / dir_len) * offset;
+
+            // Orient the new component so its connecting pins face back
+            // toward the placed component. Find average pin direction on
+            // the new component and rotate so it points opposite to dir.
+            let mut new_pin_dx = 0.0;
+            let mut new_pin_dy = 0.0;
+            for pc in &connections {
+                new_pin_dx += pc.to_pin_dx;
+                new_pin_dy += pc.to_pin_dy;
+            }
+            let new_dir_len = (new_pin_dx * new_pin_dx + new_pin_dy * new_pin_dy).sqrt();
+
+            let theta = if new_dir_len > 0.01 {
+                // We want new_pin_dir rotated by theta to point opposite to dir
+                // target angle = atan2(-dir_y, -dir_x)
+                // current angle = atan2(new_pin_dy, new_pin_dx)
+                let target = (-dir_y).atan2(-dir_x);
+                let current = new_pin_dy.atan2(new_pin_dx);
+                target - current
+            } else {
+                0.0
+            };
+
+            (place_x, place_y, theta)
+        } else {
+            // No connections to placed components — use spiral fallback
+            let ring = (placed.borrow().len() as f64 / 6.0).ceil() as usize;
+            let ring_pos = placed.borrow().len() % 6;
+            let radius = ring as f64 * 8.0;
+            let angle = std::f64::consts::PI * 2.0 * ring_pos as f64 / 6.0;
+            (cx + radius * angle.cos(), cy + radius * angle.sin(), 0.0)
+        };
+
+        // Clamp to board
+        board.components[comp_idx].x = px.clamp(ec + hw, width - ec - hw);
+        board.components[comp_idx].y = py.clamp(ec + hh, height - ec - hh);
+        board.components[comp_idx].theta = theta;
+
+        placed.borrow_mut().insert(comp_idx);
     }
 
     // Initialize constrained components
