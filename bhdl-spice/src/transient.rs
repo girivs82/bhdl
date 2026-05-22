@@ -46,7 +46,9 @@ use crate::companion_models::{
     inductor_bdf1_with_dcr, inductor_bdf2_with_dcr,
     Companion,
 };
+use crate::components::{ComponentModel, ElectricalLimits};
 use crate::errors::{Result, SpiceError};
+use crate::glacier_production::GlacierSolver;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public types
@@ -672,6 +674,278 @@ impl NodeIndexMap {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Nonlinear transient (P3c.2) — Route 1: per-timestep companion circuit + GLACIER
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Run a transient simulation of a circuit that contains nonlinear devices
+/// (diodes / LEDs).
+///
+/// **Route 1**: each timestep is solved by handing GLACIER a *companion
+/// circuit* — every reactive element is replaced by its BDF1 Norton companion
+/// (a `Resistor` in parallel with a `CurrentSource`), and the stimulus drives
+/// a `VoltageSource` at the input node. The whole step is then a single
+/// nonlinear DC solve, which is exactly what GLACIER does. The nonlinear
+/// devices are carried verbatim, so GLACIER's logarithmic transformation
+/// handles them.
+///
+/// Fixed timestep, BDF1. (BDF2 / adaptive control for the nonlinear path is a
+/// later refinement; BDF1 fixed-step establishes the Route-1 architecture and
+/// is what the half-wave-rectifier test exercises.)
+///
+/// `models` must contain a `ComponentModel` for every Diode/LED branch (the
+/// passive companions are generated internally). The circuit must have a
+/// ground node; `params.input_node` is driven by the stimulus.
+pub fn run_transient_nonlinear(
+    circuit: &Circuit,
+    models: &HashMap<String, ComponentModel>,
+    params: &TransientParams,
+) -> Result<TransientResult> {
+    if params.timestep <= 0.0 {
+        return Err(SpiceError::InvalidModel(
+            "transient timestep must be positive".to_string()));
+    }
+    if params.duration <= 0.0 {
+        return Err(SpiceError::InvalidModel(
+            "transient duration must be positive".to_string()));
+    }
+
+    // Node-index → name, and the ground node's name.
+    let node_name: HashMap<NodeIndex, String> = circuit
+        .nodes()
+        .map(|(idx, node)| (idx, node.name.clone()))
+        .collect();
+    let ground_name = circuit
+        .nodes()
+        .find(|(_, n)| n.is_ground)
+        .map(|(_, n)| n.name.clone())
+        .ok_or(SpiceError::NoGroundNode)?;
+
+    // Validate the input + probe node names exist.
+    let names: std::collections::HashSet<&str> =
+        node_name.values().map(|s| s.as_str()).collect();
+    if !names.contains(params.input_node.as_str()) {
+        return Err(SpiceError::NodeNotFound(params.input_node.clone()));
+    }
+    for p in &params.probe_nodes {
+        if !names.contains(p.as_str()) {
+            return Err(SpiceError::NodeNotFound(p.clone()));
+        }
+    }
+
+    // BDF1 internal state — one history point per reactive component.
+    let mut cap_v: HashMap<EdgeIndex, f64> = HashMap::new();
+    let mut ind_i: HashMap<EdgeIndex, f64> = HashMap::new();
+    for (edge, branch) in circuit.branches() {
+        match branch.component_type.as_str() {
+            "Capacitor" => { cap_v.insert(edge, 0.0); }
+            "Inductor"  => { ind_i.insert(edge, 0.0); }
+            _ => {}
+        }
+    }
+
+    let n_steps = (params.duration / params.timestep).ceil() as usize;
+    let mut times = Vec::with_capacity(n_steps + 1);
+    let mut probe_voltages: HashMap<String, Vec<f64>> = params
+        .probe_nodes
+        .iter()
+        .map(|name| (name.clone(), Vec::with_capacity(n_steps + 1)))
+        .collect();
+
+    // Record t = 0 (everything at rest; only the input is forced).
+    times.push(0.0);
+    let v0 = params.stimulus.at(0.0);
+    for name in &params.probe_nodes {
+        let v = if name == &params.input_node { v0 } else { 0.0 };
+        probe_voltages.get_mut(name).unwrap().push(v);
+    }
+
+    let h = params.timestep;
+    let mut t = 0.0;
+    for _ in 0..n_steps {
+        t += h;
+        let t_clamped = t.min(params.duration);
+        let stim = params.stimulus.at(t_clamped);
+
+        // 1. Build the companion circuit for this step.
+        let (comp_circuit, comp_models) = build_companion_circuit(
+            circuit, models, &cap_v, &ind_i, &node_name,
+            &ground_name, &params.input_node, stim, h,
+        )?;
+
+        // 2. Solve it with GLACIER (single deterministic operating point).
+        let mut solver = GlacierSolver::new(comp_circuit);
+        solver.enable_multi_region = false;
+        for (nm, model) in &comp_models {
+            solver.add_model(nm.clone(), model.clone());
+        }
+        let solutions = solver.solve()?;
+        let solution = solutions
+            .into_iter()
+            .min_by(|a, b| a.final_error.partial_cmp(&b.final_error)
+                .unwrap_or(std::cmp::Ordering::Equal))
+            .ok_or_else(|| SpiceError::AnalysisFailed(
+                "GLACIER returned no solution for transient step".to_string()))?;
+        let node_v = &solution.node_voltages;
+        let v_at = |idx: NodeIndex| -> f64 {
+            node_name.get(&idx)
+                .and_then(|nm| node_v.get(nm))
+                .copied()
+                .unwrap_or(0.0)
+        };
+
+        // 3. Advance each reactive component's internal state from the solved
+        //    node voltages, using the same BDF1 companion that was stamped.
+        for (edge, branch) in circuit.branches() {
+            if branch.nodes.len() != 2 { continue; }
+            let v_ext = v_at(branch.nodes[0]) - v_at(branch.nodes[1]);
+            match branch.component_type.as_str() {
+                "Capacitor" => {
+                    let v_prev = *cap_v.get(&edge).unwrap_or(&0.0);
+                    let esr = branch.metadata.get(META_ESR)
+                        .and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+                    let comp = capacitor_bdf1_with_esr(branch.value, h, v_prev, esr);
+                    let i = comp.g_eq * v_ext + comp.i_eq;
+                    cap_v.insert(edge, capacitor_advance_v_c(branch.value, h, v_prev, i));
+                }
+                "Inductor" => {
+                    let i_prev = *ind_i.get(&edge).unwrap_or(&0.0);
+                    let dcr = branch.metadata.get(META_DCR)
+                        .and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+                    let comp = inductor_bdf1_with_dcr(branch.value, h, i_prev, dcr);
+                    let i = comp.g_eq * v_ext + comp.i_eq;
+                    ind_i.insert(edge, inductor_advance_i_l(h, i));
+                }
+                _ => {}
+            }
+        }
+
+        // 4. Record probes.
+        times.push(t_clamped);
+        for name in &params.probe_nodes {
+            probe_voltages.get_mut(name).unwrap()
+                .push(node_v.get(name).copied().unwrap_or(0.0));
+        }
+    }
+
+    Ok(TransientResult { times, probe_voltages })
+}
+
+/// Build the per-timestep companion circuit handed to GLACIER.
+///
+/// Every reactive element becomes its BDF1 Norton companion — a `Resistor`
+/// (`1/g_eq`) in parallel with a `CurrentSource` (`i_eq`) between the same
+/// node pair. Resistors, diodes and LEDs are copied verbatim; any existing
+/// voltage source is copied; and a fresh `VoltageSource` named `__VIN__`
+/// drives `input_node` at the present stimulus value.
+#[allow(clippy::too_many_arguments)]
+fn build_companion_circuit(
+    circuit: &Circuit,
+    models: &HashMap<String, ComponentModel>,
+    cap_v: &HashMap<EdgeIndex, f64>,
+    ind_i: &HashMap<EdgeIndex, f64>,
+    node_name: &HashMap<NodeIndex, String>,
+    ground_name: &str,
+    input_node: &str,
+    stimulus_value: f64,
+    h: f64,
+) -> Result<(Circuit, HashMap<String, ComponentModel>)> {
+    let mut c = Circuit::new();
+    let mut m: HashMap<String, ComponentModel> = HashMap::new();
+
+    // Carry over every node by name (Circuit::add_node auto-detects ground).
+    for nm in node_name.values() {
+        c.add_node(nm.clone(), None);
+    }
+
+    // Stimulus → VoltageSource at the input node.
+    c.add_branch("__VIN__".to_string(), input_node, ground_name,
+        "VoltageSource".to_string(), stimulus_value, None);
+    m.insert("__VIN__".to_string(), ComponentModel::VoltageSource {
+        voltage: stimulus_value, internal_resistance: Some(0.0),
+    });
+
+    for (edge, branch) in circuit.branches() {
+        if branch.nodes.len() != 2 { continue; }
+        let na = node_name.get(&branch.nodes[0]).cloned().unwrap_or_default();
+        let nb = node_name.get(&branch.nodes[1]).cloned().unwrap_or_default();
+
+        match branch.component_type.as_str() {
+            "Resistor" => {
+                c.add_branch(branch.name.clone(), &na, &nb,
+                    "Resistor".to_string(), branch.value, None);
+                m.insert(branch.name.clone(), ComponentModel::Resistor {
+                    resistance: branch.value, tolerance: 5.0,
+                    limits: ElectricalLimits::default(),
+                });
+            }
+            "Diode" | "LED" => {
+                c.add_branch(branch.name.clone(), &na, &nb,
+                    branch.component_type.clone(), branch.value, None);
+                match models.get(&branch.name) {
+                    Some(model) => { m.insert(branch.name.clone(), model.clone()); }
+                    None => return Err(SpiceError::InvalidModel(format!(
+                        "run_transient_nonlinear: no model supplied for nonlinear \
+                         device '{}'", branch.name))),
+                }
+            }
+            "VoltageSource" => {
+                // A DC bias source already in the circuit — copy verbatim.
+                c.add_branch(branch.name.clone(), &na, &nb,
+                    "VoltageSource".to_string(), branch.value, None);
+                m.insert(branch.name.clone(), ComponentModel::VoltageSource {
+                    voltage: branch.value, internal_resistance: Some(0.0),
+                });
+            }
+            "Capacitor" => {
+                let esr = branch.metadata.get(META_ESR)
+                    .and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+                let v_prev = cap_v.get(&edge).copied().unwrap_or(0.0);
+                let comp = capacitor_bdf1_with_esr(branch.value, h, v_prev, esr);
+                add_companion(&mut c, &mut m, &branch.name, &na, &nb, comp);
+            }
+            "Inductor" => {
+                let dcr = branch.metadata.get(META_DCR)
+                    .and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+                let i_prev = ind_i.get(&edge).copied().unwrap_or(0.0);
+                let comp = inductor_bdf1_with_dcr(branch.value, h, i_prev, dcr);
+                add_companion(&mut c, &mut m, &branch.name, &na, &nb, comp);
+            }
+            _ => { /* unmodelled component types contribute nothing */ }
+        }
+    }
+
+    Ok((c, m))
+}
+
+/// Emit a reactive component's Norton companion as a `Resistor` (`1/g_eq`)
+/// in parallel with a `CurrentSource` (`i_eq`), both from `na` to `nb`.
+fn add_companion(
+    c: &mut Circuit,
+    m: &mut HashMap<String, ComponentModel>,
+    base_name: &str,
+    na: &str,
+    nb: &str,
+    comp: Companion,
+) {
+    // Conductance leg. `g_eq` is always > 0 for a real BDF1 companion;
+    // guard against a pathological zero by falling back to a huge resistor.
+    let r = if comp.g_eq.abs() > 1e-300 { 1.0 / comp.g_eq } else { 1e12 };
+    let r_name = format!("{}__Rc", base_name);
+    c.add_branch(r_name.clone(), na, nb, "Resistor".to_string(), r, None);
+    m.insert(r_name, ComponentModel::Resistor {
+        resistance: r, tolerance: 0.0, limits: ElectricalLimits::default(),
+    });
+
+    // Norton current-source leg: `i_eq` flows na → nb (same orientation as
+    // the companion's device current convention).
+    let i_name = format!("{}__Ic", base_name);
+    c.add_branch(i_name.clone(), na, nb, "CurrentSource".to_string(), comp.i_eq, None);
+    m.insert(i_name, ComponentModel::CurrentSource {
+        current: comp.i_eq, internal_resistance: None,
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1189,6 +1463,90 @@ mod tests {
         match run_transient(&circuit, &params) {
             Err(SpiceError::InvalidModel(_)) => {}
             other => panic!("expected InvalidModel, got {:?}", other),
+        }
+    }
+
+    // ── Nonlinear transient (P3c.2, Route 1) ─────────────────────────────
+
+    #[test]
+    fn nonlinear_transient_half_wave_rectifier() {
+        // AC source ── D1 ── Vout ──[ R1 ∥ C1 ]── GND.
+        //
+        // The diode passes only the positive half-cycles of the sine; the RC
+        // load filters them into a near-DC level. This exercises the full
+        // Route-1 nonlinear transient path: every timestep builds a companion
+        // circuit (cap → Resistor ∥ CurrentSource, input → VoltageSource) and
+        // hands it to GLACIER, whose log-transformed diode model does the
+        // nonlinear solve.
+        let mut circuit = Circuit::new();
+        circuit.add_node("Vin".to_string(),  None);
+        circuit.add_node("Vout".to_string(), None);
+        circuit.add_node("GND".to_string(),  None);
+        circuit.add_branch("D1".to_string(), "Vin",  "Vout", "Diode".to_string(),     0.0,       None);
+        circuit.add_branch("R1".to_string(), "Vout", "GND",  "Resistor".to_string(),  100_000.0, None);
+        circuit.add_branch("C1".to_string(), "Vout", "GND",  "Capacitor".to_string(), 1e-6,      None);
+
+        let mut models = HashMap::new();
+        models.insert("D1".to_string(), ComponentModel::Diode {
+            forward_voltage: 0.7,
+            forward_resistance: 0.0,
+            reverse_current: 1e-9,
+            saturation_current: Some(1e-12),
+            emission_coefficient: Some(1.0),
+            limits: ElectricalLimits::default(),
+        });
+
+        let params = TransientParams::new(
+            "Vin",
+            Stimulus::Sine { amplitude: 5.0, frequency_hz: 1000.0, dc_offset: 0.0 },
+            vec!["Vout"],
+            3e-3,    // 3 cycles at 1 kHz
+            5e-6,    // 5 µs step (200 / cycle)
+        );
+
+        let result = run_transient_nonlinear(&circuit, &models, &params).unwrap();
+        let vout = &result.probe_voltages["Vout"];
+
+        let min = vout.iter().cloned().fold(f64::MAX, f64::min);
+        let max = vout.iter().cloned().fold(f64::MIN, f64::max);
+        let final_v = *vout.last().unwrap();
+
+        // Rectified: the diode blocks the negative half-cycles, so Vout never
+        // swings substantially negative. A missing/non-conducting diode would
+        // either let Vout reach −5 V (no rectification) or never charge.
+        assert!(min > -0.3, "Vout dipped to {:.3} V — not rectified", min);
+        // Filtered DC output: the cap holds charge near the rectified peak,
+        // which sits below the 5 V source peak by the diode's forward drop.
+        assert!(
+            final_v > 3.5 && final_v < 5.0,
+            "final Vout = {:.3} V — expected a filtered DC level in (3.5, 5.0)",
+            final_v
+        );
+        // Output never exceeds the source.
+        assert!(max < 5.3, "Vout peaked at {:.3} V — exceeds the 5 V source", max);
+    }
+
+    #[test]
+    fn nonlinear_transient_missing_model_is_an_error() {
+        // A diode with no model supplied must fail loudly, not silently
+        // treat the device as absent.
+        let mut circuit = Circuit::new();
+        circuit.add_node("Vin".to_string(),  None);
+        circuit.add_node("Vout".to_string(), None);
+        circuit.add_node("GND".to_string(),  None);
+        circuit.add_branch("D1".to_string(), "Vin",  "Vout", "Diode".to_string(),    0.0,    None);
+        circuit.add_branch("R1".to_string(), "Vout", "GND",  "Resistor".to_string(), 1000.0, None);
+
+        let params = TransientParams::new(
+            "Vin",
+            Stimulus::Constant(1.0),
+            vec!["Vout"],
+            1e-4,
+            1e-5,
+        );
+        match run_transient_nonlinear(&circuit, &HashMap::new(), &params) {
+            Err(SpiceError::InvalidModel(_)) => {}
+            other => panic!("expected InvalidModel for the unmodelled diode, got {:?}", other),
         }
     }
 }

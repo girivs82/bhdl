@@ -26,6 +26,15 @@ const ULTRA_SHARP_THRESHOLD: f64 = 1e-15; // Is threshold for ultra-sharp
 const CONDITION_NUMBER_THRESHOLD: f64 = 1e10; // Preconditioning trigger
 const CONVERGENCE_TOLERANCE: f64 = 1e-9; // Default convergence tolerance
 
+/// Representable floor for a log-transformed Shockley device current. A
+/// strongly reverse-biased junction's physical forward current can be far
+/// below f64's smallest positive value; the log-domain constitutive target
+/// is clamped to this floor so the residual stays satisfiable (and Newton
+/// convergent) — the device then simply reads as "off". Also the `min_value`
+/// of the `DeviceInternal` current variables, so the variable can actually
+/// reach the clamped target.
+const MIN_SHOCKLEY_CURRENT: f64 = 1e-300;
+
 // Multi-factor adaptive damping parameters (Section III.D)
 const ERROR_ZONE_ULTRA_SMALL: f64 = 1e-10;
 const ERROR_ZONE_VERY_SMALL: f64 = 1e-8;
@@ -646,7 +655,7 @@ impl GlacierSolver {
                     // distance to either an off (~Is) or on (~mA) solution
                     // is a modest additive span.
                     value: 1e-9,
-                    min_value: 1e-100, // floor: keep ln(value) finite
+                    min_value: MIN_SHOCKLEY_CURRENT, // floor: keep ln(value) finite
                     max_value: 1e6,
                     use_log: true,
                     component_id: Some(branch.name.clone()),
@@ -875,10 +884,25 @@ impl GlacierSolver {
             jacobian[(b, di)] -= i_d;
         }
         // Constitutive row `di`: ln(I_d) = ln(Is) + v_diff/(n·V_t).
-        residual[di] = i_d.ln() - is.ln() - v_diff / (n * vt);
+        //
+        // The target is clamped to `ln(MIN_SHOCKLEY_CURRENT)`: a strongly
+        // reverse-biased junction's forward current can fall far below f64's
+        // smallest positive value, and an unclamped target then leaves the
+        // residual `ln(I_d) − target` permanently unsatisfiable (the variable
+        // floors out above the target) — Newton never converges. Clamping
+        // means a deep-reverse device asks only for the floor current (≈ 0,
+        // physically correct for an off diode) and the row stays solvable.
+        // In the clamped region the constitutive law no longer depends on
+        // the terminal voltages, so the voltage-coupling Jacobian entries
+        // are dropped there.
+        let target = is.ln() + v_diff / (n * vt);
+        let floor = MIN_SHOCKLEY_CURRENT.ln();
+        residual[di] = i_d.ln() - target.max(floor);
         jacobian[(di, di)] = 1.0; // ∂(ln I_d)/∂(ln I_d)
-        if let Some(a) = a { jacobian[(di, a)] = -1.0 / (n * vt); }
-        if let Some(b) = b { jacobian[(di, b)] =  1.0 / (n * vt); }
+        if target > floor {
+            if let Some(a) = a { jacobian[(di, a)] = -1.0 / (n * vt); }
+            if let Some(b) = b { jacobian[(di, b)] =  1.0 / (n * vt); }
+        }
     }
 
     /// Check if logarithmic transformation should be used
