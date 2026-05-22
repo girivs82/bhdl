@@ -23,6 +23,51 @@ pub const META_F_SW: &str = "f_sw";
 pub const META_T_SW: &str = "t_sw";
 pub const META_I_QUIESCENT: &str = "i_quiescent";
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SPICE-relevant stdlib attribute keys (P0 metadata bridge).
+//
+// These flow from stdlib `.bhdl` files (via `attribute foo = ...;`) through the
+// synthesizer's `ExtractedModel`, into per-branch metadata in this module, and
+// out into `ComponentModel::*` variants in `stdlib_model_loader`. They are the
+// single source of truth for "what does this component look like to SPICE,"
+// replacing the prior pattern where parameters lived in Rust source LUTs.
+//
+// New SPICE-touching attributes should be declared here, populated by
+// `netlist_converter::add_physical_component`, and consumed by
+// `stdlib_model_loader::load_models_from_circuit`. The existing Rust LUTs
+// (`LedColor::get_params`) remain as fallbacks for circuits whose stdlib
+// definition predates the corresponding attribute.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Manufacturing tolerance (fraction, e.g. 0.05 for ±5%).
+pub const META_TOLERANCE: &str = "tolerance";
+/// Power-dissipation rating in watts.
+pub const META_POWER_RATING: &str = "power_rating";
+/// Equivalent series resistance for capacitors, in ohms.
+pub const META_ESR: &str = "esr";
+/// Capacitor or device voltage rating, in volts.
+pub const META_VOLTAGE_RATING: &str = "voltage_rating";
+/// Inductor DC resistance, in ohms.
+pub const META_DCR: &str = "dcr";
+/// Shockley saturation current `Is`, in amperes.
+pub const META_SATURATION_CURRENT: &str = "saturation_current";
+/// Diode/LED ideality factor `n` (dimensionless).
+pub const META_EMISSION_COEFFICIENT: &str = "emission_coefficient";
+/// Thermal voltage `Vt = kT/q`, in volts.
+pub const META_THERMAL_VOLTAGE: &str = "thermal_voltage";
+/// Nominal forward voltage at the rated forward current, in volts.
+pub const META_FORWARD_VOLTAGE: &str = "forward_voltage";
+/// Rated forward current, in amperes.
+pub const META_FORWARD_CURRENT: &str = "forward_current";
+/// Limit-table entries (mirrored into `ElectricalLimits` by the loader).
+pub const META_MAX_CURRENT: &str = "max_current";
+pub const META_MAX_VOLTAGE: &str = "max_voltage";
+pub const META_MAX_POWER: &str = "max_power";
+pub const META_TEMP_MIN: &str = "temp_min";
+pub const META_TEMP_MAX: &str = "temp_max";
+/// Free-form variant tag (e.g. LED `color = "red"`); used by fallback LUTs.
+pub const META_VARIANT: &str = "variant";
+
 /// Electrical node in the circuit
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Node {

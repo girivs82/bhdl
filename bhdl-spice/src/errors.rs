@@ -54,7 +54,14 @@ pub enum SpiceError {
     
     #[error("Numerical error: {0}")]
     NumericalError(String),
-    
+
+    /// Returned by analysis modes that have not yet landed (e.g. AC sweep,
+    /// transient time-stepping). See the P1–P4 plan in the bhdl-spice
+    /// development notes; the prior canned-curve "stubs" were removed
+    /// rather than left to return fiction.
+    #[error("Not implemented: {0}")]
+    NotImplemented(String),
+
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }

@@ -623,7 +623,39 @@ impl GlacierSolver {
                 var_id += 1;
             }
         }
-        
+
+        // Internal current variables for Shockley devices (diodes, LEDs).
+        //
+        // This is the GLACIER logarithmic transformation (paper §III.C). Each
+        // such device gets a `DeviceInternal` variable holding its forward
+        // current `I_d`, carried in LOG space (`use_log = true`): the Newton
+        // update is multiplicative, so `I_d` stays strictly positive and can
+        // traverse the full 1e-38 … 1e0 A dynamic range gracefully. Its
+        // constitutive equation is then written linearly — `ln I_d =
+        // ln Is + V/nVt` — eliminating the `exp` (and the exponent clamp it
+        // forced) from the device's residual and Jacobian entirely. This is
+        // what lets extreme-Is devices actually *conduct* in the model
+        // rather than being frozen off by the clamp.
+        for (_idx, branch) in self.circuit.branches() {
+            if branch.component_type == "Diode" || branch.component_type == "LED" {
+                variables.push(Variable {
+                    id: var_id,
+                    name: format!("Id_{}", branch.name),
+                    // Neutral "nearly off" start; Newton drives it to the
+                    // true operating current. Log-space update means the
+                    // distance to either an off (~Is) or on (~mA) solution
+                    // is a modest additive span.
+                    value: 1e-9,
+                    min_value: 1e-100, // floor: keep ln(value) finite
+                    max_value: 1e6,
+                    use_log: true,
+                    component_id: Some(branch.name.clone()),
+                    variable_type: VariableType::DeviceInternal,
+                });
+                var_id += 1;
+            }
+        }
+
         variables
     }
     
@@ -645,123 +677,210 @@ impl GlacierSolver {
             }
         }
         
-        // KCL equations for each non-ground node
-        let mut eq_idx = 0;
-        for (_idx, node) in self.circuit.nodes() {
-            if node.name == "0" || node.name == "GND" {
-                continue;
-            }
-            
-            // Sum of currents at this node = 0
-            // Check all edges connected to this node (both incoming and outgoing)
-            for edge_ref in self.circuit.graph.edges(_idx) {
-                let branch = edge_ref.weight();
-                let from_node = self.circuit.graph[edge_ref.source()].name.clone();
-                let to_node = self.circuit.graph[edge_ref.target()].name.clone();
-                
-                // Determine current direction: positive if leaving node, negative if entering
-                let sign = if from_node == node.name { 1.0 } else { -1.0 };
-                
-                // Get voltages
-                let v_from = node_voltages.get(&from_node).copied().unwrap_or(0.0);
-                let v_to = node_voltages.get(&to_node).copied().unwrap_or(0.0);
-                let v_diff = v_from - v_to;
-                
-                // Compute current and derivatives based on component type
-                match self.models.get(&branch.name) {
-                    Some(ComponentModel::Resistor { resistance, .. }) => {
-                        let current = v_diff / resistance;
-                        residual[eq_idx] += sign * current;
-                        
-                        // Jacobian entries
-                        if let Some(from_idx) = self.get_voltage_var_index(variables, &from_node) {
-                            jacobian[(eq_idx, from_idx)] += sign / resistance;
-                        }
-                        if let Some(to_idx) = self.get_voltage_var_index(variables, &to_node) {
-                            jacobian[(eq_idx, to_idx)] -= sign / resistance;
-                        }
-                    }
-                    Some(ComponentModel::LED { saturation_current, emission_coefficient, thermal_voltage, .. }) => {
+        // Component-centric (stamping) assembly.
+        //
+        // Iterate every branch exactly once and "stamp" its contribution
+        // into BOTH of its endpoint nodes' KCL rows (and, for a voltage
+        // source, its own branch-current constraint row). This is the
+        // canonical SPICE/MNA method and matches the reference implementation
+        // `standalone_glacier.rs`.
+        //
+        // It replaced an earlier *node-centric* assembly ("for each node,
+        // walk its incident edges") that called petgraph's directed
+        // `edges()` — which yields only OUTGOING edges — and so silently
+        // dropped every branch incoming to a node from that node's KCL,
+        // corrupting both residual and Jacobian. Stamping cannot have that
+        // bug: a component owns its two node indices and unconditionally
+        // contributes to both. There is no neighbour-enumeration step to
+        // get wrong.
+        //
+        // Row/column convention (MNA): a non-ground node's KCL equation
+        // shares its index with that node's voltage variable; a voltage
+        // source's constraint equation shares its index with its branch-
+        // current variable. `get_voltage_var_index` / `get_current_var_index`
+        // therefore locate both the matrix row and the matrix column by name
+        // — the assembly does not depend on iteration order matching the
+        // variable builder.
+        //
+        // Sign convention: `residual[node] += (current leaving that node)`.
+        // For a branch carrying current `i` from its `from` node to its `to`
+        // node, that current leaves `from` and enters `to`, so it adds `+i`
+        // to the from-row and `-i` to the to-row.
+        for edge_ref in self.circuit.graph.edge_references() {
+            let branch = edge_ref.weight();
+            let from_node = self.circuit.graph[edge_ref.source()].name.clone();
+            let to_node = self.circuit.graph[edge_ref.target()].name.clone();
+
+            // Matrix index of each endpoint, or `None` for the ground
+            // reference (no KCL row, no voltage column).
+            let a_idx = self.get_voltage_var_index(variables, &from_node);
+            let b_idx = self.get_voltage_var_index(variables, &to_node);
+
+            let v_from = node_voltages.get(&from_node).copied().unwrap_or(0.0);
+            let v_to = node_voltages.get(&to_node).copied().unwrap_or(0.0);
+            let v_diff = v_from - v_to;
+
+            match self.models.get(&branch.name) {
+                Some(ComponentModel::Resistor { resistance, .. }) => {
+                    let g = 1.0 / resistance;
+                    Self::stamp_two_terminal(
+                        &mut residual, &mut jacobian, a_idx, b_idx, g * v_diff, g);
+                }
+                Some(ComponentModel::LED {
+                    saturation_current, emission_coefficient, thermal_voltage, ..
+                }) => {
+                    // Log-transformed Shockley stamp (paper §III.C). The
+                    // device's internal current variable always exists —
+                    // `create_initial_variables` adds one per diode/LED.
+                    if let Some(di) =
+                        self.get_device_current_var_index(variables, &branch.name)
+                    {
                         let is = saturation_current.unwrap_or(1e-12);
                         let n = emission_coefficient.unwrap_or(1.5);
                         let vt = thermal_voltage.unwrap_or(THERMAL_VOLTAGE);
-                        
-                        
-                        // Shockley equation with logarithmic transformation
-                        let (current, di_dv) = if v_diff > 0.0 {
-                            // Limit exponential to prevent overflow
-                            let exp_arg = (v_diff / (n * vt)).min(50.0);
-                            let exp_term = exp_arg.exp();
-                            let i = is * (exp_term - 1.0);
-                            let di = is * exp_term / (n * vt);
-                            
-                            // Apply logarithmic transformation for ultra-sharp
-                            if is <= ULTRA_SHARP_THRESHOLD && self.should_use_log_transform(di) {
-                                let log_current = (i + is).ln();
-                                let d_log_i = 1.0 / (n * vt);
-                                (i, di)  // Still use linear for now, full log transform is complex
-                            } else {
-                                (i, di)
-                            }
-                        } else {
-                            // Small reverse bias conductance to help convergence
-                            let g_reverse = is / vt;
-                            (v_diff * g_reverse, g_reverse)
-                        };
-                        
-                        residual[eq_idx] += sign * current;
-                        
-                        // Jacobian entries
-                        if let Some(from_idx) = self.get_voltage_var_index(variables, &from_node) {
-                            jacobian[(eq_idx, from_idx)] += sign * di_dv;
-                        }
-                        if let Some(to_idx) = self.get_voltage_var_index(variables, &to_node) {
-                            jacobian[(eq_idx, to_idx)] -= sign * di_dv;
-                        }
-                    }
-                    Some(ComponentModel::VoltageSource { voltage, .. }) => {
-                        // Voltage source: add current variable
-                        if let Some(curr_idx) = self.get_current_var_index(variables, &branch.name) {
-                            residual[eq_idx] += sign * variables[curr_idx].value;
-                            jacobian[(eq_idx, curr_idx)] = sign;
-                        }
-                    }
-                    _ => {
-                        // Other component types
+                        Self::stamp_shockley_log(
+                            &mut residual, &mut jacobian, a_idx, b_idx, di,
+                            variables[di].value, is, n, vt, v_diff);
                     }
                 }
-            }
-            
-            eq_idx += 1;
-        }
-        
-        // Voltage source constraint equations
-        for edge_ref in self.circuit.graph.edge_references() {
-            let branch = edge_ref.weight();
-            if let Some(ComponentModel::VoltageSource { voltage, .. }) = self.models.get(&branch.name) {
-                let from_node = self.circuit.graph[edge_ref.source()].name.clone();
-                let to_node = self.circuit.graph[edge_ref.target()].name.clone();
-                
-                let v_from = node_voltages.get(&from_node).copied().unwrap_or(0.0);
-                let v_to = node_voltages.get(&to_node).copied().unwrap_or(0.0);
-                
-                // V_from - V_to = V_source * ramp
-                residual[eq_idx] = v_from - v_to - voltage * ramp;
-                
-                if let Some(from_idx) = self.get_voltage_var_index(variables, &from_node) {
-                    jacobian[(eq_idx, from_idx)] = 1.0;
+                Some(ComponentModel::Diode {
+                    saturation_current, emission_coefficient, ..
+                }) => {
+                    // Same log-transformed Shockley model as LED, different
+                    // default parameters.
+                    if let Some(di) =
+                        self.get_device_current_var_index(variables, &branch.name)
+                    {
+                        let is = saturation_current.unwrap_or(1e-12);
+                        let n = emission_coefficient.unwrap_or(1.0);
+                        Self::stamp_shockley_log(
+                            &mut residual, &mut jacobian, a_idx, b_idx, di,
+                            variables[di].value, is, n, THERMAL_VOLTAGE, v_diff);
+                    }
                 }
-                if let Some(to_idx) = self.get_voltage_var_index(variables, &to_node) {
-                    jacobian[(eq_idx, to_idx)] = -1.0;
+                Some(ComponentModel::CurrentSource { current, .. }) => {
+                    // Independent current source: a fixed current flows
+                    // from→to regardless of the voltage across it — residual
+                    // contribution only, no Jacobian. This is what lets the
+                    // transient companion model (`i = g_eq·v + i_eq`, a
+                    // Resistor ∥ CurrentSource) be expressed to GLACIER.
+                    if let Some(a) = a_idx { residual[a] += current; }
+                    if let Some(b) = b_idx { residual[b] -= current; }
                 }
-                
-                eq_idx += 1;
+                Some(ComponentModel::VoltageSource { voltage, .. }) => {
+                    // A voltage source introduces an unknown branch current
+                    // and an extra constraint equation (modified nodal
+                    // analysis). Both share the branch-current variable's
+                    // index `ci`.
+                    if let Some(ci) = self.get_current_var_index(variables, &branch.name) {
+                        let i = variables[ci].value; // branch current, from→to
+                        // KCL: the source carries `i` out of `from`, into `to`.
+                        if let Some(a) = a_idx {
+                            residual[a] += i;
+                            jacobian[(a, ci)] += 1.0;
+                        }
+                        if let Some(b) = b_idx {
+                            residual[b] -= i;
+                            jacobian[(b, ci)] -= 1.0;
+                        }
+                        // Constraint row `ci`: V_from − V_to = voltage · ramp.
+                        residual[ci] = v_diff - voltage * ramp;
+                        if let Some(a) = a_idx { jacobian[(ci, a)] = 1.0; }
+                        if let Some(b) = b_idx { jacobian[(ci, b)] = -1.0; }
+                    }
+                }
+                _ => { /* unmodelled component types contribute nothing */ }
             }
         }
-        
+
         Ok((residual, jacobian))
     }
-    
+
+    /// Stamp a 2-terminal device into the MNA system (component-centric).
+    ///
+    /// `i` is the current flowing from the device's `from` node to its `to`
+    /// node; `g = di/d(v_diff)` is its small-signal conductance, with
+    /// `v_diff = v_from − v_to`. `a` / `b` are the matrix indices of the
+    /// from / to nodes, or `None` for the ground reference (which has neither
+    /// a KCL row nor a voltage column).
+    ///
+    /// Residual convention: `residual[node] += (current leaving node)`, so
+    /// the from-row gets `+i` and the to-row gets `−i`. The Jacobian gets the
+    /// canonical 2×2 conductance stamp; ground-incident terminals contribute
+    /// only their non-ground counterpart's diagonal entry.
+    fn stamp_two_terminal(
+        residual: &mut DVector<f64>,
+        jacobian: &mut DMatrix<f64>,
+        a: Option<usize>,
+        b: Option<usize>,
+        i: f64,
+        g: f64,
+    ) {
+        if let Some(a) = a { residual[a] += i; }
+        if let Some(b) = b { residual[b] -= i; }
+        if let Some(a) = a {
+            jacobian[(a, a)] += g;
+            if let Some(b) = b { jacobian[(a, b)] -= g; }
+        }
+        if let Some(b) = b {
+            jacobian[(b, b)] += g;
+            if let Some(a) = a { jacobian[(b, a)] -= g; }
+        }
+    }
+
+    /// Stamp a Shockley device (diode / LED) using the logarithmic
+    /// transformation — paper §III.C, the algorithm GLACIER is named for.
+    ///
+    /// The device's forward current `I_d` is an independent variable carried
+    /// in log space (`use_log`). Its constitutive law is written in the
+    /// **log domain**:
+    ///
+    /// ```text
+    ///     ln(I_d) − ln(Is) − v_diff/(n·V_t) = 0
+    /// ```
+    ///
+    /// which is *linear* in `ln(I_d)` and `v_diff` — there is no `exp` in the
+    /// residual or Jacobian, hence no exponent clamp, and the row's entries
+    /// `{1, ±1/(n·V_t)}` are bounded constants regardless of `Is`. That is
+    /// the whole point: in linear space no exponent clamp can serve both
+    /// `Is = 1e-12` and `Is = 1e-38`; in log space the same formulation
+    /// serves every `Is`, so extreme-saturation-current devices can actually
+    /// conduct rather than being frozen off.
+    ///
+    /// `di` is the device's log-current variable index, which is also the
+    /// matrix row of the constitutive equation above. `i_d` is the current's
+    /// present value (strictly positive — the log-space update guarantees
+    /// it). The KCL columns for `di` carry the chain-rule factor
+    /// `∂I_d/∂(ln I_d) = I_d` (the `diag(x)` scaling of `J_G = J_F·diag(x)`).
+    fn stamp_shockley_log(
+        residual: &mut DVector<f64>,
+        jacobian: &mut DMatrix<f64>,
+        a: Option<usize>,
+        b: Option<usize>,
+        di: usize,
+        i_d: f64,
+        is: f64,
+        n: f64,
+        vt: f64,
+        v_diff: f64,
+    ) {
+        // KCL: the forward current I_d flows from `a` (anode) to `b`
+        // (cathode). Jacobian wrt the log variable carries the `I_d` factor.
+        if let Some(a) = a {
+            residual[a] += i_d;
+            jacobian[(a, di)] += i_d;
+        }
+        if let Some(b) = b {
+            residual[b] -= i_d;
+            jacobian[(b, di)] -= i_d;
+        }
+        // Constitutive row `di`: ln(I_d) = ln(Is) + v_diff/(n·V_t).
+        residual[di] = i_d.ln() - is.ln() - v_diff / (n * vt);
+        jacobian[(di, di)] = 1.0; // ∂(ln I_d)/∂(ln I_d)
+        if let Some(a) = a { jacobian[(di, a)] = -1.0 / (n * vt); }
+        if let Some(b) = b { jacobian[(di, b)] =  1.0 / (n * vt); }
+    }
+
     /// Check if logarithmic transformation should be used
     fn should_use_log_transform(&self, gradient: f64) -> bool {
         gradient > 1e6  // Use log for very large gradients
@@ -783,6 +902,16 @@ impl GlacierSolver {
         variables.iter().position(|v| {
             v.variable_type == VariableType::BranchCurrent &&
             v.name == format!("I_{}", branch_id)
+        })
+    }
+
+    /// Get variable index for a Shockley device's internal (log-transformed)
+    /// current variable. By the MNA convention used here, this index is also
+    /// the matrix row of that device's constitutive equation.
+    fn get_device_current_var_index(&self, variables: &[Variable], branch_id: &str) -> Option<usize> {
+        variables.iter().position(|v| {
+            v.variable_type == VariableType::DeviceInternal &&
+            v.name == format!("Id_{}", branch_id)
         })
     }
     
@@ -954,7 +1083,15 @@ impl GlacierSolver {
                     let branch_name = var.name.strip_prefix("I_").unwrap().to_string();
                     branch_currents.insert(branch_name, var.value);
                 }
-                _ => {}
+                VariableType::DeviceInternal => {
+                    // Log-transformed Shockley device current (paper §III.C).
+                    // Recorded directly from the solved variable — the
+                    // separate branch-current recompute below sees it via
+                    // `branch_currents.contains_key` and skips the device.
+                    if let Some(branch_name) = var.name.strip_prefix("Id_") {
+                        branch_currents.insert(branch_name.to_string(), var.value);
+                    }
+                }
             }
         }
         
@@ -993,16 +1130,21 @@ impl GlacierSolver {
                     let is = saturation_current.unwrap_or(1e-12);
                     let n = emission_coefficient.unwrap_or(1.0);
                     let vt = THERMAL_VOLTAGE;
-                    
+
                     if v_diff > 0.0 {
                         is * ((v_diff / (n * vt)).min(50.0).exp() - 1.0)
                     } else {
                         0.0
                     }
                 }
+                Some(ComponentModel::CurrentSource { current, .. }) => {
+                    // The branch current of a current source is its set value
+                    // (flowing from → to), independent of the node voltages.
+                    *current
+                }
                 _ => 0.0,
             };
-            
+
             branch_currents.insert(branch.name.clone(), current);
         }
         
@@ -1027,5 +1169,298 @@ impl Default for Region {
             converged: false,
             stored_solution: None,
         }
+    }
+}
+#[cfg(test)]
+mod current_source_tests {
+    //! Verifies the CurrentSource arm added to GLACIER for Route 1 of the
+    //! transient-nonlinear work: a reactive component's Norton companion
+    //! `i = g_eq*v + i_eq` becomes a Resistor in parallel with a CurrentSource,
+    //! so the transient loop can hand GLACIER a per-step companion circuit.
+    //!
+    //! The test is **baseline-immune by construction**. It solves the same
+    //! divider twice, differing *only* in the current source's direction,
+    //! and asserts the *difference* of the two `Vout` values. The difference
+    //! cancels whatever voltage-divider baseline GLACIER converges to — which
+    //! matters because GLACIER's Newton loop currently mis-converges on
+    //! purely-linear, no-LED circuits (it returns a residual-norm-2 result via
+    //! its stall-detection path rather than the true operating point). That
+    //! convergence weakness is a pre-existing GLACIER issue, tracked
+    //! separately; it does not affect this test (the difference is exact) and
+    //! does not affect the transient-nonlinear use case (companion circuits
+    //! always contain the nonlinear device that GLACIER is designed for).
+
+    use super::*;
+    use crate::components::{ComponentModel, ElectricalLimits};
+
+    /// Build the divider `V1(1V)·Vin─R1(1k)─Vout─R2(1k)·GND` plus a 1 mA
+    /// current source on `Vout`. `inject` selects the source direction:
+    /// `true` → GND→Vout (current into Vout), `false` → Vout→GND (out of it).
+    fn solve_divider_with_current_source(inject: bool) -> f64 {
+        let mut circuit = Circuit::new();
+        circuit.add_node("Vin".to_string(), None);
+        circuit.add_node("Vout".to_string(), None);
+        circuit.add_node("GND".to_string(), None);
+        circuit.add_branch("V1".to_string(), "Vin", "GND", "VoltageSource".to_string(), 1.0, None);
+        circuit.add_branch("R1".to_string(), "Vin", "Vout", "Resistor".to_string(), 1000.0, None);
+        circuit.add_branch("R2".to_string(), "Vout", "GND", "Resistor".to_string(), 1000.0, None);
+        let (from, to) = if inject { ("GND", "Vout") } else { ("Vout", "GND") };
+        circuit.add_branch("I1".to_string(), from, to, "CurrentSource".to_string(), 1e-3, None);
+
+        let mut solver = GlacierSolver::new(circuit);
+        solver.enable_multi_region = false;
+        solver.add_model("V1".to_string(), ComponentModel::VoltageSource {
+            voltage: 1.0, internal_resistance: Some(0.0),
+        });
+        let res = |r: f64| ComponentModel::Resistor {
+            resistance: r, tolerance: 1.0, limits: ElectricalLimits::default(),
+        };
+        solver.add_model("R1".to_string(), res(1000.0));
+        solver.add_model("R2".to_string(), res(1000.0));
+        solver.add_model("I1".to_string(), ComponentModel::CurrentSource {
+            current: 1e-3, internal_resistance: None,
+        });
+
+        let solutions = solver.solve().expect("GLACIER solve failed");
+        solutions
+            .first().expect("no solution returned")
+            .node_voltages.get("Vout").copied().unwrap_or(0.0)
+    }
+
+    #[test]
+    fn kcl_includes_incoming_branches() {
+        // Regression test for the KCL incoming-edge bug.
+        //
+        // `Circuit.graph` is a directed petgraph `Graph`; `graph.edges(n)`
+        // returns only OUTGOING edges. GLACIER's `compute_system` KCL loop
+        // used that, so any branch for which a node is the *target* was
+        // dropped from that node's current balance — corrupting the residual
+        // and Jacobian and making GLACIER mis-solve essentially every
+        // circuit. The fix iterates both edge directions.
+        //
+        // The bare divider V1(1V)·Vin─R1(1k)─Vout─R2(1k)·GND is the minimal
+        // circuit that exposes the bug: R1 is incoming to Vout, so the buggy
+        // KCL@Vout saw only R2 and converged to Vout = 0 instead of the
+        // correct mid-divider 0.5 V.
+        let mut circuit = Circuit::new();
+        circuit.add_node("Vin".to_string(), None);
+        circuit.add_node("Vout".to_string(), None);
+        circuit.add_node("GND".to_string(), None);
+        circuit.add_branch("V1".to_string(), "Vin", "GND", "VoltageSource".to_string(), 1.0, None);
+        circuit.add_branch("R1".to_string(), "Vin", "Vout", "Resistor".to_string(), 1000.0, None);
+        circuit.add_branch("R2".to_string(), "Vout", "GND", "Resistor".to_string(), 1000.0, None);
+
+        let mut solver = GlacierSolver::new(circuit);
+        solver.enable_multi_region = false;
+        solver.add_model("V1".to_string(), ComponentModel::VoltageSource {
+            voltage: 1.0, internal_resistance: Some(0.0),
+        });
+        let res = |r: f64| ComponentModel::Resistor {
+            resistance: r, tolerance: 1.0, limits: ElectricalLimits::default(),
+        };
+        solver.add_model("R1".to_string(), res(1000.0));
+        solver.add_model("R2".to_string(), res(1000.0));
+
+        // The Jacobian's KCL@Vout row must carry R1's coupling: a uniform
+        // divider with R1 = R2 gives ∂(KCL@Vout)/∂V_Vin = −1/R1 = −1e-3 and
+        // ∂/∂V_Vout = 1/R1 + 1/R2 = 2e-3. A zero in the V_Vin column would
+        // mean R1 was dropped — the exact symptom of the bug.
+        let init = solver.create_initial_variables(1.0);
+        let (_r0, j0) = solver.compute_system(&init, 1.0).unwrap();
+        // eq index 1 is KCL@Vout (eq 0 = KCL@Vin, eq 2 = VS constraint);
+        // var index 0 is V_Vin, 1 is V_Vout.
+        assert!(
+            (j0[(1, 0)] - (-1e-3)).abs() < 1e-12,
+            "KCL@Vout ∂/∂V_Vin = {} S, want -1e-3 (R1 must be in the sum)",
+            j0[(1, 0)]
+        );
+        assert!(
+            (j0[(1, 1)] - 2e-3).abs() < 1e-12,
+            "KCL@Vout ∂/∂V_Vout = {} S, want 2e-3 (= 1/R1 + 1/R2)",
+            j0[(1, 1)]
+        );
+
+        let solutions = solver.solve().expect("GLACIER solve failed");
+        let sol = solutions.first().expect("no solution returned");
+        let v_in  = sol.node_voltages.get("Vin").copied().unwrap_or(0.0);
+        let v_out = sol.node_voltages.get("Vout").copied().unwrap_or(0.0);
+        assert!((v_in  - 1.0).abs() < 1e-4, "Vin = {}, want 1.0", v_in);
+        assert!((v_out - 0.5).abs() < 1e-4, "Vout = {}, want 0.5", v_out);
+    }
+
+    #[test]
+    fn current_source_contribution_magnitude_and_direction() {
+        // The current source sees the Thévenin resistance R1∥R2 = 500 Ω at
+        // Vout. Injecting 1 mA raises Vout by I·(R1∥R2) = 0.5 V; draining it
+        // lowers Vout by the same. The injecting-minus-draining difference
+        // is therefore exactly 2·I·(R1∥R2) = 1.0 V, independent of the
+        // divider baseline.
+        let v_inject = solve_divider_with_current_source(true);
+        let v_drain  = solve_divider_with_current_source(false);
+
+        // Direction: injecting current must raise Vout above draining.
+        assert!(
+            v_inject > v_drain,
+            "injecting ({v_inject} V) should give a higher Vout than draining ({v_drain} V)"
+        );
+        // Magnitude: the swing is 2·I·(R1∥R2) = 2·1mA·500Ω = 1.0 V.
+        let swing = v_inject - v_drain;
+        assert!(
+            (swing - 1.0).abs() < 1e-4,
+            "current-source swing = {swing} V, want 1.0 V (2·I·R_thevenin)"
+        );
+    }
+
+    #[test]
+    fn log_transform_extreme_is_led_conducts() {
+        // Regression test for the §III.C logarithmic transformation.
+        //
+        // V1(15V)·Vin ─ R1(1k) ─ Vout ─ D1(LED, Is=1e-38) ─ GND.
+        //
+        // Conducting even a few mA through an Is=1e-38 device needs a
+        // Shockley exponent of ~82. The old linear-space stamp clamped the
+        // exponent at 50, freezing the LED OFF: it solved to V_LED ≈ 15 V
+        // (the whole rail) carrying ~1e-14 A. With the log transform the
+        // constitutive law `ln(I_d) = ln(Is) + V/nVt` is linear — no clamp —
+        // so the LED conducts and lands at its physical forward voltage.
+        let mut circuit = Circuit::new();
+        circuit.add_node("Vin".to_string(),  None);
+        circuit.add_node("Vout".to_string(), None);
+        circuit.add_node("GND".to_string(),  None);
+        circuit.add_branch("V1".to_string(), "Vin",  "GND",  "VoltageSource".to_string(), 15.0,  None);
+        circuit.add_branch("R1".to_string(), "Vin",  "Vout", "Resistor".to_string(),      1000.0, None);
+        circuit.add_branch("D1".to_string(), "Vout", "GND",  "LED".to_string(),           0.0,   None);
+
+        let mut solver = GlacierSolver::new(circuit);
+        solver.enable_multi_region = false;
+        solver.add_model("V1".to_string(), ComponentModel::VoltageSource {
+            voltage: 15.0, internal_resistance: Some(0.0),
+        });
+        solver.add_model("R1".to_string(), ComponentModel::Resistor {
+            resistance: 1000.0, tolerance: 1.0, limits: ElectricalLimits::default(),
+        });
+        solver.add_model("D1".to_string(), ComponentModel::LED {
+            color: "red".to_string(),
+            forward_voltage: 2.0, forward_current: 0.02, dynamic_resistance: 10.0,
+            saturation_current: Some(1e-38),
+            emission_coefficient: Some(1.8),
+            thermal_voltage: Some(0.026),
+            limits: ElectricalLimits::default(),
+        });
+
+        let sols = solver.solve().expect("GLACIER solve failed");
+        let sol = sols.iter()
+            .min_by(|a, b| a.final_error.partial_cmp(&b.final_error).unwrap())
+            .expect("no solution");
+        let v_led = sol.node_voltages.get("Vout").copied().unwrap_or(0.0);
+
+        // A conducting forward-biased LED sits well below the 15 V rail.
+        // The frozen-off bug would put V_LED ≈ 15 V here.
+        assert!(
+            v_led > 2.0 && v_led < 6.0,
+            "Is=1e-38 LED V_LED = {:.4} V — not conducting (clamp-frozen?)",
+            v_led
+        );
+        // And it should carry a real milliamp-scale current.
+        let i_r = (15.0 - v_led) / 1000.0;
+        assert!(
+            i_r > 1e-3,
+            "Is=1e-38 LED current = {:.3e} A — effectively off",
+            i_r
+        );
+    }
+
+    #[test]
+    #[ignore] // diagnostic — run with: --ignored --nocapture
+    fn diag_extreme_is_convergence() {
+        // Does GLACIER correctly solve a circuit where a device with an
+        // *extreme* saturation current actually conducts — with the log
+        // transform dormant?
+        //
+        // Circuit per case:  V1(supply)·Vin ─ R1(1k) ─ Vout ─ D1(LED, Is) ─ GND
+        //
+        // For a correctly-solved forward-biased LED the resistor current
+        // I_R = (supply − V_LED)/R1 should be a healthy mA and should equal
+        // the LED's own current at V_LED. If instead V_LED ≈ supply (≈0
+        // current), the LED was treated as permanently OFF — the extreme-Is
+        // device defeated the solver.
+        //
+        // The Shockley stamp clamps the forward exponent at 50
+        // (`(v_diff/(n·vt)).min(50.0)`). With n·vt = 0.0468 V that caps the
+        // LED at V ≈ 2.34 V; above it the modelled current freezes at
+        // Is·(e^50−1). For Is = 1e-38 that frozen ceiling is ~5e-17 A — so
+        // the clamped model literally cannot represent that LED conducting
+        // milliamps, no matter the supply. This is the diagnostic's whole
+        // point: in linear space one clamp cannot serve both Is = 1e-12 and
+        // Is = 1e-38, which is exactly the tension the log transform removes.
+        let n = 1.8_f64;
+        let vt = 0.026_f64;
+        let nvt = n * vt;
+
+        println!("\n=== extreme-Is convergence (log transform §III.C, active) ===");
+        println!("each Shockley device carries a log-space internal current \
+                  variable; the constitutive law ln(I_d)=ln(Is)+V/nVt is \
+                  linear, so there is no exponent clamp.\n");
+        let _ = nvt;
+
+        for &(is, supply) in &[
+            (1e-12_f64, 5.0_f64),
+            (1e-20_f64, 8.0_f64),
+            (1e-30_f64, 12.0_f64),
+            (1e-38_f64, 15.0_f64),
+        ] {
+            let mut circuit = Circuit::new();
+            circuit.add_node("Vin".to_string(), None);
+            circuit.add_node("Vout".to_string(), None);
+            circuit.add_node("GND".to_string(), None);
+            circuit.add_branch("V1".to_string(), "Vin", "GND",
+                "VoltageSource".to_string(), supply, None);
+            circuit.add_branch("R1".to_string(), "Vin", "Vout",
+                "Resistor".to_string(), 1000.0, None);
+            circuit.add_branch("D1".to_string(), "Vout", "GND",
+                "LED".to_string(), 0.0, None);
+
+            let mut solver = GlacierSolver::new(circuit);
+            solver.enable_multi_region = false;
+            solver.add_model("V1".to_string(), ComponentModel::VoltageSource {
+                voltage: supply, internal_resistance: Some(0.0),
+            });
+            solver.add_model("R1".to_string(), ComponentModel::Resistor {
+                resistance: 1000.0, tolerance: 1.0, limits: ElectricalLimits::default(),
+            });
+            solver.add_model("D1".to_string(), ComponentModel::LED {
+                color: "red".to_string(),
+                forward_voltage: 2.0, forward_current: 0.02, dynamic_resistance: 10.0,
+                saturation_current: Some(is),
+                emission_coefficient: Some(n),
+                thermal_voltage: Some(vt),
+                limits: ElectricalLimits::default(),
+            });
+
+            // What a forward voltage carrying ~5 mA *should* be for this Is:
+            let v_needed = nvt * (5e-3_f64 / is).ln();
+
+            match solver.solve() {
+                Ok(sols) => {
+                    let sol = sols.iter()
+                        .min_by(|a, b| a.final_error.partial_cmp(&b.final_error).unwrap())
+                        .unwrap();
+                    let v_led = sol.node_voltages.get("Vout").copied().unwrap_or(0.0);
+                    let i_r = (supply - v_led) / 1000.0; // resistor current
+                    let converged = sol.final_error < 1e-6;
+                    println!(
+                        "Is={:>7.0e}  supply={:>5.1}V | converged={:<5} err={:>9.2e} \
+                         iters={:>4} | V_LED={:>8.4}V  I_R={:>11.3e}A | \
+                         (true V for 5mA ≈ {:>6.3}V)",
+                        is, supply, converged, sol.final_error, sol.iterations,
+                        v_led, i_r, v_needed,
+                    );
+                }
+                Err(e) => {
+                    println!("Is={:>7.0e}  supply={:>5.1}V | SOLVE FAILED: {}", is, supply, e);
+                }
+            }
+        }
+        println!();
     }
 }

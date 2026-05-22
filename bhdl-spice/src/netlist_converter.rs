@@ -9,7 +9,15 @@ use log::{debug, info, warn};
 
 use crate::{
     Circuit, ComponentModelExtractor, ExtractedModel,
-    circuit::{META_PARENT_INSTANCE, META_DECOMPOSITION_ROLE, META_COMPONENT_CLASS, META_RDS_ON, META_F_SW, META_T_SW, META_I_QUIESCENT},
+    circuit::{
+        META_PARENT_INSTANCE, META_DECOMPOSITION_ROLE, META_COMPONENT_CLASS,
+        META_RDS_ON, META_F_SW, META_T_SW, META_I_QUIESCENT,
+        META_TOLERANCE, META_POWER_RATING, META_ESR, META_VOLTAGE_RATING, META_DCR,
+        META_SATURATION_CURRENT, META_EMISSION_COEFFICIENT, META_THERMAL_VOLTAGE,
+        META_FORWARD_VOLTAGE, META_FORWARD_CURRENT,
+        META_MAX_CURRENT, META_MAX_VOLTAGE, META_MAX_POWER, META_TEMP_MIN, META_TEMP_MAX,
+        META_VARIANT,
+    },
     model_factory::SpiceModelFactory,
     models::SpiceModel,
 };
@@ -674,13 +682,15 @@ impl NetlistToSpiceConverter {
             info!("Adding component {} ({}): {} -> {}, value={}",
                   instance_name, spice_type, node1, node2, value);
 
-            circuit.add_branch(
+            let metadata = build_branch_metadata(&extracted_model);
+            circuit.add_branch_with_metadata(
                 instance_name.to_string(),
                 &node1,
                 &node2,
                 spice_type,
                 value,
                 Some(instance_id),
+                metadata,
             );
         } else if connected_nets.len() == 1 {
             // Single-pin components (like test points)
@@ -775,6 +785,74 @@ impl Circuit {
         let mut converter = NetlistToSpiceConverter::new();
         converter.convert(netlist)
     }
+}
+
+/// Project a synthesizer-produced `ExtractedModel` onto the per-branch metadata
+/// HashMap consumed downstream by `stdlib_model_loader`.
+///
+/// This is the actual "stdlib drives SPICE behavior" bridge: stdlib `.bhdl`
+/// attributes (e.g. `attribute esr = 0.05;`) reach the synthesizer, which
+/// produces an `ExtractedModel` with `parameters` (numeric) and `attributes`
+/// (string). This function maps the well-known names from those collections
+/// onto stable `META_*` keys, which the model loader then reads to populate
+/// `ComponentModel::*` variants.
+///
+/// Unknown attributes are intentionally not passed through — metadata is a
+/// solver contract, not a free-form bag. New SPICE-relevant attributes should
+/// be added to `circuit.rs` (the `META_*` constants) and to this function in
+/// the same change.
+fn build_branch_metadata(model: &ExtractedModel) -> HashMap<String, String> {
+    let mut meta = HashMap::new();
+
+    // Component class is the only string-typed key worth pulling through
+    // verbatim today; everything else is numeric.
+    if let Some(class) = model.attributes.get("component_class") {
+        meta.insert(META_COMPONENT_CLASS.to_string(), class.clone());
+    }
+
+    // Read a numeric attribute. Prefer `parameters` (typed `f64`); fall back to
+    // `attributes` only if the string parses cleanly as `f64`. This matches
+    // the convention already established by the regulator path's `read_param`.
+    let put_num = |meta: &mut HashMap<String, String>, src: &str, dst: &str| {
+        if let Some(v) = model.parameters.get(src) {
+            meta.insert(dst.to_string(), v.to_string());
+        } else if let Some(s) = model.attributes.get(src) {
+            if s.parse::<f64>().is_ok() {
+                meta.insert(dst.to_string(), s.clone());
+            }
+        }
+    };
+    let put_str = |meta: &mut HashMap<String, String>, src: &str, dst: &str| {
+        if let Some(s) = model.attributes.get(src) {
+            meta.insert(dst.to_string(), s.clone());
+        }
+    };
+
+    // Passive & semiconductor parameters that affect AC/transient solves
+    // or that downstream safety analyses read out of branch metadata.
+    put_num(&mut meta, "tolerance",            META_TOLERANCE);
+    put_num(&mut meta, "power_rating",         META_POWER_RATING);
+    put_num(&mut meta, "esr",                  META_ESR);
+    put_num(&mut meta, "voltage_rating",       META_VOLTAGE_RATING);
+    put_num(&mut meta, "dcr",                  META_DCR);
+    put_num(&mut meta, "saturation_current",   META_SATURATION_CURRENT);
+    put_num(&mut meta, "emission_coefficient", META_EMISSION_COEFFICIENT);
+    put_num(&mut meta, "thermal_voltage",      META_THERMAL_VOLTAGE);
+    put_num(&mut meta, "forward_voltage",      META_FORWARD_VOLTAGE);
+    put_num(&mut meta, "forward_current",      META_FORWARD_CURRENT);
+    put_num(&mut meta, "max_current",          META_MAX_CURRENT);
+    put_num(&mut meta, "max_voltage",          META_MAX_VOLTAGE);
+    put_num(&mut meta, "max_power",            META_MAX_POWER);
+    put_num(&mut meta, "temp_min",             META_TEMP_MIN);
+    put_num(&mut meta, "temp_max",             META_TEMP_MAX);
+
+    // Free-form variant tag (LED `color`, future diode/transistor families).
+    // The loader uses this to dispatch into fallback Rust LUTs only when the
+    // numeric attributes above are not present.
+    put_str(&mut meta, "color",   META_VARIANT);
+    put_str(&mut meta, "variant", META_VARIANT);
+
+    meta
 }
 
 #[cfg(test)]

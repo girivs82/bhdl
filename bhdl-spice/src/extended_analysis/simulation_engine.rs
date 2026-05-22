@@ -144,169 +144,69 @@ impl SimulationEngine {
         analyzer.analyze()
     }
     
-    /// Run AC analysis to get frequency response
+    /// Run AC analysis to get frequency response.
+    ///
+    /// **Not yet implemented.** The earlier body of this method returned a
+    /// hardcoded first-order low-pass at `pole_frequency = 1000 Hz`,
+    /// irrespective of the circuit — i.e. it lied. It was removed; a real
+    /// implementation lands in the `ac` module (P2 of the AC/transient plan).
+    /// Until then this method returns `SpiceError::NotImplemented` so callers
+    /// fail loudly rather than acting on synthetic results.
     pub fn run_ac_analysis(
         &mut self,
-        input_node: NodeId,
-        output_node: NodeId,
-        start_freq: f64,
-        stop_freq: f64,
-        points_per_decade: usize,
+        _input_node: NodeId,
+        _output_node: NodeId,
+        _start_freq: f64,
+        _stop_freq: f64,
+        _points_per_decade: usize,
     ) -> crate::Result<AcAnalysisResult> {
-        // Ensure DC operating point is established
-        let _dc_result = self.run_dc_analysis()?;
-        
-        // Generate frequency points (log scale)
-        let decades = (stop_freq / start_freq).log10();
-        let total_points = (decades * points_per_decade as f64) as usize;
-        let mut frequencies = Vec::with_capacity(total_points);
-        
-        for i in 0..total_points {
-            let freq = start_freq * 10.0_f64.powf(i as f64 / points_per_decade as f64);
-            frequencies.push(freq);
-        }
-        
-        // Run AC analysis at each frequency point
-        let mut frequency_points = Vec::new();
-        let mut transfer_function = Vec::new();
-        
-        for &freq in &frequencies {
-            let (magnitude_db, phase_deg, transfer_h) = self.analyze_at_frequency(input_node, output_node, freq)?;
-            
-            frequency_points.push(FrequencyPoint {
-                frequency: freq,
-                magnitude_db,
-                phase_deg,
-            });
-            
-            transfer_function.push(transfer_h);
-        }
-        
-        // Calculate stability metrics
-        let phase_margin = self.calculate_phase_margin(&frequency_points);
-        let gain_margin = self.calculate_gain_margin(&frequency_points);
-        let unity_gain_frequency = self.find_unity_gain_frequency(&frequency_points);
-        let bandwidth_3db = self.find_3db_bandwidth(&frequency_points);
-        
-        Ok(AcAnalysisResult {
-            frequency_points,
-            transfer_function,
-            phase_margin,
-            gain_margin,
-            unity_gain_frequency,
-            bandwidth_3db,
-        })
+        Err(crate::SpiceError::NotImplemented(
+            "AC analysis is not yet wired up; awaiting P2 (small-signal sweep over the DC \
+             Jacobian + reactive admittances from companion_models)".to_string(),
+        ))
     }
     
-    /// Run transient analysis with step response
+    /// Run transient analysis with step response.
+    ///
+    /// **Not yet implemented.** The prior body returned a canned damped-sine
+    /// step response with hardcoded `settling_time_target = 1 ms` and
+    /// `overshoot = 15%`, regardless of the circuit. It was removed; a real
+    /// implementation lands in the `transient` module (P3 of the AC/transient
+    /// plan — BDF1/BDF2 time-stepping using the per-step companion models in
+    /// `companion_models`, with the GLACIER DC solver invoked at each step).
+    /// Until then this method returns `SpiceError::NotImplemented`.
     pub fn run_transient_analysis(
         &mut self,
-        output_node: NodeId,
-        step_amplitude: f64,
-        simulation_time: f64,
-        time_step: f64,
+        _output_node: NodeId,
+        _step_amplitude: f64,
+        _simulation_time: f64,
+        _time_step: f64,
     ) -> crate::Result<TransientAnalysisResult> {
-        // Generate time points
-        let num_points = (simulation_time / time_step) as usize;
-        let mut time_points = Vec::with_capacity(num_points);
-        for i in 0..num_points {
-            time_points.push(i as f64 * time_step);
-        }
-        
-        // For now, simulate a realistic step response
-        // In a full implementation, this would solve the differential equations
-        let mut node_voltages = HashMap::new();
-        let mut output_voltage = Vec::with_capacity(num_points);
-        
-        // Simulate typical regulator step response
-        let final_value = step_amplitude;
-        let settling_time_target = 0.001; // 1ms typical for voltage regulator
-        let overshoot = 0.15; // 15% overshoot
-        
-        for &t in &time_points {
-            let normalized_time = t / settling_time_target;
-            
-            // Damped oscillation step response
-            let response = if t < settling_time_target * 0.1 {
-                // Initial rise
-                final_value * (normalized_time * 10.0).min(1.0)
-            } else {
-                // Settling with overshoot
-                let exponential_decay = (-normalized_time * 3.0).exp();
-                let oscillation = (normalized_time * 10.0).sin() * overshoot * exponential_decay;
-                final_value * (1.0 + oscillation)
-            };
-            
-            output_voltage.push(response);
-        }
-        
-        node_voltages.insert(output_node, output_voltage.clone());
-        
-        // Calculate metrics
-        let settling_time = self.calculate_settling_time(&time_points, &output_voltage, final_value);
-        let overshoot_percent = self.calculate_overshoot(&output_voltage, final_value);
-        let rise_time = self.calculate_rise_time(&time_points, &output_voltage, final_value);
-        let rms_ripple = self.calculate_rms_ripple(&output_voltage, final_value);
-        
-        Ok(TransientAnalysisResult {
-            time_points,
-            node_voltages,
-            settling_time,
-            overshoot_percent,
-            rise_time,
-            rms_ripple,
-        })
+        Err(crate::SpiceError::NotImplemented(
+            "Transient analysis is not yet wired up; awaiting P3 (BDF1/BDF2 over GLACIER \
+             with per-step companion models from companion_models)".to_string(),
+        ))
     }
     
-    /// Run noise analysis
+    /// Run noise analysis.
+    ///
+    /// **Not yet implemented.** The prior body synthesized noise spectra from
+    /// hand-rolled `calculate_thermal_noise`/`calculate_flicker_noise` curves
+    /// that did not consult the circuit. Removed; a real implementation
+    /// follows the AC sweep work (post-P2) since noise analysis composes
+    /// linearization-at-DC with frequency-domain transfer functions.
     pub fn run_noise_analysis(
         &mut self,
-        input_node: NodeId,
-        output_node: NodeId,
-        start_freq: f64,
-        stop_freq: f64,
-        points_per_decade: usize,
+        _input_node: NodeId,
+        _output_node: NodeId,
+        _start_freq: f64,
+        _stop_freq: f64,
+        _points_per_decade: usize,
     ) -> crate::Result<NoiseAnalysisResult> {
-        // Generate frequency points
-        let decades = (stop_freq / start_freq).log10();
-        let total_points = (decades * points_per_decade as f64) as usize;
-        let mut frequency_points = Vec::with_capacity(total_points);
-        
-        for i in 0..total_points {
-            let freq = start_freq * 10.0_f64.powf(i as f64 / points_per_decade as f64);
-            frequency_points.push(freq);
-        }
-        
-        // Calculate noise at each frequency
-        let mut output_noise = Vec::new();
-        let mut input_noise = Vec::new();
-        let mut psrr = Vec::new();
-        
-        for &freq in &frequency_points {
-            // Simulate realistic noise characteristics
-            let thermal_noise = self.calculate_thermal_noise(freq);
-            let flicker_noise = self.calculate_flicker_noise(freq);
-            let total_noise = (thermal_noise.powi(2) + flicker_noise.powi(2)).sqrt();
-            
-            output_noise.push(total_noise);
-            input_noise.push(total_noise / 100.0); // Assume 40dB gain
-            
-            // Simulate PSRR (power supply rejection ratio)
-            let psrr_value = self.calculate_psrr(freq);
-            psrr.push(psrr_value);
-        }
-        
-        // Calculate total RMS noise over bandwidth
-        let bandwidth = stop_freq - start_freq;
-        let total_rms_noise = self.integrate_noise_over_bandwidth(&frequency_points, &output_noise, bandwidth);
-        
-        Ok(NoiseAnalysisResult {
-            frequency_points,
-            output_noise,
-            input_noise,
-            psrr,
-            total_rms_noise,
-        })
+        Err(crate::SpiceError::NotImplemented(
+            "Noise analysis is not yet wired up; depends on AC sweep landing first (P2)"
+                .to_string(),
+        ))
     }
     
     /// Create a modified circuit with a component removed
