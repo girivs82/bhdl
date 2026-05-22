@@ -38,7 +38,7 @@ use std::collections::HashMap;
 use nalgebra::{DMatrix, DVector};
 use petgraph::graph::{EdgeIndex, NodeIndex};
 
-use crate::circuit::{Circuit, META_DCR, META_ESR};
+use crate::circuit::{Circuit, DeviceKind, META_DCR, META_ESR};
 use crate::companion_models::{
     capacitor_advance_v_c, capacitor_advance_v_c_bdf2,
     capacitor_bdf1_with_esr, capacitor_bdf2_with_esr,
@@ -678,15 +678,16 @@ impl NodeIndexMap {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Run a transient simulation of a circuit that contains nonlinear devices
-/// (diodes / LEDs).
+/// (diodes / LEDs) and/or multi-terminal devices (the vacuum triode).
 ///
 /// **Route 1**: each timestep is solved by handing GLACIER a *companion
 /// circuit* — every reactive element is replaced by its BDF1 Norton companion
 /// (a `Resistor` in parallel with a `CurrentSource`), and the stimulus drives
 /// a `VoltageSource` at the input node. The whole step is then a single
 /// nonlinear DC solve, which is exactly what GLACIER does. The nonlinear
-/// devices are carried verbatim, so GLACIER's logarithmic transformation
-/// handles them.
+/// branches are carried verbatim, so GLACIER's logarithmic transformation
+/// handles them; multi-terminal devices are likewise copied into the
+/// companion circuit and stamped by GLACIER from their inline parameters.
 ///
 /// Fixed timestep, BDF1. (BDF2 / adaptive control for the nonlinear path is a
 /// later refinement; BDF1 fixed-step establishes the Route-1 architecture and
@@ -912,6 +913,25 @@ fn build_companion_circuit(
             }
             _ => { /* unmodelled component types contribute nothing */ }
         }
+    }
+
+    // Multi-terminal devices (the triode) are memoryless nonlinear elements:
+    // they carry no per-timestep history, so they are copied verbatim. GLACIER
+    // stamps them directly from the parameters inlined in `DeviceKind`; no
+    // entry in `m` is needed (devices are not threaded through the model map).
+    // Terminals are re-bound by node *name* because the companion circuit's
+    // `NodeIndex` numbering differs from the source circuit's.
+    for device in circuit.devices() {
+        let term_names: Vec<String> = device.terminals.iter()
+            .map(|t| node_name.get(t).cloned().unwrap_or_default())
+            .collect();
+        let term_refs: Vec<&str> = term_names.iter().map(String::as_str).collect();
+        c.add_device(
+            device.name.clone(),
+            device.kind,
+            &term_refs,
+            device.instance_id.clone(),
+        );
     }
 
     Ok((c, m))
@@ -1548,5 +1568,100 @@ mod tests {
             Err(SpiceError::InvalidModel(_)) => {}
             other => panic!("expected InvalidModel for the unmodelled diode, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn nonlinear_transient_triode_stage_inverts_and_amplifies() {
+        // Common-cathode 6SN7 gain stage driven in the time domain:
+        //
+        //   Vbb(300 V)·Bplus ── Rp(22 kΩ) ── P
+        //   V1 (triode): plate = P, grid = G, cathode = GND
+        //   the grid G is the stimulus node — a small sine riding on the
+        //   −8 V bias.
+        //
+        // The stage has no reactive elements, so each timestep is an
+        // independent quasi-static GLACIER solve at that instant's grid
+        // voltage. The point of the test is that the *multi-terminal device*
+        // now rides the Route-1 companion circuit into GLACIER: the triode is
+        // copied into every per-step companion circuit and stamped there.
+        //
+        // Physics checked: the plate swings far more than the grid (voltage
+        // gain) and moves *opposite* to it (the common-cathode inversion).
+        let mu = 20.0; let ex = 1.4; let kg1 = 1180.0; let kp = 470.0; let kvb = 300.0;
+
+        let mut circuit = Circuit::new();
+        circuit.add_node("Bplus".to_string(), None);
+        circuit.add_node("P".to_string(),     None);
+        circuit.add_node("G".to_string(),     None);
+        circuit.add_node("GND".to_string(),   None);
+        circuit.add_branch("Vbb".to_string(), "Bplus", "GND", "VoltageSource".to_string(), 300.0,    None);
+        circuit.add_branch("Rp".to_string(),  "Bplus", "P",   "Resistor".to_string(),      22_000.0, None);
+        circuit.add_device(
+            "V1".to_string(),
+            DeviceKind::Triode { mu, ex, kg1, kp, kvb },
+            &["P", "G", "GND"],
+            None,
+        );
+
+        let mut models = HashMap::new();
+        models.insert("Vbb".to_string(), ComponentModel::VoltageSource {
+            voltage: 300.0, internal_resistance: Some(0.0),
+        });
+        models.insert("Rp".to_string(), ComponentModel::Resistor {
+            resistance: 22_000.0, tolerance: 1.0, limits: ElectricalLimits::default(),
+        });
+
+        // 0.5 V-amplitude sine on the −8 V grid bias, 2 cycles at 1 kHz.
+        let params = TransientParams::new(
+            "G",
+            Stimulus::Sine { amplitude: 0.5, frequency_hz: 1000.0, dc_offset: -8.0 },
+            vec!["P", "G"],
+            2e-3,
+            2e-5,
+        );
+
+        let result = run_transient_nonlinear(&circuit, &models, &params).unwrap();
+        // Sample 0 is the t=0 placeholder record (probes other than the input
+        // node are stamped at 0 V, not solved); the real solved trace starts
+        // at index 1.
+        let plate = &result.probe_voltages["P"][1..];
+        let grid  = &result.probe_voltages["G"][1..];
+
+        // The plate must stay in the active region throughout the swing.
+        for &v in plate {
+            assert!(
+                (50.0..290.0).contains(&v),
+                "plate left the active region: {:.1} V", v
+            );
+        }
+
+        // Voltage gain: the plate swings far more than the 1 V grid swing.
+        let p_min = plate.iter().cloned().fold(f64::MAX, f64::min);
+        let p_max = plate.iter().cloned().fold(f64::MIN, f64::max);
+        let plate_swing = p_max - p_min;
+        assert!(
+            plate_swing > 4.0,
+            "plate swing {:.2} V — expected amplification of the 1 V grid swing",
+            plate_swing
+        );
+
+        // Inversion: at the plate's most positive excursion the grid is at
+        // its most negative (below the −8 V bias), and vice versa.
+        let arg_pmax = plate.iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .unwrap().0;
+        let arg_pmin = plate.iter()
+            .enumerate()
+            .min_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .unwrap().0;
+        assert!(
+            grid[arg_pmax] < -8.0,
+            "at plate-max the grid should be below −8 V, got {:.3} V", grid[arg_pmax]
+        );
+        assert!(
+            grid[arg_pmin] > -8.0,
+            "at plate-min the grid should be above −8 V, got {:.3} V", grid[arg_pmin]
+        );
     }
 }
