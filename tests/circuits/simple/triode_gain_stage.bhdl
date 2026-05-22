@@ -1,0 +1,21 @@
+// Common-cathode 6SN7 triode gain stage — designed in bhdl HDL.
+//
+// The triode flows through the whole pipeline: parse → analyze → synthesize
+// → netlist → SPICE converter, where it becomes a multi-terminal device
+// (DeviceKind::Triode) that GLACIER solves for its DC operating point.
+import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+import { Triode } from "bhdl-stdlib/actives/triode.bhdl";
+
+board TriodeGainStage {
+    power VBB = 300V @ 100mA;
+    ground GND;
+
+    // Plate load from the B+ rail to the plate.
+    VBB -> Rp: Res(22kΩ).1;
+    Rp.2 -> V1: Triode().P;
+
+    // Cathode to ground; grid-leak resistor holds the grid at 0 V.
+    V1.K -> GND;
+    V1.G -> Rg: Res(1000000).1;
+    Rg.2 -> GND;
+}
