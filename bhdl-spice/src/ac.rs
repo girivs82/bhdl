@@ -5,13 +5,14 @@
 //! each frequency point. The returned transfer function is `H(jω) = V_out/V_in`
 //! between two user-chosen nodes.
 //!
-//! Coverage in this first cut: **linear passives** (R, C, L) with optional
-//! ESR/DCR carried through `branch.metadata` from the stdlib bridge (see
-//! `stdlib_model_loader`). Nonlinear devices (Diode, LED) are stamped as their
-//! DC-open small-signal limit (an `i = 0` boundary) — accurate when they are
-//! off, a placeholder when they are biased. Adding small-signal linearisation
-//! around the GLACIER DC operating point is a follow-up: it requires reading
-//! the DC node voltages and computing `g_d = (I_op + Is)/(n·V_t)` per device.
+//! Coverage: **linear passives** (R, C, L) with optional ESR/DCR carried
+//! through `branch.metadata` from the stdlib bridge (see `stdlib_model_loader`);
+//! **two-terminal nonlinear devices** (Diode, LED) linearised around the
+//! GLACIER DC operating point to a differential conductance `g_d`; and
+//! **multi-terminal devices** (the vacuum triode) linearised to their
+//! small-signal conductance pair `(g_p, g_m)` and stamped with the
+//! three-terminal transconductance pattern. All small-signal linearisation
+//! happens at the operating point GLACIER computes — see `run_ac_sweep_nonlinear`.
 //!
 //! Voltage sources are not stamped as branches here. Instead, the user-named
 //! `input_node` is held at the requested amplitude as a Dirichlet boundary
@@ -32,11 +33,12 @@ use crate::companion_models::{
     capacitor_admittance, inductor_admittance, resistor_admittance,
 };
 use crate::circuit::{
-    Circuit, META_DCR, META_ESR,
+    Circuit, DeviceKind, META_DCR, META_ESR,
 };
 use crate::components::ComponentModel;
 use crate::errors::{Result, SpiceError};
 use crate::glacier_production::GlacierSolver;
+use crate::triode::{conductances, TriodeParams};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public types
@@ -150,8 +152,8 @@ pub fn run_ac_sweep(
     circuit: &Circuit,
     params: &AcSweepParams,
 ) -> Result<AcSweepResult> {
-    // Purely linear path: no nonlinear devices, empty conductance map.
-    run_ac_sweep_impl(circuit, params, &HashMap::new())
+    // Purely linear path: no nonlinear branches, no multi-terminal devices.
+    run_ac_sweep_impl(circuit, params, &HashMap::new(), &[])
 }
 
 /// Run an AC sweep on a circuit that contains nonlinear devices (Diode/LED).
@@ -207,7 +209,63 @@ pub fn run_ac_sweep_nonlinear(
         nl_conductance.insert(edge, small_signal_conductance(model, v_a - v_b));
     }
 
-    run_ac_sweep_impl(circuit, params, &nl_conductance)
+    // Multi-terminal devices: linearise each at the DC operating point into a
+    // small-signal conductance pair `(g_p, g_m)` plus its terminal indices.
+    let device_stamps = device_ac_stamps(circuit, &operating_point, &node_name);
+
+    run_ac_sweep_impl(circuit, params, &nl_conductance, &device_stamps)
+}
+
+/// Small-signal AC contribution of one multi-terminal device, linearised at
+/// the DC operating point. For the vacuum triode the linearised plate current
+/// is `i_p = g_p·v_pk + g_m·v_gk`, i.e. in terms of node voltages
+///
+/// ```text
+///     i_p = g_p·v_plate + g_m·v_grid − (g_p + g_m)·v_cathode
+/// ```
+///
+/// which `stamp_devices` writes into the admittance matrix with the standard
+/// three-terminal transconductance pattern (current sourced at the plate row,
+/// sunk at the cathode row; the grid draws no current in the Class-A model).
+#[derive(Debug, Clone, Copy)]
+struct DeviceAcStamp {
+    plate: NodeIndex,
+    grid: NodeIndex,
+    cathode: NodeIndex,
+    /// Plate conductance `g_p = ∂I_p/∂V_pk` (siemens).
+    gp: f64,
+    /// Transconductance `g_m = ∂I_p/∂V_gk` (siemens).
+    gm: f64,
+}
+
+/// Linearise every multi-terminal device in `circuit` at the DC operating
+/// point `op` (node-name → voltage), returning one [`DeviceAcStamp`] each.
+fn device_ac_stamps(
+    circuit: &Circuit,
+    op: &HashMap<String, f64>,
+    node_name: &HashMap<NodeIndex, String>,
+) -> Vec<DeviceAcStamp> {
+    let voltage = |n: &NodeIndex| -> f64 {
+        node_name.get(n).and_then(|nm| op.get(nm)).copied().unwrap_or(0.0)
+    };
+    let mut stamps = Vec::new();
+    for device in circuit.devices() {
+        match device.kind {
+            DeviceKind::Triode { mu, ex, kg1, kp, kvb } => {
+                if device.terminals.len() != 3 {
+                    continue;
+                }
+                let (plate, grid, cathode) =
+                    (device.terminals[0], device.terminals[1], device.terminals[2]);
+                let vpk = voltage(&plate) - voltage(&cathode);
+                let vgk = voltage(&grid) - voltage(&cathode);
+                let p = TriodeParams::new(mu, ex, kg1, kp, kvb);
+                let (gp, gm) = conductances(&p, vpk, vgk);
+                stamps.push(DeviceAcStamp { plate, grid, cathode, gp, gm });
+            }
+        }
+    }
+    stamps
 }
 
 /// Shared sweep kernel for both the linear and nonlinear entry points.
@@ -215,6 +273,7 @@ fn run_ac_sweep_impl(
     circuit: &Circuit,
     params: &AcSweepParams,
     nl_conductance: &HashMap<EdgeIndex, f64>,
+    device_stamps: &[DeviceAcStamp],
 ) -> Result<AcSweepResult> {
     let node_index = NodeIndexMap::build(circuit)?;
     let input_idx = node_index
@@ -228,22 +287,35 @@ fn run_ac_sweep_impl(
         params.start_hz, params.stop_hz, params.points_per_decade);
     let n = node_index.size();
 
+    // Dirichlet boundaries: the input node is forced to the stimulus
+    // amplitude; every other node tied to ground through a DC voltage source
+    // is forced to 0 — a DC source has zero AC impedance, so its node is an
+    // AC ground (e.g. a B+ rail). The input wins any overlap.
+    let mut dirichlet: Vec<(usize, f64)> = ac_ground_nodes(circuit, &node_index)
+        .into_iter()
+        .filter(|&idx| idx != input_idx)
+        .map(|idx| (idx, 0.0))
+        .collect();
+    dirichlet.push((input_idx, params.input_amplitude));
+
     let mut transfer_function = Vec::with_capacity(frequencies.len());
     for &f in &frequencies {
         let omega = 2.0 * PI * f;
         let mut y = DMatrix::<Complex64>::zeros(n, n);
         stamp_branches(circuit, &node_index, omega, nl_conductance, &mut y);
+        stamp_devices(device_stamps, &node_index, &mut y);
 
-        // Dirichlet boundary at the input: replace the input row with
-        // `v[input] = amplitude`. The result is that the LU solver sees a
-        // forced known voltage at that node and the rest of the network
-        // responds linearly to it.
+        // Apply each Dirichlet boundary: replace that node's row with
+        // `v[node] = forced`. The LU solver then sees a forced known voltage
+        // and the rest of the network responds linearly to it.
         let mut rhs = DVector::<Complex64>::zeros(n);
-        for j in 0..n {
-            y[(input_idx, j)] = Complex64::new(0.0, 0.0);
+        for &(idx, forced) in &dirichlet {
+            for j in 0..n {
+                y[(idx, j)] = Complex64::new(0.0, 0.0);
+            }
+            y[(idx, idx)] = Complex64::new(1.0, 0.0);
+            rhs[idx] = Complex64::new(forced, 0.0);
         }
-        y[(input_idx, input_idx)] = Complex64::new(1.0, 0.0);
-        rhs[input_idx] = Complex64::new(params.input_amplitude, 0.0);
 
         let solution = y.lu().solve(&rhs).ok_or(SpiceError::SingularMatrix)?;
         let h = solution[output_idx] / Complex64::new(params.input_amplitude, 0.0);
@@ -382,6 +454,30 @@ fn find_ground(circuit: &Circuit) -> Option<NodeIndex> {
     None
 }
 
+/// Matrix indices of nodes that are AC grounds: nodes tied to ground through
+/// a DC `VoltageSource` branch. A DC source presents zero impedance to a
+/// small signal, so its non-ground terminal sits at AC ground (this is what
+/// makes a B+ rail an AC ground in amplifier analysis).
+///
+/// A voltage source spanning two *non-ground* nodes is an inter-node
+/// constraint (`v[a] = v[b]`) that needs full modified MNA; such sources are
+/// skipped here, consistent with the module-level note.
+fn ac_ground_nodes(circuit: &Circuit, nodes: &NodeIndexMap) -> Vec<usize> {
+    let mut out = Vec::new();
+    for (_edge, branch) in circuit.branches() {
+        if branch.component_type != "VoltageSource" || branch.nodes.len() != 2 {
+            continue;
+        }
+        let (a, b) = (branch.nodes[0], branch.nodes[1]);
+        match (nodes.is_ground(a), nodes.is_ground(b)) {
+            (true, false) => if let Some(i) = nodes.get(b) { out.push(i) },
+            (false, true) => if let Some(i) = nodes.get(a) { out.push(i) },
+            _ => {} // both ground, or both non-ground (constraint): skip
+        }
+    }
+    out
+}
+
 /// Geometrically-spaced frequency points spanning `[start, stop]`. Always
 /// returns at least one point (and includes `stop` exactly as the last point
 /// to avoid the off-by-one rounding that affects ratio-based generators).
@@ -478,6 +574,54 @@ fn stamp_branches(
                 y[(ib, ib)] += admittance;
             }
             (false, false) => { /* both ends grounded: no contribution */ }
+        }
+    }
+}
+
+/// Stamp the small-signal contribution of every multi-terminal device into
+/// `y`. For a triode the linearised plate current is
+///
+/// ```text
+///     i_p = g_p·v_plate + g_m·v_grid − (g_p + g_m)·v_cathode
+/// ```
+///
+/// flowing from the plate node into the device and out at the cathode. In the
+/// `Y·v = i` form that current enters the plate KCL row positively and the
+/// cathode row negatively, so the stamp (identical to GLACIER's DC Jacobian)
+/// is, writing `gpm = g_p + g_m`:
+///
+/// ```text
+///     y[p][p] += g_p   y[p][g] += g_m   y[p][k] −= gpm
+///     y[k][p] −= g_p   y[k][g] −= g_m   y[k][k] += gpm
+/// ```
+///
+/// The grid row is untouched — the Class-A triode model draws no grid current.
+/// Ground terminals are dropped: a ground *row* has no matrix entry, and a
+/// ground *column* multiplies the fixed zero reference voltage.
+fn stamp_devices(
+    stamps: &[DeviceAcStamp],
+    nodes: &NodeIndexMap,
+    y: &mut DMatrix<Complex64>,
+) {
+    for s in stamps {
+        let gpm = s.gp + s.gm;
+        // (row terminal, [(col terminal, value), ...]) — the plate and
+        // cathode KCL rows; the grid row contributes nothing.
+        let pattern = [
+            (s.plate,   [(s.plate, s.gp), (s.grid, s.gm), (s.cathode, -gpm)]),
+            (s.cathode, [(s.plate, -s.gp), (s.grid, -s.gm), (s.cathode, gpm)]),
+        ];
+        for (row_node, cols) in pattern {
+            let row = match nodes.get(row_node) {
+                Some(r) => r,
+                None => continue, // ground row: not in the matrix
+            };
+            for (col_node, val) in cols {
+                if let Some(col) = nodes.get(col_node) {
+                    y[(row, col)] += Complex64::new(val, 0.0);
+                }
+                // ground column: term drops (reference voltage is 0).
+            }
         }
     }
 }
@@ -840,5 +984,91 @@ mod tests {
             "high-f |H| = {:.6} should be ≪ low-f |H| = {:.6}",
             hi, mags[0]
         );
+    }
+
+    // ── Multi-terminal device AC (triode) ────────────────────────────────
+
+    #[test]
+    fn triode_common_cathode_small_signal_gain() {
+        // Common-cathode 6SN7 gain stage — the same circuit GLACIER solves
+        // for its DC operating point in `triode_gain_stage_dc_operating_point`:
+        //
+        //   Vbb(300 V)·Bplus ── Rp(22 kΩ) ── P
+        //   V1 (triode): plate = P, grid = G, cathode = GND
+        //   Vg(−8 V) biases the grid; cathode grounded.
+        //
+        // AC: the grid is the stimulus node, the plate the output. With the
+        // cathode at AC ground and the B+ rail an AC ground (Vbb has zero AC
+        // impedance), the plate-node KCL linearised at the operating point is
+        //
+        //   −v_p/Rp = g_p·v_p + g_m·v_g   ⇒   A_v = v_p/v_g = −g_m/(1/Rp + g_p)
+        //
+        // i.e. the textbook A_v = −g_m·(R_p ∥ r_p). The stage is purely
+        // resistive, so |H| is flat and the phase is an inverting 180°.
+        //
+        // Self-validating: the expected gain is derived from the *same* DC
+        // operating point the sweep linearises around, isolating the P-stamp
+        // (the (g_p, g_m) device stamp) from any arithmetic about the bias.
+        let mu = 20.0; let ex = 1.4; let kg1 = 1180.0; let kp = 470.0; let kvb = 300.0;
+        let r_p = 22_000.0_f64;
+
+        let mut circuit = Circuit::new();
+        circuit.add_node("Bplus".to_string(), None);
+        circuit.add_node("P".to_string(),     None);
+        circuit.add_node("G".to_string(),     None);
+        circuit.add_node("GND".to_string(),   None);
+        circuit.add_branch("Vbb".to_string(), "Bplus", "GND", "VoltageSource".to_string(), 300.0, None);
+        circuit.add_branch("Rp".to_string(),  "Bplus", "P",   "Resistor".to_string(),      r_p,   None);
+        circuit.add_branch("Vg".to_string(),  "G",     "GND", "VoltageSource".to_string(), -8.0,  None);
+        circuit.add_device(
+            "V1".to_string(),
+            DeviceKind::Triode { mu, ex, kg1, kp, kvb },
+            &["P", "G", "GND"],
+            None,
+        );
+
+        let mut models = HashMap::new();
+        models.insert("Vbb".to_string(), vsource_model(300.0));
+        models.insert("Rp".to_string(),  resistor_model(r_p));
+        models.insert("Vg".to_string(),  vsource_model(-8.0));
+
+        // Expected gain, derived from the DC operating point.
+        let op = dc_operating_point(&circuit, &models).unwrap();
+        let v_p = op.get("P").copied().unwrap_or(0.0);
+        assert!(
+            (50.0..290.0).contains(&v_p),
+            "plate operating point {:.1} V outside the active region", v_p
+        );
+        let tp = TriodeParams::new(mu, ex, kg1, kp, kvb);
+        let (gp, gm) = conductances(&tp, v_p, -8.0);
+        assert!(gp > 0.0 && gm > 0.0, "triode must be conducting: gp={gp}, gm={gm}");
+        let expected_av = -gm / (1.0 / r_p + gp);
+
+        // A common-cathode 6SN7 stage gives a gain of low-tens, inverting,
+        // and always below the tube's µ (=20). Guards a wildly-off stamp.
+        assert!(
+            (-20.0..-5.0).contains(&expected_av),
+            "expected gain {:.2} implausible for a 6SN7 stage", expected_av
+        );
+
+        let params = AcSweepParams::new("G", "P", 10.0, 1e6, 10);
+        let result = run_ac_sweep_nonlinear(&circuit, &models, &params).unwrap();
+
+        // The response is flat (resistive stage) and equals A_v at every
+        // frequency: real part ≈ expected_av, imaginary part ≈ 0.
+        for (f, h) in result.frequencies.iter().zip(&result.transfer_function) {
+            assert!(
+                approx_rel(h.re, expected_av, 0.02) && h.im.abs() < 1e-6,
+                "H({f} Hz) = {h}, want {expected_av} + 0j"
+            );
+        }
+        // Phase is an inverting 180° (the defining sign of a common-cathode
+        // amplifier) — magnitude_db()/phase_deg() sanity on the negative-real H.
+        for &ph in &result.phase_deg() {
+            assert!(
+                (ph.abs() - 180.0).abs() < 1e-3,
+                "common-cathode stage phase = {ph}°, want ±180"
+            );
+        }
     }
 }
