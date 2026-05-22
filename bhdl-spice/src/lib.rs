@@ -66,7 +66,7 @@ pub mod glacier_gpu;
 mod test_unified;
 
 pub use circuit::{
-    Circuit, Node, Branch, NodeId, ComponentId, Component,
+    Circuit, Node, Branch, NodeId, ComponentId, Component, Device, DeviceKind,
     META_PARENT_INSTANCE, META_DECOMPOSITION_ROLE, META_COMPONENT_CLASS,
     META_RDS_ON, META_F_SW, META_T_SW, META_I_QUIESCENT,
     META_TOLERANCE, META_POWER_RATING, META_ESR, META_VOLTAGE_RATING, META_DCR,
