@@ -778,10 +778,10 @@ impl NetlistToSpiceConverter {
             "resistor".to_string()
         } else if lower.contains("cap") || lower.starts_with('c') {
             "capacitor".to_string()
-        } else if lower.contains("ind") || lower.starts_with('l') {
-            "inductor".to_string()
         } else if lower.contains("led") {
             "led".to_string()
+        } else if lower.contains("ind") || lower.starts_with('l') {
+            "inductor".to_string()
         } else if lower.contains("diode") || lower.starts_with('d') {
             "diode".to_string()
         } else if lower.starts_with('v') {
