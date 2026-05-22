@@ -39,6 +39,7 @@ pub mod accurate_models;
 pub mod ac;
 pub mod companion_models;
 pub mod transient;
+pub mod triode;
 pub mod enhanced_glacier_solver;
 pub mod glacier_transient;
 pub mod unified_glacier_solver;
