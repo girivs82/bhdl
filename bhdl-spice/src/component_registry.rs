@@ -99,6 +99,7 @@ impl ComponentRegistry {
             "opamp" | "op_amp" | "operational_amplifier" => Some(ComponentType::OpAmp),
             "voltage_regulator" | "linear_regulator" => Some(ComponentType::VoltageRegulator),
             "switching_regulator" => Some(ComponentType::VoltageRegulator),
+            "triode" | "vacuum_triode" => Some(ComponentType::Triode),
             "power_source" => Some(ComponentType::VoltageSource),
             "ground" | "ground_reference" => Some(ComponentType::Other("ground".to_string())),
             "test_point" | "connector" => Some(ComponentType::Other("test_point".to_string())),
@@ -231,6 +232,28 @@ impl ComponentRegistry {
                 count: 5,
                 pin_types: vec!["power_in".to_string(), "ground".to_string(),
                                "power_out".to_string(), "control".to_string(), "control".to_string()],
+            },
+        });
+
+        // Vacuum triode — 3-terminal nonlinear device, Koren model. The
+        // default parameters are the nominal 6SN7 set; a real tube refines
+        // them by firmware calibration. `spice_model: "triode"` flags the
+        // converter to emit a multi-terminal device rather than a branch.
+        self.register_class("triode", ComponentMetadata {
+            component_class: "triode".to_string(),
+            spice_model: "triode".to_string(),
+            default_parameters: HashMap::from([
+                ("mu".to_string(), 20.0),
+                ("ex".to_string(), 1.4),
+                ("kg1".to_string(), 1180.0),
+                ("kp".to_string(), 470.0),
+                ("kvb".to_string(), 300.0),
+            ]),
+            pin_info: PinInfo {
+                count: 3,
+                pin_types: vec![
+                    "plate".to_string(), "grid".to_string(), "cathode".to_string(),
+                ],
             },
         });
 

@@ -154,6 +154,7 @@ impl SpiceAnalysisAugmenter {
                 crate::components::ComponentType::CurrentSource => "current_source",
                 crate::components::ComponentType::OpAmp => "opamp",
                 crate::components::ComponentType::VoltageRegulator => "voltage_regulator",
+                crate::components::ComponentType::Triode => "triode",
                 crate::components::ComponentType::Other(ref s) => s,
             };
             return Ok(type_str.to_string());

@@ -1,0 +1,70 @@
+// Vacuum Triode Component Module
+// Koren triode model — the de-facto SPICE-standard tube model.
+//
+// Terminals: P (plate / anode), G (grid), K (cathode).
+//
+// The five Koren parameters are consumed by bhdl-spice as a multi-terminal
+// device (ComponentType::Triode → circuit DeviceKind::Triode); the device is
+// stamped directly by GLACIER, not decomposed into branches. The plate-current
+// law and its small-signal conductances live in bhdl-spice/src/triode.rs.
+
+// Koren triode model parameters.
+type TriodeParams = {
+    mu: float,      // Amplification factor µ (dimensionless)
+    ex: float,      // Plate-current exponent Ex (~1.3–1.5)
+    kg1: float,     // Current-scaling constant (larger ⇒ less current)
+    kp: float,      // Grid-drive sharpness constant
+    kvb: float,     // Knee constant (volts²) — shapes the low-plate region
+};
+
+entity Triode(part: string = "6SN7") {
+    pin P: signal inout;  // Plate (anode)
+    pin G: signal in;     // Grid
+    pin K: signal inout;  // Cathode
+
+    // Nominal 6SN7 — medium-µ dual triode, the Amaravani signal-tube family.
+    // Published Koren parameters; a shipped tube refines them by firmware
+    // per-tube calibration.
+    const TRIODE_6SN7: TriodeParams = {
+        mu: 20.0,
+        ex: 1.4,
+        kg1: 1180.0,
+        kp: 470.0,
+        kvb: 300.0,
+    };
+
+    // Nominal 12AU7 / ECC82 — medium-µ dual triode, a common roll-in.
+    const TRIODE_12AU7: TriodeParams = {
+        mu: 21.5,
+        ex: 1.3,
+        kg1: 1180.0,
+        kp: 84.0,
+        kvb: 300.0,
+    };
+
+    // Select the parameter set by part number.
+    const params: TriodeParams =
+        part == "6SN7" ? TRIODE_6SN7 :
+        part == "12AU7" || part == "ECC82" ? TRIODE_12AU7 :
+        TRIODE_6SN7;  // Default to 6SN7
+
+    // Component metadata — `component_class` drives SPICE classification.
+    attribute component_class = "triode";
+    attribute part_number = part;
+
+    // Koren model parameters — flow through the model extractor into
+    // ComponentType::Triode and on to the DeviceKind::Triode the converter
+    // emits. The attribute names match the keys bhdl-spice reads.
+    attribute mu  = params.mu;
+    attribute ex  = params.ex;
+    attribute kg1 = params.kg1;
+    attribute kp  = params.kp;
+    attribute kvb = params.kvb;
+
+    // KiCad symbol — generic triode.
+    attribute kicad_symbol = "Device:Triode";
+}
+
+// Aliases for common tubes.
+alias 6SN7  = Triode("6SN7");
+alias 12AU7 = Triode("12AU7");
