@@ -52,7 +52,8 @@ entity Triode12AU7() {
 }
 
 // Common-cathode signal gain stage — a composite expanded by its `expansion`
-// block, the tube analogue of the buck regulator's virtual-pin expansion. At
+// block, the tube analogue of the buck regulator's virtual-pin expansion. The
+// OUT pin is `virtual`: it is not a real package pin, it is synthesized. At
 // synthesis the block is interpreted and the stage is replaced by a triode
 // plus its six obligatory common-cathode bias passives —
 //
@@ -68,10 +69,12 @@ entity Triode12AU7() {
 // triode needs, with no separate negative supply. Every passive value is an
 // entity parameter, so the whole bias network is tunable from one line of HDL.
 entity SignalTubeStage() {
-    pin IN:  signal in;    // small-signal input (AC-coupled to the grid)
-    pin VBB: power in;     // B+ plate supply
+    pin IN:  signal in;            // small-signal input (AC-coupled to the grid)
+    pin VBB: power in;             // B+ plate supply
     pin GND: ground;
-    pin OUT: signal out;   // amplified output
+    pin OUT: signal out virtual;   // amplified output — `virtual`: not a real
+                                   // package pin, it is synthesized by the
+                                   // `expansion` block below
 
     attribute component_class = "tube_gain_stage";
 
