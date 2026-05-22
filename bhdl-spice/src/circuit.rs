@@ -176,6 +176,49 @@ impl Branch {
     }
 }
 
+/// A multi-terminal device — one that cannot be represented as a 2-node
+/// graph edge (a `Branch`). Triodes, BJTs, MOSFETs, pentodes and
+/// transformers all have three or more terminals.
+///
+/// Devices live in `Circuit.devices`, a flat list parallel to the
+/// 2-terminal branch graph — the SPICE-style "device list" structure. A
+/// device carries its own model parameters (in `DeviceKind`); unlike a
+/// branch it is not threaded through any external model map.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Device {
+    /// Instance name (e.g. the tube reference `V1`).
+    pub name: String,
+    /// Originating BHDL netlist instance, if any.
+    pub instance_id: Option<InstanceId>,
+    /// Device type and its model parameters.
+    pub kind: DeviceKind,
+    /// Terminal nodes, ordered as documented per `DeviceKind` variant.
+    pub terminals: Vec<NodeId>,
+}
+
+/// Device type, carrying that type's model parameters inline.
+///
+/// Model parameters are stored as plain `f64` fields (not a typed params
+/// struct) so this foundational module needs no dependency on the model
+/// modules — the solver reconstructs whatever typed parameter struct it
+/// wants from these.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DeviceKind {
+    /// Vacuum triode, Koren model. `terminals` = `[plate, grid, cathode]`.
+    Triode {
+        /// Amplification factor μ.
+        mu: f64,
+        /// Plate-current exponent Ex.
+        ex: f64,
+        /// Current-scaling constant Kg1.
+        kg1: f64,
+        /// Grid-drive sharpness Kp.
+        kp: f64,
+        /// Knee constant Kvb.
+        kvb: f64,
+    },
+}
+
 /// Circuit representation using a graph
 #[derive(Clone)]
 pub struct Circuit {
@@ -187,6 +230,8 @@ pub struct Circuit {
     branch_map: HashMap<String, EdgeIndex>,
     /// Ground node index
     ground_node: Option<NodeIndex>,
+    /// Multi-terminal devices (triodes, …) — parallel to the branch graph.
+    devices: Vec<Device>,
 }
 
 impl Circuit {
@@ -197,6 +242,7 @@ impl Circuit {
             node_map: HashMap::new(),
             branch_map: HashMap::new(),
             ground_node: None,
+            devices: Vec::new(),
         }
     }
     
@@ -296,7 +342,34 @@ impl Circuit {
         self.graph.edge_indices()
             .map(move |idx| (idx, &self.graph[idx]))
     }
-    
+
+    /// Add a multi-terminal device. `terminal_names` lists the device's
+    /// terminal nodes in the order documented by its `DeviceKind` (for a
+    /// triode: plate, grid, cathode); any not yet present are created.
+    /// Returns the index of the device in `devices()`.
+    pub fn add_device(
+        &mut self,
+        name: String,
+        kind: DeviceKind,
+        terminal_names: &[&str],
+        instance_id: Option<InstanceId>,
+    ) -> usize {
+        let terminals: Vec<NodeId> = terminal_names
+            .iter()
+            .map(|n| {
+                self.node_map.get(*n).copied()
+                    .unwrap_or_else(|| self.add_node((*n).to_string(), None))
+            })
+            .collect();
+        self.devices.push(Device { name, instance_id, kind, terminals });
+        self.devices.len() - 1
+    }
+
+    /// All multi-terminal devices in the circuit.
+    pub fn devices(&self) -> &[Device] {
+        &self.devices
+    }
+
     /// Get node by name
     pub fn get_node(&self, name: &str) -> Option<(NodeIndex, &Node)> {
         self.node_map.get(name)

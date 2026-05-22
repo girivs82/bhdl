@@ -802,6 +802,56 @@ impl GlacierSolver {
             }
         }
 
+        // ── Multi-terminal devices ───────────────────────────────────────
+        //
+        // Devices live in `circuit.devices`, separate from the 2-terminal
+        // branch graph (a triode has three terminals and cannot be an edge).
+        // Each is stamped into the KCL rows of the nodes it touches.
+        for device in self.circuit.devices() {
+            match device.kind {
+                crate::circuit::DeviceKind::Triode { mu, ex, kg1, kp, kvb } => {
+                    // terminals = [plate, grid, cathode]
+                    if device.terminals.len() != 3 { continue; }
+                    let plate_name   = self.circuit.graph[device.terminals[0]].name.clone();
+                    let grid_name    = self.circuit.graph[device.terminals[1]].name.clone();
+                    let cathode_name = self.circuit.graph[device.terminals[2]].name.clone();
+
+                    let v_p = node_voltages.get(&plate_name).copied().unwrap_or(0.0);
+                    let v_g = node_voltages.get(&grid_name).copied().unwrap_or(0.0);
+                    let v_k = node_voltages.get(&cathode_name).copied().unwrap_or(0.0);
+
+                    let params = crate::triode::TriodeParams::new(mu, ex, kg1, kp, kvb);
+                    let ip = crate::triode::plate_current(&params, v_p - v_k, v_g - v_k);
+                    // (gp, gm) = (∂Ip/∂Vpk, ∂Ip/∂Vgk).
+                    let (gp, gm) = crate::triode::conductances(&params, v_p - v_k, v_g - v_k);
+
+                    // Ip = f(Vpk, Vgk) with Vpk = V_p−V_k, Vgk = V_g−V_k, so
+                    //   ∂Ip/∂V_p = gp,  ∂Ip/∂V_g = gm,  ∂Ip/∂V_k = −(gp+gm).
+                    // The plate current leaves the plate node and enters the
+                    // cathode node. The grid draws no current (ideal Class-A
+                    // high-impedance grid), so the grid KCL row gets nothing
+                    // from the triode — only the plate/cathode rows do, with
+                    // the grid voltage entering as a control.
+                    let p_idx = self.get_voltage_var_index(variables, &plate_name);
+                    let g_idx = self.get_voltage_var_index(variables, &grid_name);
+                    let k_idx = self.get_voltage_var_index(variables, &cathode_name);
+
+                    if let Some(p) = p_idx {
+                        residual[p] += ip;
+                        jacobian[(p, p)] += gp;
+                        if let Some(g) = g_idx { jacobian[(p, g)] += gm; }
+                        if let Some(k) = k_idx { jacobian[(p, k)] += -(gp + gm); }
+                    }
+                    if let Some(k) = k_idx {
+                        residual[k] -= ip;
+                        jacobian[(k, k)] += gp + gm;
+                        if let Some(p) = p_idx { jacobian[(k, p)] += -gp; }
+                        if let Some(g) = g_idx { jacobian[(k, g)] += -gm; }
+                    }
+                }
+            }
+        }
+
         Ok((residual, jacobian))
     }
 
@@ -1486,5 +1536,81 @@ mod current_source_tests {
             }
         }
         println!();
+    }
+
+    #[test]
+    fn triode_gain_stage_dc_operating_point() {
+        // Common-cathode 6SN7 gain stage:
+        //
+        //   Vbb(300 V)·Bplus ── Rp(22 kΩ) ── P
+        //   V1 (triode): plate = P, grid = G, cathode = GND
+        //   Vg(−8 V) sets the grid bias; cathode at ground.
+        //
+        // The DC operating point is the load-line intersection — the plate
+        // current the triode draws must equal the current through Rp:
+        //   Ip(Vpk = V_P, Vgk = −8) = (300 − V_P) / Rp.
+        // For these 6SN7 parameters that lands near V_P ≈ 200 V, Ip ≈ 4.5 mA.
+        //
+        // This is the first circuit GLACIER solves containing a *multi-
+        // terminal device* — the triode lives in `Circuit.devices`, not the
+        // 2-terminal branch graph, and is stamped into the plate and cathode
+        // KCL rows with the grid voltage entering as a control.
+        let mu = 20.0; let ex = 1.4; let kg1 = 1180.0; let kp = 470.0; let kvb = 300.0;
+
+        let mut circuit = Circuit::new();
+        circuit.add_node("Bplus".to_string(), None);
+        circuit.add_node("P".to_string(),     None);
+        circuit.add_node("G".to_string(),     None);
+        circuit.add_node("GND".to_string(),   None);
+        circuit.add_branch("Vbb".to_string(), "Bplus", "GND", "VoltageSource".to_string(), 300.0,    None);
+        circuit.add_branch("Rp".to_string(),  "Bplus", "P",   "Resistor".to_string(),      22_000.0, None);
+        circuit.add_branch("Vg".to_string(),  "G",     "GND", "VoltageSource".to_string(), -8.0,     None);
+        circuit.add_device(
+            "V1".to_string(),
+            crate::circuit::DeviceKind::Triode { mu, ex, kg1, kp, kvb },
+            &["P", "G", "GND"],
+            None,
+        );
+
+        let mut solver = GlacierSolver::new(circuit);
+        solver.enable_multi_region = false;
+        solver.add_model("Vbb".to_string(), ComponentModel::VoltageSource {
+            voltage: 300.0, internal_resistance: Some(0.0),
+        });
+        solver.add_model("Rp".to_string(), ComponentModel::Resistor {
+            resistance: 22_000.0, tolerance: 1.0, limits: ElectricalLimits::default(),
+        });
+        solver.add_model("Vg".to_string(), ComponentModel::VoltageSource {
+            voltage: -8.0, internal_resistance: Some(0.0),
+        });
+
+        let sols = solver.solve().expect("GLACIER solve failed");
+        let sol = sols.iter()
+            .min_by(|a, b| a.final_error.partial_cmp(&b.final_error).unwrap())
+            .expect("no solution");
+        let v_p = sol.node_voltages.get("P").copied().unwrap_or(0.0);
+
+        // The plate must sit in the active region — well below the 300 V
+        // rail (the tube conducts) and well above ground (it is not bottomed
+        // out). A cutoff solution would put V_P ≈ 300; a saturated one ≈ 0.
+        assert!(
+            (50.0..290.0).contains(&v_p),
+            "plate voltage {:.1} V is outside the active region",
+            v_p
+        );
+
+        // Plate-node KCL: the triode's plate current must equal the current
+        // through Rp. This is the equation GLACIER solved — checking it
+        // independently confirms the multi-terminal device stamp is correct.
+        let params = crate::triode::TriodeParams::new(mu, ex, kg1, kp, kvb);
+        let ip_triode   = crate::triode::plate_current(&params, v_p, -8.0);
+        let ip_resistor = (300.0 - v_p) / 22_000.0;
+        let rel = (ip_triode - ip_resistor).abs()
+            / ip_triode.abs().max(ip_resistor.abs()).max(1e-12);
+        assert!(
+            rel < 1e-3,
+            "plate-node KCL imbalance: triode Ip = {:.4} mA, Rp current = {:.4} mA",
+            ip_triode * 1e3, ip_resistor * 1e3
+        );
     }
 }
