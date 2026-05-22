@@ -1,0 +1,24 @@
+// Tube gain stage built from the SignalTubeStage virtual composite.
+//
+// The board instantiates ONE component — U1 — and connects four pins.
+// At synthesis the virtual OUT pin expands: U1 is replaced by a triode and
+// its six obligatory common-cathode bias passives (Rp, Rk, Ck, Rg, Cin,
+// Cout), all wired and valued automatically. This is the tube analogue of
+// the buck regulator's virtual-pin expansion.
+import { SignalTubeStage } from "bhdl-stdlib/actives/triode.bhdl";
+import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+
+board TubeAmp {
+    power VBB = 300V @ 100mA;
+    power SIGIN = 1V @ 1mA;
+    ground GND;
+
+    U1: SignalTubeStage();
+    VBB -> U1.VBB;
+    SIGIN -> U1.IN;
+    U1.GND -> GND;
+
+    // Output coupling drives a next-stage grid-leak load.
+    U1.OUT -> Rload: Res(470000).1;
+    Rload.2 -> GND;
+}

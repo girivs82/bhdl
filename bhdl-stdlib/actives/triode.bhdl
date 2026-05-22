@@ -50,3 +50,46 @@ entity Triode12AU7() {
 
     attribute kicad_symbol = "Device:Triode";
 }
+
+// Common-cathode signal gain stage — a composite expanded by its `expansion`
+// block, the tube analogue of the buck regulator's virtual-pin expansion. At
+// synthesis the block is interpreted and the stage is replaced by a triode
+// plus its six obligatory common-cathode bias passives —
+//
+//   Rp   — plate load resistor      (B+ → plate)
+//   Rk   — cathode bias resistor    (cathode → GND)
+//   Ck   — cathode bypass capacitor (cathode → GND, in parallel with Rk)
+//   Rg   — grid-leak resistor       (grid → GND)
+//   Cin  — input coupling capacitor (IN → grid)
+//   Cout — output coupling capacitor(plate → OUT)
+//
+// The stage self-biases: the grid sits at 0 V through Rg, while plate current
+// through Rk lifts the cathode above it — so V_gk is the negative bias the
+// triode needs, with no separate negative supply. Every passive value is an
+// entity parameter, so the whole bias network is tunable from one line of HDL.
+entity SignalTubeStage() {
+    pin IN:  signal in;    // small-signal input (AC-coupled to the grid)
+    pin VBB: power in;     // B+ plate supply
+    pin GND: ground;
+    pin OUT: signal out;   // amplified output
+
+    attribute component_class = "tube_gain_stage";
+
+    expansion {
+        // Internal nodes of the common-cathode topology.
+        internal plate:   net;
+        internal grid:    net;
+        internal cathode: net;
+
+        // Rp 22 kΩ, Rk 820 Ω, Ck 100 µF, Rg 1 MΩ, Cin/Cout 100 nF.
+        VBB -> Rp: Res(22000).1; Rp.2 -> plate;
+        plate -> V: Triode().P;
+        grid -> V.G;
+        cathode -> V.K;
+        cathode -> Rk: Res(820).1; Rk.2 -> GND;
+        cathode -> Ck: Cap(0.0001).1; Ck.2 -> GND;
+        grid -> Rg: Res(1000000).1; Rg.2 -> GND;
+        IN -> Cin: Cap(0.0000001).1; Cin.2 -> grid;
+        plate -> Cout: Cap(0.0000001).1; Cout.2 -> OUT;
+    }
+}
