@@ -1009,8 +1009,19 @@ async fn run_spice(source_file: &SourceFile, analysis_type: &str, _output: Optio
     let analysis_result = analyze(source_file);
     
     let mut generator = NetlistGenerator::new();
-    let netlist = generator.generate_from_ast_and_analysis(source_file, &analysis_result).await?;
-    
+    let mut netlist = generator.generate_from_ast_and_analysis(source_file, &analysis_result).await?;
+
+    // Expand virtual-pin composites (e.g. SignalTubeStage, switching
+    // regulators) before SPICE conversion — otherwise a design built from
+    // virtual components would be simulated with its expansion missing.
+    // Mirrors the synthesize / visualization / pipeline paths.
+    if let Some(ref flow_tracker) = analysis_result.flow_tracker {
+        bhdl_synthesizer::intent_attribute_stamper::stamp_intent_attributes(&mut netlist, flow_tracker);
+    }
+    bhdl_synthesizer::expansion_interpreter::expand_entity_instances(
+        &mut netlist, &analysis_result.expansion_recipes);
+    bhdl_synthesizer::virtual_pin_expander::expand_virtual_pins(&mut netlist);
+
     // Create unified analysis data and augment with SPICE information
     let mut analysis_data = AnalysisData::default();
     let mut augmenter = SpiceAnalysisAugmenter::new();

@@ -417,6 +417,7 @@ fn component_type_to_class(component_type: &str) -> &'static str {
         "Diode" => "diode",
         "TVSDiode" => "tvs_diode",
         "LED" => "led",
+        "Triode" => "triode",
         _ => "passive", // generic fallback
     }
 }
@@ -428,6 +429,9 @@ fn component_type_pins(component_type: &str) -> Vec<(&'static str, bool)> {
         "Res" | "Resistor" => vec![("1", true), ("2", true)],
         "Diode" => vec![("A", false), ("K", false)],
         "TVSDiode" => vec![("A", false), ("K", false)],
+        // Vacuum triode: plate / grid / cathode. The netlist converter
+        // classifies these terminals by name, so pin order is what matters.
+        "Triode" => vec![("P", true), ("G", true), ("K", true)],
         _ => vec![("1", true), ("2", true)], // Default: two passive pins
     }
 }
