@@ -231,8 +231,6 @@ async fn main() -> Result<()> {
         &mut netlist,
         &analysis.expansion_recipes,
     );
-    let _vpin_results =
-        bhdl_synthesizer::virtual_pin_expander::expand_virtual_pins(&mut netlist);
     println!("  OK: {} instances post-expansion", netlist.instances.len());
 
     // 4. GLACIER DC

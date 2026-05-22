@@ -676,21 +676,6 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
         }
     }
 
-    // Expand virtual pins (legacy vpin_* attribute approach)
-    // Skips instances already expanded by the expansion interpreter above
-    // If intent_max_ripple was stamped, this creates multi-tier cap banks
-    let expansion_results = bhdl_synthesizer::virtual_pin_expander::expand_virtual_pins(&mut netlist);
-    if !expansion_results.is_empty() {
-        println!("  {} virtual pins expanded for {} component(s)",
-            "✓".green(), expansion_results.len());
-        for r in &expansion_results {
-            if !r.additional_output_caps.is_empty() {
-                println!("    {} multi-tier cap bank: {} output caps (ripple-aware)",
-                    "→".cyan(), 1 + r.additional_output_caps.len());
-            }
-        }
-    }
-
     // Run GLACIER DC simulation for voltage/current annotation
     let sim_annotations = {
         let mut converter = NetlistToSpiceConverter::new();
@@ -914,7 +899,6 @@ async fn run_layout(
     bhdl_synthesizer::expansion_interpreter::expand_entity_instances(
         &mut netlist, &analysis.expansion_recipes,
     );
-    bhdl_synthesizer::virtual_pin_expander::expand_virtual_pins(&mut netlist);
     println!("  {} Expansion: {} instances", "✓".green(), netlist.instances.len());
 
     // 5. GLACIER DC
@@ -1020,7 +1004,6 @@ async fn run_spice(source_file: &SourceFile, analysis_type: &str, _output: Optio
     }
     bhdl_synthesizer::expansion_interpreter::expand_entity_instances(
         &mut netlist, &analysis_result.expansion_recipes);
-    bhdl_synthesizer::virtual_pin_expander::expand_virtual_pins(&mut netlist);
 
     // Create unified analysis data and augment with SPICE information
     let mut analysis_data = AnalysisData::default();

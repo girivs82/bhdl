@@ -53,7 +53,6 @@ pub mod import_preprocessor;
 pub mod synthesis_knowledge;
 
 // Virtual pin extraction from AST
-pub mod virtual_pin_extractor;
 
 // Virtual pin expansion (post-synthesis wiring of inductor/diode/cap)
 pub mod virtual_pin_expander;
@@ -310,89 +309,6 @@ impl NetlistGenerator {
         }
     }
 
-    /// Extract virtual pin components from an entity AST node
-    fn extract_virtual_pins_from_entity(&self, entity: &bhdl_ast::Entity) -> Option<Vec<bhdl_stdlib::virtual_pins::VirtualPinComponent>> {
-        use crate::virtual_pin_extractor::VirtualPinExtractor;
-
-        // Use the new virtual pin extractor to parse the entity
-        VirtualPinExtractor::extract_from_entity(entity)
-    }
-    
-    /// Process virtual pin components extracted from AST
-    fn process_virtual_pin_components(
-        &mut self, 
-        virtual_components: &[bhdl_stdlib::virtual_pins::VirtualPinComponent], 
-        instance_name: &str, 
-        component_type: &str
-    ) -> Result<()> {
-        info!("Processing {} virtual pin components for {} ({})", 
-              virtual_components.len(), instance_name, component_type);
-        
-        // Convert VirtualPinComponent to CalculatedComponent for compatibility
-        for component in virtual_components {
-            let calc_component = crate::component_calculator::CalculatedComponent {
-                component_type: match component.component_type.as_str() {
-                    "Inductor" => crate::component_calculator::ComponentType::Inductor,
-                    "Capacitor" => crate::component_calculator::ComponentType::Capacitor,
-                    "Resistor" => crate::component_calculator::ComponentType::Resistor,
-                    "Diode" => crate::component_calculator::ComponentType::Diode,
-                    "LED" => crate::component_calculator::ComponentType::LED,
-                    _ => crate::component_calculator::ComponentType::Capacitor, // Default
-                },
-                reference: component.reference.clone(),
-                value: component.value.clone(),
-                rating: component.specs.get("voltage_rating")
-                    .or_else(|| component.specs.get("current_rating"))
-                    .or_else(|| component.specs.get("power_rating"))
-                    .unwrap_or(&"".to_string()).clone(),
-                package: component.specs.get("package")
-                    .unwrap_or(&"0805".to_string()).clone(),
-                purpose: format!("Virtual pin component for {}", component_type),
-                calculation: "Extracted from module virtual pins".to_string(),
-                placement: "Near parent component".to_string(),
-                intent: match component.component_type.as_str() {
-                    "Capacitor" => crate::component_calculator::ComponentIntent::InputFiltering,
-                    "Resistor" => crate::component_calculator::ComponentIntent::CurrentLimiting,
-                    "Inductor" => crate::component_calculator::ComponentIntent::EnergyStorage,
-                    _ => crate::component_calculator::ComponentIntent::Decoupling,
-                },
-            };
-            
-            // Add the component to the netlist
-            self.add_virtual_pin_component(instance_name, &calc_component)?;
-        }
-        
-        Ok(())
-    }
-    
-    /// Add a virtual pin component to the netlist
-    fn add_virtual_pin_component(&mut self, parent_instance: &str, component: &crate::component_calculator::CalculatedComponent) -> Result<()> {
-        // Generate a unique reference for the supporting component
-        let supporting_ref = format!("{}_{}", parent_instance, component.reference);
-        
-        // Create a module for the supporting component type
-        let module_id = self.netlist.add_module(
-            format!("{:?}", component.component_type),
-            bhdl_netlist::types::ModuleKind::Component
-        );
-        
-        // Create an instance of the supporting component
-        let instance_id = self.netlist.add_instance(
-            supporting_ref.clone(),
-            module_id
-        );
-        
-        // Track the supporting component instance
-        if let Some(instance_id) = instance_id {
-            self.supporting_component_instances.insert(supporting_ref, instance_id);
-            info!("Added virtual pin component: {} ({:?})", component.reference, component.component_type);
-        } else {
-            warn!("Failed to create instance for virtual pin component: {}", component.reference);
-        }
-        
-        Ok(())
-    }
-    
     /// Generate netlist from analysis results (backwards compatibility)
     pub async fn generate_from_analysis(&mut self, analysis: &AnalysisResult) -> Result<Netlist> {
         warn!("generate_from_analysis is deprecated - connectivity extraction will be limited");
@@ -795,9 +711,32 @@ impl NetlistGenerator {
                     if let Some(instance_id) = instance_id {
                         debug!("Created component instance: {} -> {:?}", name, instance_id);
 
-                        // Add pins for the component based on database or default pins
-                        if let Err(e) = self.add_pins_for_component(name, type_name, module_id) {
-                            warn!("Failed to add pins for component {}: {}", name, e);
+                        // Add pins for the component based on database or default pins.
+                        // `get_or_create_module` hands back a *shared* module per
+                        // component type, so only the first instance of a given
+                        // type should populate the pin definitions — otherwise the
+                        // pins (and, below, the pin instances) get duplicated.
+                        let module_needs_pins = self.netlist.modules.get(module_id)
+                            .map(|m| m.pins.is_empty())
+                            .unwrap_or(false);
+                        if module_needs_pins {
+                            if let Err(e) = self.add_pins_for_component(name, type_name, module_id) {
+                                warn!("Failed to add pins for component {}: {}", name, e);
+                            }
+                        }
+
+                        // Materialize pin instances for this component instance.
+                        // `add_pins_for_component` only populates the module's pin
+                        // *definitions*; without this step the instance has zero
+                        // pin instances, so later phases (connectivity resolution,
+                        // expansion-block interpretation) cannot resolve any pin on
+                        // it. This mirrors `generate_instances_with_semantics`.
+                        // Skip module type definitions (name == type_name) — those
+                        // are library templates, not real circuit instances.
+                        if name != type_name {
+                            if let Err(e) = self.netlist.create_pin_instances(instance_id) {
+                                warn!("Failed to create pin instances for component {}: {}", name, e);
+                            }
                         }
 
                         // Try to match this instance to a database component for visualization
@@ -823,95 +762,6 @@ impl NetlistGenerator {
                     }
                 } else {
                     debug!("Component {} has no type name, skipping", name);
-                }
-            }
-        }
-        
-        // Phase 2: Automatic Supporting Component Generation
-        // For power management ICs like TPS54331, automatically generate supporting components
-        println!("🔧 MAIN SYNTHESIZER: Starting automatic supporting component generation");
-        info!("AUTOMATIC COMPONENT GENERATION: Starting automatic supporting component generation");
-        self.generate_automatic_supporting_components(&all_symbols, analysis, ast).await?;
-        
-        Ok(())
-    }
-
-    /// Generate automatic supporting components from BHDL synthesis knowledge
-    async fn generate_automatic_supporting_components(&mut self, all_symbols: &HashMap<String, bhdl_analyzer::symbol_table::Symbol>, analysis: &AnalysisResult, ast: Option<&SourceFile>) -> Result<()> {
-        debug!("Starting automatic supporting component generation for {} symbols", all_symbols.len());
-        
-        // Process ALL components that have virtual pins defined in BHDL
-        for (name, symbol) in all_symbols {
-            if matches!(symbol.kind, bhdl_analyzer::symbol_table::SymbolKind::Instance) {
-                if let Some(ref type_name) = symbol.instance_type_name {
-                    // Check if the component is defined in the analyzer's symbol table (from imports)
-                    let has_entity_definition = analysis.global_scope.lookup(type_name)
-                        .map(|s| s.kind == bhdl_analyzer::symbol_table::SymbolKind::Entity)
-                        .unwrap_or(false);
-
-                    if has_entity_definition {
-                        println!("✅ SYNTHESIZER: Found entity definition for {} in symbol table", type_name);
-                        info!("Component {} found in analyzer symbol table", type_name);
-                        
-                        // Try to extract component information directly from the AST node in the symbol table
-                        let mut virtual_components_from_ast: Option<Vec<bhdl_stdlib::virtual_pins::VirtualPinComponent>> = None;
-                        
-                        if let Some(module_symbol) = analysis.global_scope.lookup(type_name) {
-                            if let Some(syntax_node_ptr) = &module_symbol.definition_node_ptr {
-                                // Try to resolve the AST node - first from main file, then from imports
-                                let mut resolved_node = None;
-                                
-                                // First try the main AST file
-                                if let Some(ast_root) = ast {
-                                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                        syntax_node_ptr.to_node(&ast_root.syntax())
-                                    })) {
-                                        Ok(node) => resolved_node = Some(node),
-                                        Err(_) => {
-                                            debug!("Node not in main AST, checking imported files");
-                                        }
-                                    }
-                                }
-                                
-                                // If not found in main file, try imported files
-                                if resolved_node.is_none() {
-                                    for (path, imported_ast) in self.import_loader.loaded_source_files() {
-                                        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                            syntax_node_ptr.to_node(&imported_ast.syntax())
-                                        })) {
-                                            Ok(node) => {
-                                                info!("Found {} in imported file: {}", type_name, path);
-                                                resolved_node = Some(node);
-                                                break;
-                                            }
-                                            Err(_) => continue,
-                                        }
-                                    }
-                                }
-                                
-                                // Extract virtual pins if we found the node
-                                if let Some(syntax_node) = resolved_node {
-                                    if let Some(entity_node) = bhdl_ast::Entity::cast(syntax_node) {
-                                        info!("Successfully resolved {} AST node from symbol table", type_name);
-                                        virtual_components_from_ast = self.extract_virtual_pins_from_entity(&entity_node);
-                                    }
-                                } else {
-                                    warn!("Could not resolve AST node for {} - may need to load more imports", type_name);
-                                }
-                            }
-                        }
-                        
-                        // Process virtual components from AST if available
-                        if let Some(ast_components) = virtual_components_from_ast {
-                            info!("Using AST-extracted virtual pins for {} - {} components", type_name, ast_components.len());
-                            self.process_virtual_pin_components(&ast_components, name, type_name)?;
-                        } else {
-                            // AST-based extraction is the only supported method now
-                            info!("No virtual pins extracted for {} - component may not define virtual pins", type_name);
-                        }
-                    } else {
-                        debug!("Component {} ({}) has no virtual pins in BHDL", name, type_name);
-                    }
                 }
             }
         }
@@ -2546,13 +2396,10 @@ impl NetlistGenerator {
                pin_definitions.len(), component_type);
         
         if has_virtual_pins {
-            info!("Component '{}' has virtual pins that need expansion", component_type);
-            
-            // Check if we have synthesis knowledge for this component
-            // Virtual pin expansion is now handled by AST-based automatic component generation
-            info!("Virtual pin expansion will be handled by AST-based automatic component generation");
-            // The virtual pin expansion happens in generate_automatic_supporting_components
-            // which extracts virtual pins directly from AST nodes in the symbol table
+            // The pin is materialised normally; the entity's `expansion { }`
+            // block is applied post-synthesis by `expansion_interpreter`.
+            info!("Component '{}' has a virtual pin — expansion handled by its \
+                   expansion {{ }} block", component_type);
         }
         
         // Add each pin to the netlist module
