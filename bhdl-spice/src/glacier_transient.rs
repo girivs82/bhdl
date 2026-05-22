@@ -1,7 +1,22 @@
-//! GLACIER Transient Analysis Extension
-//! 
-//! Implements time-domain logarithmic transformation for transient analysis
-//! avoiding exponentials throughout the computation.
+//! GLACIER Transient Analysis Extension — **deprecated scaffold**
+//!
+//! This module was an early sketch of log-domain transient analysis for
+//! GLACIER. The math classes (`LogCapacitorCompanion`, `LogInductorCompanion`,
+//! `LogarithmicTimeDerivative`) are intended to be reusable. Everything else
+//! is a placeholder: `apply_companion_models` returns the unmodified circuit,
+//! `build_mixed_system` builds an identity matrix, and the state-reader
+//! helpers (`get_voltage_across_branch` etc.) all return `0.0`.
+//!
+//! It is retained as a **quarry** for the log-domain companion math, not as a
+//! working solver. New transient work lives in the (forthcoming) `transient`
+//! module on top of the plain BDF companions in `companion_models`. A
+//! log-domain variant can be added later if the plain BDF path proves
+//! numerically inadequate on tube cutoff / grid-current onset.
+//!
+//! Do not introduce new callers of `GlacierTransientSolver` or
+//! `run_transient_analysis` from this module — they do not solve the circuit.
+
+#![allow(deprecated)]
 
 use nalgebra::{DMatrix, DVector};
 use petgraph::graph::{NodeIndex, EdgeIndex};

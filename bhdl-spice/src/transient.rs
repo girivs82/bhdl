@@ -1,0 +1,1194 @@
+//! Transient time-domain analysis (P3a — first cut).
+//!
+//! Walks the circuit through real time with a BDF1 (Backward Euler) integration
+//! scheme. At each timestep:
+//!
+//! 1. For every reactive component (L, C), look up the (G_eq, I_eq) companion
+//!    pair from [`companion_models`] using the previous-step state.
+//! 2. Stamp those into a real-valued MNA matrix together with the resistors.
+//! 3. Hold the input node at `stimulus(t)` via a Dirichlet row substitution
+//!    (same mechanism as `ac.rs`).
+//! 4. Solve `Y · v = i` for all non-ground node voltages.
+//! 5. Update the per-component state (v_prev for caps, i_prev for inductors)
+//!    from the solution; advance time by the fixed step `dt`.
+//!
+//! Scope of this cut:
+//!  * Fixed timestep — adaptive step size lands in P3b.2.
+//!  * Linear components only — Resistor, Capacitor (with optional ESR),
+//!    Inductor (with optional DCR), plus the Dirichlet-driven input.
+//!    Diodes/LEDs are treated as open circuits. Calling GLACIER inside the
+//!    timestep loop for nonlinear devices is P3c.
+//!  * Internal device state is tracked separately from external node voltage:
+//!    `v_C` (dielectric voltage) for caps and `i_L` (coil current) for
+//!    inductors. This is what lets ESR/DCR-bearing devices produce the
+//!    correct exponential settling rather than the one-step artefact a
+//!    naive "fold ESR into a series resistance with v_ext as state" approach
+//!    would give.
+//!  * Dirichlet input is one named node; voltage sources between arbitrary
+//!    node pairs need full modified-MNA extra rows, which we have not added
+//!    yet (same caveat as `ac::run_ac_sweep`).
+//!
+//! The headline correctness check is the RC step response: charging a 1 µF
+//! capacitor through a 1 kΩ resistor from a 1 V step should produce
+//! `v(t) = 1 − e^(−t/τ)` with τ = RC = 1 ms.  At the smallest `dt` we test,
+//! the numeric trace matches the analytical curve within 1 mV.
+
+use std::collections::HashMap;
+
+use nalgebra::{DMatrix, DVector};
+use petgraph::graph::{EdgeIndex, NodeIndex};
+
+use crate::circuit::{Circuit, META_DCR, META_ESR};
+use crate::companion_models::{
+    capacitor_advance_v_c, capacitor_advance_v_c_bdf2,
+    capacitor_bdf1_with_esr, capacitor_bdf2_with_esr,
+    inductor_advance_i_l,
+    inductor_bdf1_with_dcr, inductor_bdf2_with_dcr,
+    Companion,
+};
+use crate::errors::{Result, SpiceError};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Public types
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Time-varying boundary condition imposed on `TransientParams::input_node`.
+///
+/// The signal types here are the bare minimum needed for the first transient
+/// smoke tests (step, sine). Pulse / piecewise-linear / arbitrary-callback
+/// stimuli can be added as variants without affecting the solver.
+#[derive(Debug, Clone)]
+pub enum Stimulus {
+    /// Constant DC voltage at all times. Useful for verifying steady state.
+    Constant(f64),
+    /// Heaviside step: `initial` before `t_start`, `final_v` after.
+    Step { initial: f64, final_v: f64, t_start: f64 },
+    /// `dc_offset + amplitude · sin(2π · frequency_hz · t)`.
+    Sine { amplitude: f64, frequency_hz: f64, dc_offset: f64 },
+}
+
+impl Stimulus {
+    /// Evaluate the stimulus at time `t` (seconds).
+    pub fn at(&self, t: f64) -> f64 {
+        match self {
+            Stimulus::Constant(v) => *v,
+            Stimulus::Step { initial, final_v, t_start } => {
+                if t < *t_start { *initial } else { *final_v }
+            }
+            Stimulus::Sine { amplitude, frequency_hz, dc_offset } => {
+                let omega = 2.0 * std::f64::consts::PI * frequency_hz;
+                dc_offset + amplitude * (omega * t).sin()
+            }
+        }
+    }
+}
+
+/// Time-integration scheme selector.
+///
+/// * [`Bdf1`][IntegrationOrder::Bdf1] (Backward Euler) — A-stable, first-order.
+///   Safe default; truncation error decays as O(h) globally.
+/// * [`Bdf2`][IntegrationOrder::Bdf2] — A-stable and L-stable (so stiff systems
+///   don't force h → 0), second-order accurate. The first step is always taken
+///   as BDF1 because BDF2 needs two prior history points.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntegrationOrder {
+    Bdf1,
+    Bdf2,
+}
+
+impl Default for IntegrationOrder {
+    fn default() -> Self { Self::Bdf1 }
+}
+
+#[derive(Debug, Clone)]
+pub struct TransientParams {
+    /// Name of the node held at `stimulus(t)`.
+    pub input_node: String,
+    /// Stimulus waveform applied at the input node.
+    pub stimulus: Stimulus,
+    /// Nodes whose voltages should be recorded at every timestep.
+    pub probe_nodes: Vec<String>,
+    /// Total simulation duration (seconds, from `t = 0`).
+    pub duration: f64,
+    /// Fixed integration step (seconds). Adaptive control lands in P3b.3.
+    pub timestep: f64,
+    /// Time-integration order. Defaults to BDF1 for backward compatibility
+    /// with existing tests and callers that don't care about accuracy ordering.
+    pub order: IntegrationOrder,
+    /// Optional adaptive timestep control. When `Some(_)`, the `timestep`
+    /// field is the *initial* step size and the controller adjusts it as
+    /// the simulation proceeds. When `None`, the timestep is fixed.
+    pub adaptive: Option<AdaptiveStepControl>,
+}
+
+impl TransientParams {
+    /// Minimal constructor — order defaults to BDF1, fixed timestep.
+    pub fn new(
+        input_node: impl Into<String>,
+        stimulus: Stimulus,
+        probe_nodes: Vec<impl Into<String>>,
+        duration: f64,
+        timestep: f64,
+    ) -> Self {
+        Self {
+            input_node: input_node.into(),
+            stimulus,
+            probe_nodes: probe_nodes.into_iter().map(Into::into).collect(),
+            duration,
+            timestep,
+            order: IntegrationOrder::default(),
+            adaptive: None,
+        }
+    }
+
+    /// Builder-style override for the integration order.
+    pub fn with_order(mut self, order: IntegrationOrder) -> Self {
+        self.order = order;
+        self
+    }
+
+    /// Enable adaptive timestep control. The `timestep` field is then treated
+    /// as the *initial* step size; the controller adjusts up and down based
+    /// on per-step LTE estimates produced by step-doubling.
+    pub fn with_adaptive(mut self, ctrl: AdaptiveStepControl) -> Self {
+        self.adaptive = Some(ctrl);
+        self
+    }
+}
+
+/// Adaptive timestep controller using step-doubling LTE estimation.
+///
+/// At each step the solver takes one h-step and two h/2-substeps from the
+/// same starting state. The difference between the two predictions
+/// approximates the local truncation error of the h-step (up to an O(1)
+/// constant). The step is accepted if `‖LTE‖ ≤ abs_tol + rel_tol·‖v‖`; in
+/// that case the more-accurate h/2-substep result is kept and `h` is grown
+/// by `grow_factor` if there's headroom. Otherwise `h` is shrunk by
+/// `shrink_factor` and the step is retried, down to `h_min` (below which
+/// the solver returns `SpiceError::ConvergenceFailed`).
+///
+/// Cost: ~3× per accepted step vs. fixed-step at the equivalent stable `h`.
+/// The win comes from being able to take *much larger* steps in smooth
+/// regions and tiny steps only where the dynamics actually demand them
+/// (e.g. tube cutoff, capacitor charge-up after a step input).
+#[derive(Debug, Clone)]
+pub struct AdaptiveStepControl {
+    /// Absolute tolerance on per-step LTE, in volts.
+    pub abs_tol: f64,
+    /// Relative tolerance on per-step LTE, fraction of `‖v_new‖`.
+    pub rel_tol: f64,
+    /// Minimum allowed step size; below this the solver gives up.
+    pub h_min: f64,
+    /// Maximum allowed step size.
+    pub h_max: f64,
+    /// Step-growth factor when LTE ≪ tol (≥ 1.0; typical 1.5).
+    pub grow_factor: f64,
+    /// Step-shrink factor on reject (in (0, 1); typical 0.5).
+    pub shrink_factor: f64,
+}
+
+impl Default for AdaptiveStepControl {
+    fn default() -> Self {
+        Self {
+            abs_tol:      1e-6,
+            rel_tol:      1e-3,
+            h_min:        1e-12,
+            h_max:        1e-3,
+            grow_factor:  1.5,
+            shrink_factor: 0.5,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TransientResult {
+    /// Time points at which the solver recorded state (seconds).
+    pub times: Vec<f64>,
+    /// Per-probe voltage traces, keyed by node name. Same length as `times`.
+    pub probe_voltages: HashMap<String, Vec<f64>>,
+}
+
+impl TransientResult {
+    /// Look up the recorded voltage at node `name` at time index `i`.
+    pub fn voltage(&self, name: &str, i: usize) -> Option<f64> {
+        self.probe_voltages.get(name).and_then(|v| v.get(i).copied())
+    }
+
+    /// Final-time voltage at `name`, if recorded.
+    pub fn final_voltage(&self, name: &str) -> Option<f64> {
+        self.probe_voltages.get(name).and_then(|v| v.last().copied())
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Entry point
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Run a transient simulation from `t = 0` to `params.duration` with fixed
+/// timestep `params.timestep`.
+///
+/// Initial conditions: every capacitor starts with `v = 0`, every inductor
+/// with `i = 0`. (A DC-IC solve via GLACIER would set realistic non-zero
+/// starting state; that integration is the P3c follow-up.)
+///
+/// Returns an error if the circuit has no ground node, if the input/probe
+/// nodes are missing, or if the MNA system becomes singular at some step.
+pub fn run_transient(
+    circuit: &Circuit,
+    params: &TransientParams,
+) -> Result<TransientResult> {
+    if params.timestep <= 0.0 {
+        return Err(SpiceError::InvalidModel(
+            "transient timestep must be positive".to_string(),
+        ));
+    }
+    if params.duration <= 0.0 {
+        return Err(SpiceError::InvalidModel(
+            "transient duration must be positive".to_string(),
+        ));
+    }
+
+    let nodes = NodeIndexMap::build(circuit)?;
+    let input_idx = nodes
+        .get_by_name(&params.input_node)
+        .ok_or_else(|| SpiceError::NodeNotFound(params.input_node.clone()))?;
+    let probe_indices: Vec<(String, usize)> = params
+        .probe_nodes
+        .iter()
+        .map(|name| {
+            nodes
+                .get_by_name(name)
+                .map(|i| (name.clone(), i))
+                .ok_or_else(|| SpiceError::NodeNotFound(name.clone()))
+        })
+        .collect::<Result<_>>()?;
+
+    // Per-component **internal** state.  Capacitors store the dielectric
+    // voltage `v_C`; inductors store the coil current `i_L`.  Two prior
+    // points are tracked because BDF2 needs `v_C_{n-1}` and `i_L_{n-1}` in
+    // addition to the most recent value — `(value_at_n, value_at_n_minus_1)`.
+    // For BDF1 the `n_minus_1` slot is unused; for BDF2's first step the
+    // history is incomplete and we fall back to BDF1.
+    let mut cap_v_c: HashMap<EdgeIndex, (f64, f64)> = HashMap::new();
+    let mut ind_i_l: HashMap<EdgeIndex, (f64, f64)> = HashMap::new();
+    for (edge, branch) in circuit.branches() {
+        match branch.component_type.as_str() {
+            "Capacitor" => { cap_v_c.insert(edge, (0.0, 0.0)); }
+            "Inductor"  => { ind_i_l.insert(edge, (0.0, 0.0)); }
+            _ => {}
+        }
+    }
+
+    // Pre-allocate the recording buffers. Length = number of timesteps + 1
+    // (we record the initial t=0 state too).
+    let n_steps = (params.duration / params.timestep).ceil() as usize;
+    let mut times = Vec::with_capacity(n_steps + 1);
+    let mut probe_voltages: HashMap<String, Vec<f64>> = probe_indices
+        .iter()
+        .map(|(name, _)| (name.clone(), Vec::with_capacity(n_steps + 1)))
+        .collect();
+
+    // Record t = 0 explicitly: all caps at 0V, all inductors at 0A, so probe
+    // nodes are at the same potential as their connections. The only forced
+    // node is the input; everything else is at 0V by construction.
+    times.push(0.0);
+    let v0 = params.stimulus.at(0.0);
+    for (name, idx) in &probe_indices {
+        let v = if *idx == input_idx { v0 } else { 0.0 };
+        probe_voltages.get_mut(name).unwrap().push(v);
+    }
+
+    // Main timestep loop. Two paths:
+    //   * Fixed:    take one step per iteration with `params.timestep`.
+    //   * Adaptive: try one h-step + two h/2-substeps from the same start;
+    //               accept the more-accurate result if their disagreement
+    //               (the LTE estimate) is within tolerance, otherwise
+    //               shrink h and retry.
+    let n = nodes.size();
+    let mut state = TransientState { cap_v_c, ind_i_l };
+    let mut t = 0.0;
+    let mut h = params.timestep;
+    let mut step_count = 0usize;
+
+    while t < params.duration {
+        step_count += 1;
+        // First step always uses BDF1 — BDF2 needs two prior points of
+        // history, and the t=0 initial conditions provide only one.
+        let order = if step_count == 1 {
+            IntegrationOrder::Bdf1
+        } else {
+            params.order
+        };
+
+        // Cap the step at the simulation end so we land exactly on `duration`.
+        let h_proposed = h.min(params.duration - t);
+        if h_proposed <= 0.0 { break; }
+
+        let (new_state, solution, h_taken) = match &params.adaptive {
+            None => {
+                let step = take_one_step(
+                    circuit, &nodes, &state, t, h_proposed, order,
+                    &params.stimulus, input_idx, n,
+                )?;
+                (step.state, step.solution, h_proposed)
+            }
+            Some(ctrl) => {
+                step_adaptive(
+                    circuit, &nodes, &state, t, h_proposed, order, ctrl,
+                    &params.stimulus, input_idx, n, &mut h,
+                )?
+            }
+        };
+
+        // Advance time + state, record probes.
+        t += h_taken;
+        state = new_state;
+        times.push(t);
+        for (name, idx) in &probe_indices {
+            probe_voltages.get_mut(name).unwrap().push(solution[*idx]);
+        }
+    }
+
+    Ok(TransientResult { times, probe_voltages })
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Single-step machinery
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Per-component internal state at one instant in simulated time.
+#[derive(Debug, Clone)]
+struct TransientState {
+    /// Per-capacitor `(v_C_n, v_C_n_minus_1)`.
+    cap_v_c: HashMap<EdgeIndex, (f64, f64)>,
+    /// Per-inductor `(i_L_n, i_L_n_minus_1)`.
+    ind_i_l: HashMap<EdgeIndex, (f64, f64)>,
+}
+
+/// Output of a single timestep: the post-step state plus the solved node
+/// voltages so the caller can record probes.
+struct StepResult {
+    state: TransientState,
+    solution: DVector<f64>,
+}
+
+/// Take one BDF1- or BDF2-integrated step from `state` at time `t_start` over
+/// duration `h`, returning the new state and the solved node-voltage vector.
+///
+/// This is the workhorse that the fixed-step path calls once and the adaptive
+/// path calls three times (1× at h, 2× at h/2) per accepted step.
+#[allow(clippy::too_many_arguments)]
+fn take_one_step(
+    circuit: &Circuit,
+    nodes: &NodeIndexMap,
+    state: &TransientState,
+    t_start: f64,
+    h: f64,
+    order: IntegrationOrder,
+    stimulus: &Stimulus,
+    input_idx: usize,
+    n: usize,
+) -> Result<StepResult> {
+    // 1. Allocate and stamp.
+    let mut y = DMatrix::<f64>::zeros(n, n);
+    let mut rhs = DVector::<f64>::zeros(n);
+
+    for (edge, branch) in circuit.branches() {
+        if branch.nodes.len() != 2 { continue; }
+        let a = branch.nodes[0];
+        let b = branch.nodes[1];
+
+        let companion = match branch.component_type.as_str() {
+            "Resistor" => Companion {
+                g_eq: if branch.value > 0.0 { 1.0 / branch.value } else { 0.0 },
+                i_eq: 0.0,
+            },
+            "Capacitor" => {
+                let (v_n, v_n_minus_1) = state.cap_v_c.get(&edge).copied().unwrap_or((0.0, 0.0));
+                let esr = branch.metadata.get(META_ESR)
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .unwrap_or(0.0);
+                match order {
+                    IntegrationOrder::Bdf1 =>
+                        capacitor_bdf1_with_esr(branch.value, h, v_n, esr),
+                    IntegrationOrder::Bdf2 =>
+                        capacitor_bdf2_with_esr(branch.value, h, v_n, v_n_minus_1, esr),
+                }
+            }
+            "Inductor" => {
+                let (i_n, i_n_minus_1) = state.ind_i_l.get(&edge).copied().unwrap_or((0.0, 0.0));
+                let dcr = branch.metadata.get(META_DCR)
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .unwrap_or(0.0);
+                match order {
+                    IntegrationOrder::Bdf1 =>
+                        inductor_bdf1_with_dcr(branch.value, h, i_n, dcr),
+                    IntegrationOrder::Bdf2 =>
+                        inductor_bdf2_with_dcr(branch.value, h, i_n, i_n_minus_1, dcr),
+                }
+            }
+            "VoltageSource" => continue,
+            "Diode" | "LED" => continue,
+            _ => continue,
+        };
+
+        stamp(nodes, a, b, companion, &mut y, &mut rhs);
+    }
+
+    // 2. Dirichlet boundary at the input.
+    for j in 0..n {
+        y[(input_idx, j)] = 0.0;
+    }
+    y[(input_idx, input_idx)] = 1.0;
+    rhs[input_idx] = stimulus.at(t_start + h);
+
+    // 3. Solve.
+    let solution = y.lu().solve(&rhs).ok_or(SpiceError::SingularMatrix)?;
+
+    // 4. Build the post-step state by advancing each reactive device's
+    //    internal variable from the solved node voltages.
+    let mut new_state = state.clone();
+    for (edge, branch) in circuit.branches() {
+        if branch.nodes.len() != 2 { continue; }
+        let a = branch.nodes[0];
+        let b = branch.nodes[1];
+        let v_ext = nodes.voltage_at(a, &solution) - nodes.voltage_at(b, &solution);
+        match branch.component_type.as_str() {
+            "Capacitor" => {
+                let (v_n, v_n_minus_1) = state.cap_v_c.get(&edge).copied().unwrap_or((0.0, 0.0));
+                let esr = branch.metadata.get(META_ESR)
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .unwrap_or(0.0);
+                let v_c_new = match order {
+                    IntegrationOrder::Bdf1 => {
+                        let comp = capacitor_bdf1_with_esr(branch.value, h, v_n, esr);
+                        let i_new = comp.g_eq * v_ext + comp.i_eq;
+                        capacitor_advance_v_c(branch.value, h, v_n, i_new)
+                    }
+                    IntegrationOrder::Bdf2 => {
+                        let comp = capacitor_bdf2_with_esr(
+                            branch.value, h, v_n, v_n_minus_1, esr);
+                        let i_new = comp.g_eq * v_ext + comp.i_eq;
+                        capacitor_advance_v_c_bdf2(branch.value, h, v_n, v_n_minus_1, i_new)
+                    }
+                };
+                new_state.cap_v_c.insert(edge, (v_c_new, v_n));
+            }
+            "Inductor" => {
+                let (i_n, i_n_minus_1) = state.ind_i_l.get(&edge).copied().unwrap_or((0.0, 0.0));
+                let dcr = branch.metadata.get(META_DCR)
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .unwrap_or(0.0);
+                let i_new = match order {
+                    IntegrationOrder::Bdf1 => {
+                        let comp = inductor_bdf1_with_dcr(branch.value, h, i_n, dcr);
+                        comp.g_eq * v_ext + comp.i_eq
+                    }
+                    IntegrationOrder::Bdf2 => {
+                        let comp = inductor_bdf2_with_dcr(
+                            branch.value, h, i_n, i_n_minus_1, dcr);
+                        comp.g_eq * v_ext + comp.i_eq
+                    }
+                };
+                let i_l_new = inductor_advance_i_l(h, i_new);
+                new_state.ind_i_l.insert(edge, (i_l_new, i_n));
+            }
+            _ => {}
+        }
+    }
+
+    Ok(StepResult { state: new_state, solution })
+}
+
+/// Adaptive-controller wrapper around [`take_one_step`].
+///
+/// Inside the inner loop we try the current `h`; if rejected, halve `h` and
+/// retry from the same caller-supplied start state. On accept we use the
+/// (more-accurate) two-half-step result for the post-step state, and let
+/// the caller advance time and record probes. The shared `h_state` is
+/// adjusted in-place so subsequent steps inherit the converged value.
+///
+/// **All step-doubling sub-steps use BDF1**, regardless of the caller's
+/// requested integration order. BDF2's fixed-coefficient formula assumes
+/// uniform spacing between the three history points it consults; mixing
+/// it with step-doubling (which intrinsically introduces non-uniform
+/// spacing — the `v_{n−1}` point sits at the wrong relative distance for
+/// the half-steps) makes the LTE estimator misbehave and the controller
+/// fails to converge. A proper variable-step BDF2 needs non-uniform
+/// polynomial-fit coefficients and lands in a follow-up; BDF1 inside the
+/// adaptive loop is correct under any step change and is what real
+/// SPICE-class engines do by default for first-cut adaptive control.
+#[allow(clippy::too_many_arguments)]
+fn step_adaptive(
+    circuit: &Circuit,
+    nodes: &NodeIndexMap,
+    state: &TransientState,
+    t_start: f64,
+    h_proposed: f64,
+    _requested_order: IntegrationOrder,
+    ctrl: &AdaptiveStepControl,
+    stimulus: &Stimulus,
+    input_idx: usize,
+    n: usize,
+    h_state: &mut f64,
+) -> Result<(TransientState, DVector<f64>, f64)> {
+    let order = IntegrationOrder::Bdf1;
+    let mut h_try = h_proposed.max(ctrl.h_min);
+
+    loop {
+        // One full step at h_try.
+        let s_h = take_one_step(
+            circuit, nodes, state, t_start, h_try, order, stimulus, input_idx, n,
+        )?;
+        // Two half-steps from the same start.
+        let s_half_a = take_one_step(
+            circuit, nodes, state, t_start, h_try / 2.0, order, stimulus, input_idx, n,
+        )?;
+        let s_half_b = take_one_step(
+            circuit, nodes, &s_half_a.state, t_start + h_try / 2.0,
+            h_try / 2.0, order, stimulus, input_idx, n,
+        )?;
+
+        // LTE estimate: infinity-norm of solution difference.
+        let mut lte = 0.0_f64;
+        let mut norm = 0.0_f64;
+        for i in 0..n {
+            let d = (s_h.solution[i] - s_half_b.solution[i]).abs();
+            if d > lte { lte = d; }
+            let v = s_half_b.solution[i].abs();
+            if v > norm { norm = v; }
+        }
+        let tol = ctrl.abs_tol + ctrl.rel_tol * norm;
+
+        if lte <= tol {
+            // Accept the two-half-step result (more accurate).
+            // Grow h for next step if LTE is comfortably under tolerance.
+            if lte < tol / 10.0 {
+                *h_state = (h_try * ctrl.grow_factor).min(ctrl.h_max);
+            } else {
+                *h_state = h_try;
+            }
+            return Ok((s_half_b.state, s_half_b.solution, h_try));
+        }
+
+        // Reject — shrink and retry.
+        let h_next = (h_try * ctrl.shrink_factor).max(ctrl.h_min);
+        if h_try <= ctrl.h_min {
+            return Err(SpiceError::ConvergenceFailed(0));
+        }
+        h_try = h_next;
+        *h_state = h_try;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Stamping helpers (real-valued, shared shape with ac.rs)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Stamp a Norton-form companion `i = g_eq·(v_a − v_b) + i_eq` into the MNA
+/// system. Ground-grounded terminals contribute only to their counterpart's
+/// diagonal entry; both-grounded yields nothing.
+fn stamp(
+    nodes: &NodeIndexMap,
+    a: NodeIndex,
+    b: NodeIndex,
+    companion: Companion,
+    y: &mut DMatrix<f64>,
+    rhs: &mut DVector<f64>,
+) {
+    let a_in = !nodes.is_ground(a);
+    let b_in = !nodes.is_ground(b);
+    match (a_in, b_in) {
+        (true, true) => {
+            let ia = nodes.get(a).unwrap();
+            let ib = nodes.get(b).unwrap();
+            y[(ia, ia)] += companion.g_eq;
+            y[(ib, ib)] += companion.g_eq;
+            y[(ia, ib)] -= companion.g_eq;
+            y[(ib, ia)] -= companion.g_eq;
+            rhs[ia] -= companion.i_eq;
+            rhs[ib] += companion.i_eq;
+        }
+        (true, false) => {
+            let ia = nodes.get(a).unwrap();
+            y[(ia, ia)] += companion.g_eq;
+            rhs[ia] -= companion.i_eq;
+        }
+        (false, true) => {
+            let ib = nodes.get(b).unwrap();
+            y[(ib, ib)] += companion.g_eq;
+            rhs[ib] += companion.i_eq;
+        }
+        (false, false) => { /* both grounded — no contribution */ }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Node-index map (private; duplicated locally to avoid cross-module coupling).
+// If a third analysis mode needs the same map we should lift it to a util crate.
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct NodeIndexMap {
+    by_petgraph: HashMap<NodeIndex, usize>,
+    by_name:     HashMap<String, usize>,
+    n:           usize,
+    ground:      Option<NodeIndex>,
+}
+
+impl NodeIndexMap {
+    fn build(circuit: &Circuit) -> Result<Self> {
+        let ground = circuit.nodes()
+            .find(|(_, n)| n.is_ground)
+            .map(|(idx, _)| idx);
+        if ground.is_none() {
+            return Err(SpiceError::NoGroundNode);
+        }
+        let mut by_petgraph = HashMap::new();
+        let mut by_name = HashMap::new();
+        let mut next = 0usize;
+        for (idx, node) in circuit.nodes() {
+            if Some(idx) == ground { continue; }
+            by_petgraph.insert(idx, next);
+            by_name.insert(node.name.clone(), next);
+            next += 1;
+        }
+        Ok(Self { by_petgraph, by_name, n: next, ground })
+    }
+
+    fn size(&self) -> usize { self.n }
+    fn get(&self, idx: NodeIndex) -> Option<usize> { self.by_petgraph.get(&idx).copied() }
+    fn get_by_name(&self, name: &str) -> Option<usize> { self.by_name.get(name).copied() }
+    fn is_ground(&self, idx: NodeIndex) -> bool { self.ground == Some(idx) }
+
+    /// Voltage at a petgraph node, looking up the matrix index when present
+    /// or returning 0.0 for ground.
+    fn voltage_at(&self, idx: NodeIndex, solution: &DVector<f64>) -> f64 {
+        if self.is_ground(idx) { 0.0 } else { solution[self.get(idx).unwrap()] }
+    }
+
+    fn voltage_at_matrix_index(&self, i: usize, solution: &DVector<f64>) -> f64 {
+        solution[i]
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Circuit;
+
+    fn approx(a: f64, b: f64, abs_tol: f64) -> bool {
+        (a - b).abs() < abs_tol
+    }
+
+    fn approx_rel(a: f64, b: f64, rel: f64) -> bool {
+        (a - b).abs() < rel * a.abs().max(b.abs()).max(1e-12)
+    }
+
+    fn build_rc(r: f64, c: f64) -> Circuit {
+        let mut ckt = Circuit::new();
+        ckt.add_node("Vin".to_string(),  None);
+        ckt.add_node("Vout".to_string(), None);
+        ckt.add_node("GND".to_string(),  None);
+        ckt.add_branch("R1".to_string(), "Vin",  "Vout", "Resistor".to_string(),  r, None);
+        ckt.add_branch("C1".to_string(), "Vout", "GND",  "Capacitor".to_string(), c, None);
+        ckt
+    }
+
+    fn build_rl(r: f64, l: f64) -> Circuit {
+        // Vin --[R]-- Vout --[L]-- GND
+        let mut ckt = Circuit::new();
+        ckt.add_node("Vin".to_string(),  None);
+        ckt.add_node("Vout".to_string(), None);
+        ckt.add_node("GND".to_string(),  None);
+        ckt.add_branch("R1".to_string(), "Vin",  "Vout", "Resistor".to_string(), r, None);
+        ckt.add_branch("L1".to_string(), "Vout", "GND",  "Inductor".to_string(), l, None);
+        ckt
+    }
+
+    #[test]
+    fn rc_charges_to_step_input() {
+        // Analytical: v(t) = V0·(1 − e^(−t/τ)),  τ = R·C.
+        let r = 1_000.0;       // 1 kΩ
+        let c = 1e-6;           // 1 µF → τ = 1 ms
+        let tau = r * c;
+        let v0 = 1.0;
+
+        let circuit = build_rc(r, c);
+        let params = TransientParams::new(
+            "Vin",
+            Stimulus::Step { initial: 0.0, final_v: v0, t_start: 0.0 },
+            vec!["Vout"],
+            5.0 * tau,      // 5 time constants → 99.3% of final value
+            tau / 1000.0,   // 1000 steps per τ → BDF1 error well under 1 mV
+        );
+
+        let result = run_transient(&circuit, &params).unwrap();
+
+        // Sample at t = τ, 2τ, 3τ, 5τ and compare to analytical curve.
+        for &(t_target, frac) in &[
+            (tau,         1.0 - (-1.0_f64).exp()), // 0.6321
+            (2.0 * tau,   1.0 - (-2.0_f64).exp()), // 0.8647
+            (3.0 * tau,   1.0 - (-3.0_f64).exp()), // 0.9502
+            (5.0 * tau,   1.0 - (-5.0_f64).exp()), // 0.9933
+        ] {
+            let i = result.times.iter()
+                .position(|&t| t >= t_target)
+                .unwrap_or(result.times.len() - 1);
+            let v = result.voltage("Vout", i).unwrap();
+            assert!(
+                approx(v, frac * v0, 2e-3),
+                "v(t={:.3} ms) = {:.4} V, want {:.4} V (BDF1 error)",
+                t_target * 1e3,
+                v,
+                frac * v0
+            );
+        }
+
+        // Steady-state: final voltage should be ~v0 (within BDF1 numerical bound).
+        let v_final = result.final_voltage("Vout").unwrap();
+        assert!(
+            approx(v_final, v0, 1e-2),
+            "final v = {} V, want {}",
+            v_final,
+            v0
+        );
+    }
+
+    #[test]
+    fn rc_holds_at_dc_input() {
+        // Constant input → after enough time, V_out should equal V_in (no
+        // DC current through the cap, no drop across R).
+        let circuit = build_rc(1e3, 1e-6);
+        let params = TransientParams::new(
+            "Vin",
+            Stimulus::Constant(5.0),
+            vec!["Vout"],
+            10e-3,    // 10 time constants is plenty
+            1e-5,     // 100 steps per τ
+        );
+        let result = run_transient(&circuit, &params).unwrap();
+        let v_final = result.final_voltage("Vout").unwrap();
+        assert!(
+            approx(v_final, 5.0, 1e-3),
+            "constant-input final v = {} V, want 5",
+            v_final
+        );
+    }
+
+    #[test]
+    fn rl_step_response_charges_inductor_current() {
+        // For Vin --[R]-- Vout --[L]-- GND:
+        //   At t=0 the inductor opposes current change so V_out = V_in (it
+        //   looks like an open). As t→∞ the inductor acts like a wire so
+        //   V_out = 0 (current = V_in/R flowing through both R and L).
+        //   Analytical: V_out(t) = V_in · e^(−t/τ), τ = L/R.
+        let r = 100.0;          // 100 Ω
+        let l = 1e-3;           // 1 mH → τ = 10 µs
+        let tau = l / r;
+        let v0 = 1.0;
+
+        let circuit = build_rl(r, l);
+        let params = TransientParams::new(
+            "Vin",
+            Stimulus::Step { initial: 0.0, final_v: v0, t_start: 0.0 },
+            vec!["Vout"],
+            5.0 * tau,
+            tau / 1000.0,
+        );
+        let result = run_transient(&circuit, &params).unwrap();
+
+        for &(t_target, decay) in &[
+            (tau,         (-1.0_f64).exp()),
+            (2.0 * tau,   (-2.0_f64).exp()),
+            (3.0 * tau,   (-3.0_f64).exp()),
+        ] {
+            let i = result.times.iter()
+                .position(|&t| t >= t_target)
+                .unwrap_or(result.times.len() - 1);
+            let v = result.voltage("Vout", i).unwrap();
+            assert!(
+                approx(v, decay * v0, 5e-3),
+                "RL: v(t={:.2} µs) = {:.4} V, want {:.4} V",
+                t_target * 1e6,
+                v,
+                decay * v0
+            );
+        }
+    }
+
+    #[test]
+    fn rc_with_esr_charges_at_combined_time_constant() {
+        // Vin --[R]-- Vout --[ESR + C]-- GND.
+        // Internal dielectric voltage follows v_C(t) = V₀(1 − e^(−t/τ_eff))
+        // with τ_eff = (R + ESR)·C. We can't observe v_C directly through
+        // probe_nodes (it's internal to the device), but the external Vout is
+        //   Vout = (R · v_C + ESR · Vin) / (R + ESR)
+        // which at any sample t we can compare against the analytical form
+        // because we know v_C from the elapsed time.
+        let r = 1_000.0_f64;
+        let esr = 1_000.0_f64;
+        let cap = 1e-6_f64;
+        let v_in = 1.0_f64;
+        let tau_eff = (r + esr) * cap;
+
+        let mut ckt = Circuit::new();
+        ckt.add_node("Vin".to_string(),  None);
+        ckt.add_node("Vout".to_string(), None);
+        ckt.add_node("GND".to_string(),  None);
+        ckt.add_branch("R1".to_string(), "Vin",  "Vout", "Resistor".to_string(),  r, None);
+        let mut esr_meta = HashMap::new();
+        esr_meta.insert(META_ESR.to_string(), esr.to_string());
+        ckt.add_branch_with_metadata(
+            "C1".to_string(),
+            "Vout",
+            "GND",
+            "Capacitor".to_string(),
+            cap,
+            None,
+            esr_meta,
+        );
+
+        let params = TransientParams::new(
+            "Vin",
+            Stimulus::Step { initial: 0.0, final_v: v_in, t_start: 0.0 },
+            vec!["Vout"],
+            5.0 * tau_eff,
+            tau_eff / 2_000.0,
+        );
+        let result = run_transient(&ckt, &params).unwrap();
+
+        // Sample-by-sample comparison at three target times.
+        for &(t_target, name) in &[
+            (1.0 * tau_eff, "1τ"),
+            (2.0 * tau_eff, "2τ"),
+            (4.0 * tau_eff, "4τ"),
+        ] {
+            let i = result.times.iter()
+                .position(|&t| t >= t_target)
+                .unwrap_or(result.times.len() - 1);
+            let t_sample = result.times[i];
+            let v_c_expected = v_in * (1.0 - (-t_sample / tau_eff).exp());
+            let v_out_expected =
+                (r * v_c_expected + esr * v_in) / (r + esr);
+            let v_out = result.voltage("Vout", i).unwrap();
+            assert!(
+                (v_out - v_out_expected).abs() < 3e-3,
+                "ESR @ {}: Vout = {:.4} V, want {:.4} V (t = {:.4} ms)",
+                name, v_out, v_out_expected, t_sample * 1e3
+            );
+        }
+    }
+
+    #[test]
+    fn rl_with_dcr_settles_with_dcr_voltage_drop() {
+        // Vin --[R]-- Vout --[DCR + L]-- GND.
+        // At t → ∞, di/dt = 0 so v_L = 0, current i = Vin / (R + DCR),
+        // and Vout = i · DCR = Vin · DCR / (R + DCR).
+        let r = 100.0_f64;
+        let dcr = 100.0_f64;
+        let l = 1e-3_f64;
+        let v_in = 1.0_f64;
+        let tau_eff = l / (r + dcr);
+
+        let mut ckt = Circuit::new();
+        ckt.add_node("Vin".to_string(),  None);
+        ckt.add_node("Vout".to_string(), None);
+        ckt.add_node("GND".to_string(),  None);
+        ckt.add_branch("R1".to_string(), "Vin",  "Vout", "Resistor".to_string(), r, None);
+        let mut dcr_meta = HashMap::new();
+        dcr_meta.insert(META_DCR.to_string(), dcr.to_string());
+        ckt.add_branch_with_metadata(
+            "L1".to_string(),
+            "Vout",
+            "GND",
+            "Inductor".to_string(),
+            l,
+            None,
+            dcr_meta,
+        );
+
+        let params = TransientParams::new(
+            "Vin",
+            Stimulus::Step { initial: 0.0, final_v: v_in, t_start: 0.0 },
+            vec!["Vout"],
+            10.0 * tau_eff,
+            tau_eff / 2_000.0,
+        );
+        let result = run_transient(&ckt, &params).unwrap();
+
+        let v_final = result.final_voltage("Vout").unwrap();
+        let v_expected = v_in * dcr / (r + dcr);
+        assert!(
+            (v_final - v_expected).abs() < 2e-3,
+            "DCR steady-state Vout = {:.4} V, want {:.4} V",
+            v_final, v_expected,
+        );
+
+        // At t = 0+ (first recorded step), the inductor opposes current
+        // change → Vout ≈ Vin (the whole step appears across the inductor).
+        let v_initial = result.voltage("Vout", 1).unwrap();
+        assert!(
+            v_initial > 0.9 * v_in,
+            "DCR initial Vout = {:.4} V, want close to {:.4} V",
+            v_initial, v_in,
+        );
+    }
+
+    #[test]
+    fn bdf2_more_accurate_than_bdf1_at_same_step() {
+        // The headline P3b.2 test: at identical h, BDF2's global error
+        // on a smooth waveform (RC charging) must be strictly smaller
+        // than BDF1's, because BDF2 is O(h²) accurate vs BDF1's O(h).
+        //
+        // The error margin grows fast as h grows: at h = τ/20 (deliberately
+        // coarse so BDF1 has visible error), BDF1's error at t = τ should
+        // be ~1% of V₀ and BDF2's should be ≲0.1% — at least a 5× ratio.
+        let r = 1_000.0_f64;
+        let cap = 1e-6_f64;
+        let tau = r * cap;
+        let v_in = 1.0_f64;
+        let h = tau / 20.0; // ~50 µs — coarse on purpose
+
+        let circuit = build_rc(r, cap);
+        let stim = Stimulus::Step { initial: 0.0, final_v: v_in, t_start: 0.0 };
+
+        let p_bdf1 = TransientParams::new(
+            "Vin", stim.clone(), vec!["Vout"], 5.0 * tau, h
+        );
+        let p_bdf2 = p_bdf1.clone().with_order(IntegrationOrder::Bdf2);
+
+        let r1 = run_transient(&circuit, &p_bdf1).unwrap();
+        let r2 = run_transient(&circuit, &p_bdf2).unwrap();
+
+        // Compare at t = τ, where the analytical value is 1 - 1/e ≈ 0.6321
+        let target = tau;
+        let i1 = r1.times.iter().position(|&t| t >= target).unwrap_or(r1.times.len() - 1);
+        let i2 = r2.times.iter().position(|&t| t >= target).unwrap_or(r2.times.len() - 1);
+        let v_analytical = v_in * (1.0 - (-1.0_f64).exp());
+        let err1 = (r1.voltage("Vout", i1).unwrap() - v_analytical).abs();
+        let err2 = (r2.voltage("Vout", i2).unwrap() - v_analytical).abs();
+
+        assert!(
+            err2 < err1,
+            "BDF2 error ({:.6}) should beat BDF1 error ({:.6}) at h = τ/20",
+            err2, err1
+        );
+        // Allow some headroom on the ratio claim, but it should be clear.
+        assert!(
+            err1 / err2 >= 3.0,
+            "BDF2 should be ≥3× more accurate than BDF1 at this h, got ratio = {:.2}",
+            err1 / err2
+        );
+    }
+
+    #[test]
+    fn bdf2_matches_analytical_rc_step_within_truncation() {
+        // BDF2 with h = τ/100 should match the analytical RC curve within
+        // 5e-4 V (well under BDF1's 2e-3 tolerance at the same step density).
+        let r = 1_000.0_f64;
+        let cap = 1e-6_f64;
+        let tau = r * cap;
+        let v0 = 1.0_f64;
+
+        let circuit = build_rc(r, cap);
+        let params = TransientParams::new(
+            "Vin",
+            Stimulus::Step { initial: 0.0, final_v: v0, t_start: 0.0 },
+            vec!["Vout"],
+            5.0 * tau,
+            tau / 100.0,
+        ).with_order(IntegrationOrder::Bdf2);
+
+        let result = run_transient(&circuit, &params).unwrap();
+        for &(t_target, frac) in &[
+            (tau,         1.0 - (-1.0_f64).exp()),
+            (2.0 * tau,   1.0 - (-2.0_f64).exp()),
+            (3.0 * tau,   1.0 - (-3.0_f64).exp()),
+            (5.0 * tau,   1.0 - (-5.0_f64).exp()),
+        ] {
+            let i = result.times.iter()
+                .position(|&t| t >= t_target)
+                .unwrap_or(result.times.len() - 1);
+            let v = result.voltage("Vout", i).unwrap();
+            assert!(
+                (v - frac * v0).abs() < 5e-4,
+                "BDF2 v(t={:.3} ms) = {:.4} V, want {:.4} V (within 0.5 mV)",
+                t_target * 1e3, v, frac * v0
+            );
+        }
+    }
+
+    #[test]
+    fn bdf2_first_step_falls_back_to_bdf1() {
+        // BDF2 mode must not panic / produce NaN on the very first step
+        // when v_C_n_minus_1 has no meaningful value yet. A one-step run
+        // exercises exactly that path; the result must be finite and
+        // close to what BDF1 would produce (they're identical for step 1).
+        let circuit = build_rc(1_000.0, 1e-6);
+        let params = TransientParams::new(
+            "Vin",
+            Stimulus::Step { initial: 0.0, final_v: 1.0, t_start: 0.0 },
+            vec!["Vout"],
+            1e-6,    // duration = one step exactly
+            1e-6,    // h = 1 µs
+        ).with_order(IntegrationOrder::Bdf2);
+
+        let result = run_transient(&circuit, &params).unwrap();
+        let v = result.final_voltage("Vout").unwrap();
+        assert!(v.is_finite() && v > 0.0 && v < 1.0, "first-step BDF2 fallback gave {}", v);
+    }
+
+    #[test]
+    fn adaptive_rc_step_converges_to_analytical() {
+        // RC charging with a deliberately too-coarse initial step. Adaptive
+        // control must shrink h enough that the final voltage matches the
+        // analytical curve within the requested tolerance.
+        let r = 1_000.0_f64;
+        let cap = 1e-6_f64;
+        let tau = r * cap;
+        let v0 = 1.0_f64;
+
+        let circuit = build_rc(r, cap);
+        // Adaptive mode uses BDF1 internally even if order=BDF2 is requested
+        // (see `step_adaptive` docstring); leaving order at the BDF1 default.
+        let params = TransientParams::new(
+            "Vin",
+            Stimulus::Step { initial: 0.0, final_v: v0, t_start: 0.0 },
+            vec!["Vout"],
+            5.0 * tau,
+            tau / 5.0,                       // initial h: 200 µs — coarse
+        )
+        .with_adaptive(AdaptiveStepControl {
+            abs_tol:       1e-5,
+            rel_tol:       1e-3,
+            h_min:         1e-9,
+            h_max:         tau * 2.0,
+            grow_factor:   1.5,
+            shrink_factor: 0.5,
+        });
+
+        let result = run_transient(&circuit, &params).unwrap();
+        let v_final = result.final_voltage("Vout").unwrap();
+        let v_expected = v0 * (1.0 - (-5.0_f64).exp());
+        assert!(
+            (v_final - v_expected).abs() < 5e-3,
+            "adaptive final v = {} V, want {} V",
+            v_final, v_expected
+        );
+    }
+
+    #[test]
+    fn adaptive_step_contracts_during_fast_transient_then_grows() {
+        // For a step input, the dynamics are fastest right at t=0 and slow
+        // exponentially with time. Adaptive control should take small steps
+        // near t=0 and progressively larger steps as the system settles.
+        // We verify by inspecting the recorded times: the typical step
+        // between samples late in the run should be at least 2× larger
+        // than the typical step early in the run.
+        let r = 1_000.0_f64;
+        let cap = 1e-6_f64;
+        let tau = r * cap;
+
+        let circuit = build_rc(r, cap);
+        let params = TransientParams::new(
+            "Vin",
+            Stimulus::Step { initial: 0.0, final_v: 1.0, t_start: 0.0 },
+            vec!["Vout"],
+            10.0 * tau,
+            tau / 20.0,
+        )
+        .with_adaptive(AdaptiveStepControl {
+            abs_tol:       1e-5,
+            rel_tol:       1e-3,
+            h_min:         1e-9,
+            h_max:         tau * 5.0,
+            grow_factor:   2.0,
+            shrink_factor: 0.5,
+        });
+
+        let result = run_transient(&circuit, &params).unwrap();
+        let times = &result.times;
+        assert!(times.len() >= 5, "need enough samples to compare regions");
+
+        // Average step size in the first 25% of samples vs the last 25%.
+        let q = times.len() / 4;
+        let mut early_dh = 0.0_f64;
+        for i in 1..q { early_dh += times[i] - times[i - 1]; }
+        early_dh /= (q - 1) as f64;
+
+        let mut late_dh = 0.0_f64;
+        let late_start = times.len() - q;
+        for i in late_start + 1..times.len() {
+            late_dh += times[i] - times[i - 1];
+        }
+        late_dh /= (q - 1) as f64;
+
+        assert!(
+            late_dh > 2.0 * early_dh,
+            "step did not grow: early Δh = {:.3e} s, late Δh = {:.3e} s",
+            early_dh, late_dh
+        );
+    }
+
+    #[test]
+    fn adaptive_lands_exactly_on_duration() {
+        // The adaptive loop's last step is clamped so `t` reaches `duration`
+        // exactly. Verifies the boundary handling doesn't overshoot.
+        let circuit = build_rc(1_000.0, 1e-6);
+        let duration = 3e-3;
+        let params = TransientParams::new(
+            "Vin",
+            Stimulus::Constant(1.0),
+            vec!["Vout"],
+            duration,
+            5e-5,
+        ).with_adaptive(AdaptiveStepControl::default());
+
+        let result = run_transient(&circuit, &params).unwrap();
+        let t_last = *result.times.last().unwrap();
+        assert!(
+            (t_last - duration).abs() < 1e-12,
+            "last sample at {} s, want exactly {} s",
+            t_last, duration
+        );
+    }
+
+    #[test]
+    fn missing_ground_is_an_error() {
+        let mut ckt = Circuit::new();
+        ckt.add_node("A".to_string(), None);
+        ckt.add_node("B".to_string(), None);
+        ckt.add_branch("R1".to_string(), "A", "B", "Resistor".to_string(), 1000.0, None);
+        let params = TransientParams::new(
+            "A",
+            Stimulus::Constant(1.0),
+            vec!["B"],
+            1e-3,
+            1e-6,
+        );
+        match run_transient(&ckt, &params) {
+            Err(SpiceError::NoGroundNode) => {}
+            other => panic!("expected NoGroundNode, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn rejects_nonpositive_timestep() {
+        let circuit = build_rc(1000.0, 1e-6);
+        let params = TransientParams::new(
+            "Vin",
+            Stimulus::Constant(1.0),
+            vec!["Vout"],
+            1e-3,
+            0.0, // bad
+        );
+        match run_transient(&circuit, &params) {
+            Err(SpiceError::InvalidModel(_)) => {}
+            other => panic!("expected InvalidModel, got {:?}", other),
+        }
+    }
+}

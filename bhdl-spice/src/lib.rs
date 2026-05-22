@@ -36,6 +36,9 @@ pub mod perturbation;
 pub mod fault_injection;
 pub mod intelligent_engine;
 pub mod accurate_models;
+pub mod ac;
+pub mod companion_models;
+pub mod transient;
 pub mod enhanced_glacier_solver;
 pub mod glacier_transient;
 pub mod unified_glacier_solver;
@@ -61,7 +64,16 @@ pub mod glacier_gpu;
 #[cfg(test)]
 mod test_unified;
 
-pub use circuit::{Circuit, Node, Branch, NodeId, ComponentId, Component, META_PARENT_INSTANCE, META_DECOMPOSITION_ROLE, META_COMPONENT_CLASS, META_RDS_ON, META_F_SW, META_T_SW, META_I_QUIESCENT};
+pub use circuit::{
+    Circuit, Node, Branch, NodeId, ComponentId, Component,
+    META_PARENT_INSTANCE, META_DECOMPOSITION_ROLE, META_COMPONENT_CLASS,
+    META_RDS_ON, META_F_SW, META_T_SW, META_I_QUIESCENT,
+    META_TOLERANCE, META_POWER_RATING, META_ESR, META_VOLTAGE_RATING, META_DCR,
+    META_SATURATION_CURRENT, META_EMISSION_COEFFICIENT, META_THERMAL_VOLTAGE,
+    META_FORWARD_VOLTAGE, META_FORWARD_CURRENT,
+    META_MAX_CURRENT, META_MAX_VOLTAGE, META_MAX_POWER, META_TEMP_MIN, META_TEMP_MAX,
+    META_VARIANT,
+};
 pub use components::{ComponentModel, ElectricalLimits};
 pub use analysis::{DcAnalysis, AnalysisResult, NodeVoltages, BranchCurrents};
 pub use extended_analysis::{
