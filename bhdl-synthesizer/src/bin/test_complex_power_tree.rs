@@ -311,22 +311,9 @@ async fn main() -> Result<()> {
         recipe_results.len()
     );
 
-    // Step 3b: Legacy virtual pin expansion (catches any remaining switching regulators)
-    let vpin_results =
-        bhdl_synthesizer::virtual_pin_expander::expand_virtual_pins(&mut netlist);
-
     let post_expansion_instances = netlist.instances.len();
-    let vpin_expanded = post_expansion_instances - post_recipe_instances;
+    let _vpin_expanded = post_expansion_instances - post_recipe_instances;
     let expanded_count = post_expansion_instances - pre_expansion_instances;
-
-    if !vpin_results.is_empty() {
-        println!(
-            "  {} {} legacy vpin expansion(s) for {} regulator(s)",
-            "✓".green(),
-            vpin_expanded,
-            vpin_results.len()
-        );
-    }
 
     // All 4 regulators have expansion blocks:
     // AP63205: L+C_out+C_in+C_bst (4), TPS54331: L+D+C_out+R_fb×2+C_boot (6),

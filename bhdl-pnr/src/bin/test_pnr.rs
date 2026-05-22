@@ -128,7 +128,6 @@ async fn main() -> Result<()> {
         bhdl_synthesizer::intent_attribute_stamper::stamp_intent_attributes(&mut netlist, flow_tracker);
     }
     bhdl_synthesizer::expansion_interpreter::expand_entity_instances(&mut netlist, &analysis.expansion_recipes);
-    bhdl_synthesizer::virtual_pin_expander::expand_virtual_pins(&mut netlist);
     println!("OK ({} instances)", netlist.instances.len());
 
     // 4. GLACIER

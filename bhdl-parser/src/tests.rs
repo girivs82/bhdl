@@ -497,4 +497,41 @@ alias LM1117_33 = LinearRegulator<3.3V>;
         let type_args = find_all_nodes(&result.syntax(), TYPE_ARGS);
         assert_eq!(type_args.len(), 2, "Expected 2 TYPE_ARGS");
     }
+
+    // An entity carrying an `expansion { }` block must still expose every
+    // `pin` declaration as a PIN_DECL node that is a *direct* child of
+    // ENTITY_DEF — that is what `bhdl_ast::Entity::pins()` iterates. A
+    // regression here silently strips pins off any composite/expansion entity
+    // during synthesis (the instance ends up with zero pin instances).
+    #[test]
+    fn entity_with_expansion_block_exposes_pin_decls() {
+        let src = r#"entity SignalTubeStage() {
+    pin IN:  signal in;
+    pin VBB: power in;
+    pin GND: ground;
+    pin OUT: signal out virtual;
+    attribute component_class = "tube_gain_stage";
+    expansion {
+        internal plate: net;
+        VBB -> Rp: Res(22000).1; Rp.2 -> plate;
+        plate -> V: Triode().P;
+    }
+}"#;
+        let result = parse(src);
+        let root = result.syntax();
+        let entity = root.children().find(|n| n.kind() == ENTITY_DEF)
+            .expect("entity with expansion block should parse to an ENTITY_DEF");
+
+        // PIN_DECLs must be DIRECT children of ENTITY_DEF, not buried inside
+        // the EXPANSION_BLOCK or any other wrapper.
+        let direct_pins: Vec<_> = entity.children()
+            .filter(|n| n.kind() == PIN_DECL).collect();
+        assert_eq!(direct_pins.len(), 4,
+            "expected 4 PIN_DECL nodes as direct children of ENTITY_DEF, got {}",
+            direct_pins.len());
+
+        // The expansion block must still be present alongside the pins.
+        assert_eq!(entity.children().filter(|n| n.kind() == EXPANSION_BLOCK).count(), 1,
+            "expected the EXPANSION_BLOCK to be a direct child of ENTITY_DEF");
+    }
 }
