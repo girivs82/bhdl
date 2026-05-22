@@ -122,6 +122,15 @@ impl ComponentModelExtractor {
                 "voltage_source" => {
                     parameters.insert("voltage".to_string(), 5.0); // 5V default
                 }
+                "triode" => {
+                    // Nominal 6SN7 Koren parameters — overridden below by any
+                    // values the entity supplies.
+                    parameters.insert("mu".to_string(), 20.0);
+                    parameters.insert("ex".to_string(), 1.4);
+                    parameters.insert("kg1".to_string(), 1180.0);
+                    parameters.insert("kp".to_string(), 470.0);
+                    parameters.insert("kvb".to_string(), 300.0);
+                }
                 _ => {}
             }
         }
@@ -147,6 +156,12 @@ impl ComponentModelExtractor {
                     "output_voltage" => { parameters.insert("output_voltage".to_string(), num_value); }
                     "current" | "i" => { parameters.insert("current".to_string(), num_value); }
                     "power" | "p" => { parameters.insert("power_rating".to_string(), num_value); }
+                    // Koren triode parameters.
+                    "mu" => { parameters.insert("mu".to_string(), num_value); }
+                    "ex" => { parameters.insert("ex".to_string(), num_value); }
+                    "kg1" => { parameters.insert("kg1".to_string(), num_value); }
+                    "kp" => { parameters.insert("kp".to_string(), num_value); }
+                    "kvb" => { parameters.insert("kvb".to_string(), num_value); }
                     _ => {}
                 }
             }
@@ -401,6 +416,12 @@ impl ComponentModelExtractor {
             ComponentType::OpAmp => {
                 // Create simple op-amp model with default parameters
                 Box::new(OpAmpModel::new(extracted.name.clone(), OpAmpParams::default()))
+            }
+            ComponentType::Triode => {
+                // The triode is emitted as a multi-terminal Circuit device
+                // (DeviceKind::Triode), not via the SpiceModel path — this
+                // cached placeholder is never consulted by the solver.
+                Box::new(ResistorModel::from_value(&extracted.name, 1e9, "triode"))
             }
             ComponentType::Other(type_name) => {
                 match type_name.as_str() {

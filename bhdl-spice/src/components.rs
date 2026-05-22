@@ -43,6 +43,10 @@ pub enum ComponentType {
     CurrentSource,
     OpAmp,
     VoltageRegulator,
+    /// Vacuum triode — a 3-terminal nonlinear device (Koren model). Unlike the
+    /// 2-terminal types it is not stamped as a branch; the converter emits it
+    /// as a `Circuit` device (see `circuit::DeviceKind::Triode`).
+    Triode,
     Other(String),
 }
 

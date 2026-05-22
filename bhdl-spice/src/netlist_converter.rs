@@ -10,6 +10,7 @@ use log::{debug, info, warn};
 use crate::{
     Circuit, ComponentModelExtractor, ExtractedModel,
     circuit::{
+        DeviceKind,
         META_PARENT_INSTANCE, META_DECOMPOSITION_ROLE, META_COMPONENT_CLASS,
         META_RDS_ON, META_F_SW, META_T_SW, META_I_QUIESCENT,
         META_TOLERANCE, META_POWER_RATING, META_ESR, META_VOLTAGE_RATING, META_DCR,
@@ -462,6 +463,7 @@ impl NetlistToSpiceConverter {
             ComponentType::BJT => "BJT".to_string(),
             ComponentType::MOSFET => "MOSFET".to_string(),
             ComponentType::OpAmp => "OpAmp".to_string(),
+            ComponentType::Triode => "Triode".to_string(),
             ComponentType::Other(s) => s.clone(),
         }
     }
@@ -633,6 +635,70 @@ impl NetlistToSpiceConverter {
                       instance_name, internal_resistance, vin_name, vout_name);
             }
 
+            return Ok(());
+        }
+
+        // Vacuum triode — a genuine 3-terminal nonlinear device. It is NOT
+        // decomposed into branches the way a regulator is (it cannot be
+        // expressed as linear primitives); it is emitted as a multi-terminal
+        // `Circuit` device, which GLACIER stamps directly from its inline
+        // Koren parameters.
+        if extracted_model.component_type == ComponentType::Triode {
+            let pin_info = Self::get_pin_net_info(netlist, instance_id);
+
+            // Classify the three terminals by pin name (case-insensitive).
+            // The Koren `terminals` order is [plate, grid, cathode].
+            let find = |names: &[&str]| -> Option<String> {
+                pin_info
+                    .iter()
+                    .find(|p| names.iter().any(|n| p.pin_name.eq_ignore_ascii_case(n)))
+                    .map(|p| p.net_name.clone())
+            };
+            let plate = find(&["P", "PLATE", "ANODE", "A"]);
+            let grid = find(&["G", "GRID"]);
+            let cathode = find(&["K", "CATHODE", "C"]);
+
+            let (plate, grid, cathode) = match (plate, grid, cathode) {
+                (Some(p), Some(g), Some(k)) => (p, g, k),
+                _ => {
+                    warn!(
+                        "Triode {} has unclassifiable pins {:?}; skipping",
+                        instance_name,
+                        pin_info.iter().map(|p| &p.pin_name).collect::<Vec<_>>()
+                    );
+                    return Ok(());
+                }
+            };
+
+            // Koren parameters: prefer extracted values, fall back to the
+            // nominal 6SN7 set (also the component registry's default).
+            let read_param = |name: &str, default: f64| -> f64 {
+                extracted_model.parameters.get(name).copied()
+                    .or_else(|| extracted_model.attributes.get(name)
+                        .and_then(|s| s.parse::<f64>().ok()))
+                    .unwrap_or(default)
+            };
+            let kind = DeviceKind::Triode {
+                mu: read_param("mu", 20.0),
+                ex: read_param("ex", 1.4),
+                kg1: read_param("kg1", 1180.0),
+                kp: read_param("kp", 470.0),
+                kvb: read_param("kvb", 300.0),
+            };
+
+            for n in [&plate, &grid, &cathode] {
+                circuit.add_node(n.clone(), None);
+            }
+            circuit.add_device(
+                instance_name.to_string(),
+                kind,
+                &[plate.as_str(), grid.as_str(), cathode.as_str()],
+                Some(instance_id),
+            );
+            info!(
+                "Added triode {}: plate={}, grid={}, cathode={}",
+                instance_name, plate, grid, cathode
+            );
             return Ok(());
         }
 
@@ -873,11 +939,73 @@ mod tests {
     #[test]
     fn test_component_type_inference() {
         let converter = NetlistToSpiceConverter::new();
-        
+
         assert_eq!(converter.infer_component_type("Resistor"), "resistor");
         assert_eq!(converter.infer_component_type("Res_10k"), "resistor");
         assert_eq!(converter.infer_component_type("Cap_100n"), "capacitor");
         assert_eq!(converter.infer_component_type("LED_Red"), "led");
         assert_eq!(converter.infer_component_type("Diode_1N4148"), "diode");
+    }
+
+    #[test]
+    fn triode_instance_becomes_a_device() {
+        // A triode instance must convert to a multi-terminal Circuit *device*
+        // (DeviceKind::Triode), not a branch. This exercises the whole path:
+        // component_class="triode" → registry → ComponentType::Triode → the
+        // netlist_converter device-emitting case, with the Koren parameters
+        // carried through and the three terminals classified by pin name.
+        let mut netlist = Netlist::new();
+
+        // Triode module: component_class + a non-default (12AU7) Koren set, so
+        // the test also proves the parameters flow through rather than the
+        // 6SN7 fallback defaults being substituted.
+        let triode_mod =
+            netlist.add_module("Triode".to_string(), ModuleKind::PhysicalComponent);
+        if let Some(m) = netlist.modules.get_mut(triode_mod) {
+            m.attributes.insert("component_class".to_string(), "triode".to_string());
+            m.attributes.insert("mu".to_string(), "21.5".to_string());
+            m.attributes.insert("ex".to_string(), "1.3".to_string());
+            m.attributes.insert("kg1".to_string(), "1180".to_string());
+            m.attributes.insert("kp".to_string(), "84".to_string());
+            m.attributes.insert("kvb".to_string(), "300".to_string());
+        }
+        netlist.add_pin(triode_mod, "P".to_string(),
+            bhdl_netlist::PinDirection::InOut, bhdl_netlist::PinType::Signal).unwrap();
+        netlist.add_pin(triode_mod, "G".to_string(),
+            bhdl_netlist::PinDirection::In, bhdl_netlist::PinType::Signal).unwrap();
+        netlist.add_pin(triode_mod, "K".to_string(),
+            bhdl_netlist::PinDirection::InOut, bhdl_netlist::PinType::Signal).unwrap();
+
+        let v1 = netlist.add_instance("V1".to_string(), triode_mod).unwrap();
+        let v1_pins = netlist.create_pin_instances(v1).unwrap();
+
+        let plate = netlist.add_net(Some("PLATE_NET".to_string()));
+        let grid = netlist.add_net(Some("GRID_NET".to_string()));
+        let cathode = netlist.add_net(Some("GND".to_string()));
+        netlist.connect(plate, ConnectionPoint::PinInstance(v1_pins[0])).unwrap();
+        netlist.connect(grid, ConnectionPoint::PinInstance(v1_pins[1])).unwrap();
+        netlist.connect(cathode, ConnectionPoint::PinInstance(v1_pins[2])).unwrap();
+
+        let mut converter = NetlistToSpiceConverter::new();
+        let circuit = converter.convert(&netlist).unwrap();
+
+        // Exactly one device; the triode is not also stamped as a branch.
+        assert_eq!(circuit.devices().len(), 1, "expected one triode device");
+        assert_eq!(circuit.branches().count(), 0, "triode must not emit branches");
+
+        let device = &circuit.devices()[0];
+        assert_eq!(device.name, "V1");
+        match device.kind {
+            DeviceKind::Triode { mu, ex, kg1, kp, kvb } => assert_eq!(
+                (mu, ex, kg1, kp, kvb),
+                (21.5, 1.3, 1180.0, 84.0, 300.0),
+                "Koren parameters did not flow through the converter",
+            ),
+        }
+        // Terminals are [plate, grid, cathode] by the Koren convention.
+        let term = |i: usize| circuit.get_node_name(device.terminals[i]).unwrap();
+        assert_eq!(term(0), "PLATE_NET");
+        assert_eq!(term(1), "GRID_NET");
+        assert_eq!(term(2), "GND");
     }
 }
