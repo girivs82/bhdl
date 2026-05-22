@@ -37,11 +37,21 @@ pub fn parse_value(value_str: &str) -> Option<f64> {
     
     // Get the rest of the string (units)
     let unit_part = &value_str[numeric_part.len()..];
-    
+
     // Parse the numeric value
     if let Ok(mut value) = numeric_part.parse::<f64>() {
+        let unit_trimmed = unit_part.trim();
+
+        // SI / EDA convention: uppercase 'M' is mega (1e6), lowercase 'm' is milli (1e-3).
+        // to_lowercase() below collapses the two, so detect a leading uppercase 'M'
+        // (e.g. "M", "MΩ", "Mohm") from the original string first. "Meg"/"Mega" already
+        // map to mega via the lowercased match arm, so they need no special handling.
+        if unit_trimmed.starts_with('M') && !unit_trimmed.to_lowercase().starts_with("meg") {
+            return Some(value * 1e6);
+        }
+
         // Apply unit multipliers
-        match unit_part.trim().to_lowercase().as_str() {
+        match unit_trimmed.to_lowercase().as_str() {
             // SI prefixes
             "t" | "tera" => value *= 1e12,
             "g" | "giga" => value *= 1e9,
@@ -858,7 +868,33 @@ impl Default for SpiceModelFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
+    #[test]
+    fn test_parse_value_si_prefixes() {
+        fn approx(input: &str, expected: f64) {
+            let got = parse_value(input).unwrap_or_else(|| panic!("parse_value({input:?}) returned None"));
+            assert!(
+                (got - expected).abs() <= expected.abs() * 1e-9,
+                "parse_value({input:?}) = {got}, expected {expected}"
+            );
+        }
+        // Uppercase 'M' is mega (1e6); lowercase 'm' is milli (1e-3).
+        approx("1M", 1e6);
+        approx("1MΩ", 1e6);
+        approx("1Mohm", 1e6);
+        approx("1MOhm", 1e6);
+        approx("2.2Meg", 2.2e6);
+        approx("2.2Mega", 2.2e6);
+        approx("5m", 5e-3);
+        approx("5mΩ", 5e-3);
+        approx("5mV", 5e-3);
+        // Other prefixes unaffected.
+        approx("22k", 22_000.0);
+        approx("22kΩ", 22_000.0);
+        approx("100n", 100e-9);
+        approx("470", 470.0);
+    }
+
     #[test]
     fn test_create_resistor() {
         let factory = SpiceModelFactory::new();
