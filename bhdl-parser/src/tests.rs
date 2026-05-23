@@ -534,4 +534,75 @@ alias LM1117_33 = LinearRegulator<3.3V>;
         assert_eq!(entity.children().filter(|n| n.kind() == EXPANSION_BLOCK).count(), 1,
             "expected the EXPANSION_BLOCK to be a direct child of ENTITY_DEF");
     }
+
+    // ---------------------------------------------------------------
+    // Design blocks (vendor-authored intent → bias values)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn parse_design_block_minimum() {
+        // The smallest legal design block — one assignment.
+        let input = r#"
+            entity Foo() {
+                pin OUT: signal out virtual;
+                pin K:   signal inout;
+                design for current_source {
+                    Rk = 100;
+                }
+            }
+        "#;
+        let result = parse(input);
+        assert!(result.errors.is_empty(), "parse errors: {:?}", result.errors);
+
+        let root = result.syntax();
+        let entity = find_node(&root, ENTITY_DEF).expect("no ENTITY_DEF");
+        let design = entity.children().find(|n| n.kind() == DESIGN_BLOCK)
+            .expect("no DESIGN_BLOCK under entity");
+
+        // The block must contain at least one DESIGN_ASSIGNMENT.
+        let assigns = find_all_nodes(&design, DESIGN_ASSIGNMENT);
+        assert_eq!(assigns.len(), 1, "expected one assignment");
+    }
+
+    #[test]
+    fn parse_design_block_with_const_require_and_assignments() {
+        // A realistic design block: several `const` bindings, a `require`
+        // validation, primitive calls (just IDENT followed by parens in
+        // the grammar — semantics come later), and two assignments.
+        let input = r#"
+            entity Foo() {
+                pin OUT: signal out virtual;
+                pin K:   signal inout;
+                design for amplifier {
+                    const v_p = 150.0;
+                    const i_p = 0.005;
+                    require i_p < 0.05 else "current target too high";
+                    Rp = v_p / i_p;
+                    Rk = 200.0;
+                }
+            }
+        "#;
+        let result = parse(input);
+        assert!(result.errors.is_empty(), "parse errors: {:?}", result.errors);
+
+        let root = result.syntax();
+        let design = find_node(&root, DESIGN_BLOCK).expect("no DESIGN_BLOCK");
+
+        // Verify shape: two const decls, one require, two assignments.
+        let consts = find_all_nodes(&design, PARAM_DECL);
+        assert_eq!(consts.len(), 2, "expected two `const` bindings");
+        let requires = find_all_nodes(&design, DESIGN_REQUIRE_STMT);
+        assert_eq!(requires.len(), 1, "expected one `require` statement");
+        let assigns = find_all_nodes(&design, DESIGN_ASSIGNMENT);
+        assert_eq!(assigns.len(), 2, "expected two child assignments");
+
+        // `design for amplifier` — DESIGN_KW, FOR_KW, IDENT("amplifier").
+        let kw: Vec<_> = design.children_with_tokens()
+            .filter_map(|el| el.into_token())
+            .filter(|t| !t.kind().is_trivia())
+            .take(3)
+            .map(|t| t.kind())
+            .collect();
+        assert_eq!(kw, vec![DESIGN_KW, FOR_KW, IDENT]);
+    }
 }

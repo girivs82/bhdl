@@ -72,6 +72,7 @@ pub enum SyntaxKind {
     LAYER_STACKUP_KW, // layer_stackup
     LAYER_KW,         // layer
     DEFAULT_DESIGN_RULES_KW, // default_design_rules
+    DESIGN_KW,     // design (for entity-level operating-point design blocks)
     CONSTRAIN_KW,  // constrain
     GENERATE_KW,   // generate
     FOR_KW,        // for
@@ -344,6 +345,11 @@ pub enum SyntaxKind {
     // Expansion block nodes (entity-level application circuit recipes)
     EXPANSION_BLOCK,       // expansion { ... }
     EXPANSION_INTERNAL_NET, // internal name: net;
+
+    // Design block nodes (vendor-authored intent → bias values)
+    DESIGN_BLOCK,          // design for <intent> { ... }
+    DESIGN_REQUIRE_STMT,   // require <expr> else "<msg>";
+    DESIGN_ASSIGNMENT,     // <child_name> = <expr>;
 
     // Symbol and layout definition nodes
     SYMBOL_DEF,            // symbol EntityName { ... }

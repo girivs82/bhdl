@@ -48,6 +48,7 @@ pub fn lex_ident_or_kw(lex: &mut Lexer<LexerToken>) -> KeywordOrIdent {
         "constrain" => SyntaxKind::CONSTRAIN_KW,
         "layer_stackup" => SyntaxKind::LAYER_STACKUP_KW,
         "default_design_rules" => SyntaxKind::DEFAULT_DESIGN_RULES_KW,
+        "design" => SyntaxKind::DESIGN_KW,
         "if" => SyntaxKind::IF_KW,
         "else" => SyntaxKind::ELSE_KW,
         "when" => SyntaxKind::WHEN_KW,
@@ -250,6 +251,7 @@ fn keyword_or_ident_callback(lex: &mut Lexer<LexerToken>) -> KeywordOrIdent {
         // Block Keywords (removed v1.0 block keywords)
         "layer_stackup" => SyntaxKind::LAYER_STACKUP_KW,
         "default_design_rules" => SyntaxKind::DEFAULT_DESIGN_RULES_KW,
+        "design" => SyntaxKind::DESIGN_KW,
         "constrain" => SyntaxKind::CONSTRAIN_KW,
 
         // Item Keywords (NEW)
