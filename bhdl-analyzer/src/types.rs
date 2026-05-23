@@ -454,6 +454,11 @@ pub struct AnalysisResult {
     pub monomorphization: crate::passes::MonomorphizationResult,
     /// Expansion recipes extracted from entity `expansion { }` blocks
     pub expansion_recipes: HashMap<String, bhdl_common::ExpansionRecipe>,
+    /// Design recipes extracted from entity `design for <intent> { }` blocks.
+    /// Keyed by entity name → intent name → recipe. When the synthesizer
+    /// runs the intent-driven designer for an instance, it consults this
+    /// map first and falls back to the Rust reference designer on miss.
+    pub design_recipes: HashMap<String, HashMap<String, bhdl_common::design::DesignRecipe>>,
     /// Placement recipes extracted from entity `placement { }` blocks
     pub placement_recipes: HashMap<String, bhdl_common::PlacementRecipe>,
     /// Symbol definitions extracted from `symbol EntityName { }` blocks
@@ -488,6 +493,7 @@ impl Default for AnalysisResult {
             power_domain_expansion: crate::passes::PowerDomainExpansion::new(),
             monomorphization: crate::passes::MonomorphizationResult::new(),
             expansion_recipes: HashMap::new(),
+            design_recipes: HashMap::new(),
             placement_recipes: HashMap::new(),
             symbol_definitions: HashMap::new(),
             layout_definitions: HashMap::new(),
