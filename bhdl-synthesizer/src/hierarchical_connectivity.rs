@@ -763,23 +763,29 @@ fn create_component_instance(
     let component_type = comp_inst.component_type_name()
         .map(|t| t.text().to_string())
         .ok_or_else(|| anyhow::anyhow!("Component instance missing type"))?;
-    
-    // Generate hierarchical reference designator
-    let base_refdes = get_component_refdes_prefix(&component_type);
-    let counter_key = if context.current_path.is_empty() {
-        base_refdes.clone()
+
+    // If the user wrote `<name>: <Type>(...)`, prefer that name. The instance
+    // was (or will be) created by the inference-driven path under this name;
+    // generating a fresh `U<n>` here would duplicate it as a disconnected
+    // child in the netlist.
+    let user_supplied_name = extract_user_instance_name(comp_inst);
+
+    let local_name = if let Some(name) = user_supplied_name {
+        name
     } else {
-        format!("{}.{}", context.current_path_string(), base_refdes)
+        // Anonymous (flow) syntax: generate a hierarchical refdes.
+        let base_refdes = get_component_refdes_prefix(&component_type);
+        let counter_key = if context.current_path.is_empty() {
+            base_refdes.clone()
+        } else {
+            format!("{}.{}", context.current_path_string(), base_refdes)
+        };
+        let counter = context.component_counters
+            .entry(counter_key)
+            .or_insert(0);
+        *counter += 1;
+        format!("{}{}", base_refdes, counter)
     };
-    
-    // Get or increment counter for this component type in this context
-    let counter = context.component_counters
-        .entry(counter_key)
-        .or_insert(0);
-    *counter += 1;
-    
-    // Generate instance name
-    let local_name = format!("{}{}", base_refdes, counter);
     // For hierarchical names, skip the board prefix if it's just "TestBoard" or similar
     let instance_name = if context.current_path.is_empty() {
         local_name.clone()
@@ -1190,6 +1196,31 @@ fn merge_nets(target_net_id: NetId, source_net_id: NetId, netlist: &mut Netlist)
     netlist.nets.remove(source_net_id);
     
     Ok(())
+}
+
+/// Return the user-supplied instance name from `<name>: <Type>(...)` syntax,
+/// or `None` for anonymous flow syntax like `Res(330).1`.
+fn extract_user_instance_name(
+    comp_inst: &bhdl_ast::common::ComponentInst,
+) -> Option<String> {
+    use bhdl_ast::SyntaxKind;
+    let mut first_ident: Option<String> = None;
+    for element in comp_inst.syntax().children_with_tokens() {
+        let Some(token) = element.into_token() else { continue };
+        match token.kind() {
+            SyntaxKind::IDENT => {
+                if first_ident.is_none() {
+                    first_ident = Some(token.text().to_string());
+                }
+            }
+            SyntaxKind::COLON => {
+                // Colon follows the first IDENT → that IDENT is the user's name.
+                return first_ident;
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Get reference designator prefix for a component type
