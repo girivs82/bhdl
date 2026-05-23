@@ -126,6 +126,25 @@ entity TubeCurrentSource() {
         k_int  -> Rk: Res(800).1;     Rk.2 -> K;
         g_int  -> Rg: Res(1000000).1; Rg.2 -> K;
     }
+
+    // Vendor-authored operating-point designer for the current_source intent.
+    // The Rust reference designer in bhdl-spice/src/tube_bias.rs is still
+    // shipped as the default; this `design { }` block — declared right next
+    // to the entity that uses it — overrides the reference when the
+    // synthesizer sees `for current_source(...)` on this entity.
+    //
+    // Method: pick V_pk = 100 V as the design point; invert the Koren
+    // plate-current law for the V_gk that draws the target current there;
+    // R_k follows from cathode self-bias V_k = I · R_k = -V_gk.
+    design for current_source {
+        const v_pk = 100.0;
+        const i_target = intent.current;
+        const i_max = plate_current(tube.mu, tube.ex, tube.kg1, tube.kp, tube.kvb, v_pk, 0.0);
+        require i_target < i_max
+            else "current target exceeds the tube's zero-bias current at V_pk = 100V";
+        const v_gk = koren_inverse_vgk(tube.mu, tube.ex, tube.kg1, tube.kp, tube.kvb, v_pk, i_target);
+        Rk = (0.0 - v_gk) / i_target;
+    }
 }
 
 // Triode switch — operated hard between cutoff and saturation.

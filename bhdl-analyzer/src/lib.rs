@@ -62,7 +62,7 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
     let mut resolved_constants = ResolvedConstants::new();
 
     // Pass 1: Build scope registry with base path for imports
-    let (mut scope_registry, alias_specializations, imported_expansion_recipes, imported_symbol_definitions, imported_layout_definitions, imported_placement_recipes) = pass1::build_scope_registry_with_base(source_file, base_path);
+    let (mut scope_registry, alias_specializations, imported_expansion_recipes, imported_symbol_definitions, imported_layout_definitions, imported_placement_recipes, imported_design_recipes) = pass1::build_scope_registry_with_base(source_file, base_path);
     // Extract legacy data structures for backward compatibility with existing passes
     let global_scope = scope_registry.extract_global_scope();
     let definition_scopes = scope_registry.extract_definition_scopes();
@@ -265,9 +265,12 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
     let expansion_count = expansion_recipes.len();
 
     // Extract design recipes from the main source file. (Imported-file
-    // design recipes will be merged once pass1 grows a parallel loader;
-    // for now the main-file path is enough to land stage 2.)
-    let design_recipes = extract_design_recipes(source_file);
+    // Merge vendor `design { }` recipes: imported files (loaded by pass1)
+    // overlaid with the main file's blocks.
+    let mut design_recipes = imported_design_recipes;
+    for (entity, by_intent) in extract_design_recipes(source_file) {
+        design_recipes.entry(entity).or_default().extend(by_intent);
+    }
 
     // Extract symbol and layout definitions (from imported files + main file)
     let mut symbol_definitions = imported_symbol_definitions;
