@@ -95,6 +95,57 @@ entity SignalTubeStage() {
         IN -> Cin: Cap(0.0000001).1; Cin.2 -> grid;
         plate -> Cout: Cap(0.0000001).1; Cout.2 -> OUT;
     }
+
+    // Vendor-authored operating-point designer for the amplifier intent.
+    // The Stage-5 escape hatch: a Rhai script ported directly from
+    // bhdl-spice/src/tube_bias.rs::ReferenceTriodeDesigner::first_guess.
+    //
+    // The declarative (Stages 1–4) design surface cannot express this
+    // designer because it iterates — 64-point log-grid peak find then
+    // 80-step descending-flank bisection on the gain target. The body
+    // hook gives the vendor a real scripting language for exactly this
+    // class of calculation.
+    //
+    // Method:
+    //   1. Pin V_p = V_bb / 2 (symmetric swing). R_p = V_p / I_p.
+    //   2. Sweep I_p on a log grid; locate the gain peak.
+    //   3. Bisect the descending flank for the target gain.
+    //   4. R_k from cathode self-bias: R_k = −V_gk / I_p.
+    //
+    // The GLACIER refine loop runs after this guess (framework's job).
+    design for amplifier {
+        inputs  { tube; intent; supply; }
+        outputs { Rp; Rk; }
+        body rhai r#"
+            let v_p   = supply.VBB / 2.0;
+            let i_lo  = 0.5e-3;
+            let i_max = plate_current(tube, v_p, 0.0);
+            let i_hi  = if 30e-3 < 0.85 * i_max { 30e-3 } else { 0.85 * i_max };
+
+            // Log-grid peak find.
+            let peak_i = i_lo;
+            let peak_g = 0.0;
+            for k in 0..64 {
+                let frac  = (k.to_float()) / 63.0;
+                let ratio = i_hi / i_lo;
+                let i = i_lo * (ratio ** frac);
+                let g = small_signal_gain(tube, v_p, i);
+                if g > peak_g { peak_g = g; peak_i = i; }
+            }
+
+            // Descending-flank bisection on the gain target.
+            let lo = peak_i;
+            let hi = i_hi;
+            for _step in 0..80 {
+                let mid = (lo * hi).sqrt();
+                let g = small_signal_gain(tube, v_p, mid);
+                if g > intent.gain { lo = mid; } else { hi = mid; }
+            }
+            let i_p  = (lo * hi).sqrt();
+            let v_gk = koren_inverse_vgk(tube, v_p, i_p);
+            #{ Rp: v_p / i_p, Rk: (-v_gk) / i_p }
+        "#
+    }
 }
 
 // Triode current source — a constant-current sink. The cathode resistor R_k
