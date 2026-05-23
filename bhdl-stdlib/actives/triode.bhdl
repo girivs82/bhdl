@@ -169,4 +169,24 @@ entity TubeSwitch() {
         IN  -> V.G;
         GND -> V.K;
     }
+
+    // Vendor-authored operating-point designer for the digital_switch intent.
+    // Mirrors bhdl-spice/src/tube_bias.rs::design_switch and overrides it when
+    // the synthesizer expands a `for digital_switch()` net into this entity.
+    //
+    // Method: at saturation V_gk = 0, so the plate current is the tube's
+    // zero-bias current at the saturated plate voltage V_sat. Pick R_p so
+    // that current pulls the plate from V_bb down to V_sat. At cutoff the
+    // tube draws no current and the plate naturally rests at V_bb, giving
+    // a clean rail-to-rail swing.
+    design for digital_switch {
+        const v_sat = 10.0;
+        const v_bb = supply.VBB;
+        require v_bb > v_sat
+            else "switch needs V_bb > 10 V to leave headroom for saturation";
+        const i_sat = plate_current(tube.mu, tube.ex, tube.kg1, tube.kp, tube.kvb, v_sat, 0.0);
+        require i_sat > 0.0
+            else "tube draws no current at zero bias near saturation — cannot pull the plate down";
+        Rp = (v_bb - v_sat) / i_sat;
+    }
 }

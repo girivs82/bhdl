@@ -79,6 +79,14 @@ impl<'a> DesignContext<'a> {
                 "tube" => self.tube_params.get(field).copied()
                     .ok_or_else(|| DesignEvalError::EvalError(
                         format!("tube.{field} is not in the parameter set"))),
+                // `supply.<PIN>` reads a parent power-pin voltage. The
+                // unqualified bare-name form is also accepted (the legacy
+                // surface from stage 3); `supply.` is the spelling vendors
+                // are encouraged to use because `board.` collides with the
+                // `board` keyword in expression context.
+                "supply" => self.board.get(field).copied()
+                    .ok_or_else(|| DesignEvalError::EvalError(
+                        format!("supply.{field} is not a power pin on the parent"))),
                 _ => Err(DesignEvalError::EvalError(
                     format!("unknown namespace '{ns}' in identifier '{name}'"))),
             };
