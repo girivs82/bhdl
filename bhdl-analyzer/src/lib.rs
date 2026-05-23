@@ -1396,6 +1396,35 @@ pub fn extract_expansion_recipes(
     use bhdl_ast::{Entity, HasName, SyntaxKind};
     use rowan::ast::AstNode;
 
+    // Stage 6: pre-build an in-file index of (entity name → attribute
+    // defaults). When we create an ExpansionInstance referring to a
+    // sibling entity (e.g. SignalTubeStage's expansion creating
+    // `V: Triode()`), we attach that entity's attribute defaults to the
+    // instance so the synthesizer's design-recipe evaluator can read
+    // Koren parameters without round-tripping through netlist.modules
+    // (which only carries attributes for *board-level* instances).
+    //
+    // Cross-file references (a stage entity in one file instantiating a
+    // tube device defined in another file) aren't enriched here — the
+    // ExpansionInstance carries the called name but the attributes
+    // remain empty. pass1's import loader threads recipes through
+    // separately and would need the same enrichment to cover the
+    // cross-file case; for now the in-file path covers the stdlib
+    // workflow where a tube and the stage that uses it live in the
+    // same .bhdl.
+    let mut local_entity_attrs: std::collections::HashMap<String, std::collections::HashMap<String, String>>
+        = std::collections::HashMap::new();
+    for item in source_file.items() {
+        if let Some(entity) = Entity::cast(item.syntax().clone()) {
+            if let Some(name_token) = entity.name() {
+                let attrs = crate::attribute_extraction::extract_module_attributes(&entity);
+                if !attrs.is_empty() {
+                    local_entity_attrs.insert(name_token.text().to_string(), attrs);
+                }
+            }
+        }
+    }
+
     let mut recipes = std::collections::HashMap::new();
 
     // Walk all top-level items looking for entity definitions
@@ -1448,6 +1477,7 @@ pub fn extract_expansion_recipes(
                         conn_stmt.syntax(),
                         &mut recipe,
                         &entity,
+                        &local_entity_attrs,
                     );
                 }
 
@@ -1708,6 +1738,7 @@ fn parse_expansion_connection_stmt(
     node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>,
     recipe: &mut bhdl_common::ExpansionRecipe,
     entity: &bhdl_ast::Entity,
+    local_entity_attrs: &std::collections::HashMap<String, std::collections::HashMap<String, String>>,
 ) {
     use bhdl_common::{ExpansionInstance, ExpansionConnection, ExpansionEndpoint};
     use bhdl_ast::SyntaxKind;
@@ -1751,6 +1782,7 @@ fn parse_expansion_connection_stmt(
             element,
             &entity_pins,
             &recipe.internal_nets,
+            local_entity_attrs,
         );
 
         // Register the instance if it's new
@@ -1780,6 +1812,7 @@ fn parse_expansion_element(
     text: &str,
     entity_pins: &[String],
     internal_nets: &[String],
+    local_entity_attrs: &std::collections::HashMap<String, std::collections::HashMap<String, String>>,
 ) -> (Option<bhdl_common::ExpansionEndpoint>, Option<bhdl_common::ExpansionInstance>) {
     use bhdl_common::{ExpansionEndpoint, ExpansionInstance};
 
@@ -1813,7 +1846,15 @@ fn parse_expansion_element(
                     name: handle.to_string(),
                     component_type: comp_type.to_string(),
                     params,
-                    attributes: std::collections::HashMap::new(),
+                    // Stage 6: pre-populate with the called entity's
+                    // attribute defaults (looked up in the in-file index
+                    // built at the top of extract_expansion_recipes).
+                    // Missing → empty map; an explicit instance-level
+                    // attribute override would land here at a later
+                    // extraction stage (not yet implemented).
+                    attributes: local_entity_attrs.get(comp_type)
+                        .cloned()
+                        .unwrap_or_default(),
                 };
 
                 let endpoint = pin.map(|p| ExpansionEndpoint::InstancePin(handle.to_string(), p));

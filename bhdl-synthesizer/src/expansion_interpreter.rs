@@ -8,7 +8,7 @@
 //! are reused — they remain in `virtual_pin_expander.rs` as `pub(crate)`.
 
 use std::collections::HashMap;
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 use bhdl_common::{ExpansionRecipe, ExpansionConnection, ExpansionEndpoint};
 use bhdl_netlist::{
     ConnectionPoint, InstanceId, ModuleId, NetId, Netlist, PinInstanceId,
@@ -465,9 +465,20 @@ fn intent_driven_values(
                 return values;
             }
             Err(e) => {
-                warn!("Vendor design recipe for '{}'.'{}' rejected ({e}) — \
-                       falling back to the reference designer",
+                // Fail loudly. A vendor explicitly authored this design
+                // block; silently falling back to the Rust reference
+                // designer would mask both buggy scripts and legitimate
+                // vendor rejections (`require` failures) — producing
+                // wrong-looking-but-plausible numbers either way. If the
+                // vendor wants graceful degradation they can author it
+                // inside the recipe; the framework no longer second-
+                // guesses them.
+                error!("Vendor design recipe for '{}'.'{}' failed: {e}",
                     cand.instance_name, recipe.intent_name);
+                error!("  (The Rust reference designer is NOT used as a \
+                        fallback — fix the recipe or remove the design \
+                        block to fall through to the framework default.)");
+                return std::collections::HashMap::new();
             }
         }
     }
@@ -513,7 +524,7 @@ fn intent_driven_values(
 /// falls back to bhdl-spice's nominal 6SN7 defaults so existing tests
 /// and toy boards keep working.
 fn read_device_attributes(
-    netlist: &Netlist,
+    _netlist: &Netlist,
     cand: &ExpansionCandidate,
 ) -> std::collections::HashMap<String, f64> {
     use std::collections::HashMap;
@@ -527,25 +538,28 @@ fn read_device_attributes(
     const DEVICE_CLASSES: &[&str] = &["triode"];
 
     // Walk the expansion candidate's children. Each ExpansionInstance
-    // points at an entity by name; we look that entity's module
-    // definition up in the netlist and read its attribute defaults.
+    // carries the called entity's attribute defaults (populated at
+    // analyzer time by the in-file entity-attribute index in
+    // bhdl-analyzer::extract_expansion_recipes). We don't go through
+    // netlist.modules because module-level attributes are only carried
+    // for board-level instances by the connectivity pass — devices
+    // referenced inside an expansion (the `V: Triode().P` shape) never
+    // become board instances and so their netlist module entries have
+    // empty attribute maps.
     for child in &cand.recipe.instances {
-        // Find the module definition whose name matches the
-        // child's component_type. ExpansionInstance carries the
-        // *target* entity name (e.g. "Triode" / "Triode12AU7"), so a
-        // straight name match is correct.
-        let module = netlist.modules.iter()
-            .find(|(_, m)| m.name == child.component_type)
-            .map(|(_, m)| m);
-        let module = match module { Some(m) => m, None => continue };
-
-        let class = module.attributes.get("component_class").map(String::as_str).unwrap_or("");
+        let class = child.attributes.get("component_class")
+            .map(String::as_str)
+            .unwrap_or("");
         if !DEVICE_CLASSES.contains(&class) { continue; }
+
+        log::debug!("read_device_attributes: candidate '{}' device child '{}' \
+                     resolved to entity '{}' (class={})",
+                    cand.instance_name, child.name, child.component_type, class);
 
         // Found the device child — coerce each numeric-looking attribute
         // value to f64 and stash it. Non-numeric attributes (part_number,
         // kicad_symbol, component_class itself) are skipped silently.
-        for (k, v) in &module.attributes {
+        for (k, v) in &child.attributes {
             if let Ok(f) = v.trim().parse::<f64>() {
                 device.insert(k.clone(), f);
             }

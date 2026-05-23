@@ -1,0 +1,48 @@
+// Tube-rolling end-to-end demo.
+//
+// Two amplifier stages on the same board with the same gain intent
+// (gain = 14) but different tubes — a 6SN7 (medium-µ, high kp) and a
+// 12AU7 / ECC82 (medium-µ, low kp). The same `design for amplifier`
+// recipe ships once in bhdl-stdlib/actives/triode.bhdl on each of the
+// two stage entities; the synthesizer's Stage-6 device-family
+// discovery routes the correct Koren parameters into each script
+// invocation by scanning the expansion child tagged
+// `component_class = "triode"`.
+//
+// This is the worked example of the vendor "tube rolling" workflow:
+// a vendor adding a new tube family writes a device entity + a stage
+// entity that instantiates it, and the same shipped design recipes
+// design correctly for the new tube — no Rust changes, no core PRs.
+//
+// Expected behaviour (printed by the synthesizer):
+//   Vendor design recipe for 'U_6SN7'.'amplifier': 2 value(s)
+//   Vendor design recipe for 'U_ECC82'.'amplifier': 2 value(s)
+// followed by `U_6SN7_Rp / U_6SN7_Rk` and `U_ECC82_Rp / U_ECC82_Rk`
+// resistor values that differ — because the same script evaluates
+// against different Koren parameters per stage.
+
+import { SignalTubeStage, SignalTubeStage12AU7, Triode, Triode12AU7 } from "bhdl-stdlib/actives/triode.bhdl";
+import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+
+board TubeAmpRolled {
+    power VBB = 300V @ 100mA;
+    power SIGIN = 1V @ 1mA;
+    ground GND;
+
+    U_6SN7:  SignalTubeStage();         // expansion uses Triode().P     — mu=20, kp=470
+    U_ECC82: SignalTubeStage12AU7();    // expansion uses Triode12AU7().P — mu=21.5, kp=84
+
+    // Same intent on each stage. The design recipe is bit-identical on
+    // both entities — only the device child differs.
+    net amp_in_6sn7:  SIGIN -> U_6SN7.IN  for amplifier(gain: 14);
+    net amp_in_ecc82: SIGIN -> U_ECC82.IN for amplifier(gain: 14);
+
+    VBB -> U_6SN7.VBB;
+    VBB -> U_ECC82.VBB;
+    U_6SN7.GND  -> GND;
+    U_ECC82.GND -> GND;
+
+    // Plate loads are just placeholders — the design recipe sizes Rp.
+    U_6SN7.OUT  -> Rload_a: Res(470000).1;  Rload_a.2 -> GND;
+    U_ECC82.OUT -> Rload_b: Res(470000).1;  Rload_b.2 -> GND;
+}
