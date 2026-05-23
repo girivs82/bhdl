@@ -605,4 +605,51 @@ alias LM1117_33 = LinearRegulator<3.3V>;
             .collect();
         assert_eq!(kw, vec![DESIGN_KW, FOR_KW, IDENT]);
     }
+
+    #[test]
+    fn parse_design_block_with_body_rhai_hook() {
+        // The Stage-5 foreign-language hook form. `inputs`/`outputs` are
+        // contextual IDENTs inside the design block; `body rhai r#"..."#`
+        // captures the script as a raw string. The script body contains
+        // `"` and `#` characters that the raw-string delimiter handles.
+        let input = r##"
+            entity Foo() {
+                pin OUT: signal out virtual;
+                pin K:   signal inout;
+                design for amplifier {
+                    inputs  { tube; intent; supply; }
+                    outputs { Rp; Rk; }
+                    body rhai r#"
+                        let v_p = supply.VBB / 2.0;
+                        #{ Rp: v_p / 0.005, Rk: 200.0 }
+                    "#
+                }
+            }
+        "##;
+        let result = parse(input);
+        assert!(result.errors.is_empty(), "parse errors: {:?}", result.errors);
+
+        let root = result.syntax();
+        let design = find_node(&root, DESIGN_BLOCK).expect("no DESIGN_BLOCK");
+
+        // The block must contain one inputs decl, one outputs decl,
+        // and one body hook — nothing else.
+        let inputs = find_all_nodes(&design, DESIGN_INPUTS_DECL);
+        assert_eq!(inputs.len(), 1, "expected one inputs decl");
+        let outputs = find_all_nodes(&design, DESIGN_OUTPUTS_DECL);
+        assert_eq!(outputs.len(), 1, "expected one outputs decl");
+        let bodies = find_all_nodes(&design, DESIGN_BODY_HOOK);
+        assert_eq!(bodies.len(), 1, "expected one body hook");
+
+        // The body hook must contain a RAW_STRING token carrying the
+        // script source verbatim — Rhai's `#{ ... }` map literal in
+        // particular would have broken a single-hash raw string.
+        let body = &bodies[0];
+        let raw_str = body.children_with_tokens()
+            .filter_map(|el| el.into_token())
+            .find(|t| t.kind() == RAW_STRING)
+            .expect("no RAW_STRING in body hook");
+        assert!(raw_str.text().contains("#{ Rp:"),
+            "raw string didn't capture script body: {:?}", raw_str.text());
+    }
 }

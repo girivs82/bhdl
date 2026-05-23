@@ -353,6 +353,9 @@ pub enum SyntaxKind {
     DESIGN_BLOCK,          // design for <intent> { ... }
     DESIGN_REQUIRE_STMT,   // require <expr> else "<msg>";
     DESIGN_ASSIGNMENT,     // <child_name> = <expr>;
+    DESIGN_INPUTS_DECL,    // inputs  { name; name; ... }       (Stage 5)
+    DESIGN_OUTPUTS_DECL,   // outputs { name; name; ... }       (Stage 5)
+    DESIGN_BODY_HOOK,      // body <lang> r#"..."#              (Stage 5)
 
     // Symbol and layout definition nodes
     SYMBOL_DEF,            // symbol EntityName { ... }

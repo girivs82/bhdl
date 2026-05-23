@@ -1474,7 +1474,23 @@ impl<'t> Parser<'t> {
                 Some(SyntaxKind::R_BRACE) => break,
                 Some(SyntaxKind::CONST_KW) => self.parse_design_const_decl(),
                 Some(SyntaxKind::REQUIRE_KW) => self.parse_design_require_stmt(),
-                Some(SyntaxKind::IDENT) => self.parse_design_assignment(),
+                // `body <lang> r#"..."#` — Stage-5 foreign-language hook.
+                // `body` is already a keyword (it's also used for symbol
+                // body hints); the design-block context disambiguates.
+                Some(SyntaxKind::BODY_KW) => self.parse_design_body_hook(),
+                Some(SyntaxKind::IDENT) => {
+                    // `inputs`/`outputs` are contextual keywords inside a
+                    // design block: bare IDENTs matched by text so they
+                    // don't pollute the global keyword table or collide
+                    // with stdlib identifiers. Anything else is a child
+                    // assignment (`<child_name> = <expr>;`).
+                    let text = self.peek_text();
+                    match text.as_deref() {
+                        Some("inputs")  => self.parse_design_inputs_decl(),
+                        Some("outputs") => self.parse_design_outputs_decl(),
+                        _ => self.parse_design_assignment(),
+                    }
+                }
                 Some(_) => {
                     self.error("Unexpected token in design block".to_string());
                     self.bump_any();
@@ -1487,6 +1503,79 @@ impl<'t> Parser<'t> {
         }
 
         self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
+    // inputs { name; name; ... }
+    // Names are the values the foreign-language script will see in its
+    // scope (e.g. `tube`, `intent`, `supply`). The list is for the
+    // analyzer's I/O documentation; the evaluator marshals each name into
+    // the script regardless.
+    fn parse_design_inputs_decl(&mut self) {
+        self.builder.start_node(SyntaxKind::DESIGN_INPUTS_DECL.into());
+        self.expect(SyntaxKind::IDENT); // "inputs"
+        self.expect(SyntaxKind::L_BRACE);
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) => break,
+                Some(SyntaxKind::IDENT) => {
+                    self.bump();
+                    self.skip_trivia();
+                    if self.peek() == Some(SyntaxKind::SEMI) { self.bump(); }
+                }
+                Some(_) => {
+                    self.error("Expected identifier or '}' in inputs decl".to_string());
+                    self.bump_any();
+                }
+                None => break,
+            }
+        }
+        self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
+    // outputs { name; name; ... }
+    // Names are the expansion children whose values the script will
+    // populate. Used by the analyzer to validate the script's return-map
+    // keys against the entity's expansion block.
+    fn parse_design_outputs_decl(&mut self) {
+        self.builder.start_node(SyntaxKind::DESIGN_OUTPUTS_DECL.into());
+        self.expect(SyntaxKind::IDENT); // "outputs"
+        self.expect(SyntaxKind::L_BRACE);
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) => break,
+                Some(SyntaxKind::IDENT) => {
+                    self.bump();
+                    self.skip_trivia();
+                    if self.peek() == Some(SyntaxKind::SEMI) { self.bump(); }
+                }
+                Some(_) => {
+                    self.error("Expected identifier or '}' in outputs decl".to_string());
+                    self.bump_any();
+                }
+                None => break,
+            }
+        }
+        self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
+    // body <lang> r#"..."#
+    // <lang> is an IDENT (currently only "rhai"; future languages would
+    // be additional matches in the evaluator). The body is a raw-string
+    // literal — Rust-flavoured r#"..."# — capturing the foreign-language
+    // source verbatim. The closing semicolon is optional; the raw string
+    // itself terminates the clause unambiguously.
+    fn parse_design_body_hook(&mut self) {
+        self.builder.start_node(SyntaxKind::DESIGN_BODY_HOOK.into());
+        self.expect(SyntaxKind::BODY_KW);
+        self.expect(SyntaxKind::IDENT); // language tag, e.g. "rhai"
+        self.expect(SyntaxKind::RAW_STRING);
+        self.skip_trivia();
+        if self.peek() == Some(SyntaxKind::SEMI) { self.bump(); }
         self.builder.finish_node();
     }
 
