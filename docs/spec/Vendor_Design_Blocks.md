@@ -356,3 +356,248 @@ exposes.
 
 The reference designers stay valuable: they're the worked examples
 this whole proposal was designed against.
+
+---
+
+## 11. Amendment — `body` hook for general-purpose vendor logic
+
+> **Status:** Amendment v2 (post-Stage-4). Stages 1–4 shipped the
+> declarative `design { }` block surface (const/require/assign).
+> This amendment adds the escape hatch for vendor logic the
+> declarative surface cannot express.
+
+### 11.1 The problem the declarative surface left open
+
+The reference amplifier designer in `bhdl-spice/src/tube_bias.rs` does
+a 64-point log-grid peak find followed by an 80-step bisection on the
+descending flank. Sections 3–5 above proposed closures-as-arguments
+(`bisect_descending(lo, hi, target, fn(i) { ... })`) to cover this
+without admitting general control flow. That's enough for the
+amplifier specifically — but only for the amplifier. Generalising
+honestly:
+
+- **Pinmux assignment** on an SoC is a constraint problem
+  (essentially small SAT/CSP).
+- **PLL divider chains** are an integer-search problem with
+  per-vendor disqualifying rules.
+- **Power-supply optimisation** is `fsolve`/`minimize` in 1–3D.
+- **Lookup + interpolation** of characterised tables is
+  array-shaped, not closed-form.
+- **State-machine configuration** (DDR training, charger profiles)
+  is straight imperative code over enums and maps.
+
+These do not factor into "closed-form + a single bisection
+primitive." We can either chase them with ever-more-specific HDL
+primitives (`csp_solve`, `integer_grid_search`, `lookup_3d`,
+`fsm_walk`, …) or admit that vendor design logic is sometimes
+**arbitrary imperative code**, and host it.
+
+The cases that *genuinely* need scipy / cvxpy / sympy (filter
+synthesis, RF matching) are designer-driven interactive work whose
+outputs are *numbers a human types into a `design { }` block*. They
+are not synthesis-time `(inputs) → outputs` steps. So the worst case
+the vendor `design` block actually needs to host is **imperative
+code with loops, maps, and the BHDL math primitives** — not the full
+scientific Python stack.
+
+### 11.2 The runtime question (and its trap)
+
+The obvious move — call out to user-installed Python — is the trap.
+Pinning a user's Python version, venv, and package set across a
+heterogeneous EDA-tool install is how KiCad scripting became a
+support burden. Cadence and Synopsys ship their *own* Python for
+exactly this reason. If BHDL tells the user "install Python 3.11,
+configure `uv` first," we have already lost.
+
+The actual answer is **an embedded scripting language baked into the
+BHDL binary**: zero install, zero version selection, zero venv, one
+runtime forever, statically linked.
+
+### 11.3 Choice: Rhai
+
+Concrete language: **Rhai** (`cargo add rhai`).
+
+Rationale:
+
+| Property | Why it matters |
+|---|---|
+| Native Rust crate (~200 KB) | Statically links into `bhdl-synthesizer`. No FFI surface to maintain, no DSO loading, no version drift between vendor authoring and synthesis. |
+| Sandboxed by default | No file I/O, no syscalls, no network — unless we explicitly register host functions for them. A misbehaving vendor script cannot escape into the user's filesystem. |
+| Deterministic fuel limits | Built-in `set_max_operations(n)` and time bounds. A runaway script (infinite loop, accidental quadratic) terminates with a clear synthesis error instead of hanging the build. |
+| Map literals are first-class | `#{ Rp: ..., Rk: ... }` returns directly serialise to the `HashMap<String, f64>` the expansion interpreter already consumes. |
+| JS/Rust-flavoured syntax | Modern devs read it fluently; not the `local`/`end`/1-indexed surprises of Lua. |
+| MIT-licensed | Permissive, ships inside BHDL without licence-compatibility concerns. |
+
+Lua (via `mlua`) is the EDA-precedent runner-up (Synopsys, Mentor
+have used it for decades, though most of their scripting is Tcl).
+We chose Rhai for the Rust-native integration story.
+
+### 11.4 Syntax — `body <lang> r#"..."#`
+
+The `design { }` block grows an alternate body form. The declarative
+const/require/assign surface (Stages 1–4) is preserved verbatim for
+the easy cases; the `body` form is the escape hatch.
+
+```bhdl
+design for amplifier {
+    // Declared I/O. Optional; if omitted, the evaluator passes the
+    // full intent/tube/supply context as-is.
+    inputs  { tube; intent; supply; }
+    outputs { Rp; Rk; }
+
+    // Vendor's imperative code. Single .bhdl file, no sidecar.
+    body rhai r#"
+        let v_p = supply.VBB / 2.0;
+        let i_lo = 0.5e-3;
+        let i_hi = min(30e-3, 0.85 * plate_current(tube, v_p, 0.0));
+
+        // Log-grid peak find.
+        let peak_i = i_lo;
+        let peak_g = 0.0;
+        for k in 0..64 {
+            let i = i_lo * (i_hi / i_lo).pow(k.to_float() / 63.0);
+            let g = small_signal_gain(tube, v_p, i);
+            if g > peak_g { peak_g = g; peak_i = i; }
+        }
+        // Descending-flank bisection on the target gain.
+        let lo = peak_i;
+        let hi = i_hi;
+        for _ in 0..80 {
+            let mid = (lo * hi).sqrt();
+            if small_signal_gain(tube, v_p, mid) > intent.target_gain {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        let i_p = (lo * hi).sqrt();
+        let v_gk = koren_inverse_vgk(tube, v_p, i_p);
+        #{ Rp: v_p / i_p, Rk: (-v_gk) / i_p }
+    "#
+}
+```
+
+A `design` block has **either** declarative statements (Stages 1–4)
+**or** a `body` clause — not both. Mixing is rejected at analyzer
+time; vendors who want both pre-validation and imperative logic put
+the `require` checks inside the script.
+
+Raw-string syntax `r#"..."#` (Rust-flavoured) is added to the
+lexer specifically to make embedded foreign-language source readable:
+arbitrary `"`, `\`, and even `#` inside the script need no escaping;
+the closing delimiter is `"#`. Multi-hash variants (`r##"..."##`)
+handle scripts that themselves contain `"#`.
+
+### 11.5 Host-function surface (frozen contract)
+
+A vendor script sees a fixed, versioned host API. This surface is
+**part of BHDL's public ABI** — adding host functions is permitted,
+changing or removing them is a breaking change. The v1 surface:
+
+**Math primitives** (already in `bhdl_spice`):
+
+| Host function | Returns | Notes |
+|---|---|---|
+| `plate_current(tube, v_pk, v_gk)` | `f64` | Koren plate-current law. |
+| `koren_inverse_vgk(tube, v_pk, target_ip)` | `f64` | Inverse: V_gk that draws `target_ip` at `v_pk`. Negative for Class A. |
+| `conductances(tube, v_pk, v_gk)` | `(f64, f64)` | Tuple `(g_p, g_m)`. |
+| `small_signal_gain(tube, v_pk, i_p)` | `f64` | Convenience: `g_m / (g_p + 1/r_p)` with `r_p = v_pk / i_p`. |
+
+`tube` is an opaque struct the host passes in; vendor scripts treat
+it as a black-box token threaded through these primitives. The
+Koren parameters are also reachable individually via `tube.mu`,
+`tube.ex`, `tube.kg1`, `tube.kp`, `tube.kvb` for vendors who want
+to do the math themselves.
+
+**Generic numerics** (Rhai-native, no host code):
+
+`min`, `max`, `abs`, `sqrt`, `pow`, `log`, `exp`, `sin`, `cos`,
+trigonometry, `to_float()`, array literals, hash maps. Standard
+Rhai library.
+
+**Forbidden** (sandboxing):
+
+No `eval`, no file I/O, no network, no process spawn, no module
+imports. The script sees `inputs` and emits `outputs` — that is the
+entire surface area.
+
+**Fuel limit**: `set_max_operations(1_000_000)` (≈ 10 ms wall time
+for typical scripts). Vendors who need more declare it explicitly:
+
+```bhdl
+design for ddr_train {
+    runtime rhai(max_operations: 10_000_000)
+    body rhai r#" ... "#
+}
+```
+
+### 11.6 Evaluator semantics
+
+When the expansion interpreter encounters a `design for <intent>`
+block with a `body rhai r#"..."#`:
+
+1. Build the Rhai `Engine` (cached per process; one-time
+   registration of host functions).
+2. Marshal inputs into a Rhai `Scope`:
+   - `tube` — the device-family parameter struct (Triode, BJT, …)
+   - `intent` — a map of `{ field: f64 }` from the
+     `intent_<param>` attributes
+   - `supply` — a map of `{ pin_name: voltage }` from the parent's
+     power-pin nets
+3. Apply the recipe's fuel limit (default 1M ops).
+4. `engine.eval_with_scope::<Map>(&mut scope, source)`.
+5. The script's return value MUST be a Rhai `Map` whose keys are
+   exactly the entity's `outputs { … }` declaration (or a subset —
+   missing outputs keep their literal expansion-block defaults).
+6. Marshal the `Map` back into `HashMap<String, f64>` and feed it to
+   the existing expansion-interpreter machinery.
+
+Errors (script panic, fuel exhaustion, type mismatch on return,
+missing output key) propagate as `DesignEvalError::ScriptFailed`.
+The synthesizer then falls through to the Rust reference designer
+(if declared) or fails the synthesis with the script's stderr
+captured verbatim.
+
+### 11.7 Why this preserves every invariant we promised
+
+| Invariant | How it holds |
+|---|---|
+| **Single .bhdl per component family** | The script lives in `body rhai r#"..."#`. No sidecar files. |
+| **No user-managed runtime** | Rhai is statically linked. The user installs BHDL; the runtime is already there. |
+| **Reproducible across machines** | The script is part of the .bhdl, captured by git. The Rhai version is pinned by BHDL's Cargo.lock. |
+| **Sandboxed — vendors cannot escape** | Rhai is sandbox-by-default; we register no I/O host functions. |
+| **Bounded execution time** | Fuel limit kills runaway scripts; synthesis never hangs. |
+| **Rust reference still the safety net** | Declarative block / script failure → falls through to the Rust seam (when one exists). |
+| **Worst-case vendor calculation is hostable** | Loops, maps, conditionals, host primitives. Combinatorial search, numerical optimisation, state machines — all expressible. |
+
+### 11.8 Implementation roadmap (Stage 5)
+
+1. **Lexer**: raw-string literals `r"..."`, `r#"..."#`, `r##"..."##`,
+   … Captures the byte range verbatim. ≈ half day.
+2. **Parser**: `inputs { ... }`, `outputs { ... }`, `body <lang>
+   <rawstr>` clauses inside `design { }`. Mutual-exclusion check
+   against const/require/assign statements. ≈ 1 day.
+3. **AST/analyzer**: `DesignRecipe` grows a `body: Option<BodyHook
+   { lang, source, inputs, outputs }>` variant. ≈ half day.
+4. **Synthesizer Rhai integration**: `cargo add rhai`; build the
+   `Engine` with host functions registered; marshal context, run
+   script, parse map. ≈ 2 days.
+5. **Migrate the amplifier**: `bhdl-stdlib/actives/triode.bhdl`
+   gets `design for amplifier { body rhai r#"..."# }` — direct port
+   of `ReferenceTriodeDesigner::first_guess`. The Rust trait stays
+   as fallback / test seam. ≈ 1 day.
+
+Total ≈ 5 days. Roughly the same as Stages 1–4 combined; the work
+buys end-to-end coverage of the worst-case vendor calculation.
+
+### 11.9 What we are explicitly *not* doing
+
+- **Not hosting scipy/numpy/sympy/cvxpy**. Those are designer-time
+  interactive tools, not synthesis-time vendor logic.
+- **Not loading user-supplied .so / .dll / .py at synthesis time.**
+  All vendor code lives in the .bhdl file, sandboxed by Rhai.
+- **Not building our own scripting language.** Rhai is mature
+  enough that reinventing it would be pure ego cost.
+- **Not letting the body do I/O or call out**. Pure function
+  `(inputs) → outputs`. Vendor wants reproducibility, BHDL wants
+  no surprises.
