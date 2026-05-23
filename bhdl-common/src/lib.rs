@@ -14,6 +14,7 @@ pub mod diagnostic;
 pub mod generics;
 pub mod safety;
 pub mod expansion;
+pub mod design;
 pub mod placement_recipe;
 pub mod symbol;
 pub mod layout_meta;

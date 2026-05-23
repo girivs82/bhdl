@@ -264,6 +264,11 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
     expansion_recipes.extend(main_file_recipes);
     let expansion_count = expansion_recipes.len();
 
+    // Extract design recipes from the main source file. (Imported-file
+    // design recipes will be merged once pass1 grows a parallel loader;
+    // for now the main-file path is enough to land stage 2.)
+    let design_recipes = extract_design_recipes(source_file);
+
     // Extract symbol and layout definitions (from imported files + main file)
     let mut symbol_definitions = imported_symbol_definitions;
     let main_file_symbols = extract_symbol_definitions(source_file);
@@ -420,6 +425,7 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
         power_domain_expansion, // Move ownership (Phase 1: Scalability)
         monomorphization: mono_result, // Move ownership (Pass 2.5)
         expansion_recipes, // Move ownership (Pass 8.5)
+        design_recipes, // Move ownership (Pass 8.5)
         placement_recipes, // Move ownership (Pass 8.5)
         symbol_definitions, // Move ownership (Pass 8.5)
         layout_definitions, // Move ownership (Pass 8.5)
@@ -1452,6 +1458,136 @@ pub fn extract_expansion_recipes(
     }
 
     recipes
+}
+
+/// Walk a source file's entities and pull each `design for <intent> { … }`
+/// block into a [`DesignRecipe`].
+///
+/// Expressions are stored as raw source text — the evaluator (stage 3)
+/// re-parses them. This keeps the extraction step language-agnostic and
+/// avoids embedding expression semantics in `bhdl-common`.
+pub fn extract_design_recipes(
+    source_file: &SourceFile,
+) -> std::collections::HashMap<String, std::collections::HashMap<String, bhdl_common::design::DesignRecipe>> {
+    use bhdl_common::design::{DesignRecipe, DesignStatement};
+    use bhdl_ast::{Entity, HasName, SyntaxKind};
+    use rowan::ast::AstNode;
+
+    let mut all: std::collections::HashMap<String, std::collections::HashMap<String, DesignRecipe>>
+        = std::collections::HashMap::new();
+
+    for item in source_file.items() {
+        let entity = match Entity::cast(item.syntax().clone()) {
+            Some(e) => e,
+            None => continue,
+        };
+        let entity_name = entity.name().map(|t| t.text().to_string()).unwrap_or_default();
+        if entity_name.is_empty() { continue; }
+
+        for design_node in entity.syntax().children()
+            .filter(|n| n.kind() == SyntaxKind::DESIGN_BLOCK)
+        {
+            // Intent name = the first IDENT token after FOR_KW.
+            let intent_name = {
+                let mut after_for = false;
+                let mut name = None;
+                for el in design_node.children_with_tokens() {
+                    if let Some(t) = el.as_token() {
+                        if t.kind() == SyntaxKind::FOR_KW { after_for = true; continue; }
+                        if after_for && t.kind() == SyntaxKind::IDENT {
+                            name = Some(t.text().to_string());
+                            break;
+                        }
+                    }
+                }
+                match name { Some(n) => n, None => continue }
+            };
+
+            let mut recipe = DesignRecipe::new(entity_name.clone(), intent_name.clone());
+            for stmt in design_node.children() {
+                if let Some(s) = extract_design_statement(&stmt) {
+                    recipe.statements.push(s);
+                }
+            }
+
+            if !recipe.statements.is_empty() {
+                println!("  Extracted design recipe for '{entity_name}'.'{intent_name}': \
+                          {} statement(s)", recipe.statements.len());
+                all.entry(entity_name.clone()).or_default()
+                    .insert(intent_name, recipe);
+            }
+        }
+    }
+
+    all
+}
+
+/// Translate a single statement node inside a `design { }` block into a
+/// structured [`DesignStatement`]. Returns `None` for non-statement children
+/// (whitespace, error nodes the parser recovered into).
+fn extract_design_statement(
+    node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>,
+) -> Option<bhdl_common::design::DesignStatement> {
+    use bhdl_common::design::DesignStatement;
+    use bhdl_ast::SyntaxKind;
+    match node.kind() {
+        SyntaxKind::PARAM_DECL => {
+            // const NAME = EXPR;
+            let name = first_token_text(node, SyntaxKind::IDENT)?;
+            let expr = text_between(node, SyntaxKind::EQ, SyntaxKind::SEMI)?;
+            Some(DesignStatement::Let { name, expr })
+        }
+        SyntaxKind::DESIGN_REQUIRE_STMT => {
+            // require EXPR else "MSG";
+            let condition = text_between(node, SyntaxKind::REQUIRE_KW, SyntaxKind::ELSE_KW)?;
+            let raw = first_token_text(node, SyntaxKind::STRING)?;
+            let message = raw.trim_matches('"').to_string();
+            Some(DesignStatement::Require { condition, message })
+        }
+        SyntaxKind::DESIGN_ASSIGNMENT => {
+            // CHILD = EXPR;
+            let child_name = first_token_text(node, SyntaxKind::IDENT)?;
+            let expr = text_between(node, SyntaxKind::EQ, SyntaxKind::SEMI)?;
+            Some(DesignStatement::Assign { child_name, expr })
+        }
+        _ => None,
+    }
+}
+
+/// Return the text of the first token of the given kind under `node`.
+fn first_token_text(
+    node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>,
+    kind: bhdl_ast::SyntaxKind,
+) -> Option<String> {
+    node.children_with_tokens()
+        .filter_map(|el| el.into_token())
+        .find(|t| t.kind() == kind)
+        .map(|t| t.text().to_string())
+}
+
+/// Return the concatenated text of all elements *between* the first token
+/// of kind `start` and the first token of kind `end` (after `start`).
+/// Trims whitespace. None when either anchor is missing.
+fn text_between(
+    node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>,
+    start: bhdl_ast::SyntaxKind,
+    end: bhdl_ast::SyntaxKind,
+) -> Option<String> {
+    let elements: Vec<_> = node.children_with_tokens().collect();
+    let start_idx = elements.iter()
+        .position(|el| el.as_token().map(|t| t.kind() == start).unwrap_or(false))?;
+    let end_idx = elements.iter().enumerate()
+        .skip(start_idx + 1)
+        .find(|(_, el)| el.as_token().map(|t| t.kind() == end).unwrap_or(false))
+        .map(|(i, _)| i)?;
+    let mut text = String::new();
+    for el in &elements[start_idx + 1 .. end_idx] {
+        match el {
+            rowan::NodeOrToken::Node(n) => text.push_str(&n.text().to_string()),
+            rowan::NodeOrToken::Token(t) => text.push_str(t.text()),
+        }
+    }
+    Some(text.trim().to_string())
 }
 
 /// Parse a single CONNECTION_STMT inside an expansion block into instances and connections.
