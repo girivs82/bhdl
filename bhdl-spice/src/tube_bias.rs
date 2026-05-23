@@ -538,4 +538,107 @@ mod tests {
         assert!(op.gain > 4.0 && op.gain < p.mu, "12AU7 gain {:.1}", op.gain);
         assert!(op.v_gk < 0.0 && op.i_plate > 0.0, "12AU7 op point not sane");
     }
+
+    #[test]
+    fn ac_sweep_on_a_designed_stage_lands_the_target_gain() {
+        // The whole simulate → parameterize → *finalize* loop, closed end to
+        // end inside one test. Design a stage for a gain target, build the
+        // FULL common-cathode amplifier (bypass cap, coupling caps, grid
+        // leak, load) around the designer's resistors, run an AC sweep, and
+        // check that the midband |H(jω)| GLACIER + the AC stamp deliver is
+        // the gain that was asked for. If the designer's operating point is
+        // sound, this number IS the small-signal gain the real stage gives.
+        use crate::ac::{run_ac_sweep_nonlinear, AcSweepParams};
+        use crate::components::{ComponentModel, ElectricalLimits};
+        use std::collections::HashMap;
+
+        let p = TriodeParams::sn6_6sn7();
+        let v_bb = 300.0;
+        let target = 14.0;
+        let design = design_amplifier_reference(&p, v_bb, &AmplifierSpec::gain(target))
+            .expect("design failed");
+
+        // Build the stage:
+        //
+        //   Bplus ── Rp ── P ── Cout ── Out ── Rload ── GND
+        //                  │
+        //                  V1 (P, G, K)
+        //                  │            ┌── Ck ── GND
+        //   In ── Cin ── G                 K ── Rk ── GND
+        //                 └── Rg ── GND
+        //
+        // Coupling caps (Cin/Cout) are open at DC and short at midband; the
+        // bypass cap (Ck) shorts Rk at midband, restoring the full
+        // g_m·(R_p ∥ r_p) gain the designer aimed for. Rg (1 MΩ) and Rload
+        // (470 kΩ) are large enough not to load the stage perceptibly.
+        let r_g = 1.0e6;
+        let r_load = 470.0e3;
+        let c_couple = 100e-9; // 100 nF
+        let c_bypass = 100e-6; // 100 µF
+
+        let mut circuit = Circuit::new();
+        for n in ["Bplus", "P", "K", "G", "In", "Out", "GND"] {
+            circuit.add_node(n.to_string(), None);
+        }
+        circuit.add_branch("Vbb".to_string(),  "Bplus", "GND", "VoltageSource".to_string(), v_bb,                 None);
+        circuit.add_branch("Rp".to_string(),   "Bplus", "P",   "Resistor".to_string(),      design.network.r_plate,  None);
+        circuit.add_branch("Rk".to_string(),   "K",     "GND", "Resistor".to_string(),      design.network.r_cathode,None);
+        circuit.add_branch("Ck".to_string(),   "K",     "GND", "Capacitor".to_string(),     c_bypass,             None);
+        circuit.add_branch("Rg".to_string(),   "G",     "GND", "Resistor".to_string(),      r_g,                  None);
+        circuit.add_branch("Cin".to_string(),  "In",    "G",   "Capacitor".to_string(),     c_couple,             None);
+        circuit.add_branch("Cout".to_string(), "P",     "Out", "Capacitor".to_string(),     c_couple,             None);
+        circuit.add_branch("Rload".to_string(),"Out",   "GND", "Resistor".to_string(),      r_load,               None);
+        // 0 V source on `In` gives the input node a DC reference (Cin is
+        // open at DC, so without it In would float and the DC operating-
+        // point solve would be singular). At AC the input Dirichlet wins.
+        circuit.add_branch("Vin".to_string(),  "In",    "GND", "VoltageSource".to_string(), 0.0,                  None);
+        let TriodeParams { mu, ex, kg1, kp, kvb } = p;
+        circuit.add_device("V1".to_string(),
+            DeviceKind::Triode { mu, ex, kg1, kp, kvb }, &["P", "G", "K"], None);
+
+        // GLACIER models for the resistive branches (used for the DC
+        // operating point the AC sweep linearises around).
+        let r = |name: &str, ohms: f64| (name.to_string(),
+            ComponentModel::Resistor { resistance: ohms, tolerance: 1.0,
+                limits: ElectricalLimits::default() });
+        let mut models = HashMap::new();
+        models.insert("Vbb".to_string(), ComponentModel::VoltageSource {
+            voltage: v_bb, internal_resistance: Some(0.0)
+        });
+        models.insert("Vin".to_string(), ComponentModel::VoltageSource {
+            voltage: 0.0, internal_resistance: Some(0.0)
+        });
+        for (k, v) in [r("Rp", design.network.r_plate),
+                       r("Rk", design.network.r_cathode),
+                       r("Rg", r_g), r("Rload", r_load)] {
+            models.insert(k, v);
+        }
+
+        // Sweep a decade of midband audio frequencies where every cap is a
+        // wire and Rk is fully bypassed.
+        let params = AcSweepParams::new("In", "Out", 1_000.0, 10_000.0, 4);
+        let result = run_ac_sweep_nonlinear(&circuit, &models, &params)
+            .expect("AC sweep failed");
+        let mags = result.magnitude();
+        let mid = mags[mags.len() / 2];
+
+        // Within 10 % of the asked-for gain. The remaining slack is the
+        // load-attenuation factor R_load / (R_load + r_p) and the
+        // finite-Ck/coupling-cap rolloff still partly in the sweep band.
+        assert!(
+            (mid - target).abs() < 0.1 * target,
+            "AC midband |H| = {mid:.2}, asked for {target} \
+             (designed Rp = {:.0} Ω, Rk = {:.0} Ω, op-point gain {:.2})",
+            design.network.r_plate, design.network.r_cathode,
+            design.operating_point.gain
+        );
+
+        // Inverting stage — the gain is a *negative* real at midband.
+        let h_mid = result.transfer_function[result.transfer_function.len() / 2];
+        assert!(
+            h_mid.re < 0.0 && h_mid.im.abs() < 0.05 * mid,
+            "midband H = {h_mid} — expected a negative real (common-cathode \
+             inversion), got im/|H| = {:.3}", h_mid.im.abs() / mid
+        );
+    }
 }
