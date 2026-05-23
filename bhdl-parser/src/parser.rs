@@ -79,6 +79,7 @@ fn map_token(token: LexerToken) -> SyntaxKind {
         LexerToken::At => AT,
         LexerToken::Number => NUMBER,
         LexerToken::String => STRING,
+        LexerToken::RawString => RAW_STRING,
         LexerToken::Arrow => ARROW,
         LexerToken::LeftArrow => LEFT_ARROW,
         LexerToken::BiArrow => BI_ARROW,
