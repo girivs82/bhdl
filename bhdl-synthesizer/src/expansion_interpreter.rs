@@ -38,12 +38,29 @@ pub fn expand_entity_instances(
     netlist: &mut Netlist,
     recipes: &HashMap<String, ExpansionRecipe>,
 ) -> Vec<ExpansionResult> {
+    // Convenience wrapper for callers that don't yet thread vendor design
+    // recipes through (test binaries, in-source tests). The wrapper feeds an
+    // empty design-recipe map; vendor `design { }` blocks are then ignored
+    // and intents dispatch to the Rust reference designers, exactly as before.
+    let empty = HashMap::new();
+    expand_entity_instances_with_designs(netlist, recipes, &empty)
+}
+
+/// As [`expand_entity_instances`] but with vendor `design { }` recipes
+/// threaded through. When a candidate's `(entity, intent)` matches a recipe
+/// in `design_recipes`, the evaluator runs that recipe and its outputs
+/// override the Rust reference designer for the matching child names.
+pub fn expand_entity_instances_with_designs(
+    netlist: &mut Netlist,
+    recipes: &HashMap<String, ExpansionRecipe>,
+    design_recipes: &HashMap<String, HashMap<String, bhdl_common::design::DesignRecipe>>,
+) -> Vec<ExpansionResult> {
     if recipes.is_empty() {
         return Vec::new();
     }
 
     // Phase 1 — identify which instances need expansion (immutable scan)
-    let candidates = find_expansion_candidates(netlist, recipes);
+    let candidates = find_expansion_candidates(netlist, recipes, design_recipes);
     if candidates.is_empty() {
         return Vec::new();
     }
@@ -76,12 +93,17 @@ struct ExpansionCandidate {
     param_values: HashMap<String, String>,
     /// Map of parent entity pin names → PinInstanceId
     pin_instances: HashMap<String, PinInstanceId>,
+    /// Vendor-authored `design { }` recipe for this candidate's intent, if
+    /// the entity defines one for that intent. When `Some`, it overrides
+    /// the Rust reference designer for the child names it assigns.
+    design_recipe: Option<bhdl_common::design::DesignRecipe>,
 }
 
 /// Find all instances in the netlist whose module definition matches a recipe.
 fn find_expansion_candidates(
     netlist: &Netlist,
     recipes: &HashMap<String, ExpansionRecipe>,
+    design_recipes: &HashMap<String, HashMap<String, bhdl_common::design::DesignRecipe>>,
 ) -> Vec<ExpansionCandidate> {
     let mut candidates = Vec::new();
 
@@ -164,12 +186,21 @@ fn find_expansion_candidates(
             continue;
         }
 
+        // Resolve a vendor `design { }` recipe (if any) for this candidate's
+        // intent. Looked up by (entity name → intent name).
+        let design_recipe = param_values.get("intent_name")
+            .and_then(|intent| design_recipes
+                .get(&recipe.entity_name)
+                .and_then(|by_intent| by_intent.get(intent))
+                .cloned());
+
         candidates.push(ExpansionCandidate {
             instance_id: inst_id,
             instance_name: inst.name.clone(),
             recipe,
             param_values,
             pin_instances: pin_map,
+            design_recipe,
         });
     }
 
@@ -419,28 +450,68 @@ fn expand_one_instance(
 fn intent_driven_values(
     netlist: &Netlist,
     cand: &ExpansionCandidate,
-) -> std::collections::HashMap<&'static str, f64> {
-    let mut out = std::collections::HashMap::new();
+) -> std::collections::HashMap<String, f64> {
+    // Vendor `design { }` block takes priority over the Rust reference
+    // designer. If the recipe rejects (a `require` failed, an expression
+    // didn't evaluate), warn and fall through to the reference path so the
+    // design still completes with sensible defaults.
+    if let Some(recipe) = &cand.design_recipe {
+        let board = read_board_context(netlist, cand);
+        match crate::design_evaluator::evaluate_recipe(recipe, &cand.param_values, board) {
+            Ok(values) => {
+                info!("Vendor design recipe for '{}'.'{}': {} value(s)",
+                    cand.instance_name, recipe.intent_name, values.len());
+                return values;
+            }
+            Err(e) => {
+                warn!("Vendor design recipe for '{}'.'{}' rejected ({e}) — \
+                       falling back to the reference designer",
+                    cand.instance_name, recipe.intent_name);
+            }
+        }
+    }
+
+    let mut out: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
     match cand.param_values.get("intent_name").map(String::as_str) {
         Some("amplifier") => {
             if let Some(net) = amplifier_bias_design(netlist, cand) {
-                out.insert("Rp", net.r_plate);
-                out.insert("Rk", net.r_cathode);
+                out.insert("Rp".into(), net.r_plate);
+                out.insert("Rk".into(), net.r_cathode);
             }
         }
         Some("current_source") => {
             if let Some(r_k) = current_source_bias_design(cand) {
-                out.insert("Rk", r_k);
+                out.insert("Rk".into(), r_k);
             }
         }
         Some("digital_switch") => {
             if let Some(r_p) = switch_bias_design(netlist, cand) {
-                out.insert("Rp", r_p);
+                out.insert("Rp".into(), r_p);
             }
         }
         _ => {}
     }
     out
+}
+
+/// Read the values of power nets connected to the parent's named pins.
+/// `VBB` → the voltage of the power net at the parent's `VBB` pin, etc.
+/// Used as the design-block's bare-name board context.
+fn read_board_context(
+    netlist: &Netlist,
+    cand: &ExpansionCandidate,
+) -> std::collections::HashMap<String, f64> {
+    let mut board = std::collections::HashMap::new();
+    for (pin_name, &pin_inst) in &cand.pin_instances {
+        if let Some(net_id) = find_net_for_pin_instance(netlist, pin_inst) {
+            if let Some(net) = netlist.nets.get(net_id) {
+                if let bhdl_netlist::NetClass::Power(v) = net.net_class {
+                    board.insert(pin_name.clone(), v);
+                }
+            }
+        }
+    }
+    board
 }
 
 /// Size the cathode degeneration resistor for a `current_source` intent.

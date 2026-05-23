@@ -170,7 +170,7 @@ impl TriodeAmplifierDesigner for ReferenceTriodeDesigner {
         // `gain = g_m·(R_p ∥ r_p)`, `R_p = (V_bb/2)/I_p`.
         let gain_at = |i_p: f64| -> f64 {
             let r_p = v_p / i_p;
-            let v_gk = invert_koren_vgk(params, v_p, i_p);
+            let v_gk = koren_inverse_vgk(params, v_p, i_p);
             let (g_p, g_m) = conductances(params, v_p, v_gk);
             g_m / (g_p + 1.0 / r_p)
         };
@@ -234,7 +234,7 @@ impl TriodeAmplifierDesigner for ReferenceTriodeDesigner {
         };
 
         let r_p = v_p / i_p;
-        let v_gk = invert_koren_vgk(params, v_p, i_p);
+        let v_gk = koren_inverse_vgk(params, v_p, i_p);
         // Cathode self-bias: the grid sits at 0 V, the cathode at −V_gk, and
         // that lift is produced by I_p through R_k.
         let r_k = (-v_gk) / i_p;
@@ -249,7 +249,7 @@ impl TriodeAmplifierDesigner for ReferenceTriodeDesigner {
 /// `plate_current` is continuous and strictly increasing in `V_gk`, so a
 /// bisection on `[−vpk, 0]` is robust (the bias is always negative; the upper
 /// bound 0 is grid-current onset, which the Class-A model does not cross).
-fn invert_koren_vgk(params: &TriodeParams, vpk: f64, target_ip: f64) -> f64 {
+pub fn koren_inverse_vgk(params: &TriodeParams, vpk: f64, target_ip: f64) -> f64 {
     let mut lo = -vpk.max(1.0); // deep cutoff — current ≈ 0
     let mut hi = 0.0;           // maximum current for this vpk
     // If even zero bias cannot supply the demand, clamp at 0.
@@ -323,7 +323,7 @@ pub fn refine(
         // always lands on a real, negative bias.
         let i_ceiling = 0.95 * plate_current(params, op.v_pk.max(1.0), 0.0);
         let i_centre = (v_p_goal / trial.r_plate).min(i_ceiling);
-        let v_gk = invert_koren_vgk(params, op.v_pk.max(1.0), i_centre);
+        let v_gk = koren_inverse_vgk(params, op.v_pk.max(1.0), i_centre);
         let r_k_new = ((-v_gk) / i_centre).clamp(10.0, 1e6);
         // Damp R_k in the log domain to keep the coupled loop stable.
         trial.r_cathode = (net.r_cathode.ln() * 0.4 + r_k_new.ln() * 0.6).exp();
@@ -458,7 +458,7 @@ pub fn design_current_source(
              tube's zero-bias current {i_max:.4} A at V_pk = {v_pk} V — \
              pick a smaller current or a beefier tube")));
     }
-    let v_gk = invert_koren_vgk(params, v_pk, target_current);
+    let v_gk = koren_inverse_vgk(params, v_pk, target_current);
     if v_gk >= 0.0 {
         return Err(SpiceError::AnalysisFailed(
             "tube_bias: current_source design landed on V_gk ≥ 0 — \
@@ -518,10 +518,10 @@ mod tests {
 
     #[test]
     fn koren_inversion_round_trips() {
-        // invert_koren_vgk must be the true inverse of plate_current in V_gk.
+        // koren_inverse_vgk must be the true inverse of plate_current in V_gk.
         let p = TriodeParams::sn6_6sn7();
         for &(vpk, ip) in &[(150.0, 2e-3), (200.0, 5e-3), (250.0, 9e-3)] {
-            let vgk = invert_koren_vgk(&p, vpk, ip);
+            let vgk = koren_inverse_vgk(&p, vpk, ip);
             let ip_back = plate_current(&p, vpk, vgk);
             let rel = (ip_back - ip).abs() / ip;
             assert!(rel < 1e-3, "invert({vpk},{ip}) → vgk={vgk}, Ip={ip_back}");

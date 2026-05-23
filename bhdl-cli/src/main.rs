@@ -663,9 +663,10 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
 
     // Expand entity instances via expansion { } blocks (new declarative approach)
     // Runs BEFORE legacy vpin expander so it takes priority
-    let recipe_results = bhdl_synthesizer::expansion_interpreter::expand_entity_instances(
+    let recipe_results = bhdl_synthesizer::expansion_interpreter::expand_entity_instances_with_designs(
         &mut netlist,
         &analysis.expansion_recipes,
+        &analysis.design_recipes,
     );
     if !recipe_results.is_empty() {
         println!("  {} expansion blocks applied for {} entity instance(s)",
@@ -896,8 +897,8 @@ async fn run_layout(
     }
 
     // 4. Expand
-    bhdl_synthesizer::expansion_interpreter::expand_entity_instances(
-        &mut netlist, &analysis.expansion_recipes,
+    bhdl_synthesizer::expansion_interpreter::expand_entity_instances_with_designs(
+        &mut netlist, &analysis.expansion_recipes, &analysis.design_recipes,
     );
     println!("  {} Expansion: {} instances", "✓".green(), netlist.instances.len());
 
@@ -1002,8 +1003,8 @@ async fn run_spice(source_file: &SourceFile, analysis_type: &str, _output: Optio
     if let Some(ref flow_tracker) = analysis_result.flow_tracker {
         bhdl_synthesizer::intent_attribute_stamper::stamp_intent_attributes(&mut netlist, flow_tracker);
     }
-    bhdl_synthesizer::expansion_interpreter::expand_entity_instances(
-        &mut netlist, &analysis_result.expansion_recipes);
+    bhdl_synthesizer::expansion_interpreter::expand_entity_instances_with_designs(
+        &mut netlist, &analysis_result.expansion_recipes, &analysis_result.design_recipes);
 
     // Create unified analysis data and augment with SPICE information
     let mut analysis_data = AnalysisData::default();
