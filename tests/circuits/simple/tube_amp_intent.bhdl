@@ -1,0 +1,27 @@
+// Intent-driven tube gain stage.
+//
+// The stage is not given component values — it is given an *intent*:
+// `for amplifier(gain: 15)`. bhdl designs the operating point (the plate-
+// load and cathode-bias resistors) so the expanded common-cathode stage
+// actually delivers a gain of 15. This is the simulate → parameterize →
+// finalize loop reaching the HDL surface.
+import { SignalTubeStage } from "bhdl-stdlib/actives/triode.bhdl";
+import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+
+board TubeAmpIntent {
+    power VBB = 300V @ 100mA;
+    power SIGIN = 1V @ 1mA;
+    ground GND;
+
+    U1: SignalTubeStage();
+
+    // The amplifier intent rides the net into the stage's input.
+    net amp_in: SIGIN -> U1.IN
+        for amplifier(gain: 15);
+
+    VBB -> U1.VBB;
+    U1.GND -> GND;
+
+    U1.OUT -> Rload: Res(470000).1;
+    Rload.2 -> GND;
+}

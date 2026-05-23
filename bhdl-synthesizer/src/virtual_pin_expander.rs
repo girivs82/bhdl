@@ -38,10 +38,14 @@ pub(crate) fn find_or_create_module(
     name: &str,
     pins: &[(&str, bool)],
 ) -> ModuleId {
-    // Check if module already exists with matching pin names
+    // Check if a *physical-component* module of this name already exists.
+    // The match must be limited to PhysicalComponent — an imported entity
+    // module of the same name (kind = Module, a logical definition) would
+    // otherwise be reused, and the converter silently skips Module-kind
+    // instances, so the expansion child would never reach the SPICE circuit.
     let required_pin_names: Vec<&str> = pins.iter().map(|(n, _)| *n).collect();
     'outer: for (mod_id, mod_def) in &netlist.modules {
-        if mod_def.name == name {
+        if mod_def.name == name && mod_def.kind == ModuleKind::PhysicalComponent {
             // Verify pin names match — a stdlib "Ind" with "1"/"2" must not
             // be reused when the caller needs "IN"/"OUT".
             if mod_def.pins.len() == pins.len() {

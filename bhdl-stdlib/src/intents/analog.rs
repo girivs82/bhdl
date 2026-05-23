@@ -292,3 +292,61 @@ impl IntentFunction for SignalAmplificationIntent {
         ]
     }
 }
+
+/// Amplifier intent for a gain stage.
+///
+/// `for amplifier(gain: N)` declares that a stage must deliver a small-signal
+/// voltage gain of `N`. It carries no component values — the synthesizer's
+/// operating-point designer (see `bhdl-spice/src/tube_bias.rs`) computes the
+/// bias network from the intent. The grammar surface for the
+/// simulate → parameterize → finalize loop.
+pub struct AmplifierIntent;
+
+impl IntentFunction for AmplifierIntent {
+    fn name(&self) -> &str {
+        "amplifier"
+    }
+
+    fn resolve(&self, params: &[IntentParam]) -> Result<IntentResult, String> {
+        // Gain — named `gain` or the first positional argument.
+        let gain = params.iter().find_map(|p| match p {
+            IntentParam::Named(name, IntentValue::Number(v, _)) if name == "gain" => Some(*v),
+            _ => None,
+        }).or_else(|| params.first().and_then(|p| match p {
+            IntentParam::Positional(IntentValue::Number(v, _)) => Some(*v),
+            _ => None,
+        }));
+
+        let gain = gain.ok_or_else(||
+            "amplifier() requires a gain parameter, e.g. amplifier(gain: 15)".to_string())?;
+        if gain <= 0.0 {
+            return Err(format!("amplifier() gain must be positive, got {gain}"));
+        }
+
+        Ok(IntentResult {
+            sim_mode: SimMode::AnalogRequired,
+            synthesis_hints: vec![
+                SynthesisHint::Custom(format!(
+                    "Design the stage operating point for a voltage gain of {gain}")),
+            ],
+            validation_rules: vec![
+                ValidationRule {
+                    condition: "gain_within_spec".to_string(),
+                    error_message: format!("Stage must achieve a voltage gain of {gain}"),
+                },
+            ],
+            tool_scope: ToolScope::All,
+        })
+    }
+
+    fn param_metadata(&self) -> Vec<ParamMetadata> {
+        vec![
+            ParamMetadata {
+                name: "gain".to_string(),
+                param_type: ParamType::Number,
+                required: true,
+                default_value: None,
+            },
+        ]
+    }
+}

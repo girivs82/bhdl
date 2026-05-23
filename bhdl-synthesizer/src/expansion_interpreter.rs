@@ -201,6 +201,11 @@ fn expand_one_instance(
         .map(|i| i.attributes.clone())
         .unwrap_or_default();
 
+    // Intent-driven operating-point design: when the parent carries an
+    // `amplifier` intent, run the tube-bias designer; its computed plate and
+    // cathode resistors then replace the expansion block's literal defaults.
+    let designed_bias = amplifier_bias_design(netlist, cand);
+
     for exp_inst in &cand.recipe.instances {
         let child_name = format!("{}_{}", base, exp_inst.name);
 
@@ -211,8 +216,17 @@ fn expand_one_instance(
         // Evaluate parameter expressions by substituting entity params
         let mut attrs: Vec<(&str, String)> = Vec::new();
 
-        // Set value attribute from first param
-        if let Some(first_param) = exp_inst.params.first() {
+        // Set the value attribute. An intent-driven design overrides the
+        // expansion block's literal for the resistors it computed (Rp/Rk);
+        // every other child keeps its declared value.
+        let designed_value = designed_bias.and_then(|net| match exp_inst.name.as_str() {
+            "Rp" => Some(net.r_plate),
+            "Rk" => Some(net.r_cathode),
+            _ => None,
+        });
+        if let Some(v) = designed_value {
+            attrs.push(("value", format!("{v:.3}")));
+        } else if let Some(first_param) = exp_inst.params.first() {
             let resolved = resolve_param_expression(first_param, &cand.param_values, &cand.recipe.param_defaults);
             attrs.push(("value", resolved));
         }
@@ -396,6 +410,65 @@ fn expand_one_instance(
             .map(|n| format!("{}_{}", base, n))
             .collect(),
     })
+}
+
+/// Run the intent-driven operating-point designer for an `amplifier` intent.
+///
+/// If `cand`'s parent instance carries `intent_name = "amplifier"`, this reads
+/// the B+ rail (from the power net on the parent's `VBB` pin) and the gain
+/// target (`intent_gain`), runs `bhdl_spice::tube_bias`, and returns the
+/// computed plate/cathode resistor network. Returns `None` when there is no
+/// amplifier intent or the inputs cannot be resolved — the caller then keeps
+/// the expansion block's literal component values.
+fn amplifier_bias_design(
+    netlist: &Netlist,
+    cand: &ExpansionCandidate,
+) -> Option<bhdl_spice::tube_bias::BiasNetwork> {
+    use bhdl_spice::tube_bias::{design_amplifier_reference, AmplifierSpec};
+    use bhdl_spice::triode::TriodeParams;
+
+    if cand.param_values.get("intent_name").map(String::as_str) != Some("amplifier") {
+        return None;
+    }
+
+    // B+ supply: the power voltage of the net on the parent's VBB pin.
+    let vbb_pin = *cand.pin_instances.get("VBB")?;
+    let vbb_net = find_net_for_pin_instance(netlist, vbb_pin)?;
+    let v_bb = match &netlist.nets.get(vbb_net)?.net_class {
+        bhdl_netlist::NetClass::Power(v) => *v,
+        _ => {
+            warn!("amplifier intent on '{}': VBB pin is not on a power rail \
+                   — keeping expansion defaults", cand.instance_name);
+            return None;
+        }
+    };
+
+    // Gain target from the stamped intent (absent ⇒ a default Class-A point).
+    let spec = match cand.param_values.get("intent_gain")
+        .and_then(|s| s.parse::<f64>().ok())
+    {
+        Some(g) => AmplifierSpec::gain(g),
+        None => AmplifierSpec::default_class_a(),
+    };
+
+    // The SignalTubeStage expands a default 6SN7 triode.
+    let params = TriodeParams::sn6_6sn7();
+    match design_amplifier_reference(&params, v_bb, &spec) {
+        Ok(d) => {
+            info!(
+                "Intent-driven bias for '{}': gain {:.1}, V_plate {:.0} V → \
+                 Rp {:.0} Ω, Rk {:.0} Ω",
+                cand.instance_name, d.operating_point.gain,
+                d.operating_point.v_plate, d.network.r_plate, d.network.r_cathode
+            );
+            Some(d.network)
+        }
+        Err(e) => {
+            warn!("amplifier intent on '{}': {} — keeping expansion defaults",
+                cand.instance_name, e);
+            None
+        }
+    }
 }
 
 /// Resolve a parameter expression by substituting entity parameter values.
