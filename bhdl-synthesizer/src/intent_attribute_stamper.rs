@@ -49,10 +49,26 @@ pub fn stamp_intent_attributes(
         // Resolve stage metadata: find which rail and what order this intent maps to
         let (stage_rail, stage_order) = resolve_stage_info(&intent.name, &flow.nets, rail_stage_map);
 
-        // Find all netlist instances whose names appear in this flow's component list
+        // Component-role intents (amplifier, switch, current_source) designate
+        // ONE component on the flow — the sink the role applies to. Stamping
+        // every node-mate would contaminate adjacent stages in a cascade: the
+        // intermediate net `U1.OUT -> U2.IN  for amplifier(gain: 8)` would
+        // smear gain-8 onto U1 too. For these intents, take only the flow's
+        // last component (the sink). Network-shape intents (output_filtering,
+        // control_loop, noise_filtering, …) keep the original "stamp every
+        // component on the flow" semantics — the whole network IS the role.
+        let is_component_role_intent = matches!(
+            intent.name.as_str(),
+            "amplifier" | "switch" | "current_source"
+        );
+        let target_names: Vec<&String> = if is_component_role_intent {
+            flow.components.last().into_iter().collect()
+        } else {
+            flow.components.iter().collect()
+        };
         let matching_instances: Vec<_> = netlist.instances.iter()
             .filter(|(_, inst)| {
-                flow.components.iter().any(|c| c == &inst.name)
+                target_names.iter().any(|c| *c == &inst.name)
             })
             .map(|(id, inst)| (id, inst.name.clone()))
             .collect();
