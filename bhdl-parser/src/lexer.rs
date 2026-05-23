@@ -210,8 +210,18 @@ pub enum LexerToken {
     #[regex(r"[0-9]+(?:_[0-9]+)*(?:\.[0-9]+(?:_[0-9]+)*)?", priority = 1)] 
     Number,
     // String literal regex
-    #[regex(r#""([^"\\]|\\.)*""#, priority = 1)] 
+    #[regex(r#""([^"\\]|\\.)*""#, priority = 1)]
     String,
+
+    // Raw-string literal: `r"..."`, `r#"..."#`, `r##"..."##`, ...
+    // Used for embedding foreign-language source (Rhai scripts) verbatim
+    // inside a .bhdl file: no escape sequences, no surprises. The opening
+    // `r` and zero-or-more `#` characters before the leading `"` must be
+    // matched by the same hash count at close (`"###...`). Lexer regex
+    // matches `r` + hashes + `"` to start the literal; the callback
+    // scans forward for the matching close delimiter and bumps past it.
+    #[regex(r#"r#*""#, callback = raw_string_callback, priority = 2)]
+    RawString,
 
     #[token("->")] Arrow,
     #[token("<-")] LeftArrow,   // Left arrow for port mapping
@@ -231,6 +241,29 @@ pub enum LexerToken {
 
     // Error token (Logos handles this internally now)
     // Error, // Removed explicit Error variant
+}
+
+// Callback for raw-string literals (`r"..."`, `r#"..."#`, `r##"..."##`, …).
+//
+// The Logos regex matched `r` + `n` hashes + `"` where `n` ≥ 0. The
+// matching close is `"` + the same `n` hashes. Scan the remainder of the
+// input for that close pattern and bump the lexer past it, returning the
+// full literal as a single token. If the close pattern is never found,
+// return `None` so Logos emits a lexer error spanning the unterminated
+// literal — keeps a runaway raw string from swallowing the rest of the
+// file silently.
+fn raw_string_callback(lex: &mut Lexer<LexerToken>) -> Option<()> {
+    let opener = lex.slice();
+    // `opener` is `r` + n hashes + `"`. The matching close is `"` then
+    // n hashes — build it dynamically. n = opener.len() − 2.
+    let n_hashes = opener.len().saturating_sub(2);
+    let mut close = String::with_capacity(1 + n_hashes);
+    close.push('"');
+    for _ in 0..n_hashes { close.push('#'); }
+    let rest = lex.remainder();
+    let close_pos = rest.find(&close)?;
+    lex.bump(close_pos + close.len());
+    Some(())
 }
 
 fn keyword_or_ident_callback(lex: &mut Lexer<LexerToken>) -> KeywordOrIdent {
@@ -453,6 +486,49 @@ mod tests {
         assert!(tokens.iter().any(|t| matches!(t, Ok(LexerToken::KOhmUnicode))));
         assert!(tokens.iter().any(|t| matches!(t, Ok(LexerToken::UFUnicode))));
         assert!(tokens.iter().any(|t| matches!(t, Ok(LexerToken::MHzUnit))));
+    }
+
+    #[test]
+    fn lex_raw_string_no_hashes() {
+        // The simplest raw string: `r"..."` — same delimiters as a regular
+        // string but no escape processing. Verifies the zero-hashes case.
+        let input = r#"r"hello""#;
+        let mut lexer = LexerToken::lexer(input);
+        let tok = lexer.next().unwrap();
+        assert!(matches!(tok, Ok(LexerToken::RawString)),
+            "expected RawString, got {tok:?}");
+        assert_eq!(lexer.slice(), r#"r"hello""#);
+        assert!(lexer.next().is_none());
+    }
+
+    #[test]
+    fn lex_raw_string_with_hashes() {
+        // The `r#"..."#` form lets the body contain bare `"` — exactly
+        // what an embedded Rhai script needs (`#{...}` map literals,
+        // string concatenation, etc.). Body here contains a quote and a
+        // backslash; both pass through verbatim.
+        let input = r##"r#"let s = "hi\n"; s"#"##;
+        let mut lexer = LexerToken::lexer(input);
+        let tok = lexer.next().unwrap();
+        assert!(matches!(tok, Ok(LexerToken::RawString)),
+            "expected RawString, got {tok:?}");
+        // The full literal — including the `r#"` and `"#` — is one token.
+        assert_eq!(lexer.slice(), r##"r#"let s = "hi\n"; s"#"##);
+        assert!(lexer.next().is_none());
+    }
+
+    #[test]
+    fn lex_raw_string_nested_hash_quote() {
+        // Body contains `"#`, so a single-hash delimiter would close early.
+        // Verifies the multi-hash variant lets vendors embed whatever
+        // characters their script needs.
+        let input = r###"r##"contains "#"##"###;
+        let mut lexer = LexerToken::lexer(input);
+        let tok = lexer.next().unwrap();
+        assert!(matches!(tok, Ok(LexerToken::RawString)),
+            "expected RawString, got {tok:?}");
+        assert_eq!(lexer.slice(), r###"r##"contains "#"##"###);
+        assert!(lexer.next().is_none());
     }
 
     #[test]

@@ -183,6 +183,7 @@ fn map_token(token: LexerToken) -> SyntaxKind {
         LexerToken::At => SyntaxKind::AT,
         LexerToken::Number => SyntaxKind::NUMBER,
         LexerToken::String => SyntaxKind::STRING,
+        LexerToken::RawString => SyntaxKind::RAW_STRING,
         LexerToken::Arrow => SyntaxKind::ARROW,
         LexerToken::LeftArrow => SyntaxKind::LEFT_ARROW,
         LexerToken::BiArrow => SyntaxKind::BI_ARROW,

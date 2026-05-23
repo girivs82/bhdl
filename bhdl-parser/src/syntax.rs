@@ -13,6 +13,9 @@ pub enum SyntaxKind {
     IDENT,          // Identifier
     NUMBER,         // Numeric literal (incl. units)
     STRING,         // String literal
+    RAW_STRING,     // Raw string literal (r"...", r#"..."#, …) — used to
+                    // embed foreign-language source (Rhai design block
+                    // bodies) verbatim without escaping.
     ERROR_TOKEN,    // Unrecognized token
 
     // Punctuation
