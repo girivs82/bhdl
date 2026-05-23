@@ -38,6 +38,7 @@ pub fn register_stdlib_intents(registry: &mut IntentRegistry) {
     registry.register(Box::new(analog::LevelShiftingIntent));
     registry.register(Box::new(analog::VoltageDivisionIntent));
     registry.register(Box::new(analog::SignalAmplificationIntent));
+    registry.register(Box::new(analog::AmplifierIntent));
 
     // Register digital intents
     registry.register(Box::new(digital::SignalBufferingIntent));
