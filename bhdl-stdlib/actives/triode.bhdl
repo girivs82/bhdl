@@ -96,3 +96,34 @@ entity SignalTubeStage() {
         plate -> Cout: Cap(0.0000001).1; Cout.2 -> OUT;
     }
 }
+
+// Triode current source — a constant-current sink. The cathode resistor R_k
+// is *unbypassed* (no bypass capacitor), so the negative feedback through it
+// is fully active at signal frequencies, presenting a high output impedance
+// at the plate. R_k sets the quiescent plate current.
+//
+// `for current_source(current: I)` on a net into OUT asks the designer to
+// size R_k for I_p = I at a moderate operating V_pk; the actual V_pk is then
+// determined by whatever the user wires above the OUT pin.
+entity TubeCurrentSource() {
+    pin OUT: signal out virtual;   // top of the current source — the plate
+    pin K:   signal inout;          // cathode return (typically to ground)
+
+    attribute component_class = "tube_current_source";
+
+    expansion {
+        // Internal nodes of the degenerated common-cathode topology.
+        internal g_int: net;
+        internal k_int: net;
+
+        // Triode: plate at OUT, grid and cathode on internal nets.
+        OUT    -> V: Triode().P;
+        g_int  -> V.G;
+        k_int  -> V.K;
+
+        // Cathode degeneration (no bypass cap — that's the whole point);
+        // grid-leak to the cathode return so V_g sits at K's potential.
+        k_int  -> Rk: Res(800).1;     Rk.2 -> K;
+        g_int  -> Rg: Res(1000000).1; Rg.2 -> K;
+    }
+}

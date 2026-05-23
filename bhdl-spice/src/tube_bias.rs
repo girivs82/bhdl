@@ -425,6 +425,50 @@ pub fn design_amplifier_reference(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Current-source designer
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// V_pk assumed by [`design_current_source`] when picking the operating
+/// point. The current source delivers ≈ I_p across a wide range of V_pk above
+/// the knee; this is the design point — the user's external circuit chooses
+/// the actual V_pk by whatever it wires above OUT.
+const CURRENT_SOURCE_V_PK_DESIGN: f64 = 100.0;
+
+/// Design the cathode degeneration resistor for a triode current source.
+///
+/// Topology: grid at the cathode return (0 V locally via R_g), cathode at
+/// `V_k = I_p · R_k`, so `V_gk = −I_p · R_k`. To draw `target_current` at a
+/// representative `V_pk` ([`CURRENT_SOURCE_V_PK_DESIGN`]), invert the Koren
+/// equation for the `V_gk` that yields it, then `R_k = −V_gk / I_p`. The
+/// unbypassed `R_k` then provides the negative feedback that gives the
+/// current source its high output impedance at signal frequencies.
+pub fn design_current_source(
+    params: &TriodeParams,
+    target_current: f64,
+) -> Result<f64> {
+    if target_current <= 0.0 {
+        return Err(SpiceError::InvalidModel(format!(
+            "tube_bias: current target {target_current:.4} A must be positive")));
+    }
+    let v_pk = CURRENT_SOURCE_V_PK_DESIGN;
+    let i_max = plate_current(params, v_pk, 0.0);
+    if target_current >= i_max {
+        return Err(SpiceError::AnalysisFailed(format!(
+            "tube_bias: current target {target_current:.4} A exceeds the \
+             tube's zero-bias current {i_max:.4} A at V_pk = {v_pk} V — \
+             pick a smaller current or a beefier tube")));
+    }
+    let v_gk = invert_koren_vgk(params, v_pk, target_current);
+    if v_gk >= 0.0 {
+        return Err(SpiceError::AnalysisFailed(
+            "tube_bias: current_source design landed on V_gk ≥ 0 — \
+             not realizable with cathode self-bias".to_string()));
+    }
+    let r_k = -v_gk / target_current;
+    Ok(r_k)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -640,6 +684,79 @@ mod tests {
             "midband H = {h_mid} — expected a negative real (common-cathode \
              inversion), got im/|H| = {:.3}", h_mid.im.abs() / mid
         );
+    }
+
+    #[test]
+    fn designed_current_source_sinks_the_target_current() {
+        // Design R_k for a 5 mA target, build the actual current-sink
+        // circuit around it (V_bb → R_load → plate, triode, K → R_k → GND,
+        // grid at 0 V via R_g), GLACIER-solve, and verify the plate current
+        // GLACIER reports really is ≈ 5 mA. The simulate-verifies-design
+        // closure for the current_source intent.
+        let p = TriodeParams::sn6_6sn7();
+        let target_i = 5e-3;
+        let r_k = design_current_source(&p, target_i).expect("design failed");
+
+        let v_bb = 300.0;
+        // Pick R_load so V_pk lands near the designer's assumed 100 V at
+        // the target current: V_bb − I·R_load − I·R_k = V_pk gives
+        // R_load ≈ (V_bb − V_pk) / I = (300 − 100) / 5 mA = 40 kΩ. (A
+        // current-source designer that took the user's load into account
+        // would be insensitive to this; this one assumes its design point.)
+        let r_load = 40.0e3;
+        let r_g = 1.0e6;
+
+        let mut circuit = Circuit::new();
+        for n in ["Bplus", "P", "K", "G", "GND"] {
+            circuit.add_node(n.to_string(), None);
+        }
+        circuit.add_branch("Vbb".to_string(),   "Bplus", "GND", "VoltageSource".to_string(), v_bb,   None);
+        circuit.add_branch("Rload".to_string(), "Bplus", "P",   "Resistor".to_string(),      r_load, None);
+        circuit.add_branch("Rk".to_string(),    "K",     "GND", "Resistor".to_string(),      r_k,    None);
+        circuit.add_branch("Rg".to_string(),    "G",     "GND", "Resistor".to_string(),      r_g,    None);
+        let TriodeParams { mu, ex, kg1, kp, kvb } = p;
+        circuit.add_device("V1".to_string(),
+            DeviceKind::Triode { mu, ex, kg1, kp, kvb }, &["P", "G", "K"], None);
+
+        let mut solver = GlacierSolver::new(circuit);
+        solver.enable_multi_region = false;
+        solver.add_model("Vbb".to_string(), ComponentModel::VoltageSource {
+            voltage: v_bb, internal_resistance: Some(0.0) });
+        for (n, ohms) in [("Rload", r_load), ("Rk", r_k), ("Rg", r_g)] {
+            solver.add_model(n.to_string(), ComponentModel::Resistor {
+                resistance: ohms, tolerance: 1.0, limits: ElectricalLimits::default() });
+        }
+        let sols = solver.solve().expect("GLACIER solve failed");
+        let sol = sols.iter()
+            .min_by(|a, b| a.final_error.partial_cmp(&b.final_error).unwrap())
+            .unwrap();
+        let v_plate    = sol.node_voltages.get("P").copied().unwrap_or(0.0);
+        let v_cathode  = sol.node_voltages.get("K").copied().unwrap_or(0.0);
+        let i_through  = (v_bb - v_plate) / r_load; // current through R_load
+        let i_cathode  = v_cathode / r_k;            // current through R_k
+        // Both should equal the plate current (no grid current in the model).
+        assert!(
+            (i_through - target_i).abs() < 0.10 * target_i,
+            "I through R_load = {:.3} mA, asked for {:.3} mA",
+            i_through * 1e3, target_i * 1e3
+        );
+        assert!(
+            (i_cathode - target_i).abs() < 0.10 * target_i,
+            "I through R_k = {:.3} mA, asked for {:.3} mA",
+            i_cathode * 1e3, target_i * 1e3
+        );
+        // Cathode lift is the negative bias that sets the operating point.
+        assert!(v_cathode > 0.0 && v_cathode < 10.0,
+            "cathode at {:.2} V — implausible bias", v_cathode);
+    }
+
+    #[test]
+    fn current_source_target_above_zero_bias_is_rejected() {
+        // Asking for more current than the tube delivers even at V_gk = 0
+        // cannot be realized with cathode self-bias — must error cleanly.
+        let p = TriodeParams::sn6_6sn7();
+        let err = design_current_source(&p, 1.0); // 1 A — way beyond any tube
+        assert!(err.is_err(), "1 A from a 6SN7 must be rejected");
     }
 
     #[test]

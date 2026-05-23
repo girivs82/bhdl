@@ -201,10 +201,11 @@ fn expand_one_instance(
         .map(|i| i.attributes.clone())
         .unwrap_or_default();
 
-    // Intent-driven operating-point design: when the parent carries an
-    // `amplifier` intent, run the tube-bias designer; its computed plate and
-    // cathode resistors then replace the expansion block's literal defaults.
-    let designed_bias = amplifier_bias_design(netlist, cand);
+    // Intent-driven operating-point design: when the parent carries a tube
+    // intent, run the matching designer; its computed component values then
+    // replace the expansion block's literal defaults for the children whose
+    // names appear in the returned map.
+    let intent_design = intent_driven_values(netlist, cand);
 
     for exp_inst in &cand.recipe.instances {
         let child_name = format!("{}_{}", base, exp_inst.name);
@@ -217,13 +218,9 @@ fn expand_one_instance(
         let mut attrs: Vec<(&str, String)> = Vec::new();
 
         // Set the value attribute. An intent-driven design overrides the
-        // expansion block's literal for the resistors it computed (Rp/Rk);
-        // every other child keeps its declared value.
-        let designed_value = designed_bias.and_then(|net| match exp_inst.name.as_str() {
-            "Rp" => Some(net.r_plate),
-            "Rk" => Some(net.r_cathode),
-            _ => None,
-        });
+        // expansion block's literal for the children it computed; every
+        // other child keeps its declared value.
+        let designed_value = intent_design.get(exp_inst.name.as_str()).copied();
         if let Some(v) = designed_value {
             attrs.push(("value", format!("{v:.3}")));
         } else if let Some(first_param) = exp_inst.params.first() {
@@ -410,6 +407,65 @@ fn expand_one_instance(
             .map(|n| format!("{}_{}", base, n))
             .collect(),
     })
+}
+
+/// Dispatch the intent-driven designer for the parent instance and collect
+/// the child-name → computed-value overrides it produces.
+///
+/// Each tube intent owns its own designer in `bhdl_spice::tube_bias`. The
+/// returned map keys correspond to the names of the expansion-block
+/// children whose `value` attribute the design wants to replace (e.g.
+/// "Rp"/"Rk" for an amplifier, just "Rk" for a current source).
+fn intent_driven_values(
+    netlist: &Netlist,
+    cand: &ExpansionCandidate,
+) -> std::collections::HashMap<&'static str, f64> {
+    let mut out = std::collections::HashMap::new();
+    match cand.param_values.get("intent_name").map(String::as_str) {
+        Some("amplifier") => {
+            if let Some(net) = amplifier_bias_design(netlist, cand) {
+                out.insert("Rp", net.r_plate);
+                out.insert("Rk", net.r_cathode);
+            }
+        }
+        Some("current_source") => {
+            if let Some(r_k) = current_source_bias_design(cand) {
+                out.insert("Rk", r_k);
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+/// Size the cathode degeneration resistor for a `current_source` intent.
+///
+/// Reads the target current from `intent_current` and calls
+/// `bhdl_spice::tube_bias::design_current_source`. Returns `None` when the
+/// intent is missing/malformed or the designer rejects (target too high,
+/// not realizable, …) — the caller then keeps the expansion block's
+/// literal R_k. The `TubeCurrentSource` entity uses the default 6SN7 tube.
+fn current_source_bias_design(cand: &ExpansionCandidate) -> Option<f64> {
+    use bhdl_spice::tube_bias::design_current_source;
+    use bhdl_spice::triode::TriodeParams;
+
+    let target = cand.param_values.get("intent_current")
+        .and_then(|s| parse_unit_value(s))?;
+    let params = TriodeParams::sn6_6sn7();
+    match design_current_source(&params, target) {
+        Ok(r_k) => {
+            info!(
+                "Intent-driven current_source for '{}': I_p = {:.3} mA → R_k {:.0} Ω",
+                cand.instance_name, target * 1e3, r_k
+            );
+            Some(r_k)
+        }
+        Err(e) => {
+            warn!("current_source intent on '{}': {} — keeping expansion defaults",
+                cand.instance_name, e);
+            None
+        }
+    }
 }
 
 /// Run the intent-driven operating-point designer for an `amplifier` intent.

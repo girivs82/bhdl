@@ -1,0 +1,23 @@
+// Triode current sink driven by `for current_source(current: I)`.
+//
+// The intent rides the net feeding Itail.OUT. bhdl sizes the cathode
+// degeneration resistor R_k so the tube draws exactly the requested
+// current; the unbypassed R_k delivers the high output impedance that
+// makes the stage *act* like a current source at signal frequencies.
+import { TubeCurrentSource } from "bhdl-stdlib/actives/triode.bhdl";
+import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+
+board TubeCurrentSourceTest {
+    power VBB = 300V @ 100mA;
+    ground GND;
+
+    Itail: TubeCurrentSource();
+
+    // The current source sinks I_p from VBB through a load resistor to
+    // its plate; with I_p = 5 mA and the 20 kΩ load, ≈ 100 V drops across
+    // the load and the plate sits near 200 V — exactly the headroom the
+    // designer assumed.
+    net cs_top: VBB -> Rload: Res(20000).1 -> Rload.2 -> Itail.OUT
+        for current_source(current: 5mA);
+    Itail.K -> GND;
+}
