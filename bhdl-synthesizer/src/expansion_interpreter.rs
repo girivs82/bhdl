@@ -456,8 +456,9 @@ fn intent_driven_values(
     // didn't evaluate), warn and fall through to the reference path so the
     // design still completes with sensible defaults.
     if let Some(recipe) = &cand.design_recipe {
-        let board = read_board_context(netlist, cand);
-        match crate::design_evaluator::evaluate_recipe(recipe, &cand.param_values, board) {
+        let board  = read_board_context(netlist, cand);
+        let device = read_device_attributes(netlist, cand);
+        match crate::design_evaluator::evaluate_recipe(recipe, &cand.param_values, board, device) {
             Ok(values) => {
                 info!("Vendor design recipe for '{}'.'{}': {} value(s)",
                     cand.instance_name, recipe.intent_name, values.len());
@@ -492,6 +493,71 @@ fn intent_driven_values(
         _ => {}
     }
     out
+}
+
+/// Scan an expansion candidate's child instances for the one carrying
+/// the device-family marker (`component_class = "triode"` for now;
+/// future device families add their own class strings). Return that
+/// module's numeric attribute defaults as the `tube` / `transistor` /
+/// `device` context the vendor design block will see.
+///
+/// Discovery rule (Stage 6): a child whose target entity's
+/// `component_class` attribute matches a known device-family namespace.
+/// This is the same `component_class` already used by bhdl-spice for
+/// SPICE classification, so vendors authoring a new tube family
+/// (Triode12AU7, future 6L6 power tube, …) need only tag with the
+/// same class string they already use to get correctly-routed Koren
+/// parameters into their design recipe.
+///
+/// Empty map if no qualifying child is found — the evaluator then
+/// falls back to bhdl-spice's nominal 6SN7 defaults so existing tests
+/// and toy boards keep working.
+fn read_device_attributes(
+    netlist: &Netlist,
+    cand: &ExpansionCandidate,
+) -> std::collections::HashMap<String, f64> {
+    use std::collections::HashMap;
+    let mut device = HashMap::new();
+
+    // The list of device-family component_class values whose Koren-shaped
+    // numeric attributes the evaluator threads through as `tube`. As
+    // additional device families land (BJT, MOSFET), each gets its own
+    // entry here and a corresponding namespace in the evaluator's
+    // identifier resolution.
+    const DEVICE_CLASSES: &[&str] = &["triode"];
+
+    // Walk the expansion candidate's children. Each ExpansionInstance
+    // points at an entity by name; we look that entity's module
+    // definition up in the netlist and read its attribute defaults.
+    for child in &cand.recipe.instances {
+        // Find the module definition whose name matches the
+        // child's component_type. ExpansionInstance carries the
+        // *target* entity name (e.g. "Triode" / "Triode12AU7"), so a
+        // straight name match is correct.
+        let module = netlist.modules.iter()
+            .find(|(_, m)| m.name == child.component_type)
+            .map(|(_, m)| m);
+        let module = match module { Some(m) => m, None => continue };
+
+        let class = module.attributes.get("component_class").map(String::as_str).unwrap_or("");
+        if !DEVICE_CLASSES.contains(&class) { continue; }
+
+        // Found the device child — coerce each numeric-looking attribute
+        // value to f64 and stash it. Non-numeric attributes (part_number,
+        // kicad_symbol, component_class itself) are skipped silently.
+        for (k, v) in &module.attributes {
+            if let Ok(f) = v.trim().parse::<f64>() {
+                device.insert(k.clone(), f);
+            }
+        }
+        // First qualifying device wins; a recipe with two of the same
+        // family is ambiguous and the design surface doesn't promise
+        // anything about which one is picked. (No production board has
+        // two triodes in one expansion yet.)
+        break;
+    }
+
+    device
 }
 
 /// Read the values of power nets connected to the parent's named pins.
