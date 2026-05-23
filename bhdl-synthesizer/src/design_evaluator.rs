@@ -114,17 +114,23 @@ pub fn evaluate_recipe(
     recipe: &DesignRecipe,
     intent_attrs: &HashMap<String, String>,
     board: HashMap<String, f64>,
+    device: HashMap<String, f64>,
 ) -> Result<HashMap<String, f64>, DesignEvalError> {
-    // For stage 3 the tube parameters are the 6SN7 defaults — exactly what
-    // `bhdl_spice::triode::TriodeParams::sn6_6sn7()` returns. Stage 4
-    // generalises by reading them from the triode child of the entity.
-    let mut tube_params = HashMap::new();
-    let sn6 = bhdl_spice::triode::TriodeParams::sn6_6sn7();
-    tube_params.insert("mu".into(),  sn6.mu);
-    tube_params.insert("ex".into(),  sn6.ex);
-    tube_params.insert("kg1".into(), sn6.kg1);
-    tube_params.insert("kp".into(),  sn6.kp);
-    tube_params.insert("kvb".into(), sn6.kvb);
+    // Stage 6: device-family parameters come from the actual expansion
+    // child the synthesizer identified via the `component_class` discovery
+    // rule. When the map is empty (no qualifying child, or the caller
+    // didn't bother — e.g. unit tests that just want default behaviour),
+    // fall back to the bhdl-spice nominal 6SN7 set so the toy/legacy paths
+    // keep working without churn.
+    let mut tube_params = device;
+    if tube_params.is_empty() {
+        let sn6 = bhdl_spice::triode::TriodeParams::sn6_6sn7();
+        tube_params.insert("mu".into(),  sn6.mu);
+        tube_params.insert("ex".into(),  sn6.ex);
+        tube_params.insert("kg1".into(), sn6.kg1);
+        tube_params.insert("kp".into(),  sn6.kp);
+        tube_params.insert("kvb".into(), sn6.kvb);
+    }
 
     // Stage 5 — foreign-language body hook takes precedence. The
     // analyzer guarantees mutual exclusion (body wins; statements are
@@ -649,7 +655,7 @@ mod tests {
             body: None,
         };
         let (intent, board) = ctx();
-        let out = evaluate_recipe(&recipe, &intent, board).expect("recipe eval failed");
+        let out = evaluate_recipe(&recipe, &intent, board, HashMap::new()).expect("recipe eval failed");
         let r_k = *out.get("Rk").expect("Rk not assigned");
         // Reference: the Rust path that this recipe re-expresses.
         let p = bhdl_spice::triode::TriodeParams::sn6_6sn7();
@@ -681,7 +687,7 @@ mod tests {
         let mut intent = HashMap::new();
         intent.insert("intent_current".into(), "1.0".into());
         let board = HashMap::new();
-        let err = evaluate_recipe(&recipe, &intent, board).expect_err("expected require failure");
+        let err = evaluate_recipe(&recipe, &intent, board, HashMap::new()).expect_err("expected require failure");
         match err {
             DesignEvalError::RequireFailed(_) => {}
             other => panic!("expected RequireFailed, got {other}"),
@@ -712,7 +718,7 @@ mod tests {
             }),
         };
         let (intent, board) = ctx();
-        let out = evaluate_recipe(&recipe, &intent, board).expect("body hook eval");
+        let out = evaluate_recipe(&recipe, &intent, board, HashMap::new()).expect("body hook eval");
         // Manual check: (300 - 100) / 0.005 / 10 = 4000.0
         let r_k = *out.get("Rk").expect("Rk missing from script output");
         assert!((r_k - 4000.0).abs() < 1e-6, "Rk = {r_k}, expected 4000");
@@ -740,7 +746,7 @@ mod tests {
             }),
         };
         let (intent, board) = ctx();
-        let out = evaluate_recipe(&recipe, &intent, board).expect("body hook eval");
+        let out = evaluate_recipe(&recipe, &intent, board, HashMap::new()).expect("body hook eval");
         let i_max = *out.get("i_max").expect("i_max missing");
         // Compare against the Rust call directly — the host function
         // is just a thin wrapper, so the values must match exactly.
@@ -801,7 +807,7 @@ mod tests {
         let mut board = HashMap::new();
         board.insert("VBB".into(), 300.0);
 
-        let out = evaluate_recipe(&recipe, &intent, board).expect("amplifier body hook");
+        let out = evaluate_recipe(&recipe, &intent, board, HashMap::new()).expect("amplifier body hook");
         let rp = *out.get("Rp").expect("Rp missing");
         let rk = *out.get("Rk").expect("Rk missing");
 
@@ -829,6 +835,77 @@ mod tests {
     }
 
     #[test]
+    fn device_params_flow_through_to_script() {
+        // Stage 6: when the caller supplies device parameters explicitly,
+        // they reach the Rhai script via the `tube` map. A 6SN7 and a
+        // 12AU7 ask for very different operating points at the same
+        // gain target — verifying that different device params actually
+        // produce different Rp/Rk proves the wiring isn't silently
+        // ignored.
+        use bhdl_common::design::DesignBody;
+        let recipe = DesignRecipe {
+            entity_name: "Foo".into(),
+            intent_name: "amplifier".into(),
+            statements: Vec::new(),
+            body: Some(DesignBody {
+                language: "rhai".into(),
+                inputs:  vec!["tube".into(), "intent".into(), "supply".into()],
+                outputs: vec!["Rp".into(), "Rk".into()],
+                // Minimal closed-form designer for the test — pins V_p at
+                // V_bb/2 and uses the tube's mu directly so it depends on
+                // the device map in an obvious way.
+                source: r#"
+                    let v_p = supply.VBB / 2.0;
+                    let i_p = 0.005;
+                    let v_gk = koren_inverse_vgk(tube, v_p, i_p);
+                    #{ Rp: v_p / i_p, Rk: (-v_gk) / i_p }
+                "#.into(),
+            }),
+        };
+        let mut intent = HashMap::new();
+        intent.insert("intent_gain".into(), "14.0".into());
+        let mut board = HashMap::new();
+        board.insert("VBB".into(), 300.0);
+
+        // 6SN7 device — what the synthesizer would discover from the
+        // stdlib Triode entity's attributes today.
+        let mut dev_6sn7 = HashMap::new();
+        let sn6 = bhdl_spice::triode::TriodeParams::sn6_6sn7();
+        dev_6sn7.insert("mu".into(),  sn6.mu);
+        dev_6sn7.insert("ex".into(),  sn6.ex);
+        dev_6sn7.insert("kg1".into(), sn6.kg1);
+        dev_6sn7.insert("kp".into(),  sn6.kp);
+        dev_6sn7.insert("kvb".into(), sn6.kvb);
+
+        // 12AU7 device — what a vendor "rolling" a different tube into
+        // the stage would have the synthesizer discover instead.
+        let mut dev_12au7 = HashMap::new();
+        let ecc = bhdl_spice::triode::TriodeParams::ecc82_12au7();
+        dev_12au7.insert("mu".into(),  ecc.mu);
+        dev_12au7.insert("ex".into(),  ecc.ex);
+        dev_12au7.insert("kg1".into(), ecc.kg1);
+        dev_12au7.insert("kp".into(),  ecc.kp);
+        dev_12au7.insert("kvb".into(), ecc.kvb);
+
+        let out_6sn7 = evaluate_recipe(&recipe, &intent, board.clone(), dev_6sn7).expect("6SN7 eval");
+        let out_12au7 = evaluate_recipe(&recipe, &intent, board, dev_12au7).expect("12AU7 eval");
+
+        let rk_6sn7  = *out_6sn7.get("Rk").unwrap();
+        let rk_12au7 = *out_12au7.get("Rk").unwrap();
+        // Same V_p, same I_p — R_p is identical between tubes (this is the
+        // expected closed-form behavior of the test designer). R_k differs
+        // because V_gk for 5 mA at V_p=150 V depends on the tube's kp.
+        // Both tubes happen to want similar self-bias points here (the
+        // 6SN7 and 12AU7 are both medium-µ designs); we just need to see
+        // non-equality to prove the device map actually reaches the script.
+        assert!(
+            (rk_6sn7 - rk_12au7).abs() > 1.0,
+            "Rk should differ between tubes — wiring would otherwise produce \
+             byte-equal results: 6SN7 {rk_6sn7:.1} Ω, 12AU7 {rk_12au7:.1} Ω"
+        );
+    }
+
+    #[test]
     fn body_hook_missing_declared_output_is_reported() {
         // The script returns a map missing one of the declared outputs;
         // the evaluator must surface that as ScriptFailed rather than
@@ -846,7 +923,7 @@ mod tests {
             }),
         };
         let (intent, board) = ctx();
-        let err = evaluate_recipe(&recipe, &intent, board).expect_err("missing output");
+        let err = evaluate_recipe(&recipe, &intent, board, HashMap::new()).expect_err("missing output");
         match err {
             DesignEvalError::ScriptFailed(msg) => {
                 assert!(msg.contains("Rk"),
