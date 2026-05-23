@@ -433,6 +433,11 @@ fn intent_driven_values(
                 out.insert("Rk", r_k);
             }
         }
+        Some("digital_switch") => {
+            if let Some(r_p) = switch_bias_design(netlist, cand) {
+                out.insert("Rp", r_p);
+            }
+        }
         _ => {}
     }
     out
@@ -462,6 +467,41 @@ fn current_source_bias_design(cand: &ExpansionCandidate) -> Option<f64> {
         }
         Err(e) => {
             warn!("current_source intent on '{}': {} — keeping expansion defaults",
+                cand.instance_name, e);
+            None
+        }
+    }
+}
+
+/// Size the plate-load resistor for a `switch` intent.
+///
+/// Reads the supply voltage from the power net on the parent's VBB pin and
+/// calls `bhdl_spice::tube_bias::design_switch`. Returns `None` when V_bb
+/// can't be resolved or the designer rejects — the caller then keeps the
+/// expansion block's literal R_p.
+fn switch_bias_design(netlist: &Netlist, cand: &ExpansionCandidate) -> Option<f64> {
+    use bhdl_spice::tube_bias::design_switch;
+    use bhdl_spice::triode::TriodeParams;
+
+    let vbb_pin = *cand.pin_instances.get("VBB")?;
+    let vbb_net = find_net_for_pin_instance(netlist, vbb_pin)?;
+    let v_bb = match &netlist.nets.get(vbb_net)?.net_class {
+        bhdl_netlist::NetClass::Power(v) => *v,
+        _ => {
+            warn!("switch intent on '{}': VBB pin is not on a power rail — \
+                   keeping expansion defaults", cand.instance_name);
+            return None;
+        }
+    };
+    let params = TriodeParams::sn6_6sn7();
+    match design_switch(&params, v_bb) {
+        Ok(r_p) => {
+            info!("Intent-driven switch for '{}': V_bb = {:.0} V → R_p {:.0} Ω",
+                cand.instance_name, v_bb, r_p);
+            Some(r_p)
+        }
+        Err(e) => {
+            warn!("switch intent on '{}': {} — keeping expansion defaults",
                 cand.instance_name, e);
             None
         }

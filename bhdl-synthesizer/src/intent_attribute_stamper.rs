@@ -59,7 +59,7 @@ pub fn stamp_intent_attributes(
         // component on the flow" semantics — the whole network IS the role.
         let is_component_role_intent = matches!(
             intent.name.as_str(),
-            "amplifier" | "switch" | "current_source"
+            "amplifier" | "digital_switch" | "current_source"
         );
         let target_names: Vec<&String> = if is_component_role_intent {
             flow.components.last().into_iter().collect()

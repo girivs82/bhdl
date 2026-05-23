@@ -1,0 +1,24 @@
+// Triode operated as a switch — `for digital_switch()` drives the designer
+// to size R_p so saturation pulls the plate down to a clean low rail; cutoff
+// leaves it at V_bb. A digital switch with vacuum-tube primitives.
+// (`switch` is a reserved keyword in bhdl, hence `digital_switch`.)
+import { TubeSwitch } from "bhdl-stdlib/actives/triode.bhdl";
+import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+
+board TubeSwitchTest {
+    power VBB = 300V @ 100mA;
+    power DRIVE = 0V @ 1mA;
+    ground GND;
+
+    SW: TubeSwitch();
+
+    VBB -> SW.VBB;
+    SW.GND -> GND;
+
+    // The intent rides the net into SW.IN.
+    net sw_in: DRIVE -> SW.IN  for digital_switch();
+
+    // A next-stage grid-leak as the load.
+    SW.OUT -> Rload: Res(1000000).1;
+    Rload.2 -> GND;
+}

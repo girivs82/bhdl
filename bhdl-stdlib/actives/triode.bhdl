@@ -127,3 +127,27 @@ entity TubeCurrentSource() {
         g_int  -> Rg: Res(1000000).1; Rg.2 -> K;
     }
 }
+
+// Triode switch — operated hard between cutoff and saturation.
+//
+// `for switch()` on the IN net asks the designer to size the plate-load
+// resistor R_p so the saturated state (V_gk ≈ 0) pulls the plate down to
+// near ground; cutoff naturally leaves the plate at V_bb. No bypass cap,
+// no coupling caps — DC drive in, DC level out.
+entity TubeSwitch() {
+    pin IN:  signal in;
+    pin OUT: signal out virtual;   // plate — drives the next stage's input
+    pin VBB: power in;
+    pin GND: ground inout;
+
+    attribute component_class = "tube_switch";
+
+    expansion {
+        // R_p from V_bb to the plate; the plate IS the OUT pin (DC-coupled).
+        VBB -> Rp: Res(50000).1; Rp.2 -> OUT;
+        // Triode: plate = OUT, grid driven by IN, cathode to GND.
+        OUT -> V: Triode().P;
+        IN  -> V.G;
+        GND -> V.K;
+    }
+}
