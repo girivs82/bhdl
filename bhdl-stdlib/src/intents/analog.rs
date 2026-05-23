@@ -350,3 +350,61 @@ impl IntentFunction for AmplifierIntent {
         ]
     }
 }
+
+/// Current-source intent for a constant-current tail/load.
+///
+/// `for current_source(current: I)` declares that a stage must sink a
+/// constant current `I` largely independent of the voltage across it. The
+/// designer (see `bhdl-spice/src/tube_bias.rs`) sizes the cathode
+/// degeneration resistor so the tube draws the requested plate current.
+pub struct CurrentSourceIntent;
+
+impl IntentFunction for CurrentSourceIntent {
+    fn name(&self) -> &str {
+        "current_source"
+    }
+
+    fn resolve(&self, params: &[IntentParam]) -> Result<IntentResult, String> {
+        let current = params.iter().find_map(|p| match p {
+            IntentParam::Named(name, IntentValue::Number(v, unit)) if name == "current" =>
+                Some((*v, unit.clone())),
+            _ => None,
+        }).or_else(|| params.first().and_then(|p| match p {
+            IntentParam::Positional(IntentValue::Number(v, unit)) => Some((*v, unit.clone())),
+            _ => None,
+        }));
+
+        let (i, unit) = current.ok_or_else(||
+            "current_source() requires a current parameter, e.g. current_source(current: 5mA)".to_string())?;
+        if i <= 0.0 {
+            return Err(format!("current_source() current must be positive, got {i}"));
+        }
+
+        let pretty = format!("{}{}", i, unit.as_deref().unwrap_or("A"));
+        Ok(IntentResult {
+            sim_mode: SimMode::AnalogRequired,
+            synthesis_hints: vec![
+                SynthesisHint::Custom(format!(
+                    "Size the cathode degeneration resistor for I_p = {pretty}")),
+            ],
+            validation_rules: vec![
+                ValidationRule {
+                    condition: "current_within_spec".to_string(),
+                    error_message: format!("Stage must sink {pretty}"),
+                },
+            ],
+            tool_scope: ToolScope::All,
+        })
+    }
+
+    fn param_metadata(&self) -> Vec<ParamMetadata> {
+        vec![
+            ParamMetadata {
+                name: "current".to_string(),
+                param_type: ParamType::Current,
+                required: true,
+                default_value: None,
+            },
+        ]
+    }
+}
