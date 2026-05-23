@@ -38,6 +38,11 @@ pub enum DesignEvalError {
     RequireFailed(String),
     /// Something went wrong evaluating an expression.
     EvalError(String),
+    /// A foreign-language body hook (Stage 5) failed at runtime —
+    /// parse error in the script, fuel exhaustion, wrong return shape,
+    /// host-function panic, etc. Carries the underlying engine's
+    /// diagnostic verbatim so the user sees the line and reason.
+    ScriptFailed(String),
 }
 
 impl std::fmt::Display for DesignEvalError {
@@ -45,6 +50,7 @@ impl std::fmt::Display for DesignEvalError {
         match self {
             Self::RequireFailed(msg) => write!(f, "require failed: {msg}"),
             Self::EvalError(msg) => write!(f, "{msg}"),
+            Self::ScriptFailed(msg) => write!(f, "script failed: {msg}"),
         }
     }
 }
@@ -119,6 +125,15 @@ pub fn evaluate_recipe(
     tube_params.insert("kg1".into(), sn6.kg1);
     tube_params.insert("kp".into(),  sn6.kp);
     tube_params.insert("kvb".into(), sn6.kvb);
+
+    // Stage 5 — foreign-language body hook takes precedence. The
+    // analyzer guarantees mutual exclusion (body wins; statements are
+    // dropped with a warning at extraction time), so this branch is
+    // an early return: if the recipe carries a body, the script owns
+    // the outputs entirely.
+    if recipe.body.is_some() {
+        return evaluate_body_hook(recipe, intent_attrs, &tube_params, &board);
+    }
 
     let mut ctx = DesignContext {
         locals: HashMap::new(),
@@ -310,6 +325,232 @@ fn parse_literal(text: &str) -> Result<f64, String> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Stage 5 — foreign-language body hooks (Rhai)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Evaluate a [`DesignRecipe`] whose body is a foreign-language hook.
+///
+/// Currently only `language = "rhai"` is dispatched; other languages
+/// produce a clear ScriptFailed diagnostic at synth time so the user
+/// learns the issue is missing language support rather than a script
+/// bug.
+///
+/// The Rhai script sees three variables in its scope:
+///
+/// - `tube`    — an object map of the device's parameters (`mu`, `ex`,
+///   `kg1`, `kp`, `kvb` for triodes). Vendors who want to do their own
+///   math have direct access; the host primitives also take this map
+///   as their first argument.
+/// - `intent`  — an object map of the parsed intent parameters
+///   (`target_gain`, `current`, …). Numeric values where the input
+///   parsed as a number; raw strings otherwise.
+/// - `supply`  — an object map of the parent's power-pin voltages
+///   (`VBB`, `VCC`, …).
+///
+/// The script must return a Rhai `Map` whose keys are the names the
+/// expansion interpreter expects (the entity's `outputs { … }`
+/// declaration). Each value is coerced to `f64`. Missing keys cause a
+/// ScriptFailed error; extra keys are ignored with a one-line warning.
+fn evaluate_body_hook(
+    recipe: &DesignRecipe,
+    intent_attrs: &HashMap<String, String>,
+    tube_params: &HashMap<String, f64>,
+    board: &HashMap<String, f64>,
+) -> Result<HashMap<String, f64>, DesignEvalError> {
+    use rhai::{Dynamic, Engine, Map, Scope};
+
+    let body = recipe.body.as_ref().ok_or_else(|| {
+        DesignEvalError::ScriptFailed(
+            "internal: evaluate_body_hook called without a body".to_string())
+    })?;
+
+    if body.language != "rhai" {
+        return Err(DesignEvalError::ScriptFailed(format!(
+            "unknown body language '{}' — only 'rhai' is supported in this build",
+            body.language)));
+    }
+
+    // Build (cache later) the Rhai engine with our host functions and
+    // sandbox limits applied.
+    let engine = build_rhai_engine();
+
+    // Marshal inputs into the script's scope as Rhai object maps.
+    let mut scope = Scope::new();
+    scope.push("tube",   hashmap_to_rhai_map(tube_params));
+    scope.push("intent", intent_attrs_to_rhai_map(intent_attrs));
+    scope.push("supply", hashmap_to_rhai_map(board));
+
+    let result: Dynamic = engine
+        .eval_with_scope::<Dynamic>(&mut scope, &body.source)
+        .map_err(|e| DesignEvalError::ScriptFailed(format!(
+            "Rhai eval in '{}'.'{}': {e}",
+            recipe.entity_name, recipe.intent_name)))?;
+
+    // The script's return must be a Map. Coerce each declared output
+    // to f64. Honour the entity's `outputs { … }` list when present —
+    // if the script omits a declared output, fail loudly; if it
+    // returns extras, warn but ignore.
+    let map: Map = result.try_cast::<Map>().ok_or_else(|| {
+        DesignEvalError::ScriptFailed(format!(
+            "script for '{}'.'{}' did not return a map — got something else",
+            recipe.entity_name, recipe.intent_name))
+    })?;
+
+    let mut out = HashMap::with_capacity(body.outputs.len().max(map.len()));
+    if body.outputs.is_empty() {
+        // Schema-less mode: take whatever the script returned. Coerce
+        // each value to f64 best-effort; non-numeric entries are an
+        // error since the expansion interpreter consumes a numeric map.
+        for (k, v) in map.into_iter() {
+            let f = rhai_dynamic_to_f64(&v).ok_or_else(|| {
+                DesignEvalError::ScriptFailed(format!(
+                    "script for '{}'.'{}' returned non-numeric value at key '{k}'",
+                    recipe.entity_name, recipe.intent_name))
+            })?;
+            out.insert(k.to_string(), f);
+        }
+    } else {
+        // Schema-checked mode: pick the declared outputs, fail on any
+        // missing key. Extras (script returned more than declared) are
+        // dropped with a one-shot diagnostic per recipe.
+        let mut extra_keys = Vec::new();
+        for k in map.keys() {
+            if !body.outputs.iter().any(|o| o.as_str() == k.as_str()) {
+                extra_keys.push(k.to_string());
+            }
+        }
+        if !extra_keys.is_empty() {
+            log::warn!(
+                "Vendor design recipe for '{}'.'{}' returned undeclared output(s): {:?} — ignored",
+                recipe.entity_name, recipe.intent_name, extra_keys);
+        }
+        for name in &body.outputs {
+            let v = map.get(name.as_str()).ok_or_else(|| {
+                DesignEvalError::ScriptFailed(format!(
+                    "script for '{}'.'{}' did not populate declared output '{name}'",
+                    recipe.entity_name, recipe.intent_name))
+            })?;
+            let f = rhai_dynamic_to_f64(v).ok_or_else(|| {
+                DesignEvalError::ScriptFailed(format!(
+                    "script for '{}'.'{}' produced non-numeric value for '{name}'",
+                    recipe.entity_name, recipe.intent_name))
+            })?;
+            out.insert(name.clone(), f);
+        }
+    }
+    Ok(out)
+}
+
+/// Construct a Rhai engine with the BHDL host functions registered and
+/// sandbox limits applied. The default fuel limit is conservative
+/// (1M operations ≈ tens of ms wall time on typical scripts); vendors
+/// whose recipes legitimately need more should declare it via the
+/// recipe's `runtime` clause (future work).
+fn build_rhai_engine() -> rhai::Engine {
+    use rhai::{Dynamic, Engine, Map};
+    let mut engine = Engine::new();
+
+    // Sandboxing: no module imports, no progress callback, fuel-limited.
+    engine.set_max_operations(1_000_000);
+    engine.set_max_call_levels(64);
+    engine.set_max_expr_depths(64, 32);
+
+    // Host function: plate_current(tube, v_pk, v_gk) -> f64
+    // Vendors pass the `tube` map they got in their scope; the host
+    // unpacks the five Koren parameters and dispatches to bhdl-spice.
+    engine.register_fn("plate_current",
+        |tube: Map, v_pk: f64, v_gk: f64| -> f64 {
+            let p = tube_params_from_map(&tube);
+            bhdl_spice::triode::plate_current(&p, v_pk, v_gk)
+        });
+
+    // Host function: koren_inverse_vgk(tube, v_pk, target_ip) -> f64
+    engine.register_fn("koren_inverse_vgk",
+        |tube: Map, v_pk: f64, ip: f64| -> f64 {
+            let p = tube_params_from_map(&tube);
+            bhdl_spice::tube_bias::koren_inverse_vgk(&p, v_pk, ip)
+        });
+
+    // Host function: conductances(tube, v_pk, v_gk) -> #{ g_p: …, g_m: … }
+    // Rhai doesn't have native tuples ergonomically; we return a map
+    // with named fields so the script reads `cond.g_p` / `cond.g_m`.
+    engine.register_fn("conductances",
+        |tube: Map, v_pk: f64, v_gk: f64| -> Map {
+            let p = tube_params_from_map(&tube);
+            let (g_p, g_m) = bhdl_spice::triode::conductances(&p, v_pk, v_gk);
+            let mut m = Map::new();
+            m.insert("g_p".into(), Dynamic::from_float(g_p));
+            m.insert("g_m".into(), Dynamic::from_float(g_m));
+            m
+        });
+
+    // Host convenience: small_signal_gain(tube, v_pk, i_p) -> f64
+    // The composite the amplifier designer uses repeatedly:
+    // g_m · (R_p ∥ r_p) at the operating point set by (v_pk, i_p), with
+    // R_p assumed to be v_pk / i_p (a designer holding the plate at v_pk).
+    engine.register_fn("small_signal_gain",
+        |tube: Map, v_pk: f64, i_p: f64| -> f64 {
+            let p = tube_params_from_map(&tube);
+            let r_p = v_pk / i_p;
+            let v_gk = bhdl_spice::tube_bias::koren_inverse_vgk(&p, v_pk, i_p);
+            let (g_p, g_m) = bhdl_spice::triode::conductances(&p, v_pk, v_gk);
+            g_m / (g_p + 1.0 / r_p)
+        });
+
+    engine
+}
+
+/// Convert a [`HashMap<String, f64>`] into a Rhai object map.
+fn hashmap_to_rhai_map(h: &HashMap<String, f64>) -> rhai::Map {
+    use rhai::Dynamic;
+    let mut m = rhai::Map::new();
+    for (k, v) in h {
+        m.insert(k.as_str().into(), Dynamic::from_float(*v));
+    }
+    m
+}
+
+/// Build the `intent` Rhai map from the stamped `intent_<param>` attrs.
+/// Strips the `intent_` prefix; coerces numeric-looking values to f64,
+/// otherwise stores as string so the script can decide what to do.
+fn intent_attrs_to_rhai_map(intent_attrs: &HashMap<String, String>) -> rhai::Map {
+    use rhai::Dynamic;
+    let mut m = rhai::Map::new();
+    for (k, v) in intent_attrs {
+        let name = k.strip_prefix("intent_").unwrap_or(k.as_str());
+        if let Ok(f) = parse_literal(v) {
+            m.insert(name.into(), Dynamic::from_float(f));
+        } else {
+            m.insert(name.into(), Dynamic::from(v.clone()));
+        }
+    }
+    m
+}
+
+/// Read tube parameters back out of the Rhai object map we sent in.
+/// Missing keys default to 0.0 — the script is allowed to override
+/// individual params before calling primitives, but typical recipes
+/// just thread the `tube` map straight through.
+fn tube_params_from_map(map: &rhai::Map) -> bhdl_spice::triode::TriodeParams {
+    let g = |k: &str| map.get(k).and_then(|d| d.as_float().ok()).unwrap_or(0.0);
+    bhdl_spice::triode::TriodeParams {
+        mu:  g("mu"),
+        ex:  g("ex"),
+        kg1: g("kg1"),
+        kp:  g("kp"),
+        kvb: g("kvb"),
+    }
+}
+
+/// Coerce a Rhai `Dynamic` to `f64`. Accepts Rhai floats and integers;
+/// returns None for any other shape (strings, maps, arrays, …).
+fn rhai_dynamic_to_f64(d: &rhai::Dynamic) -> Option<f64> {
+    if let Ok(f) = d.as_float() { return Some(f); }
+    if let Ok(i) = d.as_int() { return Some(i as f64); }
+    None
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -405,6 +646,7 @@ mod tests {
                 DesignStatement::Assign { child_name: "Rk".into(),
                     expr: "(0.0 - v_gk) / i_target".into() },
             ],
+            body: None,
         };
         let (intent, board) = ctx();
         let out = evaluate_recipe(&recipe, &intent, board).expect("recipe eval failed");
@@ -433,6 +675,7 @@ mod tests {
                     message: "current target exceeds zero-bias capacity".into(),
                 },
             ],
+            body: None,
         };
         // 1 A from a 6SN7 — far beyond i_max.
         let mut intent = HashMap::new();
@@ -442,6 +685,174 @@ mod tests {
         match err {
             DesignEvalError::RequireFailed(_) => {}
             other => panic!("expected RequireFailed, got {other}"),
+        }
+    }
+
+    // ─── Stage 5: Rhai body-hook evaluator ──────────────────────────────
+
+    #[test]
+    fn body_hook_returns_declared_outputs() {
+        // The simplest body hook: arithmetic on intent + supply,
+        // returning a map with the declared outputs. Verifies the
+        // marshalling round-trip (in: scope vars, out: typed map).
+        use bhdl_common::design::DesignBody;
+        let recipe = DesignRecipe {
+            entity_name: "Foo".into(),
+            intent_name: "current_source".into(),
+            statements: Vec::new(),
+            body: Some(DesignBody {
+                language: "rhai".into(),
+                inputs: vec!["intent".into(), "supply".into()],
+                outputs: vec!["Rk".into()],
+                source: r#"
+                    let i = intent.current;
+                    let v = supply.VBB;
+                    #{ Rk: (v - 100.0) / i / 10.0 }
+                "#.into(),
+            }),
+        };
+        let (intent, board) = ctx();
+        let out = evaluate_recipe(&recipe, &intent, board).expect("body hook eval");
+        // Manual check: (300 - 100) / 0.005 / 10 = 4000.0
+        let r_k = *out.get("Rk").expect("Rk missing from script output");
+        assert!((r_k - 4000.0).abs() < 1e-6, "Rk = {r_k}, expected 4000");
+    }
+
+    #[test]
+    fn body_hook_invokes_host_primitive() {
+        // The script calls a BHDL host function (`plate_current`).
+        // Verifies the host registration path: vendor scripts get
+        // direct access to bhdl-spice numerics without re-implementing
+        // the Koren equations.
+        use bhdl_common::design::DesignBody;
+        let recipe = DesignRecipe {
+            entity_name: "Foo".into(),
+            intent_name: "current_source".into(),
+            statements: Vec::new(),
+            body: Some(DesignBody {
+                language: "rhai".into(),
+                inputs: vec!["tube".into()],
+                outputs: vec!["i_max".into()],
+                source: r#"
+                    let i = plate_current(tube, 100.0, 0.0);
+                    #{ i_max: i }
+                "#.into(),
+            }),
+        };
+        let (intent, board) = ctx();
+        let out = evaluate_recipe(&recipe, &intent, board).expect("body hook eval");
+        let i_max = *out.get("i_max").expect("i_max missing");
+        // Compare against the Rust call directly — the host function
+        // is just a thin wrapper, so the values must match exactly.
+        let p = bhdl_spice::triode::TriodeParams::sn6_6sn7();
+        let i_ref = bhdl_spice::triode::plate_current(&p, 100.0, 0.0);
+        assert!((i_max - i_ref).abs() < 1e-9, "i_max = {i_max}, ref = {i_ref}");
+    }
+
+    #[test]
+    fn body_hook_loop_amplifier_first_guess() {
+        // The whole point of Stage 5: a body hook can iterate. This
+        // is the amplifier first-guess bisection ported to Rhai —
+        // log-grid peak find then descending-flank bisection on the
+        // target gain. The output (Rp, Rk) is compared against the
+        // Rust reference designer that does the same computation.
+        use bhdl_common::design::DesignBody;
+        let recipe = DesignRecipe {
+            entity_name: "Foo".into(),
+            intent_name: "amplifier".into(),
+            statements: Vec::new(),
+            body: Some(DesignBody {
+                language: "rhai".into(),
+                inputs: vec!["tube".into(), "intent".into(), "supply".into()],
+                outputs: vec!["Rp".into(), "Rk".into()],
+                source: r#"
+                    let v_p   = supply.VBB / 2.0;
+                    let i_lo  = 0.5e-3;
+                    let i_max = plate_current(tube, v_p, 0.0);
+                    let i_hi  = if 30e-3 < 0.85 * i_max { 30e-3 } else { 0.85 * i_max };
+
+                    // Log-grid peak find.
+                    let peak_i = i_lo;
+                    let peak_g = 0.0;
+                    for k in 0..64 {
+                        let frac = (k.to_float()) / 63.0;
+                        let ratio = i_hi / i_lo;
+                        let i = i_lo * (ratio ** frac);
+                        let g = small_signal_gain(tube, v_p, i);
+                        if g > peak_g { peak_g = g; peak_i = i; }
+                    }
+                    // Descending-flank bisection.
+                    let lo = peak_i;
+                    let hi = i_hi;
+                    for _step in 0..80 {
+                        let mid = (lo * hi).sqrt();
+                        let g = small_signal_gain(tube, v_p, mid);
+                        if g > intent.target_gain { lo = mid; } else { hi = mid; }
+                    }
+                    let i_p  = (lo * hi).sqrt();
+                    let v_gk = koren_inverse_vgk(tube, v_p, i_p);
+                    #{ Rp: v_p / i_p, Rk: (-v_gk) / i_p }
+                "#.into(),
+            }),
+        };
+        let mut intent = HashMap::new();
+        intent.insert("intent_name".into(), "amplifier".into());
+        intent.insert("intent_target_gain".into(), "14.0".into());
+        let mut board = HashMap::new();
+        board.insert("VBB".into(), 300.0);
+
+        let out = evaluate_recipe(&recipe, &intent, board).expect("amplifier body hook");
+        let rp = *out.get("Rp").expect("Rp missing");
+        let rk = *out.get("Rk").expect("Rk missing");
+
+        // Reference: the Rust first-guess for the same inputs (we
+        // ignore the GLACIER refine, which is the framework's job).
+        let p = bhdl_spice::triode::TriodeParams::sn6_6sn7();
+        let ref_net = bhdl_spice::tube_bias::TriodeAmplifierDesigner::first_guess(
+            &bhdl_spice::tube_bias::ReferenceTriodeDesigner,
+            &p, 300.0,
+            &bhdl_spice::tube_bias::AmplifierSpec::gain(14.0),
+        ).expect("Rust reference first_guess");
+
+        // Both designers do the same bisection, but Rhai's f64 chain
+        // differs slightly from Rust's at the last few ulps. Accept
+        // 0.5 % relative — well below the loose-tolerance bounds the
+        // refine loop converges to.
+        let rel_rp = (rp - ref_net.r_plate).abs() / ref_net.r_plate;
+        let rel_rk = (rk - ref_net.r_cathode).abs() / ref_net.r_cathode;
+        assert!(rel_rp < 0.005,
+            "Rp from script {rp:.1} Ω, Rust {:.1} Ω (rel {:.4})",
+            ref_net.r_plate, rel_rp);
+        assert!(rel_rk < 0.005,
+            "Rk from script {rk:.1} Ω, Rust {:.1} Ω (rel {:.4})",
+            ref_net.r_cathode, rel_rk);
+    }
+
+    #[test]
+    fn body_hook_missing_declared_output_is_reported() {
+        // The script returns a map missing one of the declared outputs;
+        // the evaluator must surface that as ScriptFailed rather than
+        // silently dropping the design.
+        use bhdl_common::design::DesignBody;
+        let recipe = DesignRecipe {
+            entity_name: "Foo".into(),
+            intent_name: "current_source".into(),
+            statements: Vec::new(),
+            body: Some(DesignBody {
+                language: "rhai".into(),
+                inputs:  vec!["intent".into()],
+                outputs: vec!["Rp".into(), "Rk".into()],
+                source: r#" #{ Rp: 1000.0 } "#.into(),
+            }),
+        };
+        let (intent, board) = ctx();
+        let err = evaluate_recipe(&recipe, &intent, board).expect_err("missing output");
+        match err {
+            DesignEvalError::ScriptFailed(msg) => {
+                assert!(msg.contains("Rk"),
+                    "expected message to mention missing 'Rk', got: {msg}");
+            }
+            other => panic!("expected ScriptFailed, got {other:?}"),
         }
     }
 }

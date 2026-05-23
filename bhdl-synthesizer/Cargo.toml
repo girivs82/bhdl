@@ -37,6 +37,12 @@ serde_json = "1.0"
 slotmap = "1.0"
 rand = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
+# Rhai — embedded scripting for vendor `design { }` body hooks (Stage 5).
+# Statically linked into bhdl-synthesizer so there is no user-managed
+# runtime: zero install, zero venv, deterministic across machines.
+# Sandboxed by default (no I/O, no module imports unless we register
+# host functions); fuel-limited via set_max_operations.
+rhai = { version = "1.18", default-features = false, features = ["std", "sync"] }
 uuid = { version = "1.0", features = ["v4", "serde"] }
 ndarray = "0.15"
 

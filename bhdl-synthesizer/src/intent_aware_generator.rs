@@ -377,7 +377,7 @@ impl IntentAwareGenerator {
         
         // Add units if specified
         if let Some(units) = &param.units {
-            Ok(formatted_value + units)
+            Ok(formatted_value + units.as_str())
         } else {
             Ok(formatted_value)
         }
