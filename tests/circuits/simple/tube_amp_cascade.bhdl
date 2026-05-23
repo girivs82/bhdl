@@ -1,0 +1,34 @@
+// Two-stage triode cascade — composition under the intent surface.
+//
+// Each stage is asked for its own gain via `for amplifier(...)`. The
+// designer runs independently on each instance, the SPICE converter
+// produces a real cascaded circuit, and the end-to-end midband gain is
+// the product of the two per-stage gains (positive — two inversions
+// cancel). One line of HDL declares each stage; bhdl designs both.
+import { SignalTubeStage } from "bhdl-stdlib/actives/triode.bhdl";
+import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+
+board TwoStageTubeAmp {
+    power VBB = 300V @ 200mA;
+    power SIGIN = 1V @ 1mA;
+    ground GND;
+
+    U1: SignalTubeStage();
+    U2: SignalTubeStage();
+
+    // Each gain is in the 6SN7's achievable cathode-self-bias band
+    // (roughly 12.2 to the peak) at V_bb/2 = 150 V; the total midband
+    // gain is the product (~14 × 13 ≈ 182, non-inverting overall — two
+    // stage inversions cancel).
+    net stage1_in: SIGIN -> U1.IN  for amplifier(gain: 14);
+    VBB -> U1.VBB;
+    U1.GND -> GND;
+
+    net stage2_in: U1.OUT -> U2.IN  for amplifier(gain: 13);
+    VBB -> U2.VBB;
+    U2.GND -> GND;
+
+    // Final load — a typical next-stage grid-leak.
+    U2.OUT -> Rload: Res(470000).1;
+    Rload.2 -> GND;
+}

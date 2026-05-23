@@ -641,4 +641,109 @@ mod tests {
              inversion), got im/|H| = {:.3}", h_mid.im.abs() / mid
         );
     }
+
+    #[test]
+    fn cascading_two_designed_stages_multiplies_their_gains() {
+        // Two-stage cascade. Each stage is independently designed for its
+        // own gain target; the end-to-end midband |H(jω)| should equal the
+        // product of the two per-stage gains (and the phase should be
+        // *non-inverting* — two stage inversions cancel). This is the
+        // composition argument for the intent surface made concrete.
+        use crate::ac::{run_ac_sweep_nonlinear, AcSweepParams};
+        use crate::components::{ComponentModel, ElectricalLimits};
+        use std::collections::HashMap;
+
+        let p = TriodeParams::sn6_6sn7();
+        let v_bb = 300.0;
+        let g1 = 14.0;
+        let g2 = 13.0;
+        let d1 = design_amplifier_reference(&p, v_bb, &AmplifierSpec::gain(g1)).unwrap();
+        let d2 = design_amplifier_reference(&p, v_bb, &AmplifierSpec::gain(g2)).unwrap();
+        let expected = d1.operating_point.gain * d2.operating_point.gain;
+
+        let r_g = 1.0e6;
+        let r_load = 470.0e3;
+        let c_couple = 100e-9;
+        let c_bypass = 100e-6;
+
+        let mut circuit = Circuit::new();
+        for n in ["Bplus",
+                  "P1", "K1", "G1",
+                  "P2", "K2", "G2",
+                  "In", "Out", "GND"] {
+            circuit.add_node(n.to_string(), None);
+        }
+        // Common rails and DC reference for the floating input.
+        circuit.add_branch("Vbb".to_string(),    "Bplus", "GND", "VoltageSource".to_string(), v_bb,    None);
+        circuit.add_branch("Vin".to_string(),    "In",    "GND", "VoltageSource".to_string(), 0.0,     None);
+
+        // Stage 1.
+        circuit.add_branch("Rp1".to_string(),    "Bplus", "P1",  "Resistor".to_string(),  d1.network.r_plate,   None);
+        circuit.add_branch("Rk1".to_string(),    "K1",    "GND", "Resistor".to_string(),  d1.network.r_cathode, None);
+        circuit.add_branch("Ck1".to_string(),    "K1",    "GND", "Capacitor".to_string(), c_bypass,             None);
+        circuit.add_branch("Rg1".to_string(),    "G1",    "GND", "Resistor".to_string(),  r_g,                  None);
+        circuit.add_branch("Cin1".to_string(),   "In",    "G1",  "Capacitor".to_string(), c_couple,             None);
+        // Inter-stage coupling. The real cascade board has two caps in
+        // series (U1's Cout + U2's Cin); they collapse to a single
+        // equivalent coupling cap for the purposes of this test — the
+        // intermediate node would otherwise float at DC.
+        circuit.add_branch("C_inter".to_string(), "P1",    "G2",  "Capacitor".to_string(), c_couple / 2.0,       None);
+        // Stage 2.
+        circuit.add_branch("Rp2".to_string(),    "Bplus", "P2",  "Resistor".to_string(),  d2.network.r_plate,   None);
+        circuit.add_branch("Rk2".to_string(),    "K2",    "GND", "Resistor".to_string(),  d2.network.r_cathode, None);
+        circuit.add_branch("Ck2".to_string(),    "K2",    "GND", "Capacitor".to_string(), c_bypass,             None);
+        circuit.add_branch("Rg2".to_string(),    "G2",    "GND", "Resistor".to_string(),  r_g,                  None);
+        circuit.add_branch("Cout2".to_string(),  "P2",    "Out", "Capacitor".to_string(), c_couple,             None);
+        circuit.add_branch("Rload".to_string(),  "Out",   "GND", "Resistor".to_string(),  r_load,               None);
+        let TriodeParams { mu, ex, kg1, kp, kvb } = p;
+        circuit.add_device("V1".to_string(),
+            DeviceKind::Triode { mu, ex, kg1, kp, kvb }, &["P1", "G1", "K1"], None);
+        circuit.add_device("V2".to_string(),
+            DeviceKind::Triode { mu, ex, kg1, kp, kvb }, &["P2", "G2", "K2"], None);
+
+        // GLACIER models for the DC operating-point solve.
+        let r = |n: &str, ohms: f64| (n.to_string(),
+            ComponentModel::Resistor { resistance: ohms, tolerance: 1.0,
+                limits: ElectricalLimits::default() });
+        let mut models = HashMap::new();
+        models.insert("Vbb".to_string(), ComponentModel::VoltageSource {
+            voltage: v_bb, internal_resistance: Some(0.0) });
+        models.insert("Vin".to_string(), ComponentModel::VoltageSource {
+            voltage: 0.0, internal_resistance: Some(0.0) });
+        for (k, v) in [r("Rp1", d1.network.r_plate),
+                       r("Rk1", d1.network.r_cathode),
+                       r("Rg1", r_g),
+                       r("Rp2", d2.network.r_plate),
+                       r("Rk2", d2.network.r_cathode),
+                       r("Rg2", r_g),
+                       r("Rload", r_load)] {
+            models.insert(k, v);
+        }
+
+        // Sweep one midband decade.
+        let params = AcSweepParams::new("In", "Out", 1_000.0, 10_000.0, 4);
+        let result = run_ac_sweep_nonlinear(&circuit, &models, &params)
+            .expect("AC sweep failed");
+        let mags = result.magnitude();
+        let mid = mags[mags.len() / 2];
+        let h_mid = result.transfer_function[result.transfer_function.len() / 2];
+
+        // Within 15 % of the per-stage product: the two coupling-cap
+        // pairs and the loading interactions cost a little, but the
+        // overall midband multiplier should be unmistakable.
+        assert!(
+            (mid - expected).abs() < 0.15 * expected,
+            "cascade midband |H| = {mid:.1}, expected ≈ {expected:.1} \
+             (g1·g2 = {:.1} · {:.1})",
+            d1.operating_point.gain, d2.operating_point.gain
+        );
+
+        // Two inversions cancel — the cascade is *non-inverting* at midband.
+        assert!(
+            h_mid.re > 0.0 && h_mid.im.abs() < 0.1 * mid,
+            "cascade midband H = {h_mid} — expected a positive real \
+             (two-stage inversion cancels), got im/|H| = {:.3}",
+            h_mid.im.abs() / mid
+        );
+    }
 }
