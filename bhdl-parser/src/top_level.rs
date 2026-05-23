@@ -189,6 +189,7 @@ impl<'t> Parser<'t> {
                 Some(SyntaxKind::WITH_KW) => self.parse_with_block(),
                 Some(SyntaxKind::SATISFIES_KW) => self.parse_satisfies_block(),
                 Some(SyntaxKind::EXPANSION_KW) => self.parse_expansion_block(),
+                Some(SyntaxKind::DESIGN_KW) => self.parse_design_block(),
                 Some(SyntaxKind::PLACEMENT_KW) => self.parse_placement_block(),
                 Some(SyntaxKind::IDENT) => {
                     // Check if this is an entity instantiation or connection
@@ -1452,6 +1453,73 @@ impl<'t> Parser<'t> {
         }
 
         self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
+    // Parse `design for <intent> { ... }` — vendor-authored operating-point
+    // design block. The body is a sequence of:
+    //   * `const NAME = EXPR;` — immutable bindings (reusing parse_const_decl)
+    //   * `require <expr> else "<msg>";` — validation that aborts the design
+    //   * `NAME = EXPR;` — assignment to an expansion-child's value
+    fn parse_design_block(&mut self) {
+        self.builder.start_node(SyntaxKind::DESIGN_BLOCK.into());
+        self.expect(SyntaxKind::DESIGN_KW);
+        self.expect(SyntaxKind::FOR_KW);
+        self.expect(SyntaxKind::IDENT); // intent name
+        self.expect(SyntaxKind::L_BRACE);
+
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) => break,
+                Some(SyntaxKind::CONST_KW) => self.parse_design_const_decl(),
+                Some(SyntaxKind::REQUIRE_KW) => self.parse_design_require_stmt(),
+                Some(SyntaxKind::IDENT) => self.parse_design_assignment(),
+                Some(_) => {
+                    self.error("Unexpected token in design block".to_string());
+                    self.bump_any();
+                }
+                None => {
+                    self.error("Unexpected end of file in design block".to_string());
+                    break;
+                }
+            }
+        }
+
+        self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
+    // const NAME = EXPR;  — design-block flavour, untyped (the entity-level
+    // const decl requires `const NAME: TYPE = EXPR;`).
+    fn parse_design_const_decl(&mut self) {
+        self.builder.start_node(SyntaxKind::PARAM_DECL.into());
+        self.expect(SyntaxKind::CONST_KW);
+        self.expect(SyntaxKind::IDENT);
+        self.expect(SyntaxKind::EQ);
+        self.parse_expression();
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+
+    // require <expr> else "<msg>";
+    fn parse_design_require_stmt(&mut self) {
+        self.builder.start_node(SyntaxKind::DESIGN_REQUIRE_STMT.into());
+        self.expect(SyntaxKind::REQUIRE_KW);
+        self.parse_expression();
+        self.expect(SyntaxKind::ELSE_KW);
+        self.expect(SyntaxKind::STRING);
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+
+    // <child_name> = <expr>;
+    fn parse_design_assignment(&mut self) {
+        self.builder.start_node(SyntaxKind::DESIGN_ASSIGNMENT.into());
+        self.expect(SyntaxKind::IDENT);
+        self.expect(SyntaxKind::EQ);
+        self.parse_expression();
+        self.expect(SyntaxKind::SEMI);
         self.builder.finish_node();
     }
 
