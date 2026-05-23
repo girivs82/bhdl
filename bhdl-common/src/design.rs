@@ -23,8 +23,42 @@ pub struct DesignRecipe {
     /// Intent this recipe is the designer for (e.g. "amplifier",
     /// "current_source", "digital_switch").
     pub intent_name: String,
-    /// Block body, in the order it appears in the source.
+    /// Block body, in the order it appears in the source. Mutually
+    /// exclusive with [`Self::body`] — the analyzer rejects mixing.
     pub statements: Vec<DesignStatement>,
+    /// Foreign-language hook (Stage 5). When present, the evaluator
+    /// passes the recipe's inputs to an embedded interpreter (currently
+    /// Rhai) and reads the outputs back from the script's return value.
+    /// `None` means this is a Stage-1..4 declarative recipe driven by
+    /// `statements` instead.
+    pub body: Option<DesignBody>,
+}
+
+/// A foreign-language hook attached to a [`DesignRecipe`].
+///
+/// Stage 5 of the vendor design-block spec: vendors who need arbitrary
+/// imperative code (iteration, combinatorial search, optimization)
+/// embed it as source in the .bhdl file. The script sees the declared
+/// `inputs` in its scope and must return a map keyed by the declared
+/// `outputs` names. Sandboxed by construction — no I/O, no module
+/// imports, fuel-limited execution.
+#[derive(Debug, Clone)]
+pub struct DesignBody {
+    /// Language tag (e.g. "rhai"). The evaluator dispatches by this
+    /// string; unknown languages produce a clear error at synth time.
+    pub language: String,
+    /// Names the script will see in its input scope. The evaluator
+    /// marshals these from the standard context (tube/intent/supply)
+    /// — this list is currently informational, used by the analyzer
+    /// to validate the script's expected I/O.
+    pub inputs: Vec<String>,
+    /// Names the script must populate in its return value. The
+    /// evaluator validates the returned map against this list and
+    /// applies the values to the matching expansion children.
+    pub outputs: Vec<String>,
+    /// Verbatim foreign-language source (already stripped of the
+    /// `r#"..."#` raw-string delimiters by the analyzer).
+    pub source: String,
 }
 
 /// A statement inside a `design { }` block. Expressions are kept as raw
@@ -52,6 +86,13 @@ impl DesignRecipe {
             entity_name,
             intent_name,
             statements: Vec::new(),
+            body: None,
         }
     }
+
+    /// True if this recipe carries a foreign-language body hook (Stage 5).
+    pub fn has_body(&self) -> bool { self.body.is_some() }
+
+    /// True if this recipe is a declarative Stage-1..4 statement sequence.
+    pub fn has_statements(&self) -> bool { !self.statements.is_empty() }
 }

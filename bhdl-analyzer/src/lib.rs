@@ -1507,15 +1507,52 @@ pub fn extract_design_recipes(
             };
 
             let mut recipe = DesignRecipe::new(entity_name.clone(), intent_name.clone());
-            for stmt in design_node.children() {
-                if let Some(s) = extract_design_statement(&stmt) {
+            // Two collection passes over the design block's children:
+            // (1) declarative statements (Stages 1-4 surface), (2) the
+            // Stage-5 foreign-language body hook. Mutual exclusion is
+            // checked after extraction so we can produce a clear error
+            // rather than silently dropping one side.
+            let mut inputs_decl  = Vec::new();
+            let mut outputs_decl = Vec::new();
+            let mut body_hook    = None;
+            for child in design_node.children() {
+                if let Some(s) = extract_design_statement(&child) {
                     recipe.statements.push(s);
+                    continue;
+                }
+                match child.kind() {
+                    SyntaxKind::DESIGN_INPUTS_DECL  => inputs_decl  = extract_design_name_list(&child),
+                    SyntaxKind::DESIGN_OUTPUTS_DECL => outputs_decl = extract_design_name_list(&child),
+                    SyntaxKind::DESIGN_BODY_HOOK    => body_hook    = extract_design_body_hook(&child),
+                    _ => {}
                 }
             }
 
-            if !recipe.statements.is_empty() {
-                println!("  Extracted design recipe for '{entity_name}'.'{intent_name}': \
-                          {} statement(s)", recipe.statements.len());
+            if let Some((language, source)) = body_hook {
+                if !recipe.statements.is_empty() {
+                    println!("  WARN: design recipe for '{entity_name}'.'{intent_name}' mixes \
+                              declarative statements with a `body` hook — the hook wins, \
+                              declarative statements ignored.");
+                    recipe.statements.clear();
+                }
+                recipe.body = Some(bhdl_common::design::DesignBody {
+                    language,
+                    inputs:  inputs_decl,
+                    outputs: outputs_decl,
+                    source,
+                });
+            }
+
+            if recipe.has_statements() || recipe.has_body() {
+                if recipe.has_body() {
+                    let b = recipe.body.as_ref().unwrap();
+                    println!("  Extracted design recipe for '{entity_name}'.'{intent_name}': \
+                              body hook ({}, {} bytes, {} input(s), {} output(s))",
+                              b.language, b.source.len(), b.inputs.len(), b.outputs.len());
+                } else {
+                    println!("  Extracted design recipe for '{entity_name}'.'{intent_name}': \
+                              {} statement(s)", recipe.statements.len());
+                }
                 all.entry(entity_name.clone()).or_default()
                     .insert(intent_name, recipe);
             }
@@ -1523,6 +1560,73 @@ pub fn extract_design_recipes(
     }
 
     all
+}
+
+/// Collect IDENT names from a DESIGN_INPUTS_DECL or DESIGN_OUTPUTS_DECL
+/// node. Names appear in source order; semicolons are dropped.
+fn extract_design_name_list(
+    node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>,
+) -> Vec<String> {
+    use bhdl_ast::SyntaxKind;
+    let mut names = Vec::new();
+    // Skip the leading IDENT (the `inputs`/`outputs` keyword itself —
+    // tracked as IDENT because it's contextual) and the L_BRACE.
+    let mut seen_brace = false;
+    for el in node.children_with_tokens() {
+        if let Some(t) = el.as_token() {
+            match t.kind() {
+                SyntaxKind::L_BRACE => seen_brace = true,
+                SyntaxKind::IDENT if seen_brace => names.push(t.text().to_string()),
+                _ => {}
+            }
+        }
+    }
+    names
+}
+
+/// Extract the `(language, source)` pair from a DESIGN_BODY_HOOK node.
+/// The body's RAW_STRING token is unwrapped of its `r#"..."#` delimiters
+/// here so the evaluator receives the script source verbatim.
+fn extract_design_body_hook(
+    node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>,
+) -> Option<(String, String)> {
+    use bhdl_ast::SyntaxKind;
+    let mut after_body = false;
+    let mut language = None;
+    let mut raw = None;
+    for el in node.children_with_tokens() {
+        if let Some(t) = el.as_token() {
+            match t.kind() {
+                SyntaxKind::BODY_KW => after_body = true,
+                SyntaxKind::IDENT if after_body && language.is_none() => {
+                    language = Some(t.text().to_string());
+                }
+                SyntaxKind::RAW_STRING => {
+                    raw = Some(t.text().to_string());
+                    break;
+                }
+                _ => {}
+            }
+        }
+    }
+    let language = language?;
+    let raw = raw?;
+    // Strip the `r#"..."#` delimiters. Opening: `r` + n hashes + `"`.
+    // Closing: `"` + n hashes. The body lexer guarantees the literal is
+    // well-formed, so we can locate the boundaries by counting hashes.
+    let bytes = raw.as_bytes();
+    if bytes.first() != Some(&b'r') { return None; }
+    let mut i = 1;
+    while bytes.get(i) == Some(&b'#') { i += 1; }
+    let n_hashes = i - 1;
+    if bytes.get(i) != Some(&b'"') { return None; }
+    let body_start = i + 1;
+    // The close is `"` + n_hashes hashes — those are the last 1+n_hashes
+    // bytes of the literal.
+    let body_end = raw.len().saturating_sub(1 + n_hashes);
+    if body_end < body_start { return None; }
+    let source = raw[body_start..body_end].to_string();
+    Some((language, source))
 }
 
 /// Translate a single statement node inside a `design { }` block into a
