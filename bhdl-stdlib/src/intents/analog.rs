@@ -408,3 +408,43 @@ impl IntentFunction for CurrentSourceIntent {
         ]
     }
 }
+
+/// Switch intent — drive a triode hard between cutoff and saturation.
+///
+/// `for digital_switch()` declares that a stage is operated as a digital
+/// switch: at cutoff the plate sits at V_bb (off), at saturation it pulls
+/// down to near ground (on). The designer (see `bhdl-spice/src/tube_bias.rs`)
+/// sizes the plate-load R_p so the saturated state lands at a clean low
+/// rail. (The intent name avoids `switch`, which is a reserved BHDL keyword
+/// used for `switch out` pin types.)
+pub struct SwitchIntent;
+
+impl IntentFunction for SwitchIntent {
+    fn name(&self) -> &str {
+        "digital_switch"
+    }
+
+    fn resolve(&self, _params: &[IntentParam]) -> Result<IntentResult, String> {
+        Ok(IntentResult {
+            sim_mode: SimMode::AnalogRequired,
+            synthesis_hints: vec![
+                SynthesisHint::Custom(
+                    "Size the plate-load R_p so saturation lands at a clean \
+                     low rail".to_string()),
+            ],
+            validation_rules: vec![
+                ValidationRule {
+                    condition: "rails_separated".to_string(),
+                    error_message: "Saturation and cutoff plate voltages must \
+                                    leave usable headroom".to_string(),
+                },
+            ],
+            tool_scope: ToolScope::All,
+        })
+    }
+
+    fn param_metadata(&self) -> Vec<ParamMetadata> {
+        // No required parameters; the topology + V_bb determine the design.
+        vec![]
+    }
+}

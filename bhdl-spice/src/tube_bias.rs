@@ -469,6 +469,41 @@ pub fn design_current_source(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Switch designer
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Saturated plate voltage target for [`design_switch`]: the low-rail "on"
+/// level the switch's output pulls down to with the grid driven to zero.
+const SWITCH_V_PLATE_SAT: f64 = 10.0;
+
+/// Design the plate-load resistor for a triode switch.
+///
+/// At saturation the grid is at the cathode potential (`V_gk = 0`); the
+/// plate current there is the tube's zero-bias current at the saturated
+/// plate voltage, `I_sat = I_p(V_pk = V_sat, V_gk = 0)`. Pick `R_p` so
+/// that current pulls the plate down to `V_sat`:
+///
+/// ```text
+///     R_p = (V_bb − V_sat) / I_sat
+/// ```
+///
+/// At cutoff (grid driven far below 0) the tube draws no current and the
+/// plate naturally sits at V_bb. The two rails are then well-separated.
+pub fn design_switch(params: &TriodeParams, v_bb: f64) -> Result<f64> {
+    if v_bb <= SWITCH_V_PLATE_SAT {
+        return Err(SpiceError::InvalidModel(format!(
+            "tube_bias: switch needs V_bb > {SWITCH_V_PLATE_SAT} V, got {v_bb}")));
+    }
+    let i_sat = plate_current(params, SWITCH_V_PLATE_SAT, 0.0);
+    if i_sat <= 0.0 {
+        return Err(SpiceError::AnalysisFailed(
+            "tube_bias: switch — tube draws no current at zero bias \
+             near saturation; cannot pull the plate down".to_string()));
+    }
+    Ok((v_bb - SWITCH_V_PLATE_SAT) / i_sat)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -748,6 +783,55 @@ mod tests {
         // Cathode lift is the negative bias that sets the operating point.
         assert!(v_cathode > 0.0 && v_cathode < 10.0,
             "cathode at {:.2} V — implausible bias", v_cathode);
+    }
+
+    #[test]
+    fn switch_swings_between_saturation_and_cutoff() {
+        // Build the actual switch circuit with the designer's R_p; drive
+        // the grid hard on (V_gk = 0) and hard off (V_gk far negative), and
+        // verify GLACIER produces a clean swing between the two rails.
+        // This is the simulate-verifies-design check for the switch intent.
+        use crate::components::{ComponentModel, ElectricalLimits};
+
+        let p = TriodeParams::sn6_6sn7();
+        let v_bb = 300.0;
+        let r_p = design_switch(&p, v_bb).expect("switch design failed");
+
+        let solve_plate_at = |v_in: f64| -> f64 {
+            let mut circuit = Circuit::new();
+            for n in ["Bplus", "P", "In", "GND"] {
+                circuit.add_node(n.to_string(), None);
+            }
+            circuit.add_branch("Vbb".to_string(), "Bplus", "GND", "VoltageSource".to_string(), v_bb,  None);
+            circuit.add_branch("Vin".to_string(), "In",    "GND", "VoltageSource".to_string(), v_in, None);
+            circuit.add_branch("Rp".to_string(),  "Bplus", "P",   "Resistor".to_string(),      r_p,  None);
+            let TriodeParams { mu, ex, kg1, kp, kvb } = p;
+            circuit.add_device("V1".to_string(),
+                DeviceKind::Triode { mu, ex, kg1, kp, kvb }, &["P", "In", "GND"], None);
+            let mut solver = GlacierSolver::new(circuit);
+            solver.enable_multi_region = false;
+            solver.add_model("Vbb".to_string(), ComponentModel::VoltageSource {
+                voltage: v_bb, internal_resistance: Some(0.0) });
+            solver.add_model("Vin".to_string(), ComponentModel::VoltageSource {
+                voltage: v_in, internal_resistance: Some(0.0) });
+            solver.add_model("Rp".to_string(), ComponentModel::Resistor {
+                resistance: r_p, tolerance: 1.0, limits: ElectricalLimits::default() });
+            let sols = solver.solve().unwrap();
+            sols.iter()
+                .min_by(|a, b| a.final_error.partial_cmp(&b.final_error).unwrap())
+                .unwrap()
+                .node_voltages.get("P").copied().unwrap_or(0.0)
+        };
+
+        let v_on  = solve_plate_at(0.0);     // V_gk = 0 → saturation
+        let v_off = solve_plate_at(-30.0);   // V_gk = −30 → cutoff
+
+        assert!(v_on  < 0.15 * v_bb,
+            "saturated V_plate = {v_on:.1} V — should pull down toward ground");
+        assert!(v_off > 0.95 * v_bb,
+            "cut-off V_plate = {v_off:.1} V — should rest near V_bb = {v_bb} V");
+        assert!(v_off - v_on > 0.8 * v_bb,
+            "rail separation {:.1} V — too small for a clean switch", v_off - v_on);
     }
 
     #[test]
