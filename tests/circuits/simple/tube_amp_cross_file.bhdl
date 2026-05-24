@@ -1,0 +1,29 @@
+// Cross-file Stage-6 demo. The board imports a vendor stage entity
+// from one file; that stage's expansion references a vendor tube
+// defined in a SECOND file. Stage 6's cross-file device-attribute
+// lookup pulls the tube's Koren parameters across the file boundary
+// at synthesis time, so the same Rhai amplifier script designs for
+// the vendor's tube without any explicit tube import on the board.
+//
+// Expected: the design recipe fires with Rp/Rk values determined by
+// the AcmeUltra tube's Koren parameters (mu=60, kp=200). Markedly
+// different from a 6SN7-designed stage.
+
+import { SignalStage_Acme } from "tests/circuits/simple/vendor_acme_stage.bhdl";
+import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+
+board TubeAmpCrossFile {
+    power VBB = 300V @ 100mA;
+    power SIGIN = 1V @ 1mA;
+    ground GND;
+
+    U_acme: SignalStage_Acme();
+
+    net amp_in: SIGIN -> U_acme.IN for amplifier(gain: 14);
+
+    VBB -> U_acme.VBB;
+    U_acme.GND -> GND;
+
+    U_acme.OUT -> Rload: Res(470000).1;
+    Rload.2 -> GND;
+}

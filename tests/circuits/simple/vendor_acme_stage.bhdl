@@ -1,0 +1,69 @@
+// Vendor-supplied stage entity that uses the vendor's tube from a
+// DIFFERENT .bhdl file. The expansion's `V: Triode_AcmeUltra().P`
+// references a child entity defined in vendor_acme_tube.bhdl; the
+// synthesizer's Stage-6 cross-file device discovery resolves the
+// tube's Koren attributes at synthesis time via pass1's accumulated
+// entity-attribute index.
+
+import { Triode_AcmeUltra } from "tests/circuits/simple/vendor_acme_tube.bhdl";
+import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passive/capacitor.bhdl";
+
+entity SignalStage_Acme() {
+    pin IN:  signal in;
+    pin VBB: power in;
+    pin GND: ground;
+    pin OUT: signal out virtual;
+
+    attribute component_class = "tube_gain_stage";
+
+    expansion {
+        internal plate:   net;
+        internal grid:    net;
+        internal cathode: net;
+
+        VBB -> Rp: Res(22000).1; Rp.2 -> plate;
+        plate -> V: Triode_AcmeUltra().P;     // cross-file device reference
+        grid -> V.G;
+        cathode -> V.K;
+        cathode -> Rk: Res(820).1; Rk.2 -> GND;
+        cathode -> Ck: Cap(0.0001).1; Ck.2 -> GND;
+        grid -> Rg: Res(1000000).1; Rg.2 -> GND;
+        IN -> Cin: Cap(0.0000001).1; Cin.2 -> grid;
+        plate -> Cout: Cap(0.0000001).1; Cout.2 -> OUT;
+    }
+
+    // Same Rhai amplifier script as the stdlib stages — verbatim. The
+    // tube parameters reach this script via Stage-6 cross-file discovery.
+    design for amplifier {
+        inputs  { tube; intent; supply; }
+        outputs { Rp; Rk; }
+        body rhai r#"
+            let v_p   = supply.VBB / 2.0;
+            let i_lo  = 0.5e-3;
+            let i_max = plate_current(tube, v_p, 0.0);
+            let i_hi  = if 30e-3 < 0.85 * i_max { 30e-3 } else { 0.85 * i_max };
+
+            let peak_i = i_lo;
+            let peak_g = 0.0;
+            for k in 0..64 {
+                let frac  = (k.to_float()) / 63.0;
+                let ratio = i_hi / i_lo;
+                let i = i_lo * (ratio ** frac);
+                let g = small_signal_gain(tube, v_p, i);
+                if g > peak_g { peak_g = g; peak_i = i; }
+            }
+
+            let lo = peak_i;
+            let hi = i_hi;
+            for _step in 0..80 {
+                let mid = (lo * hi).sqrt();
+                let g = small_signal_gain(tube, v_p, mid);
+                if g > intent.gain { lo = mid; } else { hi = mid; }
+            }
+            let i_p  = (lo * hi).sqrt();
+            let v_gk = koren_inverse_vgk(tube, v_p, i_p);
+            #{ Rp: v_p / i_p, Rk: (-v_gk) / i_p }
+        "#
+    }
+}

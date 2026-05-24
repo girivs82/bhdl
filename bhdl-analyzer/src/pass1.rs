@@ -49,6 +49,12 @@ struct Pass1Context {
     layout_definitions: HashMap<String, bhdl_common::LayoutDefinition>,
     // Placement recipes extracted from imported files
     placement_recipes: HashMap<String, bhdl_common::PlacementRecipe>,
+    // Stage 6 cross-file: per-entity attribute-default index accumulated
+    // from every imported file. Threaded into extract_expansion_recipes_
+    // with_overlay so an expansion in file A that instantiates an entity
+    // defined in file B picks up the callee's attribute defaults at
+    // extraction time.
+    entity_attribute_index: HashMap<String, HashMap<String, String>>,
 }
 
 impl Pass1Context {
@@ -66,6 +72,7 @@ impl Pass1Context {
             symbol_definitions: HashMap::new(),
             layout_definitions: HashMap::new(),
             placement_recipes: HashMap::new(),
+            entity_attribute_index: HashMap::new(),
         }
     }
 
@@ -110,7 +117,7 @@ pub fn populate_global_scope_and_build_definition_scopes_with_base(
     source_file: &SourceFile,
     base_path: &Path
 ) -> (SymbolTable, HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>) {
-    let (registry, _alias_specializations, _expansion_recipes, _symbol_defs, _layout_defs, _placement_recipes, _design_recipes) = build_scope_registry_with_base(source_file, base_path);
+    let (registry, _alias_specializations, _expansion_recipes, _symbol_defs, _layout_defs, _placement_recipes, _design_recipes, _entity_attr_index) = build_scope_registry_with_base(source_file, base_path);
     // Extract legacy data structures for backward compatibility
     let global_scope = registry.extract_global_scope();
     let definition_scopes = registry.extract_definition_scopes();
@@ -137,6 +144,13 @@ pub fn build_scope_registry_with_base(
     HashMap<String, bhdl_common::LayoutDefinition>,
     HashMap<String, bhdl_common::PlacementRecipe>,
     HashMap<String, HashMap<String, bhdl_common::design::DesignRecipe>>,
+    // Stage 6 cross-file: per-entity attribute defaults from imported
+    // files. Threaded into the main-file's extract_expansion_recipes
+    // call as an overlay so cross-file device discovery works for
+    // boards too (a board imports a stage entity from a stdlib file,
+    // the stage's expansion instantiates a device entity from a
+    // different stdlib file, the device's attributes flow through).
+    HashMap<String, HashMap<String, String>>,
 ) {
     println!("Building scope registry (Pass 1)...");
     let mut context = Pass1Context::new();
@@ -182,7 +196,8 @@ pub fn build_scope_registry_with_base(
     let layout_definitions = context.layout_definitions;
     let placement_recipes = context.placement_recipes;
     let design_recipes = context.design_recipes;
-    (context.registry, alias_specializations, expansion_recipes, symbol_definitions, layout_definitions, placement_recipes, design_recipes)
+    let entity_attribute_index = context.entity_attribute_index;
+    (context.registry, alias_specializations, expansion_recipes, symbol_definitions, layout_definitions, placement_recipes, design_recipes, entity_attribute_index)
 }
 
 // Pass 1 recursive helper (takes Pass1Context)
@@ -922,8 +937,33 @@ fn process_import(import: &ImportStmt, context: &mut Pass1Context) {
     // Load and parse the imported file
     match load_and_parse_module(&resolved_path) {
         Ok(imported_source) => {
-            // Extract expansion recipes from imported entities
-            let imported_recipes = crate::extract_expansion_recipes(&imported_source);
+            // Stage 6 cross-file: recursively process the imported
+            // file's OWN imports first, so a chain like
+            //   board → stage.bhdl → tube.bhdl
+            // makes the tube's entity attributes reachable in
+            // entity_attribute_index by the time we extract the stage's
+            // recipes below. Cycle detection lives in the
+            // `imported_modules` set (top of this function), which is
+            // already keyed by path string.
+            for item in imported_source.items() {
+                if let Some(nested_import) = ImportStmt::cast(item.syntax().clone()) {
+                    process_import(&nested_import, context);
+                }
+            }
+            // Stage 6: merge this file's entity attribute defaults into
+            // the global cross-file index BEFORE recipe extraction, so
+            // an entity in this file referenced via expansion from a
+            // sibling or downstream file gets its attributes attached.
+            for (name, attrs) in crate::extract_entity_attribute_index(&imported_source) {
+                context.entity_attribute_index.insert(name, attrs);
+            }
+            // Extract expansion recipes from imported entities, threading
+            // the accumulated cross-file index in so children carry
+            // attributes for entities defined in other imports.
+            let imported_recipes = crate::extract_expansion_recipes_with_overlay(
+                &imported_source,
+                &context.entity_attribute_index,
+            );
             for (name, recipe) in imported_recipes {
                 context.expansion_recipes.insert(name, recipe);
             }
