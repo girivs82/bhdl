@@ -1,0 +1,25 @@
+// Hypothetical vendor-supplied tube. Lives in a file SEPARATE from the
+// stage entity that uses it — proves the cross-file device-attribute
+// lookup at synthesis time. The Koren parameters here are picked to be
+// obviously different from any real tube in the stdlib so the design
+// recipe's output values are clearly tube-specific.
+
+entity Triode_AcmeUltra() {
+    pin P: signal inout;
+    pin G: signal in;
+    pin K: signal inout;
+
+    attribute component_class = "triode";
+    attribute part_number = "ACME-ULTRA-001";
+
+    // Synthetic Koren parameters — high mu, low kp — yields a markedly
+    // different operating point than any real-tube parameter set in the
+    // stdlib.
+    attribute mu = 60.0;
+    attribute ex = 1.2;
+    attribute kg1 = 600.0;
+    attribute kp = 200.0;
+    attribute kvb = 50.0;
+
+    attribute kicad_symbol = "Device:Triode";
+}

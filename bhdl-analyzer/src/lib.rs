@@ -62,7 +62,7 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
     let mut resolved_constants = ResolvedConstants::new();
 
     // Pass 1: Build scope registry with base path for imports
-    let (mut scope_registry, alias_specializations, imported_expansion_recipes, imported_symbol_definitions, imported_layout_definitions, imported_placement_recipes, imported_design_recipes) = pass1::build_scope_registry_with_base(source_file, base_path);
+    let (mut scope_registry, alias_specializations, imported_expansion_recipes, imported_symbol_definitions, imported_layout_definitions, imported_placement_recipes, imported_design_recipes, imported_entity_attr_index) = pass1::build_scope_registry_with_base(source_file, base_path);
     // Extract legacy data structures for backward compatibility with existing passes
     let global_scope = scope_registry.extract_global_scope();
     let definition_scopes = scope_registry.extract_definition_scopes();
@@ -260,7 +260,18 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
     // Merge recipes from imported files (Pass 1) with recipes from main source file
     println!("Analyzer: Starting Pass 8.5 - Expansion Recipe + Symbol/Layout Extraction...");
     let mut expansion_recipes = imported_expansion_recipes;
-    let main_file_recipes = extract_expansion_recipes(source_file);
+    // Stage 6 cross-file: thread pass1's accumulated cross-file
+    // entity-attribute index through main-file recipe extraction. A
+    // board (main file) that instantiates a stage entity from an
+    // imported stdlib file needs the *stage's* expansion children's
+    // attributes — which come from yet-another imported file — to be
+    // resolved here. (Cross-file resolution for purely imported
+    // expansion recipes is already handled inside pass1's per-import
+    // pass.)
+    let main_file_recipes = extract_expansion_recipes_with_overlay(
+        source_file,
+        &imported_entity_attr_index,
+    );
     expansion_recipes.extend(main_file_recipes);
     let expansion_count = expansion_recipes.len();
 
@@ -1392,37 +1403,58 @@ fn generate_power_sequences(
 pub fn extract_expansion_recipes(
     source_file: &SourceFile,
 ) -> std::collections::HashMap<String, bhdl_common::ExpansionRecipe> {
-    use bhdl_common::{ExpansionRecipe, ExpansionInstance, ExpansionConnection, ExpansionEndpoint};
-    use bhdl_ast::{Entity, HasName, SyntaxKind};
-    use rowan::ast::AstNode;
+    extract_expansion_recipes_with_overlay(
+        source_file,
+        &std::collections::HashMap::new(),
+    )
+}
 
-    // Stage 6: pre-build an in-file index of (entity name → attribute
-    // defaults). When we create an ExpansionInstance referring to a
-    // sibling entity (e.g. SignalTubeStage's expansion creating
-    // `V: Triode()`), we attach that entity's attribute defaults to the
-    // instance so the synthesizer's design-recipe evaluator can read
-    // Koren parameters without round-tripping through netlist.modules
-    // (which only carries attributes for *board-level* instances).
-    //
-    // Cross-file references (a stage entity in one file instantiating a
-    // tube device defined in another file) aren't enriched here — the
-    // ExpansionInstance carries the called name but the attributes
-    // remain empty. pass1's import loader threads recipes through
-    // separately and would need the same enrichment to cover the
-    // cross-file case; for now the in-file path covers the stdlib
-    // workflow where a tube and the stage that uses it live in the
-    // same .bhdl.
-    let mut local_entity_attrs: std::collections::HashMap<String, std::collections::HashMap<String, String>>
-        = std::collections::HashMap::new();
+/// Walk a source file's entities and extract their attribute defaults as
+/// an `(entity_name → {attr → value})` map. Used by Stage 6's
+/// device-discovery wiring: pass1 accumulates these across all imported
+/// files and the main file, then threads the combined map back into
+/// `extract_expansion_recipes_with_overlay` so cross-file references
+/// (a stage entity in one file instantiating a tube device defined in
+/// another) carry their callee's attributes through to expansion time.
+pub fn extract_entity_attribute_index(
+    source_file: &SourceFile,
+) -> std::collections::HashMap<String, std::collections::HashMap<String, String>> {
+    use bhdl_ast::{Entity, HasName};
+    use rowan::ast::AstNode;
+    let mut idx = std::collections::HashMap::new();
     for item in source_file.items() {
         if let Some(entity) = Entity::cast(item.syntax().clone()) {
             if let Some(name_token) = entity.name() {
                 let attrs = crate::attribute_extraction::extract_module_attributes(&entity);
                 if !attrs.is_empty() {
-                    local_entity_attrs.insert(name_token.text().to_string(), attrs);
+                    idx.insert(name_token.text().to_string(), attrs);
                 }
             }
         }
+    }
+    idx
+}
+
+/// Like [`extract_expansion_recipes`] but also consults a caller-supplied
+/// `overlay` map of entity attribute defaults for cross-file references.
+/// In-file entities still take precedence (an entity redefined locally
+/// would mask an imported one of the same name).
+pub fn extract_expansion_recipes_with_overlay(
+    source_file: &SourceFile,
+    overlay: &std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+) -> std::collections::HashMap<String, bhdl_common::ExpansionRecipe> {
+    use bhdl_common::{ExpansionRecipe, ExpansionInstance, ExpansionConnection, ExpansionEndpoint};
+    use bhdl_ast::{Entity, HasName, SyntaxKind};
+    use rowan::ast::AstNode;
+
+    // Stage 6: pre-build a per-file index of (entity name → attribute
+    // defaults), then overlay it on top of the caller's cross-file map.
+    // When we create an ExpansionInstance referring to an entity, the
+    // local index is checked first, then the overlay — so an in-file
+    // redefinition wins over an imported one of the same name.
+    let mut local_entity_attrs = overlay.clone();
+    for (name, attrs) in extract_entity_attribute_index(source_file) {
+        local_entity_attrs.insert(name, attrs);
     }
 
     let mut recipes = std::collections::HashMap::new();
