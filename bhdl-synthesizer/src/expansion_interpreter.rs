@@ -1078,6 +1078,12 @@ mod tests {
         netlist.add_pin(buck_mod, "VIN".to_string(), PinDirection::In, PinType::Power);
         netlist.add_pin(buck_mod, "VOUT".to_string(), PinDirection::Out, PinType::Power);
         netlist.add_pin(buck_mod, "GND".to_string(), PinDirection::Ground, PinType::Ground);
+        // Virtual pin triggers expansion (post-5795d5c: find_expansion_candidates
+        // requires a `virtual` pin on the module to consider it for expansion).
+        let vexp_pin = netlist
+            .add_pin(buck_mod, "vexpand".to_string(), PinDirection::In, PinType::Signal)
+            .expect("add_pin vexpand");
+        netlist.pins.get_mut(vexp_pin).unwrap().is_virtual = true;
 
         // Create instance
         let inst_id = netlist.instances.insert(bhdl_netlist::Instance {
