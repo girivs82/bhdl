@@ -420,9 +420,8 @@ fn evaluate_body_hook(
 
     let result: Dynamic = engine
         .eval_with_scope::<Dynamic>(&mut scope, &body.source)
-        .map_err(|e| DesignEvalError::ScriptFailed(format!(
-            "Rhai eval in '{}'.'{}': {e}",
-            recipe.entity_name, recipe.intent_name)))?;
+        .map_err(|e| DesignEvalError::ScriptFailed(format_rhai_error(
+            &recipe.entity_name, &recipe.intent_name, &body.source, &e)))?;
 
     // The script's return must be a Map. Coerce each declared output
     // to f64. Honour the entity's `outputs { … }` list when present —
@@ -586,6 +585,93 @@ fn rhai_dynamic_to_f64(d: &rhai::Dynamic) -> Option<f64> {
     if let Ok(f) = d.as_float() { return Some(f); }
     if let Ok(i) = d.as_int() { return Some(i as f64); }
     None
+}
+
+/// Format a Rhai evaluation error with the offending source line and a
+/// caret pointer. Rhai's bare diagnostic gives us `(line N, position M)`
+/// relative to the script body but no context; vendors authoring a
+/// `body rhai r#"..."#` block need to see *which* line went wrong
+/// without manually counting newlines inside their raw-string literal.
+///
+/// Output shape:
+///
+/// ```text
+/// vendor design recipe 'SignalTubeStage'.'amplifier' — Rhai eval failed:
+///     Function not found: pow (f64, f64)
+/// at script line 13, column 46:
+///     12 |             let ratio = i_hi / i_lo;
+///     13 |             let i = i_lo * ratio.pow(frac);
+///        |                                          ^
+///     14 |             let g = small_signal_gain(tube, v_p, i);
+/// ```
+///
+/// When the line / position can't be parsed out of Rhai's message
+/// (different error class, or future Rhai version changes the format)
+/// we fall back to the previous one-liner so the user still sees the
+/// raw diagnostic.
+fn format_rhai_error(
+    entity_name: &str,
+    intent_name: &str,
+    source: &str,
+    err: &rhai::EvalAltResult,
+) -> String {
+    use rhai::EvalAltResult;
+    // Rhai's Position is on the inner error for parse / runtime errors;
+    // we ask it directly rather than parse text out of the Display impl.
+    let pos = match err {
+        EvalAltResult::ErrorParsing(_, p) => Some(*p),
+        e => {
+            let p = e.position();
+            if p.is_none() { None } else { Some(p) }
+        }
+    };
+
+    let header = format!(
+        "vendor design recipe '{entity_name}'.'{intent_name}' — Rhai eval failed:\n    {err}"
+    );
+
+    let (line, col) = match pos.and_then(|p| Some((p.line()?, p.position()?))) {
+        Some(lc) => lc,
+        None => return header, // no position info available
+    };
+
+    let lines: Vec<&str> = source.lines().collect();
+    let idx = line.saturating_sub(1);
+    if idx >= lines.len() { return header; }
+
+    // Determine the printed-prefix width from the largest line number
+    // we'll show (line + 1) so the caret aligns with the column.
+    let max_line_no = (line + 1).min(lines.len());
+    let prefix_w = max_line_no.to_string().len();
+
+    let mut buf = String::new();
+    use std::fmt::Write;
+    let _ = writeln!(&mut buf, "{header}");
+    let _ = writeln!(&mut buf, "at script line {line}, column {col}:");
+
+    // Print a one-line context window: previous line (if any), the
+    // offending line, then the caret, then the following line.
+    if idx > 0 {
+        let _ = writeln!(&mut buf,
+            "    {:>w$} | {}", idx, lines[idx - 1], w = prefix_w);
+    }
+    let _ = writeln!(&mut buf,
+        "    {:>w$} | {}", line, lines[idx], w = prefix_w);
+    // Caret: column is 1-indexed. The source-content column in our
+    // output line starts after `    ` (4 spaces) + line number
+    // (prefix_w chars) + ` | ` (3 chars). The caret offset within the
+    // content portion is `col - 1`. We emit a "gutter-only" prefix
+    // (matching the line-number column with spaces) then `col - 1`
+    // spaces then '^'.
+    let _ = writeln!(&mut buf,
+        "    {} | {}^",
+        " ".repeat(prefix_w),
+        " ".repeat(col.saturating_sub(1)));
+    if idx + 1 < lines.len() {
+        let _ = writeln!(&mut buf,
+            "    {:>w$} | {}", line + 1, lines[idx + 1], w = prefix_w);
+    }
+    buf
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -949,6 +1035,64 @@ mod tests {
             (rk_6sn7 - rk_12au7).abs() > 1.0,
             "Rk should differ between tubes — wiring would otherwise produce \
              byte-equal results: 6SN7 {rk_6sn7:.1} Ω, 12AU7 {rk_12au7:.1} Ω"
+        );
+    }
+
+    #[test]
+    fn body_hook_script_error_shows_source_line_and_caret() {
+        // Deliberately syntactically broken Rhai — `for _ in` (using
+        // `_` as a loop variable name) was the bug we hit during the
+        // amplifier migration. The diagnostic should show the offending
+        // line and a caret at the column Rhai reports.
+        use bhdl_common::design::DesignBody;
+        let recipe = DesignRecipe {
+            entity_name: "Foo".into(),
+            intent_name: "amplifier".into(),
+            statements: Vec::new(),
+            body: Some(DesignBody {
+                language: "rhai".into(),
+                inputs:  vec!["intent".into()],
+                outputs: vec!["Rp".into()],
+                // The error position is on line 4 — `for _` is rejected
+                // because Rhai requires a real identifier.
+                source: r#"
+let v = 1.0;
+let n = 80;
+for _ in 0..n {
+    v = v * 2.0;
+}
+#{ Rp: v }
+"#.into(),
+            }),
+        };
+        let mut intent = HashMap::new();
+        intent.insert("intent_gain".into(), "14.0".into());
+        let board = HashMap::new();
+
+        let err = evaluate_recipe(&recipe, &intent, board, default_device())
+            .expect_err("script should fail");
+        let msg = match err {
+            DesignEvalError::ScriptFailed(m) => m,
+            other => panic!("expected ScriptFailed, got {other:?}"),
+        };
+
+        // Diagnostic shape checks. Order matters — header first, then
+        // location pointer, then the source preview.
+        assert!(
+            msg.contains("'Foo'.'amplifier'"),
+            "error should name the recipe: {msg}"
+        );
+        assert!(
+            msg.contains("at script line"),
+            "error should call out the script-relative line: {msg}"
+        );
+        assert!(
+            msg.contains("for _ in 0..n"),
+            "error should show the offending source line: {msg}"
+        );
+        assert!(
+            msg.contains("^"),
+            "error should include a caret pointing at the column: {msg}"
         );
     }
 
