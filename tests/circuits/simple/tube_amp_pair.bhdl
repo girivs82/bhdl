@@ -1,0 +1,31 @@
+// Two instances of the SAME stage entity on one board. Used to
+// reproduce the connectivity bug where the second instance loses
+// one or more children's connections (originally visible as
+// `U_b_Rk has 0 connected nets` in tube_amp_rolled.bhdl).
+//
+// Each stage should get a fully-wired Rk (cathode → GND), Rp,
+// Cin, Cout, Ck, Rg. We expect identical resistor values from the
+// design recipe on both instances (same tube, same intent).
+
+import { SignalTubeStage } from "bhdl-stdlib/actives/triode.bhdl";
+import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+
+board TubeAmpPair {
+    power VBB = 300V @ 100mA;
+    power SIGIN = 1V @ 1mA;
+    ground GND;
+
+    U_a: SignalTubeStage();
+    U_b: SignalTubeStage();
+
+    net in_a: SIGIN -> U_a.IN for amplifier(gain: 14);
+    net in_b: SIGIN -> U_b.IN for amplifier(gain: 14);
+
+    VBB -> U_a.VBB;
+    VBB -> U_b.VBB;
+    U_a.GND -> GND;
+    U_b.GND -> GND;
+
+    U_a.OUT -> Rload_a: Res(470000).1; Rload_a.2 -> GND;
+    U_b.OUT -> Rload_b: Res(470000).1; Rload_b.2 -> GND;
+}

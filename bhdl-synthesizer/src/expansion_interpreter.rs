@@ -241,9 +241,29 @@ fn expand_one_instance(
     for exp_inst in &cand.recipe.instances {
         let child_name = format!("{}_{}", base, exp_inst.name);
 
-        // Determine pin layout from component type
-        let pins = component_type_pins(&exp_inst.component_type);
-        let mod_id = find_or_create_module(netlist, &exp_inst.component_type, &pins);
+        // Determine pin layout from component type. Common-currency
+        // types (Res/Cap/Ind/Diode/Triode) have hardcoded layouts
+        // because the netlist converter / SPICE classifier key off
+        // their pin names. Everything else — vendor tube variants
+        // (Triode12AU7, custom 6L6, …), future BJT/MOSFET families —
+        // gets its pin set derived from the expansion block's actual
+        // usage of the child, so vendors can add entity families
+        // without touching the synthesizer.
+        let pins_owned: Vec<(String, bool)>;
+        let pin_refs: Vec<(&str, bool)> = match component_type_pins(&exp_inst.component_type) {
+            Some(hardcoded) => hardcoded,
+            None => {
+                pins_owned = pins_from_recipe_connections(&cand.recipe, &exp_inst.name);
+                if pins_owned.is_empty() {
+                    warn!("Expansion child '{}' (type '{}') has no pin references \
+                           in the expansion's connection list — using a default \
+                           two-pin layout. This usually means the entity is unused.",
+                          exp_inst.name, exp_inst.component_type);
+                }
+                pins_owned.iter().map(|(n, b)| (n.as_str(), *b)).collect()
+            }
+        };
+        let mod_id = find_or_create_module(netlist, &exp_inst.component_type, &pin_refs);
 
         // Evaluate parameter expressions by substituting entity params
         let mut attrs: Vec<(&str, String)> = Vec::new();
@@ -760,18 +780,61 @@ fn component_type_to_class(component_type: &str) -> &'static str {
     }
 }
 
-fn component_type_pins(component_type: &str) -> Vec<(&'static str, bool)> {
-    match component_type {
-        "Ind" | "Inductor" => vec![("1", true), ("2", true)],
+/// Return the pin layout for a hardcoded "common-currency" component type
+/// (passives, diodes, the canonical Triode). For these the names and
+/// directions live in the synthesizer because the netlist converter and
+/// SPICE classifier key off them.
+///
+/// Returns `None` for anything else — vendor-defined entities, tube
+/// variants like `Triode12AU7`, BJT/MOSFET families that will land
+/// later. Callers fall through to [`pins_from_recipe_connections`],
+/// which derives the pin set by walking the expansion block's actual
+/// usage of the child instance. That preserves the vendor-extensibility
+/// promise: adding a new entity family requires zero Rust changes here.
+fn component_type_pins(component_type: &str) -> Option<Vec<(&'static str, bool)>> {
+    Some(match component_type {
+        "Ind" | "Inductor"  => vec![("1", true), ("2", true)],
         "Cap" | "Capacitor" => vec![("1", true), ("2", true)],
-        "Res" | "Resistor" => vec![("1", true), ("2", true)],
-        "Diode" => vec![("A", false), ("K", false)],
-        "TVSDiode" => vec![("A", false), ("K", false)],
-        // Vacuum triode: plate / grid / cathode. The netlist converter
-        // classifies these terminals by name, so pin order is what matters.
-        "Triode" => vec![("P", true), ("G", true), ("K", true)],
-        _ => vec![("1", true), ("2", true)], // Default: two passive pins
+        "Res" | "Resistor"  => vec![("1", true), ("2", true)],
+        "Diode"             => vec![("A", false), ("K", false)],
+        "TVSDiode"          => vec![("A", false), ("K", false)],
+        // The canonical Triode is kept here for the case where the
+        // expansion block uses it but doesn't reference every pin in
+        // its connection list (so derivation would miss one). All
+        // tube variants beyond this — Triode12AU7, future 6L6, vendor
+        // tubes — go through the connection-walk path.
+        "Triode"            => vec![("P", true), ("G", true), ("K", true)],
+        _ => return None,
+    })
+}
+
+/// Derive the pin layout for a child instance by walking the expansion
+/// recipe's connection list and collecting every pin name referenced on
+/// that instance. Returns the pins in first-seen order, all flagged
+/// bidirectional (the synthesizer doesn't yet need direction information
+/// for vendor-defined entities; if it ever does, a per-entity pin
+/// declaration in the analyzer would feed in here).
+///
+/// This is the Stage-6-aligned discovery rule: vendors can ship
+/// arbitrary entity families and the synthesizer learns what pins they
+/// have from the expansion blocks that USE them, with no central
+/// registry to update.
+fn pins_from_recipe_connections(
+    recipe: &ExpansionRecipe,
+    child_name: &str,
+) -> Vec<(String, bool)> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    for conn in &recipe.connections {
+        for ep in [&conn.from, &conn.to] {
+            if let ExpansionEndpoint::InstancePin(n, p) = ep {
+                if n == child_name && seen.insert(p.clone()) {
+                    out.push((p.clone(), true));
+                }
+            }
+        }
     }
+    out
 }
 
 /// Create pin instances for all pins of a module on a given instance.
