@@ -1,0 +1,34 @@
+// BJT current mirror — second-device-family proof for the vendor
+// design-block surface. The board imports the BjtCurrentMirror
+// stage entity and asks it to sink 2 mA via the same
+// `for current_source(current: I)` intent already used by the tube
+// current source. Stage 6's component_class discovery routes the
+// 2N3904's Gummel-Poon parameters into the recipe's `bjt`
+// namespace; the declarative `(v_cc - v_be) / i_target` formula
+// computes R_ref.
+//
+// Expected:
+//   Vendor design recipe for 'Itail'.'current_source': 1 value(s)
+//   Itail_Rref ≈ (12 - 0.65) / 0.002 = 5675 Ω
+//
+// This is the parallel of tests/circuits/simple/tube_current_source.bhdl
+// for a different device family — proving the architecture
+// generalises beyond triodes with zero bhdl-core changes.
+
+import { NPN_2N3904, BjtCurrentMirror } from "bhdl-stdlib/actives/bjt_design.bhdl";
+import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+
+board BjtCurrentMirrorDemo {
+    power VCC = 12V @ 100mA;
+    ground GND;
+
+    Itail: BjtCurrentMirror();
+
+    // The intent: 2 mA mirror current. The recipe sees this as
+    // `intent.current = 0.002` and sizes R_ref accordingly.
+    net cs_top: VCC -> Rload: Res(5000).1 -> Rload.2 -> Itail.OUT
+        for current_source(current: 2mA);
+
+    VCC -> Itail.VCC;
+    Itail.GND -> GND;
+}

@@ -62,40 +62,61 @@ pub struct DesignContext<'a> {
     /// Stamped intent parameters from the parent instance — accessed as
     /// `intent.<name>`, looked up as `intent_<name>` in this map.
     pub intent_attrs: &'a HashMap<String, String>,
-    /// Tube parameters — accessed as `tube.<param>`.
-    pub tube_params: HashMap<String, f64>,
+    /// Device parameters — accessed as `<device_class>.<param>`. The
+    /// namespace name is the `component_class` string the synthesizer
+    /// discovered (e.g. "triode" → `triode.mu`, "bjt" → `bjt.bf`). For
+    /// backwards compatibility, the legacy hardcoded namespace `tube`
+    /// also resolves into this map when the discovered class is "triode".
+    pub device_class: String,
+    pub device_params: HashMap<String, f64>,
     /// Bare-name board context (e.g. `VBB` → 300.0).
     pub board: HashMap<String, f64>,
 }
 
 impl<'a> DesignContext<'a> {
+    /// True if the dotted prefix names the discovered device family.
+    /// Matches exact class string (`triode`, `bjt`, …) and the
+    /// legacy `tube` alias for triodes.
+    fn ns_matches_device(&self, ns: &str) -> bool {
+        ns == self.device_class
+            || (ns == "tube" && self.device_class == "triode")
+    }
+
     /// Resolve an identifier (possibly dotted) to a number.
     fn lookup(&self, name: &str) -> Result<f64, DesignEvalError> {
         let name = name.trim();
         if let Some((ns, field)) = name.split_once('.') {
-            return match ns {
-                "intent" => {
-                    let key = format!("intent_{field}");
-                    self.intent_attrs.get(&key)
-                        .ok_or_else(|| DesignEvalError::EvalError(
-                            format!("intent.{field} is not set on this instance")))
-                        .and_then(|s| parse_literal(s).map_err(|_| DesignEvalError::EvalError(
-                            format!("intent.{field} = '{s}' is not a number"))))
-                }
-                "tube" => self.tube_params.get(field).copied()
+            if ns == "intent" {
+                let key = format!("intent_{field}");
+                return self.intent_attrs.get(&key)
                     .ok_or_else(|| DesignEvalError::EvalError(
-                        format!("tube.{field} is not in the parameter set"))),
-                // `supply.<PIN>` reads a parent power-pin voltage. The
-                // unqualified bare-name form is also accepted (the legacy
-                // surface from stage 3); `supply.` is the spelling vendors
-                // are encouraged to use because `board.` collides with the
-                // `board` keyword in expression context.
-                "supply" => self.board.get(field).copied()
+                        format!("intent.{field} is not set on this instance")))
+                    .and_then(|s| parse_literal(s).map_err(|_| DesignEvalError::EvalError(
+                        format!("intent.{field} = '{s}' is not a number"))));
+            }
+            if self.ns_matches_device(ns) {
+                return self.device_params.get(field).copied()
                     .ok_or_else(|| DesignEvalError::EvalError(
-                        format!("supply.{field} is not a power pin on the parent"))),
-                _ => Err(DesignEvalError::EvalError(
-                    format!("unknown namespace '{ns}' in identifier '{name}'"))),
-            };
+                        format!("{ns}.{field} is not in the discovered device's parameter set")));
+            }
+            // `supply.<PIN>` reads a parent power-pin voltage. The
+            // unqualified bare-name form is also accepted (the legacy
+            // surface from stage 3); `supply.` is the spelling vendors
+            // are encouraged to use because `board.` collides with the
+            // `board` keyword in expression context.
+            if ns == "supply" {
+                return self.board.get(field).copied()
+                    .ok_or_else(|| DesignEvalError::EvalError(
+                        format!("supply.{field} is not a power pin on the parent")));
+            }
+            return Err(DesignEvalError::EvalError(
+                format!("unknown namespace '{ns}' in identifier '{name}' \
+                         (recognised: intent, supply, {})",
+                        if self.device_class.is_empty() {
+                            "<no device discovered>".to_string()
+                        } else {
+                            self.device_class.clone()
+                        })));
         }
         if let Some(v) = self.locals.get(name).copied() { return Ok(v); }
         if let Some(v) = self.board.get(name).copied() { return Ok(v); }
@@ -103,21 +124,35 @@ impl<'a> DesignContext<'a> {
     }
 }
 
+/// Recognised device-family namespaces. Vendors authoring a design
+/// recipe reach for one of these; the discovery rule routes the
+/// matching expansion child's attributes into a context keyed by the
+/// `component_class` string. `tube` is the legacy alias for `triode`
+/// preserved for backward compatibility with stdlib triodes shipped
+/// before the BJT generalisation.
+const DEVICE_NAMESPACES: &[&str] = &["tube", "triode", "bjt"];
+
 /// Cheap predicate over a recipe's source to decide whether device
 /// parameters are required at evaluation time. We choose a textual
 /// over-approximation because (a) the declarative-path expression
 /// language stores statements as raw text and re-parses them in
 /// `evaluate_text`, and (b) the body-hook path stores the Rhai script
 /// as one big string — in both cases the cheapest reliable signal is
-/// substring presence of `tube`. A false positive (recipe text
-/// mentions `tube` only in a comment) merely produces an early error
-/// when a tube *is* expected; a false negative (recipe avoids the
-/// substring entirely while still using tube parameters somehow)
-/// can't happen because there is no other way to access them.
+/// substring presence of a known device-namespace identifier. A false
+/// positive merely produces an early error when a device *is*
+/// expected; a false negative can't happen because there's no other
+/// way to access the params.
 fn recipe_needs_device(recipe: &DesignRecipe) -> bool {
+    let mentions_device = |s: &str| -> bool {
+        DEVICE_NAMESPACES.iter().any(|ns| {
+            s.contains(&format!("{ns}.")) || s.contains(&format!("{ns} "))
+        })
+    };
     if let Some(body) = &recipe.body {
-        if body.inputs.iter().any(|n| n == "tube") { return true; }
-        if body.source.contains("tube") { return true; }
+        if body.inputs.iter().any(|n| DEVICE_NAMESPACES.contains(&n.as_str())) {
+            return true;
+        }
+        if mentions_device(&body.source) { return true; }
     }
     for stmt in &recipe.statements {
         let exprs: &[&str] = match stmt {
@@ -125,9 +160,7 @@ fn recipe_needs_device(recipe: &DesignRecipe) -> bool {
             DesignStatement::Require { condition, .. } => &[condition.as_str()],
             DesignStatement::Assign { expr, .. } => &[expr.as_str()],
         };
-        if exprs.iter().any(|e| e.contains("tube.") || e.contains("tube ")) {
-            return true;
-        }
+        if exprs.iter().any(|e| mentions_device(e)) { return true; }
     }
     false
 }
@@ -143,25 +176,26 @@ pub fn evaluate_recipe(
     recipe: &DesignRecipe,
     intent_attrs: &HashMap<String, String>,
     board: HashMap<String, f64>,
-    device: HashMap<String, f64>,
+    device_class: String,
+    device_params: HashMap<String, f64>,
 ) -> Result<HashMap<String, f64>, DesignEvalError> {
     // Stage 6: device-family parameters come from the actual expansion
     // child the synthesizer identified via the `component_class` discovery
-    // rule. We deliberately do NOT silently substitute a default tube
+    // rule. We deliberately do NOT silently substitute a default device
     // set when the map is empty — silent defaults hide wiring bugs that
     // produce wrong-looking but plausible answers. If a recipe asks for
-    // `tube.<param>` (declarative) or declares `tube` as an input (body
-    // hook) and the synthesizer didn't find a qualifying device, fail
-    // loudly so the vendor / board author sees the configuration error.
-    let tube_params = device;
-    if recipe_needs_device(recipe) && tube_params.is_empty() {
+    // `<family>.<param>` (declarative) or declares the family as an input
+    // (body hook) and the synthesizer didn't find a qualifying device,
+    // fail loudly so the vendor / board author sees the configuration
+    // error.
+    if recipe_needs_device(recipe) && device_params.is_empty() {
         return Err(DesignEvalError::EvalError(format!(
-            "design recipe for '{}'.'{}' refers to `tube.*` parameters \
-             but the synthesizer didn't discover a device child with \
-             component_class = \"triode\" in the expansion block. Check \
-             that the entity's expansion instantiates a triode (Triode, \
-             Triode12AU7, …) and that its `component_class` attribute is \
-             set.", recipe.entity_name, recipe.intent_name)));
+            "design recipe for '{}'.'{}' refers to device parameters \
+             (tube/triode/bjt/…) but the synthesizer didn't discover a \
+             qualifying device child in the expansion block. Check that \
+             the entity's expansion instantiates a device with a \
+             recognised `component_class` attribute (\"triode\" or \
+             \"bjt\").", recipe.entity_name, recipe.intent_name)));
     }
 
     // Stage 5 — foreign-language body hook takes precedence. The
@@ -170,13 +204,14 @@ pub fn evaluate_recipe(
     // an early return: if the recipe carries a body, the script owns
     // the outputs entirely.
     if recipe.body.is_some() {
-        return evaluate_body_hook(recipe, intent_attrs, &tube_params, &board);
+        return evaluate_body_hook(recipe, intent_attrs, &device_class, &device_params, &board);
     }
 
     let mut ctx = DesignContext {
         locals: HashMap::new(),
         intent_attrs,
-        tube_params,
+        device_class,
+        device_params,
         board,
     };
 
@@ -392,7 +427,8 @@ fn parse_literal(text: &str) -> Result<f64, String> {
 fn evaluate_body_hook(
     recipe: &DesignRecipe,
     intent_attrs: &HashMap<String, String>,
-    tube_params: &HashMap<String, f64>,
+    device_class: &str,
+    device_params: &HashMap<String, f64>,
     board: &HashMap<String, f64>,
 ) -> Result<HashMap<String, f64>, DesignEvalError> {
     use rhai::{Dynamic, Engine, Map, Scope};
@@ -412,9 +448,20 @@ fn evaluate_body_hook(
     // sandbox limits applied.
     let engine = build_rhai_engine();
 
-    // Marshal inputs into the script's scope as Rhai object maps.
+    // Marshal inputs into the script's scope as Rhai object maps. The
+    // device parameters are exposed under TWO names: the actual
+    // device_class string (so a BJT recipe reads `bjt.bf`) AND `tube`
+    // as a legacy alias when the device is a triode. Scripts written
+    // before the BJT generalisation referenced `tube` directly; we
+    // keep that path working for stdlib triodes.
     let mut scope = Scope::new();
-    scope.push("tube",   hashmap_to_rhai_map(tube_params));
+    let device_map = hashmap_to_rhai_map(device_params);
+    if !device_class.is_empty() {
+        scope.push(device_class.to_string(), device_map.clone());
+    }
+    if device_class == "triode" {
+        scope.push("tube", device_map.clone());
+    }
     scope.push("intent", intent_attrs_to_rhai_map(intent_attrs));
     scope.push("supply", hashmap_to_rhai_map(board));
 
@@ -707,14 +754,20 @@ mod tests {
     }
 
     fn make_ctx<'a>(intent: &'a HashMap<String, String>, board: HashMap<String, f64>) -> DesignContext<'a> {
-        let mut tube_params = HashMap::new();
+        let mut device_params = HashMap::new();
         let sn6 = bhdl_spice::triode::TriodeParams::sn6_6sn7();
-        tube_params.insert("mu".into(),  sn6.mu);
-        tube_params.insert("ex".into(),  sn6.ex);
-        tube_params.insert("kg1".into(), sn6.kg1);
-        tube_params.insert("kp".into(),  sn6.kp);
-        tube_params.insert("kvb".into(), sn6.kvb);
-        DesignContext { locals: HashMap::new(), intent_attrs: intent, tube_params, board }
+        device_params.insert("mu".into(),  sn6.mu);
+        device_params.insert("ex".into(),  sn6.ex);
+        device_params.insert("kg1".into(), sn6.kg1);
+        device_params.insert("kp".into(),  sn6.kp);
+        device_params.insert("kvb".into(), sn6.kvb);
+        DesignContext {
+            locals: HashMap::new(),
+            intent_attrs: intent,
+            device_class: "triode".into(),
+            device_params,
+            board,
+        }
     }
 
     #[test]
@@ -788,7 +841,7 @@ mod tests {
             body: None,
         };
         let (intent, board) = ctx();
-        let out = evaluate_recipe(&recipe, &intent, board, default_device()).expect("recipe eval failed");
+        let out = evaluate_recipe(&recipe, &intent, board, "triode".to_string(), default_device()).expect("recipe eval failed");
         let r_k = *out.get("Rk").expect("Rk not assigned");
         // Reference: the Rust path that this recipe re-expresses.
         let p = bhdl_spice::triode::TriodeParams::sn6_6sn7();
@@ -820,7 +873,7 @@ mod tests {
         let mut intent = HashMap::new();
         intent.insert("intent_current".into(), "1.0".into());
         let board = HashMap::new();
-        let err = evaluate_recipe(&recipe, &intent, board, default_device()).expect_err("expected require failure");
+        let err = evaluate_recipe(&recipe, &intent, board, "triode".to_string(), default_device()).expect_err("expected require failure");
         match err {
             DesignEvalError::RequireFailed(_) => {}
             other => panic!("expected RequireFailed, got {other}"),
@@ -851,7 +904,7 @@ mod tests {
             }),
         };
         let (intent, board) = ctx();
-        let out = evaluate_recipe(&recipe, &intent, board, HashMap::new()).expect("body hook eval");
+        let out = evaluate_recipe(&recipe, &intent, board, String::new(), HashMap::new()).expect("body hook eval");
         // Manual check: (300 - 100) / 0.005 / 10 = 4000.0
         let r_k = *out.get("Rk").expect("Rk missing from script output");
         assert!((r_k - 4000.0).abs() < 1e-6, "Rk = {r_k}, expected 4000");
@@ -879,7 +932,7 @@ mod tests {
             }),
         };
         let (intent, board) = ctx();
-        let out = evaluate_recipe(&recipe, &intent, board, default_device()).expect("body hook eval");
+        let out = evaluate_recipe(&recipe, &intent, board, "triode".to_string(), default_device()).expect("body hook eval");
         let i_max = *out.get("i_max").expect("i_max missing");
         // Compare against the Rust call directly — the host function
         // is just a thin wrapper, so the values must match exactly.
@@ -940,7 +993,7 @@ mod tests {
         let mut board = HashMap::new();
         board.insert("VBB".into(), 300.0);
 
-        let out = evaluate_recipe(&recipe, &intent, board, default_device()).expect("amplifier body hook");
+        let out = evaluate_recipe(&recipe, &intent, board, "triode".to_string(), default_device()).expect("amplifier body hook");
         let rp = *out.get("Rp").expect("Rp missing");
         let rk = *out.get("Rk").expect("Rk missing");
 
@@ -1020,8 +1073,8 @@ mod tests {
         dev_12au7.insert("kp".into(),  ecc.kp);
         dev_12au7.insert("kvb".into(), ecc.kvb);
 
-        let out_6sn7 = evaluate_recipe(&recipe, &intent, board.clone(), dev_6sn7).expect("6SN7 eval");
-        let out_12au7 = evaluate_recipe(&recipe, &intent, board, dev_12au7).expect("12AU7 eval");
+        let out_6sn7 = evaluate_recipe(&recipe, &intent, board.clone(), "triode".to_string(), dev_6sn7).expect("6SN7 eval");
+        let out_12au7 = evaluate_recipe(&recipe, &intent, board, "triode".to_string(), dev_12au7).expect("12AU7 eval");
 
         let rk_6sn7  = *out_6sn7.get("Rk").unwrap();
         let rk_12au7 = *out_12au7.get("Rk").unwrap();
@@ -1069,7 +1122,7 @@ for _ in 0..n {
         intent.insert("intent_gain".into(), "14.0".into());
         let board = HashMap::new();
 
-        let err = evaluate_recipe(&recipe, &intent, board, default_device())
+        let err = evaluate_recipe(&recipe, &intent, board, "triode".to_string(), default_device())
             .expect_err("script should fail");
         let msg = match err {
             DesignEvalError::ScriptFailed(m) => m,
@@ -1114,7 +1167,7 @@ for _ in 0..n {
             }),
         };
         let (intent, board) = ctx();
-        let err = evaluate_recipe(&recipe, &intent, board, HashMap::new()).expect_err("missing output");
+        let err = evaluate_recipe(&recipe, &intent, board, String::new(), HashMap::new()).expect_err("missing output");
         match err {
             DesignEvalError::ScriptFailed(msg) => {
                 assert!(msg.contains("Rk"),

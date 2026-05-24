@@ -206,8 +206,13 @@ pub enum LexerToken {
     #[token(">")] RAngle,
     #[token("@")] At,
 
-    // Updated Number regex to handle integers and floats (basic)
-    #[regex(r"[0-9]+(?:_[0-9]+)*(?:\.[0-9]+(?:_[0-9]+)*)?", priority = 1)] 
+    // Numbers: integers, floats, and scientific notation. Examples:
+    //   42, 1_000_000, 3.14, 0.5e-3, 6.734e-15, 1.2E+8, 1e9
+    // The optional underscore-separator is preserved from the legacy
+    // grammar (a digit-grouping convenience like Rust's `1_000_000`).
+    // Scientific notation matters for SPICE-shaped device parameters —
+    // e.g. BJT saturation currents like `is = 6.734e-15`.
+    #[regex(r"[0-9]+(?:_[0-9]+)*(?:\.[0-9]+(?:_[0-9]+)*)?(?:[eE][+\-]?[0-9]+)?", priority = 1)]
     Number,
     // String literal regex
     #[regex(r#""([^"\\]|\\.)*""#, priority = 1)]
