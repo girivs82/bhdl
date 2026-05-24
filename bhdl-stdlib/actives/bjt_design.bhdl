@@ -1,0 +1,136 @@
+// Vendor design-block worked-example entities for the BJT family.
+//
+// Separated from bjt.bhdl (which holds the typed-struct BJT(part: ...)
+// entity used as a component database) so the pre-existing parse
+// issues in that file do not affect the design surface. Vendors
+// adding new BJT entities for design-block use add them here.
+
+import { Res } from "../passive/resistor.bhdl";
+
+// Flat-attribute BJT entities for the vendor design-block surface.
+//
+// The parameterized `BJT(part: ...)` entity above is the
+// component-database shape — vendors author once, users pick a part
+// at instantiation, the runtime const lookup picks the right
+// parameter struct. The design surface (Stage 6 device discovery)
+// needs static numeric attributes on the entity definition so the
+// analyzer can populate ExpansionInstance.attributes at extraction
+// time. The entities below provide that shape, one entity per part
+// number, with flat `attribute bf = 200.0;` declarations.
+//
+// Vendors adding a new BJT family copy this template and adjust the
+// numeric defaults. The shipped recipes (BjtCurrentMirror below)
+// design correctly for any entity tagged `component_class = "bjt"`.
+//
+// Naming: NPN_<part> / PNP_<part>, parallel to Triode / Triode12AU7.
+// -----------------------------------------------------------------
+
+// Nominal 2N3904 NPN general-purpose small-signal transistor.
+// Gummel-Poon parameter set from the SPICE-standard model card.
+entity NPN_2N3904() {
+    pin C: signal inout;
+    pin B: signal in;
+    pin E: signal inout;
+
+    attribute component_class = "bjt";
+    attribute part_number = "2N3904";
+
+    // Gummel-Poon subset most design recipes care about:
+    // `bf` forward current gain, `is` saturation current, `vaf`
+    // forward Early voltage, `nf`/`nr` emission coefficients,
+    // `br` reverse current gain.
+    attribute bf = 200.0;
+    attribute br = 4.0;
+    attribute is = 6.734e-15;
+    attribute nf = 1.0;
+    attribute nr = 1.0;
+    attribute vaf = 74.03;
+
+    attribute kicad_symbol = "Device:Q_NPN_BCE";
+}
+
+// Nominal 2N2222 NPN small-signal transistor — slightly higher
+// current rating than 2N3904; a common roll-in for circuits that
+// need a bit more I_C headroom.
+entity NPN_2N2222() {
+    pin C: signal inout;
+    pin B: signal in;
+    pin E: signal inout;
+
+    attribute component_class = "bjt";
+    attribute part_number = "2N2222";
+
+    attribute bf = 255.9;
+    attribute br = 6.092;
+    attribute is = 14.34e-15;
+    attribute nf = 1.0;
+    attribute nr = 1.0;
+    attribute vaf = 74.03;
+
+    attribute kicad_symbol = "Device:Q_NPN_BCE";
+}
+
+// BJT current mirror — the classic two-transistor structure. Q1 is
+// diode-connected and sets a reference current through R_ref; Q2
+// shares Q1's V_BE and mirrors that current to whatever load sits
+// above the OUT pin. Output impedance is high (limited by V_AF).
+//
+//   VCC ── Rref ── vref ── Q1.C, Q1.B, Q2.B
+//                          │
+//                          ├── Q2.C ── OUT
+//                          │
+//   GND ── Q1.E, Q2.E
+//
+// `for current_source(current: I)` on a net into OUT asks the
+// designer to size R_ref so the reference branch passes ≈ I.
+// Matched-transistor approximation: I_mirror ≈ I_ref (the β/(β+2)
+// loss is small for any β > ~50 and is ignored in this v0.1
+// recipe — vendors who care can extend it).
+entity BjtCurrentMirror() {
+    pin OUT: signal out virtual;
+    pin VCC: power in;
+    pin GND: ground inout;
+
+    attribute component_class = "bjt_current_mirror";
+
+    expansion {
+        internal vref: net;
+
+        // Reference branch.
+        VCC -> Rref: Res(10000).1; Rref.2 -> vref;
+
+        // Q1: diode-connected (collector tied to base).
+        vref -> Q1: NPN_2N3904().C;
+        vref -> Q1.B;
+        GND -> Q1.E;
+
+        // Q2: the mirror, sharing Q1's base voltage at `vref`.
+        vref -> Q2: NPN_2N3904().B;
+        OUT -> Q2.C;
+        GND -> Q2.E;
+    }
+
+    // Vendor-authored designer for the current_source intent.
+    // Straight-line declarative (Stages 1–4 surface) — no Rhai
+    // needed. The same `bjt.*` namespace the Stage 6 work routes
+    // here works because the discovery sees `component_class =
+    // "bjt"` on Q1 (the first qualifying child).
+    //
+    // Method:
+    //   At the reference branch's operating point,
+    //     I_ref = (V_CC − V_BE) / R_ref
+    //   Matched transistors ⇒ I_mirror ≈ I_ref. Solve R_ref for the
+    //   intent's target current.
+    design for current_source {
+        const v_be     = 0.65;
+        const i_target = intent.current;
+        const v_cc     = supply.VCC;
+        require v_cc > v_be
+            else "V_CC must exceed V_BE (~0.65 V) for the reference branch to conduct";
+        require i_target > 0.0
+            else "target current must be positive";
+        require i_target < bjt.bf * 0.001
+            else "target current exceeds a comfortable fraction of the device's hFE-rated range";
+        Rref = (v_cc - v_be) / i_target;
+    }
+}

@@ -478,7 +478,13 @@ fn intent_driven_values(
     if let Some(recipe) = &cand.design_recipe {
         let board  = read_board_context(netlist, cand);
         let device = read_device_attributes(netlist, cand);
-        match crate::design_evaluator::evaluate_recipe(recipe, &cand.param_values, board, device) {
+        // Decompose into (class, params) — empty class string when
+        // discovery found nothing, which evaluate_recipe surfaces as a
+        // ScriptFailed if the recipe actually refers to device params.
+        let (device_class, device_params) = device.unwrap_or_default();
+        match crate::design_evaluator::evaluate_recipe(
+            recipe, &cand.param_values, board, device_class, device_params,
+        ) {
             Ok(values) => {
                 info!("Vendor design recipe for '{}'.'{}': {} value(s)",
                     cand.instance_name, recipe.intent_name, values.len());
@@ -543,19 +549,27 @@ fn intent_driven_values(
 /// Empty map if no qualifying child is found — the evaluator then
 /// falls back to bhdl-spice's nominal 6SN7 defaults so existing tests
 /// and toy boards keep working.
+/// Result of device-family discovery: the matching child's
+/// `component_class` (used as the recipe's namespace name) and its
+/// numeric attribute defaults. None when no qualifying child is found
+/// in the candidate's expansion.
 fn read_device_attributes(
     _netlist: &Netlist,
     cand: &ExpansionCandidate,
-) -> std::collections::HashMap<String, f64> {
+) -> Option<(String, std::collections::HashMap<String, f64>)> {
     use std::collections::HashMap;
-    let mut device = HashMap::new();
+    let mut device: HashMap<String, f64> = HashMap::new();
+    let mut device_class: Option<String> = None;
 
-    // The list of device-family component_class values whose Koren-shaped
-    // numeric attributes the evaluator threads through as `tube`. As
-    // additional device families land (BJT, MOSFET), each gets its own
-    // entry here and a corresponding namespace in the evaluator's
-    // identifier resolution.
-    const DEVICE_CLASSES: &[&str] = &["triode"];
+    // The list of device-family component_class values whose numeric
+    // attribute defaults the design evaluator picks up. Each entry
+    // becomes the namespace name in recipe identifier resolution —
+    // a triode child means the recipe can read `triode.mu` (and
+    // `tube.mu` as a backwards-compatibility alias); a BJT child means
+    // the recipe can read `bjt.bf` etc. Adding a new device family is
+    // a single line here plus an entity with `component_class =
+    // "<family>"`.
+    const DEVICE_CLASSES: &[&str] = &["triode", "bjt"];
 
     // Walk the expansion candidate's children. Each ExpansionInstance
     // carries the called entity's attribute defaults (populated at
@@ -579,6 +593,7 @@ fn read_device_attributes(
         // Found the device child — coerce each numeric-looking attribute
         // value to f64 and stash it. Non-numeric attributes (part_number,
         // kicad_symbol, component_class itself) are skipped silently.
+        device_class = Some(class.to_string());
         for (k, v) in &child.attributes {
             if let Ok(f) = v.trim().parse::<f64>() {
                 device.insert(k.clone(), f);
@@ -587,11 +602,11 @@ fn read_device_attributes(
         // First qualifying device wins; a recipe with two of the same
         // family is ambiguous and the design surface doesn't promise
         // anything about which one is picked. (No production board has
-        // two triodes in one expansion yet.)
+        // two devices in one expansion yet.)
         break;
     }
 
-    device
+    device_class.map(|c| (c, device))
 }
 
 /// Read the values of power nets connected to the parent's named pins.
