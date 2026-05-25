@@ -150,9 +150,29 @@ interactions, protocol-level checks).
   linear analog + event-driven state. v0.2+ may add `idt()` and
   `ddt()` operators if the use case demands it.
 
-- **Multi-physical domains.** No thermal, no mechanical, no
-  optical. Pure electrical. (Thermal could be a v1.0 addition
-  with a `thermal { }` sibling domain, but not now.)
+- **Multi-physical domains in v0.1.** Pure electrical for now.
+  Boards genuinely have thermal, mechanical, magnetic, and
+  hygrothermal content — heatsinks, thermal pads, copper as
+  heat spreader, junction temperatures, board mass and COG,
+  vibration modes, EMI radiation patterns. None of those are in
+  v0.1 because:
+
+  1. The class of bugs v0.1 targets (power sequencing,
+     backdrive, reset timing, protocol-level glitches) all live
+     in the electrical domain.
+  2. Cross-domain coupling at the board level is *loose* (3–6
+     orders of magnitude in timescale separation, mostly
+     unidirectional electrical→thermal/mechanical) — different
+     architecture than Verilog-AMS's tightly-coupled IC-level
+     `nature`/`discipline` machinery.
+  3. The right shape is *parallel domain blocks* with explicit
+     boundary coupling, not a unified multi-domain solver — see
+     §10.4 for the extension path.
+
+  v1.0+ adds `thermal { }`, `mechanical { }`, etc. as siblings
+  of `behavior { }`. The v0.1 architecture is deliberately
+  designed so adding these later does not require revisiting
+  the behavioral surface — they're independent extensions.
 
 - **RF / EM simulation.** Touchstone S-parameters, full-wave
   field solvers, etc. — these are different tooling.
@@ -1144,6 +1164,209 @@ A subset of Verilog-A can be translated mechanically:
 
 v0.1 ships the translator for the static subset; v0.2 considers
 adding `idt`/`ddt` and translating the dynamic subset.
+
+### 10.4 Future domain extensions (v1.0+ — architecture sketch)
+
+The v0.1 surface is electrical-only by design, but the architecture
+is deliberately designed to extend to other physical domains as
+*parallel sibling blocks* of `behavior { }`. This section sketches
+the extension path so v0.1 doesn't paint itself into a corner.
+
+#### 10.4.1 The sibling-block model
+
+A future entity carrying multi-domain content is shaped like this:
+
+```bhdl
+entity LDO_3V3() {
+    pin VIN: power in;
+    pin VOUT: power out;
+    pin GND: ground inout;
+    // ... electrical pins ...
+
+    attribute component_class = "ic_regulator";
+    attribute manufacturer = "Texas Instruments";
+    attribute mpn = "TLV75533PDBV";
+    // ... SKU attributes ...
+
+    // ─── Electrical (v0.1) ──────────────────────────────────────
+    behavior {
+        analog { VOUT = clamp(VIN - 0.2, 0, 3.3); }
+        state Off, Regulating, ThermalShutdown;
+        on VIN crosses 3.5 rising { state = Regulating; }
+        // ... events, transitions ...
+    }
+
+    // ─── Thermal (v1.0+) ────────────────────────────────────────
+    thermal {
+        // Static thermal model — junction-to-ambient resistance,
+        // junction-to-case, max junction temp. Vendor data direct
+        // from datasheet.
+        theta_ja = 250 K/W;
+        theta_jc = 60 K/W;
+        max_tj = 150 °C;
+
+        // Dissipation is computed by the thermal solver from
+        // electrical results: P = (VIN - VOUT) * I(VOUT)
+        // No manual specification needed — the convention is
+        // standard for linear regulators.
+        dissipation = (VIN - VOUT) * I(VOUT);
+
+        // Event handlers in the thermal domain — fires when
+        // junction temp crosses thresholds during simulation.
+        on tj crosses 145 °C rising {
+            // Thermal foldback behavior — the electrical model
+            // sees this through the `state == ThermalShutdown`
+            // expression in its `analog { }`.
+            trigger thermal_warning;
+        }
+    }
+
+    // ─── Mechanical (v1.0+) ─────────────────────────────────────
+    mechanical {
+        mass = 50 mg;                    // for board CG / shock
+        height = 1.6 mm;                 // for clearance checks
+        cog_offset = (0, 0, 0.8 mm);     // for vibration / drop
+        max_solder_temp = 260 °C;
+        // Vibration / shock characteristics for derating
+        max_acceleration = 30 g;
+    }
+}
+```
+
+Each domain block:
+
+- Is **independently optional** — vendors author only the
+  domains they have data for; absence of a block means "no
+  contribution to this domain."
+- Has its **own solver and timescale**. Electrical runs on
+  μs–ms timesteps; thermal on s–min timesteps; mechanical may
+  not run dynamically at all (just static checks).
+- Has **its own event language and handlers**, but shares the
+  same outer infrastructure (state variables, `on` syntax,
+  Rhai escape, testbench integration).
+
+#### 10.4.2 Cross-domain coupling
+
+The coupling is **loose, asynchronous, and boundary-mediated** —
+the opposite of Verilog-AMS's tightly-coupled-matrix approach.
+
+The simulator runs domain solvers on their own time grids and
+exchanges boundary conditions at well-defined points:
+
+```
+        ┌──────────────────┐
+        │   Electrical     │   ← v0.1, runs at μs–ms timesteps
+        │   solver         │
+        │   (GLACIER +     │
+        │   event sched.)  │
+        └────────┬─────────┘
+                 │
+                 │ dissipation per component (P = I*V)
+                 │ — exported at each thermal-relevant interval
+                 │   (every ~10ms by default)
+                 ▼
+        ┌──────────────────┐
+        │    Thermal       │   ← v1.0, runs at s–min timesteps
+        │    solver        │
+        │  (RC-network or  │
+        │   reduced-order  │
+        │   FEM)           │
+        └────────┬─────────┘
+                 │
+                 │ junction temps per component, available as
+                 │   `tj(<instance>)` in any domain's expressions
+                 │   on the next thermal timestep
+                 ▼
+        ┌──────────────────┐
+        │   Mechanical /   │   ← v1.0+, mostly static checks
+        │   environmental  │
+        │   checks         │
+        └──────────────────┘
+```
+
+What this means concretely:
+
+- **Electrical does not solve the thermal matrix.** It produces
+  dissipation results that feed the thermal solver as
+  boundary conditions on its next step.
+- **Thermal does not solve the electrical matrix.** It produces
+  junction temperatures that the electrical solver can read on
+  its next step via `tj(<instance>)` if the model cares.
+- **Effects modeled at design time, not simulation time** for
+  most parametric coupling: a resistor's temperature
+  coefficient is applied during synthesis based on the
+  expected operating temperature, not solved as a feedback
+  loop. (The `design { }` recipe surface in
+  `Vendor_Design_Blocks.md` is the right place for this kind
+  of derating math.)
+
+#### 10.4.3 Testbench surface extensions
+
+The v0.1 testbench surface generalises cleanly:
+
+```bhdl
+testbench FullSystemStress for MyProduct {
+    apply VBAT = ramp(0V, 12V, over 100ms);
+    apply ambient_temp = step(45 °C, at 0s);
+
+    // Electrical assertion (v0.1)
+    expect VDD_3V3 settles_to(3.3V) within 200ms after VBAT > 6.5;
+
+    // Thermal assertion (v1.0+)
+    expect tj(U_REG3V3) < 105 °C for_all_time during 30min_simulation;
+
+    // Mechanical assertion (v1.0+)
+    expect board_max_deflection < 2mm under_load(2g);
+    expect total_board_mass < 50g;
+}
+```
+
+The temporal operators (`within`, `during`, `at_any_time`,
+`for_all_time`) and the assertion machinery generalise across
+domains because they're about *time and conditions*, not about
+any particular physics.
+
+#### 10.4.4 Import path for domain-specific data
+
+Each domain has its own natural vendor-data sources, parallel
+to electrical:
+
+| Domain | Best free data source | Format | Status |
+|---|---|---|---|
+| Electrical (passives) | LCSC / Digikey parametric | CSV | importer planned |
+| Electrical (SPICE) | Manufacturer `.lib` / `.mod` | SPICE | importer planned |
+| Electrical (IBIS) | Manufacturer `.ibs` | IBIS | importer planned (this spec §10.2) |
+| Thermal | Manufacturer datasheets (theta_ja, theta_jc) + IC-Package thermal models | Often inline in datasheet tables; thermal RC files for advanced parts | v1.0+ importer |
+| Mechanical | 3D STEP files for component bodies (free from manufacturers, SnapEDA, Ultra Librarian) | STEP / IGES | v1.0+ importer; mass/COG often derived from geometry |
+| Footprints / symbols | KiCad libraries, SnapEDA, vendor-supplied | KiCad, Eagle, OrCAD | partial integration today |
+
+The architectural promise is the same as for electrical:
+**vendors publish in whichever format makes sense for their
+domain; BHDL imports from each and emits a unified entity.**
+
+#### 10.4.5 Why this matters strategically
+
+A complete component description today is *fragmented* across
+five or six different fragmentary files:
+
+- Datasheet PDF (manufacturer)
+- SPICE/IBIS model (manufacturer's design-resources page)
+- Schematic symbol (KiCad library / SnapEDA)
+- Footprint (KiCad library / Ultra Librarian)
+- 3D STEP body (manufacturer / SnapEDA / Ultra Librarian)
+- Distributor catalog row (LCSC / DigiKey)
+
+Each fragment lives in a different format, in a different
+place, often with version drift between them. There is no
+single source of truth.
+
+BHDL's per-class importers, *taken together*, become the
+**unifying format**: one `.bhdl` file per component contains
+the union of every other fragment's content. The fragments
+become *upstream sources* the BHDL component imports from; the
+`.bhdl` is the canonical post-import representation. See the
+unification framing in
+[`Product_Description_Model.md` §8](Product_Description_Model.md#8-bhdl-as-the-unifying-component-description-format).
 
 ---
 
