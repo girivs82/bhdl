@@ -320,8 +320,14 @@ dependencies = [
 name = "bhdl-kicad-import"
 version = "0.1.0"
 dependencies = [
+ "bhdl-analyzer",
+ "bhdl-ast",
+ "bhdl-netlist",
+ "bhdl-parser",
+ "bhdl-synthesizer",
  "serde",
  "thiserror",
+ "tokio",
  "toml",
 ]
 

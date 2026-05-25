@@ -47,7 +47,7 @@ pub use lib_resolver::{LibraryResolver, SymLibTableEntry,
     parse_kicad_sym_str, parse_kicad_sym_file};
 pub use symbol_mapping::{MappingRegistry, SymbolMapping, MappingError};
 pub use nets::{extract_nets, Net, NetList, NetPin};
-pub use emitter::{emit_bhdl, EmittedBhdl, EmitError};
+pub use emitter::{emit_bhdl, emit_bhdl_with_options, EmittedBhdl, EmitError, EmitOptions};
 pub use canonical::{
     canonical_from_schematic, parse_kicad_net_file, compare,
     CanonicalNetlist, PinRef, NetDiff, EquivalenceReport,
