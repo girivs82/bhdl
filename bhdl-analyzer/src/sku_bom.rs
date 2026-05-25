@@ -109,6 +109,13 @@ pub fn walk(netlist: &Netlist) -> Vec<BomRow> {
         {
             continue;
         }
+        // Skip instances flagged do-not-populate by the active SKU
+        // variant (set by bhdl_synthesizer::variant_apply). The
+        // instance stays in the netlist (SPICE / PnR see it) but
+        // doesn't get a BOM row for this SKU.
+        if get("do_not_populate") == "true" {
+            continue;
+        }
         // Skip instances explicitly flagged as logical (entity
         // wrappers that the expansion interpreter dissolved into
         // their children — these are still in the netlist with

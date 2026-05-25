@@ -284,6 +284,13 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
         design_recipes.entry(entity).or_default().extend(by_intent);
     }
 
+    // Extract board-level SKU variants from the main source file.
+    // Variants are board-local (a `variant` block can only patch
+    // instances declared in the surrounding board), so we don't
+    // pass1-merge them across imports — a board can't reference
+    // another file's instances anyway.
+    let variants = extract_variant_blocks(source_file);
+
     // Extract symbol and layout definitions (from imported files + main file)
     let mut symbol_definitions = imported_symbol_definitions;
     let main_file_symbols = extract_symbol_definitions(source_file);
@@ -441,6 +448,7 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
         monomorphization: mono_result, // Move ownership (Pass 2.5)
         expansion_recipes, // Move ownership (Pass 8.5)
         design_recipes, // Move ownership (Pass 8.5)
+        variants,
         placement_recipes, // Move ownership (Pass 8.5)
         symbol_definitions, // Move ownership (Pass 8.5)
         layout_definitions, // Move ownership (Pass 8.5)
@@ -1524,6 +1532,106 @@ pub fn extract_expansion_recipes_with_overlay(
     }
 
     recipes
+}
+
+/// Walk a source file's boards and pull each `variant <Name> { ... }`
+/// block into a [`bhdl_common::variant::Variant`]. Returns a map of
+/// board-name → variant-name → variant.
+///
+/// V0.1 surface (see `docs/spec/Board_SKU_Variants.md` §2.2):
+/// the body of a variant block contains zero or more of these
+/// statement forms:
+///
+/// - `dnp <instance>;`               (do-not-populate)
+/// - `<instance>.value = <expr>;`    (value override; field must be `value`)
+///
+/// Anything else parses (the parser accepts any IDENT for the field
+/// name to leave room for v0.2 extensions like `.mpn`) but the
+/// analyzer rejects it here with a diagnostic.
+pub fn extract_variant_blocks(
+    source_file: &SourceFile,
+) -> std::collections::HashMap<String, std::collections::HashMap<String, bhdl_common::variant::Variant>> {
+    use bhdl_common::variant::Variant;
+    use bhdl_ast::{Board, HasName, SyntaxKind};
+    use rowan::ast::AstNode;
+
+    let mut all: std::collections::HashMap<String, std::collections::HashMap<String, Variant>>
+        = std::collections::HashMap::new();
+
+    for item in source_file.items() {
+        let board = match Board::cast(item.syntax().clone()) { Some(b) => b, None => continue };
+        let board_name = board.name().map(|t| t.text().to_string()).unwrap_or_default();
+        if board_name.is_empty() { continue; }
+
+        for variant_node in board.syntax().children()
+            .filter(|n| n.kind() == SyntaxKind::VARIANT_BLOCK)
+        {
+            // Variant name = the first IDENT token after VARIANT_KW.
+            let variant_name = {
+                let mut after_kw = false;
+                let mut name = None;
+                for el in variant_node.children_with_tokens() {
+                    if let Some(t) = el.as_token() {
+                        if t.kind() == SyntaxKind::VARIANT_KW { after_kw = true; continue; }
+                        if after_kw && t.kind() == SyntaxKind::IDENT {
+                            name = Some(t.text().to_string());
+                            break;
+                        }
+                    }
+                }
+                match name { Some(n) => n, None => continue }
+            };
+
+            let mut v = Variant::new(variant_name.clone());
+
+            for stmt in variant_node.children() {
+                match stmt.kind() {
+                    SyntaxKind::VARIANT_DNP_STMT => {
+                        if let Some(inst) = first_token_text(&stmt, SyntaxKind::IDENT) {
+                            v.dnp.insert(inst);
+                        }
+                    }
+                    SyntaxKind::VARIANT_VALUE_OVERRIDE => {
+                        // Body shape: IDENT '.' IDENT '=' EXPR ';'
+                        // The first IDENT is the instance name, the
+                        // second is the field name (must be "value"
+                        // for v0.1).
+                        let mut idents: Vec<String> = stmt.children_with_tokens()
+                            .filter_map(|el| el.into_token())
+                            .filter(|t| t.kind() == SyntaxKind::IDENT)
+                            .map(|t| t.text().to_string())
+                            .collect();
+                        if idents.len() < 2 { continue; }
+                        let field = idents.pop().unwrap();
+                        let inst  = idents.pop().unwrap();
+                        if field != "value" {
+                            println!("  WARN: variant '{}' in board '{}' tries to override \
+                                      `{}.{}` — only `.value` is supported in v0.1; ignored",
+                                     variant_name, board_name, inst, field);
+                            continue;
+                        }
+                        if let Some(expr) = text_between(&stmt, SyntaxKind::EQ, SyntaxKind::SEMI) {
+                            v.value_overrides.insert(inst, expr);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            if v.is_empty() {
+                println!("  Variant '{}'.'{}' is empty (base design unchanged).",
+                         board_name, variant_name);
+            } else {
+                println!("  Extracted variant '{}'.'{}': {} value override(s), {} DNP",
+                         board_name, variant_name,
+                         v.value_overrides.len(), v.dnp.len());
+            }
+            all.entry(board_name.clone()).or_default()
+                .insert(variant_name, v);
+        }
+    }
+
+    all
 }
 
 /// Walk a source file's entities and pull each `design for <intent> { … }`

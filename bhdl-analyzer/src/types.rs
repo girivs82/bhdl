@@ -459,6 +459,11 @@ pub struct AnalysisResult {
     /// runs the intent-driven designer for an instance, it consults this
     /// map first and falls back to the Rust reference designer on miss.
     pub design_recipes: HashMap<String, HashMap<String, bhdl_common::design::DesignRecipe>>,
+    /// Board-level SKU variants extracted from `variant <Name> { }`
+    /// blocks. Keyed by board name → variant name → patch set.
+    /// Empty when no variant blocks are declared (existing boards
+    /// keep working as a single implicit "default" SKU).
+    pub variants: HashMap<String, HashMap<String, bhdl_common::variant::Variant>>,
     /// Placement recipes extracted from entity `placement { }` blocks
     pub placement_recipes: HashMap<String, bhdl_common::PlacementRecipe>,
     /// Symbol definitions extracted from `symbol EntityName { }` blocks
@@ -494,6 +499,7 @@ impl Default for AnalysisResult {
             monomorphization: crate::passes::MonomorphizationResult::new(),
             expansion_recipes: HashMap::new(),
             design_recipes: HashMap::new(),
+            variants: HashMap::new(),
             placement_recipes: HashMap::new(),
             symbol_definitions: HashMap::new(),
             layout_definitions: HashMap::new(),
