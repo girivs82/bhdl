@@ -252,6 +252,19 @@ impl NetlistToSpiceConverter {
         let module = netlist.modules.get(instance.definition)
             .ok_or_else(|| anyhow::anyhow!("Module not found for instance {}", instance.name))?;
 
+        // Skip parts marked do-not-populate by the active SKU variant.
+        // The instance stays in the netlist (so PnR can keep the
+        // footprint on the silkscreen and downstream consumers see a
+        // structurally identical netlist across SKUs), but
+        // electrically the part isn't on the shipped board — SPICE
+        // must simulate the variant-as-built. A missing R/C is an
+        // open circuit at simulation time.
+        if instance.attributes.get("do_not_populate").map(String::as_str) == Some("true") {
+            info!("Skipping {} — flagged do-not-populate by active SKU variant",
+                  instance.name);
+            return Ok(());
+        }
+
         info!("Processing instance {} with module kind {:?}, module name: {}",
               instance.name, module.kind, module.name);
 
