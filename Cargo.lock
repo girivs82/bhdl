@@ -317,6 +317,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "bhdl-kicad-import"
+version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
 name = "bhdl-lsp"
 version = "0.1.0"
 dependencies = [
