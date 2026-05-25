@@ -374,6 +374,7 @@ single source of truth.
 |---|---|
 | `Vendor_Design_Blocks.md` | Design recipe surface (declarative + Rhai), §1–§10, then §11 amendment for the body hook |
 | `Board_SKU_Variants.md`   | Variants v0.1: DNP + value override + CLI |
+| `Behavioral_Models.md`    | System-level dynamic simulation: `behavior { }` DSL, scheduler, testbench surface, IBIS/PSpice import paths, multi-domain extension architecture |
 | *(this document)*         | The architectural overview — how the pieces compose |
 
 Features without a dedicated spec but described in this overview:
@@ -414,3 +415,231 @@ the architecture, but worth knowing about:
 
 None of these are architectural gaps — they're consumer-side
 work or speculative extensions.
+
+---
+
+## 8. BHDL as the unifying component description format
+
+This is the strategic frame that ties the architecture together
+across electrical, manufacturing, configuration, simulation,
+thermal, and mechanical dimensions.
+
+### 8.1 The fragmentation problem
+
+A complete description of a single component today is **scattered
+across five or six different fragmentary files in different
+formats in different places**:
+
+| Fragment | Where it lives today | Format |
+|---|---|---|
+| Identity (manufacturer + MPN + package) | Distributor catalog row (LCSC, DigiKey, Mouser) | CSV / JSON via web API |
+| Datasheet (human-readable spec) | Manufacturer "design resources" page | PDF |
+| Electrical SPICE model | Manufacturer "design resources" page | `.lib` / `.mod` (Berkeley SPICE) |
+| IBIS model (I/O buffer behavior) | Same | `.ibs` (IEEE-standardised) |
+| PSpice behavioral subckt | Same | PSpice-dialect SPICE |
+| Schematic symbol | KiCad / SnapEDA / Ultra Librarian | KiCad symbol, Eagle library, OrCAD |
+| Footprint | Same | KiCad footprint, Eagle library |
+| 3D body for mechanical / clearance / drop sims | Manufacturer or SnapEDA | STEP / IGES |
+| Thermal R-network (theta_ja, theta_jc) | Inline in datasheet PDF | Hand-typed values |
+| Application-note design math | Vendor design center, sometimes Excel | PDF + Excel spreadsheets |
+
+No single file contains all of these. There is **no canonical
+form of a component**. Every tool that wants to use the
+component (synthesis, simulation, layout, BOM, mechanical
+analysis) reads a different subset from a different format,
+with version drift between fragments a chronic problem.
+
+### 8.2 BHDL as the unifying form
+
+Every fragment in §8.1 has a natural mapping into BHDL's per-
+class importer pipeline:
+
+| Fragment | BHDL importer | Lands in the .bhdl as |
+|---|---|---|
+| LCSC / DigiKey catalog row | Catalog scraper (planned) | `attribute manufacturer`, `mpn`, `digikey_pn`, `lcsc_pn`, `physical_package`, `value`, `tolerance`, `voltage_rating`, … |
+| SPICE `.lib` / `.mod` | SPICE harvester (Behavioral_Models §10.1) | `behavior { analog { … } }` with PSpice→BHDL translation, OR device-family-attribute extraction (BJT Gummel-Poon, MOSFET BSIM, etc.) |
+| IBIS `.ibs` | IBIS importer (Behavioral_Models §10.2) | `behavior { analog { lookup(table, …) } state Off, Driving; … }` |
+| PSpice behavioral subckt | PSpice translator (Behavioral_Models §10.1) | `behavior { analog { … } }` |
+| KiCad symbol | Symbol importer (existing) | `attribute kicad_symbol = "..."` + `symbol { … }` block |
+| KiCad footprint | Footprint importer (existing) | `attribute footprint = "..."` + `layout { … }` block |
+| STEP 3D body | STEP importer (planned, v1.0+) | `mechanical { mass = …; height = …; cog = …; }` |
+| Thermal datasheet table | Datasheet-extraction LLM (planned) | `thermal { theta_ja = …; theta_jc = …; max_tj = …; }` |
+| Design app-note math | Vendor authoring + `design { }` blocks | `design for amplifier { … }` (existing) |
+
+The end state of an importer run is a **single `.bhdl` file per
+component containing every fragment's content in BHDL syntax**.
+The fragments become *upstream sources* that the BHDL
+component imports from; the `.bhdl` is the **canonical post-
+import form** — the source of truth every downstream tool
+reads.
+
+### 8.3 What the unified component looks like
+
+```bhdl
+// Auto-generated from upstream sources:
+//   manufacturer / SKU:  LCSC catalog
+//   electrical (SPICE):  TI design-resources `.lib`
+//   IBIS:                TI `STM32F4-GPIO.ibs`
+//   symbol:              KiCad standard library
+//   footprint:           KiCad standard library
+//   thermal:             datasheet PDF (LLM-extracted, human-verified)
+//   3D body:             SnapEDA STEP
+//
+// All eight upstream fragments now live in this one .bhdl
+// file with consistent versioning, single source of truth,
+// machine-checkable cross-references.
+
+entity STM32F401RE_GPIOC_5() {
+    pin VDD: power in;
+    pin VSS: ground inout;
+    pin IO:  signal inout;
+
+    // ─── Identity (from LCSC) ───────────────────────────────────
+    attribute component_class = "mcu_gpio";
+    attribute manufacturer = "STMicroelectronics";
+    attribute mpn = "STM32F401RET6";
+    attribute physical_package = "LQFP-64";
+    attribute footprint = "Package_QFP:LQFP-64_10x10mm_P0.5mm";
+    attribute kicad_symbol = "MCU_ST_STM32F4:STM32F401RETx";
+    attribute datasheet = "https://www.st.com/resource/en/datasheet/stm32f401re.pdf";
+    attribute digikey_pn = "497-14916-ND";
+    attribute lcsc_pn = "C76995";
+
+    // ─── Electrical I/O behaviour (from IBIS) ───────────────────
+    behavior {
+        // Pulled from STM32F4-GPIO.ibs
+        table pullup_iv {
+            -1.0   -0.080
+             0.0   -0.060
+            // … typical/min/max corners
+        }
+        table pulldown_iv { /* … */ }
+        table power_clamp { /* … */ }
+        table ground_clamp { /* … */ }
+
+        state HighZ, DrivingHigh, DrivingLow;
+        initial { state = HighZ; }
+
+        analog {
+            i_drive = if state == DrivingHigh then lookup(pullup_iv, V(IO))
+                      else if state == DrivingLow then lookup(pulldown_iv, V(IO))
+                      else 0;
+            i_clamp = lookup(power_clamp, V(IO) - V(VDD))
+                    + lookup(ground_clamp, V(IO) - V(VSS));
+            i_total = i_drive + i_clamp;
+        }
+        // ... event handlers for state transitions ...
+    }
+
+    // ─── Thermal (from datasheet, human-verified) ───────────────
+    thermal {
+        theta_ja = 45 K/W;        // LQFP-64 on standard 4-layer board
+        theta_jc = 12 K/W;
+        max_tj = 105 °C;
+    }
+
+    // ─── Mechanical (from SnapEDA STEP) ─────────────────────────
+    mechanical {
+        mass = 230 mg;
+        height = 1.4 mm;
+        body_dimensions = (10mm, 10mm, 1.4mm);
+        cog_offset = (0, 0, 0.7mm);
+    }
+}
+```
+
+This file is now the **single source of truth** for that
+component across every downstream consumer:
+
+- The synthesizer reads electrical for netlist + SPICE export
+- The BOM walker reads identity for the order-ready bill
+- The PnR reads footprint + mechanical for placement
+- The behavioral simulator reads `behavior { }` for system tests
+- The thermal solver reads `thermal { }` for junction-temp
+  estimates
+- The mechanical analyzer reads `mechanical { }` for board CG /
+  shock checks
+
+No version drift between fragments — they're all in one file,
+one commit, one version. Updates re-run the importers; the
+result is a regenerated `.bhdl` whose diff against the
+previous version is auditable.
+
+### 8.4 The economic flywheel
+
+This unification has a real strategic implication for the
+ecosystem:
+
+- **Today**: every EDA tool maintains its own component
+  database (Cadence's internal library, Altium's library
+  manager, KiCad's library, OrCAD CIS, …). Library curation
+  is a per-tool problem; libraries don't travel.
+- **With BHDL as the canonical form**: a single
+  `bhdl-parts` repository serves every tool that can read
+  BHDL. KiCad, EDA browser-based tools, future BHDL-native
+  flows all pull from one library. Component data becomes
+  *portable*.
+- **For vendors**: publishing a `.bhdl` (or letting the
+  importer pipeline pull from existing fragments) means one
+  file covers every downstream tool's needs. Reduces vendor
+  support load.
+- **For users**: opening any `.bhdl` reveals the full
+  component description — no hunting across five different
+  formats and three different vendor sites.
+
+The same architectural property that makes BHDL the canonical
+post-import form for one component also makes the *.bhdl
+ecosystem* a single shared resource the way GitHub became a
+single shared resource for code or PyPI became one for Python
+packages. Single source of truth, single point of update,
+versioned and auditable.
+
+### 8.5 What this requires (and what it doesn't)
+
+Required to realise the unification:
+
+- **Importers** for each upstream fragment format (planned in
+  `Behavioral_Models.md` §10 and elsewhere)
+- **Roundtrip-safety**: importers must be re-runnable —
+  re-importing the same upstream source produces the same
+  `.bhdl` byte-for-byte (so diffs reflect real upstream
+  changes, not importer variance)
+- **Public registry**: a `bhdl-parts` repo or equivalent that
+  hosts post-import components, ideally with CI that
+  re-imports on upstream changes
+
+Not required:
+
+- **Replacing existing formats**: SPICE / IBIS / PSpice /
+  KiCad libs all continue to exist as upstream sources.
+  BHDL doesn't compete with them; it consolidates them.
+- **Vendor cooperation**: most upstream fragments are already
+  public. The importers don't require vendor sign-off.
+- **A revolution in EE practice**: users can adopt BHDL
+  component files incrementally, alongside their existing
+  flows. The unification benefit kicks in as soon as ONE
+  consumer of the `.bhdl` content exists (which it does:
+  bhdl-cli itself).
+
+### 8.6 What's left for this to be real
+
+| Piece | Status |
+|---|---|
+| Architecture supports unified single-file form | ✅ done (this conversation) |
+| Electrical/SKU/variants/sockets in the unified form | ✅ done |
+| Behavioral architecture for unification of SPICE/IBIS/PSpice | ✅ spec'd (`Behavioral_Models.md`) |
+| Thermal/mechanical sibling-block architecture | ✅ spec'd (`Behavioral_Models.md` §10.4) |
+| LCSC importer (identity / SKU / passive electrical) | not started |
+| SPICE harvester (device-family electrical) | not started |
+| IBIS importer | not started (B10 in behavioral spec) |
+| PSpice behavioral translator | not started (B9) |
+| Symbol / footprint importers (KiCad) | partial |
+| STEP 3D body importer | not started |
+| Datasheet thermal-table extractor | not started (LLM-assisted) |
+| `bhdl-parts` public registry | not started |
+
+The remaining work is **importer engineering + ecosystem
+infrastructure**, not architecture. Each importer is bounded
+and independently committable. The unifying claim becomes more
+true as more importers land; even the first one or two
+already deliver value for the parts they cover.
