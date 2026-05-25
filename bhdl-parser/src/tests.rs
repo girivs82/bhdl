@@ -652,4 +652,75 @@ alias LM1117_33 = LinearRegulator<3.3V>;
         assert!(raw_str.text().contains("#{ Rp:"),
             "raw string didn't capture script body: {:?}", raw_str.text());
     }
+
+    #[test]
+    fn parse_variant_block_with_dnp_and_value_override() {
+        // Board with two declared SKU variants. v0.1 body grammar:
+        //  - `<inst>.value = <expr>;`  (value override)
+        //  - `dnp <inst>;`              (do-not-populate)
+        // Other statement forms are rejected by the parser.
+        let input = r#"
+            board Product {
+                R1: Res(10k);
+                R2: Res(20k);
+                C_BACKUP: Cap(10uF);
+
+                variant Basic {
+                }
+                variant Pro {
+                    R1.value = 100k;
+                    R2.value = 200k;
+                }
+                variant EU {
+                    dnp C_BACKUP;
+                }
+            }
+        "#;
+        let result = parse(input);
+        assert!(result.errors.is_empty(), "parse errors: {:?}", result.errors);
+
+        let root = result.syntax();
+        let variants = find_all_nodes(&root, VARIANT_BLOCK);
+        assert_eq!(variants.len(), 3, "expected three variant blocks");
+
+        // Pro has two value-override statements.
+        let pro = variants.iter()
+            .find(|v| variant_name(*v) == Some("Pro".to_string()))
+            .expect("no Pro variant");
+        let overrides = find_all_nodes(pro, VARIANT_VALUE_OVERRIDE);
+        assert_eq!(overrides.len(), 2, "Pro should have two value overrides");
+        let dnp_in_pro = find_all_nodes(pro, VARIANT_DNP_STMT);
+        assert_eq!(dnp_in_pro.len(), 0, "Pro shouldn't have dnp statements");
+
+        // EU has one DNP statement.
+        let eu = variants.iter()
+            .find(|v| variant_name(*v) == Some("EU".to_string()))
+            .expect("no EU variant");
+        let dnp = find_all_nodes(eu, VARIANT_DNP_STMT);
+        assert_eq!(dnp.len(), 1, "EU should have one dnp statement");
+        let overrides_in_eu = find_all_nodes(eu, VARIANT_VALUE_OVERRIDE);
+        assert_eq!(overrides_in_eu.len(), 0, "EU shouldn't have value overrides");
+
+        // Basic is empty (the base design unchanged).
+        let basic = variants.iter()
+            .find(|v| variant_name(*v) == Some("Basic".to_string()))
+            .expect("no Basic variant");
+        assert_eq!(find_all_nodes(basic, VARIANT_VALUE_OVERRIDE).len(), 0);
+        assert_eq!(find_all_nodes(basic, VARIANT_DNP_STMT).len(), 0);
+    }
+
+    /// Extract the IDENT after `variant` keyword from a VARIANT_BLOCK
+    /// node. Returns None if the keyword/name structure is malformed.
+    fn variant_name(node: &SyntaxNode<BhdlLanguage>) -> Option<String> {
+        let mut after_kw = false;
+        for el in node.children_with_tokens() {
+            if let Some(t) = el.as_token() {
+                if t.kind() == VARIANT_KW { after_kw = true; continue; }
+                if after_kw && t.kind() == IDENT {
+                    return Some(t.text().to_string());
+                }
+            }
+        }
+        None
+    }
 }
