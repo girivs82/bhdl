@@ -1,10 +1,86 @@
 # KiCad Import & Stdlib Accretion: Strategic Plan
 
-> **Status:** Pre-implementation planning document. Every
+> **Status:** **Phases A–I shipped 2026-05-25** — the importer is
+> functionally complete for v0.1. Lives in `bhdl-kicad-import/`
+> with 57 tests green and proof on a real Arduino UNO R3
+> schematic. Remaining work to close the end-to-end equivalence
+> proof lives in `bhdl-synthesizer` (component-database wiring),
+> not in this crate.
+
+> **Original status:** Pre-implementation planning document. Every
 > architectural decision, every phase of work, every test, every
 > deliverable scoped before code. Companion to the spec docs in
 > `docs/spec/`; this lives in `docs/plan/` because it's tactical
 > sequencing rather than language design.
+
+---
+
+## Completion snapshot (2026-05-25)
+
+| Phase | Status | What landed |
+|-------|--------|-------------|
+| **A** — KiCad reader infrastructure | ✅ shipped | `sexpr.rs` + `ir.rs` + `reader.rs`. KiCad 6+ S-expr → typed IR. UUID-safe number parser. 9 reader tests. |
+| **B** — Symbol library resolution | ✅ shipped | `lib_resolver.rs` (sym-lib-table + external `.kicad_sym`) + `symbol_mapping.rs` (TOML registry). `bhdl-stdlib/kicad-symbol-mapping.toml` shipped. Lazy load + env-var template expansion. |
+| **C** — Net topology extraction | ✅ shipped | `nets.rs`. Union-find on micron-quantised connection points. Mid-wire point-on-segment attachment for labels/junctions/power flags. Power > global > hierarchical > local label-naming priority. |
+| **D** — BHDL emitter | ✅ shipped | `emitter.rs`. Root → `board { }`, child sheets → `entity { }`. Power flags → `power VCC_5V = 5V;` / `ground GND;`. Unmapped → `kicad_passthrough` + warning. Multi-unit dedup. `{slash}`/`{tilde}`/etc. escape decoding. |
+| **E** — Canonical netlist + comparator | ✅ shipped | `canonical.rs`. `CanonicalNetlist` byte-deterministic. Per-sheet flattening with `/Sheet/` prefix. KiCad `.net` file parser. Structured `EquivalenceReport`. **Surfaced and fixed a real determinism bug in `nets.rs`** (HashMap-order `Net_N` naming). |
+| **F** — Arduino UNO R3 end-to-end | ✅ shipped | Real KiCad 8 schematic ingested. **154 nets, 252 pins, 38.2% stdlib coverage** (45.6% after Phase G). 370-line BHDL emitted with hierarchy preserved. Caught two real bugs: KiCad `{slash}` label escapes, multi-unit-part declaration duplication. |
+| **G** — Stdlib alignment + passthrough stub | ✅ shipped | `bhdl-stdlib/kicad_passthrough.bhdl` stub entity. Mapping registry overhauled: only entries pointing at real entities, PascalCase aligned to actual stdlib names. Disciplined fallthrough to passthrough for unmapped parts. |
+| **H** — BHDL round-trip equivalence test | ✅ shipped | `tests/roundtrip.rs`. `EmitOptions::stdlib_path` for import-line generation. `canonical_from_bhdl_netlist` walks synthesizer-produced `bhdl_netlist::Netlist`. **Phase H surfaced the real upstream gap**: the synthesizer can't load the rich-tier stdlib files because bhdl-parser doesn't accept their syntax. |
+| **I** — Reroute to parser-compatible stdlib | ✅ shipped | `stdlib_entity_file` rerouted to v2.0-grammar variants (`passives/resistor_simple.bhdl`, `passive/diode.bhdl`, `optoelectronic/led.bhdl`, `protection/tvs.bhdl`). **Round-trip now reaches `compare()` for the first time.** |
+
+## Two upstream blockers Phase H/I surfaced (not importer-side)
+
+The importer's contract — emit BHDL that parses, analyzes, and
+synthesizes — is satisfied. Round-trip equivalence remains
+blocked on two `bhdl-synthesizer` issues:
+
+1. **Component-database wiring for imported entities.** When the
+   synthesizer sees `R1: Resistor("1k");` with an `import { Resistor }
+   from "..."`, it parses the import but does NOT register the
+   resolved entity in its inference / pin-binding layer. Pass 6
+   reports `Unknown component type 'Resistor' - no inference rules
+   available`. Fix lives in `bhdl-analyzer/src/component_inference.rs`
+   (`module_resolver` wiring) + `bhdl-synthesizer/src/interface_synthesis.rs`
+   (`get_or_create_X_module` hardcoded paths). Substantial work
+   (~300 LOC across multiple files).
+2. **Ambient power-domain instances.** The analyzer's "Power
+   Analysis" pass pre-populates a default set of power domains
+   (`USB_5V`, `VCC_1V8`, `VCC_3V3`) the source never declared. The
+   synthesizer materialises these as `Instance` records, creating
+   phantom nets that don't exist in the KiCad source. Fix:
+   filter ambient domains to those actually referenced by
+   source-side connections.
+
+Both fixes are pure `bhdl-synthesizer` work and don't require
+revisiting the importer. Until they land, Phase H's `compare()`
+runs and produces a structured diff, recorded as diagnostic output
+rather than a hard assertion.
+
+## Three natural next strands
+
+The "translate then enrich" thesis is now provably viable. The
+work fans out into three independent strands:
+
+1. **Stdlib accretion (the original Phase G in this doc).** Work
+   through Arduino UNO's 37 unmapped lib_ids — 16× `R_Pack04_Split`
+   is the highest-leverage entry; ATmega328P and ATmega16U2 are the
+   marquee entities to author. Each new entity + mapping line
+   monotonically raises the importer's coverage from 45.6%.
+2. **Synthesizer pin-instance wiring (the upstream blocker).** Wire
+   imported entity pin declarations into the synthesizer's
+   component database so `R1: Resistor("1k")` produces real
+   `PinInstance` records. Closes Phase H's equivalence proof.
+3. **More boards.** Run the importer on bigger open-source designs
+   (Arduino Leonardo / Nano / Mega from the same sabogalc tree;
+   ESP32 dev boards; Raspberry Pi Pico). Each new board surfaces
+   new edge cases against the importer's contract.
+
+These are mutually independent and can run in parallel.
+
+---
+
+> _Original planning notes preserved below._
 
 ## Table of Contents
 
