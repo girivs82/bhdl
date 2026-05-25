@@ -1,0 +1,50 @@
+// Socketed-tube demo. The board instantiates `SocketedTriode_Octal`,
+// the stdlib composition entity that pairs a chassis octal socket
+// (Belton VTB9-PT) with a 6SN7 tube. Both are real orderable parts;
+// the assembler solders the socket onto the PCB, then the user
+// plugs the tube into it.
+//
+// What we expect to see in BOM:
+//   - Q1 (or similar refdes): the SOCKET (Belton VTB9-PT, Octal-Chassis-Mount)
+//   - Q2: the TUBE (6SN7 — Triode entity's SKU; or a real reel-stocked tube
+//     once we add SKU data; currently empty SKU because the bare Triode
+//     entity carries no SKU — it's a generic 6SN7)
+//
+// What we expect SPICE to do:
+//   - Skip the socket (component_class = "tube_socket" is transparent)
+//   - Emit a triode device for the tube
+//   - All three (P/G/K) nets connect through the socket's pin instances
+//     because the socket pin and the tube terminal share an internal net
+
+// Import order matters: the analyzer's cross-file overlay accumulates
+// entity attribute defaults as imports load. tube_socket.bhdl is
+// imported FIRST so its TubeSocket_Octal attrs are in scope when
+// triode.bhdl's SocketedTriode_Octal recipe gets extracted (the
+// recipe instantiates TubeSocket_Octal as a child). Order-
+// dependence is a known wart of the v0.1 overlay machinery;
+// proper fix is to do a global attr-collection pass before
+// recipe extraction. Tracked as a follow-up.
+import { TubeSocket_Octal } from "bhdl-stdlib/connectors/tube_socket.bhdl";
+import { Triode, SocketedTriode_Octal } from "bhdl-stdlib/actives/triode.bhdl";
+import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+
+board TubeSocketed {
+    power VBB = 300V @ 100mA;
+    power HTR = 6.3V @ 2A;
+    ground GND;
+
+    V1: SocketedTriode_Octal();
+
+    // Plate sees a load resistor.
+    net plate_load: VBB -> Rload: Res(22000).1 -> Rload.2 -> V1.P;
+
+    // Grid grounded through a leak resistor.
+    net grid_path: V1.G -> Rg: Res(1000000).1 -> Rg.2 -> GND;
+
+    // Cathode self-biased.
+    net cathode_path: V1.K -> Rk: Res(820).1 -> Rk.2 -> GND;
+
+    // Heater between the heater rail and ground.
+    HTR -> V1.H1;
+    V1.H2 -> GND;
+}

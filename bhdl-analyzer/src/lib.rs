@@ -1522,9 +1522,31 @@ pub fn extract_expansion_recipes_with_overlay(
                     );
                 }
 
-                if !recipe.instances.is_empty() || !recipe.connections.is_empty() {
-                    println!("  Extracted expansion recipe for '{}': {} instances, {} connections, {} internal nets, {} param defaults",
-                        entity_name, recipe.instances.len(), recipe.connections.len(), recipe.internal_nets.len(), recipe.param_defaults.len());
+                // Extract socket-pairing statements (`socket <held> in <socket>;`).
+                // Stored on the recipe; the synthesizer reads them after
+                // expansion and stamps `socketed_in = "<socket>"` on the
+                // held instance's attributes so downstream consumers
+                // (PnR, KiCad export) can suppress its footprint. Both
+                // children stay on the BOM as separate orderable SKUs.
+                for stmt in expansion_block.syntax().children()
+                    .filter(|n| n.kind() == SyntaxKind::EXPANSION_SOCKET_STMT)
+                {
+                    let idents: Vec<String> = stmt.children_with_tokens()
+                        .filter_map(|el| el.into_token())
+                        .filter(|t| t.kind() == SyntaxKind::IDENT)
+                        .map(|t| t.text().to_string())
+                        .collect();
+                    if idents.len() == 2 {
+                        recipe.socket_pairings.insert(idents[0].clone(), idents[1].clone());
+                    }
+                }
+
+                if !recipe.instances.is_empty()
+                    || !recipe.connections.is_empty()
+                    || !recipe.socket_pairings.is_empty()
+                {
+                    println!("  Extracted expansion recipe for '{}': {} instances, {} connections, {} internal nets, {} param defaults, {} socket pairings",
+                        entity_name, recipe.instances.len(), recipe.connections.len(), recipe.internal_nets.len(), recipe.param_defaults.len(), recipe.socket_pairings.len());
                     recipes.insert(entity_name, recipe);
                 }
             }

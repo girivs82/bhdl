@@ -1437,6 +1437,12 @@ impl<'t> Parser<'t> {
                 Some(SyntaxKind::NET_KW) => self.parse_net_flow_stmt(),
                 Some(SyntaxKind::GENERATE_KW) => self.parse_generate_block(),
                 Some(SyntaxKind::ATTRIBUTE_KW) => self.parse_attribute_decl(),
+                // `socket <held> in <socket>;` — composition pairing for
+                // a child instance that is physically held by another
+                // child (e.g. a tube in a chassis octal socket). Both
+                // children still appear on the BOM with their own SKUs;
+                // the held part's footprint is suppressed at PnR time.
+                Some(SyntaxKind::SOCKET_KW) => self.parse_expansion_socket_stmt(),
                 Some(SyntaxKind::IDENT) => {
                     // Connection statement or component instantiation
                     self.parse_connection_or_flow_stmt();
@@ -1682,6 +1688,26 @@ impl<'t> Parser<'t> {
     }
 
     // Parse internal net declaration: internal name: net;
+    // `socket <held_inst> in <socket_inst>;`
+    //
+    // Composition-pairing declaration inside an expansion block.
+    // Marks the `held` child as physically held inside the `socket`
+    // child (e.g. a tube in a chassis octal socket, an op-amp in a
+    // DIP socket). The synthesizer stamps `socketed_in = "<socket>"`
+    // on the held instance after expansion; downstream consumers
+    // (PnR, KiCad export) read it to suppress placement of the held
+    // part's footprint — the socket carries the footprint. Both
+    // children still appear on the BOM as separate orderable SKUs.
+    fn parse_expansion_socket_stmt(&mut self) {
+        self.builder.start_node(SyntaxKind::EXPANSION_SOCKET_STMT.into());
+        self.expect(SyntaxKind::SOCKET_KW);
+        self.expect(SyntaxKind::IDENT);  // held instance name
+        self.expect(SyntaxKind::IN_KW);
+        self.expect(SyntaxKind::IDENT);  // socket instance name
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+
     fn parse_expansion_internal_net(&mut self) {
         self.builder.start_node(SyntaxKind::EXPANSION_INTERNAL_NET.into());
         self.expect(SyntaxKind::INTERNAL_KW);

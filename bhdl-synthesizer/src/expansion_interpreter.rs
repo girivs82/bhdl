@@ -366,6 +366,41 @@ fn expand_one_instance(
         child_names.push(child_name);
     }
 
+    // 2.5. Apply socket-pairing declarations. For each
+    //      `socket <held> in <socket>;` in the recipe, stamp
+    //      `socketed_in = "<socket_inst_name>"` on the held child's
+    //      attributes. Downstream consumers (PnR, KiCad export) read
+    //      this to suppress footprint placement of the held part —
+    //      the socket carries the footprint the board solders.
+    //      Both children stay on the BOM with their own SKUs.
+    for (held_local, socket_local) in &cand.recipe.socket_pairings {
+        let socket_full = format!("{}_{}", base, socket_local);
+        let held_id = child_instance_map.get(held_local).map(|(id, _)| *id);
+        match held_id {
+            Some(id) => {
+                if let Some(inst) = netlist.instances.get_mut(id) {
+                    inst.attributes.insert(
+                        "socketed_in".to_string(),
+                        socket_full.clone(),
+                    );
+                    info!("Socket pairing in '{}': '{}' is held by '{}'",
+                          cand.instance_name, held_local, socket_full);
+                }
+            }
+            None => {
+                warn!("Socket pairing in '{}' references unknown held \
+                       instance '{}'; skipped.",
+                      cand.instance_name, held_local);
+            }
+        }
+        // Sanity check: warn if the socket instance doesn't exist either.
+        if !child_instance_map.contains_key(socket_local) {
+            warn!("Socket pairing in '{}': held instance '{}' references \
+                   unknown socket instance '{}'.",
+                  cand.instance_name, held_local, socket_local);
+        }
+    }
+
     // 3. Apply interposition rewiring
     //
     // Detect the pattern: ParentPin(P) → Child.pin_a, Child.pin_b → InternalNet(N)

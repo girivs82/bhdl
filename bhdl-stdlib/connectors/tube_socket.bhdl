@@ -1,0 +1,75 @@
+// Tube sockets — chassis-mount components that hold a vacuum tube
+// and present its pins to the PCB. The socket itself is electrically
+// transparent (just spring contacts; pass-through wires for design
+// purposes). The actual *tube* — Triode, Triode12AU7, etc. —
+// contributes the electrical model. Composition via the
+// `socket <held> in <socket>;` declaration inside an expansion
+// block tells the synthesizer to stamp `socketed_in = "<socket>"`
+// on the held instance so PnR knows to suppress its footprint
+// (the socket carries the footprint that the PCB solders).
+//
+// See docs/spec (forthcoming Sockets_Composition.md or the
+// expansion_interpreter / sku_bom modules) for the full
+// architectural shape. For now this file is the stdlib worked
+// example for octal-base tubes (6SN7, 6L6, etc.).
+
+// 8-pin octal tube socket — chassis mount. The standard for
+// medium-power and small-signal octal-based tubes like the 6SN7,
+// 6V6, 6L6, 5U4, etc. The eight pins are numbered 1..8 in the
+// EIA convention (looking at the underside of the chassis).
+//
+// SKU pinned to a common ceramic chassis-mount octal socket from
+// Belton. Vendors stocking a different make can override at
+// instance level (board-author hint).
+entity TubeSocket_Octal() {
+    pin 1: signal inout;
+    pin 2: signal inout;
+    pin 3: signal inout;
+    pin 4: signal inout;
+    pin 5: signal inout;
+    pin 6: signal inout;
+    pin 7: signal inout;
+    pin 8: signal inout;
+
+    // `component_class = "tube_socket"` is the SPICE-transparency
+    // marker: the netlist converter sees this class and skips
+    // device emission silently (the held tube provides the model).
+    attribute component_class = "tube_socket";
+    attribute part_number = "Octal-Chassis-8pin";
+
+    // SKU data — see bhdl-common::sku. The socket is a real
+    // orderable line item on the BOM separate from the tube.
+    attribute manufacturer = "Belton";
+    attribute mpn = "VTB9-PT";
+    attribute physical_package = "Octal-Chassis-Mount";
+    attribute footprint = "Connector_THT:Tube_Octal_Belton_VTB9";
+    attribute kicad_symbol = "Connector:Conn_Octal";
+    attribute datasheet = "https://www.tubedepot.com/products/belton-vtb9-pt-octal-chassis-mount-socket";
+    attribute digikey_pn = "VTB9-PT-ND";
+}
+
+// 9-pin noval tube socket — chassis mount. The standard for
+// small-signal preamp tubes (12AX7, 12AU7, 6DJ8 / ECC88 et al.).
+//
+// SKU pinned to a generic 9-pin Belton chassis-mount socket.
+entity TubeSocket_Noval() {
+    pin 1: signal inout;
+    pin 2: signal inout;
+    pin 3: signal inout;
+    pin 4: signal inout;
+    pin 5: signal inout;
+    pin 6: signal inout;
+    pin 7: signal inout;
+    pin 8: signal inout;
+    pin 9: signal inout;
+
+    attribute component_class = "tube_socket";
+    attribute part_number = "Noval-Chassis-9pin";
+    attribute manufacturer = "Belton";
+    attribute mpn = "VT9-PT-ST";
+    attribute physical_package = "Noval-Chassis-Mount";
+    attribute footprint = "Connector_THT:Tube_Noval_Belton_VT9";
+    attribute kicad_symbol = "Connector:Conn_01x09";
+    attribute datasheet = "https://www.tubedepot.com/products/belton-vt9-pt-noval-chassis-mount-socket";
+    attribute digikey_pn = "VT9-PT-ST-ND";
+}
