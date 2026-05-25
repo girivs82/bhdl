@@ -58,13 +58,41 @@ pub struct EmittedBhdl {
     pub warnings: Vec<String>,
 }
 
-/// Main entry point. `board_name` is the identifier used for the
-/// top-level `board` block (typically the .kicad_sch filename
-/// without extension, but the caller decides).
+/// Emission options. Use `EmitOptions::default()` for the
+/// behaviour the older `emit_bhdl(...)` function had; set
+/// `stdlib_path` when the emitted BHDL needs to compile through
+/// `bhdl-synthesizer` (round-trip tests, real-world use).
+#[derive(Debug, Clone, Default)]
+pub struct EmitOptions {
+    /// Path to `bhdl-stdlib/` on disk. When set, the emitter
+    /// prepends `import { ... } from "<stdlib_path>/<rel>.bhdl";`
+    /// lines for every stdlib entity referenced. When None, no
+    /// import header is emitted (older callers, tests that
+    /// don't care about parser-validity).
+    pub stdlib_path: Option<std::path::PathBuf>,
+}
+
+/// Backwards-compatible entry point. Delegates to
+/// `emit_bhdl_with_options(...)` with default options (no
+/// imports emitted).
 pub fn emit_bhdl(
     schematic: &Schematic,
     mapping: &MappingRegistry,
     board_name: &str,
+) -> Result<EmittedBhdl, EmitError> {
+    emit_bhdl_with_options(schematic, mapping, board_name, &EmitOptions::default())
+}
+
+/// Main entry point. `board_name` is the identifier used for the
+/// top-level `board` block (typically the .kicad_sch filename
+/// without extension, but the caller decides). `opts` carries
+/// optional configuration like the stdlib search path for
+/// import generation.
+pub fn emit_bhdl_with_options(
+    schematic: &Schematic,
+    mapping: &MappingRegistry,
+    board_name: &str,
+    opts: &EmitOptions,
 ) -> Result<EmittedBhdl, EmitError> {
     let mut out = String::new();
     let mut warnings = Vec::new();
@@ -78,6 +106,13 @@ pub fn emit_bhdl(
     writeln!(out, "// Edit freely — re-running the importer will preserve user changes")?;
     writeln!(out, "// only if you keep the section markers intact.")?;
     writeln!(out)?;
+
+    // ── imports ───────────────────────────────────────────────
+    if let Some(stdlib_path) = &opts.stdlib_path {
+        let used = collect_used_stdlib_entities(schematic, mapping);
+        emit_imports(&mut out, stdlib_path, &used)?;
+        writeln!(out)?;
+    }
 
     // ── child sheets first (so they're defined before use) ────
     // Stable iteration order: BTreeMap of sheet path → Sheet.
@@ -302,6 +337,83 @@ fn emit_subsheet_connections(out: &mut String, sheet: &Sheet, nets: &NetList) ->
                 .unwrap_or_else(|| format!("@unconnected_{}", port));
             writeln!(out, "    {} -> {}.{};", net_name, inst_name, port)?;
         }
+    }
+    Ok(())
+}
+
+// ──────────────────────────────────────────────────────────────
+// Import emission
+// ──────────────────────────────────────────────────────────────
+
+/// Walk every symbol in the schematic and collect the BHDL
+/// entity names the emitter will reference (mapped + the
+/// passthrough fallback when unmapped). Skips `power:*` lib_ids
+/// (those produce net decls, not entity instances).
+fn collect_used_stdlib_entities(
+    schematic: &Schematic,
+    mapping: &MappingRegistry,
+) -> BTreeSet<String> {
+    let mut used: BTreeSet<String> = BTreeSet::new();
+    let mut needs_passthrough = false;
+    for sheet in std::iter::once(&schematic.root).chain(schematic.child_sheets.values()) {
+        for sym in &sheet.symbols {
+            if sym.lib_id.starts_with("power:") { continue; }
+            match mapping.lookup(&sym.lib_id) {
+                Some(m) if !m.is_power_net() => { used.insert(m.bhdl.clone()); }
+                _ => { needs_passthrough = true; }
+            }
+        }
+    }
+    if needs_passthrough {
+        used.insert("kicad_passthrough".to_string());
+    }
+    used
+}
+
+/// Known stdlib entity → source-file location mapping. Mirrors
+/// `bhdl-stdlib/`'s directory layout. Unknown entities (rare —
+/// caller hands us names already validated against the mapping
+/// registry) get a final-fallback `kicad_passthrough.bhdl` line
+/// which is the safest no-op import.
+fn stdlib_entity_file(entity: &str) -> &'static str {
+    match entity {
+        "Resistor" | "Res"               => "passives/resistor.bhdl",
+        "Capacitor" | "Cap"
+            | "ElectrolyticCap" | "CeramicCap" => "passives/capacitor.bhdl",
+        "Inductor" | "Ind"               => "passives/inductor.bhdl",
+        "LED"                            => "passives/led.bhdl",
+        "Diode"                          => "passives/diode.bhdl",
+        "SchottkyDiode"                  => "components/power/protection/SS34.bhdl",
+        "TVSDiode"                       => "passives/tvs_diode.bhdl",
+        "Fuse"                           => "passives/fuse.bhdl",
+        "Bead"                           => "passives/inductor.bhdl",
+        "TestPoint"                      => "connectors/testpoint.bhdl",
+        "BJT"                            => "actives/bjt.bhdl",
+        "MOSFET"                         => "actives/mosfet.bhdl",
+        "kicad_passthrough"              => "kicad_passthrough.bhdl",
+        _                                => "kicad_passthrough.bhdl",
+    }
+}
+
+/// Group entities by source file (so we get one `import { A, B }
+/// from "..."` per file), then write the import block.
+fn emit_imports(
+    out: &mut String,
+    stdlib_path: &std::path::Path,
+    entities: &BTreeSet<String>,
+) -> Result<(), EmitError> {
+    let mut by_file: BTreeMap<&'static str, Vec<&str>> = BTreeMap::new();
+    for ent in entities {
+        let file = stdlib_entity_file(ent);
+        by_file.entry(file).or_default().push(ent.as_str());
+    }
+    for (file, ents) in by_file {
+        let full = stdlib_path.join(file);
+        // BHDL's import statement uses `{ A, B } from "path";`
+        // shape — see `bhdl-stdlib/basic_components.bhdl` for
+        // canonical examples.
+        let names = ents.join(", ");
+        writeln!(out, "import {{ {} }} from \"{}\";", names, full.display())?;
     }
     Ok(())
 }

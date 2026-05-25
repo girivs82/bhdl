@@ -16,5 +16,14 @@ toml = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 
 [dev-dependencies]
-# (none yet — fixture-based tests live in tests/ and use raw
-#  string literals for now)
+# Phase H: round-trip BHDL through the synthesizer and compare its
+# resulting netlist against the canonical netlist extracted from
+# the KiCad side. Dev-dep (not lib-dep) so bhdl-kicad-import stays
+# lightweight for callers who only need the importer; the round-
+# trip integration lives in tests/.
+bhdl-parser      = { path = "../bhdl-parser" }
+bhdl-ast         = { path = "../bhdl-ast" }
+bhdl-analyzer    = { path = "../bhdl-analyzer" }
+bhdl-synthesizer = { path = "../bhdl-synthesizer" }
+bhdl-netlist     = { path = "../bhdl-netlist" }
+tokio = { version = "1.0", features = ["sync", "time", "macros", "rt-multi-thread"] }
