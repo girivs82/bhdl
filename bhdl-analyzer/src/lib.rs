@@ -276,6 +276,17 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
     expansion_recipes.extend(main_file_recipes);
     let expansion_count = expansion_recipes.len();
 
+    // Build the global entity attribute index (imported files + main
+    // file). This is the order-independent source-of-truth for entity
+    // attribute defaults, threaded through AnalysisResult so the
+    // synthesizer's expansion interpreter can late-bind attributes
+    // onto leaf instances when the order-dependent extraction-time
+    // overlay missed them.
+    let mut entity_attribute_index = imported_entity_attr_index.clone();
+    for (name, attrs) in extract_entity_attribute_index(source_file) {
+        entity_attribute_index.insert(name, attrs);
+    }
+
     // Extract design recipes from the main source file. (Imported-file
     // Merge vendor `design { }` recipes: imported files (loaded by pass1)
     // overlaid with the main file's blocks.
@@ -449,6 +460,7 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
         expansion_recipes, // Move ownership (Pass 8.5)
         design_recipes, // Move ownership (Pass 8.5)
         variants,
+        entity_attribute_index,
         placement_recipes, // Move ownership (Pass 8.5)
         symbol_definitions, // Move ownership (Pass 8.5)
         layout_definitions, // Move ownership (Pass 8.5)

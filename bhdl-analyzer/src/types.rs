@@ -464,6 +464,14 @@ pub struct AnalysisResult {
     /// Empty when no variant blocks are declared (existing boards
     /// keep working as a single implicit "default" SKU).
     pub variants: HashMap<String, HashMap<String, bhdl_common::variant::Variant>>,
+    /// Global entity attribute index: per-entity flat attribute
+    /// defaults gathered from every imported file and the main file.
+    /// Used by the synthesizer's expansion interpreter to late-bind
+    /// entity attributes onto leaf instances when the analyzer's
+    /// recipe-extraction overlay missed them (the overlay is order-
+    /// dependent across imports; this index isn't, so it's the
+    /// reliable fallback). See pass1::build_scope_registry_with_base.
+    pub entity_attribute_index: HashMap<String, HashMap<String, String>>,
     /// Placement recipes extracted from entity `placement { }` blocks
     pub placement_recipes: HashMap<String, bhdl_common::PlacementRecipe>,
     /// Symbol definitions extracted from `symbol EntityName { }` blocks
@@ -500,6 +508,7 @@ impl Default for AnalysisResult {
             expansion_recipes: HashMap::new(),
             design_recipes: HashMap::new(),
             variants: HashMap::new(),
+            entity_attribute_index: HashMap::new(),
             placement_recipes: HashMap::new(),
             symbol_definitions: HashMap::new(),
             layout_definitions: HashMap::new(),

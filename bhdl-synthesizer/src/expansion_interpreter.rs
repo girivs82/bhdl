@@ -40,20 +40,31 @@ pub fn expand_entity_instances(
 ) -> Vec<ExpansionResult> {
     // Convenience wrapper for callers that don't yet thread vendor design
     // recipes through (test binaries, in-source tests). The wrapper feeds an
-    // empty design-recipe map; vendor `design { }` blocks are then ignored
-    // and intents dispatch to the Rust reference designers, exactly as before.
-    let empty = HashMap::new();
-    expand_entity_instances_with_designs(netlist, recipes, &empty)
+    // empty design-recipe map and an empty entity-attribute index; vendor
+    // `design { }` blocks are then ignored and intents dispatch to the Rust
+    // reference designers, exactly as before.
+    let empty_designs = HashMap::new();
+    let empty_attrs = HashMap::new();
+    expand_entity_instances_with_designs(netlist, recipes, &empty_designs, &empty_attrs)
 }
 
 /// As [`expand_entity_instances`] but with vendor `design { }` recipes
-/// threaded through. When a candidate's `(entity, intent)` matches a recipe
-/// in `design_recipes`, the evaluator runs that recipe and its outputs
-/// override the Rust reference designer for the matching child names.
+/// and a global entity attribute index threaded through. When a
+/// candidate's `(entity, intent)` matches a recipe in `design_recipes`,
+/// the evaluator runs that recipe and its outputs override the Rust
+/// reference designer for the matching child names.
+///
+/// `entity_attr_index` is the order-independent fallback for entity
+/// attribute defaults — when an ExpansionInstance has empty attributes
+/// (typical sign that the analyzer's order-dependent recipe-time
+/// overlay missed a cross-file reference), this index is consulted by
+/// component_type. It's the late-binding solution to the v0.1 overlay
+/// wart documented on the socket-composition demo board.
 pub fn expand_entity_instances_with_designs(
     netlist: &mut Netlist,
     recipes: &HashMap<String, ExpansionRecipe>,
     design_recipes: &HashMap<String, HashMap<String, bhdl_common::design::DesignRecipe>>,
+    entity_attr_index: &HashMap<String, HashMap<String, String>>,
 ) -> Vec<ExpansionResult> {
     if recipes.is_empty() {
         return Vec::new();
@@ -69,7 +80,7 @@ pub fn expand_entity_instances_with_designs(
 
     let mut results = Vec::new();
     for cand in candidates {
-        match expand_one_instance(netlist, &cand) {
+        match expand_one_instance(netlist, &cand, entity_attr_index) {
             Ok(result) => {
                 info!("Expanded '{}' → {} child instance(s)",
                     result.parent_instance, result.child_instances.len());
@@ -211,6 +222,7 @@ fn find_expansion_candidates(
 fn expand_one_instance(
     netlist: &mut Netlist,
     cand: &ExpansionCandidate,
+    entity_attr_index: &HashMap<String, HashMap<String, String>>,
 ) -> Result<ExpansionResult, String> {
     let base = &cand.instance_name;
 
@@ -348,9 +360,22 @@ fn expand_one_instance(
         // schematic_placement, expansion_parent, etc.) take precedence
         // because create_instance's HashMap collect is last-write-
         // wins and the entity defaults are inserted first here.
+        // Late-binding fallback: when exp_inst.attributes is empty, look
+        // up the called entity's attribute defaults in the global index.
+        // This fixes the order-dependent overlay issue — a board that
+        // imports a composition entity's file before the held entity's
+        // file would otherwise lose the held entity's SKU data on its
+        // leaf instances.
+        let entity_attrs_fallback: &HashMap<String, String> = if exp_inst.attributes.is_empty() {
+            entity_attr_index.get(&exp_inst.component_type)
+                .unwrap_or(&exp_inst.attributes)
+        } else {
+            &exp_inst.attributes
+        };
+
         let mut attr_pairs: Vec<(&str, &str)> = Vec::with_capacity(
-            exp_inst.attributes.len() + attrs.len());
-        for (k, v) in &exp_inst.attributes {
+            entity_attrs_fallback.len() + attrs.len());
+        for (k, v) in entity_attrs_fallback {
             attr_pairs.push((k.as_str(), v.as_str()));
         }
         for (k, v) in &attrs {

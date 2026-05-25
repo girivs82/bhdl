@@ -16,16 +16,13 @@
 //   - All three (P/G/K) nets connect through the socket's pin instances
 //     because the socket pin and the tube terminal share an internal net
 
-// Import order matters: the analyzer's cross-file overlay accumulates
-// entity attribute defaults as imports load. tube_socket.bhdl is
-// imported FIRST so its TubeSocket_Octal attrs are in scope when
-// triode.bhdl's SocketedTriode_Octal recipe gets extracted (the
-// recipe instantiates TubeSocket_Octal as a child). Order-
-// dependence is a known wart of the v0.1 overlay machinery;
-// proper fix is to do a global attr-collection pass before
-// recipe extraction. Tracked as a follow-up.
-import { TubeSocket_Octal } from "bhdl-stdlib/connectors/tube_socket.bhdl";
+// Imports in any order — the synthesizer's expansion interpreter
+// late-binds entity attribute defaults from the analyzer's global
+// entity_attribute_index, so cross-file references to TubeSocket_Octal
+// from SocketedTriode_Octal pick up the socket's SKU regardless of
+// which file loaded first.
 import { Triode, SocketedTriode_Octal } from "bhdl-stdlib/actives/triode.bhdl";
+import { TubeSocket_Octal } from "bhdl-stdlib/connectors/tube_socket.bhdl";
 import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
 
 board TubeSocketed {
