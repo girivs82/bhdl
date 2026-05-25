@@ -229,12 +229,18 @@ fn emit_component_decls(
     warnings: &mut Vec<String>,
 ) -> Result<(), EmitError> {
     writeln!(out, "    // Components")?;
+    // Multi-unit parts (resistor packs, op-amp duals, gate ICs)
+    // appear as several symbol instances sharing one reference
+    // designator. Emit one declaration per unique ref.
+    let mut seen_refs: BTreeSet<String> = BTreeSet::new();
     for sym in &sheet.symbols {
         // Power flags are *not* component instances; their
         // contribution is the net name they bestow.
         if sym.lib_id.starts_with("power:") {
             continue;
         }
+        let ref_des = sym.reference().unwrap_or("U_unknown").to_string();
+        if !seen_refs.insert(ref_des) { continue; }
         let m = mapping.lookup(&sym.lib_id);
         let entity_name = match m {
             Some(m) if !m.is_power_net() => m.bhdl.as_str(),
