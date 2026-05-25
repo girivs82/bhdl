@@ -99,9 +99,22 @@ can't put a string where a number is expected.
 dnp <instance_name>;
 ```
 
-The instance stays in the netlist and on the PCB layout (footprint,
-silkscreen). It is omitted from manufacturing BOMs and pick-place
-files for this SKU.
+The instance stays in the netlist's *structural* representation
+(the synthesizer keeps the InstanceId so PnR can carry the footprint
++ silkscreen onto the PCB layout), but every electrical /
+manufacturing consumer respects the DNP flag and behaves as if the
+part isn't there:
+
+- **Manufacturing BOM**: row omitted.
+- **Pick-place export**: row omitted.
+- **SPICE simulation**: the part is excluded from the circuit. A
+  missing resistor / capacitor is electrically an open circuit at
+  simulation time; simulating the populated circuit would give
+  wrong answers for the shipped product. So `--sku NoLoad spice`
+  simulates as though `Rload` doesn't exist.
+- **KiCad schematic export**: future work; should mark the symbol
+  as DNP (industry-standard hatch or "DNP" annotation) so the
+  engineer reviewing the schematic sees the variant.
 
 ### 2.3 Semantics
 

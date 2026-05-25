@@ -297,7 +297,7 @@ async fn main() -> Result<()> {
         }
         
         Some(Commands::Spice { analysis, output, use_metadata }) => {
-            run_spice(&source_file, &analysis, output, use_metadata).await?;
+            run_spice(&source_file, &analysis, output, use_metadata, cli.sku.as_deref()).await?;
         }
         
         Some(Commands::Pipeline { output_dir, no_viz, no_spice }) => {
@@ -1030,10 +1030,10 @@ async fn run_layout(
     Ok(())
 }
 
-async fn run_spice(source_file: &SourceFile, analysis_type: &str, _output: Option<PathBuf>, use_metadata: bool) -> Result<()> {
+async fn run_spice(source_file: &SourceFile, analysis_type: &str, _output: Option<PathBuf>, use_metadata: bool, sku: Option<&str>) -> Result<()> {
     // Run pipeline to get netlist
     let analysis_result = analyze(source_file);
-    
+
     let mut generator = NetlistGenerator::new();
     let mut netlist = generator.generate_from_ast_and_analysis(source_file, &analysis_result).await?;
 
@@ -1046,6 +1046,13 @@ async fn run_spice(source_file: &SourceFile, analysis_type: &str, _output: Optio
     }
     bhdl_synthesizer::expansion_interpreter::expand_entity_instances_with_designs(
         &mut netlist, &analysis_result.expansion_recipes, &analysis_result.design_recipes);
+
+    // Apply the selected SKU variant's patches AFTER expansion (so
+    // patches address post-expansion instance names). Without this,
+    // `bhdl-cli ... --sku Pro bom` would size R_FB at the variant's
+    // override but `bhdl-cli ... --sku Pro spice` would simulate
+    // with the base value — internally inconsistent.
+    apply_sku_variant(&analysis_result, &mut netlist, sku)?;
 
     // Create unified analysis data and augment with SPICE information
     let mut analysis_data = AnalysisData::default();
