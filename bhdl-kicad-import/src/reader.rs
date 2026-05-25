@@ -448,8 +448,23 @@ fn parse_no_connect(args: &[Sexpr]) -> Option<NoConnect> {
     Some(NoConnect { at, uuid })
 }
 
+/// Decode KiCad's net-label escape sequences. KiCad represents
+/// characters that aren't allowed in identifiers using `{slash}`,
+/// `{tilde}`, `{backslash}`, `{caret}`, `{newline}` markers in the
+/// label source text. We turn them into BHDL-safe identifier
+/// characters at read time so downstream phases see clean names.
+fn unescape_kicad_label(raw: &str) -> String {
+    raw.replace("{slash}", "_")
+       .replace("{tilde}", "_")
+       .replace("{backslash}", "_")
+       .replace("{caret}", "_")
+       .replace("{newline}", "_")
+       .replace("{space}", "_")
+}
+
 fn parse_label(args: &[Sexpr]) -> Option<Label> {
-    let text = args.first().and_then(|s| s.as_str())?.to_string();
+    let text = args.first().and_then(|s| s.as_str())
+        .map(unescape_kicad_label)?;
     let at = args.iter().find_map(|a| a.match_list("at")).map(parse_at_3)?;
     let uuid = args.iter().find_map(|a| a.match_list("uuid"))
         .and_then(|x| x.first())
@@ -460,7 +475,8 @@ fn parse_label(args: &[Sexpr]) -> Option<Label> {
 }
 
 fn parse_global_label(args: &[Sexpr]) -> Option<GlobalLabel> {
-    let text = args.first().and_then(|s| s.as_str())?.to_string();
+    let text = args.first().and_then(|s| s.as_str())
+        .map(unescape_kicad_label)?;
     let at = args.iter().find_map(|a| a.match_list("at")).map(parse_at_3)?;
     let shape = args.iter().find_map(|a| a.match_list("shape"))
         .and_then(|x| x.first())
@@ -476,7 +492,8 @@ fn parse_global_label(args: &[Sexpr]) -> Option<GlobalLabel> {
 }
 
 fn parse_hierarchical_label(args: &[Sexpr]) -> Option<HierarchicalLabel> {
-    let text = args.first().and_then(|s| s.as_str())?.to_string();
+    let text = args.first().and_then(|s| s.as_str())
+        .map(unescape_kicad_label)?;
     let at = args.iter().find_map(|a| a.match_list("at")).map(parse_at_3)?;
     let shape = args.iter().find_map(|a| a.match_list("shape"))
         .and_then(|x| x.first())
