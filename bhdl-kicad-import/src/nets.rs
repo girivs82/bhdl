@@ -405,7 +405,17 @@ fn point_on_segment(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> bool {
 /// Map a power-symbol label to its canonical net name. Same
 /// convention as the `_net:` entries in `kicad-symbol-mapping.toml`.
 fn canonical_power_name(ps: &PowerSymbol) -> String {
-    match ps.label.as_str() {
+    canonical_power_name_for_test(&ps.label, ps.category)
+}
+
+/// Standalone form usable by other modules (the emitter cross-
+/// references this to decide ground-vs-supply for power-decl
+/// emission).
+pub fn canonical_power_name_for_test(label: &str, category: PowerCategory) -> String {
+    let ps_like = (label, category);
+    let label = ps_like.0;
+    let category = ps_like.1;
+    match label {
         "GND" | "Earth" => "GND".to_string(),
         "+5V"  => "VCC_5V".to_string(),
         "+3V3" | "+3.3V" => "VCC_3V3".to_string(),
@@ -414,7 +424,7 @@ fn canonical_power_name(ps: &PowerSymbol) -> String {
         "VCC" => "VCC".to_string(),
         "VDD" => "VDD".to_string(),
         "VEE" => "VEE".to_string(),
-        other => match ps.category {
+        other => match category {
             PowerCategory::Ground => format!("GND_{}", sanitise(other)),
             _ => sanitise(other),
         }

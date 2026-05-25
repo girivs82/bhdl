@@ -36,6 +36,7 @@ pub mod reader;
 pub mod lib_resolver;
 pub mod symbol_mapping;
 pub mod nets;
+pub mod emitter;
 
 pub use ir::*;
 pub use reader::{read_schematic, read_from_str, ReadError};
@@ -45,3 +46,4 @@ pub use lib_resolver::{LibraryResolver, SymLibTableEntry,
     parse_kicad_sym_str, parse_kicad_sym_file};
 pub use symbol_mapping::{MappingRegistry, SymbolMapping, MappingError};
 pub use nets::{extract_nets, Net, NetList, NetPin};
+pub use emitter::{emit_bhdl, EmittedBhdl, EmitError};
