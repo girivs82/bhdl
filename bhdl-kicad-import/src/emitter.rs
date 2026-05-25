@@ -371,25 +371,44 @@ fn collect_used_stdlib_entities(
 }
 
 /// Known stdlib entity → source-file location mapping. Mirrors
-/// `bhdl-stdlib/`'s directory layout. Unknown entities (rare —
-/// caller hands us names already validated against the mapping
-/// registry) get a final-fallback `kicad_passthrough.bhdl` line
-/// which is the safest no-op import.
+/// `bhdl-stdlib/`'s directory layout.
+///
+/// **Discipline**: each target file MUST be parser-compatible
+/// (parseable by the current `bhdl-parser`). bhdl-stdlib ships
+/// two grammar tiers — the rich `passives/resistor.bhdl`
+/// (`@metadata(...)`, complex type exprs — currently un-parseable)
+/// and the parser-compatible `passives/resistor_simple.bhdl`
+/// / `passive/resistor.bhdl` (v2.0 grammar). The importer points
+/// at the latter tier so emitted BHDL round-trips through the
+/// real synthesizer. When the parser/stdlib grammar gap closes,
+/// flip the table back to the rich variants for richer
+/// downstream analysis.
 fn stdlib_entity_file(entity: &str) -> &'static str {
     match entity {
-        "Resistor" | "Res"               => "passives/resistor.bhdl",
-        "Capacitor" | "Cap"
-            | "ElectrolyticCap" | "CeramicCap" => "passives/capacitor.bhdl",
-        "Inductor" | "Ind"               => "passives/inductor.bhdl",
-        "LED"                            => "passives/led.bhdl",
-        "Diode"                          => "passives/diode.bhdl",
-        "SchottkyDiode"                  => "components/power/protection/SS34.bhdl",
-        "TVSDiode"                       => "passives/tvs_diode.bhdl",
-        "Fuse"                           => "passives/fuse.bhdl",
-        "Bead"                           => "passives/inductor.bhdl",
-        "TestPoint"                      => "connectors/testpoint.bhdl",
-        "BJT"                            => "actives/bjt.bhdl",
-        "MOSFET"                         => "actives/mosfet.bhdl",
+        // Passives: parser-compatible "_simple" variants (already
+        // export the PascalCase names our mapping registry uses).
+        "Resistor"                       => "passives/resistor_simple.bhdl",
+        "Capacitor"                      => "passives/capacitor_simple.bhdl",
+        "Inductor"                       => "passives/inductor_simple.bhdl",
+        // Short-name aliases (`Res`, `Cap`, `Ind`) live in the v2
+        // `passive/` (singular) tree — used when callers reference
+        // them directly. The importer's registry currently always
+        // emits the PascalCase names, so these branches are for
+        // safety / future use.
+        "Res"                            => "passive/resistor.bhdl",
+        "Cap" | "ElectrolyticCap"        => "passive/capacitor.bhdl",
+        "Ind"                            => "passive/inductor.bhdl",
+        "Diode"                          => "passive/diode.bhdl",
+        "LED"                            => "optoelectronic/led.bhdl",
+        // Protection / specials — point at the small v2 tree where
+        // a parser-compatible variant exists.
+        "TVSDiode"                       => "protection/tvs.bhdl",
+        // No parser-compatible Bead / Fuse / TestPoint / Schottky /
+        // BJT / MOSFET yet — they live only in the rich tier.
+        // Fall back to passthrough so the import line still
+        // resolves cleanly. (The instance will fail synthesis with
+        // a clear "no pins on kicad_passthrough" message — easier
+        // to diagnose than a 100-line parse-error dump.)
         "kicad_passthrough"              => "kicad_passthrough.bhdl",
         _                                => "kicad_passthrough.bhdl",
     }

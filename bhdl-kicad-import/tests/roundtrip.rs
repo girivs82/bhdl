@@ -90,6 +90,32 @@ const STDLIB_REGISTRY_TOML: &str = include_str!(
 /// works for the diff.
 fn canonical_from_bhdl_netlist(nl: &bhdl_netlist::Netlist) -> CanonicalNetlist {
     let mut out = CanonicalNetlist::new();
+
+    // Strategy 1: walk every PinInstance. Each carries
+    // (instance, pin_def, net) directly — the synthesizer fills
+    // `net: Some(...)` when the pin is connected. This is the
+    // authoritative source for R1.1, R1.2 etc.
+    for (_, pi) in &nl.pin_instances {
+        let Some(net_id) = pi.net else { continue; };
+        let net = match nl.nets.get(net_id) {
+            Some(n) => n,
+            None => continue,
+        };
+        let net_name = net.name.clone().unwrap_or_else(|| "Net_unnamed".to_string());
+        let inst_name = nl.instances.get(pi.instance)
+            .map(|i| i.name.clone()).unwrap_or_default();
+        let pin_name = nl.pins.get(pi.pin_def)
+            .map(|p| p.name.clone()).unwrap_or_default();
+        if !inst_name.is_empty() && !pin_name.is_empty() {
+            out.add(net_name, PinRef { reference: inst_name, pin: pin_name });
+        }
+    }
+
+    // Strategy 2: also drain the Net.connections vec for any
+    // InstancePort / InstancePin / PinInstance references the
+    // synthesizer records there (some passes record connections
+    // here rather than on pin_instances). This is defensive — we
+    // want both sources collected.
     for (_, net) in &nl.nets {
         let name = net.name.clone().unwrap_or_else(|| "Net_unnamed".to_string());
         for cp in &net.connections {
@@ -113,16 +139,11 @@ fn canonical_from_bhdl_netlist(nl: &bhdl_netlist::Netlist) -> CanonicalNetlist {
                         .unwrap_or_default();
                     (Some(pi.instance), pin_name)
                 }
-                ConnectionPoint::ModulePort(_) => {
-                    // Top-level module port; doesn't contribute a
-                    // pin-on-instance entry in our canonical form.
-                    continue;
-                }
+                ConnectionPoint::ModulePort(_) => continue,
             };
             let Some(iid) = instance_id else { continue; };
             let inst_name = nl.instances.get(iid)
-                .map(|i| i.name.clone())
-                .unwrap_or_default();
+                .map(|i| i.name.clone()).unwrap_or_default();
             if inst_name.is_empty() || port_or_pin_name.is_empty() { continue; }
             out.add(name.clone(), PinRef {
                 reference: inst_name,
@@ -130,6 +151,7 @@ fn canonical_from_bhdl_netlist(nl: &bhdl_netlist::Netlist) -> CanonicalNetlist {
             });
         }
     }
+
     out
 }
 
@@ -218,6 +240,34 @@ async fn roundtrip_tiny_resistor_fixture() {
             return;
         }
     };
+
+    // Dump the raw bhdl_netlist for diagnostic purposes.
+    eprintln!("--- bhdl_netlist raw ---");
+    eprintln!("  {} instances, {} nets, {} pin_instances, {} ports, {} pins",
+        bhdl_netlist.instances.len(),
+        bhdl_netlist.nets.len(),
+        bhdl_netlist.pin_instances.len(),
+        bhdl_netlist.ports.len(),
+        bhdl_netlist.pins.len(),
+    );
+    for (_, inst) in &bhdl_netlist.instances {
+        eprintln!("    instance: {}", inst.name);
+    }
+    for (_, net) in &bhdl_netlist.nets {
+        eprintln!("    net: {:?} ({} connections)",
+            net.name, net.connections.len());
+    }
+    for (_, pi) in &bhdl_netlist.pin_instances {
+        let inst = bhdl_netlist.instances.get(pi.instance)
+            .map(|i| i.name.as_str()).unwrap_or("?");
+        let pin = bhdl_netlist.pins.get(pi.pin_def)
+            .map(|p| p.name.as_str()).unwrap_or("?");
+        let net = pi.net
+            .and_then(|n| bhdl_netlist.nets.get(n))
+            .and_then(|n| n.name.as_deref())
+            .unwrap_or("<unconnected>");
+        eprintln!("    pin_inst: {}.{} → {}", inst, pin, net);
+    }
 
     let bhdl_canon = canonical_from_bhdl_netlist(&bhdl_netlist);
     eprintln!("--- bhdl-side canonical ---");
