@@ -51,6 +51,7 @@ pub fn lex_ident_or_kw(lex: &mut Lexer<LexerToken>) -> KeywordOrIdent {
         "design" => SyntaxKind::DESIGN_KW,
         "variant" => SyntaxKind::VARIANT_KW,
         "dnp" => SyntaxKind::DNP_KW,
+        "socket" => SyntaxKind::SOCKET_KW,
         "if" => SyntaxKind::IF_KW,
         "else" => SyntaxKind::ELSE_KW,
         "when" => SyntaxKind::WHEN_KW,
@@ -294,6 +295,7 @@ fn keyword_or_ident_callback(lex: &mut Lexer<LexerToken>) -> KeywordOrIdent {
         "design" => SyntaxKind::DESIGN_KW,
         "variant" => SyntaxKind::VARIANT_KW,
         "dnp" => SyntaxKind::DNP_KW,
+        "socket" => SyntaxKind::SOCKET_KW,
         "constrain" => SyntaxKind::CONSTRAIN_KW,
 
         // Item Keywords (NEW)

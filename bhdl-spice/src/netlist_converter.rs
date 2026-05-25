@@ -307,6 +307,29 @@ impl NetlistToSpiceConverter {
             return Ok(());
         }
 
+        // Special handling: sockets are electrically transparent
+        // (zero-impedance pass-through wires). They occupy a BOM row
+        // and a PCB footprint, but they contribute no SPICE device —
+        // the SOCKETED component (the tube, the IC) is what
+        // contributes the behaviour. Their pin instances are already
+        // on the shared nets that connect to the held component, so
+        // ignoring the socket here leaves the held component's nets
+        // intact.
+        let class = instance.attributes.get("component_class")
+            .or_else(|| netlist.modules.get(instance.definition)
+                .and_then(|m| m.attributes.get("component_class")))
+            .map(String::as_str)
+            .unwrap_or("");
+        if matches!(class,
+                    "socket" | "tube_socket" | "dip_socket" | "sip_socket" |
+                    "relay_socket" | "ic_socket")
+        {
+            info!("Skipping {} — SPICE-transparent socket (class={class}); \
+                   held part contributes the electrical model",
+                  instance.name);
+            return Ok(());
+        }
+
         // Extract model based on available information
         let extracted_model = self.extract_model_for_instance(
             &instance.name,

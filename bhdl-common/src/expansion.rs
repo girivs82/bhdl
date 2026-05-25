@@ -25,6 +25,13 @@ pub struct ExpansionRecipe {
     /// pin_type: "power", "ground", "switch", "feedback", "signal"
     /// direction: "in", "out", "inout"
     pub pin_info: HashMap<String, (String, String)>,
+    /// Composition-pairing declarations (`socket <held> in <socket>;`)
+    /// from the expansion block. Keyed by the held instance's local
+    /// name; the value is the socket instance's local name. After
+    /// expansion the synthesizer stamps `socketed_in = "<socket>"` on
+    /// the held instance so PnR can suppress its footprint — the
+    /// socket carries the footprint the board actually solders.
+    pub socket_pairings: HashMap<String, String>,
 }
 
 /// A component instance to create during expansion.
@@ -72,6 +79,7 @@ impl ExpansionRecipe {
             internal_nets: Vec::new(),
             param_defaults: HashMap::new(),
             pin_info: HashMap::new(),
+            socket_pairings: HashMap::new(),
         }
     }
 }

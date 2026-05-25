@@ -78,6 +78,7 @@ pub enum SyntaxKind {
     DESIGN_KW,     // design (for entity-level operating-point design blocks)
     VARIANT_KW,    // variant (board-level product SKU variants)
     DNP_KW,        // dnp (do-not-populate; inside variant blocks)
+    SOCKET_KW,     // socket (composition-pairing inside expansion blocks)
     CONSTRAIN_KW,  // constrain
     GENERATE_KW,   // generate
     FOR_KW,        // for
@@ -355,6 +356,11 @@ pub enum SyntaxKind {
     VARIANT_BLOCK,         // variant <Name> { ... }
     VARIANT_VALUE_OVERRIDE,// <instance>.value = <expr>;
     VARIANT_DNP_STMT,      // dnp <instance>;
+
+    // Socket pairing (declared inside expansion blocks; marks one
+    // child instance as being physically socketed in another, e.g.
+    // a tube held in a chassis octal socket).
+    EXPANSION_SOCKET_STMT, // socket <held> in <socket>;
 
     // Design block nodes (vendor-authored intent → bias values)
     DESIGN_BLOCK,          // design for <intent> { ... }

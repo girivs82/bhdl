@@ -313,3 +313,87 @@ entity TubeSwitch() {
         Rp = (v_bb - v_sat) / i_sat;
     }
 }
+
+
+// Socketed-tube composition entity. Wraps the canonical Triode
+// (currently a 6SN7 — see actives/triode.bhdl entity above) in
+// an octal chassis socket. The composition presents the same
+// three electrical pins as a bare Triode (P / G / K), plus the
+// two heater pins (H1 / H2) which the bare Triode entity doesn't
+// expose. Vendors who want a different tube in the same socket
+// write a parallel entity (e.g. `SocketedTriode6L6_Octal`) that
+// instantiates `Triode6L6` instead.
+//
+// Architectural points:
+//   - Two children: the SOCKET (physical, has its own SKU/footprint)
+//     and the TUBE (electrical, no PCB footprint of its own — it
+//     plugs into the socket).
+//   - Shared internal nets join socket pin N to tube terminal X for
+//     each electrical connection. Standard 6SN7 octal pinout:
+//     pin 2 = H heater, pin 3 = P plate, pin 5 = G grid,
+//     pin 7 = H heater, pin 8 = K cathode.
+//   - The `socket V in S;` line tells the synthesizer that V is
+//     held by S; after expansion the synthesizer stamps
+//     `socketed_in = "<base>_S"` on V's attributes so downstream
+//     PnR / KiCad export suppress V's footprint. The TUBE entity
+//     itself doesn't carry "I have no footprint" — that's a
+//     property of THIS composition, not the tube.
+//   - SPICE sees only the tube (sockets carry component_class =
+//     "tube_socket" which the converter skips silently). BOM sees
+//     both rows (socket + tube), each with its own SKU.
+entity SocketedTriode_Octal() {
+    // All outer pins are `virtual` — the composition entity has no
+    // physical package of its own; its package IS the socket's
+    // (Belton VTB9-PT). The outer pin presented to the board is a
+    // relay to the corresponding socket terminal, set up by the
+    // expansion block below. Marking them virtual is what activates
+    // the expansion interpreter for this composition.
+    pin P:  signal inout virtual;   // plate (relays to socket pin 3)
+    pin G:  signal in    virtual;   // grid  (relays to socket pin 5)
+    pin K:  signal inout virtual;   // cathode (relays to socket pin 8)
+    pin H1: signal inout virtual;   // heater (relays to socket pin 2)
+    pin H2: signal inout virtual;   // heater (relays to socket pin 7)
+
+    attribute component_class = "tube_socketed_assembly";
+
+    expansion {
+        // Internal nets: one per (socket pin, tube terminal) pair
+        // we want to expose at the composition's outer pins.
+        internal plate_net:   net;
+        internal grid_net:    net;
+        internal cathode_net: net;
+        internal h1_net:      net;
+        internal h2_net:      net;
+
+        // Socket (mechanical / SKU / footprint).
+        plate_net   -> S: TubeSocket_Octal().3;
+        grid_net    -> S.5;
+        cathode_net -> S.8;
+        h1_net      -> S.2;
+        h2_net      -> S.7;
+
+        // Tube (electrical). Same internal nets — the socket pin
+        // and the tube terminal are electrically the same node.
+        plate_net   -> V: Triode().P;
+        grid_net    -> V.G;
+        cathode_net -> V.K;
+        // (Heater pins not modelled on bare Triode entity yet —
+        // they're informational on the socket side for layout.)
+
+        // Forward outer pins to the SOCKET nets (PCB lands on the
+        // socket terminals, not on the tube). The connection-walk
+        // path naturally treats these as same-net per the existing
+        // expansion machinery.
+        P  -> plate_net;
+        G  -> grid_net;
+        K  -> cathode_net;
+        H1 -> h1_net;
+        H2 -> h2_net;
+
+        // Socket-pairing declaration. Stamps `socketed_in = "<base>_S"`
+        // on V's attributes after expansion — downstream consumers
+        // (PnR, KiCad export) suppress V's footprint placement (the
+        // socket is what gets soldered to the PCB).
+        socket V in S;
+    }
+}
