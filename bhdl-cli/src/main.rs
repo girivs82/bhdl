@@ -204,6 +204,22 @@ enum Commands {
         #[arg(long)]
         no_patterns: bool,
     },
+
+    /// Generate a manufacturing Bill of Materials from the synthesized
+    /// netlist. Walks every physical-component instance, reads the
+    /// canonical SKU attributes (manufacturer, mpn, package,
+    /// distributor PNs) declared on entities and instance overrides,
+    /// groups identical parts, and emits either Markdown or CSV.
+    Bom {
+        /// Output file path. Defaults to stdout when omitted.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Output format. `markdown` for human-readable tables,
+        /// `csv` for assembly-house parts lists.
+        #[arg(short, long, default_value = "markdown")]
+        format: String,
+    },
 }
 
 #[tokio::main]
@@ -281,6 +297,10 @@ async fn main() -> Result<()> {
 
         Some(Commands::Doc { output, bom_only, budget_only, no_tree, no_patterns }) => {
             cmd_doc(&source_file, output, bom_only, budget_only, no_tree, no_patterns).await?;
+        }
+
+        Some(Commands::Bom { output, format }) => {
+            cmd_bom(&source_file, &cli.input, output, &format).await?;
         }
 
         Some(Commands::Intents { show_hints, show_rules, filter, format }) => {
@@ -1264,6 +1284,82 @@ async fn run_simulation(source_file: &SourceFile, testbench_path: PathBuf, outpu
     fs::write(&summary_path, serde_json::to_string_pretty(&summary)?)?;
     println!("  Summary saved to: {}", summary_path.display());
 
+    Ok(())
+}
+
+/// Generate a manufacturing BOM by walking the post-expansion
+/// netlist. Mirrors the synthesis prologue used by run_spice /
+/// run_visualization — analyze, stamp intent attributes, run the
+/// expansion interpreter — so the BOM sees every concrete leaf
+/// component (including vendor-design-recipe-sized passives and
+/// expansion-block children for entity families like SignalTubeStage
+/// and BjtCurrentMirror).
+async fn cmd_bom(
+    source_file: &SourceFile,
+    source_path: &Path,
+    output: Option<PathBuf>,
+    format: &str,
+) -> Result<()> {
+    use bhdl_analyzer::sku_bom;
+
+    println!("{}", "Generating manufacturing BOM...".bold());
+    let _ = source_path; // reserved for future per-file diagnostics
+
+    // 1. Analysis pass.
+    let analysis = analyze(source_file);
+    if !analysis.diagnostics.is_empty() {
+        eprintln!("{}", "Warning: Analysis found issues".yellow().bold());
+    }
+
+    // 2. Build the netlist (logical instances).
+    let mut generator = NetlistGenerator::new();
+    let mut netlist = generator.generate_from_ast_and_analysis(source_file, &analysis).await
+        .context("Failed to synthesize netlist")?;
+
+    // 3. Stamp intent attributes so design recipes see them.
+    if let Some(ref flow_tracker) = analysis.flow_tracker {
+        bhdl_synthesizer::intent_attribute_stamper::stamp_intent_attributes(&mut netlist, flow_tracker);
+    }
+
+    // 4. Expand entity instances — turns SignalTubeStage / BjtCurrentMirror
+    //    / etc. into concrete leaf passives. The BOM walker needs to see
+    //    the post-expansion instances, not the pre-expansion logical ones.
+    let recipe_results = bhdl_synthesizer::expansion_interpreter::expand_entity_instances_with_designs(
+        &mut netlist,
+        &analysis.expansion_recipes,
+        &analysis.design_recipes,
+    );
+    if !recipe_results.is_empty() {
+        println!("  {} expansion blocks applied for {} entity instance(s)",
+            "✓".green(), recipe_results.len());
+    }
+
+    // 5. Walk the netlist; produce the BOM rows.
+    let rows = sku_bom::walk(&netlist);
+    println!("  {} {} BOM line(s) ({} total instance{})",
+        "✓".green(),
+        rows.len(),
+        rows.iter().map(|r| r.quantity).sum::<usize>(),
+        if rows.iter().map(|r| r.quantity).sum::<usize>() == 1 { "" } else { "s" });
+
+    // 6. Format + emit.
+    let text = match format {
+        "csv" => sku_bom::to_csv(&rows),
+        "markdown" | "md" => sku_bom::to_markdown(&rows),
+        other => {
+            anyhow::bail!("unknown BOM format '{other}' (expected 'markdown' or 'csv')");
+        }
+    };
+    match output {
+        Some(path) => {
+            fs::write(&path, &text)?;
+            println!("  Written to: {}", path.display());
+        }
+        None => {
+            println!();
+            print!("{}", text);
+        }
+    }
     Ok(())
 }
 

@@ -279,10 +279,19 @@ fn expand_one_instance(
             attrs.push(("value", resolved));
         }
 
-        // Set component_class from the component type so GLACIER can identify
-        // these children (the component registry only looks at this attribute).
-        let comp_class = component_type_to_class(&exp_inst.component_type);
-        attrs.push(("component_class", comp_class.to_string()));
+        // Set component_class so GLACIER / SPICE / the SKU BOM walker
+        // can identify these children. Vendor-declared value on the
+        // called entity wins (so a `NPN_2N3904` with
+        // `attribute component_class = "bjt"` lands in the BOM as
+        // "bjt", not the synthesizer's "passive" fallback). The
+        // hardcoded `component_type_to_class` table is only consulted
+        // when the entity didn't declare its own class — same
+        // architectural shape as the pin-derivation fallback.
+        let comp_class = exp_inst.attributes
+            .get("component_class")
+            .cloned()
+            .unwrap_or_else(|| component_type_to_class(&exp_inst.component_type).to_string());
+        attrs.push(("component_class", comp_class));
 
         // Determine expansion role from connection topology
         // A child is "shunt" if any of its connections touch GND; otherwise "series"
@@ -326,10 +335,27 @@ fn expand_one_instance(
             attrs.push(("stage_name", stage_name.clone()));
         }
 
-        // Convert to (&str, &str) pairs for create_instance
-        let attr_pairs: Vec<(&str, &str)> = attrs.iter()
-            .map(|(k, v)| (*k, v.as_str()))
-            .collect();
+        // Pass through the called entity's attribute defaults so they
+        // reach the leaf instance. SKU attributes (mpn, manufacturer,
+        // physical_package, footprint, kicad_symbol, datasheet,
+        // digikey_pn, …) live on the entity definition — the BOM
+        // walker, KiCad export, and supplier picker all read them off
+        // the instance. Without this propagation, an expansion-child
+        // 2N3904 transistor lands in the netlist with empty
+        // attributes and shows up on the BOM as "passive / U1".
+        //
+        // The synthesizer-set attrs above (component_class, value,
+        // schematic_placement, expansion_parent, etc.) take precedence
+        // because create_instance's HashMap collect is last-write-
+        // wins and the entity defaults are inserted first here.
+        let mut attr_pairs: Vec<(&str, &str)> = Vec::with_capacity(
+            exp_inst.attributes.len() + attrs.len());
+        for (k, v) in &exp_inst.attributes {
+            attr_pairs.push((k.as_str(), v.as_str()));
+        }
+        for (k, v) in &attrs {
+            attr_pairs.push((*k, v.as_str()));
+        }
 
         let inst_id = create_instance(netlist, &child_name, mod_id, &attr_pairs);
 

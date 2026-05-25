@@ -26,12 +26,16 @@ import { Res } from "../passive/resistor.bhdl";
 // -----------------------------------------------------------------
 
 // Nominal 2N3904 NPN general-purpose small-signal transistor.
-// Gummel-Poon parameter set from the SPICE-standard model card.
+// Gummel-Poon parameters from the standard SPICE model card; SKU
+// data pins one widely-stocked SMT incarnation (Onsemi MMBT3904LT1G,
+// SOT-23). Vendors can override on-instance to pick a different
+// package or a different supplier.
 entity NPN_2N3904() {
     pin C: signal inout;
     pin B: signal in;
     pin E: signal inout;
 
+    // SPICE classification + Stage 6 device-family discovery marker.
     attribute component_class = "bjt";
     attribute part_number = "2N3904";
 
@@ -46,12 +50,24 @@ entity NPN_2N3904() {
     attribute nr = 1.0;
     attribute vaf = 74.03;
 
+    // First-class SKU attributes (see bhdl-common::sku). These make
+    // the .bhdl file the single source of truth for ordering data —
+    // the BOM walker reads them directly, no online supplier lookup
+    // needed for parts pinned at the entity level.
+    attribute manufacturer = "ON Semiconductor";
+    attribute mpn = "MMBT3904LT1G";
+    attribute physical_package = "SOT-23";
+    attribute footprint = "Package_TO_SOT_SMD:SOT-23";
     attribute kicad_symbol = "Device:Q_NPN_BCE";
+    attribute datasheet = "https://www.onsemi.com/pdf/datasheet/mmbt3904lt1-d.pdf";
+    attribute digikey_pn = "MMBT3904LT1GOSCT-ND";
+    attribute lcsc_pn = "C20526";
 }
 
 // Nominal 2N2222 NPN small-signal transistor — slightly higher
 // current rating than 2N3904; a common roll-in for circuits that
-// need a bit more I_C headroom.
+// need a bit more I_C headroom. SKU pinned to the SOT-23 PMBT2222A
+// from Nexperia.
 entity NPN_2N2222() {
     pin C: signal inout;
     pin B: signal in;
@@ -67,7 +83,14 @@ entity NPN_2N2222() {
     attribute nr = 1.0;
     attribute vaf = 74.03;
 
+    attribute manufacturer = "Nexperia";
+    attribute mpn = "PMBT2222A,215";
+    attribute physical_package = "SOT-23";
+    attribute footprint = "Package_TO_SOT_SMD:SOT-23";
     attribute kicad_symbol = "Device:Q_NPN_BCE";
+    attribute datasheet = "https://assets.nexperia.com/documents/data-sheet/PMBT2222A.pdf";
+    attribute digikey_pn = "1727-2898-1-ND";
+    attribute lcsc_pn = "C2145";
 }
 
 // BJT current mirror — the classic two-transistor structure. Q1 is
