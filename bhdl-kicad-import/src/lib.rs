@@ -37,6 +37,7 @@ pub mod lib_resolver;
 pub mod symbol_mapping;
 pub mod nets;
 pub mod emitter;
+pub mod canonical;
 
 pub use ir::*;
 pub use reader::{read_schematic, read_from_str, ReadError};
@@ -47,3 +48,7 @@ pub use lib_resolver::{LibraryResolver, SymLibTableEntry,
 pub use symbol_mapping::{MappingRegistry, SymbolMapping, MappingError};
 pub use nets::{extract_nets, Net, NetList, NetPin};
 pub use emitter::{emit_bhdl, EmittedBhdl, EmitError};
+pub use canonical::{
+    canonical_from_schematic, parse_kicad_net_file, compare,
+    CanonicalNetlist, PinRef, NetDiff, EquivalenceReport,
+};

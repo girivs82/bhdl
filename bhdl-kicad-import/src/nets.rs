@@ -337,11 +337,25 @@ pub fn extract_nets(sheet: &Sheet) -> NetList {
         });
     }
 
-    // Build nets in a deterministic order (sort by name; auto-named
-    // nets sort after named ones since "Net_N" lexically falls
-    // wherever the digits put it — fine for tests).
+    // Sort pin lists inside each net first, then sort the *entries*
+    // by smallest pin, so auto-name numbering (Net_1, Net_2, …) is
+    // deterministic across HashMap iteration orders. Without this
+    // step, two extractions of the same sheet would assign different
+    // numeric suffixes — fatal for canonical-netlist round-tripping.
+    let mut entries: Vec<(u32, Vec<NetPin>)> = by_root.into_iter().map(|(root, mut pins)| {
+        pins.sort_by(|a, b| {
+            a.symbol_uuid.cmp(&b.symbol_uuid).then(a.pin_number.cmp(&b.pin_number))
+        });
+        (root, pins)
+    }).collect();
+    entries.sort_by(|(_, a), (_, b)| {
+        let ka = a.first().map(|p| (&p.symbol_uuid, &p.pin_number));
+        let kb = b.first().map(|p| (&p.symbol_uuid, &p.pin_number));
+        ka.cmp(&kb)
+    });
+
     let mut auto_counter: u32 = 0;
-    let mut nets: Vec<Net> = by_root.into_iter().map(|(root, pins)| {
+    let mut nets: Vec<Net> = entries.into_iter().map(|(root, pins)| {
         let (name, is_power) = match name_of.get(&root) {
             Some(c) => (c.name.clone(), c.is_power),
             None => {
