@@ -229,6 +229,13 @@ fn parse_title_block(args: &[Sexpr]) -> TitleBlock {
     tb
 }
 
+/// Public wrapper used by `lib_resolver` to parse `(symbol ...)` forms
+/// from external `.kicad_sym` library files into the same `LibSymbol` IR
+/// used for embedded `lib_symbols`.
+pub fn parse_lib_symbol_public(item: &Sexpr) -> Option<LibSymbol> {
+    parse_lib_symbol(item)
+}
+
 fn parse_lib_symbol(item: &Sexpr) -> Option<LibSymbol> {
     let args = item.match_list("symbol")?;
     let lib_id = args.first().and_then(|s| s.as_str().or(s.as_symbol()))?.to_string();
