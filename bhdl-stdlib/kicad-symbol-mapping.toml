@@ -1,229 +1,213 @@
 # KiCad → BHDL symbol mapping registry.
 #
-# Phase B of the KiCad-to-BHDL translator (see
+# Phase B/G of the KiCad-to-BHDL translator (see
 # docs/plan/KiCad_Import_And_Stdlib_Accretion.md). Each `[mapping]`
 # block tells the importer: when you see a `(symbol (lib_id "X:Y") ...)`
 # in a KiCad schematic, instantiate the named BHDL entity instead,
 # and bind the schematic pins to the BHDL entity pins via the
 # `pin_map`.
 #
-# A `pin_map` of `"1" = "p"` means "KiCad pin number 1 wires to BHDL
-# port `p`". For passives and connectors the names are usually
-# trivial (1↔p, 2↔n); for ICs the map captures the named-pin
-# convention.
+# Discipline:
+#   - Only list mappings whose `bhdl` target is a real entity
+#     already in `bhdl-stdlib`. Mappings to non-existent entities
+#     produce un-parseable .bhdl on import.
+#   - When stdlib gains a new entity (e.g. a generic Connector
+#     family), add the relevant KiCad lib_ids in the same commit.
+#   - Unmapped symbols fall through to `kicad_passthrough` (defined
+#     in `bhdl-stdlib/kicad_passthrough.bhdl`); the import never
+#     fails outright on an unknown part.
 #
-# Entries with no `pin_map` default to identity mapping (the KiCad
-# pin name IS the BHDL port name) — useful for ICs whose .bhdl
-# stdlib entity already mirrors the datasheet pin names.
+# `pin_map` translates KiCad pin numbers → BHDL port names. When
+# the BHDL entity declares numeric pins (`pin 1:`, `pin 2:`), the
+# default identity mapping is correct and pin_map can be omitted.
 #
-# Unmapped symbols fall through to a `kicad_passthrough` entity
-# (an opaque component carrying only the netlist footprint), so the
-# importer never fails outright on unknown parts — it just produces
-# weaker BHDL.
+# Power-flag symbols (`power:GND`, `power:+5V`, …) use the
+# special `_net:<NAME>` target form, meaning "this isn't an entity,
+# it names a power net at this point in the schematic". The
+# importer recognises the prefix and produces `power VCC_5V = 5V;`
+# / `ground GND;` declarations rather than entity instances.
 
 # ─── Passives (Device library) ─────────────────────────────────────
+# All resolve to existing entities in bhdl-stdlib/passives/. KiCad
+# pin numbers 1/2 line up with BHDL's pin 1/pin 2 declarations.
 
 [[mapping]]
 kicad = "Device:R"
-bhdl  = "resistor"
-pin_map = { "1" = "p", "2" = "n" }
+bhdl  = "Resistor"
 
 [[mapping]]
 kicad = "Device:R_Small"
-bhdl  = "resistor"
-pin_map = { "1" = "p", "2" = "n" }
+bhdl  = "Resistor"
 
 [[mapping]]
 kicad = "Device:R_US"
-bhdl  = "resistor"
-pin_map = { "1" = "p", "2" = "n" }
+bhdl  = "Resistor"
 
 [[mapping]]
 kicad = "Device:C"
-bhdl  = "capacitor"
-pin_map = { "1" = "p", "2" = "n" }
+bhdl  = "Capacitor"
 
 [[mapping]]
 kicad = "Device:C_Small"
-bhdl  = "capacitor"
-pin_map = { "1" = "p", "2" = "n" }
+bhdl  = "Capacitor"
 
 [[mapping]]
 kicad = "Device:C_Polarized"
-bhdl  = "capacitor"
-pin_map = { "1" = "p", "2" = "n" }
+bhdl  = "Capacitor"
 
 [[mapping]]
 kicad = "Device:L"
-bhdl  = "inductor"
-pin_map = { "1" = "p", "2" = "n" }
+bhdl  = "Inductor"
 
 [[mapping]]
 kicad = "Device:L_Small"
-bhdl  = "inductor"
-pin_map = { "1" = "p", "2" = "n" }
+bhdl  = "Inductor"
 
 [[mapping]]
 kicad = "Device:LED"
-bhdl  = "led"
-pin_map = { "1" = "k", "2" = "a" }
+bhdl  = "LED"
+pin_map = { "1" = "K", "2" = "A" }
 
 [[mapping]]
 kicad = "Device:LED_Small"
-bhdl  = "led"
-pin_map = { "1" = "k", "2" = "a" }
+bhdl  = "LED"
+pin_map = { "1" = "K", "2" = "A" }
 
 [[mapping]]
 kicad = "Device:D"
-bhdl  = "diode"
-pin_map = { "1" = "k", "2" = "a" }
+bhdl  = "Diode"
 
 [[mapping]]
 kicad = "Device:D_Small"
-bhdl  = "diode"
-pin_map = { "1" = "k", "2" = "a" }
-
-[[mapping]]
-kicad = "Device:D_Zener"
-bhdl  = "zener_diode"
-pin_map = { "1" = "k", "2" = "a" }
-
-[[mapping]]
-kicad = "Device:D_Schottky"
-bhdl  = "schottky_diode"
-pin_map = { "1" = "k", "2" = "a" }
-
-[[mapping]]
-kicad = "Device:Crystal"
-bhdl  = "crystal"
-pin_map = { "1" = "p", "2" = "n" }
-
-[[mapping]]
-kicad = "Device:Crystal_GND24"
-bhdl  = "crystal"
-pin_map = { "1" = "p", "3" = "n" }
+bhdl  = "Diode"
 
 [[mapping]]
 kicad = "Device:Fuse"
-bhdl  = "fuse"
-pin_map = { "1" = "p", "2" = "n" }
+bhdl  = "Fuse"
 
 [[mapping]]
 kicad = "Device:Polyfuse"
-bhdl  = "fuse"
-pin_map = { "1" = "p", "2" = "n" }
+bhdl  = "Fuse"
+
+# Ferrite bead: KiCad ships two spellings of the lib_id depending
+# on which library is loaded (`Ferrite_Bead` in older libraries,
+# `FerriteBead` in current KiCad 8). Map both to the same entity.
+[[mapping]]
+kicad = "Device:FerriteBead"
+bhdl  = "Bead"
 
 [[mapping]]
 kicad = "Device:Ferrite_Bead"
-bhdl  = "ferrite_bead"
-pin_map = { "1" = "p", "2" = "n" }
+bhdl  = "Bead"
+
+# ─── Protection diodes ─────────────────────────────────────────────
+
+[[mapping]]
+kicad = "Diode:1.5KE6V8CA"
+bhdl  = "TVSDiode"
+
+[[mapping]]
+kicad = "Diode:SMAJ5.0CA"
+bhdl  = "TVSDiode"
+
+[[mapping]]
+kicad = "Diode:SS34"
+bhdl  = "SchottkyDiode"
+
+[[mapping]]
+kicad = "Device:D_Schottky"
+bhdl  = "SchottkyDiode"
+
+[[mapping]]
+kicad = "Device:D_Schottky_Small"
+bhdl  = "SchottkyDiode"
 
 # ─── Transistors ───────────────────────────────────────────────────
-
-[[mapping]]
-kicad = "Device:Q_NPN_BCE"
-bhdl  = "bjt_npn"
-pin_map = { "1" = "b", "2" = "c", "3" = "e" }
-
-[[mapping]]
-kicad = "Device:Q_NPN_BEC"
-bhdl  = "bjt_npn"
-pin_map = { "1" = "b", "2" = "e", "3" = "c" }
-
-[[mapping]]
-kicad = "Device:Q_NPN_CBE"
-bhdl  = "bjt_npn"
-pin_map = { "1" = "c", "2" = "b", "3" = "e" }
-
-[[mapping]]
-kicad = "Device:Q_PNP_BCE"
-bhdl  = "bjt_pnp"
-pin_map = { "1" = "b", "2" = "c", "3" = "e" }
-
-[[mapping]]
-kicad = "Device:Q_PNP_BEC"
-bhdl  = "bjt_pnp"
-pin_map = { "1" = "b", "2" = "e", "3" = "c" }
+# BHDL's MOSFET entity takes a `part` string parameter; the
+# importer passes the KiCad Value field through, so N vs P channel
+# information rides on the part number (e.g. "BSS138", "AO3401").
+# All G/D/S pin permutations KiCad uses map to the same entity —
+# the entity itself uses datasheet pin names.
 
 [[mapping]]
 kicad = "Device:Q_NMOS_GDS"
-bhdl  = "mosfet_n"
-pin_map = { "1" = "g", "2" = "d", "3" = "s" }
+bhdl  = "MOSFET"
+pin_map = { "1" = "G", "2" = "D", "3" = "S" }
 
 [[mapping]]
 kicad = "Device:Q_NMOS_DGS"
-bhdl  = "mosfet_n"
-pin_map = { "1" = "d", "2" = "g", "3" = "s" }
+bhdl  = "MOSFET"
+pin_map = { "1" = "D", "2" = "G", "3" = "S" }
+
+[[mapping]]
+kicad = "Device:Q_NMOS_GSD"
+bhdl  = "MOSFET"
+pin_map = { "1" = "G", "2" = "S", "3" = "D" }
 
 [[mapping]]
 kicad = "Device:Q_PMOS_GDS"
-bhdl  = "mosfet_p"
-pin_map = { "1" = "g", "2" = "d", "3" = "s" }
+bhdl  = "MOSFET"
+pin_map = { "1" = "G", "2" = "D", "3" = "S" }
 
 [[mapping]]
 kicad = "Device:Q_PMOS_DGS"
-bhdl  = "mosfet_p"
-pin_map = { "1" = "d", "2" = "g", "3" = "s" }
-
-# ─── Switches ──────────────────────────────────────────────────────
+bhdl  = "MOSFET"
+pin_map = { "1" = "D", "2" = "G", "3" = "S" }
 
 [[mapping]]
-kicad = "Switch:SW_Push"
-bhdl  = "switch_spst_momentary"
-pin_map = { "1" = "a", "2" = "b" }
+kicad = "Device:Q_PMOS_GSD"
+bhdl  = "MOSFET"
+pin_map = { "1" = "G", "2" = "S", "3" = "D" }
+
+# Similarly for BJTs (BHDL entity uses datasheet pin names B/C/E
+# and `part` carries the actual transistor model number).
 
 [[mapping]]
-kicad = "Switch:SW_SPST"
-bhdl  = "switch_spst"
-pin_map = { "1" = "a", "2" = "b" }
+kicad = "Device:Q_NPN_BCE"
+bhdl  = "BJT"
+pin_map = { "1" = "B", "2" = "C", "3" = "E" }
 
 [[mapping]]
-kicad = "Switch:SW_DIP_x01"
-bhdl  = "switch_spst"
-pin_map = { "1" = "a", "2" = "b" }
-
-# ─── Connectors ────────────────────────────────────────────────────
+kicad = "Device:Q_NPN_BEC"
+bhdl  = "BJT"
+pin_map = { "1" = "B", "2" = "E", "3" = "C" }
 
 [[mapping]]
-kicad = "Connector:Conn_01x02"
-bhdl  = "connector_pin_header"
-# pin_map omitted — port names follow `pin_<n>` convention.
+kicad = "Device:Q_NPN_CBE"
+bhdl  = "BJT"
+pin_map = { "1" = "C", "2" = "B", "3" = "E" }
 
 [[mapping]]
-kicad = "Connector:Conn_01x04"
-bhdl  = "connector_pin_header"
+kicad = "Device:Q_PNP_BCE"
+bhdl  = "BJT"
+pin_map = { "1" = "B", "2" = "C", "3" = "E" }
 
 [[mapping]]
-kicad = "Connector:Conn_01x06"
-bhdl  = "connector_pin_header"
+kicad = "Device:Q_PNP_BEC"
+bhdl  = "BJT"
+pin_map = { "1" = "B", "2" = "E", "3" = "C" }
+
+# ─── Test points ───────────────────────────────────────────────────
 
 [[mapping]]
-kicad = "Connector:Conn_01x08"
-bhdl  = "connector_pin_header"
+kicad = "Connector:TestPoint"
+bhdl  = "TestPoint"
+pin_map = { "1" = "K" }
 
 [[mapping]]
-kicad = "Connector:USB_B"
-bhdl  = "connector_usb_b"
+kicad = "Connector:TestPoint_2Pin"
+bhdl  = "TestPoint"
 
-[[mapping]]
-kicad = "Connector:USB_C_Receptacle"
-bhdl  = "connector_usb_c"
-
-[[mapping]]
-kicad = "Connector:Barrel_Jack"
-bhdl  = "connector_barrel_jack"
-pin_map = { "1" = "tip", "2" = "sleeve", "3" = "ring" }
-
-# ─── Power flags ───────────────────────────────────────────────────
-#
-# Power symbols in KiCad are "labels" that name a net (+5V, GND,
-# +3V3, etc.) rather than physical parts. The importer handles them
-# specially — they become net-naming hints, not entity instances.
-# These mappings exist for completeness and to suppress
-# "unknown symbol" warnings.
+# ─── Power flags (handled specially) ───────────────────────────────
+# These aren't instantiable components — the importer treats them
+# as net-naming hints that synthesise `power`/`ground` declarations.
 
 [[mapping]]
 kicad = "power:GND"
+bhdl  = "_net:GND"
+
+[[mapping]]
+kicad = "power:Earth"
 bhdl  = "_net:GND"
 
 [[mapping]]
@@ -239,6 +223,14 @@ kicad = "power:+3.3V"
 bhdl  = "_net:VCC_3V3"
 
 [[mapping]]
+kicad = "power:+12V"
+bhdl  = "_net:VCC_12V"
+
+[[mapping]]
+kicad = "power:-12V"
+bhdl  = "_net:VEE_12V"
+
+[[mapping]]
 kicad = "power:VCC"
 bhdl  = "_net:VCC"
 
@@ -251,17 +243,56 @@ kicad = "power:VEE"
 bhdl  = "_net:VEE"
 
 [[mapping]]
-kicad = "power:+12V"
-bhdl  = "_net:VCC_12V"
-
-[[mapping]]
-kicad = "power:-12V"
-bhdl  = "_net:VEE_12V"
-
-[[mapping]]
-kicad = "power:Earth"
-bhdl  = "_net:EARTH"
+kicad = "power:VBUS"
+bhdl  = "_net:VBUS"
 
 [[mapping]]
 kicad = "power:PWR_FLAG"
 bhdl  = "_net:_pwr_flag"
+
+# ─── Mechanical / no-op symbols ────────────────────────────────────
+# Fiducials, mounting holes, and similar mechanical markers have
+# no electrical role. The importer still records them so footprint
+# information survives, but they map to passthrough entities (zero
+# pins) which the analyzer ignores during ERC.
+
+[[mapping]]
+kicad = "Mechanical:Fiducial"
+bhdl  = "kicad_passthrough"
+
+[[mapping]]
+kicad = "Mechanical:MountingHole"
+bhdl  = "kicad_passthrough"
+
+[[mapping]]
+kicad = "Mechanical:MountingHole_Pad"
+bhdl  = "kicad_passthrough"
+
+# ─── ICs, connectors, switches, transistors ────────────────────────
+# Not yet in stdlib. Left unmapped on purpose — they fall through
+# to `kicad_passthrough` automatically, and the importer prints a
+# warning for each so we know what to enrich next.
+#
+# Top candidates for the next stdlib accretion round (counts from
+# the Arduino UNO R3 fixture):
+#
+#   16  Device:R_Pack04_Split
+#    3  Mechanical:Fiducial   (now mapped above)
+#    2  Connector_Generic:Conn_01x08
+#    2  Device:FerriteBead    (mapped above; was the bug)
+#    2  Connector_Generic:Conn_02x03_Odd_Even
+#    2  Device:Varistor
+#    2  Jumper:SolderJumper_2_Open
+#    1  Connector:Barrel_Jack_Switch
+#    1  Connector:USB_C_Receptacle_USB2.0_16P
+#    1  Connector_Generic:Conn_01x06
+#    1  Connector_Generic:Conn_01x10
+#    1  Connector_Generic:Conn_02x02_Odd_Even
+#    1  Device:Crystal_GND2
+#    1  Device:Q_PMOS_GSD
+#    1  Regulator_Linear:LP2985-3.3
+#    1  Regulator_Linear:NCP1117-5.0_SOT223
+#    1  Arduino UNO:ATMEGA328P-PU
+#    1  Arduino UNO:ATMEGA16U2-MU
+#    1  Arduino UNO:LMV358IDGKR
+#    1  Arduino UNO:TS06-667-30-BK-100-G-SMT-TR

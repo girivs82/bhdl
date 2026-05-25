@@ -119,10 +119,10 @@ fn emits_bhdl_for_arduino_uno() {
 
     // Some symbols must resolve to real stdlib entries
     // (resistor, capacitor are universally mapped).
-    assert!(emitted.source.contains(": resistor("),
-        "expected at least one resistor instance");
-    assert!(emitted.source.contains(": capacitor("),
-        "expected at least one capacitor instance");
+    assert!(emitted.source.contains(": Resistor("),
+        "expected at least one Resistor instance");
+    assert!(emitted.source.contains(": Capacitor("),
+        "expected at least one Capacitor instance");
 
     // Unmapped symbols fall through to kicad_passthrough — the
     // Uno uses an ATmega328, USB receptacle, etc. that aren't

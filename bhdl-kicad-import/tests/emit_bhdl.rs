@@ -55,9 +55,9 @@ fn emits_board_block_and_components() {
 
     assert_eq!(out.board_name, "RC_Filter");
     assert!(out.source.contains("board RC_Filter {"), "missing board header:\n{}", out.source);
-    assert!(out.source.contains("R1: resistor(\"10k\");"),
+    assert!(out.source.contains("R1: Resistor(\"10k\");"),
         "expected R1 declaration:\n{}", out.source);
-    assert!(out.source.contains("C1: capacitor(\"100nF\");"),
+    assert!(out.source.contains("C1: Capacitor(\"100nF\");"),
         "expected C1 declaration:\n{}", out.source);
 }
 
