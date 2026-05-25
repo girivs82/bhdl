@@ -1,0 +1,46 @@
+// Board SKU variant demo. The same PCB ships in two configurations:
+//
+//   - Standard: 2 mA mirror current, Rload populated for testing.
+//   - HighCurrent: bumps the mirror target to 5 mA. The intent
+//     parameter is wired to the vendor design recipe so Itail_Rref
+//     gets re-sized automatically for the new target.
+//   - NoLoad: same as Standard but the load resistor is DNP'd —
+//     useful when downstream test gear provides the load.
+//
+// To produce a BOM per variant:
+//   bhdl-cli tests/circuits/simple/bjt_mirror_variants.bhdl --sku Standard bom
+//   bhdl-cli tests/circuits/simple/bjt_mirror_variants.bhdl --sku NoLoad   bom
+//
+// To list available SKUs:
+//   bhdl-cli tests/circuits/simple/bjt_mirror_variants.bhdl list-skus
+
+import { NPN_2N3904, BjtCurrentMirror } from "bhdl-stdlib/actives/bjt_design.bhdl";
+import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+
+board BjtMirrorVariants {
+    power VCC = 12V @ 100mA;
+    ground GND;
+
+    Itail: BjtCurrentMirror();
+
+    // Base design: 2 mA mirror, 5 kΩ load placeholder. Itail_Rref is
+    // sized by the vendor design recipe (the same one we landed in
+    // the Stage 5/6/7 work) to (12 - 0.65) / 0.002 = 5675 Ω.
+    net cs_top: VCC -> Rload: Res(5000).1 -> Rload.2 -> Itail.OUT
+        for current_source(current: 2mA);
+
+    VCC -> Itail.VCC;
+    Itail.GND -> GND;
+
+    // ─── SKU variants ────────────────────────────────────────────
+    variant Standard {
+        // Base design unchanged. Same as `bjt_current_mirror.bhdl`.
+    }
+
+    variant NoLoad {
+        // DNP the load resistor — assembly skips it, downstream
+        // test gear provides the load instead. The footprint stays
+        // on the PCB so a populated unit can be hand-assembled.
+        dnp Rload;
+    }
+}

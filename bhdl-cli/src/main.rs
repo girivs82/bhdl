@@ -37,6 +37,16 @@ struct Cli {
     #[arg(short, long)]
     verbose: bool,
 
+    /// Select a board SKU variant declared via `variant <Name> { ... }`
+    /// in the .bhdl file. Patches the post-expansion netlist with the
+    /// variant's value overrides and DNP marks before any consuming
+    /// subcommand runs (bom, spice, layout, …). When the board declares
+    /// variants but `--sku` is omitted, those subcommands error out
+    /// with a list of declared variants. See
+    /// docs/spec/Board_SKU_Variants.md.
+    #[arg(long, value_name = "NAME")]
+    sku: Option<String>,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -210,6 +220,9 @@ enum Commands {
     /// canonical SKU attributes (manufacturer, mpn, package,
     /// distributor PNs) declared on entities and instance overrides,
     /// groups identical parts, and emits either Markdown or CSV.
+    ///
+    /// When the board declares variants, pass `--sku <Name>` at the
+    /// top level to select which one to generate the BOM for.
     Bom {
         /// Output file path. Defaults to stdout when omitted.
         #[arg(short, long)]
@@ -220,6 +233,10 @@ enum Commands {
         #[arg(short, long, default_value = "markdown")]
         format: String,
     },
+
+    /// List the SKU variants declared by the board. Prints "default"
+    /// when no `variant` blocks are present.
+    ListSkus,
 }
 
 #[tokio::main]
@@ -300,7 +317,11 @@ async fn main() -> Result<()> {
         }
 
         Some(Commands::Bom { output, format }) => {
-            cmd_bom(&source_file, &cli.input, output, &format).await?;
+            cmd_bom(&source_file, &cli.input, output, &format, cli.sku.as_deref()).await?;
+        }
+
+        Some(Commands::ListSkus) => {
+            cmd_list_skus(&source_file).await?;
         }
 
         Some(Commands::Intents { show_hints, show_rules, filter, format }) => {
@@ -1294,11 +1315,102 @@ async fn run_simulation(source_file: &SourceFile, testbench_path: PathBuf, outpu
 /// component (including vendor-design-recipe-sized passives and
 /// expansion-block children for entity families like SignalTubeStage
 /// and BjtCurrentMirror).
+/// Apply the user-selected SKU variant's patches to the netlist.
+/// Errors out (with the list of declared variants) when the board
+/// has variants and the user didn't pass `--sku`. Returns
+/// successfully without touching the netlist when the board has no
+/// variants — the implicit "default" SKU.
+fn apply_sku_variant(
+    analysis: &bhdl_analyzer::AnalysisResult,
+    netlist: &mut bhdl_netlist::Netlist,
+    selected: Option<&str>,
+) -> Result<()> {
+    // Aggregate every board's declared variants into one map so the
+    // CLI doesn't need to know which board name was synthesized.
+    // (v0.1 boards-with-variants live in a single .bhdl file, so the
+    // map shape simplifies to "name → Variant".)
+    let mut all_variants: std::collections::HashMap<String, &bhdl_common::variant::Variant>
+        = std::collections::HashMap::new();
+    for (_board, by_name) in &analysis.variants {
+        for (name, variant) in by_name {
+            all_variants.insert(name.clone(), variant);
+        }
+    }
+
+    if all_variants.is_empty() {
+        // No variants declared anywhere on the board. The implicit
+        // "default" SKU is the base design — silently proceed.
+        if let Some(name) = selected {
+            if name != "default" {
+                anyhow::bail!(
+                    "--sku '{name}' was requested but the board declares no \
+                     variants (it has an implicit single 'default' SKU). \
+                     Either remove --sku or declare `variant {name} {{ ... }}` \
+                     on the board.");
+            }
+        }
+        return Ok(());
+    }
+
+    let name = match selected {
+        Some(n) => n,
+        None => {
+            let mut names: Vec<&String> = all_variants.keys().collect();
+            names.sort();
+            let listing = names.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ");
+            anyhow::bail!(
+                "This board declares SKU variants; pass --sku <Name> to select one. \
+                 Available variants: {listing}");
+        }
+    };
+
+    let variant = all_variants.get(name).ok_or_else(|| {
+        let mut names: Vec<&String> = all_variants.keys().collect();
+        names.sort();
+        let listing = names.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ");
+        anyhow::anyhow!("Unknown SKU '{name}'. Available variants: {listing}")
+    })?;
+
+    let report = bhdl_synthesizer::variant_apply::apply_variant(netlist, variant);
+    println!("  {} variant '{}' applied: {} value override(s), {} DNP, {} missing",
+        "✓".green(),
+        report.variant_name,
+        report.values_changed,
+        report.instances_dnpd,
+        report.missing_instances.len());
+    if !report.missing_instances.is_empty() {
+        eprintln!("    {} variant patches referenced unknown instance(s): {}",
+            "!".yellow(),
+            report.missing_instances.join(", "));
+    }
+    Ok(())
+}
+
+async fn cmd_list_skus(source_file: &SourceFile) -> Result<()> {
+    let analysis = analyze(source_file);
+    let mut all_names: Vec<String> = analysis.variants.values()
+        .flat_map(|by_name| by_name.keys().cloned())
+        .collect();
+    all_names.sort();
+    all_names.dedup();
+
+    if all_names.is_empty() {
+        println!("{}", "default".dimmed());
+        println!("  (no `variant` blocks declared on this board — single implicit SKU)");
+    } else {
+        for n in &all_names {
+            println!("{n}");
+        }
+    }
+    Ok(())
+}
+
 async fn cmd_bom(
     source_file: &SourceFile,
     source_path: &Path,
     output: Option<PathBuf>,
     format: &str,
+    sku: Option<&str>,
 ) -> Result<()> {
     use bhdl_analyzer::sku_bom;
 
@@ -1333,6 +1445,12 @@ async fn cmd_bom(
         println!("  {} expansion blocks applied for {} entity instance(s)",
             "✓".green(), recipe_results.len());
     }
+
+    // 4.5. Apply the selected SKU variant's patches. If the board
+    //      declares variants but the user didn't pass --sku, error
+    //      out with a list (same anti-silent-fallback principle as
+    //      Stage 6 device discovery).
+    apply_sku_variant(&analysis, &mut netlist, sku)?;
 
     // 5. Walk the netlist; produce the BOM rows.
     let rows = sku_bom::walk(&netlist);
