@@ -33,7 +33,13 @@
 pub mod sexpr;
 pub mod ir;
 pub mod reader;
+pub mod lib_resolver;
+pub mod symbol_mapping;
 
 pub use ir::*;
 pub use reader::{read_schematic, read_from_str, ReadError};
 pub use sexpr::{Sexpr, ParseError};
+pub use lib_resolver::{LibraryResolver, SymLibTableEntry,
+    parse_sym_lib_table_str, parse_sym_lib_table_file,
+    parse_kicad_sym_str, parse_kicad_sym_file};
+pub use symbol_mapping::{MappingRegistry, SymbolMapping, MappingError};

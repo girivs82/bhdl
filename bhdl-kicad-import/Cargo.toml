@@ -10,6 +10,10 @@ description = "Read KiCad 6+ schematic files into a typed IR. Phase A of the KiC
 # ~200 lines, easier to debug, and pins zero dependencies on a
 # format that occasionally evolves between KiCad versions.
 thiserror = "1.0"
+# For the kicad-symbol-mapping.toml registry that maps KiCad
+# library symbols (e.g. "Device:R") to BHDL stdlib entities.
+toml = "0.8"
+serde = { version = "1.0", features = ["derive"] }
 
 [dev-dependencies]
 # (none yet — fixture-based tests live in tests/ and use raw
