@@ -31,7 +31,7 @@ pub enum MappingError {
 pub struct SymbolMapping {
     /// `"Library:Symbol"` as it appears in the schematic `lib_id`.
     pub kicad: String,
-    /// Target BHDL entity name (e.g. `"resistor"`). The special
+    /// Target BHDL entity name (e.g. `"Resistor"`). The special
     /// `"_net:NAME"` form means "this isn't an entity, it names a
     /// power net" — the importer maps power-flag symbols this way.
     pub bhdl: String,

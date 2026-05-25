@@ -1,0 +1,42 @@
+// kicad_passthrough — opaque placeholder for KiCad symbols that
+// don't (yet) have a real BHDL stdlib entity.
+//
+// Phase G of the KiCad-to-BHDL importer pipeline: when the
+// importer encounters a lib_id that isn't in
+// `kicad-symbol-mapping.toml`, it emits an instance of this
+// entity carrying the original KiCad metadata (Value, Footprint,
+// reference designator) so the connection structure is preserved.
+//
+// The `enrich` phase replaces these instances with real entities
+// one symbol family at a time:
+//
+//   1. Identify a recurring passthrough (look at importer warnings).
+//   2. Write a real entity in bhdl-stdlib (e.g. `ATmega328P.bhdl`).
+//   3. Add a mapping entry in `kicad-symbol-mapping.toml`.
+//   4. Re-import — the passthrough disappears, the netlist
+//      stays bit-identical (verified by `compare()` in
+//      `bhdl-kicad-import::canonical`).
+//
+// Pins: passthrough deliberately declares no pins. KiCad
+// connections reference pins by string number ("1", "2", "RST",
+// "VBUS", …) and the importer emits those as raw references at
+// the connection site. A late-stage analyzer pass binds those
+// references to the entity's pin list when it exists; for
+// passthrough they remain dangling — recorded in the netlist but
+// flagged for enrichment.
+//
+// Args:
+//   value     — KiCad Value field (e.g. "10k", "ATmega328P-PU").
+//   footprint — KiCad Footprint field (e.g. "Resistor_SMD:R_0805").
+//   lib_id    — Original lib_id from the schematic (for traceability).
+
+entity kicad_passthrough(
+    value:     string = "",
+    footprint: string = "",
+    lib_id:    string = ""
+) {
+    // No pin declarations: passthrough carries connection
+    // structure through the netlist phase, not the typed-pin
+    // phase. Enrichment writes the proper pin list when the part
+    // gets a real entity.
+}
