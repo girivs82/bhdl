@@ -28,6 +28,7 @@ pub mod expression_evaluator;
 pub mod flow_tracking;
 pub mod unified_simulation;
 pub mod documentation;
+pub mod sku_bom;
 
 // Safety analysis module
 pub mod passes;
