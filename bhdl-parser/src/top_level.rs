@@ -138,6 +138,10 @@ impl<'t> Parser<'t> {
                 Some(SyntaxKind::WHEN_KW) => self.parse_when_block(),
                 Some(SyntaxKind::WITH_KW) => self.parse_with_block(),
                 Some(SyntaxKind::SATISFIES_KW) => self.parse_satisfies_block(),
+                // Board SKU variants: `variant <Name> { ... }` blocks
+                // at board level. v0.1 body = DNP + value override
+                // only. See docs/spec/Board_SKU_Variants.md.
+                Some(SyntaxKind::VARIANT_KW) => self.parse_variant_block(),
                 Some(SyntaxKind::IDENT) => {
                     // Check if this is an entity/component instantiation or connection
                     use crate::v2_fixes::NamedDeclarationType;
@@ -1576,6 +1580,71 @@ impl<'t> Parser<'t> {
         self.expect(SyntaxKind::RAW_STRING);
         self.skip_trivia();
         if self.peek() == Some(SyntaxKind::SEMI) { self.bump(); }
+        self.builder.finish_node();
+    }
+
+    // variant <Name> { <body> }
+    //
+    // Board-level product-SKU variant. v0.1 body: only `dnp <inst>;`
+    // and `<inst>.value = <expr>;` statements. See
+    // docs/spec/Board_SKU_Variants.md.
+    fn parse_variant_block(&mut self) {
+        self.builder.start_node(SyntaxKind::VARIANT_BLOCK.into());
+        self.expect(SyntaxKind::VARIANT_KW);
+        self.expect(SyntaxKind::IDENT); // variant name
+        self.expect(SyntaxKind::L_BRACE);
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) => break,
+                Some(SyntaxKind::DNP_KW) => self.parse_variant_dnp_stmt(),
+                Some(SyntaxKind::IDENT) => self.parse_variant_value_override(),
+                Some(_) => {
+                    self.error("Unexpected token in variant block".to_string());
+                    self.bump_any();
+                }
+                None => {
+                    self.error("Unexpected end of file in variant block".to_string());
+                    break;
+                }
+            }
+        }
+        self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
+    // dnp <instance_name>;
+    //
+    // Marks an instance as do-not-populate for this variant. The
+    // instance stays in the netlist and on the PCB layout (footprint
+    // + silkscreen) but is omitted from BOM / pick-place for this SKU.
+    fn parse_variant_dnp_stmt(&mut self) {
+        self.builder.start_node(SyntaxKind::VARIANT_DNP_STMT.into());
+        self.expect(SyntaxKind::DNP_KW);
+        self.expect(SyntaxKind::IDENT); // instance name
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+
+    // <instance_name>.value = <expr>;
+    //
+    // Replaces the literal value the base design assigned to that
+    // instance. v0.1 only allows the `.value` field; future
+    // extensions (`.mpn`, `.tolerance`, etc.) live behind v0.2 spec
+    // work — see docs/spec/Board_SKU_Variants.md §4.
+    fn parse_variant_value_override(&mut self) {
+        self.builder.start_node(SyntaxKind::VARIANT_VALUE_OVERRIDE.into());
+        self.expect(SyntaxKind::IDENT);  // instance name
+        self.expect(SyntaxKind::DOT);
+        // The field name is parsed as IDENT (contextual — `value` here
+        // is just a name). v0.1 accepts any IDENT and the analyzer
+        // rejects anything other than `value`; surfacing the
+        // diagnostic from the analyzer rather than the parser lets us
+        // extend to more fields in v0.2 without grammar churn.
+        self.expect(SyntaxKind::IDENT);
+        self.expect(SyntaxKind::EQ);
+        self.parse_expression();
+        self.expect(SyntaxKind::SEMI);
         self.builder.finish_node();
     }
 

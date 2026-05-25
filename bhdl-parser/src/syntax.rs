@@ -76,6 +76,8 @@ pub enum SyntaxKind {
     LAYER_KW,         // layer
     DEFAULT_DESIGN_RULES_KW, // default_design_rules
     DESIGN_KW,     // design (for entity-level operating-point design blocks)
+    VARIANT_KW,    // variant (board-level product SKU variants)
+    DNP_KW,        // dnp (do-not-populate; inside variant blocks)
     CONSTRAIN_KW,  // constrain
     GENERATE_KW,   // generate
     FOR_KW,        // for
@@ -348,6 +350,11 @@ pub enum SyntaxKind {
     // Expansion block nodes (entity-level application circuit recipes)
     EXPANSION_BLOCK,       // expansion { ... }
     EXPANSION_INTERNAL_NET, // internal name: net;
+
+    // Variant blocks (board-level SKU patches; v0.1 = DNP + value override)
+    VARIANT_BLOCK,         // variant <Name> { ... }
+    VARIANT_VALUE_OVERRIDE,// <instance>.value = <expr>;
+    VARIANT_DNP_STMT,      // dnp <instance>;
 
     // Design block nodes (vendor-authored intent → bias values)
     DESIGN_BLOCK,          // design for <intent> { ... }
