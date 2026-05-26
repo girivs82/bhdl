@@ -109,10 +109,15 @@ fn add_sheet(out: &mut CanonicalNetlist, sheet: &crate::ir::Sheet, prefix: &str)
         }
     }
     for net in nets.nets {
+        // Sanitise the net name to match what the emitter would
+        // produce: KiCad labels like `D+` / `D-` (USB diff pair)
+        // become `D_P` / `D_N` on both sides, so the round-trip
+        // comparator can match them.
+        let sanitised = sanitise_net_name(&net.name);
         let name = if net.is_power || prefix.is_empty() {
-            net.name.clone()
+            sanitised
         } else {
-            format!("{}{}", prefix, net.name)
+            format!("{}{}", prefix, sanitised)
         };
         for pin in net.pins {
             let reference = ref_of.get(pin.symbol_uuid.as_str())
@@ -124,6 +129,27 @@ fn add_sheet(out: &mut CanonicalNetlist, sheet: &crate::ir::Sheet, prefix: &str)
             });
         }
     }
+}
+
+/// Sanitise a KiCad net name for canonical form. Mirrors the
+/// emitter's `sanitise_ident` polarity-preserving substitutions
+/// (`+` → `_P`, `-` → `_N`) so both sides of the round-trip
+/// comparison produce the same identifier for differential-pair
+/// labels like `D+` / `D-`.
+fn sanitise_net_name(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len() + 2);
+    for c in raw.chars() {
+        if c.is_ascii_alphanumeric() || c == '_' {
+            out.push(c);
+        } else if c == '+' {
+            out.push_str("_P");
+        } else if c == '-' {
+            out.push_str("_N");
+        } else {
+            out.push('_');
+        }
+    }
+    out
 }
 
 // ─────────────────────────────────────────────────────────────────

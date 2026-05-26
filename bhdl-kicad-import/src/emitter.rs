@@ -177,7 +177,7 @@ fn emit_board(
     }
 
     // Net connections.
-    emit_net_connections(out, &nets, sheet)?;
+    emit_net_connections(out, &nets, sheet, mapping)?;
 
     writeln!(out, "}}")?;
     Ok(())
@@ -289,7 +289,7 @@ fn emit_subsheet_entity(
 
     emit_component_decls(out, sheet, mapping, warnings)?;
     writeln!(out)?;
-    emit_net_connections(out, &nets, sheet)?;
+    emit_net_connections(out, &nets, sheet, mapping)?;
 
     writeln!(out, "}}")?;
     Ok(())
@@ -374,23 +374,42 @@ fn emit_component_decls(
     Ok(())
 }
 
-fn emit_net_connections(out: &mut String, nets: &NetList, sheet: &Sheet) -> Result<(), EmitError> {
+fn emit_net_connections(
+    out: &mut String,
+    nets: &NetList,
+    sheet: &Sheet,
+    mapping: &MappingRegistry,
+) -> Result<(), EmitError> {
     writeln!(out, "    // Connections")?;
-    // Map symbol UUID → reference designator (for emit).
-    let mut ref_of: BTreeMap<&str, String> = BTreeMap::new();
+    // Map symbol UUID → (reference designator, KiCad lib_id) so we
+    // can translate KiCad pin numbers to BHDL port names via the
+    // mapping registry's `pin_map`. Without this translation,
+    // e.g. `D4.1` is emitted verbatim — but the LED entity
+    // declares pins `K` and `A`, not `1` and `2`. The connection
+    // then fails to bind to any pin instance.
+    let mut ref_and_lib: BTreeMap<&str, (String, &str)> = BTreeMap::new();
     for sym in &sheet.symbols {
         let r = sanitise_ident(sym.reference().unwrap_or("U_unknown"));
-        ref_of.insert(sym.uuid.as_str(), r);
+        ref_and_lib.insert(sym.uuid.as_str(), (r, sym.lib_id.as_str()));
     }
 
     for net in &nets.nets {
         if net.pins.is_empty() { continue; }
         let net_ref = net_reference(net);
         for pin in &net.pins {
-            let inst = ref_of.get(pin.symbol_uuid.as_str())
-                .cloned()
-                .unwrap_or_else(|| "U_unknown".into());
-            writeln!(out, "    {} -> {}.{};", net_ref, inst, pin.pin_number)?;
+            let (inst, lib_id) = match ref_and_lib.get(pin.symbol_uuid.as_str()) {
+                Some((r, l)) => (r.clone(), *l),
+                None => ("U_unknown".to_string(), ""),
+            };
+            // Translate the KiCad pin number through the mapping
+            // registry. For mapped components with an explicit
+            // pin_map, `D4.1` → `D4.K`. For unmapped components
+            // (passthroughs) or pins not in the map, the pin
+            // number passes through unchanged.
+            let pin_name = mapping.lookup(lib_id)
+                .map(|m| m.translate_pin(&pin.pin_number).to_string())
+                .unwrap_or_else(|| pin.pin_number.clone());
+            writeln!(out, "    {} -> {}.{};", net_ref, inst, pin_name)?;
         }
     }
     Ok(())
@@ -585,10 +604,26 @@ fn sheet_entity_name(path: &std::path::Path) -> String {
 /// prefixes with `_` if the first char is a digit.
 fn sanitise_ident(raw: &str) -> String {
     if raw.is_empty() { return "_".to_string(); }
-    let mut out: String = raw.chars().map(|c| {
-        if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }
-    }).collect();
-    if out.chars().next().unwrap().is_ascii_digit() {
+    // Polarity-preserving substitutions for diff-pair / differential-
+    // signal labels. KiCad commonly names differential pairs `D+` /
+    // `D-`, `RD+` / `RD-`, `TX+` / `TX-`. A naive `+`/`-` → `_`
+    // collapse merges those into a single identifier, which produces
+    // wrong netlists (the `+` and `-` signals get conflated). Keep
+    // them distinct: `+` → `_P`, `-` → `_N`. Other punctuation still
+    // becomes `_`.
+    let mut out = String::with_capacity(raw.len() + 2);
+    for c in raw.chars() {
+        if c.is_ascii_alphanumeric() || c == '_' {
+            out.push(c);
+        } else if c == '+' {
+            out.push_str("_P");
+        } else if c == '-' {
+            out.push_str("_N");
+        } else {
+            out.push('_');
+        }
+    }
+    if out.chars().next().map_or(true, |c| c.is_ascii_digit()) {
         out.insert(0, '_');
     }
     out

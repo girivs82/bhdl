@@ -597,6 +597,56 @@ async fn arduino_uno_full_roundtrip() {
         bare_only_a_bhdl_missing);
     eprintln!("  OnlyInB (BHDL has a net KiCad doesn't): {}", only_b);
     eprintln!("  PinSetDiffers (both have net, pins differ): {}", pin_diffs);
+
+    // Dump the actual PinSetDiffers + OnlyInA "BHDL missing"
+    // details — at 25 diffs total, full enumeration is legible.
+    eprintln!("--- per-diff detail ---");
+    for d in &rep.diffs {
+        match d {
+            NetDiff::PinSetDiffers { net, only_in_a, only_in_b } => {
+                // Print KiCad-side full pin list + BHDL-side full
+                // pin list (not just diffs) so we can see what's
+                // happening structurally. Both sides' canon was
+                // already flattened above.
+                let a_pins = kicad_flat.nets.get(net).cloned().unwrap_or_default();
+                let b_pins = bhdl_flat.nets.get(net).cloned().unwrap_or_default();
+                let format_set = |s: &BTreeSet<PinRef>| -> String {
+                    let mut v: Vec<String> = s.iter()
+                        .map(|p| format!("{}.{}", p.reference, p.pin))
+                        .collect();
+                    v.sort();
+                    v.join(", ")
+                };
+                eprintln!("  PinSetDiffers '{}' (KiCad {} pins, BHDL {} pins, only_a={}, only_b={}):",
+                    net, a_pins.len(), b_pins.len(),
+                    only_in_a.len(), only_in_b.len());
+                eprintln!("    KiCad: [{}]", format_set(&a_pins));
+                eprintln!("    BHDL:  [{}]", format_set(&b_pins));
+                if !only_in_a.is_empty() {
+                    eprintln!("    only_in_a: [{}]", format_set(only_in_a));
+                }
+                if !only_in_b.is_empty() {
+                    eprintln!("    only_in_b: [{}]", format_set(only_in_b));
+                }
+            }
+            NetDiff::OnlyInA { net, pins } => {
+                if !net.starts_with('/') {
+                    let mut refs: Vec<String> = pins.iter()
+                        .map(|p| format!("{}.{}", p.reference, p.pin))
+                        .collect();
+                    refs.sort();
+                    eprintln!("  OnlyInA '{}': {}", net, refs.join(", "));
+                }
+            }
+            NetDiff::OnlyInB { net, pins } => {
+                let mut refs: Vec<String> = pins.iter()
+                    .map(|p| format!("{}.{}", p.reference, p.pin))
+                    .collect();
+                refs.sort();
+                eprintln!("  OnlyInB '{}': {}", net, refs.join(", "));
+            }
+        }
+    }
     if !sample_named_pin_misses.is_empty() {
         eprintln!("--- non-numeric KiCad pin refs (likely passthrough gaps) ---");
         for pr in sample_named_pin_misses.iter().take(20) {
