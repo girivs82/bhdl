@@ -117,6 +117,75 @@ entity kicad_passthrough(
     pin 62: signal inout;
     pin 63: signal inout;
     pin 64: signal inout;
+    // ─── 65..128: extended range for larger ICs ─────────────
+    // Arduino Mega 2560's ATMEGA2560 is a 100-pin TQFP; without
+    // these higher-numbered pins, `U3.99` / `U3.100` etc. fail
+    // to materialise pin_instances and the round-trip diff lists
+    // every missing pin.
+    pin 65:  signal inout;
+    pin 66:  signal inout;
+    pin 67:  signal inout;
+    pin 68:  signal inout;
+    pin 69:  signal inout;
+    pin 70:  signal inout;
+    pin 71:  signal inout;
+    pin 72:  signal inout;
+    pin 73:  signal inout;
+    pin 74:  signal inout;
+    pin 75:  signal inout;
+    pin 76:  signal inout;
+    pin 77:  signal inout;
+    pin 78:  signal inout;
+    pin 79:  signal inout;
+    pin 80:  signal inout;
+    pin 81:  signal inout;
+    pin 82:  signal inout;
+    pin 83:  signal inout;
+    pin 84:  signal inout;
+    pin 85:  signal inout;
+    pin 86:  signal inout;
+    pin 87:  signal inout;
+    pin 88:  signal inout;
+    pin 89:  signal inout;
+    pin 90:  signal inout;
+    pin 91:  signal inout;
+    pin 92:  signal inout;
+    pin 93:  signal inout;
+    pin 94:  signal inout;
+    pin 95:  signal inout;
+    pin 96:  signal inout;
+    pin 97:  signal inout;
+    pin 98:  signal inout;
+    pin 99:  signal inout;
+    pin 100: signal inout;
+    pin 101: signal inout;
+    pin 102: signal inout;
+    pin 103: signal inout;
+    pin 104: signal inout;
+    pin 105: signal inout;
+    pin 106: signal inout;
+    pin 107: signal inout;
+    pin 108: signal inout;
+    pin 109: signal inout;
+    pin 110: signal inout;
+    pin 111: signal inout;
+    pin 112: signal inout;
+    pin 113: signal inout;
+    pin 114: signal inout;
+    pin 115: signal inout;
+    pin 116: signal inout;
+    pin 117: signal inout;
+    pin 118: signal inout;
+    pin 119: signal inout;
+    pin 120: signal inout;
+    pin 121: signal inout;
+    pin 122: signal inout;
+    pin 123: signal inout;
+    pin 124: signal inout;
+    pin 125: signal inout;
+    pin 126: signal inout;
+    pin 127: signal inout;
+    pin 128: signal inout;
 }
 
 // Aliases for entity names the importer's mapping registry
