@@ -1,0 +1,17 @@
+// Solder jumpers — PCB-side configurable shorts.
+//
+// `SolderJumper_2_Open` is a 2-pad pattern that ships open from
+// the factory; a blob of solder bridges the pads to engage the
+// jumper. Used on Arduino Mega 2560 as board-revision jumpers.
+//
+// Grammar discipline: parser-compatible v2.0 subset.
+
+entity SolderJumper_2_Open(part_no: string = "") {
+    pin A: signal inout;     //                                 (pin 1)
+    pin B: signal inout;     //                                 (pin 2)
+
+    attribute component_class = "solder-jumper";
+    attribute initial_state   = "open";
+    attribute terminals       = 2;
+    attribute part_number     = part_no;
+}

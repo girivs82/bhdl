@@ -1,0 +1,41 @@
+// Switches and pushbuttons.
+//
+// Covers the simple electromechanical parts the Arduino boards
+// use for reset and power-gating:
+//
+//   - SW_Push : 2-terminal momentary tactile pushbutton (KiCad's
+//               `Switch:SW_Push`). When pressed, the two pads are
+//               shorted; otherwise open.
+//
+//   - SW_Tactile_4Pad : 4-pad SMT tactile switch (the TS06 family
+//               used as RESET on every Arduino board). The four
+//               pads pair internally: pins 1+2 are one terminal,
+//               pins 3+4 are the other. Pressing closes 1/2 to 3/4.
+//
+// Grammar discipline: parser-compatible v2.0 subset.
+
+entity SW_Push(part_no: string = "") {
+    pin A: signal inout;     //                                 (pin 1)
+    pin B: signal inout;     //                                 (pin 2)
+
+    attribute component_class = "pushbutton";
+    attribute action          = "momentary";
+    attribute poles           = 1;
+    attribute throws          = 1;
+    attribute part_number     = part_no;
+}
+
+entity SW_Tactile_4Pad(part_no: string = "") {
+    pin A1: signal inout;    // terminal A, pad 1               (pin 1)
+    pin A2: signal inout;    // terminal A, pad 2               (pin 2)
+    pin B1: signal inout;    // terminal B, pad 1               (pin 3)
+    pin B2: signal inout;    // terminal B, pad 2               (pin 4)
+    // KiCad's TS06 family exposes a 5th pin for the centre
+    // grounding pad / shell. Often tied to GND on the board.
+    pin SHELL: signal inout; // case ground                     (pin 5)
+
+    attribute component_class = "pushbutton";
+    attribute action          = "momentary";
+    attribute pads            = 5;
+    attribute part_number     = part_no;
+}

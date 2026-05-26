@@ -1,0 +1,43 @@
+// Crystals and crystal resonators.
+//
+// Three variants matching KiCad's `Device:Crystal*` family:
+//   - Crystal         : 2-terminal piezoelectric resonator
+//   - Crystal_GND2    : 3-terminal (terminal + case-ground on pin 2)
+//   - Crystal_GND24   : 4-terminal SMD package (pins 1+3 are the
+//                       quartz terminals, pins 2+4 are case ground)
+//
+// Used on every Arduino board as the MCU clock source
+// (typically 16 MHz). The mapping registry binds the KiCad
+// lib_ids to these entities by pin number.
+//
+// Grammar discipline: parser-compatible v2.0 subset.
+
+entity Crystal(part_no: string = "") {
+    pin A: signal inout;     //                                 (pin 1)
+    pin B: signal inout;     //                                 (pin 2)
+
+    attribute component_class = "crystal";
+    attribute terminals       = 2;
+    attribute part_number     = part_no;
+}
+
+entity Crystal_GND2(part_no: string = "") {
+    pin A:    signal inout;  // terminal 1                      (pin 1)
+    pin GND2: signal inout;  // case ground                     (pin 2)
+    pin B:    signal inout;  // terminal 2                      (pin 3)
+
+    attribute component_class = "crystal";
+    attribute terminals       = 3;
+    attribute part_number     = part_no;
+}
+
+entity Crystal_GND24(part_no: string = "") {
+    pin A:    signal inout;  // terminal 1                      (pin 1)
+    pin GND2: signal inout;  // case ground (lower-left pad)    (pin 2)
+    pin B:    signal inout;  // terminal 2                      (pin 3)
+    pin GND4: signal inout;  // case ground (upper-right pad)   (pin 4)
+
+    attribute component_class = "crystal";
+    attribute terminals       = 4;
+    attribute part_number     = part_no;
+}
