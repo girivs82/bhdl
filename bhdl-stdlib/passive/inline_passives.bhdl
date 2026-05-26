@@ -1,0 +1,31 @@
+// Two-terminal in-line passive parts that share the resistor
+// shape but carry their own electrical semantics:
+//
+//   - Bead   : ferrite bead (lossy inductor for HF noise damping)
+//   - Fuse   : single-use over-current protection
+//
+// Both are 2-pin passive components with no inherent polarity.
+// KiCad's `Device:FerriteBead` / `Device:Fuse` symbols are
+// already mapped (to Bead / Fuse aliases in kicad_passthrough);
+// this file gives them real entities so the analyzer can reason
+// about pin connectivity rather than treating them as opaque.
+//
+// Grammar discipline: parser-compatible v2.0 subset.
+
+entity Bead(part_no: string = "") {
+    pin A: signal inout;     //                                 (pin 1)
+    pin B: signal inout;     //                                 (pin 2)
+
+    attribute component_class = "ferrite-bead";
+    attribute role            = "hf-noise-damping";
+    attribute part_number     = part_no;
+}
+
+entity Fuse(part_no: string = "") {
+    pin A: signal inout;     //                                 (pin 1)
+    pin B: signal inout;     //                                 (pin 2)
+
+    attribute component_class = "fuse";
+    attribute role            = "overcurrent-protection";
+    attribute part_number     = part_no;
+}

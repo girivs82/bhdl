@@ -96,6 +96,9 @@ pin_map = { "1" = "K", "2" = "A" }
 [[mapping]]
 kicad = "Device:Fuse"
 bhdl  = "Fuse"
+[mapping.pin_map]
+"1" = "A"
+"2" = "B"
 
 [[mapping]]
 kicad = "Device:Polyfuse"
@@ -107,10 +110,16 @@ bhdl  = "Fuse"
 [[mapping]]
 kicad = "Device:FerriteBead"
 bhdl  = "Bead"
+[mapping.pin_map]
+"1" = "A"
+"2" = "B"
 
 [[mapping]]
 kicad = "Device:Ferrite_Bead"
 bhdl  = "Bead"
+[mapping.pin_map]
+"1" = "A"
+"2" = "B"
 
 # ─── Protection diodes ─────────────────────────────────────────────
 
@@ -905,7 +914,9 @@ bhdl  = "_net:_pwr_flag"
 
 [[mapping]]
 kicad = "Mechanical:Fiducial"
-bhdl  = "kicad_passthrough"
+bhdl  = "Fiducial"
+[mapping.pin_map]
+"1" = "K"
 
 [[mapping]]
 kicad = "Mechanical:MountingHole"

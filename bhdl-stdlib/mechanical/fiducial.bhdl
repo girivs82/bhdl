@@ -1,0 +1,17 @@
+// Fiducial markers — board-edge alignment targets for pick-and-place
+// optical recognition. Purely mechanical: no electrical role.
+//
+// KiCad's `Mechanical:Fiducial` symbol carries one pin so the
+// fiducial gets a refdes (FID*). The pin is unused — it appears
+// on no net. This entity preserves that single pin so refdes
+// round-trip survives without falling back to kicad_passthrough.
+//
+// Grammar discipline: parser-compatible v2.0 subset.
+
+entity Fiducial(part_no: string = "Fiducial") {
+    pin K: signal inout;     // marker pad (unconnected)       (pin 1)
+
+    attribute component_class = "fiducial";
+    attribute electrical_role = "none";
+    attribute part_number     = part_no;
+}
