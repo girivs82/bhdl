@@ -1,0 +1,65 @@
+// ATmega328P — 8-bit AVR microcontroller, DIP-28 variant.
+//
+// Used by Arduino UNO (`ATMEGA328P-PU`). The chip's TQFP-32 and
+// MLF-32 variants (used by Nano and others) have a 4-pin
+// expansion with two additional ADC channels — they get their
+// own entity in this file.
+//
+// Pin names follow the standard datasheet port nomenclature:
+// PD0..PD7, PB0..PB7, PC0..PC6, plus the power/clock/reset
+// pins (VCC, GND, AVCC, AREF, RESET, XTAL1, XTAL2). The
+// importer's `kicad-symbol-mapping.toml` translates KiCad's
+// numeric pin labels (1..28) to these port names via pin_map.
+//
+// Grammar discipline: parser-compatible v2.0 subset. No
+// `@metadata(...)`, no complex type expressions, no SPICE
+// model. Those grow in a follow-up commit once the parser
+// can handle them.
+
+entity ATmega328P_DIP28(part_no: string = "ATMEGA328P-PU") {
+    // ─── PD0..PD7: Port D (digital I/O) ─────────────────────
+    pin PD0: signal inout;   // RXD / PCINT16          (pin 2)
+    pin PD1: signal inout;   // TXD / PCINT17          (pin 3)
+    pin PD2: signal inout;   // INT0 / PCINT18         (pin 4)
+    pin PD3: signal inout;   // INT1 / OC2B / PCINT19  (pin 5)
+    pin PD4: signal inout;   // T0 / XCK / PCINT20     (pin 6)
+    pin PD5: signal inout;   // T1 / OC0B / PCINT21    (pin 11)
+    pin PD6: signal inout;   // OC0A / AIN0 / PCINT22  (pin 12)
+    pin PD7: signal inout;   // AIN1 / PCINT23         (pin 13)
+
+    // ─── PB0..PB7: Port B (digital I/O + SPI + crystal) ────
+    pin PB0: signal inout;   // ICP1 / CLKO / PCINT0   (pin 14)
+    pin PB1: signal inout;   // OC1A / PCINT1          (pin 15)
+    pin PB2: signal inout;   // SS / OC1B / PCINT2     (pin 16)
+    pin PB3: signal inout;   // MOSI / OC2A / PCINT3   (pin 17)
+    pin PB4: signal inout;   // MISO / PCINT4          (pin 18)
+    pin PB5: signal inout;   // SCK / PCINT5           (pin 19)
+    pin PB6: signal inout;   // XTAL1 / TOSC1 / PCINT6 (pin 9)
+    pin PB7: signal inout;   // XTAL2 / TOSC2 / PCINT7 (pin 10)
+
+    // ─── PC0..PC5: Port C (analog I/O + I2C) + RESET ──────
+    pin PC0: signal inout;   // ADC0 / PCINT8          (pin 23)
+    pin PC1: signal inout;   // ADC1 / PCINT9          (pin 24)
+    pin PC2: signal inout;   // ADC2 / PCINT10         (pin 25)
+    pin PC3: signal inout;   // ADC3 / PCINT11         (pin 26)
+    pin PC4: signal inout;   // ADC4 / SDA / PCINT12   (pin 27)
+    pin PC5: signal inout;   // ADC5 / SCL / PCINT13   (pin 28)
+    pin PC6: signal inout;   // RESET / PCINT14        (pin 1)
+
+    // ─── Power and analog reference ─────────────────────────
+    pin VCC:  signal inout;  // (pin 7)
+    pin AVCC: signal inout;  // (pin 20) — analog VCC
+    pin AREF: signal inout;  // (pin 21) — analog reference
+    pin GND1: signal inout;  // (pin 8)  — digital ground
+    pin GND2: signal inout;  // (pin 22) — analog ground
+
+    attribute component_class = "microcontroller";
+    attribute family          = "AVR";
+    attribute architecture    = "8-bit RISC";
+    attribute flash_kb        = 32;
+    attribute sram_kb         = 2;
+    attribute eeprom_kb       = 1;
+    attribute max_clock_mhz   = 20;
+    attribute part_number     = part_no;
+    attribute kicad_symbol    = "Arduino UNO:ATMEGA328P-PU";
+}
