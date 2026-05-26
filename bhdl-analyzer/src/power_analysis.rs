@@ -231,41 +231,21 @@ impl PowerAnalysisContext {
             errors: Vec::new(),
             warnings: Vec::new(),
         };
-        ctx.add_standard_domains();
+        // No standard-domain seeding. Power domains exist iff the
+        // source declares one (`power FOO = X V;` or
+        // `ground FOO;`) — they're net-name annotations referring
+        // to actual on-board nets fed by real connectors or
+        // regulators, not abstract floating "rails." Phantom
+        // pre-population would create domains the source never
+        // declared, which the synthesizer then materialises as
+        // Instance records that don't correspond to any physical
+        // component. See `load_power_domains_from_symbols` (this
+        // file) for the source-driven population path. Discovery
+        // documented during Phase H/I of the KiCad import work —
+        // ambient seeding was creating phantom GND/USB_5V/
+        // VCC_3V3/VCC_1V8 entries on schematics that declared
+        // only their actual rails.
         ctx
-    }
-
-    /// Add standard power domains commonly used in designs
-    fn add_standard_domains(&mut self) {
-        // 5V USB power
-        let mut usb_5v = PowerDomain::new("USB_5V".to_string(), 5.0);
-        usb_5v.controllable = false; // Always-on when USB connected
-        usb_5v.max_current = 0.5; // 500mA typical USB limit
-        usb_5v.sequence_priority = 1; // First to come up
-        self.domains.insert("USB_5V".to_string(), usb_5v);
-
-        // 3.3V main rail
-        let mut vcc_3v3 = PowerDomain::new("VCC_3V3".to_string(), 3.3);
-        vcc_3v3.dependencies.push("USB_5V".to_string());
-        vcc_3v3.max_current = 1.0; // 1A capability
-        vcc_3v3.sequence_priority = 2;
-        vcc_3v3.enable_signal = Some("VCC_3V3_EN".to_string());
-        self.domains.insert("VCC_3V3".to_string(), vcc_3v3);
-
-        // 1.8V low power rail
-        let mut vcc_1v8 = PowerDomain::new("VCC_1V8".to_string(), 1.8);
-        vcc_1v8.dependencies.push("VCC_3V3".to_string());
-        vcc_1v8.max_current = 0.5; // 500mA capability
-        vcc_1v8.sequence_priority = 3;
-        vcc_1v8.enable_signal = Some("VCC_1V8_EN".to_string());
-        self.domains.insert("VCC_1V8".to_string(), vcc_1v8);
-
-        // Digital ground
-        let mut gnd = PowerDomain::new("GND".to_string(), 0.0);
-        gnd.controllable = false; // Always present
-        gnd.max_current = 10.0; // High current capability
-        gnd.sequence_priority = 0; // Always first
-        self.domains.insert("GND".to_string(), gnd);
     }
 
     /// Add a custom power domain
@@ -1158,17 +1138,58 @@ mod tests {
         }
     }
 
+    /// Helper: synthesize the same set of domains the old
+    /// `add_standard_domains` seeded, but from explicit
+    /// construction (matching what `power FOO = X V;` source
+    /// declarations now create). Used by tests below that
+    /// exercise sequencing logic on a USB→3V3→1V8 topology.
+    fn populate_standard_topology(context: &mut PowerAnalysisContext) {
+        let mut usb_5v = PowerDomain::new("USB_5V".to_string(), 5.0);
+        usb_5v.controllable = false;
+        usb_5v.max_current = 0.5;
+        usb_5v.sequence_priority = 1;
+        context.add_domain(usb_5v);
+
+        let mut vcc_3v3 = PowerDomain::new("VCC_3V3".to_string(), 3.3);
+        vcc_3v3.dependencies.push("USB_5V".to_string());
+        vcc_3v3.max_current = 1.0;
+        vcc_3v3.sequence_priority = 2;
+        vcc_3v3.enable_signal = Some("VCC_3V3_EN".to_string());
+        context.add_domain(vcc_3v3);
+
+        let mut vcc_1v8 = PowerDomain::new("VCC_1V8".to_string(), 1.8);
+        vcc_1v8.dependencies.push("VCC_3V3".to_string());
+        vcc_1v8.max_current = 0.5;
+        vcc_1v8.sequence_priority = 3;
+        vcc_1v8.enable_signal = Some("VCC_1V8_EN".to_string());
+        context.add_domain(vcc_1v8);
+
+        let mut gnd = PowerDomain::new("GND".to_string(), 0.0);
+        gnd.controllable = false;
+        gnd.max_current = 10.0;
+        gnd.sequence_priority = 0;
+        context.add_domain(gnd);
+    }
+
     #[test]
     fn test_power_analysis_context() {
+        // A freshly-constructed context now starts EMPTY — power
+        // domains come from source declarations, not from a
+        // hardcoded default set. Verify the empty initial state
+        // and that domains added explicitly are visible.
         let mut context = PowerAnalysisContext::new();
-        
-        // Should have standard domains
+        assert!(context.get_domain("USB_5V").is_none(),
+            "fresh context should have no ambient domains");
+        assert!(context.get_domain("GND").is_none(),
+            "fresh context should have no ambient ground");
+
+        populate_standard_topology(&mut context);
         assert!(context.get_domain("USB_5V").is_some());
         assert!(context.get_domain("VCC_3V3").is_some());
         assert!(context.get_domain("VCC_1V8").is_some());
         assert!(context.get_domain("GND").is_some());
-        
-        // Test domain compatibility
+
+        // Domain compatibility checks (unchanged semantics).
         assert!(!context.are_domains_compatible("USB_5V", "VCC_1V8"));
         assert!(context.are_domains_compatible("VCC_3V3", "VCC_3V3"));
     }
@@ -1176,15 +1197,16 @@ mod tests {
     #[test]
     fn test_power_sequence_generation() {
         let mut context = PowerAnalysisContext::new();
-        
+        populate_standard_topology(&mut context);
+
         // Should generate sequence without errors
         assert!(context.generate_power_sequence().is_ok());
         assert!(!context.power_sequence.is_empty());
-        
+
         // Verify sequence order (USB_5V should be first)
         let first_controllable = context.power_sequence.iter()
             .find(|step| step.action == PowerAction::Enable);
-        
+
         // Since USB_5V is not controllable, first should be VCC_3V3
         if let Some(step) = first_controllable {
             assert_eq!(step.domain_name, "VCC_3V3");
