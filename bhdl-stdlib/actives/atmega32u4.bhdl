@@ -1,0 +1,94 @@
+// ATmega32U4 — 8-bit AVR microcontroller with USB device, TQFP-44.
+//
+// Used by Arduino Leonardo (`ATMEGA32U4-XU`) and Arduino Micro
+// (`ATMEGA32U4-XUMU`). Both boards drive the *same* die and the
+// same KiCad symbol pin layout — the only difference between the
+// two KiCad symbols is the sym name, so a single entity covers
+// both. The mapping registry binds each lib_id to this entity.
+//
+// Pin names follow the standard datasheet port nomenclature for
+// the TQFP-44 package: PB0..PB7, PC6..PC7, PD0..PD7, PE2/PE6,
+// PF0..PF1, PF4..PF7, plus the USB front-end (D+/D-, UCAP, UVCC,
+// UGND, VBUS), crystal pins (XTAL1/XTAL2), power/reference
+// (VCC/VCC1, AVCC/AVCC1, AREF), ground rails (GND/GND1/GND2/GND3),
+// RESET, and an exposed thermal-pad pseudo-pin (PAD) that KiCad's
+// symbol exposes as pin 45.
+//
+// Grammar discipline mirrors atmega328p.bhdl: parser-compatible
+// v2.0 subset.
+
+entity ATmega32U4_TQFP44(part_no: string = "ATMEGA32U4-AU") {
+    // ─── Port B (digital I/O + SPI) ─────────────────────────
+    pin PB0: signal inout;   // SS / PCINT0                    (pin 8)
+    pin PB1: signal inout;   // SCLK / PCINT1                  (pin 9)
+    pin PB2: signal inout;   // PDI / MOSI / PCINT2            (pin 10)
+    pin PB3: signal inout;   // PDO / MISO / PCINT3            (pin 11)
+    pin PB4: signal inout;   // ADC11 / PCINT4                 (pin 28)
+    pin PB5: signal inout;   // PCINT5 / OC1A / OC4B / ADC12   (pin 29)
+    pin PB6: signal inout;   // PCINT6 / OC1B / OC4B / ADC13   (pin 30)
+    pin PB7: signal inout;   // PCINT7 / OC0A / OC1C / RTS     (pin 12)
+
+    // ─── Port C ─────────────────────────────────────────────
+    pin PC6: signal inout;   // OC3A / OC4A                    (pin 31)
+    pin PC7: signal inout;   // ICP3 / CLK0 / OC4A             (pin 32)
+
+    // ─── Port D (digital I/O + UART + I2C) ──────────────────
+    pin PD0: signal inout;   // OC0B / SCL / INT0              (pin 18)
+    pin PD1: signal inout;   // SDA / INT1                     (pin 19)
+    pin PD2: signal inout;   // RXD1 / AIN1 / INT2             (pin 20)
+    pin PD3: signal inout;   // TXD1 / INT3                    (pin 21)
+    pin PD4: signal inout;   // ICP1 / ADC8                    (pin 25)
+    pin PD5: signal inout;   // XCK1 / CTS                     (pin 22)
+    pin PD6: signal inout;   // T1 / OC4D / ADC9               (pin 26)
+    pin PD7: signal inout;   // T0 / OC4D / ADC10              (pin 27)
+
+    // ─── Port E ─────────────────────────────────────────────
+    pin PE2: signal inout;   // HWB                            (pin 33)
+    pin PE6: signal inout;   // INT6 / AIN0                    (pin 1)
+
+    // ─── Port F (ADC + JTAG) ────────────────────────────────
+    pin PF0: signal inout;   // ADC0                           (pin 41)
+    pin PF1: signal inout;   // ADC1                           (pin 40)
+    pin PF4: signal inout;   // ADC4 / TCK                     (pin 39)
+    pin PF5: signal inout;   // ADC5 / TMS                     (pin 38)
+    pin PF6: signal inout;   // ADC6 / TDO                     (pin 37)
+    pin PF7: signal inout;   // ADC7 / TDI                     (pin 36)
+
+    // ─── USB front-end ──────────────────────────────────────
+    pin D_P:  signal inout;  // D+                              (pin 4)
+    pin D_N:  signal inout;  // D-                              (pin 3)
+    pin UCAP: signal inout;  // USB regulator decoupling        (pin 6)
+    pin UVCC: signal inout;  // USB pad supply                  (pin 2)
+    pin UGND: signal inout;  // USB ground                      (pin 5)
+    pin VBUS: signal inout;  // USB bus-power sense             (pin 7)
+
+    // ─── Crystal / reset ────────────────────────────────────
+    pin XTAL1: signal inout; //                                 (pin 17)
+    pin XTAL2: signal inout; //                                 (pin 16)
+    pin RESET: signal inout; // active-low                      (pin 13)
+
+    // ─── Power and analog reference ─────────────────────────
+    pin VCC:   signal inout; //                                 (pin 14)
+    pin VCC1:  signal inout; //                                 (pin 34)
+    pin AVCC:  signal inout; // analog VCC                      (pin 24)
+    pin AVCC1: signal inout; // analog VCC                      (pin 44)
+    pin AREF:  signal inout; // analog reference                (pin 42)
+    pin GND:   signal inout; //                                 (pin 15)
+    pin GND1:  signal inout; //                                 (pin 23)
+    pin GND2:  signal inout; //                                 (pin 35)
+    pin GND3:  signal inout; //                                 (pin 43)
+
+    // KiCad's symbol exposes a thermal/center pseudo-pin (pin 45)
+    // on the TQFP-44 part. Internally tied to GND on most boards.
+    pin PAD:   signal inout; //                                 (pin 45)
+
+    attribute component_class = "microcontroller";
+    attribute family          = "AVR";
+    attribute architecture    = "8-bit RISC";
+    attribute flash_kb        = 32;
+    attribute sram_kb         = 2.5;
+    attribute eeprom_kb       = 1;
+    attribute max_clock_mhz   = 16;
+    attribute usb             = "USB 2.0 device";
+    attribute part_number     = part_no;
+}

@@ -542,6 +542,7 @@ fn stdlib_entity_file(entity: &str) -> &'static str {
         "MOSFET"                         => "actives/mosfet_simple.bhdl",
         "ATmega328P_DIP28"
             | "ATmega328P_QFN32"          => "actives/atmega328p.bhdl",
+        "ATmega32U4_TQFP44"               => "actives/atmega32u4.bhdl",
         // No parser-compatible Bead / Fuse / TestPoint / Schottky /
         // BJT / MOSFET yet — they live only in the rich tier.
         // Fall back to passthrough so the import line still
