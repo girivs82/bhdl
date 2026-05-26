@@ -494,6 +494,127 @@ bhdl  = "ATmega2560_TQFP100"
 "99"  = "AGND"
 "100" = "AVCC"
 
+# ─── LMV358 — dual op-amp, identical symbol across boards ─────────
+# UNO, Leonardo, and Mega 2560 all instance the same KiCad symbol
+# under per-board library names. Single entity LMV358, three rows.
+[[mapping]]
+kicad = "Arduino UNO:LMV358IDGKR"
+bhdl  = "LMV358"
+[mapping.pin_map]
+"1" = "OUT_A"
+"2" = "IN_A_N"
+"3" = "IN_A_P"
+"4" = "V_MINUS"
+"5" = "IN_B_P"
+"6" = "IN_B_N"
+"7" = "OUT_B"
+"8" = "V_PLUS"
+
+[[mapping]]
+kicad = "Arduino Leonardo:LMV358IDGKR"
+bhdl  = "LMV358"
+[mapping.pin_map]
+"1" = "OUT_A"
+"2" = "IN_A_N"
+"3" = "IN_A_P"
+"4" = "V_MINUS"
+"5" = "IN_B_P"
+"6" = "IN_B_N"
+"7" = "OUT_B"
+"8" = "V_PLUS"
+
+[[mapping]]
+kicad = "Arduino Mega 2560:LMV358IDGKR"
+bhdl  = "LMV358"
+[mapping.pin_map]
+"1" = "OUT_A"
+"2" = "IN_A_N"
+"3" = "IN_A_P"
+"4" = "V_MINUS"
+"5" = "IN_B_P"
+"6" = "IN_B_N"
+"7" = "OUT_B"
+"8" = "V_PLUS"
+
+# ─── ATmega16U2 — USB-serial bridge on UNO and Mega 2560 ──────────
+# QFN-32 (MU suffix). Symbols are byte-identical across both boards
+# so one entity fronts both lib_ids.
+[[mapping]]
+kicad = "Arduino UNO:ATMEGA16U2-MU"
+bhdl  = "ATmega16U2_QFN32"
+[mapping.pin_map]
+"1"  = "XTAL1"
+"2"  = "PC0"
+"3"  = "GND"
+"4"  = "VCC"
+"5"  = "PC2"
+"6"  = "PD0"
+"7"  = "PD1"
+"8"  = "PD2"
+"9"  = "PD3"
+"10" = "PD4"
+"11" = "PD5"
+"12" = "PD6"
+"13" = "PD7"
+"14" = "PB0"
+"15" = "PB1"
+"16" = "PB2"
+"17" = "PB3"
+"18" = "PB4"
+"19" = "PB5"
+"20" = "PB6"
+"21" = "PB7"
+"22" = "PC7"
+"23" = "PC6"
+"24" = "PC1"
+"25" = "PC5"
+"26" = "PC4"
+"27" = "UCAP"
+"28" = "UGND"
+"29" = "D_P"
+"30" = "D_N"
+"31" = "UVCC"
+"32" = "AVCC"
+"33" = "PAD"
+
+[[mapping]]
+kicad = "Arduino Mega 2560:ATMEGA16U2-MU"
+bhdl  = "ATmega16U2_QFN32"
+[mapping.pin_map]
+"1"  = "XTAL1"
+"2"  = "PC0"
+"3"  = "GND"
+"4"  = "VCC"
+"5"  = "PC2"
+"6"  = "PD0"
+"7"  = "PD1"
+"8"  = "PD2"
+"9"  = "PD3"
+"10" = "PD4"
+"11" = "PD5"
+"12" = "PD6"
+"13" = "PD7"
+"14" = "PB0"
+"15" = "PB1"
+"16" = "PB2"
+"17" = "PB3"
+"18" = "PB4"
+"19" = "PB5"
+"20" = "PB6"
+"21" = "PB7"
+"22" = "PC7"
+"23" = "PC6"
+"24" = "PC1"
+"25" = "PC5"
+"26" = "PC4"
+"27" = "UCAP"
+"28" = "UGND"
+"29" = "D_P"
+"30" = "D_N"
+"31" = "UVCC"
+"32" = "AVCC"
+"33" = "PAD"
+
 # ─── Generic pin headers (Connector_Generic library) ──────────────
 # Single-row Conn_01xN and dual-row Conn_02xN variants. Pins are
 # numbered 1..N or 1..2N (KiCad's row-major flat numbering).
