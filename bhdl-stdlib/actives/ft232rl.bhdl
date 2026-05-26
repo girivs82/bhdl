@@ -1,0 +1,67 @@
+// FT232RL — USB-to-UART bridge, SSOP-28.
+//
+// Used as the USB-serial bridge on Arduino Nano (`FT232RL`).
+// FTDI's single-chip USB↔asynchronous-serial converter; integrates
+// the USB transceiver, oscillator, EEPROM, and a 3.3 V regulator
+// in one part. The 28-pin SSOP exposes a full RS-232 modem-status
+// signal set (DTR/DSR/RTS/CTS/DCD/RI) plus four GPIO-like CBUS
+// lines for board housekeeping (TX/RX indicator LEDs, etc.).
+//
+// Pin naming follows the FTDI datasheet, with one normalisation:
+// active-low pin names like `RTS#` collapse to `RTS_N` (BHDL has
+// no `#` in identifiers). NC pads (8 and 24) get sequential names
+// NC1/NC2 so the entity preserves each physical pad.
+//
+// Grammar discipline: parser-compatible v2.0 subset.
+
+entity FT232RL(part_no: string = "FT232RL") {
+    // ─── Async serial (UART) ────────────────────────────────
+    pin TXD: signal inout;   //                                 (pin 1)
+    pin RXD: signal inout;   //                                 (pin 5)
+
+    // ─── RS-232 modem-status (active-low) ───────────────────
+    pin DTR_N: signal inout; // data terminal ready             (pin 2)
+    pin RTS_N: signal inout; // request to send                 (pin 3)
+    pin RI_N:  signal inout; // ring indicator                  (pin 6)
+    pin DSR_N: signal inout; // data set ready                  (pin 9)
+    pin DCD_N: signal inout; // data carrier detect             (pin 10)
+    pin CTS_N: signal inout; // clear to send                   (pin 11)
+
+    // ─── CBUS GPIO (config in EEPROM, board housekeeping) ───
+    pin CBUS4: signal inout; //                                 (pin 12)
+    pin CBUS2: signal inout; //                                 (pin 13)
+    pin CBUS3: signal inout; //                                 (pin 14)
+    pin CBUS1: signal inout; //                                 (pin 22)
+    pin CBUS0: signal inout; //                                 (pin 23)
+
+    // ─── USB PHY ────────────────────────────────────────────
+    pin USBDP: signal inout; // D+                              (pin 15)
+    pin USBDM: signal inout; // D-                              (pin 16)
+
+    // ─── Power / reference ──────────────────────────────────
+    pin VCC:    signal inout; // 5 V supply                      (pin 20)
+    pin VCCIO:  signal inout; // I/O bank supply                 (pin 4)
+    pin V3OUT:  signal inout; // 3.3 V internal regulator out    (pin 17)
+    pin RESET_N: signal inout; // active-low reset               (pin 19)
+    pin TEST:   signal inout; // factory test (tie to GND)       (pin 26)
+
+    // ─── Ground rails ───────────────────────────────────────
+    pin GND1: signal inout;  //                                 (pin 7)
+    pin GND2: signal inout;  //                                 (pin 18)
+    pin GND3: signal inout;  //                                 (pin 21)
+    pin AGND: signal inout;  // analog ground                   (pin 25)
+
+    // ─── Internal oscillator (12 MHz nominal) ───────────────
+    pin OSCI: signal inout;  // crystal in                      (pin 27)
+    pin OSCO: signal inout;  // crystal out                     (pin 28)
+
+    // ─── No-connect pads (kept for pin-count fidelity) ──────
+    pin NC1: signal inout;   //                                 (pin 8)
+    pin NC2: signal inout;   //                                 (pin 24)
+
+    attribute component_class = "usb-uart-bridge";
+    attribute family          = "FTDI FT232";
+    attribute usb             = "USB 2.0 device";
+    attribute pkg             = "SSOP-28";
+    attribute part_number     = part_no;
+}
