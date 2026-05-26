@@ -165,9 +165,14 @@ fn emit_board(
             writeln!(out, "    {}: {}();", inst_name, ent_name)?;
         }
         writeln!(out)?;
-        // Connections from the parent into each subsheet's ports
-        // (one per sheet pin → net mapping).
+        // Connections from the parent into each subsheet's ports.
+        // Two sources:
+        //   (a) Sheet pins on the parent — explicit per-pin wiring
+        //       to a hierarchical label inside the subsheet.
+        //   (b) Power/ground nets the subsheet lifted to ports —
+        //       wired to the board's own power-rail by name match.
         emit_subsheet_connections(out, sheet, &nets)?;
+        emit_subsheet_power_wiring(out, schematic)?;
         writeln!(out)?;
     }
 
@@ -182,6 +187,75 @@ fn emit_board(
 // Subsheet (entity) emission
 // ──────────────────────────────────────────────────────────────
 
+/// One declared entity port — used by both the entity-signature
+/// emitter and the parent's instance-wiring emitter so they
+/// agree on the port set.
+#[derive(Debug, Clone)]
+struct EntityPort {
+    /// BHDL port identifier (already sanitised).
+    name: String,
+    /// `signal inout` / `power in` / `ground in`. The classification
+    /// comes from whether the net is power-typed in `NetList`.
+    kind: &'static str,
+    /// For power ports, the canonical power-net name on the parent
+    /// (which the parent uses to wire the port). Equal to `name`
+    /// for power nets; None for hierarchical-label ports.
+    parent_net: Option<String>,
+}
+
+/// Compute the port list a subsheet exposes — both hierarchical
+/// labels (signal ports) AND power-nets referenced inside (lifted
+/// to power ports). KiCad treats power flags as implicit globals,
+/// but BHDL `entity` blocks don't allow `power X = N V;` decls
+/// inside, so we surface them as ports and let the parent board
+/// wire them at instantiation time.
+fn collect_entity_ports(sheet: &Sheet, nets: &NetList) -> Vec<EntityPort> {
+    let mut ports: Vec<EntityPort> = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+
+    // Hierarchical labels first — the schematic's explicit
+    // interface. Bidirectional signal ports.
+    for hl in &sheet.hierarchical_labels {
+        let name = sanitise_ident(&hl.text);
+        if seen.insert(name.clone()) {
+            ports.push(EntityPort {
+                name,
+                kind: "signal inout",
+                parent_net: None,
+            });
+        }
+    }
+
+    // Power / ground nets actually referenced inside the sheet's
+    // connections. These would otherwise be `power VCC_5V = 5V;`
+    // / `ground GND;` decls — not allowed inside an entity body.
+    for net in &nets.nets {
+        if !net.is_power { continue; }
+        // Skip nets with no pins on the subsheet (KiCad-side
+        // ghosts that won't generate any connections inside).
+        if net.pins.is_empty() { continue; }
+        let port_name = sanitise_ident(&net.name);
+        if !seen.insert(port_name.clone()) { continue; }
+        // Distinguish ground vs supply by the matching PowerSymbol's
+        // category. Default to `power in` if uncertain.
+        let kind = sheet.power_symbols.iter().find(|p| {
+            let canon = crate::nets::canonical_power_name_for_test(&p.label, p.category);
+            canon == net.name
+        }).map(|p| if p.category == PowerCategory::Ground {
+            "ground in"
+        } else {
+            "power in"
+        }).unwrap_or("power in");
+        ports.push(EntityPort {
+            name: port_name,
+            kind,
+            parent_net: Some(net.name.clone()),
+        });
+    }
+
+    ports
+}
+
 fn emit_subsheet_entity(
     out: &mut String,
     entity_name: &str,
@@ -190,28 +264,28 @@ fn emit_subsheet_entity(
     warnings: &mut Vec<String>,
 ) -> Result<(), EmitError> {
     let nets = extract_nets(sheet);
+    let ports = collect_entity_ports(sheet, &nets);
 
-    // Ports come from hierarchical labels — these are the
-    // schematic's stated interface to the parent.
-    let mut port_names: BTreeSet<String> = BTreeSet::new();
-    for hl in &sheet.hierarchical_labels {
-        port_names.insert(sanitise_ident(&hl.text));
+    // Parameter list. BHDL entity port syntax (per the spec and
+    // the `entity Res(value: resistance) { pin 1: signal inout }`
+    // examples in `bhdl-stdlib/passive/`):
+    //   `entity Name(...) { pin X: <kind>; ... <body>; }`
+    // Ports live INSIDE the body as `pin X: <kind>;` declarations,
+    // not in the parenthesised parameter list (which is for
+    // generic-style entity parameters like `value: resistance`).
+    writeln!(out, "entity {}() {{", entity_name)?;
+
+    // Pin declarations for every port (hierarchical labels +
+    // power/ground rails lifted from inside the sheet).
+    for p in &ports {
+        writeln!(out, "    pin {}: {};", p.name, p.kind)?;
     }
+    if !ports.is_empty() { writeln!(out)?; }
 
-    write!(out, "entity {}(", entity_name)?;
-    let mut first = true;
-    for p in &port_names {
-        if !first { write!(out, ", ")?; }
-        write!(out, "{}: signal inout", p)?;
-        first = false;
-    }
-    writeln!(out, ") {{")?;
-
-    // Power decls (still local to the subsheet — power flags in a
-    // child sheet are conceptually local power references that
-    // happen to share a name with the parent's rails).
-    emit_power_decls(out, sheet, &nets)?;
-    writeln!(out)?;
+    // No `power FOO = X V;` / `ground FOO;` decls inside the
+    // entity body — those are board-only. Power references inside
+    // resolve to the lifted ports above. See
+    // `bhdl-parser/src/top_level.rs::parse_entity_contents`.
 
     emit_component_decls(out, sheet, mapping, warnings)?;
     writeln!(out)?;
@@ -317,6 +391,38 @@ fn emit_net_connections(out: &mut String, nets: &NetList, sheet: &Sheet) -> Resu
                 .cloned()
                 .unwrap_or_else(|| "U_unknown".into());
             writeln!(out, "    {} -> {}.{};", net_ref, inst, pin.pin_number)?;
+        }
+    }
+    Ok(())
+}
+
+/// Wire each subsheet instance's power/ground ports to the
+/// board's matching power-rail. The subsheet emitter lifted
+/// implicit power-globals to explicit ports; this emits the
+/// parent-side wiring so the rails reach the inner components.
+///
+/// For each subsheet instance, walks the child sheet's nets, and
+/// for every `is_power == true` net with at least one pin
+/// connection, emits a `RAIL -> instance.RAIL;` line. The port
+/// name on the entity equals the canonical power-rail name (per
+/// `collect_entity_ports`), so the names line up.
+fn emit_subsheet_power_wiring(
+    out: &mut String,
+    schematic: &Schematic,
+) -> Result<(), EmitError> {
+    let mut emitted_any = false;
+    for sr in &schematic.root.sheet_refs {
+        let Some(child) = schematic.child_sheets.get(&sr.file_path) else { continue; };
+        let inst_name = sanitise_ident(&sr.name);
+        let child_nets = extract_nets(child);
+        for net in &child_nets.nets {
+            if !net.is_power || net.pins.is_empty() { continue; }
+            let port = sanitise_ident(&net.name);
+            if !emitted_any {
+                writeln!(out, "    // Power/ground wiring into hierarchical subsheets")?;
+                emitted_any = true;
+            }
+            writeln!(out, "    {} -> {}.{};", net.name, inst_name, port)?;
         }
     }
     Ok(())
@@ -443,8 +549,17 @@ fn emit_imports(
 
 /// How to reference a net in connection lines. Power nets use
 /// the bare name; local nets get an `@` prefix.
+///
+/// Net names are sanitised because KiCad permits punctuation in
+/// label text (e.g. `RD+` for a USB differential-pair high
+/// signal) that BHDL's lexer rejects as identifier characters.
+/// `sanitise_ident` maps `+` / `-` / `/` etc. to `_`, matching
+/// how labels themselves are sanitised at the point of net
+/// naming. Without this fix, an Arduino UNO emit produces
+/// `@RD+ -> R1.1;` which the parser bails on at the `+`.
 fn net_reference(net: &Net) -> String {
-    if net.is_power { net.name.clone() } else { format!("@{}", net.name) }
+    let safe = sanitise_ident(&net.name);
+    if net.is_power { safe } else { format!("@{}", safe) }
 }
 
 /// Map a child sheet's on-disk path to a BHDL entity name.

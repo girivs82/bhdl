@@ -5,6 +5,49 @@ use crate::{Parser, SyntaxKind};
 use crate::core::SyntaxKindExt;
 
 impl<'t> Parser<'t> {
+    /// Distinguish an `@`-led entity metadata declaration
+    /// (`@name = expr;`) from an `@`-led connection statement
+    /// (`@net -> pin;` / `@net <- pin;` / `@net <-> pin;` /
+    /// `@a @b -> pin;` chained nets). Looks ahead past the `@`
+    /// and any following IDENT / chained `@IDENT` runs to find
+    /// the first non-trivia token: an `=` means metadata, a flow
+    /// arrow means connection.
+    ///
+    /// Used by `parse_entity_contents` so that the KiCad
+    /// importer's `@SIGNAL -> R1.1;` connection emit (inside
+    /// child-sheet `entity` blocks) parses correctly.
+    pub(crate) fn is_at_connection_form(&self) -> bool {
+        let mut pos = self.pos;
+        // Skip leading trivia.
+        while pos < self.tokens.len() && self.tokens[pos].0.is_trivia() {
+            pos += 1;
+        }
+        if pos >= self.tokens.len() || self.tokens[pos].0 != SyntaxKind::AT {
+            return false;
+        }
+        // Walk past `@IDENT` runs (possibly chained as in
+        // `@a @b -> pin`).
+        loop {
+            pos += 1; // past AT
+            while pos < self.tokens.len() && self.tokens[pos].0.is_trivia() { pos += 1; }
+            if pos >= self.tokens.len() || self.tokens[pos].0 != SyntaxKind::IDENT {
+                return false;
+            }
+            pos += 1; // past IDENT
+            while pos < self.tokens.len() && self.tokens[pos].0.is_trivia() { pos += 1; }
+            if pos >= self.tokens.len() { return false; }
+            match self.tokens[pos].0 {
+                SyntaxKind::EQ => return false,           // metadata form
+                SyntaxKind::SEMI => return false,          // not connection
+                SyntaxKind::ARROW => return true,
+                SyntaxKind::BI_ARROW => return true,
+                SyntaxKind::FLOW_OP => return true,
+                SyntaxKind::AT => continue,                // chained @-net
+                _ => return false,
+            }
+        }
+    }
+
     /// Enhanced flow statement detection that differentiates between:
     /// - Flow statements: `power_flow: USB_5V |> protection |> distribution;`
     /// - Interface instances: `main_i2c: I2C(voltage=3.3V, frequency=400kHz);`

@@ -13,9 +13,34 @@ members = [
 # Use the latest resolver for better dependency management.
 resolver = "2"
 
-# Optional: Define shared workspace dependencies, profiles, etc. here if needed later.
-# [workspace.dependencies]
-# serde = { version = "1.0", features = ["derive"] }
+# ─── Dev-profile tuning (2026-05-26) ─────────────────────────────
+# The synthesizer/analyzer pipeline does heavy AST walking +
+# component-inference passes on every test run. At default
+# `opt-level = 0`, a tiny RC fixture takes ~10s wall-clock in
+# the round-trip test; the Arduino UNO fixture takes minutes.
+# The settings below trade some compile time for runtime speed.
 
-# [profile.release]
-# ...
+# External deps: opt-level=3. Heavy first-build cost (paid once
+# and cached) but they almost never change, and bhdl-synthesizer
+# leans on them (rhai, tokio, slotmap, rowan, serde) every single
+# test invocation.
+[profile.dev.package."*"]
+opt-level = 3
+
+# Workspace crates that dominate test runtime. opt-level=1 is the
+# sweet spot: ~5x runtime improvement vs level 0, only ~30%
+# slower compile (level 2/3 is where compile time really
+# balloons). Crates not listed here stay at the default
+# opt-level=0 inherited from `[profile.dev]` — that's where
+# active editing happens and incremental builds need to be
+# fastest.
+[profile.dev.package.bhdl-synthesizer]
+opt-level = 1
+[profile.dev.package.bhdl-analyzer]
+opt-level = 1
+[profile.dev.package.bhdl-parser]
+opt-level = 1
+[profile.dev.package.bhdl-ast]
+opt-level = 1
+[profile.dev.package.bhdl-netlist]
+opt-level = 1
