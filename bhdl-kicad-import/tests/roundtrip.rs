@@ -425,15 +425,21 @@ async fn arduino_uno_full_roundtrip() {
         return;
     }
 
-    // ── KiCad side ──
-    let schematic = bhdl_kicad_import::read_schematic(&root_sch).expect("read");
-    let kicad_canon = canonical_from_schematic(&schematic);
-    eprintln!("--- KiCad-side canonical: {} nets, {} pins ---",
-        kicad_canon.len(), kicad_canon.pin_count());
-
-    // ── Emit BHDL ──
+    // ── Emit BHDL (need mapping for both emit AND
+    //    KiCad-side canonical's pin translation) ──
     let mapping = MappingRegistry::from_toml_str(STDLIB_REGISTRY_TOML)
         .expect("mapping registry parses");
+
+    // ── KiCad side ──
+    // Use the mapping-aware variant so KiCad pin numbers
+    // (e.g. Diode "1"/"2", LED "1"/"2") get translated to BHDL
+    // entity port names (K/A) — matching what the emitter
+    // generates on the BHDL side via the same registry.
+    let schematic = bhdl_kicad_import::read_schematic(&root_sch).expect("read");
+    let kicad_canon = bhdl_kicad_import::canonical_from_schematic_with_mapping(
+        &schematic, Some(&mapping));
+    eprintln!("--- KiCad-side canonical: {} nets, {} pins ---",
+        kicad_canon.len(), kicad_canon.pin_count());
     let stdlib_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent().unwrap()
         .join("bhdl-stdlib");

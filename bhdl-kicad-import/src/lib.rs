@@ -49,6 +49,7 @@ pub use symbol_mapping::{MappingRegistry, SymbolMapping, MappingError};
 pub use nets::{extract_nets, Net, NetList, NetPin};
 pub use emitter::{emit_bhdl, emit_bhdl_with_options, EmittedBhdl, EmitError, EmitOptions};
 pub use canonical::{
-    canonical_from_schematic, parse_kicad_net_file, compare,
+    canonical_from_schematic, canonical_from_schematic_with_mapping,
+    parse_kicad_net_file, compare,
     CanonicalNetlist, PinRef, NetDiff, EquivalenceReport,
 };
