@@ -1,0 +1,62 @@
+// USB Type-C receptacle, USB 2.0 variant (16 pads + shield).
+//
+// Matches KiCad's `Connector:USB_C_Receptacle_USB2.0_16P` symbol
+// pin-for-pin. Pads are referenced by their physical position
+// (A1..A12 on one row, B1..B12 on the other, S1 for shield)
+// because that's how KiCad names them in the .kicad_sch source
+// and how the importer extracts them.
+//
+// USB-C is reversible: in USB 2.0 mode, A6 and B6 (and A7/B7)
+// are the SAME data line just exposed on both faces of the
+// connector. They MUST be tied together externally (typically a
+// short trace on the PCB) so the cable orientation doesn't
+// matter. Treating them as separate pins here keeps the netlist
+// faithful to KiCad — the equivalence checker can verify the
+// external tying.
+//
+// Pad function (USB 2.0 spec, USB Type-C R2.0):
+//   A1, A12, B1, B12 → GND
+//   A4, A9, B4, B9   → VBUS (5V power from host)
+//   A5               → CC1 (Configuration Channel, orientation
+//                            detection / USB-PD signalling)
+//   A6, B6           → D+ (USB 2.0 data positive)
+//   A7, B7           → D- (USB 2.0 data negative)
+//   A8               → SBU1 (sideband, used for alt modes)
+//   B5               → CC2 (the other CC line)
+//   B8               → SBU2
+//   S1               → SHIELD (chassis / cable shell)
+//
+// Pin types deliberately stay `signal inout` rather than
+// power_in / ground for VBUS and GND. That sidesteps the
+// analyzer's power-domain typing for now (which would need a
+// matching board-level declaration). When the power-type
+// system gets enforced, this entity can grow proper types in
+// a follow-up commit.
+
+entity USB_C_Receptacle_USB2_16P() {
+    // Row A
+    pin A1:  signal inout;
+    pin A4:  signal inout;
+    pin A5:  signal inout;
+    pin A6:  signal inout;
+    pin A7:  signal inout;
+    pin A8:  signal inout;
+    pin A9:  signal inout;
+    pin A12: signal inout;
+    // Row B
+    pin B1:  signal inout;
+    pin B4:  signal inout;
+    pin B5:  signal inout;
+    pin B6:  signal inout;
+    pin B7:  signal inout;
+    pin B8:  signal inout;
+    pin B9:  signal inout;
+    pin B12: signal inout;
+    // Shell
+    pin S1:  signal inout;
+
+    attribute component_class = "connector";
+    attribute connector_type  = "usb_c_receptacle";
+    attribute usb_version     = "2.0";
+    attribute kicad_symbol    = "Connector:USB_C_Receptacle_USB2.0_16P";
+}

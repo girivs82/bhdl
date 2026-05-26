@@ -76,10 +76,22 @@ pin_map = { "1" = "K", "2" = "A" }
 [[mapping]]
 kicad = "Device:D"
 bhdl  = "Diode"
+pin_map = { "1" = "K", "2" = "A" }
 
 [[mapping]]
 kicad = "Device:D_Small"
 bhdl  = "Diode"
+pin_map = { "1" = "K", "2" = "A" }
+
+[[mapping]]
+kicad = "Device:D_Zener"
+bhdl  = "Diode"
+pin_map = { "1" = "K", "2" = "A" }
+
+[[mapping]]
+kicad = "Device:D_Zener_Small"
+bhdl  = "Diode"
+pin_map = { "1" = "K", "2" = "A" }
 
 [[mapping]]
 kicad = "Device:Fuse"
@@ -223,6 +235,14 @@ bhdl  = "Pin_Header_02x02"
 [[mapping]]
 kicad = "Connector_Generic:Conn_02x03_Odd_Even"
 bhdl  = "Pin_Header_02x03"
+
+# ─── USB connectors ───────────────────────────────────────────────
+# USB-C receptacle (USB 2.0, 16-pad variant). Pad names map
+# identity-style: KiCad pin "A1" → entity pin "A1", etc.
+
+[[mapping]]
+kicad = "Connector:USB_C_Receptacle_USB2.0_16P"
+bhdl  = "USB_C_Receptacle_USB2_16P"
 
 # ─── Test points ───────────────────────────────────────────────────
 

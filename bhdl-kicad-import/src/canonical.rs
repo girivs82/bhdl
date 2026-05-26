@@ -81,31 +81,53 @@ impl CanonicalNetlist {
 /// implicit globals). Auto-generated `Net_N` names get a stable
 /// prefix per sheet so collisions across sheets don't merge
 /// unrelated nets.
+///
+/// Backwards-compatible entry point — does not apply pin-name
+/// translation. For comparator use against an
+/// importer-emit-then-synthesise round-trip, prefer
+/// [`canonical_from_schematic_with_mapping`] which applies the
+/// same `pin_map` translations the emitter does (KiCad pin "1"
+/// → BHDL port "K" for a Diode, etc.). Without it, the
+/// comparator sees `D4.1` on the KiCad side and `D4.K` on the
+/// BHDL side and flags them as different.
 pub fn canonical_from_schematic(sch: &Schematic) -> CanonicalNetlist {
+    canonical_from_schematic_with_mapping(sch, None)
+}
+
+/// Variant that optionally applies a [`MappingRegistry`]'s
+/// `pin_map` translations to KiCad pin numbers on the way into
+/// the canonical netlist. Use this when comparing against an
+/// importer-roundtrip BHDL netlist, where the emitter has
+/// already done the same translation.
+pub fn canonical_from_schematic_with_mapping(
+    sch: &Schematic,
+    mapping: Option<&crate::symbol_mapping::MappingRegistry>,
+) -> CanonicalNetlist {
     let mut out = CanonicalNetlist::new();
 
-    // Per-sheet: extract nets, then emit (canonical_name, pinrefs)
-    // into the global netlist. Power nets keep their canonical
-    // name (no prefix). Local/auto names get a sheet prefix so
-    // identically-named local nets in different sheets stay
-    // separate.
-    add_sheet(&mut out, &sch.root, "");
+    add_sheet(&mut out, &sch.root, "", mapping);
     for (path, sheet) in &sch.child_sheets {
         let prefix = format!("/{}/", path.file_stem()
             .and_then(|s| s.to_str()).unwrap_or("subsheet"));
-        add_sheet(&mut out, sheet, &prefix);
+        add_sheet(&mut out, sheet, &prefix, mapping);
     }
     out
 }
 
-fn add_sheet(out: &mut CanonicalNetlist, sheet: &crate::ir::Sheet, prefix: &str) {
+fn add_sheet(
+    out: &mut CanonicalNetlist,
+    sheet: &crate::ir::Sheet,
+    prefix: &str,
+    mapping: Option<&crate::symbol_mapping::MappingRegistry>,
+) {
     let nets = extract_nets(sheet);
-    // Build symbol_uuid → reference lookup so PinRefs carry the
-    // designator, not the UUID.
-    let mut ref_of: BTreeMap<&str, String> = BTreeMap::new();
+    // Build symbol_uuid → (reference designator, lib_id) so
+    // PinRefs carry the designator AND we can translate pin
+    // numbers via the mapping registry's pin_map.
+    let mut info_of: BTreeMap<&str, (String, &str)> = BTreeMap::new();
     for sym in &sheet.symbols {
         if let Some(r) = sym.reference() {
-            ref_of.insert(sym.uuid.as_str(), r.to_string());
+            info_of.insert(sym.uuid.as_str(), (r.to_string(), sym.lib_id.as_str()));
         }
     }
     for net in nets.nets {
@@ -120,12 +142,23 @@ fn add_sheet(out: &mut CanonicalNetlist, sheet: &crate::ir::Sheet, prefix: &str)
             format!("{}{}", prefix, sanitised)
         };
         for pin in net.pins {
-            let reference = ref_of.get(pin.symbol_uuid.as_str())
-                .cloned()
-                .unwrap_or_else(|| format!("_uuid:{}", pin.symbol_uuid));
+            let (reference, lib_id) = info_of.get(pin.symbol_uuid.as_str())
+                .map(|(r, l)| (r.clone(), *l))
+                .unwrap_or_else(|| (format!("_uuid:{}", pin.symbol_uuid), ""));
+            // Translate KiCad pin number through pin_map when the
+            // caller provided a registry. Mirrors what the
+            // emitter does at connection-emit time; without it,
+            // the canonical's pin labels are "1"/"2" while the
+            // round-tripped BHDL has "K"/"A" (and equivalent).
+            let pin_label = match mapping {
+                Some(reg) => reg.lookup(lib_id)
+                    .map(|m| m.translate_pin(&pin.pin_number).to_string())
+                    .unwrap_or_else(|| pin.pin_number.clone()),
+                None => pin.pin_number.clone(),
+            };
             out.add(name.clone(), PinRef {
                 reference,
-                pin: pin.pin_number,
+                pin: pin_label,
             });
         }
     }
