@@ -663,30 +663,22 @@ async fn arduino_uno_full_roundtrip() {
         }
     }
 
-    // Equivalence is reachable but **non-deterministic** at the
-    // synthesizer level: 5 consecutive runs of this test (Arduino
-    // UNO, 2026-05-26) produced 2 passes (✓ equivalent, 252/252
-    // pins) and 3 fails (5 differences, always the same 5 pin
-    // diffs — sub-module connection-processing depends on
-    // HashMap iteration order somewhere in
-    // `hierarchical_connectivity` / `process_entity_body`). The
-    // pipeline IS correct end-to-end; the synthesizer just
-    // doesn't promise byte-stable output across runs.
+    // Hard assertion: the full Arduino UNO R3 schematic
+    // round-trips with byte-identical netlist equivalence. The
+    // previous 95% sanity floor was a temporary tolerance for
+    // synthesizer non-determinism caused by an SlotMap iteration
+    // order bug in `find_instance_by_name`. That's now fixed via
+    // `find_instance_by_name_in_context` which prefers the
+    // module-qualified instance over bare-name first-match. 5
+    // consecutive runs (2026-05-26) all hit perfect equivalence:
+    // KiCad 98 nets / 252 pins == BHDL 98 nets / 252 pins.
     //
-    // Until the determinism issue is fixed upstream, the test
-    // records the result as a diagnostic but only asserts a
-    // sanity floor: ≥95% pin coverage. This catches any major
-    // structural regression while tolerating the ~5-pin
-    // non-determinism.
-    let coverage = bhdl_flat.pin_count() as f64 / kicad_flat.pin_count() as f64;
-    eprintln!("--- pin coverage: {:.1}% ({}/{}) ---",
-        coverage * 100.0,
-        bhdl_flat.pin_count(),
-        kicad_flat.pin_count());
-    assert!(coverage >= 0.95,
-        "Arduino UNO pin coverage dropped below 95% sanity floor: {:.1}% ({}/{})",
-        coverage * 100.0,
-        bhdl_flat.pin_count(),
-        kicad_flat.pin_count());
+    // If this fires, either the importer introduced a structural
+    // change, the synthesizer regressed, or another upstream
+    // crate (parser/analyzer) broke. The structured diff above
+    // names the exact discrepancy.
+    assert!(rep.is_equivalent(),
+        "Arduino UNO round-trip equivalence broken: {}\n{:#?}",
+        rep.summary(), rep.diffs);
 }
 
