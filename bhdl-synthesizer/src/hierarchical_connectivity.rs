@@ -697,8 +697,13 @@ fn process_connection_in_module(
                                 before_dot
                             };
                             
-                            // Find the instance
-                            if let Some(inst_id) = find_instance_by_name(netlist, inst_name) {
+                            // Find the instance. Use the context-aware
+                            // lookup so a bare `S1` reference inside an
+                            // entity body resolves to the entity-scoped
+                            // `ATMEGA328P_PU.S1` instance when the
+                            // bare-name one doesn't exist. See
+                            // `find_instance_by_name_in_context` docs.
+                            if let Some(inst_id) = find_instance_by_name_in_context(netlist, context, inst_name) {
                                 // Find the pin on this instance
                                 if let Some(pin_inst_id) = netlist.find_pin_instance(inst_id, pin_name) {
                                     // Connect this pin to the current net
@@ -1476,7 +1481,7 @@ fn process_flow_parts(
             // If the previous part left a component pin dangling (last_net_id == None,
             // last_was_component_pin == true), connect that pin to this net.
             if last_was_component_pin && last_net_id.is_none() && i > 0 {
-                connect_previous_pin_to_net(parts, i, netlist, ref_net_id)?;
+                connect_previous_pin_to_net(parts, i, netlist, context, ref_net_id)?;
             }
 
             // Merge if there's an existing intermediate net
@@ -1541,7 +1546,9 @@ fn process_flow_parts(
             println!("  Component pin: {}.{}", instance_name, pin_name);
             info!("  Component pin: {}.{}", instance_name, pin_name);
 
-            if let Some(inst_id) = find_instance_by_name(netlist, instance_name) {
+            // Context-aware: prefer module-qualified instance when
+            // we're inside a sub-module's body.
+            if let Some(inst_id) = find_instance_by_name_in_context(netlist, context, instance_name) {
                 let net_id = if let Some(existing_net_id) = last_net_id {
                     // Use the existing net from the previous element
                     existing_net_id
@@ -1594,7 +1601,7 @@ fn process_flow_parts(
 
                     // If previous was an inline instantiation with dangling pin, connect it
                     if last_was_component_pin && last_net_id.is_none() && i > 0 {
-                        connect_previous_pin_to_net(parts, i, netlist, resolved_net_id)?;
+                        connect_previous_pin_to_net(parts, i, netlist, context, resolved_net_id)?;
                     }
 
                     last_net_id = Some(resolved_net_id);
@@ -1615,10 +1622,15 @@ fn process_flow_parts(
 
 /// Helper: look back at parts[i-1] and connect its pin to the given net.
 /// Used when an inline instantiation leaves a dangling component pin.
+///
+/// Takes a `&HierarchicalContext` so the instance lookup is
+/// module-scope-aware — `S1.1` from inside `ATMEGA328P_PU` body
+/// resolves to `ATMEGA328P_PU.S1` when no bare `S1` exists.
 fn connect_previous_pin_to_net(
     parts: &[String],
     i: usize,
     netlist: &mut Netlist,
+    context: &HierarchicalContext,
     net_id: NetId,
 ) -> Result<()> {
     if i == 0 { return Ok(()); }
@@ -1630,7 +1642,7 @@ fn connect_previous_pin_to_net(
             &prev_part[..prev_dot]
         };
         let prev_pin = &prev_part[prev_dot + 1..];
-        if let Some(prev_inst_id) = find_instance_by_name(netlist, prev_inst_name) {
+        if let Some(prev_inst_id) = find_instance_by_name_in_context(netlist, context, prev_inst_name) {
             connect_pin_to_net(netlist, prev_inst_id, prev_pin, net_id,
                 &format!("{}.{}", prev_inst_name, prev_pin), "resolved net")?;
         }
@@ -1738,37 +1750,10 @@ fn create_inline_component_instance(
     Ok(instance_id)
 }
 
-/// Find an instance by name.
-///
-/// **Known non-determinism**: `netlist.instances` is a `SlotMap`
-/// whose iteration order is unspecified. When two instances share
-/// a name (which happens in practice: both
-/// `generate_database_component_instances` and `process_entity_body`
-/// can create an instance under the same bare name, e.g. `S1`
-/// at the board level vs `ATMEGA328P_PU.S1` inside a subsheet —
-/// they get distinct full names, but bare-name lookups from
-/// connection-resolution code still hit one of them), the FIRST
-/// match in iteration order wins, and the winner depends on
-/// SlotMap internals.
-///
-/// Picking the pin-richest instance (as a tiebreaker) helps for
-/// some cases but the root issue is the duplicate creation path
-/// itself. Surfaced by the KiCad importer's Arduino UNO
-/// round-trip: 5 consecutive runs produce 2-3 passes and 2-3
-/// fails, all with the same 5 missing pin connections on the
-/// same sub-module instance (S1 inside ATMEGA328P_PU).
-///
-/// Deterministic fix needs to either:
-///   (a) Suppress duplicate creation in `create_component_instance`
-///       (check bare-name match, not just full-path match), or
-///   (b) Pass module context through to the lookup so it finds
-///       the path-prefixed instance for in-module connections.
-///
-/// Both are non-trivial. For now, this just does the naive
-/// first-match scan — same behavior as before, the
-/// determinism issue is documented as a known synthesizer-side
-/// flake. The KiCad importer's round-trip test asserts only a
-/// 95% pin-coverage sanity floor pending a real fix.
+/// Find an instance by name. Naive first-match scan over the
+/// instances SlotMap. Use this only when no module context is
+/// available (rare in practice — most callers are inside a
+/// processing function that has `&HierarchicalContext`).
 fn find_instance_by_name(netlist: &Netlist, name: &str) -> Option<InstanceId> {
     for (inst_id, instance) in &netlist.instances {
         if instance.name == name {
@@ -1776,6 +1761,69 @@ fn find_instance_by_name(netlist: &Netlist, name: &str) -> Option<InstanceId> {
         }
     }
     None
+}
+
+/// Context-aware instance lookup. Prefers an instance whose name
+/// matches the current module's path-prefixed form (e.g.
+/// `ATMEGA328P_PU.S1` when called from inside ATMEGA328P_PU's
+/// body looking for `S1`), falling back to the bare name if no
+/// path-prefixed match exists.
+///
+/// Why: the synthesizer's two instance-creation paths produce
+/// instances under different naming conventions. Path 1
+/// (`generate_database_component_instances`, driven by the
+/// analyzer's symbol table) creates instances under their bare
+/// scope-local name (`S1`). Path 2 (`create_component_instance`
+/// inside `process_entity_body`, AST-driven) creates instances
+/// under hierarchical names (`ATMEGA328P_PU.S1`).
+///
+/// In Arduino UNO specifically, S1 (the reset switch) is the
+/// ONLY sub-module instance that path 1 doesn't pre-create —
+/// because its type (`kicad_passthrough`) has no Pass 6
+/// inference suggestion. So at lookup time:
+///   - Other components have BOTH bare-name (path 1) and
+///     path-prefixed (path 2) instances. With the dedup fix in
+///     `create_component_instance`, only the bare-name one
+///     survives; bare-name lookup finds it.
+///   - S1 has ONLY the path-prefixed instance
+///     (`ATMEGA328P_PU.S1`). Bare-name lookup for `S1` returns
+///     None. Connections to `S1.1`/`S1.2`/etc. silently fail
+///     to wire.
+///
+/// This function tries the path-prefixed form first so the
+/// S1-like case resolves. The naive `find_instance_by_name` is
+/// kept for callers that genuinely don't have context.
+fn find_instance_by_name_in_context(
+    netlist: &Netlist,
+    context: &HierarchicalContext,
+    name: &str,
+) -> Option<InstanceId> {
+    // If we're inside a module, try `<path>.<name>` first.
+    if !context.current_path.is_empty() {
+        // Skip a board prefix the same way `create_component_instance`
+        // does, so the lookup matches the actual stored instance
+        // name shape.
+        let path_without_board: String =
+            if context.current_path.len() > 1
+                && context.current_path[0].ends_with("Board")
+            {
+                context.current_path[1..].join(".")
+            } else if context.current_path.len() == 1
+                && context.current_path[0].ends_with("Board")
+            {
+                String::new()  // bare-name case
+            } else {
+                context.current_path.join(".")
+            };
+        if !path_without_board.is_empty() {
+            let qualified = format!("{}.{}", path_without_board, name);
+            if let Some(inst_id) = find_instance_by_name(netlist, &qualified) {
+                return Some(inst_id);
+            }
+        }
+    }
+    // Fall back to bare-name lookup.
+    find_instance_by_name(netlist, name)
 }
 
 /// Parse a connection chain string into individual parts
