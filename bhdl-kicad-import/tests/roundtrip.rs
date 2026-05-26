@@ -954,3 +954,83 @@ async fn arduino_mega_full_roundtrip() {
         "Arduino Mega round-trip equivalence broken: {}\n{:#?}",
         rep.summary(), rep.diffs);
 }
+
+// ─── Arduino Micro round-trip ─────────────────────────────────────
+//
+// Compact Leonardo-shape board (same ATMEGA32U4 with integrated
+// USB) in a smaller form factor. Flat board, 97 symbols. New
+// shapes: \`Conn_01x17\` (header size not in pin_header.bhdl) and
+// \`Crystal_GND24\` (4-pin shielded crystal). Both fall through
+// to passthrough cleanly.
+
+const MICRO_FIXTURE_DIR: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../tests/fixtures/arduino-micro",
+);
+
+#[tokio::test]
+async fn arduino_micro_full_roundtrip() {
+    let fixture = std::path::Path::new(MICRO_FIXTURE_DIR);
+    let root_sch = fixture.join("Arduino Micro.kicad_sch");
+    if !root_sch.exists() {
+        eprintln!("(skipping arduino_micro_full_roundtrip: fixture not present)");
+        return;
+    }
+
+    let mapping = MappingRegistry::from_toml_str(STDLIB_REGISTRY_TOML)
+        .expect("mapping registry parses");
+
+    let schematic = bhdl_kicad_import::read_schematic(&root_sch).expect("read");
+    let kicad_canon = bhdl_kicad_import::canonical_from_schematic_with_mapping(
+        &schematic, Some(&mapping));
+    eprintln!("--- Micro KiCad-side: {} nets, {} pins ---",
+        kicad_canon.len(), kicad_canon.pin_count());
+
+    let stdlib_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent().unwrap()
+        .join("bhdl-stdlib");
+    let opts = EmitOptions { stdlib_path: Some(stdlib_path) };
+    let emitted = bhdl_kicad_import::emit_bhdl_with_options(
+        &schematic, &mapping, "Arduino_Micro", &opts).expect("emit");
+    eprintln!("--- Micro emitted BHDL: {} lines, {} warnings ---",
+        emitted.source.lines().count(), emitted.warnings.len());
+
+    let parse_result = bhdl_parser::parse(&emitted.source);
+    if !parse_result.errors().is_empty() {
+        for e in parse_result.errors().iter().take(5) {
+            eprintln!("  {:?}", e);
+        }
+        panic!("Micro emit produces un-parseable BHDL");
+    }
+    let Some(source_file) = bhdl_ast::SourceFile::cast(parse_result.syntax()) else {
+        panic!("Micro AST cast failed");
+    };
+    let analysis = bhdl_analyzer::analyze(&source_file);
+    eprintln!("--- Micro analyzer: {} diagnostics ---", analysis.diagnostics.len());
+
+    let mut generator = bhdl_synthesizer::NetlistGenerator::new();
+    let bhdl_netlist = generator
+        .generate_from_ast_and_analysis(&source_file, &analysis).await
+        .expect("Micro synthesis must succeed");
+
+    let bhdl_canon = canonical_from_bhdl_netlist(&bhdl_netlist);
+    let kicad_flat = flatten_hierarchical_naming(&kicad_canon);
+    let bhdl_flat  = flatten_hierarchical_naming(&bhdl_canon);
+    eprintln!("--- Micro after flattening: KiCad {} nets / {} pins, BHDL {} nets / {} pins ---",
+        kicad_flat.len(), kicad_flat.pin_count(),
+        bhdl_flat.len(), bhdl_flat.pin_count());
+
+    let rep = bhdl_kicad_import::compare(&kicad_flat, &bhdl_flat);
+    eprintln!("--- Micro equivalence: {} ---", rep.summary());
+    if !rep.is_equivalent() {
+        for d in rep.diffs.iter().take(10) {
+            eprintln!("  diff: {:?}", d);
+        }
+        if rep.diffs.len() > 10 {
+            eprintln!("  ... + {} more", rep.diffs.len() - 10);
+        }
+    }
+    assert!(rep.is_equivalent(),
+        "Arduino Micro round-trip equivalence broken: {}\n{:#?}",
+        rep.summary(), rep.diffs);
+}
