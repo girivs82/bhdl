@@ -1,11 +1,26 @@
 # KiCad Import & Stdlib Accretion: Strategic Plan
 
-> **Status:** **Phases A–I shipped 2026-05-25** — the importer is
-> functionally complete for v0.1. Lives in `bhdl-kicad-import/`
-> with 57 tests green and proof on a real Arduino UNO R3
-> schematic. Remaining work to close the end-to-end equivalence
-> proof lives in `bhdl-synthesizer` (component-database wiring),
-> not in this crate.
+> **Status:** **Phases A–I shipped + full pipeline + 5-board
+> equivalence proof (2026-05-25..26).** The KiCad importer + BHDL
+> pipeline now provably round-trips byte-identical netlists for
+> five independently-authored open-source Arduino boards. 62
+> tests green; six are hard-asserted equivalence tests
+> (tiny RC fixture + 5 Arduino boards).
+>
+> | Board | Symbols | Sheets | Nets | Pins | Diffs |
+> |---|---|---|---|---|---|
+> | Tiny RC | 2 | 1 | 2 | 2 | 0 (strict) |
+> | UNO R3 | 90 | 4 | 98 | 252 | 0 |
+> | Nano | 77 | 1 | 125 | 174 | 0 |
+> | Leonardo | ~88 | 4 | 86 | 223 | 0 |
+> | Mega 2560 | 132 | 4 | 169 | 396 | 0 |
+> | Micro | 97 | 1 | 129 | 199 | 0 |
+>
+> 4 MCU families covered (ATMEGA328P / ATMEGA32U4 / ATMEGA16U2 /
+> ATMEGA2560), hierarchical and flat boards, 2..396 pins per
+> board, all hard-asserted, deterministic. Real bugs across
+> bhdl-parser / bhdl-analyzer / bhdl-synthesizer / bhdl-stdlib /
+> bhdl-kicad-import surfaced and fixed along the way.
 
 > **Original status:** Pre-implementation planning document. Every
 > architectural decision, every phase of work, every test, every
