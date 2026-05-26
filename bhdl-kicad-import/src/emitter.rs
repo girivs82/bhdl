@@ -509,6 +509,16 @@ fn stdlib_entity_file(entity: &str) -> &'static str {
         // Protection / specials — point at the small v2 tree where
         // a parser-compatible variant exists.
         "TVSDiode"                       => "protection/tvs.bhdl",
+        // Generic pin-header family. Each entity declares 1..N
+        // numeric pins matching KiCad's flat numbering.
+        "Pin_Header_01x02"
+            | "Pin_Header_01x03"
+            | "Pin_Header_01x04"
+            | "Pin_Header_01x06"
+            | "Pin_Header_01x08"
+            | "Pin_Header_01x10"
+            | "Pin_Header_02x02"
+            | "Pin_Header_02x03"          => "connectors/pin_header.bhdl",
         // No parser-compatible Bead / Fuse / TestPoint / Schottky /
         // BJT / MOSFET yet — they live only in the rich tier.
         // Fall back to passthrough so the import line still
