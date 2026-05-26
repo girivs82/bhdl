@@ -182,6 +182,13 @@ fn sanitise_net_name(raw: &str) -> String {
             out.push('_');
         }
     }
+    // BHDL identifiers cannot start with a digit. KiCad labels
+    // like `8PB4` (a multi-port group on a header) get an
+    // underscore prefix here, matching what the emitter's
+    // `sanitise_ident` does on the BHDL side.
+    if out.chars().next().map_or(false, |c| c.is_ascii_digit()) {
+        out.insert(0, '_');
+    }
     out
 }
 
