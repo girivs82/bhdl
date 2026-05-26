@@ -288,10 +288,26 @@ fn create_module_definitions(
                 // Register entity definition with variant manager
                 context.variant_manager.register_entity_definition(&entity);
 
-                // Note: We don't create entity definitions here anymore
-                // They will be created on-demand when instances are processed
+                // Create a module entry for this entity AND register
+                // its name → module_id so the second pass's
+                // `process_module_hierarchy` can walk into the
+                // body. Previously this was deferred to "on-demand
+                // when instances are processed," but that path
+                // never fires for entity *definitions* (only for
+                // their instances), so entity bodies were skipped
+                // entirely — and COMPONENT_INST lines inside a
+                // child-sheet `entity { ... }` block produced no
+                // netlist instances. Bug surfaced by the KiCad
+                // importer's Arduino UNO round-trip (96 pin
+                // instances, only 24 wired).
                 if let Some(name) = entity.name() {
-                    debug!("Registered entity definition: {}", name.text());
+                    let entity_name = name.text().to_string();
+                    let module_id = netlist.add_module(
+                        entity_name.clone(),
+                        ModuleKind::Module
+                    );
+                    context.module_name_to_id.insert(entity_name.clone(), module_id);
+                    debug!("Created entity module: {}", entity_name);
                 }
             }
             Item::Board(board) => {
@@ -369,9 +385,25 @@ fn process_entity_body(
         process_entity_instance(&entity_inst, netlist, context, analysis, import_preprocessor)?;
     }
 
-    // Process connections and flow statements
+    // Process connections, flow statements, and component
+    // instances inside the entity body. Component instances are
+    // the `R1: Resistor("1k");` form (COMPONENT_INST) — the
+    // semicolon-terminated single-line declaration that appears
+    // wherever a passive or simple IC is used. Without this
+    // branch the entity body's components are skipped entirely
+    // and their pin_instances never get wired to internal nets.
+    // (Bug surfaced by the KiCad importer's Arduino UNO
+    // round-trip: 96 pin_instances created but only 24 wired,
+    // the rest sitting on R/C/D instances inside subsheet
+    // entity bodies.) Mirrors the COMPONENT_INST handling in
+    // `process_board_body` below.
     for child in entity.syntax().children() {
         match child.kind() {
+            SyntaxKind::COMPONENT_INST => {
+                if let Some(comp_inst) = bhdl_ast::common::ComponentInst::cast(child.clone()) {
+                    create_component_instance(&comp_inst, netlist, context, analysis, import_preprocessor)?;
+                }
+            }
             SyntaxKind::CONNECTION_STMT => {
                 // Bare connection: process as flow (creates instances + wires in one pass)
                 process_connection_stmt_as_flow(&child, netlist, context, analysis, import_preprocessor)?;

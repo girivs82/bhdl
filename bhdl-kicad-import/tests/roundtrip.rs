@@ -404,6 +404,34 @@ async fn arduino_uno_full_roundtrip() {
         }
     };
 
+    // ── Diagnostic: dump synthesizer netlist shape ──
+    let pi_with_net = bhdl_netlist.pin_instances.iter()
+        .filter(|(_, pi)| pi.net.is_some()).count();
+    let total_net_connections: usize = bhdl_netlist.nets.iter()
+        .map(|(_, n)| n.connections.len()).sum();
+    eprintln!("--- bhdl_netlist shape ---");
+    eprintln!("  {} modules, {} instances, {} nets, {} pin_instances ({} with pi.net assigned)",
+        bhdl_netlist.modules.len(),
+        bhdl_netlist.instances.len(),
+        bhdl_netlist.nets.len(),
+        bhdl_netlist.pin_instances.len(),
+        pi_with_net,
+    );
+    eprintln!("  total Net.connections entries: {}", total_net_connections);
+    for (_, m) in &bhdl_netlist.modules {
+        eprintln!("    module '{}' ({} internal_instances, {} internal_nets, {} pins)",
+            m.name, m.internal_instances.len(),
+            m.internal_nets.len(), m.pins.len());
+    }
+    let instance_module_names: std::collections::BTreeMap<String, String> = bhdl_netlist.instances.iter()
+        .map(|(_, i)| {
+            let mod_name = bhdl_netlist.modules.get(i.definition)
+                .map(|m| m.name.clone()).unwrap_or_default();
+            (i.name.clone(), mod_name)
+        }).collect();
+    eprintln!("    first 5 instances: {:?}",
+        instance_module_names.iter().take(5).collect::<Vec<_>>());
+
     let bhdl_canon = canonical_from_bhdl_netlist(&bhdl_netlist);
     eprintln!("--- BHDL-side canonical: {} nets, {} pins ---",
         bhdl_canon.len(), bhdl_canon.pin_count());
