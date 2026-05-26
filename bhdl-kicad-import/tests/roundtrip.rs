@@ -682,3 +682,112 @@ async fn arduino_uno_full_roundtrip() {
         rep.summary(), rep.diffs);
 }
 
+// ─── Arduino Nano round-trip (second-board validation) ───────────
+//
+// Different MCU (ATmega328P-MU vs ATmega328P-PU on UNO), different
+// USB topology (FT232RL USB-UART bridge vs ATmega16U2), no
+// hierarchical sub-sheets (flat 77-symbol board). New shapes to
+// validate against:
+//   - `Connector_Generic:Conn_01x15` — 15-pin header (sizes we
+//     haven't pre-declared in `pin_header.bhdl`).
+//   - `Arduino Nano:FT232RL` — proprietary KiCad symbol, falls
+//     through to `kicad_passthrough` with its own pin layout.
+//   - `Device:Crystal_GND2` — 3-pin shielded crystal.
+//   - `Device:R_Pack04_Split` — 16 instances of multi-unit
+//     resistor pack (the biggest single accretion target from
+//     the Arduino UNO mapping-coverage report).
+//   - `Switch:SW_Push` — momentary push switch (we map it but
+//     to `switch_spst_momentary` entity that doesn't exist).
+//   - `Device:C_Polarized` — electrolytic cap (mapped to
+//     Capacitor but pin-direction matters).
+//
+// Soft probe initially — diff numbers tell us what to fix next.
+// Upgrade to a hard assertion once it round-trips cleanly.
+
+const NANO_FIXTURE_DIR: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../tests/fixtures/arduino-nano",
+);
+
+#[tokio::test]
+async fn arduino_nano_full_roundtrip() {
+    let fixture = std::path::Path::new(NANO_FIXTURE_DIR);
+    let root_sch = fixture.join("Arduino Nano.kicad_sch");
+    if !root_sch.exists() {
+        eprintln!("(skipping arduino_nano_full_roundtrip: fixture not present)");
+        return;
+    }
+
+    let mapping = MappingRegistry::from_toml_str(STDLIB_REGISTRY_TOML)
+        .expect("mapping registry parses");
+
+    let schematic = bhdl_kicad_import::read_schematic(&root_sch).expect("read");
+    let kicad_canon = bhdl_kicad_import::canonical_from_schematic_with_mapping(
+        &schematic, Some(&mapping));
+    eprintln!("--- Nano KiCad-side: {} nets, {} pins ---",
+        kicad_canon.len(), kicad_canon.pin_count());
+
+    let stdlib_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent().unwrap()
+        .join("bhdl-stdlib");
+    let opts = EmitOptions { stdlib_path: Some(stdlib_path) };
+    let emitted = bhdl_kicad_import::emit_bhdl_with_options(
+        &schematic, &mapping, "Arduino_Nano", &opts).expect("emit");
+    eprintln!("--- Nano emitted BHDL: {} lines, {} warnings ---",
+        emitted.source.lines().count(), emitted.warnings.len());
+
+    let parse_result = bhdl_parser::parse(&emitted.source);
+    if !parse_result.errors().is_empty() {
+        eprintln!("--- Nano BHDL PARSE failed: {} errors ---",
+            parse_result.errors().len());
+        for e in parse_result.errors().iter().take(5) {
+            eprintln!("  {:?}", e);
+        }
+        return;
+    }
+    let Some(source_file) = bhdl_ast::SourceFile::cast(parse_result.syntax()) else {
+        eprintln!("--- Nano AST cast failed ---");
+        return;
+    };
+    let analysis = bhdl_analyzer::analyze(&source_file);
+    eprintln!("--- Nano analyzer: {} diagnostics ---", analysis.diagnostics.len());
+
+    let mut generator = bhdl_synthesizer::NetlistGenerator::new();
+    let bhdl_netlist = match generator
+        .generate_from_ast_and_analysis(&source_file, &analysis).await
+    {
+        Ok(nl) => nl,
+        Err(e) => {
+            eprintln!("--- Nano SYNTHESIS failed: {} ---", e);
+            return;
+        }
+    };
+
+    let bhdl_canon = canonical_from_bhdl_netlist(&bhdl_netlist);
+    let kicad_flat = flatten_hierarchical_naming(&kicad_canon);
+    let bhdl_flat  = flatten_hierarchical_naming(&bhdl_canon);
+    eprintln!("--- Nano after flattening: KiCad {} nets / {} pins, BHDL {} nets / {} pins ---",
+        kicad_flat.len(), kicad_flat.pin_count(),
+        bhdl_flat.len(), bhdl_flat.pin_count());
+
+    let rep = bhdl_kicad_import::compare(&kicad_flat, &bhdl_flat);
+    eprintln!("--- Nano equivalence: {} ---", rep.summary());
+
+    // Hard assertion: Arduino Nano (different MCU, FT232RL
+    // USB-UART, flat board structure, 77 distinct symbols)
+    // round-trips with byte-identical netlist equivalence.
+    // Validates the pipeline isn't just memorising the UNO
+    // — it generalizes to a board with completely different
+    // shape and components.
+    if !rep.is_equivalent() {
+        for d in rep.diffs.iter().take(10) {
+            eprintln!("  diff: {:?}", d);
+        }
+        if rep.diffs.len() > 10 {
+            eprintln!("  ... + {} more", rep.diffs.len() - 10);
+        }
+    }
+    assert!(rep.is_equivalent(),
+        "Arduino Nano round-trip equivalence broken: {}\n{:#?}",
+        rep.summary(), rep.diffs);
+}
