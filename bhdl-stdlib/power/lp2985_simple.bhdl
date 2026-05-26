@@ -1,0 +1,24 @@
+// LP2985 — 150 mA low-noise LDO, SOT-23-5.
+//
+// Used as the on-board 3.3 V LDO on Arduino Leonardo and UNO
+// (`LP2985-3.3`). The 5-pin SOT-23 layout adds an active-low
+// enable (ON/OFF, called EN here) and a bypass cap pin (BP) for
+// the internal reference, both standard for this family.
+//
+// Grammar discipline: parser-compatible v2.0 subset.
+
+entity LP2985_Simple(part_no: string = "LP2985-3.3") {
+    pin VIN:  signal inout;   // unregulated input              (pin 1)
+    pin GND:  signal inout;   //                                (pin 2)
+    pin EN:   signal inout;   // active-low enable (ON/OFF)     (pin 3)
+    pin BP:   signal inout;   // internal-reference bypass cap  (pin 4)
+    pin VOUT: signal inout;   // regulated output               (pin 5)
+
+    attribute component_class = "ldo";
+    attribute family          = "LP2985";
+    attribute output_voltage  = 3.3;
+    attribute output_current  = 0.15;
+    attribute dropout_v       = 0.28;
+    attribute pkg             = "SOT-23-5";
+    attribute part_number     = part_no;
+}

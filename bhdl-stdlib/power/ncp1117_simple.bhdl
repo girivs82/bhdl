@@ -1,0 +1,27 @@
+// NCP1117 — 1 A fixed-voltage linear regulator, SOT-223.
+//
+// Used as the on-board 5 V LDO on Arduino UNO and Mega 2560
+// (`NCP1117-5.0_SOT223`). KiCad's symbol has the standard
+// 3-pin LDO pinout. The package's tab is tied to VO inside the
+// part, so KiCad collapses tab + VO onto one pin.
+//
+// This is the parser-compatible "simple" tier: bare pins, no
+// SPICE model, no parametric voltage type. The richer
+// `power/ncp1117.bhdl` (when written) will carry a `voltage`
+// type parameter.
+//
+// Grammar discipline: parser-compatible v2.0 subset.
+
+entity NCP1117_Simple(part_no: string = "NCP1117-5.0_SOT223") {
+    pin GND: signal inout;   // (pin 1)
+    pin VO:  signal inout;   // regulated output (pin 2)
+    pin VI:  signal inout;   // unregulated input (pin 3)
+
+    attribute component_class = "ldo";
+    attribute family          = "NCP1117";
+    attribute output_voltage  = 5.0;
+    attribute output_current  = 1.0;
+    attribute dropout_v       = 1.2;
+    attribute pkg             = "SOT-223";
+    attribute part_number     = part_no;
+}

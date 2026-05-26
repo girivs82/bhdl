@@ -615,6 +615,60 @@ bhdl  = "ATmega16U2_QFN32"
 "32" = "AVCC"
 "33" = "PAD"
 
+# ─── NCP1117-5.0 — SOT-223 5 V LDO (UNO, Mega 2560) ───────────────
+[[mapping]]
+kicad = "Regulator_Linear:NCP1117-5.0_SOT223"
+bhdl  = "NCP1117_Simple"
+[mapping.pin_map]
+"1" = "GND"
+"2" = "VO"
+"3" = "VI"
+
+# ─── LP2985-3.3 — SOT-23-5 3.3 V LDO (UNO, Leonardo) ──────────────
+[[mapping]]
+kicad = "Regulator_Linear:LP2985-3.3"
+bhdl  = "LP2985_Simple"
+[mapping.pin_map]
+"1" = "VIN"
+"2" = "GND"
+"3" = "EN"
+"4" = "BP"
+"5" = "VOUT"
+
+# ─── FT232RL — SSOP-28 USB-UART bridge (Nano) ─────────────────────
+[[mapping]]
+kicad = "Arduino Nano:FT232RL"
+bhdl  = "FT232RL"
+[mapping.pin_map]
+"1"  = "TXD"
+"2"  = "DTR_N"
+"3"  = "RTS_N"
+"4"  = "VCCIO"
+"5"  = "RXD"
+"6"  = "RI_N"
+"7"  = "GND1"
+"8"  = "NC1"
+"9"  = "DSR_N"
+"10" = "DCD_N"
+"11" = "CTS_N"
+"12" = "CBUS4"
+"13" = "CBUS2"
+"14" = "CBUS3"
+"15" = "USBDP"
+"16" = "USBDM"
+"17" = "V3OUT"
+"18" = "GND2"
+"19" = "RESET_N"
+"20" = "VCC"
+"21" = "GND3"
+"22" = "CBUS1"
+"23" = "CBUS0"
+"24" = "NC2"
+"25" = "AGND"
+"26" = "TEST"
+"27" = "OSCI"
+"28" = "OSCO"
+
 # ─── Generic pin headers (Connector_Generic library) ──────────────
 # Single-row Conn_01xN and dual-row Conn_02xN variants. Pins are
 # numbered 1..N or 1..2N (KiCad's row-major flat numbering).
