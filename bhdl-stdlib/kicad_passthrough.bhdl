@@ -35,10 +35,88 @@ entity kicad_passthrough(
     footprint: string = "",
     lib_id:    string = ""
 ) {
-    // No pin declarations: passthrough carries connection
-    // structure through the netlist phase, not the typed-pin
-    // phase. Enrichment writes the proper pin list when the part
-    // gets a real entity.
+    // Generic pin set covering the range the KiCad importer
+    // emits as numeric pin references (`U4.27`, `J3.5`, etc.).
+    // The importer's KiCad-side reads pin NUMBERS from the
+    // `.kicad_sch` library symbol; for parts without a real
+    // stdlib entity yet, those numbers land here.
+    //
+    // 64 pins is generous headroom: the Arduino UNO's largest
+    // un-enriched part (ATmega328P-PU) has 28 pins; USB-C
+    // receptacles have 16. Pins that aren't referenced by any
+    // connection get materialised as orphan PinInstances
+    // (pi.net = None) and the netlist canonical extractor
+    // filters those out, so they don't pollute equivalence
+    // checks.
+    //
+    // When real entities ship for specific parts (Phase G
+    // accretion), their mapping registry entries route there
+    // instead of here, and the orphan-pin footprint shrinks
+    // accordingly.
+    pin 1:  signal inout;
+    pin 2:  signal inout;
+    pin 3:  signal inout;
+    pin 4:  signal inout;
+    pin 5:  signal inout;
+    pin 6:  signal inout;
+    pin 7:  signal inout;
+    pin 8:  signal inout;
+    pin 9:  signal inout;
+    pin 10: signal inout;
+    pin 11: signal inout;
+    pin 12: signal inout;
+    pin 13: signal inout;
+    pin 14: signal inout;
+    pin 15: signal inout;
+    pin 16: signal inout;
+    pin 17: signal inout;
+    pin 18: signal inout;
+    pin 19: signal inout;
+    pin 20: signal inout;
+    pin 21: signal inout;
+    pin 22: signal inout;
+    pin 23: signal inout;
+    pin 24: signal inout;
+    pin 25: signal inout;
+    pin 26: signal inout;
+    pin 27: signal inout;
+    pin 28: signal inout;
+    pin 29: signal inout;
+    pin 30: signal inout;
+    pin 31: signal inout;
+    pin 32: signal inout;
+    pin 33: signal inout;
+    pin 34: signal inout;
+    pin 35: signal inout;
+    pin 36: signal inout;
+    pin 37: signal inout;
+    pin 38: signal inout;
+    pin 39: signal inout;
+    pin 40: signal inout;
+    pin 41: signal inout;
+    pin 42: signal inout;
+    pin 43: signal inout;
+    pin 44: signal inout;
+    pin 45: signal inout;
+    pin 46: signal inout;
+    pin 47: signal inout;
+    pin 48: signal inout;
+    pin 49: signal inout;
+    pin 50: signal inout;
+    pin 51: signal inout;
+    pin 52: signal inout;
+    pin 53: signal inout;
+    pin 54: signal inout;
+    pin 55: signal inout;
+    pin 56: signal inout;
+    pin 57: signal inout;
+    pin 58: signal inout;
+    pin 59: signal inout;
+    pin 60: signal inout;
+    pin 61: signal inout;
+    pin 62: signal inout;
+    pin 63: signal inout;
+    pin 64: signal inout;
 }
 
 // Aliases for entity names the importer's mapping registry

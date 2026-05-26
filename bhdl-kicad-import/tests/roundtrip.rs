@@ -418,6 +418,11 @@ async fn arduino_uno_full_roundtrip() {
         pi_with_net,
     );
     eprintln!("  total Net.connections entries: {}", total_net_connections);
+    eprintln!("  net names (first 50): {:?}",
+        bhdl_netlist.nets.iter()
+            .filter_map(|(_, n)| n.name.clone())
+            .take(50)
+            .collect::<Vec<_>>());
     for (_, m) in &bhdl_netlist.modules {
         eprintln!("    module '{}' ({} internal_instances, {} internal_nets, {} pins)",
             m.name, m.internal_instances.len(),
