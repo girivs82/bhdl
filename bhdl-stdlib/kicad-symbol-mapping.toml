@@ -822,6 +822,18 @@ kicad = "Connector_Generic:Conn_01x10"
 bhdl  = "Pin_Header_01x10"
 
 [[mapping]]
+kicad = "Connector_Generic:Conn_01x15"
+bhdl  = "Pin_Header_01x15"
+
+[[mapping]]
+kicad = "Connector_Generic:Conn_01x17"
+bhdl  = "Pin_Header_01x17"
+
+[[mapping]]
+kicad = "Connector_Generic:Conn_02x18_Odd_Even"
+bhdl  = "Pin_Header_02x18"
+
+[[mapping]]
 kicad = "Connector_Generic:Conn_02x02_Odd_Even"
 bhdl  = "Pin_Header_02x02"
 

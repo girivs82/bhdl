@@ -116,3 +116,101 @@ entity Pin_Header_02x03() {
     attribute connector_type  = "pin_header_dual";
     attribute kicad_symbol    = "Connector_Generic:Conn_02x03_Odd_Even";
 }
+
+// ─── Wider single-row headers (Arduino I/O strips) ─────────────
+//
+// Conn_01x15 is the Nano's main I/O strip; Conn_01x17 is the
+// Micro's. These use the same flat 1..N numbering as the
+// smaller single-row variants above.
+
+entity Pin_Header_01x15() {
+    pin 1:  signal inout;
+    pin 2:  signal inout;
+    pin 3:  signal inout;
+    pin 4:  signal inout;
+    pin 5:  signal inout;
+    pin 6:  signal inout;
+    pin 7:  signal inout;
+    pin 8:  signal inout;
+    pin 9:  signal inout;
+    pin 10: signal inout;
+    pin 11: signal inout;
+    pin 12: signal inout;
+    pin 13: signal inout;
+    pin 14: signal inout;
+    pin 15: signal inout;
+    attribute component_class = "connector";
+    attribute connector_type  = "pin_header";
+    attribute kicad_symbol    = "Connector_Generic:Conn_01x15";
+}
+
+entity Pin_Header_01x17() {
+    pin 1:  signal inout;
+    pin 2:  signal inout;
+    pin 3:  signal inout;
+    pin 4:  signal inout;
+    pin 5:  signal inout;
+    pin 6:  signal inout;
+    pin 7:  signal inout;
+    pin 8:  signal inout;
+    pin 9:  signal inout;
+    pin 10: signal inout;
+    pin 11: signal inout;
+    pin 12: signal inout;
+    pin 13: signal inout;
+    pin 14: signal inout;
+    pin 15: signal inout;
+    pin 16: signal inout;
+    pin 17: signal inout;
+    attribute component_class = "connector";
+    attribute connector_type  = "pin_header";
+    attribute kicad_symbol    = "Connector_Generic:Conn_01x17";
+}
+
+// ─── Wider dual-row headers ────────────────────────────────────
+//
+// Conn_02x18_Odd_Even is the Mega 2560's stacked PPTC182LFBN-RC
+// programming/expansion header (36 pads in a 2×18 layout).
+// KiCad numbers all 2N pads in row-major flat order.
+
+entity Pin_Header_02x18() {
+    pin 1:  signal inout;
+    pin 2:  signal inout;
+    pin 3:  signal inout;
+    pin 4:  signal inout;
+    pin 5:  signal inout;
+    pin 6:  signal inout;
+    pin 7:  signal inout;
+    pin 8:  signal inout;
+    pin 9:  signal inout;
+    pin 10: signal inout;
+    pin 11: signal inout;
+    pin 12: signal inout;
+    pin 13: signal inout;
+    pin 14: signal inout;
+    pin 15: signal inout;
+    pin 16: signal inout;
+    pin 17: signal inout;
+    pin 18: signal inout;
+    pin 19: signal inout;
+    pin 20: signal inout;
+    pin 21: signal inout;
+    pin 22: signal inout;
+    pin 23: signal inout;
+    pin 24: signal inout;
+    pin 25: signal inout;
+    pin 26: signal inout;
+    pin 27: signal inout;
+    pin 28: signal inout;
+    pin 29: signal inout;
+    pin 30: signal inout;
+    pin 31: signal inout;
+    pin 32: signal inout;
+    pin 33: signal inout;
+    pin 34: signal inout;
+    pin 35: signal inout;
+    pin 36: signal inout;
+    attribute component_class = "connector";
+    attribute connector_type  = "pin_header_dual";
+    attribute kicad_symbol    = "Connector_Generic:Conn_02x18_Odd_Even";
+}

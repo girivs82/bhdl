@@ -537,7 +537,10 @@ fn stdlib_entity_file(entity: &str) -> &'static str {
             | "Pin_Header_01x08"
             | "Pin_Header_01x10"
             | "Pin_Header_02x02"
-            | "Pin_Header_02x03"          => "connectors/pin_header.bhdl",
+            | "Pin_Header_02x03"
+            | "Pin_Header_01x15"
+            | "Pin_Header_01x17"
+            | "Pin_Header_02x18"          => "connectors/pin_header.bhdl",
         "USB_C_Receptacle_USB2_16P"      => "connectors/usb_c.bhdl",
         "MOSFET"                         => "actives/mosfet_simple.bhdl",
         "ATmega328P_DIP28"
