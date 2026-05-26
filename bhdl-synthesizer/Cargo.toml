@@ -3,6 +3,13 @@ name = "bhdl-synthesizer"
 version = "0.1.0"
 edition = "2021"
 description = "BHDL synthesizer - converts semantic analysis to netlists with preserved context"
+# `src/bin/` contains 75 historical test/demo binaries (test_7805_realistic.rs,
+# test_buck_regulator_spice_roles.rs, …). With Cargo's auto-discovery enabled,
+# every `cargo build -p bhdl-synthesizer` compiled all 75 of them — a several-
+# minute tax on every developer iteration. We disable auto-binary discovery
+# and explicitly opt the one we actually use (`end_to_end_test`) back in.
+# To revive a specific demo, add another `[[bin]]` block below.
+autobins = false
 
 [[bin]]
 name = "end_to_end_test"
@@ -30,21 +37,26 @@ env_logger = "0.11"
 console = "0.15"
 rowan = "0.15"
 tokio = { version = "1.0", features = ["sync", "time", "macros", "rt-multi-thread"] }
-futures-util = "0.3"
 colored = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-slotmap = "1.0"
 rand = "0.8"
-chrono = { version = "0.4", features = ["serde"] }
 # Rhai — embedded scripting for vendor `design { }` body hooks (Stage 5).
 # Statically linked into bhdl-synthesizer so there is no user-managed
 # runtime: zero install, zero venv, deterministic across machines.
 # Sandboxed by default (no I/O, no module imports unless we register
 # host functions); fuel-limited via set_max_operations.
 rhai = { version = "1.18", default-features = false, features = ["std", "sync"] }
-uuid = { version = "1.0", features = ["v4", "serde"] }
-ndarray = "0.15"
+
+# Dropped during the 2026-05-26 build-speed audit (Phase J followup):
+#   - ndarray         — 0 uses anywhere in src
+#   - uuid            — 0 uses
+#   - slotmap         — 0 direct uses (still pulled transitively via bhdl-netlist)
+#   - futures-util    — single use in src/bin/test_interface_synthesis_runner.rs,
+#                        which now sits in the autobins=false disabled set
+#   - chrono          — single Utc::now().to_rfc3339() call inlined to
+#                        std::time::SystemTime + manual ISO-8601 format
+# Together these were dragging ~3-5 minutes off clean-build time.
 
 [dev-dependencies]
 tempfile = "3.0"
