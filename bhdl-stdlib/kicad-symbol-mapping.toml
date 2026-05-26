@@ -249,7 +249,13 @@ bhdl  = "USB_C_Receptacle_USB2_16P"
 [[mapping]]
 kicad = "Connector:TestPoint"
 bhdl  = "TestPoint"
-pin_map = { "1" = "K" }
+# No pin_map — TestPoint is currently aliased to
+# `kicad_passthrough` which has 1..64 numeric pins. The previous
+# `pin_map = { "1" = "K" }` translated to a pin that doesn't
+# exist, causing TP.K to fail materialisation on the BHDL side
+# while the KiCad-side canonical still saw TP.K. Two diffs per
+# TestPoint on Arduino Nano (TP1, TP2). When a real TestPoint
+# entity ships with a `K` (or `pad`) port, restore the pin_map.
 
 [[mapping]]
 kicad = "Connector:TestPoint_2Pin"
