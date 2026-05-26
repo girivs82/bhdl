@@ -526,8 +526,14 @@ impl NetlistGenerator {
         // Populate database components for ALL netlist instances (before power symbols)
         self.populate_all_netlist_components().await?;
 
-        // Final phase: Populate power symbol database entries for visualization
-        self.populate_power_symbol_components(analysis).await?;
+        // Power/ground source declarations are net-name annotations,
+        // not components. The schematic-visualization layer should
+        // render them as label-glyphs on the named nets, not as
+        // pseudo-component instances. `populate_power_symbol_components`
+        // is kept around in case the visualizer wants to opt back in
+        // later but is no longer invoked on the netlist path. See
+        // Phase J of the KiCad import work for the motivation.
+        // self.populate_power_symbol_components(analysis).await?;
 
         info!("Netlist generation complete: {} modules, {} instances, {} nets, {} database components",
               self.netlist.modules.len(),
@@ -1186,102 +1192,30 @@ impl NetlistGenerator {
     fn create_power_nets(&mut self, analysis: &AnalysisResult) -> Result<()> {
         if self.config.include_power_domains {
             let power_context = &analysis.power_analysis;
-            
-            // Create nets and component instances for all power domains
+
+            // Create one Net per source-declared power/ground domain.
+            //
+            // `power VCC_5V = 5V;` / `ground GND;` source declarations
+            // are net-name annotations: they assign a name + voltage
+            // type to a net, they do NOT materialise a component.
+            // Power physically enters the board through a connector
+            // pin (USB VBUS, barrel jack tip) or is produced by a
+            // regulator pin (LDO VOUT, buck VOUT); those connector/
+            // regulator entities own their own pins. The named net is
+            // just the wire those pins terminate on. See discussion
+            // documented in Phase J of the KiCad import work.
             for (domain_name, domain_info) in &power_context.domains {
-                // Determine the appropriate NetClass based on domain type
                 let net_class = if domain_name.contains("GND") || domain_info.voltage == 0.0 {
                     NetClass::Ground
                 } else {
                     NetClass::Power(domain_info.voltage)
                 };
-                
+
                 let net_id = self.find_or_create_net(domain_name, net_class.clone());
                 self.ast_to_net.insert(domain_name.clone(), net_id);
-                
-                debug!("Created power net '{}' with voltage {:?} and class {:?}", 
+
+                debug!("Created power net '{}' with voltage {:?} and class {:?}",
                        domain_name, domain_info.voltage, net_class);
-                
-                // NEW: Create component instances for power and ground
-                if domain_name.contains("GND") || domain_info.voltage == 0.0 {
-                    // Create Ground component instance using KiCad GND symbol
-                    let symbol_name = "GND".to_string();
-                    let module_id = self.netlist.add_module(
-                        symbol_name.clone(),
-                        ModuleKind::PhysicalComponent
-                    );
-
-                    // Add pin to the module (ground symbols have pin "1")
-                    let pin_id = self.netlist.add_pin(
-                        module_id,
-                        "1".to_string(),
-                        PinDirection::InOut,
-                        PinType::Ground
-                    ).ok_or_else(|| anyhow::anyhow!("Failed to add GND pin"))?;
-                    
-                    // Create instance
-                    let instance_id = self.netlist.add_instance(
-                        domain_name.clone(),
-                        module_id
-                    ).ok_or_else(|| anyhow::anyhow!("Failed to add Ground instance"))?;
-                    
-                    // Create pin instances for the ground component
-                    let pin_instances = self.netlist.create_pin_instances(instance_id)
-                        .map_err(|e| anyhow::anyhow!("Failed to create pin instances: {}", e))?;
-                    
-                    // Connect the first pin instance to the net
-                    if let Some(&pin_inst_id) = pin_instances.first() {
-                        self.netlist.connect(net_id, ConnectionPoint::PinInstance(pin_inst_id))
-                            .map_err(|e| anyhow::anyhow!("Failed to connect ground: {}", e))?;
-                    }
-                    
-                    self.ast_to_instance.insert(domain_name.clone(), instance_id);
-
-                    info!("Created Ground component instance '{}' connected to net", domain_name);
-                } else {
-                    // Create Power component instance using voltage-appropriate symbol
-                    let symbol_name = match domain_info.voltage.round() as i32 {
-                        5 => "+5V".to_string(),
-                        12 => "+12V".to_string(),
-                        3 => "+3V3".to_string(),
-                        24 => "+24V".to_string(),
-                        _ => format!("+{}V", domain_info.voltage.round() as i32),
-                    };
-
-                    let module_id = self.netlist.add_module(
-                        symbol_name.clone(),
-                        ModuleKind::PhysicalComponent
-                    );
-
-                    // Add pin to the module (power symbols have pin "1")
-                    let pin_id = self.netlist.add_pin(
-                        module_id,
-                        "1".to_string(),
-                        PinDirection::Out,
-                        PinType::Power
-                    ).ok_or_else(|| anyhow::anyhow!("Failed to add power pin"))?;
-                    
-                    // Create instance
-                    let instance_id = self.netlist.add_instance(
-                        domain_name.clone(),
-                        module_id
-                    ).ok_or_else(|| anyhow::anyhow!("Failed to add Power instance"))?;
-                    
-                    // Create pin instances for the power component
-                    let pin_instances = self.netlist.create_pin_instances(instance_id)
-                        .map_err(|e| anyhow::anyhow!("Failed to create pin instances: {}", e))?;
-                    
-                    // Connect the first pin instance to the net
-                    if let Some(&pin_inst_id) = pin_instances.first() {
-                        self.netlist.connect(net_id, ConnectionPoint::PinInstance(pin_inst_id))
-                            .map_err(|e| anyhow::anyhow!("Failed to connect power: {}", e))?;
-                    }
-                    
-                    self.ast_to_instance.insert(domain_name.clone(), instance_id);
-
-                    info!("Created Power component instance '{}' ({}V @ {}A) connected to net",
-                          domain_name, domain_info.voltage, domain_info.max_current);
-                }
             }
         }
         Ok(())

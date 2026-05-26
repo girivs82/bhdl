@@ -1331,7 +1331,14 @@ impl PredictiveAnalyzer {
             ml_model_insights,
             prediction_confidence: overall_confidence,
             analysis_metadata: AnalysisMetadata {
-                analysis_timestamp: chrono::Utc::now().to_rfc3339(),
+                // Unix-epoch seconds as a decimal string. Was
+                // `chrono::Utc::now().to_rfc3339()` until the chrono
+                // dep was dropped during the build-speed audit;
+                // analysis_timestamp is informational only.
+                analysis_timestamp: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs().to_string())
+                    .unwrap_or_else(|_| "0".to_string()),
                 analysis_duration_ms: analysis_time.as_millis() as u64,
                 models_used: self.prediction_config.enabled_models.iter().cloned().collect(),
                 feature_count: features.values().map(|f| f.len()).sum(),
