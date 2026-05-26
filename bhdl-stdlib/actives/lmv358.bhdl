@@ -1,0 +1,38 @@
+// LMV358 — low-voltage dual operational amplifier, MSOP-8 / SOIC-8.
+//
+// Used by Arduino UNO, Leonardo, and Mega 2560 (TI part number
+// `LMV358IDGKR` — VSSOP-8 / DGK package). All three boards' KiCad
+// symbols expose the same standard dual-op-amp pinout, so a single
+// entity fronts every variant.
+//
+// Pin layout follows the canonical dual-op-amp 8-pin order:
+//   1 = OUT_A           5 = IN_B_P
+//   2 = IN_A_N          6 = IN_B_N
+//   3 = IN_A_P          7 = OUT_B
+//   4 = V_minus (GND)   8 = V_plus (VCC)
+//
+// Grammar discipline: parser-compatible v2.0 subset.
+
+entity LMV358(part_no: string = "LMV358IDGKR") {
+    // ─── Op-amp A ───────────────────────────────────────────
+    pin OUT_A:  signal inout;  // output A                       (pin 1)
+    pin IN_A_N: signal inout;  // inverting input A              (pin 2)
+    pin IN_A_P: signal inout;  // non-inverting input A          (pin 3)
+
+    // ─── Op-amp B ───────────────────────────────────────────
+    pin IN_B_P: signal inout;  // non-inverting input B          (pin 5)
+    pin IN_B_N: signal inout;  // inverting input B              (pin 6)
+    pin OUT_B:  signal inout;  // output B                       (pin 7)
+
+    // ─── Power rails ────────────────────────────────────────
+    pin V_MINUS: signal inout; // negative supply / GND          (pin 4)
+    pin V_PLUS:  signal inout; // positive supply / VCC          (pin 8)
+
+    attribute component_class    = "op-amp";
+    attribute family             = "dual-supply-rail-to-rail";
+    attribute channels           = 2;
+    attribute supply_voltage_min = 2.7;
+    attribute supply_voltage_max = 5.5;
+    attribute gbw_mhz            = 1.0;
+    attribute part_number        = part_no;
+}

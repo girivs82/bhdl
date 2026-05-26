@@ -1,0 +1,82 @@
+// ATmega16U2 — 8-bit AVR microcontroller with USB device, QFN-32.
+//
+// Used as the USB-to-serial bridge on Arduino UNO and Mega 2560
+// (the `ATMEGA16U2-MU` part — MLF/QFN-32 package). Same family as
+// ATmega32U4 but in a smaller package with less I/O. Same die runs
+// the LUFA-based DFU bootloader that lets users reflash the bridge.
+//
+// Both boards' KiCad symbols are identical, so a single entity
+// fronts both lib_ids via separate mapping rows.
+//
+// Pin names follow the standard datasheet port nomenclature:
+// PB0..PB7, PC0..PC2 + PC4..PC7, PD0..PD7, USB front-end
+// (D+/D-, UCAP, UVCC, UGND), XTAL1, AVCC, VCC, GND, plus the
+// QFN's exposed thermal pad (KiCad pin 33, named EXP in the
+// symbol — exposed as PAD here for consistency with the 328P
+// QFN-32 entity).
+//
+// Note: PC1 in this part is dual-purpose (RESET); the KiCad
+// symbol exposes it as a single pin labelled "PC1//~{RESET}".
+//
+// Grammar discipline: parser-compatible v2.0 subset.
+
+entity ATmega16U2_QFN32(part_no: string = "ATMEGA16U2-MU") {
+    // ─── Port B ─────────────────────────────────────────────
+    pin PB0: signal inout;   // SS / PCINT0                    (pin 14)
+    pin PB1: signal inout;   // SCLK / PCINT1                  (pin 15)
+    pin PB2: signal inout;   // PDI / MOSI / PCINT2            (pin 16)
+    pin PB3: signal inout;   // PDO / MISO / PCINT3            (pin 17)
+    pin PB4: signal inout;   // T1 / PCINT4                    (pin 18)
+    pin PB5: signal inout;   // PCINT5                         (pin 19)
+    pin PB6: signal inout;   // PCINT6                         (pin 20)
+    pin PB7: signal inout;   // OC0A / OC1C / PCINT7           (pin 21)
+
+    // ─── Port C ─────────────────────────────────────────────
+    pin PC0: signal inout;   // XTAL2 (alt)                    (pin 2)
+    pin PC1: signal inout;   // RESET / dW                     (pin 24)
+    pin PC2: signal inout;   //                                (pin 5)
+    pin PC4: signal inout;   //                                (pin 26)
+    pin PC5: signal inout;   //                                (pin 25)
+    pin PC6: signal inout;   //                                (pin 23)
+    pin PC7: signal inout;   //                                (pin 22)
+
+    // ─── Port D (UART + I2C-ish + ext. interrupts) ──────────
+    pin PD0: signal inout;   // OC0B / INT0                    (pin 6)
+    pin PD1: signal inout;   // AIN0 / INT1                    (pin 7)
+    pin PD2: signal inout;   // RXD1 / AIN1 / INT2             (pin 8)
+    pin PD3: signal inout;   // TXD1 / INT3                    (pin 9)
+    pin PD4: signal inout;   //                                (pin 10)
+    pin PD5: signal inout;   // XCK / CTS                      (pin 11)
+    pin PD6: signal inout;   // RTS                            (pin 12)
+    pin PD7: signal inout;   // HWB                            (pin 13)
+
+    // ─── USB front-end ──────────────────────────────────────
+    pin D_P:  signal inout;  // D+                              (pin 29)
+    pin D_N:  signal inout;  // D-                              (pin 30)
+    pin UCAP: signal inout;  // USB regulator decoupling        (pin 27)
+    pin UVCC: signal inout;  // USB pad supply                  (pin 31)
+    pin UGND: signal inout;  // USB ground                      (pin 28)
+
+    // ─── Crystal ────────────────────────────────────────────
+    pin XTAL1: signal inout; //                                 (pin 1)
+
+    // ─── Power and analog reference ─────────────────────────
+    pin VCC:  signal inout;  //                                 (pin 4)
+    pin AVCC: signal inout;  // analog VCC                      (pin 32)
+    pin GND:  signal inout;  //                                 (pin 3)
+
+    // Exposed thermal pad on the QFN bottom; KiCad's symbol
+    // exposes it as pin 33 (named "EXP" in the .kicad_sym).
+    pin PAD:  signal inout;  //                                 (pin 33)
+
+    attribute component_class = "microcontroller";
+    attribute family          = "AVR";
+    attribute architecture    = "8-bit RISC";
+    attribute flash_kb        = 16;
+    attribute sram_kb         = 0.5;
+    attribute eeprom_kb       = 0.5;
+    attribute max_clock_mhz   = 16;
+    attribute usb             = "USB 2.0 device";
+    attribute role            = "USB-serial bridge";
+    attribute part_number     = part_no;
+}
