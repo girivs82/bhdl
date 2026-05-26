@@ -242,6 +242,48 @@ bhdl  = "ATmega328P_DIP28"
 "27" = "PC4"      # ADC4 / SDA
 "28" = "PC5"      # ADC5 / SCL
 
+# ATmega328P QFN-32 / MLF-32 (used by Arduino Nano). Same MCU
+# silicon as the DIP-28 above, leadless package with two extra
+# ADC inputs (ADC6/ADC7) and duplicate VCC/GND pads.
+
+[[mapping]]
+kicad = "Arduino Nano:ATMEGA328P-MU"
+bhdl  = "ATmega328P_QFN32"
+[mapping.pin_map]
+"1"  = "PD3"      # INT1 / OC2B
+"2"  = "PD4"      # T0 / XCK
+"3"  = "GND1"
+"4"  = "VCC1"
+"5"  = "GND2"
+"6"  = "VCC2"
+"7"  = "PB6"      # XTAL1 / TOSC1
+"8"  = "PB7"      # XTAL2 / TOSC2
+"9"  = "PD5"      # T1 / OC0B
+"10" = "PD6"      # OC0A / AIN0
+"11" = "PD7"      # AIN1
+"12" = "PB0"      # ICP1 / CLKO
+"13" = "PB1"      # OC1A
+"14" = "PB2"      # SS / OC1B
+"15" = "PB3"      # MOSI / OC2A
+"16" = "PB4"      # MISO
+"17" = "PB5"      # SCK
+"18" = "AVCC"
+"19" = "ADC6"     # QFN-only ADC channel
+"20" = "AREF"
+"21" = "GND3"     # analog ground
+"22" = "ADC7"     # QFN-only ADC channel
+"23" = "PC0"      # ADC0
+"24" = "PC1"      # ADC1
+"25" = "PC2"      # ADC2
+"26" = "PC3"      # ADC3
+"27" = "PC4"      # ADC4 / SDA
+"28" = "PC5"      # ADC5 / SCL
+"29" = "PC6"      # RESET
+"30" = "PD0"      # RXD
+"31" = "PD1"      # TXD
+"32" = "PD2"      # INT0
+"33" = "PAD"      # Exposed thermal pad on QFN bottom
+
 # ─── Generic pin headers (Connector_Generic library) ──────────────
 # Single-row Conn_01xN and dual-row Conn_02xN variants. Pins are
 # numbered 1..N or 1..2N (KiCad's row-major flat numbering).

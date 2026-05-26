@@ -63,3 +63,70 @@ entity ATmega328P_DIP28(part_no: string = "ATMEGA328P-PU") {
     attribute part_number     = part_no;
     attribute kicad_symbol    = "Arduino UNO:ATMEGA328P-PU";
 }
+
+// ATmega328P — QFN-32 / MLF-32 variant.
+//
+// Used by Arduino Nano (`Arduino Nano:ATMEGA328P-MU`). Same
+// silicon as the DIP-28 above, in the smaller leadless package.
+// The 32-pin layout exposes two extra ADC inputs (ADC6/ADC7,
+// pins 19 and 22) that the DIP package doesn't bring out, and
+// has dual VCC/GND pads for the same internal die rail.
+//
+// Pin name discipline mirrors the DIP-28 entity: datasheet
+// port names (PB/PC/PD), then power/reference pins. The four
+// duplicate ground/power pads get numbered suffixes
+// (GND1/GND2/GND3 — analogous to DIP-28's GND1/GND2 — and
+// VCC1/VCC2) so the entity preserves each physical pad.
+
+entity ATmega328P_QFN32(part_no: string = "ATMEGA328P-MU") {
+    // Row A — left edge (pins 1..8)
+    pin PD3:  signal inout;  // INT1 / OC2B / PCINT19         (pin 1)
+    pin PD4:  signal inout;  // T0 / XCK / PCINT20            (pin 2)
+    pin GND1: signal inout;  //                                (pin 3)
+    pin VCC1: signal inout;  //                                (pin 4)
+    pin GND2: signal inout;  //                                (pin 5)
+    pin VCC2: signal inout;  //                                (pin 6)
+    pin PB6:  signal inout;  // XTAL1 / TOSC1 / PCINT6         (pin 7)
+    pin PB7:  signal inout;  // XTAL2 / TOSC2 / PCINT7         (pin 8)
+    // Row B — bottom edge (pins 9..16)
+    pin PD5:  signal inout;  // T1 / OC0B / PCINT21            (pin 9)
+    pin PD6:  signal inout;  // OC0A / AIN0 / PCINT22          (pin 10)
+    pin PD7:  signal inout;  // AIN1 / PCINT23                 (pin 11)
+    pin PB0:  signal inout;  // ICP1 / CLKO / PCINT0           (pin 12)
+    pin PB1:  signal inout;  // OC1A / PCINT1                  (pin 13)
+    pin PB2:  signal inout;  // SS / OC1B / PCINT2             (pin 14)
+    pin PB3:  signal inout;  // MOSI / OC2A / PCINT3           (pin 15)
+    pin PB4:  signal inout;  // MISO / PCINT4                  (pin 16)
+    // Row C — right edge (pins 17..24)
+    pin PB5:  signal inout;  // SCK / PCINT5                   (pin 17)
+    pin AVCC: signal inout;  //                                (pin 18) — analog VCC
+    pin ADC6: signal inout;  //                                (pin 19) — QFN-only
+    pin AREF: signal inout;  //                                (pin 20)
+    pin GND3: signal inout;  //                                (pin 21) — analog ground
+    pin ADC7: signal inout;  //                                (pin 22) — QFN-only
+    pin PC0:  signal inout;  // ADC0 / PCINT8                  (pin 23)
+    pin PC1:  signal inout;  // ADC1 / PCINT9                  (pin 24)
+    // Row D — top edge (pins 25..32)
+    pin PC2:  signal inout;  // ADC2 / PCINT10                 (pin 25)
+    pin PC3:  signal inout;  // ADC3 / PCINT11                 (pin 26)
+    pin PC4:  signal inout;  // ADC4 / SDA / PCINT12           (pin 27)
+    pin PC5:  signal inout;  // ADC5 / SCL / PCINT13           (pin 28)
+    pin PC6:  signal inout;  // RESET / PCINT14                (pin 29)
+    pin PD0:  signal inout;  // RXD / PCINT16                  (pin 30)
+    pin PD1:  signal inout;  // TXD / PCINT17                  (pin 31)
+    pin PD2:  signal inout;  // INT0 / PCINT18                 (pin 32)
+    // Exposed thermal pad on the QFN package bottom. KiCad's
+    // symbol exposes it as pin 33. Internally tied to GND on
+    // most boards (acts as a thermal+electrical sink).
+    pin PAD:  signal inout;  //                                 (pin 33)
+
+    attribute component_class = "microcontroller";
+    attribute family          = "AVR";
+    attribute architecture    = "8-bit RISC";
+    attribute flash_kb        = 32;
+    attribute sram_kb         = 2;
+    attribute eeprom_kb       = 1;
+    attribute max_clock_mhz   = 20;
+    attribute part_number     = part_no;
+    attribute kicad_symbol    = "Arduino Nano:ATMEGA328P-MU";
+}
