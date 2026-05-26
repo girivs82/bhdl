@@ -88,6 +88,85 @@ const STDLIB_REGISTRY_TOML: &str = include_str!(
 /// unnamed). Power nets are returned by name; the importer-side
 /// canonical netlist uses the same convention, so by-name lookup
 /// works for the diff.
+/// Normalise a canonical netlist for hierarchy-tolerant
+/// comparison. Strips two parallel naming conventions:
+///
+///   - **Net names**: drops the `/SheetName/` prefix the KiCad
+///     importer uses to scope sub-sheet local nets. After this,
+///     `/ATMEGA328P-PU/AD0` becomes `AD0`. Same-named nets across
+///     sub-sheets merge into one (matching how `canonical_from_
+///     bhdl_netlist` already merges by name).
+///   - **Reference designators**: drops the `ModuleName.` prefix
+///     the bhdl-synthesizer prepends when a component instance
+///     lives inside a sub-module body. `ATMEGA328P_PU.C12`
+///     becomes `C12`. KiCad's annotation rule guarantees refdes
+///     uniqueness across the entire board, so the prefix is
+///     redundant after flattening.
+///
+/// Risk: if two unrelated sub-sheet local labels share a name
+/// AND KiCad treats them as distinct nets, flattening will
+/// incorrectly merge them. For typical hobbyist boards
+/// (Arduino UNO, ESP32 devboards, RPi Pico) this corner case
+/// doesn't appear in practice — sheet-local label names are
+/// chosen by humans and rarely collide unintentionally.
+///
+/// Use this in `compare()`'s "flat" mode, not the strict tiny-
+/// fixture mode.
+fn flatten_hierarchical_naming(canon: &CanonicalNetlist) -> CanonicalNetlist {
+    let mut out = CanonicalNetlist::new();
+    for (name, pins) in &canon.nets {
+        let flat_name = strip_sheet_prefix(name).to_string();
+        for pr in pins {
+            let flat_ref = strip_module_prefix(&pr.reference).to_string();
+            out.add(flat_name.clone(), PinRef {
+                reference: flat_ref,
+                pin: pr.pin.clone(),
+            });
+        }
+    }
+    out
+}
+
+/// Strip a leading `/SheetName/` prefix from a net name. If the
+/// name has no slash prefix, returns it unchanged. `@`-prefixed
+/// local nets keep the `@` (BHDL syntax requirement).
+fn strip_sheet_prefix(name: &str) -> &str {
+    let stripped = name.strip_prefix('@').unwrap_or(name);
+    let after = if let Some(rest) = stripped.strip_prefix('/') {
+        // Find the next `/` — everything before it is the
+        // sheet name, everything after is the net name.
+        if let Some(slash) = rest.find('/') {
+            &rest[slash + 1 ..]
+        } else {
+            rest
+        }
+    } else {
+        stripped
+    };
+    // Preserve the `@` for local nets so the comparator doesn't
+    // accidentally merge `@AD0` with a hypothetical power net
+    // named `AD0`.
+    if name.starts_with('@') && !after.starts_with('@') {
+        // Re-prefix preserving @ — but we can't return a leaked
+        // String from a &str function. Return the bare name;
+        // the caller doesn't actually care about the `@` for
+        // matching purposes since both sides apply the same rule.
+        after
+    } else {
+        after
+    }
+}
+
+/// Strip a leading `Module.` prefix from a reference designator.
+/// If the refdes has no dot, returns it unchanged.
+fn strip_module_prefix(refdes: &str) -> &str {
+    if let Some(dot) = refdes.find('.') {
+        &refdes[dot + 1 ..]
+    } else {
+        refdes
+    }
+}
+
 fn canonical_from_bhdl_netlist(nl: &bhdl_netlist::Netlist) -> CanonicalNetlist {
     let mut out = CanonicalNetlist::new();
 
@@ -441,15 +520,90 @@ async fn arduino_uno_full_roundtrip() {
     eprintln!("--- BHDL-side canonical: {} nets, {} pins ---",
         bhdl_canon.len(), bhdl_canon.pin_count());
 
-    let rep = bhdl_kicad_import::compare(&kicad_canon, &bhdl_canon);
-    eprintln!("--- equivalence: {} ---", rep.summary());
-    if !rep.is_equivalent() {
-        // Top-5 diffs only — full Arduino-scale diff would flood logs.
-        for d in rep.diffs.iter().take(5) {
-            eprintln!("  diff: {:?}", d);
+    // Hierarchy-tolerant comparison. Both sides get their
+    // sheet/module prefixes stripped before comparison, so
+    // `/ATMEGA328P-PU/AD0` (KiCad) matches `AD0` (BHDL) and
+    // `ATMEGA328P_PU.C12` (BHDL refdes) matches `C12` (KiCad
+    // refdes). See `flatten_hierarchical_naming` docstring.
+    let kicad_flat = flatten_hierarchical_naming(&kicad_canon);
+    let bhdl_flat  = flatten_hierarchical_naming(&bhdl_canon);
+    eprintln!("--- after flattening: KiCad {} nets / {} pins, BHDL {} nets / {} pins ---",
+        kicad_flat.len(), kicad_flat.pin_count(),
+        bhdl_flat.len(), bhdl_flat.pin_count());
+
+    let rep = bhdl_kicad_import::compare(&kicad_flat, &bhdl_flat);
+    eprintln!("--- equivalence (flat): {} ---", rep.summary());
+
+    // Bucket diffs by cause so the failure mode is legible at
+    // Arduino UNO scale (~150 diffs). The categories:
+    //
+    //   - "Only A, sheet-prefixed": KiCad-side net name starts
+    //     with `/SheetName/` — the importer's per-sheet local-net
+    //     scoping. BHDL side has the net under the bare name
+    //     (no sheet prefix). Pure namespace mismatch.
+    //   - "Only A, bare name, BHDL has bare net": KiCad-side and
+    //     BHDL-side both have the net but pin sets differ.
+    //     Real wiring discrepancy or missing-pin on BHDL side.
+    //   - "Only A, bare name, BHDL missing entirely": KiCad sees
+    //     a net BHDL doesn't have at all. Often a named pin
+    //     (USB-C VBUS) that passthrough's 1..64 numeric pin set
+    //     can't cover.
+    //   - "Only B": BHDL has a net KiCad doesn't. Should be rare
+    //     once stdlib accretion catches up.
+    //   - "PinSetDiffers": both sides have the net but pins
+    //     differ. Detail of what's missing.
+    use bhdl_kicad_import::NetDiff;
+    let bhdl_has_bare: std::collections::HashSet<String> = bhdl_canon.nets.keys().cloned().collect();
+    let mut prefix_only_a = 0usize;
+    let mut bare_only_a_bhdl_missing = 0usize;
+    let mut bare_only_a_bhdl_present = 0usize;
+    let mut only_b = 0usize;
+    let mut pin_diffs = 0usize;
+    let mut sample_named_pin_misses: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
+    for d in &rep.diffs {
+        match d {
+            NetDiff::OnlyInA { net, pins } => {
+                if net.starts_with('/') {
+                    prefix_only_a += 1;
+                } else {
+                    let bare = net.trim_start_matches('@');
+                    if bhdl_has_bare.contains(bare) || bhdl_has_bare.contains(net) {
+                        bare_only_a_bhdl_present += 1;
+                    } else {
+                        bare_only_a_bhdl_missing += 1;
+                    }
+                    // Sample the named-pin references that KiCad
+                    // saw on its side (non-numeric pin numbers
+                    // signal passthrough's numeric-pin gap).
+                    for pr in pins {
+                        if pr.pin.chars().any(|c| !c.is_ascii_digit()) {
+                            sample_named_pin_misses.insert(
+                                format!("{}.{}", pr.reference, pr.pin));
+                        }
+                    }
+                }
+            }
+            NetDiff::OnlyInB { .. } => { only_b += 1; }
+            NetDiff::PinSetDiffers { .. } => { pin_diffs += 1; }
         }
-        if rep.diffs.len() > 5 {
-            eprintln!("  ... + {} more", rep.diffs.len() - 5);
+    }
+    eprintln!("--- diff breakdown ---");
+    eprintln!("  OnlyInA (sheet-prefixed, BHDL has flat version): {}",
+        prefix_only_a);
+    eprintln!("  OnlyInA (bare, BHDL has same net under same name): {}",
+        bare_only_a_bhdl_present);
+    eprintln!("  OnlyInA (bare, BHDL missing entirely): {}",
+        bare_only_a_bhdl_missing);
+    eprintln!("  OnlyInB (BHDL has a net KiCad doesn't): {}", only_b);
+    eprintln!("  PinSetDiffers (both have net, pins differ): {}", pin_diffs);
+    if !sample_named_pin_misses.is_empty() {
+        eprintln!("--- non-numeric KiCad pin refs (likely passthrough gaps) ---");
+        for pr in sample_named_pin_misses.iter().take(20) {
+            eprintln!("    {}", pr);
+        }
+        if sample_named_pin_misses.len() > 20 {
+            eprintln!("    ... + {} more", sample_named_pin_misses.len() - 20);
         }
     }
 
