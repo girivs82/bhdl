@@ -540,6 +540,7 @@ fn stdlib_entity_file(entity: &str) -> &'static str {
             | "Pin_Header_02x03"          => "connectors/pin_header.bhdl",
         "USB_C_Receptacle_USB2_16P"      => "connectors/usb_c.bhdl",
         "MOSFET"                         => "actives/mosfet_simple.bhdl",
+        "ATmega328P_DIP28"               => "actives/atmega328p.bhdl",
         // No parser-compatible Bead / Fuse / TestPoint / Schottky /
         // BJT / MOSFET yet — they live only in the rich tier.
         // Fall back to passthrough so the import line still
