@@ -306,3 +306,123 @@ fn dump_canonical(c: &CanonicalNetlist) {
         eprintln!("    {:20} {:?}", name, refs);
     }
 }
+
+// ─── Arduino UNO full round-trip ────────────────────────────────────
+//
+// Reads the real Arduino UNO KiCad 8 schematic fixture (committed
+// at `tests/fixtures/arduino-uno-thru-hole/`), emits BHDL with
+// import statements pointing at the parser-compatible stdlib
+// variants, then attempts the full parse → analyze → synthesize
+// → canonical round-trip.
+//
+// Expected outcome (as of 2026-05-26): the bottleneck is the 42
+// `kicad_passthrough` instances. That entity declares zero pins
+// (it's a placeholder until enrichment writes proper entities
+// for ATmega328P, USB-C, R-pack, etc.). Connections referencing
+// passthrough pins like `U4.27 -> @AD0` fail at analysis time
+// because U4 has no pin "27". This test records the failure
+// mode as diagnostic output — it's a "what's actually blocking
+// us at scale" probe, not yet a hard assertion.
+//
+// To make this pass:
+//   (a) Enrich the stdlib with real entities for the parts the
+//       Arduino uses (highest-leverage: ATmega328P, then
+//       R_Pack04, USB-C, regulators), OR
+//   (b) Teach `kicad_passthrough` to accept arbitrary pin
+//       references (lossy — would defeat the type system).
+// Option (a) is the plan's prescribed direction.
+
+const ARDUINO_FIXTURE_DIR: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../tests/fixtures/arduino-uno-thru-hole",
+);
+
+#[tokio::test]
+async fn arduino_uno_full_roundtrip() {
+    let fixture = std::path::Path::new(ARDUINO_FIXTURE_DIR);
+    let root_sch = fixture.join("Arduino UNO.kicad_sch");
+    if !root_sch.exists() {
+        eprintln!("(skipping arduino_uno_full_roundtrip: fixture not present)");
+        return;
+    }
+
+    // ── KiCad side ──
+    let schematic = bhdl_kicad_import::read_schematic(&root_sch).expect("read");
+    let kicad_canon = canonical_from_schematic(&schematic);
+    eprintln!("--- KiCad-side canonical: {} nets, {} pins ---",
+        kicad_canon.len(), kicad_canon.pin_count());
+
+    // ── Emit BHDL ──
+    let mapping = MappingRegistry::from_toml_str(STDLIB_REGISTRY_TOML)
+        .expect("mapping registry parses");
+    let stdlib_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent().unwrap()
+        .join("bhdl-stdlib");
+    let opts = EmitOptions { stdlib_path: Some(stdlib_path) };
+    let emitted = bhdl_kicad_import::emit_bhdl_with_options(
+        &schematic, &mapping, "Arduino_UNO", &opts).expect("emit");
+
+    eprintln!("--- emitted BHDL: {} lines, {} warnings ---",
+        emitted.source.lines().count(), emitted.warnings.len());
+
+    // ── Run through the synthesizer ──
+    let parse_result = bhdl_parser::parse(&emitted.source);
+    if !parse_result.errors().is_empty() {
+        eprintln!("--- BHDL PARSE failed on emitted Arduino BHDL ({} errors) ---",
+            parse_result.errors().len());
+        for e in parse_result.errors().iter().take(5) {
+            eprintln!("  parse error: {:?}", e);
+        }
+        eprintln!("(stopping at parse stage — known gap)");
+        return;
+    }
+    let Some(source_file) = bhdl_ast::SourceFile::cast(parse_result.syntax()) else {
+        eprintln!("--- AST cast failed — known gap ---");
+        return;
+    };
+    let analysis = bhdl_analyzer::analyze(&source_file);
+    eprintln!("--- analyzer: {} diagnostics ---", analysis.diagnostics.len());
+    // Show the first few; passthrough-pin diagnostics will dominate.
+    let unique_messages: BTreeSet<&str> = analysis.diagnostics.iter()
+        .map(|d| d.message.as_str()).collect();
+    eprintln!("    {} unique diagnostic message(s)", unique_messages.len());
+    for msg in unique_messages.iter().take(8) {
+        let count = analysis.diagnostics.iter()
+            .filter(|d| d.message == *msg).count();
+        eprintln!("    [{}×] {}", count, msg);
+    }
+
+    let mut generator = bhdl_synthesizer::NetlistGenerator::new();
+    let bhdl_netlist = match generator
+        .generate_from_ast_and_analysis(&source_file, &analysis).await
+    {
+        Ok(nl) => nl,
+        Err(e) => {
+            eprintln!("--- SYNTHESIS failed on Arduino BHDL: {} ---", e);
+            eprintln!("(recording as diagnostic; not a hard fail yet)");
+            return;
+        }
+    };
+
+    let bhdl_canon = canonical_from_bhdl_netlist(&bhdl_netlist);
+    eprintln!("--- BHDL-side canonical: {} nets, {} pins ---",
+        bhdl_canon.len(), bhdl_canon.pin_count());
+
+    let rep = bhdl_kicad_import::compare(&kicad_canon, &bhdl_canon);
+    eprintln!("--- equivalence: {} ---", rep.summary());
+    if !rep.is_equivalent() {
+        // Top-5 diffs only — full Arduino-scale diff would flood logs.
+        for d in rep.diffs.iter().take(5) {
+            eprintln!("  diff: {:?}", d);
+        }
+        if rep.diffs.len() > 5 {
+            eprintln!("  ... + {} more", rep.diffs.len() - 5);
+        }
+    }
+
+    // No hard assertion yet — this is a measurement probe. Once
+    // kicad_passthrough has real replacements for Arduino's
+    // 42 unmapped parts (or the passthrough gains dynamic-pin
+    // support), upgrade to `assert!(rep.is_equivalent(), …)`.
+}
+
