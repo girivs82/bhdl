@@ -1,0 +1,118 @@
+// Parser-compatible generic pin-header entities.
+//
+// Targets KiCad's `Connector_Generic:Conn_01xN` (single-row,
+// pins 1..N along one edge) and `Connector_Generic:Conn_02xN`
+// (dual-row, pins 1..2N in row-major order) families. The
+// Arduino UNO uses 7 instances of these across 5 distinct
+// shapes (Conn_01x06, 01x08, 01x10, 02x02, 02x03).
+//
+// Each pin is `signal inout` because at the schematic level a
+// header is just a physical connection point — directionality
+// comes from the entity on the other end of the cable.
+//
+// Written in the v2-compatible grammar subset (no @metadata,
+// no complex type expressions) so bhdl-parser can read them
+// directly from `bhdl-synthesizer`'s import_loader. When the
+// grammar gap closes (Phase post-J), these can grow richer
+// attributes.
+
+// ─── Single-row headers (Conn_01xN) ────────────────────────────
+
+entity Pin_Header_01x02() {
+    pin 1: signal inout;
+    pin 2: signal inout;
+    attribute component_class = "connector";
+    attribute connector_type  = "pin_header";
+    attribute kicad_symbol    = "Connector_Generic:Conn_01x02";
+}
+
+entity Pin_Header_01x03() {
+    pin 1: signal inout;
+    pin 2: signal inout;
+    pin 3: signal inout;
+    attribute component_class = "connector";
+    attribute connector_type  = "pin_header";
+    attribute kicad_symbol    = "Connector_Generic:Conn_01x03";
+}
+
+entity Pin_Header_01x04() {
+    pin 1: signal inout;
+    pin 2: signal inout;
+    pin 3: signal inout;
+    pin 4: signal inout;
+    attribute component_class = "connector";
+    attribute connector_type  = "pin_header";
+    attribute kicad_symbol    = "Connector_Generic:Conn_01x04";
+}
+
+entity Pin_Header_01x06() {
+    pin 1: signal inout;
+    pin 2: signal inout;
+    pin 3: signal inout;
+    pin 4: signal inout;
+    pin 5: signal inout;
+    pin 6: signal inout;
+    attribute component_class = "connector";
+    attribute connector_type  = "pin_header";
+    attribute kicad_symbol    = "Connector_Generic:Conn_01x06";
+}
+
+entity Pin_Header_01x08() {
+    pin 1: signal inout;
+    pin 2: signal inout;
+    pin 3: signal inout;
+    pin 4: signal inout;
+    pin 5: signal inout;
+    pin 6: signal inout;
+    pin 7: signal inout;
+    pin 8: signal inout;
+    attribute component_class = "connector";
+    attribute connector_type  = "pin_header";
+    attribute kicad_symbol    = "Connector_Generic:Conn_01x08";
+}
+
+entity Pin_Header_01x10() {
+    pin 1:  signal inout;
+    pin 2:  signal inout;
+    pin 3:  signal inout;
+    pin 4:  signal inout;
+    pin 5:  signal inout;
+    pin 6:  signal inout;
+    pin 7:  signal inout;
+    pin 8:  signal inout;
+    pin 9:  signal inout;
+    pin 10: signal inout;
+    attribute component_class = "connector";
+    attribute connector_type  = "pin_header";
+    attribute kicad_symbol    = "Connector_Generic:Conn_01x10";
+}
+
+// ─── Dual-row headers (Conn_02xN) ──────────────────────────────
+//
+// KiCad numbers dual-row pins as 1..N down one row, then
+// (N+1)..2N down the other — pin 1 on row 1 column 1, pin 2 on
+// row 2 column 1, pin 3 on row 1 column 2, etc. The flat
+// 1..2N numbering matches what the importer's net references
+// (`U1.5`) expect.
+
+entity Pin_Header_02x02() {
+    pin 1: signal inout;
+    pin 2: signal inout;
+    pin 3: signal inout;
+    pin 4: signal inout;
+    attribute component_class = "connector";
+    attribute connector_type  = "pin_header_dual";
+    attribute kicad_symbol    = "Connector_Generic:Conn_02x02_Odd_Even";
+}
+
+entity Pin_Header_02x03() {
+    pin 1: signal inout;
+    pin 2: signal inout;
+    pin 3: signal inout;
+    pin 4: signal inout;
+    pin 5: signal inout;
+    pin 6: signal inout;
+    attribute component_class = "connector";
+    attribute connector_type  = "pin_header_dual";
+    attribute kicad_symbol    = "Connector_Generic:Conn_02x03_Odd_Even";
+}
