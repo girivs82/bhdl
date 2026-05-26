@@ -1,0 +1,29 @@
+// Simplified MOSFET — parser-compatible (v2.0 grammar subset).
+//
+// Three-terminal MOSFET: gate, drain, source. Covers both N-
+// and P-channel devices (channel polarity comes from the
+// schematic's part-number selection, not the entity itself).
+// The 4th-terminal (bulk/body) variant isn't covered here —
+// most discrete MOSFETs tie body internally to source, and
+// KiCad's `Q_NMOS_*` / `Q_PMOS_*` symbols are 3-pin.
+//
+// KiCad's six pin-order variants (GDS, DGS, GSD for both N
+// and P) all map to this single entity via the registry's
+// `pin_map`. KiCad pin number "1"/"2"/"3" → entity port
+// "G"/"D"/"S" depending on which variant the symbol is.
+// See `bhdl-stdlib/kicad-symbol-mapping.toml`.
+
+// `part` and `package` are reserved keywords in BHDL grammar
+// (PART_KW / PACKAGE_KW), so the parameter names use the
+// underscore-prefixed convention common in stdlib entities to
+// dodge collisions.
+entity MOSFET(part_no: string = "", pkg: string = "SOT-23") {
+    pin G: signal inout;  // Gate
+    pin D: signal inout;  // Drain
+    pin S: signal inout;  // Source
+
+    attribute component_class = "transistor";
+    attribute transistor_type = "mosfet";
+    attribute part_number     = part_no;
+    attribute footprint       = pkg;
+}

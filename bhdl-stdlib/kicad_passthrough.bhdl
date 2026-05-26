@@ -128,7 +128,11 @@ entity kicad_passthrough(
 // alias drops away when a real entity ships in stdlib.
 alias Bead          = kicad_passthrough;
 alias Fuse          = kicad_passthrough;
-alias MOSFET        = kicad_passthrough;
+// MOSFET: now has a real entity in actives/mosfet_simple.bhdl
+// with proper G/D/S pins. The alias was dropping the pin
+// distinction (passthrough's 1..64 → no G/D/S), so
+// emitter-applied pin_map translation produced unresolvable
+// connections like Q1.G.
 alias BJT           = kicad_passthrough;
 alias SchottkyDiode = kicad_passthrough;
 alias TVSDiode      = kicad_passthrough;
