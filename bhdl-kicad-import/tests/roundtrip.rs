@@ -232,7 +232,13 @@ async fn roundtrip_tiny_resistor_fixture() {
         eprintln!("  diag: {}", d.message);
     }
     let mut generator = bhdl_synthesizer::NetlistGenerator::new();
-    let bhdl_netlist = match generator.generate_from_analysis(&analysis).await {
+    // Use the AST-aware entry point — the backwards-compat
+    // `generate_from_analysis(...)` discards the AST, which
+    // means the synthesizer's `import_loader.process_imports(...)`
+    // is skipped entirely and entity declarations from the
+    // imported stdlib files never reach the pin-binding layer.
+    // Symptom: `Unknown component type 'Resistor'`.
+    let bhdl_netlist = match generator.generate_from_ast_and_analysis(&source_file, &analysis).await {
         Ok(nl) => nl,
         Err(e) => {
             eprintln!("--- SYNTHESIS FAILED — known v0.1 gap ---");
@@ -275,17 +281,20 @@ async fn roundtrip_tiny_resistor_fixture() {
 
     let rep = compare(&kicad_canon, &bhdl_canon);
     eprintln!("--- equivalence: {} ---", rep.summary());
-    if !rep.is_equivalent() {
-        for d in &rep.diffs {
-            eprintln!("  diff: {:?}", d);
-        }
-        // For now, structural differences are recorded as
-        // diagnostic output rather than a hard failure — the
-        // round-trip pipeline has known gaps (entity-arg type
-        // mismatches, port-naming conventions) we'll close one
-        // by one. Once the *first* fixture round-trips cleanly,
-        // upgrade this to a hard assert.
+    for d in &rep.diffs {
+        eprintln!("  diff: {:?}", d);
     }
+    // Hard assertion: the round-trip equivalence guarantee.
+    // KiCad source → bhdl-kicad-import emit → bhdl-parser →
+    // bhdl-analyzer → bhdl-synthesizer → canonical netlist
+    // MUST produce a netlist equivalent to the one extracted
+    // directly from the KiCad source. If this fires, either the
+    // importer introduced a structural change, or one of the
+    // upstream crates regressed. The structured diff above
+    // names the exact discrepancy.
+    assert!(rep.is_equivalent(),
+        "round-trip equivalence broken: {}\n{:#?}",
+        rep.summary(), rep.diffs);
 }
 
 fn dump_canonical(c: &CanonicalNetlist) {
