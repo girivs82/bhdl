@@ -1,0 +1,153 @@
+// ATmega2560 — 8-bit AVR microcontroller, TQFP-100.
+//
+// Used by Arduino Mega 2560 (`ATMEGA2560-16AU`). The 100-pin part
+// exposes 11 GPIO ports (A/B/C/D/E/F/G/H/J/K/L) for a total of 86
+// I/O lines, plus four VCC/GND pairs for the wider power-rail
+// distribution that a 16 MHz part needs at high simultaneous-switch
+// counts.
+//
+// Pin names follow the standard datasheet port nomenclature.
+// Ports A, B, C, D, E, F, H, J, K, L are full 8-bit; port G is
+// 6-bit (PG0..PG5). The mapping registry's pin_map translates
+// KiCad's numeric labels (1..100) onto these names.
+//
+// Grammar discipline mirrors atmega328p.bhdl / atmega32u4.bhdl:
+// parser-compatible v2.0 subset.
+
+entity ATmega2560_TQFP100(part_no: string = "ATMEGA2560-16AU") {
+    // ─── Port A (multiplexed address/data AD0..AD7) ─────────
+    pin PA0: signal inout;   // AD0                            (pin 78)
+    pin PA1: signal inout;   // AD1                            (pin 77)
+    pin PA2: signal inout;   // AD2                            (pin 76)
+    pin PA3: signal inout;   // AD3                            (pin 75)
+    pin PA4: signal inout;   // AD4                            (pin 74)
+    pin PA5: signal inout;   // AD5                            (pin 73)
+    pin PA6: signal inout;   // AD6                            (pin 72)
+    pin PA7: signal inout;   // AD7                            (pin 71)
+
+    // ─── Port B (SPI + timers) ──────────────────────────────
+    pin PB0: signal inout;   // SS / PCINT0                    (pin 19)
+    pin PB1: signal inout;   // SCK / PCINT1                   (pin 20)
+    pin PB2: signal inout;   // MOSI / PCINT2                  (pin 21)
+    pin PB3: signal inout;   // MISO / PCINT3                  (pin 22)
+    pin PB4: signal inout;   // OC2A / PCINT4                  (pin 23)
+    pin PB5: signal inout;   // OC1A / PCINT5                  (pin 24)
+    pin PB6: signal inout;   // OC1B / PCINT6                  (pin 25)
+    pin PB7: signal inout;   // OC0A / OC1C / PCINT7           (pin 26)
+
+    // ─── Port C (upper address byte A8..A15) ────────────────
+    pin PC0: signal inout;   // A8                             (pin 53)
+    pin PC1: signal inout;   // A9                             (pin 54)
+    pin PC2: signal inout;   // A10                            (pin 55)
+    pin PC3: signal inout;   // A11                            (pin 56)
+    pin PC4: signal inout;   // A12                            (pin 57)
+    pin PC5: signal inout;   // A13                            (pin 58)
+    pin PC6: signal inout;   // A14                            (pin 59)
+    pin PC7: signal inout;   // A15                            (pin 60)
+
+    // ─── Port D (I2C + UART1 + ext. interrupts) ─────────────
+    pin PD0: signal inout;   // SCL / INT0                     (pin 43)
+    pin PD1: signal inout;   // SDA / INT1                     (pin 44)
+    pin PD2: signal inout;   // RXD1 / INT2                    (pin 45)
+    pin PD3: signal inout;   // TXD1 / INT3                    (pin 46)
+    pin PD4: signal inout;   // ICP1                           (pin 47)
+    pin PD5: signal inout;   // XCK1                           (pin 48)
+    pin PD6: signal inout;   // T1                             (pin 49)
+    pin PD7: signal inout;   // T0                             (pin 50)
+
+    // ─── Port E (UART0 + INT4..7 + Timer 3) ─────────────────
+    pin PE0: signal inout;   // RXD0 / PCINT8                  (pin 2)
+    pin PE1: signal inout;   // TXD0                           (pin 3)
+    pin PE2: signal inout;   // XCK0 / AIN0                    (pin 4)
+    pin PE3: signal inout;   // OC3A / AIN1                    (pin 5)
+    pin PE4: signal inout;   // OC3B / INT4                    (pin 6)
+    pin PE5: signal inout;   // OC3C / INT5                    (pin 7)
+    pin PE6: signal inout;   // T3 / INT6                      (pin 8)
+    pin PE7: signal inout;   // CLKO / ICP3 / INT7             (pin 9)
+
+    // ─── Port F (ADC + JTAG) ────────────────────────────────
+    pin PF0: signal inout;   // ADC0                           (pin 97)
+    pin PF1: signal inout;   // ADC1                           (pin 96)
+    pin PF2: signal inout;   // ADC2                           (pin 95)
+    pin PF3: signal inout;   // ADC3                           (pin 94)
+    pin PF4: signal inout;   // ADC4 / TCK                     (pin 93)
+    pin PF5: signal inout;   // ADC5 / TMS                     (pin 92)
+    pin PF6: signal inout;   // ADC6 / TDO                     (pin 91)
+    pin PF7: signal inout;   // ADC7 / TDI                     (pin 90)
+
+    // ─── Port G (6-bit: ext. bus control + TOSC) ────────────
+    pin PG0: signal inout;   // WR                             (pin 51)
+    pin PG1: signal inout;   // RD                             (pin 52)
+    pin PG2: signal inout;   // ALE                            (pin 70)
+    pin PG3: signal inout;   // TOSC2                          (pin 28)
+    pin PG4: signal inout;   // TOSC1                          (pin 29)
+    pin PG5: signal inout;   // OC0B                           (pin 1)
+
+    // ─── Port H (UART2 + Timer 4 + Timer 2 PWM) ─────────────
+    pin PH0: signal inout;   // RXD2                           (pin 12)
+    pin PH1: signal inout;   // TXD2                           (pin 13)
+    pin PH2: signal inout;   // XCK2                           (pin 14)
+    pin PH3: signal inout;   // OC4A                           (pin 15)
+    pin PH4: signal inout;   // OC4B                           (pin 16)
+    pin PH5: signal inout;   // OC4C                           (pin 17)
+    pin PH6: signal inout;   // OC2B                           (pin 18)
+    pin PH7: signal inout;   // T4                             (pin 27)
+
+    // ─── Port J (UART3 + PCINT9..15) ────────────────────────
+    pin PJ0: signal inout;   // RXD3 / PCINT9                  (pin 63)
+    pin PJ1: signal inout;   // TXD3 / PCINT10                 (pin 64)
+    pin PJ2: signal inout;   // XCK3 / PCINT11                 (pin 65)
+    pin PJ3: signal inout;   // PCINT12                        (pin 66)
+    pin PJ4: signal inout;   // PCINT13                        (pin 67)
+    pin PJ5: signal inout;   // PCINT14                        (pin 68)
+    pin PJ6: signal inout;   // PCINT15                        (pin 69)
+    pin PJ7: signal inout;   //                                (pin 79)
+
+    // ─── Port K (ADC8..15 + PCINT16..23) ────────────────────
+    pin PK0: signal inout;   // ADC8 / PCINT16                 (pin 89)
+    pin PK1: signal inout;   // ADC9 / PCINT17                 (pin 88)
+    pin PK2: signal inout;   // ADC10 / PCINT18                (pin 87)
+    pin PK3: signal inout;   // ADC11 / PCINT19                (pin 86)
+    pin PK4: signal inout;   // ADC12 / PCINT20                (pin 85)
+    pin PK5: signal inout;   // ADC13 / PCINT21                (pin 84)
+    pin PK6: signal inout;   // ADC14 / PCINT22                (pin 83)
+    pin PK7: signal inout;   // ADC15 / PCINT23                (pin 82)
+
+    // ─── Port L (Timer 5 + ICP4/5) ──────────────────────────
+    pin PL0: signal inout;   // ICP4                           (pin 35)
+    pin PL1: signal inout;   // ICP5                           (pin 36)
+    pin PL2: signal inout;   // T5                             (pin 37)
+    pin PL3: signal inout;   // OC5A                           (pin 38)
+    pin PL4: signal inout;   // OC5B                           (pin 39)
+    pin PL5: signal inout;   // OC5C                           (pin 40)
+    pin PL6: signal inout;   //                                (pin 41)
+    pin PL7: signal inout;   //                                (pin 42)
+
+    // ─── Crystal / reset ────────────────────────────────────
+    pin XTAL1: signal inout; //                                 (pin 34)
+    pin XTAL2: signal inout; //                                 (pin 33)
+    pin RESET: signal inout; // active-low                      (pin 30)
+
+    // ─── Power and analog reference ─────────────────────────
+    pin VCC:   signal inout; //                                 (pin 10)
+    pin VCC1:  signal inout; //                                 (pin 31)
+    pin VCC2:  signal inout; //                                 (pin 61)
+    pin VCC3:  signal inout; //                                 (pin 80)
+    pin GND:   signal inout; //                                 (pin 11)
+    pin GND1:  signal inout; //                                 (pin 32)
+    pin GND2:  signal inout; //                                 (pin 62)
+    pin GND3:  signal inout; //                                 (pin 81)
+    pin AVCC:  signal inout; // analog VCC                      (pin 100)
+    pin AGND:  signal inout; // analog ground                   (pin 99)
+    pin AREF:  signal inout; // analog reference                (pin 98)
+
+    attribute component_class = "microcontroller";
+    attribute family          = "AVR";
+    attribute architecture    = "8-bit RISC";
+    attribute flash_kb        = 256;
+    attribute sram_kb         = 8;
+    attribute eeprom_kb       = 4;
+    attribute max_clock_mhz   = 16;
+    attribute gpio_count      = 86;
+    attribute part_number     = part_no;
+}
