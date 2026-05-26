@@ -187,7 +187,29 @@ impl<'t> Parser<'t> {
                 Some(SyntaxKind::R_BRACE) => break,
                 Some(SyntaxKind::PIN_KW) => self.parse_entity_pin_decl(),
                 Some(SyntaxKind::CONST_KW) => self.parse_const_decl(),
-                Some(SyntaxKind::AT) => self.parse_entity_metadata(),
+                Some(SyntaxKind::AT) => {
+                    // `@` at entity scope is ambiguous between
+                    // entity metadata (`@name = expr;`) and a net
+                    // connection (`@net -> pin;` /
+                    // `@net <- pin;` / `@net <-> pin;`). The first
+                    // form expects EQ after IDENT; the second
+                    // expects a flow arrow. Look ahead past
+                    // `@IDENT` to decide.
+                    //
+                    // Required because the KiCad importer's
+                    // emitter produces `@SIGNAL -> R1.1;` style
+                    // connections inside child-sheet `entity`
+                    // blocks, which is the natural translation
+                    // of KiCad's net-label semantics. Without
+                    // this branch the parser falls into
+                    // `parse_entity_metadata` and errors with
+                    // `Expected EQ, found Some(ARROW)`.
+                    if self.is_at_connection_form() {
+                        self.parse_v2_connection_expr();
+                    } else {
+                        self.parse_entity_metadata();
+                    }
+                }
                 Some(SyntaxKind::ATTRIBUTE_KW) => self.parse_attribute_decl(),
                 Some(SyntaxKind::GENERATE_KW) => self.parse_generate_block(),
                 Some(SyntaxKind::WITH_KW) => self.parse_with_block(),
