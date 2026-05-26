@@ -205,6 +205,14 @@ literal interpolation of generic-param values, no logic. Anything
 that needs branching belongs in a `design { }` block, not in MPN
 derivation.
 
+> **Caveat — known limitation of templates.** Real manufacturer MPN
+> naming is wildly inconsistent (AP2112K uses "3.3"; Murata caps use
+> "3V3"; some TI parts use "33"; some encode tolerance via a middle-
+> letter in the MPN). String interpolation works for the clean ~70 %
+> of ICs and will fail on the messy long tail. v0.2 adds a Rhai
+> callback (`fn derive_mpn(generic_values) -> string`) for the rest.
+> See §8 for the full evolution note. v0.1 ships templates only.
+
 Adjustable parts like LM317 take the literal form:
 
 ```bhdl
@@ -512,6 +520,80 @@ features that build on the resolution metadata once it's in place.
   better than a Panasonic 10 kΩ on a given board. This needs a
   proper part database, vendor APIs, and policy hooks; out of
   scope.
+
+- **Class-resolution failure modes.** What happens when the BOM
+  pass's cost function can't satisfy a class? Three sub-cases,
+  each needs an explicit answer:
+  1. **No candidate MPN** — e.g., `Resistor<73.2kΩ, 0.1%, "0201">`
+     is real but no vendor stocks it. The compiler must surface
+     this with the offending generic tuple and the refdes(es)
+     that use it, not fail mid-pass with a stack trace. Probably
+     a `BomError::NoCandidate { class, instances }` diagnostic.
+  2. **No candidate in stock** — every MPN that satisfies the
+     class is on a 26-week lead. Different from (1); user may
+     want to proceed anyway with a soft warning, or hard-fail,
+     depending on policy. A `--stock-policy=strict|warn|ignore`
+     flag is the obvious surface.
+  3. **User wants to override the picker** — the cost function
+     would pick MPN X, but the user knows MPN Y is what their
+     contract manufacturer has on the line. The
+     `bom_preferences { … pin … }` syntax handles this; the
+     question is what happens if `pin` names a part that
+     *doesn't* satisfy the class (typo, wrong package, etc.).
+     Hard error with both the class and the offending pin.
+
+  v0.1 picks pragmatic defaults: hard-fail on (1), warn on (2),
+  hard-fail on (3) mismatch. v0.2 makes the policies
+  configurable.
+
+- **The part-database format.** §3 talks about "the part
+  database the BOM pass queries" without specifying what it is.
+  The schema, the source, and the authority all need to land
+  somewhere. Working assumptions for v0.1 (deferred to a
+  separate spec doc, `Part_Database.md`):
+
+  - **Schema.** Each row is `{ mpn, manufacturer, generic_class,
+    generic_values, package, datasheet_url, vendor_skus[],
+    stock?, price?, lead_time? }`. `generic_class` is the entity
+    name (`Resistor`); `generic_values` is the bound tuple.
+    Stock/price/lead-time are optional (snapshot from vendor APIs).
+  - **Source of truth.** A local file (TOML or SQLite) checked
+    into the repo. Vendor-API integration (Octopart, Digi-Key,
+    LCSC) lives in a separate tool that updates the local file;
+    the synthesizer never touches the network.
+  - **Authority.** Per-project file by default. A shared "stdlib
+    part database" may exist for jellybean parts (the 10k 1%
+    0603 entries that every project wants).
+  - **Granularity.** One row = one orderable SKU. Reel vs cut-tape
+    vs tube are separate rows (same MPN family, different vendor
+    SKUs).
+
+  This is a genuine system unto itself and the synthesizer must
+  not be designed assuming it doesn't exist. v0.1 ships a
+  stub-shaped database (TOML file in `bhdl-stdlib/parts/`) with
+  a handful of seed entries; v0.2 grows it.
+
+- **`mpn_template` evolution.** §3 uses string interpolation
+  (`"AP2112K-{V_OUT_short}TRG"`) for MPN derivation. This will
+  break on real manufacturer naming conventions, which vary
+  wildly: AP2112K uses "3.3", Murata caps use "3V3", TI uses
+  "33", some parts re-shuffle suffixes for tape-and-reel vs
+  cut-tape, some encode tolerance via a middle-letter (Yageo's
+  `RC0603FR-07*L` family). The template path works for ~70% of
+  clean cases (most ICs) but will need to become a Rhai
+  callback (`fn derive_mpn(v_out) -> string`) for the messy
+  long tail. v0.1 ships the template; v0.2 adds the callback.
+
+- **Socket interaction.** Completed task #36 added socket
+  pairing (entity→socket→physical-pair). Under this spec a
+  socket pairs against a *footprint*, which lives in the
+  generic axes (the `PKG` parameter on passives, or the
+  `package` attribute on ICs). Confirmed by inspection that
+  the existing socket implementation already pairs against
+  footprint strings — so the v0.1 model is consistent with
+  what's there. No change needed, but worth re-verifying after
+  Phase 2 (when more entities declare `package` in their
+  generics).
 
 ## 9. Decision log
 
