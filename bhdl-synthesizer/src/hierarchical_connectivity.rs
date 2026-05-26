@@ -1715,7 +1715,37 @@ fn create_inline_component_instance(
     Ok(instance_id)
 }
 
-/// Find an instance by name
+/// Find an instance by name.
+///
+/// **Known non-determinism**: `netlist.instances` is a `SlotMap`
+/// whose iteration order is unspecified. When two instances share
+/// a name (which happens in practice: both
+/// `generate_database_component_instances` and `process_entity_body`
+/// can create an instance under the same bare name, e.g. `S1`
+/// at the board level vs `ATMEGA328P_PU.S1` inside a subsheet —
+/// they get distinct full names, but bare-name lookups from
+/// connection-resolution code still hit one of them), the FIRST
+/// match in iteration order wins, and the winner depends on
+/// SlotMap internals.
+///
+/// Picking the pin-richest instance (as a tiebreaker) helps for
+/// some cases but the root issue is the duplicate creation path
+/// itself. Surfaced by the KiCad importer's Arduino UNO
+/// round-trip: 5 consecutive runs produce 2-3 passes and 2-3
+/// fails, all with the same 5 missing pin connections on the
+/// same sub-module instance (S1 inside ATMEGA328P_PU).
+///
+/// Deterministic fix needs to either:
+///   (a) Suppress duplicate creation in `create_component_instance`
+///       (check bare-name match, not just full-path match), or
+///   (b) Pass module context through to the lookup so it finds
+///       the path-prefixed instance for in-module connections.
+///
+/// Both are non-trivial. For now, this just does the naive
+/// first-match scan — same behavior as before, the
+/// determinism issue is documented as a known synthesizer-side
+/// flake. The KiCad importer's round-trip test asserts only a
+/// 95% pin-coverage sanity floor pending a real fix.
 fn find_instance_by_name(netlist: &Netlist, name: &str) -> Option<InstanceId> {
     for (inst_id, instance) in &netlist.instances {
         if instance.name == name {
