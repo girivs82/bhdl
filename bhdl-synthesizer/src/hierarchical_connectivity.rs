@@ -834,10 +834,33 @@ fn create_component_instance(
         format!("{}.{}", path_without_board, local_name)
     };
     
-    // Check if instance already exists (from component inference phase)
-    for (inst_id, instance) in &netlist.instances {
-        if instance.name == instance_name {
-            debug!("Component instance '{}' already exists from inference phase, skipping creation", instance_name);
+    // Check if an instance with the same name already exists.
+    //
+    // We accept TWO match shapes:
+    //   - Full hierarchical match (`instance_name` ==
+    //     `ATMEGA328P_PU.S1`): another path inside this same
+    //     hierarchical context already created it.
+    //   - Bare-name match (`local_name` == existing instance name
+    //     == `S1` at board level): the earlier
+    //     `generate_database_component_instances` pass walked
+    //     analyzer-registered Instance symbols and created `S1`
+    //     unprefixed. KiCad's annotation rule guarantees refdes
+    //     uniqueness across the entire board (`S1` only ever
+    //     appears once across all sheets), so a bare-name
+    //     collision genuinely refers to the SAME conceptual
+    //     component — we should re-use it, not duplicate.
+    //
+    // The bare-name branch fixes the non-deterministic
+    // `find_instance_by_name` behavior in the Arduino UNO
+    // round-trip: before this fix, both `S1` and
+    // `ATMEGA328P_PU.S1` existed, and bare-name lookup hit one
+    // or the other depending on SlotMap iteration. After this
+    // fix, only `S1` exists; lookup is deterministic.
+    for (_inst_id, instance) in &netlist.instances {
+        if instance.name == instance_name || instance.name == local_name {
+            debug!("Component instance '{}' already exists (matched on {}), skipping creation",
+                instance_name,
+                if instance.name == instance_name { "full path" } else { "bare name" });
             return Ok(());
         }
     }
