@@ -549,6 +549,15 @@ fn stdlib_entity_file(entity: &str) -> &'static str {
         "FT232RL"                         => "actives/ft232rl.bhdl",
         "NCP1117_Simple"                  => "power/ncp1117_simple.bhdl",
         "LP2985_Simple"                   => "power/lp2985_simple.bhdl",
+        "Crystal"
+            | "Crystal_GND2"
+            | "Crystal_GND24"             => "passive/crystal.bhdl",
+        "R_Pack04_Split"                  => "passives/resistor_pack.bhdl",
+        "SW_Push"
+            | "SW_Tactile_4Pad"           => "electromechanical/switch.bhdl",
+        "Varistor"                        => "passive/varistor.bhdl",
+        "Barrel_Jack_Switch"              => "connectors/barrel_jack.bhdl",
+        "SolderJumper_2_Open"             => "passive/solder_jumper.bhdl",
         // No parser-compatible Bead / Fuse / TestPoint / Schottky /
         // BJT / MOSFET yet — they live only in the rich tier.
         // Fall back to passthrough so the import line still

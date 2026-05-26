@@ -1,0 +1,16 @@
+// Varistor — voltage-dependent resistor for transient suppression.
+//
+// 2-terminal symmetric clamping device. KiCad's `Device:Varistor`
+// uses passive A/B pins like a resistor. Used on Arduino Micro
+// (RV1, RV2) for USB ESD protection on D+/D-.
+//
+// Grammar discipline: parser-compatible v2.0 subset.
+
+entity Varistor(part_no: string = "") {
+    pin A: signal inout;     //                                 (pin 1)
+    pin B: signal inout;     //                                 (pin 2)
+
+    attribute component_class = "varistor";
+    attribute role            = "transient-voltage-suppressor";
+    attribute part_number     = part_no;
+}

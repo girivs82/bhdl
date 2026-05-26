@@ -1,0 +1,30 @@
+// Resistor networks (arrays in a single package).
+//
+// `R_Pack04_Split` — four electrically-isolated resistors in one
+// package (8 pads total, 2 per element). KiCad's pin numbering
+// pairs them as (1,2), (3,4), (5,6), (7,8) — pin 1 and 2 are the
+// two terminals of resistor A, and so on. Used on Arduino UNO,
+// Mega 2560, Leonardo, and Micro as USB-line / interface
+// pull-ups (RN1, RN2, RN3).
+//
+// Grammar discipline: parser-compatible v2.0 subset.
+
+entity R_Pack04_Split(part_no: string = "") {
+    // Resistor element A
+    pin R1A: signal inout;   //                                 (pin 1)
+    pin R1B: signal inout;   //                                 (pin 2)
+    // Resistor element B
+    pin R2A: signal inout;   //                                 (pin 3)
+    pin R2B: signal inout;   //                                 (pin 4)
+    // Resistor element C
+    pin R3A: signal inout;   //                                 (pin 5)
+    pin R3B: signal inout;   //                                 (pin 6)
+    // Resistor element D
+    pin R4A: signal inout;   //                                 (pin 7)
+    pin R4B: signal inout;   //                                 (pin 8)
+
+    attribute component_class = "resistor-network";
+    attribute topology        = "isolated-elements";
+    attribute element_count   = 4;
+    attribute part_number     = part_no;
+}

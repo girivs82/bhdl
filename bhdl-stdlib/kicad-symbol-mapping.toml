@@ -669,6 +669,120 @@ bhdl  = "FT232RL"
 "27" = "OSCI"
 "28" = "OSCO"
 
+# ─── Crystals (2/3/4-terminal variants in Device library) ─────────
+[[mapping]]
+kicad = "Device:Crystal"
+bhdl  = "Crystal"
+[mapping.pin_map]
+"1" = "A"
+"2" = "B"
+
+[[mapping]]
+kicad = "Device:Crystal_GND2"
+bhdl  = "Crystal_GND2"
+[mapping.pin_map]
+"1" = "A"
+"2" = "GND2"
+"3" = "B"
+
+[[mapping]]
+kicad = "Device:Crystal_GND24"
+bhdl  = "Crystal_GND24"
+[mapping.pin_map]
+"1" = "A"
+"2" = "GND2"
+"3" = "B"
+"4" = "GND4"
+
+# ─── Resistor networks (Device library) ────────────────────────────
+[[mapping]]
+kicad = "Device:R_Pack04_Split"
+bhdl  = "R_Pack04_Split"
+[mapping.pin_map]
+"1" = "R1A"
+"2" = "R1B"
+"3" = "R2A"
+"4" = "R2B"
+"5" = "R3A"
+"6" = "R3B"
+"7" = "R4A"
+"8" = "R4B"
+
+# ─── Pushbutton switches (Switch library + per-board TS06 SKU) ────
+[[mapping]]
+kicad = "Switch:SW_Push"
+bhdl  = "SW_Push"
+[mapping.pin_map]
+"1" = "A"
+"2" = "B"
+
+# TS06 4-pad SMT tactile button — Arduino RESET on every board.
+# Same KiCad symbol layout under per-board library names.
+[[mapping]]
+kicad = "Arduino UNO:TS06-667-30-BK-100-G-SMT-TR"
+bhdl  = "SW_Tactile_4Pad"
+[mapping.pin_map]
+"1" = "A1"
+"2" = "A2"
+"3" = "B1"
+"4" = "B2"
+"5" = "SHELL"
+
+[[mapping]]
+kicad = "Arduino Leonardo:TS06-667-30-BK-100-G-SMT-TR"
+bhdl  = "SW_Tactile_4Pad"
+[mapping.pin_map]
+"1" = "A1"
+"2" = "A2"
+"3" = "B1"
+"4" = "B2"
+"5" = "SHELL"
+
+[[mapping]]
+kicad = "Arduino Mega 2560:TS06-667-30-BK-100-G-SMT-TR"
+bhdl  = "SW_Tactile_4Pad"
+[mapping.pin_map]
+"1" = "A1"
+"2" = "A2"
+"3" = "B1"
+"4" = "B2"
+"5" = "SHELL"
+
+[[mapping]]
+kicad = "Arduino Micro:TS06-667-30-BK-100-G-SMT-TR"
+bhdl  = "SW_Tactile_4Pad"
+[mapping.pin_map]
+"1" = "A1"
+"2" = "A2"
+"3" = "B1"
+"4" = "B2"
+"5" = "SHELL"
+
+# ─── Varistor (Device:Varistor) ────────────────────────────────────
+[[mapping]]
+kicad = "Device:Varistor"
+bhdl  = "Varistor"
+[mapping.pin_map]
+"1" = "A"
+"2" = "B"
+
+# ─── Barrel-jack DC power connector ────────────────────────────────
+[[mapping]]
+kicad = "Connector:Barrel_Jack_Switch"
+bhdl  = "Barrel_Jack_Switch"
+[mapping.pin_map]
+"1" = "TIP"
+"2" = "SLEEVE"
+"3" = "SWITCH"
+
+# ─── Solder jumper (open by default) ───────────────────────────────
+[[mapping]]
+kicad = "Jumper:SolderJumper_2_Open"
+bhdl  = "SolderJumper_2_Open"
+[mapping.pin_map]
+"1" = "A"
+"2" = "B"
+
 # ─── Generic pin headers (Connector_Generic library) ──────────────
 # Single-row Conn_01xN and dual-row Conn_02xN variants. Pins are
 # numbered 1..N or 1..2N (KiCad's row-major flat numbering).

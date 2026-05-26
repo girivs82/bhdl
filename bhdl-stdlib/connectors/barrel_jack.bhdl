@@ -1,0 +1,24 @@
+// Barrel-jack DC power connectors.
+//
+// `Barrel_Jack_Switch` — 3-terminal jack with a normally-closed
+// switch on the sleeve, which opens when a plug is inserted.
+// KiCad pinout:
+//   1 = center pin (positive terminal of the plug)
+//   2 = sleeve (negative terminal)
+//   3 = switch terminal (shorted to pin 2 when no plug is inserted)
+//
+// Used on Arduino UNO, Leonardo, and Mega 2560 as the external
+// power-in jack (typically 7–12 V DC).
+//
+// Grammar discipline: parser-compatible v2.0 subset.
+
+entity Barrel_Jack_Switch(part_no: string = "") {
+    pin TIP:    signal inout; // center / positive               (pin 1)
+    pin SLEEVE: signal inout; // outer / ground                  (pin 2)
+    pin SWITCH: signal inout; // switch contact (NC to sleeve)   (pin 3)
+
+    attribute component_class = "dc-jack";
+    attribute terminals       = 3;
+    attribute switched        = true;
+    attribute part_number     = part_no;
+}
