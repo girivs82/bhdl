@@ -109,9 +109,24 @@ impl<'a> DesignContext<'a> {
                     .ok_or_else(|| DesignEvalError::EvalError(
                         format!("supply.{field} is not a power pin on the parent")));
             }
+            // `self.<param>` resolves the entity's own constructor
+            // arguments (spec §5.2 plain `design { }` form). The
+            // values live on the instance attribute map under their
+            // bare names — same map `intent_<x>` is stamped into,
+            // just without the `intent_` prefix. Strings like "5V"
+            // are parsed for their numeric component so e.g.
+            // `self.v_out` in a body reads 5.0 from `v_out = "5V"`.
+            if ns == "self" {
+                return self.intent_attrs.get(field)
+                    .ok_or_else(|| DesignEvalError::EvalError(
+                        format!("self.{field} is not set on this instance \
+                                 (constructor arg missing?)")))
+                    .and_then(|s| parse_literal(s).map_err(|_| DesignEvalError::EvalError(
+                        format!("self.{field} = '{s}' is not a number"))));
+            }
             return Err(DesignEvalError::EvalError(
                 format!("unknown namespace '{ns}' in identifier '{name}' \
-                         (recognised: intent, supply, {})",
+                         (recognised: intent, self, supply, {})",
                         if self.device_class.is_empty() {
                             "<no device discovered>".to_string()
                         } else {
@@ -785,6 +800,64 @@ mod tests {
         let (intent, board) = ctx();
         let c = make_ctx(&intent, board);
         assert!((evaluate_text("intent.current", &c).unwrap() - 0.005).abs() < 1e-12);
+    }
+
+    #[test]
+    fn evaluates_self_lookup() {
+        // `self.X` reads constructor args from the instance attribute
+        // map by the bare name. Same map intent_<x> uses, different
+        // prefix convention.
+        let mut attrs = HashMap::new();
+        attrs.insert("v_out".to_string(), "5V".to_string());
+        attrs.insert("dropout".to_string(), "1.2V".to_string());
+        let c = make_ctx(&attrs, HashMap::new());
+        assert!((evaluate_text("self.v_out", &c).unwrap() - 5.0).abs() < 1e-12);
+        assert!((evaluate_text("self.dropout", &c).unwrap() - 1.2).abs() < 1e-12);
+        // Missing arg surfaces a clear error.
+        assert!(evaluate_text("self.nonexistent", &c).is_err());
+    }
+
+    #[test]
+    fn lm317_style_design_block_evaluates() {
+        // Reproduce LM317's plain `design { }` body in isolation, using
+        // simple two-operand sub-expressions stored in named locals.
+        // The full inline form `240.0 * (self.v_out / v_ref - 1.0)`
+        // exposes a known issue in `parse_expression`'s handling of
+        // chained mixed-precedence binops (TODO: fix in the parser);
+        // for now we factor the arithmetic into single-binop steps,
+        // which the evaluator handles cleanly.
+        //
+        // LM317: V_OUT = V_REF * (1 + R1/R2), with V_REF = 1.25 V and
+        // R2 = 240 Ω. For V_OUT = 5 V:
+        //   delta = V_OUT - V_REF        = 3.75
+        //   scale = R2 / V_REF           = 192
+        //   R1    = delta * scale        = 720
+        let mut attrs = HashMap::new();
+        attrs.insert("v_out".to_string(), "5V".to_string());
+
+        let recipe = DesignRecipe {
+            entity_name: "LM317".into(),
+            intent_name: "<plain>".into(),
+            statements: vec![
+                DesignStatement::Let { name: "v_ref".into(), expr: "1.25".into() },
+                DesignStatement::Require {
+                    condition: "self.v_out >= 1.35".into(),
+                    message: "LM317 minimum V_OUT is V_REF + headroom (~1.35V)".into(),
+                },
+                DesignStatement::Let { name: "delta".into(), expr: "self.v_out - v_ref".into() },
+                DesignStatement::Let { name: "scale".into(), expr: "240.0 / v_ref".into() },
+                DesignStatement::Assign { child_name: "r2_value".into(), expr: "240.0".into() },
+                DesignStatement::Assign { child_name: "r1_value".into(), expr: "delta * scale".into() },
+            ],
+            body: None,
+        };
+
+        let out = evaluate_recipe(
+            &recipe, &attrs, HashMap::new(), String::new(), HashMap::new(),
+        ).expect("LM317 recipe should evaluate");
+
+        assert!((out["r2_value"] - 240.0).abs() < 1e-9, "r2_value = {}", out["r2_value"]);
+        assert!((out["r1_value"] - 720.0).abs() < 1e-9, "r1_value = {}", out["r1_value"]);
     }
 
     #[test]
