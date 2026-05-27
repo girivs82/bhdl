@@ -271,18 +271,21 @@ impl<'t> Parser<'t> {
         }
     }
 
-    // Parse an interface-field declaration inside an entity body:
+    // Parse an interface-field declaration inside an entity body.
     //
-    //     interface SPI spi;       (master-perspective field)
-    //     interface ~SPI spi;      (slave-perspective field — directions reversed)
+    // Three shapes:
     //
-    // Adds the interface's signals to the entity's pin set as
-    // dot-qualified names (spi.MOSI, spi.MISO, …). The `~` sigil
-    // is captured in the AST so the analyzer can flip directions
-    // when materialising the signals as pins. Optional generic-arg
-    // block `<...>` is reserved for parameterised interfaces (e.g.
-    // SPI<width=16>) and just parses through here — analyzer
-    // semantics for the args are a later concern.
+    //     interface  SPI spi;                       (master-perspective, unbound)
+    //     interface ~SPI spi;                       (slave-perspective, unbound — `~` flips directions)
+    //     interface  SPI spi { MOSI=PB3; MISO=PB4; SCK=PB5; CS=PB2; }
+    //                                                (master-perspective, bound to physical pins)
+    //
+    // The unbound forms materialise fresh `field.signal` pins on
+    // the entity (current v0.2/v0.3 behaviour). The bound form
+    // declares that each interface signal is an alias for an
+    // already-declared physical pin — the same wire, two ways to
+    // refer to it. v0.4 grammar; analyzer + synthesizer handling
+    // in the next commit.
     fn parse_interface_field_decl(&mut self) {
         self.builder.start_node(SyntaxKind::INTERFACE_FIELD_DECL.into());
         self.expect(SyntaxKind::INTERFACE_KW);
@@ -294,7 +297,58 @@ impl<'t> Parser<'t> {
             self.parse_type_args();
         }
         self.expect(SyntaxKind::IDENT); // field name
-        self.expect(SyntaxKind::SEMI);
+
+        if self.peek() == Some(SyntaxKind::L_BRACE) {
+            self.parse_interface_field_bindings();
+            // No semicolon after a binding block — the closing `}` is
+            // the terminator.
+        } else {
+            self.expect(SyntaxKind::SEMI);
+        }
+
+        self.builder.finish_node();
+    }
+
+    // Parse the binding block: `{ SIG = PIN; SIG = PIN; ... }`.
+    // Each entry binds an interface signal to an already-declared
+    // physical pin (or pin number). The signal name must be a bare
+    // identifier; the pin reference is an IDENT or a NUMBER (because
+    // some entities have numeric pins like `pin 1:`).
+    fn parse_interface_field_bindings(&mut self) {
+        self.builder.start_node(SyntaxKind::INTERFACE_FIELD_BINDINGS.into());
+        self.expect(SyntaxKind::L_BRACE);
+
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) | None => break,
+                Some(SyntaxKind::IDENT) => {
+                    self.builder.start_node(SyntaxKind::INTERFACE_FIELD_BINDING.into());
+                    self.expect(SyntaxKind::IDENT); // signal name
+                    self.expect(SyntaxKind::EQ);
+                    if self.peek() == Some(SyntaxKind::IDENT)
+                        || self.peek() == Some(SyntaxKind::NUMBER)
+                    {
+                        self.bump(); // pin reference
+                    } else {
+                        self.error(
+                            "Expected pin name or pin number after `=` in interface binding"
+                                .to_string(),
+                        );
+                    }
+                    self.expect(SyntaxKind::SEMI);
+                    self.builder.finish_node();
+                }
+                _ => {
+                    self.error(
+                        "Expected signal name in interface binding block".to_string(),
+                    );
+                    self.bump_any();
+                }
+            }
+        }
+
+        self.expect(SyntaxKind::R_BRACE);
         self.builder.finish_node();
     }
 

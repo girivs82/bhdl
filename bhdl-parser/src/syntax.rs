@@ -221,6 +221,8 @@ pub enum SyntaxKind {
     INTERFACE_PERSPECTIVE, // perspective master { ... }
     INTERFACE_INST,      // instance: InterfaceName();
     INTERFACE_FIELD_DECL, // interface [~]Name field;  (entity body)
+    INTERFACE_FIELD_BINDINGS, // { SIG = PIN; SIG = PIN; ... } after a field decl
+    INTERFACE_FIELD_BINDING,  // one entry of the above: `SIG = PIN`
     TYPE_DEF,       // type TypeName = TypeExpression;
     PART_FAMILY_DEF,    // part_family Name : ClassPattern { require ...; attribute ...; }
     CLASS_PATTERN,      // : EntityName<*, "1%", "0603"> — the class skeleton
