@@ -1,0 +1,18 @@
+// Diodes Incorporated AP2112K family — fixed-V LDOs in SOT-25.
+//
+// One MPN per V_OUT variant. The class pattern uses a wildcard
+// for V_OUT and a `require` clause enumerates the available
+// fixed voltages. The mpn_template's `v_short(V_OUT)` helper
+// renders "3.3" / "5.0" / etc. without trailing zeros.
+//
+// Phase 2 grammar exercise: generic class pattern + enumerated
+// `require` set + mpn_template interpolation.
+
+part_family Diodes_AP2112K : AP2112K<V_OUT: *> {
+    require V_OUT in { 1.5V, 1.8V, 2.5V, 2.6V, 2.7V, 2.8V, 3.0V, 3.3V, 5.0V };
+
+    attribute manufacturer  = "Diodes Incorporated";
+    attribute mpn_template  = "AP2112K-{v_short(V_OUT)}TRG";
+    attribute datasheet     = "https://www.diodes.com/assets/Datasheets/AP2112.pdf";
+    attribute package_real  = "SOT-25";
+}

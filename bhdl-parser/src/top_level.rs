@@ -28,6 +28,7 @@ impl<'t> Parser<'t> {
                 SyntaxKind::FAULT_INJECT_KW => self.parse_fault_inject_def(),
                 SyntaxKind::SYMBOL_KW => self.parse_symbol_def(),
                 SyntaxKind::LAYOUT_KW => self.parse_layout_def(),
+                SyntaxKind::PART_FAMILY_KW => self.parse_part_family_def(),
                 _ => {
                     // Handle unexpected tokens at the top level
                     self.error(format!("Expected a top-level item (e.g., 'board', 'entity', 'interface', 'testbench', etc.), found {:?}", kind));
@@ -719,6 +720,109 @@ impl<'t> Parser<'t> {
         // Parse initializer expression
         self.parse_expression();
         
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+
+    // Parse part_family declaration (v0.2 BOM catalog grammar).
+    //
+    //     part_family Yageo_RC0603FR_07 : Resistor<R: *, "1%", "0603"> {
+    //         require R in E96(1Ω, 10MΩ);
+    //         attribute manufacturer = "Yageo";
+    //         attribute mpn_template = "RC0603FR-07{e96_code(R)}L";
+    //     }
+    //
+    //     part_family TI_LM317T : LM317 {
+    //         attribute mpn = "LM317T";
+    //     }
+    //
+    // Body items are `require expr;` constraint clauses and
+    // `attribute name = expr;` declarations. The class pattern
+    // after `:` is the entity name optionally followed by a
+    // generic-args block (TYPE_ARGS shape, but allowing `*` as a
+    // wildcard).
+    //
+    // For Phase 2 the parser builds the AST but no downstream
+    // pass consumes it yet. The catalog scan in Phase 4 walks
+    // PART_FAMILY_DEF nodes to populate the candidate list.
+    pub(crate) fn parse_part_family_def(&mut self) {
+        self.builder.start_node(SyntaxKind::PART_FAMILY_DEF.into());
+        self.expect(SyntaxKind::PART_FAMILY_KW);
+        self.expect(SyntaxKind::IDENT); // family name
+
+        // Class pattern: `: EntityName` or `: EntityName<args>`.
+        self.builder.start_node(SyntaxKind::CLASS_PATTERN.into());
+        self.expect(SyntaxKind::COLON);
+        self.expect(SyntaxKind::IDENT); // entity name
+        if self.peek() == Some(SyntaxKind::L_ANGLE) {
+            // Reuse parse_type_args (already accepts NUMBER, STRING,
+            // IDENT, signed numbers). For Phase 2 we just need it to
+            // not error; the wildcard `*` and `R: *` shapes specified
+            // in the spec are accepted by parse_type_args's
+            // permissive fallback (it consumes unknown tokens) —
+            // tightening to spec-conformant patterns is a follow-up.
+            self.parse_type_args();
+        }
+        self.builder.finish_node(); // CLASS_PATTERN
+
+        // Body block: { require ...; attribute ...; }
+        self.expect(SyntaxKind::L_BRACE);
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) | None => break,
+                Some(SyntaxKind::REQUIRE_KW) => self.parse_require_clause(),
+                Some(SyntaxKind::ATTRIBUTE_KW) => {
+                    // Reuse the existing attribute-decl parser used
+                    // inside entities.
+                    self.parse_attribute_decl();
+                }
+                _ => {
+                    self.error(
+                        "Expected 'require' or 'attribute' in part_family body".to_string(),
+                    );
+                    self.bump_any();
+                }
+            }
+        }
+        self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
+    // Parse a constraint clause inside a part_family body:
+    //
+    //     require R in E96(1Ω, 10MΩ);
+    //     require V_OUT in { 1.5V, 1.8V, 2.5V, 3.3V, 5.0V };
+    //     require R >= 0Ω;
+    //
+    // The RHS uses constructs (`in`, set literals, E-series helpers)
+    // that the v0.2 expression grammar doesn't yet recognise as
+    // binary operators. For Phase 2 we accept *any* token stream up
+    // to the terminating `;` and keep it as raw children of the
+    // REQUIRE_CLAUSE node. The catalog-scan pass (Phase 4) will
+    // re-parse the inner tokens against a constraint mini-grammar
+    // — the parser's only job here is to fence the clause cleanly
+    // so the rest of the part_family body parses.
+    fn parse_require_clause(&mut self) {
+        self.builder.start_node(SyntaxKind::REQUIRE_CLAUSE.into());
+        self.expect(SyntaxKind::REQUIRE_KW);
+        // Tolerant body: bump everything up to (but not including) SEMI.
+        // Bail on R_BRACE in case the user forgot the semicolon — the
+        // outer loop will recover at the body brace.
+        let mut depth_paren = 0i32;
+        let mut depth_brace = 0i32;
+        loop {
+            match self.peek() {
+                None => break,
+                Some(SyntaxKind::SEMI) if depth_paren == 0 && depth_brace == 0 => break,
+                Some(SyntaxKind::R_BRACE) if depth_brace == 0 => break,
+                Some(SyntaxKind::L_PAREN) => { depth_paren += 1; self.bump_any(); }
+                Some(SyntaxKind::R_PAREN) => { depth_paren -= 1; self.bump_any(); }
+                Some(SyntaxKind::L_BRACE) => { depth_brace += 1; self.bump_any(); }
+                Some(SyntaxKind::R_BRACE) => { depth_brace -= 1; self.bump_any(); }
+                Some(_) => self.bump_any(),
+            }
+        }
         self.expect(SyntaxKind::SEMI);
         self.builder.finish_node();
     }

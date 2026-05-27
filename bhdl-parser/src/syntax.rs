@@ -138,6 +138,10 @@ pub enum SyntaxKind {
     GROUP_KW,     // group (symbol pin group)
     PART_KW,      // part (multi-part symbol)
     PACKAGE_KW,   // package (layout package)
+    PART_FAMILY_KW, // part_family (v0.2 catalog declaration)
+    // Note: REQUIRE_KW already exists above (line ~116) for interface
+    // requirements and design-block constraints; the same keyword is
+    // reused for part_family constraint clauses.
 
     // Testbench keywords
     TESTBENCH_KW,    // testbench
@@ -217,6 +221,9 @@ pub enum SyntaxKind {
     INTERFACE_PERSPECTIVE, // perspective master { ... }
     INTERFACE_INST,      // instance: InterfaceName();
     TYPE_DEF,       // type TypeName = TypeExpression;
+    PART_FAMILY_DEF,    // part_family Name : ClassPattern { require ...; attribute ...; }
+    CLASS_PATTERN,      // : EntityName<*, "1%", "0603"> — the class skeleton
+    REQUIRE_CLAUSE,     // require R in E96(1Ω, 10MΩ);
     STRUCT_LITERAL, // { field1: value1, field2: value2 }
     STRUCT_FIELD,   // field1: value1
     NULL_LITERAL,   // null

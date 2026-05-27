@@ -1,0 +1,21 @@
+// Texas Instruments LM317 — adjustable LDO, family-of-one.
+//
+// Single MPN per package variant. v0.2 part_family declaration:
+// the catalog scan (Phase 4) will find this row when an LM317
+// entity instance needs a candidate part. No template expansion
+// needed; the MPN is literal.
+//
+// Phase 2 grammar exercise: minimum-viable family declaration
+// (literal MPN, no `require` clauses, no template). The class
+// pattern `: LM317` is just an entity name — no generic args.
+//
+// The parser doesn't yet resolve the `LM317` name against a real
+// entity definition (no import here for that reason); resolution
+// is a Phase 4 catalog-scan concern.
+
+part_family TI_LM317T : LM317 {
+    attribute manufacturer  = "Texas Instruments";
+    attribute mpn           = "LM317T";
+    attribute package_real  = "TO-220";
+    attribute datasheet     = "https://www.ti.com/lit/ds/symlink/lm317.pdf";
+}
