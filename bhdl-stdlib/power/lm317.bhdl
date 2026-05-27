@@ -1,0 +1,66 @@
+// LM317 — adjustable 3-pin linear regulator (layer-2 entity).
+//
+// Demonstrates the layer-2 entity shape called out in
+// docs/spec/Parameterization_And_BOM_Resolution.md §5: virtual
+// pins on the output, an `expansion { }` block that materialises
+// the support components (input cap, output cap, feedback
+// divider), and a plain `design { }` block that sizes the
+// feedback divider from the user's runtime `v_out` argument.
+//
+// Use site (board):
+//
+//     LDO: LM317(v_out: 5V);
+//     @VBUS_9V -> LDO.VIN;
+//     LDO.VOUT -> @VCC_5V;
+//
+// The expansion automatically adds:
+//   - C_in  : 10µF input bulk cap from VIN to GND
+//   - C_out : 22µF output bulk cap from VOUT to GND
+//   - R1, R2: feedback divider VOUT → ADJ → GND, sized so
+//             V_OUT = V_REF × (1 + R1/R2) with V_REF = 1.25V
+//             and R2 fixed at 240Ω (TI's canonical recipe).
+//
+// MPN selection happens via the catalog row in
+// `bhdl-stdlib/parts/ti/lm317.bhdl` (Phase 3).
+//
+// Grammar discipline: parser-compatible v2.0 subset.
+
+entity LM317(v_out: voltage = 5V) {
+    pin VIN:  power in;
+    pin VOUT: power out virtual;
+    pin ADJ:  signal inout;
+    pin GND:  ground;
+
+    attribute component_class = "ldo";
+    attribute family          = "LM317";
+    attribute output_voltage  = v_out;
+    attribute role            = "adjustable-ldo";
+
+    // Plain design block (v0.2 §5.2). Computes the feedback-
+    // divider values from `v_out`. Runs once per instance, after
+    // constructor binding, before expansion materialisation.
+    //
+    // R2 is fixed at 240Ω per the LM317 datasheet's canonical
+    // application circuit (small enough that the 50µA bias
+    // current through ADJ is negligible at the divider's output
+    // voltage). R1 = R2 × (V_OUT / V_REF − 1).
+    design {
+        const v_ref = 1.25;
+        require v_out >= 1.35V
+            else "LM317 minimum V_OUT is V_REF + headroom (~1.35V)";
+        r2_value = 240.0;
+        r1_value = 240.0 * (v_out / v_ref - 1.0);
+    }
+
+    // Expansion uses the short-named passive entities (Res, Cap)
+    // which still take runtime-arg form. The new generic-form
+    // Resistor/Capacitor entities (Phase 1) will get expansion
+    // support in a follow-up so this can read
+    // `Resistor<r1_value, 1%>` instead.
+    expansion {
+        VIN  -> C_in:  Cap(10µF).1;             C_in.2  -> GND;
+        VOUT -> C_out: Cap(22µF).1;             C_out.2 -> GND;
+        VOUT -> R1:    Res(r1_value).1;         R1.2    -> ADJ;
+        ADJ  -> R2:    Res(r2_value).1;         R2.2    -> GND;
+    }
+}
