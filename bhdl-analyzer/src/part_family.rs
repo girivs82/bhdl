@@ -491,6 +491,10 @@ pub fn pattern_elements(pattern: &ClassPattern) -> Vec<PatternElement> {
 
 /// Split a string on commas at depth 0 (ignoring commas inside
 /// nested brackets/parens/braces).
+pub(crate) fn split_top_level_commas_pub(s: &str) -> Vec<String> {
+    split_top_level_commas(s)
+}
+
 fn split_top_level_commas(s: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut buf = String::new();
@@ -518,6 +522,10 @@ fn split_top_level_commas(s: &str) -> Vec<String> {
 ///   IDENT : *       → NamedWildcard(IDENT)
 ///   "..."           → Literal::String
 ///   number+unit     → Literal::<physical-quantity>
+pub(crate) fn parse_pattern_element_pub(text: &str) -> PatternElement {
+    parse_pattern_element(text)
+}
+
 fn parse_pattern_element(text: &str) -> PatternElement {
     let t = text.trim();
     if t == "*" {
