@@ -25,6 +25,10 @@ pub enum SymbolKind {
     Pin,
     VirtualPin,
     Instance,
+    /// v0.2 catalog declaration. `Symbol.instance_type_name` carries
+    /// the entity name from the class pattern (the entity this family
+    /// populates), so the catalog scan can look up candidates per class.
+    PartFamily,
 }
 
 impl SymbolKind {

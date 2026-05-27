@@ -1,6 +1,6 @@
 use crate::{SyntaxKind, BhdlLanguage, SyntaxNode};
 use rowan::ast::AstNode;
-use crate::items::{Board, Entity, ComponentDef, InterfaceDef, TypedefDef, ImportStmt, SymbolDef, LayoutDef};
+use crate::items::{Board, Entity, ComponentDef, InterfaceDef, TypedefDef, ImportStmt, SymbolDef, LayoutDef, PartFamilyDef};
 use crate::testbench::TestbenchDef;
 
 // Add definitions for top-level items later
@@ -79,6 +79,7 @@ pub enum Item {
     TestbenchDef(TestbenchDef),
     SymbolDef(SymbolDef),
     LayoutDef(LayoutDef),
+    PartFamilyDef(PartFamilyDef),
 }
 
 impl AstNode for Item {
@@ -87,7 +88,8 @@ impl AstNode for Item {
     fn can_cast(kind: SyntaxKind) -> bool {
         ImportStmt::can_cast(kind) || Board::can_cast(kind) || Entity::can_cast(kind) || ComponentDef::can_cast(kind) ||
         InterfaceDef::can_cast(kind) || TypedefDef::can_cast(kind) || TestbenchDef::can_cast(kind) ||
-        SymbolDef::can_cast(kind) || LayoutDef::can_cast(kind)
+        SymbolDef::can_cast(kind) || LayoutDef::can_cast(kind) ||
+        PartFamilyDef::can_cast(kind)
     }
 
     fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> {
@@ -100,6 +102,7 @@ impl AstNode for Item {
         else if TestbenchDef::can_cast(syntax.kind()) { Some(Item::TestbenchDef(TestbenchDef::cast(syntax)?)) }
         else if SymbolDef::can_cast(syntax.kind()) { Some(Item::SymbolDef(SymbolDef::cast(syntax)?)) }
         else if LayoutDef::can_cast(syntax.kind()) { Some(Item::LayoutDef(LayoutDef::cast(syntax)?)) }
+        else if PartFamilyDef::can_cast(syntax.kind()) { Some(Item::PartFamilyDef(PartFamilyDef::cast(syntax)?)) }
         else { None }
     }
 
@@ -114,6 +117,7 @@ impl AstNode for Item {
             Item::TestbenchDef(i) => i.syntax(),
             Item::SymbolDef(i) => i.syntax(),
             Item::LayoutDef(i) => i.syntax(),
+            Item::PartFamilyDef(i) => i.syntax(),
         }
     }
 } 
