@@ -1,0 +1,33 @@
+// Common serial-bus interfaces.
+//
+// Declared from the *master* perspective. The `~` sigil at a field
+// declaration site (e.g. `interface ~SPI spi;`) flips signal
+// directions for slave-perspective use.
+//
+// The reversal rule is simple:
+//   out  → in
+//   in   → out
+//   inout → inout       (bus signals like I2C SDA stay symmetric)
+//
+// This file is the minimum interface set the v0.1 wire-up needs.
+// More peripheral protocols (UART, CAN, USB, RGMII, …) land as
+// follow-ups once the synthesizer's connection-expansion path
+// for `MCU.spi -> FLASH.spi` is in place.
+
+interface I2C {
+    signal SDA: inout;
+    signal SCL: out;
+}
+
+interface SPI {
+    signal MOSI: out;            // Master Out, Slave In
+    signal MISO: in;             // Master In, Slave Out
+    signal SCK:  out;            // Serial clock — master drives
+    signal CS:   out optional;   // Chip-select; sometimes omitted on
+                                  // single-slave buses (active-low).
+}
+
+interface UART {
+    signal TX: out;
+    signal RX: in;
+}

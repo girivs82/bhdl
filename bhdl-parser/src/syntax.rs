@@ -220,6 +220,7 @@ pub enum SyntaxKind {
     INTERFACE_REQUIREMENT, // require pullup(SDA, 4.7k);
     INTERFACE_PERSPECTIVE, // perspective master { ... }
     INTERFACE_INST,      // instance: InterfaceName();
+    INTERFACE_FIELD_DECL, // interface [~]Name field;  (entity body)
     TYPE_DEF,       // type TypeName = TypeExpression;
     PART_FAMILY_DEF,    // part_family Name : ClassPattern { require ...; attribute ...; }
     CLASS_PATTERN,      // : EntityName<*, "1%", "0603"> — the class skeleton
