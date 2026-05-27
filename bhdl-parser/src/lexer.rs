@@ -81,6 +81,7 @@ pub fn lex_ident_or_kw(lex: &mut Lexer<LexerToken>) -> KeywordOrIdent {
         "group" => SyntaxKind::GROUP_KW,
         "part" => SyntaxKind::PART_KW,
         "package" => SyntaxKind::PACKAGE_KW,
+        "part_family" => SyntaxKind::PART_FAMILY_KW,
         _ => SyntaxKind::IDENT,
     };
     KeywordOrIdent { kind, text: slice.into() }
@@ -362,6 +363,7 @@ fn keyword_or_ident_callback(lex: &mut Lexer<LexerToken>) -> KeywordOrIdent {
         "group" => SyntaxKind::GROUP_KW,
         "part" => SyntaxKind::PART_KW,
         "package" => SyntaxKind::PACKAGE_KW,
+        "part_family" => SyntaxKind::PART_FAMILY_KW,
 
         // Power domain keywords (Phase 1: Scalability)
         "power_domain" => SyntaxKind::POWER_DOMAIN_KW,
