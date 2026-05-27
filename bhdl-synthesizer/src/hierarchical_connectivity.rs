@@ -8,7 +8,7 @@
 //! - SPICE subcircuit generation
 
 use anyhow::Result;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use bhdl_ast::{AstNode, SyntaxKind, Entity, EntityInst, ConnectionStmt, HasName, BinaryExpr};
 use bhdl_analyzer::types::AnalysisResult;
 use bhdl_netlist::{Netlist, ModuleId, InstanceId, NetId, ConnectionPoint};
@@ -233,10 +233,126 @@ pub fn extract_hierarchical_connectivity(
     println!("=== Phase 2: Processing module hierarchy ===");
     info!("=== Phase 2: Processing module hierarchy ===");
     process_module_hierarchy(ast, analysis, netlist, &mut context, import_preprocessor)?;
-    
+
+    // Third pass: detect interface-field pin conflicts (v0.6).
+    // When an entity declares multiple bindings sharing a physical
+    // pin (PB3 = SPI.MOSI AND PB3 = ICSP.MOSI), a board using more
+    // than one of the conflicting fields would route the same
+    // pin to two roles. Reject early with a clear diagnostic.
+    println!("=== Phase 3: Interface-field conflict detection ===");
+    info!("=== Phase 3: Interface-field conflict detection ===");
+    detect_interface_field_conflicts(ast, netlist)?;
+
     println!("=== COMPLETED hierarchical connectivity extraction ===");
     info!("=== COMPLETED hierarchical connectivity extraction ===");
     Ok(())
+}
+
+/// v0.6: walk the board(s) for connection statements, harvest
+/// `(instance, field)` pairs used in any connection, then for each
+/// instance check whether the used fields' pin bindings overlap.
+/// Two used fields claiming the same physical pin is a conflict.
+fn detect_interface_field_conflicts(
+    ast: &bhdl_ast::SourceFile,
+    netlist: &Netlist,
+) -> Result<()> {
+    use bhdl_parser::SyntaxKind;
+    use rowan::ast::AstNode;
+
+    // Map from instance name → set of interface-field names used.
+    let mut used_fields: HashMap<String, HashSet<String>> = HashMap::new();
+
+    for item in ast.items() {
+        let bhdl_ast::Item::Board(board) = item else { continue; };
+        // Walk every CONNECTION_STMT in the board body.
+        for stmt in board.syntax().descendants() {
+            if stmt.kind() != SyntaxKind::CONNECTION_STMT { continue; }
+            let text = stmt.text().to_string();
+            // Extract every `IDENT.IDENT(.IDENT)?` pattern.
+            harvest_field_references(&text, &mut used_fields);
+        }
+    }
+
+    // For each instance with at least one used field, look up its
+    // module's bindings and detect overlaps.
+    let mut conflicts = Vec::new();
+    for (inst_name, fields) in &used_fields {
+        if fields.len() < 2 { continue; }
+
+        // Resolve the instance to its module.
+        let Some((_, inst)) = netlist
+            .instances
+            .iter()
+            .find(|(_, i)| &i.name == inst_name)
+        else { continue; };
+        let Some(module) = netlist.modules.get(inst.definition) else { continue; };
+
+        // For each used field, collect (signal → physical pin) bindings.
+        // physical_pin → set of (field, signal) that map to it.
+        let mut pin_claims: HashMap<String, Vec<(String, String)>> = HashMap::new();
+        for (attr_key, phys_pin) in &module.attributes {
+            let Some(dotted) = attr_key.strip_prefix(INTERFACE_FIELD_BINDING_ATTR_PREFIX)
+            else { continue; };
+            let Some(dot_pos) = dotted.find('.') else { continue; };
+            let field = &dotted[..dot_pos];
+            let signal = &dotted[dot_pos + 1..];
+            if !fields.contains(field) { continue; }
+            pin_claims
+                .entry(phys_pin.clone())
+                .or_default()
+                .push((field.to_string(), signal.to_string()));
+        }
+
+        for (pin, claimants) in pin_claims {
+            if claimants.len() < 2 { continue; }
+            // Reduce to distinct field names.
+            let mut distinct_fields: Vec<&str> = claimants.iter().map(|(f, _)| f.as_str()).collect();
+            distinct_fields.sort();
+            distinct_fields.dedup();
+            if distinct_fields.len() < 2 { continue; }
+            let fields_label = distinct_fields.iter().map(|f| format!("`{}`", f)).collect::<Vec<_>>().join(" and ");
+            let detail = claimants
+                .iter()
+                .map(|(f, s)| format!("{}.{}", f, s))
+                .collect::<Vec<_>>()
+                .join(", ");
+            conflicts.push(format!(
+                "pin `{}.{}` is claimed by multiple interface fields ({}). The board \
+                 uses each of them: {}. One physical pin can only serve one role at \
+                 a time — pick one interface to wire on this instance.",
+                inst_name, pin, fields_label, detail,
+            ));
+        }
+    }
+
+    if !conflicts.is_empty() {
+        for msg in &conflicts {
+            error!("{}", msg);
+            eprintln!("error: {}", msg);
+        }
+    }
+    Ok(())
+}
+
+/// Scrape `instance.field(.signal)?` references out of a connection
+/// statement's text. Quick-and-dirty: split on whitespace and
+/// connection operators, look at each token, take the leading
+/// `IDENT.IDENT` pair.
+fn harvest_field_references(text: &str, used: &mut HashMap<String, HashSet<String>>) {
+    for raw in text.split(|c: char| c.is_whitespace() || matches!(c, '-' | '>' | '<' | ';' | ',' | '(' | ')')) {
+        let s = raw.trim();
+        if s.is_empty() { continue; }
+        let mut parts = s.split('.');
+        let inst = match parts.next() { Some(s) if !s.is_empty() => s, _ => continue };
+        let field = match parts.next() { Some(s) if !s.is_empty() => s, _ => continue };
+        // Skip pure identifiers that don't look like instance refs
+        // (no caret on what `instance` even is — but the second token
+        // must look like an identifier, not e.g. an attribute or
+        // operator). Filter aggressively.
+        if !inst.chars().all(|c| c.is_alphanumeric() || c == '_') { continue; }
+        if !field.chars().all(|c| c.is_alphanumeric() || c == '_') { continue; }
+        used.entry(inst.to_string()).or_default().insert(field.to_string());
+    }
 }
 
 /// Build mapping from original interface instance names to generated names
