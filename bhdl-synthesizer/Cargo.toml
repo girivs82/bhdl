@@ -23,6 +23,10 @@ path = "src/bin/test_interface_bundle.rs"
 name = "test_interface_bound"
 path = "src/bin/test_interface_bound.rs"
 
+[[bin]]
+name = "test_interface_direction"
+path = "src/bin/test_interface_direction.rs"
+
 # [[bin]]
 # name = "test_unified_svg"
 # path = "../test_unified_svg.rs"
