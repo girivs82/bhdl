@@ -569,6 +569,100 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                 }
             }
         }
+        SyntaxKind::INTERFACE_FIELD_DECL => {
+            // `interface [~]Name field;` inside an entity body.
+            // Materialise the interface's signals as Pin symbols on
+            // the parent entity, named `field.signal`. The `~`
+            // sigil flips signal directions (out↔in; inout stays).
+            //
+            // v0.1 limitation: requires the interface definition to
+            // be in scope (registered globally) before the field
+            // decl is processed. Imports satisfy this; same-file
+            // forward references don't yet. A future pre-pass that
+            // harvests interface defs first will lift the
+            // restriction.
+            let mut field_name = None;
+            let mut type_name = None;
+            let mut reversed = false;
+            for el in node.children_with_tokens() {
+                if let Some(tok) = el.as_token() {
+                    match tok.kind() {
+                        SyntaxKind::TILDE => reversed = true,
+                        SyntaxKind::IDENT => {
+                            if type_name.is_none() {
+                                type_name = Some(tok.text().to_string());
+                            } else if field_name.is_none() {
+                                field_name = Some((tok.text().to_string(), tok.text_range()));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            if let (Some(type_name), Some((field, field_range))) = (type_name.as_deref(), field_name) {
+                // Resolve the interface definition through the global scope.
+                let iface_def_node = context
+                    .global_scope_mut()
+                    .lookup(type_name)
+                    .filter(|sym| sym.kind == SymbolKind::Interface)
+                    .and_then(|sym| sym.definition_node_ptr.clone())
+                    .and_then(|ptr| {
+                        // Re-anchor the SyntaxNodePtr against the
+                        // source-file root. Pass1's walker visits
+                        // the entity body, so the root of `node` is
+                        // still the file's SourceFile.
+                        node.ancestors()
+                            .last()
+                            .map(|root| ptr.to_node(&root))
+                    });
+
+                if let Some(iface_node) = iface_def_node {
+                    // Walk the interface's children for INTERFACE_SIGNAL
+                    // nodes (skipping nested perspectives — those are
+                    // only consumed when an explicit perspective is
+                    // requested, a v0.2 concern).
+                    for child in iface_node.children() {
+                        if child.kind() != SyntaxKind::INTERFACE_SIGNAL { continue; }
+                        let Some(signal) = InterfaceSignal::cast(child.clone()) else { continue; };
+                        let Some(signal_name_tok) = signal.name() else { continue; };
+                        let signal_name = signal_name_tok.text().to_string();
+
+                        let mut direction = signal.direction().map(|d| match d {
+                            SignalDirection::In => PortDirectionKind::In,
+                            SignalDirection::Out => PortDirectionKind::Out,
+                            SignalDirection::InOut => PortDirectionKind::InOut,
+                        });
+                        if reversed {
+                            direction = direction.map(|d| match d {
+                                PortDirectionKind::In => PortDirectionKind::Out,
+                                PortDirectionKind::Out => PortDirectionKind::In,
+                                PortDirectionKind::InOut => PortDirectionKind::InOut,
+                            });
+                        }
+
+                        // Pin symbol name combines field + signal so it
+                        // can be resolved through the dotted form
+                        // `field.signal` at connection sites.
+                        let pin_name = format!("{}.{}", field, signal_name);
+                        let mut sym = Symbol::new_decl(
+                            &pin_name,
+                            SymbolKind::Pin,
+                            field_range,
+                            node,
+                            None, // no bus bounds
+                            None,
+                            direction,
+                        );
+                        // Cross-reference: instance_type_name carries
+                        // the interface type so later passes can find
+                        // sibling signals of the same field.
+                        sym.instance_type_name = Some(type_name.to_string());
+                        context.current_scope_mut().insert(sym);
+                    }
+                }
+            }
+        }
         SyntaxKind::INTERFACE_SIGNAL => {
             if let Some(signal) = InterfaceSignal::cast(node.clone()) {
                 if let Some(name_token) = signal.name() {
