@@ -1698,7 +1698,12 @@ pub fn extract_design_recipes(
         for design_node in entity.syntax().children()
             .filter(|n| n.kind() == SyntaxKind::DESIGN_BLOCK)
         {
-            // Intent name = the first IDENT token after FOR_KW.
+            // Intent name = the first IDENT token after FOR_KW. If no
+            // FOR_KW is present, this is a plain `design { }` block
+            // (spec §5.2 scenario A) — the recipe runs unconditionally
+            // for every instance of the entity. We store these under
+            // the sentinel name "<plain>" so the same HashMap shape
+            // can hold both forms.
             let intent_name = {
                 let mut after_for = false;
                 let mut name = None;
@@ -1711,7 +1716,7 @@ pub fn extract_design_recipes(
                         }
                     }
                 }
-                match name { Some(n) => n, None => continue }
+                name.unwrap_or_else(|| "<plain>".to_string())
             };
 
             let mut recipe = DesignRecipe::new(entity_name.clone(), intent_name.clone());

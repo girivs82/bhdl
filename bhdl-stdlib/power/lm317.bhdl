@@ -45,11 +45,16 @@ entity LM317(v_out: voltage = 5V) {
     // current through ADJ is negligible at the divider's output
     // voltage). R1 = R2 × (V_OUT / V_REF − 1).
     design {
+        // V_OUT = V_REF × (1 + R1/R2)  ⇒  R1 = R2 × (V_OUT − V_REF)/V_REF.
+        // Factored into single-binop steps because `parse_expression`
+        // currently mishandles chained mixed-precedence binops.
         const v_ref = 1.25;
-        require v_out >= 1.35V
+        require self.v_out >= 1.35
             else "LM317 minimum V_OUT is V_REF + headroom (~1.35V)";
+        const delta = self.v_out - v_ref;
+        const scale = 240.0 / v_ref;
         r2_value = 240.0;
-        r1_value = 240.0 * (v_out / v_ref - 1.0);
+        r1_value = delta * scale;
     }
 
     // Expansion uses the short-named passive entities (Res, Cap)

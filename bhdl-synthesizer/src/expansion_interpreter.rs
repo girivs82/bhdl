@@ -197,12 +197,24 @@ fn find_expansion_candidates(
             continue;
         }
 
-        // Resolve a vendor `design { }` recipe (if any) for this candidate's
-        // intent. Looked up by (entity name → intent name).
+        // Resolve a vendor `design { }` recipe (if any) for this candidate.
+        // Lookup order:
+        //   1. (entity_name, intent_name) — matcher form, when the
+        //      instance carries an `intent_name` attribute set by
+        //      `intent_attribute_stamper`.
+        //   2. (entity_name, "<plain>")   — plain `design { }` form
+        //      (spec §5.2 scenario A), runs unconditionally for every
+        //      instance of an entity that defines one.
+        // The intent form wins when both are present so the user can
+        // still drive an entity with `for INTENT(...)` if they want.
         let design_recipe = param_values.get("intent_name")
             .and_then(|intent| design_recipes
                 .get(&recipe.entity_name)
                 .and_then(|by_intent| by_intent.get(intent))
+                .cloned())
+            .or_else(|| design_recipes
+                .get(&recipe.entity_name)
+                .and_then(|by_intent| by_intent.get("<plain>"))
                 .cloned());
 
         candidates.push(ExpansionCandidate {
