@@ -1479,6 +1479,14 @@ fn process_connection_stmt_as_flow(
 /// materialisation (bhdl-analyzer/src/pass1.rs); both must produce
 /// the same pin set so connection resolution sees `field.signal`
 /// in both the symbol table and the netlist.
+/// Prefix used on `module.attributes` keys to store interface-field
+/// pin bindings. `intf_bind__spi.MOSI = "PB3"` means the dotted
+/// pin name `spi.MOSI` is an alias for the physical pin `PB3` on
+/// this module. Encoded into attributes (rather than a dedicated
+/// netlist field) so we don't have to thread additional mutable
+/// state through the existing pin-population call chain.
+pub(crate) const INTERFACE_FIELD_BINDING_ATTR_PREFIX: &str = "intf_bind__";
+
 fn add_interface_field_pins(
     entity: &bhdl_ast::Entity,
     module_id: ModuleId,
@@ -1515,6 +1523,26 @@ fn add_interface_field_pins(
             }
         }
         let (Some(type_name), Some(field_name)) = (type_name, field_name) else { continue; };
+
+        // v0.4 pinmux: collect per-signal bindings from the optional
+        // `{ SIG = PIN; ... }` block. When bindings are present, the
+        // field aliases existing pins instead of materialising new
+        // ones.
+        let mut bindings: HashMap<String, String> = HashMap::new();
+        for child in field_node.children() {
+            if child.kind() != SyntaxKind::INTERFACE_FIELD_BINDINGS { continue; }
+            for binding in child.children().filter(|n| n.kind() == SyntaxKind::INTERFACE_FIELD_BINDING) {
+                let idents: Vec<String> = binding
+                    .children_with_tokens()
+                    .filter_map(|el| el.into_token())
+                    .filter(|t| t.kind() == SyntaxKind::IDENT || t.kind() == SyntaxKind::NUMBER)
+                    .map(|t| t.text().to_string())
+                    .collect();
+                if idents.len() >= 2 {
+                    bindings.insert(idents[0].clone(), idents[1].clone());
+                }
+            }
+        }
 
         // Look up the interface definition in the variant manager
         // first (same-file), then in imports.
@@ -1593,10 +1621,39 @@ fn add_interface_field_pins(
             }
 
             let pin_name = format!("{}.{}", field_name, sig_name);
-            netlist.add_port(module_id, pin_name.clone(), port_direction, None);
-            netlist.add_pin(module_id, pin_name, pin_direction, PinType::Signal);
+
+            if let Some(target_pin) = bindings.get(&sig_name) {
+                // Bound: don't create a new pin. Record the alias on
+                // the module's attribute map under a reserved prefix
+                // so connection processing can resolve `spi.MOSI` to
+                // the canonical physical pin (`PB3`).
+                if let Some(module) = netlist.modules.get_mut(module_id) {
+                    let key = format!(
+                        "{}{}",
+                        INTERFACE_FIELD_BINDING_ATTR_PREFIX, pin_name,
+                    );
+                    module.attributes.insert(key, target_pin.clone());
+                }
+            } else {
+                netlist.add_port(module_id, pin_name.clone(), port_direction, None);
+                netlist.add_pin(module_id, pin_name, pin_direction, PinType::Signal);
+            }
         }
     }
+}
+
+/// Look up an interface-field pin-binding alias on the instance's
+/// module. Returns the canonical pin name if the dotted reference
+/// is an alias; `None` if it's a regular pin or no binding exists.
+fn resolve_field_binding_alias<'a>(
+    netlist: &'a Netlist,
+    inst_id: InstanceId,
+    pin_name: &str,
+) -> Option<&'a str> {
+    let inst = netlist.instances.get(inst_id)?;
+    let module = netlist.modules.get(inst.definition)?;
+    let key = format!("{}{}", INTERFACE_FIELD_BINDING_ATTR_PREFIX, pin_name);
+    module.attributes.get(&key).map(|s| s.as_str())
 }
 
 /// If `parts` is a pure bundle-bundle chain (every endpoint is
@@ -1638,16 +1695,23 @@ fn expand_interface_bundle_chain(
             return vec![parts.to_vec()];
         };
 
-        // Collect this instance's pin names.
-        let pin_names: Vec<&str> = module
+        // Collect this instance's pin names — both real pins and
+        // interface-field bindings (the latter live as attributes
+        // under the INTERFACE_FIELD_BINDING_ATTR_PREFIX).
+        let mut pin_names: Vec<String> = module
             .pins
             .iter()
-            .filter_map(|pid| netlist.pins.get(*pid).map(|p| p.name.as_str()))
+            .filter_map(|pid| netlist.pins.get(*pid).map(|p| p.name.clone()))
             .collect();
+        for (k, _) in &module.attributes {
+            if let Some(dotted) = k.strip_prefix(INTERFACE_FIELD_BINDING_ATTR_PREFIX) {
+                pin_names.push(dotted.to_string());
+            }
+        }
 
         // If a pin is named exactly `field_name`, this is a single
         // pin reference, not a bundle.
-        if pin_names.iter().any(|n| *n == field_name) {
+        if pin_names.iter().any(|n| n == field_name) {
             return vec![parts.to_vec()];
         }
 
@@ -1663,6 +1727,7 @@ fn expand_interface_bundle_chain(
             return vec![parts.to_vec()];
         }
         signals.sort();
+        signals.dedup();
         bundle_info.push((instance_name.to_string(), field_name.to_string(), signals));
     }
 
@@ -1898,6 +1963,15 @@ fn connect_pin_to_net(
     desc: &str,
     target_desc: &str,
 ) -> Result<()> {
+    // v0.4 interface-field binding alias resolution: if `pin_name`
+    // is a dotted form (`spi.MOSI`) that was registered as an alias
+    // for a physical pin (`PB3`), translate it before looking up
+    // the pin instance.
+    let pin_name = resolve_field_binding_alias(netlist, inst_id, pin_name)
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| pin_name.to_string());
+    let pin_name = pin_name.as_str();
+
     if let Some(pin_inst_id) = netlist.find_pin_instance(inst_id, pin_name) {
         netlist.connect(net_id, ConnectionPoint::PinInstance(pin_inst_id))
             .map_err(|e| anyhow::anyhow!("Failed to connect pin: {}", e))?;
