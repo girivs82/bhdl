@@ -1,0 +1,18 @@
+// ON Semiconductor NCP1117 — 1 A fixed-voltage LDO, SOT-223.
+//
+// One MPN per output-voltage variant. The Arduino fixtures use
+// only the 5.0 V variant (NCP1117ST50T3G in the SOT-223
+// `_SOT223` package suffix that KiCad's symbol carries).
+//
+// We model this as an enumerated family — the catalog scan can
+// match any of the listed voltages when the user instantiates the
+// generic `NCP1117_Simple` entity.
+
+part_family ON_NCP1117_50 : NCP1117_Simple {
+    attribute manufacturer  = "ON Semiconductor";
+    attribute mpn           = "NCP1117ST50T3G";
+    attribute output_v      = 5.0;
+    attribute package_real  = "SOT-223";
+    attribute datasheet     = "https://www.onsemi.com/pdf/datasheet/ncp1117-d.pdf";
+    attribute role          = "ldo";
+}

@@ -1,0 +1,12 @@
+// Microchip Technology ATmega2560 — 8-bit AVR MCU, TQFP-100.
+//
+// Used on Arduino Mega 2560. ATMEGA2560-16AU is the 16 MHz variant.
+
+part_family Microchip_ATmega2560_16AU : ATmega2560_TQFP100 {
+    attribute manufacturer  = "Microchip Technology";
+    attribute mpn           = "ATMEGA2560-16AU";
+    attribute package_real  = "TQFP-100";
+    attribute clock_mhz_max = 16;
+    attribute datasheet     = "https://ww1.microchip.com/downloads/aemDocuments/documents/MCU08/ProductDocuments/DataSheets/ATmega640-1280-1281-2560-2561-DS-DS40002211A.pdf";
+    attribute role          = "microcontroller";
+}

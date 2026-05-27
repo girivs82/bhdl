@@ -1,0 +1,12 @@
+// Microchip Technology ATmega16U2 — 8-bit AVR MCU with USB device.
+//
+// QFN-32 variant used as the USB-serial bridge on Arduino UNO and
+// Mega 2560 boards.
+
+part_family Microchip_ATmega16U2_MU : ATmega16U2_QFN32 {
+    attribute manufacturer  = "Microchip Technology";
+    attribute mpn           = "ATMEGA16U2-MU";
+    attribute package_real  = "QFN-32";
+    attribute datasheet     = "https://ww1.microchip.com/downloads/aemDocuments/documents/MCU08/ProductDocuments/DataSheets/Atmel-7799-8-bit-AVR-Microcontroller-ATmega8U2-16U2-32U2_Datasheet.pdf";
+    attribute role          = "usb-serial-bridge";
+}

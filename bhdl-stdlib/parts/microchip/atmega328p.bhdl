@@ -1,0 +1,26 @@
+// Microchip Technology ATmega328P — 8-bit AVR MCU.
+//
+// Two physical-package variants, two MPNs:
+//   ATMEGA328P-PU : DIP-28 (Arduino UNO R3 thru-hole)
+//   ATMEGA328P-MU : QFN-32 / MLF-32 (Arduino Nano, surface-mount)
+//
+// Each is its own "family of one" — single MPN per entity, no
+// template needed. The class pattern names the package-specific
+// entity (ATmega328P_DIP28 vs ATmega328P_QFN32) — these are
+// separate types in the stdlib because the pin layouts differ.
+
+part_family Microchip_ATmega328P_PU : ATmega328P_DIP28 {
+    attribute manufacturer  = "Microchip Technology";
+    attribute mpn           = "ATMEGA328P-PU";
+    attribute package_real  = "DIP-28";
+    attribute datasheet     = "https://ww1.microchip.com/downloads/aemDocuments/documents/MCU08/ProductDocuments/DataSheets/ATmega48A-PA-88A-PA-168A-PA-328-P-DS-DS40002061B.pdf";
+    attribute role          = "microcontroller";
+}
+
+part_family Microchip_ATmega328P_MU : ATmega328P_QFN32 {
+    attribute manufacturer  = "Microchip Technology";
+    attribute mpn           = "ATMEGA328P-MU";
+    attribute package_real  = "QFN-32";
+    attribute datasheet     = "https://ww1.microchip.com/downloads/aemDocuments/documents/MCU08/ProductDocuments/DataSheets/ATmega48A-PA-88A-PA-168A-PA-328-P-DS-DS40002061B.pdf";
+    attribute role          = "microcontroller";
+}

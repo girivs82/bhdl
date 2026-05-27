@@ -1,0 +1,12 @@
+// FTDI FT232RL — USB-to-UART bridge, SSOP-28.
+//
+// Used on Arduino Nano. Single MPN per package; FTDI doesn't offer
+// other suffixes that change the pin-out.
+
+part_family FTDI_FT232RL : FT232RL {
+    attribute manufacturer  = "Future Technology Devices International";
+    attribute mpn           = "FT232RL";
+    attribute package_real  = "SSOP-28";
+    attribute datasheet     = "https://ftdichip.com/wp-content/uploads/2020/08/DS_FT232R.pdf";
+    attribute role          = "usb-uart-bridge";
+}

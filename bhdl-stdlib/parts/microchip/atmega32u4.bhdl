@@ -1,0 +1,24 @@
+// Microchip Technology ATmega32U4 — 8-bit AVR MCU with USB device.
+//
+// Two MPN suffixes seen in the Arduino fixtures:
+//   ATMEGA32U4-AU   : TQFP-44 (Leonardo)
+//   ATMEGA32U4-MU   : QFN-44 (other variants)
+// The KiCad symbol used by both Leonardo and Micro is the same
+// pin-layout — Micro's `XUMU` suffix is a vendor SKU shape, not
+// a different die. We model both as families of the same entity.
+
+part_family Microchip_ATmega32U4_AU : ATmega32U4_TQFP44 {
+    attribute manufacturer  = "Microchip Technology";
+    attribute mpn           = "ATMEGA32U4-AU";
+    attribute package_real  = "TQFP-44";
+    attribute datasheet     = "https://ww1.microchip.com/downloads/aemDocuments/documents/MCU08/ProductDocuments/DataSheets/Atmel-7766-8-bit-AVR-ATmega16U4-32U4_Datasheet.pdf";
+    attribute role          = "microcontroller-usb";
+}
+
+part_family Microchip_ATmega32U4_MU : ATmega32U4_TQFP44 {
+    attribute manufacturer  = "Microchip Technology";
+    attribute mpn           = "ATMEGA32U4-MU";
+    attribute package_real  = "QFN-44";
+    attribute datasheet     = "https://ww1.microchip.com/downloads/aemDocuments/documents/MCU08/ProductDocuments/DataSheets/Atmel-7766-8-bit-AVR-ATmega16U4-32U4_Datasheet.pdf";
+    attribute role          = "microcontroller-usb";
+}
