@@ -19,7 +19,7 @@
 
 use std::collections::BTreeMap;
 
-use bhdl_ast::{Item, PartFamilyDef, SourceFile};
+use bhdl_ast::{HasName, Item, PartFamilyDef, SourceFile};
 use bhdl_common::ConstValue;
 use rowan::ast::AstNode;
 use serde::Serialize;
@@ -514,5 +514,173 @@ mod tests {
         let bundle = run_catalog_scan("test", &instances, &catalog);
         assert_eq!(bundle.selections_needed.len(), 1);
         assert!(bundle.selections_needed[0].candidates.is_empty());
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Source-file → InstanceClass extraction
+// ─────────────────────────────────────────────────────────────────
+//
+// The catalog-scan driver takes a list of `InstanceClass` values; in
+// the migration plan these come from the monomorphization pass once
+// it grows a side-table of (refdes, ClassInstance) records. For the
+// v0.2 round-trip case the typed-literal generics live right on the
+// instance site (`R1: Resistor<10kΩ>();`), so we can extract them
+// directly from the parsed AST without going through mono. This
+// works because every passive in the importer's output is a direct
+// parametric instantiation — there's no design-block-derived
+// computation flowing into the generic positions yet.
+//
+// When designer/expansion-time computation lands (e.g. LM317's
+// `r1_value = ...` flowing into `Resistor<r1_value, 1%>.1`), the
+// extractor will need to read the mono pass's substituted output
+// instead. For now the AST walk is enough.
+
+use bhdl_ast::Board;
+
+/// Walk every `board` in `source` and emit one [`InstanceClass`]
+/// per `COMPONENT_INST` child. The component's type-args block
+/// (the `<…>` between the entity name and the `(…)`) is parsed
+/// into [`ConstValue`]s using the same machinery the matcher uses
+/// for class-pattern literals.
+pub fn extract_instances(source: &SourceFile) -> Vec<InstanceClass> {
+    let mut out = Vec::new();
+    for board in source.boards() {
+        collect_from_board(&board, &mut out);
+    }
+    out
+}
+
+fn collect_from_board(board: &Board, out: &mut Vec<InstanceClass>) {
+    use bhdl_parser::SyntaxKind;
+    // Walk every COMPONENT_INST descendant. We don't recurse into
+    // subsheets here — they get their own board entry at top level
+    // in the importer's output, so each board flows through its
+    // own walker call.
+    for node in board.syntax().descendants() {
+        if node.kind() != SyntaxKind::COMPONENT_INST { continue; }
+        let Some(ci) = bhdl_ast::common::ComponentInst::cast(node.clone()) else { continue; };
+        let refdes = match ci.name() {
+            Some(t) => t.text().to_string(),
+            None => continue,
+        };
+        let entity = match ci.component_type_name() {
+            Some(t) => t.text().to_string(),
+            None => continue,
+        };
+        // Find the TYPE_ARGS sibling (cousin actually — it sits
+        // alongside the COLON+IDENT type-name and before the
+        // PARAM_LIST inside COMPONENT_INST).
+        let type_args = node
+            .children()
+            .find(|n| n.kind() == SyntaxKind::TYPE_ARGS);
+
+        let generics = match type_args {
+            Some(ta) => extract_type_args_values(&ta),
+            None => Vec::new(),
+        };
+
+        out.push(InstanceClass {
+            refdes,
+            class: ClassInstance { entity, generics },
+        });
+    }
+}
+
+/// Walk a TYPE_ARGS node and extract its values as a positional
+/// list of [`ConstValue`]s. Reuses the matcher's pattern-element
+/// machinery — every element in an instance-site TypeArgs *must*
+/// be a literal (wildcards aren't legal here). Non-literal
+/// elements are skipped with a warning to stderr.
+fn extract_type_args_values(node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>) -> Vec<ConstValue> {
+    use crate::part_family::PatternElement;
+
+    // Get the inner text between < and > and reuse the same
+    // top-level-comma splitter the pattern parser uses.
+    let raw = node.text().to_string();
+    let inner = raw.trim();
+    let inner = inner.strip_prefix('<').unwrap_or(inner);
+    let inner = inner.strip_suffix('>').unwrap_or(inner);
+
+    let mut out = Vec::new();
+    for piece in crate::part_family::split_top_level_commas_pub(inner) {
+        match crate::part_family::parse_pattern_element_pub(&piece) {
+            PatternElement::Literal(v) => out.push(v),
+            other => {
+                eprintln!(
+                    "warning: non-literal in instance-site type args: {:?}",
+                    other
+                );
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod source_to_bom_tests {
+    use super::*;
+    use bhdl_parser::parse;
+    use rowan::ast::AstNode;
+
+    /// Full pipeline: parse a small BHDL board → extract instances
+    /// → run catalog scan → invoke default plugin → assert chosen MPN.
+    #[test]
+    fn end_to_end_resistor_to_mpn() {
+        let _ = std::process::Command::new("cargo")
+            .args(["build", "--quiet", "--bin", "bhdl_plugin_default"])
+            .status()
+            .expect("cargo build");
+
+        let src = r#"
+            import { Resistor } from "../bhdl-stdlib/passives/resistor_simple.bhdl";
+
+            board TestBoard {
+                power VCC_5V = 5V;
+                ground GND;
+
+                R1: Resistor<10kΩ, 1%, "0603">();
+
+                VCC_5V -> R1.1;
+                R1.2 -> GND;
+            }
+        "#;
+        let pr = parse(src);
+        assert!(pr.errors().is_empty(), "parse errors: {:?}", pr.errors());
+        let source = SourceFile::cast(pr.syntax()).expect("source file");
+
+        let instances = extract_instances(&source);
+        assert_eq!(instances.len(), 1);
+        assert_eq!(instances[0].refdes, "R1");
+        assert_eq!(instances[0].class.entity, "Resistor");
+        assert_eq!(instances[0].class.generics.len(), 3);
+
+        let catalog = vec![
+            load_file("../bhdl-stdlib/parts/yageo/rc0603fr.bhdl"),
+            load_file("../bhdl-stdlib/parts/avx/cr0603_fx.bhdl"),
+            load_file("../bhdl-stdlib/parts/panasonic/erj_3ek.bhdl"),
+        ];
+        let bundle = run_catalog_scan("TestBoard", &instances, &catalog);
+        assert_eq!(bundle.selections_needed.len(), 1);
+        assert_eq!(bundle.selections_needed[0].candidates.len(), 3);
+
+        let response = crate::plugin::run_plugin(
+            &bundle,
+            crate::plugin::default_plugin_command(),
+        ).expect("plugin");
+        let sel = &response.selections[0];
+        assert!(sel.is_ok());
+        // Default plugin picks first alphabetical by manufacturer →
+        // AVX wins over Panasonic / Yageo for this class. The
+        // template renders R=10kΩ → "1002", so AVX MPN is
+        // "CR0603-FX-1002ELF".
+        assert_eq!(sel.mpn.as_deref(), Some("CR0603-FX-1002ELF"));
+    }
+
+    fn load_file(path: &str) -> (SourceFile, String) {
+        let content = std::fs::read_to_string(path).unwrap();
+        let pr = parse(&content);
+        let sf = SourceFile::cast(pr.syntax()).unwrap();
+        (sf, path.to_string())
     }
 }
