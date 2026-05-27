@@ -795,3 +795,353 @@ mod matcher_tests {
         assert!(match_class(&name, &pat, &cons, &class).is_none());
     }
 }
+
+// ─────────────────────────────────────────────────────────────────
+// §4d — Template engine
+// ─────────────────────────────────────────────────────────────────
+//
+// Renders the `mpn_template` attribute of a successful family match
+// into a concrete MPN string. The template uses a tiny interpolation
+// syntax with a fixed function library:
+//
+//     "AP2112K-{v_short(V_OUT)}TRG"   → "AP2112K-3.3TRG"
+//     "RC0603FR-07{e96_code(R)}L"     → "RC0603FR-071002L"
+//     "GRM188R71H{c_code(C)}KA01D"    → "GRM188R71H104KA01D"
+//
+// Functions live in a single dispatch table; adding manufacturer-
+// specific helpers means extending it. (v0.3 will allow user-
+// defined helpers in Rhai; v0.2 is the fixed set spec'd in §4.4.)
+
+/// Errors raised while rendering an mpn_template.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TemplateError {
+    pub message: String,
+}
+
+impl TemplateError {
+    fn new(s: impl Into<String>) -> Self {
+        Self { message: s.into() }
+    }
+}
+
+/// Render an MPN template against a set of bindings. The bindings
+/// come from a successful [`match_class`] call.
+///
+/// Template syntax:
+/// - Literal text passes through verbatim.
+/// - `{func(arg)}` invokes a built-in helper on the binding value
+///   named `arg`. Returns the helper's string result.
+///
+/// Unrecognised helpers and missing bindings produce a
+/// [`TemplateError`]; the catalog scan surfaces these as
+/// non-fatal warnings (the family is skipped, not the whole pass).
+pub fn render_template(
+    template: &str,
+    bindings: &HashMap<String, ConstValue>,
+) -> Result<String, TemplateError> {
+    let mut out = String::new();
+    let mut chars = template.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '{' {
+            // Read until the matching `}`.
+            let mut slot = String::new();
+            let mut closed = false;
+            while let Some(c2) = chars.next() {
+                if c2 == '}' {
+                    closed = true;
+                    break;
+                }
+                slot.push(c2);
+            }
+            if !closed {
+                return Err(TemplateError::new("unterminated `{...}` in template"));
+            }
+            out.push_str(&render_slot(slot.trim(), bindings)?);
+        } else if c == '}' {
+            return Err(TemplateError::new("stray `}` in template"));
+        } else {
+            out.push(c);
+        }
+    }
+
+    Ok(out)
+}
+
+/// Render one interpolation slot. Slot syntax: `function(argument)`
+/// or bare `argument` (which is shorthand for an implicit "identity"
+/// helper that formats the value with no extra processing).
+fn render_slot(
+    slot: &str,
+    bindings: &HashMap<String, ConstValue>,
+) -> Result<String, TemplateError> {
+    // Identity case: `{X}` — render the binding value with default format.
+    if !slot.contains('(') {
+        let val = bindings
+            .get(slot)
+            .ok_or_else(|| TemplateError::new(format!("no binding for `{}`", slot)))?;
+        return Ok(default_format(val));
+    }
+
+    // Function call: `func(arg)`
+    let open = slot.find('(').unwrap();
+    let close = slot
+        .rfind(')')
+        .ok_or_else(|| TemplateError::new(format!("unterminated `(` in `{}`", slot)))?;
+    if close <= open + 1 && close > 0 {
+        // `func()` is currently unsupported.
+        return Err(TemplateError::new(format!(
+            "function call must have one argument: `{}`", slot
+        )));
+    }
+    let func = slot[..open].trim();
+    let arg = slot[open + 1..close].trim();
+    let val = bindings.get(arg).ok_or_else(|| {
+        TemplateError::new(format!(
+            "no binding for argument `{}` in `{}({})`",
+            arg, func, arg
+        ))
+    })?;
+    dispatch_helper(func, val)
+}
+
+/// Default value formatter for the identity slot. Renders a
+/// ConstValue in a reasonable form for general-purpose templates.
+fn default_format(v: &ConstValue) -> String {
+    match v {
+        ConstValue::String(s) => s.clone(),
+        ConstValue::Integer(i) => i.to_string(),
+        ConstValue::Float(f) => trim_float(*f),
+        ConstValue::Voltage(v) => format!("{}V", trim_float(*v)),
+        ConstValue::Current(a) => format!("{}A", trim_float(*a)),
+        ConstValue::Resistance(r) => format!("{}", trim_float(*r)),
+        ConstValue::Capacitance(c) => format!("{}", trim_float(*c)),
+        ConstValue::Inductance(l) => format!("{}", trim_float(*l)),
+        ConstValue::Power(p) => format!("{}W", trim_float(*p)),
+        ConstValue::Frequency(hz) => format!("{}Hz", trim_float(*hz)),
+        ConstValue::Time(s) => format!("{}s", trim_float(*s)),
+        ConstValue::Bool(b) => b.to_string(),
+    }
+}
+
+/// Dispatch a helper-function call. The v0.2 helper library is fixed;
+/// extending it is a synthesizer change.
+fn dispatch_helper(func: &str, v: &ConstValue) -> Result<String, TemplateError> {
+    match func {
+        "v_short" => v_short(v),
+        "e96_code" => e_code(v, 3),
+        "e48_code" => e_code(v, 3),
+        "e24_code" => e_code(v, 2),
+        "e12_code" => e_code(v, 2),
+        "c_code" => c_code(v),
+        other => Err(TemplateError::new(format!(
+            "unknown template helper `{}`; v0.2 supports v_short, e96_code, e48_code, e24_code, e12_code, c_code",
+            other
+        ))),
+    }
+}
+
+// ─── Helper functions ───────────────────────────────────────────
+
+/// Voltage formatter: trims trailing zeros from the fractional part.
+/// `3.3V → "3.3"`, `5.0V → "5"`, `1.5V → "1.5"`. Used by fixed-V
+/// IC MPN templates like AP2112K-3.3TRG.
+fn v_short(v: &ConstValue) -> Result<String, TemplateError> {
+    match v {
+        ConstValue::Voltage(volts) => Ok(trim_float(*volts)),
+        other => Err(TemplateError::new(format!(
+            "v_short expects a Voltage, got {:?}",
+            other
+        ))),
+    }
+}
+
+/// EIA E-series resistor code. `n_digits` is the number of
+/// significant-digit characters: 3 for E96/E48 (e.g. "100" for
+/// 10k), 2 for E24/E12 (e.g. "10" for 10k). The decade suffix
+/// follows: a single digit for values ≥ 1Ω, or `R` followed by
+/// the fractional digits for values < 1Ω.
+///
+/// Examples (n_digits=3):
+///   10Ω   → "10R0"
+///   100Ω  → "1000"
+///   1kΩ   → "1001"
+///   4.7kΩ → "4701"
+///   10kΩ  → "1002"
+///   1MΩ   → "1004"
+fn e_code(v: &ConstValue, n_digits: usize) -> Result<String, TemplateError> {
+    let r = match v {
+        ConstValue::Resistance(r) => *r,
+        other => return Err(TemplateError::new(format!(
+            "e_code expects a Resistance, got {:?}",
+            other
+        ))),
+    };
+    if r <= 0.0 {
+        return Err(TemplateError::new("resistance must be positive"));
+    }
+    // Sub-ohm: use R-notation. e.g. 0.47Ω → "R47" (for 2-digit) or "R470".
+    if r < 1.0 {
+        let scaled = r * 10f64.powi(n_digits as i32);
+        let mantissa = scaled.round() as i64;
+        return Ok(format!("R{:0width$}", mantissa, width = n_digits));
+    }
+    // Standard form: mantissa + decade.
+    // For n_digits=3 (E96), mantissa is in [100, 999].
+    // For n_digits=2 (E24), mantissa is in [10, 99].
+    let target_mantissa_min = 10f64.powi(n_digits as i32 - 1);
+    let target_mantissa_max = 10f64.powi(n_digits as i32) - 1.0;
+    let mut decade = 0i32;
+    let mut m = r;
+    while m > target_mantissa_max + 1e-9 {
+        m /= 10.0;
+        decade += 1;
+    }
+    while m < target_mantissa_min - 1e-9 {
+        m *= 10.0;
+        decade -= 1;
+    }
+    let mantissa = m.round() as i64;
+    Ok(format!("{:0width$}{}", mantissa, decade, width = n_digits))
+}
+
+/// EIA-198 capacitance code. Two significant digits plus a single-
+/// digit decade representing the multiplier in picofarads.
+/// `100nF → "104"` (10 × 10⁴ pF = 100 nF).
+/// `10nF  → "103"` (10 × 10³ pF = 10 nF).
+/// `1µF   → "105"` (10 × 10⁵ pF = 1 µF).
+fn c_code(v: &ConstValue) -> Result<String, TemplateError> {
+    let c_f = match v {
+        ConstValue::Capacitance(c) => *c,
+        other => return Err(TemplateError::new(format!(
+            "c_code expects a Capacitance, got {:?}",
+            other
+        ))),
+    };
+    if c_f <= 0.0 {
+        return Err(TemplateError::new("capacitance must be positive"));
+    }
+    let pf = c_f * 1.0e12;
+    // Normalise to [10, 99] mantissa.
+    let mut decade = 0i32;
+    let mut m = pf;
+    while m > 99.0 + 1e-9 {
+        m /= 10.0;
+        decade += 1;
+    }
+    while m < 10.0 - 1e-9 {
+        m *= 10.0;
+        decade -= 1;
+    }
+    let mantissa = m.round() as i64;
+    Ok(format!("{:02}{}", mantissa, decade.max(0)))
+}
+
+/// Trim trailing zeros (and a dangling `.`) from a float's
+/// default `{}` rendering. `3.0 → "3"`, `3.3 → "3.3"`,
+/// `10.000 → "10"`, `0.5 → "0.5"`.
+fn trim_float(f: f64) -> String {
+    let mut s = format!("{:.6}", f);
+    if s.contains('.') {
+        while s.ends_with('0') { s.pop(); }
+        if s.ends_with('.') { s.pop(); }
+    }
+    s
+}
+
+#[cfg(test)]
+mod template_tests {
+    use super::*;
+
+    fn binds(pairs: &[(&str, ConstValue)]) -> HashMap<String, ConstValue> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+    }
+
+    #[test]
+    fn v_short_basic() {
+        let b = binds(&[("V", ConstValue::Voltage(3.3))]);
+        assert_eq!(render_template("{v_short(V)}", &b).unwrap(), "3.3");
+        let b = binds(&[("V", ConstValue::Voltage(5.0))]);
+        assert_eq!(render_template("{v_short(V)}", &b).unwrap(), "5");
+        let b = binds(&[("V", ConstValue::Voltage(1.5))]);
+        assert_eq!(render_template("{v_short(V)}", &b).unwrap(), "1.5");
+    }
+
+    #[test]
+    fn e96_code_typical() {
+        // 100Ω → "1000"
+        let b = binds(&[("R", ConstValue::Resistance(100.0))]);
+        assert_eq!(render_template("{e96_code(R)}", &b).unwrap(), "1000");
+        // 1kΩ → "1001"
+        let b = binds(&[("R", ConstValue::Resistance(1_000.0))]);
+        assert_eq!(render_template("{e96_code(R)}", &b).unwrap(), "1001");
+        // 10kΩ → "1002"
+        let b = binds(&[("R", ConstValue::Resistance(10_000.0))]);
+        assert_eq!(render_template("{e96_code(R)}", &b).unwrap(), "1002");
+        // 4.7kΩ → "4701"
+        let b = binds(&[("R", ConstValue::Resistance(4_700.0))]);
+        assert_eq!(render_template("{e96_code(R)}", &b).unwrap(), "4701");
+        // 1MΩ → "1004"
+        let b = binds(&[("R", ConstValue::Resistance(1_000_000.0))]);
+        assert_eq!(render_template("{e96_code(R)}", &b).unwrap(), "1004");
+    }
+
+    #[test]
+    fn e96_code_sub_ohm() {
+        // 0.47Ω → "R470" (n_digits=3)
+        let b = binds(&[("R", ConstValue::Resistance(0.47))]);
+        assert_eq!(render_template("{e96_code(R)}", &b).unwrap(), "R470");
+    }
+
+    #[test]
+    fn c_code_typical() {
+        // 100 nF → "104" (10 × 10⁴ pF)
+        let b = binds(&[("C", ConstValue::Capacitance(100e-9))]);
+        assert_eq!(render_template("{c_code(C)}", &b).unwrap(), "104");
+        // 10 nF → "103"
+        let b = binds(&[("C", ConstValue::Capacitance(10e-9))]);
+        assert_eq!(render_template("{c_code(C)}", &b).unwrap(), "103");
+        // 1 µF → "105"
+        let b = binds(&[("C", ConstValue::Capacitance(1e-6))]);
+        assert_eq!(render_template("{c_code(C)}", &b).unwrap(), "105");
+    }
+
+    #[test]
+    fn full_yageo_template() {
+        let b = binds(&[("R", ConstValue::Resistance(10_000.0))]);
+        let out = render_template("RC0603FR-07{e96_code(R)}L", &b).unwrap();
+        assert_eq!(out, "RC0603FR-071002L");
+    }
+
+    #[test]
+    fn full_ap2112k_template() {
+        let b = binds(&[("V_OUT", ConstValue::Voltage(3.3))]);
+        let out = render_template("AP2112K-{v_short(V_OUT)}TRG", &b).unwrap();
+        assert_eq!(out, "AP2112K-3.3TRG");
+    }
+
+    #[test]
+    fn full_murata_template() {
+        let b = binds(&[("C", ConstValue::Capacitance(100e-9))]);
+        let out = render_template("GRM188R71H{c_code(C)}KA01D", &b).unwrap();
+        assert_eq!(out, "GRM188R71H104KA01D");
+    }
+
+    #[test]
+    fn unknown_helper_errors() {
+        let b = binds(&[("R", ConstValue::Resistance(1.0))]);
+        assert!(render_template("{flubber(R)}", &b).is_err());
+    }
+
+    #[test]
+    fn missing_binding_errors() {
+        let b: HashMap<String, ConstValue> = HashMap::new();
+        assert!(render_template("{e96_code(R)}", &b).is_err());
+    }
+
+    #[test]
+    fn unterminated_slot_errors() {
+        let b: HashMap<String, ConstValue> = HashMap::new();
+        assert!(render_template("RC0603FR-07{e96_code(R", &b).is_err());
+    }
+}
