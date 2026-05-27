@@ -1,14 +1,22 @@
 # Parameterization and BOM Resolution
 
-> **Status:** Proposal v0.1. Scope: the three-form argument model
-> (generic / runtime / intent), how virtual pins and design blocks
-> participate, and the pipeline that turns parametric BHDL into a
-> deterministic BOM.
+> **Status:** Proposal v0.2. Scope: the three-form argument model
+> (generic / runtime / intent), the three-layer **entity / class /
+> part** model with first-class `part_family` catalog declarations,
+> and the user-supplied **plugin protocol** that owns stocking and
+> selection.
 >
-> Out of scope for v0.1: the **cost function** itself (what makes one
-> Yageo 10k preferable to a Panasonic 10k on a given board), board-
-> level `bom_preferences { }` syntax beyond the headline shape, and
-> the format of the part database the SKU resolver queries.
+> Changes from v0.1 (committed as `9ee7216`):
+> - **Three-layer model** (entity / class / part) supersedes the
+>   per-entity `resolution = "class" | "specific"` flag. The flag is
+>   removed; resolution kind falls out structurally from how many
+>   `part_family` declarations populate a class.
+> - **`mpn_template`** moves off entities and onto `part_family`
+>   declarations.
+> - **Stocking is out of BHDL.** A user-supplied plugin (JSON stdin/
+>   stdout) owns stock, price, lead time, and vendor SKU lookup.
+>   BHDL emits "what's possible"; the plugin returns "what to buy."
+> - New **Pass 4.5 (catalog scan)** sits between expansion and BOM.
 
 ## 1. Motivation
 
@@ -24,22 +32,34 @@ parts belongs in a type position — not as a free-form attribute string
 parsed at run time, and not as a runtime constructor argument that
 makes two physically different parts share an entity.
 
+But the language must also acknowledge a second reality: passives
+exist in tens of thousands of MPNs that are *vendor-substitutable for
+the same design intent*. A board specifying "10 kΩ 1 % 0603" should
+pick *one* MPN per board (so manufacturing loads one reel), but
+*which* MPN — Yageo, Panasonic, AVX, an in-house preferred-vendor
+part — depends on the user's purchasing context, not on the design.
+
 This document defines:
 
-1. **Three argument forms**, one per scenario, with no overloading.
-2. **Class vs. specific resolution** — whether a fully-monomorphised
-   entity name is already an MPN or still names an equivalence class
-   the BOM layer must narrow.
-3. **Virtual pins, `design` blocks, and `design for INTENT` blocks** —
-   how computed values inside an entity feed the generics of its
-   internal children.
-4. **The synthesis pipeline** — the four passes that take a parametric
-   board description and produce a deterministic, MPN-resolved BOM.
+1. **Three argument forms** (§2), one per scenario, with no overloading.
+2. **The entity / class / part model** (§3) — a parametric entity
+   generates classes; classes are populated by zero or more
+   `part_family` declarations; each `part_family` is a parametric
+   generator of parts (orderable MPNs).
+3. **`part_family` declarations** (§4) — catalog grammar, semantics,
+   value-range constraints (`require R in E96(…)`).
+4. **Virtual pins and `design` blocks** (§5) — how computed values
+   inside an entity feed the generics of its internal children.
+5. **The synthesis pipeline** (§6) — five passes that take a
+   parametric board to a candidate-MPN list ready for the plugin.
+6. **The plugin protocol** (§7) — JSON stdin/stdout interface that
+   the user supplies for stocking, selection, and vendor SKU
+   mapping. BHDL ships a default deterministic plugin.
 
-The model deliberately mirrors how a human electrical engineer
-reasons: *here's the part I picked, configure it*; *here's a
-requirement, you pick the part*; *here's an equivalence class, the
-purchasing layer picks the SKU*.
+The model deliberately mirrors how an electrical engineer thinks:
+*here's the part I picked, configure it*; *here's a requirement, you
+pick the part*; *here's an equivalence class, the purchasing layer
+picks the SKU*. And the purchasing layer is **not** BHDL.
 
 ## 2. The three argument forms
 
@@ -59,13 +79,12 @@ entity Resistor<
     attribute resistance      = R;
     attribute tolerance       = TOL;
     attribute package         = PKG;
-    attribute resolution      = "class";
 }
 ```
 
-- Every distinct generic tuple monomorphises to a distinct entity:
+- Every distinct generic tuple monomorphises to a distinct class:
   `Resistor<10kΩ, 1%, "0603">` and `Resistor<10kΩ, 5%, "0603">` are
-  *different* entities post-mono, with different mangled names.
+  *different classes* post-mono, with different mangled names.
 - Default values fill in unspecified positions: `Resistor<10kΩ>`
   expands to `Resistor<10kΩ, 5%, "0603">`.
 
@@ -94,9 +113,6 @@ entity LM317(v_out: voltage = 5V) {
     pin ADJ:  feedback in;
     pin GND:  ground;
 
-    attribute resolution = "specific";
-    attribute mpn        = "LM317T";
-
     design {
         const v_ref = 1.25;
         require v_out >= v_ref + 0.1
@@ -114,10 +130,10 @@ entity LM317(v_out: voltage = 5V) {
 }
 ```
 
-- `LM317T` is one MPN regardless of `v_out`. `v_out` is therefore
+- LM317T is one MPN regardless of `v_out`. `v_out` is therefore
   **not** generic. It's a runtime parameter.
-- The `design { }` block runs the Rhai body to derive `r1_value` and
-  `r2_value`. Those flow into the **generics** of the internal
+- The `design { }` block runs the Rhai body to derive `r1_value`
+  and `r2_value`. Those flow into the **generics** of the internal
   `Resistor<…>` instances. The mono pass then specialises those.
 - A runtime parameter's value **must be resolvable at synthesis
   time** — it's a compile-time constant in the BHDL sense, not a
@@ -127,35 +143,27 @@ entity LM317(v_out: voltage = 5V) {
 ### 2.3 Intent attachment — `for INTENT(…)`
 
 Used when the **implementation is not chosen yet**. The user declares
-a *requirement* against a net (or, more rarely, an instance) and a
-late binding pass picks an entity from the candidate set whose
-`design for INTENT { }` block can fulfil it.
+a *requirement* against a net and a late binding pass picks an
+entity from the candidate set whose `design for INTENT { }` block
+can fulfil it.
 
 ```bhdl
 // User: "I need a 3.3V rail somehow."
 @VCC_3V3 for voltage_regulator(v_in: 5V, v_out: 3.3V, i_max: 500mA);
-
-// Matcher considers all entities with `design for voltage_regulator`:
-//   - AP2112K<3.3V>           (fixed-V LDO)
-//   - LM317                   (adjustable LDO)
-//   - BuckRegulator<3.3V>     (switching)
-//   - …
-// It picks the best fit by some policy (efficiency, cost, board area).
 ```
 
-Each candidate entity carries a `design for INTENT { }` block whose
-Rhai body computes its parameters from the intent's `intent.*` fields.
-This is the form already used in the current stdlib for
-`design for current_source { }` and `design for amplifier { }`.
+The intent matcher considers all entities with `design for
+voltage_regulator { }`, picks one by policy (efficiency, cost,
+board area), and emits the picked entity bound to the net.
 
-**Critical distinction**: once the user writes `LM317(v_out: 5V)`
+**Critical distinction**: once the user writes `LM317(v_out: 5V)`,
 they have *already chosen* the part. The `for voltage_regulator(…)`
 form is **wrong** for that case — it would be expressing a
 requirement against an entity that has already committed to an
 implementation. Use `(…)` for "I picked it, configure it"; use
 `for INTENT(…)` for "you pick it."
 
-### 2.4 Summary table
+### 2.4 Summary
 
 | Form | When | Resolves at | Example |
 |---|---|---|---|
@@ -163,101 +171,239 @@ implementation. Use `(…)` for "I picked it, configure it"; use
 | `Entity(p1, p2, …)` | Same-part configuration | Designer Rhai, then mono on internals | `LM317(v_out: 5V)` |
 | `@net for INTENT(…)` | Abstract requirement; impl not chosen | Intent matcher → designer → mono | `@VCC for voltage_regulator(...)` |
 
-These three forms compose cleanly:
+## 3. Entity, class, part — the three-layer model
 
-```bhdl
-// Generic + runtime in one entity.
-LDO: SomeFamily<V_VARIANT: voltage>(trim: percentage = 0%)(...) { … }
+After monomorphisation, every parametric instance lands somewhere in
+a three-layer hierarchy:
 
-// Use site: choose the variant, configure the trim.
-RAIL: SomeFamily<3.3V>(trim: 1%);
-```
+| Layer | What it is | Source | Example |
+|---|---|---|---|
+| **Entity** | Parametric template, no bound generics | BHDL `entity` decl | `Resistor<R, TOL, PKG>` |
+| **Class** | Bound-generic identity — the equivalence class a design names | Synthesised from entity + bound generics | `Resistor<10kΩ, 1%, "0603">` |
+| **Part family** | Parametric *generator* of MPNs within one or more classes | BHDL `part_family` decl | `Yageo_RC0603FR_07` |
+| **Part (MPN)** | Concrete orderable item — what appears on the BOM | Expanded from `part_family` at catalog-scan time | `RC0603FR-0710KL` |
 
-## 3. Class vs. specific resolution
+### 3.1 Where each layer lives
 
-After monomorphisation, an entity name is either:
+- **Entities** live in `bhdl-stdlib/<category>/<entity>.bhdl`. They
+  describe what a kind of part *is*: its pin set, its electrical
+  attributes, its parametric axes. They carry **no MPN information**.
 
-| `resolution` | Meaning | What follows |
+- **Classes** are not source-level. They emerge as a side-effect of
+  monomorphising entity instances against their generics. The mono
+  pass's mangled name *is* the class identity.
+
+- **Part families** live in `bhdl-stdlib/parts/<manufacturer>/`
+  (or in a project's own `parts/` for user-specific catalogs). They
+  declare which classes a manufacturer's product family populates,
+  and how to derive concrete MPNs from class generics.
+
+- **Parts** are not source-level. They are produced at catalog-scan
+  time by expanding `part_family` templates against the concrete
+  generic tuples found in the design. Their identity is the MPN
+  string.
+
+### 3.2 Why the layering replaces the `resolution` flag
+
+v0.1 carried `attribute resolution = "class" | "specific"` per
+entity. v0.2 drops it. The distinction *still exists* but is now
+**structural** rather than declarative:
+
+| Catalog-scan finds… | What it means | What was called this in v0.1 |
 |---|---|---|
-| `"specific"` | Name **is** the orderable part — MPN derives mechanically | Nothing; BOM line written |
-| `"class"` | Name is an equivalence class; many MPNs satisfy it | Cost-function pass picks one MPN |
+| Multiple `part_family` matches | Real equivalence class (e.g. a 10k 1% 0603) | `"class"` |
+| One `part_family` match, parametric template | Mechanically-named part family (e.g. AP2112K-V variants) | `"specific"` (template form) |
+| One `part_family` match, literal MPN | Family of one (e.g. LM317T) | `"specific"` (literal form) |
+| Zero matches | Catalog gap; BOM pass errors with the class identity | n/a (was a compile-time error in v0.1 too) |
 
-This split exists because most ICs collapse to a single MPN per
-generic tuple (`AP2112K<3.3V>` ↔ `AP2112K-3.3TRG`), while passives
-have thousands of pin-and-spec compatible MPNs across vendors.
+The synthesizer no longer has to look at a flag on the entity — it
+counts the matches. Adding a new manufacturer's resistor line later
+*automatically* turns more catalog rows into candidates for the
+existing 10kΩ 1% 0603 class, without touching the `Resistor` entity.
 
-### 3.1 Specific entities
+### 3.3 Why this scales
 
-A `"specific"` entity declares its MPN — either as a literal, or via
-a template string interpolating its generic parameters:
+The original concern that drove the v0.1 part-DB sketch was: there
+are tens of thousands of resistor MPNs in the wild; you can't have
+a `.bhdl` per MPN.
+
+The three-layer model resolves this. The thousands collapse into:
+
+- **One entity** per axis schema (`Resistor<R, TOL, PKG>`) — a few
+  files in stdlib.
+- **A few hundred classes per design** (every distinct generic
+  tuple the design uses) — synthesised, not source.
+- **A few hundred `part_family` declarations per stdlib** —
+  manageable to write by hand or generate from manufacturer CSVs.
+- **Concrete parts** emerge at catalog-scan time from family
+  expansion; no per-MPN source files.
+
+The N×M explosion of "every MPN in the world" collapses to N
+entities + M part families, where N and M are both ~hundreds.
+
+## 4. `part_family` declarations
+
+A `part_family` is a parametric generator of MPNs that populates one
+or more classes. Its job is to bridge between BHDL's type-level part
+identity (class) and the manufacturer's orderable identity (MPN).
+
+### 4.1 Grammar
+
+```ebnf
+part_family_decl :=
+    "part_family" IDENT class_pattern "{"
+        constraints
+        attributes
+    "}"
+
+class_pattern :=
+    ":" entity_name "<" generic_args ">"     // e.g. ": Resistor<*, '1%', '0603'>"
+
+generic_args :=
+    generic_arg ("," generic_arg)*
+
+generic_arg :=
+    IDENT ":" "*"          // unbound (wildcard) — narrowed by `require`
+  | IDENT ":" const_value  // bound to a specific value
+  | const_value            // positional shorthand
+  | "*"                    // positional wildcard
+
+constraints :=
+    ("require" expr ("else" string_literal)? ";")*
+
+attributes :=
+    ("attribute" IDENT "=" expr ";")*
+```
+
+`*` in the `class_pattern` means "any value of this generic." A
+`require` clause narrows it.
+
+### 4.2 Examples
+
+**Yageo's 1% 0603 thick-film resistors** — populates many resistor
+classes (every E96 value × 7 decades):
 
 ```bhdl
-entity AP2112K<V_OUT: voltage>() {
-    attribute resolution   = "specific";
-    attribute mpn_template = "AP2112K-{V_OUT_short}TRG";
-    // … pins, attributes, etc.
+part_family Yageo_RC0603FR_07 : Resistor<R: *, "1%", "0603"> {
+    require R in E96(1Ω, 10MΩ);
+
+    attribute manufacturer  = "Yageo";
+    attribute mpn_template  = "RC0603FR-07{e96_code(R)}L";
+    attribute datasheet     = "https://www.yageo.com/.../RC_thick_film.pdf";
+    attribute tc_ppm        = 100;
+    attribute power_w       = 0.1;
 }
 ```
 
-`{V_OUT_short}` is a derived form (3.3 → "3.3", written without
-trailing zeros). The template syntax is intentionally narrow: only
-literal interpolation of generic-param values, no logic. Anything
-that needs branching belongs in a `design { }` block, not in MPN
-derivation.
-
-> **Caveat — known limitation of templates.** Real manufacturer MPN
-> naming is wildly inconsistent (AP2112K uses "3.3"; Murata caps use
-> "3V3"; some TI parts use "33"; some encode tolerance via a middle-
-> letter in the MPN). String interpolation works for the clean ~70 %
-> of ICs and will fail on the messy long tail. v0.2 adds a Rhai
-> callback (`fn derive_mpn(generic_values) -> string`) for the rest.
-> See §8 for the full evolution note. v0.1 ships templates only.
-
-Adjustable parts like LM317 take the literal form:
+**Diodes Inc's AP2112K family** — fixed-V LDOs in SOT-25, one MPN
+per voltage variant:
 
 ```bhdl
-attribute resolution = "specific";
-attribute mpn        = "LM317T";
-```
+part_family Diodes_AP2112K : AP2112K<V_OUT: *> {
+    require V_OUT in { 1.5V, 1.8V, 2.5V, 2.6V, 2.7V, 2.8V, 3.0V, 3.3V, 5.0V };
 
-### 3.2 Class entities
-
-A `"class"` entity leaves the MPN unset and lets the BOM layer
-choose. The cost function looks at:
-
-- All MPNs in the part database whose attributes satisfy the
-  monomorphised entity's generics (`R == 10kΩ ± TOL`, `PKG == "0603"`,
-  etc.).
-- Stock-on-hand, price, lead time, vendor preference.
-- Per-board overrides in `bom_preferences { }`.
-
-It picks one winner per `(class, board)` pair — never one winner per
-*instance*, because a board with 30 instances of `Resistor<10kΩ, 1%,
-"0603">` should not order 30 different reels of equivalent parts.
-
-### 3.3 Board-level overrides
-
-Boards can pin or hint MPN selection:
-
-```bhdl
-board MyBoard {
-    bom_preferences {
-        Resistor<10kΩ, 1%, "0603">    pin "Yageo:RC0603FR-0710KL";
-        Resistor<*, *, "0603">        prefer_vendor "Panasonic";
-        Capacitor<*, *, "X7R", *>     prefer_vendor "Murata";
-    }
-    // … instances …
+    attribute manufacturer  = "Diodes Incorporated";
+    attribute mpn_template  = "AP2112K-{v_short(V_OUT)}TRG";
+    attribute datasheet     = "https://www.diodes.com/.../AP2112.pdf";
+    attribute package_real  = "SOT-25";
 }
 ```
 
-`pin` is a hard binding (cost function must use the named MPN or
-fail). `prefer_vendor` is a soft hint (used only as a tiebreaker).
-The `*` wildcards in the LHS keys are placeholders for "any value of
-this generic"; full syntax is left for v0.2.
+**LM317T** — adjustable LDO, family of one with a literal MPN:
 
-## 4. Virtual pins and `design` blocks
+```bhdl
+part_family TI_LM317T : LM317 {
+    attribute manufacturer = "Texas Instruments";
+    attribute mpn          = "LM317T";   // literal; no template
+    attribute datasheet    = "https://...";
+    attribute package_real = "TO-220";
+}
+```
 
-### 4.1 Virtual pins declare an expansion contract
+**Murata's GRM21 X7R 0805 cap line** — populates capacitor classes
+across capacitance × voltage:
+
+```bhdl
+part_family Murata_GRM21BR71 : Capacitor<C: *, V: *, "X7R", "0805"> {
+    require V in { 10V, 16V, 25V, 50V };
+    require C in E12(1nF, 10µF);
+
+    attribute manufacturer  = "Murata";
+    attribute mpn_template  = "GRM21BR71{v_code(V)}{c_code(C)}KA01L";
+    attribute datasheet     = "https://...";
+    attribute dielectric    = "X7R";
+}
+```
+
+### 4.3 Value-range constraints
+
+The `require` clause supports common forms used in catalogs:
+
+- **E-series membership** — `R in E12(...)`, `R in E24(...)`,
+  `R in E48(...)`, `R in E96(...)`, `R in E192(...)`. Standard EIA
+  values; the synthesizer knows the tables.
+- **Range** — `R >= 1Ω`, `R <= 10MΩ`, `R in (1Ω..10MΩ)`.
+- **Enumeration** — `V_OUT in { 1.5V, 1.8V, 2.5V, … }`. Discrete set.
+- **Composite** — boolean combinations: `require (R in E96 && R in (1Ω..10MΩ)) || R == 0Ω;` (jumper-resistor exception).
+
+If a `require` fails for a particular class's generic tuple, that
+family does **not** match — the catalog scan moves on. No error is
+raised; the absence of a match is just the absence of a candidate.
+An error only emerges if *no* family matches the class at all.
+
+### 4.4 The `mpn_template` mini-language
+
+`mpn_template` is a string-interpolation template. Interpolation
+slots take the form `{expr}` where `expr` is a small language of
+named functions over generic-parameter values:
+
+| Function | Purpose | Example |
+|---|---|---|
+| `e96_code(R)` | EIA E96 3-digit value-code (e.g. 1002 for 10k) | `{e96_code(R)}` → `"1002"` |
+| `e24_code(R)` | EIA E24 2-digit code | |
+| `v_short(V)` | Voltage as "3.3", "5.0", etc. (no trailing zero rules per fn) | `{v_short(V_OUT)}` → `"3.3"` |
+| `v_code(V)` | Manufacturer-specific voltage codes (lookup table) | `{v_code(V)}` → `"1H"` for 50V Murata |
+| `c_code(C)` | Capacitance codes per EIA-198 (3-digit + multiplier) | `{c_code(100nF)}` → `"104"` |
+| Identity | Raw value as default-formatted | `{V}` → `"3.3V"` |
+
+The function set is fixed in v0.2. v0.3 will allow user-defined
+helper functions in BHDL's Rhai scope so manufacturer-specific
+codings can be expressed without a synthesizer change.
+
+### 4.5 Multiple families per class is the normal case
+
+A class like `Resistor<10kΩ, 1%, "0603">` will typically be matched
+by 5–20 part families (Yageo, Panasonic, AVX, Vishay, Bourns, …).
+Catalog scan returns *all* matches as candidates; the plugin picks
+one. The user's plugin is where company-specific preferences,
+stock, and pricing enter the decision.
+
+### 4.6 User-extensible catalogs
+
+`part_family` is a top-level construct that can appear in user
+projects, not just stdlib. A company that buys bulk-priced Bourns
+reels can ship its own catalog:
+
+```bhdl
+// In acme-corp/parts/bourns_avl.bhdl — Acme Corp's approved Bourns
+// resistor line (negotiated reel pricing).
+part_family Acme_Bourns_CR0603 : Resistor<R: *, "1%", "0603"> {
+    require R in E96(10Ω, 1MΩ);
+    attribute manufacturer  = "Bourns";
+    attribute mpn_template  = "CR0603-FX-{e96_code(R)}ELF";
+    attribute avl_status    = "preferred";   // hint to the plugin
+    attribute internal_pn   = "Acme:RES-{e96_code(R)}-0603-1P";
+}
+```
+
+The user's plugin reads the `avl_status = "preferred"` attribute
+and prioritises this family over the stdlib's generic Yageo/Panasonic
+matches. The attribute is opaque to the synthesizer — it's plugin
+metadata that rides along in the candidate list.
+
+## 5. Virtual pins and `design` blocks
+
+### 5.1 Virtual pins declare an expansion contract
 
 A pin marked `virtual` is *not* a physical pad on the part. It is an
 expansion point where synthesis materialises supporting components
@@ -275,26 +421,23 @@ instantiates the entity without supplying `v_out` (and there's no
 default), the analyzer rejects the program *at type-check time*,
 before any Rhai runs.
 
-### 4.2 Two flavours of `design` block
+### 5.2 Two flavours of `design` block
 
 | Form | Purpose | When the body runs |
 |---|---|---|
 | `design { … }` | Plain runtime computation (scenario A) | Once per instance, after constructor binding |
 | `design for INTENT { … }` | Intent matcher (scenario B) | Once per intent attachment that picks this entity |
 
-Both flavours have the same Rhai surface — they read inputs, write
-outputs, may emit `require` diagnostics. The difference is the input
-namespace:
+Both flavours have the same Rhai surface. The difference is the
+input namespace:
 
 - `design { }` reads from `self.*` (runtime params + generics).
 - `design for INTENT { }` reads from `self.*` **and** `intent.*`
   (the requirement that matched this candidate).
 
-An entity may have both — a `design { }` for the always-on
-configuration computation, plus `design for INTENT { }` blocks for
-each intent it can fulfil.
+An entity may have both.
 
-### 4.3 How values flow into expansion
+### 5.3 How values flow into expansion
 
 The `design` block writes locals (`r1_value`, `c_out_value`, …). The
 `expansion { }` block references those locals in generic-parameter
@@ -313,10 +456,7 @@ the expansion produces concrete generic tuples on the internal
 components — and those flow into the monomorphisation pass like any
 other generic.
 
-## 5. The synthesis pipeline
-
-After parsing and type-checking, four passes lower a parametric
-board to a deterministic, MPN-resolved BOM:
+## 6. The synthesis pipeline
 
 ```
 ┌──────────────────────┐
@@ -344,29 +484,275 @@ board to a deterministic, MPN-resolved BOM:
             ▼
 ┌──────────────────────┐
 │  4. Monomorphization │  walk the now-flat tree; for each parametric
-│                      │  entity, emit one specialised copy per distinct
-│                      │  generic tuple. Deterministic mangled names.
+│                      │  entity, emit one specialised class per
+│                      │  distinct generic tuple. Deterministic
+│                      │  mangled names.
 └──────────────────────┘
             │
             ▼
 ┌──────────────────────┐
-│  5. BOM resolution   │  for each specialised entity:
-│                      │   - `resolution = "specific"` → derive MPN from
-│                      │     `mpn_template` or `mpn` literal.
-│                      │   - `resolution = "class"`    → cost function
-│                      │     picks one MPN per (class, board).
+│  4.5 Catalog scan    │  for each class produced by pass 4, walk all
+│       (NEW in v0.2)  │  `part_family` declarations and find those
+│                      │  whose class_pattern matches and whose
+│                      │  `require` clauses are satisfied. For each
+│                      │  match, expand `mpn_template` against the
+│                      │  class's generic values to produce candidate
+│                      │  MPNs. Bundle: { class, instances, candidates }.
+└──────────────────────┘
+            │
+            ▼
+┌──────────────────────┐
+│  5. Plugin BOM       │  serialise the candidate-bundle list to JSON,
+│       resolution     │  invoke the user's plugin via stdin/stdout,
+│   (REWRITTEN v0.2)   │  parse the plugin's selections, write the
+│                      │  final BOM with vendor SKUs.
 └──────────────────────┘
 ```
 
-Pass 4 (monomorphization) already exists in
-`bhdl-analyzer/src/passes/monomorphization.rs` and handles `<…>`
-specialisation correctly. Passes 1–3 are partially implemented
-(intent matcher exists for current_source / amplifier; designer
-Rhai exists; expansion exists). Pass 5 is greenfield.
+Passes 1–4 already exist in `bhdl-analyzer` (intent matcher and
+designer for `current_source` / `amplifier`; full mono pass at
+`bhdl-analyzer/src/passes/monomorphization.rs`). Pass 4.5 and the
+revised Pass 5 are greenfield.
 
-## 6. Examples end-to-end
+Pass 4.5 is **pure deterministic source-language traversal** — no
+I/O, no network, no plugin involvement. It produces a JSON document
+that can be persisted, diffed, or reviewed independently of the
+plugin step. This separation matters: catalog scan results are
+reproducible and source-controllable; only the plugin step is
+context-dependent.
 
-### 6.1 Fixed-V LDO (specific, generic on V_OUT)
+## 7. The plugin protocol
+
+### 7.1 Why plugin
+
+Stocking is a user-process concern, not a language concern:
+
+- **Hobbyist** — Digi-Key / Mouser personal accounts, cost-optimised.
+- **Company** — approved-vendor list, internal SAP stock, contract
+  pricing.
+- **Contract manufacturer** — their own preferred-parts library.
+- **Air-gapped** — local CSV of pre-approved parts, no network.
+
+Baking any of these into BHDL would lock out the others. The plugin
+boundary makes BHDL portable; the plugin owns the messy real-world
+data integration.
+
+### 7.2 The contract
+
+A plugin is **any executable** that:
+
+1. Reads a JSON document from stdin (the candidate bundle).
+2. Writes a JSON document to stdout (the selections).
+3. Exits with status 0 on success, non-zero on error.
+
+Stderr is free for the plugin's logging; BHDL surfaces it on
+failure but otherwise passes it through to the user's terminal.
+
+This is language-agnostic — plugins can be Bash scripts, Python
+programs, compiled Rust binaries, anything that can read stdin and
+write stdout.
+
+### 7.3 Input schema (BHDL → plugin)
+
+```json
+{
+  "bhdl_version": "0.2",
+  "protocol_version": "1",
+  "board": "MyBoard",
+  "policy_hints": {
+    "currency": "USD",
+    "manufacturing_location": "US"
+  },
+  "selections_needed": [
+    {
+      "class": "Resistor",
+      "generics": {
+        "R": "10kΩ",
+        "TOL": "1%",
+        "PKG": "0603"
+      },
+      "instance_count": 4,
+      "instances": ["R1", "R5", "R12", "R23"],
+      "candidates": [
+        {
+          "family": "Yageo_RC0603FR_07",
+          "mpn": "RC0603FR-0710KL",
+          "manufacturer": "Yageo",
+          "attributes": {
+            "datasheet": "https://...",
+            "tc_ppm": 100,
+            "power_w": 0.1
+          }
+        },
+        {
+          "family": "Panasonic_ERJ_3EK",
+          "mpn": "ERJ-3EKF1002V",
+          "manufacturer": "Panasonic",
+          "attributes": { "datasheet": "https://...", "tc_ppm": 100, "power_w": 0.1 }
+        },
+        {
+          "family": "Acme_Bourns_CR0603",
+          "mpn": "CR0603-FX-1002ELF",
+          "manufacturer": "Bourns",
+          "attributes": { "avl_status": "preferred", "internal_pn": "Acme:RES-1002-0603-1P" }
+        }
+      ]
+    }
+  ]
+}
+```
+
+`policy_hints` carries user-supplied policy that BHDL doesn't
+interpret but the plugin may want (preferred currency, manufacturing
+location for region-restricted parts, etc.). Per-board hints live in
+the board declaration:
+
+```bhdl
+board MyBoard {
+    bom_policy {
+        currency = "USD";
+        manufacturing_location = "US";
+    }
+    // … instances …
+}
+```
+
+### 7.4 Output schema (plugin → BHDL)
+
+```json
+{
+  "protocol_version": "1",
+  "selections": [
+    {
+      "class_index": 0,
+      "mpn": "RC0603FR-0710KL",
+      "manufacturer": "Yageo",
+      "vendor": "Digi-Key",
+      "vendor_sku": "311-10.0KHRCT-ND",
+      "qty": 4,
+      "unit_price": 0.0042,
+      "currency": "USD",
+      "stock": 4329,
+      "lead_time_weeks": 0,
+      "note": "lowest in-stock matching class"
+    }
+  ],
+  "warnings": [
+    "C5 (Capacitor<470µF, 20%, electrolytic, '8x10mm'>): only one candidate; consider second-sourcing"
+  ]
+}
+```
+
+- `class_index` references `selections_needed[i]` in the input.
+- All fields after `mpn` and `manufacturer` are optional. A minimal
+  plugin (the default) returns just MPN + manufacturer; richer
+  plugins fill in vendor SKU, stock, pricing.
+- `warnings[]` is plugin-emitted free-form text; BHDL prints it
+  alongside the BOM.
+
+### 7.5 Errors
+
+A plugin returns an error per-class by replacing the selection object
+with an error object:
+
+```json
+{
+  "selections": [
+    {
+      "class_index": 1,
+      "error": "no_stock",
+      "message": "All candidate MPNs for Capacitor<470µF, 20%, electrolytic, '8x10mm'> are out of stock"
+    }
+  ]
+}
+```
+
+BHDL surfaces these as `BomError::PluginRejected { class, message }`
+diagnostics referencing the affected refdes(es). The user can:
+
+- Adjust the design (pick a different value, look up alternatives).
+- Add a `bom_preferences { pin … }` override (§7.7) that bypasses
+  the plugin for the affected class.
+- Retry later (if `no_stock` is transient).
+
+If the plugin exits non-zero before returning JSON, BHDL treats it
+as a fatal error with the captured stderr.
+
+### 7.6 Selecting the plugin
+
+Per-project, in `bhdl.toml`:
+
+```toml
+[bom]
+plugin = "bhdl-plugin-digikey"     # or a path: "./tools/select_parts.py"
+plugin_args = ["--prefer-jit", "--max-lead-weeks", "4"]
+```
+
+Per-board overrides:
+
+```bhdl
+board MyBoard {
+    bom_policy {
+        plugin = "./scripts/avl_select.py";
+    }
+    // … instances …
+}
+```
+
+If no plugin is configured, BHDL invokes the **default plugin**.
+
+### 7.7 The default plugin
+
+Ships with BHDL. Deterministic, no network access:
+
+1. For each class, pick the first candidate alphabetically by
+   `(manufacturer, mpn)`.
+2. Set `qty` from `instance_count`.
+3. Leave `vendor`, `vendor_sku`, `unit_price`, `stock`,
+   `lead_time_weeks` unset.
+
+Out-of-the-box, every BHDL project produces a valid BOM (MPNs only,
+no sourcing info). Serious users plug in their own.
+
+### 7.8 Board-level overrides
+
+Sometimes the user wants to *bypass* the plugin for a specific class:
+
+```bhdl
+board MyBoard {
+    bom_preferences {
+        // Hard pin: ignore the plugin's candidates, use this MPN.
+        Resistor<10kΩ, 1%, "0603">  pin "Yageo:RC0603FR-0710KL";
+
+        // Soft hint: passes through to the plugin as a policy hint.
+        Resistor<*, *, "0603">      prefer_vendor "Panasonic";
+    }
+    // … instances …
+}
+```
+
+- `pin` is enforced *before* the plugin sees the candidates: the
+  candidate list is filtered to just the pinned MPN. If that MPN
+  isn't in the candidate list (typo, wrong package), BHDL fails
+  with `BomError::PinMismatch`.
+- `prefer_vendor` and similar soft hints are forwarded to the
+  plugin as additional `policy_hints` fields. The plugin may or
+  may not honour them.
+
+### 7.9 Plugin protocol versioning
+
+`protocol_version` is in both directions of the JSON. BHDL emits the
+protocol version it produces; plugins emit the version they
+respond with. Mismatch is a hard error with a clear message ("plugin
+speaks protocol v2; this BHDL emits protocol v1").
+
+v0.2 freezes protocol v1. Future BHDL versions may emit additional
+fields; plugins that don't understand them must ignore unknown
+fields gracefully (the spec mandates this).
+
+## 8. Examples end-to-end
+
+### 8.1 Fixed-V LDO
 
 ```bhdl
 entity AP2112K<V_OUT: voltage>() {
@@ -374,10 +760,14 @@ entity AP2112K<V_OUT: voltage>() {
     pin VOUT: power out;
     pin GND:  ground;
     pin EN:   signal in;
+    attribute package = "SOT-25";
+}
 
-    attribute resolution   = "specific";
-    attribute mpn_template = "AP2112K-{V_OUT_short}TRG";
-    attribute package      = "SOT-25";
+// In bhdl-stdlib/parts/diodes/ap2112k.bhdl:
+part_family Diodes_AP2112K : AP2112K<V_OUT: *> {
+    require V_OUT in { 1.5V, 1.8V, 2.5V, 3.3V, 5.0V };
+    attribute manufacturer = "Diodes Incorporated";
+    attribute mpn_template = "AP2112K-{v_short(V_OUT)}TRG";
 }
 
 board MyBoard {
@@ -387,11 +777,12 @@ board MyBoard {
     @EN_3V3  -> LDO.EN;
 }
 
-// After mono: AP2112K_3V3 (one specialised entity).
-// After BOM:  AP2112K-3.3TRG (one MPN, derived from template).
+// After mono:        class AP2112K<3.3V> with 1 instance (LDO).
+// After catalog:     candidates = [{ mpn: "AP2112K-3.3TRG", manufacturer: "Diodes Inc" }]
+// After plugin:      selection = { mpn: "AP2112K-3.3TRG", vendor_sku: "AP2112K-3.3TRG-DICT-ND", … }
 ```
 
-### 6.2 Adjustable LDO (specific, runtime V_OUT, internal design Rhai)
+### 8.2 Adjustable LDO
 
 ```bhdl
 entity LM317(v_out: voltage = 5V) {
@@ -399,9 +790,6 @@ entity LM317(v_out: voltage = 5V) {
     pin VOUT: power out virtual @requires(v_out: voltage);
     pin ADJ:  feedback in;
     pin GND:  ground;
-
-    attribute resolution = "specific";
-    attribute mpn        = "LM317T";
 
     design {
         const v_ref = 1.25;
@@ -419,6 +807,13 @@ entity LM317(v_out: voltage = 5V) {
     }
 }
 
+// In bhdl-stdlib/parts/ti/lm317.bhdl:
+part_family TI_LM317T : LM317 {
+    attribute manufacturer = "Texas Instruments";
+    attribute mpn          = "LM317T";
+    attribute package_real = "TO-220";
+}
+
 board MyBoard {
     LDO: LM317(v_out: 5V);
     @VBUS_9V -> LDO.VIN;
@@ -427,20 +822,18 @@ board MyBoard {
 
 // After designer: r1_value = 720, r2_value = 240.
 // After expansion: C_in, C_out, R1, R2 materialised as children of LDO.
-// After mono:
-//   - LM317                            (specific, 1 MPN)
-//   - Capacitor<10µF, 20%, X7R, 0603>  (class)
-//   - Capacitor<22µF, 20%, X7R, 0805>  (class)
-//   - Resistor<720Ω, 1%, 0603>         (class)
-//   - Resistor<240Ω, 1%, 0603>         (class)
-// After BOM: LM317T + 4 cost-function-picked MPNs.
+// After mono: 5 classes — LM317, Capacitor<10µF,20%,X7R,0603>,
+//   Capacitor<22µF,20%,X7R,0805>, Resistor<720Ω,1%,0603>,
+//   Resistor<240Ω,1%,0603>.
+// After catalog: each class collects candidate part_families.
+// After plugin: 5 MPNs selected (one per class) with the user's plugin policy.
 ```
 
-### 6.3 Intent-driven (matcher picks the LDO)
+### 8.3 Intent-driven
 
 ```bhdl
 board MyBoard {
-    @VBUS_5V for voltage_source(v: 5V, i_max: 1A);    // upstream
+    @VBUS_5V for voltage_source(v: 5V, i_max: 1A);
     @VCC_3V3 for voltage_regulator(
         v_in:  5V,
         v_out: 3.3V,
@@ -448,12 +841,12 @@ board MyBoard {
     );
 }
 
-// Matcher considers AP2112K, LM317, BuckRegulator, etc.
+// Intent matcher considers all entities with `design for voltage_regulator`.
 // Picks (say) AP2112K<3.3V> on the strength of dropout and quiescent.
-// Pipeline proceeds as in §6.1.
+// Pipeline proceeds as in §8.1.
 ```
 
-## 7. Migration from the current stdlib
+## 9. Migration from the current stdlib
 
 Today's stdlib has three coexisting shapes:
 
@@ -462,140 +855,87 @@ Today's stdlib has three coexisting shapes:
    `value` and `tolerance` are part-defining and must become generics.
 3. **Zero-arg with `part_no` string** — the accretion entities
    (`ATmega328P_DIP28(part_no: string = "ATMEGA328P-PU")`). These
-   are already "specific" parts; `part_no` is the MPN. Migration is
-   cosmetic: drop `part_no`, add `attribute resolution = "specific";
-   attribute mpn = "ATMEGA328P-PU";`.
+   carry MPN info as a constructor string; under v0.2 the MPN moves
+   to a `part_family` declaration.
 
-The migration unfolds in three commit-sized phases:
+Five commit-sized phases:
 
 ### Phase 1: passives become generic
 
 Convert `Resistor(value, tolerance)` → `Resistor<R, TOL, PKG>()`,
-update the four importer call sites that emit these, update the
-KiCad importer to parse string values (`"10k"`) into typed
-literals (`10kΩ`) before instantiation. **All round-trip tests
+update importer call sites, parse KiCad value strings (`"10k"`) into
+typed literals (`10kΩ`) before instantiation. **All round-trip tests
 must stay green** — the netlist is unchanged; only the surface
 syntax of the instance moves from `(…)` to `<…>`.
 
-### Phase 2: ICs declare `resolution`
+### Phase 2: introduce `part_family` grammar
 
-For every entity in `actives/`, `power/`, `connectors/`: add
-`attribute resolution = "specific";` and either `mpn` or
-`mpn_template`. Drop the `part_no: string` constructor parameter
-where present (it duplicates `mpn`). No netlist changes.
+Add the `part_family` keyword to the parser, the analyser's symbol
+table, and the AST. Stub out catalog scan as a no-op (returns the
+entity's existing `mpn` attribute as the single candidate, for
+back-compat). Tests still pass.
 
-### Phase 3: monomorphization key extends
+### Phase 3: catalog seed
 
-The mono pass currently keys on generic tuple alone. Add `class`
-entities to the key so the BOM pass can group instances by
-class. No behavioural change for existing tests; sets up pass 5.
+Write the first ~30 `part_family` declarations covering the most
+common passives (3–5 manufacturers × 3 tolerance × 3 packages for
+resistors, similar for caps) and every Arduino-board IC. Move the
+existing `part_no` constructor parameters from accretion entities
+into the corresponding `part_family` decls.
 
-Pass 5 (cost-function BOM resolver) and `bom_preferences { }`
-syntax are out of scope for this migration — they're separate
-features that build on the resolution metadata once it's in place.
+### Phase 4: catalog scan pass
 
-## 8. Open questions deferred to v0.2
+Implement Pass 4.5 — walk `part_family` decls, match against classes,
+expand templates. Emits the JSON candidate bundle. No plugin yet;
+the catalog-scan output is just printed.
 
-- **Spec windows** — temperature range, voltage range, GBW, etc.
-  These are part-specific specs the BOM cost function reads but
-  the user can also *require* (`@VCC_3V3 for voltage_regulator(…)
-  with v_in_max >= 12V`). v0.1 treats them as attributes; v0.2
-  formalises them as constraint clauses.
+### Phase 5: plugin invocation
 
-- **Wildcard `bom_preferences` syntax** — beyond the headline
-  shape shown here.
+Implement Pass 5 — spawn the plugin process, pipe JSON in, parse
+JSON out. Ship the default plugin. Document the protocol.
 
-- **Multi-MPN runtime configuration** — parts where one runtime
-  field also changes the BOM line (e.g., a programmable LDO
-  whose `v_out` is fused at the factory, so you order a
-  different MPN per V_OUT). These exist but are rare; deferred
-  until a real example forces the issue.
+After Phase 5, the BOM is auto-derived from the design. Round-trip
+tests continue to gate every step.
 
-- **Class equivalence rules** — when are two `Resistor<10kΩ, 1%,
-  "0603">` invocations from different boards "the same class"?
-  Per-board scoping in v0.1; cross-board class identity (for
-  multi-board cost optimisation) is v0.2.
+## 10. Open questions deferred to v0.3+
 
-- **The cost function itself** — what makes one Yageo 10 kΩ
-  better than a Panasonic 10 kΩ on a given board. This needs a
-  proper part database, vendor APIs, and policy hooks; out of
-  scope.
+- **Spec windows** — temperature range, voltage range, GBW. These
+  are part attributes the plugin reads, but the user can also
+  *require* them at design time (`@VCC for voltage_regulator(…) with
+  v_in_max >= 12V`). v0.2 treats them as attributes; v0.3 formalises
+  them as constraint clauses.
 
-- **Class-resolution failure modes.** What happens when the BOM
-  pass's cost function can't satisfy a class? Three sub-cases,
-  each needs an explicit answer:
-  1. **No candidate MPN** — e.g., `Resistor<73.2kΩ, 0.1%, "0201">`
-     is real but no vendor stocks it. The compiler must surface
-     this with the offending generic tuple and the refdes(es)
-     that use it, not fail mid-pass with a stack trace. Probably
-     a `BomError::NoCandidate { class, instances }` diagnostic.
-  2. **No candidate in stock** — every MPN that satisfies the
-     class is on a 26-week lead. Different from (1); user may
-     want to proceed anyway with a soft warning, or hard-fail,
-     depending on policy. A `--stock-policy=strict|warn|ignore`
-     flag is the obvious surface.
-  3. **User wants to override the picker** — the cost function
-     would pick MPN X, but the user knows MPN Y is what their
-     contract manufacturer has on the line. The
-     `bom_preferences { … pin … }` syntax handles this; the
-     question is what happens if `pin` names a part that
-     *doesn't* satisfy the class (typo, wrong package, etc.).
-     Hard error with both the class and the offending pin.
+- **Wildcard syntax in `bom_preferences`.** v0.2 ships the headline
+  `Resistor<*, *, "0603"> prefer_vendor "Panasonic"` shape; the full
+  pattern algebra (negation, conjunction across attributes, etc.) is
+  v0.3.
 
-  v0.1 picks pragmatic defaults: hard-fail on (1), warn on (2),
-  hard-fail on (3) mismatch. v0.2 makes the policies
-  configurable.
+- **Multi-MPN runtime configuration** — parts where a runtime field
+  also changes the BOM line (factory-fused programmable LDO whose
+  `v_out` is set at the factory, so you order a different MPN per
+  V_OUT). Rare; deferred until a real example forces the issue.
 
-- **The part-database format.** §3 talks about "the part
-  database the BOM pass queries" without specifying what it is.
-  The schema, the source, and the authority all need to land
-  somewhere. Working assumptions for v0.1 (deferred to a
-  separate spec doc, `Part_Database.md`):
+- **Cross-board class identity.** When are two `Resistor<10kΩ, 1%,
+  "0603">` invocations from *different boards* the same class for
+  multi-board cost optimisation? Per-board scoping in v0.2; v0.3
+  allows opt-in cross-board class merging.
 
-  - **Schema.** Each row is `{ mpn, manufacturer, generic_class,
-    generic_values, package, datasheet_url, vendor_skus[],
-    stock?, price?, lead_time? }`. `generic_class` is the entity
-    name (`Resistor`); `generic_values` is the bound tuple.
-    Stock/price/lead-time are optional (snapshot from vendor APIs).
-  - **Source of truth.** A local file (TOML or SQLite) checked
-    into the repo. Vendor-API integration (Octopart, Digi-Key,
-    LCSC) lives in a separate tool that updates the local file;
-    the synthesizer never touches the network.
-  - **Authority.** Per-project file by default. A shared "stdlib
-    part database" may exist for jellybean parts (the 10k 1%
-    0603 entries that every project wants).
-  - **Granularity.** One row = one orderable SKU. Reel vs cut-tape
-    vs tube are separate rows (same MPN family, different vendor
-    SKUs).
+- **User-defined `mpn_template` helper functions.** v0.2 fixes the
+  function set (`e96_code`, `v_short`, etc.). v0.3 allows Rhai-defined
+  helpers in stdlib so manufacturer-specific codings can be added
+  without a synthesizer change.
 
-  This is a genuine system unto itself and the synthesizer must
-  not be designed assuming it doesn't exist. v0.1 ships a
-  stub-shaped database (TOML file in `bhdl-stdlib/parts/`) with
-  a handful of seed entries; v0.2 grows it.
+- **Plugin protocol stability.** v0.2 freezes protocol v1.
+  Backwards-compatible field additions are allowed (plugins must
+  ignore unknown fields); breaking changes require bumping to v2
+  with a transition window where BHDL supports both.
 
-- **`mpn_template` evolution.** §3 uses string interpolation
-  (`"AP2112K-{V_OUT_short}TRG"`) for MPN derivation. This will
-  break on real manufacturer naming conventions, which vary
-  wildly: AP2112K uses "3.3", Murata caps use "3V3", TI uses
-  "33", some parts re-shuffle suffixes for tape-and-reel vs
-  cut-tape, some encode tolerance via a middle-letter (Yageo's
-  `RC0603FR-07*L` family). The template path works for ~70% of
-  clean cases (most ICs) but will need to become a Rhai
-  callback (`fn derive_mpn(v_out) -> string`) for the messy
-  long tail. v0.1 ships the template; v0.2 adds the callback.
+- **Catalog discontinuities and value exclusions.** Some real
+  families have gaps (discontinued values, factory-restricted SKUs).
+  v0.2 catalog rows declare a value range; v0.3 adds
+  `excluded_values = { … }` per family.
 
-- **Socket interaction.** Completed task #36 added socket
-  pairing (entity→socket→physical-pair). Under this spec a
-  socket pairs against a *footprint*, which lives in the
-  generic axes (the `PKG` parameter on passives, or the
-  `package` attribute on ICs). Confirmed by inspection that
-  the existing socket implementation already pairs against
-  footprint strings — so the v0.1 model is consistent with
-  what's there. No change needed, but worth re-verifying after
-  Phase 2 (when more entities declare `package` in their
-  generics).
-
-## 9. Decision log
+## 11. Decision log
 
 - **`value` belongs in `<…>`, not `(…)`** — because changing a
   resistor's value means ordering a different part. (User
@@ -607,14 +947,37 @@ features that build on the resolution metadata once it's in place.
   the part, here's my requirement." Use `Entity(…)` for the
   first; use `@net for INTENT(…)` for the second.
 
-- **`resolution = "class" | "specific"`** — a per-entity flag
-  that tells the BOM pass who owns MPN selection. Passives are
-  classes; most ICs are specific.
+- **Three-layer model: entity / class / part** — supersedes v0.1's
+  `resolution = "class" | "specific"` per-entity flag. Resolution
+  kind is now structural (count of matching `part_family`
+  declarations). Adding a new manufacturer's catalog row
+  automatically expands candidates without touching the entity.
+  (User observation: "given our classification — a resistor class
+  that can hold multiple types/parts — maybe we rethink the DB.")
+
+- **`part_family` is BHDL, not external data.** Catalog rows are
+  source-controlled, parser-checked, type-checked alongside
+  entities. Manufacturer-CSV importers may *generate* `part_family`
+  decls but the canonical form is BHDL.
+
+- **Stocking is a user-supplied plugin, not part of BHDL.**
+  (User observation: "the stocking DB should not be part of BHDL,
+  but the user process… should be an extension/plugin that the
+  user supplies, so that the final part selection works the way
+  the user wants.") Plugin contract: JSON over stdin/stdout, exit
+  status. Language-agnostic. Default plugin ships with BHDL for
+  zero-config operation.
 
 - **Cost-function pass is board-scoped** — one winning MPN per
-  `(class, board)`, never per instance. Avoids loading two
-  reels of equivalent parts on the same board.
+  `(class, board)`, never per instance. Avoids loading two reels
+  of equivalent parts on the same board.
 
 - **`design { }` vs `design for INTENT { }`** — distinct forms.
   The first is plain runtime computation; the second is the
   entity-side of intent matching. An entity may have both.
+
+- **`mpn_template` lives on `part_family`, not on entities.**
+  Entities are pure type definitions with no MPN information.
+  Moving MPN derivation to `part_family` declarations is what
+  makes the three-layer model work — multiple manufacturers can
+  ship into the same class without entity-level coordination.
