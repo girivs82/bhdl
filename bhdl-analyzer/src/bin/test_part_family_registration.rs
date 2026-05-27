@@ -11,8 +11,8 @@
 //!   3. Its `instance_type_name` matches the entity name we wrote
 //!      in the class pattern.
 
-use bhdl_analyzer::{analyze, symbol_table::SymbolKind};
-use bhdl_ast::SourceFile;
+use bhdl_analyzer::{analyze, symbol_table::SymbolKind, part_family::parse_require_clause};
+use bhdl_ast::{SourceFile, Item, PartFamilyDef};
 use bhdl_parser::parse;
 use rowan::ast::AstNode;
 use std::fs;
@@ -108,7 +108,45 @@ fn main() {
                 s.instance_type_name.as_deref().unwrap_or("?")
             ))
             .collect();
-        println!("✓ {} — {}", path.display(), names.join(", "));
+
+        // Phase 4b verification: every `require` clause in this file
+        // must parse cleanly into a Constraint.
+        let mut req_results = Vec::new();
+        for item in source_file.items() {
+            if let Item::PartFamilyDef(pf) = item {
+                for clause in pf.require_clauses() {
+                    let body = clause.body_text();
+                    match parse_require_clause(&clause) {
+                        Ok(c) => {
+                            let kind = match c {
+                                bhdl_analyzer::part_family::Constraint::InESeries { .. } => "InESeries",
+                                bhdl_analyzer::part_family::Constraint::InSet { .. } => "InSet",
+                            };
+                            req_results.push(format!("[{}: {}]", kind, body));
+                        }
+                        Err(e) => {
+                            println!(
+                                "✗ {} — require '{}' failed: {}",
+                                path.display(),
+                                body,
+                                e.message,
+                            );
+                            fail += 1;
+                            // Skip the per-file pass increment.
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+        let suffix = if req_results.is_empty() {
+            String::new()
+        } else {
+            format!("    require: {}", req_results.join(" "))
+        };
+        let _ = PartFamilyDef::cast as fn(_) -> _; // keep the import used
+        println!("✓ {} — {}{}", path.display(), names.join(", "),
+            if suffix.is_empty() { String::new() } else { format!("\n   {}", suffix) });
         pass += 1;
     }
 
