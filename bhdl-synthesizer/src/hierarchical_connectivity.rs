@@ -14,7 +14,7 @@ use bhdl_analyzer::types::AnalysisResult;
 use bhdl_netlist::{Netlist, ModuleId, InstanceId, NetId, ConnectionPoint};
 use bhdl_parser::BhdlLanguage;
 use rowan::SyntaxNode;
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 use crate::entity_variants::EntityVariantManager;
 use crate::populate_instance_attributes;
 
@@ -1463,10 +1463,88 @@ fn process_connection_stmt_as_flow(
     let chains = expand_interface_bundle_chain(&parts, netlist, context);
 
     for chain in chains {
+        // v0.5: direction-compatibility check for chains that are
+        // pure interface-signal connections. Walks the endpoints,
+        // looks up the logical interface direction on each side,
+        // and rejects clearly-incompatible pairings (two `out`
+        // endpoints driving the same line, etc.). Non-interface
+        // chains skip the check.
+        if let Err(e) = check_chain_directions(&chain, netlist, context) {
+            error!("{}", e);
+            eprintln!("error: {}", e);
+            // Bail on this chain — refusing to silently produce
+            // a netlist with a multi-driver short.
+            continue;
+        }
         // Process with no initial net — the first element in the chain will establish it
         process_flow_parts(&chain, None, netlist, context, analysis, import_preprocessor)?;
     }
 
+    Ok(())
+}
+
+/// Walk a chain of `inst.field.signal` endpoints; if both endpoints
+/// declare a logical interface-signal direction (`intf_dir__` attr)
+/// and the directions clash, return an error.
+///
+/// Rules:
+///   out × out  → error (two drivers)
+///   in  × in   → error (no driver on the net)
+///   inout × _  → ok (bidirectional pin tolerates either side)
+///   _ × inout  → ok
+///   out × in   → ok (the intended case)
+///   in × out   → ok
+///
+/// Endpoints that don't carry an `intf_dir__` attribute are
+/// non-interface pins and skip the check.
+fn check_chain_directions(
+    chain: &[String],
+    netlist: &Netlist,
+    context: &HierarchicalContext,
+) -> std::result::Result<(), String> {
+    // Collect (endpoint, logical_dir) for endpoints that have one.
+    let mut info: Vec<(String, String)> = Vec::new();
+    for endpoint in chain {
+        let endpoint = endpoint.trim();
+        let Some(dot) = endpoint.find('.') else { continue; };
+        let instance_name = &endpoint[..dot];
+        let dotted = &endpoint[dot + 1..];
+        if !dotted.contains('.') { continue; } // not a `field.signal` shape
+
+        let Some(inst_id) = find_instance_by_name_in_context(netlist, context, instance_name)
+        else { continue; };
+        let Some(inst) = netlist.instances.get(inst_id) else { continue; };
+        let Some(module) = netlist.modules.get(inst.definition) else { continue; };
+        let key = format!("{}{}", INTERFACE_FIELD_DIRECTION_ATTR_PREFIX, dotted);
+        if let Some(dir) = module.attributes.get(&key) {
+            info.push((endpoint.to_string(), dir.clone()));
+        }
+    }
+    if info.len() < 2 { return Ok(()); }
+
+    // Pairwise check among the typed endpoints.
+    for i in 0..info.len() {
+        for j in (i + 1)..info.len() {
+            let (a_name, a_dir) = (&info[i].0, info[i].1.as_str());
+            let (b_name, b_dir) = (&info[j].0, info[j].1.as_str());
+            if a_dir == "inout" || b_dir == "inout" { continue; }
+            if a_dir == "out" && b_dir == "out" {
+                return Err(format!(
+                    "incompatible directions on connection: `{}` and `{}` are both `out` \
+                     (two drivers would short on the same net). Did you forget `~Interface` \
+                     on one side?",
+                    a_name, b_name
+                ));
+            }
+            if a_dir == "in" && b_dir == "in" {
+                return Err(format!(
+                    "incompatible directions on connection: `{}` and `{}` are both `in` \
+                     (no driver on the net). Did you forget `~Interface` on one side?",
+                    a_name, b_name
+                ));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1486,6 +1564,16 @@ fn process_connection_stmt_as_flow(
 /// netlist field) so we don't have to thread additional mutable
 /// state through the existing pin-population call chain.
 pub(crate) const INTERFACE_FIELD_BINDING_ATTR_PREFIX: &str = "intf_bind__";
+
+/// Prefix for storing the *logical* interface-signal direction on
+/// the module's attributes. `intf_dir__spi.MOSI = "out"` means
+/// signal MOSI on the field `spi` is declared as `out` (from this
+/// entity's perspective, after any `~` reversal). Used by the
+/// connection direction-compatibility check (v0.5) so that bound
+/// interface signals (whose underlying physical pin is typically
+/// `inout`) still report the logical direction the interface
+/// claims.
+pub(crate) const INTERFACE_FIELD_DIRECTION_ATTR_PREFIX: &str = "intf_dir__";
 
 fn add_interface_field_pins(
     entity: &bhdl_ast::Entity,
@@ -1621,6 +1709,23 @@ fn add_interface_field_pins(
             }
 
             let pin_name = format!("{}.{}", field_name, sig_name);
+
+            // Record the *logical* interface-signal direction for
+            // direction-compatibility checking. We store it on the
+            // module's attributes whether or not the field is
+            // bound, so both forms participate in the check.
+            let dir_str = match pin_direction {
+                PinDirection::In  => "in",
+                PinDirection::Out => "out",
+                PinDirection::InOut => "inout",
+                _ => "unknown",
+            };
+            if let Some(module) = netlist.modules.get_mut(module_id) {
+                let dir_key = format!(
+                    "{}{}", INTERFACE_FIELD_DIRECTION_ATTR_PREFIX, pin_name,
+                );
+                module.attributes.insert(dir_key, dir_str.to_string());
+            }
 
             if let Some(target_pin) = bindings.get(&sig_name) {
                 // Bound: don't create a new pin. Record the alias on
