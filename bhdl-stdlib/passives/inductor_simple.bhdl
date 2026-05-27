@@ -1,30 +1,22 @@
-// Simplified Inductor Component Module
-// Compatible with current BHDL parser
+// Simplified Inductor — v0.2 generic form.
+//
+// Three part-defining axes: inductance, current rating, package.
+// Every distinct generic tuple monomorphises to a distinct class.
+//
+// Use sites pass the value at the type level:
+//
+//     L1: Inductor<10µH>;                  // defaults I_MAX=1A, PKG="0805"
+//     L2: Inductor<33µH, 3A>;              // override current
+//     L3: Inductor<100µH, 2A, "1210">;     // all three
+//
+// Parser-compatible v2.0 subset.
 
-entity Inductor(value: inductance, current: current = 1A) {
-    pin 1: signal inout;  // Terminal 1
-    pin 2: signal inout;  // Terminal 2
-    
-    // Component attributes
+entity Inductor<L: inductance, I_MAX: current = 1A, PKG: string = "0805">() {
+    pin 1: signal inout;
+    pin 2: signal inout;
+
     attribute component_class = "inductor";
-    attribute inductance = value;
-    attribute current_rating = current;
-    
-    // Inductor type based on value and current
-    attribute inductor_type = 
-        current >= 3A ? "power" :
-        value <= 100nH ? "air_core" :
-        "ferrite";
-    
-    // DCR approximation (simplified without sqrt)
-    attribute dcr = 
-        current >= 3A ? 0.02Ω :
-        value <= 100nH ? 0.001Ω :
-        0.01Ω;
-    
-    // SPICE model parameters
-    attribute spice_model = "inductor";
-    attribute spice_inductance = value;
-    attribute spice_dcr = dcr;
-    attribute spice_current_rating = current;
+    attribute inductance      = L;
+    attribute current_rating  = I_MAX;
+    attribute pkg             = PKG;
 }

@@ -364,12 +364,21 @@ fn emit_component_decls(
         };
         let inst_ident = sanitise_ident(sym.reference().unwrap_or("U_unknown"));
         let value = sym.value().unwrap_or("").trim();
-        let arg = if value.is_empty() || value == sym.reference().unwrap_or("") {
-            String::new()
+        // v0.2 generic-form passives: emit `Resistor<10kΩ>()` instead
+        // of `Resistor("10k")`. The value moves from a string-typed
+        // constructor argument to a typed-literal generic argument
+        // (spec §2.1, Phase 1).
+        let inst_line = if let Some(generics) = passive_generics(entity_name, value) {
+            format!("    {}: {}<{}>();", inst_ident, entity_name, generics)
         } else {
-            format!("\"{}\"", value.replace('"', "\\\""))
+            let arg = if value.is_empty() || value == sym.reference().unwrap_or("") {
+                String::new()
+            } else {
+                format!("\"{}\"", value.replace('"', "\\\""))
+            };
+            format!("    {}: {}({});", inst_ident, entity_name, arg)
         };
-        writeln!(out, "    {}: {}({});", inst_ident, entity_name, arg)?;
+        writeln!(out, "{}", inst_line)?;
     }
     Ok(())
 }
@@ -666,6 +675,70 @@ fn format_num(v: f64) -> String {
         let s = s.trim_end_matches('0').trim_end_matches('.');
         s.to_string()
     }
+}
+
+/// Translate a KiCad value string into a typed-literal generic
+/// argument for a v0.2 generic passive (Resistor, Capacitor,
+/// Inductor). Returns `Some(literal)` when `entity` is a generic
+/// passive *and* `value` parses cleanly; returns `None` otherwise,
+/// signalling to the caller that the legacy
+/// `Entity("string")` form should be used.
+///
+/// Examples:
+///
+///     passive_generics("Resistor", "10k")    -> Some("10kΩ")
+///     passive_generics("Resistor", "1M")     -> Some("1MΩ")
+///     passive_generics("Capacitor", "100nF") -> Some("100nF")
+///     passive_generics("Capacitor", "22uF")  -> Some("22µF")
+///     passive_generics("Inductor", "10uH")   -> Some("10µH")
+///     passive_generics("ATmega328P_DIP28", _) -> None  // not a passive
+///     passive_generics("Resistor", "")       -> None  // no value
+///
+/// The output is what BHDL's parser accepts in a generic-arg
+/// position — number + SI prefix + unit suffix. SI µ is normalised
+/// from KiCad's common `u` shorthand.
+fn passive_generics(entity: &str, value: &str) -> Option<String> {
+    let unit = match entity {
+        "Resistor" => "Ω",
+        "Capacitor" => "F",
+        "Inductor"  => "H",
+        _ => return None,
+    };
+    let v = value.trim();
+    if v.is_empty() { return None; }
+
+    // Strip an existing unit suffix matching this entity's unit. We
+    // accept the SI symbol (Ω/F/H) verbatim or KiCad's common
+    // ASCII fallback ("R" for Ω on resistors, plain "F"/"H").
+    let stripped = v
+        .strip_suffix(unit)
+        .or_else(|| if unit == "Ω" { v.strip_suffix('R').or_else(|| v.strip_suffix('Ω')) } else { None })
+        .unwrap_or(v);
+
+    // Split into (number, prefix). The SI prefix can be at the very
+    // end of the stripped string ('k', 'K', 'M', 'm', 'u', 'µ',
+    // 'n', 'p'). KiCad commonly uses 'k' or 'K' for kilo and 'u'
+    // for micro; normalise.
+    let (num_part, si_prefix) = if let Some(last) = stripped.chars().last() {
+        match last {
+            'k' | 'K' => (stripped[..stripped.len() - last.len_utf8()].to_string(), "k"),
+            'M'       => (stripped[..stripped.len() - 1].to_string(), "M"),
+            'm'       => (stripped[..stripped.len() - 1].to_string(), "m"),
+            'u' | 'µ' => (stripped[..stripped.len() - last.len_utf8()].to_string(), "µ"),
+            'n'       => (stripped[..stripped.len() - 1].to_string(), "n"),
+            'p'       => (stripped[..stripped.len() - 1].to_string(), "p"),
+            _         => (stripped.to_string(), ""),
+        }
+    } else {
+        return None;
+    };
+
+    // The remaining number part must parse as a positive float
+    // (with optional decimal point). Reject everything else.
+    if num_part.is_empty() { return None; }
+    if num_part.parse::<f64>().is_err() { return None; }
+
+    Some(format!("{}{}{}", num_part, si_prefix, unit))
 }
 
 /// Look up which net a coordinate lands on. Used for sheet-pin →

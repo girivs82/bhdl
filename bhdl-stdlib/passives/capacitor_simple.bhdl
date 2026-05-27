@@ -1,23 +1,24 @@
-// Simplified Capacitor Component Module
-// Compatible with current BHDL parser
+// Simplified Capacitor — v0.2 generic form.
+//
+// Four part-defining axes: capacitance, voltage rating, dielectric
+// (X7R/X5R/C0G/Y5V/electrolytic/tantalum), package. Every distinct
+// generic tuple monomorphises to a distinct class.
+//
+// Use sites pass the value at the type level:
+//
+//     C1: Capacitor<100nF>;                          // defaults
+//     C2: Capacitor<10µF, 25V>;                      // override V_MAX
+//     C3: Capacitor<22µF, 25V, "X7R", "0805">;       // all four
+//
+// Parser-compatible v2.0 subset.
 
-entity Capacitor(value: capacitance, voltage: voltage = 50V) {
-    pin 1: signal inout;  // Terminal 1 
-    pin 2: signal inout;  // Terminal 2
-    
-    // Component attributes
+entity Capacitor<C: capacitance, V_MAX: voltage = 50V, DIEL: string = "X7R", PKG: string = "0603">() {
+    pin 1: signal inout;
+    pin 2: signal inout;
+
     attribute component_class = "capacitor";
-    attribute capacitance = value;
-    attribute voltage_rating = voltage;
-    
-    // Determine capacitor type based on value
-    attribute capacitor_type = value >= 10uF ? "electrolytic" : "ceramic";
-    
-    // ESR approximation (simplified without sqrt)
-    attribute esr = value >= 10uF ? 0.5 : 0.01;
-    
-    // SPICE model parameters
-    attribute spice_model = "capacitor";
-    attribute spice_capacitance = value;
-    attribute spice_voltage_rating = voltage;
+    attribute capacitance     = C;
+    attribute voltage_rating  = V_MAX;
+    attribute dielectric      = DIEL;
+    attribute pkg             = PKG;
 }
