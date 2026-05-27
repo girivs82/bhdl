@@ -1609,8 +1609,13 @@ impl<'t> Parser<'t> {
     fn parse_design_block(&mut self) {
         self.builder.start_node(SyntaxKind::DESIGN_BLOCK.into());
         self.expect(SyntaxKind::DESIGN_KW);
-        self.expect(SyntaxKind::FOR_KW);
-        self.expect(SyntaxKind::IDENT); // intent name
+        // v0.2: `design for INTENT { … }` (matcher form) OR plain
+        // `design { … }` (entity-private runtime computation, spec
+        // §5.2). The FOR_KW + IDENT pair is now optional.
+        if self.peek() == Some(SyntaxKind::FOR_KW) {
+            self.bump(); // consume `for`
+            self.expect(SyntaxKind::IDENT); // intent name
+        }
         self.expect(SyntaxKind::L_BRACE);
 
         loop {
