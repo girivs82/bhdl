@@ -1102,6 +1102,9 @@ fn add_component_pins(
         for pin in &pins {
             add_pin_to_netlist(pin, module_id, netlist, specialized_module);
         }
+        // Also materialise interface-field signals as `field.signal`
+        // pins on this module (v0.3 interfaces).
+        add_interface_field_pins(&entity_ast, module_id, netlist, context, import_preprocessor);
         return Ok(());
     }
 
@@ -1116,6 +1119,7 @@ fn add_component_pins(
             for pin in &pins {
                 add_pin_to_netlist(pin, module_id, netlist, specialized_module);
             }
+            add_interface_field_pins(&entity_ast, module_id, netlist, context, import_preprocessor);
             return Ok(());
         }
     }
@@ -1442,10 +1446,245 @@ fn process_connection_stmt_as_flow(
     println!("Parsed {} parts from bare connection", parts.len());
     info!("Parsed {} parts from bare connection", parts.len());
 
-    // Process with no initial net — the first element in the chain will establish it
-    process_flow_parts(&parts, None, netlist, context, analysis, import_preprocessor)?;
+    // Bundle expansion (v0.3 interfaces): if every part is an
+    // `instance.field` reference where the field is an interface
+    // field (i.e. the instance has pins `field.X`, `field.Y`, …
+    // but no pin literally named `field`), expand the single
+    // chain into one parallel chain per signal. So
+    //   MCU.spi -> FLASH.spi
+    // becomes
+    //   MCU.spi.MOSI -> FLASH.spi.MOSI
+    //   MCU.spi.MISO -> FLASH.spi.MISO
+    //   MCU.spi.SCK  -> FLASH.spi.SCK
+    //   MCU.spi.CS   -> FLASH.spi.CS
+    //
+    // Mixed bundle/single-pin chains aren't expanded (we leave
+    // those to the operator-by-operator form, which still works).
+    let chains = expand_interface_bundle_chain(&parts, netlist, context);
+
+    for chain in chains {
+        // Process with no initial net — the first element in the chain will establish it
+        process_flow_parts(&chain, None, netlist, context, analysis, import_preprocessor)?;
+    }
 
     Ok(())
+}
+
+/// Walk an entity's INTERFACE_FIELD_DECL children and add a Pin
+/// to `module_id` for each signal in the referenced interface,
+/// named `field.signal_name`. Applies direction reversal for the
+/// `~InterfaceName` form.
+///
+/// This is the synthesiser-side counterpart to pass1's symbol
+/// materialisation (bhdl-analyzer/src/pass1.rs); both must produce
+/// the same pin set so connection resolution sees `field.signal`
+/// in both the symbol table and the netlist.
+fn add_interface_field_pins(
+    entity: &bhdl_ast::Entity,
+    module_id: ModuleId,
+    netlist: &mut Netlist,
+    context: &HierarchicalContext,
+    import_preprocessor: Option<&crate::import_preprocessor::ImportPreprocessor>,
+) {
+    use bhdl_netlist::{PinDirection, PinType, PortDirection};
+    use bhdl_parser::SyntaxKind;
+    use rowan::ast::AstNode;
+
+    for field_node in entity
+        .syntax()
+        .children()
+        .filter(|n| n.kind() == SyntaxKind::INTERFACE_FIELD_DECL)
+    {
+        // Extract `~`, type name, field name from the field decl.
+        let mut reversed = false;
+        let mut type_name = None;
+        let mut field_name = None;
+        for el in field_node.children_with_tokens() {
+            if let Some(tok) = el.as_token() {
+                match tok.kind() {
+                    SyntaxKind::TILDE => reversed = true,
+                    SyntaxKind::IDENT => {
+                        if type_name.is_none() {
+                            type_name = Some(tok.text().to_string());
+                        } else if field_name.is_none() {
+                            field_name = Some(tok.text().to_string());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let (Some(type_name), Some(field_name)) = (type_name, field_name) else { continue; };
+
+        // Look up the interface definition in the variant manager
+        // first (same-file), then in imports.
+        let iface_node = context
+            .variant_manager
+            .find_entity_definition(&type_name)
+            .map(|e| e.syntax().clone())
+            .or_else(|| {
+                import_preprocessor
+                    .and_then(|p| p.get_imported_entity(&type_name).map(|e| e.syntax().clone()))
+            });
+        // Also fall back to scanning the entity's own source file
+        // for an INTERFACE_DEF with the matching name. Interfaces
+        // aren't entities; the variant_manager / preprocessor APIs
+        // index entities only.
+        let iface_node = iface_node.or_else(|| {
+            let mut root = entity.syntax().clone();
+            while let Some(p) = root.parent() { root = p; }
+            root.descendants()
+                .find(|n| {
+                    if n.kind() != SyntaxKind::INTERFACE_DEF { return false; }
+                    n.children_with_tokens()
+                        .filter_map(|el| el.into_token())
+                        .filter(|t| t.kind() == SyntaxKind::IDENT)
+                        .next()
+                        .map(|t| t.text() == type_name)
+                        .unwrap_or(false)
+                })
+        });
+
+        let Some(iface_node) = iface_node else { continue; };
+
+        for sig_node in iface_node
+            .children()
+            .filter(|n| n.kind() == SyntaxKind::INTERFACE_SIGNAL)
+        {
+            // Pull signal name + direction.
+            let sig_name_tok = sig_node
+                .children_with_tokens()
+                .filter_map(|el| el.into_token())
+                .find(|t| t.kind() == SyntaxKind::IDENT);
+            let Some(sig_name_tok) = sig_name_tok else { continue; };
+            let sig_name = sig_name_tok.text().to_string();
+
+            let dir_tok = sig_node
+                .children_with_tokens()
+                .filter_map(|el| el.into_token())
+                .find(|t| matches!(
+                    t.kind(),
+                    SyntaxKind::IN_KW | SyntaxKind::OUT_KW | SyntaxKind::INOUT_KW
+                ));
+            let mut pin_direction = match dir_tok.as_ref().map(|t| t.kind()) {
+                Some(SyntaxKind::IN_KW) => PinDirection::In,
+                Some(SyntaxKind::OUT_KW) => PinDirection::Out,
+                Some(SyntaxKind::INOUT_KW) => PinDirection::InOut,
+                _ => PinDirection::InOut,
+            };
+            let mut port_direction = match dir_tok.as_ref().map(|t| t.kind()) {
+                Some(SyntaxKind::IN_KW) => PortDirection::Input,
+                Some(SyntaxKind::OUT_KW) => PortDirection::Output,
+                Some(SyntaxKind::INOUT_KW) => PortDirection::InOut,
+                _ => PortDirection::InOut,
+            };
+            if reversed {
+                pin_direction = match pin_direction {
+                    PinDirection::In => PinDirection::Out,
+                    PinDirection::Out => PinDirection::In,
+                    PinDirection::InOut => PinDirection::InOut,
+                    other => other,
+                };
+                port_direction = match port_direction {
+                    PortDirection::Input => PortDirection::Output,
+                    PortDirection::Output => PortDirection::Input,
+                    other => other,
+                };
+            }
+
+            let pin_name = format!("{}.{}", field_name, sig_name);
+            netlist.add_port(module_id, pin_name.clone(), port_direction, None);
+            netlist.add_pin(module_id, pin_name, pin_direction, PinType::Signal);
+        }
+    }
+}
+
+/// If `parts` is a pure bundle-bundle chain (every endpoint is
+/// `inst.field` where `field` is an interface field on `inst`),
+/// expand into one chain per signal sorted alphabetically. Otherwise
+/// return `[parts]` unchanged.
+fn expand_interface_bundle_chain(
+    parts: &[String],
+    netlist: &Netlist,
+    context: &HierarchicalContext,
+) -> Vec<Vec<String>> {
+    // First pass: gather (instance_name, field_name, signal_set) per
+    // candidate part. Bail out the moment any part doesn't look like
+    // a bundle ref.
+    let mut bundle_info: Vec<(String, String, Vec<String>)> = Vec::with_capacity(parts.len());
+    for part in parts {
+        let endpoint = part.trim();
+        let Some(dot) = endpoint.find('.') else {
+            return vec![parts.to_vec()];
+        };
+        let instance_name = &endpoint[..dot];
+        let field_name = &endpoint[dot + 1..];
+
+        // Skip if endpoint already has a nested dot (`A.spi.MOSI`)
+        // — that's the explicit per-signal form, not a bundle.
+        if field_name.contains('.') {
+            return vec![parts.to_vec()];
+        }
+
+        // Resolve the instance.
+        let Some(inst_id) = find_instance_by_name_in_context(netlist, context, instance_name)
+        else {
+            return vec![parts.to_vec()];
+        };
+        let Some(inst) = netlist.instances.get(inst_id) else {
+            return vec![parts.to_vec()];
+        };
+        let Some(module) = netlist.modules.get(inst.definition) else {
+            return vec![parts.to_vec()];
+        };
+
+        // Collect this instance's pin names.
+        let pin_names: Vec<&str> = module
+            .pins
+            .iter()
+            .filter_map(|pid| netlist.pins.get(*pid).map(|p| p.name.as_str()))
+            .collect();
+
+        // If a pin is named exactly `field_name`, this is a single
+        // pin reference, not a bundle.
+        if pin_names.iter().any(|n| *n == field_name) {
+            return vec![parts.to_vec()];
+        }
+
+        // Find sibling signals: pin names that look like `field.X`.
+        let prefix = format!("{}.", field_name);
+        let mut signals: Vec<String> = pin_names
+            .iter()
+            .filter_map(|n| n.strip_prefix(&prefix).map(|s| s.to_string()))
+            .collect();
+        if signals.is_empty() {
+            // No siblings either — this is just an unresolved reference;
+            // hand off to process_flow_parts as-is.
+            return vec![parts.to_vec()];
+        }
+        signals.sort();
+        bundle_info.push((instance_name.to_string(), field_name.to_string(), signals));
+    }
+
+    // All parts qualified. They must agree on the signal set.
+    let signals = &bundle_info[0].2;
+    for (_, _, sigs) in &bundle_info[1..] {
+        if sigs != signals {
+            // Mismatched bundle widths — don't try to be clever.
+            return vec![parts.to_vec()];
+        }
+    }
+
+    // Generate one chain per signal.
+    let mut chains = Vec::with_capacity(signals.len());
+    for sig in signals {
+        let chain: Vec<String> = bundle_info
+            .iter()
+            .map(|(inst, field, _)| format!("{}.{}.{}", inst, field, sig))
+            .collect();
+        chains.push(chain);
+    }
+    chains
 }
 
 /// Shared flow processing logic used by both NET_FLOW_STMT and CONNECTION_STMT handlers.
