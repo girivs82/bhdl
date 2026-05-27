@@ -10,6 +10,7 @@ pub mod scope_registry;
 pub mod hierarchical_symbol_table;
 pub mod net_attributes;
 pub mod part_family;
+pub mod catalog_scan;
 mod pass1;
 mod pass2;
 mod pass3;
