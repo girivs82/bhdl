@@ -218,6 +218,7 @@ impl<'t> Parser<'t> {
                 Some(SyntaxKind::EXPANSION_KW) => self.parse_expansion_block(),
                 Some(SyntaxKind::DESIGN_KW) => self.parse_design_block(),
                 Some(SyntaxKind::PLACEMENT_KW) => self.parse_placement_block(),
+                Some(SyntaxKind::INTERFACE_KW) => self.parse_interface_field_decl(),
                 Some(SyntaxKind::IDENT) => {
                     // Check if this is an entity instantiation or connection
                     // Entity instantiation: instance_name: EntityType(params) { ... }
@@ -268,6 +269,33 @@ impl<'t> Parser<'t> {
                 }
             }
         }
+    }
+
+    // Parse an interface-field declaration inside an entity body:
+    //
+    //     interface SPI spi;       (master-perspective field)
+    //     interface ~SPI spi;      (slave-perspective field — directions reversed)
+    //
+    // Adds the interface's signals to the entity's pin set as
+    // dot-qualified names (spi.MOSI, spi.MISO, …). The `~` sigil
+    // is captured in the AST so the analyzer can flip directions
+    // when materialising the signals as pins. Optional generic-arg
+    // block `<...>` is reserved for parameterised interfaces (e.g.
+    // SPI<width=16>) and just parses through here — analyzer
+    // semantics for the args are a later concern.
+    fn parse_interface_field_decl(&mut self) {
+        self.builder.start_node(SyntaxKind::INTERFACE_FIELD_DECL.into());
+        self.expect(SyntaxKind::INTERFACE_KW);
+        if self.peek() == Some(SyntaxKind::TILDE) {
+            self.bump(); // consume `~`
+        }
+        self.expect(SyntaxKind::IDENT); // interface type name
+        if self.peek() == Some(SyntaxKind::L_ANGLE) {
+            self.parse_type_args();
+        }
+        self.expect(SyntaxKind::IDENT); // field name
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
     }
 
     // Parse entity pin declaration (v2.0 style)
