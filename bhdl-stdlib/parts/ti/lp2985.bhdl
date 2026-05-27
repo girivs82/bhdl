@@ -1,0 +1,13 @@
+// Texas Instruments LP2985 — 150 mA low-noise LDO, SOT-23-5.
+//
+// One MPN per output-voltage variant. Arduino UNO and Leonardo use
+// the 3.3 V version (LP2985-33DBVR in TI's SOT-23-5 / DBV package).
+
+part_family TI_LP2985_33 : LP2985_Simple {
+    attribute manufacturer  = "Texas Instruments";
+    attribute mpn           = "LP2985-33DBVR";
+    attribute output_v      = 3.3;
+    attribute package_real  = "SOT-23-5";
+    attribute datasheet     = "https://www.ti.com/lit/ds/symlink/lp2985-n.pdf";
+    attribute role          = "ldo";
+}

@@ -1,0 +1,17 @@
+// Panasonic ERJ-3EK series — thin-film 1 % resistors in 0603.
+//
+// Vendor-substitutable alternative to Yageo RC0603FR-07 for the
+// same `Resistor<*, "1%", "0603">` class. Catalog scan returns
+// both; the user's plugin picks one by stock/price/preference.
+//
+// MPN format: ERJ-3EKF{e96_code(R)}V (V suffix = tape & reel).
+
+part_family Panasonic_ERJ_3EKF : Resistor<R: *, "1%", "0603"> {
+    require R in E96(10Ω, 1MΩ);
+
+    attribute manufacturer  = "Panasonic";
+    attribute mpn_template  = "ERJ-3EKF{e96_code(R)}V";
+    attribute datasheet     = "https://industrial.panasonic.com/cdbs/www-data/pdf/RDA0000/AOA0000C306.pdf";
+    attribute tc_ppm        = 100;
+    attribute power_w       = 0.1;
+}

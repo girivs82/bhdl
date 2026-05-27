@@ -1,0 +1,12 @@
+// Texas Instruments LMV358IDGKR — dual op-amp, VSSOP-8.
+//
+// Used on Arduino UNO, Leonardo, and Mega 2560 as a current-sense
+// amplifier near the on-board USB power MOSFET. Family-of-one.
+
+part_family TI_LMV358IDGKR : LMV358 {
+    attribute manufacturer  = "Texas Instruments";
+    attribute mpn           = "LMV358IDGKR";
+    attribute package_real  = "VSSOP-8";
+    attribute datasheet     = "https://www.ti.com/lit/ds/symlink/lmv358.pdf";
+    attribute role          = "op-amp";
+}

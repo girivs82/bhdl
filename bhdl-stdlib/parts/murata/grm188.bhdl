@@ -1,0 +1,17 @@
+// Murata GRM188R71 series — X7R 50 V capacitors in 0603.
+//
+// Single-family example for the capacitor catalog. Populates the
+// `Capacitor<*, 50V, "X7R", "0603">` class for value range
+// 1 nF to 1 µF.
+//
+// MPN format: GRM188R71H{c_code(C)}KA01D (H suffix = 50 V).
+
+part_family Murata_GRM188R71H : Capacitor<C: *, 50V, "X7R", "0603"> {
+    require C in E12(1nF, 1µF);
+
+    attribute manufacturer  = "Murata Manufacturing";
+    attribute mpn_template  = "GRM188R71H{c_code(C)}KA01D";
+    attribute datasheet     = "https://psearch.en.murata.com/capacitor/product/GRM188R71H103KA01%23.html";
+    attribute dielectric    = "X7R";
+    attribute tolerance     = 10;   // ±10%
+}
