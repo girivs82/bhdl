@@ -15,6 +15,10 @@ autobins = false
 name = "end_to_end_test"
 path = "src/bin/end_to_end_test.rs"
 
+[[bin]]
+name = "test_interface_bundle"
+path = "src/bin/test_interface_bundle.rs"
+
 # [[bin]]
 # name = "test_unified_svg"
 # path = "../test_unified_svg.rs"
