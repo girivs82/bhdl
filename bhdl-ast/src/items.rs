@@ -1513,3 +1513,112 @@ impl LayoutDef {
             })
     }
 }
+// ─── part_family declarations (v0.2 catalog) ───────────────────────
+//
+// Catalog row binding a manufacturer's product family to one or more
+// classes (bound-generic entity tuples). See
+// docs/spec/Parameterization_And_BOM_Resolution.md §3–§4.
+//
+//   part_family TI_LM317T : LM317 {
+//       attribute mpn = "LM317T";
+//   }
+//
+//   part_family Yageo_RC0603FR_07 : Resistor<R: *, "1%", "0603"> {
+//       require R in E96(1Ω, 10MΩ);
+//       attribute mpn_template = "RC0603FR-07{e96_code(R)}L";
+//   }
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PartFamilyDef(pub(crate) SyntaxNode<BhdlLanguage>);
+
+impl AstNode for PartFamilyDef {
+    type Language = BhdlLanguage;
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::PART_FAMILY_DEF }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> {
+        if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None }
+    }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+
+impl HasName for PartFamilyDef {}
+
+impl PartFamilyDef {
+    /// The class-pattern child node: `: EntityName<args>` after the
+    /// family name. Used by the catalog scan to find the entity this
+    /// family populates.
+    pub fn class_pattern(&self) -> Option<ClassPattern> {
+        self.0.children().find_map(ClassPattern::cast)
+    }
+
+    /// Iterator over `require ...;` constraint clauses in the body.
+    pub fn require_clauses(&self) -> impl Iterator<Item = RequireClause> {
+        self.0.children().filter_map(RequireClause::cast)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ClassPattern(pub(crate) SyntaxNode<BhdlLanguage>);
+
+impl AstNode for ClassPattern {
+    type Language = BhdlLanguage;
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::CLASS_PATTERN }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> {
+        if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None }
+    }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+
+impl ClassPattern {
+    /// The entity name this family populates (e.g. "Resistor",
+    /// "AP2112K", "LM317"). First IDENT after the `:` token.
+    pub fn entity_name(&self) -> Option<String> {
+        self.0
+            .children_with_tokens()
+            .filter_map(|el| el.into_token())
+            .find(|t| t.kind() == SyntaxKind::IDENT)
+            .map(|t| t.text().to_string())
+    }
+
+    /// Optional generic-args block (`<R: *, "1%", "0603">`). Returns
+    /// the raw TYPE_ARGS node — the catalog scan re-walks it to bind
+    /// wildcards and literal pins against an instance's class tuple.
+    pub fn type_args(&self) -> Option<crate::items::TypeArgs> {
+        self.0.children().find_map(crate::items::TypeArgs::cast)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RequireClause(pub(crate) SyntaxNode<BhdlLanguage>);
+
+impl AstNode for RequireClause {
+    type Language = BhdlLanguage;
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::REQUIRE_CLAUSE }
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> {
+        if Self::can_cast(syntax.kind()) { Some(Self(syntax)) } else { None }
+    }
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> { &self.0 }
+}
+
+impl RequireClause {
+    /// Raw token stream of the clause body (everything between `require`
+    /// and the terminating `;`). Phase 4b re-parses this against a
+    /// constraint mini-grammar.
+    pub fn body_text(&self) -> String {
+        let mut buf = String::new();
+        let mut after_kw = false;
+        for el in self.0.children_with_tokens() {
+            if let Some(tok) = el.as_token() {
+                if tok.kind() == SyntaxKind::REQUIRE_KW { after_kw = true; continue; }
+                if tok.kind() == SyntaxKind::SEMI { break; }
+                if after_kw && tok.kind() != SyntaxKind::WHITESPACE {
+                    buf.push_str(tok.text());
+                }
+            } else if let Some(n) = el.as_node() {
+                if after_kw {
+                    buf.push_str(&n.text().to_string());
+                }
+            }
+        }
+        buf.trim().to_string()
+    }
+}

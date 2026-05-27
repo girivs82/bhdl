@@ -6,7 +6,7 @@ use rowan::ast::AstNode;
 use bhdl_parser::{SyntaxKind, BhdlLanguage};
 use bhdl_ast::{
     SourceFile, HasName,
-    items::{Board, Entity, ComponentDef, InterfaceDef, TypedefDef, ImportStmt},
+    items::{Board, Entity, ComponentDef, InterfaceDef, TypedefDef, ImportStmt, PartFamilyDef},
     enums::EnumDef,
     traits::{TraitDef, TraitImpl},
     common::{ParamDecl, PortDecl, NetDecl, ComponentInst, NetRef, PinDecl}, // Added PinDecl for v2.0
@@ -284,6 +284,31 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                         name_token.text_range(),
                         &node_ptr
                     ));
+                }
+            }
+        }
+        SyntaxKind::PART_FAMILY_DEF => {
+            // v0.2 catalog declaration. The symbol is keyed on the
+            // family name (Yageo_RC0603FR_07, TI_LM317T, etc.); the
+            // class pattern's entity name (Resistor, LM317) is stored
+            // in `instance_type_name` so a later index can group all
+            // families that populate the same entity for fast catalog
+            // scan lookup. Phase 4c will build that index over the
+            // top-level scope; Phase 4a only does the registration.
+            if let Some(def_node) = PartFamilyDef::cast(node.clone()) {
+                if let Some(name_token) = def_node.name() {
+                    let entity_name = def_node
+                        .class_pattern()
+                        .and_then(|cp| cp.entity_name());
+                    let node_ptr = SyntaxNodePtr::new(node);
+                    let mut sym = Symbol::new_definition(
+                        name_token.text(),
+                        SymbolKind::PartFamily,
+                        name_token.text_range(),
+                        &node_ptr,
+                    );
+                    sym.instance_type_name = entity_name;
+                    context.current_scope_mut().insert(sym);
                 }
             }
         }
