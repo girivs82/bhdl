@@ -851,12 +851,21 @@ impl<'t> Parser<'t> {
         self.expect(SyntaxKind::IDENT); // Instance name
         self.expect(SyntaxKind::COLON);
         self.expect(SyntaxKind::IDENT); // Component type
-        
+
+        // v0.2 generic args at instance site: `R1: Resistor<10kΩ>();`
+        // The actual values aren't captured into the COMPONENT_INST AST
+        // for v0.1 round-trip purposes (the netlist comparator keys on
+        // refdes + pin only); they become part of the class identity in
+        // the analyzer's mono pass, which already understands TYPE_ARGS.
+        if self.peek() == Some(SyntaxKind::L_ANGLE) {
+            self.parse_type_args();
+        }
+
         // Parameters
         if self.peek() == Some(SyntaxKind::L_PAREN) {
             self.parse_param_list_expr();
         }
-        
+
         self.expect(SyntaxKind::SEMI);
         self.builder.finish_node();
     }

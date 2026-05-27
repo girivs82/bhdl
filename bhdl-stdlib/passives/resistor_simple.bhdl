@@ -1,24 +1,25 @@
-// Simplified Resistor Component Module
-// Compatible with current BHDL parser
+// Simplified Resistor — v0.2 generic form.
+//
+// Three part-defining axes: resistance, tolerance, package. Every
+// distinct generic tuple monomorphises to a distinct class; the
+// catalog scan pass (Phase 4) populates each class with candidate
+// MPNs from `part_family` declarations.
+//
+// Use sites pass the value at the type level, not as a constructor
+// argument:
+//
+//     R1: Resistor<10kΩ>;             // defaults TOL=5%, PKG="0603"
+//     R2: Resistor<4.7kΩ, 1%>;        // override tolerance
+//     R3: Resistor<100Ω, 1%, "0805">; // override all three
+//
+// Parser-compatible v2.0 subset.
 
-entity Resistor(value: resistance, tolerance: percentage = 5%) {
-    pin 1: signal inout;  // Terminal 1
-    pin 2: signal inout;  // Terminal 2
-    
-    // Component attributes
+entity Resistor<R: resistance, TOL: percentage = 5%, PKG: string = "0603">() {
+    pin 1: signal inout;
+    pin 2: signal inout;
+
     attribute component_class = "resistor";
-    attribute resistance = value;
-    attribute tolerance = tolerance;
-    
-    // Power rating based on standard sizes
-    attribute power_rating = 
-        value <= 1kΩ ? 0.125W :
-        value <= 10kΩ ? 0.25W :
-        value <= 100kΩ ? 0.25W :
-        0.5W;
-    
-    // SPICE model parameters
-    attribute spice_model = "resistor";
-    attribute spice_resistance = value;
-    attribute spice_tolerance = tolerance;
+    attribute resistance      = R;
+    attribute tolerance       = TOL;
+    attribute pkg             = PKG;
 }

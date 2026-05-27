@@ -90,11 +90,32 @@ impl<'t> Parser<'t> {
         if pos < self.tokens.len() {
             match self.tokens[pos].0 {
                 // Entity/Component/Interface instance: name: TypeName(params) or name: TypeName { ... }
+                // v0.2: also name: TypeName<generic_args>(params) — passives like
+                // Resistor<10kΩ>() take typed-literal generic args at the instance site.
                 SyntaxKind::IDENT => {
                     // Look ahead for what follows the type name
                     let mut next_pos = pos + 1;
                     while next_pos < self.tokens.len() && self.tokens[next_pos].0.is_trivia() {
                         next_pos += 1;
+                    }
+                    // Skip past a balanced generic-args block <...> if present.
+                    // We're only classifying here, not parsing — just need to find
+                    // the token after the closing '>' so the L_PAREN check below works.
+                    if next_pos < self.tokens.len() && self.tokens[next_pos].0 == SyntaxKind::L_ANGLE {
+                        let mut depth = 1;
+                        next_pos += 1;
+                        while next_pos < self.tokens.len() && depth > 0 {
+                            match self.tokens[next_pos].0 {
+                                SyntaxKind::L_ANGLE => depth += 1,
+                                SyntaxKind::R_ANGLE => depth -= 1,
+                                _ => {}
+                            }
+                            next_pos += 1;
+                        }
+                        // Skip trivia after the closing '>'
+                        while next_pos < self.tokens.len() && self.tokens[next_pos].0.is_trivia() {
+                            next_pos += 1;
+                        }
                     }
                     if next_pos < self.tokens.len() {
                         match self.tokens[next_pos].0 {
