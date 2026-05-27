@@ -1603,6 +1603,10 @@ impl RequireClause {
     /// Raw token stream of the clause body (everything between `require`
     /// and the terminating `;`). Phase 4b re-parses this against a
     /// constraint mini-grammar.
+    ///
+    /// Whitespace is preserved so the downstream tokenizer can split
+    /// `R in E96(...)` on the `in` keyword without false-merging into
+    /// `RinE96(...)`. Comments inside the clause body are dropped.
     pub fn body_text(&self) -> String {
         let mut buf = String::new();
         let mut after_kw = false;
@@ -1610,7 +1614,7 @@ impl RequireClause {
             if let Some(tok) = el.as_token() {
                 if tok.kind() == SyntaxKind::REQUIRE_KW { after_kw = true; continue; }
                 if tok.kind() == SyntaxKind::SEMI { break; }
-                if after_kw && tok.kind() != SyntaxKind::WHITESPACE {
+                if after_kw && tok.kind() != SyntaxKind::COMMENT {
                     buf.push_str(tok.text());
                 }
             } else if let Some(n) = el.as_node() {
