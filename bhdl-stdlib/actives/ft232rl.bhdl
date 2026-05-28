@@ -59,6 +59,19 @@ entity FT232RL(part_no: string = "FT232RL") {
     pin NC1: signal inout;   //                                 (pin 8)
     pin NC2: signal inout;   //                                 (pin 24)
 
+    // ─── Peripheral interfaces (v0.7 perspective form) ──────
+    // FT232RL's sole purpose is to bridge USB to UART. From the host
+    // MCU's point of view, this chip is the *dce* (data-circuit-
+    // terminating equipment) — i.e. its TXD pin transmits *to* the
+    // host MCU's RX, and its RXD pin receives *from* the host MCU's
+    // TX. With v0.7 wires{}, `mcu.uart -> bridge.uart` cross-pairs
+    // automatically: bridge.uart.RX (alias for the RXD pin) lands
+    // on the same net as mcu.uart.TX.
+    interface UART:dce uart {
+        TX = TXD;   // chip-out, drives line to host's RX
+        RX = RXD;   // chip-in,  receives line from host's TX
+    }
+
     attribute component_class = "usb-uart-bridge";
     attribute family          = "FTDI FT232";
     attribute usb             = "USB 2.0 device";

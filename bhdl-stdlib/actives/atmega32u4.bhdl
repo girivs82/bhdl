@@ -82,6 +82,37 @@ entity ATmega32U4_TQFP44(part_no: string = "ATMEGA32U4-AU") {
     // on the TQFP-44 part. Internally tied to GND on most boards.
     pin PAD:   signal inout; //                                 (pin 45)
 
+    // ─── Peripheral interfaces (v0.7 perspective form) ──────
+    // SPI master on Port B (PB0=SS, PB1=SCLK, PB2=MOSI, PB3=MISO).
+    interface SPI spi {
+        MOSI = PB2;
+        MISO = PB3;
+        SCK  = PB1;
+        CS   = PB0;
+    }
+
+    // I2C / TWI on Port D (PD0=SCL, PD1=SDA).
+    interface I2C i2c {
+        SDA = PD1;
+        SCL = PD0;
+    }
+
+    // USART1 — the part's only USART (no USART0; USB has its own
+    // controller). PD2=RXD1, PD3=TXD1. Chip is the dte side.
+    interface UART uart {
+        TX = PD3;
+        RX = PD2;
+    }
+
+    // ICSP target: shares Port B SPI signals; RESET is the dedicated
+    // active-low /RESET pin (pin 13), not on a PORTx.
+    interface ICSP:slave icsp {
+        MOSI  = PB2;
+        MISO  = PB3;
+        SCK   = PB1;
+        RESET = RESET;
+    }
+
     attribute component_class = "microcontroller";
     attribute family          = "AVR";
     attribute architecture    = "8-bit RISC";

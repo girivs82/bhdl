@@ -43,6 +43,10 @@ path = "src/bin/test_interface_v07_bundle.rs"
 name = "test_interface_uart_cross"
 path = "src/bin/test_interface_uart_cross.rs"
 
+[[bin]]
+name = "test_arduino_uart_bridge"
+path = "src/bin/test_arduino_uart_bridge.rs"
+
 # [[bin]]
 # name = "test_unified_svg"
 # path = "../test_unified_svg.rs"
