@@ -9,21 +9,37 @@ use bhdl_ast::SourceFile;
 use bhdl_parser::parse;
 use rowan::ast::AstNode;
 
+// Two SPI definitions:
+//   SPI_LEGACY — flat v0.6 form, used with `~` for back-compat.
+//   SPI_V07    — v0.7 perspective form, used with `:slave`.
+// Both sides should materialise the same 4 pins with the same
+// directions. This proves the v0.7 path agrees with the legacy path.
 const SOURCE: &str = r#"
-interface SPI {
+interface SPI_LEGACY {
     signal MOSI: out;
     signal MISO: in;
     signal SCK:  out;
     signal CS:   out optional;
 }
-
-entity Master {
-    interface SPI spi;
+interface SPI_V07 {
+    perspective master {
+        signal MOSI: out;
+        signal MISO: in;
+        signal SCK:  out;
+        signal CS:   out optional;
+    }
+    perspective slave {
+        signal MOSI: in;
+        signal MISO: out;
+        signal SCK:  in;
+        signal CS:   in optional;
+    }
 }
 
-entity Slave {
-    interface ~SPI spi;
-}
+entity Master      { interface SPI_LEGACY spi; }
+entity Slave       { interface ~SPI_LEGACY spi; }
+entity MasterV07   { interface SPI_V07 spi; }
+entity SlaveV07    { interface SPI_V07:slave spi; }
 "#;
 
 fn fail(msg: &str) -> ! {
@@ -37,31 +53,42 @@ fn main() {
     let sf = SourceFile::cast(pr.syntax()).expect("source file");
     let result = analyze(&sf);
 
-    // Find both entity scopes.
-    let mut master_scope_id = None;
-    let mut slave_scope_id = None;
+    // Find all four entity scopes.
+    let mut scopes: std::collections::HashMap<&'static str, _> = Default::default();
     for entry in result.scope_registry.iter() {
         if entry.kind != bhdl_analyzer::scope_registry::ScopeKind::Entity { continue; }
         let name = entry.table.scope_name.clone();
-        match name.as_deref() {
-            Some("Master") => master_scope_id = Some(entry.id),
-            Some("Slave")  => slave_scope_id  = Some(entry.id),
-            _ => {}
+        for key in ["Master", "Slave", "MasterV07", "SlaveV07"] {
+            if name.as_deref() == Some(key) {
+                scopes.insert(key, entry.id);
+            }
         }
     }
-    let master_id = master_scope_id.unwrap_or_else(|| fail("Master entity scope not found"));
-    let slave_id  = slave_scope_id.unwrap_or_else(|| fail("Slave entity scope not found"));
+    for key in ["Master", "Slave", "MasterV07", "SlaveV07"] {
+        if !scopes.contains_key(key) {
+            fail(&format!("{} entity scope not found", key));
+        }
+    }
 
     let probes = [
-        ("Master", master_id, "spi.MOSI", PortDirectionKind::Out),
-        ("Master", master_id, "spi.MISO", PortDirectionKind::In),
-        ("Master", master_id, "spi.SCK",  PortDirectionKind::Out),
-        ("Master", master_id, "spi.CS",   PortDirectionKind::Out),
-        // ~SPI flips out↔in:
-        ("Slave",  slave_id, "spi.MOSI", PortDirectionKind::In),
-        ("Slave",  slave_id, "spi.MISO", PortDirectionKind::Out),
-        ("Slave",  slave_id, "spi.SCK",  PortDirectionKind::In),
-        ("Slave",  slave_id, "spi.CS",   PortDirectionKind::In),
+        // Legacy ~SPI form (v0.6, still accepted):
+        ("Master", scopes["Master"], "spi.MOSI", PortDirectionKind::Out),
+        ("Master", scopes["Master"], "spi.MISO", PortDirectionKind::In),
+        ("Master", scopes["Master"], "spi.SCK",  PortDirectionKind::Out),
+        ("Master", scopes["Master"], "spi.CS",   PortDirectionKind::Out),
+        ("Slave",  scopes["Slave"],  "spi.MOSI", PortDirectionKind::In),
+        ("Slave",  scopes["Slave"],  "spi.MISO", PortDirectionKind::Out),
+        ("Slave",  scopes["Slave"],  "spi.SCK",  PortDirectionKind::In),
+        ("Slave",  scopes["Slave"],  "spi.CS",   PortDirectionKind::In),
+        // v0.7 explicit-perspective form:
+        ("MasterV07", scopes["MasterV07"], "spi.MOSI", PortDirectionKind::Out),
+        ("MasterV07", scopes["MasterV07"], "spi.MISO", PortDirectionKind::In),
+        ("MasterV07", scopes["MasterV07"], "spi.SCK",  PortDirectionKind::Out),
+        ("MasterV07", scopes["MasterV07"], "spi.CS",   PortDirectionKind::Out),
+        ("SlaveV07",  scopes["SlaveV07"],  "spi.MOSI", PortDirectionKind::In),
+        ("SlaveV07",  scopes["SlaveV07"],  "spi.MISO", PortDirectionKind::Out),
+        ("SlaveV07",  scopes["SlaveV07"],  "spi.SCK",  PortDirectionKind::In),
+        ("SlaveV07",  scopes["SlaveV07"],  "spi.CS",   PortDirectionKind::In),
     ];
 
     for (entity, scope_id, pin_name, expected) in probes {

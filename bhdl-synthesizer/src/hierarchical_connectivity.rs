@@ -1707,23 +1707,40 @@ fn add_interface_field_pins(
         .children()
         .filter(|n| n.kind() == SyntaxKind::INTERFACE_FIELD_DECL)
     {
-        // Extract `~`, type name, field name from the field decl.
+        // Extract `~`, type name, perspective selector (v0.7),
+        // and field name from the field decl.
         let mut reversed = false;
-        let mut type_name = None;
-        let mut field_name = None;
-        for el in field_node.children_with_tokens() {
-            if let Some(tok) = el.as_token() {
-                match tok.kind() {
-                    SyntaxKind::TILDE => reversed = true,
-                    SyntaxKind::IDENT => {
-                        if type_name.is_none() {
-                            type_name = Some(tok.text().to_string());
-                        } else if field_name.is_none() {
-                            field_name = Some(tok.text().to_string());
-                        }
-                    }
-                    _ => {}
+        let mut type_name: Option<String> = None;
+        let mut perspective_name: Option<String> = None;
+        let mut field_name: Option<String> = None;
+        let tokens: Vec<_> = field_node
+            .children_with_tokens()
+            .filter_map(|el| el.into_token())
+            .filter(|t| matches!(
+                t.kind(),
+                SyntaxKind::TILDE | SyntaxKind::COLON | SyntaxKind::IDENT
+            ))
+            .collect();
+        let mut i = 0;
+        while i < tokens.len() {
+            match tokens[i].kind() {
+                SyntaxKind::TILDE => { reversed = true; i += 1; }
+                SyntaxKind::IDENT if type_name.is_none() => {
+                    type_name = Some(tokens[i].text().to_string());
+                    i += 1;
                 }
+                SyntaxKind::COLON if perspective_name.is_none() => {
+                    i += 1;
+                    if i < tokens.len() && tokens[i].kind() == SyntaxKind::IDENT {
+                        perspective_name = Some(tokens[i].text().to_string());
+                        i += 1;
+                    }
+                }
+                SyntaxKind::IDENT if field_name.is_none() => {
+                    field_name = Some(tokens[i].text().to_string());
+                    i += 1;
+                }
+                _ => i += 1,
             }
         }
         let (Some(type_name), Some(field_name)) = (type_name, field_name) else { continue; };
@@ -1779,10 +1796,17 @@ fn add_interface_field_pins(
 
         let Some(iface_node) = iface_node else { continue; };
 
-        for sig_node in iface_node
-            .children()
-            .filter(|n| n.kind() == SyntaxKind::INTERFACE_SIGNAL)
-        {
+        // v0.7: resolve the perspective selector to a list of
+        // INTERFACE_SIGNAL nodes + whether directions need
+        // flipping (only true for legacy `~` with no explicit
+        // perspectives).
+        let (signal_nodes, flip_for_legacy) = synth_resolve_perspective_signals(
+            &iface_node,
+            perspective_name.as_deref(),
+            reversed,
+        );
+
+        for sig_node in signal_nodes {
             // Pull signal name + direction.
             let sig_name_tok = sig_node
                 .children_with_tokens()
@@ -1810,7 +1834,7 @@ fn add_interface_field_pins(
                 Some(SyntaxKind::INOUT_KW) => PortDirection::InOut,
                 _ => PortDirection::InOut,
             };
-            if reversed {
+            if flip_for_legacy {
                 pin_direction = match pin_direction {
                     PinDirection::In => PinDirection::Out,
                     PinDirection::Out => PinDirection::In,
@@ -1861,6 +1885,78 @@ fn add_interface_field_pins(
             }
         }
     }
+}
+
+/// v0.7: pick the INTERFACE_SIGNAL nodes corresponding to the
+/// requested perspective.
+///
+/// Same logic as the analyzer's `resolve_perspective_signals`:
+///   1. explicit selector → that perspective.
+///   2. legacy `~`: second-declared perspective if any, else
+///      top-level signals with directions flipped.
+///   3. no selector: first-declared perspective if any, else
+///      top-level signals (v0.6 single-implicit-perspective form).
+///
+/// Returns `(signals, flip_for_legacy)`. `flip_for_legacy=true`
+/// only in case (2)'s fallback branch.
+fn synth_resolve_perspective_signals(
+    iface: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>,
+    perspective: Option<&str>,
+    legacy_reversed: bool,
+) -> (Vec<rowan::SyntaxNode<bhdl_parser::BhdlLanguage>>, bool) {
+    use bhdl_parser::SyntaxKind;
+
+    let perspectives: Vec<_> = iface
+        .children()
+        .filter(|n| n.kind() == SyntaxKind::INTERFACE_PERSPECTIVE)
+        .collect();
+
+    if let Some(name) = perspective {
+        for p in &perspectives {
+            let p_name = p
+                .children_with_tokens()
+                .filter_map(|el| el.into_token())
+                .find(|t| t.kind() == SyntaxKind::IDENT)
+                .map(|t| t.text().to_string());
+            if p_name.as_deref() == Some(name) {
+                let sigs = p
+                    .children()
+                    .filter(|n| n.kind() == SyntaxKind::INTERFACE_SIGNAL)
+                    .collect();
+                return (sigs, false);
+            }
+        }
+        // Fall through if name didn't match.
+    }
+
+    if legacy_reversed {
+        if perspectives.len() >= 2 {
+            let sigs = perspectives[1]
+                .children()
+                .filter(|n| n.kind() == SyntaxKind::INTERFACE_SIGNAL)
+                .collect();
+            return (sigs, false);
+        }
+        let sigs = iface
+            .children()
+            .filter(|n| n.kind() == SyntaxKind::INTERFACE_SIGNAL)
+            .collect();
+        return (sigs, true);
+    }
+
+    if !perspectives.is_empty() {
+        let sigs = perspectives[0]
+            .children()
+            .filter(|n| n.kind() == SyntaxKind::INTERFACE_SIGNAL)
+            .collect();
+        return (sigs, false);
+    }
+
+    let sigs = iface
+        .children()
+        .filter(|n| n.kind() == SyntaxKind::INTERFACE_SIGNAL)
+        .collect();
+    (sigs, false)
 }
 
 /// Look up an interface-field pin-binding alias on the instance's
