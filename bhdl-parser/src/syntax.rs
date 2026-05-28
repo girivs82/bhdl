@@ -89,6 +89,7 @@ pub enum SyntaxKind {
     OUTPUT_KW,     // output
     SIGNAL_KW,     // signal (base type)
     WIRE_KW,       // wire
+    WIRES_KW,      // wires (v0.7: interface wire-mapping block)
     TRI_KW,        // tri
     TRIREG_KW,     // trireg
     UWIRE_KW,      // uwire
@@ -223,6 +224,8 @@ pub enum SyntaxKind {
     INTERFACE_FIELD_DECL, // interface [~]Name field;  (entity body)
     INTERFACE_FIELD_BINDINGS, // { SIG = PIN; SIG = PIN; ... } after a field decl
     INTERFACE_FIELD_BINDING,  // one entry of the above: `SIG = PIN`
+    INTERFACE_WIRES_BLOCK,    // wires { dte.TX <-> dce.RX; ... }  (v0.7)
+    INTERFACE_WIRE_MAPPING,   // one entry: `perspective.signal <-> perspective.signal`
     TYPE_DEF,       // type TypeName = TypeExpression;
     PART_FAMILY_DEF,    // part_family Name : ClassPattern { require ...; attribute ...; }
     CLASS_PATTERN,      // : EntityName<*, "1%", "0603"> — the class skeleton
