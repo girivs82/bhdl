@@ -401,83 +401,122 @@ values, wiring, and BOM identifiers. The board author writes
 intent at the chip-and-interface level; the synthesizer fills
 in the datasheet-mandated circuit around it.
 
-## 8. Planned: abstract entities + SKU resolution (v0.9b)
+## 8. Abstract entities + SKU resolution (v0.9b, landed 2026-05-29)
 
-The next layer up. Today a designer must pick the SKU at
-instantiation time: `ATmega328P_DIP28()` vs `ATmega328P_QFN32()`.
-The DIP-28 lacks ADC6/ADC7 (only on QFN-32); a board using ADC7
-fails to synthesize without the designer knowing they need the
-QFN package.
+**Goal achieved:** designer writes the abstract chip; the resolver
+picks the first SKU whose pin-map covers the aliases the board
+actually uses, and rewrites the source to use that SKU's
+specific names.
 
-**Goal:** designer writes the abstract chip; synth picks the
-smallest SKU whose pin set covers the board's actual usage.
-
-### 8.1 Sketch
+### 8.1 Form
 
 ```bhdl
 abstract entity ATmega328P {
-    // Superset pin/alias set across all SKUs in the family.
-    aliases { gpio0..gpio23, adc0..adc7, reset, ... }
-
-    interface SPI, I2C, UART, ICSP;
-
     family {
-        // Order = preference (smallest/cheapest first).
-        ATmega328P_DIP28:  exposes [gpio0..gpio23, adc0..adc5, reset]
-                           footprint "Package_DIP:DIP-28_W7.62mm"
-                           pin_map { gpio0 = ("PD0", 2), ... };
-        ATmega328P_TQFP32: exposes [gpio0..gpio23, adc0..adc7, reset]
-                           footprint "Package_QFP:TQFP-32_7x7mm";
-        ATmega328P_QFN32:  exposes [...]
-                           footprint "Package_DFN_QFN:QFN-32_5x5mm";
+        ATmega328P_DIP28 {
+            // Each family entry declares its own pin_map from
+            // abstract alias → that SKU's concrete pin name.
+            // SKUs that don't expose an alias omit it.
+            vcc  = VCC;
+            avcc = AVCC;
+            gnd  = GND1;
+            agnd = GND2;
+            adc0 = PC0;   adc1 = PC1;   …   adc5 = PC5;
+            reset = PC6;
+            // adc6 / adc7 absent — DIP-28 doesn't bring them out.
+        };
+        ATmega328P_QFN32 {
+            vcc  = VCC1;          // ← QFN supply pin is named differently
+            avcc = AVCC;
+            gnd  = GND1;
+            agnd = GND3;
+            adc0 = PC0;   …   adc5 = PC5;
+            adc6 = ADC6;  adc7 = ADC7;     // QFN-only
+            reset = PC6;
+        };
     }
 }
 ```
 
-Board:
+### 8.2 Use
 
 ```bhdl
-mcu: ATmega328P();          // abstract
-mcu.gpio11 -> @MOSI;        // any SKU has gpio11 ✓
-mcu.adc7   -> @TEMP_SENSE;  // ← only TQFP32/QFN32 have this
-// Synthesizer picks TQFP32 (smallest fit; DIP-28 dropped).
+mcu: ATmega328P();                  // abstract
+@VCC -> mcu.vcc;                    // SKU-stable alias names
+mcu.gnd  -> @GND;
+mcu.adc7 -> @TEMP_SENSE;            // ← only QFN's pin_map has adc7
 ```
 
-### 8.2 Resolution algorithm
+The preprocessor rewrites both the instance type token and each
+alias reference. Board B above lands as:
 
-```
-1. Walk board, collect set of aliases wired on each abstract
-   instance.
-2. For each instance, find the first SKU in its family{} whose
-   `exposes` is a superset of the wired aliases.
-3. Rewrite the abstract instance to the chosen physical SKU
-   (instantiate the concrete entity; copy connections).
-4. Stamp BOM attrs (mpn, footprint, kicad_symbol) from the SKU.
-5. KiCad export consults the SKU's pin_map for physical pin
-   numbers.
+```bhdl
+// (abstract entity block stripped)
+mcu: ATmega328P_QFN32();
+@VCC -> mcu.VCC1;                   // mcu.vcc → QFN's VCC1
+mcu.GND1 -> @GND;
+mcu.ADC7 -> @TEMP_SENSE;
 ```
 
-### 8.3 What the mechanism buys
+— exactly the source the regular parser/analyzer/synthesizer
+expect.
 
-- Designer experience: write intent, not package.
-- BOM correctness: smallest part wins by default; explicit
-  override (`mcu: ATmega328P(package="QFN-32")`) for board
-  re-laying.
-- Catchable errors: "Your board wires `mcu.adc7` but none of
-  the available SKUs in family `ATmega328P` expose it." beats
-  silent malfunction.
+### 8.3 Resolution algorithm
 
-### 8.4 Cost
+```
+1. extract_abstract_decls(source)
+     → HashMap<abstract_name, family entries with pin_maps>
+2. extract_abstract_instances(source, decls)
+     → instances using one of the abstract names
+3. For each instance:
+     a. Find the set of `inst.X` references the board makes.
+     b. Pick the first family entry whose pin_map keys ⊇ used set.
+     c. Record (instance → chosen entry).
+4. Rewrite source:
+     - strip every `abstract entity NAME { ... }` block
+     - rewrite each abstract instance type token to the chosen SKU
+     - rewrite each `mcu.X` → `mcu.<pin_map[X]>` per the chosen map
+```
 
-| What's new | Effort |
-|---|---|
-| `abstract entity` + `family { }` + `exposes` + `pin_map` grammar | ~1 session |
-| Pin-usage analysis (collect aliases per instance) | ~0.5 session |
-| SKU-resolution pass (Phase 4.6, after expansion) | ~1 session |
-| Footprint/MPN propagation + KiCad export hook | ~0.5 session |
-| Spec polish + 1 demo board | ~0.5 session |
+### 8.4 Implementation: source-text preprocessor
 
-~3-4 sessions total.
+The mechanism lives *above* the parser, as a string rewrite
+over the raw source. No parser/grammar changes — abstract
+entities are a preprocessor convention, parser-invisible. This
+sidesteps the multi-module-creation-site integration challenge
+that derailed an earlier in-tree attempt (see the related
+note in task #92 history).
+
+Public entry point: `bhdl-synthesizer/src/abstract_resolver.rs::preprocess`.
+Callers (e.g. the synthesizer driver or a test) read the source
+string, call `preprocess`, then parse the result.
+
+### 8.5 What this buys
+
+- **SKU-independent designer experience.** The board author
+  writes `mcu.vcc` and gets the right pin for whichever SKU
+  is chosen — DIP-28's plain `VCC` or QFN-32's `VCC1`.
+- **BOM correctness.** Smallest-listed family member wins by
+  default; users can lock a choice by instantiating the concrete
+  entity directly (`mcu: ATmega328P_DIP28()`), bypassing the
+  abstract resolver.
+- **Catchable errors at synth time.** "Abstract entity
+  'ATmega328P' instance 'mcu' wires aliases {adc7, …}, but no
+  family member's pin_map covers all of them." beats silent
+  malfunction or wrong-pin behaviour.
+- **No grammar overhead.** The bhdl-parser doesn't change;
+  abstract entities are a preprocessing layer.
+
+### 8.6 Open follow-ups
+
+- **Integrate into NetlistGenerator** so callers don't need to
+  call `preprocess` explicitly; the synthesizer would invoke it
+  in its pipeline when given a board source string (vs. an AST).
+- **Expose chosen SKU as an instance attribute** so downstream
+  BOM walkers know which package was selected without re-parsing.
+- **`exposes [list]` shorthand** for SKUs where most aliases
+  map trivially (alias name == pin name); avoids verbose
+  per-pin = mappings.
 
 ## 9. Decision log
 
@@ -499,6 +538,12 @@ mcu.adc7   -> @TEMP_SENSE;  // ← only TQFP32/QFN32 have this
   Foundation for the v0.9b abstract-entity layer. (`e052ce0`)
 - **2026-05-28** — Fix `merge_nets` pin-instance staleness
   bug exposed by the alias test. Same commit (`e052ce0`).
+- **2026-05-29 (v0.9b)** — Land abstract entities + per-SKU
+  pin maps via a source-text preprocessor
+  (`bhdl-synthesizer/src/abstract_resolver.rs`). Boards write
+  `mcu.vcc` and the resolver picks the SKU + rewrites to that
+  SKU's specific pin name (DIP-28's `VCC` vs QFN-32's `VCC1`).
+  Closes task #92.
 - **2026-05-29** — Extend Phase 4.4 to stamp entity parameter
   defaults in addition to explicit overrides. Closes task #90;
   the C8T6 default-args board now lands with full BOM
