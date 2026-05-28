@@ -45,30 +45,35 @@ async fn synth_and_inspect_mcu(path: &str) -> Result<(usize, String, String)> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Note: Phase 4.4 only stamps args the user *explicitly* passed
-    // — it doesn't materialise entity-parameter *defaults* onto the
-    // instance. So the C8T6 board (which uses `STM32F103Cx()` with
-    // no overrides) lands with empty part_no/flash_kb on the
-    // instance; the defaults still apply at the entity level (used
-    // by analyzer/expansion) but don't reach the instance's BOM
-    // attributes. That gap is a separate follow-up (entity-defaults
-    // → instance-attr propagation). For this test we only verify
-    // the explicit-override path, which is the primary motivator
-    // for parametric entities — a variant board overrides what it
-    // needs to override.
+    // Task #90 (landed 2026-05-29): Phase 4.4 now stamps entity
+    // parameter *defaults* in addition to explicit overrides, so a
+    // board using `STM32F103Cx()` (no args) lands with the C8T6
+    // defaults on the instance attrs (part_no = "STM32F103C8T6",
+    // flash_kb = 64). The override path (CBT6 board) still works
+    // because Phase 4.4 stamps explicit args first; defaults use
+    // entry().or_insert() so they only fill in what's missing.
 
-    println!("=== C8T6 (default args, no overrides on instance attrs) ===");
+    println!("=== C8T6 (default args propagate via Phase 4.4) ===");
     let (n_c8t6, part_c8t6, flash_c8t6) =
         synth_and_inspect_mcu("tests/circuits/realistic/stm32_blue_pill.bhdl").await?;
     println!("  instances total: {}", n_c8t6);
     println!("  mcu.part_no  = {:?}", part_c8t6);
     println!("  mcu.flash_kb = {:?}", flash_c8t6);
-    // Should be 12 (chip + 11 children: 9 always-on + 2 I²C1 pullups).
     if n_c8t6 != 12 {
         eprintln!("✗ C8T6 expected 12 instances, got {}", n_c8t6);
         std::process::exit(1);
     }
-    println!("✓ C8T6: same parametric entity yields the expected expansion (12 instances)");
+    if !part_c8t6.contains("C8T6") {
+        eprintln!("✗ C8T6 default args didn't propagate: part_no = {:?} \
+                   (expected to contain 'C8T6')", part_c8t6);
+        std::process::exit(1);
+    }
+    if flash_c8t6 != "64" {
+        eprintln!("✗ C8T6 default args didn't propagate: flash_kb = {:?} \
+                   (expected '64')", flash_c8t6);
+        std::process::exit(1);
+    }
+    println!("✓ C8T6: defaults propagated (part_no='STM32F103C8T6', flash_kb=64)");
 
     println!("\n=== CBT6 (explicit overrides for the 128 KB variant) ===");
     let (n_cbt6, part_cbt6, flash_cbt6) =

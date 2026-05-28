@@ -943,46 +943,152 @@ impl NetlistGenerator {
         use bhdl_ast::common::ComponentInst;
         use rowan::ast::AstNode;
 
-        let mut stamped = 0usize;
+        // Build an index of entity_name → list of (param_name, default_value_text)
+        // from the entire AST + imported entities. Used in the second
+        // pass below to stamp DEFAULTS on instances that didn't pass
+        // an explicit override (task #90).
+        let mut entity_param_defaults: HashMap<String, Vec<(String, String)>> = HashMap::new();
+
+        // Helper: extract (param_name, default_value) pairs from an
+        // entity-def AST node. Returned as an owned Vec — caller
+        // decides where to store.
+        fn extract_param_defaults(
+            entity_node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>,
+        ) -> Vec<(String, String)> {
+            let mut defaults: Vec<(String, String)> = Vec::new();
+            for param_node in entity_node.children() {
+                if param_node.kind() != SyntaxKind::PARAM_LIST { continue; }
+                for entity_param in param_node.children() {
+                    if entity_param.kind() != SyntaxKind::PARAM_DECL { continue; }
+                    let pname = entity_param.children_with_tokens()
+                        .filter_map(|el| el.into_token())
+                        .find(|t| t.kind() == SyntaxKind::IDENT)
+                        .map(|t| t.text().to_string());
+                    let Some(pname) = pname else { continue; };
+                    // Default value: walk children for text after EQ.
+                    let mut saw_eq = false;
+                    let mut default_text = String::new();
+                    for el in entity_param.children_with_tokens() {
+                        match el {
+                            rowan::NodeOrToken::Token(t) if t.kind() == SyntaxKind::EQ => {
+                                saw_eq = true;
+                            }
+                            rowan::NodeOrToken::Node(n) if saw_eq => {
+                                default_text.push_str(n.text().to_string().trim());
+                            }
+                            rowan::NodeOrToken::Token(t) if saw_eq
+                                && t.kind() != SyntaxKind::WHITESPACE
+                                && t.kind() != SyntaxKind::COMMA
+                                && t.kind() != SyntaxKind::R_PAREN =>
+                            {
+                                default_text.push_str(t.text());
+                            }
+                            _ => {}
+                        }
+                    }
+                    let default_text = default_text.trim().to_string();
+                    if !default_text.is_empty() {
+                        defaults.push((pname, default_text));
+                    }
+                }
+            }
+            defaults
+        }
+
+        // (a) Local entity defs in the same file.
+        for node in ast.syntax().descendants() {
+            if node.kind() != SyntaxKind::ENTITY_DEF { continue; }
+            let name = node.children_with_tokens()
+                .filter_map(|el| el.into_token())
+                .find(|t| t.kind() == SyntaxKind::IDENT)
+                .map(|t| t.text().to_string());
+            let Some(entity_name) = name else { continue; };
+            let defaults = extract_param_defaults(&node);
+            if !defaults.is_empty() {
+                entity_param_defaults.insert(entity_name, defaults);
+            }
+        }
+
+        let mut stamped_explicit = 0usize;
+        let mut stamped_defaults = 0usize;
         for node in ast.syntax().descendants() {
             if node.kind() != SyntaxKind::COMPONENT_INST { continue; }
             let Some(comp_inst) = ComponentInst::cast(node) else { continue; };
 
             // The user-supplied refdes (`U1` in `U1: LM317(...)`).
-            let inst_name = comp_inst.syntax()
+            // The entity-type IDENT is the second.
+            let idents: Vec<String> = comp_inst.syntax()
                 .children_with_tokens()
                 .filter_map(|el| el.into_token())
-                .find(|t| t.kind() == SyntaxKind::IDENT)
-                .map(|t| t.text().to_string());
-            let Some(name) = inst_name else { continue; };
-
-            // Constructor args (`v_out=5V`, `tolerance=1%`, …) live
-            // under a `PARAM_LIST` node — not `PARAM_ASSIGN_BLOCK`,
-            // which is a different (older?) grammar shape that
-            // ComponentInst::param_assign_block() returns. Use
-            // param_list().params() instead.
-            let Some(param_list) = comp_inst.param_list() else { continue; };
+                .filter(|t| t.kind() == SyntaxKind::IDENT)
+                .map(|t| t.text().to_string())
+                .collect();
+            if idents.is_empty() { continue; }
+            let inst_name = &idents[0];
+            let entity_type = idents.get(1).cloned();
 
             // Find the matching netlist instance by name.
             let inst_id = self.netlist.instances.iter()
-                .find(|(_, inst)| inst.name == name)
+                .find(|(_, inst)| inst.name == *inst_name)
                 .map(|(id, _)| id);
             let Some(inst_id) = inst_id else { continue; };
 
-            for assign in param_list.params() {
-                if let (Some(name_tok), Some(value_expr)) =
-                    (bhdl_ast::HasName::name(&assign), assign.value())
-                {
-                    let key = name_tok.text().to_string();
-                    let val = value_expr.syntax().text().to_string().trim().to_string();
+            // (1) Stamp explicit constructor args from the `PARAM_LIST`.
+            // Constructor args (`v_out=5V`, `tolerance=1%`, …) live
+            // under a `PARAM_LIST` node — not `PARAM_ASSIGN_BLOCK`,
+            // which is a different grammar shape.
+            if let Some(param_list) = comp_inst.param_list() {
+                for assign in param_list.params() {
+                    if let (Some(name_tok), Some(value_expr)) =
+                        (bhdl_ast::HasName::name(&assign), assign.value())
+                    {
+                        let key = name_tok.text().to_string();
+                        let val = value_expr.syntax().text().to_string().trim().to_string();
+                        if let Some(inst) = self.netlist.instances.get_mut(inst_id) {
+                            inst.attributes.entry(key).or_insert(val);
+                            stamped_explicit += 1;
+                        }
+                    }
+                }
+            }
+
+            // (2) Task #90: stamp entity-parameter DEFAULTS for any
+            // params the user didn't explicitly override.
+            //
+            // Source for defaults: same-file entity defs already
+            // collected above; for imported entities, do an on-demand
+            // collection from the imported AST.
+            if let Some(ref etype) = entity_type {
+                // Lazily collect imported entity's defaults if not
+                // already in the index.
+                if !entity_param_defaults.contains_key(etype) {
+                    if let Some(ref pp) = self.import_preprocessor {
+                        if let Some(imported) = pp.get_imported_entity(etype) {
+                            let defaults = extract_param_defaults(imported.syntax());
+                            if !defaults.is_empty() {
+                                entity_param_defaults.insert(etype.clone(), defaults);
+                            }
+                        }
+                    }
+                }
+                if let Some(defaults) = entity_param_defaults.get(etype).cloned() {
                     if let Some(inst) = self.netlist.instances.get_mut(inst_id) {
-                        inst.attributes.entry(key).or_insert(val);
-                        stamped += 1;
+                        for (pname, pdefault) in defaults {
+                            // entry().or_insert() skips when the user
+                            // already passed an override (the
+                            // explicit-args pass above stamped them).
+                            let pre_exists = inst.attributes.contains_key(&pname);
+                            inst.attributes.entry(pname.clone()).or_insert(pdefault);
+                            if !pre_exists {
+                                stamped_defaults += 1;
+                            }
+                        }
                     }
                 }
             }
         }
-        info!("Phase 4.4: stamped {} constructor arg(s) onto netlist instances", stamped);
+        info!("Phase 4.4: stamped {} explicit arg(s) + {} default(s) onto instances",
+              stamped_explicit, stamped_defaults);
     }
 
     fn extract_connectivity_from_ast(&mut self, ast: &SourceFile, analysis: &AnalysisResult) -> Result<()> {

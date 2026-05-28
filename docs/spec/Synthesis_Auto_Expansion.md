@@ -295,14 +295,21 @@ way. Datasheets that show "PE0/NC" entries for some SKUs are
 already telling you these are different chips, not parameters
 of one chip — just one PDF for convenience.
 
-### 5.4 Known gap (task #90)
+### 5.4 Default propagation (task #90, landed 2026-05-29)
 
-Phase 4.4 only stamps args the user *explicitly* passed.
-Entity-parameter *defaults* don't propagate to instance
-attributes. So `mcu: STM32F103Cx()` lands with empty
-`mcu.part_no` even though the entity body uses the default
-internally. Fix: extend Phase 4.4 to also stamp entity defaults
-when no override is given.
+Phase 4.4 stamps entity-parameter *defaults* in addition to
+explicit constructor args. So `mcu: STM32F103Cx()` lands with
+the canonical SKU's identifiers (`mcu.part_no="STM32F103C8T6"`,
+`mcu.flash_kb="64"`) on the instance attrs — usable by the BOM
+walker and KiCad exporter. The explicit-override path keeps
+priority because Phase 4.4 stamps overrides first and defaults
+use `entry().or_insert()` semantics.
+
+Implementation: a per-entity `(param_name, default_text)` index
+is built up front from same-file entity defs + imported stdlib
+entities, then consulted per-instance after the explicit args
+are stamped. See `extract_param_defaults` in
+`bhdl-synthesizer/src/lib.rs`.
 
 ## 6. Function aliases
 
@@ -492,6 +499,10 @@ mcu.adc7   -> @TEMP_SENSE;  // ← only TQFP32/QFN32 have this
   Foundation for the v0.9b abstract-entity layer. (`e052ce0`)
 - **2026-05-28** — Fix `merge_nets` pin-instance staleness
   bug exposed by the alias test. Same commit (`e052ce0`).
+- **2026-05-29** — Extend Phase 4.4 to stamp entity parameter
+  defaults in addition to explicit overrides. Closes task #90;
+  the C8T6 default-args board now lands with full BOM
+  identifiers (`part_no`, `flash_kb`) on its instance.
 
 ## 10. Implementation file index
 
