@@ -219,6 +219,7 @@ impl<'t> Parser<'t> {
                 Some(SyntaxKind::DESIGN_KW) => self.parse_design_block(),
                 Some(SyntaxKind::PLACEMENT_KW) => self.parse_placement_block(),
                 Some(SyntaxKind::INTERFACE_KW) => self.parse_interface_field_decl(),
+                Some(SyntaxKind::ALIASES_KW) => self.parse_entity_aliases_block(),
                 Some(SyntaxKind::IDENT) => {
                     // Check if this is an entity instantiation or connection
                     // Entity instantiation: instance_name: EntityType(params) { ... }
@@ -785,6 +786,37 @@ impl<'t> Parser<'t> {
     // Optional in interface declarations; default pairing is by
     // signal name when omitted (correct for SPI/I2C/USB; required
     // for UART/RS-232 etc.).
+    /// Parse `aliases { gpio0 = PB0; gpio1 = PB1; ... }` inside an
+    /// entity body. v0.9 function-alias mechanism: gives logical
+    /// names (gpio0, adc4, …) to physical port pins so board
+    /// authors don't need datasheet vocabulary.
+    pub(crate) fn parse_entity_aliases_block(&mut self) {
+        self.builder.start_node(SyntaxKind::ENTITY_ALIASES_BLOCK.into());
+        self.expect(SyntaxKind::ALIASES_KW);
+        self.expect(SyntaxKind::L_BRACE);
+
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) | None => break,
+                Some(SyntaxKind::IDENT) => {
+                    self.builder.start_node(SyntaxKind::ENTITY_ALIAS_MAPPING.into());
+                    self.expect(SyntaxKind::IDENT);   // alias name (gpio0, adc4, …)
+                    self.expect(SyntaxKind::EQ);
+                    self.expect(SyntaxKind::IDENT);   // physical pin name (PB0, PC4, …)
+                    self.expect(SyntaxKind::SEMI);
+                    self.builder.finish_node();
+                }
+                _ => {
+                    self.error("Expected `alias_name = pin_name;` in aliases block".to_string());
+                    self.bump_any();
+                }
+            }
+        }
+        self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
     pub(crate) fn parse_interface_wires_block(&mut self) {
         self.builder.start_node(SyntaxKind::INTERFACE_WIRES_BLOCK.into());
         self.expect(SyntaxKind::WIRES_KW);
