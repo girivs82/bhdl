@@ -292,14 +292,37 @@ fn expand_one_instance(
         // Evaluate parameter expressions by substituting entity params
         let mut attrs: Vec<(&str, String)> = Vec::new();
 
-        // Set the value attribute. An intent-driven design overrides the
-        // expansion block's literal for the children it computed; every
-        // other child keeps its declared value.
-        let designed_value = intent_design.get(exp_inst.name.as_str()).copied();
-        if let Some(v) = designed_value {
+        // Set the value attribute. Three sources, in priority order:
+        //
+        //  1. Intent-driven designer keyed by *child name*. Used by the
+        //     Rust reference tube designers (`amplifier_bias_design`
+        //     returns {"Rp": …, "Rk": …}) and by vendor `design { }`
+        //     blocks whose `Assign` statements name the child directly
+        //     (e.g. `Rp = …;`).
+        //
+        //  2. Intent-driven designer keyed by *script variable*. The
+        //     LM317 stdlib pattern: the design block computes
+        //     `r1_value = …` and `r2_value = …`, then the expansion
+        //     block references those names as the value parameter
+        //     (`Res(r1_value)`). The expansion-recipe extractor stores
+        //     the literal identifier string as the child's first param;
+        //     here we substitute it for the computed number when the
+        //     identifier matches a design-output key. Without this
+        //     bridge the child instance lands in the netlist with
+        //     `value=r1_value` (the raw text) instead of `value=720`.
+        //
+        //  3. Fallback: resolve the parameter expression against the
+        //     entity's param defaults (handles `value=10µF` literals
+        //     and similar).
+        let first_param = exp_inst.params.first().map(String::as_str);
+        let designed_by_child = intent_design.get(exp_inst.name.as_str()).copied();
+        let designed_by_param = first_param
+            .and_then(|p| intent_design.get(p.trim()))
+            .copied();
+        if let Some(v) = designed_by_child.or(designed_by_param) {
             attrs.push(("value", format!("{v:.3}")));
-        } else if let Some(first_param) = exp_inst.params.first() {
-            let resolved = resolve_param_expression(first_param, &cand.param_values, &cand.recipe.param_defaults);
+        } else if let Some(fp) = first_param {
+            let resolved = resolve_param_expression(fp, &cand.param_values, &cand.recipe.param_defaults);
             attrs.push(("value", resolved));
         }
 
