@@ -67,6 +67,10 @@ path = "src/bin/test_arduino_class_board.rs"
 name = "test_stm32_blue_pill"
 path = "src/bin/test_stm32_blue_pill.rs"
 
+[[bin]]
+name = "test_stm32_variant_sku"
+path = "src/bin/test_stm32_variant_sku.rs"
+
 # [[bin]]
 # name = "test_unified_svg"
 # path = "../test_unified_svg.rs"

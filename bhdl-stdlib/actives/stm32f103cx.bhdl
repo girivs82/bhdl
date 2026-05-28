@@ -1,20 +1,47 @@
-// STM32F103C8T6 — 32-bit ARM Cortex-M3 MCU, LQFP-48.
+// STM32F103Cx — 32-bit ARM Cortex-M3 MCU family, LQFP-48.
 //
-// The "Blue Pill" chip. F103C8T6 = 64 KB flash, 20 KB SRAM,
-// 3× USART, 2× SPI, 2× I²C, USB device, 72 MHz max.
+// One parametric entity covering the full LQFP-48 product line.
+// All four SKUs share the same pinout, the same peripheral IP
+// blocks (3× USART, 2× SPI, 2× I²C, USB device), the same 72 MHz
+// max clock, and the same datasheet-mandated support-passive
+// network — they differ only in memory size and supplier part
+// numbers, which are clean parameterisation targets:
+//
+//   ┌────────────┬───────────┬──────────┬───────────────┐
+//   │ SKU        │ flash_kb  │ sram_kb  │ kicad_symbol  │
+//   ├────────────┼───────────┼──────────┼───────────────┤
+//   │ F103C4T6   │      16   │      6   │ STM32F103C4Tx │
+//   │ F103C6T6   │      32   │     10   │ STM32F103C6Tx │
+//   │ F103C8T6   │      64   │     20   │ STM32F103C8Tx │  ← Blue Pill, default
+//   │ F103CBT6   │     128   │     20   │ STM32F103CBTx │
+//   └────────────┴───────────┴──────────┴───────────────┘
+//
+// Use:
+//
+//     mcu: STM32F103Cx();                          // defaults to C8T6
+//     mcu: STM32F103Cx(                             // 128 KB variant
+//         part_no="STM32F103CBT6",
+//         flash_kb=128,
+//         kicad_symbol="MCU_ST_STM32F1:STM32F103CBTx",
+//     );
 //
 // Pin naming follows the standard ST datasheet port nomenclature
 // for the LQFP-48 package: PA0..PA15, PB0..PB15, PC13..PC15,
 // PD0/PD1 (osc inputs), plus power (VDD×3, VDDA, VBAT) and
 // ground (VSS×3, VSSA), the reset pin (NRST), and BOOT0.
 //
-// First Cortex-M entity in the BHDL stdlib — pattern mirrors
-// the AVR entities (atmega328p.bhdl, …): datasheet-correct pin
-// names, peripheral interface bindings in v0.7 perspective
-// form, plus auto-expansion for the support-passive network
-// the chip's datasheet requires.
+// Larger LQFP packages (R/V/Z) have different pinouts and need
+// their own family entity (stm32f103rx.bhdl etc., to follow).
+// The pattern of "one entity per package, parametric within"
+// generalises to any product line with sufficient SKU reuse:
+// supply-voltage variants, temp-range variants, etc.
 
-entity STM32F103C8T6(part_no: string = "STM32F103C8T6") {
+entity STM32F103Cx(
+    part_no: string      = "STM32F103C8T6",
+    flash_kb: int        = 64,
+    sram_kb: int         = 20,
+    kicad_symbol: string = "MCU_ST_STM32F1:STM32F103C8Tx",
+) {
     // ─── Port A (general I/O + peripheral muxes) ────────────
     pin PA0:  signal inout;   // WKUP / USART2_CTS / ADC0       (pin 10)
     pin PA1:  signal inout;   // USART2_RTS / ADC1              (pin 11)
@@ -128,13 +155,13 @@ entity STM32F103C8T6(part_no: string = "STM32F103C8T6") {
     attribute component_class = "microcontroller";
     attribute family          = "STM32F1";
     attribute architecture    = "ARM Cortex-M3";
-    attribute flash_kb        = 64;
-    attribute sram_kb         = 20;
+    attribute flash_kb        = flash_kb;     // from constructor arg
+    attribute sram_kb         = sram_kb;      // from constructor arg
     attribute max_clock_mhz   = 72;
     attribute usb             = "USB 2.0 device";
     attribute pkg             = "LQFP-48";
-    attribute part_number     = part_no;
-    attribute kicad_symbol    = "MCU_ST_STM32F1:STM32F103C8Tx";
+    attribute part_number     = part_no;      // SKU-specific
+    attribute kicad_symbol    = kicad_symbol; // SKU-specific
 
     // ─── Auto-expansion: datasheet support passives ─────────
     //
