@@ -545,11 +545,27 @@ string, call `preprocess`, then parse the result.
 - **No grammar overhead.** The bhdl-parser doesn't change;
   abstract entities are a preprocessing layer.
 
-### 8.6 Open follow-ups
+### 8.6 Integrated entry point: `synthesize_from_source`
 
-- **Integrate into NetlistGenerator** so callers don't need to
-  call `preprocess` explicitly; the synthesizer would invoke it
-  in its pipeline when given a board source string (vs. an AST).
+```rust
+pub async fn synthesize_from_source(source: &str) -> Result<(String, Netlist)>
+```
+
+Single call that runs the full pipeline: preprocessor → parser
+→ analyzer → synthesizer. Returns the rewritten source alongside
+the netlist so callers can inspect what the parser actually saw.
+Callers don't need to know preprocessing happened.
+
+The preprocessor also **strips imports of family members that
+weren't chosen** — the downstream analyzer otherwise emits
+"Undefined component type" for entities imported but unused
+from the same file. So a board that imports both
+`ATmega328P_DIP28` and `ATmega328P_QFN32` (for the family list)
+and ends up resolving to DIP-28 will have the QFN-32 import
+quietly removed from the rewritten source.
+
+### 8.7 Open follow-ups
+
 - **Expose chosen SKU as an instance attribute** so downstream
   BOM walkers know which package was selected without re-parsing.
 - **`exposes [list]` shorthand** for SKUs where most aliases

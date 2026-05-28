@@ -21,6 +21,7 @@
 
 use bhdl_parser::parse;
 use bhdl_synthesizer::abstract_resolver::preprocess;
+use bhdl_synthesizer::synthesize_from_source;
 use anyhow::Result;
 
 const BOARD_A_DIP_FITS: &str = r#"
@@ -125,7 +126,9 @@ board ATmega328P_Abstract_QFN_Needed {
 }
 "#;
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
+    env_logger::init();
     println!("=== Board A: DIP-28 sufficient (no QFN-only aliases used) ===");
     let rewritten_a = preprocess(BOARD_A_DIP_FITS)?;
     if !rewritten_a.contains("mcu: ATmega328P_DIP28(") {
@@ -232,6 +235,37 @@ board Misuse {
         }
     }
 
-    println!("\nv0.9b abstract-entity resolution (alias-aware, port-validated): PASS");
+    // End-to-end integration: synthesize_from_source runs the
+    // preprocessor + parser + analyzer + synthesizer in one call.
+    // Verifies the resolved SKU actually flows into the materialized
+    // netlist (not just text rewriting).
+    println!("\n=== End-to-end: synthesize_from_source picks the right SKU ===");
+    let (_rewritten_a, netlist_a) = synthesize_from_source(BOARD_A_DIP_FITS).await?;
+    let mcu_module_a = netlist_a.instances.iter()
+        .find(|(_, i)| i.name == "mcu")
+        .and_then(|(_, i)| netlist_a.modules.get(i.definition))
+        .map(|m| m.name.as_str())
+        .unwrap_or("<missing>");
+    if mcu_module_a != "ATmega328P_DIP28" {
+        eprintln!("✗ Board A end-to-end: mcu's module = {:?}, expected ATmega328P_DIP28",
+                  mcu_module_a);
+        std::process::exit(1);
+    }
+    println!("✓ Board A synthesized: mcu uses module ATmega328P_DIP28");
+
+    let (_rewritten_b, netlist_b) = synthesize_from_source(BOARD_B_NEEDS_QFN).await?;
+    let mcu_module_b = netlist_b.instances.iter()
+        .find(|(_, i)| i.name == "mcu")
+        .and_then(|(_, i)| netlist_b.modules.get(i.definition))
+        .map(|m| m.name.as_str())
+        .unwrap_or("<missing>");
+    if mcu_module_b != "ATmega328P_QFN32" {
+        eprintln!("✗ Board B end-to-end: mcu's module = {:?}, expected ATmega328P_QFN32",
+                  mcu_module_b);
+        std::process::exit(1);
+    }
+    println!("✓ Board B synthesized: mcu uses module ATmega328P_QFN32");
+
+    println!("\nv0.9b abstract-entity resolution (alias-aware, port-validated, integrated): PASS");
     Ok(())
 }
