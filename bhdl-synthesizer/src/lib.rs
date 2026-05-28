@@ -438,6 +438,21 @@ impl NetlistGenerator {
             self.extract_connectivity_limited(analysis)?;
         }
 
+        // Phase 4.4: Stamp constructor arguments onto instances.
+        // A board like `U1: LM317(v_out=5V);` carries the arg
+        // `v_out=5V` on the COMPONENT_INST AST node, but the
+        // multi-path instance-creation code (database mapper,
+        // hierarchical extractor, component-inference) doesn't
+        // consistently transfer those args onto the netlist
+        // instance's attribute map — so by the time Phase 4.5
+        // runs the `design { }` evaluator, `self.v_out` is
+        // unset and the recipe rejects. Walk every COMPONENT_INST
+        // in the AST and merge its constructor args into the
+        // matching netlist instance.
+        if let Some(ast) = ast {
+            self.stamp_constructor_args_on_instances(ast);
+        }
+
         // Phase 4.5: Apply entity `expansion { }` blocks (virtual-pin
         // auto-expansion). Each instance whose entity declares ≥1
         // `virtual` pin AND whose entity has an `expansion { }` block
@@ -911,6 +926,65 @@ impl NetlistGenerator {
     }
 
     /// Extract connectivity from AST and create nets
+    /// Walk every `COMPONENT_INST` node in the AST and merge its
+    /// constructor arguments (`name=value` pairs inside the `(...)`)
+    /// into the matching netlist instance's `attributes` map.
+    ///
+    /// Why: multiple instance-creation paths (database mapper,
+    /// hierarchical entity walk, component-inference fallback) each
+    /// own part of the attribute story but none consistently
+    /// transfers the user's constructor args onto the netlist
+    /// instance. The `design { }` evaluator at Phase 4.5 then can't
+    /// see `self.v_out` for entities like LM317 that take a
+    /// runtime arg. A single unified merge pass right before
+    /// expansion guarantees those args are visible.
+    fn stamp_constructor_args_on_instances(&mut self, ast: &SourceFile) {
+        use bhdl_ast::SyntaxKind;
+        use bhdl_ast::common::ComponentInst;
+        use rowan::ast::AstNode;
+
+        let mut stamped = 0usize;
+        for node in ast.syntax().descendants() {
+            if node.kind() != SyntaxKind::COMPONENT_INST { continue; }
+            let Some(comp_inst) = ComponentInst::cast(node) else { continue; };
+
+            // The user-supplied refdes (`U1` in `U1: LM317(...)`).
+            let inst_name = comp_inst.syntax()
+                .children_with_tokens()
+                .filter_map(|el| el.into_token())
+                .find(|t| t.kind() == SyntaxKind::IDENT)
+                .map(|t| t.text().to_string());
+            let Some(name) = inst_name else { continue; };
+
+            // Constructor args (`v_out=5V`, `tolerance=1%`, …) live
+            // under a `PARAM_LIST` node — not `PARAM_ASSIGN_BLOCK`,
+            // which is a different (older?) grammar shape that
+            // ComponentInst::param_assign_block() returns. Use
+            // param_list().params() instead.
+            let Some(param_list) = comp_inst.param_list() else { continue; };
+
+            // Find the matching netlist instance by name.
+            let inst_id = self.netlist.instances.iter()
+                .find(|(_, inst)| inst.name == name)
+                .map(|(id, _)| id);
+            let Some(inst_id) = inst_id else { continue; };
+
+            for assign in param_list.params() {
+                if let (Some(name_tok), Some(value_expr)) =
+                    (bhdl_ast::HasName::name(&assign), assign.value())
+                {
+                    let key = name_tok.text().to_string();
+                    let val = value_expr.syntax().text().to_string().trim().to_string();
+                    if let Some(inst) = self.netlist.instances.get_mut(inst_id) {
+                        inst.attributes.entry(key).or_insert(val);
+                        stamped += 1;
+                    }
+                }
+            }
+        }
+        info!("Phase 4.4: stamped {} constructor arg(s) onto netlist instances", stamped);
+    }
+
     fn extract_connectivity_from_ast(&mut self, ast: &SourceFile, analysis: &AnalysisResult) -> Result<()> {
         use bhdl_ast::{AstNode, SyntaxKind, ConnectionStmt};
         

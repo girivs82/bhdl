@@ -22,6 +22,7 @@ use anyhow::Result;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    env_logger::init();
     let src = std::fs::read_to_string("tests/circuits/realistic/lm317_5v.bhdl")?;
     let pr = parse(&src);
     if !pr.errors().is_empty() {
@@ -61,27 +62,24 @@ async fn main() -> Result<()> {
     }
 
     // The design-block computes R1 = 240 × (V_OUT − V_REF)/V_REF.
-    // For V_OUT = 5V, that's 720Ω. Currently the synthesizer passes
-    // the raw script variable name ("r1_value") through as the
-    // value attr instead of evaluating the design block and
-    // substituting the computed number. This is a known gap
-    // (tracked separately) — the expansion *structure* is correct,
-    // but the design→expansion value-binding loop isn't yet closed.
+    // For V_OUT = 5V, that's 720Ω. Verify the full design →
+    // expansion value-binding loop closes.
     let r1_inst = netlist.instances.iter()
         .find(|(_, inst)| inst.name == "R1" || inst.name.ends_with("_R1"))
         .map(|(_, inst)| inst);
     if let Some(inst) = r1_inst {
         let val = inst.attributes.get("value").map(|s| s.as_str()).unwrap_or("");
         println!("\nR1 value attr: {:?}", val);
-        if val.contains("720") {
-            println!("✓ R1 value computed from v_out=5V (720Ω — design block evaluated)");
-        } else {
-            println!("⚠ R1 value is the raw script variable name {:?} \
-                     — expansion topology is correct, but the design→expansion \
-                     value substitution isn't wired yet (tracked separately)", val);
+        if !val.contains("720") {
+            eprintln!("✗ R1 expected 720Ω (from v_out=5V design block), got {:?}", val);
+            std::process::exit(1);
         }
+        println!("✓ R1 = 720Ω (design block evaluated v_out=5V → 240×(5−1.25)/1.25)");
+    } else {
+        eprintln!("✗ R1 instance not found");
+        std::process::exit(1);
     }
 
-    println!("\nLM317 expansion topology end-to-end: PASS");
+    println!("\nLM317 design+expansion end-to-end: PASS");
     Ok(())
 }
