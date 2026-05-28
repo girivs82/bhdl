@@ -47,6 +47,10 @@ path = "src/bin/test_interface_uart_cross.rs"
 name = "test_arduino_uart_bridge"
 path = "src/bin/test_arduino_uart_bridge.rs"
 
+[[bin]]
+name = "test_atmega328p_decoupling"
+path = "src/bin/test_atmega328p_decoupling.rs"
+
 # [[bin]]
 # name = "test_unified_svg"
 # path = "../test_unified_svg.rs"

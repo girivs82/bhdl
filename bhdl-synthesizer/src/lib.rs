@@ -437,7 +437,34 @@ impl NetlistGenerator {
         } else {
             self.extract_connectivity_limited(analysis)?;
         }
-        
+
+        // Phase 4.5: Apply entity `expansion { }` blocks (virtual-pin
+        // auto-expansion). Each instance whose entity declares ≥1
+        // `virtual` pin AND whose entity has an `expansion { }` block
+        // gets the block's child instances materialised, with parent-
+        // pin references resolved to whatever the board wired them to.
+        //
+        // This was previously dead code — the interpreter existed but
+        // nothing in the synthesis pipeline called it, so stdlib
+        // entities like LM317/ATmega328P with `expansion { }` blocks
+        // never actually expanded. Wired in 2026-05-28.
+        if !analysis.expansion_recipes.is_empty() {
+            info!(
+                "Phase 4.5: running expansion interpreter ({} recipe(s) available)",
+                analysis.expansion_recipes.len()
+            );
+            let results = crate::expansion_interpreter::expand_entity_instances_with_designs(
+                &mut self.netlist,
+                &analysis.expansion_recipes,
+                &analysis.design_recipes,
+                &analysis.entity_attribute_index,
+            );
+            info!(
+                "Phase 4.5: expansion produced {} expanded instance(s)",
+                results.len()
+            );
+        }
+
         // Phase 5: Apply semantic annotations for visualization
         if self.config.preserve_semantic_context {
             self.apply_semantic_annotations(analysis)?;

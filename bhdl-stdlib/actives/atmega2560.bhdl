@@ -129,7 +129,7 @@ entity ATmega2560_TQFP100(part_no: string = "ATMEGA2560-16AU") {
     pin RESET: signal inout; // active-low                      (pin 30)
 
     // ─── Power and analog reference ─────────────────────────
-    pin VCC:   signal inout; //                                 (pin 10)
+    pin VCC:   signal inout virtual; //                         (pin 10) (gates expansion)
     pin VCC1:  signal inout; //                                 (pin 31)
     pin VCC2:  signal inout; //                                 (pin 61)
     pin VCC3:  signal inout; //                                 (pin 80)
@@ -192,4 +192,20 @@ entity ATmega2560_TQFP100(part_no: string = "ATMEGA2560-16AU") {
     attribute max_clock_mhz   = 16;
     attribute gpio_count      = 86;
     attribute part_number     = part_no;
+
+    // ─── Auto-expansion: 100-pin AVR decoupling + reset ─────
+    // Four VCC rails on this part, each needing its own 100nF
+    // bypass plus one bulk cap; AVCC + AREF filtering; /RESET
+    // pullup + power-on RC (dedicated /RESET pin).
+    expansion {
+        VCC   -> C_vcc:   Cap(100nF).1;  C_vcc.2   -> GND;
+        VCC   -> C_bulk:  Cap(10µF).1;   C_bulk.2  -> GND;
+        VCC1  -> C_vcc1:  Cap(100nF).1;  C_vcc1.2  -> GND1;
+        VCC2  -> C_vcc2:  Cap(100nF).1;  C_vcc2.2  -> GND2;
+        VCC3  -> C_vcc3:  Cap(100nF).1;  C_vcc3.2  -> GND3;
+        AVCC  -> C_avcc:  Cap(100nF).1;  C_avcc.2  -> AGND;
+        AREF  -> C_aref:  Cap(100nF).1;  C_aref.2  -> AGND;
+        VCC   -> R_reset: Res(10kΩ).1;   R_reset.2 -> RESET;
+        RESET -> C_reset: Cap(100nF).1;  C_reset.2 -> GND;
+    }
 }
