@@ -68,7 +68,7 @@ entity ATmega32U4_TQFP44(part_no: string = "ATMEGA32U4-AU") {
     pin RESET: signal inout; // active-low                      (pin 13)
 
     // ─── Power and analog reference ─────────────────────────
-    pin VCC:   signal inout; //                                 (pin 14)
+    pin VCC:   signal inout virtual; //                         (pin 14) (gates expansion)
     pin VCC1:  signal inout; //                                 (pin 34)
     pin AVCC:  signal inout; // analog VCC                      (pin 24)
     pin AVCC1: signal inout; // analog VCC                      (pin 44)
@@ -122,4 +122,25 @@ entity ATmega32U4_TQFP44(part_no: string = "ATMEGA32U4-AU") {
     attribute max_clock_mhz   = 16;
     attribute usb             = "USB 2.0 device";
     attribute part_number     = part_no;
+
+    // ─── Auto-expansion: full-MCU + USB support passives ────
+    // ATmega32U4 datasheet §29 application circuit: per-VCC
+    // decoupling on both digital rails, AVCC pair, AREF filter,
+    // UVCC + UCAP, /RESET pullup + power-on RC, USB ESD.
+    expansion {
+        VCC   -> C_vcc:   Cap(100nF).1;  C_vcc.2   -> GND;
+        VCC   -> C_bulk:  Cap(10µF).1;   C_bulk.2  -> GND;
+        VCC1  -> C_vcc1:  Cap(100nF).1;  C_vcc1.2  -> GND;
+        AVCC  -> C_avcc:  Cap(100nF).1;  C_avcc.2  -> GND;
+        AVCC1 -> C_avcc1: Cap(100nF).1;  C_avcc1.2 -> GND;
+        AREF  -> C_aref:  Cap(100nF).1;  C_aref.2  -> GND;
+        UVCC  -> C_uvcc:  Cap(100nF).1;  C_uvcc.2  -> UGND;
+        UCAP  -> C_ucap:  Cap(1µF).1;    C_ucap.2  -> UGND;
+        // /RESET pullup + power-on RC (dedicated /RESET pin here).
+        VCC   -> R_reset: Res(10kΩ).1;   R_reset.2 -> RESET;
+        RESET -> C_reset: Cap(100nF).1;  C_reset.2 -> GND;
+        // USB D+/D- ESD protection.
+        D_P   -> TVS_dp:  TVSDiode(5V).1; TVS_dp.2 -> UGND;
+        D_N   -> TVS_dn:  TVSDiode(5V).1; TVS_dn.2 -> UGND;
+    }
 }

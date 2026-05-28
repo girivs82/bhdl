@@ -61,7 +61,7 @@ entity ATmega16U2_QFN32(part_no: string = "ATMEGA16U2-MU") {
     pin XTAL1: signal inout; //                                 (pin 1)
 
     // ─── Power and analog reference ─────────────────────────
-    pin VCC:  signal inout;  //                                 (pin 4)
+    pin VCC:  signal inout virtual;  //                         (pin 4) (gates expansion)
     pin AVCC: signal inout;  // analog VCC                      (pin 32)
     pin GND:  signal inout;  //                                 (pin 3)
 
@@ -110,4 +110,20 @@ entity ATmega16U2_QFN32(part_no: string = "ATMEGA16U2-MU") {
     attribute usb             = "USB 2.0 device";
     attribute role            = "USB-serial bridge";
     attribute part_number     = part_no;
+
+    // ─── Auto-expansion: USB-bridge support passives ────────
+    // Datasheet (ATmega16U2 §27, "Typical Application") requires
+    // per-rail decoupling, a UCAP reservoir for the on-chip USB
+    // LDO, and TVS clamps on D+/D-. Always-on per instance.
+    expansion {
+        VCC  -> C_vcc:   Cap(100nF).1;  C_vcc.2   -> GND;
+        VCC  -> C_bulk:  Cap(10µF).1;   C_bulk.2  -> GND;
+        AVCC -> C_avcc:  Cap(100nF).1;  C_avcc.2  -> GND;
+        UVCC -> C_uvcc:  Cap(100nF).1;  C_uvcc.2  -> UGND;
+        // UCAP needs 1µF low-ESR (datasheet §22.2.1).
+        UCAP -> C_ucap:  Cap(1µF).1;    C_ucap.2  -> UGND;
+        // USB D+/D- ESD protection.
+        D_P  -> TVS_dp:  TVSDiode(5V).1; TVS_dp.2 -> UGND;
+        D_N  -> TVS_dn:  TVSDiode(5V).1; TVS_dn.2 -> UGND;
+    }
 }

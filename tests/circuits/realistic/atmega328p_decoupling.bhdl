@@ -1,0 +1,23 @@
+// Test circuit: ATmega328P with auto-expanded decoupling.
+//
+// Uses explicit imports (the working pattern, mirrors
+// test_7805_with_imports.bhdl) so the synthesizer's
+// import_loader can pull the stdlib entity definitions —
+// including the chip's `expansion { }` block.
+
+import { ATmega328P_DIP28 } from "bhdl-stdlib/actives/atmega328p.bhdl";
+import { Cap } from "bhdl-stdlib/passive/capacitor.bhdl";
+
+board ATmega328P_Decoupling_Test {
+    power VCC = 5V @ 200mA;
+    ground GND;
+
+    mcu: ATmega328P_DIP28();
+
+    // Board wires only the power/ground pins. Decoupling caps
+    // come from the chip's expansion block.
+    @VCC -> mcu.VCC;
+    @VCC -> mcu.AVCC;
+    mcu.GND1 -> @GND;
+    mcu.GND2 -> @GND;
+}

@@ -47,7 +47,12 @@ entity ATmega328P_DIP28(part_no: string = "ATMEGA328P-PU") {
     pin PC6: signal inout;   // RESET / PCINT14        (pin 1)
 
     // ─── Power and analog reference ─────────────────────────
-    pin VCC:  signal inout;  // (pin 7)
+    // VCC is marked `virtual` to gate the entity's `expansion { }`
+    // block (which adds the datasheet-recommended decoupling
+    // network). The pin itself is still wired normally at the
+    // board level; the `virtual` keyword is purely a synthesis-
+    // time trigger for auto-expansion.
+    pin VCC:  signal inout virtual;  // (pin 7)
     pin AVCC: signal inout;  // (pin 20) — analog VCC
     pin AREF: signal inout;  // (pin 21) — analog reference
     pin GND1: signal inout;  // (pin 8)  — digital ground
@@ -103,6 +108,33 @@ entity ATmega328P_DIP28(part_no: string = "ATMEGA328P-PU") {
     attribute max_clock_mhz   = 20;
     attribute part_number     = part_no;
     attribute kicad_symbol    = "Arduino UNO:ATMEGA328P-PU";
+
+    // ─── Auto-expansion: datasheet-recommended support passives ─
+    //
+    // Triggered by the `virtual` keyword on `VCC`. Every board
+    // that drops in an ATmega328P_DIP28 gets these caps for free,
+    // matching the chip's datasheet "typical application" circuit:
+    //
+    //   - C_vcc  : 100nF ceramic VCC →GND1 (digital decoupling)
+    //   - C_bulk :  10µF bulk    VCC →GND1 (low-freq reservoir)
+    //   - C_avcc : 100nF ceramic AVCC→GND2 (analog supply decoupling)
+    //   - C_aref : 100nF ceramic AREF→GND2 (analog reference filter)
+    //
+    // Intentionally omitted from this entity (handled elsewhere):
+    //   - I²C pullups, SPI series-term : interface-level, v0.8
+    //     require clauses (task #83).
+    //   - /RESET pullup + power-on RC  : PC6 is a dual-function
+    //     port pin on the DIP-28 so marking it `virtual` would
+    //     collide with interface bindings. Lands when the entity
+    //     grows a separate /RESET pin or v0.8 conditional gating.
+    //   - Crystal load caps : PB6/PB7 are also port pins; same
+    //     conflict.
+    expansion {
+        VCC  -> C_vcc:  Cap(100nF).1;  C_vcc.2  -> GND1;
+        VCC  -> C_bulk: Cap(10µF).1;   C_bulk.2 -> GND1;
+        AVCC -> C_avcc: Cap(100nF).1;  C_avcc.2 -> GND2;
+        AREF -> C_aref: Cap(100nF).1;  C_aref.2 -> GND2;
+    }
 }
 
 // ATmega328P — QFN-32 / MLF-32 variant.

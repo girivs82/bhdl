@@ -39,7 +39,7 @@ entity FT232RL(part_no: string = "FT232RL") {
     pin USBDM: signal inout; // D-                              (pin 16)
 
     // ─── Power / reference ──────────────────────────────────
-    pin VCC:    signal inout; // 5 V supply                      (pin 20)
+    pin VCC:    signal inout virtual; // 5 V supply              (pin 20) (gates expansion)
     pin VCCIO:  signal inout; // I/O bank supply                 (pin 4)
     pin V3OUT:  signal inout; // 3.3 V internal regulator out    (pin 17)
     pin RESET_N: signal inout; // active-low reset               (pin 19)
@@ -77,4 +77,21 @@ entity FT232RL(part_no: string = "FT232RL") {
     attribute usb             = "USB 2.0 device";
     attribute pkg             = "SSOP-28";
     attribute part_number     = part_no;
+
+    // ─── Auto-expansion: USB-bridge support passives ────────
+    // FTDI AN-184 / FT232RL datasheet §3.3 "Application Examples":
+    // 100nF + 10µF on VCC, 100nF on VCCIO, 100nF on V3OUT (the
+    // internal 3.3 V LDO output), pullup + RC on /RESET, ESD on
+    // USB data lines.
+    expansion {
+        VCC     -> C_vcc:    Cap(100nF).1;  C_vcc.2    -> GND1;
+        VCC     -> C_bulk:   Cap(10µF).1;   C_bulk.2   -> GND1;
+        VCCIO   -> C_vccio:  Cap(100nF).1;  C_vccio.2  -> GND2;
+        V3OUT   -> C_v3out:  Cap(100nF).1;  C_v3out.2  -> AGND;
+        VCC     -> R_reset:  Res(10kΩ).1;   R_reset.2  -> RESET_N;
+        RESET_N -> C_reset:  Cap(100nF).1;  C_reset.2  -> GND1;
+        // USB data-line ESD protection.
+        USBDP   -> TVS_dp:   TVSDiode(5V).1; TVS_dp.2  -> GND2;
+        USBDM   -> TVS_dn:   TVSDiode(5V).1; TVS_dn.2  -> GND2;
+    }
 }
