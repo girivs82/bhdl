@@ -987,20 +987,22 @@ fn component_type_to_class(component_type: &str) -> &'static str {
 /// through and become conditional on actual board-level wiring.
 fn is_power_rail_pin(name: &str) -> bool {
     let u = name.to_uppercase();
-    u.starts_with("VCC")     // VCC, VCC1, VCC2, VCCIO
-        || u.starts_with("GND")  // GND, GND1, GND2, GND3
+    u.starts_with("VCC")        // VCC, VCC1, VCC2, VCCIO
+        || u.starts_with("GND")     // GND, GND1, GND2, GND3
         || u.starts_with("AVCC")
+        || u.starts_with("VDD")     // VDD, VDD_1..VDD_3, VDDA (STM32)
+        || u.starts_with("VSS")     // VSS, VSS_1..VSS_3, VSSA (STM32)
         || u == "AGND"
         || u == "AREF"
         || u == "UVCC"
         || u == "UGND"
         || u == "UCAP"
         || u == "VBUS"
+        || u == "VBAT"              // STM32 backup-domain rail
         || u == "V3OUT"
         || u == "RESET"
         || u == "RESET_N"
-        || u == "VDD"
-        || u == "VSS"
+        || u == "NRST"              // STM32 active-low reset
 }
 
 /// Given an expansion candidate (parent instance + its recipe),
