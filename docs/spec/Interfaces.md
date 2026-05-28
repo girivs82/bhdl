@@ -9,9 +9,17 @@
 >
 > Out of scope for v0.7: parameterised interfaces (`SPI<width=16>`,
 > grammar parses but unused), hierarchical sub-interfaces (`RGMII`
-> containing nested `TX` and `RX` sub-interfaces), interface
-> requirements (`require pullup(SDA, 4.7kΩ)`), and timing
+> containing nested `TX` and `RX` sub-interfaces), and timing
 > constraints (`constrain setup(...)`). All deferred to v0.8+.
+>
+> **`require pullup`/`require decap`** (originally planned as a v0.8
+> interface-syntax addition) was retired in favour of **vendor
+> `expansion { }` blocks with conditional gating**. See
+> [`Synthesis_Auto_Expansion.md`](Synthesis_Auto_Expansion.md) — the
+> chip's stdlib entity owns the recipe and sources passives from
+> the chip's own VCC pin, which avoids the multi-rail I²C-backdrive
+> failure an interface-level `require` would have to solve
+> separately. (Decision recorded 2026-05-28.)
 
 ## 1. Motivation
 
