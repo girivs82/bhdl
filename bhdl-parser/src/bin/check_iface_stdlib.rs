@@ -1,6 +1,9 @@
-//! Walks `bhdl-stdlib/interfaces/**/*.bhdl` and confirms every file
-//! parses with zero errors. Added with the v0.1 interface work so
-//! the canonical interface declarations stay parser-validated.
+//! Walks `bhdl-stdlib/**/*.bhdl` and confirms every file parses
+//! with zero errors. Added with the v0.1 interface work to keep
+//! the canonical interface declarations parser-validated; expanded
+//! at v0.7c to cover the whole stdlib (after the `~Interface` →
+//! `:perspective` migration). Accepts an optional CLI argument
+//! pointing at a different root, defaulting to `bhdl-stdlib/`.
 
 use bhdl_parser::parse;
 use std::fs;
@@ -17,9 +20,11 @@ fn collect(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
 }
 
 fn main() {
-    let root = Path::new("bhdl-stdlib/interfaces");
+    let arg = std::env::args().nth(1);
+    let root_path = arg.unwrap_or_else(|| "bhdl-stdlib".to_string());
+    let root = Path::new(&root_path);
     if !root.exists() {
-        eprintln!("interfaces directory not found: {}", root.display());
+        eprintln!("root not found: {}", root.display());
         std::process::exit(2);
     }
     let mut files = Vec::new();

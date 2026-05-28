@@ -69,7 +69,12 @@ entity ATmega328P_DIP28(part_no: string = "ATMEGA328P-PU") {
         CS   = PB2;
     }
 
-    interface ICSP icsp {
+    // Chip is the programming *target*, so use the ICSP slave
+    // perspective explicitly — MOSI/SCK/RESET are inputs on this
+    // side, MISO is the output. A USBasp / Atmel-ICE programmer
+    // declared as `interface ICSP icsp` (default = master)
+    // direction-matches us.
+    interface ICSP:slave icsp {
         MOSI  = PB3;
         MISO  = PB4;
         SCK   = PB5;
