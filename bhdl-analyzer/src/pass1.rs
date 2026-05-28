@@ -570,37 +570,23 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
             }
         }
         SyntaxKind::INTERFACE_FIELD_DECL => {
-            // `interface [~]Name field;` inside an entity body.
+            // `interface [~]Name[:perspective] field;` inside an entity body.
             // Materialise the interface's signals as Pin symbols on
-            // the parent entity, named `field.signal`. The `~`
-            // sigil flips signal directions (out↔in; inout stays).
+            // the parent entity, named `field.signal`.
             //
-            // v0.1 limitation: requires the interface definition to
-            // be in scope (registered globally) before the field
-            // decl is processed. Imports satisfy this; same-file
-            // forward references don't yet. A future pre-pass that
-            // harvests interface defs first will lift the
-            // restriction.
-            let mut field_name = None;
-            let mut type_name = None;
-            let mut reversed = false;
-            for el in node.children_with_tokens() {
-                if let Some(tok) = el.as_token() {
-                    match tok.kind() {
-                        SyntaxKind::TILDE => reversed = true,
-                        SyntaxKind::IDENT => {
-                            if type_name.is_none() {
-                                type_name = Some(tok.text().to_string());
-                            } else if field_name.is_none() {
-                                field_name = Some((tok.text().to_string(), tok.text_range()));
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
+            // v0.7: signal lookup follows the perspective selector
+            // (`:slave`) if present; falls back to the first-declared
+            // perspective if the interface has any, or the top-level
+            // flat signal set (v0.6 single-implicit-perspective form).
+            // Legacy `~Name` resolves to the second-declared
+            // perspective when present, else flips the top-level
+            // signals' directions (v0.6 semantics).
+            let (type_name_opt, perspective_name, reversed, field_info) =
+                parse_field_decl_tokens(node);
 
-            if let (Some(type_name), Some((field, field_range))) = (type_name.as_deref(), field_name) {
+            if let (Some(type_name), Some((field, field_range))) =
+                (type_name_opt.as_deref(), field_info)
+            {
                 // Resolve the interface definition through the global scope.
                 let iface_def_node = context
                     .global_scope_mut()
@@ -608,22 +594,20 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                     .filter(|sym| sym.kind == SymbolKind::Interface)
                     .and_then(|sym| sym.definition_node_ptr.clone())
                     .and_then(|ptr| {
-                        // Re-anchor the SyntaxNodePtr against the
-                        // source-file root. Pass1's walker visits
-                        // the entity body, so the root of `node` is
-                        // still the file's SourceFile.
                         node.ancestors()
                             .last()
                             .map(|root| ptr.to_node(&root))
                     });
 
                 if let Some(iface_node) = iface_def_node {
-                    // Walk the interface's children for INTERFACE_SIGNAL
-                    // nodes (skipping nested perspectives — those are
-                    // only consumed when an explicit perspective is
-                    // requested, a v0.2 concern).
-                    for child in iface_node.children() {
-                        if child.kind() != SyntaxKind::INTERFACE_SIGNAL { continue; }
+                    // Resolve the perspective → list of signal nodes.
+                    let (signal_nodes, flip_directions) = resolve_perspective_signals(
+                        &iface_node,
+                        perspective_name.as_deref(),
+                        reversed,
+                    );
+
+                    for child in signal_nodes {
                         let Some(signal) = InterfaceSignal::cast(child.clone()) else { continue; };
                         let Some(signal_name_tok) = signal.name() else { continue; };
                         let signal_name = signal_name_tok.text().to_string();
@@ -633,7 +617,7 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                             SignalDirection::Out => PortDirectionKind::Out,
                             SignalDirection::InOut => PortDirectionKind::InOut,
                         });
-                        if reversed {
+                        if flip_directions {
                             direction = direction.map(|d| match d {
                                 PortDirectionKind::In => PortDirectionKind::Out,
                                 PortDirectionKind::Out => PortDirectionKind::In,
@@ -1412,3 +1396,149 @@ fn process_entity_body(entity: &Entity, scope: &mut SymbolTable) {
 
 
  
+// ─────────────────────────────────────────────────────────────────
+// v0.7 interface-perspective helpers
+// ─────────────────────────────────────────────────────────────────
+
+/// Walk an INTERFACE_FIELD_DECL node's tokens and pull out the four
+/// pieces of information the analyser needs:
+///   - type IDENT (interface name)
+///   - perspective IDENT after a `:` (None if no selector)
+///   - whether `~` was present (legacy reversal sigil)
+///   - field IDENT + its TextRange
+///
+/// Grammar layout: `'interface' '~'? IDENT (':' IDENT)? ('<' … '>')? IDENT (';' | '{' … '}')`.
+/// We classify tokens by appearance order. The first IDENT is the
+/// type name; if a COLON follows, the next IDENT is the perspective;
+/// any subsequent IDENT is the field name. Generic-args (`<...>`)
+/// and the binding block (`{...}`) are non-IDENT-bearing children
+/// at the relevant points so this counter-based pass works.
+fn parse_field_decl_tokens(
+    node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>,
+) -> (Option<String>, Option<String>, bool, Option<(String, TextRange)>) {
+    use bhdl_ast::SyntaxKind;
+
+    let tokens: Vec<_> = node
+        .children_with_tokens()
+        .filter_map(|el| el.into_token())
+        .filter(|t| matches!(
+            t.kind(),
+            SyntaxKind::TILDE | SyntaxKind::COLON | SyntaxKind::IDENT
+        ))
+        .collect();
+
+    let mut reversed = false;
+    let mut type_name: Option<String> = None;
+    let mut perspective: Option<String> = None;
+    let mut field: Option<(String, TextRange)> = None;
+
+    let mut i = 0;
+    while i < tokens.len() {
+        let tok = &tokens[i];
+        match tok.kind() {
+            SyntaxKind::TILDE => {
+                reversed = true;
+                i += 1;
+            }
+            SyntaxKind::IDENT if type_name.is_none() => {
+                type_name = Some(tok.text().to_string());
+                i += 1;
+            }
+            SyntaxKind::COLON if perspective.is_none() => {
+                i += 1;
+                if i < tokens.len() && tokens[i].kind() == SyntaxKind::IDENT {
+                    perspective = Some(tokens[i].text().to_string());
+                    i += 1;
+                }
+            }
+            SyntaxKind::IDENT if field.is_none() => {
+                field = Some((tok.text().to_string(), tok.text_range()));
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+
+    (type_name, perspective, reversed, field)
+}
+
+/// Choose the set of INTERFACE_SIGNAL nodes to materialise for a
+/// field declaration, plus whether the directions need flipping.
+///
+/// Resolution order:
+///   1. Explicit `perspective_name` selector → that perspective's signals.
+///   2. Legacy `~` sigil:
+///        * 2+ perspectives declared → second-declared (no flip).
+///        * 1 or 0 perspectives → top-level signals, FLIP directions
+///          (v0.6 semantics).
+///   3. No selector, no `~`:
+///        * Interface has perspectives → first-declared (no flip).
+///        * Interface has only top-level signals → top-level (no flip).
+///
+/// Returns `(signals, flip_directions)`. `flip_directions=true`
+/// applies only in the legacy-`~`-with-no-explicit-perspectives
+/// fallback case.
+fn resolve_perspective_signals(
+    iface: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>,
+    perspective: Option<&str>,
+    legacy_reversed: bool,
+) -> (Vec<rowan::SyntaxNode<bhdl_parser::BhdlLanguage>>, bool) {
+    use bhdl_ast::SyntaxKind;
+
+    let perspectives: Vec<_> = iface
+        .children()
+        .filter(|n| n.kind() == SyntaxKind::INTERFACE_PERSPECTIVE)
+        .collect();
+
+    // 1. Explicit selector.
+    if let Some(name) = perspective {
+        for p in &perspectives {
+            let p_name = p
+                .children_with_tokens()
+                .filter_map(|el| el.into_token())
+                .find(|t| t.kind() == SyntaxKind::IDENT)
+                .map(|t| t.text().to_string());
+            if p_name.as_deref() == Some(name) {
+                let sigs = p
+                    .children()
+                    .filter(|n| n.kind() == SyntaxKind::INTERFACE_SIGNAL)
+                    .collect();
+                return (sigs, false);
+            }
+        }
+        // Perspective name didn't match — fall through to default.
+    }
+
+    // 2. Legacy `~` sigil.
+    if legacy_reversed {
+        if perspectives.len() >= 2 {
+            let sigs = perspectives[1]
+                .children()
+                .filter(|n| n.kind() == SyntaxKind::INTERFACE_SIGNAL)
+                .collect();
+            return (sigs, false);
+        }
+        // Fall through to top-level with directions flipped.
+        let sigs = iface
+            .children()
+            .filter(|n| n.kind() == SyntaxKind::INTERFACE_SIGNAL)
+            .collect();
+        return (sigs, true);
+    }
+
+    // 3. No selector. Prefer first-declared perspective if any.
+    if !perspectives.is_empty() {
+        let sigs = perspectives[0]
+            .children()
+            .filter(|n| n.kind() == SyntaxKind::INTERFACE_SIGNAL)
+            .collect();
+        return (sigs, false);
+    }
+
+    // 3 fallback: top-level signals (v0.6 single-implicit-perspective form).
+    let sigs = iface
+        .children()
+        .filter(|n| n.kind() == SyntaxKind::INTERFACE_SIGNAL)
+        .collect();
+    (sigs, false)
+}
