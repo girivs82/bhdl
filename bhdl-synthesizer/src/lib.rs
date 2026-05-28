@@ -44,6 +44,8 @@ pub mod package_selector;
 pub mod glacier_physical_selection;
 
 // Import loader for handling BHDL imports
+pub mod abstract_resolver;
+
 pub mod import_loader;
 
 // Import preprocessor for pre-processing imports before analysis
