@@ -142,5 +142,12 @@ entity ATmega32U4_TQFP44(part_no: string = "ATMEGA32U4-AU") {
         // USB D+/D- ESD protection.
         D_P   -> TVS_dp:  TVSDiode(5V).1; TVS_dp.2 -> UGND;
         D_N   -> TVS_dn:  TVSDiode(5V).1; TVS_dn.2 -> UGND;
+
+        // I²C pullups on PD1 (SDA) and PD0 (SCL). Gated by
+        // conditional expansion (#89): fire only when the board
+        // wires these pins — when the board uses PD0/PD1 as
+        // generic GPIO instead, the pullups stay absent.
+        PD1   -> R_pu_sda: Res(4.7kΩ).1;  R_pu_sda.2 -> VCC;
+        PD0   -> R_pu_scl: Res(4.7kΩ).1;  R_pu_scl.2 -> VCC;
     }
 }

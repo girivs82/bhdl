@@ -207,5 +207,12 @@ entity ATmega2560_TQFP100(part_no: string = "ATMEGA2560-16AU") {
         AREF  -> C_aref:  Cap(100nF).1;  C_aref.2  -> AGND;
         VCC   -> R_reset: Res(10kΩ).1;   R_reset.2 -> RESET;
         RESET -> C_reset: Cap(100nF).1;  C_reset.2 -> GND;
+
+        // I²C pullups on PD1 (SDA) and PD0 (SCL). Gated — fire
+        // only when the board wires these pins via the i2c
+        // interface field; otherwise stay absent so PD0/PD1
+        // remain clean GPIO.
+        PD1   -> R_pu_sda: Res(4.7kΩ).1;  R_pu_sda.2 -> VCC;
+        PD0   -> R_pu_scl: Res(4.7kΩ).1;  R_pu_scl.2 -> VCC;
     }
 }
