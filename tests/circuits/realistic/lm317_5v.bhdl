@@ -1,0 +1,24 @@
+// Minimal LM317 board: 12V input, regulate to 5V output.
+//
+// Exercises the v0.7c Phase 4.5 expansion + the stdlib LM317
+// entity's combined `design { }` + `expansion { }` blocks:
+//   - design { } computes R1 from the user's v_out=5V
+//     (R1 = 240 × (5 − 1.25) / 1.25 = 720Ω).
+//   - expansion { } materialises C_in, C_out, R1, R2 on the
+//     correct nets.
+
+import { LM317 } from "bhdl-stdlib/power/lm317.bhdl";
+import { Cap, Res } from "bhdl-stdlib/passive/capacitor.bhdl";
+
+board LM317_5V_Test {
+    power VIN  = 12V @ 500mA;
+    power VOUT = 5V  @ 500mA;
+    ground GND;
+
+    U1: LM317(v_out=5V);
+
+    @VIN  -> U1.VIN;
+    U1.VOUT -> @VOUT;
+    U1.GND  -> @GND;
+    // ADJ pin and R1/R2 divider come from the chip's expansion {}.
+}
