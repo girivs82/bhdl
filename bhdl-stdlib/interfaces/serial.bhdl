@@ -31,3 +31,15 @@ interface UART {
     signal TX: out;
     signal RX: in;
 }
+
+// AVR ICSP (In-Circuit Serial Programming). Shares its data
+// signals with SPI on most AVR chips, plus an active-low RESET
+// pulse during programming. ICSP is the master interface that
+// programmers like USBasp / Atmel-ICE present; the chip is the
+// slave.
+interface ICSP {
+    signal MOSI:  out;
+    signal MISO:  in;
+    signal SCK:   out;
+    signal RESET: out;
+}
