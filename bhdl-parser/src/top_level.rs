@@ -255,6 +255,10 @@ impl<'t> Parser<'t> {
                     // Interface perspectives
                     self.parse_interface_perspective();
                 }
+                Some(SyntaxKind::WIRES_KW) => {
+                    // v0.7 wire mapping between perspectives
+                    self.parse_interface_wires_block();
+                }
                 Some(SyntaxKind::INTERFACE_KW) => {
                     // Nested interface (hierarchical)
                     self.parse_interface_def();
@@ -289,10 +293,25 @@ impl<'t> Parser<'t> {
     fn parse_interface_field_decl(&mut self) {
         self.builder.start_node(SyntaxKind::INTERFACE_FIELD_DECL.into());
         self.expect(SyntaxKind::INTERFACE_KW);
+
+        // v0.7: the legacy `~Interface` sugar is deprecated in favour
+        // of `Interface:perspective`. We still accept it during the
+        // v0.7a/b transition window so existing entities keep
+        // working; the v0.7c stdlib-migration commit will promote
+        // this to a hard error once all use sites are updated.
         if self.peek() == Some(SyntaxKind::TILDE) {
-            self.bump(); // consume `~`
+            self.bump(); // consume `~`; analyzer still treats it as "reversed"
         }
+
         self.expect(SyntaxKind::IDENT); // interface type name
+
+        // v0.7 perspective selector: `:perspective_name` after the
+        // interface IDENT and before the optional generic-args block.
+        if self.peek() == Some(SyntaxKind::COLON) {
+            self.bump(); // consume `:`
+            self.expect(SyntaxKind::IDENT); // perspective name
+        }
+
         if self.peek() == Some(SyntaxKind::L_ANGLE) {
             self.parse_type_args();
         }
@@ -754,6 +773,48 @@ impl<'t> Parser<'t> {
     }
     
     // Parse interface perspective: perspective master { ... }
+    // v0.7: parse the wires { } block inside an interface body.
+    //
+    //     wires {
+    //         dte.TX <-> dce.RX;
+    //         dte.RX <-> dce.TX;
+    //     }
+    //
+    // Each line is `perspective.signal <-> perspective.signal ;`.
+    // Optional in interface declarations; default pairing is by
+    // signal name when omitted (correct for SPI/I2C/USB; required
+    // for UART/RS-232 etc.).
+    pub(crate) fn parse_interface_wires_block(&mut self) {
+        self.builder.start_node(SyntaxKind::INTERFACE_WIRES_BLOCK.into());
+        self.expect(SyntaxKind::WIRES_KW);
+        self.expect(SyntaxKind::L_BRACE);
+
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) | None => break,
+                Some(SyntaxKind::IDENT) => {
+                    self.builder.start_node(SyntaxKind::INTERFACE_WIRE_MAPPING.into());
+                    self.expect(SyntaxKind::IDENT);   // left perspective
+                    self.expect(SyntaxKind::DOT);
+                    self.expect(SyntaxKind::IDENT);   // left signal
+                    self.expect(SyntaxKind::BI_ARROW); // <->
+                    self.expect(SyntaxKind::IDENT);   // right perspective
+                    self.expect(SyntaxKind::DOT);
+                    self.expect(SyntaxKind::IDENT);   // right signal
+                    self.expect(SyntaxKind::SEMI);
+                    self.builder.finish_node();
+                }
+                _ => {
+                    self.error("Expected `perspective.signal <-> perspective.signal;` in wires block".to_string());
+                    self.bump_any();
+                }
+            }
+        }
+        self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
     fn parse_interface_perspective(&mut self) {
         self.builder.start_node(SyntaxKind::INTERFACE_PERSPECTIVE.into());
         
