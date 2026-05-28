@@ -58,12 +58,56 @@ pub fn preprocess(source: &str) -> Result<String> {
     // Find every `inst_name: ABSTRACT_NAME(...)` instance.
     let instances = extract_abstract_instances(source, &decls);
 
+    // Validate: every family entry's pin_map keys must be a subset of
+    // the declared abstract ports. Otherwise the stdlib author has a
+    // bug (the SKU is exposing aliases the abstract entity doesn't
+    // declare, and a board can't reference them by name).
+    for decl in decls.values() {
+        if decl.abstract_ports.is_empty() { continue; }  // legacy: no ports declared
+        for fam in &decl.family {
+            for alias in fam.pin_map.keys() {
+                if !decl.abstract_ports.contains(alias) {
+                    return Err(anyhow!(
+                        "Family entry '{}' maps abstract port '{}' which is \
+                         not declared on the abstract entity. Declared ports: \
+                         {:?}.",
+                        fam.concrete_name, alias,
+                        {
+                            let mut v: Vec<&String> = decl.abstract_ports.iter().collect();
+                            v.sort();
+                            v
+                        }));
+                }
+            }
+        }
+    }
+
     // Resolve each instance + collect per-instance pin-alias rewrites.
     type AliasRewrite = HashMap<String, String>; // alias → concrete pin
     let mut resolutions: HashMap<String, (String, AliasRewrite)> = HashMap::new();
     for (inst_name, entity_type, _type_range) in &instances {
         let decl = &decls[entity_type];
         let wired_aliases = extract_wired_pins(source, inst_name);
+
+        // Validate: every board-side reference must be a declared
+        // abstract port. Caught here (rather than as "no family
+        // member covers") so the error message names the *abstract
+        // entity*, which is what the user sees in their source.
+        if !decl.abstract_ports.is_empty() {
+            for alias in &wired_aliases {
+                if !decl.abstract_ports.contains(alias) {
+                    return Err(anyhow!(
+                        "Board references '{}.{}' but abstract entity \
+                         '{}' has no port named '{}'. Declared ports: {:?}.",
+                        inst_name, alias, entity_type, alias,
+                        {
+                            let mut v: Vec<&String> = decl.abstract_ports.iter().collect();
+                            v.sort();
+                            v
+                        }));
+                }
+            }
+        }
 
         let chosen = decl.family.iter().find(|fam| {
             wired_aliases.iter().all(|a| fam.pin_map.contains_key(a))
@@ -101,6 +145,14 @@ struct AbstractDecl {
     /// Source byte range of the entire `abstract entity NAME { ... }`
     /// block — gets stripped on rewrite.
     range: std::ops::Range<usize>,
+    /// The abstract entity's port set — the set of pin names the
+    /// abstract entity declares (e.g. `pin vcc: signal inout;`).
+    /// This is the surface board authors read to know what they can
+    /// reference. Each family entry's pin_map MUST map only these
+    /// names (validated at extract time); a board referencing a
+    /// name not in this set is a board-side error reported by
+    /// preprocess().
+    abstract_ports: HashSet<String>,
     /// Ordered list of family entries (preference order).
     family: Vec<FamilyEntry>,
 }
@@ -146,10 +198,26 @@ fn extract_abstract_decls(source: &str) -> HashMap<String, AbstractDecl> {
             Some(c) => c,
             None => { cursor = block_open + 1; continue; }
         };
-        let block_body = &source[block_open + 1..block_close];
+        let raw_block_body = &source[block_open + 1..block_close];
+        // Strip comments so words like "family" inside doc comments
+        // don't false-match the family-keyword scan below.
+        let stripped_body = strip_block_comments(raw_block_body);
+        let block_body = stripped_body.as_str();
 
-        // Within the abstract block, find `family { ... }`.
-        let family = match block_body.find("family") {
+        // Within the abstract block, find `family { ... }`. Pin
+        // declarations live before it (between the abstract block's
+        // `{` and `family`); they declare the abstract port set.
+        // Use word-boundary scan to avoid matching "family" inside
+        // identifiers (e.g. `family_param`).
+        let family_positions = find_keyword_positions(block_body, "family");
+        let family_pos_in_body = family_positions.first().copied();
+        let pin_decl_region = match family_pos_in_body {
+            Some(rel) => &block_body[..rel],
+            None => block_body,
+        };
+        let abstract_ports = parse_port_decls(pin_decl_region);
+
+        let family = match family_pos_in_body {
             Some(fam_rel) => {
                 let fam_kw_pos = block_open + 1 + fam_rel;
                 let after_fam_kw = fam_kw_pos + "family".len();
@@ -169,9 +237,48 @@ fn extract_abstract_decls(source: &str) -> HashMap<String, AbstractDecl> {
 
         out.insert(name, AbstractDecl {
             range: kw_start..(block_close + 1),
+            abstract_ports,
             family,
         });
         cursor = block_close + 1;
+    }
+    out
+}
+
+/// Inside the abstract entity's body but BEFORE the `family` block,
+/// extract every `pin NAME: …;` declaration's NAME. These are the
+/// names a board author may use on instances of the abstract entity.
+fn parse_port_decls(body: &str) -> HashSet<String> {
+    let mut out = HashSet::new();
+    let bytes = body.as_bytes();
+    let mut search = 0;
+    while let Some(rel) = body[search..].find("pin") {
+        let pos = search + rel;
+        // Word-boundary check.
+        let before_ok = pos == 0
+            || !(bytes[pos - 1].is_ascii_alphanumeric() || bytes[pos - 1] == b'_');
+        let after_kw = pos + "pin".len();
+        let after_ok = after_kw < body.len()
+            && bytes[after_kw].is_ascii_whitespace();
+        if !(before_ok && after_ok) {
+            search = pos + 1; continue;
+        }
+        // Read the IDENT after `pin `.
+        let rest = body[after_kw..].trim_start();
+        let name_start = after_kw + (body.len() - after_kw - rest.len());
+        let name_end = name_start + rest.bytes()
+            .take_while(|b| b.is_ascii_alphanumeric() || *b == b'_').count();
+        if name_end > name_start {
+            // Sanity: next non-whitespace char should be `:` (the type
+            // separator) to avoid matching `pin foo` in prose comments
+            // that survived the strip.
+            let after_name = name_end + body[name_end..].bytes()
+                .take_while(|b| b.is_ascii_whitespace()).count();
+            if after_name < body.len() && bytes[after_name] == b':' {
+                out.insert(body[name_start..name_end].to_string());
+            }
+        }
+        search = name_end.max(pos + 1);
     }
     out
 }
@@ -248,6 +355,60 @@ fn parse_family_entries(body: &str) -> Vec<FamilyEntry> {
         if i < body.len() && bytes[i] == b';' { i += 1; }
 
         out.push(FamilyEntry { concrete_name, pin_map });
+    }
+    out
+}
+
+/// Replace `//…` line and `/* … */` block comments with spaces so
+/// keyword/word scans don't match content inside doc comments.
+/// Byte offsets are preserved (each comment char becomes a space
+/// or newline), so positions in the stripped string still map
+/// 1:1 to positions in the original source.
+fn strip_block_comments(source: &str) -> String {
+    let bytes = source.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'/' {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                out.push(b' ');
+                i += 1;
+            }
+        } else if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'*' {
+            out.push(b' '); out.push(b' ');
+            i += 2;
+            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                if bytes[i] == b'\n' { out.push(b'\n'); } else { out.push(b' '); }
+                i += 1;
+            }
+            if i + 1 < bytes.len() {
+                out.push(b' '); out.push(b' ');
+                i += 2;
+            }
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).unwrap_or_else(|_| source.to_string())
+}
+
+/// Word-boundary keyword-position scan over a source string.
+fn find_keyword_positions(source: &str, keyword: &str) -> Vec<usize> {
+    let mut out = Vec::new();
+    let bytes = source.as_bytes();
+    let mut search = 0;
+    while let Some(rel) = source[search..].find(keyword) {
+        let pos = search + rel;
+        let before_ok = pos == 0
+            || !(bytes[pos - 1].is_ascii_alphanumeric() || bytes[pos - 1] == b'_');
+        let after = pos + keyword.len();
+        let after_ok = after >= source.len()
+            || !(bytes[after].is_ascii_alphanumeric() || bytes[after] == b'_');
+        if before_ok && after_ok {
+            out.push(pos);
+        }
+        search = pos + 1;
     }
     out
 }
