@@ -28,18 +28,32 @@ import { ATmega328P_DIP28 } from "bhdl-stdlib/actives/atmega328p.bhdl";
 import { ATmega328P_QFN32 } from "bhdl-stdlib/actives/atmega328p.bhdl";
 
 abstract entity ATmega328P {
+    // Abstract port list — the surface a board author reads to know
+    // what's available. Each family entry's pin_map maps these ports
+    // to that SKU's concrete pin names; SKUs that don't expose a port
+    // simply omit it from their pin_map.
+    pin vcc:   signal inout;
+    pin avcc:  signal inout;
+    pin gnd:   signal inout;
+    pin agnd:  signal inout;
+    pin adc0:  signal inout;
+    pin adc1:  signal inout;
+    pin adc2:  signal inout;
+    pin adc3:  signal inout;
+    pin adc4:  signal inout;
+    pin adc5:  signal inout;
+    pin adc6:  signal inout;   // QFN-only
+    pin adc7:  signal inout;   // QFN-only
+    pin reset: signal inout;
+
     family {
         ATmega328P_DIP28 {
             vcc  = VCC;
             avcc = AVCC;
             gnd  = GND1;
             agnd = GND2;
-            adc0 = PC0;
-            adc1 = PC1;
-            adc2 = PC2;
-            adc3 = PC3;
-            adc4 = PC4;
-            adc5 = PC5;
+            adc0 = PC0;  adc1 = PC1;  adc2 = PC2;
+            adc3 = PC3;  adc4 = PC4;  adc5 = PC5;
             reset = PC6;
             // No adc6 / adc7 — DIP-28 doesn't bring them out.
         };
@@ -48,12 +62,8 @@ abstract entity ATmega328P {
             avcc = AVCC;
             gnd  = GND1;
             agnd = GND3;
-            adc0 = PC0;
-            adc1 = PC1;
-            adc2 = PC2;
-            adc3 = PC3;
-            adc4 = PC4;
-            adc5 = PC5;
+            adc0 = PC0;  adc1 = PC1;  adc2 = PC2;
+            adc3 = PC3;  adc4 = PC4;  adc5 = PC5;
             adc6 = ADC6;
             adc7 = ADC7;
             reset = PC6;
@@ -185,6 +195,43 @@ fn main() -> Result<()> {
     }
     println!("✓ Board B → QFN-32; vcc→VCC1 (SKU-specific); adc7→ADC7; parses clean");
 
-    println!("\nv0.9b abstract-entity resolution (alias-aware): PASS");
+    // Board C: deliberately references an abstract port that isn't
+    // declared. The resolver should catch this with a port-name
+    // error before SKU resolution, naming the *abstract* entity (not
+    // a concrete SKU) so the user sees the diagnostic relative to
+    // what they wrote.
+    let bad_board = r#"
+abstract entity ATmega328P {
+    pin vcc:  signal inout;
+    pin gnd:  signal inout;
+    pin adc0: signal inout;
+    family {
+        ATmega328P_DIP28 { vcc = VCC; gnd = GND1; adc0 = PC0; };
+    }
+}
+
+board Misuse {
+    mcu: ATmega328P();
+    mcu.adc9 -> @SOMEWHERE;   // ← no such port on the abstract entity
+}
+"#;
+    println!("\n=== Board C: undeclared port → error ===");
+    match preprocess(bad_board) {
+        Ok(_) => {
+            eprintln!("✗ preprocess should have errored on undeclared port 'adc9'");
+            std::process::exit(1);
+        }
+        Err(e) => {
+            let msg = format!("{}", e);
+            if !msg.contains("adc9") || !msg.contains("ATmega328P") {
+                eprintln!("✗ error message doesn't name the bad port and abstract \
+                           entity clearly: {}", msg);
+                std::process::exit(1);
+            }
+            println!("✓ caught with clear diagnostic: {}", msg);
+        }
+    }
+
+    println!("\nv0.9b abstract-entity resolution (alias-aware, port-validated): PASS");
     Ok(())
 }

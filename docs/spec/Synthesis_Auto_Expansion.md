@@ -412,6 +412,21 @@ specific names.
 
 ```bhdl
 abstract entity ATmega328P {
+    // Abstract port list — the surface a board author reads to
+    // know what's available. Every BHDL entity has a portlist;
+    // the abstract entity is no exception. Each family entry's
+    // pin_map below maps these abstract ports → that SKU's
+    // concrete pin name. SKUs that don't expose a given abstract
+    // port simply omit it from their map.
+    pin vcc:   signal inout;
+    pin avcc:  signal inout;
+    pin gnd:   signal inout;
+    pin agnd:  signal inout;
+    pin adc0:  signal inout;
+    ...
+    pin adc7:  signal inout;   // QFN-only
+    pin reset: signal inout;
+
     family {
         ATmega328P_DIP28 {
             // Each family entry declares its own pin_map from
@@ -465,18 +480,41 @@ expect.
 
 ```
 1. extract_abstract_decls(source)
-     → HashMap<abstract_name, family entries with pin_maps>
-2. extract_abstract_instances(source, decls)
+     → HashMap<abstract_name, (abstract_ports, family entries)>
+2. Validate: every family entry's pin_map keys ⊆ abstract_ports
+     (catches stdlib-author bugs where a SKU exposes an alias
+      the abstract entity doesn't declare).
+3. extract_abstract_instances(source, decls)
      → instances using one of the abstract names
-3. For each instance:
+4. For each instance:
      a. Find the set of `inst.X` references the board makes.
-     b. Pick the first family entry whose pin_map keys ⊇ used set.
-     c. Record (instance → chosen entry).
-4. Rewrite source:
+     b. Validate: every X ∈ abstract_ports (catches board-author
+        typos; error names the abstract entity, not a SKU).
+     c. Pick the first family entry whose pin_map keys ⊇ used set.
+     d. Record (instance → chosen entry).
+5. Rewrite source:
      - strip every `abstract entity NAME { ... }` block
      - rewrite each abstract instance type token to the chosen SKU
      - rewrite each `mcu.X` → `mcu.<pin_map[X]>` per the chosen map
 ```
+
+The two-level validation gives clear diagnostics at each layer:
+
+- **Stdlib author makes a mistake** (SKU pin_map references an
+  alias not in the abstract port list):
+  ```
+  Family entry 'ATmega328P_QFN32' maps abstract port 'spi_mosi'
+  which is not declared on the abstract entity. Declared ports:
+  ["adc0", ..., "vcc"].
+  ```
+
+- **Board author makes a typo** (uses an alias that doesn't exist):
+  ```
+  Board references 'mcu.adc9' but abstract entity 'ATmega328P'
+  has no port named 'adc9'. Declared ports: ["adc0", ..., "vcc"].
+  ```
+
+Both errors point at the layer the user can fix.
 
 ### 8.4 Implementation: source-text preprocessor
 
@@ -544,6 +582,14 @@ string, call `preprocess`, then parse the result.
   `mcu.vcc` and the resolver picks the SKU + rewrites to that
   SKU's specific pin name (DIP-28's `VCC` vs QFN-32's `VCC1`).
   Closes task #92.
+- **2026-05-29 (v0.9b refinement)** — Abstract entities declare
+  their own port list (`pin name: type direction;`). Validated
+  at both stdlib-author and board-author layers:
+  family entries' pin_map keys must be a subset of the abstract
+  ports, and board references must name declared ports. The
+  abstract port list is the surface a board author reads to
+  know what's available — every BHDL entity has a portlist,
+  the abstract entity is no exception.
 - **2026-05-29** — Extend Phase 4.4 to stamp entity parameter
   defaults in addition to explicit overrides. Closes task #90;
   the C8T6 default-args board now lands with full BOM
