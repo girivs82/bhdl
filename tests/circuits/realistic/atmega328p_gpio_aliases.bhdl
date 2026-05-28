@@ -1,0 +1,30 @@
+// v0.9a function-alias demo: a board that uses `mcu.gpio11` and
+// `mcu.gpio12` instead of `mcu.PB3` and `mcu.PB4`. The board
+// author writes Arduino-friendly pin names; the synthesizer
+// resolves them to the chip's port pins via the entity's
+// `aliases { }` block.
+
+import { ATmega328P_DIP28 } from "bhdl-stdlib/actives/atmega328p.bhdl";
+import { Cap, Res } from "bhdl-stdlib/passive/capacitor.bhdl";
+
+board ATmega328P_GPIO_Alias_Test {
+    power VCC = 5V @ 200mA;
+    ground GND;
+
+    mcu: ATmega328P_DIP28();
+
+    // Power.
+    @VCC -> mcu.VCC;
+    @VCC -> mcu.AVCC;
+    mcu.GND1 -> @GND;
+    mcu.GND2 -> @GND;
+
+    // Wire via function aliases instead of port names.
+    // gpio11 = PB3 (MOSI), gpio12 = PB4 (MISO), gpio13 = PB5 (SCK)
+    // adc0  = PC0
+    mcu.gpio11 -> @MOSI_NET;
+    mcu.gpio12 -> @MISO_NET;
+    mcu.gpio13 -> @SCK_NET;
+    mcu.adc0   -> @ADC_IN;
+    mcu.reset  -> @RESET_NET;
+}

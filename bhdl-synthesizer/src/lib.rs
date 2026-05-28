@@ -2074,6 +2074,42 @@ impl NetlistGenerator {
         debug!("add_pins_for_component called for component_type: {} (from lib.rs)", component_type);
         debug!("import_preprocessor is_some: {}", self.import_preprocessor.is_some());
         
+        // Stamp v0.9 entity aliases (`aliases { gpio0 = PB0; ... }`)
+        // onto the module's attributes BEFORE we touch pin definitions —
+        // resolve_field_binding_alias checks these attrs to translate
+        // `mcu.gpio0` to `mcu.PB0` at connection-resolution time.
+        if let Some(ref preprocessor) = self.import_preprocessor {
+            if let Some(entity) = preprocessor.get_imported_entity(component_type) {
+                use bhdl_ast::SyntaxKind;
+                use rowan::ast::AstNode;
+                let prefix = crate::hierarchical_connectivity::ENTITY_ALIAS_ATTR_PREFIX;
+                let mut stamped = 0usize;
+                for node in entity.syntax().descendants() {
+                    if node.kind() != SyntaxKind::ENTITY_ALIASES_BLOCK { continue; }
+                    for mapping in node.children() {
+                        if mapping.kind() != SyntaxKind::ENTITY_ALIAS_MAPPING { continue; }
+                        let idents: Vec<String> = mapping.children_with_tokens()
+                            .filter_map(|el| el.into_token())
+                            .filter(|t| t.kind() == SyntaxKind::IDENT)
+                            .map(|t| t.text().to_string())
+                            .collect();
+                        if idents.len() < 2 { continue; }
+                        if let Some(m) = self.netlist.modules.get_mut(module_id) {
+                            m.attributes.insert(
+                                format!("{}{}", prefix, idents[0]),
+                                idents[1].clone(),
+                            );
+                            stamped += 1;
+                        }
+                    }
+                }
+                if stamped > 0 {
+                    info!("Stamped {} v0.9 alias(es) on module '{}'",
+                          stamped, component_type);
+                }
+            }
+        }
+
         // First check if this component was imported via preprocessor
         let (pin_definitions, has_virtual_pins) = if let Some(ref preprocessor) = self.import_preprocessor {
             if let Some(entity) = preprocessor.get_imported_entity(component_type) {

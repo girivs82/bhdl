@@ -1221,6 +1221,7 @@ fn add_component_pins(
         // Also materialise interface-field signals as `field.signal`
         // pins on this module (v0.3 interfaces).
         add_interface_field_pins(&entity_ast, module_id, netlist, context, import_preprocessor);
+        add_entity_aliases(&entity_ast, module_id, netlist);
         return Ok(());
     }
 
@@ -1236,6 +1237,7 @@ fn add_component_pins(
                 add_pin_to_netlist(pin, module_id, netlist, specialized_module);
             }
             add_interface_field_pins(&entity_ast, module_id, netlist, context, import_preprocessor);
+            add_entity_aliases(&entity_ast, module_id, netlist);
             return Ok(());
         }
     }
@@ -1362,7 +1364,7 @@ fn merge_nets(target_net_id: NetId, source_net_id: NetId, netlist: &mut Netlist)
     } else {
         return Ok(());
     };
-    
+
     // Move connections to target net
     if let Some(target_net) = netlist.nets.get_mut(target_net_id) {
         for connection in source_connections {
@@ -1371,10 +1373,30 @@ fn merge_nets(target_net_id: NetId, source_net_id: NetId, netlist: &mut Netlist)
             }
         }
     }
-    
+
+    // Update every pin_instance that referenced the source net to point
+    // at the target. Without this fix, pin instances retain stale
+    // `net` pointers to the (now-removed) source net, and downstream
+    // net→pin queries miss them entirely. The bug only surfaced once
+    // a board file wrote a connection in pin-first/net-second order
+    // (e.g. `mcu.GND1 -> @GND`), since that path goes through an
+    // auto-net + merge. Net-first/pin-second order
+    // (`@GND -> mcu.GND1`) avoids the merge and worked all along.
+    let mut moved = 0usize;
+    for (_pi_id, pi) in netlist.pin_instances.iter_mut() {
+        if pi.net == Some(source_net_id) {
+            pi.net = Some(target_net_id);
+            moved += 1;
+        }
+    }
+    if moved > 0 {
+        debug!("merge_nets: rewrote {} pin_instance(s) from {:?} → {:?}",
+            moved, source_net_id, target_net_id);
+    }
+
     // Remove the source net
     netlist.nets.remove(source_net_id);
-    
+
     Ok(())
 }
 
@@ -1700,6 +1722,16 @@ pub(crate) const INTERFACE_FIELD_DIRECTION_ATTR_PREFIX: &str = "intf_dir__";
 /// dte.TX <-> dce.RX). Absent when `wires { }` was omitted (the
 /// SPI/I²C same-name default).
 pub(crate) const INTERFACE_FIELD_XWIRE_ATTR_PREFIX: &str = "intf_xwire__";
+
+/// Prefix for entity-level function aliases (v0.9).
+/// `alias__gpio0 = "PB0"` on a module means the logical pin name
+/// `gpio0` is an alias for the physical pin `PB0`. Synthesizer
+/// pin-lookup checks this prefix when a referenced pin name
+/// isn't directly defined on the module — letting board authors
+/// write `mcu.gpio0` instead of `mcu.PB0`. Parallel mechanism to
+/// the interface-field bindings above but without the dotted
+/// `field.signal` namespacing.
+pub(crate) const ENTITY_ALIAS_ATTR_PREFIX: &str = "alias__";
 
 fn add_interface_field_pins(
     entity: &bhdl_ast::Entity,
@@ -2069,8 +2101,56 @@ fn resolve_field_binding_alias<'a>(
 ) -> Option<&'a str> {
     let inst = netlist.instances.get(inst_id)?;
     let module = netlist.modules.get(inst.definition)?;
+    // First try the v0.7 interface-field-binding form: `intf_bind__spi.MOSI`.
     let key = format!("{}{}", INTERFACE_FIELD_BINDING_ATTR_PREFIX, pin_name);
+    if let Some(physical) = module.attributes.get(&key) {
+        return Some(physical.as_str());
+    }
+    // Then try the v0.9 entity-alias form: `alias__gpio0`.
+    let key = format!("{}{}", ENTITY_ALIAS_ATTR_PREFIX, pin_name);
     module.attributes.get(&key).map(|s| s.as_str())
+}
+
+/// Walk an entity's AST looking for `aliases { gpio0 = PB0; … }`
+/// blocks and stamp each mapping onto the module's attributes
+/// using the `alias__<name>` prefix. Called once per module
+/// during creation, parallel to `add_interface_field_pins`.
+fn add_entity_aliases(
+    entity_ast: &Entity,
+    module_id: ModuleId,
+    netlist: &mut Netlist,
+) {
+    use bhdl_ast::SyntaxKind;
+    use rowan::ast::AstNode;
+
+    let mut count = 0;
+
+    // Find all ENTITY_ALIASES_BLOCK nodes inside the entity body.
+    for node in entity_ast.syntax().descendants() {
+        if node.kind() != SyntaxKind::ENTITY_ALIASES_BLOCK { continue; }
+        for mapping in node.children() {
+            if mapping.kind() != SyntaxKind::ENTITY_ALIAS_MAPPING { continue; }
+            // Each mapping has two IDENT tokens: alias_name, then physical pin name.
+            let idents: Vec<String> = mapping.children_with_tokens()
+                .filter_map(|el| el.into_token())
+                .filter(|t| t.kind() == SyntaxKind::IDENT)
+                .map(|t| t.text().to_string())
+                .collect();
+            if idents.len() < 2 { continue; }
+            let alias_name = &idents[0];
+            let physical_name = &idents[1];
+            if let Some(module) = netlist.modules.get_mut(module_id) {
+                module.attributes.insert(
+                    format!("{}{}", ENTITY_ALIAS_ATTR_PREFIX, alias_name),
+                    physical_name.clone(),
+                );
+                count += 1;
+            }
+        }
+    }
+    if count > 0 {
+        info!("add_entity_aliases: stamped {} alias(es) on module {:?}", count, module_id);
+    }
 }
 
 /// If `parts` is a pure bundle-bundle chain (every endpoint is

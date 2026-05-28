@@ -99,6 +99,40 @@ entity ATmega328P_DIP28(part_no: string = "ATMEGA328P-PU") {
         RX = PD0;
     }
 
+    // ─── Function aliases (v0.9a) ──────────────────────────
+    // Logical pin names so board authors don't need to type
+    // datasheet port names. Sequential numbering by physical
+    // pin order across the DIP-28 layout. The Arduino board
+    // personality remaps these further to D0..D13 / A0..A5
+    // (handled at a higher abstraction layer).
+    aliases {
+        // GPIOs in physical pin-number order (DIP-28).
+        // Pin 1 = PC6 (RESET), pin 2-6 = PD0..PD4, etc.
+        gpio0  = PD0;   // pin 2  (RXD)
+        gpio1  = PD1;   // pin 3  (TXD)
+        gpio2  = PD2;   // pin 4
+        gpio3  = PD3;   // pin 5
+        gpio4  = PD4;   // pin 6
+        gpio5  = PD5;   // pin 11
+        gpio6  = PD6;   // pin 12
+        gpio7  = PD7;   // pin 13
+        gpio8  = PB0;   // pin 14
+        gpio9  = PB1;   // pin 15
+        gpio10 = PB2;   // pin 16 (SS)
+        gpio11 = PB3;   // pin 17 (MOSI)
+        gpio12 = PB4;   // pin 18 (MISO)
+        gpio13 = PB5;   // pin 19 (SCK)
+        // ADC inputs (PC0..PC5).
+        adc0   = PC0;   // pin 23
+        adc1   = PC1;   // pin 24
+        adc2   = PC2;   // pin 25
+        adc3   = PC3;   // pin 26
+        adc4   = PC4;   // pin 27 (also SDA)
+        adc5   = PC5;   // pin 28 (also SCL)
+        // Special-function aliases.
+        reset  = PC6;   // pin 1  /RESET
+    }
+
     attribute component_class = "microcontroller";
     attribute family          = "AVR";
     attribute architecture    = "8-bit RISC";
