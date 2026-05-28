@@ -1,7 +1,7 @@
 //! v0.4 interface check: an MCU with `interface SPI spi { MOSI=PB3; ... }`
 //! wired via `mcu.spi -> flash.spi` should produce nets containing the
 //! MCU's **physical pins** (PB3, PB4, …), not synthetic `mcu.spi.MOSI`
-//! pins. The peripheral (unbound `interface ~SPI spi;`) still uses the
+//! pins. The peripheral (unbound `interface SPI:slave spi;`) still uses the
 //! `flash.spi.MOSI` form. Bundle expansion bridges the two.
 
 use bhdl_ast::SourceFile;
@@ -11,9 +11,16 @@ use std::collections::BTreeMap;
 
 const SOURCE: &str = r#"
 interface SPI {
-    signal MOSI: out;
-    signal MISO: in;
-    signal SCK:  out;
+    perspective master {
+        signal MOSI: out;
+        signal MISO: in;
+        signal SCK:  out;
+    }
+    perspective slave {
+        signal MOSI: in;
+        signal MISO: out;
+        signal SCK:  in;
+    }
 }
 
 entity SomeMCU {
@@ -29,7 +36,7 @@ entity SomeMCU {
 }
 
 entity Flash {
-    interface ~SPI spi;
+    interface SPI:slave spi;
 }
 
 board Demo {

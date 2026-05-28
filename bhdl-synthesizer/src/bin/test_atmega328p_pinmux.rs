@@ -20,10 +20,22 @@ use std::collections::BTreeMap;
 // far more pin decls). The Arduino-roundtrip already verifies
 // the full stdlib entity parses cleanly under the importer.
 const SOURCE: &str = r#"
-interface SPI  { signal MOSI: out; signal MISO: in; signal SCK: out; signal CS: out optional; }
-interface ICSP { signal MOSI: out; signal MISO: in; signal SCK: out; signal RESET: out; }
-interface I2C  { signal SDA: inout; signal SCL: out; }
-interface UART { signal TX: out; signal RX: in; }
+interface SPI {
+    perspective master { signal MOSI: out; signal MISO: in;  signal SCK: out; signal CS: out optional; }
+    perspective slave  { signal MOSI: in;  signal MISO: out; signal SCK: in;  signal CS: in  optional; }
+}
+interface ICSP {
+    perspective master { signal MOSI: out; signal MISO: in;  signal SCK: out; signal RESET: out; }
+    perspective slave  { signal MOSI: in;  signal MISO: out; signal SCK: in;  signal RESET: in;  }
+}
+interface I2C {
+    perspective bus { signal SDA: inout; signal SCL: inout; }
+}
+interface UART {
+    perspective dte { signal TX: out; signal RX: in; }
+    perspective dce { signal TX: out; signal RX: in; }
+    wires { dte.TX <-> dce.RX; dte.RX <-> dce.TX; }
+}
 
 entity ATmega328P {
     pin PB2: signal inout;
@@ -42,7 +54,7 @@ entity ATmega328P {
     interface UART uart { TX=PD1; RX=PD0; }
 }
 
-entity W25Q32 { interface ~SPI spi; }
+entity W25Q32 { interface SPI:slave spi; }
 
 board Demo {
     mcu:   ATmega328P();

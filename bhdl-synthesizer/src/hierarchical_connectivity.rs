@@ -1647,15 +1647,16 @@ fn check_chain_directions(
             if a_dir == "out" && b_dir == "out" {
                 return Err(format!(
                     "incompatible directions on connection: `{}` and `{}` are both `out` \
-                     (two drivers would short on the same net). Did you forget `~Interface` \
-                     on one side?",
+                     (two drivers would short on the same net). Did you forget \
+                     a `:slave` (or other opposing perspective) selector on one side?",
                     a_name, b_name
                 ));
             }
             if a_dir == "in" && b_dir == "in" {
                 return Err(format!(
                     "incompatible directions on connection: `{}` and `{}` are both `in` \
-                     (no driver on the net). Did you forget `~Interface` on one side?",
+                     (no driver on the net). Did you forget a `:slave` (or other \
+                     opposing perspective) selector on one side?",
                     a_name, b_name
                 ));
             }
@@ -1690,6 +1691,15 @@ pub(crate) const INTERFACE_FIELD_BINDING_ATTR_PREFIX: &str = "intf_bind__";
 /// `inout`) still report the logical direction the interface
 /// claims.
 pub(crate) const INTERFACE_FIELD_DIRECTION_ATTR_PREFIX: &str = "intf_dir__";
+
+/// Prefix for storing the cross-perspective signal-name mapping
+/// implied by an interface's `wires { }` block. Stored per-field
+/// on the module's attributes: `intf_xwire__<field>__<my_signal>`
+/// → `<other_perspective's_signal>`. Used by bundle expansion to
+/// pair signals across perspectives whose names cross (UART:
+/// dte.TX <-> dce.RX). Absent when `wires { }` was omitted (the
+/// SPI/I²C same-name default).
+pub(crate) const INTERFACE_FIELD_XWIRE_ATTR_PREFIX: &str = "intf_xwire__";
 
 fn add_interface_field_pins(
     entity: &bhdl_ast::Entity,
@@ -1806,6 +1816,24 @@ fn add_interface_field_pins(
             reversed,
         );
 
+        // v0.7c: harvest cross-perspective signal mappings from the
+        // interface's optional `wires { }` block. For each entry
+        // `lhs_persp.lhs_sig <-> rhs_persp.rhs_sig`, if our
+        // perspective is on one side, record the other-side signal
+        // name we pair with. Used by bundle expansion to wire
+        // cross-name protocols (UART) correctly.
+        let our_perspective = match (&perspective_name, reversed) {
+            (Some(name), _) => Some(name.clone()),
+            (None, true) => {
+                // Legacy `~`: resolve to second-declared perspective name
+                // (if any) so the xwire lookup keys still work.
+                synth_nth_perspective_name(&iface_node, 1)
+            }
+            (None, false) => synth_nth_perspective_name(&iface_node, 0),
+        };
+        let xwires_for_field: HashMap<String, String> =
+            synth_harvest_xwires(&iface_node, our_perspective.as_deref());
+
         for sig_node in signal_nodes {
             // Pull signal name + direction.
             let sig_name_tok = sig_node
@@ -1865,6 +1893,17 @@ fn add_interface_field_pins(
                     "{}{}", INTERFACE_FIELD_DIRECTION_ATTR_PREFIX, pin_name,
                 );
                 module.attributes.insert(dir_key, dir_str.to_string());
+
+                // Cross-wire mapping for this signal, if the interface
+                // declares one. Bundle expansion reads this to wire
+                // cross-name protocols.
+                if let Some(other_side_sig) = xwires_for_field.get(&sig_name) {
+                    let xwire_key = format!(
+                        "{}{}__{}",
+                        INTERFACE_FIELD_XWIRE_ATTR_PREFIX, field_name, sig_name,
+                    );
+                    module.attributes.insert(xwire_key, other_side_sig.clone());
+                }
             }
 
             if let Some(target_pin) = bindings.get(&sig_name) {
@@ -1885,6 +1924,67 @@ fn add_interface_field_pins(
             }
         }
     }
+}
+
+/// Name of the n-th declared perspective on this interface (0-indexed).
+/// `None` if the interface declares fewer than n+1 perspectives.
+fn synth_nth_perspective_name(
+    iface: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>,
+    n: usize,
+) -> Option<String> {
+    use bhdl_parser::SyntaxKind;
+    let mut idx = 0;
+    for child in iface.children() {
+        if child.kind() != SyntaxKind::INTERFACE_PERSPECTIVE { continue; }
+        if idx == n {
+            return child
+                .children_with_tokens()
+                .filter_map(|el| el.into_token())
+                .find(|t| t.kind() == SyntaxKind::IDENT)
+                .map(|t| t.text().to_string());
+        }
+        idx += 1;
+    }
+    None
+}
+
+/// Harvest the cross-perspective signal mappings from an interface's
+/// optional `wires { }` block, restricted to the side `my_perspective`.
+/// Returns a map `my_signal_name → other_perspective_signal_name`.
+///
+/// Each `<lhs_persp.lhs_sig> <-> <rhs_persp.rhs_sig>` entry contributes:
+///   - if `lhs_persp == my_perspective`: lhs_sig → rhs_sig
+///   - if `rhs_persp == my_perspective`: rhs_sig → lhs_sig
+/// Both directions handled so the lookup works regardless of which
+/// side of the `<->` operator the user wrote first.
+fn synth_harvest_xwires(
+    iface: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>,
+    my_perspective: Option<&str>,
+) -> HashMap<String, String> {
+    use bhdl_parser::SyntaxKind;
+    let mut out = HashMap::new();
+    let Some(mine) = my_perspective else { return out; };
+
+    for child in iface.children() {
+        if child.kind() != SyntaxKind::INTERFACE_WIRES_BLOCK { continue; }
+        for mapping in child.children().filter(|n| n.kind() == SyntaxKind::INTERFACE_WIRE_MAPPING) {
+            let idents: Vec<String> = mapping
+                .children_with_tokens()
+                .filter_map(|el| el.into_token())
+                .filter(|t| t.kind() == SyntaxKind::IDENT)
+                .map(|t| t.text().to_string())
+                .collect();
+            if idents.len() != 4 { continue; }
+            let (lhs_persp, lhs_sig, rhs_persp, rhs_sig) =
+                (&idents[0], &idents[1], &idents[2], &idents[3]);
+            if lhs_persp == mine {
+                out.insert(lhs_sig.clone(), rhs_sig.clone());
+            } else if rhs_persp == mine {
+                out.insert(rhs_sig.clone(), lhs_sig.clone());
+            }
+        }
+    }
+    out
 }
 
 /// v0.7: pick the INTERFACE_SIGNAL nodes corresponding to the
@@ -2048,25 +2148,59 @@ fn expand_interface_bundle_chain(
         bundle_info.push((instance_name.to_string(), field_name.to_string(), signals));
     }
 
-    // All parts qualified. They must agree on the signal set.
-    let signals = &bundle_info[0].2;
-    for (_, _, sigs) in &bundle_info[1..] {
-        if sigs != signals {
-            // Mismatched bundle widths — don't try to be clever.
-            return vec![parts.to_vec()];
-        }
-    }
+    // v0.7c: signal sets may differ across endpoints when an
+    // interface's `wires { }` block declares cross-name pairings
+    // (UART dte.TX ↔ dce.RX). We pick the driver perspective —
+    // the first endpoint — and translate signal names for every
+    // subsequent endpoint via that endpoint's `intf_xwire__field__sig`
+    // attribute, falling back to the same name (the SPI/I2C
+    // default).
+    let driver_signals = bundle_info[0].2.clone();
 
-    // Generate one chain per signal.
-    let mut chains = Vec::with_capacity(signals.len());
-    for sig in signals {
-        let chain: Vec<String> = bundle_info
-            .iter()
-            .map(|(inst, field, _)| format!("{}.{}.{}", inst, field, sig))
-            .collect();
+    let mut chains = Vec::with_capacity(driver_signals.len());
+    for sig in &driver_signals {
+        let mut chain = Vec::with_capacity(bundle_info.len());
+        // Driver endpoint uses the signal as-is.
+        chain.push(format!("{}.{}.{}", bundle_info[0].0, bundle_info[0].1, sig));
+        // Subsequent endpoints translate via their own xwire map.
+        for (inst, field, other_sigs) in &bundle_info[1..] {
+            let translated = translate_via_xwire(netlist, context, inst, field, sig);
+            // The translated name must exist on the other endpoint's
+            // pin/binding set — otherwise we're trying to pair with a
+            // signal the other side doesn't carry. Bail to the
+            // unexpanded form in that case (the connection processor
+            // will then surface a clear "no pin" error).
+            if !other_sigs.iter().any(|s| s == &translated) {
+                return vec![parts.to_vec()];
+            }
+            chain.push(format!("{}.{}.{}", inst, field, translated));
+        }
         chains.push(chain);
     }
     chains
+}
+
+/// Translate `sig` (a signal name on the driver endpoint) into the
+/// corresponding signal name on `instance.field` per its module's
+/// recorded cross-wire mapping. Returns `sig` unchanged when no
+/// mapping is recorded — the by-name default that's correct for
+/// SPI / I²C / USB.
+fn translate_via_xwire(
+    netlist: &Netlist,
+    context: &HierarchicalContext,
+    instance_name: &str,
+    field_name: &str,
+    sig: &str,
+) -> String {
+    let Some(inst_id) = find_instance_by_name_in_context(netlist, context, instance_name)
+    else { return sig.to_string(); };
+    let Some(inst) = netlist.instances.get(inst_id) else { return sig.to_string(); };
+    let Some(module) = netlist.modules.get(inst.definition) else { return sig.to_string(); };
+    let key = format!(
+        "{}{}__{}",
+        INTERFACE_FIELD_XWIRE_ATTR_PREFIX, field_name, sig,
+    );
+    module.attributes.get(&key).cloned().unwrap_or_else(|| sig.to_string())
 }
 
 /// Shared flow processing logic used by both NET_FLOW_STMT and CONNECTION_STMT handlers.

@@ -2,7 +2,7 @@
 //! expands at synthesis to per-signal connections.
 //!
 //! Defines a tiny SPI interface, a Master and Slave entity (the
-//! Slave using `~SPI` to flip directions), instantiates both on a
+//! Slave using `SPI:slave` to flip directions), instantiates both on a
 //! board, writes the bundle connection, and asserts the
 //! synthesised netlist has four nets each with two pins (master
 //! + slave) — one per SPI signal.
@@ -14,9 +14,16 @@ use std::collections::BTreeMap;
 
 const SOURCE: &str = r#"
 interface SPI {
-    signal MOSI: out;
-    signal MISO: in;
-    signal SCK:  out;
+    perspective master {
+        signal MOSI: out;
+        signal MISO: in;
+        signal SCK:  out;
+    }
+    perspective slave {
+        signal MOSI: in;
+        signal MISO: out;
+        signal SCK:  in;
+    }
 }
 
 entity Master {
@@ -24,7 +31,7 @@ entity Master {
 }
 
 entity Slave {
-    interface ~SPI spi;
+    interface SPI:slave spi;
 }
 
 board Demo {
