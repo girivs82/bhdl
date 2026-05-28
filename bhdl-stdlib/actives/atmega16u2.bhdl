@@ -69,6 +69,37 @@ entity ATmega16U2_QFN32(part_no: string = "ATMEGA16U2-MU") {
     // exposes it as pin 33 (named "EXP" in the .kicad_sym).
     pin PAD:  signal inout;  //                                 (pin 33)
 
+    // ─── Peripheral interfaces (v0.7 perspective form) ──────
+    // SPI on Port B (PB0=SS, PB1=SCLK, PB2=MOSI, PB3=MISO).
+    // Chip is the SPI master in standalone use.
+    interface SPI spi {
+        MOSI = PB2;
+        MISO = PB3;
+        SCK  = PB1;
+        CS   = PB0;
+    }
+
+    // ICSP target: same physical SPI signals plus the dedicated
+    // RESET pulse on PC1 (PC1 is dual-function /RESET on this part).
+    // Programmer (USBasp / Atmel-ICE) declares `interface ICSP icsp;`
+    // (default master) and direction-matches us.
+    interface ICSP:slave icsp {
+        MOSI  = PB2;
+        MISO  = PB3;
+        SCK   = PB1;
+        RESET = PC1;
+    }
+
+    // USART1 — the only USART on this part. On the Arduino Uno this
+    // chip sits as the USB↔serial bridge between the host MCU and
+    // USB, i.e. the *dce* side of the link to the host's `dte` UART.
+    // Boards using this chip standalone may need to override the
+    // perspective explicitly at instantiation; default is `dte`.
+    interface UART uart {
+        TX = PD3;   // TXD1 (PD3, pin 9)
+        RX = PD2;   // RXD1 (PD2, pin 8)
+    }
+
     attribute component_class = "microcontroller";
     attribute family          = "AVR";
     attribute architecture    = "8-bit RISC";

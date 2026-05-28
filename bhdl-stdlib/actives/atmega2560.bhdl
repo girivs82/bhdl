@@ -141,6 +141,48 @@ entity ATmega2560_TQFP100(part_no: string = "ATMEGA2560-16AU") {
     pin AGND:  signal inout; // analog ground                   (pin 99)
     pin AREF:  signal inout; // analog reference                (pin 98)
 
+    // ─── Peripheral interfaces (v0.7 perspective form) ──────
+    // SPI master on Port B (PB0=SS, PB1=SCK, PB2=MOSI, PB3=MISO).
+    interface SPI spi {
+        MOSI = PB2;
+        MISO = PB3;
+        SCK  = PB1;
+        CS   = PB0;
+    }
+
+    // I2C / TWI on Port D (PD0=SCL, PD1=SDA).
+    interface I2C i2c {
+        SDA = PD1;
+        SCL = PD0;
+    }
+
+    // Four USARTs — uart0/uart1/uart2/uart3, the Mega's defining
+    // feature relative to the 328P. Boards pick whichever they need.
+    interface UART uart0 {
+        TX = PE1;   // TXD0
+        RX = PE0;   // RXD0
+    }
+    interface UART uart1 {
+        TX = PD3;   // TXD1
+        RX = PD2;   // RXD1
+    }
+    interface UART uart2 {
+        TX = PH1;   // TXD2
+        RX = PH0;   // RXD2
+    }
+    interface UART uart3 {
+        TX = PJ1;   // TXD3
+        RX = PJ0;   // RXD3
+    }
+
+    // ICSP target: shares Port B SPI signals; RESET on dedicated /RESET pin.
+    interface ICSP:slave icsp {
+        MOSI  = PB2;
+        MISO  = PB3;
+        SCK   = PB1;
+        RESET = RESET;
+    }
+
     attribute component_class = "microcontroller";
     attribute family          = "AVR";
     attribute architecture    = "8-bit RISC";
