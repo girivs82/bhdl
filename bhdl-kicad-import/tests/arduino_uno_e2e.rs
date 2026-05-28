@@ -118,24 +118,26 @@ fn emits_bhdl_for_arduino_uno() {
         "missing VCC_5V power decl");
 
     // Some symbols must resolve to real stdlib entries
-    // (resistor, capacitor are universally mapped).
-    assert!(emitted.source.contains(": Resistor("),
-        "expected at least one Resistor instance");
-    assert!(emitted.source.contains(": Capacitor("),
-        "expected at least one Capacitor instance");
+    // (resistor, capacitor are universally mapped). With the v0.2
+    // generic-passive emit path, a parseable value like "100n"
+    // produces `: Capacitor<100nF>()`; only unparseable values
+    // (e.g. "5k1") fall back to `: Resistor("5k1")`. Accept either.
+    assert!(
+        emitted.source.contains(": Resistor(") || emitted.source.contains(": Resistor<"),
+        "expected at least one Resistor instance",
+    );
+    assert!(
+        emitted.source.contains(": Capacitor(") || emitted.source.contains(": Capacitor<"),
+        "expected at least one Capacitor instance",
+    );
 
-    // Unmapped symbols fall through to kicad_passthrough — the
-    // Uno uses an ATmega328, USB receptacle, etc. that aren't
-    // (yet) in the stdlib mapping. That's expected.
+    // Unmapped symbols fall through to kicad_passthrough. Early
+    // in the stdlib's life this was expected (ATmega328, USB
+    // receptacle, etc. weren't mapped); the stdlib has since grown
+    // to cover every Arduino Uno symbol, so passthroughs are now
+    // legitimately zero. The test still records the count for
+    // visibility but no longer requires it to be positive.
     let passthroughs = emitted.source.matches(": kicad_passthrough(").count();
-    assert!(passthroughs > 0,
-        "expected at least one kicad_passthrough for unmapped ICs");
-
-    // Warnings name the unmapped symbols (non-empty unless the
-    // stdlib mapping covers literally every Uno part — not
-    // currently the case).
-    assert!(!emitted.warnings.is_empty(),
-        "expected at least one warning for unmapped symbols");
 
     let lines = emitted.source.lines().count();
     eprintln!(
