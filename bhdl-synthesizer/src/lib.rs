@@ -939,6 +939,20 @@ impl NetlistGenerator {
     /// runtime arg. A single unified merge pass right before
     /// expansion guarantees those args are visible.
     fn stamp_constructor_args_on_instances(&mut self, ast: &SourceFile) {
+        // Helper: strip surrounding double-quotes from a string-literal
+        // constructor arg value. The AST text() returns the literal
+        // source token including its quotes (`"STM32F103C8T6"`), but
+        // downstream consumers (BOM walker, KiCad export, comparators)
+        // expect the bare string. Numeric / unit / identifier values
+        // pass through unchanged.
+        fn unquote_string_literal(s: &str) -> String {
+            let s = s.trim();
+            if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
+                s[1..s.len() - 1].to_string()
+            } else {
+                s.to_string()
+            }
+        }
         use bhdl_ast::SyntaxKind;
         use bhdl_ast::common::ComponentInst;
         use rowan::ast::AstNode;
@@ -986,7 +1000,7 @@ impl NetlistGenerator {
                             _ => {}
                         }
                     }
-                    let default_text = default_text.trim().to_string();
+                    let default_text = unquote_string_literal(default_text.trim());
                     if !default_text.is_empty() {
                         defaults.push((pname, default_text));
                     }
@@ -1043,7 +1057,8 @@ impl NetlistGenerator {
                         (bhdl_ast::HasName::name(&assign), assign.value())
                     {
                         let key = name_tok.text().to_string();
-                        let val = value_expr.syntax().text().to_string().trim().to_string();
+                        let val = unquote_string_literal(
+                            value_expr.syntax().text().to_string().trim());
                         if let Some(inst) = self.netlist.instances.get_mut(inst_id) {
                             inst.attributes.entry(key).or_insert(val);
                             stamped_explicit += 1;
