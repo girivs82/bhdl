@@ -1,0 +1,57 @@
+// End-to-end integration: a simplified Arduino-class board that
+// chains every piece of infrastructure we built over the past few
+// turns:
+//
+//   1. Power regulator with `design { }` + `expansion { }` recipe:
+//      LM317 sized from v_out=5V → R1=720Ω, R2=240Ω feedback
+//      divider + input/output bulk caps. (Tests phase 4.5 +
+//      design→expansion value-binding loop.)
+//
+//   2. MCU with always-on `expansion { }`:
+//      ATmega328P_DIP28 → decoupling caps on VCC/AVCC/AREF.
+//      (Tests phase 4.5 expansion firing on imported stdlib
+//      entities.)
+//
+//   3. MCU with conditionally-gated expansion:
+//      Same chip — PC4 and PC5 are wired here (used as I²C bus),
+//      so the chip's gated pullup children R_pu_sda / R_pu_scl
+//      should fire. (Tests #89 conditional expansion gating.)
+//
+//   4. Cross-chip routing through the analyzer's net extraction.
+//      VIN → LM317 → VCC rail → multiple chips on the same rail.
+//
+// Negative checks (things that must NOT appear):
+//   - No false pullups on chips without I²C usage (none in this
+//     fixture, but the gating logic stays exercised).
+
+import { LM317 } from "bhdl-stdlib/power/lm317.bhdl";
+import { ATmega328P_DIP28 } from "bhdl-stdlib/actives/atmega328p.bhdl";
+import { Cap, Res } from "bhdl-stdlib/passive/capacitor.bhdl";
+
+board Arduino_Class_Board {
+    power VIN  = 12V @ 500mA;
+    power VCC  = 5V  @ 300mA;
+    ground GND;
+
+    // 12V → 5V regulator. LM317's expansion provides C_in, C_out,
+    // and the R1/R2 feedback divider (R1=720Ω computed from v_out=5V).
+    U_REG: LM317(v_out=5V);
+    @VIN -> U_REG.VIN;
+    U_REG.VOUT -> @VCC;
+    U_REG.GND -> @GND;
+
+    // ATmega328P MCU. Decoupling caps materialise unconditionally;
+    // I²C pullups fire because PC4/PC5 are wired below.
+    MCU: ATmega328P_DIP28();
+    @VCC -> MCU.VCC;
+    @VCC -> MCU.AVCC;
+    MCU.GND1 -> @GND;
+    MCU.GND2 -> @GND;
+
+    // Wire PC4/PC5 as I²C — this gates the chip's R_pu_sda/R_pu_scl
+    // children into firing. A separate EEPROM/sensor would land on
+    // these nets in a full board; for this test the named nets are
+    // enough to keep them "wired" from the gating logic's POV.
+    MCU.PC4 -> @SDA_BUS;
+    MCU.PC5 -> @SCL_BUS;
+}
