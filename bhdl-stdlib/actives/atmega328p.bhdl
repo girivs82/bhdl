@@ -53,6 +53,42 @@ entity ATmega328P_DIP28(part_no: string = "ATMEGA328P-PU") {
     pin GND1: signal inout;  // (pin 8)  — digital ground
     pin GND2: signal inout;  // (pin 22) — analog ground
 
+    // ─── Peripheral interfaces (v0.6 pinmux) ────────────────
+    //
+    // The peripherals share their physical pins; the board picks
+    // which one to wire and the synthesizer enforces mutual
+    // exclusion on the shared pins. The bindings here follow the
+    // ATmega328P datasheet pinout.
+    //
+    // SPI on PB3..PB5 + PB2 (chip-select). Also serves as the
+    // ICSP programming-header data path with RESET on PC6.
+    interface SPI spi {
+        MOSI = PB3;
+        MISO = PB4;
+        SCK  = PB5;
+        CS   = PB2;
+    }
+
+    interface ICSP icsp {
+        MOSI  = PB3;
+        MISO  = PB4;
+        SCK   = PB5;
+        RESET = PC6;
+    }
+
+    // I2C on PC4/PC5 — also the ADC4/ADC5 pins, so a board that
+    // wires `mcu.i2c` can't also read those ADC channels.
+    interface I2C i2c {
+        SDA = PC4;
+        SCL = PC5;
+    }
+
+    // UART0 on PD0/PD1.
+    interface UART uart {
+        TX = PD1;
+        RX = PD0;
+    }
+
     attribute component_class = "microcontroller";
     attribute family          = "AVR";
     attribute architecture    = "8-bit RISC";
