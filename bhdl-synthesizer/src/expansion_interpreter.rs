@@ -7,7 +7,7 @@
 //! `create_instance`, `connect_pin_instance_by_name`, `find_net_for_pin_instance`)
 //! are reused — they remain in `virtual_pin_expander.rs` as `pub(crate)`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use log::{debug, error, info, warn};
 use bhdl_common::{ExpansionRecipe, ExpansionConnection, ExpansionEndpoint};
 use bhdl_netlist::{
@@ -262,7 +262,44 @@ fn expand_one_instance(
     // names appear in the returned map.
     let intent_design = intent_driven_values(netlist, cand);
 
+    // Per-child connectivity gating: determine which expansion
+    // children should actually fire based on whether their
+    // referenced parent pins are wired at the board level.
+    //
+    // Motivation: an entity like atmega328p exposes I²C on
+    // PC4/PC5 (which are also ADC4/ADC5). A board that only
+    // uses ADC shouldn't materialise the I²C pullups the chip's
+    // expansion block declares — those would load the ADC input.
+    //
+    // Rule: a child is "live" if every ParentPin name referenced
+    // by any of its connections is either:
+    //   (a) a power-rail name (VCC/GND/AVCC/AREF/UVCC/UGND/UCAP/
+    //       VBUS — these are the chip's required power, so by
+    //       convention always considered connected), OR
+    //   (b) explicitly wired on the board (the parent's pin
+    //       instance shares a net with at least one other pin).
+    // Otherwise the child is dropped, along with all connections
+    // referring to it.
+    let live_children: HashSet<String> =
+        compute_live_children(netlist, cand);
+
+    if live_children.len() < cand.recipe.instances.len() {
+        info!(
+            "Expansion of '{}': {}/{} children fire ({} dropped — \
+             referenced parent pins not wired)",
+            cand.instance_name,
+            live_children.len(),
+            cand.recipe.instances.len(),
+            cand.recipe.instances.len() - live_children.len(),
+        );
+    }
+
     for exp_inst in &cand.recipe.instances {
+        if !live_children.contains(&exp_inst.name) {
+            debug!("Skipping expansion child '{}' (no wired parent pin)",
+                exp_inst.name);
+            continue;
+        }
         let child_name = format!("{}_{}", base, exp_inst.name);
 
         // Determine pin layout from component type. Common-currency
@@ -507,6 +544,15 @@ fn expand_one_instance(
     let mut conn_idx_counter = 0usize;
 
     for conn in &cand.recipe.connections {
+        // Skip connections whose child reference isn't in the
+        // live set (its parent-pin dependency wasn't wired).
+        let touches_dead_child = |ep: &ExpansionEndpoint| match ep {
+            ExpansionEndpoint::InstancePin(child, _) => !live_children.contains(child),
+            _ => false,
+        };
+        if touches_dead_child(&conn.from) || touches_dead_child(&conn.to) {
+            continue;
+        }
         conn_idx_counter += 1;
         let from_net = resolve_endpoint_net(
             netlist, &conn.from, cand, &child_instance_map, &internal_net_map,
@@ -927,6 +973,128 @@ fn component_type_to_class(component_type: &str) -> &'static str {
 /// which derives the pin set by walking the expansion block's actual
 /// usage of the child instance. That preserves the vendor-extensibility
 /// promise: adding a new entity family requires zero Rust changes here.
+/// A parent pin name is "always connected" if it's recognised as a
+/// chip power/ground rail. By convention, every instance is wired
+/// to its power pins (otherwise it can't function), so expansion
+/// children attached to those pins always fire — even if the board
+/// hasn't *explicitly* connected them yet at the moment we check
+/// (e.g. the connection statement comes after the chip declaration).
+///
+/// Heuristic, case-insensitive: matches VCC*, GND*, AVCC*, AGND,
+/// AREF, UVCC, UGND, UCAP, VBUS, V3OUT, VCCIO, RESET, RESET_N.
+/// These are the canonical AVR/USB-bridge/regulator power-rail and
+/// always-driven pin names; signal pins (SDA, SCL, MOSI, …) fall
+/// through and become conditional on actual board-level wiring.
+fn is_power_rail_pin(name: &str) -> bool {
+    let u = name.to_uppercase();
+    u.starts_with("VCC")     // VCC, VCC1, VCC2, VCCIO
+        || u.starts_with("GND")  // GND, GND1, GND2, GND3
+        || u.starts_with("AVCC")
+        || u == "AGND"
+        || u == "AREF"
+        || u == "UVCC"
+        || u == "UGND"
+        || u == "UCAP"
+        || u == "VBUS"
+        || u == "V3OUT"
+        || u == "RESET"
+        || u == "RESET_N"
+        || u == "VDD"
+        || u == "VSS"
+}
+
+/// Given an expansion candidate (parent instance + its recipe),
+/// return the set of expansion-child names that should actually
+/// materialise. A child is "live" iff every ParentPin name
+/// referenced by any of its connections is either a power-rail
+/// pin (see [`is_power_rail_pin`]) or is actually wired at the
+/// board level (the parent's pin instance shares a net with at
+/// least one other pin instance).
+fn compute_live_children(
+    netlist: &Netlist,
+    cand: &ExpansionCandidate,
+) -> HashSet<String> {
+    // Group recipe connections by which child they touch.
+    let mut child_parent_refs: HashMap<String, HashSet<String>> = HashMap::new();
+    for conn in &cand.recipe.connections {
+        let mut child_names_in_conn: Vec<&str> = Vec::new();
+        let mut parent_names_in_conn: Vec<&str> = Vec::new();
+        for ep in [&conn.from, &conn.to] {
+            match ep {
+                ExpansionEndpoint::InstancePin(c, _) => child_names_in_conn.push(c),
+                ExpansionEndpoint::ParentPin(p) => parent_names_in_conn.push(p),
+                _ => {}
+            }
+        }
+        for c in &child_names_in_conn {
+            let set = child_parent_refs
+                .entry((*c).to_string())
+                .or_default();
+            for p in &parent_names_in_conn { set.insert((*p).to_string()); }
+        }
+    }
+
+    // Count how many connections reference each parent pin. A pin
+    // referenced multiple times is being internally wired by the
+    // expansion itself (e.g. LM317's ADJ pin connects R1.2 → ADJ
+    // and ADJ → R2.1 — the chip's expansion handles ADJ's wiring
+    // without board involvement). Such pins are unconditionally
+    // live: dropping a child that's part of an internal divider
+    // because ADJ has no board net would be wrong.
+    let mut parent_ref_counts: HashMap<&str, usize> = HashMap::new();
+    for conn in &cand.recipe.connections {
+        for ep in [&conn.from, &conn.to] {
+            if let ExpansionEndpoint::ParentPin(p) = ep {
+                *parent_ref_counts.entry(p.as_str()).or_insert(0) += 1;
+            }
+        }
+    }
+
+    // Helper: is this parent pin live (i.e. should children that
+    // reference it be allowed to materialise)?
+    //
+    // A pin is live if any of these holds:
+    //   1. It's a power-rail name (VCC/GND/AVCC/…) — chip
+    //      operation requires it; assume the board wired it.
+    //   2. It has a netlist net (the board's flow extractor
+    //      gave it one — board explicitly wired the pin or it
+    //      appeared in a flow chain).
+    //   3. It's referenced by more than one expansion connection
+    //      (i.e. the expansion is wiring it up internally, like
+    //      LM317's ADJ).
+    //
+    // Otherwise — single recipe reference + no board net + not a
+    // power rail — the recipe declared it as an interface
+    // augmentation point (e.g. `SDA -> R_pu: Res(4.7kΩ).1`) that
+    // the board didn't wire, so the child should be dropped.
+    let parent_pin_is_live = |pin_name: &str| -> bool {
+        if is_power_rail_pin(pin_name) { return true; }
+        if parent_ref_counts.get(pin_name).copied().unwrap_or(0) >= 2 {
+            return true;
+        }
+        let Some(&pi_id) = cand.pin_instances.get(pin_name) else { return false; };
+        let Some(pi) = netlist.pin_instances.get(pi_id) else { return false; };
+        pi.net.is_some()
+    };
+
+    // Decide each child's fate.
+    let mut live: HashSet<String> = HashSet::new();
+    for exp_inst in &cand.recipe.instances {
+        // A child with no recipe connections (rare; usually a
+        // standalone reservoir like a thermal-pad placeholder)
+        // is kept by default — we only drop children whose
+        // *referenced* parent pins are unwired.
+        let parents = match child_parent_refs.get(&exp_inst.name) {
+            Some(p) => p,
+            None => { live.insert(exp_inst.name.clone()); continue; }
+        };
+        if parents.iter().all(|p| parent_pin_is_live(p)) {
+            live.insert(exp_inst.name.clone());
+        }
+    }
+    live
+}
+
 fn component_type_pins(component_type: &str) -> Option<Vec<(&'static str, bool)>> {
     Some(match component_type {
         "Ind" | "Inductor"  => vec![("1", true), ("2", true)],

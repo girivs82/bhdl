@@ -1,0 +1,23 @@
+// Positive case for conditional expansion gating: the board uses
+// the I²C interface, so the chip's `expansion { }` block should
+// fire its R_pu_sda + R_pu_scl pullup children on PC4/PC5 → VCC.
+
+import { ATmega328P_DIP28 } from "bhdl-stdlib/actives/atmega328p.bhdl";
+import { Cap, Res } from "bhdl-stdlib/passive/capacitor.bhdl";
+
+board ATmega328P_I2C_Used {
+    power VCC = 5V @ 200mA;
+    ground GND;
+
+    mcu: ATmega328P_DIP28();
+
+    // Power.
+    @VCC -> mcu.VCC;
+    @VCC -> mcu.AVCC;
+    mcu.GND1 -> @GND;
+    mcu.GND2 -> @GND;
+
+    // Wire I²C — PC4/PC5 get nets via the interface binding.
+    mcu.PC4 -> @SDA_BUS;
+    mcu.PC5 -> @SCL_BUS;
+}

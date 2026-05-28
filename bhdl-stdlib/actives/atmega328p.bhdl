@@ -120,20 +120,38 @@ entity ATmega328P_DIP28(part_no: string = "ATMEGA328P-PU") {
     //   - C_avcc : 100nF ceramic AVCC→GND2 (analog supply decoupling)
     //   - C_aref : 100nF ceramic AREF→GND2 (analog reference filter)
     //
-    // Intentionally omitted from this entity (handled elsewhere):
-    //   - I²C pullups, SPI series-term : interface-level, v0.8
-    //     require clauses (task #83).
-    //   - /RESET pullup + power-on RC  : PC6 is a dual-function
-    //     port pin on the DIP-28 so marking it `virtual` would
-    //     collide with interface bindings. Lands when the entity
-    //     grows a separate /RESET pin or v0.8 conditional gating.
-    //   - Crystal load caps : PB6/PB7 are also port pins; same
-    //     conflict.
+    // With Phase 4.5's conditional-expansion gating (per-pin-
+    // connected, da3786a + #89), recipes that reference signal
+    // pins like PC4/PC5 only fire when the board actually wires
+    // them. So I²C pullups can now safely live in the chip
+    // entity's expansion — they materialise iff the board uses
+    // PC4/PC5 as I²C (the i2c interface field), and stay absent
+    // when the board uses them as ADC inputs (ADC4/ADC5).
+    //
+    // The pullup rail is the chip's own VCC pin — which is the
+    // rail the board wired to power *this* chip. Multi-rail
+    // boards therefore avoid the I²C-backdrive risk automatically:
+    // each chip's pullup tracks its own VCC.
+    //
+    // Still intentionally omitted (separate follow-ups):
+    //   - SPI series-term : depends on clock rate / topology;
+    //     belongs as an opt-in.
+    //   - /RESET pullup + power-on RC : PC6 is dual-function; the
+    //     QFN-32 variant or chips with a dedicated /RESET pin can
+    //     grow this later.
+    //   - Crystal load caps : PB6/PB7 are also port pins.
     expansion {
+        // Always-on decoupling network (datasheet "Typical
+        // Application").
         VCC  -> C_vcc:  Cap(100nF).1;  C_vcc.2  -> GND1;
         VCC  -> C_bulk: Cap(10µF).1;   C_bulk.2 -> GND1;
         AVCC -> C_avcc: Cap(100nF).1;  C_avcc.2 -> GND2;
         AREF -> C_aref: Cap(100nF).1;  C_aref.2 -> GND2;
+
+        // I²C pullups on PC4 (SDA) and PC5 (SCL). Gated on the
+        // board wiring those pins — see compute_live_children.
+        PC4  -> R_pu_sda: Res(4.7kΩ).1;  R_pu_sda.2 -> VCC;
+        PC5  -> R_pu_scl: Res(4.7kΩ).1;  R_pu_scl.2 -> VCC;
     }
 }
 
