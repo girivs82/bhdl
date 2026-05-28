@@ -2563,6 +2563,39 @@ impl Default for NetlistGenerator {
     }
 }
 
+/// One-stop entry point that takes raw BHDL source text and runs
+/// the full pipeline:
+///   1. v0.9b abstract-entity preprocessor
+///      (`abstract_resolver::preprocess`) — strips `abstract entity`
+///      blocks, rewrites `mcu: ABSTRACT()` → `mcu: ChosenSKU()`,
+///      rewrites `mcu.alias` → `mcu.<pin_map[alias]>`.
+///   2. Parser → AST.
+///   3. Analyzer.
+///   4. NetlistGenerator pipeline (constructor-arg stamping,
+///      expansion interpreter, conditional gating, etc.).
+///
+/// Returns the rewritten source alongside the netlist so callers
+/// can debug / display what the parser actually saw. If the input
+/// has no abstract-entity declarations, the rewritten source equals
+/// the input.
+pub async fn synthesize_from_source(source: &str) -> Result<(String, Netlist)> {
+    use bhdl_ast::AstNode;
+    let rewritten = crate::abstract_resolver::preprocess(source)?;
+    let pr = bhdl_parser::parse(&rewritten);
+    if !pr.errors().is_empty() {
+        let errs: Vec<String> = pr.errors().iter().take(5)
+            .map(|e| format!("{:?}", e)).collect();
+        return Err(anyhow::anyhow!(
+            "Parse errors in (possibly rewritten) source: {}", errs.join("; ")));
+    }
+    let sf = SourceFile::cast(pr.syntax())
+        .ok_or_else(|| anyhow::anyhow!("Could not cast to SourceFile"))?;
+    let analysis = bhdl_analyzer::analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let netlist = gen.generate_from_ast_and_analysis(&sf, &analysis).await?;
+    Ok((rewritten, netlist))
+}
+
 /// Generate netlist from BHDL source with full semantic context
 pub async fn generate_netlist_from_source(source_file: &SourceFile) -> Result<Netlist> {
     info!("Generating netlist from BHDL source with semantic context");

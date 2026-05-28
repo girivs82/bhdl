@@ -137,7 +137,28 @@ pub fn preprocess(source: &str) -> Result<String> {
         }
     }
 
-    Ok(rewrite(source, &decls, &instances, &resolutions))
+    // Collect the set of concrete entity names that were *chosen* by
+    // resolution, and the set that *appears in any family list*.
+    // Imports of family members that weren't chosen get stripped
+    // from the rewritten source — otherwise the downstream analyzer
+    // emits "Undefined component type" for them (it doesn't tolerate
+    // imported-but-unused entries from the same file).
+    let mut chosen: HashSet<String> = HashSet::new();
+    let mut all_family_members: HashSet<String> = HashSet::new();
+    for (_name, decl) in &decls {
+        for fam in &decl.family {
+            all_family_members.insert(fam.concrete_name.clone());
+        }
+    }
+    for (_inst, (concrete, _)) in &resolutions {
+        chosen.insert(concrete.clone());
+    }
+    let stripped_imports: HashSet<String> = all_family_members
+        .difference(&chosen)
+        .cloned()
+        .collect();
+
+    Ok(rewrite(source, &decls, &instances, &resolutions, &stripped_imports))
 }
 
 /// Parsed abstract-entity declaration.
@@ -516,6 +537,7 @@ fn rewrite(
     abstract_decls: &HashMap<String, AbstractDecl>,
     instances: &[(String, String, std::ops::Range<usize>)],
     resolutions: &HashMap<String, (String, HashMap<String, String>)>,
+    stripped_imports: &HashSet<String>,
 ) -> String {
     type Edit = (std::ops::Range<usize>, String);
     let mut edits: Vec<Edit> = Vec::new();
@@ -523,6 +545,35 @@ fn rewrite(
     // (a) Strip abstract entity declarations.
     for decl in abstract_decls.values() {
         edits.push((decl.range.clone(), String::new()));
+    }
+
+    // (a.5) Strip imports of family members that weren't chosen.
+    // Looks for the pattern `import { ConcreteName } from "...";` —
+    // the entire line gets removed. Imports that pull multiple
+    // entries are left alone (rare in stdlib usage).
+    for entity_name in stripped_imports {
+        // Find every `import { ENTITY }` occurrence and remove the
+        // enclosing statement.
+        let pattern = format!("import {{ {} }}", entity_name);
+        let mut search = 0;
+        while let Some(rel) = source[search..].find(&pattern) {
+            let pos = search + rel;
+            // Find the start of the line (preserve preceding ws).
+            let line_start = source[..pos].rfind('\n')
+                .map(|i| i + 1).unwrap_or(0);
+            // Find the end of the statement (next ';' then to end-of-line).
+            let semi = source[pos..].find(';').map(|i| pos + i + 1);
+            let end = match semi {
+                Some(semi_pos) => {
+                    let after = &source[semi_pos..];
+                    let nl = after.find('\n').map(|i| semi_pos + i + 1);
+                    nl.unwrap_or(semi_pos)
+                }
+                None => pos + pattern.len(),
+            };
+            edits.push((line_start..end, String::new()));
+            search = end;
+        }
     }
 
     // (b) Rewrite instance type tokens + per-pin alias rewrites.
