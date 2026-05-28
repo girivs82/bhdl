@@ -1,0 +1,30 @@
+// Minimal Blue Pill board: STM32F103C8T6 on a 3.3V rail, with I²C1
+// in use. Exercises the new STM32 stdlib entity through the same
+// pipeline that handles AVR chips — proving the infrastructure is
+// arch-independent.
+
+import { STM32F103C8T6 } from "bhdl-stdlib/actives/stm32f103c8t6.bhdl";
+import { Cap, Res } from "bhdl-stdlib/passive/capacitor.bhdl";
+
+board STM32_Blue_Pill {
+    power VDD = 3.3V @ 100mA;
+    ground GND;
+
+    mcu: STM32F103C8T6();
+
+    // Power. STM32 has three VDD pins and three VSS pins — they all
+    // share the same chip die rail so wire them to the same nets.
+    @VDD -> mcu.VDD_1;
+    @VDD -> mcu.VDD_2;
+    @VDD -> mcu.VDD_3;
+    @VDD -> mcu.VDDA;
+    mcu.VSS_1 -> @GND;
+    mcu.VSS_2 -> @GND;
+    mcu.VSS_3 -> @GND;
+    mcu.VSSA  -> @GND;
+    mcu.VBAT  -> @VDD;     // tie VBAT to VDD if no backup battery
+
+    // Use I²C1 (PB6/PB7) — pullups should fire.
+    mcu.PB6 -> @SCL_BUS;
+    mcu.PB7 -> @SDA_BUS;
+}

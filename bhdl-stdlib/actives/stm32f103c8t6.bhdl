@@ -1,0 +1,174 @@
+// STM32F103C8T6 — 32-bit ARM Cortex-M3 MCU, LQFP-48.
+//
+// The "Blue Pill" chip. F103C8T6 = 64 KB flash, 20 KB SRAM,
+// 3× USART, 2× SPI, 2× I²C, USB device, 72 MHz max.
+//
+// Pin naming follows the standard ST datasheet port nomenclature
+// for the LQFP-48 package: PA0..PA15, PB0..PB15, PC13..PC15,
+// PD0/PD1 (osc inputs), plus power (VDD×3, VDDA, VBAT) and
+// ground (VSS×3, VSSA), the reset pin (NRST), and BOOT0.
+//
+// First Cortex-M entity in the BHDL stdlib — pattern mirrors
+// the AVR entities (atmega328p.bhdl, …): datasheet-correct pin
+// names, peripheral interface bindings in v0.7 perspective
+// form, plus auto-expansion for the support-passive network
+// the chip's datasheet requires.
+
+entity STM32F103C8T6(part_no: string = "STM32F103C8T6") {
+    // ─── Port A (general I/O + peripheral muxes) ────────────
+    pin PA0:  signal inout;   // WKUP / USART2_CTS / ADC0       (pin 10)
+    pin PA1:  signal inout;   // USART2_RTS / ADC1              (pin 11)
+    pin PA2:  signal inout;   // USART2_TX / ADC2               (pin 12)
+    pin PA3:  signal inout;   // USART2_RX / ADC3               (pin 13)
+    pin PA4:  signal inout;   // SPI1_NSS / DAC_OUT1 / ADC4     (pin 14)
+    pin PA5:  signal inout;   // SPI1_SCK / DAC_OUT2 / ADC5     (pin 15)
+    pin PA6:  signal inout;   // SPI1_MISO / ADC6 / TIM3_CH1    (pin 16)
+    pin PA7:  signal inout;   // SPI1_MOSI / ADC7 / TIM3_CH2    (pin 17)
+    pin PA8:  signal inout;   // USART1_CK / TIM1_CH1 / MCO     (pin 29)
+    pin PA9:  signal inout;   // USART1_TX / TIM1_CH2           (pin 30)
+    pin PA10: signal inout;   // USART1_RX / TIM1_CH3           (pin 31)
+    pin PA11: signal inout;   // USART1_CTS / USB_DM            (pin 32)
+    pin PA12: signal inout;   // USART1_RTS / USB_DP            (pin 33)
+    pin PA13: signal inout;   // SWDIO / JTMS                   (pin 34)
+    pin PA14: signal inout;   // SWCLK / JTCK                   (pin 37)
+    pin PA15: signal inout;   // JTDI / SPI3_NSS                (pin 38)
+
+    // ─── Port B (general I/O + peripheral muxes) ────────────
+    pin PB0:  signal inout;   // ADC8 / TIM3_CH3                (pin 18)
+    pin PB1:  signal inout;   // ADC9 / TIM3_CH4                (pin 19)
+    pin PB2:  signal inout;   // BOOT1                          (pin 20)
+    pin PB3:  signal inout;   // JTDO / SPI1_SCK_alt            (pin 39)
+    pin PB4:  signal inout;   // JNTRST / SPI1_MISO_alt         (pin 40)
+    pin PB5:  signal inout;   // I2C1_SMBAI / SPI1_MOSI_alt     (pin 41)
+    pin PB6:  signal inout;   // I2C1_SCL / USART1_TX_alt       (pin 42)
+    pin PB7:  signal inout;   // I2C1_SDA / USART1_RX_alt       (pin 43)
+    pin PB8:  signal inout;   // I2C1_SCL_alt / CAN_RX          (pin 45)
+    pin PB9:  signal inout;   // I2C1_SDA_alt / CAN_TX          (pin 46)
+    pin PB10: signal inout;   // I2C2_SCL / USART3_TX           (pin 21)
+    pin PB11: signal inout;   // I2C2_SDA / USART3_RX           (pin 22)
+    pin PB12: signal inout;   // SPI2_NSS                       (pin 25)
+    pin PB13: signal inout;   // SPI2_SCK                       (pin 26)
+    pin PB14: signal inout;   // SPI2_MISO                      (pin 27)
+    pin PB15: signal inout;   // SPI2_MOSI                      (pin 28)
+
+    // ─── Port C (tamper / RTC / standby) ────────────────────
+    pin PC13: signal inout;   // TAMPER / LED_PIN (Blue Pill)   (pin 2)
+    pin PC14: signal inout;   // OSC32_IN                       (pin 3)
+    pin PC15: signal inout;   // OSC32_OUT                      (pin 4)
+
+    // ─── Port D (HSE crystal inputs) ────────────────────────
+    pin PD0:  signal inout;   // OSC_IN                         (pin 5)
+    pin PD1:  signal inout;   // OSC_OUT                        (pin 6)
+
+    // ─── Reset / boot ───────────────────────────────────────
+    pin NRST: signal inout;   // active-low reset               (pin 7)
+    pin BOOT0: signal inout;  //                                (pin 44)
+
+    // ─── Power and analog reference ─────────────────────────
+    // VDD is marked virtual to gate the chip's `expansion { }`
+    // block (decoupling network, NRST RC, conditional I²C
+    // pullups). The pin itself is still wired normally at
+    // the board level.
+    pin VDD_1: signal inout virtual;  //                        (pin 24)
+    pin VDD_2: signal inout;          //                        (pin 36)
+    pin VDD_3: signal inout;          //                        (pin 48)
+    pin VDDA:  signal inout;          // analog VDD             (pin 9)
+    pin VBAT:  signal inout;          // backup-domain VDD      (pin 1)
+    pin VSS_1: signal inout;          //                        (pin 23)
+    pin VSS_2: signal inout;          //                        (pin 35)
+    pin VSS_3: signal inout;          //                        (pin 47)
+    pin VSSA:  signal inout;          // analog VSS             (pin 8)
+
+    // ─── Peripheral interfaces (v0.7 perspective form) ──────
+    // Default mappings; alternative remaps exist but the user
+    // can declare a different binding on a per-board basis.
+
+    // SPI1 master on Port A.
+    interface SPI spi1 {
+        MOSI = PA7;
+        MISO = PA6;
+        SCK  = PA5;
+        CS   = PA4;
+    }
+
+    // SPI2 master on Port B.
+    interface SPI spi2 {
+        MOSI = PB15;
+        MISO = PB14;
+        SCK  = PB13;
+        CS   = PB12;
+    }
+
+    // I²C1 (default mapping PB6/PB7).
+    interface I2C i2c1 {
+        SDA = PB7;
+        SCL = PB6;
+    }
+
+    // I²C2 on Port B.
+    interface I2C i2c2 {
+        SDA = PB11;
+        SCL = PB10;
+    }
+
+    // Three USARTs.
+    interface UART uart1 {
+        TX = PA9;    // USART1_TX
+        RX = PA10;   // USART1_RX
+    }
+    interface UART uart2 {
+        TX = PA2;    // USART2_TX
+        RX = PA3;    // USART2_RX
+    }
+    interface UART uart3 {
+        TX = PB10;   // USART3_TX (conflicts with I2C2_SCL — pick one)
+        RX = PB11;   // USART3_RX
+    }
+
+    attribute component_class = "microcontroller";
+    attribute family          = "STM32F1";
+    attribute architecture    = "ARM Cortex-M3";
+    attribute flash_kb        = 64;
+    attribute sram_kb         = 20;
+    attribute max_clock_mhz   = 72;
+    attribute usb             = "USB 2.0 device";
+    attribute pkg             = "LQFP-48";
+    attribute part_number     = part_no;
+    attribute kicad_symbol    = "MCU_ST_STM32F1:STM32F103C8Tx";
+
+    // ─── Auto-expansion: datasheet support passives ─────────
+    //
+    // Always-on:
+    //   - 100nF ceramic on each VDD pin (VDD_1/2/3)
+    //   - 4.7µF bulk reservoir on the primary VDD
+    //   - VDDA: 100nF + ferrite from VDD recommended; here we
+    //     just add a 1µF + 10nF parallel on VDDA → VSSA per
+    //     application note AN2867 §4.3.
+    //   - VBAT: 100nF decoupling
+    //   - NRST: 10kΩ pullup to VDD + 100nF to GND (power-on RC)
+    //
+    // Conditional (gated, per #89):
+    //   - I²C1 pullups on PB6/PB7 — fire only when those pins
+    //     are wired at the board level.
+    //   - I²C2 pullups on PB10/PB11 — same.
+    expansion {
+        VDD_1 -> C_vdd1: Cap(100nF).1; C_vdd1.2 -> VSS_1;
+        VDD_1 -> C_bulk: Cap(4.7µF).1; C_bulk.2 -> VSS_1;
+        VDD_2 -> C_vdd2: Cap(100nF).1; C_vdd2.2 -> VSS_2;
+        VDD_3 -> C_vdd3: Cap(100nF).1; C_vdd3.2 -> VSS_3;
+        VDDA  -> C_vdda1: Cap(1µF).1;  C_vdda1.2 -> VSSA;
+        VDDA  -> C_vdda2: Cap(10nF).1; C_vdda2.2 -> VSSA;
+        VBAT  -> C_vbat: Cap(100nF).1; C_vbat.2 -> VSS_1;
+
+        // NRST pullup + power-on RC.
+        VDD_1 -> R_nrst: Res(10kΩ).1;  R_nrst.2 -> NRST;
+        NRST  -> C_nrst: Cap(100nF).1; C_nrst.2 -> VSS_1;
+
+        // I²C1 pullups (gated).
+        PB7  -> R_pu_sda1: Res(4.7kΩ).1; R_pu_sda1.2 -> VDD_1;
+        PB6  -> R_pu_scl1: Res(4.7kΩ).1; R_pu_scl1.2 -> VDD_1;
+        // I²C2 pullups (gated).
+        PB11 -> R_pu_sda2: Res(4.7kΩ).1; R_pu_sda2.2 -> VDD_1;
+        PB10 -> R_pu_scl2: Res(4.7kΩ).1; R_pu_scl2.2 -> VDD_1;
+    }
+}
