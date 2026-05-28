@@ -1,0 +1,30 @@
+// Variant SKU board: same LQFP-48 pinout as the C8T6 Blue Pill,
+// but configured for the F103CBT6 (128 KB flash). Demonstrates
+// parametric-entity usage — one stdlib file (stm32f103cx.bhdl)
+// covers every member of the LQFP-48 product line.
+
+import { STM32F103Cx } from "bhdl-stdlib/actives/stm32f103cx.bhdl";
+import { Cap, Res } from "bhdl-stdlib/passive/capacitor.bhdl";
+
+board STM32_CBT6_Variant {
+    power VDD = 3.3V @ 100mA;
+    ground GND;
+
+    // Override constructor args for the 128 KB SKU.
+    mcu: STM32F103Cx(
+        part_no="STM32F103CBT6",
+        flash_kb=128,
+        kicad_symbol="MCU_ST_STM32F1:STM32F103CBTx",
+    );
+
+    // Power wiring identical to the C8T6 board — same pinout.
+    @VDD -> mcu.VDD_1;
+    @VDD -> mcu.VDD_2;
+    @VDD -> mcu.VDD_3;
+    @VDD -> mcu.VDDA;
+    mcu.VSS_1 -> @GND;
+    mcu.VSS_2 -> @GND;
+    mcu.VSS_3 -> @GND;
+    mcu.VSSA  -> @GND;
+    mcu.VBAT  -> @VDD;
+}

@@ -3,14 +3,15 @@
 // pipeline that handles AVR chips — proving the infrastructure is
 // arch-independent.
 
-import { STM32F103C8T6 } from "bhdl-stdlib/actives/stm32f103c8t6.bhdl";
+import { STM32F103Cx } from "bhdl-stdlib/actives/stm32f103cx.bhdl";
 import { Cap, Res } from "bhdl-stdlib/passive/capacitor.bhdl";
 
 board STM32_Blue_Pill {
     power VDD = 3.3V @ 100mA;
     ground GND;
 
-    mcu: STM32F103C8T6();
+    // Default constructor args target the C8T6 SKU (the Blue Pill).
+    mcu: STM32F103Cx();
 
     // Power. STM32 has three VDD pins and three VSS pins — they all
     // share the same chip die rail so wire them to the same nets.
