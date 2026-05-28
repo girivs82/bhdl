@@ -277,30 +277,31 @@ impl<'t> Parser<'t> {
 
     // Parse an interface-field declaration inside an entity body.
     //
-    // Three shapes:
+    // Three shapes (v0.7):
     //
-    //     interface  SPI spi;                       (master-perspective, unbound)
-    //     interface ~SPI spi;                       (slave-perspective, unbound — `~` flips directions)
-    //     interface  SPI spi { MOSI=PB3; MISO=PB4; SCK=PB5; CS=PB2; }
-    //                                                (master-perspective, bound to physical pins)
+    //     interface  SPI         spi;                (default perspective, unbound)
+    //     interface  SPI:slave   spi;                (explicit perspective, unbound)
+    //     interface  SPI         spi { MOSI=PB3; MISO=PB4; SCK=PB5; CS=PB2; }
+    //                                                (default perspective, bound to physical pins)
     //
     // The unbound forms materialise fresh `field.signal` pins on
-    // the entity (current v0.2/v0.3 behaviour). The bound form
-    // declares that each interface signal is an alias for an
-    // already-declared physical pin — the same wire, two ways to
-    // refer to it. v0.4 grammar; analyzer + synthesizer handling
-    // in the next commit.
+    // the entity. The bound form declares that each interface
+    // signal is an alias for an already-declared physical pin —
+    // the same wire, two ways to refer to it.
     fn parse_interface_field_decl(&mut self) {
         self.builder.start_node(SyntaxKind::INTERFACE_FIELD_DECL.into());
         self.expect(SyntaxKind::INTERFACE_KW);
 
-        // v0.7: the legacy `~Interface` sugar is deprecated in favour
-        // of `Interface:perspective`. We still accept it during the
-        // v0.7a/b transition window so existing entities keep
-        // working; the v0.7c stdlib-migration commit will promote
-        // this to a hard error once all use sites are updated.
+        // v0.7c: the legacy `~Interface` sugar (v0.6 and earlier) is
+        // now a hard error. Use an explicit `:perspective` selector.
         if self.peek() == Some(SyntaxKind::TILDE) {
-            self.bump(); // consume `~`; analyzer still treats it as "reversed"
+            self.error(
+                "the `~Interface` direction-flip sugar was removed in v0.7. \
+                 Use an explicit perspective selector instead, e.g. \
+                 `interface SPI:slave spi;`."
+                    .to_string(),
+            );
+            self.bump(); // consume `~` to keep parsing
         }
 
         self.expect(SyntaxKind::IDENT); // interface type name

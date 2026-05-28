@@ -45,12 +45,19 @@ fn run_and_count_nets(source: &str) -> (usize, String) {
 
 const GOOD: &str = r#"
 interface SPI {
-    signal MOSI: out;
-    signal MISO: in;
-    signal SCK:  out;
+    perspective master {
+        signal MOSI: out;
+        signal MISO: in;
+        signal SCK:  out;
+    }
+    perspective slave {
+        signal MOSI: in;
+        signal MISO: out;
+        signal SCK:  in;
+    }
 }
-entity Master { interface  SPI spi; }
-entity Slave  { interface ~SPI spi; }
+entity Master { interface SPI       spi; }
+entity Slave  { interface SPI:slave spi; }
 board OK {
     mcu:   Master();
     flash: Slave();

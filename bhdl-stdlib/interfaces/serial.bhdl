@@ -1,45 +1,73 @@
-// Common serial-bus interfaces.
+// Common serial-bus interfaces (v0.7 perspective form).
 //
-// Declared from the *master* perspective. The `~` sigil at a field
-// declaration site (e.g. `interface ~SPI spi;`) flips signal
-// directions for slave-perspective use.
+// Each interface declares one or more `perspective` blocks naming
+// the roles that talk to each other. A field declaration picks a
+// perspective with the `:role` selector:
 //
-// The reversal rule is simple:
-//   out  → in
-//   in   → out
-//   inout → inout       (bus signals like I2C SDA stay symmetric)
+//     interface SPI       spi;   // default = first-declared (master)
+//     interface SPI:slave spi;   // explicit slave view
 //
-// This file is the minimum interface set the v0.1 wire-up needs.
-// More peripheral protocols (UART, CAN, USB, RGMII, …) land as
-// follow-ups once the synthesizer's connection-expansion path
-// for `MCU.spi -> FLASH.spi` is in place.
+// For protocols where signals are named identically on both sides
+// (SPI MOSI/MISO/SCK, ICSP MOSI/MISO/SCK/RESET) the synthesizer
+// pairs by name. For protocols where signal names differ between
+// roles (UART: dte.TX ↔ dce.RX, dte.RX ↔ dce.TX) a `wires { }`
+// block declares the cross-pairing explicitly.
+//
+// I2C is symmetric: a single perspective suffices.
 
 interface I2C {
-    signal SDA: inout;
-    signal SCL: out;
+    perspective bus {
+        signal SDA: inout;
+        signal SCL: inout;
+    }
 }
 
 interface SPI {
-    signal MOSI: out;            // Master Out, Slave In
-    signal MISO: in;             // Master In, Slave Out
-    signal SCK:  out;            // Serial clock — master drives
-    signal CS:   out optional;   // Chip-select; sometimes omitted on
-                                  // single-slave buses (active-low).
+    perspective master {
+        signal MOSI: out;             // Master Out, Slave In
+        signal MISO: in;              // Master In, Slave Out
+        signal SCK:  out;             // Serial clock — master drives
+        signal CS:   out optional;    // Chip-select (active-low).
+    }
+    perspective slave {
+        signal MOSI: in;
+        signal MISO: out;
+        signal SCK:  in;
+        signal CS:   in optional;
+    }
 }
 
+// UART: signal names differ across endpoints, so we cross-wire
+// explicitly. `dte` (data-terminal equipment, e.g. an MCU) talks
+// to `dce` (data-circuit-terminating equipment, e.g. a USB bridge).
 interface UART {
-    signal TX: out;
-    signal RX: in;
+    perspective dte {
+        signal TX: out;
+        signal RX: in;
+    }
+    perspective dce {
+        signal TX: out;
+        signal RX: in;
+    }
+    wires {
+        dte.TX <-> dce.RX;
+        dte.RX <-> dce.TX;
+    }
 }
 
-// AVR ICSP (In-Circuit Serial Programming). Shares its data
-// signals with SPI on most AVR chips, plus an active-low RESET
-// pulse during programming. ICSP is the master interface that
-// programmers like USBasp / Atmel-ICE present; the chip is the
-// slave.
+// AVR ICSP (In-Circuit Serial Programming). Same-name SPI-shape
+// signals plus an active-low RESET pulse during programming.
 interface ICSP {
-    signal MOSI:  out;
-    signal MISO:  in;
-    signal SCK:   out;
-    signal RESET: out;
+    perspective master {
+        signal MOSI:  out;
+        signal MISO:  in;
+        signal SCK:   out;
+        signal RESET: out;
+    }
+    perspective slave {
+        signal MOSI:  in;
+        signal MISO:  out;
+        signal SCK:   in;
+        signal RESET: in;
+    }
 }

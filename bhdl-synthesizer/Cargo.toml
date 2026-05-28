@@ -39,6 +39,10 @@ path = "src/bin/test_atmega328p_pinmux.rs"
 name = "test_interface_v07_bundle"
 path = "src/bin/test_interface_v07_bundle.rs"
 
+[[bin]]
+name = "test_interface_uart_cross"
+path = "src/bin/test_interface_uart_cross.rs"
+
 # [[bin]]
 # name = "test_unified_svg"
 # path = "../test_unified_svg.rs"

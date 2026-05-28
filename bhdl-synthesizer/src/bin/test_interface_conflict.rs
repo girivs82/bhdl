@@ -39,8 +39,14 @@ fn synth(source: &str) -> usize {
 }
 
 const COMMON: &str = r#"
-interface SPI  { signal MOSI: out; signal MISO: in; signal SCK: out; signal CS: out; }
-interface ICSP { signal MOSI: out; signal MISO: in; signal SCK: out; signal RESET: out; }
+interface SPI {
+    perspective master { signal MOSI: out; signal MISO: in;  signal SCK: out; signal CS: out; }
+    perspective slave  { signal MOSI: in;  signal MISO: out; signal SCK: in;  signal CS: in;  }
+}
+interface ICSP {
+    perspective master { signal MOSI: out; signal MISO: in;  signal SCK: out; signal RESET: out; }
+    perspective slave  { signal MOSI: in;  signal MISO: out; signal SCK: in;  signal RESET: in;  }
+}
 
 entity ATmega328P {
     pin PB2: signal inout;
@@ -54,8 +60,8 @@ entity ATmega328P {
     interface ICSP icsp { MOSI=PB3; MISO=PB4; SCK=PB5; RESET=PB2; }
 }
 
-entity Flash      { interface ~SPI  spi;  }
-entity Programmer { interface ~ICSP icsp; }
+entity Flash      { interface SPI:slave  spi;  }
+entity Programmer { interface ICSP:slave icsp; }
 "#;
 
 fn main() {
