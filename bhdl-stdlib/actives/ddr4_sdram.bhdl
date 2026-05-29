@@ -1,0 +1,97 @@
+// Micron MT40A-series DDR4 SDRAM, x8, 78-ball FBGA.
+//
+// One parametric entity covering the x8 product line. The 4/8/16 Gb
+// x8 parts share the same 78-ball pinout, the same JEDEC DDR4
+// electrical interface, and the same datasheet-mandated per-chip
+// support network — they differ only in density and supplier part
+// number, which are clean parameterisation targets:
+//
+//   ┌──────────────┬─────────────┬───────────────────────────┐
+//   │ part_no      │ density_gb  │ kicad_symbol              │
+//   ├──────────────┼─────────────┼───────────────────────────┤
+//   │ MT40A512M8   │      4      │ Memory_RAM:MT40A512M8     │
+//   │ MT40A1G8     │      8      │ Memory_RAM:MT40A1G8       │  ← default
+//   │ MT40A2G8     │     16      │ Memory_RAM:MT40A2G8       │
+//   └──────────────┴─────────────┴───────────────────────────┘
+//
+// Use:
+//
+//     u1: DDR4_SDRAM_x8();                       // defaults to 8 Gb
+//     u1: DDR4_SDRAM_x8(                          // 16 Gb variant
+//         part_no="MT40A2G8",
+//         density_gb=16,
+//         kicad_symbol="Memory_RAM:MT40A2G8",
+//     );
+//
+// The data path and command/address bus are exposed as DDR4
+// interface fields (see interfaces/ddr4.bhdl). Pins are materialised
+// from the interface (dat.DQ0 … dat.DQS.N, ca.CK_t …); ball-map
+// bindings to physical FBGA designators are a follow-up once the
+// v0.4 binding grammar supports hierarchical (`DQS.P = ball`) names.
+//
+// Power rails follow DDR4: VDD = VDDQ = 1.2 V (POD12), VPP = 2.5 V
+// (the activation pump rail new in DDR4), VREFCA externally
+// supplied. ODT and on-die VREFDQ are mode-register configured and
+// need no board components.
+
+entity DDR4_SDRAM_x8(
+    part_no: string      = "MT40A1G8",
+    density_gb: int      = 8,
+    kicad_symbol: string = "Memory_RAM:MT40A1G8",
+) {
+    // ─── Data path (x8) + command/address bus ───────────────
+    // Unbound interface fields: the synthesizer materialises
+    //   dat.DQ0..dat.DQ7, dat.DM, dat.DQS.P, dat.DQS.N
+    //   ca.CK_t, ca.A0.., ca.CS_n, …  (sdram perspective → inputs)
+    // and attaches the DDR4 protocol constraints to each leaf.
+    interface DDR4Data    dat;
+    interface DDR4Ca:sdram ca;
+
+    // ─── Power and reference ────────────────────────────────
+    // VDD marked virtual to gate the expansion block; still wired
+    // normally at the board level.
+    pin VDD:    signal inout virtual;  // 1.2 V core
+    pin VDDQ:   signal inout;          // 1.2 V I/O
+    pin VPP:    signal inout;          // 2.5 V activation pump
+    pin VREFCA: signal inout;          // CA reference (≈0.5·VDD)
+    pin VSS:    signal inout;
+    pin VSSQ:   signal inout;
+
+    // ─── Calibration ────────────────────────────────────────
+    pin ZQ: signal inout;              // 240 Ω 1% to VSS
+
+    attribute component_class = "sdram";
+    attribute family          = "DDR4";
+    attribute jedec_std       = "JESD79-4";
+    attribute organization    = "x8";
+    attribute density_gb      = density_gb;     // from constructor arg
+    attribute pkg             = "FBGA-78";
+    attribute io_standard     = "POD12";
+    attribute part_number     = part_no;        // SKU-specific
+    attribute kicad_symbol    = kicad_symbol;    // SKU-specific
+
+    // ─── Auto-expansion: datasheet per-chip support network ──
+    //
+    //   - ZQ calibration: 240 Ω 1% from ZQ to VSS (JEDEC fixed).
+    //   - VPP: 100 nF decoupling on the 2.5 V pump rail.
+    //   - VDD / VDDQ: 100 nF per rail + 4.7 µF bulk reservoir.
+    //   - VREFCA: 1 nF bypass to VSS (when not actively driven).
+    //
+    // ODT termination and VREFDQ are internal to the die (mode-
+    // register configured) — no board components.
+    expansion {
+        // ZQ calibration reference resistor.
+        ZQ -> R_zq: Res(240Ω).1; R_zq.2 -> VSS;
+
+        // VPP pump-rail decoupling.
+        VPP -> C_vpp: Cap(100nF).1; C_vpp.2 -> VSS;
+
+        // Core + I/O decoupling.
+        VDD  -> C_vdd:  Cap(100nF).1; C_vdd.2  -> VSS;
+        VDD  -> C_bulk: Cap(4.7µF).1; C_bulk.2 -> VSS;
+        VDDQ -> C_vddq: Cap(100nF).1; C_vddq.2 -> VSSQ;
+
+        // CA reference bypass.
+        VREFCA -> C_vref: Cap(1nF).1; C_vref.2 -> VSS;
+    }
+}
