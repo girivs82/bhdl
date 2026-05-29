@@ -79,6 +79,10 @@ path = "src/bin/test_gpio_aliases.rs"
 name = "test_abstract_resolver"
 path = "src/bin/test_abstract_resolver.rs"
 
+[[bin]]
+name = "test_subinterface_synth"
+path = "src/bin/test_subinterface_synth.rs"
+
 # [[bin]]
 # name = "test_unified_svg"
 # path = "../test_unified_svg.rs"

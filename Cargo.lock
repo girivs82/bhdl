@@ -242,6 +242,7 @@ dependencies = [
  "md5",
  "rowan",
  "serde",
+ "serde_json",
  "tokio",
  "toml",
 ]
