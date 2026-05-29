@@ -62,8 +62,17 @@ struct UseSite {
 pub fn preprocess(source: &str) -> Result<String> {
     let stripped = strip_block_comments(source);
     let templates = find_templates(&stripped)?;
+    // Even when no parametric templates are declared, we still want
+    // to run a generate-loop expansion pass over the source so that
+    // board/entity-level `generate for ... { ... }` blocks (the
+    // swizzle use case) get unrolled before the parser sees them.
     if templates.is_empty() {
-        return Ok(source.to_string());
+        let expanded = expand_generate_loops(&stripped);
+        return if expanded == stripped {
+            Ok(source.to_string())
+        } else {
+            Ok(expanded)
+        };
     }
 
     // Skip ranges covered by template definitions when scanning for
@@ -118,6 +127,11 @@ pub fn preprocess(source: &str) -> Result<String> {
         out.push_str(body);
         out.push('\n');
     }
+
+    // Top-level generate-loop pass. Template bodies were already
+    // unrolled inside `expand_template`; this pass catches
+    // board/entity-level generates (the swizzle use case).
+    let out = expand_generate_loops(&out);
 
     Ok(out)
 }
@@ -416,54 +430,156 @@ fn find_and_expand_one_generate(text: &str) -> Option<(usize, usize, String)> {
         if bytes.get(after_for).map(|c| c.is_ascii_alphanumeric() || *c == b'_').unwrap_or(false) {
             continue;
         }
-        // Loop variable name.
-        let p = match skip_ws(text, after_for) { Some(x) => x, None => continue };
-        let var_end = scan_ident(text, p);
-        if var_end == p { continue; }
-        let var = text[p..var_end].to_string();
-        // `in` keyword.
-        let p = match skip_ws(text, var_end) { Some(x) => x, None => continue };
-        if !text[p..].starts_with("in") { continue; }
-        let after_in = p + 2;
-        if bytes.get(after_in).map(|c| c.is_ascii_alphanumeric() || *c == b'_').unwrap_or(false) {
-            continue;
-        }
-        // Lower bound.
-        let p = match skip_ws(text, after_in) { Some(x) => x, None => continue };
-        let (start_n, after_start) = match parse_range_bound(text, p) {
+
+        // Header: var-decl `in` iteration-source
+        let (header, after_header) = match parse_loop_header(text, after_for) {
             Some(x) => x,
             None => continue,
         };
-        // `..`
-        let p = match skip_ws(text, after_start) { Some(x) => x, None => continue };
-        if !text[p..].starts_with("..") { continue; }
-        let p = p + 2;
-        let p = match skip_ws(text, p) { Some(x) => x, None => continue };
-        let (end_n, after_end) = match parse_range_bound(text, p) {
-            Some(x) => x,
-            None => continue,
-        };
+
         // `{` body `}`
-        let p = match skip_ws(text, after_end) { Some(x) => x, None => continue };
+        let p = match skip_ws(text, after_header) { Some(x) => x, None => continue };
         if bytes.get(p) != Some(&b'{') { continue; }
         let close = match find_matching_brace(text, p) { Some(c) => c, None => continue };
         let loop_body = &text[p + 1..close];
 
-        // Build the unrolled replacement. Each iteration substitutes
-        // `<var>` → integer. We also drop any leading newlines
-        // between iterations to keep things tidy.
-        let mut expanded = String::with_capacity(loop_body.len() * (end_n.saturating_sub(start_n)));
-        let needle = format!("<{}>", var);
-        if end_n > start_n {
-            for i in start_n..end_n {
-                let copy = loop_body.replace(&needle, &i.to_string());
-                expanded.push_str(&copy);
-                expanded.push('\n');
+        // Build the unrolled replacement. For each (idx, val) in
+        // the iteration source, copy the body with `<var_val>` →
+        // val and (if a paired index var was declared) `<var_idx>`
+        // → idx. `_` as a name suppresses substitution.
+        let mut expanded = String::with_capacity(loop_body.len() * header.values.len());
+        for (idx, val) in header.values.iter().enumerate() {
+            let mut copy = loop_body.to_string();
+            if header.var_val != "_" {
+                copy = copy.replace(&format!("<{}>", header.var_val), &val.to_string());
             }
+            if let Some(vi) = &header.var_idx {
+                if vi != "_" {
+                    copy = copy.replace(&format!("<{}>", vi), &idx.to_string());
+                }
+            }
+            expanded.push_str(&copy);
+            expanded.push('\n');
         }
         return Some((kw_pos, close + 1, expanded));
     }
     None
+}
+
+/// Parsed generate-loop header: variable binding(s) + the concrete
+/// values to iterate. The body is substituted using `<var_val>` for
+/// the current value and `<var_idx>` (if present) for the iteration
+/// index.
+struct LoopHeader {
+    /// Optional paired index variable from `for (j, i) in …` syntax.
+    /// `None` for the single-variable form `for i in …`.
+    var_idx: Option<String>,
+    /// The value variable.
+    var_val: String,
+    /// Concrete iteration values. For `0..<N>` this is `0..N`; for
+    /// `[2,3,0,1]` it's the list verbatim.
+    values: Vec<usize>,
+}
+
+fn parse_loop_header(text: &str, after_for: usize) -> Option<(LoopHeader, usize)> {
+    let bytes = text.as_bytes();
+    let p = skip_ws(text, after_for)?;
+
+    // Variable declaration: either `IDENT` or `(IDENT, IDENT)`.
+    let (var_idx, var_val, after_vars) = if bytes.get(p) == Some(&b'(') {
+        let p = p + 1;
+        let p = skip_ws(text, p)?;
+        let i1_end = scan_ident_or_underscore(text, p);
+        if i1_end == p { return None; }
+        let i1 = text[p..i1_end].to_string();
+        let p = skip_ws(text, i1_end)?;
+        if bytes.get(p) != Some(&b',') { return None; }
+        let p = skip_ws(text, p + 1)?;
+        let i2_end = scan_ident_or_underscore(text, p);
+        if i2_end == p { return None; }
+        let i2 = text[p..i2_end].to_string();
+        let p = skip_ws(text, i2_end)?;
+        if bytes.get(p) != Some(&b')') { return None; }
+        (Some(i1), i2, p + 1)
+    } else {
+        let end = scan_ident_or_underscore(text, p);
+        if end == p { return None; }
+        (None, text[p..end].to_string(), end)
+    };
+
+    // `in` keyword.
+    let p = skip_ws(text, after_vars)?;
+    if !text[p..].starts_with("in") { return None; }
+    let after_in = p + 2;
+    if bytes.get(after_in).map(|c| c.is_ascii_alphanumeric() || *c == b'_').unwrap_or(false) {
+        return None;
+    }
+
+    // Iteration source: `[list, of, ints]` OR `BOUND..BOUND`.
+    let p = skip_ws(text, after_in)?;
+    let (values, after_src) = if bytes.get(p) == Some(&b'[') {
+        parse_list_literal(text, p)?
+    } else {
+        parse_range_literal(text, p)?
+    };
+
+    Some((LoopHeader { var_idx, var_val, values }, after_src))
+}
+
+fn scan_ident_or_underscore(text: &str, start: usize) -> usize {
+    let bytes = text.as_bytes();
+    if start >= bytes.len() { return start; }
+    let first = bytes[start];
+    if !(first.is_ascii_alphabetic() || first == b'_') { return start; }
+    let mut i = start + 1;
+    while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+        i += 1;
+    }
+    i
+}
+
+/// Parse `[N, N, N, ...]` starting at `[`. Each element is a bare
+/// integer or a `<N>`-wrapped integer (the latter is what parametric
+/// substitution might leave behind).
+fn parse_list_literal(text: &str, start: usize) -> Option<(Vec<usize>, usize)> {
+    let bytes = text.as_bytes();
+    if bytes.get(start) != Some(&b'[') { return None; }
+    // Find matching `]`. We don't expect nested brackets in tier 1.
+    let mut i = start + 1;
+    while i < bytes.len() && bytes[i] != b']' {
+        i += 1;
+    }
+    if i >= bytes.len() { return None; }
+    let inner = &text[start + 1..i];
+    let mut values = Vec::new();
+    for chunk in inner.split(',') {
+        let s = chunk.trim();
+        if s.is_empty() { continue; }
+        let n = parse_int_token(s)?;
+        values.push(n);
+    }
+    Some((values, i + 1))
+}
+
+/// Parse `BOUND..BOUND` into a concrete `0..N`-style range.
+fn parse_range_literal(text: &str, start: usize) -> Option<(Vec<usize>, usize)> {
+    let (lo, after_lo) = parse_range_bound(text, start)?;
+    let p = skip_ws(text, after_lo)?;
+    if !text[p..].starts_with("..") { return None; }
+    let p = p + 2;
+    let p = skip_ws(text, p)?;
+    let (hi, after_hi) = parse_range_bound(text, p)?;
+    let values = if hi > lo { (lo..hi).collect() } else { Vec::new() };
+    Some((values, after_hi))
+}
+
+/// Parse a single integer or `<N>`-wrapped integer from `s`.
+fn parse_int_token(s: &str) -> Option<usize> {
+    let s = s.trim();
+    if let Some(inner) = s.strip_prefix('<').and_then(|r| r.strip_suffix('>')) {
+        return inner.trim().parse().ok();
+    }
+    s.parse().ok()
 }
 
 /// Parse a generate-loop range bound. Accepts bare digits (`8`) or

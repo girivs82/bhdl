@@ -92,6 +92,10 @@ name = "test_iface_constraints"
 path = "src/bin/test_iface_constraints.rs"
 
 [[bin]]
+name = "test_swizzle_via_generate"
+path = "src/bin/test_swizzle_via_generate.rs"
+
+[[bin]]
 name = "test_ddr4_full_stack"
 path = "src/bin/test_ddr4_full_stack.rs"
 

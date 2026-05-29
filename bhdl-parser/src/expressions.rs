@@ -315,7 +315,10 @@ impl<'t> Parser<'t> {
                             self.parse_param_list_expr(); // Parse arguments
                             self.builder.finish_node();
                         } else {
-                            // Pin access: LED.A
+                            // Pin access: LED.A, or multi-segment dotted path:
+                            // mc.lane0.DQ0 (interface field with sub-interface
+                            // leaf — needed for swizzle and any hierarchical
+                            // sub-interface access from board scope).
                             self.builder.start_node_at(checkpoint, SyntaxKind::PIN_REF.into());
                             match self.peek() {
                                 Some(SyntaxKind::IDENT) | Some(SyntaxKind::NUMBER) | Some(SyntaxKind::UNIT_IDENTIFIER) => {
@@ -326,6 +329,28 @@ impl<'t> Parser<'t> {
                                 }
                                 _ => {
                                     self.error("Expected pin name after '.'".to_string());
+                                }
+                            }
+                            // Continue consuming `.IDENT` segments for nested
+                            // sub-interface field access.
+                            while self.peek() == Some(SyntaxKind::DOT) {
+                                // Lookahead one token past the DOT — only
+                                // extend the path when followed by an
+                                // identifier-like token. Avoid swallowing
+                                // ambiguous trailing dots (range, etc.).
+                                let next = self.tokens
+                                    .iter()
+                                    .skip(self.pos + 1)
+                                    .find(|(k, _)| !k.is_trivia())
+                                    .map(|(k, _)| *k);
+                                match next {
+                                    Some(SyntaxKind::IDENT)
+                                    | Some(SyntaxKind::NUMBER)
+                                    | Some(SyntaxKind::UNIT_IDENTIFIER) => {
+                                        self.bump(); // DOT
+                                        self.bump(); // segment
+                                    }
+                                    _ => break,
                                 }
                             }
                             self.builder.finish_node();
