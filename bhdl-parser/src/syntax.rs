@@ -229,6 +229,11 @@ pub enum SyntaxKind {
     INTERFACE_WIRE_MAPPING,   // one entry: `perspective.signal <-> perspective.signal`
     ENTITY_ALIASES_BLOCK,     // aliases { gpio0 = PB0; ... }       (v0.9)
     ENTITY_ALIAS_MAPPING,     // one entry: `alias_name = pin_name`
+    CONSTRAINTS_BLOCK,        // constraints { stmt; stmt; ... }     (v0.8 timing)
+    CONSTRAINT_STMT,          // one entry: `targets [-> targets]: prop_list;`
+    CONSTRAINT_LHS,           // left-hand target list (raw tokens)
+    CONSTRAINT_RHS,           // right-hand target list, only present for relations
+    CONSTRAINT_PROPS,         // property list (raw tokens)
     TYPE_DEF,       // type TypeName = TypeExpression;
     PART_FAMILY_DEF,    // part_family Name : ClassPattern { require ...; attribute ...; }
     CLASS_PATTERN,      // : EntityName<*, "1%", "0603"> — the class skeleton
