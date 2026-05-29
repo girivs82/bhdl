@@ -83,6 +83,10 @@ path = "src/bin/test_abstract_resolver.rs"
 name = "test_subinterface_synth"
 path = "src/bin/test_subinterface_synth.rs"
 
+[[bin]]
+name = "test_parametric_iface"
+path = "src/bin/test_parametric_iface.rs"
+
 # [[bin]]
 # name = "test_unified_svg"
 # path = "../test_unified_svg.rs"
