@@ -91,6 +91,10 @@ path = "src/bin/test_parametric_iface.rs"
 name = "test_iface_constraints"
 path = "src/bin/test_iface_constraints.rs"
 
+[[bin]]
+name = "test_ddr4_full_stack"
+path = "src/bin/test_ddr4_full_stack.rs"
+
 # [[bin]]
 # name = "test_unified_svg"
 # path = "../test_unified_svg.rs"
