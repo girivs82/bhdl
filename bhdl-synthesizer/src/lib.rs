@@ -46,6 +46,8 @@ pub mod glacier_physical_selection;
 // Import loader for handling BHDL imports
 pub mod abstract_resolver;
 
+pub mod parametric_resolver;
+
 pub mod import_loader;
 
 // Import preprocessor for pre-processing imports before analysis
@@ -2580,8 +2582,12 @@ impl Default for NetlistGenerator {
 /// the input.
 pub async fn synthesize_from_source(source: &str) -> Result<(String, Netlist)> {
     use bhdl_ast::AstNode;
+    // v0.8: monomorphise parametric interfaces (`interface SPI<lanes=4> ...`)
+    // before the abstract resolver, so abstract-entity bodies that use
+    // parametric interfaces work cleanly downstream.
+    let source = crate::parametric_resolver::preprocess(source)?;
     let (rewritten, resolutions) =
-        crate::abstract_resolver::preprocess_with_resolutions(source)?;
+        crate::abstract_resolver::preprocess_with_resolutions(&source)?;
     let pr = bhdl_parser::parse(&rewritten);
     if !pr.errors().is_empty() {
         let errs: Vec<String> = pr.errors().iter().take(5)
