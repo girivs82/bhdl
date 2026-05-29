@@ -344,6 +344,31 @@ A complete DDR4 byte-laned memory interface, exercising all three
 v0.8 features at once. (Trimmed to 4-bit byte lanes for brevity;
 real DDR4 uses 8.)
 
+> **Shipped in stdlib.** This example is real, not illustrative:
+> `bhdl-stdlib/interfaces/ddr4.bhdl` defines `DiffPair`, `DDR4Data`,
+> `DDR4Ca`, and the parametric `DDR4<byte_lanes>` controller bundle;
+> `bhdl-stdlib/actives/ddr4_sdram.bhdl` is the Micron MT40A x8 SDRAM
+> entity (parametric over density) whose `expansion { }` block adds
+> the 240 Ω ZQ calibration resistor + VPP/VDD/VDDQ decoupling +
+> VREFCA bypass. `test_ddr4_stdlib` validates both the structural
+> materialisation (37-pin controller, 33-pin SDRAM, constraints on
+> every leaf) and the imported full-pipeline path (all six datasheet
+> support components fire). One composition wrinkle surfaced and was
+> fixed: the conditional-gating "always-on support pin" set had to
+> learn `ZQ`/`VPP`/`VREF` — see
+> [`Synthesis_Auto_Expansion.md`](Synthesis_Auto_Expansion.md) §3.1.
+>
+> Two deliberate differences between the snippet below and the
+> shipped files: (1) the shipped `DiffPair` is **non-parametric** —
+> the parametric resolver does not rewrite a parametric use-site
+> *inside* a parametric template body, so a `DiffPair<z>` nested in
+> `DDR4<byte_lanes>` wouldn't monomorphise; impedance is instead
+> declared by the containing interface's constraints (`DQS.*:
+> differential 80ohm`). (2) The shipped `DDR4Ca` uses explicit
+> `CK_t`/`CK_c` signals rather than a `DiffPair CK` sub-interface,
+> because it has perspectives and perspective + sub-interface
+> composition is kept out of this first stdlib.
+
 ```bhdl
 // A differential pair — reused for clock and every strobe.
 interface DiffPair<z: int = 100> {

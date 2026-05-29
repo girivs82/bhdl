@@ -126,13 +126,25 @@ uses PC4/PC5 as ADC4/ADC5.
 A recipe child is "live" (fires) iff every `ParentPin` it
 references is either:
 
-1. **A power-rail name** — `VCC*`, `GND*`, `AVCC*`, `VDD*`,
-   `VSS*`, `AGND`, `AREF`, `UVCC`, `UGND`, `UCAP`, `VBUS`,
-   `VBAT`, `V3OUT`, `NRST`, `RESET`, `RESET_N`. (Heuristic;
-   see `is_power_rail_pin`.) Power pins are assumed always-on
-   for chip operation, so children attached to them fire even
-   if the board hasn't *explicitly* connected them yet at the
-   moment expansion runs.
+1. **An always-on support pin.** Despite the historical name
+   `is_power_rail_pin`, this set is *not* limited to power rails:
+   it's the category of pins whose datasheet support network is
+   **mandatory regardless of board wiring**. It covers supply
+   rails (`VCC*`, `GND*`, `AVCC*`, `VDD*`, `VSS*`, `VPP*`,
+   `AGND`, `UVCC`, `UGND`, `VBUS`, `VBAT`, `V3OUT`), reference
+   inputs (`AREF`, `VREF*`), charge-pump caps (`UCAP`),
+   calibration references (`ZQ`), and reset pins (`NRST`,
+   `RESET`, `RESET_N`). These are pins the board never "wires"
+   in the peripheral sense but that always need their support
+   component, so children attached to them fire even if the
+   board hasn't explicitly connected them.
+
+   The distinction this rule draws is **mandatory chip-support
+   pin** (always fire) vs **peripheral signal pin** (`SDA`,
+   `SCL`, GPIO — gate on actual board use, rule 2). When a
+   vendor adds a new always-on support pin family, extend the
+   curated set in `is_power_rail_pin`. (DDR4's `ZQ`/`VPP`/`VREF`
+   were added this way — see §7 decision log.)
 2. **Wired on the board** — the pin's `PinInstance` has a net.
    The board's flow extractor gives a pin a net whenever the
    pin appears in any connection statement.
@@ -654,6 +666,24 @@ re-running the preprocessor.
   defaults in addition to explicit overrides. Closes task #90;
   the C8T6 default-args board now lands with full BOM
   identifiers (`part_no`, `flash_kb`) on its instance.
+- **2026-05-30 (DDR4 stdlib)** — First stdlib part exercising the
+  full v0.8 interface stack (parametric + generate + hierarchical
+  + constraints) together with an expansion network:
+  `bhdl-stdlib/actives/ddr4_sdram.bhdl` (Micron MT40A x8) +
+  `bhdl-stdlib/interfaces/ddr4.bhdl`. The chip's expansion adds the
+  240 Ω ZQ calibration resistor, VPP/VDD/VDDQ decoupling, and the
+  VREFCA bypass. Closes task #97. (`c087231`)
+- **2026-05-30 (gating fix)** — The conditional-gating rule 1 set
+  was over-narrow: it suppressed *mandatory* support children whose
+  pin connects a non-rail pin to a rail and is referenced only once
+  (DDR4 `R_zq` ZQ→VSS, `C_vpp` VPP→VSS, `C_vref` VREFCA→VSS). These
+  are as mandatory as the already-whitelisted `AREF`/`UCAP`/`NRST`,
+  so `is_power_rail_pin` was extended with `VPP*`/`VREF*`/`ZQ` and
+  reframed as "always-on support pin" (§3.1 rule 1). Also confirmed
+  the full `synthesize_from_source` pipeline composes imports +
+  parametric + expansion for the real imported-entity path (the
+  empty-module symptom was specific to inline entity defs, an
+  unusual pattern). Closes task #98. (`c264bb0`)
 
 ## 10. Implementation file index
 
@@ -667,5 +697,6 @@ re-running the preprocessor.
 | Alias parsing | `bhdl-parser/src/top_level.rs::parse_entity_aliases_block` |
 | Alias resolution | `bhdl-synthesizer/src/hierarchical_connectivity.rs::resolve_field_binding_alias` |
 | `is_power_rail_pin` heuristic | `bhdl-synthesizer/src/expansion_interpreter.rs` |
-| Reference stdlib entities | `bhdl-stdlib/actives/atmega328p.bhdl`, `bhdl-stdlib/actives/stm32f103cx.bhdl`, `bhdl-stdlib/power/lm317.bhdl` |
-| Reference tests | `bhdl-synthesizer/src/bin/test_{lm317_5v,atmega328p_decoupling,conditional_expansion,gpio_aliases,stm32_variant_sku,arduino_class_board}.rs` |
+| Reference stdlib entities | `bhdl-stdlib/actives/atmega328p.bhdl`, `bhdl-stdlib/actives/stm32f103cx.bhdl`, `bhdl-stdlib/actives/ddr4_sdram.bhdl`, `bhdl-stdlib/power/lm317.bhdl` |
+| DDR4 interface stack | `bhdl-stdlib/interfaces/ddr4.bhdl` (DiffPair, DDR4Data, DDR4Ca, parametric `DDR4<byte_lanes>`) |
+| Reference tests | `bhdl-synthesizer/src/bin/test_{lm317_5v,atmega328p_decoupling,conditional_expansion,gpio_aliases,stm32_variant_sku,arduino_class_board,ddr4_stdlib}.rs` |
