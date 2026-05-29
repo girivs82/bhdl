@@ -46,6 +46,15 @@ interface DDR4ByteLane {
     constraints {
         DQ0, DQ1, DQ2, DQ3, DQ4, DQ5, DQ6, DQ7: single_ended 40ohm, signal_class DATA;
         DM: single_ended 40ohm, signal_class DM;
+        // Bit swizzle freedom: within a byte lane the strobe latches
+        // all data lines together, so the router may permute DQ0..DQ7
+        // + DM however it likes. No new BHDL machinery needed — the
+        // property name `swizzle_within_byte` (distinct from
+        // `swizzle_across_bytes` declared at the DDR4 outer level)
+        // flows to every materialised DQ leaf as its own attribute,
+        // so both freedoms coexist on the same pin without a
+        // last-write-wins collision.
+        DQ0, DQ1, DQ2, DQ3, DQ4, DQ5, DQ6, DQ7, DM: swizzle_within_byte true;
     }
 }
 
@@ -60,6 +69,12 @@ interface DDR4<byte_lanes: int = 8> {
     constraints {
         CK.*:               signal_class CLOCK, max_freq 1600MHz;
         A0, A1, CS:         single_ended 50ohm, signal_class ADDR;
+        // Byte swizzle freedom: byte lanes train independently, so
+        // the router may reorder lane0..laneN-1 as a whole. Wildcard
+        // `lane*` matches every leaf under any laneK. Distinct
+        // property name from `swizzle_within_byte` lets both
+        // freedoms coexist on the same pin.
+        lane*:              swizzle_across_bytes true;
     }
 }
 
@@ -197,5 +212,37 @@ fn main() {
         "1ps",
     );
 
-    println!("\nv0.8 DDR4 full-stack (parametric + generate + hierarchical + constraints): PASS");
+    // Swizzle freedoms — declared protocol-level permission for the
+    // router to permute signals. Zero new code landed for this; we
+    // just verify the constraint property names propagate to the
+    // expected leaves. Distinct names (`swizzle_within_byte` from
+    // DDR4ByteLane vs `swizzle_across_bytes` from DDR4 outer) let
+    // both freedoms coexist on the same DQ pin under tier-1
+    // single-valued attribute storage.
+    for lane in 0..4 {
+        for dq in 0..8 {
+            // Inner: bit swizzle within this byte.
+            need_attr(
+                &format!("{}ddr.lane{}.DQ{}__swizzle_within_byte", INTERFACE_CONSTRAINT_ATTR_PREFIX, lane, dq),
+                "true",
+            );
+            // Outer: byte lanes themselves can swap.
+            need_attr(
+                &format!("{}ddr.lane{}.DQ{}__swizzle_across_bytes", INTERFACE_CONSTRAINT_ATTR_PREFIX, lane, dq),
+                "true",
+            );
+        }
+        need_attr(
+            &format!("{}ddr.lane{}.DM__swizzle_within_byte", INTERFACE_CONSTRAINT_ATTR_PREFIX, lane),
+            "true",
+        );
+        // The outer `lane*` wildcard reaches DQS pair too.
+        need_attr(
+            &format!("{}ddr.lane{}.DQS.P__swizzle_across_bytes", INTERFACE_CONSTRAINT_ATTR_PREFIX, lane),
+            "true",
+        );
+    }
+    println!("✓ swizzle freedoms (within_byte + across_bytes) propagated to every relevant leaf");
+
+    println!("\nv0.8 DDR4 full-stack (parametric + generate + hierarchical + constraints + swizzle): PASS");
 }
