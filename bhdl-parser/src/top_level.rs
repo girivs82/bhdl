@@ -260,6 +260,10 @@ impl<'t> Parser<'t> {
                     // v0.7 wire mapping between perspectives
                     self.parse_interface_wires_block();
                 }
+                Some(SyntaxKind::CONSTRAINTS_KW) => {
+                    // v0.8 protocol-derived timing/electrical constraints.
+                    self.parse_interface_constraints_block();
+                }
                 Some(SyntaxKind::INTERFACE_KW) => {
                     // v0.8 hierarchical sub-interfaces: inside an
                     // interface body, `interface SubName fieldName;`
@@ -827,6 +831,100 @@ impl<'t> Parser<'t> {
             }
         }
         self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
+    /// v0.8 constraints block — `constraints { stmt; stmt; ... }`
+    /// inside an interface body. Each statement carries protocol-
+    /// derived timing/electrical metadata (impedance, signal class,
+    /// length match, skew bounds). The parser records each statement
+    /// as a coarse-grained tree:
+    ///
+    ///     CONSTRAINTS_BLOCK
+    ///       CONSTRAINT_STMT
+    ///         CONSTRAINT_LHS    (target list text)
+    ///         CONSTRAINT_RHS    (only for `A -> B:` relations)
+    ///         CONSTRAINT_PROPS  (property list text)
+    ///
+    /// LHS/RHS/PROPS are uninterpreted token streams; the synthesizer
+    /// re-parses them with its own mini-parser. This keeps the parser
+    /// lenient and lets the property vocabulary evolve without
+    /// grammar changes.
+    pub(crate) fn parse_interface_constraints_block(&mut self) {
+        self.builder.start_node(SyntaxKind::CONSTRAINTS_BLOCK.into());
+        self.expect(SyntaxKind::CONSTRAINTS_KW);
+        self.expect(SyntaxKind::L_BRACE);
+
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) | None => break,
+                Some(SyntaxKind::SEMI) => {
+                    // Stray semicolon between statements — consume and continue.
+                    self.bump_any();
+                }
+                _ => self.parse_interface_constraint_stmt(),
+            }
+        }
+        self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
+    fn parse_interface_constraint_stmt(&mut self) {
+        self.builder.start_node(SyntaxKind::CONSTRAINT_STMT.into());
+
+        // LHS: tokens up to `->` or `:`.
+        self.builder.start_node(SyntaxKind::CONSTRAINT_LHS.into());
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::COLON)
+                | Some(SyntaxKind::ARROW)
+                | Some(SyntaxKind::SEMI)
+                | Some(SyntaxKind::R_BRACE)
+                | None => break,
+                _ => self.bump_any(),
+            }
+        }
+        self.builder.finish_node();
+
+        // Optional `-> RHS`
+        if self.peek() == Some(SyntaxKind::ARROW) {
+            self.bump_any();
+            self.builder.start_node(SyntaxKind::CONSTRAINT_RHS.into());
+            loop {
+                self.skip_trivia();
+                match self.peek() {
+                    Some(SyntaxKind::COLON)
+                    | Some(SyntaxKind::SEMI)
+                    | Some(SyntaxKind::R_BRACE)
+                    | None => break,
+                    _ => self.bump_any(),
+                }
+            }
+            self.builder.finish_node();
+        }
+
+        // `:` PROPS `;`
+        if self.peek() == Some(SyntaxKind::COLON) {
+            self.bump_any();
+        } else {
+            self.error("expected `:` in constraint statement".to_string());
+        }
+
+        self.builder.start_node(SyntaxKind::CONSTRAINT_PROPS.into());
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::SEMI) | Some(SyntaxKind::R_BRACE) | None => break,
+                _ => self.bump_any(),
+            }
+        }
+        self.builder.finish_node();
+
+        if self.peek() == Some(SyntaxKind::SEMI) {
+            self.bump_any();
+        }
         self.builder.finish_node();
     }
 

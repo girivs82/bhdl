@@ -87,6 +87,10 @@ path = "src/bin/test_subinterface_synth.rs"
 name = "test_parametric_iface"
 path = "src/bin/test_parametric_iface.rs"
 
+[[bin]]
+name = "test_iface_constraints"
+path = "src/bin/test_iface_constraints.rs"
+
 # [[bin]]
 # name = "test_unified_svg"
 # path = "../test_unified_svg.rs"

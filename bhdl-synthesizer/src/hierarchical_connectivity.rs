@@ -1973,6 +1973,14 @@ fn add_interface_field_pins(
             perspective_name.as_deref(),
             reversed,
         );
+
+        // v0.8 constraints: walk this interface's `constraints { }`
+        // block (if any) and attach each property to the materialised
+        // pins under the dotted prefix `field_name.…`. Sub-interface
+        // constraints are applied during recursion above, so by the
+        // time we reach here all leaf pins this constraint block can
+        // reference already exist in `module.pins`.
+        apply_iface_constraints(&iface_node, module_id, netlist, &field_name);
     }
 }
 
@@ -2186,7 +2194,210 @@ fn add_sub_interface_field_pins(
             effective_perspective.as_deref(),
             effective_reversed,
         );
+
+        // v0.8 constraints on the sub-interface itself (e.g., DiffPair's
+        // `*: differential 100ohm`) get attached to the leaves
+        // materialised under `nested_prefix.*`.
+        apply_iface_constraints(&sub_iface_node, module_id, netlist, &nested_prefix);
     }
+}
+
+/// v0.8 constraints — attribute-key prefixes.
+///
+/// Per-pin properties are stored as
+///   `intf_const__<dotted_pin_name>__<prop_name>` → `<value_text>`
+/// Cross-pin relations are stored as
+///   `intf_const_rel__<from_pin>__<to_pin>__<prop_name>` → `<value_text>`
+///
+/// Downstream consumers (PCB router/DRC, future SI analysers, BOM
+/// walkers wanting termination-rail info) iterate the module's
+/// attributes and read by prefix.
+pub const INTERFACE_CONSTRAINT_ATTR_PREFIX: &str = "intf_const__";
+pub const INTERFACE_CONSTRAINT_REL_ATTR_PREFIX: &str = "intf_const_rel__";
+
+/// Walk an interface's `constraints { }` block (if present) and
+/// attach each statement's properties to the module attributes,
+/// keyed by the materialised pin path under `prefix`.
+///
+/// Target syntax (in tier 1):
+///   - `*`            — every leaf pin under `prefix.*`
+///   - `IDENT`        — `prefix.IDENT`
+///   - `IDENT.IDENT…` — fully qualified path (dotted) under prefix
+///   - `IDENT*`       — wildcard suffix; matches every leaf whose
+///                       leaf-segment starts with `IDENT`
+///   - `IDENT.*`      — every leaf under `prefix.IDENT.*`
+///
+/// Relations (`A -> B: prop`) cross-product the LHS-resolved set
+/// with the RHS-resolved set.
+fn apply_iface_constraints(
+    iface_node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>,
+    module_id: ModuleId,
+    netlist: &mut Netlist,
+    prefix: &str,
+) {
+    use bhdl_parser::SyntaxKind;
+
+    // Snapshot the materialised pin set ONCE so wildcard expansion
+    // doesn't see partial state if anything reorders mid-loop.
+    let module_pins: Vec<String> = match netlist.modules.get(module_id) {
+        Some(m) => m
+            .pins
+            .iter()
+            .filter_map(|pid| netlist.pins.get(*pid).map(|p| p.name.clone()))
+            .collect(),
+        None => return,
+    };
+
+    for cb in iface_node
+        .children()
+        .filter(|n| n.kind() == SyntaxKind::CONSTRAINTS_BLOCK)
+    {
+        for stmt in cb.children().filter(|n| n.kind() == SyntaxKind::CONSTRAINT_STMT) {
+            let lhs_text = stmt
+                .children()
+                .find(|n| n.kind() == SyntaxKind::CONSTRAINT_LHS)
+                .map(|n| n.text().to_string())
+                .unwrap_or_default();
+            let rhs_text = stmt
+                .children()
+                .find(|n| n.kind() == SyntaxKind::CONSTRAINT_RHS)
+                .map(|n| n.text().to_string());
+            let props_text = stmt
+                .children()
+                .find(|n| n.kind() == SyntaxKind::CONSTRAINT_PROPS)
+                .map(|n| n.text().to_string())
+                .unwrap_or_default();
+
+            let lhs_targets = resolve_constraint_targets(&lhs_text, prefix, &module_pins);
+            let props = parse_constraint_props(&props_text);
+            if props.is_empty() { continue; }
+
+            match rhs_text {
+                Some(rhs) => {
+                    let rhs_targets = resolve_constraint_targets(&rhs, prefix, &module_pins);
+                    if lhs_targets.is_empty() || rhs_targets.is_empty() { continue; }
+                    if let Some(module) = netlist.modules.get_mut(module_id) {
+                        for from in &lhs_targets {
+                            for to in &rhs_targets {
+                                for (k, v) in &props {
+                                    let key = format!(
+                                        "{}{}__{}__{}",
+                                        INTERFACE_CONSTRAINT_REL_ATTR_PREFIX,
+                                        from, to, k,
+                                    );
+                                    module.attributes.insert(key, v.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+                None => {
+                    if lhs_targets.is_empty() { continue; }
+                    if let Some(module) = netlist.modules.get_mut(module_id) {
+                        for pin in &lhs_targets {
+                            for (k, v) in &props {
+                                let key = format!(
+                                    "{}{}__{}",
+                                    INTERFACE_CONSTRAINT_ATTR_PREFIX, pin, k,
+                                );
+                                module.attributes.insert(key, v.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Resolve a comma-separated target list (LHS or RHS text) into a
+/// concrete pin-name set, all under the given `prefix`. Wildcards
+/// match against `module_pins` (materialised pin names that start
+/// with `prefix.`).
+fn resolve_constraint_targets(
+    text: &str,
+    prefix: &str,
+    module_pins: &[String],
+) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for raw in text.split(',') {
+        let target = raw.trim();
+        if target.is_empty() { continue; }
+        let resolved = resolve_one_target(target, prefix, module_pins);
+        for r in resolved {
+            if !out.contains(&r) { out.push(r); }
+        }
+    }
+    out
+}
+
+fn resolve_one_target(target: &str, prefix: &str, module_pins: &[String]) -> Vec<String> {
+    // `*` alone — every leaf under prefix.*
+    if target == "*" {
+        let p = format!("{}.", prefix);
+        return module_pins.iter()
+            .filter(|n| n.starts_with(&p))
+            .cloned()
+            .collect();
+    }
+
+    // Trailing wildcard: `DQ*` or `lane*.DQS` or `CK.*`
+    if let Some(stripped) = target.strip_suffix(".*") {
+        let p = format!("{}.{}.", prefix, stripped);
+        return module_pins.iter()
+            .filter(|n| n.starts_with(&p))
+            .cloned()
+            .collect();
+    }
+    if target.ends_with('*') {
+        let stem = &target[..target.len() - 1]; // strip trailing `*`
+        // For something like `DQ*` we want every pin whose leaf
+        // segment (after the prefix) starts with `DQ`. For
+        // `lane*.DQS` we'd want a multi-segment wildcard; that
+        // shape isn't supported in tier 1 — bail to no-match.
+        if stem.contains('*') || stem.contains('.') && !stem.ends_with('.') {
+            // Mixed wildcard / dotted form — tier-2 work.
+            return Vec::new();
+        }
+        let p = format!("{}.{}", prefix, stem);
+        return module_pins.iter()
+            .filter(|n| n.starts_with(&p))
+            .cloned()
+            .collect();
+    }
+
+    // Plain dotted path: prefix.IDENT[.IDENT…]
+    let full = format!("{}.{}", prefix, target);
+    if module_pins.iter().any(|n| n == &full) {
+        return vec![full];
+    }
+    // Could be a sub-bundle reference (no leaf with that exact name
+    // but leaves below it). Match by prefix.
+    let p = format!("{}.", full);
+    let matches: Vec<String> = module_pins
+        .iter()
+        .filter(|n| n.starts_with(&p))
+        .cloned()
+        .collect();
+    matches
+}
+
+/// Parse a property list like `single_ended 40ohm, signal_class DATA`
+/// into (name, value-text) pairs. The name is the first token; the
+/// value is everything after it up to the next comma.
+fn parse_constraint_props(text: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for chunk in text.split(',') {
+        let s = chunk.trim();
+        if s.is_empty() { continue; }
+        let (name, value) = match s.find(|c: char| c.is_whitespace()) {
+            Some(p) => (s[..p].to_string(), s[p..].trim().to_string()),
+            None => (s.to_string(), String::new()),
+        };
+        if name.is_empty() { continue; }
+        out.push((name, value));
+    }
+    out
 }
 
 /// Name of the n-th declared perspective on this interface (0-indexed).
