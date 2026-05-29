@@ -1955,6 +1955,237 @@ fn add_interface_field_pins(
                 netlist.add_pin(module_id, pin_name, pin_direction, PinType::Signal);
             }
         }
+
+        // v0.8 hierarchical sub-interfaces: this interface may itself
+        // declare `interface SubName subField;` rows. Recursively
+        // materialise their pins under the dotted prefix
+        // `field_name.sub_field_name.*`. Sub-fields inherit our
+        // perspective + legacy-flip state (e.g., DualUART:dte → all
+        // sub-channels resolved as `dte`).
+        add_sub_interface_field_pins(
+            &iface_node,
+            module_id,
+            netlist,
+            context,
+            import_preprocessor,
+            entity,
+            &field_name,
+            perspective_name.as_deref(),
+            reversed,
+        );
+    }
+}
+
+/// v0.8 hierarchical sub-interfaces: recursively materialise pins for
+/// any `interface SubName subField;` rows declared inside `iface_node`'s
+/// body, under the dotted prefix `parent_prefix.sub_field`.
+///
+/// Sub-interface fields inherit the *parent's* perspective + `~`
+/// reversal so a `DualUART:dte` selector flows to both `ch0` and `ch1`
+/// as `dte`. Pinmux bindings, `wires { }` cross-name pairing, and
+/// explicit per-sub-field perspective selectors are NOT supported at
+/// the nested level in this slice; they remain leaf-only features and
+/// would need a richer recursion if hierarchical interfaces grow them
+/// later.
+#[allow(clippy::too_many_arguments)]
+fn add_sub_interface_field_pins(
+    iface_node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>,
+    module_id: ModuleId,
+    netlist: &mut Netlist,
+    context: &HierarchicalContext,
+    import_preprocessor: Option<&crate::import_preprocessor::ImportPreprocessor>,
+    entity: &bhdl_ast::Entity,
+    parent_prefix: &str,
+    parent_perspective: Option<&str>,
+    parent_reversed: bool,
+) {
+    use bhdl_netlist::{PinDirection, PinType, PortDirection};
+    use bhdl_parser::SyntaxKind;
+
+    for field_node in iface_node
+        .children()
+        .filter(|n| n.kind() == SyntaxKind::INTERFACE_FIELD_DECL)
+    {
+        // Same token-walk as the parent loop: `[~] TypeName [: persp] fieldName`.
+        let mut reversed = false;
+        let mut type_name: Option<String> = None;
+        let mut perspective_name: Option<String> = None;
+        let mut field_name: Option<String> = None;
+        let tokens: Vec<_> = field_node
+            .children_with_tokens()
+            .filter_map(|el| el.into_token())
+            .filter(|t| matches!(
+                t.kind(),
+                SyntaxKind::TILDE | SyntaxKind::COLON | SyntaxKind::IDENT
+            ))
+            .collect();
+        let mut i = 0;
+        while i < tokens.len() {
+            match tokens[i].kind() {
+                SyntaxKind::TILDE => { reversed = true; i += 1; }
+                SyntaxKind::IDENT if type_name.is_none() => {
+                    type_name = Some(tokens[i].text().to_string());
+                    i += 1;
+                }
+                SyntaxKind::COLON if perspective_name.is_none() => {
+                    i += 1;
+                    if i < tokens.len() && tokens[i].kind() == SyntaxKind::IDENT {
+                        perspective_name = Some(tokens[i].text().to_string());
+                        i += 1;
+                    }
+                }
+                SyntaxKind::IDENT if field_name.is_none() => {
+                    field_name = Some(tokens[i].text().to_string());
+                    i += 1;
+                }
+                _ => i += 1,
+            }
+        }
+        let (Some(type_name), Some(field_name)) = (type_name, field_name) else { continue; };
+
+        // Inherit parent's perspective + reversed when this sub-field
+        // didn't declare its own. The combined `reversed` xors so that
+        // `~` at either level toggles direction.
+        let effective_perspective = perspective_name.or_else(|| parent_perspective.map(|s| s.to_string()));
+        let effective_reversed = reversed ^ parent_reversed;
+
+        // Resolve sub-interface definition via the same three-step chain.
+        let sub_iface_node = context
+            .variant_manager
+            .find_entity_definition(&type_name)
+            .map(|e| e.syntax().clone())
+            .or_else(|| {
+                import_preprocessor
+                    .and_then(|p| p.get_imported_entity(&type_name).map(|e| e.syntax().clone()))
+            })
+            .or_else(|| {
+                let mut root = entity.syntax().clone();
+                while let Some(p) = root.parent() { root = p; }
+                root.descendants().find(|n| {
+                    if n.kind() != SyntaxKind::INTERFACE_DEF { return false; }
+                    n.children_with_tokens()
+                        .filter_map(|el| el.into_token())
+                        .filter(|t| t.kind() == SyntaxKind::IDENT)
+                        .next()
+                        .map(|t| t.text() == type_name)
+                        .unwrap_or(false)
+                })
+            });
+        let Some(sub_iface_node) = sub_iface_node else { continue; };
+
+        let (signal_nodes, flip_for_legacy) = synth_resolve_perspective_signals(
+            &sub_iface_node,
+            effective_perspective.as_deref(),
+            effective_reversed,
+        );
+
+        let nested_prefix = format!("{}.{}", parent_prefix, field_name);
+
+        // Cross-wire harvest from the sub-interface (e.g.,
+        // UartChannel's `wires { dte.TX <-> dce.RX; }`). The bundle
+        // expander's `translate_via_xwire` looks up xwires under the
+        // *outer* field name (the user-written `mcu.duart`) using the
+        // remaining nested path as part of the signal key. We split
+        // `nested_prefix` at the first dot to get
+        // `outer_field` + `rest_path`, then store one entry per
+        // sub-interface signal whose name remaps.
+        let (outer_field, rest_path) = match nested_prefix.find('.') {
+            Some(p) => (&nested_prefix[..p], &nested_prefix[p + 1..]),
+            None => (nested_prefix.as_str(), ""),
+        };
+        let nested_xwires: HashMap<String, String> =
+            synth_harvest_xwires(&sub_iface_node, effective_perspective.as_deref());
+        if let Some(module) = netlist.modules.get_mut(module_id) {
+            for (lhs_sig, rhs_sig) in &nested_xwires {
+                let key_sig = if rest_path.is_empty() {
+                    lhs_sig.clone()
+                } else {
+                    format!("{}.{}", rest_path, lhs_sig)
+                };
+                let val_sig = if rest_path.is_empty() {
+                    rhs_sig.clone()
+                } else {
+                    format!("{}.{}", rest_path, rhs_sig)
+                };
+                let key = format!(
+                    "{}{}__{}",
+                    INTERFACE_FIELD_XWIRE_ATTR_PREFIX, outer_field, key_sig,
+                );
+                module.attributes.insert(key, val_sig);
+            }
+        }
+
+        for sig_node in signal_nodes {
+            let sig_name_tok = sig_node
+                .children_with_tokens()
+                .filter_map(|el| el.into_token())
+                .find(|t| t.kind() == SyntaxKind::IDENT);
+            let Some(sig_name_tok) = sig_name_tok else { continue; };
+            let sig_name = sig_name_tok.text().to_string();
+
+            let dir_tok = sig_node
+                .children_with_tokens()
+                .filter_map(|el| el.into_token())
+                .find(|t| matches!(
+                    t.kind(),
+                    SyntaxKind::IN_KW | SyntaxKind::OUT_KW | SyntaxKind::INOUT_KW
+                ));
+            let mut pin_direction = match dir_tok.as_ref().map(|t| t.kind()) {
+                Some(SyntaxKind::IN_KW) => PinDirection::In,
+                Some(SyntaxKind::OUT_KW) => PinDirection::Out,
+                Some(SyntaxKind::INOUT_KW) => PinDirection::InOut,
+                _ => PinDirection::InOut,
+            };
+            let mut port_direction = match dir_tok.as_ref().map(|t| t.kind()) {
+                Some(SyntaxKind::IN_KW) => PortDirection::Input,
+                Some(SyntaxKind::OUT_KW) => PortDirection::Output,
+                Some(SyntaxKind::INOUT_KW) => PortDirection::InOut,
+                _ => PortDirection::InOut,
+            };
+            if flip_for_legacy {
+                pin_direction = match pin_direction {
+                    PinDirection::In => PinDirection::Out,
+                    PinDirection::Out => PinDirection::In,
+                    PinDirection::InOut => PinDirection::InOut,
+                    other => other,
+                };
+                port_direction = match port_direction {
+                    PortDirection::Input => PortDirection::Output,
+                    PortDirection::Output => PortDirection::Input,
+                    other => other,
+                };
+            }
+
+            let pin_name = format!("{}.{}", nested_prefix, sig_name);
+            let dir_str = match pin_direction {
+                PinDirection::In => "in",
+                PinDirection::Out => "out",
+                PinDirection::InOut => "inout",
+                _ => "unknown",
+            };
+            if let Some(module) = netlist.modules.get_mut(module_id) {
+                let dir_key = format!(
+                    "{}{}", INTERFACE_FIELD_DIRECTION_ATTR_PREFIX, pin_name,
+                );
+                module.attributes.insert(dir_key, dir_str.to_string());
+            }
+            netlist.add_port(module_id, pin_name.clone(), port_direction, None);
+            netlist.add_pin(module_id, pin_name, pin_direction, PinType::Signal);
+        }
+
+        // Tail recursion: deeper nesting (e.g., RGMII { tx { phy { ... } } })
+        // is uncommon today but cheap to support.
+        add_sub_interface_field_pins(
+            &sub_iface_node,
+            module_id,
+            netlist,
+            context,
+            import_preprocessor,
+            entity,
+            &nested_prefix,
+            effective_perspective.as_deref(),
+            effective_reversed,
+        );
     }
 }
 

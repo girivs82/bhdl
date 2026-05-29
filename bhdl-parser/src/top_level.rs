@@ -261,8 +261,21 @@ impl<'t> Parser<'t> {
                     self.parse_interface_wires_block();
                 }
                 Some(SyntaxKind::INTERFACE_KW) => {
-                    // Nested interface (hierarchical)
-                    self.parse_interface_def();
+                    // v0.8 hierarchical sub-interfaces: inside an
+                    // interface body, `interface SubName fieldName;`
+                    // declares a sub-interface field — same shape
+                    // as the inside-entity-body form.
+                    //
+                    //     interface DualUART {
+                    //         interface UartChannel ch0;
+                    //         interface UartChannel ch1;
+                    //     }
+                    //
+                    // (Nested interface *definitions* — `interface X
+                    // { ... }` inside another interface — are not
+                    // supported; declare nested defs at the top
+                    // level instead.)
+                    self.parse_interface_field_decl();
                 }
                 Some(_) => {
                     self.error("Unexpected token in interface definition".to_string());
