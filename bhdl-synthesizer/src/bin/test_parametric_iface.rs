@@ -107,5 +107,79 @@ fn main() {
     }
     println!("✓ rewritten source parses cleanly");
 
-    println!("\nv0.8 parametric interfaces (tier 1): PASS");
+    // ---------- tier 2: generative loops ----------
+    println!("\n=== tier 2: generate loops ===");
+    let tier2_src = r#"
+interface DiffPair {
+    signal P: inout;
+    signal N: inout;
+}
+interface DDR4ByteLane {
+    signal DM: inout;
+    interface DiffPair DQS;
+}
+interface DDR4<byte_lanes: int = 8> {
+    signal A0: out;
+    interface DiffPair CK;
+    generate for i in 0..<byte_lanes> {
+        interface DDR4ByteLane lane<i>;
+    }
+}
+
+entity MemController {
+    interface DDR4<byte_lanes=2> ddr;
+}
+
+entity SmallMem {
+    interface DDR4<byte_lanes=4> ddr;
+}
+"#;
+    let rewritten2 = preprocess(tier2_src).unwrap_or_else(|e| fail(&format!("preprocess: {}", e)));
+    println!("=== rewritten ===\n{}", rewritten2);
+
+    // The DDR4__byte_lanes_2 monomorphisation should declare lane0 and lane1.
+    let mc_idx = rewritten2.find("interface DDR4__byte_lanes_2 {").unwrap_or_else(|| {
+        fail("missing DDR4__byte_lanes_2 monomorphisation")
+    });
+    let mc_block = &rewritten2[mc_idx..];
+    let mc_end = mc_block.find("\n}").map(|e| e + 2).unwrap_or(mc_block.len());
+    let mc_block = &mc_block[..mc_end];
+    for needed in &[
+        "interface DDR4ByteLane lane0;",
+        "interface DDR4ByteLane lane1;",
+    ] {
+        if !mc_block.contains(needed) {
+            fail(&format!("DDR4__byte_lanes_2 missing `{}`", needed));
+        }
+    }
+    if mc_block.contains("lane2") {
+        fail("DDR4__byte_lanes_2 leaked an extra `lane2;` row");
+    }
+    if mc_block.contains("generate for") {
+        fail("DDR4__byte_lanes_2 still contains an unexpanded `generate for` block");
+    }
+    println!("✓ DDR4<byte_lanes=2> unrolled to lane0, lane1 (no lane2, no generate residue)");
+
+    let sm_idx = rewritten2.find("interface DDR4__byte_lanes_4 {").unwrap();
+    let sm_block = &rewritten2[sm_idx..];
+    let sm_end = sm_block.find("\n}").map(|e| e + 2).unwrap_or(sm_block.len());
+    let sm_block = &sm_block[..sm_end];
+    for k in 0..4 {
+        let needle = format!("interface DDR4ByteLane lane{};", k);
+        if !sm_block.contains(&needle) {
+            fail(&format!("DDR4__byte_lanes_4 missing `{}`", needle));
+        }
+    }
+    println!("✓ DDR4<byte_lanes=4> unrolled to lane0..lane3");
+
+    // Sanity: the rewritten tier-2 source should still parse cleanly.
+    let pr2 = bhdl_parser::parse(&rewritten2);
+    if !pr2.errors().is_empty() {
+        eprintln!("tier-2 rewritten source has parse errors:");
+        for e in pr2.errors().iter().take(10) { eprintln!("  {:?}", e); }
+        std::process::exit(1);
+    }
+    println!("✓ tier-2 rewritten source parses cleanly");
+
+    println!("\nv0.8 parametric interfaces (tier 1 + tier 2): PASS");
 }

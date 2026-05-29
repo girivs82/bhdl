@@ -368,11 +368,123 @@ fn expand_template(tpl: &Template, args: &BTreeMap<String, String>, mangled: &st
             body = body.replace(&needle, &format!("<{}>", v));
         }
     }
+    // Step 1.5 (tier 2): unroll `generate for i in <a>..<b> { ... }`
+    // loops, substituting `<i>` per iteration. Nested loops are
+    // handled by the multi-pass driver. Loop bounds may be bare
+    // numbers or `<NUMBER>` (the form parametric substitution
+    // produces, since `<param>` is the placeholder syntax).
+    let body = expand_generate_loops(&body);
     // Step 2: expand `signal IDENT<INT>: dir;` rows into N flat
     // `signal IDENTk: dir;` lines.
     let body = expand_signal_arrays(&body);
 
     format!("interface {} {{{}}}", mangled, body)
+}
+
+/// Tier-2 generative loops.
+///
+///     generate for IDENT in BOUND..BOUND { body }
+///
+/// Each loop is unrolled to N copies of `body`, with `<IDENT>`
+/// replaced by each integer in the half-open range. A bound is
+/// either a bare ASCII integer or `<N>` (the form parametric
+/// substitution produces, since `<param>` is the placeholder
+/// syntax we already use elsewhere).
+///
+/// Nested loops are supported via the multi-pass driver below —
+/// each pass expands the first matched `generate for` and re-runs
+/// against the result, so inner loops surface in subsequent passes.
+fn expand_generate_loops(body: &str) -> String {
+    let mut out = body.to_string();
+    loop {
+        match find_and_expand_one_generate(&out) {
+            Some((start, end, replacement)) => {
+                out.replace_range(start..end, &replacement);
+            }
+            None => return out,
+        }
+    }
+}
+
+fn find_and_expand_one_generate(text: &str) -> Option<(usize, usize, String)> {
+    let bytes = text.as_bytes();
+    for kw_pos in find_keyword_positions(text, "generate") {
+        let after_kw = kw_pos + "generate".len();
+        let p = match skip_ws(text, after_kw) { Some(x) => x, None => continue };
+        if !text[p..].starts_with("for") { continue; }
+        let after_for = p + 3;
+        if bytes.get(after_for).map(|c| c.is_ascii_alphanumeric() || *c == b'_').unwrap_or(false) {
+            continue;
+        }
+        // Loop variable name.
+        let p = match skip_ws(text, after_for) { Some(x) => x, None => continue };
+        let var_end = scan_ident(text, p);
+        if var_end == p { continue; }
+        let var = text[p..var_end].to_string();
+        // `in` keyword.
+        let p = match skip_ws(text, var_end) { Some(x) => x, None => continue };
+        if !text[p..].starts_with("in") { continue; }
+        let after_in = p + 2;
+        if bytes.get(after_in).map(|c| c.is_ascii_alphanumeric() || *c == b'_').unwrap_or(false) {
+            continue;
+        }
+        // Lower bound.
+        let p = match skip_ws(text, after_in) { Some(x) => x, None => continue };
+        let (start_n, after_start) = match parse_range_bound(text, p) {
+            Some(x) => x,
+            None => continue,
+        };
+        // `..`
+        let p = match skip_ws(text, after_start) { Some(x) => x, None => continue };
+        if !text[p..].starts_with("..") { continue; }
+        let p = p + 2;
+        let p = match skip_ws(text, p) { Some(x) => x, None => continue };
+        let (end_n, after_end) = match parse_range_bound(text, p) {
+            Some(x) => x,
+            None => continue,
+        };
+        // `{` body `}`
+        let p = match skip_ws(text, after_end) { Some(x) => x, None => continue };
+        if bytes.get(p) != Some(&b'{') { continue; }
+        let close = match find_matching_brace(text, p) { Some(c) => c, None => continue };
+        let loop_body = &text[p + 1..close];
+
+        // Build the unrolled replacement. Each iteration substitutes
+        // `<var>` → integer. We also drop any leading newlines
+        // between iterations to keep things tidy.
+        let mut expanded = String::with_capacity(loop_body.len() * (end_n.saturating_sub(start_n)));
+        let needle = format!("<{}>", var);
+        if end_n > start_n {
+            for i in start_n..end_n {
+                let copy = loop_body.replace(&needle, &i.to_string());
+                expanded.push_str(&copy);
+                expanded.push('\n');
+            }
+        }
+        return Some((kw_pos, close + 1, expanded));
+    }
+    None
+}
+
+/// Parse a generate-loop range bound. Accepts bare digits (`8`) or
+/// the wrapped form (`<8>`) that parametric substitution emits.
+fn parse_range_bound(text: &str, start: usize) -> Option<(usize, usize)> {
+    let bytes = text.as_bytes();
+    let mut i = start;
+    let wrapped = bytes.get(i) == Some(&b'<');
+    if wrapped { i += 1; }
+    let num_start = i;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i == num_start { return None; }
+    let n: usize = text[num_start..i].parse().ok()?;
+    if wrapped {
+        if bytes.get(i) != Some(&b'>') { return None; }
+        Some((n, i + 1))
+    } else {
+        Some((n, i))
+    }
 }
 
 /// Scan the body for every `signal IDENT<INT>: dir;` occurrence and
