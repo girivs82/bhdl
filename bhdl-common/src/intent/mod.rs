@@ -3,6 +3,13 @@
 
 use std::collections::HashMap;
 
+/// P&R layout-intent vocabulary (`LayoutIntent`, `PinRef`, …). Distinct
+/// from the simulation-lifecycle types in this module (`IntentCall`,
+/// `IntentResult`, `SimMode`, `SynthesisHint`); the two cover different
+/// intent kinds and different downstream consumers. See
+/// `bhdl-pnr/docs/intent_vocabulary_v0.md`.
+pub mod vocabulary;
+
 /// Simulation mode determined by intent
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SimMode {
@@ -96,7 +103,14 @@ pub struct ParamMetadata {
     pub default_value: Option<IntentValue>,
 }
 
-/// Parameter type for validation
+/// Parameter type for validation.
+///
+/// The first block is the original simulation/synthesis-lifecycle set.
+/// The second block (P&R v0) is added for the layout-intent vocabulary
+/// — see `intent::vocabulary` and `bhdl-pnr/docs/intent_vocabulary_v0.md`
+/// §3. These tag parser-side validation of `for INTENT(...)` arguments
+/// inside `expansion { }` blocks; the typed values land in
+/// `vocabulary::LayoutIntent`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParamType {
     Duration,
@@ -107,6 +121,15 @@ pub enum ParamType {
     String,
     Number,
     Boolean,
+    // ── P&R layout-intent vocabulary v0 ──────────────────────────
+    Length,        // mm
+    Area,          // mm²
+    Ohms,          // impedance / resistance
+    Pin,           // host-pin reference → resolves to vocabulary::PinRef
+    Net,           // board-level net reference
+    ComponentRef,  // sibling-component reference within an expansion
+    LayerHint,     // enum: Any | Top | Bottom | Inner | AdjacentToGroundPlane
+    Topology,      // enum: Star | DaisyChain | FlyBy | T
 }
 
 /// Registry of available intent functions
