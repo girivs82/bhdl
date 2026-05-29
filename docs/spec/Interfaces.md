@@ -1,16 +1,24 @@
 # Interfaces
 
-> **Status:** Proposal v0.7. Scope: peripheral-protocol bundles
-> (SPI, I²C, UART, USB, etc.) declared as named signal groups with
-> per-role *perspectives*, optional cross-name *wire mappings*, and
-> per-instance *pin bindings* that tie interface signals to physical
-> pins on a chip. Covers the v0.1–v0.6 design that's already shipped
-> plus the v0.7 perspectives surface that closes the cross-name gap.
+> **Status:** Shipped through v0.8. Scope: peripheral-protocol
+> bundles (SPI, I²C, UART, USB, DDR, etc.) declared as named signal
+> groups with per-role *perspectives*, optional cross-name *wire
+> mappings*, per-instance *pin bindings* that tie interface signals
+> to physical pins on a chip, plus the v0.8 additions: **hierarchical
+> sub-interfaces**, **parametric interfaces** (with generative
+> loops), and **protocol-derived timing/electrical constraints**.
+> Together these make a full DDR4 stack expressible (see §10).
 >
-> Out of scope for v0.7: parameterised interfaces (`SPI<width=16>`,
-> grammar parses but unused), hierarchical sub-interfaces (`RGMII`
-> containing nested `TX` and `RX` sub-interfaces), and timing
-> constraints (`constrain setup(...)`). All deferred to v0.8+.
+> The v0.8 features earlier drafts listed as "deferred" are now all
+> shipped:
+>
+> - **Parametric interfaces** (`SPI<lanes=4>`) — §11. Tier 1
+>   (parameter substitution + signal-array expansion) and tier 2
+>   (generative `generate for` loops, including list-literal
+>   iteration and `(idx, val)` destructuring) both landed.
+> - **Hierarchical sub-interfaces** (`RGMII` with nested `TX`/`RX`,
+>   `DiffPair` as a reusable diff-pair) — §12.
+> - **Interface constraints** (`constraints { … }`) — §13.
 >
 > **`require pullup`/`require decap`** (originally planned as a v0.8
 > interface-syntax addition) was retired in favour of **vendor
@@ -327,3 +335,287 @@ longer participates in interface field declarations.
   choice of which interface field to wire is the implicit pinmux
   selection. The v0.6 conflict check enforces "one pin can serve
   one role at a time."
+
+---
+
+## 10. v0.8 worked example: DDR4
+
+A complete DDR4 byte-laned memory interface, exercising all three
+v0.8 features at once. (Trimmed to 4-bit byte lanes for brevity;
+real DDR4 uses 8.)
+
+```bhdl
+// A differential pair — reused for clock and every strobe.
+interface DiffPair<z: int = 100> {
+    signal P: inout;
+    signal N: inout;
+    constraints {
+        *:       differential <z>ohm;   // `*` = the pair as a unit
+        P -> N:  length_match 1ps;       // tight intra-pair skew
+    }
+}
+
+// One byte lane: data bits + strobe + mask, with bit-swizzle freedom.
+interface DDR4ByteLane {
+    signal DQ0: inout; signal DQ1: inout;
+    signal DQ2: inout; signal DQ3: inout;
+    signal DM:  inout;
+    interface DiffPair<z=80> DQS;        // 80Ω strobe pair
+    constraints {
+        DQ0, DQ1, DQ2, DQ3: single_ended 40ohm, signal_class DATA;
+        DM:                 single_ended 40ohm, signal_class DM;
+        // Bit swizzle: the strobe latches all data lines together,
+        // so the router may permute DQ0..DQ3 + DM within the byte.
+        DQ0, DQ1, DQ2, DQ3, DM: swizzle_within_byte true;
+    }
+}
+
+// The whole protocol, parameterised by byte-lane count.
+interface DDR4<byte_lanes: int = 8> {
+    signal A0: out; signal A1: out; signal CS: out;
+    interface DiffPair CK;               // 100Ω clock pair (default z)
+    generate for i in 0..<byte_lanes> {
+        interface DDR4ByteLane lane<i>;
+    }
+    constraints {
+        CK.*:        signal_class CLOCK, max_freq 1600MHz;
+        A0, A1, CS:  single_ended 50ohm, signal_class ADDR;
+        // Byte swizzle: byte lanes train independently and may be
+        // reordered as whole units.
+        lane*:       swizzle_across_bytes true;
+    }
+}
+
+entity MemController { interface DDR4<byte_lanes=4> ddr; }
+```
+
+What the synthesiser produces from this:
+
+- **Parametric expansion** turns `DDR4<byte_lanes=4>` into a
+  monomorphised `DDR4__byte_lanes_4` and unrolls the `generate for`
+  into `lane0 … lane3`.
+- **Hierarchical materialisation** flattens every nested interface
+  into dotted leaf pins: `ddr.CK.P`, `ddr.lane2.DQS.N`,
+  `ddr.lane0.DQ3`, …
+- **Constraint propagation** attaches each protocol rule to the
+  leaves it covers — `DiffPair`'s `differential 80ohm` lands on all
+  four `ddr.laneK.DQS.{P,N}` pairs, the outer `CK.*` clock rules
+  reach the nested `ddr.CK.{P,N}`, and the cross-bundle skew bounds
+  (if declared) cross-product across endpoints.
+
+Board-level **swizzle** is then expressed with the generalised
+generate primitive — no swizzle-specific syntax (§11.3):
+
+```bhdl
+board {
+    mc:  MemController();
+    mem: MemoryChip();
+    // Byte swizzle: the list literal IS the permutation table.
+    generate for (j, i) in [2, 3, 0, 1] {
+        mc.ddr.lane<j>.DQS -> mem.ddr.lane<i>.DQS;
+    }
+}
+```
+
+---
+
+## 11. Parametric interfaces (v0.8)
+
+An interface may declare integer parameters with defaults, used to
+size signal arrays and unroll generative loops. Implemented as a
+**source-text monomorphisation pass** (`parametric_resolver`) that
+runs before the parser: each distinct argument tuple becomes a
+mangled concrete interface, and use sites are rewritten to the
+mangled name.
+
+### 11.1 Parameter substitution + signal arrays (tier 1)
+
+```bhdl
+interface SPI<lanes: int = 1> {
+    perspective master { signal SCK: out; signal CS: out; signal IO<lanes>: inout; }
+    perspective slave  { signal SCK: in;  signal CS: in;  signal IO<lanes>: inout; }
+}
+
+interface SPI<lanes=4>:slave qspi;   // → SPI__lanes_4, IO0..IO3
+interface SPI<lanes=8>:slave ospi;   // → SPI__lanes_8, IO0..IO7
+interface SPI            :slave spi;  // → SPI__lanes_1 (default), IO0
+```
+
+- `signal NAME<N>: dir;` expands to `signal NAME0: dir; … NAME<N-1>: dir;`.
+- Arguments may be **named** (`<lanes=4>`) or **positional**
+  (`<4>`); defaults fill any unbound parameter.
+- Unadorned use (`interface SPI …`) resolves to the all-defaults
+  monomorphisation, so legacy non-parametric interfaces keep
+  working unchanged.
+
+### 11.2 Generative loops (tier 2)
+
+```bhdl
+interface DDR4<byte_lanes: int = 8> {
+    generate for i in 0..<byte_lanes> {
+        interface DDR4ByteLane lane<i>;
+    }
+}
+```
+
+`generate for VAR in ITER { body }` copies `body` once per element,
+substituting `<VAR>` with the value. Two iteration sources:
+
+- **Range**: `0..<N>` (bounds may be bare integers or `<N>`-wrapped,
+  the form parameter substitution leaves behind).
+- **List literal**: `[2, 3, 0, 1]` — iterates the values verbatim.
+
+A paired binding `for (idx, val) in [...]` binds the first name to
+the iteration index and the second to the current value (use `_` to
+suppress either). Loops nest; the resolver unrolls outermost-first
+and re-scans.
+
+### 11.3 Top-level generates + swizzle
+
+Generate-loop unrolling also runs over **board and entity bodies**,
+not just inside parametric templates. This makes DDR byte/bit
+swizzle expressible without any swizzle-specific syntax — the list
+literal IS the permutation table:
+
+```bhdl
+// Byte swizzle: mc.lane0→mem.lane2, lane1→lane3, lane2→lane0, lane3→lane1
+generate for (j, i) in [2, 3, 0, 1] {
+    mc.lane<j> -> mem.lane<i>;
+}
+// Bit swizzle within a lane: nest the loops.
+generate for (j, i) in [2, 0, 3, 1] {
+    mc.lane0.DQ<j> -> mem.lane0.DQ<i>;
+}
+```
+
+This is strictly more expressive than a chosen mapping: the
+interface's `swizzle_*` constraints (§13) declare *what permutations
+are legal*; the generate form realises *one specific choice*. Hybrid
+use (bulk generate + hand-locked exceptions via a trailing explicit
+connection, last-wins) works too.
+
+---
+
+## 12. Hierarchical sub-interfaces (v0.8)
+
+An interface body may declare fields whose type is **another
+interface**:
+
+```bhdl
+interface UartChannel {
+    perspective dte { signal TX: out; signal RX: in; }
+    perspective dce { signal TX: out; signal RX: in; }
+    wires { dte.TX <-> dce.RX; dte.RX <-> dce.TX; }
+}
+interface DualUART {
+    interface UartChannel ch0;
+    interface UartChannel ch1;
+}
+```
+
+Materialisation recurses, producing dotted leaf pins
+(`duart.ch0.TX`, `duart.ch1.RX`). Sub-interface fields **inherit the
+parent's perspective + `~` reversal** (xored), so `DualUART:dte`
+resolves both channels as `dte`. Each sub-interface's `wires { }`
+cross-name mapping is propagated onto the outer field's xwire
+attributes, so a single bundle binding `mcu.duart -> per.duart` fans
+out to the correct pairwise nets across every nested channel.
+
+This is the foundation for diff pairs (`DiffPair { P; N }` reused
+across CK/DQS/PCIe-lanes), multi-channel buses (RGMII's TX/RX
+sub-bundles), and the DDR4 byte-lane stack in §10.
+
+---
+
+## 13. Interface constraints (v0.8)
+
+A `constraints { … }` block inside an interface body carries
+**protocol-derived** timing/electrical metadata — rules that come
+from the protocol spec, not from any individual chip, so they belong
+with the interface and apply to every chip that uses it.
+
+```bhdl
+constraints {
+    *:               differential 100ohm;            // bundle-self target
+    DQ0, DQ1, DQ2:   single_ended 40ohm, signal_class DATA;
+    CK.*:            signal_class CLOCK, max_freq 1600MHz;
+    P -> N:          length_match 1ps;               // pairwise relation
+    CK -> lane0.DQS: skew_max 100ps;                 // cross-bundle relation
+}
+```
+
+Three statement shapes:
+
+1. **Per-signal**: `SIG[, SIG2, …]: prop1, prop2, …;`
+2. **Pairwise relation**: `SIG_A -> SIG_B: prop;` (cross-products
+   across resolved LHS × RHS targets).
+3. **Group/wildcard**: targets may be a bare ident, a dotted path
+   (`CK.P`), `*` (the interface as a unit), `IDENT.*` (everything
+   under a sub-field), or a trailing-`*` wildcard (`DQ*`, `lane*`).
+
+**Grammar is lenient and text-bearing** (CONSTRAINT_LHS / _RHS /
+_PROPS hold uninterpreted token spans). The property vocabulary is
+re-parsed synth-side, so new property names (`swizzle_within_byte`,
+`topology`, …) need *no* grammar change — they flow through as
+metadata.
+
+**Storage.** Constraints become module attributes the downstream
+PCB router / SI analyser / BOM walker reads by prefix:
+
+```
+intf_const__<pin_path>__<prop>           = <value>
+intf_const_rel__<from>__<to>__<prop>     = <value>
+```
+
+**Inheritance** falls out of recursion: each interface applies its
+*own* constraints at the depth where its leaves are materialised,
+prefixed with the dotted path. `DiffPair`'s `*: differential 100ohm`
+automatically reaches every `DiffPair` instantiation (CK, every
+laneK.DQS) with no duplication.
+
+> **Tier-1 storage is single-valued per (pin, property).** Two
+> co-existing freedoms on the same pin (bit + byte swizzle) use
+> *distinct property names* (`swizzle_within_byte` vs
+> `swizzle_across_bytes`) to avoid last-write-wins collision.
+> Multi-value storage, entity-level overrides, board-level
+> additions, and cross-net conflict detection are deferred to
+> tier-2, pending a real constraint consumer.
+
+---
+
+## 14. v0.8 decision log
+
+- **Parametric interfaces as a text preprocessor, not a parser
+  feature.** Monomorphisation is a transformation of source text;
+  doing it before the parser keeps the AST and downstream synth
+  ignorant of generics. Same architecture as the abstract-entity
+  and import preprocessors. (Mirrors the v0.9b decision.)
+
+- **Constraints belong on the interface, not the chip entity.** The
+  rules (impedance class, length match, swizzle freedom) come from
+  the *protocol*, so anchoring them to the interface means one
+  authoritative definition instead of cut-and-paste across every
+  SKU. Chip-specific tweaks (entity overrides) and design-intent
+  additions (board) are tier-2 layers on top. (User framing:
+  "constraints belong with the part that requires them" — refined
+  to "the part is the protocol, not the silicon.")
+
+- **Diff pairs are a hierarchical sub-interface, not a constraint
+  annotation.** `interface DiffPair { P; N }` makes differential-ness
+  structural; `differential Nohm` targets the pair-as-a-unit via the
+  bundle-self `*`. No `differential_with OTHER` syntax, and one
+  DiffPair definition serves USB/MIPI/PCIe/DDR. (User: "doesn't make
+  sense to duplicate DQS, DQSn multiple times.")
+
+- **Swizzle is generative iteration, not new syntax.** Rather than a
+  board-level `swizzle { … }` block (rejected as too tedious), the
+  generate-loop primitive was generalised to list-literal iteration
+  + `(idx, val)` destructuring. The permutation table *is* the list
+  literal. (User: "if we had an arbitrary generate loop, we don't
+  need new features.")
+
+- **Swizzle *freedom* vs swizzle *choice* are separate concerns.**
+  The interface's `swizzle_*` constraints declare which permutations
+  the protocol permits (preserving all 8! options for the router);
+  a board-level generate realises one specific mapping. Bounded
+  freedom is more powerful than a hard-coded choice.
