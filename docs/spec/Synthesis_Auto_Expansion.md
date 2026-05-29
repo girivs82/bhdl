@@ -516,6 +516,38 @@ The two-level validation gives clear diagnostics at each layer:
 
 Both errors point at the layer the user can fix.
 
+**Multi-function-pin conflict.** Real chips multiplex pins:
+PC4 on ATmega328P is GPIO *or* ADC4 *or* I²C SDA — but only one
+role at a time. The abstract entity can expose all three as
+separate ports, with the SKU's pin_map routing all three to PC4:
+
+```bhdl
+abstract entity ATmega328P {
+    pin adc4: signal inout;
+    pin sda:  signal inout;          // mux'd with adc4 on PC4
+    family {
+        ATmega328P_DIP28 {
+            adc4 = PC4;              // PC4 as ADC4 ...
+            sda  = PC4;              // ...or as SDA, not both
+        };
+    }
+}
+```
+
+A board that wires both at once errors with a diagnostic naming
+the offending physical pin AND the colliding aliases:
+
+```
+Multi-function-pin conflict on 'mcu' (ATmega328P resolved to
+SKU 'ATmega328P_DIP28'): physical pin 'PC4' is claimed by
+aliases ["adc4", "sda"]. Each physical pin can only serve one
+role at a time — pick one alias per pin.
+```
+
+The check happens after SKU resolution (so the diagnostic
+references the chosen SKU's pin_map) but before source rewriting
+(so the user sees the alias names they actually wrote).
+
 ### 8.4 Implementation: source-text preprocessor
 
 The mechanism lives *above* the parser, as a string rewrite
