@@ -96,6 +96,10 @@ name = "test_swizzle_via_generate"
 path = "src/bin/test_swizzle_via_generate.rs"
 
 [[bin]]
+name = "test_ddr4_stdlib"
+path = "src/bin/test_ddr4_stdlib.rs"
+
+[[bin]]
 name = "test_ddr4_full_stack"
 path = "src/bin/test_ddr4_full_stack.rs"
 
