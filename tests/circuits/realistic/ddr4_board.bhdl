@@ -1,0 +1,10 @@
+import { DDR4_SDRAM_x8 } from "bhdl-stdlib/actives/ddr4_sdram.bhdl";
+import { Cap } from "bhdl-stdlib/passive/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+
+board DDR4Board {
+    power VDD = 1.2V @ 2A;
+    ground GND;
+    u1: DDR4_SDRAM_x8();
+    @VDD -> u1.VDD; @VDD -> u1.VDDQ; u1.VSS -> @GND; u1.VSSQ -> @GND;
+}

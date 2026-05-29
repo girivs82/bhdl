@@ -985,13 +985,29 @@ fn component_type_to_class(component_type: &str) -> &'static str {
 /// These are the canonical AVR/USB-bridge/regulator power-rail and
 /// always-driven pin names; signal pins (SDA, SCL, MOSI, …) fall
 /// through and become conditional on actual board-level wiring.
+/// Is this an "always-on support pin" — a pin whose datasheet support
+/// network (decoupling cap, calibration resistor, reference bypass,
+/// reset RC) is mandatory regardless of whether the board wires the
+/// pin? Such pins are unconditionally live in the gating heuristic.
+///
+/// Despite the historical name, this set is NOT limited to power
+/// rails: it already includes reference inputs (AREF), charge-pump
+/// caps (UCAP), and reset pins (NRST/RESET). Those are all pins the
+/// board never "wires" in the peripheral sense but that always need
+/// their support component — exactly the same category as DDR4's ZQ
+/// calibration pin, VPP pump rail, and VREF references. The
+/// distinction this draws is "mandatory chip-support pin" vs
+/// "peripheral signal pin" (SDA/SCL/GPIO), the latter gating on
+/// actual board use.
 fn is_power_rail_pin(name: &str) -> bool {
     let u = name.to_uppercase();
     u.starts_with("VCC")        // VCC, VCC1, VCC2, VCCIO
         || u.starts_with("GND")     // GND, GND1, GND2, GND3
         || u.starts_with("AVCC")
-        || u.starts_with("VDD")     // VDD, VDD_1..VDD_3, VDDA (STM32)
-        || u.starts_with("VSS")     // VSS, VSS_1..VSS_3, VSSA (STM32)
+        || u.starts_with("VDD")     // VDD, VDD_1..VDD_3, VDDA (STM32), VDDQ (DDR)
+        || u.starts_with("VSS")     // VSS, VSS_1..VSS_3, VSSA (STM32), VSSQ (DDR)
+        || u.starts_with("VPP")     // DDR4 activation pump rail (2.5 V supply)
+        || u.starts_with("VREF")    // VREFCA / VREFDQ / VREF — reference inputs
         || u == "AGND"
         || u == "AREF"
         || u == "UVCC"
@@ -1000,6 +1016,7 @@ fn is_power_rail_pin(name: &str) -> bool {
         || u == "VBUS"
         || u == "VBAT"              // STM32 backup-domain rail
         || u == "V3OUT"
+        || u == "ZQ"                // DDR4 calibration reference (240Ω to VSS)
         || u == "RESET"
         || u == "RESET_N"
         || u == "NRST"              // STM32 active-low reset
