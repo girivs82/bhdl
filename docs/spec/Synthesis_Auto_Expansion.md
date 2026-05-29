@@ -596,13 +596,25 @@ from the same file. So a board that imports both
 and ends up resolving to DIP-28 will have the QFN-32 import
 quietly removed from the rewritten source.
 
-### 8.7 Open follow-ups
+### 8.7 SKU choice exposed as instance attributes
 
-- **Expose chosen SKU as an instance attribute** so downstream
-  BOM walkers know which package was selected without re-parsing.
+After SKU resolution, `synthesize_from_source` stamps two
+attributes on each abstract-resolved instance:
+
+- `abstract_origin` — the abstract entity the user wrote
+  (e.g. `"ATmega328P"`).
+- `selected_sku` — the concrete SKU the resolver picked
+  (e.g. `"ATmega328P_QFN32"`).
+
+BOM walkers, KiCad exporters, SPICE exporters, and comparators
+can read these directly from `instance.attributes` without
+re-running the preprocessor.
+
+### 8.8 Open follow-ups
+
 - **`exposes [list]` shorthand** for SKUs where most aliases
   map trivially (alias name == pin name); avoids verbose
-  per-pin = mappings.
+  per-pin = mappings. Cosmetic; the explicit form works fine.
 
 ## 9. Decision log
 

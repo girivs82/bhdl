@@ -241,9 +241,11 @@ board Misuse {
     // netlist (not just text rewriting).
     println!("\n=== End-to-end: synthesize_from_source picks the right SKU ===");
     let (_rewritten_a, netlist_a) = synthesize_from_source(BOARD_A_DIP_FITS).await?;
-    let mcu_module_a = netlist_a.instances.iter()
+    let mcu_a = netlist_a.instances.iter()
         .find(|(_, i)| i.name == "mcu")
-        .and_then(|(_, i)| netlist_a.modules.get(i.definition))
+        .map(|(_, i)| i)
+        .expect("mcu instance");
+    let mcu_module_a = netlist_a.modules.get(mcu_a.definition)
         .map(|m| m.name.as_str())
         .unwrap_or("<missing>");
     if mcu_module_a != "ATmega328P_DIP28" {
@@ -251,12 +253,26 @@ board Misuse {
                   mcu_module_a);
         std::process::exit(1);
     }
+    let abs_origin_a = mcu_a.attributes.get("abstract_origin").map(|s| s.as_str());
+    let selected_sku_a = mcu_a.attributes.get("selected_sku").map(|s| s.as_str());
+    if abs_origin_a != Some("ATmega328P") {
+        eprintln!("✗ Board A: mcu.abstract_origin = {:?}, expected 'ATmega328P'", abs_origin_a);
+        std::process::exit(1);
+    }
+    if selected_sku_a != Some("ATmega328P_DIP28") {
+        eprintln!("✗ Board A: mcu.selected_sku = {:?}, expected 'ATmega328P_DIP28'", selected_sku_a);
+        std::process::exit(1);
+    }
     println!("✓ Board A synthesized: mcu uses module ATmega328P_DIP28");
+    println!("  ↳ mcu.abstract_origin = {:?}, mcu.selected_sku = {:?}",
+        abs_origin_a, selected_sku_a);
 
     let (_rewritten_b, netlist_b) = synthesize_from_source(BOARD_B_NEEDS_QFN).await?;
-    let mcu_module_b = netlist_b.instances.iter()
+    let mcu_b = netlist_b.instances.iter()
         .find(|(_, i)| i.name == "mcu")
-        .and_then(|(_, i)| netlist_b.modules.get(i.definition))
+        .map(|(_, i)| i)
+        .expect("mcu instance");
+    let mcu_module_b = netlist_b.modules.get(mcu_b.definition)
         .map(|m| m.name.as_str())
         .unwrap_or("<missing>");
     if mcu_module_b != "ATmega328P_QFN32" {
@@ -264,7 +280,13 @@ board Misuse {
                   mcu_module_b);
         std::process::exit(1);
     }
+    let selected_sku_b = mcu_b.attributes.get("selected_sku").map(|s| s.as_str());
+    if selected_sku_b != Some("ATmega328P_QFN32") {
+        eprintln!("✗ Board B: mcu.selected_sku = {:?}, expected 'ATmega328P_QFN32'", selected_sku_b);
+        std::process::exit(1);
+    }
     println!("✓ Board B synthesized: mcu uses module ATmega328P_QFN32");
+    println!("  ↳ mcu.selected_sku = {:?}", selected_sku_b);
 
     // Board D: multi-function-pin conflict. The abstract entity
     // declares both `adc4` and `sda` as ports; the SKU's pin_map

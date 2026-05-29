@@ -2580,7 +2580,8 @@ impl Default for NetlistGenerator {
 /// the input.
 pub async fn synthesize_from_source(source: &str) -> Result<(String, Netlist)> {
     use bhdl_ast::AstNode;
-    let rewritten = crate::abstract_resolver::preprocess(source)?;
+    let (rewritten, resolutions) =
+        crate::abstract_resolver::preprocess_with_resolutions(source)?;
     let pr = bhdl_parser::parse(&rewritten);
     if !pr.errors().is_empty() {
         let errs: Vec<String> = pr.errors().iter().take(5)
@@ -2592,7 +2593,27 @@ pub async fn synthesize_from_source(source: &str) -> Result<(String, Netlist)> {
         .ok_or_else(|| anyhow::anyhow!("Could not cast to SourceFile"))?;
     let analysis = bhdl_analyzer::analyze(&sf);
     let mut gen = NetlistGenerator::new();
-    let netlist = gen.generate_from_ast_and_analysis(&sf, &analysis).await?;
+    let mut netlist = gen.generate_from_ast_and_analysis(&sf, &analysis).await?;
+
+    // Stamp the v0.9b resolution choice on each abstract-resolved
+    // instance. BOM walkers, KiCad export, comparators, and SPICE
+    // exporters can read these to know:
+    //   - which abstract entity the user wrote (`abstract_origin`)
+    //   - which concrete SKU the resolver picked (`selected_sku`)
+    // …without re-running the preprocessor.
+    for (inst_name, resolution) in &resolutions {
+        for (_id, inst) in netlist.instances.iter_mut() {
+            if inst.name == *inst_name {
+                inst.attributes.insert(
+                    "abstract_origin".to_string(),
+                    resolution.abstract_entity.clone());
+                inst.attributes.insert(
+                    "selected_sku".to_string(),
+                    resolution.concrete_sku.clone());
+            }
+        }
+    }
+
     Ok((rewritten, netlist))
 }
 

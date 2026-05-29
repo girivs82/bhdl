@@ -45,14 +45,49 @@
 use std::collections::{HashMap, HashSet};
 use anyhow::{Result, anyhow};
 
+/// Per-instance resolution record returned by [`preprocess_with_resolutions`].
+/// `abstract_entity` is the name the user wrote (`ATmega328P`),
+/// `concrete_sku` is the SKU the resolver picked (`ATmega328P_QFN32`).
+#[derive(Debug, Clone)]
+pub struct Resolution {
+    pub abstract_entity: String,
+    pub concrete_sku: String,
+}
+
+/// Map from instance name (e.g. `mcu`) to its resolution.
+pub type ResolutionMap = HashMap<String, Resolution>;
+
+/// As [`preprocess`] but also returns the per-instance resolution
+/// map. Useful when downstream tooling (e.g. the synthesizer driver)
+/// wants to stamp the chosen SKU back onto netlist instances after
+/// synthesis so BOM walkers can see which SKU each abstract
+/// instance became.
+pub fn preprocess_with_resolutions(source: &str) -> Result<(String, ResolutionMap)> {
+    let (rewritten, raw) = preprocess_impl(source)?;
+    let map: ResolutionMap = raw.into_iter()
+        .map(|(inst, abs, sku)| (inst, Resolution {
+            abstract_entity: abs,
+            concrete_sku: sku,
+        }))
+        .collect();
+    Ok((rewritten, map))
+}
+
 /// Source-text preprocessing for abstract-entity resolution.
 ///
 /// Returns the rewritten source. If the input has no abstract-entity
 /// declarations, the returned string equals the input verbatim.
 pub fn preprocess(source: &str) -> Result<String> {
+    Ok(preprocess_impl(source)?.0)
+}
+
+/// Shared implementation. Returns the rewritten source plus a list
+/// of (instance_name, abstract_entity_name, concrete_sku_name) per
+/// resolved abstract instance.
+fn preprocess_impl(source: &str) -> Result<(String, Vec<(String, String, String)>)> {
     let decls = extract_abstract_decls(source);
     if decls.is_empty() {
-        return Ok(source.to_string());
+        return Ok((source.to_string(), Vec::new()));
     }
 
     // Find every `inst_name: ABSTRACT_NAME(...)` instance.
@@ -192,7 +227,17 @@ pub fn preprocess(source: &str) -> Result<String> {
         .cloned()
         .collect();
 
-    Ok(rewrite(source, &decls, &instances, &resolutions, &stripped_imports))
+    let rewritten = rewrite(source, &decls, &instances, &resolutions, &stripped_imports);
+
+    // Build the (inst_name, abstract_entity, concrete_sku) list for callers.
+    let resolved_list: Vec<(String, String, String)> = instances.iter()
+        .filter_map(|(inst_name, entity_type, _)| {
+            resolutions.get(inst_name).map(|(concrete, _)|
+                (inst_name.clone(), entity_type.clone(), concrete.clone()))
+        })
+        .collect();
+
+    Ok((rewritten, resolved_list))
 }
 
 /// Parsed abstract-entity declaration.
