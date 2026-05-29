@@ -114,6 +114,40 @@ pub fn preprocess(source: &str) -> Result<String> {
         });
         match chosen {
             Some(fam) => {
+                // Multi-function-pin conflict check: each physical
+                // pin can serve only one role per board. If two
+                // wired aliases both map to the same concrete pin
+                // (e.g. on atmega328p, `adc4` and `sda` both → PC4),
+                // the user is asking the pin to do two jobs at once.
+                // Flag it with a clear diagnostic that names the
+                // colliding aliases AND the offending physical pin.
+                let mut by_physical: HashMap<&str, Vec<&str>> = HashMap::new();
+                for alias in &wired_aliases {
+                    if let Some(physical) = fam.pin_map.get(alias) {
+                        by_physical.entry(physical.as_str())
+                            .or_default()
+                            .push(alias.as_str());
+                    }
+                }
+                let mut collisions: Vec<(&str, Vec<&str>)> = by_physical.into_iter()
+                    .filter(|(_, aliases)| aliases.len() > 1)
+                    .map(|(p, mut a)| { a.sort(); (p, a) })
+                    .collect();
+                if !collisions.is_empty() {
+                    collisions.sort_by_key(|(p, _)| p.to_string());
+                    let details: Vec<String> = collisions.iter()
+                        .map(|(p, aliases)| format!(
+                            "physical pin '{}' is claimed by aliases {:?}",
+                            p, aliases))
+                        .collect();
+                    return Err(anyhow!(
+                        "Multi-function-pin conflict on '{}' ({} resolved \
+                         to SKU '{}'): {}. Each physical pin can only serve \
+                         one role at a time — pick one alias per pin.",
+                        inst_name, entity_type, fam.concrete_name,
+                        details.join("; ")));
+                }
+
                 eprintln!(
                     "[abstract_resolver] '{}' ({}) wires {:?} → resolved to {} \
                      (family candidates tried: {:?})",
@@ -316,6 +350,13 @@ fn parse_port_decls(body: &str) -> HashSet<String> {
 /// using it can only reference pins that exist on the concrete
 /// entity directly (no abstract aliases).
 fn parse_family_entries(body: &str) -> Vec<FamilyEntry> {
+    // Strip comments first so an inline `// ...` on one line doesn't
+    // eat the following line when we later split on `;`. Byte
+    // offsets are preserved (each comment char becomes a space or
+    // newline) so positions in the stripped body still align with
+    // the original.
+    let stripped = strip_block_comments(body);
+    let body = stripped.as_str();
     let mut out = Vec::new();
     let bytes = body.as_bytes();
     let mut i = 0;
@@ -357,7 +398,8 @@ fn parse_family_entries(body: &str) -> Vec<FamilyEntry> {
             };
             let map_body = &body[map_open + 1..map_close];
             for stmt in map_body.split(';') {
-                let cleaned = stmt.split("//").next().unwrap_or("").trim();
+                // Comments already stripped at function entry.
+                let cleaned = stmt.trim();
                 if cleaned.is_empty() { continue; }
                 // Parse `alias = pin`.
                 if let Some(eq_pos) = cleaned.find('=') {

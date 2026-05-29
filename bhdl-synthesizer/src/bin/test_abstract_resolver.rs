@@ -266,6 +266,56 @@ board Misuse {
     }
     println!("✓ Board B synthesized: mcu uses module ATmega328P_QFN32");
 
-    println!("\nv0.9b abstract-entity resolution (alias-aware, port-validated, integrated): PASS");
+    // Board D: multi-function-pin conflict. The abstract entity
+    // declares both `adc4` and `sda` as ports; the SKU's pin_map
+    // routes BOTH to the same physical pin (PC4 on the AVR). A
+    // board wiring both at once should error with a clear
+    // diagnostic that names the offending physical pin AND the
+    // colliding aliases.
+    let conflict_board = r#"
+abstract entity ATmega328P {
+    pin vcc:  signal inout;
+    pin gnd:  signal inout;
+    pin adc4: signal inout;
+    pin sda:  signal inout;       // mux'd with adc4 on PC4
+    family {
+        ATmega328P_DIP28 {
+            vcc  = VCC;
+            gnd  = GND1;
+            adc4 = PC4;            // mux: PC4 = ADC4 …
+            sda  = PC4;            //       …or SDA, not both
+        };
+    }
+}
+
+board MuxedConflict {
+    mcu: ATmega328P();
+    mcu.adc4 -> @ANALOG_IN;
+    mcu.sda  -> @I2C_BUS;          // ← collides with adc4 on PC4
+}
+"#;
+    println!("\n=== Board D: multi-function-pin conflict → error ===");
+    match preprocess(conflict_board) {
+        Ok(_) => {
+            eprintln!("✗ preprocess should have detected the PC4 collision");
+            std::process::exit(1);
+        }
+        Err(e) => {
+            let msg = format!("{}", e);
+            if !msg.contains("Multi-function-pin conflict")
+                || !msg.contains("PC4")
+                || !msg.contains("adc4")
+                || !msg.contains("sda")
+            {
+                eprintln!("✗ collision error doesn't name the pin or both \
+                           aliases clearly: {}", msg);
+                std::process::exit(1);
+            }
+            println!("✓ caught: {}", msg);
+        }
+    }
+
+    println!("\nv0.9b abstract-entity resolution (alias-aware, port-validated, \
+             mux-conflict-detected, integrated): PASS");
     Ok(())
 }
