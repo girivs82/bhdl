@@ -29,6 +29,7 @@
 use bhdl_ast::{AstNode, SourceFile};
 use bhdl_synthesizer::parametric_resolver;
 use bhdl_synthesizer::hierarchical_connectivity::INTERFACE_CONSTRAINT_ATTR_PREFIX;
+use bhdl_synthesizer::synthesize_from_source;
 use bhdl_parser::parse;
 
 fn fail(msg: &str) -> ! {
@@ -36,7 +37,8 @@ fn fail(msg: &str) -> ! {
     std::process::exit(1);
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let iface = std::fs::read_to_string("bhdl-stdlib/interfaces/ddr4.bhdl")
         .or_else(|_| std::fs::read_to_string("../bhdl-stdlib/interfaces/ddr4.bhdl"))
         .unwrap_or_else(|e| fail(&format!("read ddr4.bhdl: {}", e)));
@@ -177,6 +179,42 @@ board DDR4TestBoard {
             }
         }
     }
+
+    // ── 5. Real usage through the FULL pipeline ──────────────────
+    // A board that *imports* the SDRAM stdlib entity, synthesized via
+    // synthesize_from_source (parametric → abstract → parse → analyze
+    // → generate, including the Phase 4.5 expansion interpreter). This
+    // is how a user actually consumes the part. All six datasheet
+    // support components — including the ZQ calibration resistor, VPP
+    // pump decoupling, and VREFCA bypass that the conditional gating
+    // previously suppressed — must materialise.
+    let board_src = std::fs::read_to_string("tests/circuits/realistic/ddr4_board.bhdl")
+        .or_else(|_| std::fs::read_to_string("../tests/circuits/realistic/ddr4_board.bhdl"))
+        .unwrap_or_else(|e| fail(&format!("read ddr4_board.bhdl: {}", e)));
+    let (_t, full_nl) = match synthesize_from_source(&board_src).await {
+        Ok(x) => x,
+        Err(e) => fail(&format!("full-pipeline synthesis failed: {}", e)),
+    };
+    let inst_names: Vec<String> = full_nl.instances.iter().map(|(_, i)| i.name.clone()).collect();
+    let want_children = [
+        "u1_R_zq",    // 240Ω ZQ calibration — was suppressed pre-fix
+        "u1_C_vpp",   // VPP pump decoupling — was suppressed pre-fix
+        "u1_C_vref",  // VREFCA bypass — was suppressed pre-fix
+        "u1_C_vdd",   // core decoupling
+        "u1_C_bulk",  // bulk reservoir
+        "u1_C_vddq",  // I/O decoupling
+    ];
+    for c in want_children.iter() {
+        if !inst_names.iter().any(|n| n == c) {
+            let mut sorted = inst_names.clone(); sorted.sort();
+            fail(&format!("imported full-pipeline missing expansion child `{}`. Instances: {:?}", c, sorted));
+        }
+    }
+    // No stray leaked passive-entity definitions as instances.
+    if inst_names.iter().any(|n| n == "Cap" || n == "Res") {
+        fail("imported full-pipeline leaked a bare Cap/Res entity as an instance");
+    }
+    println!("✓ imported SDRAM through full synthesize_from_source: all 6 datasheet support components materialise (ZQ + VPP + VREFCA + 3× decoupling), no leaked passives");
 
     println!("\n✓ DDR4 stdlib validation: PASS");
 }
