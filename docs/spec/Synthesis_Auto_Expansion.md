@@ -13,8 +13,10 @@
 >   4. **Parametric entities** (one entity, many SKUs).
 >   5. **Function aliases** (logical pin names like `gpio0`).
 >
-> Out of scope (v0.9b+): abstract entities + family{} blocks for
-> usage-driven SKU resolution. Sketched in §8.
+> Plus two layers built atop them: abstract entities + family{} blocks
+> for usage-driven SKU resolution (§8, v0.9b, landed), and typed
+> **layout intents** on expansion children that hand placement hints to
+> P&R (§6a, landed 2026-05-30).
 
 ## 1. Motivation
 
@@ -377,6 +379,88 @@ When the synthesizer processes a connection `instance.X`:
 - `bhdl-synthesizer/src/lib.rs::add_pins_for_component` (where
   alias-attribute stamping happens during module creation).
 
+## 6a. Layout intents on expansion children (P&R handoff, landed 2026-05-30)
+
+An expansion-block component declaration may carry a **layout intent**
+— a typed, datasheet-rooted hint about *where the part must sit*, for
+the place-&-route tool to consume. This is the synth→P&R handoff: the
+chip's stdlib author knows `C_vcc` is a high-frequency bypass cap that
+must hug the VCC pin with a tight return loop; that knowledge rides
+from the `.bhdl` source to the netlist as a typed value, instead of
+being re-inferred from connectivity.
+
+### 6a.1 Source form
+
+The intent attaches to a **standalone component declaration** via a
+`for INTENT(...)` clause; the wiring is written separately and
+references the instance it creates:
+
+```bhdl
+expansion {
+    C_vcc: Cap(100nF) for high_freq_bypass(rail: VCC, return: GND1, loop_area_max: 1.5mm2);
+    VCC -> C_vcc.1;  C_vcc.2 -> GND1;
+}
+```
+
+The intent vocabulary (`high_freq_bypass`, `bulk_reservoir`,
+`analog_ref_filter`, `crystal_load_cap`, `switching_input_filter`,
+`feedback_divider`, `snubber`, `series_termination`, `gate_resistor`,
+`pullup`, `pulldown`, `current_sense`) and its parameter signatures are
+the P&R contract, specified in
+`bhdl-pnr/docs/intent_vocabulary_v0.md` §4. Pin-valued params (`rail:
+VCC`) reference the host entity's pins by name; resolution to a flat
+board net happens at P&R lowering time, not here.
+
+Area literals use the canonical ASCII form `1.5mm2` (the lexer also
+accepts `mm²`).
+
+### 6a.2 Threading
+
+1. **Parser** — `for INTENT(...)` parses to an `INTENT_CLAUSE`/
+   `INTENT_CALL` subtree on the `COMPONENT_INST` node (it attaches at
+   the component-decl position inside `expansion { }`, alongside the
+   existing flow/`@net` positions).
+2. **Analyzer** — `lower_layout_intent` reads the `INTENT_CALL` into a
+   typed `bhdl_common::intent::vocabulary::LayoutIntent`; a
+   `COMPONENT_INST` pass over the expansion block attaches it to the
+   matching `ExpansionInstance` (merging with any inline-flow-created
+   instance of the same name).
+3. **Synthesizer (Phase 4.5)** — when the expansion interpreter
+   materializes the child, it copies the intents onto the netlist
+   `Instance.layout_intents: Vec<LayoutIntent>`.
+
+P&R reads that field directly — no stringly attribute, no boundary
+re-parse. The same field is the shared "which nets are critical"
+signal for placement, routing, and (future) Glacier Phase-1 budget
+emission.
+
+### 6a.3 Relationship to the other mechanisms
+
+- **Distinct from the simulation-lifecycle intent** in
+  `bhdl-common/src/intent.rs` (`IntentCall`/`SimMode`), which drives
+  cap *sizing* from simulated currents. `LayoutIntent` drives *placement*.
+  Same component can carry both (one picks the value, the other places
+  the copper).
+- **Distinct from interface `constraints { }`** (`Interfaces.md` §13),
+  which carries protocol net/signal rules (impedance, length-match) as
+  module attributes. Layout intents are support-passive *placement*;
+  interface constraints are signal-net *routing*. Both feed the same
+  P&R constraint catalog from different producers.
+- **Composes with conditional gating (§3):** a gated-off child takes
+  its intent with it (no orphan constraints reach P&R).
+- **v0 analyzer lowering** covers the three decoupling kinds
+  (`high_freq_bypass`, `bulk_reservoir`, `analog_ref_filter`) used by
+  the ATmega milestone; other vocabulary kinds warn-and-degrade until
+  their stdlib use appears (single match-arm extension point in
+  `lower_layout_intent`).
+
+End-to-end proof: `atmega328p.bhdl`'s annotated decoupling caps
+materialize with typed intents (`test_layout_intent_thread`), and P&R
+places them within their proximity targets through the full
+`place_and_route` pipeline (`bhdl-pnr/tests/atmega_decoupling_intent.rs`
+`full_pipeline_places_caps_near_pins`). See
+`bhdl-pnr/docs/handshake_notes.md` for the cross-session contract.
+
 ## 7. How the mechanisms compose
 
 The five mechanisms are designed to compose. A single chip
@@ -684,6 +768,18 @@ re-running the preprocessor.
   parametric + expansion for the real imported-entity path (the
   empty-module symptom was specific to inline entity defs, an
   unusual pattern). Closes task #98. (`c264bb0`)
+- **2026-05-30 (layout intents → P&R, §6a)** — `for INTENT(...)` on an
+  expansion component-decl threads a typed
+  `LayoutIntent` (`bhdl-common::intent::vocabulary`) from `.bhdl`
+  source through the analyzer to `Instance.layout_intents` on the
+  materialized child. The synth-side half of the P&R intent handshake
+  (`bhdl-pnr/docs/handshake_notes.md` §8); P&R reads the typed field
+  directly and lowers it to placement constraints. Parser gained the
+  intent clause on the component-decl position + `mm2`/`mm²` area
+  units; a latent named-param trivia bug was fixed in passing. ATmega
+  decoupling annotated; verified end-to-end through the full
+  `place_and_route` (P&R `full_pipeline_places_caps_near_pins`).
+  Closes tasks #99, #100. (`4464f7a`, `d4913a2`)
 
 ## 10. Implementation file index
 
@@ -697,6 +793,9 @@ re-running the preprocessor.
 | Alias parsing | `bhdl-parser/src/top_level.rs::parse_entity_aliases_block` |
 | Alias resolution | `bhdl-synthesizer/src/hierarchical_connectivity.rs::resolve_field_binding_alias` |
 | `is_power_rail_pin` heuristic | `bhdl-synthesizer/src/expansion_interpreter.rs` |
+| Layout-intent vocabulary (shared type) | `bhdl-common/src/intent/vocabulary.rs::LayoutIntent` |
+| Layout-intent lowering (§6a) | `bhdl-analyzer/src/lib.rs::lower_layout_intent` + `parse_expansion_component_inst` |
+| Layout-intent attach on instance | `bhdl-synthesizer/src/expansion_interpreter.rs::expand_one_instance` → `Instance.layout_intents` |
 | Reference stdlib entities | `bhdl-stdlib/actives/atmega328p.bhdl`, `bhdl-stdlib/actives/stm32f103cx.bhdl`, `bhdl-stdlib/actives/ddr4_sdram.bhdl`, `bhdl-stdlib/power/lm317.bhdl` |
 | DDR4 interface stack | `bhdl-stdlib/interfaces/ddr4.bhdl` (DiffPair, DDR4Data, DDR4Ca, parametric `DDR4<byte_lanes>`) |
-| Reference tests | `bhdl-synthesizer/src/bin/test_{lm317_5v,atmega328p_decoupling,conditional_expansion,gpio_aliases,stm32_variant_sku,arduino_class_board,ddr4_stdlib}.rs` |
+| Reference tests | `bhdl-synthesizer/src/bin/test_{lm317_5v,atmega328p_decoupling,conditional_expansion,gpio_aliases,stm32_variant_sku,arduino_class_board,ddr4_stdlib,layout_intent_thread}.rs` |
