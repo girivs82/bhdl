@@ -543,7 +543,9 @@ and no manual `PlacementRecipe`.
 ## 9. Conflicts and diagnostics
 
 The constraint set is a flat `Vec<Constraint>`; conflicts are detected
-by a dedicated pass (`bhdl-pnr/src/constraint/conflicts.rs`, TBD) before
+by a dedicated pass (`bhdl-pnr/src/constraint/conflicts.rs`,
+**implemented** — run from `place_and_route` before the placement loop,
+logging errors/warnings) before
 placement begins:
 
 - **Same-axis contradictions.** `Proximity(a, b, ≤ 2mm)` +
