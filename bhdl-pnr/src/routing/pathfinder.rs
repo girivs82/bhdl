@@ -25,13 +25,17 @@ pub fn pathfinder_route(
 ) -> Vec<Route> {
     let mut routes: Vec<Route> = nets.iter().map(|n| Route::empty(n.id)).collect();
 
-    // Sort nets by priority (high-weight first)
+    // Sort nets by priority (high effective-weight first). Effective
+    // weight = base net weight + constraint criticality, so diff pairs /
+    // impedance-controlled / clock / length-matched nets route first and
+    // get the least-congested paths (negotiated-congestion routers are
+    // order-sensitive). Un-annotated boards see no change (zero bonus).
+    let crit = crate::routing::criticality::net_criticality(board);
     let mut net_order: Vec<usize> = (0..nets.len()).collect();
     net_order.sort_by(|&a, &b| {
-        nets[b]
-            .weight
-            .partial_cmp(&nets[a].weight)
-            .unwrap_or(Ordering::Equal)
+        let wa = crate::routing::criticality::effective_weight(&nets[a], &crit);
+        let wb = crate::routing::criticality::effective_weight(&nets[b], &crit);
+        wb.partial_cmp(&wa).unwrap_or(Ordering::Equal)
     });
 
     let comp_idx: HashMap<ComponentId, usize> = board
