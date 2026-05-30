@@ -126,17 +126,31 @@ impl<'t> Parser<'t> {
     }
     
     /// Parse interface instance: name: TypeName(params);
+    ///
+    /// Also handles the component-declaration form used inside
+    /// `expansion { }` blocks with an optional trailing P&R layout
+    /// intent clause:
+    ///
+    ///     C_vcc: Cap(100nF) for high_freq_bypass(rail: VCC, ...);
+    ///
+    /// The `for INTENT(...)` clause attaches to the COMPONENT_INST node
+    /// so the analyzer can lower it to a typed `LayoutIntent`.
     fn parse_interface_instance(&mut self) {
         // In v2.0, interface instances are just named type instantiations
         self.builder.start_node(SyntaxKind::COMPONENT_INST.into());
         self.expect(SyntaxKind::IDENT); // Instance name
         self.expect(SyntaxKind::COLON);
         self.expect(SyntaxKind::IDENT); // Type name
-        
+
         if self.peek() == Some(SyntaxKind::L_PAREN) {
             self.parse_param_list();
         }
-        
+
+        // Optional P&R layout-intent clause (expansion-block form).
+        if self.has_intent_clause() {
+            self.parse_intent_clause();
+        }
+
         self.expect(SyntaxKind::SEMI);
         self.builder.finish_node();
     }

@@ -148,3 +148,7 @@ rhai = { version = "1.18", default-features = false, features = ["std", "sync"] 
 
 [dev-dependencies]
 tempfile = "3.0"
+
+[[bin]]
+name = "test_layout_intent_thread"
+path = "src/bin/test_layout_intent_thread.rs"

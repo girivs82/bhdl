@@ -456,6 +456,15 @@ fn expand_one_instance(
 
         let inst_id = create_instance(netlist, &child_name, mod_id, &attr_pairs);
 
+        // Carry the expansion child's typed P&R layout intents onto the
+        // materialized netlist instance, so bhdl-pnr reads them directly
+        // off `Instance.layout_intents` (no string-lift). (Handshake §8.3.)
+        if !exp_inst.layout_intents.is_empty() {
+            if let Some(inst) = netlist.instances.get_mut(inst_id) {
+                inst.layout_intents = exp_inst.layout_intents.clone();
+            }
+        }
+
         // Create pin instances for the child
         let pin_instances = create_child_pin_instances(netlist, inst_id)?;
 
@@ -1418,6 +1427,7 @@ mod tests {
                 ("c_out".to_string(), "470µF".to_string()),
                 ("diode_vf".to_string(), "0.5V".to_string()),
             ].into_iter().collect(),
+            layout_intents: Vec::new(),
         });
 
         // Create pin instances using netlist helper (same as production code)
@@ -1546,6 +1556,7 @@ mod tests {
             name: "ldo".to_string(),
             definition: mod_id,
             attributes: HashMap::new(),
+            layout_intents: Vec::new(),
         });
 
         let recipes: HashMap<String, ExpansionRecipe> = HashMap::new();

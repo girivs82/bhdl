@@ -233,7 +233,8 @@ fn map_token(token: LexerToken) -> SyntaxKind {
         
         // Length units
         LexerToken::MMUnit | LexerToken::UMUnicode | LexerToken::UMUnit | LexerToken::NMUnit | LexerToken::MILUnit |
-        
+        LexerToken::MM2Unit | LexerToken::MM2Unicode |
+
         // Additional units
         LexerToken::DbUnit | LexerToken::DbmUnit
         => SyntaxKind::UNIT_IDENTIFIER,

@@ -1537,6 +1537,36 @@ pub fn extract_expansion_recipes_with_overlay(
                     );
                 }
 
+                // Extract standalone component declarations carrying P&R
+                // layout intents (`C_vcc: Cap(100nF) for high_freq_bypass(...)`).
+                // These parse as COMPONENT_INST nodes (not CONNECTION_STMT),
+                // so the flow extractor above misses them; their wiring is
+                // written separately and references the instance declared
+                // here. Skip names already created by an inline flow form.
+                {
+                    use bhdl_ast::SyntaxKind;
+                    use rowan::ast::AstNode;
+                    for comp_node in expansion_block.syntax().children()
+                        .filter(|n| n.kind() == SyntaxKind::COMPONENT_INST)
+                    {
+                        if let Some(inst) = parse_expansion_component_inst(
+                            &comp_node, &local_entity_attrs,
+                        ) {
+                            if !recipe.instances.iter().any(|i| i.name == inst.name) {
+                                recipe.instances.push(inst);
+                            } else if let Some(existing) = recipe.instances.iter_mut()
+                                .find(|i| i.name == inst.name)
+                            {
+                                // Inline flow already created it; just merge
+                                // in the layout intents from the decl form.
+                                if existing.layout_intents.is_empty() {
+                                    existing.layout_intents = inst.layout_intents;
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Extract socket-pairing statements (`socket <held> in <socket>;`).
                 // Stored on the recipe; the synthesizer reads them after
                 // expansion and stamps `socketed_in = "<socket>"` on the
@@ -2038,6 +2068,10 @@ fn parse_expansion_element(
                     attributes: local_entity_attrs.get(comp_type)
                         .cloned()
                         .unwrap_or_default(),
+                    // Inline-flow instantiations carry no intent clause;
+                    // intents come via the standalone-decl form, merged in
+                    // the COMPONENT_INST pass. (See parse_expansion_component_inst.)
+                    layout_intents: Vec::new(),
                 };
 
                 let endpoint = pin.map(|p| ExpansionEndpoint::InstancePin(handle.to_string(), p));
@@ -2081,6 +2115,166 @@ fn parse_expansion_element(
 
     // Default: assume it's an entity pin (e.g., "GND", "VIN")
     (Some(ExpansionEndpoint::ParentPin(text.to_string())), None)
+}
+
+/// Extract a standalone component declaration inside an `expansion { }`
+/// block — the P&R-intent form:
+///
+///     C_vcc: Cap(100nF) for high_freq_bypass(rail: VCC, return: GND1, loop_area_max: 1.5mm2);
+///
+/// This parses as a COMPONENT_INST node (not a CONNECTION_STMT), so it
+/// isn't picked up by the flow-chain extractor. The wiring is written
+/// separately (`VCC -> C_vcc.1; C_vcc.2 -> GND1;`) and references the
+/// instance this declares. Returns the `ExpansionInstance` (with any
+/// `for INTENT(...)` lowered to typed `LayoutIntent`s), or `None` if the
+/// node doesn't have the `name: Type(...)` shape.
+fn parse_expansion_component_inst(
+    node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>,
+    local_entity_attrs: &std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+) -> Option<bhdl_common::ExpansionInstance> {
+    use bhdl_ast::SyntaxKind;
+
+    // COMPONENT_INST tokens: IDENT(name) COLON IDENT(type) PARAM_LIST(...) [INTENT_CLAUSE].
+    // Pull the first two IDENT tokens at the node's top level for name + type.
+    let idents: Vec<String> = node
+        .children_with_tokens()
+        .filter_map(|el| el.into_token())
+        .filter(|t| t.kind() == SyntaxKind::IDENT)
+        .map(|t| t.text().to_string())
+        .collect();
+    if idents.len() < 2 {
+        return None;
+    }
+    let name = idents[0].clone();
+    let component_type = idents[1].clone();
+
+    // Params: text inside the PARAM_LIST, comma-split (matches the
+    // flow-form extractor's convention of raw param-expression text).
+    let params: Vec<String> = node
+        .children()
+        .find(|n| n.kind() == SyntaxKind::PARAM_LIST)
+        .map(|pl| {
+            let t = pl.text().to_string();
+            let t = t.trim().trim_start_matches('(').trim_end_matches(')').trim();
+            if t.is_empty() {
+                Vec::new()
+            } else {
+                t.split(',').map(|s| s.trim().to_string()).collect()
+            }
+        })
+        .unwrap_or_default();
+
+    // Layout intents from any INTENT_CLAUSE → INTENT_CALL child.
+    let mut layout_intents = Vec::new();
+    for clause in node.children().filter(|n| n.kind() == SyntaxKind::INTENT_CLAUSE) {
+        if let Some(call) = clause.children().find(|n| n.kind() == SyntaxKind::INTENT_CALL) {
+            if let Some(intent) = lower_layout_intent(&call) {
+                layout_intents.push(intent);
+            }
+        }
+    }
+
+    Some(bhdl_common::ExpansionInstance {
+        name,
+        component_type,
+        params,
+        attributes: local_entity_attrs.get(&idents[1]).cloned().unwrap_or_default(),
+        layout_intents,
+    })
+}
+
+/// Lower an `INTENT_CALL` syntax node to a typed
+/// [`bhdl_common::intent::vocabulary::LayoutIntent`].
+///
+/// Reads the intent name + named parameters and constructs the matching
+/// variant. Pin-valued params become `PinRef::HostPin` (resolved later,
+/// at P&R lowering time — handshake §8.3). Distance/area params are
+/// parsed to `f32`; when omitted, the vocabulary `defaults` fill in.
+/// Returns `None` for an unrecognized intent name (warn-and-degrade —
+/// the synth side simply doesn't attach it; P&R never sees a bad value).
+///
+/// v0: the three decoupling/power-integrity kinds needed for the ATmega
+/// milestone are lowered. The remaining vocabulary kinds parse but lower
+/// to `None` until their stdlib use appears (the match arm is the single
+/// extension point).
+fn lower_layout_intent(
+    call: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>,
+) -> Option<bhdl_common::intent::vocabulary::LayoutIntent> {
+    use bhdl_common::intent::vocabulary::{defaults, LayoutIntent, PinRef};
+    use bhdl_ast::SyntaxKind;
+
+    // Intent name = first IDENT token directly under INTENT_CALL.
+    let name = call
+        .children_with_tokens()
+        .filter_map(|el| el.into_token())
+        .find(|t| t.kind() == SyntaxKind::IDENT)?
+        .text()
+        .to_string();
+
+    // Collect named params: name → raw value text (trimmed).
+    let mut named: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    if let Some(params) = call.children().find(|n| n.kind() == SyntaxKind::INTENT_PARAMS) {
+        for np in params.children().filter(|n| n.kind() == SyntaxKind::INTENT_NAMED_PARAM) {
+            // INTENT_NAMED_PARAM: IDENT COLON <value-expr>. The key is the
+            // first IDENT; the value is everything after the colon.
+            let key = np
+                .children_with_tokens()
+                .filter_map(|el| el.into_token())
+                .find(|t| t.kind() == SyntaxKind::IDENT)
+                .map(|t| t.text().to_string());
+            let full = np.text().to_string();
+            let value = full.split_once(':').map(|(_, v)| v.trim().to_string());
+            if let (Some(k), Some(v)) = (key, value) {
+                named.insert(k, v);
+            }
+        }
+    }
+
+    // Helpers.
+    let pin = |k: &str| -> Option<PinRef> {
+        named.get(k).map(|s| PinRef::HostPin(s.trim().to_string()))
+    };
+    // Parse the leading numeric portion of a value like "1.5mm2" / "2mm".
+    let num = |k: &str| -> Option<f32> {
+        named.get(k).and_then(|s| {
+            let digits: String = s
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-')
+                .collect();
+            digits.parse::<f32>().ok()
+        })
+    };
+
+    match name.as_str() {
+        "high_freq_bypass" => Some(LayoutIntent::HighFreqBypass {
+            rail: pin("rail")?,
+            return_pin: pin("return")?,
+            loop_area_max_mm2: num("loop_area_max")?,
+            proximity_max_mm: num("proximity_max")
+                .unwrap_or(defaults::HIGH_FREQ_BYPASS_PROXIMITY_MM),
+        }),
+        "bulk_reservoir" => Some(LayoutIntent::BulkReservoir {
+            rail: pin("rail")?,
+            return_pin: pin("return")?,
+            proximity_max_mm: num("proximity_max")
+                .unwrap_or(defaults::BULK_RESERVOIR_PROXIMITY_MM),
+        }),
+        "analog_ref_filter" => Some(LayoutIntent::AnalogRefFilter {
+            ref_pin: pin("ref_pin")?,
+            return_pin: pin("return")?,
+            proximity_max_mm: num("proximity_max")
+                .unwrap_or(defaults::ANALOG_REF_FILTER_PROXIMITY_MM),
+        }),
+        other => {
+            // Recognized-by-vocabulary but not yet lowered here, or an
+            // unknown kind. Warn-and-degrade: attach nothing.
+            log::warn!(
+                "expansion intent `{}` not lowered (no v0 analyzer recipe yet); skipping",
+                other
+            );
+            None
+        }
+    }
 }
 
 /// Extract placement recipes from all entity definitions in the source file.

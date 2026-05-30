@@ -175,6 +175,12 @@ pub enum LexerToken {
     #[token("um", priority = 4)] UMUnit,
     #[token("nm", priority = 4)] NMUnit,
     #[token("mil", priority = 4)] MILUnit,
+    // Area units (for P&R loop-area / footprint constraints). `mm2` is
+    // the canonical ASCII form (handshake §8.3); `mm²` accepted as an
+    // alias. Priority 5 > `mm`'s 4 so `1.5mm2` lexes as NUMBER + MM2Unit
+    // rather than NUMBER + MMUnit + NUMBER.
+    #[token("mm2", priority = 5)] MM2Unit,
+    #[token("mm²", priority = 5)] MM2Unicode,
     
     // Additional units
     #[token("dB", priority = 4)] DbUnit,

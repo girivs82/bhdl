@@ -176,11 +176,22 @@ entity ATmega328P_DIP28(part_no: string = "ATMEGA328P-PU") {
     //   - Crystal load caps : PB6/PB7 are also port pins.
     expansion {
         // Always-on decoupling network (datasheet "Typical
-        // Application").
-        VCC  -> C_vcc:  Cap(100nF).1;  C_vcc.2  -> GND1;
-        VCC  -> C_bulk: Cap(10µF).1;   C_bulk.2 -> GND1;
-        AVCC -> C_avcc: Cap(100nF).1;  C_avcc.2 -> GND2;
-        AREF -> C_aref: Cap(100nF).1;  C_aref.2 -> GND2;
+        // Application"), annotated with P&R layout intents so the
+        // placer puts each cap adjacent to its supply pin with a
+        // tight rail→return loop. The intent rides on the standalone
+        // component declaration; the wiring lines below reference the
+        // instance it creates. (See intent_vocabulary_v0.md §5.)
+        C_vcc:  Cap(100nF) for high_freq_bypass(rail: VCC,  return: GND1, loop_area_max: 1.5mm2);
+        VCC -> C_vcc.1;  C_vcc.2 -> GND1;
+
+        C_bulk: Cap(10µF) for bulk_reservoir(rail: VCC, return: GND1, proximity_max: 10mm);
+        VCC -> C_bulk.1; C_bulk.2 -> GND1;
+
+        C_avcc: Cap(100nF) for high_freq_bypass(rail: AVCC, return: GND2, loop_area_max: 1.5mm2);
+        AVCC -> C_avcc.1; C_avcc.2 -> GND2;
+
+        C_aref: Cap(100nF) for analog_ref_filter(ref_pin: AREF, return: GND2);
+        AREF -> C_aref.1; C_aref.2 -> GND2;
 
         // I²C pullups on PC4 (SDA) and PC5 (SCL). Gated on the
         // board wiring those pins — see compute_live_children.
