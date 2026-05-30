@@ -5,8 +5,11 @@
 //! placer can satisfy proximity and minimize loop area alongside its
 //! existing wirelength/density/cohesion terms.
 //!
-//! Sign convention matches the rest of the placer: a `Forces` entry is a
-//! *descent direction* — the way to move a component to reduce cost.
+//! Sign convention matches the rest of the placer (`compute_wirelength`):
+//! a `Forces` entry is the **cost gradient**, and `optimizer::adam_step`
+//! moves each component `x -= lr · gradient` (descends). So these
+//! functions return gradients, NOT descent directions — getting this
+//! backwards pushes components away from their targets.
 //!
 //! Only translation gradients (dx, dy) are produced in v0; rotation
 //! (d_theta) is left at zero. Loop area responds well to translation
@@ -88,20 +91,23 @@ pub fn compute_proximity_forces(board: &Board) -> Forces {
         // Quadratic-style magnitude (∝ overshoot) × hardness weight.
         let mag = weight_of(hardness) * overshoot;
 
-        // Direction to move `a`: toward b if attracting, away if keeping out.
+        // GRADIENT (not descent dir): for attraction, moving `a` toward b
+        // *reduces* cost, so the gradient on `a` points AWAY from b
+        // (`-ux`); adam_step then descends (`x -= lr·grad`) → a moves
+        // toward b. KeepAway is the opposite sign.
         let dir = if attract { 1.0 } else { -1.0 };
-        let (fax, fay) = (dir * mag * ux, dir * mag * uy);
+        let (gax, gay) = (-dir * mag * ux, -dir * mag * uy);
 
         if let Some(&ia) = idx.get(&owner(a)) {
             if board.components[ia].placement.is_free() {
-                f.dx[ia] += fax;
-                f.dy[ia] += fay;
+                f.dx[ia] += gax;
+                f.dy[ia] += gay;
             }
         }
         if let Some(&ib) = idx.get(&owner(b)) {
             if board.components[ib].placement.is_free() {
-                f.dx[ib] -= fax;
-                f.dy[ib] -= fay;
+                f.dx[ib] -= gax;
+                f.dy[ib] -= gay;
             }
         }
     }
@@ -159,7 +165,8 @@ pub fn compute_loop_area_forces(board: &Board) -> Forces {
         }
         let sgn = if signed >= 0.0 { 1.0 } else { -1.0 };
         // d|A|/d(x_i) = 0.5·sgn·(y_{i+1} − y_{i−1}); d|A|/d(y_i) = 0.5·sgn·(x_{i−1} − x_{i+1}).
-        // Descent direction is the negative gradient, scaled by weight·overshoot.
+        // Emit the GRADIENT (scaled by weight·overshoot); adam_step
+        // descends (`x -= lr·grad`), shrinking the area.
         let scale = weight_of(hardness) * overshoot;
         for i in 0..m {
             let prev = pts[(i + m - 1) % m];
@@ -170,9 +177,8 @@ pub fn compute_loop_area_forces(board: &Board) -> Forces {
             let comp = loop_pins[i].component;
             if let Some(&ci) = idx.get(&comp) {
                 if board.components[ci].placement.is_free() {
-                    // Move opposite the area gradient (shrink area).
-                    f.dx[ci] += -scale * g_x;
-                    f.dy[ci] += -scale * g_y;
+                    f.dx[ci] += scale * g_x;
+                    f.dy[ci] += scale * g_y;
                 }
             }
         }
@@ -245,9 +251,10 @@ mod tests {
         }];
         let board = Board { constraints: cons, ..board };
         let f = compute_proximity_forces(&board);
-        // A is left of B and too far → A should be pushed +x (toward B),
-        // B pushed −x (toward A).
-        assert!(f.dx[0] > 0.0, "A should move +x toward B, got {}", f.dx[0]);
-        assert!(f.dx[1] < 0.0, "B should move -x toward A, got {}", f.dx[1]);
+        // Forces are GRADIENTS; adam_step descends (x -= lr·grad). A is
+        // left of B and too far → to move A toward B (+x), A's gradient
+        // must be NEGATIVE in x; B's gradient positive.
+        assert!(f.dx[0] < 0.0, "A's gradient should be -x (descends toward B), got {}", f.dx[0]);
+        assert!(f.dx[1] > 0.0, "B's gradient should be +x (descends toward A), got {}", f.dx[1]);
     }
 }

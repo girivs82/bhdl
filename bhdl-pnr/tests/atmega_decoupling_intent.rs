@@ -10,11 +10,13 @@
 //! `constraint_model_v0.md` §8: intent → constraint → cost term → correct
 //! geometry, with no board-level annotation and no `PlacementRecipe`.
 //!
-//! The test drives the intent forces in a plain gradient loop rather than
-//! the full `place_and_route` pipeline, to isolate the intent mechanism
-//! from orthogonal placer machinery (block-init, progressive freezer,
-//! legalization). Full-pipeline integration is tracked separately — see
-//! the note on the pre-existing Fixed-component overlap-resolution bug.
+//! Two milestones: (1) the isolated gradient loop, which checks the
+//! intent mechanism alone (exact convergence to the proximity targets);
+//! and (2) the COMPLETE `place_and_route` pipeline (block-init +
+//! progressive freezer + intent forces + legalization), which proves the
+//! caps still land near their pins end-to-end and the anchored MCU
+//! doesn't drift. Both pass; the full-pipeline result is looser (a few mm
+//! vs exact) because block-init/density/freezer add noise.
 
 use bhdl_common::intent::vocabulary::{LayoutIntent, PinRef};
 use bhdl_pnr::constraint::eval::LayoutSnapshot;
@@ -22,7 +24,7 @@ use bhdl_pnr::constraint::PinSel;
 use bhdl_pnr::intent::lower_board_intents;
 use bhdl_pnr::constraint::eval::eval_all;
 use bhdl_pnr::placement::intent_forces::{compute_loop_area_forces, compute_proximity_forces};
-use bhdl_pnr::types::*;
+use bhdl_pnr::{place_and_route, types::*};
 use slotmap::SlotMap;
 
 struct Ids {
@@ -207,12 +209,14 @@ fn drive_intent_forces(board: &mut Board, iters: usize, lr: f64) {
             if !c.placement.is_free() {
                 continue;
             }
-            // Normalize per-component step so far-away caps don't overshoot.
+            // Forces are GRADIENTS — descend (move opposite the gradient),
+            // matching optimizer::adam_step. Normalize the step so far-away
+            // caps don't overshoot.
             let (dx, dy) = (f.dx[i], f.dy[i]);
             let mag = (dx * dx + dy * dy).sqrt().max(1e-9);
             let step = lr.min(mag); // cap the step length at lr
-            c.x += step * dx / mag;
-            c.y += step * dy / mag;
+            c.x -= step * dx / mag;
+            c.y -= step * dy / mag;
         }
     }
 }
@@ -262,4 +266,42 @@ fn intent_forces_place_caps_at_their_pins() {
         summary.hard_violations.len(),
         summary.hard_violations
     );
+}
+
+/// Full-pipeline milestone: run the COMPLETE `place_and_route`
+/// (block-init + progressive freezer + intent forces + legalization), not
+/// the isolated gradient loop, and assert the decoupling caps still land
+/// near their specific host pins. This was previously blocked by the
+/// Fixed-component overlap-resolution drift bug (now fixed: overlap
+/// resolution treats `is_fixed()` like frozen, so the anchored MCU no
+/// longer drifts and trips legalization).
+#[test]
+fn full_pipeline_places_caps_near_pins() {
+    let (mut board, targets) = build_board();
+    let report = lower_board_intents(&mut board);
+    assert!(report.constraints_emitted >= 7);
+
+    let config = PnrConfig { max_iterations: 500, ..PnrConfig::default() };
+    let result = place_and_route(board, config, 0).expect("place_and_route");
+    let placed = &result.board;
+
+    // The anchored MCU must NOT have drifted (the bug that used to trip
+    // legalization's Fixed-component assert).
+    let mcu = placed.components.iter().find(|c| c.name == "mcu").unwrap();
+    if let PlacementConstraint::Fixed { x, y, .. } = &mcu.placement {
+        assert!((mcu.x - x).abs() < 1e-6 && (mcu.y - y).abs() < 1e-6,
+            "Fixed MCU drifted to ({}, {})", mcu.x, mcu.y);
+    }
+
+    // Each intent-flagged cap lands near its specific host pin. The full
+    // pipeline's block-init + density + freezer add noise the isolated
+    // loop doesn't, so allow generous coarse-placement slack — the point
+    // is the intent forces dominate placement, not exact convergence.
+    for (cap_id, pin) in &targets {
+        let d = dist(placed, *cap_id, *pin);
+        let name = &placed.components.iter().find(|c| c.id == *cap_id).unwrap().name;
+        eprintln!("{name}: {d:.2}mm from target pin (full pipeline)");
+        assert!(d < 12.0,
+            "{name}: expected near its target pin through the full pipeline, got {d:.2}mm");
+    }
 }
