@@ -105,7 +105,7 @@ pub fn build_board(
     }
 
     // 3. Build net lookup tables (mirrors bhdl-schematic/src/extract.rs:60-95)
-    let (pin_inst_to_net, _inst_pin_to_net) = build_net_lookups(netlist);
+    let (pin_inst_to_net, inst_pin_to_net) = build_net_lookups(netlist);
 
     // 4. Build fixed placement lookup
     let fixed_placements: HashMap<String, &FixedPlacement> = config
@@ -247,6 +247,12 @@ pub fn build_board(
             y: 0.0,
             theta: 0.0,
             density_inflation: 1.0,
+            // Typed layout intents flow directly off the netlist instance
+            // (synth step 4.1 landed: Phase 4.5 copies ExpansionInstance
+            // intents onto Instance.layout_intents — no string-lift,
+            // handshake §8.3). The intent-lowering pass turns these into
+            // geometric constraints; empty for un-annotated components.
+            layout_intents: instance.layout_intents.clone(),
         });
     }
 
@@ -313,6 +319,8 @@ pub fn build_board(
             required_trace_width_mm: trace_width,
             layer_constraint,
             intent,
+            // Board-level @net intents (rare); populated by synth step 4.1.
+            layout_intents: Vec::new(),
         });
     }
 
@@ -424,8 +432,27 @@ pub fn build_board(
 
     let board_config = BoardConfig {
         outline,
+        // Courtyard keepout (per side) follows the density level the
+        // footprints were generated at.
+        courtyard_excess_mm: config.density_level.courtyard_excess_mm(),
         ..config.board_config
     };
+
+    // Interface constraints: parse the synth side's `intf_const__*` module
+    // attributes (shipped v0.8) into typed net/signal constraints, with
+    // live pin-path→NetId resolution. The expansion-intent half is added
+    // later by `intent::lower_board_intents` (it appends to this vec).
+    let (iface_constraints, iface_diags) =
+        extract_interface_constraints(netlist, &id_map, &inst_pin_to_net);
+    for d in &iface_diags {
+        log::warn!("interface constraints: {d}");
+    }
+    if !iface_constraints.is_empty() {
+        log::info!(
+            "interface constraints: {} from intf_const__* attributes",
+            iface_constraints.len()
+        );
+    }
 
     Ok(Board {
         config: board_config,
@@ -434,10 +461,70 @@ pub fn build_board(
         nets,
         groups,
         placement_recipes: std::collections::HashMap::new(), // populated by caller
+        // Net/signal constraints from interface `intf_const__*` attributes
+        // (above); expansion-intent constraints appended by
+        // `intent::lower_board_intents`.
+        constraints: iface_constraints,
     })
 }
 
 // ── Net lookup tables ────────────────────────────────────────────────
+
+/// Parse every instance's `intf_const__*` module attributes into typed
+/// net/signal constraints, resolving dotted leaf pin-paths
+/// (`ddr.lane0.DQ0`) to P&R `NetId`s.
+///
+/// Resolution chain: instance + pin-path → module pin (by name) →
+/// `inst_pin_to_net` → `NlNetId` → `id_map` → `NetId`. Paths that don't
+/// resolve are dropped with a diagnostic (warn-and-degrade).
+fn extract_interface_constraints(
+    netlist: &Netlist,
+    id_map: &IdMap,
+    inst_pin_to_net: &HashMap<(InstanceId, NlPinId), NlNetId>,
+) -> (Vec<crate::constraint::Constraint>, Vec<String>) {
+    use crate::intent::interface_constraints::{
+        lower_interface_constraints, parse_interface_attrs,
+    };
+
+    let mut all = Vec::new();
+    let mut diags = Vec::new();
+
+    for (inst_id, instance) in netlist.instances.iter() {
+        let module = match netlist.modules.get(instance.definition) {
+            Some(m) => m,
+            None => continue,
+        };
+        if module.attributes.is_empty() {
+            continue;
+        }
+        let attrs: Vec<(&str, &str)> = module
+            .attributes
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        let (parsed, pdiags) = parse_interface_attrs(attrs.iter().copied());
+        diags.extend(pdiags);
+        if parsed.is_empty() {
+            continue;
+        }
+
+        // Resolver: dotted leaf pin-path → NetId, scoped to this instance.
+        let resolve = |path: &str| -> Option<NetId> {
+            let pin_def = module.pins.iter().copied().find(|&pid| {
+                netlist.pins.get(pid).map(|p| p.name == path).unwrap_or(false)
+            })?;
+            let nl_net = inst_pin_to_net.get(&(inst_id, pin_def))?;
+            let idx = id_map.net_to_idx.get(nl_net)?;
+            id_map.net_ids.get(*idx).copied()
+        };
+
+        let (cons, ldiags) = lower_interface_constraints(&parsed, &instance.name, &resolve);
+        all.extend(cons);
+        diags.extend(ldiags);
+    }
+
+    (all, diags)
+}
 
 /// Build lookup tables mapping connection points to net IDs.
 /// Mirrors bhdl-schematic/src/extract.rs:60-95.

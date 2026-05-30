@@ -987,6 +987,18 @@ async fn run_layout(
     if !board.placement_recipes.is_empty() {
         println!("  {} Placement recipes: {} entities", "✓".green(), board.placement_recipes.len());
     }
+    // Lower expansion/board layout intents into geometric constraints.
+    // No-op for un-annotated boards; emits proximity/loop-area constraints
+    // for components carrying `for INTENT(...)` annotations.
+    let lowering = bhdl_pnr::intent::lower_board_intents(&mut board);
+    if lowering.constraints_emitted > 0 {
+        println!(
+            "  {} Intent constraints: {} from {} annotated components",
+            "✓".green(),
+            lowering.constraints_emitted,
+            lowering.components_with_intent
+        );
+    }
     println!("  {} Board: {} components, {} nets, {} groups",
         "✓".green(), board.components.len(), board.nets.len(), board.groups.len());
 

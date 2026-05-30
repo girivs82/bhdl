@@ -24,8 +24,16 @@ pub struct Board {
     pub components: Vec<Component>,
     pub nets: Vec<PnrNet>,
     pub groups: Vec<FunctionalGroup>,
-    /// Placement recipes from stdlib (vendor datasheet layout recommendations)
+    /// Placement recipes from stdlib (vendor datasheet layout recommendations).
+    /// The *rigid* placement form: absolute (dx, dy, rotation) offsets copied
+    /// from datasheet reference layouts. When present, honored verbatim.
     pub placement_recipes: std::collections::HashMap<String, bhdl_common::PlacementRecipe>,
+    /// Layout constraints lowered from intent + interface constraints.
+    /// The *flexible* placement/routing form: proximity, loop area, length
+    /// match, etc. that the optimizer balances against other costs.
+    /// Populated by the intent-lowering pass after semantic build.
+    /// See `bhdl-pnr/docs/constraint_model_v0.md`.
+    pub constraints: Vec<crate::constraint::Constraint>,
 }
 
 // ── Board configuration ────────────────────────────────────────────────
@@ -42,6 +50,12 @@ pub struct BoardConfig {
     pub mounting_holes: Vec<MountingHole>,
     pub keepout_zones: Vec<KeepoutZone>,
     pub placement_regions: Vec<PlacementRegion>,
+    /// IPC-7351B courtyard excess (per side, mm) added to each
+    /// component's pad/body extent to form its keepout boundary. Set from
+    /// the density level at board build; consumed by overlap resolution
+    /// and available to `KeepAway` clearance. See `footprint_spec_v0.md`
+    /// §6.1.
+    pub courtyard_excess_mm: f64,
 }
 
 impl Default for BoardConfig {
@@ -56,7 +70,20 @@ impl Default for BoardConfig {
             mounting_holes: Vec::new(),
             keepout_zones: Vec::new(),
             placement_regions: Vec::new(),
+            courtyard_excess_mm: 0.25, // IPC nominal
         }
+    }
+}
+
+impl Component {
+    /// Courtyard rectangle extent (w, h) = pad/body extent + 2× the
+    /// board's per-side courtyard excess. The manufacturable keepout the
+    /// placer must respect between components.
+    pub fn courtyard_extent(&self, excess_mm: f64) -> (f64, f64) {
+        (
+            self.width_mm + 2.0 * excess_mm,
+            self.height_mm + 2.0 * excess_mm,
+        )
     }
 }
 
@@ -363,6 +390,13 @@ pub struct Component {
 
     // Congestion inflation factor (from routing feedback)
     pub density_inflation: f64,
+
+    /// Typed layout intents attached to this component (e.g. a decoupling
+    /// cap carrying `high_freq_bypass`). Read from the netlist instance's
+    /// `layout_intents` by the semantic preprocessor; lowered to
+    /// `Board.constraints` by the intent-lowering pass. Empty for most
+    /// components.
+    pub layout_intents: Vec<bhdl_common::intent::vocabulary::LayoutIntent>,
 }
 
 impl Component {
@@ -430,7 +464,15 @@ pub struct PnrNet {
     pub weight: f64,
     pub required_trace_width_mm: f64,
     pub layer_constraint: LayerConstraint,
+    /// Legacy string-form intent (from the older `intent_routing_constraints`
+    /// path). Retained during transition; superseded by typed constraints
+    /// in `Board.constraints`.
     pub intent: Option<String>,
+    /// Typed layout intents attached at board level to this net
+    /// (e.g. `@USB_DP for ...`). Most nets carry none; net/signal routing
+    /// constraints generally arrive via the interface-constraint boundary
+    /// (`intf_const__*`) rather than here.
+    pub layout_intents: Vec<bhdl_common::intent::vocabulary::LayoutIntent>,
 }
 
 impl PnrNet {
@@ -593,6 +635,11 @@ pub struct PlacementConfig {
     pub lambda_congestion: f64,
     pub lambda_via: f64,
     pub lambda_region: f64,
+    /// Weight on intent-derived proximity/keep-away forces (soft base).
+    /// Hard proximity is additionally scaled by a ramping Lagrangian λ.
+    pub lambda_proximity: f64,
+    /// Weight on intent-derived loop-area minimization forces.
+    pub lambda_loop_area: f64,
 }
 
 impl Default for PlacementConfig {
@@ -606,6 +653,8 @@ impl Default for PlacementConfig {
             lambda_congestion: 0.0, // starts at 0, grows after routing begins
             lambda_via: 0.0,
             lambda_region: 1.0,
+            lambda_proximity: 4.0,
+            lambda_loop_area: 1.0,
         }
     }
 }
