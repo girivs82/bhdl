@@ -14,10 +14,14 @@
 > `build_board` parses each instance's `intf_const__*` module attributes
 > and resolves dotted leaf pin-paths → `NetId` (via the netlist pin→net
 > map) into `Board.constraints` — verified non-regressing against the
-> full suite. Still pending: routing-side *evaluation* of these
-> (the router consumes them; `eval` returns `Unknown` pre-routing), the
-> §9 conflict pass, and a DDR4 board fixture that wires the *data* bus
-> (the current fixture wires only power, so data-net resolution isn't
+> full suite. The §9 conflict pass is **implemented**
+> (`constraint/conflicts.rs`, run before placement). Router-side
+> consumption has **begun**: criticality-driven net ordering
+> (`routing/criticality.rs`) routes constrained nets first. Still
+> pending: deeper routing-side *evaluation* (coupled diff-pair routing,
+> length matching, impedance-controlled width — `eval` returns `Unknown`
+> pre-routing for those), and a DDR4 board fixture that wires the *data*
+> bus (the current fixture wires only power, so data-net resolution isn't
 > exercised end-to-end yet — the parser/lowering/resolver chain is
 > unit-verified). Scope:
 > the typed constraint algebra that intent recipes emit and that
