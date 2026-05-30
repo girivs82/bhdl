@@ -855,6 +855,7 @@ mod tests {
             name: "reg33".to_string(),
             definition: reg_mod,
             attributes: reg_attrs,
+            layout_intents: Vec::new(),
         });
         let reg_pins = nl.create_pin_instances(reg_id).unwrap();
         nl.connect(vin_net, ConnectionPoint::PinInstance(reg_pins[0])).unwrap(); // VI
@@ -870,6 +871,7 @@ mod tests {
             name: "r_load33".to_string(),
             definition: res_mod,
             attributes: res_attrs,
+            layout_intents: Vec::new(),
         });
         let res_pins = nl.create_pin_instances(res_id).unwrap();
         nl.connect(v33_net, ConnectionPoint::PinInstance(res_pins[0])).unwrap();
@@ -934,6 +936,7 @@ mod tests {
             name: "c33".to_string(),
             definition: cap_mod,
             attributes: attrs,
+            layout_intents: Vec::new(),
         });
         let cap_pins = nl.create_pin_instances(cap_id).unwrap();
         nl.connect(v33, ConnectionPoint::PinInstance(cap_pins[0])).unwrap();
@@ -968,6 +971,7 @@ mod tests {
             name: "buck_C".to_string(),
             definition: cap_mod,
             attributes: attrs,
+            layout_intents: Vec::new(),
         });
         let cap_pins = nl.create_pin_instances(cap_id).unwrap();
         nl.connect(v33, ConnectionPoint::PinInstance(cap_pins[0])).unwrap();
@@ -1003,6 +1007,7 @@ mod tests {
             name: "auto_c_out_V3_3".to_string(),
             definition: cap_mod,
             attributes: attrs,
+            layout_intents: Vec::new(),
         });
         let cap_pins = nl.create_pin_instances(cap_id).unwrap();
         nl.connect(v33, ConnectionPoint::PinInstance(cap_pins[0])).unwrap();

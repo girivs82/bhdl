@@ -1456,18 +1456,21 @@ mod tests {
                 component_type: "Ind".to_string(),
                 params: vec!["l_value".to_string()],
                 attributes: HashMap::new(),
+                layout_intents: Vec::new(),
             },
             bhdl_common::ExpansionInstance {
                 name: "D".to_string(),
                 component_type: "Diode".to_string(),
                 params: vec!["diode_vf".to_string()],
                 attributes: HashMap::new(),
+                layout_intents: Vec::new(),
             },
             bhdl_common::ExpansionInstance {
                 name: "C_out".to_string(),
                 component_type: "Cap".to_string(),
                 params: vec!["c_out".to_string()],
                 attributes: HashMap::new(),
+                layout_intents: Vec::new(),
             },
         ];
         recipe.connections = vec![
