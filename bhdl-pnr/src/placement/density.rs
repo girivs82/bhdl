@@ -483,6 +483,7 @@ mod tests {
                 x, y,
                 theta: 0.0,
                 density_inflation: 1.0,
+                layout_intents: vec![],
             }
         }).collect();
 
@@ -496,6 +497,8 @@ mod tests {
             components: comps,
             nets: vec![],
             groups: vec![],
+            placement_recipes: Default::default(),
+            constraints: vec![],
         }
     }
 

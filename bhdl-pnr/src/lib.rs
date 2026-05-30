@@ -27,7 +27,10 @@
 //! let kicad_pcb = bhdl_pnr::output::kicad::export_kicad_pcb(&result.board, &result.routes);
 //! ```
 
+pub mod constraint;
 pub mod feedback;
+pub mod footprint;
+pub mod intent;
 pub mod ipc7351;
 pub mod legalization;
 pub mod output;
@@ -168,6 +171,20 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         forces.accumulate(&thermal_forces, config.placement.lambda_thermal);
         forces.accumulate(&region_forces, config.placement.lambda_region);
 
+        // Intent-derived constraint forces (proximity, loop area). Only
+        // computed when the board actually carries constraints, so
+        // un-annotated boards pay nothing. The proximity term ramps like
+        // density so hard proximity tightens as placement settles
+        // (Lagrangian-style); loop area uses a steady soft weight.
+        if !board.constraints.is_empty() {
+            let prox_forces = placement::intent_forces::compute_proximity_forces(&board);
+            let loop_forces = placement::intent_forces::compute_loop_area_forces(&board);
+            // Ramp proximity weight from 0.5× to ~2× over the run.
+            let ramp = 0.5 + 1.5 * (iteration as f64 / config.max_iterations.max(1) as f64);
+            forces.accumulate(&prox_forces, config.placement.lambda_proximity * ramp);
+            forces.accumulate(&loop_forces, config.placement.lambda_loop_area);
+        }
+
         // Add routing feedback forces (ramp up after routing starts)
         if grid.is_some() {
             // λ_C and λ_V ramp: start small, grow linearly over iterations
@@ -227,18 +244,28 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         // not just through gradient descent which Adam normalizes away.
         for i in 0..n {
             for j in (i + 1)..n {
-                if freezer.is_frozen(i) && freezer.is_frozen(j) { continue; }
+                // A component is immovable for overlap displacement if it is
+                // either progressively frozen or constrained to a Fixed
+                // position — shoving a Fixed component violates its invariant
+                // (caught by the legalization debug_assert downstream).
+                let immovable_i = freezer.is_frozen(i) || board.components[i].placement.is_fixed();
+                let immovable_j = freezer.is_frozen(j) || board.components[j].placement.is_fixed();
+                if immovable_i && immovable_j { continue; }
                 let dx = board.components[j].x - board.components[i].x;
                 let dy = board.components[j].y - board.components[i].y;
-                let min_dx = (board.components[i].width_mm + board.components[j].width_mm) / 2.0 + 0.5;
-                let min_dy = (board.components[i].height_mm + board.components[j].height_mm) / 2.0 + 0.5;
+                // Min center-to-center separation = sum of half-extents plus
+                // both components' courtyard excess (IPC keepout). At nominal
+                // density (0.25/side) this is the prior hardcoded +0.5.
+                let cy = 2.0 * board.config.courtyard_excess_mm;
+                let min_dx = (board.components[i].width_mm + board.components[j].width_mm) / 2.0 + cy;
+                let min_dy = (board.components[i].height_mm + board.components[j].height_mm) / 2.0 + cy;
                 if dx.abs() < min_dx && dy.abs() < min_dy {
                     // Push proportional to overlap — larger overlaps get stronger push
                     let overlap = ((min_dx - dx.abs()) + (min_dy - dy.abs())) / 2.0;
                     let push = (overlap * 0.5).max(0.2); // at least 0.2mm, scales with overlap
                     let sign_x = if dx >= 0.0 { 1.0 } else { -1.0 };
                     let sign_y = if dy >= 0.0 { 1.0 } else { -1.0 };
-                    if !freezer.is_frozen(i) && !freezer.is_frozen(j) {
+                    if !immovable_i && !immovable_j {
                         if (min_dx - dx.abs()) < (min_dy - dy.abs()) {
                             board.components[i].x -= sign_x * push;
                             board.components[j].x += sign_x * push;
@@ -246,13 +273,13 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                             board.components[i].y -= sign_y * push;
                             board.components[j].y += sign_y * push;
                         }
-                    } else if !freezer.is_frozen(j) {
+                    } else if !immovable_j {
                         if (min_dx - dx.abs()) < (min_dy - dy.abs()) {
                             board.components[j].x += sign_x * push * 2.0;
                         } else {
                             board.components[j].y += sign_y * push * 2.0;
                         }
-                    } else if !freezer.is_frozen(i) {
+                    } else if !immovable_i {
                         if (min_dx - dx.abs()) < (min_dy - dy.abs()) {
                             board.components[i].x -= sign_x * push * 2.0;
                         } else {

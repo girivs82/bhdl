@@ -45,6 +45,19 @@ pub enum DensityLevel {
     Least,
 }
 
+impl DensityLevel {
+    /// IPC-7351B courtyard excess (CPL) — the clearance, per side, beyond
+    /// the pad/body extent that defines the manufacturable keepout
+    /// (courtyard) boundary. mm.
+    pub fn courtyard_excess_mm(self) -> f64 {
+        match self {
+            DensityLevel::Most => 0.50,
+            DensityLevel::Nominal => 0.25,
+            DensityLevel::Least => 0.10,
+        }
+    }
+}
+
 /// Solder fillet goals for toe, heel, and side.
 #[derive(Debug, Clone, Copy)]
 struct JValues {
@@ -97,6 +110,16 @@ pub enum PackageFamily {
         lead_width: f64,   // lead width, mm
         lead_span: f64,    // lead tip to tab back, mm
         pins: usize,       // lead pins (excluding tab)
+    },
+    /// Dual in-line through-hole (DIP / PDIP, JEDEC MS-001). Two rows of
+    /// plated through-holes; pin 1 top-left, numbered down the left side
+    /// then up the right (counter-clockwise, datasheet convention).
+    Dip {
+        pins: usize,         // total pin count (even)
+        pitch: f64,          // pin-to-pin spacing along a row, mm (0.1" = 2.54)
+        row_spacing: f64,    // distance between the two rows, mm (0.3" = 7.62)
+        drill: f64,          // through-hole drill diameter, mm
+        pad_dia: f64,        // annular pad diameter, mm
     },
 }
 
@@ -181,6 +204,22 @@ fn make_pad(number: &str, x: f64, y: f64, w: f64, h: f64) -> FootprintPad {
     }
 }
 
+/// Plated through-hole pad. Pin 1 is rectangular (datasheet pin-1 marker);
+/// the rest are oval/round. `dia` is the annular copper diameter, `drill`
+/// the hole.
+fn make_th_pad(number: &str, x: f64, y: f64, dia: f64, drill: f64, is_pin1: bool) -> FootprintPad {
+    FootprintPad {
+        pad_number: number.to_string(),
+        x_position: round_to(x, 0.001),
+        y_position: round_to(y, 0.001),
+        width: round_to(dia, ROUND_GRID),
+        height: round_to(dia, ROUND_GRID),
+        shape: if is_pin1 { PadShape::Rectangle } else { PadShape::Oval },
+        drill_diameter: Some(round_to(drill, 0.001)),
+        pad_type: PadType::ThroughHole,
+    }
+}
+
 // ── Family-specific generators ───────────────────────────────────────
 
 fn generate_chip(l: f64, w: f64, t: f64, tol: f64, level: DensityLevel) -> ComponentFootprint {
@@ -210,6 +249,63 @@ fn generate_chip(l: f64, w: f64, t: f64, tol: f64, level: DensityLevel) -> Compo
         body_width: l,
         body_height: w,
         pitch: None,
+        pads,
+    }
+}
+
+/// Dual in-line through-hole. Two rows of `pins/2`, pin 1 at top-left,
+/// numbered down the left column then up the right column.
+///
+/// Coordinate frame: origin at body center, +Y downward (KiCad
+/// convention). Left column at x = -row_spacing/2, right at +row_spacing/2.
+fn generate_dip(
+    pins: usize,
+    pitch: f64,
+    row_spacing: f64,
+    drill: f64,
+    pad_dia: f64,
+) -> ComponentFootprint {
+    let per_row = pins / 2;
+    let half_x = row_spacing / 2.0;
+    // Vertical span of one row of pins, centered on the origin.
+    let span = (per_row as f64 - 1.0) * pitch;
+    let top = -span / 2.0;
+
+    let mut pads = Vec::with_capacity(pins);
+    // Left column, top → bottom: pins 1 .. per_row.
+    for i in 0..per_row {
+        let y = top + i as f64 * pitch;
+        pads.push(make_th_pad(
+            &(i + 1).to_string(),
+            -half_x,
+            y,
+            pad_dia,
+            drill,
+            i == 0, // pin 1 marker
+        ));
+    }
+    // Right column, bottom → top: pins per_row+1 .. pins.
+    for j in 0..per_row {
+        let y = (top + span) - j as f64 * pitch;
+        pads.push(make_th_pad(
+            &(per_row + j + 1).to_string(),
+            half_x,
+            y,
+            pad_dia,
+            drill,
+            false,
+        ));
+    }
+
+    ComponentFootprint {
+        footprint_name: format!("DIP-{}_W{:.2}mm", pins, row_spacing),
+        svg_data: String::new(),
+        pad_count: pins as u32,
+        // Body extent: width ≈ row spacing + pad margin; length ≈ pin span
+        // + end margin (≈ one pitch beyond the end pads).
+        body_width: row_spacing,
+        body_height: span + pitch,
+        pitch: Some(pitch),
         pads,
     }
 }
@@ -542,6 +638,9 @@ pub fn generate_footprint(family: &PackageFamily, level: DensityLevel) -> Compon
         PackageFamily::DPAK { body, tab, pitch, lead_width, lead_span, pins } => {
             generate_dpak(*body, *tab, *pitch, *lead_width, *lead_span, *pins, level)
         }
+        PackageFamily::Dip { pins, pitch, row_spacing, drill, pad_dia } => {
+            generate_dip(*pins, *pitch, *row_spacing, *drill, *pad_dia)
+        }
     }
 }
 
@@ -677,8 +776,35 @@ pub fn standard_package(name: &str) -> Option<PackageFamily> {
             lead_width: 0.80, lead_span: 2.54, pins: 2,
         },
 
+        // ── DIP / PDIP through-hole (JEDEC MS-001) ──────────────────
+        // 0.1" pitch; narrow (0.3"=7.62mm) and wide (0.6"=15.24mm) rows.
+        // 0.8mm drill / 1.6mm pad matches the common KiCad Package_DIP set.
+        "DIP-4"  | "DIP4"  => dip(4, 7.62),
+        "DIP-6"  | "DIP6"  => dip(6, 7.62),
+        "DIP-8"  | "DIP8"  | "DIP-8_W7.62mm"  => dip(8, 7.62),
+        "DIP-14" | "DIP14" | "DIP-14_W7.62mm" => dip(14, 7.62),
+        "DIP-16" | "DIP16" | "DIP-16_W7.62mm" => dip(16, 7.62),
+        "DIP-18" | "DIP18" | "DIP-18_W7.62mm" => dip(18, 7.62),
+        "DIP-20" | "DIP20" | "DIP-20_W7.62mm" => dip(20, 7.62),
+        "DIP-24" | "DIP24" | "DIP-24_W7.62mm" => dip(24, 7.62),
+        "DIP-28" | "DIP28" | "DIP-28_W7.62mm" => dip(28, 7.62), // ATmega328P-PU
+        "DIP-24-W" | "DIP-24_W15.24mm" => dip(24, 15.24),
+        "DIP-28-W" | "DIP-28_W15.24mm" => dip(28, 15.24),
+        "DIP-40" | "DIP40" | "DIP-40_W15.24mm" => dip(40, 15.24), // ATmega16/etc.
+
         _ => return None,
     })
+}
+
+/// Standard PDIP family constructor: 0.1" pitch, 0.8mm drill, 1.6mm pad.
+fn dip(pins: usize, row_spacing: f64) -> PackageFamily {
+    PackageFamily::Dip {
+        pins,
+        pitch: 2.54,
+        row_spacing,
+        drill: 0.80,
+        pad_dia: 1.60,
+    }
 }
 
 // ── Unit tests ───────────────────────────────────────────────────────
@@ -686,6 +812,44 @@ pub fn standard_package(name: &str) -> Option<PackageFamily> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_dip28_atmega() {
+        // ATmega328P-PU: 28-pin narrow PDIP, 0.1" pitch, 0.3" rows.
+        let fp = generate_footprint(
+            &standard_package("DIP-28").unwrap(),
+            DensityLevel::Nominal,
+        );
+        assert_eq!(fp.pad_count, 28);
+        assert_eq!(fp.pads.len(), 28);
+
+        let find = |n: &str| fp.pads.iter().find(|p| p.pad_number == n).unwrap();
+
+        // Two columns at ±row_spacing/2 = ±3.81mm.
+        let p1 = find("1");
+        let p28 = find("28");
+        let p14 = find("14");
+        let p15 = find("15");
+        assert!((p1.x_position - (-3.81)).abs() < 0.01, "pin1 x {}", p1.x_position);
+        assert!((p28.x_position - 3.81).abs() < 0.01, "pin28 x {}", p28.x_position);
+
+        // Pin 1 (top-left) and pin 28 (top-right) share the top row Y.
+        assert!((p1.y_position - p28.y_position).abs() < 0.01);
+        // Pin 14 (bottom-left) and pin 15 (bottom-right) share the bottom Y.
+        assert!((p14.y_position - p15.y_position).abs() < 0.01);
+        // Pin 1 is at the top, pin 14 at the bottom: 13 pitches apart.
+        assert!((p14.y_position - p1.y_position - 13.0 * 2.54).abs() < 0.01);
+
+        // Through-hole with drill; pin 1 is the rectangular marker.
+        assert!(matches!(p1.pad_type, PadType::ThroughHole));
+        assert!(p1.drill_diameter.is_some());
+        assert!(matches!(p1.shape, PadShape::Rectangle));
+        assert!(matches!(p28.shape, PadShape::Oval));
+
+        // Adjacent pins in the left column are one pitch apart.
+        let p2 = find("2");
+        assert!((p2.y_position - p1.y_position - 2.54).abs() < 0.01);
+    }
 
     #[test]
     fn test_chip_0603_nominal() {

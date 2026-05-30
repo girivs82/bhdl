@@ -10,6 +10,7 @@
 pub mod analytical;
 pub mod blocks;
 pub mod density;
+pub mod intent_forces;
 pub mod optimizer;
 pub mod rotation;
 pub mod grouping;
