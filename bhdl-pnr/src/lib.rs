@@ -98,6 +98,31 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         board.layer_stack.layers.len()
     );
 
+    // 0. Detect constraint contradictions before placement (§9). v0 logs
+    //    them prominently and proceeds; hard-fail-on-conflict is gated
+    //    behind a future board layout_policy.
+    if !board.constraints.is_empty() {
+        let conflicts = constraint::conflicts::detect_conflicts(&board.constraints);
+        if !conflicts.is_empty() {
+            let (errors, warnings) =
+                constraint::conflicts::count_by_severity(&conflicts);
+            info!(
+                "constraint conflicts: {} error(s), {} warning(s)",
+                errors, warnings
+            );
+            for c in &conflicts {
+                match c.severity {
+                    constraint::conflicts::Severity::Error => {
+                        log::error!("{}", c.describe())
+                    }
+                    constraint::conflicts::Severity::Warning => {
+                        log::warn!("{}", c.describe())
+                    }
+                }
+            }
+        }
+    }
+
     // 1. Initialize placement (block-based with datasheet patterns)
     let recipes = board.placement_recipes.clone();
     placement::initialize(&mut board, seed, &recipes);

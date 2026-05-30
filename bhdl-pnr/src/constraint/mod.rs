@@ -18,6 +18,7 @@
 //!   - Loop area uses the shoelace centroid approximation (§5 of the
 //!     doc) so it can participate in placement cost before any wires.
 
+pub mod conflicts;
 pub mod eval;
 
 #[cfg(test)]
