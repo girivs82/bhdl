@@ -843,6 +843,7 @@ mod tests {
             name: "R1".to_string(),
             definition: res_mod_id,
             attributes: res_attrs,
+            layout_intents: Vec::new(),
         });
 
         // Create capacitor instance with 100nF value
@@ -852,6 +853,7 @@ mod tests {
             name: "C1".to_string(),
             definition: cap_mod_id,
             attributes: cap_attrs,
+            layout_intents: Vec::new(),
         });
 
         (netlist, res_id, cap_id)
@@ -977,6 +979,7 @@ mod tests {
             name: "R_novalue".to_string(),
             definition: mod_id,
             attributes: HashMap::new(),
+            layout_intents: Vec::new(),
         });
 
         let results = apply_glacier_physical_selection(
@@ -1034,6 +1037,7 @@ mod tests {
             name: "L1".to_string(),
             definition: ind_mod_id,
             attributes: ind_attrs,
+            layout_intents: Vec::new(),
         });
 
         // 2A through the inductor
@@ -1084,6 +1088,7 @@ mod tests {
             name: "L_big".to_string(),
             definition: ind_mod_id,
             attributes: ind_attrs,
+            layout_intents: Vec::new(),
         });
 
         // 8A — needs THT
@@ -1121,6 +1126,7 @@ mod tests {
             name: "C1".to_string(),
             definition: cap_mod_id,
             attributes: cap_attrs,
+            layout_intents: Vec::new(),
         });
 
         // Create pin instances

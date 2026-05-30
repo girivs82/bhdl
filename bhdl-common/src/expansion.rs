@@ -47,6 +47,11 @@ pub struct ExpansionInstance {
     pub params: Vec<String>,
     /// Additional attributes to set on the created instance
     pub attributes: HashMap<String, String>,
+    /// Typed P&R layout intents from a `for INTENT(...)` clause on this
+    /// expansion child's component declaration. Empty when none. The
+    /// analyzer lowers the parsed `INTENT_CALL` to these; the Phase 4.5
+    /// interpreter copies them onto the materialized netlist instance.
+    pub layout_intents: Vec<crate::intent::vocabulary::LayoutIntent>,
 }
 
 /// A connection to wire up during expansion.

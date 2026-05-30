@@ -91,6 +91,7 @@ pub(crate) fn create_instance(
         name: name.to_string(),
         definition: module_id,
         attributes: attrs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+        layout_intents: Vec::new(),
     });
     inst_id
 }

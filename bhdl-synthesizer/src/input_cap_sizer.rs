@@ -796,6 +796,7 @@ mod tests {
             name: "c_in".to_string(),
             definition: cap_mod,
             attributes: cap_attrs,
+            layout_intents: Vec::new(),
         });
         let cap_pins = nl.create_pin_instances(cap_id).unwrap();
         nl.connect(vin_net, ConnectionPoint::PinInstance(cap_pins[0])).unwrap(); // pin 1 → VIN
@@ -810,6 +811,7 @@ mod tests {
             name: "buck".to_string(),
             definition: reg_mod,
             attributes: reg_attrs,
+            layout_intents: Vec::new(),
         });
         let reg_pins = nl.create_pin_instances(reg_id).unwrap();
         nl.connect(vin_net, ConnectionPoint::PinInstance(reg_pins[0])).unwrap(); // VIN
@@ -922,6 +924,7 @@ mod tests {
             name: "buck".to_string(),
             definition: reg_mod,
             attributes: reg_attrs,
+            layout_intents: Vec::new(),
         });
         let reg_pins = nl.create_pin_instances(reg_id).unwrap();
         nl.connect(vin_net, ConnectionPoint::PinInstance(reg_pins[0])).unwrap();

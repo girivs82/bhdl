@@ -48,12 +48,7 @@ impl Netlist {
     // Add an instance of a module
     pub fn add_instance(&mut self, name: String, module_id: ModuleId) -> Option<InstanceId> {
         if self.modules.contains_key(module_id) {
-            let instance = Instance {
-                name,
-                definition: module_id,
-                attributes: std::collections::HashMap::new(),
-            };
-            Some(self.instances.insert(instance))
+            Some(self.instances.insert(Instance::new(name, module_id)))
         } else {
             None
         }

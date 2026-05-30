@@ -42,12 +42,20 @@ impl<'t> Parser<'t> {
             
             // Try to parse as identifier first
             if self.peek() == Some(SyntaxKind::IDENT) {
-                // Look ahead to see if it's a named parameter
-                let mut lookahead = self.pos + 1;
+                // Look ahead to see if it's a named parameter. `peek()`
+                // skips trivia but `self.pos` may still point AT trivia,
+                // so first advance to the IDENT we peeked, THEN scan for
+                // the next non-trivia token (which would be the COLON of
+                // a `name: value` named param).
+                let mut ident_at = self.pos;
+                while ident_at < self.tokens.len() && self.tokens[ident_at].0.is_trivia() {
+                    ident_at += 1;
+                }
+                let mut lookahead = ident_at + 1;
                 while lookahead < self.tokens.len() && self.tokens[lookahead].0.is_trivia() {
                     lookahead += 1;
                 }
-                
+
                 if lookahead < self.tokens.len() && self.tokens[lookahead].0 == SyntaxKind::COLON {
                     // Named parameter: name: value
                     self.builder.start_node_at(checkpoint, SyntaxKind::INTENT_NAMED_PARAM.into());

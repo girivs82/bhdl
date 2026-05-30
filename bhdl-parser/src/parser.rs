@@ -114,8 +114,9 @@ fn map_token(token: LexerToken) -> SyntaxKind {
         LexerToken::PercentUnit | LexerToken::PctUnit |
         LexerToken::WUnit | LexerToken::MWUnit | LexerToken::UWUnicode | 
         LexerToken::UWUnit | LexerToken::NWUnit |
-        LexerToken::MMUnit | LexerToken::UMUnicode | LexerToken::UMUnit | 
+        LexerToken::MMUnit | LexerToken::UMUnicode | LexerToken::UMUnit |
         LexerToken::NMUnit | LexerToken::MILUnit |
+        LexerToken::MM2Unit | LexerToken::MM2Unicode |
         LexerToken::DbUnit | LexerToken::DbmUnit => UNIT_IDENTIFIER,
     }
 }
