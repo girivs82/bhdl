@@ -101,12 +101,14 @@ fn full_pipeline_routes_a_constrained_board() {
     assert_eq!(result.routes.len(), 2, "expected a route entry per net");
     let routed = result.routes.iter().filter(|r| !r.is_empty()).count();
     eprintln!("routed {}/2 nets, HPWL={:.1}mm", routed, result.metrics.hpwl_mm);
-    // NOTE: actual route success on a tiny hand-built board with a
-    // component-pitch coarse grid is router-internal and not asserted here
-    // — that is validated on real synth-pipeline boards. This test's job is
-    // to prove place_and_route runs the router + criticality ordering on a
-    // *constrained, netted* board without error (every other test is
-    // net-less, so the router is a no-op there).
+    // Both nets must actually route. This guards a former router bug: a pin
+    // whose pad center happened to land on a grid-cell center (a sub-cell
+    // alignment accident vs. the 1mm routing grid) got its own cell marked
+    // `blocked` by the pad keepaway, and `dijkstra_to_any` never expanded
+    // into a blocked sink cell — so the net was spuriously declared
+    // unroutable. The post-placement coordinates here land exactly that way,
+    // so this is a direct regression for that fix (was 0/2, now 2/2).
+    assert_eq!(routed, 2, "both nets should route (had {}/2)", routed);
 
     // Placement produced a finite wirelength and in-bounds components.
     assert!(result.metrics.hpwl_mm.is_finite() && result.metrics.hpwl_mm > 0.0);

@@ -192,6 +192,14 @@ impl RoutingGrid {
         for layer in &self.cells {
             for row in layer {
                 for cell in row {
+                    // Blocked cells (pads, keepouts) have capacity 0. The only
+                    // demand they ever carry is a net terminating on its own
+                    // pin — unavoidable terminal access, not routable
+                    // congestion — so they must not register as overflow or the
+                    // negotiated-congestion loop would never converge.
+                    if cell.blocked {
+                        continue;
+                    }
                     if cell.demand > cell.capacity {
                         max = max.max(cell.demand - cell.capacity);
                     }
