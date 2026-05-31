@@ -1,7 +1,10 @@
 # Source Resolvers (level-3 auto-fetch) — scoping spec v0
 
-> **Status:** Scoping proposal. Not implemented. Defines the optional
-> level-3 of library resolution (`Library_Resolution.md` §7c): letting
+> **Status:** Core landed (the helper protocol + cache + fetch +
+> lock/hash verification — §3/§4, schema §2). Remaining: a built-in
+> `git` convenience scheme and the `--offline`/`bhdl fetch`/allowlist
+> hardening (§6/§5). Defines the optional level-3 of library resolution
+> (`Library_Resolution.md` §7c): letting
 > the toolchain *fetch* a declared library from a VCS/remote by a
 > pinned revision, instead of the user syncing it and pointing `path =`
 > at it (levels 1–2, which already work).

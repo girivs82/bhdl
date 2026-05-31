@@ -288,6 +288,7 @@ dependencies = [
  "anyhow",
  "bhdl-ast",
  "bhdl-parser",
+ "log",
  "serde",
  "serde_json",
  "sha2",
