@@ -106,10 +106,20 @@ enum Commands {
         /// Output netlist file
         #[arg(short, long)]
         output: Option<PathBuf>,
-        
+
         /// Netlist format (json, spice)
         #[arg(short, long, default_value = "json")]
         format: String,
+    },
+
+    /// Emit a frozen structural netlist — the immutable "as-fabbed"
+    /// record (resolved components + flat connectivity, stamped with
+    /// the toolchain version + library lock). Stable, versioned schema;
+    /// archive it alongside the board. See docs/spec/Library_Resolution.md.
+    Freeze {
+        /// Output file (JSON). Defaults to `<input>.frozen.json`.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
     },
     
     /// Generate interactive schematic visualization (HTML)
@@ -286,7 +296,13 @@ async fn main() -> Result<()> {
     // the input file) OR `-I`/`$BHDL_LIB_PATH` is supplied. Otherwise
     // imports keep legacy literal-path behaviour (stdlib-only boards
     // need no manifest). See docs/spec/Library_Resolution.md.
+    // Captured for `freeze` provenance: the resolved library lock
+    // (name + exact version + content hash) this build used.
+    let mut frozen_libraries: Vec<bhdl_common::library::LockedLibrary> = Vec::new();
     if let Some(resolver) = build_library_resolver(&cli)? {
+        if let Ok(lock) = resolver.compute_lockfile() {
+            frozen_libraries = lock.libraries;
+        }
         bhdl_synthesizer::set_global_library_resolver(resolver);
     }
 
@@ -326,6 +342,10 @@ async fn main() -> Result<()> {
         
         Some(Commands::Synthesize { output, format }) => {
             run_synthesis(&source_file, output, &format).await?;
+        }
+
+        Some(Commands::Freeze { output }) => {
+            run_freeze(&source_file, &cli.input, output, frozen_libraries).await?;
         }
         
         Some(Commands::Visualize { output, json, validate, ascii }) => {
@@ -835,6 +855,48 @@ async fn run_synthesis(source_file: &SourceFile, output: Option<PathBuf>, format
         }
     }
     
+    Ok(())
+}
+
+/// Emit the frozen structural netlist — the immutable as-fabbed record.
+async fn run_freeze(
+    source_file: &SourceFile,
+    source_path: &Path,
+    output: Option<PathBuf>,
+    libraries: Vec<bhdl_common::library::LockedLibrary>,
+) -> Result<()> {
+    use bhdl_synthesizer::freeze::{freeze_netlist, Provenance};
+
+    let analysis = analyze(source_file);
+    let mut generator = NetlistGenerator::new();
+    let netlist = generator
+        .generate_from_ast_and_analysis(source_file, &analysis)
+        .await
+        .context("Failed to synthesize netlist for freeze")?;
+
+    let generated_at = humantime::format_rfc3339_seconds(std::time::SystemTime::now()).to_string();
+    let provenance = Provenance {
+        tool_version: env!("CARGO_PKG_VERSION").to_string(),
+        source: source_path.display().to_string(),
+        generated_at,
+        libraries,
+    };
+
+    let frozen = freeze_netlist(&netlist, provenance);
+    let json = serde_json::to_string_pretty(&frozen)?;
+
+    let out = output.unwrap_or_else(|| {
+        let mut p = source_path.to_path_buf();
+        p.set_extension("frozen.json");
+        p
+    });
+    fs::write(&out, &json).with_context(|| format!("writing {}", out.display()))?;
+
+    println!("{}", "✓ Frozen netlist written".green().bold());
+    println!("  Components: {}", frozen.components.len());
+    println!("  Nets:       {}", frozen.nets.len());
+    println!("  Libraries:  {}", frozen.provenance.libraries.len());
+    println!("  Output:     {}", out.display());
     Ok(())
 }
 

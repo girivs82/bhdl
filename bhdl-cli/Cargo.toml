@@ -13,6 +13,7 @@ bhdl-schematic = { path = "../bhdl-schematic" }
 bhdl-spice = { path = "../bhdl-spice" }
 bhdl-components = { path = "../bhdl-components" }
 bhdl-common = { path = "../bhdl-common" }
+humantime = "2"
 bhdl-pnr = { path = "../bhdl-pnr" }
 bhdl-testbench = { path = "../bhdl-testbench" }
 bhdl-sim = { path = "../bhdl-sim" }

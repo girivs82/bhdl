@@ -156,3 +156,7 @@ path = "src/bin/test_layout_intent_thread.rs"
 [[test]]
 name = "library_resolution"
 path = "tests/library_resolution.rs"
+
+[[test]]
+name = "freeze_netlist"
+path = "tests/freeze_netlist.rs"

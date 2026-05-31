@@ -49,6 +49,7 @@ pub mod abstract_resolver;
 pub mod parametric_resolver;
 
 pub mod import_loader;
+pub mod freeze;
 
 // Import preprocessor for pre-processing imports before analysis
 pub mod import_preprocessor;
