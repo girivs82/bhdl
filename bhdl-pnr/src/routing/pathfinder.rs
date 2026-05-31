@@ -80,10 +80,15 @@ pub fn pathfinder_route(
             routes[net_idx] = route;
         }
 
-        // Update history for overused cells
+        // Update history for overused cells. Skip blocked cells (cap 0): the
+        // only demand they carry is a net terminating on its own pin terminal,
+        // which is unavoidable and must not accrue congestion history.
         for layer in &mut grid.cells {
             for row in layer {
                 for cell in row {
+                    if cell.blocked {
+                        continue;
+                    }
                     if cell.demand > cell.capacity {
                         cell.history += (cell.demand - cell.capacity) as f64;
                     }
@@ -235,7 +240,15 @@ fn dijkstra_to_any(
         // Expand planar neighbors (4 cardinal + 4 diagonal)
         for (nbr, move_cost) in grid.planar_neighbors(cell) {
             let gc = grid.get(nbr);
-            if gc.blocked {
+            // Blocked cells are unroutable through-traffic (pads, keepouts).
+            // EXCEPTION: a cell that is one of *this* net's own terminals
+            // must remain reachable — a pin's pad center can fall inside its
+            // own pad-keepaway block (whether it does is a sub-cell alignment
+            // accident vs. the routing grid), and a blocked sink that can
+            // never be pushed onto the heap would make the net spuriously
+            // unroutable. Terminals only; we still never tunnel through other
+            // components' pads.
+            if gc.blocked && !sinks.contains(&nbr) {
                 continue;
             }
 
@@ -260,7 +273,9 @@ fn dijkstra_to_any(
                     continue;
                 }
                 let gc = grid.get(nbr);
-                if gc.blocked {
+                // Same terminal exception as the planar case: a via may land
+                // on a blocked cell only if it is this net's own pin terminal.
+                if gc.blocked && !sinks.contains(&nbr) {
                     continue;
                 }
 
