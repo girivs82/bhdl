@@ -229,13 +229,14 @@ A 4-year rebuild therefore either reproduces the byte-identical library
 or fails loudly ("library `acme-stdlib` (2.1.0) CONTENT changed since
 the lock"), pointing the user at the exact divergence.
 
-> **Still requires the library to be retrievable.** The lock guarantees
-> *detection* of drift and *exact-version selection*; it does not by
-> itself archive the library bytes. Pair it with the company archiving
-> its tagged library versions (or a future registry/vendor-dir), and
-> with the complementary frozen-structural-netlist release artifact for
-> the absolute as-fabbed record. (See the reproducibility discussion in
-> the project notes.)
+### Archival — the VCS *is* the archive (§7c)
+
+The lock guarantees *detection* of drift and *exact-version selection*;
+it does not itself store the library bytes. It does not need to —
+**version control already archives bytes**, and the content hash makes
+retrieval *verifiable*: git/Perforce/etc. holds the bytes, the hash
+proves you pulled the right ones. No custom registry is required. See
+§7c for the workflow (VCS-agnostic).
 
 ## 7b. Frozen structural netlist — `bhdl freeze` (landed)
 
@@ -272,12 +273,65 @@ to re-run). The two artifacts are complementary: keep the lockfile for
 reproducible rebuilds and the frozen netlist for the immutable
 as-fabbed record. Implementation: `bhdl-synthesizer/src/freeze.rs`.
 
+## 7c. Archival workflow — VCS-agnostic (no registry)
+
+BHDL deliberately does **not** ship a package registry. Companies
+already run version control; that *is* the byte-archive. The
+content-hash (§7a) is what makes any VCS-backed retrieval verifiable —
+the VCS holds the bytes, the hash proves you pulled the right ones.
+Crucially, the resolver **never fetches**: a human or script syncs the
+bytes by whatever means, then points the dependency at them. That makes
+the whole archival story **VCS-agnostic** — git, Perforce, SVN, a
+released tarball, anything.
+
+Three levels, increasing rigor; **levels 1–2 need no BHDL code at all
+and work for any VCS:**
+
+1. **Manual sync + `path =`.** Retrieve the locked version however your
+   shop does it — `git checkout v2.1.0`, `p4 sync //depot/bhdl-libs/...@<changelist>`,
+   `svn up -r`, untar a release — and point `bhdl.toml`'s `path =` at
+   the synced tree. If you grabbed the wrong revision, the lock's
+   content-hash mismatches and the build fails loudly. The hash is the
+   VCS-neutral verification layer.
+
+2. **Vendor into the board's VCS.** Bind the library into the board
+   project so checking out the board also restores its libraries:
+   - **git:** a submodule pinned to a commit, `path =` at the submodule.
+   - **Perforce:** a stream/branch mapping (or `p4 populate`) that
+     brings the lib tree into the board's workspace at a fixed
+     changelist, `path =` at that path.
+   - **both (mixed shops):** whichever VCS the board lives in vendors
+     the lib; the `path =` + content-hash contract is identical.
+   The board's VCS history now pins the exact library bytes; the hash
+   double-checks.
+
+3. **Source-fetch dependencies (optional, pluggable — not yet built).**
+   If a shop wants the toolchain to *fetch* automatically (Cargo-style),
+   the dependency/lock gains a scheme-prefixed `source` —
+   `git:<url>#<rev>`, `p4:<depot-path>@<changelist>`, `tarball:<url>` —
+   and resolution dispatches on the scheme to a **source resolver**.
+   This is an open extension point, **not git-only by design**: BHDL
+   may ship a `git` resolver as one built-in, and a company on Perforce
+   supplies a `p4` resolver as an extension (or simply stays on level 1
+   and syncs themselves). The `source` field in `bhdl.lock` is already a
+   free-form scheme-prefixed string (today it records `path:…` /
+   `search:…`), so recording `git:…` / `p4:…` provenance needs no
+   format change — only the optional auto-fetch dispatch is new work.
+
+The toolchain's contract is therefore: **declare (manifest) + verify
+(lock content-hash) + record provenance (frozen netlist).** *Retrieving*
+the bytes is the VCS's job, and BHDL stays out of the business of
+knowing how each company's VCS works.
+
 ## 8. Out of scope for v0
 
-- **Registry / vendor-dir** that archives library bytes (the lock
-  detects drift but doesn't store the bytes) — v1+.
-- **Registry / network fetch** — v1+; v0 is path/search-root only.
-- **Git dependencies** — later.
+- **Package registry / network fetch** — explicitly *not planned*. VCS
+  is the archive (§7c); we don't reinvent it.
+- **Auto-fetch source resolvers** (level 3, §7c) — a pluggable,
+  scheme-dispatched, VCS-agnostic hook; deferred until a shop wants
+  toolchain-driven fetch instead of sync-then-`path=`. When built, git
+  is one built-in resolver; Perforce/SVN/others are extensions, not
+  core.
 - **Full semver ranges** (`^`, `~`, `>=`) — v0 is exact-with-patch-flex;
   ranges are v1.
 - **Transitive library deps** (a lib depending on another lib) — v0
