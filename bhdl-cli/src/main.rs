@@ -62,6 +62,17 @@ struct Cli {
     #[arg(short = 'I', long = "lib-path", value_name = "DIR")]
     lib_path: Vec<PathBuf>,
 
+    /// Regenerate `bhdl.lock` from the current libraries even if it
+    /// exists and has drifted. Use this when you intentionally bump or
+    /// edit a dependency. Without it, a drifted lock is a hard error.
+    #[arg(long)]
+    update_lock: bool,
+
+    /// CI mode: require `bhdl.lock` to exist and match exactly; never
+    /// generate or update it. Errors if the lock is missing or drifted.
+    #[arg(long)]
+    locked: bool,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -401,7 +412,73 @@ fn build_library_resolver(
         env_lib_path.as_deref(),
         None, // bundled stdlib falls back to literal `bhdl-stdlib/…`
     )?;
+
+    // Lockfile gate (next to the manifest). Pins exact versions +
+    // content hashes so a rebuild reproduces the same libraries or
+    // fails loudly — never silently substitutes a changed recipe.
+    if let Some(mp) = &manifest_path {
+        enforce_lockfile(&resolver, mp, cli.update_lock, cli.locked, cli.verbose)?;
+    } else if cli.locked {
+        anyhow::bail!("--locked requires a bhdl.toml + bhdl.lock, but no manifest was found");
+    }
+
     Ok(Some(resolver))
+}
+
+/// Generate, verify, or update `bhdl.lock` (sibling of the manifest).
+///
+///   - missing lock, default      → generate it (record exact versions + hashes)
+///   - missing lock, --locked     → error (CI must build against a committed lock)
+///   - present lock, matches      → ok
+///   - present lock, drifted      → error (loud) unless --update-lock
+///   - --update-lock              → regenerate regardless
+fn enforce_lockfile(
+    resolver: &bhdl_common::library::LibraryResolver,
+    manifest_path: &std::path::Path,
+    update_lock: bool,
+    locked: bool,
+    verbose: bool,
+) -> Result<()> {
+    use bhdl_common::library::Lockfile;
+
+    let lock_path = manifest_path.with_file_name("bhdl.lock");
+    let current = resolver.compute_lockfile()?;
+
+    // Nothing declared → no lock needed.
+    if current.libraries.is_empty() {
+        return Ok(());
+    }
+
+    if update_lock {
+        current.save(&lock_path)?;
+        if verbose { eprintln!("library lock: updated {}", lock_path.display()); }
+        return Ok(());
+    }
+
+    if lock_path.is_file() {
+        let stored = Lockfile::load(&lock_path)?;
+        let drifts = stored.diff(&current);
+        if !drifts.is_empty() {
+            eprintln!("{}", "Library lock drift — refusing to build:".red().bold());
+            for d in &drifts {
+                eprintln!("  {} {}", "•".red(), d);
+            }
+            anyhow::bail!(
+                "bhdl.lock no longer matches the resolved libraries; \
+                 restore the locked libraries or pass --update-lock if the change is intended"
+            );
+        }
+        if verbose { eprintln!("library lock: verified {} ({} libs)", lock_path.display(), current.libraries.len()); }
+    } else if locked {
+        anyhow::bail!(
+            "--locked was given but {} does not exist; commit a lockfile first (run without --locked to generate one)",
+            lock_path.display()
+        );
+    } else {
+        current.save(&lock_path)?;
+        if verbose { eprintln!("library lock: generated {}", lock_path.display()); }
+    }
+    Ok(())
 }
 
 fn run_parse(source_file: &SourceFile, root: &bhdl_ast::SyntaxNode<bhdl_ast::BhdlLanguage>, format: &str) -> Result<()> {

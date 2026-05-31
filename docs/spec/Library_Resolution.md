@@ -179,9 +179,68 @@ cannot introduce an undeclared dependency.
    (b) `-I` flag, (c) `$BHDL_LIB_PATH` — plus the negative cases
    (undeclared namespace, version mismatch, missing root).
 
+## 7a. Lockfile — `bhdl.lock` (landed)
+
+The version field in `bhdl.toml` is necessary but not sufficient for
+multi-year reproducibility: v0 version matching is patch-flexible (a
+`"2.1"` pin accepts any `2.1.x`), and — worse — a vendor can edit a
+recipe *in place* without bumping the version at all (the literal
+"10 kΩ pulldown silently becomes 15 kΩ" case). The lockfile closes
+both gaps.
+
+`bhdl.lock` sits next to `bhdl.toml`, is committed, and pins for every
+declared library:
+
+```toml
+version = 1
+
+[[library]]
+name    = "acme-stdlib"
+version = "2.1.0"                 # exact resolved version, not the loose pin
+hash    = "md5:9f3a…"             # content digest of the library root
+source  = "path:../acme/acme-stdlib"
+```
+
+- **Content hash** = md5 over every `.bhdl` file + `manifest.toml` in the
+  library root, visited in sorted relative-path order, each framed by
+  its path + length. Deterministic across machines/time. md5 is for
+  **drift detection, not security** — we're catching an accidental
+  vendor edit, not a crafted collision. The hash is the part that
+  catches an in-place change with no version bump.
+- **Lock pins the whole declared set** (like Cargo.lock), not just what
+  one board imports — a pure function of (manifest + search path).
+
+### Enforcement
+
+| State | Default | `--locked` (CI) | `--update-lock` |
+|---|---|---|---|
+| no lock | generate + write | **error** (commit a lock first) | generate |
+| lock matches | build | build | regenerate |
+| lock drifted | **error** (loud) | **error** | regenerate |
+
+Drift is classified: `Content` (same version, different bytes — the
+dangerous silent case), `Version`, `Added`, `Removed`. Default mode
+refuses to build on any drift and names the offending library; the user
+either restores the locked library or passes `--update-lock` to accept
+the change intentionally. **Never a silent substitution** — the
+property that matters for fabbable hardware.
+
+A 4-year rebuild therefore either reproduces the byte-identical library
+or fails loudly ("library `acme-stdlib` (2.1.0) CONTENT changed since
+the lock"), pointing the user at the exact divergence.
+
+> **Still requires the library to be retrievable.** The lock guarantees
+> *detection* of drift and *exact-version selection*; it does not by
+> itself archive the library bytes. Pair it with the company archiving
+> its tagged library versions (or a future registry/vendor-dir), and
+> with the complementary frozen-structural-netlist release artifact for
+> the absolute as-fabbed record. (See the reproducibility discussion in
+> the project notes.)
+
 ## 8. Out of scope for v0
 
-- **Lockfile** (`bhdl.lock`) pinning resolved roots/hashes — v1.
+- **Registry / vendor-dir** that archives library bytes (the lock
+  detects drift but doesn't store the bytes) — v1+.
 - **Registry / network fetch** — v1+; v0 is path/search-root only.
 - **Git dependencies** — later.
 - **Full semver ranges** (`^`, `~`, `>=`) — v0 is exact-with-patch-flex;

@@ -138,6 +138,182 @@ pub fn version_matches(req: &str, have: &str) -> bool {
     true
 }
 
+// ─── Lockfile (`bhdl.lock`) ──────────────────────────────────────────
+//
+// Pins the *exact* resolved version + a content hash of every declared
+// library, so a rebuild years later either reproduces the byte-identical
+// library or fails loudly — it never silently substitutes a changed
+// recipe (e.g. a vendor's 10 kΩ pulldown quietly becoming 15 kΩ). The
+// hash is the key: it catches a content change even when the vendor
+// *didn't* bump the version number.
+//
+// `bhdl.toml` carries (possibly loose) pins for dev convenience;
+// `bhdl.lock` carries the exact pins + hashes for reproducibility —
+// the same split as Cargo.toml / Cargo.lock.
+
+/// Auto-generated lockfile. Sits next to `bhdl.toml`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Lockfile {
+    /// Lockfile format version (bumped if the schema changes).
+    pub version: u32,
+    #[serde(default, rename = "library")]
+    pub libraries: Vec<LockedLibrary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LockedLibrary {
+    pub name: String,
+    /// Exact resolved version (from the library's `manifest.toml` at
+    /// lock time), not the possibly-loose `bhdl.toml` requirement.
+    pub version: String,
+    /// Content digest of the library root (see `hash_library_root`).
+    /// `md5:<hex>` — for drift detection, not adversarial security.
+    pub hash: String,
+    /// Informational: how the library was located at lock time.
+    pub source: String,
+}
+
+impl Lockfile {
+    pub const CURRENT_VERSION: u32 = 1;
+
+    pub fn load(path: &Path) -> anyhow::Result<Self> {
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| anyhow::anyhow!("reading {}: {}", path.display(), e))?;
+        toml::from_str(&text)
+            .map_err(|e| anyhow::anyhow!("parsing {}: {}", path.display(), e))
+    }
+
+    pub fn save(&self, path: &Path) -> anyhow::Result<()> {
+        let header = "# bhdl.lock — auto-generated. Pins exact library versions + content\n\
+                      # hashes for reproducible builds. Do not edit by hand; commit it.\n\n";
+        let body = toml::to_string_pretty(self)
+            .map_err(|e| anyhow::anyhow!("serializing lockfile: {}", e))?;
+        std::fs::write(path, format!("{header}{body}"))
+            .map_err(|e| anyhow::anyhow!("writing {}: {}", path.display(), e))
+    }
+
+    fn get(&self, name: &str) -> Option<&LockedLibrary> {
+        self.libraries.iter().find(|l| l.name == name)
+    }
+
+    /// Compare a freshly-resolved lock against this (stored) one.
+    /// Returns the drifts; empty == the build matches the lock.
+    pub fn diff(&self, current: &Lockfile) -> Vec<LockDrift> {
+        let mut drifts = Vec::new();
+        for cur in &current.libraries {
+            match self.get(&cur.name) {
+                None => drifts.push(LockDrift::Added { name: cur.name.clone() }),
+                Some(locked) => {
+                    if locked.version != cur.version {
+                        drifts.push(LockDrift::Version {
+                            name: cur.name.clone(),
+                            locked: locked.version.clone(),
+                            current: cur.version.clone(),
+                        });
+                    } else if locked.hash != cur.hash {
+                        drifts.push(LockDrift::Content {
+                            name: cur.name.clone(),
+                            version: cur.version.clone(),
+                        });
+                    }
+                }
+            }
+        }
+        for locked in &self.libraries {
+            if current.get(&locked.name).is_none() {
+                drifts.push(LockDrift::Removed { name: locked.name.clone() });
+            }
+        }
+        drifts
+    }
+}
+
+/// A way a freshly-resolved build differs from the stored lockfile.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LockDrift {
+    /// Same version, different content — the dangerous silent case
+    /// (e.g. 10 kΩ → 15 kΩ shipped without a version bump).
+    Content { name: String, version: String },
+    Version { name: String, locked: String, current: String },
+    Added { name: String },
+    Removed { name: String },
+}
+
+impl std::fmt::Display for LockDrift {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LockDrift::Content { name, version } => write!(
+                f,
+                "library `{name}` ({version}) CONTENT changed since the lock — same \
+                 version, different bytes (e.g. a vendor edited a recipe in place). \
+                 Restore the locked library, or run with --update-lock if intended."
+            ),
+            LockDrift::Version { name, locked, current } => write!(
+                f,
+                "library `{name}` resolves to {current} but the lock pins {locked}. \
+                 Restore {locked}, or run with --update-lock if intended."
+            ),
+            LockDrift::Added { name } => write!(f, "library `{name}` is new since the lock; run --update-lock"),
+            LockDrift::Removed { name } => write!(f, "library `{name}` was in the lock but is no longer declared; run --update-lock"),
+        }
+    }
+}
+
+/// Stable content digest of a library root: an md5 over every `.bhdl`
+/// file plus `manifest.toml`, visited in sorted relative-path order,
+/// each contribution framed by its path + length so file boundaries
+/// can't be confused. Deterministic across machines and time — the
+/// whole point of the lock. Returns `md5:<hex>`.
+///
+/// (md5 is used for change-detection, not security: we're catching an
+/// accidental vendor edit, not defending against a crafted collision.)
+pub fn hash_library_root(root: &Path) -> anyhow::Result<String> {
+    let mut files: Vec<PathBuf> = Vec::new();
+    collect_bhdl_files(root, &mut files)?;
+    let manifest = root.join("manifest.toml");
+    if manifest.is_file() {
+        files.push(manifest);
+    }
+    // Sort by path *relative to root* for machine-independence.
+    files.sort_by(|a, b| {
+        let ar = a.strip_prefix(root).unwrap_or(a);
+        let br = b.strip_prefix(root).unwrap_or(b);
+        ar.cmp(br)
+    });
+
+    let mut ctx = md5::Context::new();
+    for f in &files {
+        let rel = f.strip_prefix(root).unwrap_or(f).to_string_lossy().replace('\\', "/");
+        let bytes = std::fs::read(f)
+            .map_err(|e| anyhow::anyhow!("hashing {}: {}", f.display(), e))?;
+        ctx.consume(rel.as_bytes());
+        ctx.consume(b"\0");
+        ctx.consume(&(bytes.len() as u64).to_le_bytes());
+        ctx.consume(&bytes);
+    }
+    Ok(format!("md5:{:x}", ctx.compute()))
+}
+
+fn collect_bhdl_files(dir: &Path, out: &mut Vec<PathBuf>) -> anyhow::Result<()> {
+    if !dir.is_dir() {
+        return Ok(());
+    }
+    let mut entries: Vec<_> = std::fs::read_dir(dir)
+        .map_err(|e| anyhow::anyhow!("reading dir {}: {}", dir.display(), e))?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .collect();
+    entries.sort();
+    for p in entries {
+        if p.is_dir() {
+            collect_bhdl_files(&p, out)?;
+        } else if p.extension().and_then(|s| s.to_str()) == Some("bhdl") {
+            out.push(p);
+        }
+    }
+    Ok(())
+}
+
 /// Resolves namespaced import paths (`<ns>/<rel>.bhdl`) to files on
 /// disk against a project manifest + search roots. Built once per
 /// build and shared by the import loader and the component-library
@@ -302,6 +478,41 @@ impl LibraryResolver {
             }),
         }
     }
+
+    /// Resolve *every* declared library and produce a lockfile pinning
+    /// each one's exact version + content hash. Like Cargo, the lock
+    /// pins the whole declared dependency set (not just what a given
+    /// board imports), so it's a pure function of (manifest + search
+    /// path) and reproducible. `bhdl-stdlib` is implicit and not locked
+    /// (it's the bundled lib, versioned with the toolchain itself).
+    pub fn compute_lockfile(&self) -> anyhow::Result<Lockfile> {
+        let mut libraries = Vec::new();
+        if let Some(manifest) = &self.manifest {
+            let mut names: Vec<&String> = manifest.libraries.keys().collect();
+            names.sort(); // deterministic lock ordering
+            for name in names {
+                let root = self
+                    .resolve_namespace_root(name)
+                    .map_err(|e| anyhow::anyhow!("{}", e))?;
+                let lm = LibraryManifest::load(&root.join("manifest.toml"))?;
+                let hash = hash_library_root(&root)?;
+                let source = self
+                    .manifest
+                    .as_ref()
+                    .and_then(|m| m.libraries.get(name))
+                    .and_then(|d| d.path())
+                    .map(|p| format!("path:{p}"))
+                    .unwrap_or_else(|| format!("search:{}", root.display()));
+                libraries.push(LockedLibrary {
+                    name: name.clone(),
+                    version: lm.library.version,
+                    hash,
+                    source,
+                });
+            }
+        }
+        Ok(Lockfile { version: Lockfile::CURRENT_VERSION, libraries })
+    }
 }
 
 #[cfg(test)]
@@ -451,6 +662,77 @@ mod tests {
             }
             other => panic!("expected VersionMismatch, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn lockfile_generate_verify_and_detect_drift() {
+        let t = tmp();
+        let libs = t.join("libs");
+        std::fs::create_dir_all(&libs).unwrap();
+        let root = make_lib(&libs, "acme-stdlib", "2.1.0");
+        let mp = write_manifest(
+            &t,
+            "[project]\nname=\"b\"\n[libraries]\nacme-stdlib = { path = \"libs/acme-stdlib\", version = \"2.1\" }\n",
+        );
+
+        let r = LibraryResolver::new(Some(&mp), &[], None, None).unwrap();
+        let lock = r.compute_lockfile().unwrap();
+        assert_eq!(lock.libraries.len(), 1);
+        assert_eq!(lock.libraries[0].name, "acme-stdlib");
+        assert_eq!(lock.libraries[0].version, "2.1.0");
+        assert!(lock.libraries[0].hash.starts_with("md5:"));
+
+        // Re-resolving identical content → no drift.
+        let again = r.compute_lockfile().unwrap();
+        assert!(lock.diff(&again).is_empty(), "identical content must not drift");
+
+        // THE scenario: vendor edits a recipe in place WITHOUT bumping
+        // the version (10kΩ → 15kΩ). Same version, different bytes.
+        std::fs::write(
+            root.join("parts/widget.bhdl"),
+            "entity Widget { pin A: signal inout; /* now 15k */ }\n",
+        )
+        .unwrap();
+        let after_edit = r.compute_lockfile().unwrap();
+        let drift = lock.diff(&after_edit);
+        assert_eq!(drift.len(), 1);
+        assert!(
+            matches!(&drift[0], LockDrift::Content { name, .. } if name == "acme-stdlib"),
+            "in-place content edit must surface as Content drift, got {:?}",
+            drift
+        );
+
+        // A version bump surfaces as Version drift, not Content.
+        std::fs::write(
+            root.join("manifest.toml"),
+            "[library]\nname = \"acme-stdlib\"\nversion = \"2.1.1\"\n",
+        )
+        .unwrap();
+        let after_bump = r.compute_lockfile().unwrap();
+        let vd = lock.diff(&after_bump);
+        assert!(
+            matches!(&vd[0], LockDrift::Version { locked, current, .. } if locked == "2.1.0" && current == "2.1.1"),
+            "version bump must surface as Version drift, got {:?}",
+            vd
+        );
+    }
+
+    #[test]
+    fn lockfile_roundtrips_through_toml() {
+        let t = tmp();
+        let lf = Lockfile {
+            version: 1,
+            libraries: vec![LockedLibrary {
+                name: "acme-stdlib".into(),
+                version: "2.1.0".into(),
+                hash: "md5:deadbeef".into(),
+                source: "path:libs/acme-stdlib".into(),
+            }],
+        };
+        let p = t.join("bhdl.lock");
+        lf.save(&p).unwrap();
+        let back = Lockfile::load(&p).unwrap();
+        assert_eq!(lf, back);
     }
 
     #[test]

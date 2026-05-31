@@ -287,6 +287,7 @@ dependencies = [
  "anyhow",
  "bhdl-ast",
  "bhdl-parser",
+ "md5",
  "serde",
  "serde_json",
  "toml",
