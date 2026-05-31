@@ -1980,7 +1980,7 @@ fn add_interface_field_pins(
         // constraints are applied during recursion above, so by the
         // time we reach here all leaf pins this constraint block can
         // reference already exist in `module.pins`.
-        apply_iface_constraints(&iface_node, module_id, netlist, &field_name);
+        apply_iface_constraints(&iface_node, module_id, netlist, &field_name, &type_name);
     }
 }
 
@@ -2198,7 +2198,7 @@ fn add_sub_interface_field_pins(
         // v0.8 constraints on the sub-interface itself (e.g., DiffPair's
         // `*: differential 100ohm`) get attached to the leaves
         // materialised under `nested_prefix.*`.
-        apply_iface_constraints(&sub_iface_node, module_id, netlist, &nested_prefix);
+        apply_iface_constraints(&sub_iface_node, module_id, netlist, &nested_prefix, &type_name);
     }
 }
 
@@ -2229,13 +2229,41 @@ pub const INTERFACE_CONSTRAINT_REL_ATTR_PREFIX: &str = "intf_const_rel__";
 ///
 /// Relations (`A -> B: prop`) cross-product the LHS-resolved set
 /// with the RHS-resolved set.
+///
+/// # Tier-2 (task #96): multi-value storage + override precedence + provenance
+///
+/// A `(pin, prop)` slot may be targeted by more than one statement — most
+/// commonly a broad wildcard (`*: single_ended 40ohm`) plus a specific
+/// override (`DQ0: single_ended 50ohm`). The earlier implementation blindly
+/// `insert`ed, so the last writer silently won and the disagreement was
+/// invisible downstream. We now:
+///
+/// - accumulate every contributor (value + tier + source line + the
+///   declaring interface type name) per attribute key;
+/// - resolve the **winning** value by override precedence —
+///   [`ConstraintTier::Specific`] (explicit pin) beats
+///   [`ConstraintTier::Interface`] (wildcard), ties broken last-writer —
+///   and store it in the primary `intf_const__*` attribute exactly as
+///   before (backward compatible);
+/// - emit the full contributor map once per module under
+///   [`INTERFACE_CONSTRAINT_PROVENANCE_ATTR`] (a single JSON attribute) so
+///   the P&R session can render traceable diagnostics and detect
+///   same-tier contradictions. Cross-net contradictions remain P&R's to
+///   detect post-net-merge (handshake §10).
+///
+/// `scope` is the declaring interface's type name (e.g. `"DDR4Data"`),
+/// recorded in each provenance entry alongside the source line.
 fn apply_iface_constraints(
     iface_node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>,
     module_id: ModuleId,
     netlist: &mut Netlist,
     prefix: &str,
+    scope: &str,
 ) {
     use bhdl_parser::SyntaxKind;
+    use bhdl_common::constraint_provenance::{
+        ConstraintProvenance, ConstraintProvenanceMap, INTERFACE_CONSTRAINT_PROVENANCE_ATTR,
+    };
 
     // Snapshot the materialised pin set ONCE so wildcard expansion
     // doesn't see partial state if anything reorders mid-loop.
@@ -2247,6 +2275,11 @@ fn apply_iface_constraints(
             .collect(),
         None => return,
     };
+
+    // Accumulate contributors per primary attribute key across all
+    // statements in this interface's constraint block(s).
+    let mut acc: std::collections::HashMap<String, Vec<ConstraintProvenance>> =
+        std::collections::HashMap::new();
 
     for cb in iface_node
         .children()
@@ -2268,45 +2301,124 @@ fn apply_iface_constraints(
                 .map(|n| n.text().to_string())
                 .unwrap_or_default();
 
-            let lhs_targets = resolve_constraint_targets(&lhs_text, prefix, &module_pins);
             let props = parse_constraint_props(&props_text);
             if props.is_empty() { continue; }
 
+            let line = constraint_stmt_line(&stmt);
+
             match rhs_text {
                 Some(rhs) => {
-                    let rhs_targets = resolve_constraint_targets(&rhs, prefix, &module_pins);
-                    if lhs_targets.is_empty() || rhs_targets.is_empty() { continue; }
-                    if let Some(module) = netlist.modules.get_mut(module_id) {
-                        for from in &lhs_targets {
-                            for to in &rhs_targets {
-                                for (k, v) in &props {
-                                    let key = format!(
-                                        "{}{}__{}__{}",
-                                        INTERFACE_CONSTRAINT_REL_ATTR_PREFIX,
-                                        from, to, k,
-                                    );
-                                    module.attributes.insert(key, v.clone());
+                    // Relation: cross-product per-target so each endpoint
+                    // pair carries its own tier (Specific only when both
+                    // endpoints are explicit).
+                    for fraw in lhs_text.split(',') {
+                        let ft = fraw.trim();
+                        if ft.is_empty() { continue; }
+                        let ftier = constraint_target_tier(ft);
+                        let froms = resolve_one_target(ft, prefix, &module_pins);
+                        for rraw in rhs.split(',') {
+                            let rt = rraw.trim();
+                            if rt.is_empty() { continue; }
+                            let rtier = constraint_target_tier(rt);
+                            let tier = ftier.min(rtier);
+                            let tos = resolve_one_target(rt, prefix, &module_pins);
+                            for from in &froms {
+                                for to in &tos {
+                                    for (k, v) in &props {
+                                        let key = format!(
+                                            "{}{}__{}__{}",
+                                            INTERFACE_CONSTRAINT_REL_ATTR_PREFIX,
+                                            from, to, k,
+                                        );
+                                        acc.entry(key).or_default().push(
+                                            ConstraintProvenance::new(
+                                                v.clone(), line, tier, scope,
+                                            ),
+                                        );
+                                    }
                                 }
                             }
                         }
                     }
                 }
                 None => {
-                    if lhs_targets.is_empty() { continue; }
-                    if let Some(module) = netlist.modules.get_mut(module_id) {
-                        for pin in &lhs_targets {
+                    for raw in lhs_text.split(',') {
+                        let t = raw.trim();
+                        if t.is_empty() { continue; }
+                        let tier = constraint_target_tier(t);
+                        let pins = resolve_one_target(t, prefix, &module_pins);
+                        for pin in &pins {
                             for (k, v) in &props {
                                 let key = format!(
                                     "{}{}__{}",
                                     INTERFACE_CONSTRAINT_ATTR_PREFIX, pin, k,
                                 );
-                                module.attributes.insert(key, v.clone());
+                                acc.entry(key).or_default().push(
+                                    ConstraintProvenance::new(v.clone(), line, tier, scope),
+                                );
                             }
                         }
                     }
                 }
             }
         }
+    }
+
+    if acc.is_empty() { return; }
+
+    if let Some(module) = netlist.modules.get_mut(module_id) {
+        // Merge into any provenance map a prior call (another interface
+        // field on this same module) already wrote.
+        let mut prov_map: ConstraintProvenanceMap = module
+            .attributes
+            .get(INTERFACE_CONSTRAINT_PROVENANCE_ATTR)
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_default();
+
+        for (key, entries) in acc {
+            // Primary attribute = the override winner (back-compat shape).
+            if let Some(win) = ConstraintProvenance::winner(&entries) {
+                module.attributes.insert(key.clone(), win.value.clone());
+            }
+            prov_map.entry(key).or_default().extend(entries);
+        }
+
+        if let Ok(json) = serde_json::to_string(&prov_map) {
+            module
+                .attributes
+                .insert(INTERFACE_CONSTRAINT_PROVENANCE_ATTR.to_string(), json);
+        }
+    }
+}
+
+/// 1-based source line of a constraint statement within its file, derived
+/// from the syntax tree (count newlines before the node's start offset).
+/// `None` if the offset can't be sliced (shouldn't happen for real nodes).
+/// Best-effort: when the interface was source-text-monomorphised (a
+/// parametric interface), the line is relative to the preprocessed text.
+fn constraint_stmt_line(
+    stmt: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>,
+) -> Option<u32> {
+    let mut root = stmt.clone();
+    while let Some(p) = root.parent() {
+        root = p;
+    }
+    let src = root.text().to_string();
+    let off = usize::from(stmt.text_range().start());
+    let prefix = src.get(..off)?;
+    Some(prefix.matches('\n').count() as u32 + 1)
+}
+
+/// Override tier of a raw constraint target token: a wildcard target
+/// (`*`, `DQ*`, `CK.*`) is the broad [`ConstraintTier::Interface`]; an
+/// explicit pin/bundle name is the narrower [`ConstraintTier::Specific`]
+/// and overrides a wildcard on the same `(pin, prop)`.
+fn constraint_target_tier(raw: &str) -> bhdl_common::constraint_provenance::ConstraintTier {
+    use bhdl_common::constraint_provenance::ConstraintTier;
+    if raw.contains('*') {
+        ConstraintTier::Interface
+    } else {
+        ConstraintTier::Specific
     }
 }
 

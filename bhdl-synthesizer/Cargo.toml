@@ -164,3 +164,7 @@ path = "tests/freeze_netlist.rs"
 [[test]]
 name = "source_fetch"
 path = "tests/source_fetch.rs"
+
+[[test]]
+name = "constraints_tier2"
+path = "tests/constraints_tier2.rs"
