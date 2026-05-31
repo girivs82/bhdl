@@ -21,6 +21,7 @@ pub mod layout_meta;
 pub mod sku;
 pub mod variant;
 pub mod library;
+pub mod source;
 
 pub use component_types::{ComponentType, ComponentTypeMapper};
 pub use pin_metadata::{PinMetadata, PinFunction, ModulePinMetadata};

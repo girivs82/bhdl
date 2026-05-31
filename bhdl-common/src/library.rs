@@ -40,10 +40,11 @@ pub struct ProjectInfo {
     pub version: Option<String>,
 }
 
-/// A declared library dependency. Accepts two TOML shapes:
-///   `lib = "1.4"`                       (bare version, name-resolved)
-///   `lib = { version = "1.4" }`         (name-resolved)
-///   `lib = { path = "../x", version = "2.1" }`  (explicit root)
+/// A declared library dependency. Accepts these TOML shapes:
+///   `lib = "1.4"`                                  (bare version, name-resolved)
+///   `lib = { version = "1.4" }`                    (name-resolved)
+///   `lib = { path = "../x", version = "2.1" }`     (explicit local root)
+///   `lib = { source = "git:…", rev = "…", version = "2.1" }`  (level-3 fetch)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Dependency {
@@ -54,6 +55,14 @@ pub enum Dependency {
         version: String,
         #[serde(default)]
         path: Option<String>,
+        /// Level-3: `<scheme>:<locator>` fetched by a source resolver.
+        /// Mutually exclusive with `path`. Requires `rev`.
+        #[serde(default)]
+        source: Option<String>,
+        /// Level-3: the pinned, immutable revision (commit SHA,
+        /// changelist, digest) the `source` is fetched at.
+        #[serde(default)]
+        rev: Option<String>,
     },
 }
 
@@ -68,6 +77,18 @@ impl Dependency {
         match self {
             Dependency::Version(_) => None,
             Dependency::Detailed { path, .. } => path.as_deref(),
+        }
+    }
+    pub fn source(&self) -> Option<&str> {
+        match self {
+            Dependency::Version(_) => None,
+            Dependency::Detailed { source, .. } => source.as_deref(),
+        }
+    }
+    pub fn rev(&self) -> Option<&str> {
+        match self {
+            Dependency::Version(_) => None,
+            Dependency::Detailed { rev, .. } => rev.as_deref(),
         }
     }
 }
@@ -170,8 +191,13 @@ pub struct LockedLibrary {
     /// `sha256:<hex>`. The scheme prefix is self-describing and leaves
     /// room for a future migration; only sha256 is emitted today.
     pub hash: String,
-    /// Informational: how the library was located at lock time.
+    /// Informational: how the library was located at lock time
+    /// (`path:…`, `search:…`, or a `<scheme>:<locator>` source).
     pub source: String,
+    /// Level-3: the pinned revision a `source` dep was fetched at.
+    /// `None` for path/search deps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rev: Option<String>,
 }
 
 impl Lockfile {
@@ -336,6 +362,8 @@ pub struct LibraryResolver {
     search_roots: Vec<PathBuf>,
     /// Location of the bundled `bhdl-stdlib` (resolved separately).
     stdlib_root: Option<PathBuf>,
+    /// Level-3 source-fetch options (resolver-helper dirs + offline).
+    fetch: crate::source::FetchOptions,
 }
 
 /// Outcome of resolving an import's namespace to a library root.
@@ -343,6 +371,9 @@ pub struct LibraryResolver {
 pub enum ResolveError {
     /// `<ns>` is not `bhdl-stdlib` and not declared in `[libraries]`.
     Undeclared { namespace: String },
+    /// A level-3 `source` dependency failed to fetch/resolve, or the
+    /// dependency is malformed (e.g. both `path` and `source`).
+    Fetch { namespace: String, detail: String },
     /// Declared, but no root on the search path / `path =` matched.
     NotFound { namespace: String, searched: Vec<PathBuf> },
     /// Found a root, but its `manifest.toml` version disagrees with the
@@ -357,6 +388,10 @@ impl std::fmt::Display for ResolveError {
                 f,
                 "import references library `{namespace}`, which is not declared in \
                  bhdl.toml [libraries] (only `{STDLIB_NAMESPACE}` is implicit)"
+            ),
+            ResolveError::Fetch { namespace, detail } => write!(
+                f,
+                "library `{namespace}`: {detail}"
             ),
             ResolveError::NotFound { namespace, searched } => write!(
                 f,
@@ -400,7 +435,21 @@ impl LibraryResolver {
             }
         }
 
-        Ok(LibraryResolver { manifest, manifest_dir, search_roots, stdlib_root })
+        Ok(LibraryResolver {
+            manifest,
+            manifest_dir,
+            search_roots,
+            stdlib_root,
+            fetch: crate::source::FetchOptions::default(),
+        })
+    }
+
+    /// Configure level-3 source-fetch behaviour (resolver-helper search
+    /// dirs + offline). Builder-style; default is "no extra resolver
+    /// dirs, online".
+    pub fn with_fetch_options(mut self, fetch: crate::source::FetchOptions) -> Self {
+        self.fetch = fetch;
+        self
     }
 
     /// Resolve an import `from "<ns>/<rel>.bhdl"` to an absolute file
@@ -437,10 +486,39 @@ impl LibraryResolver {
 
         // 3a. Explicit path = root (relative to the manifest dir).
         if let Some(p) = dep.path() {
+            if dep.source().is_some() {
+                return Err(ResolveError::Fetch {
+                    namespace: ns.to_string(),
+                    detail: "declares both `path` and `source` (mutually exclusive)".into(),
+                });
+            }
             let root = match &self.manifest_dir {
                 Some(d) => d.join(p),
                 None => PathBuf::from(p),
             };
+            return self.version_check(ns, dep.version(), root);
+        }
+
+        // 3b. Level-3 `source = "<scheme>:<locator>"` + `rev` — fetched
+        // (or cache-hit) via the scheme's resolver helper.
+        if let Some(src) = dep.source() {
+            let rev = dep.rev().ok_or_else(|| ResolveError::Fetch {
+                namespace: ns.to_string(),
+                detail: "`source` requires a pinned `rev`".into(),
+            })?;
+            let spec = crate::source::SourceSpec::parse(src, rev).map_err(|e| {
+                ResolveError::Fetch { namespace: ns.to_string(), detail: e.to_string() }
+            })?;
+            if spec.rev_looks_mutable() {
+                log::warn!(
+                    "library `{ns}` source rev `{}` looks mutable — reproducibility relies \
+                     on an immutable revision (commit SHA / changelist / digest)",
+                    spec.rev
+                );
+            }
+            let root = crate::source::resolve_source(&spec, &self.fetch).map_err(|e| {
+                ResolveError::Fetch { namespace: ns.to_string(), detail: e.to_string() }
+            })?;
             return self.version_check(ns, dep.version(), root);
         }
 
@@ -501,18 +579,20 @@ impl LibraryResolver {
                     .map_err(|e| anyhow::anyhow!("{}", e))?;
                 let lm = LibraryManifest::load(&root.join("manifest.toml"))?;
                 let hash = hash_library_root(&root)?;
-                let source = self
-                    .manifest
-                    .as_ref()
-                    .and_then(|m| m.libraries.get(name))
-                    .and_then(|d| d.path())
-                    .map(|p| format!("path:{p}"))
-                    .unwrap_or_else(|| format!("search:{}", root.display()));
+                let dep = self.manifest.as_ref().and_then(|m| m.libraries.get(name));
+                let (source, rev) = match dep {
+                    Some(d) if d.source().is_some() => {
+                        (d.source().unwrap().to_string(), d.rev().map(|r| r.to_string()))
+                    }
+                    Some(d) if d.path().is_some() => (format!("path:{}", d.path().unwrap()), None),
+                    _ => (format!("search:{}", root.display()), None),
+                };
                 libraries.push(LockedLibrary {
                     name: name.clone(),
                     version: lm.library.version,
                     hash,
                     source,
+                    rev,
                 });
             }
         }
@@ -732,6 +812,7 @@ mod tests {
                 version: "2.1.0".into(),
                 hash: "sha256:deadbeef".into(),
                 source: "path:libs/acme-stdlib".into(),
+                rev: None,
             }],
         };
         let p = t.join("bhdl.lock");
