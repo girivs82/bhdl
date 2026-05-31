@@ -67,7 +67,7 @@ fn lowers_ddr4_to_typed_constraints() {
     let resolve = |path: &str| ids.get(path).copied();
 
     let (parsed, _) = parse_interface_attrs(DDR4_MC.iter().copied());
-    let (cons, diags) = lower_interface_constraints(&parsed, "mc", &resolve);
+    let (cons, diags) = lower_interface_constraints(&parsed, "mc", &resolve, &Default::default());
     assert!(diags.is_empty(), "lowering diagnostics: {diags:?}");
 
     let count = |pred: &dyn Fn(&Constraint) -> bool| cons.iter().filter(|c| pred(c)).count();
@@ -116,7 +116,7 @@ fn ck_t_underscore_pair_inference() {
     };
     let attrs = [("intf_const__ddr.ca.CK_t__differential", "100ohm")];
     let (parsed, _) = parse_interface_attrs(attrs.iter().copied());
-    let (cons, diags) = lower_interface_constraints(&parsed, "mc", &resolve);
+    let (cons, diags) = lower_interface_constraints(&parsed, "mc", &resolve, &Default::default());
     assert!(diags.is_empty(), "diags: {diags:?}");
     // Pair inferred from _t → _c sibling.
     assert!(cons.iter().any(|c| matches!(c, Constraint::DiffPair { .. })));
@@ -126,4 +126,38 @@ fn ck_t_underscore_pair_inference() {
 fn prefix_constants_match_synth_side() {
     assert_eq!(ATTR_PREFIX, "intf_const__");
     assert_eq!(REL_ATTR_PREFIX, "intf_const_rel__");
+}
+
+#[test]
+fn provenance_enriches_constraint_source() {
+    use bhdl_common::constraint_provenance::{
+        ConstraintProvenance, ConstraintProvenanceMap, ConstraintTier,
+    };
+
+    let mut nets: SlotMap<NetId, ()> = SlotMap::with_key();
+    let n = nets.insert(());
+    let resolve = |path: &str| if path == "ddr.lane0.DQ0" { Some(n) } else { None };
+
+    let attrs = [("intf_const__ddr.lane0.DQ0__single_ended", "34ohm")];
+    let (parsed, _) = parse_interface_attrs(attrs.iter().copied());
+
+    // Provenance sidecar: the winning contributor at line 34 in DDR4Data.
+    let mut prov: ConstraintProvenanceMap = Default::default();
+    prov.insert(
+        "intf_const__ddr.lane0.DQ0__single_ended".into(),
+        vec![ConstraintProvenance::new("34ohm", Some(34), ConstraintTier::Specific, "DDR4Data")],
+    );
+
+    let (cons, _) = lower_interface_constraints(&parsed, "mc", &resolve, &prov);
+    let imp = cons.iter().find(|c| matches!(c, Constraint::Impedance { .. })).unwrap();
+    let src = imp.source();
+    assert_eq!(src.line, Some(34), "line carried from provenance");
+    assert_eq!(src.file, "DDR4Data", "interface scope carried as file");
+    assert_eq!(src.intent_kind, "interface:single_ended");
+
+    // Without provenance, the source has no line (back-compat).
+    let (cons2, _) = lower_interface_constraints(&parsed, "mc", &resolve, &Default::default());
+    let src2 = cons2.iter().find(|c| matches!(c, Constraint::Impedance { .. })).unwrap().source();
+    assert_eq!(src2.line, None);
+    assert!(src2.file.is_empty());
 }
