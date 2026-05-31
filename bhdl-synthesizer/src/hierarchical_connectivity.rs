@@ -2380,6 +2380,37 @@ fn apply_iface_constraints(
             if let Some(win) = ConstraintProvenance::winner(&entries) {
                 module.attributes.insert(key.clone(), win.value.clone());
             }
+            // Surface a within-module same-tier contradiction at emit time
+            // (two equally-authoritative statements disagreeing on one
+            // (pin, prop) — distinct from an intentional specific-over-
+            // wildcard override). This is the synth-owned half of the
+            // conflict split; cross-net, post-net-merge contradictions are
+            // P&R's §9 pass (handshake §10/§11/§13). We warn rather than
+            // fail: the override winner is still well-defined (last
+            // writer), so the build proceeds, but the disagreement is
+            // logged with each side's origin.
+            if ConstraintProvenance::has_same_tier_conflict(&entries) {
+                let detail = entries
+                    .iter()
+                    .map(|e| {
+                        let loc = e
+                            .line
+                            .map(|l| format!("{}:{}", e.scope, l))
+                            .unwrap_or_else(|| e.scope.clone());
+                        format!("{} @ {} ({})", e.value, loc, e.tier.as_str())
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" vs ");
+                let winner_val = ConstraintProvenance::winner(&entries)
+                    .map(|w| w.value.as_str())
+                    .unwrap_or("<none>");
+                warn!(
+                    "interface constraint conflict on `{}`: {} — using `{}` \
+                     (last writer); make the intended value the more-specific \
+                     target to silence this",
+                    key, detail, winner_val,
+                );
+            }
             prov_map.entry(key).or_default().extend(entries);
         }
 
