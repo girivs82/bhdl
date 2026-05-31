@@ -66,7 +66,7 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
     let mut resolved_constants = ResolvedConstants::new();
 
     // Pass 1: Build scope registry with base path for imports
-    let (mut scope_registry, alias_specializations, imported_expansion_recipes, imported_symbol_definitions, imported_layout_definitions, imported_placement_recipes, imported_design_recipes, imported_entity_attr_index) = pass1::build_scope_registry_with_base(source_file, base_path);
+    let (mut scope_registry, alias_specializations, imported_expansion_recipes, imported_symbol_definitions, imported_layout_definitions, imported_placement_recipes, imported_design_recipes, imported_entity_attr_index, imported_entity_param_index) = pass1::build_scope_registry_with_base(source_file, base_path);
     // Extract legacy data structures for backward compatibility with existing passes
     let global_scope = scope_registry.extract_global_scope();
     let definition_scopes = scope_registry.extract_definition_scopes();
@@ -290,6 +290,16 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
         entity_attribute_index.insert(name, attrs);
     }
 
+    // Build the global entity constructor-parameter-name index (imported
+    // files + main file), the order-independent companion to
+    // entity_attribute_index. The synthesizer's expansion interpreter
+    // uses it to resolve attribute values that reference a child entity's
+    // own parameter into the instantiation argument.
+    let mut entity_param_names = imported_entity_param_index.clone();
+    for (name, params) in extract_entity_param_names(source_file) {
+        entity_param_names.insert(name, params);
+    }
+
     // Extract design recipes from the main source file. (Imported-file
     // Merge vendor `design { }` recipes: imported files (loaded by pass1)
     // overlaid with the main file's blocks.
@@ -464,6 +474,7 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
         design_recipes, // Move ownership (Pass 8.5)
         variants,
         entity_attribute_index,
+        entity_param_names,
         placement_recipes, // Move ownership (Pass 8.5)
         symbol_definitions, // Move ownership (Pass 8.5)
         layout_definitions, // Move ownership (Pass 8.5)
@@ -1457,6 +1468,69 @@ pub fn extract_entity_attribute_index(
         }
     }
     idx
+}
+
+/// Walk a source file's entities and extract their ordered constructor-
+/// parameter names as an `(entity_name → [param_name, …])` map. Mirrors
+/// [`extract_entity_attribute_index`]; pass1 accumulates these across all
+/// imported files and threads the combined map into
+/// `extract_expansion_recipes_with_overlay`. The recipe extractor uses it
+/// to resolve attribute values that are bare references to a child
+/// entity's own parameter (e.g. `entity Cap(value: capacitance) {
+/// attribute capacitance = value; }`) into the positional argument
+/// supplied at the instantiation site — so the leaf instance carries
+/// `capacitance = "100nF"` rather than the literal placeholder `"value"`.
+pub fn extract_entity_param_names(
+    source_file: &SourceFile,
+) -> std::collections::HashMap<String, Vec<String>> {
+    use bhdl_ast::{Entity, HasName};
+    use rowan::ast::AstNode;
+    let mut idx = std::collections::HashMap::new();
+    for item in source_file.items() {
+        if let Some(entity) = Entity::cast(item.syntax().clone()) {
+            if let Some(name_token) = entity.name() {
+                let mut names = Vec::new();
+                if let Some(param_list) = entity.param_list() {
+                    for param_def in param_list.param_defs() {
+                        if let Some(n) = param_def.name() {
+                            names.push(n.text().to_string());
+                        }
+                    }
+                }
+                if !names.is_empty() {
+                    idx.insert(name_token.text().to_string(), names);
+                }
+            }
+        }
+    }
+    idx
+}
+
+/// Substitute attribute values that are bare references to one of the
+/// child entity's constructor parameters with the corresponding
+/// positional argument expression from the instantiation.
+///
+/// Fixes the case where e.g. `entity Cap(value: capacitance) { attribute
+/// capacitance = value; }` would otherwise stamp the literal parameter
+/// *name* `"value"` onto the leaf instance instead of the actual
+/// argument (e.g. `"100nF"`). Param↔arg matching is positional; a
+/// reference to a parameter for which no positional argument was supplied
+/// (it relied on a default) is left untouched.
+pub fn substitute_value_params(
+    attributes: &mut std::collections::HashMap<String, String>,
+    param_names: &[String],
+    args: &[String],
+) {
+    if param_names.is_empty() || args.is_empty() {
+        return;
+    }
+    for value in attributes.values_mut() {
+        if let Some(idx) = param_names.iter().position(|p| p == value.trim()) {
+            if let Some(arg) = args.get(idx) {
+                *value = arg.trim().to_string();
+            }
+        }
+    }
 }
 
 /// Like [`extract_expansion_recipes`] but also consults a caller-supplied

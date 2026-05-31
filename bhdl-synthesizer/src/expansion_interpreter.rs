@@ -45,7 +45,8 @@ pub fn expand_entity_instances(
     // reference designers, exactly as before.
     let empty_designs = HashMap::new();
     let empty_attrs = HashMap::new();
-    expand_entity_instances_with_designs(netlist, recipes, &empty_designs, &empty_attrs)
+    let empty_params = HashMap::new();
+    expand_entity_instances_with_designs(netlist, recipes, &empty_designs, &empty_attrs, &empty_params)
 }
 
 /// As [`expand_entity_instances`] but with vendor `design { }` recipes
@@ -65,6 +66,7 @@ pub fn expand_entity_instances_with_designs(
     recipes: &HashMap<String, ExpansionRecipe>,
     design_recipes: &HashMap<String, HashMap<String, bhdl_common::design::DesignRecipe>>,
     entity_attr_index: &HashMap<String, HashMap<String, String>>,
+    entity_param_names: &HashMap<String, Vec<String>>,
 ) -> Vec<ExpansionResult> {
     if recipes.is_empty() {
         return Vec::new();
@@ -80,7 +82,7 @@ pub fn expand_entity_instances_with_designs(
 
     let mut results = Vec::new();
     for cand in candidates {
-        match expand_one_instance(netlist, &cand, entity_attr_index) {
+        match expand_one_instance(netlist, &cand, entity_attr_index, entity_param_names) {
             Ok(result) => {
                 info!("Expanded '{}' → {} child instance(s)",
                     result.parent_instance, result.child_instances.len());
@@ -235,6 +237,7 @@ fn expand_one_instance(
     netlist: &mut Netlist,
     cand: &ExpansionCandidate,
     entity_attr_index: &HashMap<String, HashMap<String, String>>,
+    entity_param_names: &HashMap<String, Vec<String>>,
 ) -> Result<ExpansionResult, String> {
     let base = &cand.instance_name;
 
@@ -445,9 +448,37 @@ fn expand_one_instance(
             &exp_inst.attributes
         };
 
+        // Resolve attribute values that are bare references to the called
+        // entity's own constructor parameters into the argument supplied
+        // at this instantiation. The stdlib passives expose their value
+        // under a semantic alias — e.g. `entity Cap(value: capacitance) {
+        // attribute capacitance = value; }`. The attribute extractor
+        // captures that as the literal text "value" (the parameter name),
+        // so without this step the leaf instance lands in the netlist
+        // (and the frozen BOM) with `capacitance = "value"` instead of
+        // the actual value like "100nF". We resolve each parameter the
+        // same way the `value` attribute above is resolved, then rewrite
+        // matching attribute values. Done here (not at recipe-extraction
+        // time) so it's order-independent across imports, matching the
+        // entity_attr_index fallback's contract.
+        let mut entity_attrs_owned = entity_attrs_fallback.clone();
+        if let Some(param_names) = entity_param_names.get(&exp_inst.component_type) {
+            let resolved_args: Vec<String> = param_names.iter().enumerate().map(|(i, name)| {
+                match exp_inst.params.get(i) {
+                    Some(arg) => resolve_param_expression(
+                        arg, &cand.param_values, &cand.recipe.param_defaults),
+                    // Parameter relied on its default and was not passed
+                    // positionally — leave any reference untouched.
+                    None => name.clone(),
+                }
+            }).collect();
+            bhdl_analyzer::substitute_value_params(
+                &mut entity_attrs_owned, param_names, &resolved_args);
+        }
+
         let mut attr_pairs: Vec<(&str, &str)> = Vec::with_capacity(
-            entity_attrs_fallback.len() + attrs.len());
-        for (k, v) in entity_attrs_fallback {
+            entity_attrs_owned.len() + attrs.len());
+        for (k, v) in &entity_attrs_owned {
             attr_pairs.push((k.as_str(), v.as_str()));
         }
         for (k, v) in &attrs {

@@ -516,6 +516,7 @@ impl NetlistGenerator {
                 &analysis.expansion_recipes,
                 &analysis.design_recipes,
                 &analysis.entity_attribute_index,
+                &analysis.entity_param_names,
             );
             info!(
                 "Phase 4.5: expansion produced {} expanded instance(s)",
