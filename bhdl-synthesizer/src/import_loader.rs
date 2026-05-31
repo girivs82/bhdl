@@ -18,6 +18,15 @@ pub struct ImportLoader {
     
     /// Base path for resolving relative imports
     base_path: String,
+
+    /// Optional Cargo-style library resolver. When set, non-relative
+    /// imports (`<namespace>/<rel>.bhdl`) resolve through it — against
+    /// the project manifest's declared libraries + the search path
+    /// (`-I` / `$BHDL_LIB_PATH`). When unset, non-relative imports fall
+    /// back to the legacy literal-path-from-cwd behaviour (keeps
+    /// stdlib-only boards and existing tests working with no manifest).
+    /// See `docs/spec/Library_Resolution.md`.
+    resolver: Option<bhdl_common::library::LibraryResolver>,
 }
 
 impl ImportLoader {
@@ -26,12 +35,18 @@ impl ImportLoader {
             loaded_entities: HashMap::new(),
             loaded_source_files: HashMap::new(),
             base_path: base_path.into(),
+            resolver: None,
         }
     }
-    
+
     /// Update the base path for resolving relative imports
     pub fn set_base_path(&mut self, base_path: impl Into<String>) {
         self.base_path = base_path.into();
+    }
+
+    /// Install the Cargo-style library resolver for namespaced imports.
+    pub fn set_resolver(&mut self, resolver: bhdl_common::library::LibraryResolver) {
+        self.resolver = Some(resolver);
     }
     
     /// Process imports from a source file
@@ -61,12 +76,20 @@ impl ImportLoader {
     
     /// Load entities from a file path
     fn load_from_path(&mut self, import_path: &str, module_names: &[String]) -> Result<()> {
-        // Resolve the path relative to the base path
+        // Resolve the path. `./` and `../` stay file-relative to the
+        // base path. Non-relative `<namespace>/<rel>.bhdl` imports go
+        // through the Cargo-style resolver when one is installed
+        // (declared-library + search-path resolution); otherwise they
+        // fall back to the legacy literal-path-from-cwd behaviour.
         let full_path = if import_path.starts_with("../") || import_path.starts_with("./") {
-            // Relative path - resolve from base
             Path::new(&self.base_path).join(import_path)
+        } else if let Some(resolver) = &self.resolver {
+            resolver
+                .resolve_import(import_path)
+                .map_err(|e| anyhow::anyhow!("{}", e))?
         } else {
-            // Absolute or stdlib path
+            // Legacy: literal path (works for `bhdl-stdlib/…` when run
+            // from the workspace root).
             Path::new(import_path).to_path_buf()
         };
         

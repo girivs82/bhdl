@@ -152,3 +152,7 @@ tempfile = "3.0"
 [[bin]]
 name = "test_layout_intent_thread"
 path = "src/bin/test_layout_intent_thread.rs"
+
+[[test]]
+name = "library_resolution"
+path = "tests/library_resolution.rs"

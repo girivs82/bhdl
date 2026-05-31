@@ -245,6 +245,28 @@ impl Default for NetlistConfig {
     }
 }
 
+/// Process-global Cargo-style library resolver, set once at startup by
+/// the CLI from the project `bhdl.toml` + `-I`/`$BHDL_LIB_PATH`. The
+/// library search configuration is an invocation-level setting (like
+/// Cargo's, derived once from manifest + env + flags), so every
+/// `NetlistGenerator::new()` in this process adopts it without
+/// threading it through call sites. Unset in library/test contexts →
+/// legacy literal-path import resolution. See
+/// docs/spec/Library_Resolution.md.
+static GLOBAL_LIBRARY_RESOLVER: std::sync::OnceLock<bhdl_common::library::LibraryResolver> =
+    std::sync::OnceLock::new();
+
+/// Install the process-global library resolver. Idempotent — first call
+/// wins (subsequent calls are ignored), matching the once-at-startup
+/// contract. Call before any synthesis runs.
+pub fn set_global_library_resolver(resolver: bhdl_common::library::LibraryResolver) {
+    let _ = GLOBAL_LIBRARY_RESOLVER.set(resolver);
+}
+
+fn global_library_resolver() -> Option<bhdl_common::library::LibraryResolver> {
+    GLOBAL_LIBRARY_RESOLVER.get().cloned()
+}
+
 /// Main netlist generator that converts analyzer results to netlists
 pub struct NetlistGenerator {
     config: NetlistConfig,
@@ -291,9 +313,17 @@ impl NetlistGenerator {
     /// Create a new netlist generator with custom configuration
     pub fn with_config(config: NetlistConfig) -> Self {
         
-        // Initialize import loader with current directory as base
-        let import_loader = ImportLoader::new(".");
-        
+        // Initialize import loader with current directory as base.
+        // If the process installed a global library resolver (set once
+        // by the CLI from `bhdl.toml` + `-I`/`$BHDL_LIB_PATH`), adopt it
+        // so namespaced imports resolve against declared libraries.
+        // Unset → legacy literal-path behaviour (back-compat for tests
+        // and stdlib-only boards). See docs/spec/Library_Resolution.md.
+        let mut import_loader = ImportLoader::new(".");
+        if let Some(resolver) = global_library_resolver() {
+            import_loader.set_resolver(resolver);
+        }
+
         Self {
             config,
             netlist: Netlist::new(),
@@ -321,6 +351,14 @@ impl NetlistGenerator {
         self.import_preprocessor = Some(preprocessor);
     }
     
+    /// Install a Cargo-style library resolver so namespaced imports
+    /// (`<lib>/<path>.bhdl`) resolve against a project `bhdl.toml` +
+    /// the `-I`/`$BHDL_LIB_PATH` search path. See
+    /// `docs/spec/Library_Resolution.md`.
+    pub fn set_library_resolver(&mut self, resolver: bhdl_common::library::LibraryResolver) {
+        self.import_loader.set_resolver(resolver);
+    }
+
     /// Set the source file path for proper import resolution
     pub fn set_source_file_path(&mut self, path: impl AsRef<Path>) {
         // Extract the directory from the file path to use as the base for relative imports

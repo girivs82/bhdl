@@ -289,6 +289,7 @@ dependencies = [
  "bhdl-parser",
  "serde",
  "serde_json",
+ "toml",
 ]
 
 [[package]]
