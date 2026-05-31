@@ -136,13 +136,11 @@ unchanged; only `source` deps go through the fetch+cache path.
 - **Helpers run with user privileges** — they're executables the user
   installed, same trust as any build tool. Documented boundary, not a
   sandbox.
-- **Tamper-evidence vs a hostile remote** is the content-hash. ⚠️ The
-  shipped lock hash is **md5**, chosen for *accidental*-drift detection.
-  For level-3, where bytes arrive from a possibly-compromised remote, a
-  collision-resistant hash is warranted — **upgrade the lock hash to
-  sha256 (or blake3) when level-3 lands.** (Decision §8. md5 stays fine
-  for the path=/search levels; the lock can carry an algorithm tag and
-  support both.)
+- **Tamper-evidence vs a hostile remote** is the content-hash. The
+  shipped lock hash is **sha256** (collision-resistant, used everywhere
+  — `Library_Resolution.md` §7a), so a remote serving different bytes
+  for the same revision fails the hash check. No algorithm work is
+  needed for level-3; the verification layer is already adequate.
 - **Scheme/host allowlist (optional).** A board may restrict where libs
   may come from:
   ```toml
@@ -179,20 +177,20 @@ script on PATH, shipped and maintained by whoever uses Perforce.
 
 ## 8. Open decisions (need a call before building)
 
-1. **Lock hash algorithm.** Keep md5 (drift only) vs upgrade to sha256
-   for level-3 remote-fetch integrity. *Lean: add an algorithm tag to
-   the lock and use sha256 for `source` deps; md5 stays valid for
-   path=/search.*
-2. **Helper protocol shape.** JSON-on-stdin/stdout (proposed, extensible)
+*(Hash algorithm — formerly the first decision — is settled: the lock
+uses **sha256** everywhere, already shipped. No level-3 work needed
+there.)*
+
+1. **Helper protocol shape.** JSON-on-stdin/stdout (proposed, extensible)
    vs plain CLI args (simpler). *Lean: JSON — room for auth hints,
    sparse-checkout, depth, without arg churn.*
-3. **Built-in git, or git-as-helper.** Ship a `git` built-in for the
+2. **Built-in git, or git-as-helper.** Ship a `git` built-in for the
    common case vs treat every scheme uniformly as a helper. *Lean:
    built-in git + helper protocol for the rest.*
-4. **Cache location.** Global `~/.cache/bhdl` (Cargo-style, cross-project
+3. **Cache location.** Global `~/.cache/bhdl` (Cargo-style, cross-project
    reuse) vs project-local `.bhdl/cache` (hermetic). *Lean: global with a
    project-local override + `$BHDL_CACHE`.*
-5. **Mutable-rev policy.** Warn vs hard-error on `main`/`HEAD`/`latest`.
+4. **Mutable-rev policy.** Warn vs hard-error on `main`/`HEAD`/`latest`.
    *Lean: warn (the content-hash still catches the resulting drift).*
 
 ## 9. Staging

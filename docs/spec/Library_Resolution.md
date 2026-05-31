@@ -197,16 +197,18 @@ version = 1
 [[library]]
 name    = "acme-stdlib"
 version = "2.1.0"                 # exact resolved version, not the loose pin
-hash    = "md5:9f3a…"             # content digest of the library root
+hash    = "sha256:9f3a…"          # content digest of the library root
 source  = "path:../acme/acme-stdlib"
 ```
 
-- **Content hash** = md5 over every `.bhdl` file + `manifest.toml` in the
-  library root, visited in sorted relative-path order, each framed by
-  its path + length. Deterministic across machines/time. md5 is for
-  **drift detection, not security** — we're catching an accidental
-  vendor edit, not a crafted collision. The hash is the part that
-  catches an in-place change with no version bump.
+- **Content hash** = sha256 over every `.bhdl` file + `manifest.toml` in
+  the library root, visited in sorted relative-path order, each framed
+  by its path + length. Deterministic across machines/time. One
+  collision-resistant hash everywhere — it catches both accidental
+  drift (a vendor editing a recipe in place, no version bump) and, at
+  level-3 (`Source_Resolvers.md`), a remote serving different bytes for
+  the same revision. The scheme prefix (`sha256:`) is self-describing
+  and leaves room for a future migration.
 - **Lock pins the whole declared set** (like Cargo.lock), not just what
   one board imports — a pure function of (manifest + search path).
 
