@@ -275,6 +275,7 @@ dependencies = [
  "clap",
  "colored",
  "env_logger 0.10.2",
+ "humantime",
  "log",
  "serde_json",
  "tokio",

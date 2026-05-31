@@ -237,6 +237,41 @@ the lock"), pointing the user at the exact divergence.
 > the absolute as-fabbed record. (See the reproducibility discussion in
 > the project notes.)
 
+## 7b. Frozen structural netlist — `bhdl freeze` (landed)
+
+The lockfile makes a build *reproducible from source*. Its complement
+is the **frozen structural netlist**: the *result* of a build —
+every concrete component (resolved value/footprint/MPN) and the flat
+connectivity, after all expansion/design/parametric inference — but
+**without** the recipes, intents, or templates that produced it. It's
+the manufacturing/release record ("this exact netlist is what we
+fabbed"), self-describing and dependency-pinned, and it depends on
+nothing being retrievable later.
+
+```
+bhdl board.bhdl freeze -o board.frozen.json
+```
+
+The schema is **stable and versioned** (`schema_version`), unlike
+`synth --format json` (which dumps the internal netlist verbatim):
+
+- **`provenance`** — toolchain version, source path, RFC-3339
+  timestamp, and the embedded **lockfile libraries** (name + exact
+  version + content hash) the build resolved against, so the frozen
+  record alone documents its full dependency set.
+- **`components`** — sorted by refdes; `refdes`, `component_type`,
+  resolved `value`/`footprint`/`mpn`, plus curated structural
+  attributes. Synthesis-internal and design-layer keys (`intf_*`,
+  `vpin_*`, `expansion_*`, `alias__*`, intents) are stripped — this is
+  the as-fabbed structural record, not the design model.
+- **`nets`** — sorted by name; each carries its `(refdes, pin)`
+  endpoints (sorted). Flat, no hierarchy.
+
+It is a **derived snapshot, not rebuildable source** (no design layer
+to re-run). The two artifacts are complementary: keep the lockfile for
+reproducible rebuilds and the frozen netlist for the immutable
+as-fabbed record. Implementation: `bhdl-synthesizer/src/freeze.rs`.
+
 ## 8. Out of scope for v0
 
 - **Registry / vendor-dir** that archives library bytes (the lock
