@@ -47,6 +47,21 @@ struct Cli {
     #[arg(long, value_name = "NAME")]
     sku: Option<String>,
 
+    /// Path to the project manifest (`bhdl.toml`) declaring library
+    /// dependencies. When omitted, BHDL discovers one by walking up
+    /// from the input file's directory (Cargo-style). Only needed when
+    /// the board imports from a non-`bhdl-stdlib` library.
+    /// See docs/spec/Library_Resolution.md.
+    #[arg(long, value_name = "FILE")]
+    manifest: Option<PathBuf>,
+
+    /// Library search root for resolving declared (name-only)
+    /// dependencies — repeatable, highest precedence first. Mirrors a
+    /// C compiler's `-I`. Authoritative over `$BHDL_LIB_PATH`. Point
+    /// these at proprietary/internal library roots.
+    #[arg(short = 'I', long = "lib-path", value_name = "DIR")]
+    lib_path: Vec<PathBuf>,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -254,6 +269,16 @@ async fn main() -> Result<()> {
             .init();
     }
     
+    // Configure Cargo-style library resolution (proprietary / external
+    // stdlibs). Activates only when the board opts in — a `bhdl.toml`
+    // is found (explicit --manifest, else discovered by walking up from
+    // the input file) OR `-I`/`$BHDL_LIB_PATH` is supplied. Otherwise
+    // imports keep legacy literal-path behaviour (stdlib-only boards
+    // need no manifest). See docs/spec/Library_Resolution.md.
+    if let Some(resolver) = build_library_resolver(&cli)? {
+        bhdl_synthesizer::set_global_library_resolver(resolver);
+    }
+
     // Read input file
     let input_content = fs::read_to_string(&cli.input)
         .with_context(|| format!("Failed to read file: {}", cli.input.display()))?;
@@ -330,6 +355,53 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Build the Cargo-style library resolver from CLI flags + environment.
+///
+/// Returns `Some(resolver)` when library resolution should activate:
+/// a `bhdl.toml` is found (explicit `--manifest`, else discovered by
+/// walking up from the input file's directory) OR `-I`/`--lib-path`
+/// roots were given. Returns `None` for the pure stdlib-only case
+/// (no manifest, no lib paths) so imports keep their legacy
+/// literal-path behaviour and nothing changes for existing boards.
+fn build_library_resolver(
+    cli: &Cli,
+) -> Result<Option<bhdl_common::library::LibraryResolver>> {
+    use bhdl_common::library::{discover_project_manifest, LibraryResolver};
+
+    // Locate the manifest: explicit flag, else walk up from the input dir.
+    let manifest_path = match &cli.manifest {
+        Some(p) => Some(p.clone()),
+        None => {
+            let start = cli.input.parent().unwrap_or_else(|| std::path::Path::new("."));
+            discover_project_manifest(start)
+        }
+    };
+
+    let env_lib_path = std::env::var("BHDL_LIB_PATH").ok();
+
+    // Activate only when the user opted in.
+    if manifest_path.is_none() && cli.lib_path.is_empty() && env_lib_path.is_none() {
+        return Ok(None);
+    }
+
+    if cli.verbose {
+        if let Some(m) = &manifest_path {
+            eprintln!("library resolver: manifest {}", m.display());
+        }
+        for r in &cli.lib_path {
+            eprintln!("library resolver: -I {}", r.display());
+        }
+    }
+
+    let resolver = LibraryResolver::new(
+        manifest_path.as_deref(),
+        &cli.lib_path,
+        env_lib_path.as_deref(),
+        None, // bundled stdlib falls back to literal `bhdl-stdlib/…`
+    )?;
+    Ok(Some(resolver))
 }
 
 fn run_parse(source_file: &SourceFile, root: &bhdl_ast::SyntaxNode<bhdl_ast::BhdlLanguage>, format: &str) -> Result<()> {
