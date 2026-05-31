@@ -77,6 +77,9 @@ pub enum IfaceProp {
 pub struct IfaceConstraint {
     pub target: IfaceTarget,
     pub prop: IfaceProp,
+    /// The original `intf_const__*` / `intf_const_rel__*` attribute key,
+    /// used to look this constraint up in the provenance sidecar map.
+    pub key: String,
 }
 
 /// Parse a set of `(attr_key, attr_value)` pairs (an instance's module
@@ -91,10 +94,14 @@ where
     let mut diags = Vec::new();
 
     for (key, value) in attrs {
+        // The provenance sidecar is not itself a constraint.
+        if key == bhdl_common::constraint_provenance::INTERFACE_CONSTRAINT_PROVENANCE_ATTR {
+            continue;
+        }
         let parsed = if let Some(rest) = key.strip_prefix(REL_ATTR_PREFIX) {
-            parse_rel(rest, value)
+            parse_rel(rest, value, key)
         } else if let Some(rest) = key.strip_prefix(ATTR_PREFIX) {
-            parse_per_signal(rest, value)
+            parse_per_signal(rest, value, key)
         } else {
             continue; // not an interface-constraint attribute
         };
@@ -114,22 +121,24 @@ where
 }
 
 /// `<pin_path>__<prop>` (the prop is the final `__`-delimited segment).
-fn parse_per_signal(rest: &str, value: &str) -> Option<IfaceConstraint> {
+fn parse_per_signal(rest: &str, value: &str, key: &str) -> Option<IfaceConstraint> {
     let (pin_path, prop_name) = rest.rsplit_once("__")?;
     Some(IfaceConstraint {
         target: IfaceTarget::PerSignal(pin_path.to_string()),
         prop: parse_prop(prop_name, value),
+        key: key.to_string(),
     })
 }
 
 /// `<from>__<to>__<prop>`.
-fn parse_rel(rest: &str, value: &str) -> Option<IfaceConstraint> {
+fn parse_rel(rest: &str, value: &str, key: &str) -> Option<IfaceConstraint> {
     // The prop is the last segment; from/to are the two before it.
     let (head, prop_name) = rest.rsplit_once("__")?;
     let (from, to) = head.rsplit_once("__")?;
     Some(IfaceConstraint {
         target: IfaceTarget::Pairwise(from.to_string(), to.to_string()),
         prop: parse_prop(prop_name, value),
+        key: key.to_string(),
     })
 }
 
@@ -228,18 +237,32 @@ pub fn lower_interface_constraints(
     parsed: &[IfaceConstraint],
     instance: &str,
     resolve: &NetResolver,
+    provenance: &bhdl_common::constraint_provenance::ConstraintProvenanceMap,
 ) -> (Vec<Constraint>, Vec<String>) {
+    use bhdl_common::constraint_provenance::ConstraintProvenance;
+
     let mut out = Vec::new();
     let mut diags = Vec::new();
     // pin-path → scope, for swizzle prefix reconstruction.
     let mut swizzle_within: Vec<String> = Vec::new();
     let mut swizzle_across: Vec<String> = Vec::new();
 
-    let src = |prop: &str| ConstraintSource {
-        file: String::new(),
-        line: None,
-        intent_kind: format!("interface:{prop}"),
-        recipe_version: "0".into(),
+    // Build a ConstraintSource, enriched with the synth side's provenance
+    // sidecar (handshake §10/§11): the winning contributor's `.bhdl` line
+    // and declaring interface scope. `file` carries the interface type
+    // name (no absolute path threaded yet — line + scope is traceable).
+    let src = |key: &str, prop: &str| -> ConstraintSource {
+        let (file, line) = provenance
+            .get(key)
+            .and_then(|e| ConstraintProvenance::winner(e))
+            .map(|w| (w.scope.clone(), w.line))
+            .unwrap_or_default();
+        ConstraintSource {
+            file,
+            line,
+            intent_kind: format!("interface:{prop}"),
+            recipe_version: "0".into(),
+        }
     };
 
     let mut resolve_or_warn = |path: &str, prop: &str, diags: &mut Vec<String>| -> Option<NetId> {
@@ -262,7 +285,7 @@ pub fn lower_interface_constraints(
                         net,
                         target_ohms: *ohms,
                         tolerance_pct: 10.0,
-                        source: src("single_ended"),
+                        source: src(&c.key, "single_ended"),
                     });
                 }
             }
@@ -279,14 +302,14 @@ pub fn lower_interface_constraints(
                             n_net,
                             spacing_mm: 0.15,
                             length_match_mm: 0.1,
-                            source: src("differential"),
+                            source: src(&c.key, "differential"),
                         });
                         for net in [p_net, n_net] {
                             out.push(Constraint::Impedance {
                                 net,
                                 target_ohms: *ohms,
                                 tolerance_pct: 5.0,
-                                source: src("differential"),
+                                source: src(&c.key, "differential"),
                             });
                         }
                     }
@@ -296,7 +319,7 @@ pub fn lower_interface_constraints(
                         net,
                         target_ohms: *ohms,
                         tolerance_pct: 5.0,
-                        source: src("differential"),
+                        source: src(&c.key, "differential"),
                     });
                 }
             }
@@ -306,7 +329,7 @@ pub fn lower_interface_constraints(
                         net,
                         class: class.clone(),
                         max_freq_hz: None,
-                        source: src("signal_class"),
+                        source: src(&c.key, "signal_class"),
                     });
                 }
             }
@@ -316,7 +339,7 @@ pub fn lower_interface_constraints(
                         net,
                         class: String::new(),
                         max_freq_hz: Some(*hz),
-                        source: src("max_freq"),
+                        source: src(&c.key, "max_freq"),
                     });
                 }
             }
@@ -327,7 +350,7 @@ pub fn lower_interface_constraints(
                         kind: kind.clone(),
                         root: None,
                         stub_max_mm: None,
-                        source: src("topology"),
+                        source: src(&c.key, "topology"),
                     });
                 }
             }
@@ -345,7 +368,7 @@ pub fn lower_interface_constraints(
                         nets: vec![na, nb],
                         tolerance_mm: ps / PS_PER_MM,
                         hardness: crate::constraint::Hardness::Hard,
-                        source: src("length_match"),
+                        source: src(&c.key, "length_match"),
                     });
                 }
             }
@@ -360,7 +383,7 @@ pub fn lower_interface_constraints(
                             shape: crate::constraint::CostShape::Hinge { slack: 0.0 },
                             weight: 1.0,
                         },
-                        source: src("skew_max"),
+                        source: src(&c.key, "skew_max"),
                     });
                 }
             }
@@ -384,7 +407,7 @@ fn lower_swizzle(
     scope: SwizzleScope,
     instance: &str,
     resolve: &NetResolver,
-    src: &dyn Fn(&str) -> ConstraintSource,
+    src: &dyn Fn(&str, &str) -> ConstraintSource,
     out: &mut Vec<Constraint>,
     diags: &mut Vec<String>,
 ) {
@@ -395,20 +418,25 @@ fn lower_swizzle(
         SwizzleScope::WithinGroup => "swizzle_within_byte",
         SwizzleScope::AcrossGroups => "swizzle_across_bytes",
     };
-    // Group by parent prefix (everything up to the last '.').
-    let mut by_parent: BTreeMap<String, Vec<NetId>> = BTreeMap::new();
+    // Group by parent prefix (everything up to the last '.'), keeping one
+    // representative member path per parent for provenance lookup.
+    let mut by_parent: BTreeMap<String, (Vec<NetId>, String)> = BTreeMap::new();
     for path in paths {
         let parent = path.rsplit_once('.').map(|(p, _)| p).unwrap_or("").to_string();
         match resolve(path) {
-            Some(net) => by_parent.entry(parent).or_default().push(net),
+            Some(net) => {
+                let e = by_parent.entry(parent).or_insert_with(|| (Vec::new(), path.clone()));
+                e.0.push(net);
+            }
             None => diags.push(format!(
                 "interface:{prop} on `{instance}.{path}`: net did not resolve (dropped from swizzle group)"
             )),
         }
     }
-    for (_parent, members) in by_parent {
+    for (_parent, (members, rep_path)) in by_parent {
         if members.len() >= 2 {
-            out.push(Constraint::SwizzleGroup { members, scope, source: src(prop) });
+            let key = format!("{ATTR_PREFIX}{rep_path}__{prop}");
+            out.push(Constraint::SwizzleGroup { members, scope, source: src(&key, prop) });
         }
     }
 }

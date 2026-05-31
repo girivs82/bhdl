@@ -508,6 +508,16 @@ fn extract_interface_constraints(
             continue;
         }
 
+        // Decode the synth side's provenance sidecar (handshake §10/§11),
+        // if present, to enrich each constraint's source with the `.bhdl`
+        // line + declaring interface scope. Absent / malformed → empty map
+        // (sources keep their pin-path-only provenance, back-compat).
+        let provenance: bhdl_common::constraint_provenance::ConstraintProvenanceMap = module
+            .attributes
+            .get(bhdl_common::constraint_provenance::INTERFACE_CONSTRAINT_PROVENANCE_ATTR)
+            .and_then(|json| serde_json::from_str(json).ok())
+            .unwrap_or_default();
+
         // Resolver: dotted leaf pin-path → NetId, scoped to this instance.
         let resolve = |path: &str| -> Option<NetId> {
             let pin_def = module.pins.iter().copied().find(|&pid| {
@@ -518,7 +528,8 @@ fn extract_interface_constraints(
             id_map.net_ids.get(*idx).copied()
         };
 
-        let (cons, ldiags) = lower_interface_constraints(&parsed, &instance.name, &resolve);
+        let (cons, ldiags) =
+            lower_interface_constraints(&parsed, &instance.name, &resolve, &provenance);
         all.extend(cons);
         diags.extend(ldiags);
     }

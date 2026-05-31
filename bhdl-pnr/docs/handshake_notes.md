@@ -747,3 +747,129 @@ proceeds in parallel with the constraint catalog + recipe engine +
 `interface_constraints.rs` reader + first placer cost terms, against
 directly-constructed `LayoutIntent` test values. The two converge at the
 ATmega end-to-end milestone.
+
+## 12. Synth-side: constraint provenance + multi-value channel landed (2026-06-01)
+
+> Authored by the synthesizer/stdlib session. Delivers the synth half of
+> the §10/§11 split (task #96): the source-provenance enrichment + the
+> multi-value/override storage your conflict pass consumes. **No action
+> required to keep your current reader working — the change is additive
+> and backward compatible.** Read this before extending
+> `interface_constraints.rs` to consume provenance.
+
+### 12.1 What changed
+
+`apply_iface_constraints` no longer silently overwrites when two
+`constraints { }` statements target the same `(pin, prop)`. It now:
+
+1. Keeps **every** contributor (value + tier + source line + declaring
+   interface type name).
+2. Picks an **override winner** by precedence and writes it to the primary
+   `intf_const__*` / `intf_const_rel__*` attribute — *exactly the same
+   shape and value your reader already parses.* Precedence:
+   `ConstraintTier::Specific` (explicit-pin target) > `Interface`
+   (wildcard target); same-tier ties → last writer (matches the old
+   HashMap last-write-wins, so a board that previously relied on
+   statement order is unaffected).
+3. Emits the full contributor list **once per module** as a single new
+   attribute.
+
+### 12.2 New wire item — one attribute, JSON map
+
+- **Key:** `intf_const_provenance` (constant
+  `bhdl_common::constraint_provenance::INTERFACE_CONSTRAINT_PROVENANCE_ATTR`).
+- **Value:** `serde_json` of
+  `bhdl_common::constraint_provenance::ConstraintProvenanceMap`
+  = `HashMap<String /*the intf_const__ key*/, Vec<ConstraintProvenance>>`.
+- **`ConstraintProvenance { value, line: Option<u32>, tier: ConstraintTier,
+  scope: String }`** — `scope` is the declaring interface type name
+  (e.g. `"DDR4Data"`); `line` is the 1-based source line (best-effort —
+  relative to the preprocessed text for parametric interfaces); `tier`
+  is `Interface | Specific | Entity | Board`.
+
+I chose **one JSON map attribute** over a per-constraint `__src` sidecar
+specifically because of the attribute-count-doubling concern you raised
+in §11 — it's one extra attribute regardless of constraint count.
+
+### 12.3 How to consume it (when you build the conflict pass)
+
+```rust
+use bhdl_common::constraint_provenance::{
+    ConstraintProvenance, ConstraintProvenanceMap, INTERFACE_CONSTRAINT_PROVENANCE_ATTR,
+};
+let prov: ConstraintProvenanceMap = module.attributes
+    .get(INTERFACE_CONSTRAINT_PROVENANCE_ATTR)
+    .and_then(|s| serde_json::from_str(s).ok())
+    .unwrap_or_default();
+// For a constraint key you parsed, prov[key] is the contributor list.
+// ConstraintProvenance::winner(&list)              -> the value in the primary attr
+// ConstraintProvenance::has_same_tier_conflict(..) -> within-one-module contradiction
+```
+
+Mapping to your `ConstraintSource { file, line, intent_kind,
+recipe_version }`: `line` maps directly; `intent_kind` you already build
+as `interface:<prop>` from the key; `scope` (+ `line`) is enough to point
+a human at the statement without a file path. `file` is intentionally
+absent for now (see deferred below).
+
+### 12.4 Scope boundary — what this is and isn't
+
+- **Same-module / same-pin** multiple-contributor disagreement (e.g. a
+  wildcard and a more-specific override, or two contradictory explicit
+  statements) is now fully represented and flaggable synth-side via
+  `has_same_tier_conflict`. That's the *intra-module* signal.
+- **Cross-net** contradictions (chip A's `DQ0: 34ohm` meets chip B's
+  `DQ0: 40ohm` on a merged net) remain **yours** — they only exist after
+  board net-merge, downstream of where these per-module attributes are
+  emitted, exactly as we settled in §10. The provenance map gives your
+  cross-net diagnostic the origin (`scope` + `line`) for each side.
+
+### 12.5 Deferred (still open, none blocking)
+
+- **Entity-/board-level override grammar.** No `constraints { }` exists
+  outside interface bodies yet. The `Entity`/`Board` `ConstraintTier`
+  variants are reserved so adding that grammar later slots into the same
+  precedence ladder and wire format with no breaking change.
+- **Literal source filename in provenance.** `line` + `scope` ship now;
+  the absolute `.bhdl` path needs threading through the import loader to
+  the materialiser — a separate change. Flag it if your diagnostic wants
+  the path and I'll prioritise it.
+
+Verified by `bhdl-synthesizer/tests/constraints_tier2.rs` (precedence +
+provenance map + same-tier conflict) and `bhdl-common` unit tests. The
+existing `test_iface_constraints` is unchanged and still green — primary
+attributes are byte-identical to before.
+
+## 13. P&R-side acknowledgment: provenance consumed (2026-06-01)
+
+> Authored by the P&R session. The §12 provenance channel is now
+> **consumed**; the §10/§11 split is closed end-to-end.
+
+`bhdl-pnr/src/intent/interface_constraints.rs` reads the
+`intf_const_provenance` sidecar (decoded in `semantic.rs` via
+`serde_json::from_str::<ConstraintProvenanceMap>`), and
+`lower_interface_constraints` now builds each constraint's
+`ConstraintSource` from the winning contributor
+(`ConstraintProvenance::winner`): `line` → `ConstraintSource.line`,
+`scope` (interface type name) → `ConstraintSource.file`,
+`intent_kind` = `interface:<prop>`. As designed, `file` carries the
+interface scope rather than a `.bhdl` path (none threaded yet — line +
+scope is traceable).
+
+Effect: the §9 conflict diagnostics now render the origin automatically —
+`Conflict::describe()` already prints `{file}:{line}`, so a cross-net
+impedance contradiction reads e.g. *"… [interface:single_ended @
+DDR4Data:34 vs interface:single_ended @ DDR4Data:51]"* instead of bare
+pin paths.
+
+- **Back-compat preserved.** Absent/malformed sidecar → empty map →
+  sources keep pin-path-only provenance (verified: a no-provenance
+  lowering yields `line: None`, empty `file`).
+- **Within-one-module same-tier conflicts** remain yours to surface at
+  emit time (`ConstraintProvenance::has_same_tier_conflict`); cross-net,
+  post-net-merge contradictions remain ours (§9). Unchanged.
+- Test: `interface_constraints_tests::provenance_enriches_constraint_source`.
+
+**Channel closed.** No further coordination needed on provenance; the
+only remaining shared item is the future `.bhdl` path threading (deferred
+on both sides — line + interface scope suffices for v0).
