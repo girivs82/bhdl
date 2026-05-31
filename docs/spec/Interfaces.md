@@ -603,8 +603,32 @@ laneK.DQS) with no duplication.
 > *distinct property names* (`swizzle_within_byte` vs
 > `swizzle_across_bytes`) to avoid last-write-wins collision.
 > Multi-value storage, entity-level overrides, board-level
-> additions, and cross-net conflict detection are deferred to
+> additions, and cross-net conflict detection were deferred to
 > tier-2, pending a real constraint consumer.
+
+> **Tier-2 — partly landed (task #96).** With `bhdl-pnr` now the live
+> consumer, the synth side stopped silently overwriting on a same
+> `(pin, property)` collision. It keeps **every** contributor, resolves a
+> winning value by **override precedence** (an explicit-pin target is
+> `Specific` and beats a wildcard's `Interface` tier; same-tier ties go
+> to the last writer), and writes that winner into the primary
+> `intf_const__*` attribute exactly as before. The full contributor list
+> — value + tier + source line + declaring interface name — is emitted
+> **once per module** as a JSON
+> [`ConstraintProvenanceMap`](../../bhdl-common/src/constraint_provenance.rs)
+> under the `intf_const_provenance` attribute, so the router can render
+> traceable diagnostics and flag same-tier contradictions. This is the
+> "multi-value storage + override precedence + provenance" slice.
+>
+> Still deferred: **entity-level / board-level override blocks** (no
+> grammar yet — the `Entity`/`Board` precedence tiers are reserved in
+> `ConstraintTier` so adding the grammar won't reshape the wire format);
+> the literal **source filename** in provenance (line + interface name
+> ship now; the `.bhdl` path needs threading through the import loader);
+> and **cross-net conflict detection** itself, which is structurally
+> P&R-owned — a cross-net contradiction only exists after board
+> net-merge, downstream of where the synth side emits these per-module
+> attributes (P&R↔synth handshake §10/§11).
 
 ---
 
