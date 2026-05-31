@@ -167,7 +167,8 @@ pub struct LockedLibrary {
     /// lock time), not the possibly-loose `bhdl.toml` requirement.
     pub version: String,
     /// Content digest of the library root (see `hash_library_root`).
-    /// `md5:<hex>` — for drift detection, not adversarial security.
+    /// `sha256:<hex>`. The scheme prefix is self-describing and leaves
+    /// room for a future migration; only sha256 is emitted today.
     pub hash: String,
     /// Informational: how the library was located at lock time.
     pub source: String,
@@ -259,14 +260,17 @@ impl std::fmt::Display for LockDrift {
     }
 }
 
-/// Stable content digest of a library root: an md5 over every `.bhdl`
+/// Stable content digest of a library root: a sha256 over every `.bhdl`
 /// file plus `manifest.toml`, visited in sorted relative-path order,
 /// each contribution framed by its path + length so file boundaries
 /// can't be confused. Deterministic across machines and time — the
-/// whole point of the lock. Returns `md5:<hex>`.
+/// whole point of the lock. Returns `sha256:<hex>`.
 ///
-/// (md5 is used for change-detection, not security: we're catching an
-/// accidental vendor edit, not defending against a crafted collision.)
+/// sha256 (one collision-resistant hash everywhere) covers both
+/// accidental drift (a vendor editing a recipe in place) and the
+/// level-3 supply-chain case (a remote serving different bytes for the
+/// same revision). See docs/spec/Library_Resolution.md §7a and
+/// Source_Resolvers.md.
 pub fn hash_library_root(root: &Path) -> anyhow::Result<String> {
     let mut files: Vec<PathBuf> = Vec::new();
     collect_bhdl_files(root, &mut files)?;
@@ -281,17 +285,18 @@ pub fn hash_library_root(root: &Path) -> anyhow::Result<String> {
         ar.cmp(br)
     });
 
-    let mut ctx = md5::Context::new();
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
     for f in &files {
         let rel = f.strip_prefix(root).unwrap_or(f).to_string_lossy().replace('\\', "/");
         let bytes = std::fs::read(f)
             .map_err(|e| anyhow::anyhow!("hashing {}: {}", f.display(), e))?;
-        ctx.consume(rel.as_bytes());
-        ctx.consume(b"\0");
-        ctx.consume(&(bytes.len() as u64).to_le_bytes());
-        ctx.consume(&bytes);
+        hasher.update(rel.as_bytes());
+        hasher.update(b"\0");
+        hasher.update((bytes.len() as u64).to_le_bytes());
+        hasher.update(&bytes);
     }
-    Ok(format!("md5:{:x}", ctx.compute()))
+    Ok(format!("sha256:{:x}", hasher.finalize()))
 }
 
 fn collect_bhdl_files(dir: &Path, out: &mut Vec<PathBuf>) -> anyhow::Result<()> {
@@ -680,7 +685,7 @@ mod tests {
         assert_eq!(lock.libraries.len(), 1);
         assert_eq!(lock.libraries[0].name, "acme-stdlib");
         assert_eq!(lock.libraries[0].version, "2.1.0");
-        assert!(lock.libraries[0].hash.starts_with("md5:"));
+        assert!(lock.libraries[0].hash.starts_with("sha256:"));
 
         // Re-resolving identical content → no drift.
         let again = r.compute_lockfile().unwrap();
@@ -725,7 +730,7 @@ mod tests {
             libraries: vec![LockedLibrary {
                 name: "acme-stdlib".into(),
                 version: "2.1.0".into(),
-                hash: "md5:deadbeef".into(),
+                hash: "sha256:deadbeef".into(),
                 source: "path:libs/acme-stdlib".into(),
             }],
         };
