@@ -472,6 +472,14 @@ pub struct AnalysisResult {
     /// dependent across imports; this index isn't, so it's the
     /// reliable fallback). See pass1::build_scope_registry_with_base.
     pub entity_attribute_index: HashMap<String, HashMap<String, String>>,
+    /// Per-entity ordered constructor-parameter names, gathered from
+    /// every imported file and the main file (order-independent, like
+    /// `entity_attribute_index`). The synthesizer's expansion
+    /// interpreter uses it to resolve attribute values that are bare
+    /// references to a child entity's own parameter (e.g. `attribute
+    /// capacitance = value;`) into the argument supplied at the
+    /// instantiation site, instead of leaking the literal param name.
+    pub entity_param_names: HashMap<String, Vec<String>>,
     /// Placement recipes extracted from entity `placement { }` blocks
     pub placement_recipes: HashMap<String, bhdl_common::PlacementRecipe>,
     /// Symbol definitions extracted from `symbol EntityName { }` blocks
@@ -509,6 +517,7 @@ impl Default for AnalysisResult {
             design_recipes: HashMap::new(),
             variants: HashMap::new(),
             entity_attribute_index: HashMap::new(),
+            entity_param_names: HashMap::new(),
             placement_recipes: HashMap::new(),
             symbol_definitions: HashMap::new(),
             layout_definitions: HashMap::new(),
