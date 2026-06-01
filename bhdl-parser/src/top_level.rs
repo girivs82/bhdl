@@ -1134,12 +1134,59 @@ impl<'t> Parser<'t> {
         self.expect(SyntaxKind::EQ);
         self.expect(SyntaxKind::IDENT); // Target name
 
-        // Optional type arguments: <5V, 3.3V>
+        // Optional type arguments: `<5V, 3.3V>` (generic specialization)
+        // OR constructor arguments: `(3.3V)` / `("2N2222")` (binds the
+        // target entity's regular constructor params). Both forms bind
+        // values to the target's parameters positionally; we record them
+        // in the same TYPE_ARGS node so the analyzer treats them
+        // uniformly (the monomorphization pass distinguishes generic vs
+        // regular by which target the alias points at).
         if self.peek() == Some(SyntaxKind::L_ANGLE) {
             self.parse_type_args();
+        } else if self.peek() == Some(SyntaxKind::L_PAREN) {
+            self.parse_alias_ctor_args();
         }
 
         self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+
+    // Parse a constructor-argument list on an alias: `(value, value, ...)`.
+    // Recorded under the same TYPE_ARGS node the generic `<...>` form uses
+    // so the analyzer's existing type-arg extraction picks the values up
+    // verbatim — the only difference from `<...>` is the paren delimiters
+    // (and that `>`/`<` aren't operators here, so no special handling).
+    fn parse_alias_ctor_args(&mut self) {
+        self.builder.start_node(SyntaxKind::TYPE_ARGS.into());
+        self.expect(SyntaxKind::L_PAREN);
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_PAREN) | None => break,
+                Some(SyntaxKind::NUMBER) | Some(SyntaxKind::STRING) |
+                Some(SyntaxKind::TRUE_KW) | Some(SyntaxKind::FALSE_KW) |
+                Some(SyntaxKind::MINUS) | Some(SyntaxKind::PLUS) => {
+                    self.parse_value();
+                    self.skip_trivia();
+                    if self.peek() == Some(SyntaxKind::COMMA) {
+                        self.bump();
+                    }
+                }
+                Some(SyntaxKind::IDENT) => {
+                    self.bump();
+                    self.skip_trivia();
+                    if self.peek() == Some(SyntaxKind::COMMA) {
+                        self.bump();
+                    }
+                }
+                _ => {
+                    // Unexpected token — bump to make progress and avoid a
+                    // hang; the trailing R_PAREN/SEMI expectations report.
+                    self.bump();
+                }
+            }
+        }
+        self.expect(SyntaxKind::R_PAREN);
         self.builder.finish_node();
     }
 

@@ -360,7 +360,7 @@ fn expand_one_instance(
             .and_then(|p| intent_design.get(p.trim()))
             .copied();
         if let Some(v) = designed_by_child.or(designed_by_param) {
-            attrs.push(("value", format!("{v:.3}")));
+            attrs.push(("value", format_designed_value(v)));
         } else if let Some(fp) = first_param {
             let resolved = resolve_param_expression(fp, &cand.param_values, &cand.recipe.param_defaults);
             attrs.push(("value", resolved));
@@ -689,8 +689,18 @@ fn intent_driven_values(
         // discovery found nothing, which evaluate_recipe surfaces as a
         // ScriptFailed if the recipe actually refers to device params.
         let (device_class, device_params) = device.unwrap_or_default();
+        // The design block reads its `self.<param>` values from the
+        // instance attribute map. Constructor-arg defaults that weren't
+        // explicitly stamped (e.g. the params an SKU alias didn't bind)
+        // live in the recipe's `param_defaults`; merge them underneath so
+        // `self.v_in` resolves to the entity default while any stamped
+        // override (a board arg or an SKU alias's bound value) still wins.
+        let mut self_params = cand.recipe.param_defaults.clone();
+        for (k, v) in &cand.param_values {
+            self_params.insert(k.clone(), v.clone());
+        }
         match crate::design_evaluator::evaluate_recipe(
-            recipe, &cand.param_values, board, device_class, device_params,
+            recipe, &self_params, board, device_class, device_params,
         ) {
             Ok(values) => {
                 info!("Vendor design recipe for '{}'.'{}': {} value(s)",
@@ -983,6 +993,28 @@ fn resolve_param_expression(
     }
     // Return as-is (it might be a literal like "33µH")
     trimmed.to_string()
+}
+
+/// Format a design-computed component value for the child `value`
+/// attribute.
+///
+/// Resistor-scale magnitudes keep the historical 3-decimal form
+/// (`720.000`) — several tests + frozen BOMs assert that exact string.
+/// But a computed *reactive* value lands in SI base units far below
+/// 1e-3: a 5.7µH inductor is `5.7e-6` H, a 4µF cap is `4e-6` F. Under
+/// `{:.3}` both truncate to `"0.000"` — silently zeroing the part. For
+/// those we emit a full-precision, non-scientific Display string (e.g.
+/// `0.0000057`), which the downstream value parser reads back as a bare
+/// SI-base number. (Non-scientific matters: the unit parser would treat
+/// the `e` in `5.7e-6` as the start of a unit suffix.)
+fn format_designed_value(v: f64) -> String {
+    if v != 0.0 && v.abs() < 1e-3 {
+        // Rust's f64 Display never uses exponent notation, so this is a
+        // plain decimal that round-trips to the same f64.
+        format!("{v}")
+    } else {
+        format!("{v:.3}")
+    }
 }
 
 /// Determine the standard pin layout for a component type.

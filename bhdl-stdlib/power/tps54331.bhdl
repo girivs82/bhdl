@@ -1,18 +1,59 @@
-// TPS54331: TI 3A step-down converter (SLVSA86)
-// FB voltage divider resistors in addition to standard L+D+C expansion children
-// R_fb_top/R_fb_bot set V_OUT via internal 0.8V reference: V_OUT = 0.8V × (1 + R_top/R_bot)
+// TPS54331: TI 3A step-down (buck) converter (SLVSA86).
+//
+// The FIRST stdlib entity to size its REACTIVE support components
+// (inductor + input/output caps) from electrical targets via a
+// `design { }` block — the buck analogue of LM317's resistor-divider
+// sizing. Earlier the L/C were fixed parameter defaults; now they are
+// computed from V_OUT, V_IN, I_out, f_sw and the ripple targets, then
+// substituted into the expansion children by variable name (the same
+// design→expansion path LM317 uses, task #88).
+//
+// Sized components (TI SLVSA86 application equations):
+//   - L_out : (V_IN−V_OUT)·D / (f_sw·ΔI_L),  ΔI_L = ripple_ratio·I_out
+//   - C_out : ΔI_L / (8·f_sw·ΔV_out)
+//   - C_in  : I_out·D·(1−D) / (f_sw·ΔV_in)
+//   - R_top : R_bot·(V_OUT−V_REF)/V_REF   (V_REF = 0.8V internal)
+// Fixed by datasheet: catch diode, 100nF bootstrap cap, R_bot reference.
+//
+// These are STEADY-STATE SEED values, not final BOM values. The point of
+// computing them from the operating point (rather than copying a datasheet
+// table) is to hand simulation a principled, board-specific starting
+// point; GLACIER/SPICE then closes the loop and refines where the closed
+// form under-provisions. In particular the FB divider (R_top) lands on the
+// datasheet value to E96 rounding, and L_out is the true ripple minimum
+// (a real BOM rounds up for margin). C_out/C_in from the ripple-only
+// equations are LOWER BOUNDS — real output-cap selection is dominated by
+// load-transient droop and ESR, which only simulation captures, so expect
+// the sim-refined C_out to grow well above this seed. See
+// docs spec simulation_in_the_loop: textbook seed → simulate → adjust.
+//
+// Use site (board):  buck: TPS54331_3V3();  or  TPS54331(v_out: 5V, v_in: 12V).
+//
+// All electrical targets are constructor params with sane defaults, so a
+// bare `TPS54331_3V3()` sizes for a 12V→3.3V @ 2A rail; override any of
+// them at the call site for a different operating point.
+//
+// `v_out` is a regular constructor parameter, NOT a generic `<…>`: it
+// changes computed values (divider ratio, L/C via duty cycle), not the
+// entity's structure (same pins, same expansion topology), so it belongs
+// in the `design { }` self-readable parameter set — the same modelling
+// LM317 uses. Generics are reserved for structural parameters (bus width,
+// lane count). The SKU aliases below bind it as a positional arg.
 
-entity TPS54331<V_OUT: voltage>(
-    dropout: voltage = 0.5V,
-    f_sw: frequency = 570kHz,
-    rds_on: resistance = 90mΩ,
-    t_sw: time = 20ns,
-    i_quiescent: current = 3.4mA,
-    l_value: inductance = 10µH,
-    c_out: capacitance = 22µF,
-    diode_vf: voltage = 0.45V,
-    r_fb_top: resistance = 31.6kΩ,
-    r_fb_bot: resistance = 10kΩ
+entity TPS54331(
+    v_out:        voltage     = 3.3V,    // regulated output (sets divider + duty)
+    v_in:         voltage     = 12V,     // input rail (sets duty cycle)
+    i_out_max:    current     = 2A,      // max load current
+    f_sw:         frequency   = 570kHz,  // internal oscillator (fixed-freq part)
+    ripple_ratio: float       = 0.3,     // ΔI_L / I_out (datasheet 0.2–0.4)
+    ripple_v:     voltage      = 30mV,   // target output ripple
+    ripple_v_in:  voltage      = 150mV,  // target input ripple
+    r_fb_bot:     resistance   = 10kΩ,   // FB divider reference resistor
+    diode_vf:     voltage      = 0.45V,
+    dropout:      voltage      = 0.5V,
+    rds_on:       resistance   = 90mΩ,
+    t_sw:         time         = 20ns,
+    i_quiescent:  current      = 3.4mA
 ) {
     pin VIN:  power in;
     pin VOUT: power out virtual;
@@ -23,25 +64,75 @@ entity TPS54331<V_OUT: voltage>(
     pin GND:  ground;
 
     attribute component_class = "switching_regulator";
-    attribute output_voltage = V_OUT;
+    attribute output_voltage = v_out;
     attribute f_sw = f_sw;
     attribute rds_on = rds_on;
     attribute t_sw = t_sw;
     attribute i_quiescent = i_quiescent;
 
+    // Reactive + divider sizing. Runs once per instance, after
+    // constructor binding, before expansion materialisation. Each line
+    // is a single binary op into a `const` because `parse_expression`
+    // currently mishandles chained mixed-precedence binops (same
+    // discipline as lm317.bhdl). All quantities evaluate in SI base
+    // units (V, A, Hz → H, F, Ω), so the outputs are henries/farads/ohms.
+    design {
+        const v_ref = 0.8;                       // TPS54331 internal FB ref
+        const vout  = self.v_out;                // regulated output target
+        require vout < self.v_in
+            else "buck V_OUT must be below V_IN";
+
+        const duty  = vout / self.v_in;          // D = V_OUT / V_IN
+        const vdiff = self.v_in - vout;          // V_IN − V_OUT
+
+        // L_out = (V_IN−V_OUT)·D / (f_sw·ΔI_L),  ΔI_L = ripple_ratio·I_out.
+        const d_il  = self.ripple_ratio * self.i_out_max;
+        const l_num = vdiff * duty;
+        const l_den = self.f_sw * d_il;
+        l_value     = l_num / l_den;
+
+        // C_out = ΔI_L / (8·f_sw·ΔV_out).
+        const co_d0 = self.f_sw * self.ripple_v;
+        const co_d  = co_d0 * 8.0;
+        c_out_value = d_il / co_d;
+
+        // C_in = I_out·D·(1−D) / (f_sw·ΔV_in).
+        const inv_d  = 1.0 - duty;
+        const ci_n0  = self.i_out_max * duty;
+        const ci_num = ci_n0 * inv_d;
+        const ci_den = self.f_sw * self.ripple_v_in;
+        c_in_value   = ci_num / ci_den;
+
+        // FB divider: V_OUT = V_REF·(1 + R_top/R_bot) ⇒
+        //   R_top = R_bot·(V_OUT − V_REF)/V_REF.
+        const vov     = vout - v_ref;
+        const r_scale = self.r_fb_bot / v_ref;
+        r_top_value   = vov * r_scale;
+    }
+
+    // The computed values flow in by variable name (`Ind(l_value)` etc.);
+    // R_bot, the catch diode and the bootstrap cap are datasheet-fixed.
+    // The input cap carries the switching_input_filter intent so the
+    // placer keeps the hot V_IN→C_in→GND loop tight (the EMC-critical
+    // loop); the intent rides the standalone decl, the wiring references
+    // the instance.
     expansion {
-        // All connections go through real IC pins — no internal nets needed
+        C_in: Cap(c_in_value) for switching_input_filter(rail: VIN, return: GND, loop_area_max: 2.0mm2, switch_node_keepaway: 1.0mm);
+        VIN -> C_in.1; C_in.2 -> GND;
+
         SW -> L_out: Ind(l_value).1; L_out.2 -> VOUT;
         GND -> D_catch: Diode(diode_vf).A; D_catch.K -> SW;
-        VOUT -> C_out: Cap(c_out).1; C_out.2 -> GND;
-        VOUT -> R_top: Res(r_fb_top).1; R_top.2 -> FB;
+        VOUT -> C_out: Cap(c_out_value).1; C_out.2 -> GND;
+        VOUT -> R_top: Res(r_top_value).1; R_top.2 -> FB;
         FB -> R_bot: Res(r_fb_bot).1; R_bot.2 -> GND;
         BOOT -> C_boot: Cap(100nF).1; C_boot.2 -> SW;
     }
 }
 
-alias TPS54331_3V3 = TPS54331<3.3V>;
-alias TPS54331_5V = TPS54331<5V>;
+// SKU aliases bind `v_out` positionally (first param) — same alias-with-
+// constructor-arg form as `alias 2N2222 = BJT("2N2222")`.
+alias TPS54331_3V3 = TPS54331(3.3V);
+alias TPS54331_5V = TPS54331(5V);
 
 symbol TPS54331 {
     left   { VIN, EN, BOOT }

@@ -493,7 +493,11 @@ impl NetlistGenerator {
         // in the AST and merge its constructor args into the
         // matching netlist instance.
         if let Some(ast) = ast {
-            self.stamp_constructor_args_on_instances(ast);
+            self.stamp_constructor_args_on_instances(
+                ast,
+                &analysis.monomorphization.alias_specializations,
+                &analysis.entity_param_names,
+            );
         }
 
         // Phase 4.5: Apply entity `expansion { }` blocks (virtual-pin
@@ -982,7 +986,12 @@ impl NetlistGenerator {
     /// see `self.v_out` for entities like LM317 that take a
     /// runtime arg. A single unified merge pass right before
     /// expansion guarantees those args are visible.
-    fn stamp_constructor_args_on_instances(&mut self, ast: &SourceFile) {
+    fn stamp_constructor_args_on_instances(
+        &mut self,
+        ast: &SourceFile,
+        alias_specs: &[bhdl_analyzer::passes::monomorphization::AliasSpecialization],
+        entity_param_names: &HashMap<String, Vec<String>>,
+    ) {
         // Helper: strip surrounding double-quotes from a string-literal
         // constructor arg value. The AST text() returns the literal
         // source token including its quotes (`"STM32F103C8T6"`), but
@@ -1091,6 +1100,24 @@ impl NetlistGenerator {
                 .map(|(id, _)| id);
             let Some(inst_id) = inst_id else { continue; };
 
+            // Resolve constructor-argument aliases (`alias TPS54331_3V3 =
+            // TPS54331(3.3V)`): if the instance's type is such an alias,
+            // the *effective* entity for default lookup is the alias
+            // target, and the alias's positional args bind to the
+            // target's params. The alias args sit between board-explicit
+            // overrides (highest) and entity defaults (lowest), so a
+            // board can still override an SKU alias's value at the call
+            // site. `alias_specs` carries both generic `<…>` and
+            // constructor `(…)` aliases uniformly (the parser records both
+            // in the same TYPE_ARGS node); for a generic alias the target
+            // is a generic entity and this positional bind is harmless
+            // (its params are bound by monomorphization instead).
+            let alias = entity_type.as_ref()
+                .and_then(|et| alias_specs.iter().find(|a| &a.alias_name == et));
+            let effective_type = alias
+                .map(|a| a.target_entity.clone())
+                .or_else(|| entity_type.clone());
+
             // (1) Stamp explicit constructor args from the `PARAM_LIST`.
             // Constructor args (`v_out=5V`, `tolerance=1%`, …) live
             // under a `PARAM_LIST` node — not `PARAM_ASSIGN_BLOCK`,
@@ -1111,13 +1138,29 @@ impl NetlistGenerator {
                 }
             }
 
+            // (1b) Stamp constructor-arg-alias positional args, bound to
+            // the target entity's params by position. `or_insert` keeps
+            // any board-explicit override stamped in (1).
+            if let Some(a) = alias {
+                if let Some(pnames) = entity_param_names.get(&a.target_entity) {
+                    for (i, arg) in a.type_arg_texts.iter().enumerate() {
+                        let Some(pname) = pnames.get(i) else { break; };
+                        let val = unquote_string_literal(arg.trim());
+                        if let Some(inst) = self.netlist.instances.get_mut(inst_id) {
+                            inst.attributes.entry(pname.clone()).or_insert(val);
+                        }
+                    }
+                }
+            }
+
             // (2) Task #90: stamp entity-parameter DEFAULTS for any
             // params the user didn't explicitly override.
             //
             // Source for defaults: same-file entity defs already
             // collected above; for imported entities, do an on-demand
-            // collection from the imported AST.
-            if let Some(ref etype) = entity_type {
+            // collection from the imported AST. For an alias instance the
+            // effective entity is the alias target, not the alias name.
+            if let Some(ref etype) = effective_type {
                 // Lazily collect imported entity's defaults if not
                 // already in the index.
                 if !entity_param_defaults.contains_key(etype) {
