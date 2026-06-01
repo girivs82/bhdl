@@ -48,6 +48,87 @@ impl ESeries {
             _ => None,
         }
     }
+
+    /// Number of standard values per decade.
+    fn count(&self) -> usize {
+        match self {
+            Self::E12 => 12,
+            Self::E24 => 24,
+            Self::E48 => 48,
+            Self::E96 => 96,
+            Self::E192 => 192,
+        }
+    }
+
+    /// The one-decade base values of this series, in `[1.0, 10.0)`,
+    /// ascending. E12/E24 use the IEC 60063 historical tables (which
+    /// differ slightly from a pure geometric progression); the finer
+    /// series (E48/E96/E192) are defined geometrically as
+    /// `round(10^(k/N), 3 sig figs)`.
+    fn base_values(&self) -> Vec<f64> {
+        match self {
+            Self::E12 => vec![
+                1.0, 1.2, 1.5, 1.8, 2.2, 2.7, 3.3, 3.9, 4.7, 5.6, 6.8, 8.2,
+            ],
+            Self::E24 => vec![
+                1.0, 1.1, 1.2, 1.3, 1.5, 1.6, 1.8, 2.0, 2.2, 2.4, 2.7, 3.0, 3.3, 3.6, 3.9,
+                4.3, 4.7, 5.1, 5.6, 6.2, 6.8, 7.5, 8.2, 9.1,
+            ],
+            Self::E48 | Self::E96 | Self::E192 => {
+                let n = self.count();
+                (0..n)
+                    .map(|k| {
+                        let v = 10f64.powf(k as f64 / n as f64);
+                        // Round to 3 significant figures (values are in [1,10)).
+                        (v * 100.0).round() / 100.0
+                    })
+                    .collect()
+            }
+        }
+    }
+
+    /// Snap `value` to the nearest value in this series, measured by
+    /// LOG (ratio) distance — the correct metric for a geometric series,
+    /// and the one that makes e.g. 31250Ω resolve to the E96 31.6kΩ a
+    /// datasheet would pick (it is fractionally closer in ratio than
+    /// 30.9kΩ even though linear distance ties). Decade-agnostic; the
+    /// decade wrap point (`10.0×`) is included so values just under a
+    /// decade boundary round up correctly. Non-positive input is returned
+    /// unchanged.
+    pub fn nearest(&self, value: f64) -> f64 {
+        if !(value > 0.0) {
+            return value;
+        }
+        let lv = value.log10();
+        let mult = 10f64.powf(lv.floor());
+        let mut candidates: Vec<f64> = self.base_values().iter().map(|b| b * mult).collect();
+        candidates.push(10.0 * mult); // wrap: top of decade → next decade's 1.0
+        candidates
+            .into_iter()
+            .min_by(|a, b| {
+                (a.log10() - lv)
+                    .abs()
+                    .partial_cmp(&(b.log10() - lv).abs())
+                    .unwrap()
+            })
+            .unwrap()
+    }
+}
+
+/// Snap an E-series-constrained binding to the nearest standard value,
+/// preserving its physical dimension. Returns `None` for a dimensionless
+/// or non-numeric value that has no meaningful E-series snap.
+fn snap_constvalue(v: &ConstValue, series: &ESeries) -> Option<ConstValue> {
+    let snapped = series.nearest(v.as_f64()?);
+    Some(match v {
+        ConstValue::Resistance(_) => ConstValue::Resistance(snapped),
+        ConstValue::Capacitance(_) => ConstValue::Capacitance(snapped),
+        ConstValue::Inductance(_) => ConstValue::Inductance(snapped),
+        ConstValue::Voltage(_) => ConstValue::Voltage(snapped),
+        ConstValue::Current(_) => ConstValue::Current(snapped),
+        ConstValue::Float(_) => ConstValue::Float(snapped),
+        _ => return None,
+    })
 }
 
 /// One constraint clause from a `part_family` body.
@@ -627,6 +708,25 @@ pub fn match_class(
         }
     }
 
+    // Step 4: snap E-series-constrained axes to the nearest standard
+    // value. A design block emits a generic computed value (e.g. a buck
+    // FB resistor at 31250Ω); the catalog declares `R in E96(…)`. Without
+    // this the MPN template would encode the raw 31250 verbatim, naming a
+    // part that cannot be ordered. Snapping the binding here makes the
+    // rendered MPN a real E-series part (31250Ω → 31.6kΩ). This is the
+    // catalog-side "snap" stage of the sizing pipeline (seed → simulate →
+    // snap → simulate → margin → simulate); the snapped value is what the
+    // downstream BOM/MPN names.
+    for c in constraints {
+        if let Constraint::InESeries { axis, series, .. } = c {
+            if let Some(v) = bindings.get(axis) {
+                if let Some(snapped) = snap_constvalue(v, series) {
+                    bindings.insert(axis.clone(), snapped);
+                }
+            }
+        }
+    }
+
     Some(MatchResult {
         family: family_name.to_string(),
         bindings,
@@ -1151,5 +1251,51 @@ mod template_tests {
     fn unterminated_slot_errors() {
         let b: HashMap<String, ConstValue> = HashMap::new();
         assert!(render_template("RC0603FR-07{e96_code(R", &b).is_err());
+    }
+}
+
+#[cfg(test)]
+mod eseries_snap_tests {
+    use super::*;
+
+    #[test]
+    fn e96_snaps_computed_divider_to_datasheet_value() {
+        // A buck FB resistor computed at 31250Ω lands on the E96 31.6kΩ
+        // a datasheet would pick (closer in ratio than 30.9kΩ).
+        let r = ESeries::E96.nearest(31250.0);
+        assert!((r - 31600.0).abs() < 1.0, "expected 31600, got {r}");
+    }
+
+    #[test]
+    fn e12_snaps_capacitor_up_to_standard() {
+        // 4.4µF → nearest E12 is 4.7µF.
+        let c = ESeries::E12.nearest(4.4e-6);
+        assert!((c - 4.7e-6).abs() < 1e-9, "expected 4.7µF, got {c}");
+    }
+
+    #[test]
+    fn nearest_is_decade_agnostic_and_exact_on_grid() {
+        // Exact standard values are returned unchanged across decades.
+        assert!((ESeries::E12.nearest(1.0e3) - 1.0e3).abs() < 1e-6);
+        assert!((ESeries::E24.nearest(4.7e6) - 4.7e6).abs() < 1.0);
+        assert!((ESeries::E96.nearest(1.0) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn near_decade_boundary_rounds_to_next_decade() {
+        // 9.9kΩ is closer (in ratio) to 10kΩ than to the E12 8.2kΩ.
+        let r = ESeries::E12.nearest(9_900.0);
+        assert!((r - 10_000.0).abs() < 1.0, "expected 10k, got {r}");
+    }
+
+    #[test]
+    fn snap_constvalue_preserves_dimension() {
+        let snapped = snap_constvalue(&ConstValue::Resistance(31250.0), &ESeries::E96).unwrap();
+        match snapped {
+            ConstValue::Resistance(r) => assert!((r - 31600.0).abs() < 1.0),
+            other => panic!("dimension not preserved: {other:?}"),
+        }
+        // Dimensionless / non-numeric values have no meaningful snap.
+        assert!(snap_constvalue(&ConstValue::String("x".into()), &ESeries::E96).is_none());
     }
 }
