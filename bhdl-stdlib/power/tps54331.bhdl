@@ -34,9 +34,16 @@
 //   4. simulate     — validate the ON-GRID value vs base spec; a bad
 //                     down-snap shows up HERE, before any margin can mask
 //                     it (step up one E-series value and re-validate)
-//   5. margin       — derate for ageing/reliability, as an up-step on the
-//                     E-series grid (so margin is additive, never absorbed
-//                     by rounding — which is why snap precedes margin)
+//   5. margin       — derate for ageing/reliability, applied in the
+//                     SIM-DETERMINED safe direction (not assumed "up"):
+//                     sensitivity ∂slack/∂value picks the direction that
+//                     increases slack to the binding constraint. One-sided
+//                     spec → step along the E-series grid away from the
+//                     boundary (up OR down per the component's circuit
+//                     role); two-sided window (e.g. an FB divider, a gate
+//                     resistor) → step toward the window centre. Margin is
+//                     additive on the grid, never absorbed by rounding —
+//                     which is why snap precedes margin.
 //   6. simulate     — sign off on the as-built, margined, on-grid value
 //
 // Use site (board):  buck: TPS54331_3V3();  or  TPS54331(v_out: 5V, v_in: 12V).
