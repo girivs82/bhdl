@@ -24,8 +24,20 @@
 // (a real BOM rounds up for margin). C_out/C_in from the ripple-only
 // equations are LOWER BOUNDS — real output-cap selection is dominated by
 // load-transient droop and ESR, which only simulation captures, so expect
-// the sim-refined C_out to grow well above this seed. See
-// docs spec simulation_in_the_loop: textbook seed → simulate → adjust.
+// the sim-refined C_out to grow well above this seed.
+//
+// Full sizing pipeline (this entity is stage 1 only; rest is Glacier +
+// catalog-side, see docs spec simulation_in_the_loop):
+//   1. seed         — these closed-form values
+//   2. simulate     — refine to the real-valued requirement
+//   3. snap         — nearest E-series (real part)
+//   4. simulate     — validate the ON-GRID value vs base spec; a bad
+//                     down-snap shows up HERE, before any margin can mask
+//                     it (step up one E-series value and re-validate)
+//   5. margin       — derate for ageing/reliability, as an up-step on the
+//                     E-series grid (so margin is additive, never absorbed
+//                     by rounding — which is why snap precedes margin)
+//   6. simulate     — sign off on the as-built, margined, on-grid value
 //
 // Use site (board):  buck: TPS54331_3V3();  or  TPS54331(v_out: 5V, v_in: 12V).
 //
