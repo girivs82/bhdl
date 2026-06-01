@@ -543,6 +543,45 @@ impl LibraryResolver {
         Err(ResolveError::NotFound { namespace: ns.to_string(), searched })
     }
 
+    /// All resolvable library roots: the bundled stdlib plus every
+    /// declared `[libraries]` entry that resolves. Best-effort — a library
+    /// that fails to resolve (undeclared elsewhere, offline `source=`, …)
+    /// is skipped rather than erroring, since this drives *discovery*
+    /// (catalog/part-family harvesting), not a hard import.
+    pub fn library_roots(&self) -> Vec<PathBuf> {
+        let mut roots = Vec::new();
+        if let Ok(r) = self.resolve_namespace_root(STDLIB_NAMESPACE) {
+            roots.push(r);
+        }
+        if let Some(m) = &self.manifest {
+            for ns in m.libraries.keys() {
+                if ns == STDLIB_NAMESPACE {
+                    continue;
+                }
+                if let Ok(r) = self.resolve_namespace_root(ns) {
+                    if !roots.contains(&r) {
+                        roots.push(r);
+                    }
+                }
+            }
+        }
+        roots
+    }
+
+    /// Every `*.bhdl` file under the resolvable library roots whose text
+    /// contains `part_family` — the candidate set for catalog discovery
+    /// (E-series value snapping etc.). The `part_family` substring is a
+    /// cheap pre-filter so callers parse only catalog files, not every
+    /// `.bhdl` in every library. Convention-free: catalogs are found
+    /// wherever they live in a library, not by a hardcoded `parts/` path.
+    pub fn catalog_bhdl_files(&self) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        for root in self.library_roots() {
+            collect_part_family_files(&root, &mut out);
+        }
+        out
+    }
+
     fn version_check(&self, ns: &str, required: &str, root: PathBuf) -> Result<PathBuf, ResolveError> {
         let mpath = root.join("manifest.toml");
         match LibraryManifest::load(&mpath) {
@@ -600,9 +639,53 @@ impl LibraryResolver {
     }
 }
 
+/// Recursively collect `*.bhdl` files under `dir` whose contents mention
+/// `part_family` (cheap pre-filter to skip the bulk of non-catalog stdlib
+/// files). Best-effort: unreadable dirs/files are silently skipped.
+fn collect_part_family_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_part_family_files(&path, out);
+        } else if path.extension().map_or(false, |x| x == "bhdl") {
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                if text.contains("part_family") {
+                    out.push(path);
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn catalog_discovery_finds_only_part_family_files() {
+        let t = std::env::temp_dir().join(format!("bhdl_catdisc_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&t);
+        let parts = t.join("stdlib/parts/yageo");
+        std::fs::create_dir_all(&parts).unwrap();
+        // A catalog file (has part_family) nested in a subdir.
+        std::fs::write(
+            parts.join("rc0603fr.bhdl"),
+            "part_family Yageo_RC0603FR_07 : Resistor<R: *, \"1%\", \"0603\"> {\n  require R in E96(1Ω, 10MΩ);\n}\n",
+        )
+        .unwrap();
+        // A non-catalog .bhdl (no part_family) — must be skipped.
+        std::fs::write(t.join("stdlib/actives/mcu.bhdl"), "entity Mcu { pin A: signal inout; }\n").ok();
+        std::fs::create_dir_all(t.join("stdlib/actives")).ok();
+        std::fs::write(t.join("stdlib/actives/mcu.bhdl"), "entity Mcu { pin A: signal inout; }\n").unwrap();
+
+        let resolver = LibraryResolver::new(None, &[], None, Some(t.join("stdlib"))).unwrap();
+        let files = resolver.catalog_bhdl_files();
+        assert_eq!(files.len(), 1, "only the part_family file, got {files:?}");
+        assert!(files[0].ends_with("rc0603fr.bhdl"));
+
+        let _ = std::fs::remove_dir_all(&t);
+    }
 
     #[test]
     fn parses_all_dependency_shapes() {
