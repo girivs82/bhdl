@@ -2,12 +2,33 @@
 name = "bhdl-analyzer"
 version = "0.1.0"
 edition = "2021"
+# `src/bin/` holds ~70 historical demo/debug binaries (test_*.rs, debug_*.rs).
+# With Cargo's auto-discovery on, every `cargo build/test -p bhdl-analyzer`
+# compiled all of them — a multi-minute tax on each iteration (and the reason
+# `cargo test -p bhdl-analyzer` ran ~40× slower than `--lib`). We disable
+# auto-discovery and explicitly opt in only the binaries that are actually
+# needed: `bhdl_plugin_default` (spawned at runtime by the plugin system —
+# `plugin.rs` does `cargo build --bin bhdl_plugin_default`, which REQUIRES the
+# explicit target) plus the demos referenced from authoritative docs (CLAUDE.md).
+# To revive any other demo, add a `[[bin]]` block for it. Mirrors the same
+# treatment bhdl-synthesizer already has.
+autobins = false
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+# Runtime-critical: the default BOM plugin, spawned by name (must be built).
+[[bin]]
+name = "bhdl_plugin_default"
+path = "src/bin/bhdl_plugin_default.rs"
 
 [[bin]]
 name = "test_import_processing"
 path = "src/bin/test_import_processing.rs"
+
+# Referenced from CLAUDE.md.
+[[bin]]
+name = "test_scalability_comprehensive"
+path = "src/bin/test_scalability_comprehensive.rs"
 
 [[bin]]
 name = "test_documentation_generation"
