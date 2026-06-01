@@ -2339,6 +2339,13 @@ fn lower_layout_intent(
             proximity_max_mm: num("proximity_max")
                 .unwrap_or(defaults::ANALOG_REF_FILTER_PROXIMITY_MM),
         }),
+        "switching_input_filter" => Some(LayoutIntent::SwitchingInputFilter {
+            rail: pin("rail")?,
+            return_pin: pin("return")?,
+            loop_area_max_mm2: num("loop_area_max")?,
+            switch_node_keepaway_mm: num("switch_node_keepaway")
+                .unwrap_or(defaults::SWITCHING_INPUT_FILTER_KEEPAWAY_MM),
+        }),
         other => {
             // Recognized-by-vocabulary but not yet lowered here, or an
             // unknown kind. Warn-and-degrade: attach nothing.

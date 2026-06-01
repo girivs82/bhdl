@@ -401,12 +401,37 @@ fn dispatch_primitive(name: &str, args: &[f64]) -> Result<f64, DesignEvalError> 
 }
 
 /// Parse a numeric literal — bare or with a BHDL electrical unit suffix
-/// (`100V`, `5mA`, `1MΩ`, …). Reuses `bhdl_spice::model_factory::parse_value`
-/// so unit handling matches the rest of the toolchain.
+/// (`100V`, `5mA`, `1MΩ`, `570kHz`, `30mV`, …) — into its SI-base f64.
+///
+/// The canonical unit table is `bhdl_common::const_value::parse_unit_suffix`
+/// (V/mV/µV, A/mA, Ω/kΩ/MΩ/mΩ, F/µF/nF/pF, H/mH/µH/nH, Hz/kHz/MHz/GHz),
+/// which normalizes to SI base units the same way the analyzer's
+/// type-arg / default parsing does. We split the leading numeric part
+/// from the trailing unit and apply that multiplier. The SPICE
+/// `model_factory::parse_value` is kept only as a last-resort fallback —
+/// it uses SPICE-style suffixes (`k`, `meg`, `u`) and notably mishandles
+/// frequency units like `kHz` (returning the bare number), which silently
+/// produced a 1000× sizing error before this path was preferred.
 fn parse_literal(text: &str) -> Result<f64, String> {
     let t = text.trim();
     if let Ok(n) = t.parse::<f64>() {
         return Ok(n);
+    }
+    // Leading numeric run (digits, sign, decimal point, exponent), then
+    // the unit suffix. A bare scientific literal like `5e-6` is already
+    // handled by the direct parse above, so treating `e`/`E` as numeric
+    // here only matters for non-bare inputs, none of whose units begin
+    // with `e`.
+    if let Some(idx) = t.find(|c: char| {
+        !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+' || c == 'e' || c == 'E')
+    }) {
+        let (num, unit) = t.split_at(idx);
+        if let (Ok(n), Some((scale, _ctor))) = (
+            num.parse::<f64>(),
+            bhdl_common::const_value::parse_unit_suffix(unit.trim()),
+        ) {
+            return Ok(n * scale);
+        }
     }
     bhdl_spice::model_factory::parse_value(t)
         .ok_or_else(|| format!("not a numeric literal: '{t}'"))

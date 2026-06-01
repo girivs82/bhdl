@@ -1177,8 +1177,14 @@ fn process_import(import: &ImportStmt, context: &mut Pass1Context) {
             // register the recipe under "LM2596_5V" as well.
             for (alias_name, target_name) in &aliases {
                 if let Some(recipe) = context.expansion_recipes.get(target_name) {
-                    let mut alias_recipe = recipe.clone();
-                    alias_recipe.entity_name = alias_name.clone();
+                    // Copy the recipe under the alias name but KEEP its
+                    // original `entity_name` (the target). The expansion
+                    // interpreter looks up the matching `design { }` recipe
+                    // by `recipe.entity_name`; renaming it to the alias
+                    // would miss the design recipe (which is keyed by the
+                    // real entity), silently dropping computed values for
+                    // SKU-alias instances.
+                    let alias_recipe = recipe.clone();
                     context.expansion_recipes.insert(alias_name.clone(), alias_recipe);
                 }
             }

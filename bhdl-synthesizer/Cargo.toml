@@ -168,3 +168,7 @@ path = "tests/source_fetch.rs"
 [[test]]
 name = "constraints_tier2"
 path = "tests/constraints_tier2.rs"
+
+[[test]]
+name = "regulator_sizing"
+path = "tests/regulator_sizing.rs"
