@@ -377,6 +377,100 @@ pub fn apply_glacier_physical_selection(
 }
 
 /// Determine the component class from the module definition name and instance attributes.
+/// Catalog-driven physical selection — the unification of value snapping
+/// with rating/package selection. For each passive, compute its stress
+/// (voltage across, current through, power) from the GLACIER results + net
+/// voltages, then ask the catalog (`value_snap::select_family`) for the
+/// smallest-package `part_family` whose E-series value range covers the
+/// part AND whose ratings cover the *derated* stress. When one is found,
+/// override the package/ratings the hardcoded ladder picked and snap the
+/// `value` to that family's series. Falls through (leaves the ladder
+/// result untouched) when no catalog family matches — so it never
+/// regresses a part the catalogue doesn't cover. Returns the count
+/// overridden. Runs after [`apply_glacier_physical_selection`].
+pub fn apply_catalog_physical_selection(
+    netlist: &mut Netlist,
+    families: &[bhdl_analyzer::value_snap::FamilyDecl],
+    instance_currents: &HashMap<String, f64>,
+    instance_power: &HashMap<String, f64>,
+    net_voltages: &HashMap<String, f64>,
+) -> usize {
+    use bhdl_analyzer::value_snap::{
+        format_value, parse_value_string, select_family, snap_to_family, Stress,
+    };
+    if families.is_empty() {
+        return 0;
+    }
+    let inst_v = compute_instance_max_voltages(netlist, net_voltages);
+    let ids: Vec<_> = netlist.instances.keys().collect();
+    // (id, class, package, voltage_rating, current_rating, power_w, value_str)
+    type Plan = (
+        bhdl_netlist::InstanceId,
+        Option<String>,
+        Option<f64>,
+        Option<f64>,
+        Option<f64>,
+        String,
+    );
+    let mut plan: Vec<Plan> = Vec::new();
+    for id in ids {
+        let inst = &netlist.instances[id];
+        let name = inst.name.clone();
+        let Some(class) = classify_component(netlist, inst.definition, &inst.attributes) else {
+            continue;
+        };
+        if !matches!(class.as_str(), "resistor" | "capacitor" | "inductor") {
+            continue;
+        }
+        let Some(value) = inst.attributes.get("value").and_then(|s| parse_value_string(s)) else {
+            continue;
+        };
+        let stress = Stress {
+            voltage: inst_v.get(&name).copied().filter(|v| *v > 1e-9),
+            current: instance_currents
+                .get(&name)
+                .copied()
+                .map(f64::abs)
+                .filter(|c| *c > 1e-12),
+            power: instance_power
+                .get(&name)
+                .copied()
+                .map(f64::abs)
+                .filter(|p| *p > 1e-15),
+        };
+        if let Some(fam) = select_family(families, &class, value, &stress) {
+            let snapped = snap_to_family(fam, value);
+            plan.push((
+                id,
+                fam.package.clone(),
+                fam.voltage_rating,
+                fam.current_rating,
+                fam.power_w,
+                format_value(snapped, &class),
+            ));
+        }
+    }
+    let n = plan.len();
+    for (id, pkg, vr, ir, pw, value_str) in plan {
+        if let Some(inst) = netlist.instances.get_mut(id) {
+            if let Some(p) = pkg {
+                inst.attributes.insert("package".to_string(), p);
+            }
+            if let Some(v) = vr {
+                inst.attributes.insert("voltage_rating".to_string(), format!("{v}"));
+            }
+            if let Some(i) = ir {
+                inst.attributes.insert("current_rating".to_string(), format!("{i}"));
+            }
+            if let Some(w) = pw {
+                inst.attributes.insert("power_rating".to_string(), format!("{w}"));
+            }
+            inst.attributes.insert("value".to_string(), value_str);
+        }
+    }
+    n
+}
+
 fn classify_component(
     netlist: &Netlist,
     def_id: bhdl_netlist::ModuleId,
