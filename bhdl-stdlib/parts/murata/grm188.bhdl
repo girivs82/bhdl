@@ -14,4 +14,6 @@ part_family Murata_GRM188R71H : Capacitor<C: *, 50V, "X7R", "0603"> {
     attribute datasheet     = "https://psearch.en.murata.com/capacitor/product/GRM188R71H103KA01%23.html";
     attribute dielectric    = "X7R";
     attribute tolerance     = 10;   // ±10%
+    attribute package       = "0603";
+    attribute voltage_rating = 50;
 }

@@ -1,0 +1,20 @@
+// Murata GRM32 series — X7R 100 V MLCC in 1210.
+//
+// Higher-voltage capacitor tier above the 50 V (GRM188, 0603) and 25 V
+// (GRM31, 1206) families. Same E12 value grid across nF–µF, but the
+// 1210/100 V part is selected when a cap sits on a rail high enough that
+// the smaller/lower-voltage families fail the voltage derating check
+// (rating ≥ 2× operating). Gives rating-aware selection a real
+// voltage/size alternative.
+
+part_family Murata_GRM32ER72A : Capacitor<C: *, 100V, "X7R", "1210"> {
+    require C in E12(1nF, 10µF);
+
+    attribute manufacturer   = "Murata Manufacturing";
+    attribute mpn_template   = "GRM32ER72A{c_code(C)}KA01L";
+    attribute datasheet      = "https://www.murata.com/en-us/products/capacitor/ceramiccapacitor";
+    attribute dielectric     = "X7R";
+    attribute tolerance      = 10;
+    attribute package        = "1210";
+    attribute voltage_rating = 100;
+}

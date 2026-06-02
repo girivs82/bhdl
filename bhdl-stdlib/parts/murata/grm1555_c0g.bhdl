@@ -19,4 +19,6 @@ part_family Murata_GRM1555C1H : Capacitor<C: *, 50V, "C0G", "0402"> {
     attribute datasheet     = "https://www.murata.com/en-us/products/capacitor/ceramiccapacitor";
     attribute dielectric    = "C0G";
     attribute tolerance     = 5;    // ±5%
+    attribute package       = "0402";
+    attribute voltage_rating = 50;
 }
