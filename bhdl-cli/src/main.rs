@@ -1578,7 +1578,17 @@ async fn run_simulation(source_file: &SourceFile, testbench_path: PathBuf, outpu
 /// (both read the `value` attribute).
 fn snap_catalog_values(netlist: &mut bhdl_netlist::Netlist) {
     use bhdl_ast::AstNode;
-    let Some(resolver) = bhdl_synthesizer::global_library_resolver() else { return };
+    // Prefer the user's import resolver (built only when they opt into a
+    // bhdl.toml / -I / $BHDL_LIB_PATH). Otherwise fall back to a
+    // discovery-only resolver rooted at the bundled stdlib, so catalog
+    // E-series snapping works on ANY board — not just ones with a project
+    // manifest. (Snapping must not be gated behind the manifest opt-in,
+    // which is for *import* resolution.)
+    let Some(resolver) =
+        bhdl_synthesizer::global_library_resolver().or_else(catalog_discovery_resolver)
+    else {
+        return;
+    };
     let mut sources = Vec::new();
     for path in resolver.catalog_bhdl_files() {
         if let Ok(text) = std::fs::read_to_string(&path) {
@@ -1600,6 +1610,22 @@ fn snap_catalog_values(netlist: &mut bhdl_netlist::Netlist) {
             n
         );
     }
+}
+
+/// Fallback resolver used only for *catalog discovery* (E-series value
+/// snapping) when the user hasn't opted into a project manifest. Rooted at
+/// the bundled stdlib, located the same way the legacy import path locates
+/// it — `bhdl-stdlib` relative to the working directory. Returns `None`
+/// if that directory isn't present (e.g. an installed CLI run from an
+/// unrelated cwd), in which case snapping is simply skipped. Threads no
+/// manifest, so its `library_roots()` is exactly the stdlib — it never
+/// affects import resolution.
+fn catalog_discovery_resolver() -> Option<bhdl_common::library::LibraryResolver> {
+    let stdlib = std::path::PathBuf::from("bhdl-stdlib");
+    if !stdlib.is_dir() {
+        return None;
+    }
+    bhdl_common::library::LibraryResolver::new(None, &[], None, Some(stdlib)).ok()
 }
 
 fn apply_sku_variant(
