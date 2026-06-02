@@ -322,6 +322,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "bhdl-jlcparts-provider"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "bhdl-kicad-import"
 version = "0.1.0"
 dependencies = [

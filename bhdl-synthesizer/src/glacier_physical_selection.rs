@@ -397,14 +397,40 @@ pub fn apply_glacier_physical_selection(
 ///
 /// The provider is any executable named by `$BHDL_SUPPLY_PROVIDER`
 /// (whitespace-split into program + args; e.g.
-/// `python3 .../bhdl_jlcparts_provider.py`). Best-effort: unset env, a
-/// spawn failure, or an unparseable reply ⇒ leaves the catalogue result
-/// untouched (no MPN), never errors the build. Reuses the JSON
-/// stdin/stdout plugin protocol (`bhdl_analyzer::plugin`).
+/// `python3 .../bhdl_jlcparts_provider.py`). If that is unset, the bundled
+/// zero-dependency Rust provider (`bhdl-jlcparts-provider`, found next to
+/// the running executable or on `PATH`) is used automatically whenever a
+/// jlcparts DB is available via `$BHDL_JLCPARTS_DB` — no Python or system
+/// SQLite required. Best-effort: no provider, a spawn failure, or an
+/// unparseable reply ⇒ leaves the catalogue result untouched (no MPN),
+/// never errors the build. Reuses the JSON stdin/stdout plugin protocol
+/// (`bhdl_analyzer::plugin`).
+/// Zero-config default: the bundled Rust `bhdl-jlcparts-provider`, used
+/// only when a catalogue DB is available via `$BHDL_JLCPARTS_DB`. Resolves
+/// the binary next to the current executable first (the normal install
+/// layout), then falls back to bare `bhdl-jlcparts-provider` on `PATH`.
+/// Returns the whitespace-joined `program [db-path]` spec, or `None` when
+/// no DB is configured (so the build stays MPN-less rather than erroring).
+fn default_provider_spec() -> Option<String> {
+    let db = std::env::var("BHDL_JLCPARTS_DB")
+        .ok()
+        .filter(|s| !s.trim().is_empty())?;
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("bhdl-jlcparts-provider")))
+        .filter(|p| p.exists())
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "bhdl-jlcparts-provider".to_string());
+    Some(format!("{exe} {db}"))
+}
+
 pub fn apply_supply_chain_mpns(netlist: &mut Netlist) -> usize {
     let spec = match std::env::var("BHDL_SUPPLY_PROVIDER") {
         Ok(s) if !s.trim().is_empty() => s,
-        _ => return 0,
+        _ => match default_provider_spec() {
+            Some(s) => s,
+            None => return 0,
+        },
     };
 
     // Build the requirement list from the selected passives; track
