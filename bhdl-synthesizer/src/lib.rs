@@ -974,6 +974,44 @@ impl NetlistGenerator {
     }
 
     /// Extract connectivity from AST and create nets
+    /// Recover the refdes of an inline-flow component instantiation
+    /// (`… -> refdes: Entity(args).pin`). The parser wraps only the entity
+    /// IDENT in the `COMPONENT_INST` node; the refdes is the `IDENT :`
+    /// binding immediately preceding it (siblings in the same parent).
+    /// Walks backward over siblings, skipping trivia, expecting `:` then
+    /// the refdes IDENT/NUMBER. Returns `None` for an anonymous inline use
+    /// (no `refdes:` binding) or any other preceding shape.
+    fn preceding_flow_refdes(
+        node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>,
+    ) -> Option<String> {
+        use bhdl_ast::SyntaxKind;
+        let mut el = node.prev_sibling_or_token();
+        let mut seen_colon = false;
+        while let Some(e) = el {
+            match e.kind() {
+                SyntaxKind::WHITESPACE | SyntaxKind::COMMENT => {}
+                SyntaxKind::COLON if !seen_colon => seen_colon = true,
+                // The refdes in a flow part is wrapped in an `IDENT_REF`
+                // node (`… -> buck : Entity(...)`), not a bare token.
+                SyntaxKind::IDENT_REF if seen_colon => {
+                    return e.as_node().and_then(|n| {
+                        n.children_with_tokens()
+                            .filter_map(|x| x.into_token())
+                            .find(|t| t.kind() == SyntaxKind::IDENT)
+                            .map(|t| t.text().to_string())
+                    });
+                }
+                // Defensive: also accept a bare IDENT/NUMBER token refdes.
+                SyntaxKind::IDENT | SyntaxKind::NUMBER if seen_colon => {
+                    return e.as_token().map(|t| t.text().to_string());
+                }
+                _ => return None,
+            }
+            el = e.prev_sibling_or_token();
+        }
+        None
+    }
+
     /// Walk every `COMPONENT_INST` node in the AST and merge its
     /// constructor arguments (`name=value` pairs inside the `(...)`)
     /// into the matching netlist instance's `attributes` map.
@@ -1091,8 +1129,42 @@ impl NetlistGenerator {
                 .map(|t| t.text().to_string())
                 .collect();
             if idents.is_empty() { continue; }
-            let inst_name = &idents[0];
-            let entity_type = idents.get(1).cloned();
+            // Two COMPONENT_INST shapes carry different ident layouts:
+            //   - Standalone decl `refdes: Entity(args);` — the node holds
+            //     BOTH idents (refdes, entity).
+            //   - Inline-flow `… -> refdes: Entity(args).pin` — the parser
+            //     (bhdl-parser expressions.rs) wraps only the ENTITY ident;
+            //     the refdes is the `IDENT :` binding immediately preceding
+            //     the node. Without recovering it, `idents[0]` is the
+            //     entity, the instance lookup by name fails, and the
+            //     instance never gets its constructor defaults stamped — so
+            //     its `design { }` block fails (`self.f_sw = 'f_sw'`) and
+            //     emits placeholder values. (Bug A.)
+            // Discriminate the two shapes by whether the COMPONENT_INST
+            // node itself contains the `:` binding (verified against the
+            // parser's AST):
+            //   - Standalone `refdes: Entity(...)` — COLON is INSIDE, so
+            //     idents = [refdes, entity].
+            //   - Inline-flow `… -> refdes: Entity(...).pin` — no COLON
+            //     inside; idents = [entity, pin], and the refdes is the
+            //     preceding `IDENT_REF :` sibling.
+            // Ident *count* can't distinguish them (both are 2), so key off
+            // the COLON.
+            let has_inner_colon = comp_inst
+                .syntax()
+                .children_with_tokens()
+                .any(|e| e.kind() == SyntaxKind::COLON);
+            let (inst_name, entity_type) = if has_inner_colon {
+                (idents[0].clone(), idents.get(1).cloned())
+            } else {
+                match Self::preceding_flow_refdes(comp_inst.syntax()) {
+                    Some(refdes) => (refdes, idents.first().cloned()),
+                    // Anonymous inline use (no `refdes:` binding, e.g.
+                    // `VIN -> Cap(10µF).1`) — nothing to stamp by name.
+                    None => continue,
+                }
+            };
+            let inst_name = &inst_name;
 
             // Find the matching netlist instance by name.
             let inst_id = self.netlist.instances.iter()
