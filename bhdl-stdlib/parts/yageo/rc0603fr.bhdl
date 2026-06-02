@@ -18,4 +18,6 @@ part_family Yageo_RC0603FR_07 : Resistor<R: *, "1%", "0603"> {
     attribute datasheet     = "https://www.yageo.com/datasheets/RC_thick_film.pdf";
     attribute tc_ppm        = 100;
     attribute power_w       = 0.1;
+    attribute package       = "0603";
+    attribute voltage_rating = 75;
 }

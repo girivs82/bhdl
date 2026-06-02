@@ -17,4 +17,6 @@ part_family Murata_GRM31CR61 : Capacitor<C: *, 25V, "X5R", "1206"> {
     attribute datasheet     = "https://www.murata.com/en-us/products/capacitor/ceramiccapacitor";
     attribute dielectric    = "X5R";
     attribute tolerance     = 10;   // ±10%
+    attribute package       = "1206";
+    attribute voltage_rating = 25;
 }
