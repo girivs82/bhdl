@@ -388,6 +388,23 @@ pub fn apply_glacier_physical_selection(
 /// result untouched) when no catalog family matches — so it never
 /// regresses a part the catalogue doesn't cover. Returns the count
 /// overridden. Runs after [`apply_glacier_physical_selection`].
+/// Declared rail voltages (net name → volts) from each `Power` net's
+/// class. Used for the voltage stress when no GLACIER node-voltage solve
+/// is available — e.g. the BOM path, which runs no simulation. A 2-pin
+/// passive's voltage stress is then the max declared voltage across its
+/// nets (via [`compute_instance_max_voltages`]).
+pub fn declared_net_voltages(netlist: &Netlist) -> HashMap<String, f64> {
+    let mut out = HashMap::new();
+    for (_id, net) in netlist.nets.iter() {
+        if let bhdl_netlist::types::NetClass::Power(v) = net.net_class {
+            if let Some(name) = &net.name {
+                out.insert(name.clone(), v);
+            }
+        }
+    }
+    out
+}
+
 pub fn apply_catalog_physical_selection(
     netlist: &mut Netlist,
     families: &[bhdl_analyzer::value_snap::FamilyDecl],
@@ -454,7 +471,13 @@ pub fn apply_catalog_physical_selection(
     for (id, pkg, vr, ir, pw, value_str) in plan {
         if let Some(inst) = netlist.instances.get_mut(id) {
             if let Some(p) = pkg {
-                inst.attributes.insert("package".to_string(), p);
+                // `package` is the convention the GLACIER selector + other
+                // consumers use; `physical_package` (bhdl_common::sku::PACKAGE)
+                // is the key the BOM walker reads for its Package column.
+                // Write both so the selected package actually surfaces in
+                // the BOM.
+                inst.attributes.insert("package".to_string(), p.clone());
+                inst.attributes.insert("physical_package".to_string(), p);
             }
             if let Some(v) = vr {
                 inst.attributes.insert("voltage_rating".to_string(), format!("{v}"));

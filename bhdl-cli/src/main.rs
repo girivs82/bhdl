@@ -1789,9 +1789,33 @@ async fn cmd_bom(
     //      Stage 6 device discovery).
     apply_sku_variant(&analysis, &mut netlist, sku)?;
 
-    // 4.6. Snap computed passive values to the catalog E-series so the BOM
-    //      names a real, orderable part (and matches what SPICE simulates).
-    snap_catalog_values(&mut netlist);
+    // 4.6. Catalog selection for the BOM. The BOM runs no GLACIER sim, so
+    //      use the DECLARED rail voltages for cap voltage stress (analytic,
+    //      always available); resistor power / inductor current aren't
+    //      known without simulation, so those fall back to value-only
+    //      (smallest package). This snaps the value AND assigns the
+    //      smallest adequate package — so the BOM names a real, orderable
+    //      part. (The GLACIER paths use sim-derived stress instead.)
+    {
+        let families = harvest_catalog_families();
+        let declared_v =
+            bhdl_synthesizer::glacier_physical_selection::declared_net_voltages(&netlist);
+        let empty = std::collections::HashMap::new();
+        let n = bhdl_synthesizer::glacier_physical_selection::apply_catalog_physical_selection(
+            &mut netlist,
+            &families,
+            &empty,
+            &empty,
+            &declared_v,
+        );
+        if n > 0 {
+            println!(
+                "  {} catalog selection: {} part(s) → standard value + smallest adequate package",
+                "✓".green(),
+                n
+            );
+        }
+    }
 
     // 5. Walk the netlist; produce the BOM rows.
     let rows = sku_bom::walk(&netlist);
