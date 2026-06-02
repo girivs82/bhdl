@@ -1029,6 +1029,25 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
             &annotations.instance_power,
             &annotations.net_voltages,
         );
+        // Catalog-driven override: where a part_family covers the part's
+        // value + derated stress, pick the smallest adequate package from
+        // the catalogue (and snap the value) instead of the hardcoded
+        // ladder. Uses the same GLACIER-derived stress.
+        let families = harvest_catalog_families();
+        let overridden = bhdl_synthesizer::glacier_physical_selection::apply_catalog_physical_selection(
+            &mut netlist,
+            &families,
+            &annotations.instance_currents,
+            &annotations.instance_power,
+            &annotations.net_voltages,
+        );
+        if overridden > 0 {
+            println!(
+                "  {} catalog selection: {} part(s) → smallest adequate package",
+                "✓".green(),
+                overridden
+            );
+        }
         if !results.is_empty() {
             println!("  {} physical parameters selected for {} components",
                 "✓".green(), results.len());
@@ -1576,18 +1595,23 @@ async fn run_simulation(source_file: &SourceFile, testbench_path: PathBuf, outpu
 /// catalogs, or no matching family ⇒ the netlist is left untouched. Called
 /// post-expansion / post-SKU-patch, before SPICE conversion and BOM walk
 /// (both read the `value` attribute).
-fn snap_catalog_values(netlist: &mut bhdl_netlist::Netlist) {
+/// Discover + parse + harvest the catalog `part_family` declarations
+/// (E-series ranges + ratings + package) through the library system, with
+/// a bundled-stdlib fallback so it works on any board (no bhdl.toml
+/// needed). Shared by the value-only snap and the rating-aware physical
+/// selection.
+fn harvest_catalog_families() -> Vec<bhdl_analyzer::value_snap::FamilyDecl> {
     use bhdl_ast::AstNode;
     // Prefer the user's import resolver (built only when they opt into a
     // bhdl.toml / -I / $BHDL_LIB_PATH). Otherwise fall back to a
     // discovery-only resolver rooted at the bundled stdlib, so catalog
-    // E-series snapping works on ANY board — not just ones with a project
-    // manifest. (Snapping must not be gated behind the manifest opt-in,
+    // selection works on ANY board — not just ones with a project
+    // manifest. (Selection must not be gated behind the manifest opt-in,
     // which is for *import* resolution.)
     let Some(resolver) =
         bhdl_synthesizer::global_library_resolver().or_else(catalog_discovery_resolver)
     else {
-        return;
+        return Vec::new();
     };
     let mut sources = Vec::new();
     for path in resolver.catalog_bhdl_files() {
@@ -1598,7 +1622,11 @@ fn snap_catalog_values(netlist: &mut bhdl_netlist::Netlist) {
             }
         }
     }
-    let families = bhdl_analyzer::value_snap::harvest_families(&sources);
+    bhdl_analyzer::value_snap::harvest_families(&sources)
+}
+
+fn snap_catalog_values(netlist: &mut bhdl_netlist::Netlist) {
+    let families = harvest_catalog_families();
     if families.is_empty() {
         return;
     }
