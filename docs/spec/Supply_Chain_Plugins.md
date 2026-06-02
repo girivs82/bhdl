@@ -37,7 +37,8 @@ transition, free Welcome-1K plan), github.com/yaqwsx/jlcparts.
 **Picks (free-first):**
 - **jlcparts offline DB** — default zero-config provider: no key, no rate
   limit, queryable offline, parametric, reproducible. Catalogue is the
-  LCSC/JLC cost-optimized/assembly sweet spot.
+  LCSC/JLC cost-optimized/assembly sweet spot. Shipped as a zero-dependency
+  Rust binary over the full SQLite (§4.1) + a Python CSV reference (§4.2).
 - **DigiKey v4** — first online provider: authoritative, broad, real
   parametric search; user supplies their own OAuth creds.
 - Mouser/Nexar — secondary enrichers / premium cross-distributor coverage.
@@ -59,35 +60,69 @@ So a supply-chain provider is exactly: read requirements on stdin → query
 its source → emit `PluginSelection`s with the real `mpn`/`manufacturer`/
 `stock`/`unit_price`. No core change to the protocol is needed.
 
-## 4. jlcparts provider (default, offline) — BUILT + VERIFIED
+## 4. jlcparts providers (default, offline) — BUILT + VERIFIED
 
-Shipped: `bhdl-stdlib/plugins/bhdl_jlcparts_provider.py`. Data artifact is
-**CDFER/jlcpcb-parts-database** (MIT) — the in-stock JLCPCB catalogue
-derived from yaqwsx/jlcparts:
-- full SQLite (~1 GB): `…/jlcpcb-components.sqlite3`
-- **basic+preferred CSV (~3.6 MB):** `…/jlcpcb-components-basic-preferred.csv`
+Data artifact is **CDFER/jlcpcb-parts-database** (MIT) — the in-stock
+JLCPCB catalogue derived from yaqwsx/jlcparts:
+- **full SQLite (~1.6 GB): `…/jlcpcb-components.sqlite3`** — the whole
+  catalogue (not just basic/preferred), so odd E96 values and specialised
+  parts resolve (e.g. 1.65Ω, 31.6kΩ).
+- basic+preferred CSV (~3.6 MB): `…/jlcpcb-components-basic-preferred.csv`
+  — the no-extra-fee assembly subset.
 
-The CSV (basic + preferred = the no-extra-fee, in-stock assembly parts) is
-the right zero-config default for cost-optimized assembly, small enough to
-cache/pin, and avoids the 1 GB download. The provider reads it via
-`$BHDL_JLCPARTS_CSV` (or argv[1]); a sibling provider can query the full
-SQLite for wider coverage.
+Two providers ship, sharing the JSON stdin/stdout protocol:
 
-Provider logic: per requirement, filter rows by category↔class
-(Resistors/Capacitors/Inductors), parse the parametric value out of the
-`description` text (`510kΩ`→510e3, `100nF`→100e-9, `10µH`→10e-6) and match
-it within tolerance, match `package`, require `stock>0`; rank basic >
-preferred > most-stock > cheapest; emit a `PluginSelection` with `mpn`
-(= the catalogue's `mfr`), `manufacturer`, `vendor="LCSC"`,
-`vendor_sku="C"+lcsc`, `stock`, `unit_price`.
+### 4.1 `bhdl-jlcparts-provider` (Rust, SQLite) — the default
 
-**Verified** against the real CSV — e.g. 10kΩ/0402 → C25744
-`0402WGF1002TCE`; 100nF/0402 → C1525 `CL05B104KO5NNNC` (the canonical
-JLCPCB basic 100nF); 10µH → C1046 `SDFL2012S100KTF`. All correct, in-stock,
-orderable parts.
+A workspace crate (`bhdl-jlcparts-provider`) querying the **full SQLite**.
+`rusqlite`'s `bundled` feature statically links SQLite into the binary, so
+the provider has **zero runtime dependencies** — no Python interpreter, no
+system `libsqlite3`, a single self-contained executable consistent with the
+Rust workspace. DB path from `$BHDL_JLCPARTS_DB` (or argv[1]).
 
-Because the data is a **local snapshot**, this is hermetic and reproducible:
-no per-build network call, MIT-licensed (no redistribution-ToS problem).
+It is the **zero-config default**: when `$BHDL_SUPPLY_PROVIDER` is unset but
+`$BHDL_JLCPARTS_DB` points at a catalogue, the live `bom`/`visualize` path
+auto-resolves `bhdl-jlcparts-provider` (next to the running executable, else
+on `PATH`) — see `glacier_physical_selection::default_provider_spec`.
+
+Resolution per requirement: resolve category↔class once to the indexed
+`category_id`s; parse the parametric value out of the `description` text
+(`510kΩ`→510e3, `100nF`→100e-9, **`6.8uH`→6.8e-6** — inductors use ASCII
+`u`, and a Henry match rejects `…Hz` frequencies); among in-stock
+value-matching rows, **prefer the closest value** (so exact E96 121Ω wins
+over an in-tolerance 120Ω), tiebroken by rank basic > preferred > stock.
+
+**Footprint cascade** — the provider actively translates between BHDL's
+package codes and jlcparts' notation rather than giving up:
+1. **strict** package-string equality (R/C EIA codes — `0603`, `1206` —
+   match jlcparts verbatim);
+2. **code token** — the size code as a substring of the package string *or
+   the MPN*. This is the inductor translator: a `6045` request matches
+   `SWPA6045S6R8MT` / `SRN6045-…` even though jlcparts labels the package
+   `SMD,6x6mm` — in SRN**6045** the `45` is the 4.5 mm *height*, not the
+   width, so naive L×W translation is wrong, but the size code lives in the
+   part number;
+3. **value-only** last resort, no package constraint, with a warning that
+   the footprint could not be confirmed.
+
+**Verified end-to-end** (zero-config, only `$BHDL_JLCPARTS_DB` set) on
+`tps54331_test.bhdl` — all 8 passives resolve, exact values, no warnings:
+`121Ω→C22867 0603WAF1210T5E`, `1.65Ω→C25189`, `31.6kΩ→C25967`,
+`10µF→C13585`, `4.7µF→C29823`, `6.8µH/6045→C57254 SWPA6045S6R8MT`,
+`10kΩ→C25804`. Warm query ~0.12 s (cold ~1.9 s is pure page-in of the 1.6 GB
+DB — I/O-bound, identical in any language). `cargo test -p
+bhdl-jlcparts-provider` covers the value parser (ASCII-µ, Hz rejection).
+
+### 4.2 `bhdl_jlcparts_provider.py` (CSV) — the hackable reference
+
+`bhdl-stdlib/plugins/bhdl_jlcparts_provider.py` reads the basic/preferred
+**CSV** (`$BHDL_JLCPARTS_CSV`). Tiny, no build step, easy to fork — the
+reference implementation of the protocol for other parties. Covers the
+assembly subset only (misses odd E96 values the full SQLite carries).
+
+Because the data is a **local snapshot**, both are hermetic and
+reproducible: no per-build network call, MIT-licensed (no
+redistribution-ToS problem).
 
 ## 5. Reproducibility (ties to `bhdl.lock`)
 
@@ -121,24 +156,29 @@ catalogue physical selection. Steps 1–3 below are implemented; pinning
 3. **Apply** — ✅ writes `mpn`/`manufacturer`/`lcsc_pn`/`stock` onto the
    instance; the BOM walker reads `mpn`/`manufacturer`/`lcsc_pn`.
 4. **Pin** — ⏳ record the selected MPN in `bhdl.lock` (§5). Not yet built.
-5. **Provider** — ✅ jlcparts reference provider shipped; DigiKey online
-   provider (BYO OAuth) still TODO.
+5. **Provider** — ✅ both jlcparts providers shipped; the Rust SQLite binary
+   is the zero-config default (§4.1), the Python CSV is the reference
+   (§4.2). DigiKey online provider (BYO OAuth) still TODO.
 
-**Verified end-to-end** against the real basic/preferred CSV on
-`tps54331_test.bhdl`:
+**Verified end-to-end** — zero-config (only `$BHDL_JLCPARTS_DB` set, no
+`$BHDL_SUPPLY_PROVIDER`), full SQLite, on `tps54331_test.bhdl`:
 ```
-$ BHDL_SUPPLY_PROVIDER="python3 bhdl-stdlib/plugins/bhdl_jlcparts_provider.py" \
-  BHDL_JLCPARTS_CSV=/tmp/jlc_bp.csv  bhdl-cli tps54331_test.bhdl bom
-  ✓ supply chain: 5 real MPN(s) resolved
-| R4 | 1 | 10kΩ | UNI-ROYAL(Uniroyal Elec) | 0603WAF1002T5E | 0603 | lcsc=C25804 |
-| C1 | 1 | 10µF | Samsung Electro-Mechanics | CL31A106KBHNNNE | 1206 | lcsc=C13585 |
+$ BHDL_JLCPARTS_DB=/path/jlcpcb-components.sqlite3  bhdl-cli tps54331_test.bhdl bom
+  ✓ supply chain: 8 real MPN(s) resolved
+| R1 | 1 | 121Ω  | UNI-ROYAL          | 0603WAF1210T5E | 0603 | lcsc=C22867 |
+| R2 | 1 | 1.65Ω | UNI-ROYAL          | 0603WAF165KT5E | 0603 | lcsc=C25189 |
+| L1 | 1 | 6.8µH | Sunlord            | SWPA6045S6R8MT | 6045 | lcsc=C57254 |
+| C1 | 1 | 10µF  | Samsung Electro-M. | CL31A106KBHNNNE| 1206 | lcsc=C13585 |
 …
 ```
-The protocol field is `protocol_version: "1"` (a string), matching
-`plugin.rs::PluginResponse`. Misses (e.g. odd E96 values like 1.65Ω/31.6kΩ,
-or a `6045` inductor package code absent from the dataset's notation) are
-basic/preferred-subset coverage gaps, resolved by pointing at the full
-SQLite catalogue — not pipeline bugs.
+All 8 passives resolve with exact values and confirmed footprints (the full
+SQLite carries the odd E96 values 1.65Ω/31.6kΩ the CSV subset omits, and the
+code-token cascade translates the `6045` inductor footprint). The protocol
+field is `protocol_version: "1"` (a string), matching
+`plugin.rs::PluginResponse`. A remaining miss now means the part is
+genuinely out of stock catalogue-wide (or the value/footprint has no
+equivalent), not a coverage gap of the subset — and the build stays
+MPN-less for that line rather than erroring.
 
 ## 7. Out of scope
 
