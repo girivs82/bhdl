@@ -697,6 +697,19 @@ fn intent_driven_values(
         // override (a board arg or an SKU alias's bound value) still wins.
         let mut self_params = cand.recipe.param_defaults.clone();
         for (k, v) in &cand.param_values {
+            // Skip self-referential echoes (`f_sw → "f_sw"`). These come
+            // from an entity's pass-through metadata attribute whose value
+            // is a bare param identifier (`attribute f_sw = f_sw;`): the
+            // attribute extractor captures the literal text "f_sw", and
+            // the flow-instantiation path copies module attributes onto
+            // the instance, so they land in param_values. Letting such an
+            // echo override would clobber the real entity default
+            // (570kHz) with the param NAME — the design block then sees
+            // `self.f_sw = 'f_sw'`. A genuine override (`f_sw=1MHz`)
+            // differs from the key and still applies. (Bug A, layer 2.)
+            if v.trim() == k {
+                continue;
+            }
             self_params.insert(k.clone(), v.clone());
         }
         match crate::design_evaluator::evaluate_recipe(
