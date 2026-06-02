@@ -264,7 +264,7 @@ pub fn set_global_library_resolver(resolver: bhdl_common::library::LibraryResolv
     let _ = GLOBAL_LIBRARY_RESOLVER.set(resolver);
 }
 
-fn global_library_resolver() -> Option<bhdl_common::library::LibraryResolver> {
+pub fn global_library_resolver() -> Option<bhdl_common::library::LibraryResolver> {
     GLOBAL_LIBRARY_RESOLVER.get().cloned()
 }
 
