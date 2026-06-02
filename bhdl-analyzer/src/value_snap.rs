@@ -27,17 +27,147 @@ use bhdl_netlist::Netlist;
 
 use crate::part_family::{parse_require_clause, Constraint, ESeries};
 
-/// One catalog family's snapping-relevant facts: the normalized component
-/// class it applies to and the E-series ranges it declares. (MPN/template
-/// data is irrelevant to value snapping and is dropped.)
-#[derive(Debug, Clone)]
+/// One catalog family's selection-relevant facts: the normalized
+/// component class, the E-series value range(s) it stocks, and its
+/// ratings + package (for stress-aware, size-minimizing selection).
+#[derive(Debug, Clone, Default)]
 pub struct FamilyDecl {
+    /// part_family declaration name (e.g. `"Yageo_RC0603FR_07"`).
+    pub name: String,
     /// Normalized component class — `"resistor"`, `"capacitor"`,
     /// `"inductor"` (see [`normalize_class`]).
     pub class: String,
     /// `(series, min, max)` for each `require axis in E_N(min, max)`
     /// clause, with min/max already lowered to SI base units.
     pub series_ranges: Vec<(ESeries, f64, f64)>,
+    /// Package/footprint code (`"0603"`, `"1206"`, …) — the physical
+    /// size, from an `attribute package = …`. Drives size minimization.
+    pub package: Option<String>,
+    /// Working-voltage rating in volts (`attribute voltage_rating = …`).
+    pub voltage_rating: Option<f64>,
+    /// Saturation/RMS current rating in amps (`attribute current_rating = …`).
+    pub current_rating: Option<f64>,
+    /// Power rating in watts (`attribute power_w = …`).
+    pub power_w: Option<f64>,
+}
+
+/// Electrical stress a passive instance experiences. Any dimension that
+/// isn't known (`None`) is simply not used to filter candidates.
+#[derive(Debug, Clone, Default)]
+pub struct Stress {
+    /// Volts across the part (cap rail / resistor drop).
+    pub voltage: Option<f64>,
+    /// Amps through the part (inductor peak/RMS).
+    pub current: Option<f64>,
+    /// Watts dissipated (resistor I²R).
+    pub power: Option<f64>,
+}
+
+/// A catalog family chosen for an instance, plus the value snapped to that
+/// family's E-series.
+#[derive(Debug, Clone)]
+pub struct SelectedPart {
+    pub family: FamilyDecl,
+    /// The instance's value snapped to the chosen family's series.
+    pub value: f64,
+}
+
+// Derating policy: a part's rating must exceed the operating stress by
+// these factors (rating >= stress * factor). Ceramic caps lose
+// capacitance under DC bias, so 2× headroom is conventional; power and
+// resistor-voltage use 2× / 1.5×; inductor saturation current 1.25×.
+const CAP_VOLTAGE_DERATE: f64 = 2.0;
+const RES_VOLTAGE_DERATE: f64 = 1.5;
+const RES_POWER_DERATE: f64 = 2.0;
+const IND_CURRENT_DERATE: f64 = 1.25;
+
+/// Relative physical size of a 2-terminal SMD package — lower is smaller
+/// (preferred). Unknown packages rank last so a rating-adequate part with
+/// a known small package always wins over an unspecified one.
+fn package_rank(pkg: Option<&str>) -> u32 {
+    match pkg.map(|s| s.trim()) {
+        Some("01005") => 0,
+        Some("0201") => 1,
+        Some("0402") => 2,
+        Some("0603") => 3,
+        Some("0805") => 4,
+        Some("1206") => 5,
+        Some("1210") => 6,
+        Some("1812") => 7,
+        Some("2010") => 8,
+        Some("2512") => 9,
+        // Hand-coded larger footprints (power inductors etc.) sort above
+        // chip sizes by their numeric prefix; unknown sorts last.
+        Some(other) => other
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<String>()
+            .parse::<u32>()
+            .map(|n| 100 + n)
+            .unwrap_or(u32::MAX - 1),
+        None => u32::MAX,
+    }
+}
+
+/// Does this family's ratings cover the (derated) stress for its class?
+/// A rating that the family doesn't declare can't be checked, so it's
+/// treated as adequate (the caller's catalog is responsible for declaring
+/// the ratings it wants enforced).
+fn rating_covers(f: &FamilyDecl, class: &str, stress: &Stress) -> bool {
+    match class {
+        "capacitor" => match (f.voltage_rating, stress.voltage) {
+            (Some(rating), Some(v)) => rating >= v * CAP_VOLTAGE_DERATE,
+            _ => true,
+        },
+        "resistor" => {
+            let v_ok = match (f.voltage_rating, stress.voltage) {
+                (Some(rating), Some(v)) => rating >= v * RES_VOLTAGE_DERATE,
+                _ => true,
+            };
+            let p_ok = match (f.power_w, stress.power) {
+                (Some(rating), Some(p)) => rating >= p * RES_POWER_DERATE,
+                _ => true,
+            };
+            v_ok && p_ok
+        }
+        "inductor" => match (f.current_rating, stress.current) {
+            (Some(rating), Some(i)) => rating >= i * IND_CURRENT_DERATE,
+            _ => true,
+        },
+        _ => true,
+    }
+}
+
+/// Select the smallest-package catalog family that stocks `value` (within
+/// one of its E-series ranges) AND whose ratings cover the derated
+/// `stress`, for the given normalized `class`. Returns the family plus the
+/// value snapped to its series, or `None` if nothing adequate exists.
+///
+/// This is the stress-aware, size-minimizing successor to the value-only
+/// [`snap_netlist_values`]: it answers "which real part" (value + rating +
+/// package), not just "which standard value".
+pub fn select_family<'a>(
+    families: &'a [FamilyDecl],
+    class: &str,
+    value: f64,
+    stress: &Stress,
+) -> Option<&'a FamilyDecl> {
+    families
+        .iter()
+        .filter(|f| f.class == class)
+        .filter(|f| f.series_ranges.iter().any(|(_, lo, hi)| value >= *lo && value <= *hi))
+        .filter(|f| rating_covers(f, class, stress))
+        .min_by_key(|f| package_rank(f.package.as_deref()))
+}
+
+/// Snap `value` to `family`'s E-series (the range that contains it).
+pub fn snap_to_family(family: &FamilyDecl, value: f64) -> f64 {
+    family
+        .series_ranges
+        .iter()
+        .find(|(_, lo, hi)| value >= *lo && value <= *hi)
+        .map(|(series, _, _)| series.nearest(value))
+        .unwrap_or(value)
 }
 
 /// Normalize the several spellings of a component class to one canonical
@@ -149,7 +279,9 @@ pub fn harvest_families(sources: &[SourceFile]) -> Vec<FamilyDecl> {
 }
 
 fn harvest_one(pf: &PartFamilyDef) -> Option<FamilyDecl> {
+    use bhdl_ast::HasName;
     let class = normalize_class(&pf.class_pattern()?.entity_name()?)?.to_string();
+    let name = pf.name().map(|n| n.text().to_string()).unwrap_or_default();
     let mut series_ranges = Vec::new();
     for clause in pf.require_clauses() {
         if let Ok(Constraint::InESeries { series, min, max, .. }) = parse_require_clause(&clause) {
@@ -161,7 +293,43 @@ fn harvest_one(pf: &PartFamilyDef) -> Option<FamilyDecl> {
     if series_ranges.is_empty() {
         return None;
     }
-    Some(FamilyDecl { class, series_ranges })
+    let attrs = read_part_family_attrs(pf);
+    let num = |k: &str| attrs.get(k).and_then(|s| parse_value_string(s));
+    Some(FamilyDecl {
+        name,
+        class,
+        series_ranges,
+        package: attrs.get("package").cloned(),
+        voltage_rating: num("voltage_rating"),
+        current_rating: num("current_rating"),
+        power_w: num("power_w"),
+    })
+}
+
+/// Read `attribute K = V;` declarations directly under a `part_family`
+/// node into a key→value map (values unquoted). Quick text-based parse,
+/// matching the catalog scanner's approach.
+fn read_part_family_attrs(pf: &PartFamilyDef) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    for child in pf.syntax().children() {
+        if child.kind() != bhdl_parser::SyntaxKind::ATTRIBUTE_DECL {
+            continue;
+        }
+        let text = child.text().to_string();
+        let s = text
+            .trim()
+            .trim_start_matches("attribute")
+            .trim()
+            .trim_end_matches(';')
+            .trim();
+        if let Some((k, v)) = s.split_once('=') {
+            out.insert(
+                k.trim().to_string(),
+                v.trim().trim_matches('"').to_string(),
+            );
+        }
+    }
+    out
 }
 
 /// The component class of a netlist instance: its `component_class`
@@ -273,6 +441,52 @@ mod tests {
             let v = parse_value_string(s).unwrap();
             assert_eq!(format_value(v, class), s);
         }
+    }
+
+    fn fam(name: &str, class: &str, pkg: &str, v: Option<f64>, p: Option<f64>, i: Option<f64>) -> FamilyDecl {
+        FamilyDecl {
+            name: name.into(),
+            class: class.into(),
+            series_ranges: vec![(ESeries::E12, 1e-12, 1e3)],
+            package: Some(pkg.into()),
+            voltage_rating: v,
+            current_rating: i,
+            power_w: p,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn select_picks_smallest_package_meeting_ratings() {
+        // Two cap families: 0603/50V and 1210/100V. A 12V rail (×2 derate
+        // → needs ≥24V) fits both → pick the smaller 0603. A 60V rail
+        // (needs ≥120V) fits only the 1210.
+        let fams = vec![
+            fam("C_0603_50V", "capacitor", "0603", Some(50.0), None, None),
+            fam("C_1210_100V", "capacitor", "1210", Some(100.0), None, None),
+        ];
+        // 12V op → needs ≥24V; both fit → smaller 0603.
+        let low = select_family(&fams, "capacitor", 1e-6, &Stress { voltage: Some(12.0), ..Default::default() });
+        assert_eq!(low.unwrap().name, "C_0603_50V", "smallest adequate package");
+        // 40V op → needs ≥80V; 50V part inadequate, 100V part fits → 1210.
+        let high = select_family(&fams, "capacitor", 1e-6, &Stress { voltage: Some(40.0), ..Default::default() });
+        assert_eq!(high.unwrap().name, "C_1210_100V", "only the 100V part is adequate");
+        // 60V op → needs ≥120V; even the 100V part is inadequate → none.
+        let none = select_family(&fams, "capacitor", 1e-6, &Stress { voltage: Some(60.0), ..Default::default() });
+        assert!(none.is_none());
+    }
+
+    #[test]
+    fn select_resistor_filters_on_power() {
+        // 0603/0.1W vs 2512/1W. 0.3W dissipation (×2 → needs ≥0.6W) → 2512.
+        let fams = vec![
+            fam("R_0603", "resistor", "0603", Some(75.0), Some(0.1), None),
+            fam("R_2512", "resistor", "2512", Some(200.0), Some(1.0), None),
+        ];
+        let s = select_family(&fams, "resistor", 100.0, &Stress { power: Some(0.3), voltage: Some(5.0), ..Default::default() });
+        assert_eq!(s.unwrap().name, "R_2512", "0603 0.1W can't take 0.3W");
+        let s2 = select_family(&fams, "resistor", 100.0, &Stress { power: Some(0.01), voltage: Some(5.0), ..Default::default() });
+        assert_eq!(s2.unwrap().name, "R_0603", "low power → smallest");
     }
 
     #[test]

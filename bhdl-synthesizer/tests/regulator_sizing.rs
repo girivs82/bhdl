@@ -142,9 +142,9 @@ async fn tps54331_values_snap_to_e_series() {
     // stdlib parts/ catalog via the library resolver; here we construct
     // them directly to isolate the snap.)
     let families = vec![
-        FamilyDecl { class: "resistor".into(), series_ranges: vec![(ESeries::E96, 1.0, 10e6)] },
-        FamilyDecl { class: "capacitor".into(), series_ranges: vec![(ESeries::E12, 1e-12, 1.0)] },
-        FamilyDecl { class: "inductor".into(), series_ranges: vec![(ESeries::E12, 1e-9, 1.0)] },
+        FamilyDecl { class: "resistor".into(), series_ranges: vec![(ESeries::E96, 1.0, 10e6)], ..Default::default() },
+        FamilyDecl { class: "capacitor".into(), series_ranges: vec![(ESeries::E12, 1e-12, 1.0)], ..Default::default() },
+        FamilyDecl { class: "inductor".into(), series_ranges: vec![(ESeries::E12, 1e-9, 1.0)], ..Default::default() },
     ];
     let n = snap_netlist_values(&mut netlist, &families);
     assert!(n >= 4, "expected ≥4 passive values snapped, got {n}");
