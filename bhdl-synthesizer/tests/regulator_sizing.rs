@@ -109,3 +109,57 @@ async fn tps54331_sizes_reactive_components() {
     // to zero under the old `{:.3}`.
     assert!(l > 0.0 && c_out > 0.0 && c_in > 0.0, "reactive values must be non-zero");
 }
+
+/// Sizing pipeline stage 3: the catalog-authoritative E-series snap pass
+/// rewrites the computed reactive/resistive values on the real expanded
+/// TPS54331 netlist to the nearest standard part (so SPICE + BOM agree on
+/// an orderable value). Validates `value_snap::snap_netlist_values` against
+/// the actual expansion children, with the E-series taken from
+/// catalog-shaped `FamilyDecl`s (not hardcoded per type).
+#[tokio::test]
+async fn tps54331_values_snap_to_e_series() {
+    use bhdl_analyzer::part_family::ESeries;
+    use bhdl_analyzer::value_snap::{snap_netlist_values, FamilyDecl};
+
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("workspace root")
+        .to_path_buf();
+    std::env::set_current_dir(&ws).expect("cwd → workspace root");
+
+    let pr = parse(BOARD);
+    assert!(pr.errors().is_empty(), "parse errors: {:?}", pr.errors());
+    let sf = SourceFile::cast(pr.syntax()).expect("source file");
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let mut netlist = gen
+        .generate_from_ast_and_analysis(&sf, &analysis)
+        .await
+        .expect("synthesis");
+
+    // Catalog-shaped families: resistors→E96, caps/inductors→E12, with
+    // wide validity ranges. (The live pipeline harvests these from the
+    // stdlib parts/ catalog via the library resolver; here we construct
+    // them directly to isolate the snap.)
+    let families = vec![
+        FamilyDecl { class: "resistor".into(), series_ranges: vec![(ESeries::E96, 1.0, 10e6)] },
+        FamilyDecl { class: "capacitor".into(), series_ranges: vec![(ESeries::E12, 1e-12, 1.0)] },
+        FamilyDecl { class: "inductor".into(), series_ranges: vec![(ESeries::E12, 1e-9, 1.0)] },
+    ];
+    let n = snap_netlist_values(&mut netlist, &families);
+    assert!(n >= 4, "expected ≥4 passive values snapped, got {n}");
+
+    let value_str = |needle: &str| -> String {
+        let (_, inst) = netlist
+            .instances
+            .iter()
+            .find(|(_, i)| i.name.contains(needle))
+            .unwrap_or_else(|| panic!("`{needle}` not found"));
+        inst.attributes.get("value").cloned().unwrap_or_default()
+    };
+
+    // 6.996µH → E12 6.8µH; 31250Ω → E96 31.6kΩ; 4.386µF/4.664µF → E12 4.7µF.
+    assert_eq!(value_str("L_out"), "6.8µH", "inductor → nearest E12");
+    assert_eq!(value_str("R_top"), "31.6kΩ", "divider → nearest E96 (=datasheet)");
+    assert_eq!(value_str("C_out"), "4.7µF", "output cap → nearest E12");
+}

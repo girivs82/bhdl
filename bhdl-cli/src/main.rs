@@ -930,6 +930,9 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
         }
     }
 
+    // Snap computed passive values to catalog E-series before sim/viz.
+    snap_catalog_values(&mut netlist);
+
     // Run GLACIER DC simulation for voltage/current annotation
     let sim_annotations = {
         let mut converter = NetlistToSpiceConverter::new();
@@ -1156,6 +1159,9 @@ async fn run_layout(
     );
     println!("  {} Expansion: {} instances", "✓".green(), netlist.instances.len());
 
+    // Snap computed passive values to catalog E-series before layout/sim.
+    snap_catalog_values(&mut netlist);
+
     // 5. GLACIER DC
     let sim_annotations = {
         let mut converter = bhdl_spice::NetlistToSpiceConverter::new();
@@ -1279,6 +1285,10 @@ async fn run_spice(source_file: &SourceFile, analysis_type: &str, _output: Optio
     // override but `bhdl-cli ... --sku Pro spice` would simulate
     // with the base value — internally inconsistent.
     apply_sku_variant(&analysis_result, &mut netlist, sku)?;
+
+    // Stage 3: snap computed passive values to catalog E-series so SPICE
+    // simulates the as-built (orderable) value, not the raw computed one.
+    snap_catalog_values(&mut netlist);
 
     // Create unified analysis data and augment with SPICE information
     let mut analysis_data = AnalysisData::default();
@@ -1553,6 +1563,45 @@ async fn run_simulation(source_file: &SourceFile, testbench_path: PathBuf, outpu
 /// has variants and the user didn't pass `--sku`. Returns
 /// successfully without touching the netlist when the board has no
 /// variants — the implicit "default" SKU.
+/// E-series value snapping — sizing-pipeline stage 3 (catalog-authoritative).
+///
+/// Rewrites each passive instance's `value` to the nearest standard value
+/// of the E-series its matching `part_family` catalog entry declares, so
+/// the value SPICE simulates and the value the BOM names are one real,
+/// orderable number (a design-block-computed 31250Ω → 31.6kΩ). Catalog
+/// families are discovered through the library system — the same resolver
+/// that resolves imports — so the E-series is never hardcoded per type.
+///
+/// Best-effort and side-effect-free when nothing applies: no resolver, no
+/// catalogs, or no matching family ⇒ the netlist is left untouched. Called
+/// post-expansion / post-SKU-patch, before SPICE conversion and BOM walk
+/// (both read the `value` attribute).
+fn snap_catalog_values(netlist: &mut bhdl_netlist::Netlist) {
+    use bhdl_ast::AstNode;
+    let Some(resolver) = bhdl_synthesizer::global_library_resolver() else { return };
+    let mut sources = Vec::new();
+    for path in resolver.catalog_bhdl_files() {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            let pr = bhdl_parser::parse(&text);
+            if let Some(sf) = SourceFile::cast(pr.syntax()) {
+                sources.push(sf);
+            }
+        }
+    }
+    let families = bhdl_analyzer::value_snap::harvest_families(&sources);
+    if families.is_empty() {
+        return;
+    }
+    let n = bhdl_analyzer::value_snap::snap_netlist_values(netlist, &families);
+    if n > 0 {
+        println!(
+            "  {} E-series snap: {} value(s) → standard parts (catalog-driven)",
+            "✓".green(),
+            n
+        );
+    }
+}
+
 fn apply_sku_variant(
     analysis: &bhdl_analyzer::AnalysisResult,
     netlist: &mut bhdl_netlist::Netlist,
@@ -1685,6 +1734,10 @@ async fn cmd_bom(
     //      out with a list (same anti-silent-fallback principle as
     //      Stage 6 device discovery).
     apply_sku_variant(&analysis, &mut netlist, sku)?;
+
+    // 4.6. Snap computed passive values to the catalog E-series so the BOM
+    //      names a real, orderable part (and matches what SPICE simulates).
+    snap_catalog_values(&mut netlist);
 
     // 5. Walk the netlist; produce the BOM rows.
     let rows = sku_bom::walk(&netlist);
