@@ -1,0 +1,19 @@
+// Bourns SRN6045TA series — shielded SMD power inductors (6.0×6.0 mm).
+//
+// Power-inductor catalog family for the `Inductor<*, …>` class. Covers
+// the switch-mode range a buck/boost regulator's design block sizes into
+// (≈100 nH … 1 mH), snapped to E12 standard values. With this present,
+// a computed inductor like a buck's 6.996 µH resolves to a real part
+// (E12 6.8 µH) instead of staying a raw computed float.
+//
+// MPN format: SRN6045TA-<value-code>.
+
+part_family Bourns_SRN6045TA : Inductor<L: *, "20%", "6045"> {
+    require L in E12(100nH, 1mH);
+
+    attribute manufacturer  = "Bourns";
+    attribute mpn_template  = "SRN6045TA-{e12_code(L)}";
+    attribute datasheet     = "https://www.bourns.com/docs/product-datasheets/srn6045ta.pdf";
+    attribute tolerance     = 20;   // ±20%
+    attribute shielded      = "true";
+}

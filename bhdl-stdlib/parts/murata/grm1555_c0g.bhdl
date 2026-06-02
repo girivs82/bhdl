@@ -1,0 +1,22 @@
+// Murata GRM1555 C0G/NP0 series — 0402 MLCC, small-value precision range.
+//
+// Small-value capacitor catalog family for the `Capacitor<*, …>` class,
+// covering 1 pF … 1 nF snapped to E24 (the standard grid for precision
+// C0G/NP0 values used in filters, compensation, crystal load caps). Sits
+// below Murata_GRM188R71H (X7R, 1 nF … 1 µF) so the full capacitor
+// catalogue spans pF → ~100 µF across three dielectric/value tiers:
+//   C0G  1 pF – 1 nF   (E24, this file)
+//   X7R  1 nF – 1 µF   (E12, grm188.bhdl)
+//   X5R  1 µF – 100 µF (E6,  grm31.bhdl)
+//
+// MPN format: GRM1555C1H{c_code(C)}A01D (C1 = C0G, H = 50 V).
+
+part_family Murata_GRM1555C1H : Capacitor<C: *, 50V, "C0G", "0402"> {
+    require C in E24(1pF, 1nF);
+
+    attribute manufacturer  = "Murata Manufacturing";
+    attribute mpn_template  = "GRM1555C1H{c_code(C)}A01D";
+    attribute datasheet     = "https://www.murata.com/en-us/products/capacitor/ceramiccapacitor";
+    attribute dielectric    = "C0G";
+    attribute tolerance     = 5;    // ±5%
+}
