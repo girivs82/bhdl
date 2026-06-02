@@ -299,7 +299,11 @@ fn harvest_one(pf: &PartFamilyDef) -> Option<FamilyDecl> {
         name,
         class,
         series_ranges,
-        package: attrs.get("package").cloned(),
+        // `physical_package`, not `package`: `package` is a reserved
+        // keyword (layout blocks), so `attribute package = …` fails to
+        // parse. `physical_package` is also the key the BOM reads
+        // (bhdl_common::sku::PACKAGE).
+        package: attrs.get("physical_package").or_else(|| attrs.get("package")).cloned(),
         voltage_rating: num("voltage_rating"),
         current_rating: num("current_rating"),
         power_w: num("power_w"),
@@ -311,7 +315,9 @@ fn harvest_one(pf: &PartFamilyDef) -> Option<FamilyDecl> {
 /// matching the catalog scanner's approach.
 fn read_part_family_attrs(pf: &PartFamilyDef) -> HashMap<String, String> {
     let mut out = HashMap::new();
-    for child in pf.syntax().children() {
+    // Use descendants(), not children(): attribute decls may be nested
+    // inside the part_family's body block rather than direct children.
+    for child in pf.syntax().descendants() {
         if child.kind() != bhdl_parser::SyntaxKind::ATTRIBUTE_DECL {
             continue;
         }
@@ -503,9 +509,30 @@ mod tests {
         assert_eq!(fams.len(), 1);
         assert_eq!(fams[0].class, "resistor");
         assert_eq!(fams[0].series_ranges.len(), 1);
+        assert_eq!(fams[0].name, "Yageo_RC0603FR_07");
+    }
+
+    #[test]
+    fn harvest_reads_package_and_ratings() {
+        let src = r#"
+            part_family X : Resistor<R: *, "1%", "1206"> {
+                require R in E96(1Ω, 10MΩ);
+                attribute physical_package = "1206";
+                attribute power_w        = 0.25;
+                attribute voltage_rating = 200;
+            }
+        "#;
+        let pr = bhdl_parser::parse(src);
+        let sf = SourceFile::cast(pr.syntax()).unwrap();
+        let fams = harvest_families(&[sf]);
+        assert_eq!(fams.len(), 1);
+        assert_eq!(fams[0].package.as_deref(), Some("1206"), "package attr");
+        assert_eq!(fams[0].power_w, Some(0.25), "power_w attr");
+        assert_eq!(fams[0].voltage_rating, Some(200.0), "voltage_rating attr");
         let (series, lo, hi) = &fams[0].series_ranges[0];
         assert_eq!(*series, ESeries::E96);
         assert!((*lo - 1.0).abs() < 1e-9);
         assert!((*hi - 10e6).abs() < 1.0);
     }
 }
+

@@ -14,7 +14,7 @@ part_family Vishay_CRCW1206 : Resistor<R: *, "1%", "1206"> {
     attribute mpn_template   = "CRCW1206{e96_code(R)}FKEA";
     attribute datasheet      = "https://www.vishay.com/docs/20035/dcrcwe3.pdf";
     attribute tc_ppm         = 100;
-    attribute package        = "1206";
+    attribute physical_package        = "1206";
     attribute power_w        = 0.25;
     attribute voltage_rating = 200;
 }

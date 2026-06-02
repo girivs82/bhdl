@@ -16,7 +16,7 @@ part_family Bourns_SRN6045TA : Inductor<L: *, "20%", "6045"> {
     attribute datasheet     = "https://www.bourns.com/docs/product-datasheets/srn6045ta.pdf";
     attribute tolerance     = 20;   // ±20%
     attribute shielded      = "true";
-    attribute package        = "6045";
+    attribute physical_package        = "6045";
     attribute current_rating = 3.5;   // A (I_sat)
     attribute power_w        = 1.0;
 }
