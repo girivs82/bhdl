@@ -388,6 +388,138 @@ pub fn apply_glacier_physical_selection(
 /// result untouched) when no catalog family matches — so it never
 /// regresses a part the catalogue doesn't cover. Returns the count
 /// overridden. Runs after [`apply_glacier_physical_selection`].
+/// Resolve real, orderable MPNs for the catalogue-selected passives via an
+/// external supply-chain provider (e.g. the bundled jlcparts provider),
+/// and write `mpn`/`manufacturer`/`lcsc_pn`/`stock` onto the instances so
+/// the BOM names real parts. Runs after [`apply_catalog_physical_selection`]
+/// (which fixed value + package); the provider turns (class, value,
+/// package) → a real part.
+///
+/// The provider is any executable named by `$BHDL_SUPPLY_PROVIDER`
+/// (whitespace-split into program + args; e.g.
+/// `python3 .../bhdl_jlcparts_provider.py`). Best-effort: unset env, a
+/// spawn failure, or an unparseable reply ⇒ leaves the catalogue result
+/// untouched (no MPN), never errors the build. Reuses the JSON
+/// stdin/stdout plugin protocol (`bhdl_analyzer::plugin`).
+pub fn apply_supply_chain_mpns(netlist: &mut Netlist) -> usize {
+    let spec = match std::env::var("BHDL_SUPPLY_PROVIDER") {
+        Ok(s) if !s.trim().is_empty() => s,
+        _ => return 0,
+    };
+
+    // Build the requirement list from the selected passives; track
+    // class_index → InstanceId for applying the reply.
+    let mut idx_to_id: Vec<bhdl_netlist::InstanceId> = Vec::new();
+    let mut reqs: Vec<serde_json::Value> = Vec::new();
+    for id in netlist.instances.keys().collect::<Vec<_>>() {
+        let inst = &netlist.instances[id];
+        let Some(class) = classify_component(netlist, inst.definition, &inst.attributes) else {
+            continue;
+        };
+        if !matches!(class.as_str(), "resistor" | "capacitor" | "inductor") {
+            continue;
+        }
+        let Some(value) = inst
+            .attributes
+            .get("value")
+            .and_then(|s| bhdl_analyzer::value_snap::parse_value_string(s))
+        else {
+            continue;
+        };
+        let package = inst
+            .attributes
+            .get("physical_package")
+            .or_else(|| inst.attributes.get("package"))
+            .cloned();
+        let ci = idx_to_id.len();
+        idx_to_id.push(id);
+        reqs.push(serde_json::json!({
+            "class_index": ci,
+            "class": class,
+            "value": value,
+            "package": package,
+            "tolerance_pct": 2.0,
+        }));
+    }
+    if reqs.is_empty() {
+        return 0;
+    }
+    let payload = serde_json::json!({ "protocol": 1, "requirements": reqs }).to_string();
+
+    // Spawn the provider directly with our requirements payload (the
+    // plugin.rs `run_plugin` helper is hardcoded to a CandidateBundle
+    // input; we use the leaner supply-requirements JSON), and parse its
+    // reply with the shared `PluginResponse` type.
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut parts = spec.split_whitespace();
+    let prog = match parts.next() {
+        Some(p) => p,
+        None => return 0,
+    };
+    let mut cmd = std::process::Command::new(prog);
+    for a in parts {
+        cmd.arg(a);
+    }
+    cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("supply-chain provider `{prog}` failed to spawn: {e}");
+            return 0;
+        }
+    };
+    if let Some(mut si) = child.stdin.take() {
+        let _ = si.write_all(payload.as_bytes());
+        // drop closes stdin → provider sees EOF
+    }
+    let out = match child.wait_with_output() {
+        Ok(o) => o,
+        Err(e) => {
+            log::warn!("supply-chain provider wait failed: {e}");
+            return 0;
+        }
+    };
+    if !out.status.success() {
+        log::warn!(
+            "supply-chain provider exited {:?}: {}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        return 0;
+    }
+    let resp: bhdl_analyzer::plugin::PluginResponse =
+        match serde_json::from_slice(&out.stdout) {
+            Ok(r) => r,
+            Err(e) => {
+                log::warn!("supply-chain provider reply not parseable: {e}");
+                return 0;
+            }
+        };
+    for w in &resp.warnings {
+        log::warn!("supply-chain provider: {w}");
+    }
+
+    let mut n = 0;
+    for sel in &resp.selections {
+        let Some(mpn) = sel.mpn.as_ref() else { continue };
+        let Some(&id) = idx_to_id.get(sel.class_index) else { continue };
+        let Some(inst) = netlist.instances.get_mut(id) else { continue };
+        inst.attributes.insert("mpn".to_string(), mpn.clone());
+        if let Some(m) = &sel.manufacturer {
+            inst.attributes.insert("manufacturer".to_string(), m.clone());
+        }
+        if let Some(sku) = &sel.vendor_sku {
+            inst.attributes.insert("lcsc_pn".to_string(), sku.clone());
+        }
+        if let Some(s) = sel.stock {
+            inst.attributes.insert("stock".to_string(), s.to_string());
+        }
+        n += 1;
+    }
+    n
+}
+
 /// Declared rail voltages (net name → volts) from each `Power` net's
 /// class. Used for the voltage stress when no GLACIER node-voltage solve
 /// is available — e.g. the BOM path, which runs no simulation. A 2-pin

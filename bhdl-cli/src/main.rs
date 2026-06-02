@@ -1048,6 +1048,14 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
                 overridden
             );
         }
+        let mpns = bhdl_synthesizer::glacier_physical_selection::apply_supply_chain_mpns(&mut netlist);
+        if mpns > 0 {
+            println!(
+                "  {} supply chain: {} real MPN(s) resolved",
+                "✓".green(),
+                mpns
+            );
+        }
         if !results.is_empty() {
             println!("  {} physical parameters selected for {} components",
                 "✓".green(), results.len());
@@ -1813,6 +1821,17 @@ async fn cmd_bom(
                 "  {} catalog selection: {} part(s) → standard value + smallest adequate package",
                 "✓".green(),
                 n
+            );
+        }
+        // Resolve real, orderable MPNs via the supply-chain provider
+        // ($BHDL_SUPPLY_PROVIDER, e.g. the bundled jlcparts provider).
+        // Best-effort: unset/failed ⇒ catalogue value+package stand.
+        let mpns = bhdl_synthesizer::glacier_physical_selection::apply_supply_chain_mpns(&mut netlist);
+        if mpns > 0 {
+            println!(
+                "  {} supply chain: {} real MPN(s) resolved",
+                "✓".green(),
+                mpns
             );
         }
     }
