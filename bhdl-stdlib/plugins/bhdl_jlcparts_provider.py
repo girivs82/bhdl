@@ -19,10 +19,10 @@ Protocol (JSON over stdin/stdout), aligned with bhdl-analyzer plugin.rs
 PluginResponse/PluginSelection:
 
   stdin:  {"protocol":1, "requirements":[
-             {"index":0, "class":"resistor", "value":10000.0,
+             {"class_index":0, "class":"resistor", "value":10000.0,
               "package":"0603", "tolerance_pct":1.0} ...]}
-  stdout: {"protocol":1, "selections":[
-             {"index":0, "mpn":"...", "manufacturer":"...", "vendor":"LCSC",
+  stdout: {"protocol_version":"1", "selections":[
+             {"class_index":0, "mpn":"...", "manufacturer":"...", "vendor":"LCSC",
               "vendor_sku":"C25804", "stock":100000, "unit_price":0.0008,
               "currency":"USD"} ...],
            "warnings":[...]}
@@ -86,7 +86,7 @@ def select(req, rows):
     category = CLASS_TO_CATEGORY.get(cls)
     unit = UNIT.get(cls)
     if category is None or unit is None:
-        return {"index": req["index"], "error": f"unsupported class '{cls}'"}
+        return {"class_index": req["class_index"], "error": f"unsupported class '{cls}'"}
 
     target = req.get("value")
     want_pkg = (req.get("package") or "").strip().lower()
@@ -118,13 +118,13 @@ def select(req, rows):
         candidates.append((basic, pref, stock, -price, r))
 
     if not candidates:
-        return {"index": req["index"],
+        return {"class_index": req["class_index"],
                 "error": f"no in-stock {cls} matching value/package in catalogue"}
 
     candidates.sort(key=lambda t: (t[0], t[1], t[2], t[3]), reverse=True)
     r = candidates[0][4]
     return {
-        "index": req["index"],
+        "class_index": req["class_index"],
         "mpn": r.get("mfr") or None,
         "manufacturer": r.get("manufacturer") or None,
         "vendor": "LCSC",
@@ -145,14 +145,14 @@ def main():
         # No data: emit a well-formed empty response with a warning, so the
         # caller falls back to catalogue defaults rather than failing.
         print(json.dumps({
-            "protocol": 1, "selections": [],
+            "protocol_version": "1", "selections": [],
             "warnings": ["jlcparts CSV not found; set $BHDL_JLCPARTS_CSV "
                          "(download from cdfer.github.io/jlcpcb-parts-database)"],
         }))
         return
     rows = load_rows(csv_path)
     selections = [select(r, rows) for r in req.get("requirements", [])]
-    print(json.dumps({"protocol": 1, "selections": selections, "warnings": warnings}))
+    print(json.dumps({"protocol_version": "1", "selections": selections, "warnings": warnings}))
 
 
 if __name__ == "__main__":

@@ -101,31 +101,44 @@ the lock makes it reproducible and verifiable. DigiKey's no-redistribution
 ToS is satisfied because only the MPN (an identifier the user selected),
 not the distributor's dataset, is stored.
 
-## 6. Wiring plan (implementation, not yet built)
+## 6. Wiring — BUILT (live `bom`/`visualize` pipeline)
 
-The plugin protocol + a default provider exist, but `run_catalog_scan` /
-the plugin invocation are **not yet in the live `generate`/`bom`/`spice`
-pipeline** (test/demo-only — see `catalog_scan.rs` module doc). To get real
-MPNs into the BOM:
+`glacier_physical_selection::apply_supply_chain_mpns(netlist)` is now
+invoked from the live `bhdl bom` and `bhdl visualize` paths, right after
+catalogue physical selection. Steps 1–3 below are implemented; pinning
+(step 4) is the remaining piece.
 
-1. **Bridge** — build the plugin input from the live netlist's selected
-   passives (class + snapped value + ratings + package from
-   `apply_catalog_physical_selection`), not the hand-built `InstanceClass`
-   list the demos use.
-2. **Invoke** — spawn the configured supply-chain plugin (reuse
-   `plugin.rs`; default = jlcparts provider), pipe requirements, parse
-   `PluginSelection`s. Best-effort: no plugin / no match ⇒ keep the
-   catalogue's value + package, leave MPN blank (today's behaviour).
-3. **Apply** — write `mpn`/`manufacturer`/`vendor`/`stock`/`unit_price`
-   onto the instance (the BOM walker already reads `mpn`/`manufacturer`).
-4. **Pin** — record the selected MPN in `bhdl.lock` (§5).
-5. **Provider** — ship the jlcparts reference provider; DigiKey as the
-   first online provider (BYO OAuth).
+1. **Bridge** — ✅ builds the requirement list from the netlist's selected
+   passives (`classify_component` + `parse_value_string` of the snapped
+   `value` + `physical_package`), tracking `class_index → InstanceId`.
+2. **Invoke** — ✅ spawns `$BHDL_SUPPLY_PROVIDER` (default unset ⇒ no-op),
+   pipes the requirements JSON to its stdin, parses the reply with the
+   shared `PluginResponse` type. Best-effort: no provider / unparseable
+   reply / no match ⇒ keep the catalogue value + package, leave MPN blank.
+   (Note: this path spawns the provider directly with the leaner
+   *requirements* payload rather than `plugin.rs::run_plugin`, which is
+   hardcoded to a `CandidateBundle` input.)
+3. **Apply** — ✅ writes `mpn`/`manufacturer`/`lcsc_pn`/`stock` onto the
+   instance; the BOM walker reads `mpn`/`manufacturer`/`lcsc_pn`.
+4. **Pin** — ⏳ record the selected MPN in `bhdl.lock` (§5). Not yet built.
+5. **Provider** — ✅ jlcparts reference provider shipped; DigiKey online
+   provider (BYO OAuth) still TODO.
 
-Verifiable end-to-end with a **fixture provider** (a tiny script returning
-a known MPN for a requirement — same pattern as the source-resolver
-fixture test), independent of any real DB/network. The real jlcparts run
-needs the user's downloaded `cache.sqlite3`.
+**Verified end-to-end** against the real basic/preferred CSV on
+`tps54331_test.bhdl`:
+```
+$ BHDL_SUPPLY_PROVIDER="python3 bhdl-stdlib/plugins/bhdl_jlcparts_provider.py" \
+  BHDL_JLCPARTS_CSV=/tmp/jlc_bp.csv  bhdl-cli tps54331_test.bhdl bom
+  ✓ supply chain: 5 real MPN(s) resolved
+| R4 | 1 | 10kΩ | UNI-ROYAL(Uniroyal Elec) | 0603WAF1002T5E | 0603 | lcsc=C25804 |
+| C1 | 1 | 10µF | Samsung Electro-Mechanics | CL31A106KBHNNNE | 1206 | lcsc=C13585 |
+…
+```
+The protocol field is `protocol_version: "1"` (a string), matching
+`plugin.rs::PluginResponse`. Misses (e.g. odd E96 values like 1.65Ω/31.6kΩ,
+or a `6045` inductor package code absent from the dataset's notation) are
+basic/preferred-subset coverage gaps, resolved by pointing at the full
+SQLite catalogue — not pipeline bugs.
 
 ## 7. Out of scope
 
