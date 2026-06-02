@@ -59,25 +59,35 @@ So a supply-chain provider is exactly: read requirements on stdin → query
 its source → emit `PluginSelection`s with the real `mpn`/`manufacturer`/
 `stock`/`unit_price`. No core change to the protocol is needed.
 
-## 4. jlcparts provider (default, offline)
+## 4. jlcparts provider (default, offline) — BUILT + VERIFIED
 
-jlcparts produces per-category JSON + an intermediate `cache.sqlite3`
-(components carry LCSC #, manufacturer, MPN, package, category, stock,
-price, datasheet, and parametric attributes stored as normalized JSON
-dicts). The provider:
+Shipped: `bhdl-stdlib/plugins/bhdl_jlcparts_provider.py`. Data artifact is
+**CDFER/jlcpcb-parts-database** (MIT) — the in-stock JLCPCB catalogue
+derived from yaqwsx/jlcparts:
+- full SQLite (~1 GB): `…/jlcpcb-components.sqlite3`
+- **basic+preferred CSV (~3.6 MB):** `…/jlcpcb-components-basic-preferred.csv`
 
-1. Locate the DB (`$BHDL_JLCPARTS_DB`, else a cached download path).
-2. For each requirement, query `components` filtered by category↔class,
-   the parametric value within the part_family's tolerance, the package,
-   and `stock > 0`; rank by stock desc / unit-price asc.
-3. Emit a `PluginSelection` with `mpn`, `manufacturer`, `vendor="LCSC"`,
-   `vendor_sku=<Cxxxx>`, `stock`, `unit_price`, `currency`.
+The CSV (basic + preferred = the no-extra-fee, in-stock assembly parts) is
+the right zero-config default for cost-optimized assembly, small enough to
+cache/pin, and avoids the 1 GB download. The provider reads it via
+`$BHDL_JLCPARTS_CSV` (or argv[1]); a sibling provider can query the full
+SQLite for wider coverage.
 
-Because the DB is a **local snapshot**, this is hermetic and reproducible —
-no per-build network call, no redistribution-ToS problem (it's the open
-jlcparts dataset, not a proprietary API response). The exact SQL is written
-against the installed `cache.sqlite3` schema (parametric attrs are JSON, so
-the query JSON-extracts the primary value per category).
+Provider logic: per requirement, filter rows by category↔class
+(Resistors/Capacitors/Inductors), parse the parametric value out of the
+`description` text (`510kΩ`→510e3, `100nF`→100e-9, `10µH`→10e-6) and match
+it within tolerance, match `package`, require `stock>0`; rank basic >
+preferred > most-stock > cheapest; emit a `PluginSelection` with `mpn`
+(= the catalogue's `mfr`), `manufacturer`, `vendor="LCSC"`,
+`vendor_sku="C"+lcsc`, `stock`, `unit_price`.
+
+**Verified** against the real CSV — e.g. 10kΩ/0402 → C25744
+`0402WGF1002TCE`; 100nF/0402 → C1525 `CL05B104KO5NNNC` (the canonical
+JLCPCB basic 100nF); 10µH → C1046 `SDFL2012S100KTF`. All correct, in-stock,
+orderable parts.
+
+Because the data is a **local snapshot**, this is hermetic and reproducible:
+no per-build network call, MIT-licensed (no redistribution-ToS problem).
 
 ## 5. Reproducibility (ties to `bhdl.lock`)
 
