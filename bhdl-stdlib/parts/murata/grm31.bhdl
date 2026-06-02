@@ -1,0 +1,20 @@
+// Murata GRM31 series — X5R 0805/1206 MLCC, bulk/reservoir range.
+//
+// Bulk-capacitance catalog family for the `Capacitor<*, …>` class,
+// covering 1 µF … 100 µF snapped to E12 (bulk MLCC are stocked on the
+// E12 grid). Complements Murata_GRM188R71H (X7R 0603, 1 nF … 1 µF):
+// together they give continuous E-series coverage from nF to ~100 µF, so
+// a buck regulator's computed output/input caps (e.g. 4.39 µF / 4.66 µF)
+// resolve to a real part (E6 4.7 µF) instead of staying raw floats.
+//
+// MPN format: GRM31CR61<v-code>{c_code(C)}L (R6 = X5R, 1 = 6.3 V class).
+
+part_family Murata_GRM31CR61 : Capacitor<C: *, 25V, "X5R", "1206"> {
+    require C in E12(1µF, 100µF);
+
+    attribute manufacturer  = "Murata Manufacturing";
+    attribute mpn_template  = "GRM31CR61E{c_code(C)}L";
+    attribute datasheet     = "https://www.murata.com/en-us/products/capacitor/ceramiccapacitor";
+    attribute dielectric    = "X5R";
+    attribute tolerance     = 10;   // ±10%
+}
