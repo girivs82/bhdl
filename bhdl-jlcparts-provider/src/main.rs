@@ -40,6 +40,12 @@ use std::io::Read;
 struct Requirements {
     #[serde(default)]
     requirements: Vec<Requirement>,
+    /// Top-level default objective when a requirement omits its own.
+    #[serde(default)]
+    objective: Option<Objective>,
+    /// Top-level default build quantity (for the price tier + stock headroom).
+    #[serde(default)]
+    quantity: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -52,6 +58,89 @@ struct Requirement {
     package: Option<String>,
     #[serde(default)]
     tolerance_pct: Option<f64>,
+    /// Per-requirement optimization objective (overrides the top-level one).
+    #[serde(default)]
+    objective: Option<Objective>,
+    /// Per-requirement build quantity (overrides the top-level one).
+    #[serde(default)]
+    quantity: Option<u64>,
+}
+
+/// An optimization objective: either a named profile or an explicit weight
+/// set. Deserializes from a bare string (`"cost"`) or an object
+/// (`{"value":1.0,"price":0.1,...}`).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum Objective {
+    Profile(String),
+    Weights(Weights),
+}
+
+/// Weights for the soft cost terms (each normalized 0..1 across the feasible
+/// candidate set before weighting). Lower total score is better.
+#[derive(Debug, Clone, Copy, Deserialize)]
+struct Weights {
+    #[serde(default)]
+    value: f64,
+    #[serde(default)]
+    price: f64,
+    #[serde(default)]
+    assembly: f64,
+    #[serde(default)]
+    stock: f64,
+    #[serde(default)]
+    lead: f64,
+}
+
+impl Weights {
+    /// Named profiles. Unknown names fall back to `balanced`.
+    fn profile(name: &str) -> Weights {
+        match name.trim().to_ascii_lowercase().as_str() {
+            // value error dominates → exact E-series wins (the old behaviour);
+            // value is the *only* term, tiebroken (deterministically) by price
+            "precision" | "value" | "exact" => Weights {
+                value: 1.0,
+                price: 0.0,
+                assembly: 0.0,
+                stock: 0.0,
+                lead: 0.0,
+            },
+            // cheapest to assemble: unit price + basic/extended fee dominate;
+            // a slightly-off-but-in-tolerance value is acceptable
+            "cost" | "cheap" | "price" => Weights {
+                value: 0.2,
+                price: 1.0,
+                assembly: 0.8,
+                stock: 0.2,
+                lead: 0.0,
+            },
+            // production resilience: maximise stock headroom, minimise lead
+            "availability" | "stock" | "supply" => Weights {
+                value: 0.3,
+                price: 0.2,
+                assembly: 0.2,
+                stock: 1.0,
+                lead: 0.5,
+            },
+            // sensible all-rounder
+            _ => Weights {
+                value: 0.5,
+                price: 0.5,
+                assembly: 0.4,
+                stock: 0.3,
+                lead: 0.1,
+            },
+        }
+    }
+}
+
+impl Objective {
+    fn weights(&self) -> Weights {
+        match self {
+            Objective::Profile(name) => Weights::profile(name),
+            Objective::Weights(w) => *w,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -157,13 +246,35 @@ fn parse_value(re: &Regex, unit: char, text: &str) -> Option<f64> {
     None
 }
 
-/// Lowest-quantity unit price from the tiered `price` JSON array.
-fn first_tier_price(price_json: &str) -> Option<f64> {
+/// Unit price for a given build quantity from the tiered `price` JSON array
+/// (`[{"qFrom":1,"qTo":10,"price":x}, {"qFrom":11,"qTo":null,...}]`). Picks
+/// the tier whose `[qFrom, qTo]` window contains `qty`; falls back to the
+/// last tier at or below `qty`, else the first tier.
+fn price_at_qty(price_json: &str, qty: u64) -> Option<f64> {
     let v: serde_json::Value = serde_json::from_str(price_json).ok()?;
-    v.as_array()?
-        .first()?
-        .get("price")
-        .and_then(|p| p.as_f64().or_else(|| p.as_str().and_then(|s| s.parse().ok())))
+    let tiers = v.as_array()?;
+    let price_of = |t: &serde_json::Value| -> Option<f64> {
+        t.get("price")
+            .and_then(|p| p.as_f64().or_else(|| p.as_str().and_then(|s| s.parse().ok())))
+    };
+    let mut fallback: Option<f64> = None;
+    for t in tiers {
+        let q_from = t.get("qFrom").and_then(|x| x.as_u64()).unwrap_or(0);
+        let q_to = t.get("qTo").and_then(|x| x.as_u64()); // null = open-ended
+        if let Some(p) = price_of(t) {
+            if fallback.is_none() {
+                fallback = Some(p); // first valid tier
+            }
+            let in_window = qty >= q_from && q_to.map(|hi| qty <= hi).unwrap_or(true);
+            if in_window {
+                return Some(p);
+            }
+            if q_from <= qty {
+                fallback = Some(p); // best tier at or below qty so far
+            }
+        }
+    }
+    fallback
 }
 
 // ── Resolution ───────────────────────────────────────────────────
@@ -232,6 +343,8 @@ impl Catalogue {
         &mut self,
         req: &Requirement,
         re: &Regex,
+        weights: Weights,
+        qty: u64,
         warnings: &mut Vec<String>,
     ) -> Selection {
         let unit = match unit_for(&req.class) {
@@ -259,14 +372,16 @@ impl Catalogue {
         let tol = req.tolerance_pct.unwrap_or(2.0) / 100.0;
 
         // footprint cascade: strict string → code token in package/MPN →
-        // value-only (warn). When there's no requested package, only the
-        // unconstrained pass applies.
+        // value-only (warn). Within the first non-empty feasible set we run
+        // the multi-objective score, so the footprint gate stays hard while
+        // value/price/assembly/stock trade off softly.
         let modes: &[PkgMode] = match want_pkg {
             Some(_) => &[PkgMode::Strict, PkgMode::Token, PkgMode::Any],
             None => &[PkgMode::Any],
         };
         for mode in modes {
-            if let Some(sel) = self.query_best(&ids, req, unit, re, tol, want_pkg, *mode) {
+            let cands = self.collect_feasible(&ids, req, unit, re, tol, qty, want_pkg, *mode);
+            if let Some(sel) = score_and_pick(req, &cands, weights, tol) {
                 if *mode == PkgMode::Any && want_pkg.is_some() {
                     warnings.push(format!(
                         "class_index {}: no in-stock {} matched package '{}' \
@@ -290,21 +405,23 @@ impl Catalogue {
         }
     }
 
-    fn query_best(
+    /// Gather every feasible in-stock candidate for one footprint mode:
+    /// value within tolerance (hard gate). Bounded to `MAX_CANDS` rows in
+    /// rank order so a loose tolerance can't blow up. The soft scoring then
+    /// runs over this set.
+    fn collect_feasible(
         &self,
         cat_ids: &[i64],
         req: &Requirement,
         unit: char,
         re: &Regex,
         tol: f64,
+        qty: u64,
         pkg: Option<&str>,
         mode: PkgMode,
-    ) -> Option<Selection> {
-        let placeholders = cat_ids
-            .iter()
-            .map(|_| "?")
-            .collect::<Vec<_>>()
-            .join(",");
+    ) -> Vec<Cand> {
+        const MAX_CANDS: usize = 4000;
+        let placeholders = cat_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let mut sql = format!(
             "SELECT mfr, manufacturer, basic, preferred, stock, price, description, lcsc \
              FROM v_components \
@@ -313,18 +430,18 @@ impl Catalogue {
         match (mode, pkg) {
             (PkgMode::Strict, Some(_)) => sql.push_str(" AND lower(package) = lower(?)"),
             (PkgMode::Token, Some(_)) => {
-                // size code as a substring of the package string or the MPN
                 sql.push_str(" AND (lower(package) LIKE lower(?) OR lower(mfr) LIKE lower(?))")
             }
             _ => {}
         }
-        // Best-ranked first: basic > preferred > most stock. We scan in this
-        // order and take the first row whose parsed value matches, so the
-        // result is the best-ranked value-matching part.
+        // rank order so the bounded scan keeps the most relevant rows
         sql.push_str(" ORDER BY basic DESC, preferred DESC, stock DESC");
 
-        let mut stmt = self.conn.prepare(&sql).ok()?;
-        // bind: category ids, then package params per mode
+        let mut out = Vec::new();
+        let mut stmt = match self.conn.prepare(&sql) {
+            Ok(s) => s,
+            Err(_) => return out,
+        };
         let mut params: Vec<&dyn rusqlite::ToSql> = Vec::new();
         for id in cat_ids {
             params.push(id);
@@ -343,66 +460,160 @@ impl Catalogue {
             }
             _ => {}
         }
-
-        let mut rows = stmt.query(params.as_slice()).ok()?;
-        // Among value-matching candidates, prefer the *closest* value (so an
-        // exact E96 121Ω wins over a high-stock 120Ω that is merely within
-        // tolerance), with the SQL rank (basic > preferred > most stock) as
-        // the tiebreak — rows arrive in rank order, so on an equal value
-        // error the first-seen (better-ranked) candidate is kept. An exact
-        // hit (err == 0) short-circuits the scan.
-        let mut best: Option<(f64, Selection)> = None;
+        let mut rows = match stmt.query(params.as_slice()) {
+            Ok(r) => r,
+            Err(_) => return out,
+        };
         while let Ok(Some(row)) = rows.next() {
-            let description: String = row.get(6).ok()?;
-            let mut err = 0.0;
+            if out.len() >= MAX_CANDS {
+                break;
+            }
+            let description: String = match row.get(6) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+            let mut value_err = 0.0;
             if let Some(target) = req.value {
                 let v = match parse_value(re, unit, &description) {
                     Some(v) => v,
                     None => continue,
                 };
-                err = (v - target).abs() / target.max(1e-30);
-                if err > tol.max(1e-9) {
-                    continue;
+                value_err = (v - target).abs() / target.max(1e-30);
+                if value_err > tol.max(1e-9) {
+                    continue; // hard gate: out of tolerance
                 }
             }
-            // strictly-better value error replaces; ties keep the earlier
-            // (better-ranked) candidate already stored.
-            if best.as_ref().map(|(be, _)| err < *be).unwrap_or(true) {
-                let mfr: String = row.get(0).ok()?;
-                let manufacturer: Option<String> = row.get(1).ok()?;
-                let basic: i64 = row.get(2).ok()?;
-                let preferred: i64 = row.get(3).ok()?;
-                let stock: i64 = row.get(4).ok()?;
-                let price: String = row.get(5).ok()?;
-                let lcsc: i64 = row.get(7).ok()?;
-                best = Some((
-                    err,
-                    Selection {
-                        class_index: req.class_index,
-                        mpn: Some(mfr),
-                        manufacturer,
-                        vendor: Some("LCSC".to_string()),
-                        vendor_sku: Some(format!("C{lcsc}")),
-                        stock: Some(stock.max(0) as u64),
-                        unit_price: first_tier_price(&price),
-                        currency: Some("USD".to_string()),
-                        note: Some(if basic == 1 {
-                            "basic".to_string()
-                        } else if preferred == 1 {
-                            "preferred".to_string()
-                        } else {
-                            "extended".to_string()
-                        }),
-                        error: None,
-                    },
-                ));
-                if err == 0.0 {
-                    break; // exact value at best rank — cannot improve
-                }
-            }
+            let basic: i64 = row.get(2).unwrap_or(0);
+            let preferred: i64 = row.get(3).unwrap_or(0);
+            let stock: i64 = row.get(4).unwrap_or(0);
+            let price_json: String = row.get(5).unwrap_or_default();
+            out.push(Cand {
+                mfr: row.get(0).unwrap_or_default(),
+                manufacturer: row.get(1).ok(),
+                lcsc: row.get(7).unwrap_or(0),
+                value_err,
+                unit_price: price_at_qty(&price_json, qty),
+                // assembly-fee proxy: basic parts are free to place, preferred
+                // mid, extended carries the per-part fee + feeder setup
+                assembly: if basic == 1 {
+                    0.0
+                } else if preferred == 1 {
+                    0.5
+                } else {
+                    1.0
+                },
+                stock: stock.max(0) as u64,
+                note: if basic == 1 {
+                    "basic"
+                } else if preferred == 1 {
+                    "preferred"
+                } else {
+                    "extended"
+                },
+            });
         }
-        best.map(|(_, sel)| sel)
+        out
     }
+}
+
+/// One feasible candidate (passed the hard gates) with the raw metrics the
+/// scorer normalizes and weights.
+struct Cand {
+    mfr: String,
+    manufacturer: Option<String>,
+    lcsc: i64,
+    value_err: f64,
+    unit_price: Option<f64>,
+    assembly: f64,
+    stock: u64,
+    note: &'static str,
+}
+
+/// Min-max normalize a metric across candidates → 0..1 (0 = best/lowest).
+/// All-equal collapses to 0 so the term drops out.
+fn normalize(vals: &[f64]) -> Vec<f64> {
+    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+    for &v in vals {
+        lo = lo.min(v);
+        hi = hi.max(v);
+    }
+    let span = hi - lo;
+    if span <= f64::EPSILON {
+        return vec![0.0; vals.len()];
+    }
+    vals.iter().map(|&v| (v - lo) / span).collect()
+}
+
+/// Score the feasible set and return the lowest-cost pick. Each soft term is
+/// min-max normalized across the set, then weighted; lower total wins.
+/// Tiebroken by value error then price so the result is deterministic.
+fn score_and_pick(req: &Requirement, cands: &[Cand], w: Weights, tol: f64) -> Option<Selection> {
+    if cands.is_empty() {
+        return None;
+    }
+    // Value error is an *absolute spec* metric, not a relative one: normalize
+    // against the tolerance budget (0 = exact, 1 = at the tolerance edge) so a
+    // wide tolerance band doesn't dilute it. Min-max (below) is right for the
+    // genuinely relative quantities (price, stock).
+    let tol_eff = tol.max(1e-9);
+    let ve_n: Vec<f64> = cands
+        .iter()
+        .map(|c| (c.value_err / tol_eff).min(1.0))
+        .collect();
+    // missing price → treated as worst (max) so unknowns aren't free
+    let max_price = cands
+        .iter()
+        .filter_map(|c| c.unit_price)
+        .fold(0.0_f64, f64::max);
+    let pr: Vec<f64> = cands
+        .iter()
+        .map(|c| c.unit_price.unwrap_or(max_price))
+        .collect();
+    let asm: Vec<f64> = cands.iter().map(|c| c.assembly).collect();
+    // stock as a cost: more stock = lower cost, so negate (headroom relative
+    // to the build qty is captured by the normalization span)
+    let st: Vec<f64> = cands.iter().map(|c| -(c.stock as f64)).collect();
+    // lead time isn't in the offline catalogue → uniform 0 (term drops out)
+    let ld: Vec<f64> = vec![0.0; cands.len()];
+
+    let pr_n = normalize(&pr);
+    let asm_n = normalize(&asm);
+    let st_n = normalize(&st);
+    let ld_n = normalize(&ld);
+
+    let mut best_i = 0;
+    let mut best = f64::INFINITY;
+    for i in 0..cands.len() {
+        let score = w.value * ve_n[i]
+            + w.price * pr_n[i]
+            + w.assembly * asm_n[i]
+            + w.stock * st_n[i]
+            + w.lead * ld_n[i];
+        // deterministic tiebreak: lower score, then closer value, then cheaper
+        let better = score < best - 1e-12
+            || ((score - best).abs() <= 1e-12
+                && (cands[i].value_err < cands[best_i].value_err
+                    || (cands[i].value_err == cands[best_i].value_err
+                        && pr[i] < pr[best_i])));
+        if better {
+            best = score;
+            best_i = i;
+        }
+    }
+
+    let c = &cands[best_i];
+    Some(Selection {
+        class_index: req.class_index,
+        mpn: Some(c.mfr.clone()),
+        manufacturer: c.manufacturer.clone(),
+        vendor: Some("LCSC".to_string()),
+        vendor_sku: Some(format!("C{}", c.lcsc)),
+        stock: Some(c.stock),
+        unit_price: c.unit_price,
+        currency: Some("USD".to_string()),
+        note: Some(c.note.to_string()),
+        error: None,
+    })
 }
 
 fn emit(resp: &Response) {
@@ -468,6 +679,13 @@ fn main() {
     // number, optional SI prefix, the unit letter
     let mut warnings = Vec::new();
     let mut selections = Vec::with_capacity(reqs.requirements.len());
+    // top-level defaults (overridden per-requirement)
+    let default_weights = reqs
+        .objective
+        .as_ref()
+        .map(Objective::weights)
+        .unwrap_or_else(|| Weights::profile("balanced"));
+    let default_qty = reqs.quantity.unwrap_or(1).max(1);
     // one compiled regex per unit (cheap; ≤3 distinct units)
     let mut res: HashMap<char, Regex> = HashMap::new();
     for req in &reqs.requirements {
@@ -490,7 +708,13 @@ fn main() {
             .unwrap()
         });
         let re = re.clone();
-        selections.push(cat.resolve(req, &re, &mut warnings));
+        let weights = req
+            .objective
+            .as_ref()
+            .map(Objective::weights)
+            .unwrap_or(default_weights);
+        let qty = req.quantity.unwrap_or(default_qty).max(1);
+        selections.push(cat.resolve(req, &re, weights, qty, &mut warnings));
     }
 
     emit(&Response {
@@ -547,5 +771,68 @@ mod tests {
             parse_value(&r, 'H', "8@100MHz 6.8nH ±5%").unwrap(),
             6.8e-9
         ));
+    }
+
+    #[test]
+    fn price_tier_selection() {
+        let j = r#"[{"qFrom":1,"qTo":9,"price":0.01},
+                    {"qFrom":10,"qTo":99,"price":0.005},
+                    {"qFrom":100,"qTo":null,"price":0.002}]"#;
+        assert!(close(price_at_qty(j, 1).unwrap(), 0.01));
+        assert!(close(price_at_qty(j, 50).unwrap(), 0.005));
+        assert!(close(price_at_qty(j, 100).unwrap(), 0.002));
+        assert!(close(price_at_qty(j, 100_000).unwrap(), 0.002)); // open-ended top tier
+    }
+
+    fn cand(value_err: f64, price: f64, asm: f64, stock: u64, note: &'static str) -> Cand {
+        Cand {
+            mfr: format!("M{note}{stock}"),
+            manufacturer: None,
+            lcsc: stock as i64,
+            value_err,
+            unit_price: Some(price),
+            assembly: asm,
+            stock,
+            note,
+        }
+    }
+
+    fn req() -> Requirement {
+        Requirement {
+            class_index: 0,
+            class: "resistor".into(),
+            value: Some(121.0),
+            package: Some("0603".into()),
+            tolerance_pct: Some(2.0),
+            objective: None,
+            quantity: None,
+        }
+    }
+
+    #[test]
+    fn profile_changes_pick() {
+        // A: exact value, extended, pricey, low stock.
+        // B: 0.8% off, basic, cheap, huge stock.
+        let cands = vec![
+            cand(0.0, 0.02, 1.0, 5_000, "extended"),
+            cand(0.008, 0.001, 0.0, 9_000_000, "basic"),
+        ];
+        let tol = 0.02; // req tolerance 2% as a fraction
+        // precision → exact value wins (candidate A / extended)
+        let p = score_and_pick(&req(), &cands, Weights::profile("precision"), tol).unwrap();
+        assert_eq!(p.note.as_deref(), Some("extended"));
+        // cost → cheap basic wins despite the slight value error (candidate B)
+        let c = score_and_pick(&req(), &cands, Weights::profile("cost"), tol).unwrap();
+        assert_eq!(c.note.as_deref(), Some("basic"));
+        // availability → the huge-stock basic part wins
+        let a = score_and_pick(&req(), &cands, Weights::profile("availability"), tol).unwrap();
+        assert_eq!(a.note.as_deref(), Some("basic"));
+    }
+
+    #[test]
+    fn single_candidate_is_returned() {
+        let cands = vec![cand(0.0, 0.01, 0.0, 1000, "basic")];
+        assert!(score_and_pick(&req(), &cands, Weights::profile("balanced"), 0.02).is_some());
+        assert!(score_and_pick(&req(), &[], Weights::profile("balanced"), 0.02).is_none());
     }
 }

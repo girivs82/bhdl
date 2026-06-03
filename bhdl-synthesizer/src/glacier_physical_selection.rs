@@ -424,7 +424,96 @@ fn default_provider_spec() -> Option<String> {
     Some(format!("{exe} {db}"))
 }
 
-pub fn apply_supply_chain_mpns(netlist: &mut Netlist) -> usize {
+/// Supply-chain optimization policy passed to [`apply_supply_chain_mpns`].
+///
+/// Resolved per passive with **three-level precedence** so the objective is
+/// selectable at synthesis time AND overridable per part / per net:
+/// 1. the instance's own `supply_profile` / `supply_weights` / `supply_qty`
+///    attribute (set in BHDL source — travels with the design);
+/// 2. the policy of a net the passive connects to (`net_profiles`, keyed by
+///    net name — e.g. `FB=precision`, `VCC=cost`);
+/// 3. the global default (`profile` / `quantity`).
+///
+/// The provider itself defaults to `balanced` when nothing is specified.
+#[derive(Debug, Default, Clone)]
+pub struct SupplyOptions {
+    /// Global default objective (profile name, e.g. "cost"/"precision").
+    pub profile: Option<String>,
+    /// Global default build quantity (price tier + stock headroom).
+    pub quantity: Option<u64>,
+    /// Per-net objective overrides, keyed by net name.
+    pub net_profiles: HashMap<String, String>,
+}
+
+impl SupplyOptions {
+    /// Fill any unset field from the environment:
+    /// `BHDL_SUPPLY_PROFILE`, `BHDL_SUPPLY_QTY`,
+    /// `BHDL_SUPPLY_NET_PROFILES="VCC=cost,FB=precision"`.
+    pub fn with_env_fallback(mut self) -> Self {
+        if self.profile.is_none() {
+            self.profile = std::env::var("BHDL_SUPPLY_PROFILE")
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+        }
+        if self.quantity.is_none() {
+            self.quantity = std::env::var("BHDL_SUPPLY_QTY")
+                .ok()
+                .and_then(|s| s.trim().parse().ok());
+        }
+        if self.net_profiles.is_empty() {
+            if let Ok(s) = std::env::var("BHDL_SUPPLY_NET_PROFILES") {
+                self.net_profiles = parse_net_profiles(&s);
+            }
+        }
+        self
+    }
+}
+
+/// Parse `"VCC=cost,FB=precision"` into a net-name → profile map.
+pub fn parse_net_profiles(s: &str) -> HashMap<String, String> {
+    s.split(',')
+        .filter_map(|kv| {
+            let (k, v) = kv.split_once('=')?;
+            let (k, v) = (k.trim(), v.trim());
+            if k.is_empty() || v.is_empty() {
+                None
+            } else {
+                Some((k.to_string(), v.to_string()))
+            }
+        })
+        .collect()
+}
+
+/// instance id → sorted distinct connected net names (for per-net policy).
+fn instance_connected_nets(
+    netlist: &Netlist,
+) -> HashMap<bhdl_netlist::InstanceId, Vec<String>> {
+    let mut out: HashMap<bhdl_netlist::InstanceId, Vec<String>> = HashMap::new();
+    for (_net_id, net) in &netlist.nets {
+        let Some(net_name) = &net.name else { continue };
+        for conn in &net.connections {
+            let iid = match conn {
+                bhdl_netlist::ConnectionPoint::InstancePort(iid, _)
+                | bhdl_netlist::ConnectionPoint::InstancePin(iid, _) => Some(*iid),
+                bhdl_netlist::ConnectionPoint::PinInstance(pi_id) => {
+                    netlist.pin_instances.get(*pi_id).map(|pi| pi.instance)
+                }
+                _ => None,
+            };
+            if let Some(iid) = iid {
+                out.entry(iid).or_default().push(net_name.clone());
+            }
+        }
+    }
+    for nets in out.values_mut() {
+        nets.sort();
+        nets.dedup();
+    }
+    out
+}
+
+pub fn apply_supply_chain_mpns(netlist: &mut Netlist, opts: &SupplyOptions) -> usize {
     let spec = match std::env::var("BHDL_SUPPLY_PROVIDER") {
         Ok(s) if !s.trim().is_empty() => s,
         _ => match default_provider_spec() {
@@ -432,6 +521,8 @@ pub fn apply_supply_chain_mpns(netlist: &mut Netlist) -> usize {
             None => return 0,
         },
     };
+
+    let inst_nets = instance_connected_nets(netlist);
 
     // Build the requirement list from the selected passives; track
     // class_index → InstanceId for applying the reply.
@@ -457,20 +548,65 @@ pub fn apply_supply_chain_mpns(netlist: &mut Netlist) -> usize {
             .get("physical_package")
             .or_else(|| inst.attributes.get("package"))
             .cloned();
+        let tolerance_pct = inst
+            .attributes
+            .get("tolerance_pct")
+            .or_else(|| inst.attributes.get("tolerance"))
+            .and_then(|s| s.trim().trim_end_matches('%').parse::<f64>().ok())
+            .unwrap_or(2.0);
+
+        // per-requirement objective: instance attr > per-net policy > none
+        // (none ⇒ the top-level default applies in the provider).
+        let objective: Option<serde_json::Value> = inst
+            .attributes
+            .get("supply_weights")
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .or_else(|| {
+                inst.attributes
+                    .get("supply_profile")
+                    .map(|p| serde_json::Value::String(p.clone()))
+            })
+            .or_else(|| {
+                // first connected net (sorted) carrying a policy
+                inst_nets.get(&id).and_then(|nets| {
+                    nets.iter()
+                        .find_map(|n| opts.net_profiles.get(n))
+                        .map(|p| serde_json::Value::String(p.clone()))
+                })
+            });
+        let quantity: Option<u64> = inst
+            .attributes
+            .get("supply_qty")
+            .and_then(|s| s.trim().parse().ok());
+
         let ci = idx_to_id.len();
         idx_to_id.push(id);
-        reqs.push(serde_json::json!({
+        let mut req = serde_json::json!({
             "class_index": ci,
             "class": class,
             "value": value,
             "package": package,
-            "tolerance_pct": 2.0,
-        }));
+            "tolerance_pct": tolerance_pct,
+        });
+        if let Some(o) = objective {
+            req["objective"] = o;
+        }
+        if let Some(q) = quantity {
+            req["quantity"] = serde_json::json!(q);
+        }
+        reqs.push(req);
     }
     if reqs.is_empty() {
         return 0;
     }
-    let payload = serde_json::json!({ "protocol": 1, "requirements": reqs }).to_string();
+    let mut top = serde_json::json!({ "protocol": 1, "requirements": reqs });
+    if let Some(p) = &opts.profile {
+        top["objective"] = serde_json::Value::String(p.clone());
+    }
+    if let Some(q) = opts.quantity {
+        top["quantity"] = serde_json::json!(q);
+    }
+    let payload = top.to_string();
 
     // Spawn the provider directly with our requirements payload (the
     // plugin.rs `run_plugin` helper is hardcoded to a CandidateBundle

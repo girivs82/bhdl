@@ -268,6 +268,24 @@ enum Commands {
         /// `csv` for assembly-house parts lists.
         #[arg(short, long, default_value = "markdown")]
         format: String,
+
+        /// Supply-chain optimization profile for resolving real MPNs:
+        /// `precision` (exact E-series value), `cost` (cheapest to
+        /// assemble), `availability` (max stock / min lead), or
+        /// `balanced` (default). Overridable per part via a
+        /// `supply_profile` attribute, or per net via --supply-net.
+        #[arg(long, value_name = "PROFILE")]
+        supply_profile: Option<String>,
+
+        /// Target build quantity — selects the price tier and weights
+        /// stock headroom. Defaults to 1.
+        #[arg(long, value_name = "N")]
+        supply_qty: Option<u64>,
+
+        /// Per-net supply profile override, `NET=PROFILE` (repeatable),
+        /// e.g. `--supply-net FB=precision --supply-net VCC=cost`.
+        #[arg(long = "supply-net", value_name = "NET=PROFILE")]
+        supply_net: Vec<String>,
     },
 
     /// List the SKU variants declared by the board. Prints "default"
@@ -372,8 +390,18 @@ async fn main() -> Result<()> {
             cmd_doc(&source_file, output, bom_only, budget_only, no_tree, no_patterns).await?;
         }
 
-        Some(Commands::Bom { output, format }) => {
-            cmd_bom(&source_file, &cli.input, output, &format, cli.sku.as_deref()).await?;
+        Some(Commands::Bom { output, format, supply_profile, supply_qty, supply_net }) => {
+            cmd_bom(
+                &source_file,
+                &cli.input,
+                output,
+                &format,
+                cli.sku.as_deref(),
+                supply_profile,
+                supply_qty,
+                supply_net,
+            )
+            .await?;
         }
 
         Some(Commands::ListSkus) => {
@@ -1048,7 +1076,14 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
                 overridden
             );
         }
-        let mpns = bhdl_synthesizer::glacier_physical_selection::apply_supply_chain_mpns(&mut netlist);
+        // visualization uses env-driven supply policy (no CLI flags here)
+        let supply_opts =
+            bhdl_synthesizer::glacier_physical_selection::SupplyOptions::default()
+                .with_env_fallback();
+        let mpns = bhdl_synthesizer::glacier_physical_selection::apply_supply_chain_mpns(
+            &mut netlist,
+            &supply_opts,
+        );
         if mpns > 0 {
             println!(
                 "  {} supply chain: {} real MPN(s) resolved",
@@ -1755,6 +1790,9 @@ async fn cmd_bom(
     output: Option<PathBuf>,
     format: &str,
     sku: Option<&str>,
+    supply_profile: Option<String>,
+    supply_qty: Option<u64>,
+    supply_net: Vec<String>,
 ) -> Result<()> {
     use bhdl_analyzer::sku_bom;
 
@@ -1826,7 +1864,18 @@ async fn cmd_bom(
         // Resolve real, orderable MPNs via the supply-chain provider
         // ($BHDL_SUPPLY_PROVIDER, e.g. the bundled jlcparts provider).
         // Best-effort: unset/failed ⇒ catalogue value+package stand.
-        let mpns = bhdl_synthesizer::glacier_physical_selection::apply_supply_chain_mpns(&mut netlist);
+        let supply_opts = bhdl_synthesizer::glacier_physical_selection::SupplyOptions {
+            profile: supply_profile.clone(),
+            quantity: supply_qty,
+            net_profiles: bhdl_synthesizer::glacier_physical_selection::parse_net_profiles(
+                &supply_net.join(","),
+            ),
+        }
+        .with_env_fallback();
+        let mpns = bhdl_synthesizer::glacier_physical_selection::apply_supply_chain_mpns(
+            &mut netlist,
+            &supply_opts,
+        );
         if mpns > 0 {
             println!(
                 "  {} supply chain: {} real MPN(s) resolved",
