@@ -21,7 +21,7 @@ board SensorInterface {
     c_in.2 -> GND;
 
     // Regulation
-    net vin_filt: c_in.1 -> reg: LM7805().VI -> reg.VO -> VREG for voltage_regulation(5V, 12V);
+    net vin_filt: c_in.1 -> reg: LM7805().VI; reg.VO -> VREG for voltage_regulation(5V, 12V);
     reg.GND -> GND;
 
     // Regulated output filter
@@ -29,18 +29,18 @@ board SensorInterface {
     c_reg.2 -> GND;
 
     // Power indicator LED
-    net pwr_led: VREG -> r_led: Res(330).1 -> r_led.2 -> led_pwr: LED("green").A for current_limiting(15mA);
+    net pwr_led: VREG -> r_led: Res(330).1; r_led.2 -> led_pwr: LED("green").A for current_limiting(15mA);
     led_pwr.K -> GND;
 
     // Signal path: sensor bias → amplifier
-    net sensor_bias: VREG -> r_bias: Res(10000).1 -> r_bias.2 -> amp: OpAmp().INP for signal_conditioning;
+    net sensor_bias: VREG -> r_bias: Res(10000).1; r_bias.2 -> amp: OpAmp().INP for signal_conditioning;
     amp.VCC -> VREG;
     amp.GND -> GND;
 
     // Feedback network
-    net fb_net: amp.OUT -> r_fb: Res(100000).1 -> r_fb.2 -> amp.INM;
+    net fb_net: amp.OUT -> r_fb: Res(100000).1; r_fb.2 -> amp.INM;
 
     // Output filter
-    net amp_out: amp.OUT -> r_out: Res(1000).1 -> r_out.2 -> c_filt: Cap(100nF).1 for anti_alias(10kHz);
+    net amp_out: amp.OUT -> r_out: Res(1000).1; r_out.2 -> c_filt: Cap(100nF).1 for anti_alias(10kHz);
     c_filt.2 -> GND;
 }

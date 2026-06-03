@@ -12,23 +12,23 @@ board IntentLayoutDemo {
     ground GND;
 
     // LEFT ZONE: Input protection
-    net input_protected: external_in -> tvs1: TVSDiode(15V).K -> tvs1.A -> @protected_in
+    net input_protected: external_in -> tvs1: TVSDiode(15V).K; tvs1.A -> @protected_in
         for input_protection(15V, 100mA);
 
     // TOP ZONE: Power regulation
-    net power_regulated: @VCC -> reg: LM7805().VI -> reg.VO -> @VCC5V
+    net power_regulated: @VCC -> reg: LM7805().VI; reg.VO -> @VCC5V
         for voltage_regulation(5V, 12V);
 
     // CENTER ZONE: Signal processing / filtering
-    net signal_filtered: @protected_in -> r1: Res(10k).1 -> r1.2 -> c1: Cap(100nF).1 -> c1.2 -> @filtered_signal
+    net signal_filtered: @protected_in -> r1: Res(10k).1; r1.2 -> c1: Cap(100nF).1; c1.2 -> @filtered_signal
         for noise_filtering(1kHz, 40dB);
 
     // RIGHT ZONE: Output buffering
-    net output_buffered: @filtered_signal -> r2: Res(330).1 -> r2.2 -> led: LED("red").A
+    net output_buffered: @filtered_signal -> r2: Res(330).1; r2.2 -> led: LED("red").A
         for output_buffering(20mA);
 
     // BOTTOM ZONE: Current sensing
-    net current_sensed: r2.2 -> sense_r: Res(0.1).1 -> sense_r.2 -> @sense_point
+    net current_sensed: r2.2 -> sense_r: Res(0.1).1; sense_r.2 -> @sense_point
         for current_sensing(50mA, 1%);
 
     // Ground connections

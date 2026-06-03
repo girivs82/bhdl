@@ -11,7 +11,7 @@ board TripleFanOut {
     ground GND;
 
     // Regulation
-    VIN -> reg: LM7805().VI -> reg.VO -> VOUT for voltage_regulation(5V, 9V);
+    VIN -> reg: LM7805().VI; reg.VO -> VOUT for voltage_regulation(5V, 9V);
     reg.GND -> GND;
 
     // Output cap
@@ -19,14 +19,14 @@ board TripleFanOut {
     c_out.2 -> GND;
 
     // Branch 1: Red LED
-    net red_path: VOUT -> r1: Res(220).1 -> r1.2 -> led_r: LED("red").A for current_limiting(20mA);
+    net red_path: VOUT -> r1: Res(220).1; r1.2 -> led_r: LED("red").A for current_limiting(20mA);
     led_r.K -> GND;
 
     // Branch 2: Green LED
-    net green_path: VOUT -> r2: Res(150).1 -> r2.2 -> led_g: LED("green").A for current_limiting(25mA);
+    net green_path: VOUT -> r2: Res(150).1; r2.2 -> led_g: LED("green").A for current_limiting(25mA);
     led_g.K -> GND;
 
     // Branch 3: Blue LED
-    net blue_path: VOUT -> r3: Res(100).1 -> r3.2 -> led_b: LED("blue").A for current_limiting(30mA);
+    net blue_path: VOUT -> r3: Res(100).1; r3.2 -> led_b: LED("blue").A for current_limiting(30mA);
     led_b.K -> GND;
 }

@@ -5,7 +5,7 @@ board SimpleLEDBoard {
     ground GND;
     
     // Simple LED circuit  
-    @VCC -> R1: Res(330).1 -> R1.2 -> LED1: LED(red).A;
+    @VCC -> R1: Res(330).1; R1.2 -> LED1: LED(red).A;
     LED1.K -> @GND;
 }
 

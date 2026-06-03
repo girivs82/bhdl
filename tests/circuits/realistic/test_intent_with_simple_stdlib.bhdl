@@ -13,34 +13,34 @@ board IntentDrivenPowerSupply {
     ground GND;
 
     // LEFT ZONE: Input protection with intent
-    net protected_input: VIN -> fuse: Fuse(1A).1 -> fuse.2 -> @protected_vin
+    net protected_input: VIN -> fuse: Fuse(1A).1; fuse.2 -> @protected_vin
         for input_protection(15V, 1A);
 
     @protected_vin -> tvs: TVSDiode(15V).K;
     tvs.A -> GND;
 
     // CENTER ZONE: Input filtering with intent
-    net filtered_input: @protected_vin -> c_in: ElectrolyticCap(100µF, 25V).pos -> c_in.pos -> @filtered_in
+    net filtered_input: @protected_vin -> c_in: ElectrolyticCap(100µF, 25V).pos; c_in.pos -> @filtered_in
         for noise_filtering(100Hz, 40dB);
     c_in.neg -> GND;
 
     // TOP ZONE: Voltage regulation with intent
-    net regulated_power: @filtered_in -> reg: LM7805().IN -> reg.OUT -> @VCC
+    net regulated_power: @filtered_in -> reg: LM7805().IN; reg.OUT -> @VCC
         for voltage_regulation(5V, 12V);
     reg.GND -> GND;
 
     // CENTER ZONE: Output filtering with intent
-    net filtered_output: @VCC -> c_out: ElectrolyticCap(10µF, 10V).pos -> c_out.pos -> @filtered_out
+    net filtered_output: @VCC -> c_out: ElectrolyticCap(10µF, 10V).pos; c_out.pos -> @filtered_out
         for noise_filtering(10kHz, 60dB);
     c_out.neg -> GND;
 
     // RIGHT ZONE: LED indicator with intent
-    net led_indicator: @filtered_out -> r_led: Res(330).1 -> r_led.2 -> led: LED("green").A -> led.A -> @led_out
+    net led_indicator: @filtered_out -> r_led: Res(330).1; r_led.2 -> led: LED("green").A; led.A -> @led_out
         for current_limiting(20mA);
     led.K -> GND;
 
     // BOTTOM ZONE: Current sensing with intent
-    net current_measurement: r_led.2 -> sense: Res(0.1).1 -> sense.2 -> @sensed
+    net current_measurement: r_led.2 -> sense: Res(0.1).1; sense.2 -> @sensed
         for current_sensing(20mA, 1%);
     @sensed -> led.A;
 

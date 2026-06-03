@@ -92,7 +92,7 @@ entity BufferAmplifier {
 
     // Follower connections
     INPUT -> OPAMP_INSTANCE.IN_P;
-    OPAMP_INSTANCE.OUT -> OPAMP_INSTANCE.IN_N; // Feedback
+    OPAMP_INSTANCE.OUT; OPAMP_INSTANCE.IN_N; // Feedback
     OPAMP_INSTANCE.OUT -> OUTPUT;
   }
 }

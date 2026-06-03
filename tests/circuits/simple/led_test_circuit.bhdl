@@ -4,5 +4,5 @@ board SimpleRedLED {
     ground GND;
     
     // Simple LED circuit with current limiting resistor
-    VDD -> R1: Res(220Ω).1 -> R1.2 -> D1: LED(red).A -> D1.K -> GND;
+    VDD -> R1: Res(220Ω).1; R1.2 -> D1: LED(red).A; D1.K -> GND;
 }

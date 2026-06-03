@@ -46,7 +46,7 @@ board Oscillator555 {
     timing_r2: U1.7 -> Res(10kΩ).1 -> U1.6;
     
     // Connect threshold and trigger together
-    U1.6 -> U1.2;
+    U1.6; U1.2;
     
     // Timing capacitor
     timing_cap: U1.2 -> Cap(100nF).1 -> GND;

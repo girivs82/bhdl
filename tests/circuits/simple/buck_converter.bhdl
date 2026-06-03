@@ -23,9 +23,9 @@ board SimpleBuck {
     buck.GND -> GND;
 
     // 5V indicator LED
-    V5 -> r_led: Res(220).1 -> r_led.2 -> led: LED("green").A;
+    V5 -> r_led: Res(220).1; r_led.2 -> led: LED("green").A;
     led.K -> GND;
 
     // Load resistor (2A at 5V = 2.5Ω)
-    V5 -> r_load: Res(2.5).1 -> r_load.2 -> GND;
+    V5 -> r_load: Res(2.5).1; r_load.2 -> GND;
 }

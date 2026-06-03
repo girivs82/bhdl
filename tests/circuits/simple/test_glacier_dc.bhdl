@@ -9,6 +9,6 @@ board GlacierDCTest {
 
     // Voltage divider: 10k + 5k = 15k total, I = 12/15000 = 0.8mA
     // V(mid) = 12 * 5000/15000 = 4.0V
-    VIN -> r1: Res(10kΩ).1 -> r1.2 -> r2: Res(5kΩ).1;
+    VIN -> r1: Res(10kΩ).1; r1.2 -> r2: Res(5kΩ).1;
     r2.2 -> GND;
 }

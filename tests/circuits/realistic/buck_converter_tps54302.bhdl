@@ -26,7 +26,7 @@ board BuckConverterTPS54302 {
     @GND <- u1.GND;
     
     // Bootstrap capacitor (between BOOT and PH pins)
-    net boot_cap: u1.BOOT -> c_boot: Capacitor(100nF, 10V).1 -> c_boot.2 -> u1.PH;
+    net boot_cap: u1.BOOT -> c_boot: Capacitor(100nF, 10V).1; c_boot.2 -> u1.PH;
     
     // Power stage - inductor from SW to output
     net switch_node: u1.SW -> l1: Inductor(4.7uH, 3A).1;
@@ -43,7 +43,7 @@ board BuckConverterTPS54302 {
     // For 5V output: 5V = 0.6V * (1 + R1/R2)
     // R1/R2 = 7.33, using R1=22kohm, R2=3kohm
     net fb_top: @VOUT -> r_fb1: Resistor(22kohm, 1%).1;
-    net fb_tap: r_fb1.2 -> r_fb2: Resistor(3kohm, 1%).1 -> r_fb2.2 -> @GND;
+    net fb_tap: r_fb1.2 -> r_fb2: Resistor(3kohm, 1%).1; r_fb2.2 -> @GND;
     net feedback: r_fb1.2 -> u1.FB;
     
     // Component roles for visualization

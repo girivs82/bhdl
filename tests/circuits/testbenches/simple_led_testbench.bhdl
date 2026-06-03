@@ -5,7 +5,7 @@ board SimpleLEDBoard {
     ground GND;
     
     // Simple LED circuit
-    @VCC -> R1: Resistor(330Ω).1 -> R1.2 -> LED1: LED(red).anode;
+    @VCC -> R1: Resistor(330Ω).1; R1.2 -> LED1: LED(red).anode;
     LED1.cathode -> @GND;
 }
 

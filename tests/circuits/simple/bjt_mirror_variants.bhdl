@@ -26,7 +26,7 @@ board BjtMirrorVariants {
     // Base design: 2 mA mirror, 5 kΩ load placeholder. Itail_Rref is
     // sized by the vendor design recipe (the same one we landed in
     // the Stage 5/6/7 work) to (12 - 0.65) / 0.002 = 5675 Ω.
-    net cs_top: VCC -> Rload: Res(5000).1 -> Rload.2 -> Itail.OUT
+    net cs_top: VCC -> Rload: Res(5000).1; Rload.2 -> Itail.OUT
         for current_source(current: 2mA);
 
     VCC -> Itail.VCC;
