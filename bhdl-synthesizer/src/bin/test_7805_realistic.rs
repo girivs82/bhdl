@@ -47,7 +47,6 @@ async fn main() -> Result<()> {
         preserve_semantic_context: true,
         include_power_domains: true,
         include_component_inference: true,
-        flatten_hierarchy: false,
         database_path: None, // This will prevent database initialization
         ..Default::default()
     };

@@ -167,8 +167,6 @@ pub struct NetlistConfig {
     pub include_power_domains: bool,
     /// Generate component inference annotations
     pub include_component_inference: bool,
-    /// Flatten hierarchical designs to top-level
-    pub flatten_hierarchy: bool,
     /// Path to component database
     pub database_path: Option<String>,
     /// Enable simulation-driven optimization
@@ -207,28 +205,12 @@ pub struct DatabaseStats {
     pub symbol_cache_hit_rate: f64,
 }
 
-/// Represents different types of connection endpoints
-#[derive(Debug, Clone)]
-enum ConnectionEndpoint {
-    /// Simple net name (VCC, GND, etc.)
-    Net(String),
-    /// Component pin (instance.pin)
-    Pin(String, String), // (instance_name, pin_name)
-    /// Named handle declaration (C1: Cap(...))
-    NamedHandle(String, String), // (handle_name, component_type)
-    /// Net assignment with component (net_name: Component(...).pin)
-    NetAssignment(String, String, String), // (net_name, component_type, pin_name),
-    /// Net reference with @ prefix (@NETNAME)
-    NetRef(String), // net_name without @ prefix
-}
-
 impl Default for NetlistConfig {
     fn default() -> Self {
         Self {
             preserve_semantic_context: true,
             include_power_domains: true,
             include_component_inference: true,
-            flatten_hierarchy: false,
             database_path: Some("/Users/girivs/src/bhdl-new/components.db".to_string()),
             enable_simulation_optimization: false,
             enable_compatibility_analysis: true,
@@ -276,9 +258,6 @@ pub struct NetlistGenerator {
     ast_to_module: HashMap<String, ModuleId>,
     ast_to_instance: HashMap<String, InstanceId>,
     ast_to_net: HashMap<String, NetId>,
-    // Mapping from net assignment handles to instance IDs
-    // When we see "protected_vin: TVSDiode(15V).K", we map "protected_vin" -> TVSDiode instance
-    net_assignment_handles: HashMap<String, InstanceId>,
     // Database component mapper for real component instances
     database_mapper: Option<DatabaseComponentMapper>,
     // Component instances with database symbol references
@@ -331,7 +310,6 @@ impl NetlistGenerator {
             ast_to_module: HashMap::new(),
             ast_to_instance: HashMap::new(),
             ast_to_net: HashMap::new(),
-            net_assignment_handles: HashMap::new(),
             database_mapper: None, // Will be initialized async in generate_from_analysis
             component_instances: Vec::new(),
             type_mapper: ComponentTypeMapper::new(),
@@ -652,41 +630,29 @@ impl NetlistGenerator {
     /// Extract module hierarchy from analysis results
     fn extract_module_hierarchy(&mut self, analysis: &AnalysisResult) -> Result<()> {
         debug!("Extracting module hierarchy from analysis");
-        
-        // Use flat extraction for now if hierarchy is to be flattened
-        if self.config.flatten_hierarchy {
-            // Create a basic top-level module for flat designs
-            let top_module_id = self.netlist.add_module(
-                "top_level".to_string(), 
-                ModuleKind::Board
-            );
-            self.netlist.top_level_module = Some(top_module_id);
-            self.ast_to_module.insert("top_level".to_string(), top_module_id);
-            debug!("Created top-level module for flat design: {:?}", top_module_id);
-        } else {
-            // Extract module definitions from global scope
-            for symbol in analysis.global_scope.iter() {
-                if matches!(symbol.kind, bhdl_analyzer::symbol_table::SymbolKind::Entity |
-                                       bhdl_analyzer::symbol_table::SymbolKind::Board) {
-                    let module_kind = if matches!(symbol.kind, bhdl_analyzer::symbol_table::SymbolKind::Board) {
-                        ModuleKind::Board
-                    } else {
-                        ModuleKind::Module
-                    };
-                    
-                    let module_id = self.netlist.add_module(
-                        symbol.name.clone(),
-                        module_kind
-                    );
-                    
-                    self.ast_to_module.insert(symbol.name.clone(), module_id);
-                    
-                    if module_kind == ModuleKind::Board {
-                        self.netlist.top_level_module = Some(module_id);
-                    }
-                    
-                    debug!("Created module '{}' with kind {:?}", symbol.name, module_kind);
+
+        // Extract module definitions from global scope
+        for symbol in analysis.global_scope.iter() {
+            if matches!(symbol.kind, bhdl_analyzer::symbol_table::SymbolKind::Entity |
+                                   bhdl_analyzer::symbol_table::SymbolKind::Board) {
+                let module_kind = if matches!(symbol.kind, bhdl_analyzer::symbol_table::SymbolKind::Board) {
+                    ModuleKind::Board
+                } else {
+                    ModuleKind::Module
+                };
+
+                let module_id = self.netlist.add_module(
+                    symbol.name.clone(),
+                    module_kind
+                );
+
+                self.ast_to_module.insert(symbol.name.clone(), module_id);
+
+                if module_kind == ModuleKind::Board {
+                    self.netlist.top_level_module = Some(module_id);
                 }
+
+                debug!("Created module '{}' with kind {:?}", symbol.name, module_kind);
             }
         }
 
@@ -1291,28 +1257,15 @@ impl NetlistGenerator {
     }
 
     fn extract_connectivity_from_ast(&mut self, ast: &SourceFile, analysis: &AnalysisResult) -> Result<()> {
-        use bhdl_ast::{AstNode, SyntaxKind, ConnectionStmt};
-        
         info!("Extracting connectivity from AST");
         
-        // Always create power nets first - they're needed by both extraction methods
+        // Always create power nets first
         self.create_power_nets(analysis)?;
-        
-        if !self.config.flatten_hierarchy {
-            // Use hierarchical connectivity extraction
-            info!("Using hierarchical connectivity extraction");
-            hierarchical_connectivity::extract_hierarchical_connectivity(ast, analysis, &mut self.netlist, self.import_preprocessor.as_ref())?;
-        } else {
-            // Use flat extraction for backward compatibility
-            info!("Using flat connectivity extraction");
-            
-            // Now traverse the AST to find all connection statements
-            let mut connection_count = 0;
-            self.visit_connections_in_ast(ast.syntax(), &mut connection_count, analysis)?;
-            
-            info!("Extracted {} connections from AST", connection_count);
-        }
-        
+
+        // Use hierarchical connectivity extraction (AST-based)
+        info!("Using hierarchical connectivity extraction");
+        hierarchical_connectivity::extract_hierarchical_connectivity(ast, analysis, &mut self.netlist, self.import_preprocessor.as_ref())?;
+
         Ok(())
     }
     
@@ -1452,484 +1405,6 @@ impl NetlistGenerator {
         }
 
         Ok(())
-    }
-
-    /// Visit all connection statements in the AST
-    fn visit_connections_in_ast(&mut self, node: &bhdl_ast::SyntaxNode<bhdl_ast::BhdlLanguage>, count: &mut usize, analysis: &AnalysisResult) -> Result<()> {
-        use bhdl_ast::{SyntaxKind, AstNode, ConnectionStmt};
-        
-        // Check if this is a connection statement
-        if node.kind() == SyntaxKind::CONNECTION_STMT {
-            if let Some(conn_stmt) = ConnectionStmt::cast(node.clone()) {
-                // First pass: identify and map component handles
-                self.identify_component_handles(&conn_stmt)?;
-                // Second pass: process connections
-                self.process_connection_statement(&conn_stmt, analysis)?;
-                *count += 1;
-            }
-        }
-        
-        // Recursively visit children
-        for child in node.children() {
-            self.visit_connections_in_ast(&child, count, analysis)?;
-        }
-        
-        Ok(())
-    }
-    
-    /// Identify component handles in a connection statement (first pass)
-    fn identify_component_handles(&mut self, conn: &bhdl_ast::ConnectionStmt) -> Result<()> {
-        use bhdl_ast::AstNode;
-        let conn_text = conn.syntax().text().to_string();
-        let parts: Vec<&str> = conn_text.split("->").collect();
-        
-        for part in parts {
-            let endpoint = part.trim().trim_end_matches(';');
-            
-            // Check for net assignment pattern (handle: Component(...).pin)
-            if let Some(colon_pos) = endpoint.find(':') {
-                let handle_name = endpoint[..colon_pos].trim();
-                
-                // Extract component type
-                let after_colon = endpoint[colon_pos + 1..].trim();
-                if let Some(paren_pos) = after_colon.find('(') {
-                    let component_type = after_colon[..paren_pos].trim();
-                    
-                    // Find the matching component instance by type
-                    // This should map the handle to the instance that was created during component generation
-                    for (idx, comp) in self.component_instances.iter().enumerate() {
-                        if comp.bhdl_type == component_type && 
-                           !self.net_assignment_handles.values().any(|&id| {
-                               self.ast_to_instance.get(&comp.instance_name)
-                                   .map(|&inst_id| inst_id == id)
-                                   .unwrap_or(false)
-                           }) {
-                            // Found unmapped component of the right type
-                            if let Some(&inst_id) = self.ast_to_instance.get(&comp.instance_name) {
-                                self.net_assignment_handles.insert(handle_name.to_string(), inst_id);
-                                info!("Mapped handle '{}' to instance {} ({})", handle_name, comp.instance_name, component_type);
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        Ok(())
-    }
-    
-    /// Process a single connection statement
-    fn process_connection_statement(&mut self, conn: &bhdl_ast::ConnectionStmt, analysis: &AnalysisResult) -> Result<()> {
-        use bhdl_ast::AstNode;
-        // Parse the connection to extract the flow of connections
-        // Example: VIN -> C1: Cap(100uF, 25V).pos -> U1: LM7805(package="TO-220").IN;
-        // Example with net naming: VIN @RAW-> fuse: Fuse(1A).1
-        
-        let conn_text = conn.syntax().text().to_string();
-        info!("Processing connection: {}", conn_text.trim());
-        
-        // Debug: Check for D1 and C3 connections specifically
-        if conn_text.contains("D1") || conn_text.contains("C3") {
-            info!("  DEBUG: Found D1/C3 connection: {}", conn_text.trim());
-        }
-        
-        // Parse the connection chain by splitting on -> but handle @NETNAME-> specially
-        let parts = self.parse_connection_chain(&conn_text);
-        
-        info!("  Parsed connection into {} parts:", parts.len());
-        for (i, part) in parts.iter().enumerate() {
-            info!("    Part {}: '{}'", i, part);
-        }
-        
-        if parts.len() < 2 {
-            warn!("Invalid connection format: {}", conn_text);
-            return Ok(());
-        }
-        
-        // Track the net for this connection chain
-        let mut current_net_id: Option<NetId> = None;
-        
-        // First pass: identify if we're connecting to an existing net
-        let mut target_net_name: Option<String> = None;
-        for part in &parts {
-            let endpoint = part.trim().trim_end_matches(';');
-            if let ConnectionEndpoint::Net(net_name) = self.parse_connection_endpoint(endpoint) {
-                target_net_name = Some(net_name);
-                break;
-            }
-        }
-        
-        // If we found a target net, use it as the current net
-        if let Some(net_name) = target_net_name {
-            current_net_id = Some(self.ensure_net_exists(&net_name));
-            info!("  Using existing net '{}' for connection", net_name);
-        }
-        
-        // Process each connection endpoint
-        for (i, part) in parts.iter().enumerate() {
-            let endpoint = part.trim().trim_end_matches(';');
-            let endpoint_info = self.parse_connection_endpoint(endpoint);
-            
-            info!("  Connection endpoint {}: {:?}", i, endpoint_info);
-            
-            match endpoint_info {
-                ConnectionEndpoint::Net(net_name) => {
-                    // This is a simple net reference (VCC, GND, etc.)
-                    // Skip if we already set this as current net in the first pass
-                    if current_net_id.is_none() {
-                        current_net_id = Some(self.ensure_net_exists(&net_name));
-                    }
-                }
-                ConnectionEndpoint::NetRef(net_name) => {
-                    // This is a net reference with @ prefix (@NETNAME)
-                    // Connect to the existing net or create it if it doesn't exist
-                    let net_id = self.ensure_net_exists(&net_name);
-                    current_net_id = Some(net_id);
-                    info!("    Connected to net reference @{} (net {:?})", net_name, net_id);
-                }
-                ConnectionEndpoint::Pin(instance_name, pin_name) => {
-                    // This is a component pin reference (C1.pos, U1.IN, fuse.2, etc.)
-                    // or an interface signal reference (i2c_bus.SDA)
-                    
-                    // First check if this might be an interface signal reference
-                    // The pattern instance_name.pin_name might be an interface signal
-                    // Check the analysis result to see if instance_name is an interface
-                    let mut is_interface_signal = false;
-                    
-                    // Look for any net that ends with _<signal_name> and starts with a valid instance prefix
-                    let mut found_interface_net = false;
-                    for (net_id, net) in self.netlist.nets.iter() {
-                        if let Some(net_name) = &net.name {
-                            // Check if this net ends with our signal name
-                            if net_name.ends_with(&format!("_{}", pin_name)) {
-                                // Extract the prefix before _<signal>
-                                let prefix_end = net_name.len() - pin_name.len() - 1;
-                                if prefix_end > 0 {
-                                    let prefix = &net_name[..prefix_end];
-                                    // Check if this prefix matches a known instance (like U1, U2, etc.)
-                                    // Interface instances are typically generated with U<number> names
-                                    if prefix.starts_with("U") && prefix[1..].chars().all(|c| c.is_digit(10)) {
-                                        // This looks like an interface signal net
-                                        info!("    Found interface signal net: {} for {}.{}", net_name, instance_name, pin_name);
-                                        current_net_id = Some(net_id);
-                                        found_interface_net = true;
-                                        is_interface_signal = true;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    
-                    if found_interface_net {
-                        // We've already set the current_net_id, continue to next endpoint
-                        continue;
-                    }
-                    
-                    // Not an interface signal, check for regular component pin
-                    let instance_id = if let Some(&handle_id) = self.net_assignment_handles.get(&instance_name) {
-                        info!("    Found net assignment handle '{}' -> instance {:?}", instance_name, handle_id);
-                        Some(handle_id)
-                    } else {
-                        self.ast_to_instance.get(&instance_name).copied()
-                    };
-                    
-                    if let Some(inst_id) = instance_id {
-                        if let Some(pin_inst_id) = self.netlist.find_pin_instance(inst_id, &pin_name) {
-                            // Connect this pin to the current net
-                            let net_id = current_net_id.get_or_insert_with(|| {
-                                self.netlist.add_net(None)
-                            });
-                            
-                            self.netlist.connect(*net_id, ConnectionPoint::PinInstance(pin_inst_id))
-                                .map_err(|e| anyhow::anyhow!("Failed to connect pin: {}", e))?;
-                                
-                            info!("    Connected {} to net {:?}", endpoint, net_id);
-                        } else {
-                            warn!("    Pin {} not found on instance {}", pin_name, instance_name);
-                            // Try common pin name alternatives
-                            let alt_pins = match pin_name.as_str() {
-                                "1" => vec!["IN", "VI", "VIN", "+", "pos"],
-                                "2" => vec!["OUT", "VO", "VOUT", "-", "neg", "GND"],  
-                                "3" => vec!["GND", "COM"],
-                                "pos" => vec!["+", "1"],
-                                "neg" => vec!["-", "2", "GND"],
-                                "IN" => vec!["1", "VI", "VIN"],
-                                "OUT" => vec!["2", "3", "VO", "VOUT"],
-                                "GND" => vec!["2", "3", "COM", "-"],
-                                "K" => vec!["cathode", "2", "-"],
-                                "A" => vec!["anode", "1", "+"],
-                                _ => vec![]
-                            };
-                            for alt in alt_pins {
-                                if let Some(pin_inst_id) = self.netlist.find_pin_instance(inst_id, alt) {
-                                    info!("    Found pin using alternative name '{}' instead of '{}'", alt, pin_name);
-                                    let net_id = current_net_id.get_or_insert_with(|| {
-                                        self.netlist.add_net(None)
-                                    });
-                                    self.netlist.connect(*net_id, ConnectionPoint::PinInstance(pin_inst_id))
-                                        .map_err(|e| anyhow::anyhow!("Failed to connect pin: {}", e))?;
-                                    break;
-                                }
-                            }
-                        }
-                    } else {
-                        warn!("    Instance {} not found (checked both regular instances and net assignment handles)", instance_name);
-                        warn!("    Available instances:");
-                        for (name, _) in &self.ast_to_instance {
-                            warn!("      - {}", name);
-                        }
-                        warn!("    Available net assignment handles:");
-                        for (handle, _) in &self.net_assignment_handles {
-                            warn!("      - {}", handle);
-                        }
-                    }
-                }
-                ConnectionEndpoint::NamedHandle(handle_name, _component_type) => {
-                    // This is a named handle declaration (C1: Cap(...))
-                    // The instance should already be created during component generation
-                    if !self.ast_to_instance.contains_key(&handle_name) {
-                        warn!("    Named handle {} not found in instances", handle_name);
-                    }
-                }
-                ConnectionEndpoint::NetAssignment(handle_name, component_type, pin_name) => {
-                    // This is inline component instantiation (handle: Component(...).pin)
-                    // Example: r1: Res(330Ω).1
-                    // This creates a component instance with handle, NOT a net
-                    
-                    info!("    Processing inline component instantiation: {} = {}(...).{}", handle_name, component_type, pin_name);
-                    
-                    // Do NOT create a net with the handle name!
-                    // The net is the connection itself, not the handle
-                    
-                    // Check if this handle already has an instance
-                    let inst_id = if let Some(&existing_id) = self.net_assignment_handles.get(&handle_name) {
-                        info!("    Found pre-mapped handle '{}' -> instance {:?}", handle_name, existing_id);
-                        existing_id
-                    } else {
-                        // Need to create the component instance inline
-                        info!("    Creating inline component instance for handle '{}'", handle_name);
-                        
-                        // Create the component instance
-                        // TODO: This should use database components if available
-                        let module_id = self.netlist.add_module(
-                            component_type.to_string(),
-                            self.map_component_type_to_module_kind(&component_type)
-                        );
-                        
-                        // Add pins for this component type
-                        if let Err(e) = self.add_pins_for_component(&handle_name, &component_type, module_id) {
-                            warn!("Failed to add pins for {}: {}", component_type, e);
-                        }
-                        
-                        // Create the instance
-                        let new_inst_id = self.netlist.add_instance(
-                            handle_name.to_string(),
-                            module_id
-                        );
-                        
-                        if let Some(inst_id) = new_inst_id {
-                            // Create pin instances for this component
-                            self.netlist.create_pin_instances(inst_id)
-                                .map_err(|e| anyhow::anyhow!("Failed to create pin instances: {}", e))?;
-                            
-                            // Transfer component parameters from analyzer to instance attributes
-                            self.populate_instance_attributes(inst_id, &handle_name, analysis);
-                            
-                            // Store mappings
-                            self.ast_to_instance.insert(handle_name.to_string(), inst_id);
-                            self.net_assignment_handles.insert(handle_name.to_string(), inst_id);
-                            
-                            info!("    Created instance {:?} for handle '{}'", inst_id, handle_name);
-                            inst_id
-                        } else {
-                            warn!("    Failed to create instance for handle '{}'", handle_name);
-                            continue;
-                        }
-                    };
-                    
-                    // Find the pin on this instance
-                    if let Some(pin_inst_id) = self.netlist.find_pin_instance(inst_id, &pin_name) {
-                            // Connect this pin to the current net
-                            let net_id = current_net_id.get_or_insert_with(|| {
-                                self.netlist.add_net(None)
-                            });
-                            
-                            self.netlist.connect(*net_id, ConnectionPoint::PinInstance(pin_inst_id))
-                                .map_err(|e| anyhow::anyhow!("Failed to connect pin: {}", e))?;
-                            
-                            info!("    Connected {}({}).{} to net {:?}", component_type, "...", pin_name, net_id);
-                    } else {
-                            warn!("    Pin {} not found on {} instance", pin_name, component_type);
-                            // Try common pin name alternatives
-                            let alt_pins = match pin_name.as_str() {
-                                "1" => vec!["IN", "VI", "VIN", "+", "pos"],
-                                "2" => vec!["OUT", "VO", "VOUT", "-", "neg", "GND"],
-                                "3" => vec!["GND", "COM"],
-                                _ => vec![]
-                            };
-                            for alt in alt_pins {
-                                if let Some(pin_inst_id) = self.netlist.find_pin_instance(inst_id, alt) {
-                                    info!("    Found pin using alternative name '{}' instead of '{}'", alt, pin_name);
-                                    
-                                    let net_id = current_net_id.get_or_insert_with(|| {
-                                        self.netlist.add_net(None)
-                                    });
-                                    
-                                    self.netlist.connect(*net_id, ConnectionPoint::PinInstance(pin_inst_id))
-                                        .map_err(|e| anyhow::anyhow!("Failed to connect pin: {}", e))?;
-                                    break;
-                                }
-                            }
-                    }
-                }
-            }
-        }
-        
-        Ok(())
-    }
-    
-    /// Clean connection endpoint by removing trailing semicolons and extracting net/pin name
-    fn clean_connection_endpoint(&self, endpoint: &str) -> String {
-        // Remove trailing semicolon
-        let clean = endpoint.trim_end_matches(';').trim();
-        
-        // Extract just the net/pin identifier
-        // Examples:
-        // "C1: Cap(100uF, 25V).pos" -> "C1.pos"
-        // "U1: LM7805(package=\"TO-220\").IN" -> "U1.IN"
-        // "VCC" -> "VCC"
-        
-        if let Some(colon_pos) = clean.find(':') {
-            // This is a named handle like "C1: Cap(...).pos"
-            let name = clean[..colon_pos].trim();
-            
-            // Find the pin after the component instantiation
-            if let Some(dot_pos) = clean.rfind('.') {
-                let pin = &clean[dot_pos + 1..];
-                return format!("{}.{}", name, pin);
-            } else {
-                return name.to_string();
-            }
-        }
-        
-        // Simple identifier or component.pin
-        clean.to_string()
-    }
-    
-    /// Ensure a net exists for the given name
-    fn ensure_net_exists(&mut self, net_name: &str) -> NetId {
-        if let Some(&net_id) = self.ast_to_net.get(net_name) {
-            net_id
-        } else {
-            let net_id = self.netlist.add_net(Some(net_name.to_string()));
-            self.ast_to_net.insert(net_name.to_string(), net_id);
-            debug!("Created net '{}'", net_name);
-            net_id
-        }
-    }
-    
-    /// Parse a connection chain handling @NETNAME-> syntax
-    fn parse_connection_chain(&self, conn_text: &str) -> Vec<String> {
-        let mut parts = Vec::new();
-        let mut current = String::new();
-        let mut i = 0;
-        let chars: Vec<char> = conn_text.chars().collect();
-        
-        while i < chars.len() {
-            if i + 1 < chars.len() && chars[i] == '-' && chars[i + 1] == '>' {
-                // Found ->
-                // Look back to see if we have @NETNAME pattern
-                let trimmed = current.trim();
-                if let Some(space_pos) = trimmed.rfind(' ') {
-                    let after_space = &trimmed[space_pos + 1..];
-                    if after_space.starts_with('@') {
-                        // This is "something @NETNAME" pattern
-                        // Split at the space before @
-                        let before_at = trimmed[..space_pos].trim();
-                        if !before_at.is_empty() {
-                            parts.push(before_at.to_string());
-                        }
-                        // Keep @NETNAME-> together
-                        parts.push(format!("{}{}", after_space, "->"));
-                        current.clear();
-                        i += 2; // Skip past ->
-                        continue;
-                    }
-                }
-                
-                // Normal -> split
-                if !current.trim().is_empty() {
-                    parts.push(current.trim().to_string());
-                }
-                current.clear();
-                i += 2; // Skip past ->
-            } else {
-                current.push(chars[i]);
-                i += 1;
-            }
-        }
-        
-        // Don't forget the last part
-        if !current.trim().is_empty() {
-            parts.push(current.trim().trim_end_matches(';').to_string());
-        }
-        
-        parts
-    }
-    
-    /// Parse a connection endpoint to determine its type
-    fn parse_connection_endpoint(&self, endpoint: &str) -> ConnectionEndpoint {
-        let trimmed = endpoint.trim();
-        
-        // Check for net creation/reference with @ prefix
-        // @NETNAME-> creates and references a net
-        // @NETNAME references an existing net
-        if trimmed.ends_with("->") && trimmed.contains('@') {
-            // This is @NETNAME-> pattern (net creation)
-            let without_arrow = trimmed.trim_end_matches("->");
-            if let Some(at_pos) = without_arrow.rfind('@') {
-                let net_name = without_arrow[at_pos + 1..].trim().to_string();
-                return ConnectionEndpoint::NetRef(net_name);
-            }
-        } else if trimmed.starts_with('@') {
-            // This is just @NETNAME (net reference)
-            let net_name = trimmed[1..].to_string(); // Remove @ prefix
-            return ConnectionEndpoint::NetRef(net_name);
-        }
-        
-        // Check for net assignment pattern (handle: Component(...).pin)
-        // This creates a component instance with a handle, NOT a net
-        if let Some(colon_pos) = trimmed.find(':') {
-            let handle_name = trimmed[..colon_pos].trim().to_string();
-            
-            // Extract component type and pin
-            let after_colon = trimmed[colon_pos + 1..].trim();
-            if let Some(paren_pos) = after_colon.find('(') {
-                let component_type = after_colon[..paren_pos].trim().to_string();
-                
-                // Check if there's a pin after the component
-                if let Some(dot_pos) = after_colon.rfind('.') {
-                    let pin_name = after_colon[dot_pos + 1..].trim().to_string();
-                    // This is a component instantiation with handle and pin reference
-                    return ConnectionEndpoint::NetAssignment(handle_name, component_type, pin_name);
-                } else {
-                    // This is a named handle without pin (shouldn't happen in valid syntax)
-                    return ConnectionEndpoint::NamedHandle(handle_name, component_type);
-                }
-            }
-        }
-        
-        // Check for pin reference (handle.pin)
-        if let Some(dot_pos) = trimmed.find('.') {
-            let instance_name = trimmed[..dot_pos].trim().to_string();
-            let pin_name = trimmed[dot_pos + 1..].trim().to_string();
-            return ConnectionEndpoint::Pin(instance_name, pin_name);
-        }
-        
-        // Otherwise it's a simple net name (VCC, GND, etc.)
-        ConnectionEndpoint::Net(trimmed.to_string())
     }
 
     /// Apply semantic annotations for intelligent visualization
@@ -3352,7 +2827,6 @@ mod tests {
         assert!(config.preserve_semantic_context);
         assert!(config.include_power_domains);
         assert!(config.include_component_inference);
-        assert!(!config.flatten_hierarchy);
     }
 
     #[test]

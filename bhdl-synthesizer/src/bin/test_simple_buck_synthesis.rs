@@ -48,7 +48,6 @@ async fn main() -> Result<()> {
         preserve_semantic_context: true,
         include_power_domains: true,
         include_component_inference: true,
-        flatten_hierarchy: false,
         database_path: None,
         enable_simulation_optimization: false,
         enable_compatibility_analysis: false,
