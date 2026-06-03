@@ -183,25 +183,40 @@ feedback-bottom R4 (10kΩ, on the internal FB/GND nets) keeps the cost pick
 `C25804`. `cargo test` covers the scorer (profile changes the pick) and the
 price-tier selector.
 
-**Recipe-driven precision (the stdlib carries the policy).** The cleanest
-way to express "this node needs a precision part" is a **semantic part
-type** in the stdlib, so the policy lives with the recipe author, not the
-board designer. `bhdl-stdlib/passive/resistor.bhdl` ships **`PrecisionRes`**
-— electrically a `Res`, but with entity-body attributes
-`max_tolerance = "1%"` (hard grade gate) + `supply_profile = "grade"` (soft
-low-drift/tight preference). The TPS54331 recipe builds its FB divider from
-`PrecisionRes`, so a bare `bhdl bom` (no flags) resolves the feedback
-resistors to thin-film ≤1 % low-TC parts (R3 31.6 kΩ → YAGEO
-`RT0603BRC0731K6L`, R4 10 kΩ → Ever Ohms `TP0603T10K0P0510Z`) while the
-LED/load resistors stay on the cheap ±1 % jellybeans — **zero board-designer
-effort**. Entity-body attributes are the reliable carrier here: constructor
-named-arg overrides (`Res(x, supply_profile=…)`) do *not* stamp through the
-inline-flow instantiation the recipes use (a separate synthesizer bug), so
-the semantic-part-type pattern is preferred.
+**Recipe-driven precision (the stdlib carries the policy).** "This node
+needs a precision part" is expressed as **per-instance attributes on the
+ordinary `Res`**, not a separate part type — precision is a *spec*, not a
+different component. The TPS54331 recipe builds its FB divider with
+`Res(r_top_value, tolerance = 1%, supply_profile = "grade")`:
+- `tolerance = 1%` → the part's grade spec; the resolver uses it as the
+  hard `max_tolerance` gate (the default `0.05` on a load/pull-up → ≤5%,
+  which excludes nothing);
+- `supply_profile = "grade"` → soft preference for tight tolerance + low
+  drift among the feasible parts.
+
+So a bare `bhdl bom` (no flags) resolves the feedback resistors to thin-film
+≤1 % low-TC parts (R3 31.6 kΩ → YAGEO `RT0603BRC0731K6L`, R4 10 kΩ → Ever
+Ohms `TP0603T10K0P0510Z`) while the LED/load resistors stay on cheap ±1 %
+jellybeans — **zero board-designer effort**, one `Res` type.
+
+This relies on constructor **named-arg overrides reaching the leaf
+instance**. They previously vanished on the flow-style instantiation recipes
+use (`… -> r: Res(x, k = v).pin`): the expansion extractor packs all args
+(positional + named) into `params` as raw text, and the interpreter only
+consumed `params[0]` as the value. The expansion interpreter now lifts the
+`k = v` entries from `params` onto the instance as attributes (overriding
+entity defaults, last-write-wins), and the resolver sanitizes raw stamped
+values (`tolerance` via a fraction/percent-robust parse; `supply_profile`
+trimmed of surrounding quotes/space). Board-level `… -> r: Res(x, k=v) …`
+also stamps named args now (synthesizer reads both the `PARAM_LIST` and
+`PARAM_ASSIGN_BLOCK` arg shapes). (A separate, narrower bug remains: a
+board-level *standalone* `r: Res(v, k=v);` drops the positional value — not
+hit by the flow-style recipes/boards.)
 
 > **Per-net source annotation is still partial.** A passive inherits a net
 > policy via the `--supply-net`/env map (by net name) or — preferably — via
-> a `PrecisionRes`-style stdlib part type. A true source-level
+> per-instance `tolerance`/`supply_profile` attributes set in the recipe.
+> A true source-level
 > `net V3_3 { supply: precision }` block would need a `Net.attributes` +
 > parser extension (scoped as a follow-up); the semantic-part-type route
 > covers the common recipe cases without it.
