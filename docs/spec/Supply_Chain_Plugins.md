@@ -168,9 +168,22 @@ C: dielectric, L: current):
   block's outputs exactly as it does the positional value — so a recipe can
   *size* any leaf attribute, not just its value. For the default 2 A / 0.3
   ripple operating point this requires ≥ ~3.0 A, which the resolved
-  `SWPA6045S6R8MT` (3 A Irms) just clears. (The closed-form `I_peak` here is
-  the seed; a GLACIER-refined operating-point current supersedes it once the
-  in-loop stress model lands — tasks #1/#4.)
+  `SWPA6045S6R8MT` (3 A Irms) just clears.
+
+  **GLACIER-refined operating point (`bhdl bom --simulate`).** The closed-form
+  `I_peak` is a seed; with `--simulate`, the BOM runs a GLACIER DC solve and
+  `stamp_inductor_sim_current` stamps each inductor's `current_rating` from
+  the *simulated* branch current (with the buck VOUT-side-net inference for
+  inductors that read 0 A at DC, and 80 % saturation derating). The supply
+  current gate then prefers that `current_rating` over the recipe/board seed,
+  so the inductor is selected against the actual operating point. Package /
+  value selection is left to the catalogue pass (identical with or without
+  `--simulate`), so enabling the solve never disturbs the footprint. Without
+  `--simulate` the BOM uses the recipe seed + declared rail voltages (fast,
+  no solve). This realizes the GLACIER half of the stress model (tasks #1/#4)
+  for the inductor-current axis; the cap-voltage and resistor-power *supply*
+  gates (and feeding sim stress into catalogue package selection) remain
+  follow-ups.
 
 **Profiles** are weight presets, selectable at synthesis time:
 - `precision` — value-only → exact E-series wins;
