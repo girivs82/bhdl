@@ -614,6 +614,15 @@ pub fn apply_supply_chain_mpns(netlist: &mut Netlist, opts: &SupplyOptions) -> u
             .attributes
             .get("supply_qty")
             .and_then(|s| s.trim().parse().ok());
+        // Required ceramic dielectric (e.g. `dielectric = "C0G"` on a
+        // filter/timing/reference cap) → hard gate in the provider. Sanitize
+        // the raw stamped value's surrounding quotes/space.
+        let dielectric: Option<String> = inst
+            .attributes
+            .get("dielectric")
+            .map(|d| d.trim().trim_matches('"').trim())
+            .filter(|d| !d.is_empty())
+            .map(str::to_string);
 
         let ci = idx_to_id.len();
         idx_to_id.push(id);
@@ -626,6 +635,9 @@ pub fn apply_supply_chain_mpns(netlist: &mut Netlist, opts: &SupplyOptions) -> u
         });
         if let Some(m) = max_tolerance_pct {
             req["max_tolerance_pct"] = serde_json::json!(m);
+        }
+        if let Some(d) = dielectric {
+            req["dielectric"] = serde_json::Value::String(d);
         }
         if let Some(o) = objective {
             req["objective"] = o;

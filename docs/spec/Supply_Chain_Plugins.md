@@ -142,7 +142,11 @@ Beyond value, two **hard gates** apply: `tolerance_pct` bounds the *value*
 match window, and optional `max_tolerance_pct` bounds the *part grade* — a
 feedback/measurement path can require ≤1 % (or ≤0.1 %) parts, and looser
 ones become infeasible (a part with no parseable tolerance also fails the
-grade gate).
+grade gate). For ceramic capacitors, an optional `dielectric` (e.g. `"C0G"`)
+is a third hard gate: a filter/timing/reference cap that must be
+temperature-stable accepts only Class-I parts (C0G≡NP0 aliased), excluding
+the cheap X7R/Y5V jellybeans — sourced from a `dielectric` instance
+attribute (`Cap(value, dielectric = "C0G")`).
 
 **Profiles** are weight presets, selectable at synthesis time:
 - `precision` — value-only → exact E-series wins;
@@ -160,7 +164,10 @@ Explicit weight objects (incl. `tolerance`/`tempco`) override presets.
 Verified on the full DB: 10 kΩ/0603 under `cost` → `0603WAF1002T5E` (Thick
 Film ±1 % ±100 ppm, basic, cheap), under `grade` → `AR03BTS1002` (Thin Film
 ±0.1 % ±25 ppm precision part); adding `max_tolerance_pct: 0.5` tightens the
-feasible set further.
+feasible set further. 100 nF/0402 default → `CL05B104KO5NNNC` (Samsung X7R,
+basic), with `dielectric: "C0G"` → `GRM31C5C1H104JA01L` (Murata C0G). The
+same parameter mechanism that gives a resistor its grade gives a capacitor
+its dielectric — one `Cap` type, no `C0G_Cap` variant.
 
 **Per-net / per-part policy.** The BHDL side
 (`glacier_physical_selection::apply_supply_chain_mpns` + `SupplyOptions`)
