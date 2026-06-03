@@ -142,11 +142,23 @@ Beyond value, two **hard gates** apply: `tolerance_pct` bounds the *value*
 match window, and optional `max_tolerance_pct` bounds the *part grade* — a
 feedback/measurement path can require ≤1 % (or ≤0.1 %) parts, and looser
 ones become infeasible (a part with no parseable tolerance also fails the
-grade gate). For ceramic capacitors, an optional `dielectric` (e.g. `"C0G"`)
-is a third hard gate: a filter/timing/reference cap that must be
-temperature-stable accepts only Class-I parts (C0G≡NP0 aliased), excluding
-the cheap X7R/Y5V jellybeans — sourced from a `dielectric` instance
-attribute (`Cap(value, dielectric = "C0G")`).
+grade gate).
+
+Per-class hard gates round out the quality story (R: tolerance/drift,
+C: dielectric, L: current):
+- **capacitor `dielectric`** (e.g. `"C0G"`) — a filter/timing/reference cap
+  that must be temperature-stable accepts only Class-I parts (C0G≡NP0
+  aliased), excluding the cheap X7R/Y5V jellybeans; from a `dielectric`
+  instance attribute (`Cap(value, dielectric = "C0G")`).
+- **inductor `current_a`** — a power-path inductor must carry the rail
+  current or it saturates/overheats. The part's *conservative* rating (the
+  MIN of Irms/Isat parsed from the description, e.g. `31mΩ 3A 4.3A 6.8uH` →
+  3 A) must be ≥ the requirement; an unrated part fails the gate. From a
+  `rated_current`/`current` instance attribute
+  (`Ind(value, rated_current = "6A")`). Verified: a bare 6.8 µH `availability`
+  pick is `FXL0630-6R8-M` (5 A); with `current_a = 5.5` it correctly flips to
+  the 8.5 A `FXL1040-6R8-M`. (Deriving this current from the operating point
+  / GLACIER instead of an explicit attribute is stress-model work — §future.)
 
 **Profiles** are weight presets, selectable at synthesis time:
 - `precision` — value-only → exact E-series wins;

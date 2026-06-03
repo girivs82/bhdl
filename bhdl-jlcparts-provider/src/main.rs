@@ -68,6 +68,11 @@ struct Requirement {
     /// dielectric.
     #[serde(default)]
     dielectric: Option<String>,
+    /// Hard gate on an inductor's rated current (amps): the part's
+    /// conservative rating (min of Irms/Isat parsed from the description)
+    /// must be ≥ this. Keeps a tiny signal inductor out of a power path.
+    #[serde(default)]
+    current_a: Option<f64>,
     /// Per-requirement optimization objective (overrides the top-level one).
     #[serde(default)]
     objective: Option<Objective>,
@@ -378,6 +383,30 @@ fn dielectric_drift(text: &str) -> Option<f64> {
         .map(|(_, d)| *d)
 }
 
+/// An inductor's *conservative* rated current (amps) from the description —
+/// the MIN of all current tokens, because parts list both Irms (thermal) and
+/// Isat (saturation) and the part is only safe up to the lower of the two
+/// (`31mΩ 3A 4.3A 6.8uH` → 3.0; `5mA 6.8uH` → 0.005). `None` if no current
+/// is stated. DCR (`…Ω`) and frequencies (`…Hz`) don't match.
+fn parse_current_a(text: &str) -> Option<f64> {
+    let mut min: Option<f64> = None;
+    for caps in regex_current().captures_iter(text) {
+        let num: f64 = match caps[1].parse() {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let amps = if caps.get(2).map(|m| !m.as_str().is_empty()).unwrap_or(false) {
+            num * 1e-3 // milliamps
+        } else {
+            num
+        };
+        if amps > 0.0 {
+            min = Some(min.map_or(amps, |m: f64| m.min(amps)));
+        }
+    }
+    min
+}
+
 /// Does a part's description satisfy a required dielectric? Case-insensitive
 /// substring, with C0G≡NP0 treated as equivalent (they name the same
 /// temperature-stable Class-I dielectric).
@@ -411,6 +440,12 @@ fn regex_tol_any() -> &'static Regex {
 fn regex_ppm() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| Regex::new(r"([0-9]+(?:\.[0-9]+)?)\s*ppm").unwrap())
+}
+fn regex_current() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    // number, optional `m` (milli), then `A` at a word boundary. `\b` after A
+    // rejects `mAh`-style and keeps DCR (`…Ω`) / freq (`…Hz`) out.
+    R.get_or_init(|| Regex::new(r"([0-9]+(?:\.[0-9]+)?)\s*(m)?A\b").unwrap())
 }
 
 // ── Resolution ───────────────────────────────────────────────────
@@ -632,6 +667,14 @@ impl Catalogue {
             if let Some(want) = req.dielectric.as_deref() {
                 if !dielectric_matches(want, &description) {
                     continue;
+                }
+            }
+            // hard gate: inductor rated current — the part must carry it.
+            // Unknown rating fails the gate (don't risk an unrated part).
+            if let Some(need) = req.current_a {
+                match parse_current_a(&description) {
+                    Some(rating) if rating + 1e-9 >= need => {}
+                    _ => continue,
                 }
             }
             let tempco = parse_tempco_ppm(&description, &req.class);
@@ -993,9 +1036,26 @@ mod tests {
             tolerance_pct: Some(2.0),
             max_tolerance_pct: None,
             dielectric: None,
+            current_a: None,
             objective: None,
             quantity: None,
         }
+    }
+
+    #[test]
+    fn inductor_rated_current() {
+        // power inductor: two ratings → conservative MIN (Irms)
+        assert!(close(
+            parse_current_a("31mΩ 3A 4.3A 6.8uH ±20% Power Inductors").unwrap(),
+            3.0
+        ));
+        // single small rating (signal/multilayer inductor)
+        assert!(close(parse_current_a("1.7Ω 6.8uH 5mA ±10% 0603").unwrap(), 0.005));
+        assert!(close(parse_current_a("1.2A 220mΩ 2A 6.8uH ±20%").unwrap(), 1.2));
+        // no current stated
+        assert_eq!(parse_current_a("6.8uH ±20% 0603"), None);
+        // DCR (Ω) and frequency (Hz) must NOT be read as current
+        assert_eq!(parse_current_a("2.6Ω 55MHz 6.8uH"), None);
     }
 
     #[test]

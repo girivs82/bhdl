@@ -485,6 +485,18 @@ fn parse_pct(s: &str) -> Option<f64> {
     }
 }
 
+/// Parse a current attribute into amps: `"2A"` → 2.0, `"500mA"` → 0.5,
+/// `"0.5"` (bare) → 0.5. Robust to surrounding quotes/space.
+fn parse_amps(s: &str) -> Option<f64> {
+    let t = s.trim().trim_matches('"').trim();
+    let t = t.strip_suffix('A').or_else(|| t.strip_suffix('a')).unwrap_or(t).trim();
+    if let Some(num) = t.strip_suffix('m').or_else(|| t.strip_suffix('M')) {
+        num.trim().parse::<f64>().ok().map(|v| v * 1e-3)
+    } else {
+        t.parse::<f64>().ok()
+    }
+}
+
 /// Parse `"VCC=cost,FB=precision"` into a net-name → profile map.
 pub fn parse_net_profiles(s: &str) -> HashMap<String, String> {
     s.split(',')
@@ -662,6 +674,14 @@ pub fn apply_supply_chain_mpns(
             .map(|d| d.trim().trim_matches('"').trim())
             .filter(|d| !d.is_empty())
             .map(str::to_string);
+        // Required inductor rated current (amps) → hard gate in the provider.
+        // From an explicit `rated_current`/`current` attribute (e.g.
+        // `Ind(value, rated_current = "2A")` on a power-path inductor).
+        let current_a: Option<f64> = inst
+            .attributes
+            .get("rated_current")
+            .or_else(|| inst.attributes.get("current"))
+            .and_then(|s| parse_amps(s));
 
         let ci = idx_to_id.len();
         idx_to_id.push(id);
@@ -677,6 +697,9 @@ pub fn apply_supply_chain_mpns(
         }
         if let Some(d) = dielectric {
             req["dielectric"] = serde_json::Value::String(d);
+        }
+        if let Some(c) = current_a {
+            req["current_a"] = serde_json::json!(c);
         }
         if let Some(o) = objective {
             req["objective"] = o;
