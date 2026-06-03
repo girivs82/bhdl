@@ -131,20 +131,43 @@ score = w_value·valueErr + w_price·price + w_assembly·asmFee
   JSON is indexed by qty — comparing qty-1 prices would mislead);
 - **assembly fee** is the basic(0) < preferred(0.5) < extended(1) proxy for
   JLCPCB's per-part + feeder cost;
+- **tolerance** is the *part's* grade (±%) parsed from the description —
+  tighter is better; **tempco / drift** is the resistor's `±N ppm/℃` or, for
+  ceramic capacitors, the dielectric mapped to a drift proxy (C0G/NP0 ≪ X7R
+  ≪ Y5V) — lower is better;
 - **stock** rewards headroom; **lead** is modeled but ~0 for the in-stock
   offline DB.
 
+Beyond value, two **hard gates** apply: `tolerance_pct` bounds the *value*
+match window, and optional `max_tolerance_pct` bounds the *part grade* — a
+feedback/measurement path can require ≤1 % (or ≤0.1 %) parts, and looser
+ones become infeasible (a part with no parseable tolerance also fails the
+grade gate).
+
 **Profiles** are weight presets, selectable at synthesis time:
-`precision` (value-only → exact E-series wins), `cost` (price + assembly
-dominate; a slightly-off in-tolerance value is fine), `availability` (max
-stock / min lead), `balanced` (default). Explicit weight objects override
-presets.
+- `precision` — value-only → exact E-series wins;
+- `grade` (a.k.a. `feedback`/`measurement`/`reference`) — a **precision
+  path**: exact value AND high part grade (tight tolerance, low drift),
+  cost secondary. This is the one to use for a feedback divider or a
+  precision measurement chain;
+- `cost` — price + assembly dominate; a slightly-off in-tolerance value is
+  fine;
+- `availability` — max stock / min lead;
+- `balanced` — default (a little of everything, incl. mild grade weight).
+
+Explicit weight objects (incl. `tolerance`/`tempco`) override presets.
+
+Verified on the full DB: 10 kΩ/0603 under `cost` → `0603WAF1002T5E` (Thick
+Film ±1 % ±100 ppm, basic, cheap), under `grade` → `AR03BTS1002` (Thin Film
+±0.1 % ±25 ppm precision part); adding `max_tolerance_pct: 0.5` tightens the
+feasible set further.
 
 **Per-net / per-part policy.** The BHDL side
 (`glacier_physical_selection::apply_supply_chain_mpns` + `SupplyOptions`)
 resolves the objective per passive with three-level precedence:
 1. the instance's own `supply_profile` / `supply_weights` / `supply_qty`
-   attribute (in BHDL source — travels with the design);
+   attribute (in BHDL source — travels with the design); a per-part
+   `max_tolerance` attribute additionally hard-gates the part grade;
 2. the policy of a net it connects to (`--supply-net NET=PROFILE` /
    `$BHDL_SUPPLY_NET_PROFILES`, keyed by net name);
 3. the global default (`bhdl bom --supply-profile … --supply-qty …` /

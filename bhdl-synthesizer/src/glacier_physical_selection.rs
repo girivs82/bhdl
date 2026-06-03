@@ -554,6 +554,13 @@ pub fn apply_supply_chain_mpns(netlist: &mut Netlist, opts: &SupplyOptions) -> u
             .or_else(|| inst.attributes.get("tolerance"))
             .and_then(|s| s.trim().trim_end_matches('%').parse::<f64>().ok())
             .unwrap_or(2.0);
+        // hard gate on the part's *grade* (±%): a precision path declares
+        // e.g. `max_tolerance = "0.5%"` and looser parts become infeasible.
+        let max_tolerance_pct = inst
+            .attributes
+            .get("max_tolerance")
+            .or_else(|| inst.attributes.get("max_tol"))
+            .and_then(|s| s.trim().trim_end_matches('%').parse::<f64>().ok());
 
         // per-requirement objective: instance attr > per-net policy > none
         // (none ⇒ the top-level default applies in the provider).
@@ -588,6 +595,9 @@ pub fn apply_supply_chain_mpns(netlist: &mut Netlist, opts: &SupplyOptions) -> u
             "package": package,
             "tolerance_pct": tolerance_pct,
         });
+        if let Some(m) = max_tolerance_pct {
+            req["max_tolerance_pct"] = serde_json::json!(m);
+        }
         if let Some(o) = objective {
             req["objective"] = o;
         }

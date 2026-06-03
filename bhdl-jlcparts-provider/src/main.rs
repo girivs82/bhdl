@@ -58,6 +58,10 @@ struct Requirement {
     package: Option<String>,
     #[serde(default)]
     tolerance_pct: Option<f64>,
+    /// Hard gate on the *part's* tolerance grade (±%): candidates worse than
+    /// this are infeasible. E.g. a feedback divider that needs ≤1% parts.
+    #[serde(default)]
+    max_tolerance_pct: Option<f64>,
     /// Per-requirement optimization objective (overrides the top-level one).
     #[serde(default)]
     objective: Option<Objective>,
@@ -90,6 +94,12 @@ struct Weights {
     stock: f64,
     #[serde(default)]
     lead: f64,
+    /// part tolerance grade (tighter % is better) — for precision paths
+    #[serde(default)]
+    tolerance: f64,
+    /// temperature drift (lower ppm/°C, better dielectric) is better
+    #[serde(default)]
+    tempco: f64,
 }
 
 impl Weights {
@@ -100,9 +110,18 @@ impl Weights {
             // value is the *only* term, tiebroken (deterministically) by price
             "precision" | "value" | "exact" => Weights {
                 value: 1.0,
-                price: 0.0,
+                ..Self::zero()
+            },
+            // precision *path*: exact value AND high part grade — tight
+            // tolerance, low temperature drift (e.g. feedback dividers,
+            // measurement/reference chains). Cost is secondary.
+            "grade" | "precision-grade" | "feedback" | "measurement" | "reference" => Weights {
+                value: 0.7,
+                tolerance: 1.0,
+                tempco: 0.7,
+                price: 0.1,
                 assembly: 0.0,
-                stock: 0.0,
+                stock: 0.1,
                 lead: 0.0,
             },
             // cheapest to assemble: unit price + basic/extended fee dominate;
@@ -112,7 +131,7 @@ impl Weights {
                 price: 1.0,
                 assembly: 0.8,
                 stock: 0.2,
-                lead: 0.0,
+                ..Self::zero()
             },
             // production resilience: maximise stock headroom, minimise lead
             "availability" | "stock" | "supply" => Weights {
@@ -121,6 +140,7 @@ impl Weights {
                 assembly: 0.2,
                 stock: 1.0,
                 lead: 0.5,
+                ..Self::zero()
             },
             // sensible all-rounder
             _ => Weights {
@@ -129,7 +149,21 @@ impl Weights {
                 assembly: 0.4,
                 stock: 0.3,
                 lead: 0.1,
+                tolerance: 0.2,
+                tempco: 0.1,
             },
+        }
+    }
+
+    fn zero() -> Weights {
+        Weights {
+            value: 0.0,
+            price: 0.0,
+            assembly: 0.0,
+            stock: 0.0,
+            lead: 0.0,
+            tolerance: 0.0,
+            tempco: 0.0,
         }
     }
 }
@@ -275,6 +309,84 @@ fn price_at_qty(price_json: &str, qty: u64) -> Option<f64> {
         }
     }
     fallback
+}
+
+// ── Part-grade parsing (tolerance, temperature drift) ────────────
+
+/// Part tolerance as a percentage from the description (`±1%`, `±0.1%`).
+/// Falls back to the worst leg of an asymmetric spec (`-20%~+80%` → 80,
+/// the Y5V case) so loose parts aren't mistaken for tight ones.
+fn parse_tolerance_pct(text: &str) -> Option<f64> {
+    // ±N% (the symmetric, well-specified case)
+    if let Some(c) = regex_tol_pm().captures(text) {
+        if let Ok(v) = c[1].parse::<f64>() {
+            return Some(v);
+        }
+    }
+    // else the max of any N% appearing (covers -20%~+80%)
+    let mut worst: Option<f64> = None;
+    for c in regex_tol_any().captures_iter(text) {
+        if let Ok(v) = c[1].parse::<f64>() {
+            worst = Some(worst.map_or(v, |w: f64| w.max(v)));
+        }
+    }
+    worst
+}
+
+/// Temperature drift as ppm/°C. Resistors state it directly (`±100ppm/℃`);
+/// ceramic capacitors encode it in the dielectric code (C0G/NP0 ≪ X7R ≪ Y5V),
+/// mapped to a representative ppm-equivalent for ranking.
+fn parse_tempco_ppm(text: &str, class: &str) -> Option<f64> {
+    if let Some(c) = regex_ppm().captures(text) {
+        if let Ok(v) = c[1].parse::<f64>() {
+            return Some(v);
+        }
+    }
+    if class == "capacitor" {
+        return dielectric_drift(text);
+    }
+    None
+}
+
+/// Map a ceramic dielectric code → representative drift (ppm-equiv) for
+/// ranking. C0G/NP0 are temperature-stable; Y5V/Z5U swing wildly.
+fn dielectric_drift(text: &str) -> Option<f64> {
+    let up = text.to_ascii_uppercase();
+    // order matters: check the stable codes first
+    const TABLE: &[(&str, f64)] = &[
+        ("C0G", 30.0),
+        ("NP0", 30.0),
+        ("X8R", 150.0),
+        ("X7R", 800.0),
+        ("X7S", 800.0),
+        ("X7T", 800.0),
+        ("X6S", 800.0),
+        ("X5R", 800.0),
+        ("Y5V", 10000.0),
+        ("Z5U", 10000.0),
+        ("Y5U", 10000.0),
+    ];
+    TABLE
+        .iter()
+        .find(|(code, _)| up.contains(code))
+        .map(|(_, d)| *d)
+}
+
+// Compiled lazily once each (no `lazy_static`/`once_cell` needed — built in
+// main and threaded, but these tiny helpers re-use thread-local-free statics
+// via a single OnceLock).
+use std::sync::OnceLock;
+fn regex_tol_pm() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"±\s*([0-9]+(?:\.[0-9]+)?)\s*%").unwrap())
+}
+fn regex_tol_any() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"([0-9]+(?:\.[0-9]+)?)\s*%").unwrap())
+}
+fn regex_ppm() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"([0-9]+(?:\.[0-9]+)?)\s*ppm").unwrap())
 }
 
 // ── Resolution ───────────────────────────────────────────────────
@@ -480,9 +592,19 @@ impl Catalogue {
                 };
                 value_err = (v - target).abs() / target.max(1e-30);
                 if value_err > tol.max(1e-9) {
-                    continue; // hard gate: out of tolerance
+                    continue; // hard gate: value out of tolerance
                 }
             }
+            let tol_pct = parse_tolerance_pct(&description);
+            // hard gate: part tolerance grade worse than required → infeasible
+            if let Some(max_tol) = req.max_tolerance_pct {
+                match tol_pct {
+                    Some(t) if t <= max_tol + 1e-9 => {}
+                    // unknown tolerance is treated as failing a hard grade gate
+                    _ => continue,
+                }
+            }
+            let tempco = parse_tempco_ppm(&description, &req.class);
             let basic: i64 = row.get(2).unwrap_or(0);
             let preferred: i64 = row.get(3).unwrap_or(0);
             let stock: i64 = row.get(4).unwrap_or(0);
@@ -493,6 +615,8 @@ impl Catalogue {
                 lcsc: row.get(7).unwrap_or(0),
                 value_err,
                 unit_price: price_at_qty(&price_json, qty),
+                tol_pct,
+                tempco,
                 // assembly-fee proxy: basic parts are free to place, preferred
                 // mid, extended carries the per-part fee + feeder setup
                 assembly: if basic == 1 {
@@ -526,6 +650,10 @@ struct Cand {
     unit_price: Option<f64>,
     assembly: f64,
     stock: u64,
+    /// part tolerance grade (±%), lower = better
+    tol_pct: Option<f64>,
+    /// temperature drift (ppm/°C or dielectric proxy), lower = better
+    tempco: Option<f64>,
     note: &'static str,
 }
 
@@ -575,11 +703,20 @@ fn score_and_pick(req: &Requirement, cands: &[Cand], w: Weights, tol: f64) -> Op
     let st: Vec<f64> = cands.iter().map(|c| -(c.stock as f64)).collect();
     // lead time isn't in the offline catalogue → uniform 0 (term drops out)
     let ld: Vec<f64> = vec![0.0; cands.len()];
+    // part grade: tighter tolerance % and lower drift ppm are better. Missing
+    // → treated as the worst in the set so an unspecified part can't masquerade
+    // as a precision one.
+    let worst_tol = cands.iter().filter_map(|c| c.tol_pct).fold(0.0_f64, f64::max);
+    let worst_tc = cands.iter().filter_map(|c| c.tempco).fold(0.0_f64, f64::max);
+    let tl: Vec<f64> = cands.iter().map(|c| c.tol_pct.unwrap_or(worst_tol)).collect();
+    let tc: Vec<f64> = cands.iter().map(|c| c.tempco.unwrap_or(worst_tc)).collect();
 
     let pr_n = normalize(&pr);
     let asm_n = normalize(&asm);
     let st_n = normalize(&st);
     let ld_n = normalize(&ld);
+    let tl_n = normalize(&tl);
+    let tc_n = normalize(&tc);
 
     let mut best_i = 0;
     let mut best = f64::INFINITY;
@@ -588,7 +725,9 @@ fn score_and_pick(req: &Requirement, cands: &[Cand], w: Weights, tol: f64) -> Op
             + w.price * pr_n[i]
             + w.assembly * asm_n[i]
             + w.stock * st_n[i]
-            + w.lead * ld_n[i];
+            + w.lead * ld_n[i]
+            + w.tolerance * tl_n[i]
+            + w.tempco * tc_n[i];
         // deterministic tiebreak: lower score, then closer value, then cheaper
         let better = score < best - 1e-12
             || ((score - best).abs() <= 1e-12
@@ -793,6 +932,24 @@ mod tests {
             unit_price: Some(price),
             assembly: asm,
             stock,
+            tol_pct: None,
+            tempco: None,
+            note,
+        }
+    }
+
+    /// graded candidate: label carries the tolerance for readable assertions
+    fn candg(value_err: f64, price: f64, tol: f64, tempco: f64, note: &'static str) -> Cand {
+        Cand {
+            mfr: format!("R{tol}"),
+            manufacturer: None,
+            lcsc: (tol * 1000.0) as i64,
+            value_err,
+            unit_price: Some(price),
+            assembly: 0.0,
+            stock: 100_000,
+            tol_pct: Some(tol),
+            tempco: Some(tempco),
             note,
         }
     }
@@ -804,6 +961,7 @@ mod tests {
             value: Some(121.0),
             package: Some("0603".into()),
             tolerance_pct: Some(2.0),
+            max_tolerance_pct: None,
             objective: None,
             quantity: None,
         }
@@ -834,5 +992,60 @@ mod tests {
         let cands = vec![cand(0.0, 0.01, 0.0, 1000, "basic")];
         assert!(score_and_pick(&req(), &cands, Weights::profile("balanced"), 0.02).is_some());
         assert!(score_and_pick(&req(), &[], Weights::profile("balanced"), 0.02).is_none());
+    }
+
+    #[test]
+    fn parse_grade_specs() {
+        // resistor tolerance + tempco
+        assert!(close(
+            parse_tolerance_pct("100mW 10kΩ Thin Film ±0.1% ±25ppm/℃").unwrap(),
+            0.1
+        ));
+        assert!(close(
+            parse_tolerance_pct("100mW 10kΩ Thick Film ±100ppm/℃ ±5%").unwrap(),
+            5.0
+        ));
+        assert!(close(
+            parse_tempco_ppm("Thin Film ±0.1% ±25ppm/℃", "resistor").unwrap(),
+            25.0
+        ));
+        // asymmetric Y5V tolerance → worst leg
+        assert!(close(parse_tolerance_pct("-20%~+80% 100nF 50V Y5V").unwrap(), 80.0));
+        // capacitor dielectric → drift proxy (C0G ≪ X7R ≪ Y5V)
+        let c0g = parse_tempco_ppm("10pF 50V C0G ±5%", "capacitor").unwrap();
+        let x7r = parse_tempco_ppm("100nF 50V X7R ±10%", "capacitor").unwrap();
+        let y5v = parse_tempco_ppm("-20%~+80% 100nF 50V Y5V", "capacitor").unwrap();
+        assert!(c0g < x7r && x7r < y5v);
+    }
+
+    #[test]
+    fn grade_profile_prefers_tight_low_drift() {
+        // all exact value; differ only in grade.
+        // A: ±5%, 100ppm (cheap jellybean).  B: ±0.1%, 25ppm (precision).
+        let cands = vec![
+            candg(0.0, 0.001, 5.0, 100.0, "thick"),
+            candg(0.0, 0.02, 0.1, 25.0, "thin"),
+        ];
+        // grade → the tight-tolerance, low-drift part wins despite higher price
+        let g = score_and_pick(&req(), &cands, Weights::profile("grade"), 0.02).unwrap();
+        assert_eq!(g.note.as_deref(), Some("thin"));
+        // cost → the cheap jellybean wins (grade ignored)
+        let c = score_and_pick(&req(), &cands, Weights::profile("cost"), 0.02).unwrap();
+        assert_eq!(c.note.as_deref(), Some("thick"));
+    }
+
+    #[test]
+    fn max_tolerance_is_a_hard_gate() {
+        // simulate the collect_feasible gate: a ±5% part must be excluded when
+        // the requirement caps tolerance at 1%.
+        let mut r = req();
+        r.max_tolerance_pct = Some(1.0);
+        let keep = |t: f64| match r.max_tolerance_pct {
+            Some(m) => t <= m + 1e-9,
+            None => true,
+        };
+        assert!(keep(0.1));
+        assert!(keep(1.0));
+        assert!(!keep(5.0));
     }
 }
