@@ -270,10 +270,12 @@ enum Commands {
         format: String,
 
         /// Supply-chain optimization profile for resolving real MPNs:
-        /// `precision` (exact E-series value), `cost` (cheapest to
-        /// assemble), `availability` (max stock / min lead), or
-        /// `balanced` (default). Overridable per part via a
-        /// `supply_profile` attribute, or per net via --supply-net.
+        /// `precision` (exact E-series value), `grade` (precision path:
+        /// exact value + tight tolerance + low drift, for feedback /
+        /// measurement), `cost` (cheapest to assemble), `availability`
+        /// (max stock / min lead), or `balanced` (default). Overridable
+        /// per part via a `supply_profile` attribute, or per net via
+        /// --supply-net.
         #[arg(long, value_name = "PROFILE")]
         supply_profile: Option<String>,
 
