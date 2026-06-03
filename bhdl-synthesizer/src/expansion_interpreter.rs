@@ -476,13 +476,36 @@ fn expand_one_instance(
                 &mut entity_attrs_owned, param_names, &resolved_args);
         }
 
+        // Call-site named-arg overrides. The expansion extractors put named
+        // constructor args (`tolerance = 1%`, `supply_profile = "grade"`)
+        // into `params` as raw `k = v` strings — the positional value is
+        // params[0], the only entry without `=`. Lift the named ones to
+        // instance attributes so per-instance overrides written in a
+        // recipe's `expansion { }` reach the leaf (e.g. a feedback divider
+        // declaring its resistors as 1%/grade). Pushed AFTER `attrs` so they
+        // win over the entity defaults (create_instance is last-write-wins).
+        let named_overrides: Vec<(String, String)> = exp_inst
+            .params
+            .iter()
+            .filter_map(|p| {
+                let eq = p.find('=')?;
+                let key = p[..eq].trim();
+                let val = p[eq + 1..].trim().trim_matches('"').trim();
+                (!key.is_empty() && !val.is_empty())
+                    .then(|| (key.to_string(), val.to_string()))
+            })
+            .collect();
+
         let mut attr_pairs: Vec<(&str, &str)> = Vec::with_capacity(
-            entity_attrs_owned.len() + attrs.len());
+            entity_attrs_owned.len() + attrs.len() + named_overrides.len());
         for (k, v) in &entity_attrs_owned {
             attr_pairs.push((k.as_str(), v.as_str()));
         }
         for (k, v) in &attrs {
             attr_pairs.push((*k, v.as_str()));
+        }
+        for (k, v) in &named_overrides {
+            attr_pairs.push((k.as_str(), v.as_str()));
         }
 
         let inst_id = create_instance(netlist, &child_name, mod_id, &attr_pairs);

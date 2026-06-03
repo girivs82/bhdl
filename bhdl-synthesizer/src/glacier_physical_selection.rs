@@ -470,6 +470,21 @@ impl SupplyOptions {
     }
 }
 
+/// Parse a tolerance/percentage attribute robustly into *percent*:
+/// `"1%"` → 1.0, `"0.05%"` → 0.05, a bare fraction `"0.05"` → 5.0, a bare
+/// number `"5"` → 5.0. (A value ≤ 1 with no `%` is read as a fraction, the
+/// convention the stdlib uses, e.g. `attribute tolerance = 0.05`.)
+fn parse_pct(s: &str) -> Option<f64> {
+    let t = s.trim().trim_matches('"').trim();
+    if let Some(stripped) = t.strip_suffix('%') {
+        stripped.trim().parse::<f64>().ok()
+    } else {
+        t.parse::<f64>()
+            .ok()
+            .map(|v| if v <= 1.0 { v * 100.0 } else { v })
+    }
+}
+
 /// Parse `"VCC=cost,FB=precision"` into a net-name → profile map.
 pub fn parse_net_profiles(s: &str) -> HashMap<String, String> {
     s.split(',')
@@ -548,19 +563,29 @@ pub fn apply_supply_chain_mpns(netlist: &mut Netlist, opts: &SupplyOptions) -> u
             .get("physical_package")
             .or_else(|| inst.attributes.get("package"))
             .cloned();
+        // Value-match window (how close the catalogue nominal must be to the
+        // computed/snapped target). Read literally (NOT via parse_pct): the
+        // stdlib's `tolerance = 0.05` keeps this a tight ~0.05% window so the
+        // exact E-series value is pinned (an adjacent standard value like
+        // 120 vs 121 — 0.83% off — is excluded), while a recipe's
+        // `tolerance = 1%` widens it to 1%. Decoupled from the grade gate.
         let tolerance_pct = inst
             .attributes
             .get("tolerance_pct")
             .or_else(|| inst.attributes.get("tolerance"))
-            .and_then(|s| s.trim().trim_end_matches('%').parse::<f64>().ok())
+            .and_then(|s| s.trim().trim_end_matches('%').trim().parse::<f64>().ok())
             .unwrap_or(2.0);
-        // hard gate on the part's *grade* (±%): a precision path declares
-        // e.g. `max_tolerance = "0.5%"` and looser parts become infeasible.
+        // Hard gate on the part's *grade* (±%): the selected part must be at
+        // least this good. Sourced from an explicit `max_tolerance`, else the
+        // part's own declared `tolerance` spec (`tolerance: 1%` on a feedback
+        // resistor → ≤1% parts; the default `0.05` → ≤5%, which excludes
+        // almost nothing). Robust to "1%", "0.05" (fraction), and "5".
         let max_tolerance_pct = inst
             .attributes
             .get("max_tolerance")
             .or_else(|| inst.attributes.get("max_tol"))
-            .and_then(|s| s.trim().trim_end_matches('%').parse::<f64>().ok());
+            .or_else(|| inst.attributes.get("tolerance"))
+            .and_then(|s| parse_pct(s));
 
         // per-requirement objective: instance attr > per-net policy > none
         // (none ⇒ the top-level default applies in the provider).
@@ -571,7 +596,11 @@ pub fn apply_supply_chain_mpns(netlist: &mut Netlist, opts: &SupplyOptions) -> u
             .or_else(|| {
                 inst.attributes
                     .get("supply_profile")
-                    .map(|p| serde_json::Value::String(p.clone()))
+                    // raw stamped values can carry surrounding quotes/space
+                    // (e.g. ` "grade"`) — sanitize to a bare profile name.
+                    .map(|p| p.trim().trim_matches('"').trim())
+                    .filter(|p| !p.is_empty())
+                    .map(|p| serde_json::Value::String(p.to_string()))
             })
             .or_else(|| {
                 // first connected net (sorted) carrying a policy

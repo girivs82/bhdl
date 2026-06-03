@@ -10,33 +10,3 @@ entity Res(value: resistance) {
     attribute power_rating = 0.25W;
     attribute kicad_symbol = "Device:R";
 }
-
-// Precision resistor — same electrical part as `Res`, but it carries its
-// own SUPPLY-CHAIN POLICY so the recipe author (not the board designer)
-// expresses the intent "this node needs a precision part". Used for
-// feedback dividers, reference/measurement chains, current-sense, etc.
-//
-// The policy rides as entity-body attributes (which flow to every instance,
-// unlike constructor-arg overrides):
-//   - max_tolerance = "1%"      → HARD gate: a looser part is infeasible
-//                                 (the supply provider drops > 1% parts).
-//   - supply_profile = "grade"  → SOFT preference: among the ≤1% parts,
-//                                 favour tight tolerance + low temperature
-//                                 drift (the `grade` cost-function profile).
-//   - tolerance = 0.01          → 1% nominal spec (was 5% on plain Res).
-//
-// A board that resolves real MPNs (bhdl bom with a jlcparts DB) then gets a
-// Thin-Film ±1%-or-better, low-TC part here automatically — no per-net or
-// per-part annotation needed at the call site.
-entity PrecisionRes(value: resistance) {
-    pin 1: signal inout;
-    pin 2: signal inout;
-
-    attribute component_class = "resistor";
-    attribute resistance = value;
-    attribute tolerance = 0.01;
-    attribute power_rating = 0.25W;
-    attribute kicad_symbol = "Device:R";
-    attribute max_tolerance = "1%";
-    attribute supply_profile = "grade";
-}

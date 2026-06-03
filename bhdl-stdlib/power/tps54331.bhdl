@@ -144,10 +144,15 @@ entity TPS54331(
         VOUT -> C_out: Cap(c_out_value).1; C_out.2 -> GND;
         // FB divider sets V_OUT = V_REF·(1 + R_top/R_bot); its ratio
         // accuracy and temperature stability set the output-voltage
-        // accuracy, so these are PRECISION parts (≤1%, low drift) — the
-        // recipe declares that here so the board designer doesn't have to.
-        VOUT -> R_top: PrecisionRes(r_top_value).1; R_top.2 -> FB;
-        FB -> R_bot: PrecisionRes(r_fb_bot).1; R_bot.2 -> GND;
+        // accuracy, so these are PRECISION parts — the recipe states that
+        // as part attributes on the ordinary `Res` (no special type):
+        //   tolerance: 1%      → hard grade gate, ≤1% parts (vs the 5%
+        //                        default that loads/pull-ups get);
+        //   supply_profile: grade → prefer tight tolerance + low drift.
+        // The board designer writes nothing; a bare `bhdl bom` resolves
+        // these to thin-film, low-TC parts automatically.
+        VOUT -> R_top: Res(r_top_value, tolerance = 1%, supply_profile = "grade").1; R_top.2 -> FB;
+        FB -> R_bot: Res(r_fb_bot, tolerance = 1%, supply_profile = "grade").1; R_bot.2 -> GND;
         BOOT -> C_boot: Cap(100nF).1; C_boot.2 -> SW;
     }
 }

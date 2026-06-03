@@ -1210,6 +1210,31 @@ impl NetlistGenerator {
                 }
             }
 
+            // (1a) Inline-flow instances (`… -> r: Res(x, k=v).pin`) carry
+            // their constructor args under PARAM_ASSIGN_BLOCK, not
+            // PARAM_LIST (parser `parse_component_parameters`). Without this,
+            // named-arg overrides on the flow-style instantiation that
+            // recipes/expansions use silently vanished. Stamp the *named*
+            // assignments here too — `HasName::name()` only matches a direct
+            // IDENT token, so positional args (the value, an IDENT_REF/expr
+            // child node) are correctly skipped and still bind via component
+            // inference. `or_insert` keeps any PARAM_LIST stamp above.
+            if let Some(block) = comp_inst.param_assign_block() {
+                for assign in block.assignments() {
+                    if let (Some(name_tok), Some(value_expr)) =
+                        (bhdl_ast::HasName::name(&assign), assign.value())
+                    {
+                        let key = name_tok.text().to_string();
+                        let val = unquote_string_literal(
+                            value_expr.syntax().text().to_string().trim());
+                        if let Some(inst) = self.netlist.instances.get_mut(inst_id) {
+                            inst.attributes.entry(key).or_insert(val);
+                            stamped_explicit += 1;
+                        }
+                    }
+                }
+            }
+
             // (1b) Stamp constructor-arg-alias positional args, bound to
             // the target entity's params by position. `or_insert` keeps
             // any board-explicit override stamped in (1).
