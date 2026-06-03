@@ -2951,11 +2951,16 @@ fn process_flow_parts(
                         println!("  Warning: No previous net to connect to for {}.{}", instance_name, pin_name);
                     }
 
-                    // After an inline instantiation the specified pin is connected;
-                    // the *other* pin (e.g. r1.2) will be referenced explicitly later
-                    // and will need a new intermediate net.
+                    // `->` uniformly MERGES its two endpoints: keep `last_net_id`
+                    // on the net we just connected the named pin to, so a
+                    // following endpoint joins the SAME net (no threading
+                    // *through* the component). `inst.a -> inst.b` therefore
+                    // ties the two pins — a deliberate gate→source / diode-
+                    // connect tie, or, for a 2-pin passive, a short GLACIER
+                    // flags. A SERIES element uses the explicit split form
+                    // (`… -> inst.a; inst.b -> …`), landing the second pin on a
+                    // fresh net in the next statement.
                     last_was_component_pin = true;
-                    last_net_id = None;
                 }
             }
         } else if let Some(dot_pos) = endpoint.find('.') {
