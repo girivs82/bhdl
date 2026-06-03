@@ -113,6 +113,60 @@ package codes and jlcparts' notation rather than giving up:
 DB — I/O-bound, identical in any language). `cargo test -p
 bhdl-jlcparts-provider` covers the value parser (ASCII-µ, Hz rejection).
 
+### 4.1a Selection is a multi-objective cost function, not a fixed cascade
+
+Within the footprint-feasible, in-stock, in-tolerance candidate set, the
+pick is **scored**, not lexicographically ranked. Each soft term is
+normalized then weighted; lowest total wins:
+
+```
+score = w_value·valueErr + w_price·price + w_assembly·asmFee
+      + w_stock·(−stock) + w_lead·lead
+```
+
+- **value error** is normalized against the *tolerance budget*
+  (`|v−target|/tol`, 0 = exact, 1 = at the edge) — an absolute spec metric,
+  not min-max, so a wide tolerance band can't dilute it;
+- **price** is the unit price at the **build quantity** (the tiered `price`
+  JSON is indexed by qty — comparing qty-1 prices would mislead);
+- **assembly fee** is the basic(0) < preferred(0.5) < extended(1) proxy for
+  JLCPCB's per-part + feeder cost;
+- **stock** rewards headroom; **lead** is modeled but ~0 for the in-stock
+  offline DB.
+
+**Profiles** are weight presets, selectable at synthesis time:
+`precision` (value-only → exact E-series wins), `cost` (price + assembly
+dominate; a slightly-off in-tolerance value is fine), `availability` (max
+stock / min lead), `balanced` (default). Explicit weight objects override
+presets.
+
+**Per-net / per-part policy.** The BHDL side
+(`glacier_physical_selection::apply_supply_chain_mpns` + `SupplyOptions`)
+resolves the objective per passive with three-level precedence:
+1. the instance's own `supply_profile` / `supply_weights` / `supply_qty`
+   attribute (in BHDL source — travels with the design);
+2. the policy of a net it connects to (`--supply-net NET=PROFILE` /
+   `$BHDL_SUPPLY_NET_PROFILES`, keyed by net name);
+3. the global default (`bhdl bom --supply-profile … --supply-qty …` /
+   `$BHDL_SUPPLY_PROFILE`, `$BHDL_SUPPLY_QTY`).
+
+The chosen objective + quantity ride in the protocol (top-level default +
+optional per-`requirement` override), so any provider honours them.
+
+Demonstrated on `tps54331_test.bhdl`: `--supply-profile cost
+--supply-net V3_3=precision` flips only the parts on the `V3_3` rail (R1
+121Ω → exact `C327406`, R3 31.6kΩ → exact `C103536`) to precision while the
+feedback-bottom R4 (10kΩ, on the internal FB/GND nets) keeps the cost pick
+`C25804`. `cargo test` covers the scorer (profile changes the pick) and the
+price-tier selector.
+
+> **Per-net source annotation is partial.** A passive inherits a net policy
+> only via the `--supply-net`/env map (by net name) today, because the
+> netlist `Net` struct carries no user attributes. A true source-level
+> `net V3_3 { supply: precision }` block needs a small `Net.attributes` +
+> parser extension — scoped as a follow-up. Per-*part* source annotation
+> (`supply_profile` instance attribute) already works.
+
 ### 4.2 `bhdl_jlcparts_provider.py` (CSV) — the hackable reference
 
 `bhdl-stdlib/plugins/bhdl_jlcparts_provider.py` reads the basic/preferred
