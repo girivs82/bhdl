@@ -2088,9 +2088,49 @@ async fn cmd_bom(
                 match bhdl_spice::GlacierDcSolver::new().solve(circuit) {
                     Ok(result) => {
                         let ann = build_simulation_annotations(&result, &circuit_ref);
+                        // build_simulation_annotations prunes "internal"
+                        // DC-equivalent nets from net_voltages for the
+                        // schematic renderer — and a buck's VOUT rail is
+                        // classed internal to its switch node, so its voltage
+                        // is dropped. Sign-off needs it. Work on a clone and
+                        // re-derive the pruned endpoint: an inductor is a DC
+                        // short, so propagate the surviving (canonical) node's
+                        // voltage across every inductor branch back onto the
+                        // pruned rail. Iterate to a fixpoint for inductor chains.
+                        let mut sv = ann.net_voltages.clone();
+                        for _ in 0..8 {
+                            let pairs: Vec<(String, String)> = circuit_ref
+                                .branches()
+                                .filter(|(_, b)| b.component_type == "Inductor")
+                                .filter_map(|(e, _)| {
+                                    let (a, b) = circuit_ref.branch_nodes(e)?;
+                                    Some((
+                                        circuit_ref.get_node_name(a)?.to_string(),
+                                        circuit_ref.get_node_name(b)?.to_string(),
+                                    ))
+                                })
+                                .collect();
+                            let mut changed = false;
+                            for (na, nb) in pairs {
+                                match (sv.get(&na).copied(), sv.get(&nb).copied()) {
+                                    (Some(v), None) => {
+                                        sv.insert(nb, v);
+                                        changed = true;
+                                    }
+                                    (None, Some(v)) => {
+                                        sv.insert(na, v);
+                                        changed = true;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            if !changed {
+                                break;
+                            }
+                        }
                         let rows = bhdl_synthesizer::signoff::compute_signoff(
                             &netlist,
-                            &ann.net_voltages,
+                            &sv,
                             &ann.instance_power,
                             &ann.instance_currents,
                         );
@@ -2230,6 +2270,9 @@ fn build_simulation_annotations(
             annotations.net_voltages.insert(name.to_string(), *voltage);
         }
     }
+    // The reference node is implicit at 0 V; make it explicit so a part
+    // bridging a live net and ground resolves two endpoints, not one.
+    annotations.net_voltages.entry("GND".to_string()).or_insert(0.0);
 
     // Map branch currents: EdgeIndex → branch.name → current
     // Also compute power dissipation per branch
