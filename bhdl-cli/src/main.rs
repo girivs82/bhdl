@@ -402,6 +402,8 @@ async fn main() -> Result<()> {
                 supply_profile,
                 supply_qty,
                 supply_net,
+                cli.update_lock,
+                cli.locked,
             )
             .await?;
         }
@@ -492,7 +494,16 @@ fn enforce_lockfile(
     use bhdl_common::library::Lockfile;
 
     let lock_path = manifest_path.with_file_name("bhdl.lock");
-    let current = resolver.compute_lockfile()?;
+    let mut current = resolver.compute_lockfile()?;
+
+    // Preserve any supply-chain part pins — they live in the same lockfile
+    // but are owned by the BOM path, not the library resolver. Without this,
+    // every library-lock (re)write would wipe the part section.
+    if lock_path.is_file() {
+        if let Ok(stored) = Lockfile::load(&lock_path) {
+            current.parts = stored.parts;
+        }
+    }
 
     // Nothing declared → no lock needed.
     if current.libraries.is_empty() {
@@ -1085,7 +1096,8 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
         let mpns = bhdl_synthesizer::glacier_physical_selection::apply_supply_chain_mpns(
             &mut netlist,
             &supply_opts,
-        );
+        )
+        .len();
         if mpns > 0 {
             println!(
                 "  {} supply chain: {} real MPN(s) resolved",
@@ -1795,11 +1807,12 @@ async fn cmd_bom(
     supply_profile: Option<String>,
     supply_qty: Option<u64>,
     supply_net: Vec<String>,
+    update_lock: bool,
+    locked: bool,
 ) -> Result<()> {
     use bhdl_analyzer::sku_bom;
 
     println!("{}", "Generating manufacturing BOM...".bold());
-    let _ = source_path; // reserved for future per-file diagnostics
 
     // 1. Analysis pass.
     let analysis = analyze(source_file);
@@ -1863,27 +1876,97 @@ async fn cmd_bom(
                 n
             );
         }
-        // Resolve real, orderable MPNs via the supply-chain provider
-        // ($BHDL_SUPPLY_PROVIDER, e.g. the bundled jlcparts provider).
-        // Best-effort: unset/failed ⇒ catalogue value+package stand.
-        let supply_opts = bhdl_synthesizer::glacier_physical_selection::SupplyOptions {
-            profile: supply_profile.clone(),
-            quantity: supply_qty,
-            net_profiles: bhdl_synthesizer::glacier_physical_selection::parse_net_profiles(
-                &supply_net.join(","),
-            ),
-        }
-        .with_env_fallback();
-        let mpns = bhdl_synthesizer::glacier_physical_selection::apply_supply_chain_mpns(
-            &mut netlist,
-            &supply_opts,
-        );
-        if mpns > 0 {
-            println!(
-                "  {} supply chain: {} real MPN(s) resolved",
-                "✓".green(),
-                mpns
-            );
+        // Resolve real, orderable MPNs. Reproducibility model (mirrors
+        // Cargo): a project's `bhdl.lock` (next to `bhdl.toml`) pins each
+        // refdes→MPN. If pins exist and `--update-lock` was not given, reuse
+        // them and DON'T call the provider; otherwise resolve via the
+        // provider and write the pins back. `--locked` forbids resolving
+        // (CI must build against committed pins).
+        use bhdl_synthesizer::glacier_physical_selection as gps;
+        let lock_path = source_path
+            .parent()
+            .and_then(bhdl_common::library::discover_project_manifest)
+            .map(|m| m.with_file_name("bhdl.lock"));
+        let existing_lock = lock_path
+            .as_ref()
+            .filter(|p| p.exists())
+            .and_then(|p| bhdl_common::library::Lockfile::load(p).ok());
+        let have_pins = existing_lock
+            .as_ref()
+            .map(|l| !l.parts.is_empty())
+            .unwrap_or(false);
+
+        if have_pins && !update_lock {
+            let lock = existing_lock.as_ref().unwrap();
+            let pins: Vec<gps::ResolvedPart> = lock
+                .parts
+                .iter()
+                .map(|p| gps::ResolvedPart {
+                    refdes: p.refdes.clone(),
+                    mpn: p.mpn.clone(),
+                    manufacturer: p.manufacturer.clone(),
+                    vendor_sku: p.vendor_sku.clone(),
+                    provider: p.provider.clone(),
+                })
+                .collect();
+            let n = gps::apply_locked_parts(&mut netlist, &pins);
+            if n > 0 {
+                println!(
+                    "  {} supply chain: {} MPN(s) pinned from bhdl.lock",
+                    "🔒".green(),
+                    n
+                );
+            }
+        } else {
+            if locked {
+                anyhow::bail!(
+                    "--locked: bhdl.lock has no part pins to build against; \
+                     run once without --locked (or with --update-lock) to generate them"
+                );
+            }
+            let supply_opts = gps::SupplyOptions {
+                profile: supply_profile.clone(),
+                quantity: supply_qty,
+                net_profiles: gps::parse_net_profiles(&supply_net.join(",")),
+            }
+            .with_env_fallback();
+            let resolved = gps::apply_supply_chain_mpns(&mut netlist, &supply_opts);
+            if !resolved.is_empty() {
+                println!(
+                    "  {} supply chain: {} real MPN(s) resolved",
+                    "✓".green(),
+                    resolved.len()
+                );
+                // Pin the selections so the next build is reproducible.
+                if let Some(lp) = &lock_path {
+                    let mut lock = existing_lock.unwrap_or(bhdl_common::library::Lockfile {
+                        version: bhdl_common::library::Lockfile::CURRENT_VERSION,
+                        libraries: Vec::new(),
+                        parts: Vec::new(),
+                    });
+                    lock.set_parts(
+                        resolved
+                            .iter()
+                            .map(|r| bhdl_common::library::LockedPart {
+                                refdes: r.refdes.clone(),
+                                mpn: r.mpn.clone(),
+                                manufacturer: r.manufacturer.clone(),
+                                vendor_sku: r.vendor_sku.clone(),
+                                provider: r.provider.clone(),
+                            })
+                            .collect(),
+                    );
+                    match lock.save(lp) {
+                        Ok(()) => println!(
+                            "  {} wrote {} part pin(s) to {}",
+                            "✓".green(),
+                            resolved.len(),
+                            lp.display()
+                        ),
+                        Err(e) => eprintln!("  warning: could not write bhdl.lock: {e}"),
+                    }
+                }
+            }
         }
     }
 
