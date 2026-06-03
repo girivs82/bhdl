@@ -51,7 +51,6 @@ async fn test_all_component_types_have_pins() -> Result<()> {
         preserve_semantic_context: true,
         include_power_domains: true,
         include_component_inference: true,
-        flatten_hierarchy: false,
         database_path: None,
         ..NetlistConfig::default()
     };

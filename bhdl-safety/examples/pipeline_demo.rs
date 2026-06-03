@@ -56,7 +56,6 @@ board DangerousLED {
         preserve_semantic_context: true,
         include_power_domains: true,
         include_component_inference: true,
-        flatten_hierarchy: false,
         database_path: Some("/Users/girivs/src/bhdl-new/components.db".to_string()),
     };
     
