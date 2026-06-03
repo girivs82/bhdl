@@ -48,7 +48,7 @@ struct Requirements {
     quantity: Option<u64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct Requirement {
     class_index: usize,
     class: String,
@@ -73,6 +73,15 @@ struct Requirement {
     /// must be ≥ this. Keeps a tiny signal inductor out of a power path.
     #[serde(default)]
     current_a: Option<f64>,
+    /// Hard gate on a capacitor's voltage rating (volts): the part's rated
+    /// voltage must be ≥ this (the derated operating voltage). Keeps an
+    /// under-rated MLCC off a higher rail.
+    #[serde(default)]
+    voltage_v: Option<f64>,
+    /// Hard gate on a resistor's power rating (watts): the part's rated
+    /// power must be ≥ this (the derated operating dissipation).
+    #[serde(default)]
+    power_w: Option<f64>,
     /// Per-requirement optimization objective (overrides the top-level one).
     #[serde(default)]
     objective: Option<Objective>,
@@ -407,6 +416,38 @@ fn parse_current_a(text: &str) -> Option<f64> {
     min
 }
 
+/// A capacitor's voltage rating (volts) from the description (`100nF 50V
+/// X7R` → 50). The MAX `…V` token, so a stray lower voltage can't understate
+/// the rating. `None` if no voltage stated.
+fn parse_voltage_v(text: &str) -> Option<f64> {
+    let mut max: Option<f64> = None;
+    for caps in regex_voltage().captures_iter(text) {
+        if let Ok(v) = caps[1].parse::<f64>() {
+            max = Some(max.map_or(v, |m: f64| m.max(v)));
+        }
+    }
+    max
+}
+
+/// A resistor's power rating (watts) from the description (`100mW …` → 0.1,
+/// `…1W…` → 1.0). The MAX power token. `None` if none stated.
+fn parse_power_w(text: &str) -> Option<f64> {
+    let mut max: Option<f64> = None;
+    for caps in regex_power().captures_iter(text) {
+        let num: f64 = match caps[1].parse() {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let w = if caps.get(2).map(|m| !m.as_str().is_empty()).unwrap_or(false) {
+            num * 1e-3 // milliwatts
+        } else {
+            num
+        };
+        max = Some(max.map_or(w, |m: f64| m.max(w)));
+    }
+    max
+}
+
 /// Does a part's description satisfy a required dielectric? Case-insensitive
 /// substring, with C0G≡NP0 treated as equivalent (they name the same
 /// temperature-stable Class-I dielectric).
@@ -446,6 +487,16 @@ fn regex_current() -> &'static Regex {
     // number, optional `m` (milli), then `A` at a word boundary. `\b` after A
     // rejects `mAh`-style and keeps DCR (`…Ω`) / freq (`…Hz`) out.
     R.get_or_init(|| Regex::new(r"([0-9]+(?:\.[0-9]+)?)\s*(m)?A\b").unwrap())
+}
+fn regex_voltage() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    // number then `V` at a word boundary (rejects `…Vdc`-glued junk; `5V` ok).
+    R.get_or_init(|| Regex::new(r"([0-9]+(?:\.[0-9]+)?)\s*V\b").unwrap())
+}
+fn regex_power() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    // number, optional `m` (milli), then `W` at a word boundary.
+    R.get_or_init(|| Regex::new(r"([0-9]+(?:\.[0-9]+)?)\s*(m)?W\b").unwrap())
 }
 
 // ── Resolution ───────────────────────────────────────────────────
@@ -566,10 +617,48 @@ impl Catalogue {
             }
         }
 
+        // No feasible part. If a current/voltage/power gate is what excluded
+        // everything (parts exist at this value/footprint but none meet the
+        // stress), that's a real design issue — an over-stressed component
+        // (e.g. a 1.65Ω carrying 2 A = 6.6 W in an 0603). The SAFE behavior
+        // is to LEAVE IT UNPOPULATED and warn LOUDLY: never auto-substitute
+        // an under-rated part (a missed warning would ship a part that burns
+        // up). The designer must fix the derating / package / topology.
+        if req.current_a.is_some() || req.voltage_v.is_some() || req.power_w.is_some() {
+            let mut relaxed = req.clone();
+            let (c, v, p) = (
+                relaxed.current_a.take(),
+                relaxed.voltage_v.take(),
+                relaxed.power_w.take(),
+            );
+            let stress_is_the_cause = modes.iter().any(|mode| {
+                let cands =
+                    self.collect_feasible(&ids, &relaxed, unit, re, tol, qty, want_pkg, *mode);
+                score_and_pick(&relaxed, &cands, weights, tol).is_some()
+            });
+            if stress_is_the_cause {
+                let need = [
+                    c.map(|x| format!("{x:.3} A")),
+                    v.map(|x| format!("{x:.1} V")),
+                    p.map(|x| format!("{x:.3} W")),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(", ");
+                warnings.push(format!(
+                    "class_index {}: OVER-STRESSED — no in-stock {} meets ≥ {} at this \
+                     value/footprint; LEFT UNPOPULATED (no safe part). Fix the derating / \
+                     package / topology.",
+                    req.class_index, req.class, need,
+                ));
+            }
+        }
+
         Selection {
             class_index: req.class_index,
             error: Some(format!(
-                "no in-stock {} matching value/package in catalogue",
+                "no in-stock {} matching value/package/stress in catalogue",
                 req.class
             )),
             ..Default::default()
@@ -673,6 +762,20 @@ impl Catalogue {
             // Unknown rating fails the gate (don't risk an unrated part).
             if let Some(need) = req.current_a {
                 match parse_current_a(&description) {
+                    Some(rating) if rating + 1e-9 >= need => {}
+                    _ => continue,
+                }
+            }
+            // hard gate: capacitor voltage rating ≥ (derated) operating volts
+            if let Some(need) = req.voltage_v {
+                match parse_voltage_v(&description) {
+                    Some(rating) if rating + 1e-9 >= need => {}
+                    _ => continue,
+                }
+            }
+            // hard gate: resistor power rating ≥ (derated) dissipation
+            if let Some(need) = req.power_w {
+                match parse_power_w(&description) {
                     Some(rating) if rating + 1e-9 >= need => {}
                     _ => continue,
                 }
@@ -1037,9 +1140,21 @@ mod tests {
             max_tolerance_pct: None,
             dielectric: None,
             current_a: None,
+            voltage_v: None,
+            power_w: None,
             objective: None,
             quantity: None,
         }
+    }
+
+    #[test]
+    fn cap_voltage_and_resistor_power_parse() {
+        assert!(close(parse_voltage_v("100nF 50V X7R ±10% 0603").unwrap(), 50.0));
+        assert!(close(parse_voltage_v("10µF 6.3V X5R 0805").unwrap(), 6.3));
+        assert_eq!(parse_voltage_v("100nF X7R ±10%"), None); // no voltage stated
+        assert!(close(parse_power_w("100mW 10kΩ 75V ±1% 0603").unwrap(), 0.1));
+        assert!(close(parse_power_w("1W 0.1Ω 2512 ±5%").unwrap(), 1.0));
+        assert!(close(parse_power_w("250mW 1kΩ").unwrap(), 0.25));
     }
 
     #[test]

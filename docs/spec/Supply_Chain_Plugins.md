@@ -181,9 +181,30 @@ C: dielectric, L: current):
   `--simulate`), so enabling the solve never disturbs the footprint. Without
   `--simulate` the BOM uses the recipe seed + declared rail voltages (fast,
   no solve). This realizes the GLACIER half of the stress model (tasks #1/#4)
-  for the inductor-current axis; the cap-voltage and resistor-power *supply*
-  gates (and feeding sim stress into catalogue package selection) remain
-  follow-ups.
+  for the inductor-current axis.
+
+- **capacitor `voltage_v` / resistor `power_w`** — the V and P analogues of
+  the inductor current gate, completing the per-class stress trio at the MPN
+  level. The resolver derives the requirement from the *operating* stress
+  (not the part's nominal default): cap voltage = the max voltage across the
+  part (declared rail voltages in the BOM path, sim node voltages under
+  `--simulate`) × 2 derate; resistor power = the simulated dissipation × 2
+  derate (so it only gates under `--simulate`). The provider parses the
+  part's rated `…V` / `…W` from the description and requires rating ≥
+  requirement. So a 10 µF on a 12 V rail demands a ≥ 24 V MLCC even if a
+  cheaper 16 V part shares the package the catalogue chose.
+
+  **Over-stress is left UNPOPULATED, not auto-substituted.** If a stress gate
+  excludes *every* part at the value/footprint (the component is genuinely
+  over-stressed — e.g. a 1.65 Ω carrying 2 A ≈ 6.6 W in an 0603), the
+  provider leaves the line unpopulated and emits a loud `OVER-STRESSED …
+  LEFT UNPOPULATED` warning naming the unmet requirement. It never
+  auto-drops to an under-rated part: a missed warning must not ship a part
+  that burns up — the designer fixes the derating / package / topology. (A
+  stress gate fires only when its operating value is known: cap voltage from
+  declared rails always; resistor power and the sim-refined values only under
+  `--simulate`.) (Feeding sim stress into catalogue *package* selection —
+  reconciling the glacier↔catalogue passes — remains the larger follow-up.)
 
 **Profiles** are weight presets, selectable at synthesis time:
 - `precision` — value-only → exact E-series wins;
