@@ -66,11 +66,37 @@ impl ComponentRegistry {
     ///
     /// The primary (and only) lookup path is through the `component_class`
     /// attribute, which flows from entity definitions through the pipeline.
-    pub fn get_component_type(&self, _module_name: &str, attributes: &HashMap<String, String>) -> Option<ComponentType> {
+    pub fn get_component_type(&self, module_name: &str, attributes: &HashMap<String, String>) -> Option<ComponentType> {
         if let Some(class) = attributes.get("component_class") {
-            return self.class_to_component_type(class);
+            if let Some(ct) = self.class_to_component_type(class) {
+                return Some(ct);
+            }
         }
-        None
+        // Fallback: classify by the module/type name. A bare stdlib instance
+        // (`Cap`, `Res`, `Ind`, …) carries no `component_class` attribute, so
+        // without this it would be rejected as "Unknown component type" and
+        // dropped from the SPICE circuit. Mirror the synthesizer's own
+        // name-based `classify_component` so the DC solve sees the passive.
+        self.name_to_component_type(module_name)
+    }
+
+    /// Classify by module/type name (stdlib aliases). Exact names plus the
+    /// `res_`/`cap_`/`ind_` prefix forms; deliberately conservative so a
+    /// name like `Resonator` or `Crystal` is NOT swept into a passive.
+    fn name_to_component_type(&self, module_name: &str) -> Option<ComponentType> {
+        let n = module_name.trim().to_lowercase();
+        match n.as_str() {
+            "res" | "resistor" | "r" => Some(ComponentType::Resistor),
+            "cap" | "capacitor" | "c" => Some(ComponentType::Capacitor),
+            "ind" | "inductor" | "l" => Some(ComponentType::Inductor),
+            "diode" | "d" => Some(ComponentType::Diode),
+            "led" => Some(ComponentType::LED),
+            "fuse" => Some(ComponentType::Resistor),
+            _ if n.starts_with("res_") => Some(ComponentType::Resistor),
+            _ if n.starts_with("cap_") => Some(ComponentType::Capacitor),
+            _ if n.starts_with("ind_") => Some(ComponentType::Inductor),
+            _ => None,
+        }
     }
 
     /// Get SPICE model type for a component class

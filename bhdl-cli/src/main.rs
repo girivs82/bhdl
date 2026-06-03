@@ -2072,6 +2072,47 @@ async fn cmd_bom(
             print!("{}", text);
         }
     }
+
+    // 7. Sign-off report (`--simulate`): re-solve the SNAPPED netlist and
+    //    report each passive's margin (rating ÷ derated stress) against the
+    //    catalogue rating the BOM selected. Spec: Simulation_Margin_Signoff.md.
+    //    This is stage 4 — MEASURE + REPORT, no value changes; the stepping
+    //    loop (#5) builds on the same margin computation. The earlier (4.55)
+    //    solve runs on pre-snap values to seed the inductor gate; this one
+    //    runs on the values that actually landed on the BOM.
+    if simulate {
+        let mut conv = NetlistToSpiceConverter::new();
+        match conv.convert(&netlist) {
+            Ok(circuit) => {
+                let circuit_ref = circuit.clone();
+                match bhdl_spice::GlacierDcSolver::new().solve(circuit) {
+                    Ok(result) => {
+                        let ann = build_simulation_annotations(&result, &circuit_ref);
+                        let rows = bhdl_synthesizer::signoff::compute_signoff(
+                            &netlist,
+                            &ann.net_voltages,
+                            &ann.instance_power,
+                            &ann.instance_currents,
+                        );
+                        if let Some(report) =
+                            bhdl_synthesizer::signoff::format_signoff_report(&rows)
+                        {
+                            print!("{report}");
+                        }
+                    }
+                    Err(e) => eprintln!(
+                        "  {}",
+                        format!("sign-off re-solve failed ({e}); margins not reported").yellow()
+                    ),
+                }
+            }
+            Err(e) => eprintln!(
+                "  {}",
+                format!("sign-off conversion failed ({e}); margins not reported").yellow()
+            ),
+        }
+    }
+
     Ok(())
 }
 

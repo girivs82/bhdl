@@ -1069,7 +1069,7 @@ pub fn apply_catalog_physical_selection(
     n
 }
 
-fn classify_component(
+pub fn classify_component(
     netlist: &Netlist,
     def_id: bhdl_netlist::ModuleId,
     attrs: &HashMap<String, String>,
@@ -1109,7 +1109,7 @@ fn classify_component(
 
 /// For each instance, compute the maximum voltage seen across its connected nets.
 /// This is used for capacitor voltage rating selection where V=P/I is 0/0 for DC caps.
-fn compute_instance_max_voltages(
+pub fn compute_instance_max_voltages(
     netlist: &Netlist,
     net_voltages: &HashMap<String, f64>,
 ) -> HashMap<String, f64> {

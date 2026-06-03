@@ -183,6 +183,48 @@ impl NetlistToSpiceConverter {
             }
         }
 
+        // Step 3b: Energise declared power rails. A board `power V = 5V`
+        //          declaration sets the net's class to Power(v) but — unlike a
+        //          `+5V` power-symbol instance — adds no source, so without
+        //          this the rail is undriven and the DC solve is trivial
+        //          (every node 0 V, no current, no stress). Add a VoltageSource
+        //          from each Power net to GND, skipping any net already driven
+        //          by a regulator (`vsource_nodes`) or a power symbol (an
+        //          existing VoltageSource branch) so a rail is never
+        //          double-driven.
+        let mut driven: std::collections::HashSet<crate::circuit::NodeId> = circuit
+            .branches()
+            .filter(|(_, b)| b.component_type == "VoltageSource")
+            .flat_map(|(_, b)| b.nodes.iter().copied())
+            .collect();
+        circuit.add_node("GND".to_string(), None);
+        for (_net_id, net) in &netlist.nets {
+            let bhdl_netlist::types::NetClass::Power(v) = net.net_class else {
+                continue;
+            };
+            let Some(name) = net.name.clone() else { continue };
+            if net.connections.is_empty() {
+                continue; // unused rail — nothing to energise
+            }
+            if vsource_nodes.contains(&name) {
+                continue; // already driven by a regulator output
+            }
+            let idx = circuit.add_node(name.clone(), None); // idempotent
+            if driven.contains(&idx) {
+                continue; // already driven by a power symbol
+            }
+            circuit.add_branch(
+                format!("V_{name}"),
+                &name,
+                "GND",
+                "VoltageSource".to_string(),
+                v,
+                None,
+            );
+            driven.insert(idx);
+            info!("Added declared power rail {} as VoltageSource {}V → GND", name, v);
+        }
+
         info!("Created SPICE circuit with {} nodes and {} components",
              circuit.nodes().count(), circuit.branches().count());
 
