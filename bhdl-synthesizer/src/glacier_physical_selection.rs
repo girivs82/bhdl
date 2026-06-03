@@ -603,6 +603,10 @@ pub fn apply_supply_chain_mpns(
     // Build the requirement list from the selected passives; track
     // class_index → InstanceId for applying the reply.
     let mut idx_to_id: Vec<bhdl_netlist::InstanceId> = Vec::new();
+    // Parallel to `idx_to_id`: a human-readable summary of the derated
+    // stress gate(s) applied to each requirement, used to explain an
+    // UNPOPULATED part when the provider can find nothing that clears them.
+    let mut gate_summary: Vec<String> = Vec::new();
     let mut reqs: Vec<serde_json::Value> = Vec::new();
     for id in netlist.instances.keys().collect::<Vec<_>>() {
         let inst = &netlist.instances[id];
@@ -722,6 +726,23 @@ pub fn apply_supply_chain_mpns(
 
         let ci = idx_to_id.len();
         idx_to_id.push(id);
+        // Record the derated stress gate(s) for this requirement so an
+        // unfillable one can be explained precisely.
+        let mut gates: Vec<String> = Vec::new();
+        if let Some(v) = voltage_v {
+            gates.push(format!("V≥{v:.3}V (derated {CAP_V_DERATE}×)"));
+        }
+        if let Some(p) = power_w {
+            gates.push(format!("P≥{p:.4}W (derated {RES_P_DERATE}×)"));
+        }
+        if let Some(c) = current_a {
+            gates.push(format!("I≥{c:.4}A"));
+        }
+        gate_summary.push(if gates.is_empty() {
+            "value/package/tolerance only (no V/I/P stress gate)".to_string()
+        } else {
+            gates.join(", ")
+        });
         let mut req = serde_json::json!({
             "class_index": ci,
             "class": class,
@@ -819,28 +840,78 @@ pub fn apply_supply_chain_mpns(
         log::warn!("supply-chain provider: {w}");
     }
 
-    let mut resolved = Vec::new();
+    // Index the provider's reply by requirement so we can both apply the
+    // chosen MPNs and detect requirements it left UNFILLED (e.g. nothing in
+    // the catalogue clears the derated V/I/P stress gate).
+    let mut by_index: HashMap<usize, &bhdl_analyzer::plugin::PluginSelection> = HashMap::new();
     for sel in &resp.selections {
-        let Some(mpn) = sel.mpn.as_ref() else { continue };
-        let Some(&id) = idx_to_id.get(sel.class_index) else { continue };
-        let Some(inst) = netlist.instances.get_mut(id) else { continue };
-        inst.attributes.insert("mpn".to_string(), mpn.clone());
-        if let Some(m) = &sel.manufacturer {
-            inst.attributes.insert("manufacturer".to_string(), m.clone());
+        by_index.insert(sel.class_index, sel);
+    }
+
+    let mut resolved = Vec::new();
+    for (ci, &id) in idx_to_id.iter().enumerate() {
+        let sel = by_index.get(&ci).copied();
+        let mpn = sel.and_then(|s| s.mpn.as_ref());
+
+        match mpn {
+            Some(mpn) => {
+                let Some(inst) = netlist.instances.get_mut(id) else { continue };
+                inst.attributes.insert("mpn".to_string(), mpn.clone());
+                if let Some(m) = sel.and_then(|s| s.manufacturer.as_ref()) {
+                    inst.attributes.insert("manufacturer".to_string(), m.clone());
+                }
+                if let Some(sku) = sel.and_then(|s| s.vendor_sku.as_ref()) {
+                    inst.attributes.insert("lcsc_pn".to_string(), sku.clone());
+                }
+                if let Some(s) = sel.and_then(|s| s.stock) {
+                    inst.attributes.insert("stock".to_string(), s.to_string());
+                }
+                resolved.push(ResolvedPart {
+                    refdes: inst.name.clone(),
+                    mpn: mpn.clone(),
+                    manufacturer: sel.and_then(|s| s.manufacturer.clone()),
+                    vendor_sku: sel.and_then(|s| s.vendor_sku.clone()),
+                    provider: Some(provider_name.clone()),
+                });
+            }
+            None => {
+                // The provider could not source a part for this requirement.
+                // Mark it DO-NOT-POPULATE with an explicit reason and warn
+                // LOUDLY — we never silently substitute a weaker part. The
+                // most common cause is over-stress: the operating point
+                // exceeds every catalogue family's derated rating.
+                let gate = gate_summary.get(ci).map(String::as_str).unwrap_or("");
+                let reason = sel
+                    .and_then(|s| s.error.clone().or_else(|| s.note.clone()))
+                    .filter(|n| !n.trim().is_empty())
+                    .unwrap_or_else(|| {
+                        "no catalogue part meets the value/stress requirement".to_string()
+                    });
+                let Some(inst) = netlist.instances.get_mut(id) else { continue };
+                let refdes = inst.name.clone();
+                let class = inst
+                    .attributes
+                    .get("component_class")
+                    .cloned()
+                    .unwrap_or_default();
+                inst.attributes.insert("dnp".to_string(), "true".to_string());
+                inst.attributes
+                    .insert("dnp_reason".to_string(), reason.clone());
+                if !gate.is_empty() {
+                    inst.attributes
+                        .insert("stress_gate".to_string(), gate.to_string());
+                }
+                log::warn!(
+                    "⚠ UNPOPULATED {refdes}{}: {reason} — required {gate}. \
+                     No part substituted; populate manually or relax the operating point.",
+                    if class.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" ({class})")
+                    },
+                );
+            }
         }
-        if let Some(sku) = &sel.vendor_sku {
-            inst.attributes.insert("lcsc_pn".to_string(), sku.clone());
-        }
-        if let Some(s) = sel.stock {
-            inst.attributes.insert("stock".to_string(), s.to_string());
-        }
-        resolved.push(ResolvedPart {
-            refdes: inst.name.clone(),
-            mpn: mpn.clone(),
-            manufacturer: sel.manufacturer.clone(),
-            vendor_sku: sel.vendor_sku.clone(),
-            provider: Some(provider_name.clone()),
-        });
     }
     resolved
 }
