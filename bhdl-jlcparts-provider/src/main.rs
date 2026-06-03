@@ -62,6 +62,12 @@ struct Requirement {
     /// this are infeasible. E.g. a feedback divider that needs ≤1% parts.
     #[serde(default)]
     max_tolerance_pct: Option<f64>,
+    /// Hard gate on a ceramic capacitor's dielectric (e.g. `"C0G"`): only
+    /// parts of that class (C0G≡NP0 aliased) are feasible. For
+    /// filter/timing/reference caps that need a temperature-stable
+    /// dielectric.
+    #[serde(default)]
+    dielectric: Option<String>,
     /// Per-requirement optimization objective (overrides the top-level one).
     #[serde(default)]
     objective: Option<Objective>,
@@ -372,6 +378,24 @@ fn dielectric_drift(text: &str) -> Option<f64> {
         .map(|(_, d)| *d)
 }
 
+/// Does a part's description satisfy a required dielectric? Case-insensitive
+/// substring, with C0G≡NP0 treated as equivalent (they name the same
+/// temperature-stable Class-I dielectric).
+fn dielectric_matches(want: &str, desc: &str) -> bool {
+    let up = desc.to_ascii_uppercase();
+    let w = want.trim().trim_matches('"').trim().to_ascii_uppercase();
+    if w.is_empty() {
+        return true;
+    }
+    let w_str = w.as_str();
+    let aliases: &[&str] = if w == "C0G" || w == "NP0" {
+        &["C0G", "NP0"]
+    } else {
+        std::slice::from_ref(&w_str)
+    };
+    aliases.iter().any(|a| up.contains(a))
+}
+
 // Compiled lazily once each (no `lazy_static`/`once_cell` needed — built in
 // main and threaded, but these tiny helpers re-use thread-local-free statics
 // via a single OnceLock).
@@ -602,6 +626,12 @@ impl Catalogue {
                     Some(t) if t <= max_tol + 1e-9 => {}
                     // unknown tolerance is treated as failing a hard grade gate
                     _ => continue,
+                }
+            }
+            // hard gate: required ceramic dielectric (C0G/NP0, X7R, …)
+            if let Some(want) = req.dielectric.as_deref() {
+                if !dielectric_matches(want, &description) {
+                    continue;
                 }
             }
             let tempco = parse_tempco_ppm(&description, &req.class);
@@ -962,9 +992,26 @@ mod tests {
             package: Some("0603".into()),
             tolerance_pct: Some(2.0),
             max_tolerance_pct: None,
+            dielectric: None,
             objective: None,
             quantity: None,
         }
+    }
+
+    #[test]
+    fn dielectric_gate() {
+        let c0g = "100pF 50V C0G ±5% 0402 MLCC";
+        let np0 = "100pF 50V NP0 ±5% 0402 MLCC";
+        let x7r = "100nF 50V X7R ±10% 0603 MLCC";
+        // C0G request accepts C0G and its NP0 alias, rejects X7R
+        assert!(dielectric_matches("C0G", c0g));
+        assert!(dielectric_matches("C0G", np0));
+        assert!(!dielectric_matches("C0G", x7r));
+        // case / quote / whitespace robustness
+        assert!(dielectric_matches(" \"c0g\" ", c0g));
+        // X7R request is exact (not satisfied by C0G)
+        assert!(dielectric_matches("X7R", x7r));
+        assert!(!dielectric_matches("X7R", c0g));
     }
 
     #[test]

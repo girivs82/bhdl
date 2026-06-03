@@ -1,0 +1,30 @@
+// Demonstrates the supply-chain *dielectric* gate on capacitors — the
+// capacitor analogue of the feedback-divider precision-resistor story.
+//
+// A capacitor that sets a frequency (RC corner, oscillator load, PLL loop
+// filter) or holds a reference must be temperature-stable, i.e. a Class-I
+// C0G/NP0 dielectric — NOT a cheap X7R/Y5V whose capacitance drifts with
+// temperature and bias. That requirement is a property of the *part* in the
+// circuit, so it's declared on the instance, not chosen by the board user:
+//
+//   Cap(value, dielectric = "C0G", tolerance = "5%")
+//
+// `bhdl bom` (with a jlcparts DB) then hard-gates that cap to a C0G part,
+// while an ordinary bulk-decoupling cap stays on the cheap X7R jellybean.
+
+import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passive/capacitor.bhdl";
+
+board PrecisionCapTest {
+    power V = 3.3V @ 10mA;
+    ground GND;
+
+    // Precision RC low-pass: c_filt sets the corner frequency → C0G.
+    V -> r_filt: Res(10kΩ, tolerance = 1%).1;
+    r_filt.2 -> c_filt: Cap(1nF, dielectric = "C0G", tolerance = 5%).1;
+    c_filt.2 -> GND;
+
+    // Ordinary bulk decoupling — a cheap X7R is fine, no constraint.
+    V -> c_bulk: Cap(100nF).1;
+    c_bulk.2 -> GND;
+}
