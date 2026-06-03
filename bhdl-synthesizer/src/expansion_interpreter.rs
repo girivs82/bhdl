@@ -477,22 +477,37 @@ fn expand_one_instance(
         }
 
         // Call-site named-arg overrides. The expansion extractors put named
-        // constructor args (`tolerance = 1%`, `supply_profile = "grade"`)
-        // into `params` as raw `k = v` strings — the positional value is
-        // params[0], the only entry without `=`. Lift the named ones to
-        // instance attributes so per-instance overrides written in a
-        // recipe's `expansion { }` reach the leaf (e.g. a feedback divider
-        // declaring its resistors as 1%/grade). Pushed AFTER `attrs` so they
-        // win over the entity defaults (create_instance is last-write-wins).
+        // constructor args (`tolerance = 1%`, `supply_profile = "grade"`,
+        // `rated_current = l_rated_current`) into `params` as raw `k = v`
+        // strings — the positional value is params[0], the only entry without
+        // `=`. Lift the named ones to instance attributes so per-instance
+        // overrides written in a recipe's `expansion { }` reach the leaf.
+        // The value is resolved the SAME way as params[0]: a bare reference
+        // to a `design { }` output (e.g. `l_rated_current`) is substituted
+        // for the computed number, so a recipe can SIZE an attribute (not
+        // just pass a literal); a string literal / param ref / plain literal
+        // passes through unchanged. Pushed AFTER `attrs` so they win over the
+        // entity defaults (create_instance is last-write-wins).
         let named_overrides: Vec<(String, String)> = exp_inst
             .params
             .iter()
             .filter_map(|p| {
                 let eq = p.find('=')?;
                 let key = p[..eq].trim();
-                let val = p[eq + 1..].trim().trim_matches('"').trim();
-                (!key.is_empty() && !val.is_empty())
-                    .then(|| (key.to_string(), val.to_string()))
+                let raw = p[eq + 1..].trim().trim_matches('"').trim();
+                if key.is_empty() || raw.is_empty() {
+                    return None;
+                }
+                let val = if let Some(dv) = intent_design.get(raw) {
+                    format_designed_value(*dv)
+                } else {
+                    resolve_param_expression(
+                        raw,
+                        &cand.param_values,
+                        &cand.recipe.param_defaults,
+                    )
+                };
+                Some((key.to_string(), val))
             })
             .collect();
 
