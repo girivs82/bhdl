@@ -239,17 +239,45 @@ Because the data is a **local snapshot**, both are hermetic and
 reproducible: no per-build network call, MIT-licensed (no
 redistribution-ToS problem).
 
-## 5. Reproducibility (ties to `bhdl.lock`)
+## 5. Reproducibility (`bhdl.lock` part pins) — BUILT
 
-Live APIs return volatile stock/price, but the **selected MPN is a stable
-identifier** — pin it. On a build, the plugin resolves a requirement to an
-MPN; `bhdl.lock` records `(refdes-or-requirement-hash → mpn, vendor_sku,
-provider, snapshot-id)`. A rebuild reuses the pinned MPN; `--offline`/
-`--locked` never calls the provider. This mirrors the source-resolver
-revision pinning (`docs/spec/Source_Resolvers.md`): the provider fetches,
-the lock makes it reproducible and verifiable. DigiKey's no-redistribution
-ToS is satisfied because only the MPN (an identifier the user selected),
-not the distributor's dataset, is stored.
+Live providers return volatile stock/price, but the **selected MPN is a
+stable identifier** — so it's pinned. `bhdl.lock` (the existing library lock,
+next to `bhdl.toml`) gained a `[[part]]` section:
+
+```toml
+[[part]]
+refdes       = "buck_R_top"          # the instance's structural name (stable)
+mpn          = "RT0603BRC0731K6L"
+manufacturer = "YAGEO"
+vendor_sku   = "C860829"
+provider     = "bhdl-jlcparts-provider"
+```
+
+Lifecycle (cmd_bom, mirrors Cargo):
+- **first `bhdl bom`** → resolves via the provider, writes the pins
+  (`✓ wrote N part pin(s) to bhdl.lock`);
+- **rebuild** → reuses the pins, **does not call the provider**
+  (`🔒 N MPN(s) pinned from bhdl.lock`) — reproducible and offline;
+- **`--update-lock`** → re-resolves and rewrites;
+- **`--locked`** → builds against the committed pins; errors if none exist
+  (CI guard).
+
+`apply_supply_chain_mpns` returns the selections; `apply_locked_parts`
+applies pins without a provider; `enforce_lockfile` preserves the part
+section when it rewrites library locks (shared file). Only the **MPN/SKU
+identifier** is stored — never stock or price — so no distributor dataset is
+redistributed (satisfies e.g. DigiKey's no-redistribution ToS), the same
+contract as source-resolver revision pinning
+(`docs/spec/Source_Resolvers.md`).
+
+Verified on a `bhdl.toml` project (copy of `tps54331_test`): first build
+wrote 8 pins; a second build with `$BHDL_JLCPARTS_DB` **unset** still
+produced the identical BOM from the lock; `--locked` on a pin-less project
+errors; `--update-lock` refreshes. Manifest-less circuits (no `bhdl.toml`)
+resolve fresh every build, unchanged. Pinning by `refdes` (structural name);
+requirement-hash keying is a possible future refinement for rename
+stability.
 
 ## 6. Wiring — BUILT (live `bom`/`visualize` pipeline)
 

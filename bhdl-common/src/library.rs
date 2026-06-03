@@ -179,6 +179,31 @@ pub struct Lockfile {
     pub version: u32,
     #[serde(default, rename = "library")]
     pub libraries: Vec<LockedLibrary>,
+    /// Supply-chain part pins (refdes → resolved MPN). Managed by the BOM
+    /// path, not the library resolver — keeps real, orderable selections
+    /// reproducible across rebuilds. Only the stable *identifier* (MPN +
+    /// vendor SKU) is pinned, never the volatile stock/price (and so no
+    /// distributor dataset is redistributed).
+    #[serde(default, rename = "part")]
+    pub parts: Vec<LockedPart>,
+}
+
+/// One pinned supply-chain selection.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LockedPart {
+    /// Stable per-design key: the instance's structural name (e.g.
+    /// `buck_R_top`, `c_filt`), not the BOM-assigned refdes (which depends
+    /// on walk order).
+    pub refdes: String,
+    /// The resolved manufacturer part number — the reproducible identifier.
+    pub mpn: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manufacturer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vendor_sku: Option<String>,
+    /// Which provider resolved it (informational).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -221,6 +246,13 @@ impl Lockfile {
 
     fn get(&self, name: &str) -> Option<&LockedLibrary> {
         self.libraries.iter().find(|l| l.name == name)
+    }
+
+    /// Replace the part pins, sorted by refdes for a stable, diff-friendly
+    /// lockfile.
+    pub fn set_parts(&mut self, mut parts: Vec<LockedPart>) {
+        parts.sort_by(|a, b| a.refdes.cmp(&b.refdes));
+        self.parts = parts;
     }
 
     /// Compare a freshly-resolved lock against this (stored) one.
@@ -635,7 +667,7 @@ impl LibraryResolver {
                 });
             }
         }
-        Ok(Lockfile { version: Lockfile::CURRENT_VERSION, libraries })
+        Ok(Lockfile { version: Lockfile::CURRENT_VERSION, libraries, parts: Vec::new() })
     }
 }
 
@@ -896,6 +928,13 @@ mod tests {
                 hash: "sha256:deadbeef".into(),
                 source: "path:libs/acme-stdlib".into(),
                 rev: None,
+            }],
+            parts: vec![LockedPart {
+                refdes: "buck_R_top".into(),
+                mpn: "RT0603BRC0731K6L".into(),
+                manufacturer: Some("YAGEO".into()),
+                vendor_sku: Some("C860829".into()),
+                provider: Some("bhdl-jlcparts-provider".into()),
             }],
         };
         let p = t.join("bhdl.lock");

@@ -528,12 +528,51 @@ fn instance_connected_nets(
     out
 }
 
-pub fn apply_supply_chain_mpns(netlist: &mut Netlist, opts: &SupplyOptions) -> usize {
+/// One resolved supply-chain selection, returned so the caller can pin it in
+/// `bhdl.lock`. `refdes` is the instance's structural name (a stable key).
+#[derive(Debug, Clone)]
+pub struct ResolvedPart {
+    pub refdes: String,
+    pub mpn: String,
+    pub manufacturer: Option<String>,
+    pub vendor_sku: Option<String>,
+    pub provider: Option<String>,
+}
+
+/// Apply previously-pinned MPNs (from `bhdl.lock`) onto matching instances by
+/// structural name, WITHOUT calling any provider. Returns how many applied.
+pub fn apply_locked_parts(netlist: &mut Netlist, parts: &[ResolvedPart]) -> usize {
+    use std::collections::HashMap;
+    let by_name: HashMap<String, bhdl_netlist::InstanceId> = netlist
+        .instances
+        .iter()
+        .map(|(id, inst)| (inst.name.clone(), id))
+        .collect();
+    let mut n = 0;
+    for p in parts {
+        let Some(&id) = by_name.get(&p.refdes) else { continue };
+        let Some(inst) = netlist.instances.get_mut(id) else { continue };
+        inst.attributes.insert("mpn".to_string(), p.mpn.clone());
+        if let Some(m) = &p.manufacturer {
+            inst.attributes.insert("manufacturer".to_string(), m.clone());
+        }
+        if let Some(sku) = &p.vendor_sku {
+            inst.attributes.insert("lcsc_pn".to_string(), sku.clone());
+        }
+        n += 1;
+    }
+    n
+}
+
+pub fn apply_supply_chain_mpns(
+    netlist: &mut Netlist,
+    opts: &SupplyOptions,
+) -> Vec<ResolvedPart> {
     let spec = match std::env::var("BHDL_SUPPLY_PROVIDER") {
         Ok(s) if !s.trim().is_empty() => s,
         _ => match default_provider_spec() {
             Some(s) => s,
-            None => return 0,
+            None => return Vec::new(),
         },
     };
 
@@ -648,7 +687,7 @@ pub fn apply_supply_chain_mpns(netlist: &mut Netlist, opts: &SupplyOptions) -> u
         reqs.push(req);
     }
     if reqs.is_empty() {
-        return 0;
+        return Vec::new();
     }
     let mut top = serde_json::json!({ "protocol": 1, "requirements": reqs });
     if let Some(p) = &opts.profile {
@@ -668,8 +707,9 @@ pub fn apply_supply_chain_mpns(netlist: &mut Netlist, opts: &SupplyOptions) -> u
     let mut parts = spec.split_whitespace();
     let prog = match parts.next() {
         Some(p) => p,
-        None => return 0,
+        None => return Vec::new(),
     };
+    let provider_name = prog.rsplit('/').next().unwrap_or(prog).to_string();
     let mut cmd = std::process::Command::new(prog);
     for a in parts {
         cmd.arg(a);
@@ -679,7 +719,7 @@ pub fn apply_supply_chain_mpns(netlist: &mut Netlist, opts: &SupplyOptions) -> u
         Ok(c) => c,
         Err(e) => {
             log::warn!("supply-chain provider `{prog}` failed to spawn: {e}");
-            return 0;
+            return Vec::new();
         }
     };
     if let Some(mut si) = child.stdin.take() {
@@ -690,7 +730,7 @@ pub fn apply_supply_chain_mpns(netlist: &mut Netlist, opts: &SupplyOptions) -> u
         Ok(o) => o,
         Err(e) => {
             log::warn!("supply-chain provider wait failed: {e}");
-            return 0;
+            return Vec::new();
         }
     };
     if !out.status.success() {
@@ -699,21 +739,21 @@ pub fn apply_supply_chain_mpns(netlist: &mut Netlist, opts: &SupplyOptions) -> u
             out.status.code(),
             String::from_utf8_lossy(&out.stderr)
         );
-        return 0;
+        return Vec::new();
     }
     let resp: bhdl_analyzer::plugin::PluginResponse =
         match serde_json::from_slice(&out.stdout) {
             Ok(r) => r,
             Err(e) => {
                 log::warn!("supply-chain provider reply not parseable: {e}");
-                return 0;
+                return Vec::new();
             }
         };
     for w in &resp.warnings {
         log::warn!("supply-chain provider: {w}");
     }
 
-    let mut n = 0;
+    let mut resolved = Vec::new();
     for sel in &resp.selections {
         let Some(mpn) = sel.mpn.as_ref() else { continue };
         let Some(&id) = idx_to_id.get(sel.class_index) else { continue };
@@ -728,9 +768,15 @@ pub fn apply_supply_chain_mpns(netlist: &mut Netlist, opts: &SupplyOptions) -> u
         if let Some(s) = sel.stock {
             inst.attributes.insert("stock".to_string(), s.to_string());
         }
-        n += 1;
+        resolved.push(ResolvedPart {
+            refdes: inst.name.clone(),
+            mpn: mpn.clone(),
+            manufacturer: sel.manufacturer.clone(),
+            vendor_sku: sel.vendor_sku.clone(),
+            provider: Some(provider_name.clone()),
+        });
     }
-    n
+    resolved
 }
 
 /// Declared rail voltages (net name → volts) from each `Power` net's
