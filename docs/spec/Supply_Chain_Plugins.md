@@ -183,12 +183,28 @@ feedback-bottom R4 (10kΩ, on the internal FB/GND nets) keeps the cost pick
 `C25804`. `cargo test` covers the scorer (profile changes the pick) and the
 price-tier selector.
 
-> **Per-net source annotation is partial.** A passive inherits a net policy
-> only via the `--supply-net`/env map (by net name) today, because the
-> netlist `Net` struct carries no user attributes. A true source-level
-> `net V3_3 { supply: precision }` block needs a small `Net.attributes` +
-> parser extension — scoped as a follow-up. Per-*part* source annotation
-> (`supply_profile` instance attribute) already works.
+**Recipe-driven precision (the stdlib carries the policy).** The cleanest
+way to express "this node needs a precision part" is a **semantic part
+type** in the stdlib, so the policy lives with the recipe author, not the
+board designer. `bhdl-stdlib/passive/resistor.bhdl` ships **`PrecisionRes`**
+— electrically a `Res`, but with entity-body attributes
+`max_tolerance = "1%"` (hard grade gate) + `supply_profile = "grade"` (soft
+low-drift/tight preference). The TPS54331 recipe builds its FB divider from
+`PrecisionRes`, so a bare `bhdl bom` (no flags) resolves the feedback
+resistors to thin-film ≤1 % low-TC parts (R3 31.6 kΩ → YAGEO
+`RT0603BRC0731K6L`, R4 10 kΩ → Ever Ohms `TP0603T10K0P0510Z`) while the
+LED/load resistors stay on the cheap ±1 % jellybeans — **zero board-designer
+effort**. Entity-body attributes are the reliable carrier here: constructor
+named-arg overrides (`Res(x, supply_profile=…)`) do *not* stamp through the
+inline-flow instantiation the recipes use (a separate synthesizer bug), so
+the semantic-part-type pattern is preferred.
+
+> **Per-net source annotation is still partial.** A passive inherits a net
+> policy via the `--supply-net`/env map (by net name) or — preferably — via
+> a `PrecisionRes`-style stdlib part type. A true source-level
+> `net V3_3 { supply: precision }` block would need a `Net.attributes` +
+> parser extension (scoped as a follow-up); the semantic-part-type route
+> covers the common recipe cases without it.
 
 ### 4.2 `bhdl_jlcparts_provider.py` (CSV) — the hackable reference
 

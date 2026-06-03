@@ -142,8 +142,12 @@ entity TPS54331(
         SW -> L_out: Ind(l_value).1; L_out.2 -> VOUT;
         GND -> D_catch: Diode(diode_vf).A; D_catch.K -> SW;
         VOUT -> C_out: Cap(c_out_value).1; C_out.2 -> GND;
-        VOUT -> R_top: Res(r_top_value).1; R_top.2 -> FB;
-        FB -> R_bot: Res(r_fb_bot).1; R_bot.2 -> GND;
+        // FB divider sets V_OUT = V_REF·(1 + R_top/R_bot); its ratio
+        // accuracy and temperature stability set the output-voltage
+        // accuracy, so these are PRECISION parts (≤1%, low drift) — the
+        // recipe declares that here so the board designer doesn't have to.
+        VOUT -> R_top: PrecisionRes(r_top_value).1; R_top.2 -> FB;
+        FB -> R_bot: PrecisionRes(r_fb_bot).1; R_bot.2 -> GND;
         BOOT -> C_boot: Cap(100nF).1; C_boot.2 -> SW;
     }
 }
