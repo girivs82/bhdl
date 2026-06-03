@@ -139,15 +139,50 @@ model {
     node VIN  draws  = <expr>;         // current draw (a current source to GND)
     // …or, for a transistor, a named built-in model + its parameters:
     builtin koren { mu: self.mu, ex: self.ex, kg1: self.kg1, … };
+    // …or, wrap a real vendor simulation model and adapt it:
+    vendor spice "models/tps54302.lib" subckt TPS54302
+        map { VIN: VIN, SW: PH, GND: GND, FB: FB, EN: EN, BOOT: BOOT }
+        params { fsw: self.f_sw };
 }
 ```
 
-Two forms: **primitive composition** (sources/branches between the device's
-named pins, as a regulator decomposes into `V_OUT` source + `V_IN` draw), and
-**builtin reference** (name a core numerical model — `koren`, `gummel_poon`,
-`shichman_hodges` — and supply its parameters). The builtins stay in core (they
-are device-*class* physics, reusable); the *parameters and choice* are vendor
-IP and move to HDL.
+Three forms, in **decreasing fidelity / increasing availability**:
+
+1. **Vendor model** — wrap a real model the vendor ships (`spice` subckt /
+   `.lib`, behavioral `verilog_a`, an `ibis` buffer, a tabulated efficiency or
+   ripple curve). The block `map`s the vendor model's pins to the entity's pins
+   and binds whatever params it can. This is the vendor's deep IP used verbatim.
+2. **Builtin** — name a core numerical model (`koren`, `gummel_poon`,
+   `shichman_hodges`) and supply parameters. Core owns the device-*class*
+   physics; the parameters/choice are vendor IP in HDL.
+3. **Primitive composition** — describe the behaviour ourselves with sources /
+   branches between the device's named pins (a regulator as `V_OUT` source +
+   `V_IN` draw). This is *our own data about how the part should behave* — the
+   analytic reference, authored when no vendor model exists.
+
+### 5.1.1 "Work with whatever we have" — graceful degradation
+
+The three forms are not exclusive; an entity may declare several, and **GLACIER
+uses the richest one whose inputs it can actually satisfy** from the netlist and
+operating point. The block declares, per model variant, what it *needs* (pins,
+params, a model file on disk); the solver binds what the design provides and
+picks the best satisfiable variant, falling through:
+
+```
+vendor model present AND its file/pins/params resolvable   → use it
+   else builtin with all params bound                      → use it
+   else our primitive/analytic composition                 → use it
+   else generic core stamping (today's hardcoded default)  → use it
+```
+
+So a board that ships the vendor `.lib` gets the vendor's exact model; the same
+entity on a board without it still simulates via our analytic composition; and a
+bare instance with neither still gets the generic default. Nothing *requires* the
+vendor model — it is an upgrade when available, never a hard dependency. The same
+ladder applies to the **stress** surface (§4): a vendor-supplied derating/ripple
+model is used if present, else our reference ripple formulas, else generic DC
+stress. This is the supply-chain-provider philosophy applied to simulation: a
+pluggable, best-available model, with an always-present in-tree fallback.
 
 ### 5.2 Migration path
 
