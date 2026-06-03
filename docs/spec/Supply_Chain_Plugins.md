@@ -154,11 +154,23 @@ C: dielectric, L: current):
   current or it saturates/overheats. The part's *conservative* rating (the
   MIN of Irms/Isat parsed from the description, e.g. `31mΩ 3A 4.3A 6.8uH` →
   3 A) must be ≥ the requirement; an unrated part fails the gate. From a
-  `rated_current`/`current` instance attribute
-  (`Ind(value, rated_current = "6A")`). Verified: a bare 6.8 µH `availability`
-  pick is `FXL0630-6R8-M` (5 A); with `current_a = 5.5` it correctly flips to
-  the 8.5 A `FXL1040-6R8-M`. (Deriving this current from the operating point
-  / GLACIER instead of an explicit attribute is stress-model work — §future.)
+  `rated_current`/`current` instance attribute. Verified: a bare 6.8 µH
+  `availability` pick is `FXL0630-6R8-M` (5 A); with `current_a = 5.5` it
+  correctly flips to the 8.5 A `FXL1040-6R8-M`.
+
+  Crucially this is **sized by the recipe, not passed by the board author.**
+  A board author writes `Ind(value, rated_current = "6A")` directly, but a
+  vendor stdlib recipe with a `design { }` block SIZES it from the operating
+  point: the TPS54331 buck computes `I_peak = I_out + ΔI_L/2` and emits
+  `l_rated_current = I_peak·1.3` (saturation headroom), then its expansion
+  instantiates `Ind(l_value, rated_current = l_rated_current)`. The
+  expansion interpreter resolves the named-arg value against the design
+  block's outputs exactly as it does the positional value — so a recipe can
+  *size* any leaf attribute, not just its value. For the default 2 A / 0.3
+  ripple operating point this requires ≥ ~3.0 A, which the resolved
+  `SWPA6045S6R8MT` (3 A Irms) just clears. (The closed-form `I_peak` here is
+  the seed; a GLACIER-refined operating-point current supersedes it once the
+  in-loop stress model lands — tasks #1/#4.)
 
 **Profiles** are weight presets, selectable at synthesis time:
 - `precision` — value-only → exact E-series wins;

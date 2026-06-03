@@ -110,6 +110,18 @@ entity TPS54331(
         const l_den = self.f_sw * d_il;
         l_value     = l_num / l_den;
 
+        // Inductor SATURATION-CURRENT requirement, sized from the operating
+        // point: I_peak = I_out + ΔI_L/2, with 1.3× headroom over peak (the
+        // part's Isat/Irms must clear this or it saturates in the power
+        // path). Flows to the inductor as `rated_current` → the supply
+        // provider's current gate. This is the L analogue of the divider /
+        // L / C sizing already done here — a sizing output, not a board
+        // parameter. (A GLACIER-refined I_peak supersedes this closed form
+        // once the in-loop stress model lands.)
+        const il_half     = d_il / 2.0;
+        const i_peak      = self.i_out_max + il_half;
+        l_rated_current   = i_peak * 1.3;
+
         // C_out = ΔI_L / (8·f_sw·ΔV_out).
         const co_d0 = self.f_sw * self.ripple_v;
         const co_d  = co_d0 * 8.0;
@@ -139,7 +151,7 @@ entity TPS54331(
         C_in: Cap(c_in_value) for switching_input_filter(rail: VIN, return: GND, loop_area_max: 2.0mm2, switch_node_keepaway: 1.0mm);
         VIN -> C_in.1; C_in.2 -> GND;
 
-        SW -> L_out: Ind(l_value).1; L_out.2 -> VOUT;
+        SW -> L_out: Ind(l_value, rated_current = l_rated_current).1; L_out.2 -> VOUT;
         GND -> D_catch: Diode(diode_vf).A; D_catch.K -> SW;
         VOUT -> C_out: Cap(c_out_value).1; C_out.2 -> GND;
         // FB divider sets V_OUT = V_REF·(1 + R_top/R_bot); its ratio
