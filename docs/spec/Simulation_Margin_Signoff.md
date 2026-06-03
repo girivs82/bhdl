@@ -238,5 +238,100 @@ so the sign-off result is reproducible and lock-file-stable.
    mining is a later enhancement.
 5. **AC / transient stress** — output-cap selection is dominated by load-transient
    droop, which a DC solve doesn't capture (the `tps54331` header flags this).
-   Is DC-only sign-off acceptable for v1, with transient deferred? Proposed: yes,
-   DC v1; document the gap loudly in the report.
+   Is DC-only sign-off acceptable for v1, with transient deferred? **Resolved:
+   no — DC alone is too thin to give value-stepping teeth (see §11).** The loop
+   adds an analytic *ripple* stress model so a reactive part's value genuinely
+   sets its stress.
+
+---
+
+## 11. Ripple-aware sign-off (the value-stepping that bites)
+
+### 11.1 Why DC alone is not enough
+
+Under a pure DC operating point, a passive's stress is almost entirely
+*topological*, not value-dependent: a cap's voltage is the rail it sits across;
+a resistor's power is `V²/R` whose over-stress fix is a higher *rating*, not a
+different value. Both are already enforced — the supply gate filters by derated
+rating and §7 DNPs when nothing clears. So a DC-only value-stepping loop has
+almost nothing productive to step.
+
+Value-stepping only *bites* where the **value sets the stress**, and for the
+switching topologies this stdlib targets that means **ripple**:
+
+| Part | Ripple quantity | Closed form | Value effect |
+|---|---|---|---|
+| output inductor `L` | peak current `I_pk = I_out + ΔI_L/2` | `ΔI_L = (V_in−V_out)·D / (f_sw·L)` | smaller `L` ⇒ larger `ΔI_L` ⇒ larger `I_pk` |
+| output cap `C_out` | ripple voltage `ΔV_out` | `ΔI_L / (8·f_sw·C_out)` | smaller `C` ⇒ larger `ΔV_out` |
+| input cap `C_in` | ripple voltage `ΔV_in` | `I_out·D·(1−D) / (f_sw·C_in)` | smaller `C` ⇒ larger `ΔV_in` |
+
+These are **the same closed forms `tps54331.bhdl`'s `design {}` block already
+uses to seed the values** (`D = V_out/V_in`). The sign-off loop runs them
+*forward on the snapped values* to check what the BOM part actually delivers —
+no new transient/AC SPICE solver, just the analytic ripple model evaluated at
+the real operating point.
+
+### 11.2 Operating point — recovered from the netlist, not re-entered
+
+Everything the ripple forms need is already present:
+
+- `V_in`, `V_out` — the GLACIER DC node voltages (the rails).
+- `I_out` — **the output rail's declared current budget** (`power VOUT = 5V @ 2A`
+  → `I_out = 2A`). This is why the budget on a `power` decl matters here.
+- `f_sw` — the switching regulator's `f_sw` attribute (the stdlib entity stamps
+  it, e.g. TPS54331 `attribute f_sw = 570kHz`).
+- **component role** — by connectivity: a cap whose nets are `{V_out, GND}` is an
+  output cap, `{V_in, GND}` an input cap; the inductor between the switch node and
+  `V_out` is *the* output inductor. No new annotation — the rails already name
+  themselves.
+
+If a regulator / `f_sw` / output rail can't be identified (not a switching
+topology, or a bare passive board), the part has **no ripple stress** and falls
+back to the DC margin of §4 — ripple is purely additive head-room information.
+
+### 11.3 Ripple-aware stress & margin
+
+For each reactive part, the ripple model contributes:
+
+- inductor: stress axis becomes **peak current** `I_pk` (was the DC/average
+  current); margin `= I_sat_rating / (I_pk · IND_CURRENT_DERATE)`.
+- output cap: **total voltage** `V_out + ΔV_out/2` for the voltage gate, *and* a
+  ripple-current figure for caps that declare one; the ripple voltage `ΔV_out`
+  is additionally checked against the design **ripple target** (`ripple_v`).
+- input cap: ripple voltage `ΔV_in` vs `ripple_v_in`.
+
+The verdict bands (§4) are unchanged; the *stress* fed into them is the
+ripple-aware figure when a ripple model applies, the DC figure otherwise. The
+report gains a `Ripple` column and names the binding quantity.
+
+### 11.4 The stepping (now it has somewhere to go)
+
+A reactive part **UNDER-MARGIN or over its ripple target** is stepped **up** the
+E-series (larger `L`/`C` ⇒ less ripple ⇒ more margin) — a strictly monotone,
+one-sided direction, so no empirical `∂slack/∂value` probing is needed for the
+ripple axis (the sign is known from the physics). Each step:
+
+1. bump the value to the next E-series position **up**;
+2. recompute ripple (analytic — cheap, no solve) and the DC margin (the rails
+   don't move when only a reactive value changes, so the GLACIER re-solve can be
+   skipped for pure-reactive steps — a key efficiency win over §6);
+3. stop when the part signs off, or at the E-series ceiling (then DNP / loud-warn
+   per §7, e.g. "no standard C_out meets the 30 mV ripple target at this f_sw").
+
+Resistive / DC-only parts continue to use §6's bounded re-solve loop; the two
+compose — reactive parts converge analytically, resistive parts via the solver.
+
+### 11.5 Staging
+
+- **A. Operating-point extraction** — identify the regulator (`f_sw`), the rails
+  and their `I_out` budget, and each reactive part's role. Fix the VOUT
+  node-voltage reporting gap (output-side nodes must survive into the annotation
+  map) as a prerequisite so output caps have a `V_out` at all.
+- **B. Ripple model** — the three closed forms as a pure function
+  `ripple_stress(role, op, value)`; fold into `compute_signoff` so the report
+  shows ripple-aware stress + a `Ripple` column.
+- **C. Stepping** — the up-the-E-series reactive loop (analytic, no re-solve),
+  composing with §6 for resistive parts; DNP at the ceiling.
+
+Each stage is independently shippable: A makes the buck output side report real
+numbers; B makes them ripple-aware; C makes them self-correcting.
