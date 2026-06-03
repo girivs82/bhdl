@@ -1,0 +1,31 @@
+// Demonstrates the supply-chain *rated-current* gate on inductors — the
+// inductor analogue of a resistor's power rating or a capacitor's voltage
+// rating, and the third per-class quality gate (R: tolerance/drift,
+// C: dielectric, L: current).
+//
+// A 6.8 µH inductor exists in the catalogue from 5 mA signal/multilayer
+// parts up to multi-amp power inductors. In a power path the part must carry
+// the operating current, or it saturates / overheats — a property of the
+// *part* in the circuit, declared on the instance:
+//
+//   Ind(value, rated_current = "6A")
+//
+// `bhdl bom` (with a jlcparts DB) then hard-gates to a part whose
+// conservative rating (the lower of Irms/Isat parsed from the datasheet
+// description) is ≥ that, while an unconstrained inductor is free to be a
+// small/cheap one.
+
+import { Ind } from "bhdl-stdlib/passive/inductor.bhdl";
+
+board PowerInductorTest {
+    power V = 5V @ 3A;
+    ground GND;
+
+    // Power-path inductor: must handle the rail current.
+    V -> l_pwr: Ind(6.8µH, rated_current = "6A").1;
+    l_pwr.2 -> GND;
+
+    // Unconstrained inductor (e.g. a small signal/RF choke) — no gate.
+    V -> l_sig: Ind(6.8µH).1;
+    l_sig.2 -> GND;
+}
