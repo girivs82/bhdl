@@ -742,9 +742,8 @@ fn process_connection_in_module(
                     // so we just need to process the connections
                     
                     // Now process the actual connections
-                    // Parse the full connection text to handle chains like A -> B -> C
-                    let conn_text = conn_stmt.syntax().text().to_string();
-                    let parts = parse_connection_chain(&conn_text);
+                    // Walk the AST to handle chains like A -> B -> C
+                    let parts = extract_flow_chain_ast(conn_stmt.syntax());
                     
                     debug!("Processing connection with {} parts", parts.len());
                     
@@ -1537,8 +1536,8 @@ fn process_net_flow_statement(
     }
     
     if let (Some(net_name), Some(flow_text)) = (net_name, flow_text) {
-        // Parse the flow expression into parts
-        let parts = parse_connection_chain(&flow_text);
+        // Extract the flow endpoints from the AST (skips the `net NAME :` prefix).
+        let parts = extract_flow_chain_ast(node);
         println!("Parsed {} parts from flow expression", parts.len());
         info!("Parsed {} parts from flow expression", parts.len());
 
@@ -1580,7 +1579,7 @@ fn process_connection_stmt_as_flow(
         return Ok(());
     }
 
-    let parts = parse_connection_chain(flow_text);
+    let parts = extract_flow_chain_ast(node);
     println!("Parsed {} parts from bare connection", parts.len());
     info!("Parsed {} parts from bare connection", parts.len());
 
@@ -3260,61 +3259,60 @@ fn find_instance_by_name_in_context(
     find_instance_by_name(netlist, name)
 }
 
-/// Parse a connection chain string into individual parts
-fn parse_connection_chain(conn_text: &str) -> Vec<String> {
-    let mut parts = Vec::new();
-    let mut current_part = String::new();
-    let mut in_parens = 0;
-    let mut chars = conn_text.chars().peekable();
-    
-    while let Some(ch) = chars.next() {
-        match ch {
-            '(' => {
-                in_parens += 1;
-                current_part.push(ch);
+/// Extract the ordered flow endpoints of a connection / net-flow statement
+/// directly from the syntax tree, splitting at the lexer's `ARROW` /
+/// `BI_ARROW` tokens rather than re-scanning the statement's source text.
+///
+/// This replaces the former char-level `parse_connection_chain` scanner
+/// *and* the ad-hoc `find(':')` / `find(" for ")` / `strip_suffix(';')`
+/// text munging at the call sites — both are forms of re-parsing already-
+/// parsed structure. Walking tokens is robust to anything the lexer already
+/// disambiguates (arrows inside string arguments, nested parens, etc.):
+///   - for a `NET_FLOW_STMT`, the leading `net NAME :` prefix is skipped
+///     (it ends at the first `COLON` token);
+///   - accumulation stops at a `for` / `where` clause keyword or the
+///     terminating `;`, so intent / where clauses never leak into the last
+///     endpoint.
+///
+/// Endpoints are returned with their original inner spacing trimmed, e.g.
+/// `["@VIN", "c_in: Cap(22uF).1"]` — the same shape `process_flow_parts`
+/// already consumes.
+fn extract_flow_chain_ast(node: &SyntaxNode<BhdlLanguage>) -> Vec<String> {
+    let is_net_flow = node.kind() == SyntaxKind::NET_FLOW_STMT;
+    let mut parts: Vec<String> = Vec::new();
+    let mut current = String::new();
+    // CONNECTION_STMT has no `net NAME :` prefix to skip.
+    let mut prefix_done = !is_net_flow;
+
+    let flush = |parts: &mut Vec<String>, current: &mut String| {
+        let trimmed = current.trim();
+        if !trimmed.is_empty() {
+            parts.push(trimmed.to_string());
+        }
+        current.clear();
+    };
+
+    // Pre-order traversal yields tokens in source order, including those
+    // nested in `BINARY_EXPR` / inline `COMPONENT_INST` children, so a
+    // left- or right-nested arrow chain flattens to the correct sequence.
+    for element in node.descendants_with_tokens() {
+        let token = match element.as_token() {
+            Some(t) => t,
+            None => continue,
+        };
+        let kind = token.kind();
+        if !prefix_done {
+            if kind == SyntaxKind::COLON {
+                prefix_done = true;
             }
-            ')' => {
-                in_parens -= 1;
-                current_part.push(ch);
-            }
-            '-' if in_parens == 0 => {
-                // Check if this is part of an arrow
-                if chars.peek() == Some(&'>') {
-                    // End current part and skip the arrow
-                    if !current_part.trim().is_empty() {
-                        parts.push(current_part.trim().to_string());
-                    }
-                    current_part.clear();
-                    chars.next(); // Skip '>'
-                } else {
-                    current_part.push(ch);
-                }
-            }
-            '<' if in_parens == 0 => {
-                // Check if this is part of a bidirectional arrow
-                if chars.peek() == Some(&'-') {
-                    if !current_part.trim().is_empty() {
-                        parts.push(current_part.trim().to_string());
-                    }
-                    current_part.clear();
-                    chars.next(); // Skip '-'
-                    if chars.peek() == Some(&'>') {
-                        chars.next(); // Skip '>'
-                    }
-                } else {
-                    current_part.push(ch);
-                }
-            }
-            _ => {
-                current_part.push(ch);
-            }
+            continue;
+        }
+        match kind {
+            SyntaxKind::ARROW | SyntaxKind::BI_ARROW => flush(&mut parts, &mut current),
+            SyntaxKind::FOR_KW | SyntaxKind::WHERE_KW | SyntaxKind::SEMI => break,
+            _ => current.push_str(token.text()),
         }
     }
-    
-    // Add the last part
-    if !current_part.trim().is_empty() {
-        parts.push(current_part.trim().to_string());
-    }
-    
+    flush(&mut parts, &mut current);
     parts
 }
