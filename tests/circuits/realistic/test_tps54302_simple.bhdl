@@ -8,8 +8,8 @@ board TPS54302_Buck_Simple {
     ground GND;
     
     // Input filtering
-    @VIN -> c_in1: Cap(22uF).1 -> @GND;
-    @VIN -> c_in2: Cap(100nF).1 -> @GND;
+    @VIN -> c_in1: Cap(22uF).1; c_in1.2 -> @GND;
+    @VIN -> c_in2: Cap(100nF).1; c_in2.2 -> @GND;
     
     // Main regulator (simplified as a module)
     @VIN -> reg: TPS54302().VIN;
@@ -17,18 +17,18 @@ board TPS54302_Buck_Simple {
     @VIN -> reg.EN;  // Enable always high
     
     // Phase/switching node and inductor
-    reg.PH -> l_out: Ind(4.7uH).1 -> @VOUT;
+    reg.PH -> l_out: Ind(4.7uH).1; l_out.2 -> @VOUT;
     
     // Output filtering
-    @VOUT -> c_out1: Cap(47uF).1 -> @GND;
-    @VOUT -> c_out2: Cap(22uF).1 -> @GND;
+    @VOUT -> c_out1: Cap(47uF).1; c_out1.2 -> @GND;
+    @VOUT -> c_out2: Cap(22uF).1; c_out2.2 -> @GND;
     
     // Feedback network
-    @VOUT -> r_fb1: Res(22k).1 -> reg.FB;
-    reg.FB -> r_fb2: Res(3k).1 -> @GND;
+    @VOUT -> r_fb1: Res(22k).1; r_fb1.2 -> reg.FB;
+    reg.FB -> r_fb2: Res(3k).1; r_fb2.2 -> @GND;
     
     // Bootstrap capacitor
-    reg.BOOT -> c_boot: Cap(100nF).1 -> reg.PH;
+    reg.BOOT -> c_boot: Cap(100nF).1; c_boot.2 -> reg.PH;
 }
 
 // Simplified component modules
