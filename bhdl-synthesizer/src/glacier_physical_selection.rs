@@ -675,11 +675,15 @@ pub fn apply_supply_chain_mpns(
             .filter(|d| !d.is_empty())
             .map(str::to_string);
         // Required inductor rated current (amps) → hard gate in the provider.
-        // From an explicit `rated_current`/`current` attribute (e.g.
-        // `Ind(value, rated_current = "2A")` on a power-path inductor).
+        // Precedence: GLACIER-derived `current_rating` (the simulated
+        // operating point, stamped by apply_glacier_physical_selection when a
+        // DC solve ran) wins; else the recipe/board closed-form
+        // `rated_current` (e.g. the buck's design block, or
+        // `Ind(value, rated_current = "2A")`); else a bare `current`.
         let current_a: Option<f64> = inst
             .attributes
-            .get("rated_current")
+            .get("current_rating")
+            .or_else(|| inst.attributes.get("rated_current"))
             .or_else(|| inst.attributes.get("current"))
             .and_then(|s| parse_amps(s));
 
@@ -817,6 +821,53 @@ pub fn declared_net_voltages(netlist: &Netlist) -> HashMap<String, f64> {
         }
     }
     out
+}
+
+/// Stamp each inductor's `current_rating` from a GLACIER DC solve's branch
+/// currents, WITHOUT touching package/value selection (that stays with the
+/// catalogue pass). For a buck inductor whose DC branch current reads ~0 (it
+/// is modelled as a short), the operating current is inferred from the
+/// VOUT-side net's total load. The value stamped is the 80%-saturation
+/// requirement (`I/0.8`), matching `select_inductor_physical`; the
+/// supply-chain current gate consumes it, so the part is selected against the
+/// simulated operating point rather than the recipe's closed-form seed.
+/// Returns how many inductors were stamped.
+pub fn stamp_inductor_sim_current(
+    netlist: &mut Netlist,
+    instance_currents: &HashMap<String, f64>,
+) -> usize {
+    let net_load = compute_net_load_currents(netlist, instance_currents);
+    let ids: Vec<_> = netlist.instances.keys().collect();
+    let mut n = 0;
+    for id in ids {
+        let inst = &netlist.instances[id];
+        if classify_component(netlist, inst.definition, &inst.attributes).as_deref()
+            != Some("inductor")
+        {
+            continue;
+        }
+        let name = inst.name.clone();
+        let mut current = instance_currents.get(&name).copied().unwrap_or(0.0).abs();
+        if current < 1e-6 {
+            if let Some(c) = find_inductor_vout_net_current(netlist, id, &net_load) {
+                current = c;
+            }
+        }
+        if current < 1e-9 {
+            continue;
+        }
+        let required = current / 0.8; // 80% saturation derating
+        let s = if required >= 1.0 {
+            format!("{required:.3}A")
+        } else {
+            format!("{:.0}mA", required * 1e3)
+        };
+        if let Some(inst_mut) = netlist.instances.get_mut(id) {
+            inst_mut.attributes.insert("current_rating".to_string(), s);
+            n += 1;
+        }
+    }
+    n
 }
 
 pub fn apply_catalog_physical_selection(

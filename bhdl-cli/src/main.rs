@@ -288,6 +288,15 @@ enum Commands {
         /// e.g. `--supply-net FB=precision --supply-net VCC=cost`.
         #[arg(long = "supply-net", value_name = "NET=PROFILE")]
         supply_net: Vec<String>,
+
+        /// Run a GLACIER DC solve and derive each passive's stress (cap
+        /// voltage, resistor power, inductor current) from the simulated
+        /// operating point, instead of declared-rail-voltage-only. The
+        /// inductor current gate is then fed by simulation rather than the
+        /// recipe's closed-form seed. Best-effort: if the solve fails the
+        /// BOM still generates from declared stress.
+        #[arg(long)]
+        simulate: bool,
     },
 
     /// List the SKU variants declared by the board. Prints "default"
@@ -392,7 +401,7 @@ async fn main() -> Result<()> {
             cmd_doc(&source_file, output, bom_only, budget_only, no_tree, no_patterns).await?;
         }
 
-        Some(Commands::Bom { output, format, supply_profile, supply_qty, supply_net }) => {
+        Some(Commands::Bom { output, format, supply_profile, supply_qty, supply_net, simulate }) => {
             cmd_bom(
                 &source_file,
                 &cli.input,
@@ -404,6 +413,7 @@ async fn main() -> Result<()> {
                 supply_net,
                 cli.update_lock,
                 cli.locked,
+                simulate,
             )
             .await?;
         }
@@ -1809,6 +1819,7 @@ async fn cmd_bom(
     supply_net: Vec<String>,
     update_lock: bool,
     locked: bool,
+    simulate: bool,
 ) -> Result<()> {
     use bhdl_analyzer::sku_bom;
 
@@ -1850,13 +1861,65 @@ async fn cmd_bom(
     //      Stage 6 device discovery).
     apply_sku_variant(&analysis, &mut netlist, sku)?;
 
-    // 4.6. Catalog selection for the BOM. The BOM runs no GLACIER sim, so
-    //      use the DECLARED rail voltages for cap voltage stress (analytic,
-    //      always available); resistor power / inductor current aren't
-    //      known without simulation, so those fall back to value-only
-    //      (smallest package). This snaps the value AND assigns the
-    //      smallest adequate package — so the BOM names a real, orderable
-    //      part. (The GLACIER paths use sim-derived stress instead.)
+    // 4.55. Optional GLACIER DC solve (`--simulate`): derive each passive's
+    //       stress from the simulated operating point. This stamps the
+    //       inductor's `current_rating` (the L analogue of cap voltage /
+    //       resistor power) from the actual branch current, which the
+    //       supply-chain current gate then consumes — refining the recipe's
+    //       closed-form `rated_current` seed. Best-effort: a failed solve
+    //       falls through to the declared-stress path below.
+    let sim_stress: Option<bhdl_schematic::SimulationAnnotations> = if simulate {
+        let mut converter = NetlistToSpiceConverter::new();
+        match converter.convert(&netlist) {
+            Ok(circuit) => {
+                let circuit_ref = circuit.clone();
+                match bhdl_spice::GlacierDcSolver::new().solve(circuit) {
+                    Ok(result) => {
+                        println!(
+                            "  {} GLACIER DC solve: converged in {} iteration(s)",
+                            "✓".green(),
+                            result.iterations
+                        );
+                        Some(build_simulation_annotations(&result, &circuit_ref))
+                    }
+                    Err(e) => {
+                        eprintln!("  {}", format!("DC solve failed ({e}); using declared stress").yellow());
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("  {}", format!("circuit conversion failed ({e}); using declared stress").yellow());
+                None
+            }
+        }
+    } else {
+        None
+    };
+    if let Some(ref ann) = sim_stress {
+        // Stamp the inductor current gate from the simulated operating point
+        // (current only — package/value selection stays with the catalogue
+        // pass below, identical to the non-sim path, to avoid disturbing the
+        // footprint/value).
+        let n = bhdl_synthesizer::glacier_physical_selection::stamp_inductor_sim_current(
+            &mut netlist,
+            &ann.instance_currents,
+        );
+        if n > 0 {
+            println!(
+                "  {} sim stress: {} inductor current rating(s) from GLACIER operating point",
+                "✓".green(),
+                n
+            );
+        }
+    }
+
+    // 4.6. Catalog selection for the BOM: snap the value AND assign the
+    //      smallest adequate package using the DECLARED rail voltages for cap
+    //      voltage stress (analytic, always available). `--simulate` adds the
+    //      inductor current gate above; package/value selection here is
+    //      identical with or without it, so the BOM always names a real,
+    //      orderable part.
     {
         let families = harvest_catalog_families();
         let declared_v =
