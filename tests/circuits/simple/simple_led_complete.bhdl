@@ -6,6 +6,6 @@ board SimpleLED {
     power VCC = 5V @ 100mA;
     ground GND;
 
-    net led_drive: VCC -> r1: Res(330).1 -> r1.2 -> led1: LED("red").A for current_limiting(15mA);
+    net led_drive: VCC -> r1: Res(330).1; r1.2 -> led1: LED("red").A for current_limiting(15mA);
     led1.K -> GND;
 }

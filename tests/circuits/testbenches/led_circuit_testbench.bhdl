@@ -8,17 +8,17 @@ board LEDCircuitWithProtection {
     net protected_signal;
     
     // Protection circuit
-    input_signal -> D1: TVSDiode(6V).K -> D1.A -> GND;
-    input_signal -> R1: Res(100Ω).1 -> R1.2 -> protected_signal;
+    input_signal -> D1: TVSDiode(6V).K; D1.A -> GND;
+    input_signal -> R1: Res(100Ω).1; R1.2 -> protected_signal;
     
     // LED driver circuit
     protected_signal -> Q1: NPN().base;
-    VDD -> R2: Res(220Ω).1 -> R2.2 -> LED1: LED(red).A -> LED1.K -> Q1.collector;
+    VDD -> R2: Res(220Ω).1; R2.2 -> LED1: LED(red).A; LED1.K -> Q1.collector;
     Q1.emitter -> GND;
     
     // Current monitoring
     net current_sense;
-    Q1.emitter -> R3: Res(10Ω).1 -> R3.2 -> current_sense -> GND;
+    Q1.emitter -> R3: Res(10Ω).1; R3.2 -> current_sense -> GND;
 }
 
 // Testbench for LED circuit

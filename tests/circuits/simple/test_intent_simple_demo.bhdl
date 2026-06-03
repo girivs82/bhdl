@@ -19,7 +19,7 @@ board IntentLayoutDemo {
     c1.2 -> GND;
 
     // TOP ZONE: Voltage regulation
-    net regulated: c1.1 -> reg: LM7805().VI -> reg.VO -> VOUT for voltage_regulation(5V, 12V);
+    net regulated: c1.1 -> reg: LM7805().VI; reg.VO -> VOUT for voltage_regulation(5V, 12V);
     reg.GND -> GND;
 
     // CENTER ZONE: Output filtering
@@ -27,9 +27,9 @@ board IntentLayoutDemo {
     c2.2 -> GND;
 
     // RIGHT ZONE: LED indicator
-    net indicator: VOUT -> r1: Res(330).1 -> r1.2 -> led: LED("green").A for current_limiting(20mA);
+    net indicator: VOUT -> r1: Res(330).1; r1.2 -> led: LED("green").A for current_limiting(20mA);
     led.K -> GND;
 
     // BOTTOM ZONE: Current sensing
-    net sensed: r1.2 -> sense: Res(0.1).1 -> sense.2 -> led.A for current_sensing(20mA, 1%);
+    net sensed: r1.2 -> sense: Res(0.1).1; sense.2 -> led.A for current_sensing(20mA, 1%);
 }

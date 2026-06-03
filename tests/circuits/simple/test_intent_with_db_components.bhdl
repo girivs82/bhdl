@@ -24,9 +24,9 @@ board IntentLayoutDemo {
     c2.2 -> gnd4: GND();
 
     // RIGHT ZONE: LED indicator
-    net indicator: c2.1 -> r1: Res(330).1 -> r1.2 -> led: LED("green").A for current_limiting(20mA);
+    net indicator: c2.1 -> r1: Res(330).1; r1.2 -> led: LED("green").A for current_limiting(20mA);
     led.K -> gnd5: GND();
 
     // BOTTOM ZONE: Current sensing
-    net sensed: r1.2 -> sense: Res(0.1).1 -> sense.2 -> led.A for current_sensing(20mA, 1%);
+    net sensed: r1.2 -> sense: Res(0.1).1; sense.2 -> led.A for current_sensing(20mA, 1%);
 }

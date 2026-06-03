@@ -7,6 +7,6 @@ board BareLED {
     ground GND;
 
     // Bare connection - no net keyword
-    VCC -> r1: Res(330).1 -> r1.2 -> led1: LED("red").A;
+    VCC -> r1: Res(330).1; r1.2 -> led1: LED("red").A;
     led1.K -> GND;
 }

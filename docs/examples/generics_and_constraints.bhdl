@@ -19,8 +19,8 @@ entity VoltageDivider<R1, R2>(ratio: float)
     pin vout: signal out;
     pin gnd: power in;
 
-    @vin -> R1.1 -> R1.2 -> @vout;
-    @vout -> R2.1 -> R2.2 -> @gnd;
+    @vin -> R1.1; R1.2 -> @vout;
+    @vout -> R2.1; R2.2 -> @gnd;
 }
 
 // Board using generic modules with concrete types

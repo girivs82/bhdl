@@ -66,11 +66,11 @@ board ComplexPowerTree {
     // Output filter cap auto-created from |> output_filtering(max_ripple: 50mV) on V5_BUCK
 
     // 5V buck indicator LED (green)
-    V5_BUCK -> r_led5b: Res(330).1 -> r_led5b.2 -> led5b: LED("green").A for loading(purpose: "indicator");
+    V5_BUCK -> r_led5b: Res(330).1; r_led5b.2 -> led5b: LED("green").A for loading(purpose: "indicator");
     led5b.K -> GND;
 
     // 5V buck load (10Ω ≈ 500mA)
-    V5_BUCK -> r_load5b: Res(10).1 -> r_load5b.2 -> GND for loading(purpose: "main load");
+    V5_BUCK -> r_load5b: Res(10).1; r_load5b.2 -> GND for loading(purpose: "main load");
 
     // Cascade: 5V → 3.3V via AP2112K LDO (expansion adds C_in + C_out)
     V5_BUCK -> reg33: AP2112K_3V3().VIN for regulation();
@@ -80,11 +80,11 @@ board ComplexPowerTree {
     // Output filter cap auto-created from |> output_filtering on V3_3
 
     // 3.3V indicator LED (blue)
-    V3_3 -> r_led33: Res(150).1 -> r_led33.2 -> led33: LED("blue").A for loading(purpose: "indicator");
+    V3_3 -> r_led33: Res(150).1; r_led33.2 -> led33: LED("blue").A for loading(purpose: "indicator");
     led33.K -> GND;
 
     // 3.3V load (330Ω ≈ 10mA)
-    V3_3 -> r_load33: Res(330).1 -> r_load33.2 -> GND for loading(purpose: "load");
+    V3_3 -> r_load33: Res(330).1; r_load33.2 -> GND for loading(purpose: "load");
 
     // === Branch 2: Adjustable Buck + Ultra-Low-Iq LDO Path ===
 
@@ -96,7 +96,7 @@ board ComplexPowerTree {
     // Output filter cap auto-created from |> output_filtering on V5_AUX
 
     // 5V aux indicator LED (red)
-    V5_AUX -> r_led5a: Res(470).1 -> r_led5a.2 -> led5a: LED("red").A for loading(purpose: "indicator");
+    V5_AUX -> r_led5a: Res(470).1; r_led5a.2 -> led5a: LED("red").A for loading(purpose: "indicator");
     led5a.K -> GND;
 
     // Cascade: 5V aux → 1.8V via XC6206 LDO (expansion adds C_in + C_out)
@@ -107,9 +107,9 @@ board ComplexPowerTree {
     // Output filter cap auto-created from |> output_filtering on V1_8
 
     // 1.8V load (18Ω ≈ 100mA)
-    V1_8 -> r_load18: Res(18).1 -> r_load18.2 -> GND for loading(purpose: "main load");
+    V1_8 -> r_load18: Res(18).1; r_load18.2 -> GND for loading(purpose: "main load");
 
     // 1.8V indicator LED (yellow)
-    V1_8 -> r_led18: Res(56).1 -> r_led18.2 -> led18: LED("yellow").A for loading(purpose: "indicator");
+    V1_8 -> r_led18: Res(56).1; r_led18.2 -> led18: LED("yellow").A for loading(purpose: "indicator");
     led18.K -> GND;
 }

@@ -16,7 +16,7 @@ board MultiRailPower {
     c_in.2 -> GND;
 
     // 12V → 5V regulation
-    net vin_filt: c_in.1 -> reg5: LM7805().VI -> reg5.VO -> V5 for voltage_regulation(5V, 12V);
+    net vin_filt: c_in.1 -> reg5: LM7805().VI; reg5.VO -> V5 for voltage_regulation(5V, 12V);
     reg5.GND -> GND;
 
     // 5V output filter
@@ -24,11 +24,11 @@ board MultiRailPower {
     c5.2 -> GND;
 
     // 5V indicator LED
-    net led5_path: V5 -> r5_led: Res(330).1 -> r5_led.2 -> led5: LED("green").A for current_limiting(15mA);
+    net led5_path: V5 -> r5_led: Res(330).1; r5_led.2 -> led5: LED("green").A for current_limiting(15mA);
     led5.K -> GND;
 
     // 5V → 3.3V regulation
-    net v5_filt: V5 -> reg33: LM1117_33().VI -> reg33.VO -> V3_3 for voltage_regulation(3.3V, 5V);
+    net v5_filt: V5 -> reg33: LM1117_33().VI; reg33.VO -> V3_3 for voltage_regulation(3.3V, 5V);
     reg33.GND -> GND;
 
     // 3.3V output filter
@@ -36,6 +36,6 @@ board MultiRailPower {
     c33.2 -> GND;
 
     // 3.3V indicator LED
-    net led33_path: V3_3 -> r33_led: Res(100).1 -> r33_led.2 -> led33: LED("blue").A for current_limiting(12mA);
+    net led33_path: V3_3 -> r33_led: Res(100).1; r33_led.2 -> led33: LED("blue").A for current_limiting(12mA);
     led33.K -> GND;
 }

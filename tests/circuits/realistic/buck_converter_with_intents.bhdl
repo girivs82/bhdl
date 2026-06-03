@@ -6,11 +6,11 @@ board BuckConverter {
     ground GND;
 
     // Input protection
-    net protected_vin: @VIN -> tvs: TVSDiode(18V).K -> tvs.A -> @GND
+    net protected_vin: @VIN -> tvs: TVSDiode(18V).K; tvs.A -> @GND
         for input_protection(overvoltage: 18V, current_limit: 3A);
 
     // Input bulk capacitor for current surge
-    net vin_filtered: @protected_vin -> Cin: Cap(100u).1 -> Cin.2 -> @GND
+    net vin_filtered: @protected_vin -> Cin: Cap(100u).1; Cin.2 -> @GND
         for noise_filtering(cutoff: 10kHz);
 
     // Buck converter controller
@@ -33,7 +33,7 @@ board BuckConverter {
     Cout.2 -> @GND;
 
     // Feedback network with precision requirements
-    net feedback: @output_unfiltered -> R1: Res(10k).1 -> R1.2 -> @GND
+    net feedback: @output_unfiltered -> R1: Res(10k).1; R1.2 -> @GND
         for control_loop(bandwidth: 10kHz, stability_margin: 45deg)
         for precision_measurement(accuracy: 1%, resolution: 12bit);
 
@@ -44,7 +44,7 @@ board BuckConverter {
     @output_unfiltered -> @VOUT;
 
     // Load current measurement
-    net load_current: @VOUT -> Rload: Res(3.3).1 -> Rload.2 -> @GND
+    net load_current: @VOUT -> Rload: Res(3.3).1; Rload.2 -> @GND
         for current_limiting(max: 1.5A)
         for precision_measurement(accuracy: 0.5%);
 }

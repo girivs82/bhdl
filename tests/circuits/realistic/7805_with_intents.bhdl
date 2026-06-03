@@ -7,11 +7,11 @@ board LM7805_Regulator {
     ground GND;
 
     // Input protection circuit
-    net protected_input: VIN -> tvs: TVSDiode(15V).K -> tvs.A -> @GND
+    net protected_input: VIN -> tvs: TVSDiode(15V).K; tvs.A -> @GND
         for input_protection(overvoltage: 15V, current_limit: 2A);
 
     // Input filtering with anti-noise requirements
-    net filtered_input: @protected_input -> C1: Cap(100n).1 -> C1.2 -> @GND
+    net filtered_input: @protected_input -> C1: Cap(100n).1; C1.2 -> @GND
         for noise_filtering(cutoff: 100kHz, attenuation: 40dB);
 
     // Voltage regulation
@@ -25,13 +25,13 @@ board LM7805_Regulator {
     reg.GND -> @GND;
 
     // Output capacitor for stability
-    net regulated_output: reg.VOUT -> C2: Cap(10u).1 -> C2.2 -> @GND
+    net regulated_output: reg.VOUT -> C2: Cap(10u).1; C2.2 -> @GND
         for low_noise(max_ripple: 10mV);
 
     // Current-limited LED indicator
     power VOUT = 5V @ 1A;
     @regulated_output -> @VOUT;
 
-    @VOUT -> R1: Res(330).1 -> R1.2 -> led: LED(green).A -> led.K -> @GND
+    @VOUT -> R1: Res(330).1; R1.2 -> led: LED(green).A; led.K -> @GND
         for current_limiting(max: 15mA);
 }

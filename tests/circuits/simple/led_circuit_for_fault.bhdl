@@ -6,5 +6,5 @@ board FaultTestBoard {
     
     // LED circuit with current limiting resistor
     // Normal operation: (5V - 2V) / 330Ω ≈ 9mA
-    net led_circuit: @VCC -> R1: Res(330).1 -> R1.2 -> LED1: LED(red).anode -> LED1.cathode -> @GND;
+    net led_circuit: @VCC -> R1: Res(330).1; R1.2 -> LED1: LED(red).anode; LED1.cathode -> @GND;
 }
