@@ -1106,6 +1106,8 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
         let mpns = bhdl_synthesizer::glacier_physical_selection::apply_supply_chain_mpns(
             &mut netlist,
             &supply_opts,
+            &annotations.net_voltages,
+            &annotations.instance_power,
         )
         .len();
         if mpns > 0 {
@@ -1993,7 +1995,18 @@ async fn cmd_bom(
                 net_profiles: gps::parse_net_profiles(&supply_net.join(",")),
             }
             .with_env_fallback();
-            let resolved = gps::apply_supply_chain_mpns(&mut netlist, &supply_opts);
+            // Stress for the cap-voltage / resistor-power gates: simulated
+            // node voltages + dissipation under --simulate, else declared
+            // rail voltages (cap voltage works analytically; resistor power
+            // needs the solve, so it only gates under --simulate).
+            let empty_p = std::collections::HashMap::new();
+            let declared_v = gps::declared_net_voltages(&netlist);
+            let (gate_v, gate_p) = match &sim_stress {
+                Some(ann) => (&ann.net_voltages, &ann.instance_power),
+                None => (&declared_v, &empty_p),
+            };
+            let resolved =
+                gps::apply_supply_chain_mpns(&mut netlist, &supply_opts, gate_v, gate_p);
             if !resolved.is_empty() {
                 println!(
                     "  {} supply chain: {} real MPN(s) resolved",

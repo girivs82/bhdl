@@ -579,6 +579,8 @@ pub fn apply_locked_parts(netlist: &mut Netlist, parts: &[ResolvedPart]) -> usiz
 pub fn apply_supply_chain_mpns(
     netlist: &mut Netlist,
     opts: &SupplyOptions,
+    net_voltages: &HashMap<String, f64>,
+    instance_power: &HashMap<String, f64>,
 ) -> Vec<ResolvedPart> {
     let spec = match std::env::var("BHDL_SUPPLY_PROVIDER") {
         Ok(s) if !s.trim().is_empty() => s,
@@ -589,6 +591,14 @@ pub fn apply_supply_chain_mpns(
     };
 
     let inst_nets = instance_connected_nets(netlist);
+    // Per-instance operating stress for the V/P gates: cap voltage from the
+    // (declared or simulated) rail voltages across the part; resistor power
+    // from the simulated dissipation. Derated 2× to match the catalogue
+    // selection's headroom convention. Inductor current rides the
+    // `current_rating` attribute instead (recipe seed or GLACIER).
+    let inst_v = compute_instance_max_voltages(netlist, net_voltages);
+    const CAP_V_DERATE: f64 = 2.0;
+    const RES_P_DERATE: f64 = 2.0;
 
     // Build the requirement list from the selected passives; track
     // class_index → InstanceId for applying the reply.
@@ -686,6 +696,29 @@ pub fn apply_supply_chain_mpns(
             .or_else(|| inst.attributes.get("rated_current"))
             .or_else(|| inst.attributes.get("current"))
             .and_then(|s| parse_amps(s));
+        // Capacitor voltage gate: derated operating voltage across the part
+        // (from declared rails in the BOM path, or sim node voltages under
+        // --simulate). Resistor power gate: derated simulated dissipation
+        // (no value in the no-sim BOM path → no gate then).
+        let voltage_v: Option<f64> = if class == "capacitor" {
+            inst_v
+                .get(&inst.name)
+                .copied()
+                .filter(|v| *v > 1e-9)
+                .map(|v| v * CAP_V_DERATE)
+        } else {
+            None
+        };
+        let power_w: Option<f64> = if class == "resistor" {
+            instance_power
+                .get(&inst.name)
+                .copied()
+                .map(f64::abs)
+                .filter(|p| *p > 1e-12)
+                .map(|p| p * RES_P_DERATE)
+        } else {
+            None
+        };
 
         let ci = idx_to_id.len();
         idx_to_id.push(id);
@@ -704,6 +737,12 @@ pub fn apply_supply_chain_mpns(
         }
         if let Some(c) = current_a {
             req["current_a"] = serde_json::json!(c);
+        }
+        if let Some(v) = voltage_v {
+            req["voltage_v"] = serde_json::json!(v);
+        }
+        if let Some(p) = power_w {
+            req["power_w"] = serde_json::json!(p);
         }
         if let Some(o) = objective {
             req["objective"] = o;
