@@ -509,6 +509,16 @@ impl NetlistGenerator {
             );
         }
 
+        // Phase 4.6: Stamp entity `attribute` declarations onto every
+        // instance, making them FIRST-CLASS on the netlist. Entity attributes
+        // (component_class, switching_frequency, topology, output_current, …)
+        // were otherwise dropped for entities without an expansion/design
+        // block, leaving the instance attribute-less — which left the SPICE
+        // converter unable to recognise the device and the sign-off ripple
+        // model unable to recover the operating point. This pass runs after
+        // all instances exist; an attribute already present is not overwritten.
+        self.stamp_entity_attributes_on_instances();
+
         // Phase 5: Apply semantic annotations for visualization
         if self.config.preserve_semantic_context {
             self.apply_semantic_annotations(analysis)?;
@@ -1852,6 +1862,61 @@ impl NetlistGenerator {
         CommonPinType::Signal
     }
     
+    /// Stamp each instance's entity `attribute` declarations onto the
+    /// instance, making entity attributes first-class on the netlist (Phase
+    /// 4.6). Resolves the imported entity for each instance's module name and
+    /// copies its `attribute` decls (component_class, switching_frequency,
+    /// topology, …) onto the instance, never overwriting an existing key.
+    fn stamp_entity_attributes_on_instances(&mut self) {
+        // Step 1: (instance, entity-name) for every instance — borrows netlist.
+        let id_names: Vec<(InstanceId, String)> = self
+            .netlist
+            .instances
+            .iter()
+            .filter_map(|(id, inst)| {
+                let module = self.netlist.modules.get(inst.definition)?;
+                Some((id, module.name.clone()))
+            })
+            .collect();
+        // Step 2: resolve each entity's attributes from the import loader,
+        // which resolves BOTH explicitly-imported entities and entities pulled
+        // in on-demand via the global library resolver (stdlib parts used
+        // without an `import` statement, like a bare `TPS54302()`). Borrows
+        // self.import_loader only.
+        let updates: Vec<(InstanceId, std::collections::HashMap<String, String>)> = id_names
+            .into_iter()
+            .filter_map(|(id, name)| {
+                let entity = self.import_loader.get_entity(&name)?;
+                let attrs =
+                    bhdl_analyzer::attribute_extraction::extract_module_attributes(entity);
+                if attrs.is_empty() {
+                    None
+                } else {
+                    Some((id, attrs))
+                }
+            })
+            .collect();
+        // Step 3: apply — mutates instances.
+        let (mut total, mut touched) = (0usize, 0usize);
+        for (id, attrs) in updates {
+            if let Some(inst) = self.netlist.instances.get_mut(id) {
+                let before = total;
+                for (k, v) in attrs {
+                    if !inst.attributes.contains_key(&k) {
+                        inst.attributes.insert(k, v);
+                        total += 1;
+                    }
+                }
+                if total > before {
+                    touched += 1;
+                }
+            }
+        }
+        if total > 0 {
+            info!("Phase 4.6: stamped {total} entity attribute(s) across {touched} instance(s)");
+        }
+    }
+
     /// Add pins to a component module based on its type using stdlib definitions
     fn add_pins_for_component(&mut self, instance_name: &str, component_type: &str, module_id: ModuleId) -> Result<()> {
         debug!("add_pins_for_component called for component_type: {} (from lib.rs)", component_type);
