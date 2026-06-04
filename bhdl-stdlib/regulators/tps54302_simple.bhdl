@@ -19,8 +19,11 @@ entity TPS54302() {
     attribute component_class = "voltage_regulator";
     attribute regulator_type = "synchronous_buck";
     attribute topology = "buck";
-    attribute package = "SOT-23-6";
-    
+    // NOTE: `package` is a reserved keyword (it heads the `layout { package
+    // <Footprint>; }` block) and cannot be an `attribute` name — using it as
+    // one is a hard parse error that drops every following attribute. The
+    // footprint lives in the `layout TPS54302` block below.
+
     // Electrical specifications
     attribute output_current = 3A;
     attribute input_voltage_min = 4.5V;
@@ -57,4 +60,8 @@ entity TPS54302() {
     attribute spice_switching_frequency = 500kHz;
     attribute spice_duty_cycle = "variable";
     attribute spice_feedback_reference = 0.6V;
+}
+
+layout TPS54302 {
+    package SOT-23-6;
 }

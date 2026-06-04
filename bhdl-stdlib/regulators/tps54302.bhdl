@@ -121,8 +121,11 @@ entity TPS54302() {
     attribute component_class = "voltage_regulator";
     attribute regulator_type = "synchronous_buck";
     attribute topology = "buck";
-    attribute package = "SOT-23-6";
-    
+    // NOTE: `package` is a reserved keyword (it heads the `layout { package
+    // <Footprint>; }` block) and cannot be an `attribute` name — using it as
+    // one is a hard parse error that drops every following attribute. The
+    // footprint lives in the `layout TPS54302` block at the end of the file.
+
     // Electrical specifications
     attribute output_current = BUCK_PARAMS.output_current;
     attribute input_voltage_min = BUCK_PARAMS.input_voltage_min;
@@ -345,4 +348,8 @@ entity TPS54302() {
     attribute prefer_straight_traces = true;
     attribute power_trace_clearance = 0.5;       // mm clearance from other traces
     attribute separate_power_grounds = false;    // Use single ground plane
+}
+
+layout TPS54302 {
+    package SOT-23-6;
 }

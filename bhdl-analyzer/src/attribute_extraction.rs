@@ -56,6 +56,217 @@ pub fn extract_module_attributes(entity: &Entity) -> HashMap<String, String> {
     attributes
 }
 
+/// Like [`extract_module_attributes`], but additionally resolves attribute
+/// values that are bare references to the entity's OWN `const`s or
+/// constructor parameters into their concrete value text:
+///
+/// ```text
+///   attribute f_sw = f_sw;                       -> "570kHz" (param default)
+///   attribute switching_frequency =
+///       BUCK_PARAMS.switching_frequency;         -> "500kHz" (const field)
+///   attribute oi = BUCK_PARAMS.impedance.output_impedance;  -> "0.05Ω"
+/// ```
+///
+/// `extract_module_attributes` returns the literal *reference text*
+/// (`"f_sw"`, `"BUCK_PARAMS.switching_frequency"`) because it only reads the
+/// value token. The sign-off ripple model needs the resolved NUMBER, so this
+/// variant evaluates the reference against the entity's local declarations.
+/// Anything that doesn't resolve (a call-site-only param with no default, an
+/// unknown reference, an expression) is left exactly as
+/// `extract_module_attributes` produced it — the resolution is purely
+/// additive and never fails.
+pub fn extract_module_attributes_resolved(entity: &Entity) -> HashMap<String, String> {
+    let mut attrs = extract_module_attributes(entity);
+    let syntax = entity.syntax();
+
+    // (name -> RHS value node) for every `const NAME[: type] = <value>;`.
+    // The parser emits a const as a PARAM_DECL node carrying a CONST_KW token
+    // (constructor params are PARAM_DECLs too, but live inside a PARAM_LIST —
+    // these are the entity's DIRECT children). The first IDENT after CONST_KW
+    // is the name; the first node after EQ is the value (a STRUCT_LITERAL for
+    // struct consts, possibly wrapped in an expression node).
+    let mut consts: HashMap<String, rowan::SyntaxNode<bhdl_ast::BhdlLanguage>> = HashMap::new();
+    for child in syntax.children() {
+        if child.kind() != SyntaxKind::PARAM_DECL {
+            continue;
+        }
+        let is_const = child
+            .children_with_tokens()
+            .filter_map(|el| el.into_token())
+            .any(|t| t.kind() == SyntaxKind::CONST_KW);
+        if !is_const {
+            continue;
+        }
+        let mut name: Option<String> = None;
+        let mut saw_eq = false;
+        let mut value: Option<rowan::SyntaxNode<bhdl_ast::BhdlLanguage>> = None;
+        for el in child.children_with_tokens() {
+            match el {
+                rowan::NodeOrToken::Token(t) => match t.kind() {
+                    SyntaxKind::IDENT if name.is_none() && !saw_eq => {
+                        name = Some(t.text().to_string());
+                    }
+                    SyntaxKind::EQ => saw_eq = true,
+                    _ => {}
+                },
+                rowan::NodeOrToken::Node(n) if saw_eq && value.is_none() => {
+                    value = Some(n);
+                }
+                _ => {}
+            }
+        }
+        if let (Some(n), Some(v)) = (name, value) {
+            consts.insert(n, v);
+        }
+    }
+
+    // (name -> default value text) for constructor params with a default.
+    let mut param_defaults: HashMap<String, String> = HashMap::new();
+    for param_list in syntax.children().filter(|c| c.kind() == SyntaxKind::PARAM_LIST) {
+        for pd in param_list.children().filter(|c| c.kind() == SyntaxKind::PARAM_DECL) {
+            let mut pname: Option<String> = None;
+            let mut saw_eq = false;
+            let mut default = String::new();
+            for el in pd.children_with_tokens() {
+                match el {
+                    rowan::NodeOrToken::Token(t) if t.kind() == SyntaxKind::IDENT && pname.is_none() => {
+                        pname = Some(t.text().to_string());
+                    }
+                    rowan::NodeOrToken::Token(t) if t.kind() == SyntaxKind::EQ => saw_eq = true,
+                    rowan::NodeOrToken::Node(n) if saw_eq => {
+                        default.push_str(n.text().to_string().trim());
+                    }
+                    rowan::NodeOrToken::Token(t)
+                        if saw_eq
+                            && !matches!(
+                                t.kind(),
+                                SyntaxKind::WHITESPACE | SyntaxKind::COMMA | SyntaxKind::R_PAREN
+                            ) =>
+                    {
+                        default.push_str(t.text());
+                    }
+                    _ => {}
+                }
+            }
+            if let (Some(p), false) = (pname, default.trim().is_empty()) {
+                param_defaults.insert(p, unquote(default.trim()));
+            }
+        }
+    }
+
+    for v in attrs.values_mut() {
+        if let Some(resolved) = resolve_attr_ref(v.trim(), &consts, &param_defaults) {
+            *v = resolved;
+        }
+    }
+    attrs
+}
+
+fn unquote(s: &str) -> String {
+    let s = s.trim();
+    if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
+        s[1..s.len() - 1].to_string()
+    } else {
+        s.to_string()
+    }
+}
+
+/// Resolve a single attribute value that is a bare reference — either a
+/// constructor-param name, a `const` name, or a dotted `CONST.field[.field…]`
+/// path into a `const`'s struct literal. Returns `None` when the text isn't
+/// such a reference or can't be resolved (leaving the literal untouched).
+fn resolve_attr_ref(
+    text: &str,
+    consts: &HashMap<String, rowan::SyntaxNode<bhdl_ast::BhdlLanguage>>,
+    param_defaults: &HashMap<String, String>,
+) -> Option<String> {
+    let text = text.trim();
+    // Only resolve things that look like a (possibly dotted) identifier path;
+    // never touch numbers, quoted strings, booleans or expressions.
+    if text.is_empty()
+        || !text
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '.')
+        || text.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(true)
+    {
+        return None;
+    }
+    let mut parts = text.split('.');
+    let head = parts.next()?;
+    if text.find('.').is_none() {
+        // Bare name: param default first, then a scalar const.
+        if let Some(d) = param_defaults.get(head) {
+            return Some(d.clone());
+        }
+        if let Some(node) = consts.get(head) {
+            // Only a scalar (non-struct) const resolves to a value text.
+            if node.kind() != SyntaxKind::STRUCT_LITERAL {
+                return Some(unquote(node.text().to_string().trim()));
+            }
+        }
+        return None;
+    }
+    // Dotted path: walk struct-literal fields starting from the const.
+    let mut cur = as_struct_literal(consts.get(head)?)?;
+    let fields: Vec<&str> = parts.collect();
+    for (i, field) in fields.iter().enumerate() {
+        let last = i + 1 == fields.len();
+        match struct_field_value(&cur, field)? {
+            rowan::NodeOrToken::Token(t) => return Some(unquote(t.text().trim())),
+            rowan::NodeOrToken::Node(n) => {
+                if last {
+                    return Some(unquote(n.text().to_string().trim()));
+                }
+                cur = as_struct_literal(&n)?;
+            }
+        }
+    }
+    None
+}
+
+/// Coerce a node to the STRUCT_LITERAL it is or directly wraps. `parse_const_decl`
+/// runs the RHS through `parse_expression`, which may wrap the `{ … }` in an
+/// expression node, so accept the first STRUCT_LITERAL in pre-order.
+fn as_struct_literal(
+    node: &rowan::SyntaxNode<bhdl_ast::BhdlLanguage>,
+) -> Option<rowan::SyntaxNode<bhdl_ast::BhdlLanguage>> {
+    if node.kind() == SyntaxKind::STRUCT_LITERAL {
+        return Some(node.clone());
+    }
+    node.descendants().find(|d| d.kind() == SyntaxKind::STRUCT_LITERAL)
+}
+
+/// Find the value following `field:` inside a STRUCT_LITERAL node. The parser
+/// emits field-name IDENT tokens and value expressions inline (no wrapper
+/// node), so scan for the matching name, then the COLON, then the next
+/// non-trivia element is the value.
+fn struct_field_value(
+    struct_lit: &rowan::SyntaxNode<bhdl_ast::BhdlLanguage>,
+    field: &str,
+) -> Option<rowan::NodeOrToken<rowan::SyntaxNode<bhdl_ast::BhdlLanguage>, rowan::SyntaxToken<bhdl_ast::BhdlLanguage>>> {
+    let mut depth = 0i32; // brace depth, to stay at this struct's top level
+    let mut matched = false;
+    let mut after_colon = false;
+    for el in struct_lit.children_with_tokens() {
+        match &el {
+            rowan::NodeOrToken::Token(t) => match t.kind() {
+                SyntaxKind::L_BRACE => depth += 1,
+                SyntaxKind::R_BRACE => depth -= 1,
+                SyntaxKind::WHITESPACE | SyntaxKind::COMMENT => {}
+                SyntaxKind::IDENT if depth == 1 && !matched => {
+                    matched = t.text() == field;
+                }
+                SyntaxKind::COLON if matched => after_colon = true,
+                _ if after_colon => return Some(el.clone()),
+                _ => {}
+            },
+            rowan::NodeOrToken::Node(_) if after_colon => return Some(el.clone()),
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Extract a cleaned value from an expression node
 fn extract_node_value(node: &rowan::SyntaxNode<bhdl_ast::BhdlLanguage>) -> String {
     let text = node.text().to_string().trim().to_string();
@@ -214,5 +425,37 @@ entity Res(value: resistance) {
 
         let attrs = extract_module_attributes(&entities[0]);
         assert_eq!(attrs.get("component_class"), Some(&"resistor".to_string()));
+    }
+
+    #[test]
+    fn resolves_param_and_const_references() {
+        // `attribute f_sw = f_sw;`           -> param default
+        // `attribute sf = P.switching_frequency;` -> const struct field
+        // `attribute oi = P.impedance.output_impedance;` -> nested field
+        // `attribute cc = "voltage_regulator";`   -> literal, untouched
+        let source = r#"
+entity Reg(f_sw: frequency = 570kHz) {
+    pin VIN: power in;
+    const P: T = {
+        output_current: 3A,
+        switching_frequency: 500kHz,
+        impedance: { output_impedance: 0.05 },
+    };
+    attribute component_class = "voltage_regulator";
+    attribute f_sw = f_sw;
+    attribute sf = P.switching_frequency;
+    attribute oc = P.output_current;
+    attribute oi = P.impedance.output_impedance;
+}
+"#;
+        let parse = bhdl_parser::parse(source);
+        let sf = bhdl_ast::SourceFile::cast(parse.syntax()).unwrap();
+        let entity = sf.entities().next().unwrap();
+        let attrs = extract_module_attributes_resolved(&entity);
+        assert_eq!(attrs.get("component_class"), Some(&"voltage_regulator".to_string()));
+        assert_eq!(attrs.get("f_sw"), Some(&"570kHz".to_string()));
+        assert_eq!(attrs.get("sf"), Some(&"500kHz".to_string()));
+        assert_eq!(attrs.get("oc"), Some(&"3A".to_string()));
+        assert_eq!(attrs.get("oi"), Some(&"0.05".to_string()));
     }
 }
