@@ -211,6 +211,57 @@ environment, same evaluator) so the deferred half slots in without redesign.
   (DC stress; hardcoded device model). Blocks are strictly additive; nothing
   that works today regresses.
 
+## 6A. Stability (control-loop) surface — device IP, deferred build
+
+DC operating point and ripple (§4) are *static* checks. A switching regulator
+also has a **control loop** that must be stable, and stability is **not
+generic**: it depends on the regulator's error-amp transconductance, the
+modulator/PWM gain, the internal or external compensation, *and* the external
+network (`L`, `C_out` and its ESR, the feedback divider). Only the device knows
+its loop; so the loop model belongs in the `simulation {}` block, as a third
+surface beside `stress {}` and `model {}`:
+
+```
+stability {
+    // the device's control-loop model — vendor IP
+    error_amp   gm = self.gm_ea, ro = self.ro_ea;
+    modulator   gain = self.v_in / self.v_ramp;       // or current-mode Gm_power
+    compensation type3 { rc: Rc.value, cc: Cc.value, cp: Cp.value };
+    // external plant assembled from the expansion children + ESR
+    plant buck { l: L_out.value, c: C_out.value, esr: C_out.esr, rload: vout/iout };
+    // targets the sign-off checks
+    require phase_margin >= 45deg;
+    require gain_margin  >= 10dB;
+    require crossover    in (f_sw/20 .. f_sw/5);
+}
+```
+
+The analysis is an **AC small-signal** loop sweep (Bode of `T(s) = plant ×
+compensation × modulator`), reporting crossover frequency, phase margin and
+gain margin against the `require`d targets — the same verdict bands as §4 but on
+loop margins. Like §5, the loop *math* for a class (voltage-mode / current-mode
+buck, type-II/III comp) is a **core builtin**; the *parameters and topology
+choice* are the vendor's, in HDL. Provenance ladder still applies: a vendor that
+ships a measured/AC `.lib` loop model is used verbatim; else the analytic builtin
+from these parameters; else stability is reported **unchecked** (never silently
+"passed").
+
+### 6A.1 Coupling with the ripple stepping — the important consequence
+
+Ripple-stepping (`Simulation_Margin_Signoff.md` §11.4) steps `C_out` **up** to
+cut ripple, and treats that as monotone-safe. **With stability in scope it is
+not:** a larger `C_out` lowers the output pole / ESR-zero and can *reduce* phase
+margin. So `C_out` has a **two-sided** window — large enough for ripple/droop,
+not so large (or wrong-ESR) that the loop loses margin. The stepping loop must
+therefore consult the stability surface: a ripple step that would drop phase
+margin below target is rejected (or the part is flagged), exactly the two-sided
+treatment §11.3 already defines for divider ratios.
+
+**Until the stability surface is built**, the ripple stepper must not present a
+`C_out` increase as fully signed-off — it `log`s that loop stability was not
+checked for the stepped value, so the change is never silently assumed safe.
+This is the honest v1 stance; the stability surface removes the caveat.
+
 ## 7. Open questions
 
 1. **Shared consts with `design {}`** — the ripple forms duplicate the design
