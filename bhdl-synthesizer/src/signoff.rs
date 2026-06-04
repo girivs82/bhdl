@@ -74,6 +74,9 @@ pub struct SignoffRow {
     /// Ripple-model annotation when an analytic switcher model applied
     /// (e.g. `"ΔI_L=1.35A, I_pk=3.68A"`, `"ΔV_out=9mV"`), else `None`.
     pub ripple: Option<String>,
+    /// Stage-C value-stepping recommendation when the part is over its ripple
+    /// target (e.g. `"4.7µH → 6.8µH (ratio 0.41→0.28)"`), else `None`.
+    pub step: Option<String>,
 }
 
 /// Operating point of a switching (buck) converter, recovered from the
@@ -89,7 +92,14 @@ struct SwitcherOp {
     i_out: f64,
     f_sw: f64,
     duty: f64,
+    /// Target inductor ripple ratio ΔI_L/I_out (datasheet 0.2–0.4). From the
+    /// regulator's `ripple_ratio` attribute, else the 0.3 default. Drives the
+    /// Stage-C inductor value-stepping.
+    ripple_ratio: f64,
 }
+
+/// Default inductor ripple-ratio target when the regulator declares none.
+const DEFAULT_RIPPLE_RATIO: f64 = 0.3;
 
 /// Recover the buck operating point from the netlist: `f_sw` and `i_out`
 /// from the switching regulator's attributes, `v_in`/`v_out` from the
@@ -105,7 +115,7 @@ fn recover_switcher_op(
     // onto the netlist instance or module (only `entity_attribute_index`
     // carries them), so look up each key in three places, instance first:
     //   instance attrs → module attrs → entity_attribute_index[entity name].
-    let (f_sw, i_out) = netlist.instances.values().find_map(|inst| {
+    let (f_sw, i_out, ripple_ratio) = netlist.instances.values().find_map(|inst| {
         let module = netlist.modules.get(inst.definition);
         let ent = module.and_then(|m| entity_attrs.get(&m.name));
         let get = |k: &str| {
@@ -137,7 +147,11 @@ fn recover_switcher_op(
             .or_else(|| get("output_current_max"))
             .and_then(|s| parse_si(s))
             .filter(|i| *i > 0.0)?;
-        Some((f_sw, i_out))
+        let ripple_ratio = get("ripple_ratio")
+            .and_then(|s| parse_si(s))
+            .filter(|r| *r > 0.0)
+            .unwrap_or(DEFAULT_RIPPLE_RATIO);
+        Some((f_sw, i_out, ripple_ratio))
     })?;
     let rails: Vec<f64> = declared_net_voltages(netlist)
         .into_values()
@@ -161,7 +175,45 @@ fn recover_switcher_op(
         i_out,
         f_sw,
         duty: v_out / v_in,
+        ripple_ratio,
     })
+}
+
+/// Smallest standard E12 value ≥ `target` (a ceil onto the E12 ladder),
+/// preserving decade. Used to step a reactive value UP to the next standard
+/// part — Stage C steps the inductor up until its ripple ratio meets target.
+fn e12_ceil(target: f64) -> f64 {
+    const E12: [f64; 12] = [
+        1.0, 1.2, 1.5, 1.8, 2.2, 2.7, 3.3, 3.9, 4.7, 5.6, 6.8, 8.2,
+    ];
+    if !(target > 0.0) {
+        return target;
+    }
+    let decade = 10f64.powf(target.log10().floor());
+    for b in E12 {
+        let v = b * decade;
+        if v >= target * (1.0 - 1e-9) {
+            return v;
+        }
+    }
+    10.0 * decade // top of decade → next decade's 1.0
+}
+
+/// Stage-C inductor value-stepping. If the output inductor's ripple ratio
+/// ΔI_L/I_out exceeds the target, return the E12 value it should step UP to so
+/// the ratio meets target, with the resulting ratio. `L_target =
+/// (V_in−V_out)·D / (f_sw · ripple_ratio · I_out)`, ceiled onto E12. Larger L ⇒
+/// less ripple, strictly monotone and stability-benign, so no search is needed.
+/// Returns `None` when the current value already meets the target.
+fn inductor_value_step(op: &SwitcherOp, l_current: f64, d_il: f64) -> Option<(f64, f64)> {
+    let ratio = d_il / op.i_out;
+    if ratio <= op.ripple_ratio + 1e-9 {
+        return None; // already within target
+    }
+    let l_target = (op.v_in - op.v_out) * op.duty / (op.f_sw * op.ripple_ratio * op.i_out);
+    let l_step = e12_ceil(l_target.max(l_current));
+    let d_il_new = (op.v_in - op.v_out) * op.duty / (op.f_sw * l_step);
+    Some((l_step, d_il_new / op.i_out))
 }
 
 /// The output inductor's ripple current `ΔI_L = (V_in−V_out)·D / (f_sw·L)`,
@@ -268,6 +320,7 @@ pub fn compute_signoff(
         // actually bites (`Simulation_Margin_Signoff.md` §11). DC parts and
         // non-switching designs keep the generic stress above.
         let mut ripple: Option<String> = None;
+        let mut step: Option<String> = None;
         if let (Some(op), Some(d_il)) = (op.as_ref(), d_il) {
             match class.as_str() {
                 "inductor" => {
@@ -277,6 +330,20 @@ pub fn compute_signoff(
                         let i_pk = op.i_out + dil / 2.0;
                         stress = Some(i_pk);
                         ripple = Some(format!("ΔI_L={dil:.3}A → I_pk={i_pk:.3}A"));
+                        // Stage C: if the ripple ratio is over target, recommend
+                        // the E12 step-up that meets it (larger L ⇒ less ripple,
+                        // monotone — the value-fixable axis, distinct from the
+                        // current *rating* margin which is the supply gate's job).
+                        if let Some((l_step, ratio_new)) = inductor_value_step(op, l, dil) {
+                            step = Some(format!(
+                                "{} → {} (ratio {:.2}→{:.2}, target {:.2})",
+                                fmt_si(l, "H"),
+                                fmt_si(l_step, "H"),
+                                dil / op.i_out,
+                                ratio_new,
+                                op.ripple_ratio,
+                            ));
+                        }
                     }
                 }
                 "capacitor" => {
@@ -324,11 +391,42 @@ pub fn compute_signoff(
             verdict,
             dnp,
             ripple,
+            step,
         });
     }
 
     rows.sort_by(|a, b| a.refdes.cmp(&b.refdes));
     rows
+}
+
+/// Format an SI base-unit value with an engineering prefix, e.g.
+/// `6.8e-6, "H"` → `"6.8µH"`, `47e-6, "F"` → `"47µF"`.
+fn fmt_si(v: f64, unit: &str) -> String {
+    if !(v.abs() > 0.0) {
+        return format!("0{unit}");
+    }
+    const PREFIXES: &[(&str, f64)] = &[
+        ("p", 1e-12),
+        ("n", 1e-9),
+        ("µ", 1e-6),
+        ("m", 1e-3),
+        ("", 1e0),
+        ("k", 1e3),
+        ("M", 1e6),
+    ];
+    let mut best = ("", 1e0);
+    for &(p, scale) in PREFIXES {
+        let scaled = v / scale;
+        if scaled.abs() >= 1.0 && scaled.abs() < 1000.0 {
+            best = (p, scale);
+            break;
+        }
+    }
+    let scaled = v / best.1;
+    // Trim trailing zeros: 6.80 → 6.8, 47.0 → 47.
+    let s = format!("{scaled:.2}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    format!("{s}{}{unit}", best.0)
 }
 
 fn fmt_opt(v: Option<f64>, unit: &str) -> String {
@@ -394,6 +492,28 @@ pub fn format_signoff_report(rows: &[SignoffRow]) -> Option<String> {
         out.push_str(
             "_Not-simulated rows had no DC stress (e.g. a cap with no DC voltage across it) \
              or no selected rating to compare; transient/AC stress is not modelled in this DC pass._\n",
+        );
+    }
+
+    // Stage C — value-stepping recommendations (reactive parts over their
+    // ripple target). Currently the inductor ripple-ratio case; the value is
+    // recommended, not yet applied to the BOM (re-selecting the stepped part's
+    // MPN is a follow-up), so it reads as a recommendation.
+    let steps: Vec<&SignoffRow> = rows.iter().filter(|r| r.step.is_some()).collect();
+    if !steps.is_empty() {
+        out.push_str("\n**Stepping recommendations (to meet ripple target):**\n");
+        for r in steps {
+            out.push_str(&format!(
+                "- {} ({}): {}\n",
+                r.refdes,
+                r.class,
+                r.step.as_deref().unwrap_or("")
+            ));
+        }
+        out.push_str(
+            "_Recommended values, not yet applied to the BOM (stepped-part MPN re-selection \
+             is a follow-up). Output-cap stepping additionally needs the control-loop stability \
+             check (a larger C_out can reduce phase margin) and is deferred._\n",
         );
     }
     Some(out)
