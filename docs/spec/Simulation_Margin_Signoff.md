@@ -307,9 +307,8 @@ report gains a `Ripple` column and names the binding quantity.
 ### 11.4 The stepping (now it has somewhere to go)
 
 A reactive part **UNDER-MARGIN or over its ripple target** is stepped **up** the
-E-series (larger `L`/`C` ⇒ less ripple ⇒ more margin) — a strictly monotone,
-one-sided direction, so no empirical `∂slack/∂value` probing is needed for the
-ripple axis (the sign is known from the physics). Each step:
+E-series (larger `L`/`C` ⇒ less ripple). For the *ripple* axis in isolation the
+direction is monotone, so no `∂slack/∂value` probing is needed. Each step:
 
 1. bump the value to the next E-series position **up**;
 2. recompute ripple (analytic — cheap, no solve) and the DC margin (the rails
@@ -317,6 +316,18 @@ ripple axis (the sign is known from the physics). Each step:
    skipped for pure-reactive steps — a key efficiency win over §6);
 3. stop when the part signs off, or at the E-series ceiling (then DNP / loud-warn
    per §7, e.g. "no standard C_out meets the 30 mV ripple target at this f_sw").
+
+> **Caveat — stepping `C_out` is NOT monotone once loop stability is in scope.**
+> A larger output cap cuts ripple but lowers the output pole / ESR-zero and can
+> *reduce* the regulator's phase margin, so `C_out` actually has a **two-sided**
+> window (enough for ripple/droop, not so much that the loop destabilises). The
+> stepper must consult the control-loop **stability surface**
+> (`Vendor_Simulation_Blocks.md` §6A) and reject a ripple step that would drop
+> phase margin below target — the same two-sided handling §11.3 gives divider
+> ratios. Until that surface is built, a `C_out` increase is **not** reported as
+> fully signed-off: the stepper `log`s that loop stability was not checked for the
+> stepped value, so nothing is silently assumed safe. The inductor `I_pk` step
+> (larger `L` ⇒ less ripple current, monotone and stability-benign) is unaffected.
 
 Resistive / DC-only parts continue to use §6's bounded re-solve loop; the two
 compose — reactive parts converge analytically, resistive parts via the solver.
