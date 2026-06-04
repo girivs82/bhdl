@@ -253,6 +253,48 @@ pub fn global_library_resolver() -> Option<bhdl_common::library::LibraryResolver
     GLOBAL_LIBRARY_RESOLVER.get().cloned()
 }
 
+/// Recursively collect every `*.bhdl` file under `dir` into `out`.
+fn collect_bhdl_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in rd.flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            collect_bhdl_files(&p, out);
+        } else if p.extension().and_then(|e| e.to_str()) == Some("bhdl") {
+            out.push(p);
+        }
+    }
+}
+
+/// Merge one stdlib attribute into a slot, preferring a concrete value over a
+/// still-unresolved dotted reference. When the same entity name is defined in
+/// more than one stdlib file (e.g. `TPS54302` in both `tps54302.bhdl` and
+/// `tps54302_simple.bhdl`), this keeps the usable number rather than letting
+/// file order decide — a `BUCK_PARAMS.switching_frequency` that failed to
+/// resolve never masks a sibling's plain `500kHz`.
+fn merge_stdlib_attr(slot: &mut HashMap<String, String>, k: String, v: String) {
+    // A value that is a dotted identifier path (starts with a letter, only
+    // identifier chars + dots) is an unresolved const/field reference. A
+    // number like `0.05` starts with a digit, so it is never mis-flagged.
+    fn looks_unresolved(s: &str) -> bool {
+        let s = s.trim();
+        s.contains('.')
+            && s.chars().next().map(|c| c.is_alphabetic() || c == '_').unwrap_or(false)
+            && s.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.')
+    }
+    match slot.get(&k) {
+        None => {
+            slot.insert(k, v);
+        }
+        Some(existing) if looks_unresolved(existing) && !looks_unresolved(&v) => {
+            slot.insert(k, v);
+        }
+        Some(_) => {}
+    }
+}
+
 /// Main netlist generator that converts analyzer results to netlists
 pub struct NetlistGenerator {
     config: NetlistConfig,
@@ -1878,17 +1920,43 @@ impl NetlistGenerator {
                 Some((id, module.name.clone()))
             })
             .collect();
-        // Step 2: resolve each entity's attributes from the import loader,
-        // which resolves BOTH explicitly-imported entities and entities pulled
-        // in on-demand via the global library resolver (stdlib parts used
-        // without an `import` statement, like a bare `TPS54302()`). Borrows
-        // self.import_loader only.
+        // Step 2: resolve each entity's attributes. First try the import
+        // loader (explicitly-imported entities). For entities the loader
+        // can't supply — a bare `TPS54302()` used WITHOUT an `import`, which
+        // resolves only against a same-file stub that carries no attributes —
+        // fall back to scanning the bundled stdlib by entity name, so the
+        // stdlib part's real attributes (component_class, switching_frequency,
+        // topology, output_current, …) still reach the instance.
+        //
+        // Both paths use the *resolved* extractor so attribute values that are
+        // bare references to the entity's own consts/params (`f_sw = f_sw`,
+        // `switching_frequency = BUCK_PARAMS.switching_frequency`) land as the
+        // concrete number the sign-off ripple model needs, not the literal
+        // reference text.
+        use bhdl_analyzer::attribute_extraction::extract_module_attributes_resolved as extract_attrs;
+
+        // Which entity names need the stdlib fallback (loader has no attrs)?
+        let fallback_names: std::collections::HashSet<String> = id_names
+            .iter()
+            .filter(|(_, name)| {
+                self.import_loader
+                    .get_entity(name)
+                    .map(|e| extract_attrs(e).is_empty())
+                    .unwrap_or(true)
+            })
+            .map(|(_, name)| name.clone())
+            .collect();
+        let stdlib_attrs = Self::stdlib_entity_attribute_index(&fallback_names);
+
         let updates: Vec<(InstanceId, std::collections::HashMap<String, String>)> = id_names
             .into_iter()
             .filter_map(|(id, name)| {
-                let entity = self.import_loader.get_entity(&name)?;
-                let attrs =
-                    bhdl_analyzer::attribute_extraction::extract_module_attributes(entity);
+                let attrs = self
+                    .import_loader
+                    .get_entity(&name)
+                    .map(extract_attrs)
+                    .filter(|a| !a.is_empty())
+                    .or_else(|| stdlib_attrs.get(&name).cloned())?;
                 if attrs.is_empty() {
                     None
                 } else {
@@ -1915,6 +1983,67 @@ impl NetlistGenerator {
         if total > 0 {
             info!("Phase 4.6: stamped {total} entity attribute(s) across {touched} instance(s)");
         }
+    }
+
+    /// Build an (entity name → resolved attributes) index by scanning the
+    /// bundled stdlib for the requested entity names. This is the Phase 4.6
+    /// fallback for BARE (non-imported) parts: a circuit may use `TPS54302()`
+    /// with only a same-file pin stub (no attributes) and no `import`, so the
+    /// import loader has nothing — but the real part lives in the stdlib.
+    /// Returns an empty map when no names are requested or the stdlib can't be
+    /// located (an installed CLI run from an unrelated cwd), in which case the
+    /// instance simply keeps whatever attributes it already had.
+    fn stdlib_entity_attribute_index(
+        names: &std::collections::HashSet<String>,
+    ) -> HashMap<String, HashMap<String, String>> {
+        use bhdl_analyzer::attribute_extraction::extract_module_attributes_resolved;
+        let mut out: HashMap<String, HashMap<String, String>> = HashMap::new();
+        if names.is_empty() {
+            return out;
+        }
+        // Prefer the user's installed resolver; otherwise a discovery resolver
+        // rooted at the bundled stdlib (the same locating rule catalog
+        // discovery uses — `bhdl-stdlib` relative to the cwd).
+        let Some(resolver) = global_library_resolver().or_else(|| {
+            let stdlib = std::path::PathBuf::from("bhdl-stdlib");
+            stdlib
+                .is_dir()
+                .then(|| bhdl_common::library::LibraryResolver::new(None, &[], None, Some(stdlib)).ok())
+                .flatten()
+        }) else {
+            return out;
+        };
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        for root in resolver.library_roots() {
+            collect_bhdl_files(&root, &mut files);
+        }
+        files.sort(); // deterministic merge order
+        for path in files {
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let parse = bhdl_parser::parse(&text);
+            let Some(sf) = SourceFile::cast(parse.syntax()) else {
+                continue;
+            };
+            for entity in sf.entities() {
+                let Some(ename) = entity.name().map(|t| t.text().to_string()) else {
+                    continue;
+                };
+                if !names.contains(&ename) {
+                    continue;
+                }
+                let attrs = extract_module_attributes_resolved(&entity);
+                if attrs.is_empty() {
+                    continue;
+                }
+                let slot = out.entry(ename).or_default();
+                for (k, v) in attrs {
+                    merge_stdlib_attr(slot, k, v);
+                }
+            }
+        }
+        out
     }
 
     /// Add pins to a component module based on its type using stdlib definitions
