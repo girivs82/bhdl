@@ -255,6 +255,35 @@ pub fn compute_signoff(
     // and the output/input cap ripple-voltage derivations below.
     let op = recover_switcher_op(netlist, entity_attrs);
     let d_il = op.as_ref().and_then(|op| inductor_ripple_current(netlist, op));
+    // Parallel caps on a rail SHARE the switching ripple current — the ripple
+    // voltage is set by the TOTAL bank capacitance, not each cap alone (else a
+    // 100nF HF bypass next to a 22µF bulk cap reads an absurd multi-volt
+    // ripple). Sum the input-side and output-side bank capacitance, classified
+    // by each cap's DC node voltage.
+    let (c_in_total, c_out_total) = match op.as_ref() {
+        Some(op) => {
+            let near = |a: f64, b: f64| (a - b).abs() < 0.1 * b.max(1.0);
+            let (mut cin, mut cout) = (0.0, 0.0);
+            for inst in netlist.instances.values() {
+                if classify_component(netlist, inst.definition, &inst.attributes).as_deref()
+                    != Some("capacitor")
+                {
+                    continue;
+                }
+                let Some(c) = inst.attributes.get("value").and_then(|s| parse_si(s)) else {
+                    continue;
+                };
+                let v = inst_v.get(&inst.name).copied().unwrap_or(0.0);
+                if near(v, op.v_out) {
+                    cout += c;
+                } else if near(v, op.v_in) {
+                    cin += c;
+                }
+            }
+            (cin, cout)
+        }
+        None => (0.0, 0.0),
+    };
     let mut rows = Vec::new();
 
     for (id, inst) in netlist.instances.iter() {
@@ -347,19 +376,28 @@ pub fn compute_signoff(
                     }
                 }
                 "capacitor" => {
+                    // Ripple voltage is a per-RAIL quantity set by the whole
+                    // parallel bank (c_*_total), shared by every cap on the
+                    // rail — not a function of this cap's own value.
                     let v_dc = stress.unwrap_or(0.0);
                     let near = |a: f64, b: f64| (a - b).abs() < 0.1 * b.max(1.0);
-                    if let Some(c) = parse_si(&value).filter(|c| *c > 0.0) {
-                        if near(v_dc, op.v_out) {
-                            // Output cap: total voltage = V_out + ΔV_out/2.
-                            let dv = d_il / (8.0 * op.f_sw * c);
-                            stress = Some(op.v_out + dv / 2.0);
-                            ripple = Some(format!("ΔV_out={:.1}mV", dv * 1000.0));
-                        } else if near(v_dc, op.v_in) {
-                            // Input cap: ripple voltage (stress stays the rail).
-                            let dv = op.i_out * op.duty * (1.0 - op.duty) / (op.f_sw * c);
-                            ripple = Some(format!("ΔV_in={:.1}mV", dv * 1000.0));
-                        }
+                    if near(v_dc, op.v_out) && c_out_total > 0.0 {
+                        // Output cap: total voltage = V_out + ΔV_out/2.
+                        let dv = d_il / (8.0 * op.f_sw * c_out_total);
+                        stress = Some(op.v_out + dv / 2.0);
+                        ripple = Some(format!(
+                            "ΔV_out={:.1}mV (bank {})",
+                            dv * 1000.0,
+                            fmt_si(c_out_total, "F")
+                        ));
+                    } else if near(v_dc, op.v_in) && c_in_total > 0.0 {
+                        // Input cap: ripple voltage (stress stays the rail).
+                        let dv = op.i_out * op.duty * (1.0 - op.duty) / (op.f_sw * c_in_total);
+                        ripple = Some(format!(
+                            "ΔV_in={:.1}mV (bank {})",
+                            dv * 1000.0,
+                            fmt_si(c_in_total, "F")
+                        ));
                     }
                 }
                 _ => {}
