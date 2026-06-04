@@ -120,8 +120,11 @@ pub fn extract_module_attributes_resolved(entity: &Entity) -> HashMap<String, St
         }
     }
 
-    // (name -> default value text) for constructor params with a default.
+    // ALL constructor param names (with or without a default), plus the
+    // subset that have a default value. We need the full set to recognise a
+    // reference; the defaults to resolve one.
     let mut param_defaults: HashMap<String, String> = HashMap::new();
+    let mut param_names: std::collections::HashSet<String> = std::collections::HashSet::new();
     for param_list in syntax.children().filter(|c| c.kind() == SyntaxKind::PARAM_LIST) {
         for pd in param_list.children().filter(|c| c.kind() == SyntaxKind::PARAM_DECL) {
             let mut pname: Option<String> = None;
@@ -148,16 +151,41 @@ pub fn extract_module_attributes_resolved(entity: &Entity) -> HashMap<String, St
                     _ => {}
                 }
             }
-            if let (Some(p), false) = (pname, default.trim().is_empty()) {
-                param_defaults.insert(p, unquote(default.trim()));
+            if let Some(p) = pname {
+                param_names.insert(p.clone());
+                if !default.trim().is_empty() {
+                    param_defaults.insert(p, unquote(default.trim()));
+                }
             }
         }
     }
 
-    for v in attrs.values_mut() {
-        if let Some(resolved) = resolve_attr_ref(v.trim(), &consts, &param_defaults) {
-            *v = resolved;
+    // A value is a REFERENCE only if its head identifier names a constructor
+    // param or a `const` — NOT merely because it looks like an identifier. This
+    // matters because attribute string values are stored unquoted, so a literal
+    // like `attribute component_class = "voltage_regulator"` reads as the bare
+    // word `voltage_regulator`; it must be KEPT, while `attribute resistance =
+    // value` (the Res entity's un-defaulted `value` param) is a real reference
+    // that can't resolve and must be DROPPED — stamping the literal text "value"
+    // would make the SPICE converter fall back to a 1kΩ default and corrupt the
+    // operating point.
+    let is_reference = |text: &str| -> bool {
+        let head = text.trim().split('.').next().unwrap_or("");
+        !head.is_empty() && (param_names.contains(head) || consts.contains_key(head))
+    };
+    let mut drop: Vec<String> = Vec::new();
+    for (k, v) in attrs.iter_mut() {
+        let t = v.trim().to_string();
+        if !is_reference(&t) {
+            continue; // a literal (string / number / bool / expr) — keep as-is
         }
+        match resolve_attr_ref(&t, &consts, &param_defaults) {
+            Some(resolved) => *v = resolved,
+            None => drop.push(k.clone()), // reference that can't resolve (un-defaulted param)
+        }
+    }
+    for k in drop {
+        attrs.remove(&k);
     }
     attrs
 }
