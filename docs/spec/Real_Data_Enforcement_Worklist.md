@@ -21,17 +21,10 @@ Audit of every fabricated value in the analysis / selection path (per
   real LED/diode/R defaults live in `model_extractor.rs` (below).
 - [ ] `lib.rs:813,1089` param parse `.unwrap_or(0.0)`.
 - [ ] `lib.rs:966,1219` supply_voltage `.unwrap_or(5.0)`.
-- [ ] `unified_simulation.rs:597` R=1000 / `:616` C=100n / `:621` ESR=0.1 / `:622` ESL=1n.
 - [ ] `spice_synthesis.rs:251` divider load_current `.unwrap_or(0.001)`.
-- [ ] `netlist_converter.rs` regulator vout `.unwrap_or(5.0)`; read_param defaults (rds_on=0.2, f_sw=500e3, t_sw=80n, i_quiescent=5e-3); 10kΩ dropout.
-- [ ] `model_extractor.rs:107-133` default params (resistance=1000, capacitance=1e-9, inductance=1e-6, Vf=0.7/2.0, voltage=5, Koren nominals). **LIVE** (`ComponentModelExtractor`, exported). Seeds a fabricated default per SPICE-model type, THEN overrides with entity values — so the default only "wins" for an under-declared component. This + `netlist_converter.rs` (rds_on/f_sw/t_sw/i_q/vout) + `unified_simulation.rs` (R/C/ESR/ESL) form ONE chained device-model default stack in the live SPICE-sim path.
-  - DESIGN DECISION needed before enforcing: removing the seed makes
-    `ExtractedModel.parameters` potentially empty → must decide how UNCHECKED
-    propagates through model_extractor → netlist_converter → unified_simulation
-    (skip the component / drop confidence to 0 + warn / hard-error the sim).
-    Validation surface is the SPICE-sim suite, NOT the connectivity oracle
-    (which this path never touches). Blast radius: any sim of an under-declared
-    Res/Cap/diode/regulator.
+- [x] `model_extractor.rs` default params (resistance=1000, capacitance=1e-9, inductance=1e-6, Vf=0.7/2.0, voltage=5, Koren nominals) — **done (sweep 3/N)**. Decision: **hard-error the sim**. Removed the fabricated default-seed; `extract_from_data` now builds parameters only from entity-declared values and HARD-ERRORS (naming the component + missing param) if the SPICE model's required parameter(s) are absent. Measured: connectivity oracle 51/51 (freeze path untouched); `bom --simulate` sign-off now hard-errors on **30/51** circuits (under-declared LEDs/diodes/triodes/regulators), 20 clean + buck survives. This is the intended "maximally force the data problem" degradation.
+- [ ] `netlist_converter.rs` regulator vout `.unwrap_or(5.0)`; read_param defaults (rds_on=0.2, f_sw=500e3, t_sw=80n, i_quiescent=5e-3); 10kΩ dropout. Same chain; many are now SHADOWED by the model_extractor hard-error (convert() aborts first) but the regulator-specific ones still apply post-extraction — audit which remain reachable.
+- [ ] `unified_simulation.rs:597` R=1000 / `:616` C=100n / `:621` ESR=0.1 / `:622` ESL=1n — separate sim entry; apply the same hard-error rule.
 
 ## C. Proxies (a different real value substituted)
 - [ ] `signoff.rs:147` `i_out` = regulator rated output_current used as the actual per-rail load. Real load must come from the rail / a declared load.

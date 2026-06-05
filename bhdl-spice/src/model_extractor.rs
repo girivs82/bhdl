@@ -94,48 +94,22 @@ impl ComponentModelExtractor {
         let component_type = self.component_registry.get_component_type(&module_type, &data)
             .ok_or_else(|| anyhow::anyhow!("Unknown component type: {}", module_type))?;
         
-        // Get default parameters from registry
+        // Real-Data Policy (docs/spec/Real_Data_Policy.md): NO fabricated
+        // default parameters. The model is built solely from values the entity
+        // declares; a component that does not declare the parameters its SPICE
+        // model needs is a HARD ERROR — never silently simulated on a guessed
+        // 1kΩ / 1nF / 0.7V / Koren-nominal value. (The previous code seeded a
+        // per-model default here, then overrode it; the seed is removed.)
         let mut parameters = HashMap::new();
-        
-        // Use registry's default parameters as base
         let component_class = data.get("component_class")
             .cloned()
             .unwrap_or_else(|| module_type.clone());
-        if let Some(spice_model) = self.component_registry.get_spice_model(&component_class) {
-            // Get default parameters based on SPICE model type
-            match spice_model {
-                "resistor" => {
-                    parameters.insert("resistance".to_string(), 1000.0); // 1kΩ default
-                }
-                "capacitor" => {
-                    parameters.insert("capacitance".to_string(), 1e-9); // 1nF default
-                }
-                "inductor" => {
-                    parameters.insert("inductance".to_string(), 1e-6); // 1µH default
-                }
-                "diode" | "led" => {
-                    parameters.insert("forward_voltage".to_string(), 0.7); // 0.7V default
-                    if spice_model == "led" {
-                        parameters.insert("forward_voltage".to_string(), 2.0); // 2V for LED
-                    }
-                }
-                "voltage_source" => {
-                    parameters.insert("voltage".to_string(), 5.0); // 5V default
-                }
-                "triode" => {
-                    // Nominal 6SN7 Koren parameters — overridden below by any
-                    // values the entity supplies.
-                    parameters.insert("mu".to_string(), 20.0);
-                    parameters.insert("ex".to_string(), 1.4);
-                    parameters.insert("kg1".to_string(), 1180.0);
-                    parameters.insert("kp".to_string(), 470.0);
-                    parameters.insert("kvb".to_string(), 300.0);
-                }
-                _ => {}
-            }
-        }
-        
-        // Override with any specified values from data
+        let spice_model = self
+            .component_registry
+            .get_spice_model(&component_class)
+            .map(|s| s.to_string());
+
+        // Build parameters ONLY from entity-supplied values.
         for (key, value) in &data {
             if let Some(num_value) = self.parse_value(value) {
                 // Map common attribute names to parameter names
@@ -167,6 +141,36 @@ impl ComponentModelExtractor {
             }
         }
         
+        // Hard-gate (Real-Data Policy): every parameter the SPICE model needs
+        // must be a real, entity-declared value. Any missing ⇒ hard error,
+        // naming the component and the missing parameter(s). No fabrication.
+        if let Some(sm) = spice_model.as_deref() {
+            let required: &[&str] = match sm {
+                "resistor" => &["resistance"],
+                "capacitor" => &["capacitance"],
+                "inductor" => &["inductance"],
+                "diode" | "led" => &["forward_voltage"],
+                "voltage_source" => &["voltage"],
+                "triode" => &["mu", "ex", "kg1", "kp", "kvb"],
+                _ => &[],
+            };
+            let missing: Vec<&str> = required
+                .iter()
+                .copied()
+                .filter(|k| !parameters.contains_key(*k))
+                .collect();
+            if !missing.is_empty() {
+                return Err(anyhow::anyhow!(
+                    "component '{}' ({}) is missing real SPICE parameter(s) {:?} — \
+                     Real-Data Policy: no fabricated defaults; declare them on the \
+                     stdlib entity (the datasheet)",
+                    name,
+                    sm,
+                    missing
+                ));
+            }
+        }
+
         Ok(ExtractedModel {
             name,
             source: ModelSource::Stdlib,
@@ -176,7 +180,7 @@ impl ComponentModelExtractor {
             confidence: 0.9,
         })
     }
-    
+
     /// Extract model from symbol table entry
     pub fn extract_from_symbol_table(
         &mut self,
