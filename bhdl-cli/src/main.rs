@@ -2178,6 +2178,14 @@ async fn cmd_bom(
                         {
                             print!("{report}");
                         }
+                        // Control-loop stability (analytic, datasheet model).
+                        if let Some(stab) = bhdl_synthesizer::signoff::compute_stability(
+                            &netlist,
+                            &sv,
+                            &analysis.entity_attribute_index,
+                        ) {
+                            print!("{}", bhdl_synthesizer::signoff::format_stability(&stab));
+                        }
                     }
                     Err(e) => eprintln!(
                         "  {}",

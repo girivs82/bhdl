@@ -32,7 +32,20 @@ entity TPS54302() {
     attribute efficiency = 92%;
     attribute dropout_voltage = 0.5V;
     attribute feedback_voltage = 0.6V;
-    
+
+    // Control-loop stability constants (datasheet SLVSDG6C). The part is
+    // INTERNALLY COMPENSATED — TI does not publish the internal comp R/C, so
+    // the loop is characterised by TI's published closed-form equations:
+    //   crossover  f_co = loop_crossover_k / (V_out · C_out)        [Eq 14]
+    //   target     f_co < f_sw · loop_crossover_max_ratio  (= f_sw/10)
+    //   ceramic C_out → low phase margin unless a feedforward cap
+    //     C_ff = 1 / (2π · f_co · R_top)                            [Eq 16]
+    // `loop_crossover_k` (the "5.1") bundles the error-amp gm (240µA/V), the
+    // current-sense/modulator gain and the internal compensation into one
+    // datasheet-characterised constant.
+    attribute loop_crossover_k = 5.1;
+    attribute loop_crossover_max_ratio = 0.1;
+
     // Protection features
     attribute has_thermal_protection = true;
     attribute has_current_limiting = true;
