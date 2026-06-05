@@ -306,9 +306,30 @@ pub enum StabilityVerdict {
     LowMargin,
     /// Crossover above the datasheet target (f_sw·loop_ratio) — too fast.
     FastCrossover,
-    /// A required real-data value (output-cap ESR) is not available — per the
-    /// Real-Data Policy we never substitute a fabricated value, so the phase
-    /// margin cannot be verified.
+    /// A required real-data value (output-cap ESR or even the cap *type*) is not
+    /// available — per the Real-Data Policy we never substitute a fabricated
+    /// value, so the phase margin cannot be verified.
+    Unchecked,
+}
+
+/// On what basis the output-cap ESR zero (the loop's phase-boost term) was
+/// established — the heart of the ceramic-vs-bulk split.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EsrBasis {
+    /// Computed numerically from each output cap's REAL published ESR
+    /// (electrolytic / tantalum / polymer — DigiKey carries these). The ESR
+    /// zero `f_z(esr)` is a real number.
+    Real,
+    /// The output bank contains a ceramic (MLCC). Ceramic ESR is structurally
+    /// single-digit mΩ, so `f_z(esr)/f_co = V_out/(2π·ESR·K)` is provably ≫ 1
+    /// (and is INDEPENDENT of C_out) — the ESR zero sits far above crossover
+    /// and provides no phase boost there, REGARDLESS of the exact mΩ. This is a
+    /// structural inequality, not a fabricated number: phase margin must come
+    /// from a feedforward cap, not the ESR zero. No numeric `f_z(esr)`.
+    CeramicStructural,
+    /// At least one output cap's ESR is unknown AND its type is not identifiable
+    /// as ceramic — neither a real ESR nor the structural ceramic argument
+    /// applies, so the phase margin is genuinely UNCHECKED.
     Unchecked,
 }
 
@@ -326,15 +347,46 @@ pub struct StabilityResult {
     /// Datasheet crossover target f_sw·loop_ratio (real, not 0.1·f_sw).
     pub crossover_target: f64,
     pub crossover_ok: bool,
-    /// ESR zero `1/(2π·ESR·C_out)` of the output bank — `None` when the real
-    /// ESR is not available (verdict then `Unchecked`).
+    /// ESR zero `1/(2π·ESR·C_out)` of the output bank — `Some` only under
+    /// `EsrBasis::Real`. `None` for the ceramic-structural case (the zero is
+    /// known-high but not computed to a number) and for `Unchecked`.
     pub f_z_esr: Option<f64>,
+    /// How the ESR-zero phase-boost term was established (real / ceramic-
+    /// structural / unchecked).
+    pub esr_basis: EsrBasis,
     pub ff_present: bool,
     pub r_top: Option<f64>,
     pub c_ff_required: Option<f64>,
-    /// Output-cap refdes that did not supply a real ESR value (Real-Data Policy).
+    /// Output-cap refdes whose ESR *and* type are both unknown (Real-Data
+    /// Policy → UNCHECKED). A ceramic with no numeric ESR is NOT listed here —
+    /// it's handled structurally.
     pub missing_esr: Vec<String>,
     pub verdict: StabilityVerdict,
+}
+
+/// Ceramic (Class-I/II) dielectric codes. A cap tagged with one of these has
+/// structurally low ESR (single-digit mΩ) — enough to place its ESR zero far
+/// above any practical crossover (see `EsrBasis::CeramicStructural`).
+const CERAMIC_DIELECTRICS: &[&str] = &[
+    "C0G", "NP0", "U2J", "X5R", "X6S", "X6T", "X7R", "X7S", "X7T", "X8R", "X8L",
+    "Y5V", "Z5U", "Y5U",
+];
+
+/// Is this capacitor a ceramic (MLCC)? Decided from the real `dielectric` /
+/// `dielectric_hint` attribute (set by the provider selection / cap sizer).
+/// `None`-dielectric ⇒ not identifiable as ceramic (caller treats as unknown).
+fn cap_is_ceramic(inst: &bhdl_netlist::Instance) -> bool {
+    let d = inst
+        .attributes
+        .get("dielectric")
+        .or_else(|| inst.attributes.get("dielectric_hint"));
+    match d {
+        Some(s) => {
+            let up = s.to_ascii_uppercase();
+            CERAMIC_DIELECTRICS.iter().any(|c| up.contains(c))
+        }
+        None => false,
+    }
 }
 
 /// Evaluate loop stability from the netlist + operating point. Returns `None`
@@ -360,14 +412,21 @@ pub fn compute_stability(
         classify_component(netlist, inst.definition, &inst.attributes).as_deref() == Some(class)
     };
 
-    // Output capacitor bank: sum C, and combine each cap's REAL ESR in
-    // parallel. Real-Data Policy (docs/spec/Real_Data_Policy.md): the ESR must
-    // come from the part's catalogue/datasheet `esr` value — NEVER a
-    // dielectric/package estimate, and NOT `sim_max_esr` (that is the max-ESR
-    // *requirement* a part must beat, not its actual ESR). A cap with no real
-    // ESR is recorded; if any output cap lacks it the phase margin is reported
-    // UNCHECKED rather than computed from a fabricated number.
-    let (mut c_out, mut g_esr) = (0.0f64, 0.0f64); // g_esr = Σ 1/ESR_i (parallel)
+    // Output capacitor bank. Sum C, and classify each cap's ESR-zero basis
+    // (Real-Data Policy, docs/spec/Real_Data_Policy.md):
+    //   • REAL ESR (electrolytic/tantalum/polymer): combine 1/ESR in parallel
+    //     for a numeric bank ESR zero. NEVER a dielectric/package estimate, and
+    //     NOT `sim_max_esr` (that is the max-ESR a part must beat).
+    //   • CERAMIC (MLCC, identified by dielectric): no numeric ESR needed — its
+    //     ESR zero is structurally ≫ crossover (f_z/f_co = V_out/(2π·ESR·K) is
+    //     ≫1 and C_out-independent for single-digit-mΩ ESR), so it provides no
+    //     phase boost. A real inequality, not a fabricated number.
+    //   • UNKNOWN (no real ESR, not identifiable as ceramic): genuinely
+    //     UNCHECKED — we won't guess the type or the ESR.
+    let mut c_out = 0.0f64;
+    let mut g_esr = 0.0f64; // Σ 1/ESR_i over caps with REAL ESR
+    let mut real_esr_count = 0usize;
+    let mut ceramic_present = false;
     let mut missing_esr: Vec<String> = Vec::new();
     for inst in netlist.instances.values() {
         if !role_is(inst, "capacitor") {
@@ -379,13 +438,9 @@ pub fn compute_stability(
                 continue;
             };
             c_out += c;
-            match inst
-                .attributes
-                .get("esr")
-                .and_then(|s| parse_si(s))
-                .filter(|e| *e > 0.0)
-            {
-                Some(esr) => g_esr += 1.0 / esr,
+            match inst.attributes.get("esr").and_then(|s| parse_si(s)).filter(|e| *e > 0.0) {
+                Some(esr) => { g_esr += 1.0 / esr; real_esr_count += 1; }
+                None if cap_is_ceramic(inst) => ceramic_present = true,
                 None => missing_esr.push(inst.name.clone()),
             }
         }
@@ -418,14 +473,16 @@ pub fn compute_stability(
             })
     });
 
-    // Phase margin needs the ESR zero, which needs real ESR. Missing ⇒ UNCHECKED.
+    // An output cap whose ESR *and* type are both unknown ⇒ genuinely
+    // UNCHECKED (can't apply the real ESR zero nor the ceramic argument).
     if !missing_esr.is_empty() {
         return Some(StabilityResult {
             f_co,
             f_sw: op.f_sw,
-        crossover_target,
+            crossover_target,
             crossover_ok,
             f_z_esr: None,
+            esr_basis: EsrBasis::Unchecked,
             ff_present,
             r_top,
             c_ff_required: None,
@@ -434,10 +491,21 @@ pub fn compute_stability(
         });
     }
 
-    let f_z_esr = 1.0 / (2.0 * PI * (1.0 / g_esr) * c_out);
-    // The ESR zero only boosts phase at crossover if it sits at/below it; well
-    // above (low ESR) ⇒ negligible boost ⇒ low margin without a feedforward cap.
-    let esr_zero_high = f_z_esr > 10.0 * f_co;
+    // Establish the ESR-zero phase-boost term.
+    //   • Ceramic in the bank ⇒ its low ESR dominates the bank's HF impedance,
+    //     so the bank ESR zero is structurally ≫ crossover (no numeric ESR
+    //     needed, and it holds even mixed with bulk caps).
+    //   • Otherwise all output caps have REAL ESR ⇒ compute the bank ESR zero.
+    let (f_z_esr, esr_basis, esr_zero_high) = if ceramic_present {
+        (None, EsrBasis::CeramicStructural, true)
+    } else {
+        // real_esr_count > 0 here (c_out > 0 and missing/ceramic both empty)
+        let fz = 1.0 / (2.0 * PI * (1.0 / g_esr) * c_out);
+        (Some(fz), EsrBasis::Real, fz > 10.0 * f_co)
+    };
+    // The ESR zero boosts phase at crossover only if it sits at/below it; ≫
+    // crossover (low/ceramic ESR) ⇒ no boost ⇒ low margin without a feedforward
+    // cap. This verdict is now real for ceramics, not UNCHECKED.
     let c_ff_required = if esr_zero_high && !ff_present {
         r_top.map(|rt| 1.0 / (2.0 * PI * f_co * rt))
     } else {
@@ -456,7 +524,8 @@ pub fn compute_stability(
         f_sw: op.f_sw,
         crossover_target,
         crossover_ok,
-        f_z_esr: Some(f_z_esr),
+        f_z_esr,
+        esr_basis,
         ff_present,
         r_top,
         c_ff_required,
@@ -480,23 +549,27 @@ pub fn format_stability(s: &StabilityResult) -> String {
         fmt_si(s.crossover_target, "Hz"),
         if s.crossover_ok { "OK" } else { "OVER" },
     ));
-    match s.f_z_esr {
-        Some(fz) => {
+    match s.esr_basis {
+        EsrBasis::Real => {
+            let fz = s.f_z_esr.unwrap_or(0.0);
             let high = fz > 10.0 * s.f_co;
             out.push_str(&format!(
-                "- ESR zero f_z(esr) = {} ({} crossover ⇒ {}); feedforward cap {}\n",
+                "- ESR zero f_z(esr) = {} (real datasheet ESR; {} crossover ⇒ {}); feedforward cap {}\n",
                 fmt_si(fz, "Hz"),
                 if high { "≫" } else { "≤" },
-                if high {
-                    "no phase boost there"
-                } else {
-                    "adds phase boost"
-                },
+                if high { "no phase boost there" } else { "adds phase boost" },
                 if s.ff_present { "present" } else { "absent" },
             ));
         }
-        None => out.push_str(&format!(
-            "- ESR zero: **not computable — output cap(s) {} provide no real ESR data**\n",
+        EsrBasis::CeramicStructural => out.push_str(&format!(
+            "- ESR zero: ceramic output bank ⇒ structurally ≫ crossover \
+             (f_z/f_co = V_out/(2π·ESR·K) ≫ 1, C_out-independent) ⇒ no phase boost; \
+             phase margin must come from a feedforward cap ({})\n",
+            if s.ff_present { "present" } else { "absent" },
+        )),
+        EsrBasis::Unchecked => out.push_str(&format!(
+            "- ESR zero: **not computable — output cap(s) {} have neither a real ESR \
+             nor an identifiable ceramic dielectric**\n",
             s.missing_esr.join(", "),
         )),
     }
@@ -513,10 +586,11 @@ pub fn format_stability(s: &StabilityResult) -> String {
     }
     if s.verdict == StabilityVerdict::Unchecked {
         out.push_str(
-            "_Phase margin needs the output-cap ESR, and the catalogue provides none \
-             (ceramics are specified by dissipation factor / impedance, not a single ESR). \
-             Per the Real-Data Policy no value is fabricated; source ESR/DF into the \
-             catalogue, or prefer parts/vendors that publish it._\n",
+            "_Phase margin is UNCHECKED: an output cap has neither a real published ESR \
+             (electrolytic/tantalum/polymer — sourced via the DigiKey provider) nor an \
+             identifiable ceramic dielectric (which would make the ESR zero structurally \
+             negligible). Per the Real-Data Policy no value is fabricated; tag the cap's \
+             dielectric or source a real ESR._\n",
         );
     }
     out

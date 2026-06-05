@@ -204,6 +204,18 @@ pub struct LockedPart {
     /// Which provider resolved it (informational).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
+    /// Real published ESR (ohms) for the pinned part, when the provider
+    /// supplied it. Pinned so a locked rebuild keeps real-data sign-off
+    /// (loop stability / ripple) instead of falling back to UNCHECKED.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub esr_ohms: Option<f64>,
+    /// Frequency (Hz) the pinned ESR is specified at, when stated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub esr_test_freq_hz: Option<f64>,
+    /// The pinned part's dielectric (e.g. `"X7R"`) for ceramics — pinned so a
+    /// locked rebuild keeps the real ceramic-vs-bulk stability classification.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dielectric: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -935,6 +947,9 @@ mod tests {
                 manufacturer: Some("YAGEO".into()),
                 vendor_sku: Some("C860829".into()),
                 provider: Some("bhdl-jlcparts-provider".into()),
+                esr_ohms: None,
+                esr_test_freq_hz: None,
+                dielectric: None,
             }],
         };
         let p = t.join("bhdl.lock");

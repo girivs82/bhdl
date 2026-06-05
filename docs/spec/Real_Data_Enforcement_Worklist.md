@@ -46,10 +46,17 @@ only Temperature Coefficient / Tolerance / Voltage / Capacitance. So **ceramic
 ESR stays UNCHECKED even with DigiKey**; the earlier "DF → derive ceramic ESR"
 premise does not hold on this catalogue. Ceramic ESR needs manufacturer
 impedance curves (datasheet extraction), not a vendor parameter.
-- [ ] WIRE-UP (next): extend `PluginSelection` (analyzer plugin.rs) with
-  `esr_ohms`/`esr_test_freq_hz`; wire the resolved ESR into the netlist cap
-  `esr` attribute so sign-off stability + cap-sizing read real data and flip
-  out of UNCHECKED/UNACCOUNTED for non-ceramic output caps.
+- [x] WIRE-UP: `PluginSelection` carries `esr_ohms`/`esr_test_freq_hz`/
+  `dielectric`; both providers emit them; glacier writes them onto the netlist
+  cap `esr`/`dielectric` attributes (+ pinned in `bhdl.lock`). Sign-off
+  stability now splits the ESR zero three ways (Real-Data Policy):
+  **Real** (numeric ESR zero from a part's published ESR — electrolytic/
+  tantalum/polymer), **CeramicStructural** (ceramic identified by dielectric ⇒
+  ESR zero provably ≫ crossover since f_z/f_co = V_out/(2π·ESR·K) ≫1 and
+  C_out-independent ⇒ no phase boost ⇒ real verdict from a structural
+  inequality, not a number), and **Unchecked** (ESR and type both unknown).
+  The TPS54302 buck now reports a real **LOW PHASE MARGIN** (was UNCHECKED) with
+  the C_ff fix. Oracle 51/51.
 
 ## The blocker: enforcement is gated on DATA AVAILABILITY
 Most of B/C/A cannot become "real value or UNCHECKED" usefully until the
