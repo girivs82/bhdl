@@ -617,10 +617,15 @@ impl NetlistToSpiceConverter {
         // Special handling for voltage regulators (3-terminal)
         // Use pin types from stdlib: power-in = VIN, power-out = VOUT, ground = GND
         if extracted_model.component_type == ComponentType::VoltageRegulator {
+            // Real-Data Policy: the regulator's output voltage must be a real
+            // entity-declared value — no fabricated 5 V fallback.
             let vout_voltage = extracted_model.parameters.get("vout").copied()
                 .or(extracted_model.parameters.get("output_voltage").copied())
                 .or(extracted_model.parameters.get("voltage").copied())
-                .unwrap_or(5.0);
+                .ok_or_else(|| anyhow::anyhow!(
+                    "regulator '{}' has no real output voltage (vout/output_voltage/voltage) — \
+                     Real-Data Policy: declare it on the stdlib entity (the datasheet)",
+                    instance_name))?;
 
             let pin_info = Self::get_pin_net_info(netlist, instance_id);
 
@@ -650,12 +655,18 @@ impl NetlistToSpiceConverter {
                 .unwrap_or_default();
             let is_switching = component_class == "switching_regulator";
 
-            // Helper: read a parameter from extracted_model (f64) or attributes (string)
-            let read_param = |name: &str, default: f64| -> f64 {
+            // Helper: REQUIRE a real parameter from extracted_model (f64) or
+            // attributes (string). Real-Data Policy: no fabricated default —
+            // a regulator that does not declare its loss-model constants is a
+            // hard error (the device datasheet must supply rds_on / f_sw / …).
+            let req_param = |name: &str| -> anyhow::Result<f64> {
                 extracted_model.parameters.get(name).copied()
                     .or_else(|| extracted_model.attributes.get(name)
                         .and_then(|s| s.parse::<f64>().ok()))
-                    .unwrap_or(default)
+                    .ok_or_else(|| anyhow::anyhow!(
+                        "regulator '{}' is missing real SPICE parameter '{}' — Real-Data \
+                         Policy: declare it on the stdlib entity (the datasheet)",
+                        instance_name, name))
             };
 
             // Add voltage source on output: VOUT → GND = vout_voltage
@@ -669,11 +680,11 @@ impl NetlistToSpiceConverter {
                 // Store device loss model parameters for post-simulation power
                 // computation from physics, not lumped estimates.
                 // I_quiescent applies to both linear and switching regulators.
-                vout_meta.insert(META_I_QUIESCENT.to_string(), read_param("i_quiescent", 5e-3).to_string());
+                vout_meta.insert(META_I_QUIESCENT.to_string(), req_param("i_quiescent")?.to_string());
                 if is_switching {
-                    vout_meta.insert(META_RDS_ON.to_string(), read_param("rds_on", 0.2).to_string());
-                    vout_meta.insert(META_F_SW.to_string(), read_param("f_sw", 500e3).to_string());
-                    vout_meta.insert(META_T_SW.to_string(), read_param("t_sw", 80e-9).to_string());
+                    vout_meta.insert(META_RDS_ON.to_string(), req_param("rds_on")?.to_string());
+                    vout_meta.insert(META_F_SW.to_string(), req_param("f_sw")?.to_string());
+                    vout_meta.insert(META_T_SW.to_string(), req_param("t_sw")?.to_string());
                 }
                 circuit.add_branch_with_metadata(
                     format!("{}_vout", instance_name),

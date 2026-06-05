@@ -588,13 +588,16 @@ impl UnifiedSimulationOrchestrator {
                         "Res" | "Resistor" => {
                             if let Some(ref nonlinear) = sim_feedback.nonlinear_model {
                                 // Extract resistance from component parameters
+                                // Real-Data Policy: real declared resistance or hard error.
                                 let resistance = component.parameters.iter()
                                     .find(|p| p.name.to_lowercase() == "resistance" || p.name.to_lowercase() == "value")
                                     .and_then(|p| match p.value {
                                         crate::component_inference::ParameterValue::Resistance(val) => Some(val),
                                         _ => None,
                                     })
-                                    .unwrap_or(1000.0);
+                                    .ok_or_else(|| format!(
+                                        "resistor '{}' has no real resistance value — Real-Data Policy: \
+                                         declare it on the entity", instance_name))?;
                                     
                                 circuit.add_resistor_component(
                                     instance_name, 
@@ -607,19 +610,25 @@ impl UnifiedSimulationOrchestrator {
                         "Cap" | "Capacitor" => {
                             if let Some(ref freq_resp) = sim_feedback.frequency_response {
                                 // Extract capacitance from component parameters
+                                // Real-Data Policy: real declared capacitance or hard error.
                                 let capacitance = component.parameters.iter()
                                     .find(|p| p.name.to_lowercase() == "capacitance" || p.name.to_lowercase() == "value")
                                     .and_then(|p| match p.value {
                                         crate::component_inference::ParameterValue::Capacitance(val) => Some(val),
                                         _ => None,
                                     })
-                                    .unwrap_or(100e-9);
-                                    
+                                    .ok_or_else(|| format!(
+                                        "capacitor '{}' has no real capacitance value — Real-Data Policy: \
+                                         declare it on the entity", instance_name))?;
+
+                                // Parasitics: a real value if the stdlib model supplies one, else
+                                // IDEAL (0) — an ideal element makes no measurement claim, whereas a
+                                // fabricated 0.1Ω/1nH would. (Real-Data Policy: no invented value.)
                                 circuit.add_capacitor_component(
                                     instance_name,
                                     capacitance,
-                                    freq_resp.esr.unwrap_or(0.1),
-                                    freq_resp.esl.unwrap_or(1e-9)
+                                    freq_resp.esr.unwrap_or(0.0),
+                                    freq_resp.esl.unwrap_or(0.0)
                                 );
                                 info!("Added capacitor {} with {:.0}nF from stdlib", instance_name, capacitance * 1e9);
                             }
