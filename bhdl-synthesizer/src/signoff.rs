@@ -96,6 +96,14 @@ struct SwitcherOp {
     /// regulator's `ripple_ratio` attribute, else the 0.3 default. Drives the
     /// Stage-C inductor value-stepping.
     ripple_ratio: f64,
+    /// Control-loop crossover constant K in `f_co = K / (V_out·C_out)` (the
+    /// device's `loop_crossover_k` datasheet constant). `None` ⇒ no loop model
+    /// declared ⇒ stability reported unchecked.
+    loop_k: Option<f64>,
+    /// Crossover must stay below `f_sw · loop_ratio` (datasheet ≈ f_sw/10).
+    loop_ratio: f64,
+    /// Feedback reference voltage (regulation point), for divider-top detection.
+    v_ref: f64,
 }
 
 /// Default inductor ripple-ratio target when the regulator declares none.
@@ -115,7 +123,8 @@ fn recover_switcher_op(
     // onto the netlist instance or module (only `entity_attribute_index`
     // carries them), so look up each key in three places, instance first:
     //   instance attrs → module attrs → entity_attribute_index[entity name].
-    let (f_sw, i_out, ripple_ratio) = netlist.instances.values().find_map(|inst| {
+    let (f_sw, i_out, ripple_ratio, loop_k, loop_ratio, v_ref) =
+        netlist.instances.values().find_map(|inst| {
         let module = netlist.modules.get(inst.definition);
         let ent = module.and_then(|m| entity_attrs.get(&m.name));
         let get = |k: &str| {
@@ -151,7 +160,19 @@ fn recover_switcher_op(
             .and_then(|s| parse_si(s))
             .filter(|r| *r > 0.0)
             .unwrap_or(DEFAULT_RIPPLE_RATIO);
-        Some((f_sw, i_out, ripple_ratio))
+        let loop_k = get("loop_crossover_k")
+            .and_then(|s| parse_si(s))
+            .filter(|k| *k > 0.0);
+        let loop_ratio = get("loop_crossover_max_ratio")
+            .and_then(|s| parse_si(s))
+            .filter(|r| *r > 0.0)
+            .unwrap_or(0.1);
+        let v_ref = get("feedback_voltage")
+            .or_else(|| get("v_ref"))
+            .and_then(|s| parse_si(s))
+            .filter(|v| *v > 0.0)
+            .unwrap_or(0.6);
+        Some((f_sw, i_out, ripple_ratio, loop_k, loop_ratio, v_ref))
     })?;
     let rails: Vec<f64> = declared_net_voltages(netlist)
         .into_values()
@@ -176,6 +197,9 @@ fn recover_switcher_op(
         f_sw,
         duty: v_out / v_in,
         ripple_ratio,
+        loop_k,
+        loop_ratio,
+        v_ref,
     })
 }
 
@@ -237,6 +261,252 @@ fn inductor_ripple_current(netlist: &Netlist, op: &SwitcherOp) -> Option<f64> {
 /// ignores the trailing unit letter.
 fn parse_si(s: &str) -> Option<f64> {
     bhdl_analyzer::value_snap::parse_value_string(s.trim())
+}
+
+/// Per-instance list of its connected nets' DC voltages — used to identify a
+/// part's role from the operating point (an output cap touches V_out, the
+/// divider-top resistor touches V_out and V_ref, etc.).
+fn instance_net_voltages(
+    netlist: &Netlist,
+    net_voltages: &HashMap<String, f64>,
+) -> HashMap<String, Vec<f64>> {
+    let mut out: HashMap<String, Vec<f64>> = HashMap::new();
+    for (_id, net) in netlist.nets.iter() {
+        let Some(name) = &net.name else { continue };
+        let Some(v) = net_voltages.get(name).copied() else {
+            continue;
+        };
+        for conn in &net.connections {
+            let inst_id = match conn {
+                bhdl_netlist::ConnectionPoint::InstancePort(iid, _)
+                | bhdl_netlist::ConnectionPoint::InstancePin(iid, _) => Some(*iid),
+                bhdl_netlist::ConnectionPoint::PinInstance(pi) => {
+                    netlist.pin_instances.get(*pi).map(|p| p.instance)
+                }
+                _ => None,
+            };
+            if let Some(iid) = inst_id {
+                if let Some(inst) = netlist.instances.get(iid) {
+                    out.entry(inst.name.clone()).or_default().push(v);
+                }
+            }
+        }
+    }
+    out
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StabilityVerdict {
+    /// Loop has adequate phase margin per the datasheet criterion.
+    Stable,
+    /// ESR zero well above crossover with no feedforward cap — low phase margin.
+    LowMargin,
+    /// Crossover above the datasheet target (f_sw·loop_ratio) — too fast.
+    FastCrossover,
+    /// A required real-data value (output-cap ESR) is not available — per the
+    /// Real-Data Policy we never substitute a fabricated value, so the phase
+    /// margin cannot be verified.
+    Unchecked,
+}
+
+/// Control-loop stability assessment (analytic, datasheet model). For an
+/// internally-compensated current-mode buck (TPS54302 class) whose internal
+/// comp values TI does not publish, the loop is characterised by TI's own
+/// closed-form equations: crossover `f_co = K/(V_out·C_out)` (Eq 14), the
+/// `f_co < f_sw·loop_ratio` target, and the low-ESR-ceramic phase-margin
+/// criterion that calls for a feedforward cap `C_ff = 1/(2π·f_co·R_top)`
+/// (Eq 16). The constant `K` and ratio are declared by the device.
+#[derive(Debug, Clone)]
+pub struct StabilityResult {
+    pub f_co: f64,
+    pub f_sw: f64,
+    pub crossover_ok: bool,
+    /// ESR zero `1/(2π·ESR·C_out)` of the output bank — `None` when the real
+    /// ESR is not available (verdict then `Unchecked`).
+    pub f_z_esr: Option<f64>,
+    pub ff_present: bool,
+    pub r_top: Option<f64>,
+    pub c_ff_required: Option<f64>,
+    /// Output-cap refdes that did not supply a real ESR value (Real-Data Policy).
+    pub missing_esr: Vec<String>,
+    pub verdict: StabilityVerdict,
+}
+
+/// Evaluate loop stability from the netlist + operating point. Returns `None`
+/// when there is no switcher, no declared loop constant (`loop_crossover_k`),
+/// or no identifiable output cap bank — i.e. stability is then *unchecked*,
+/// never silently "passed".
+pub fn compute_stability(
+    netlist: &Netlist,
+    net_voltages: &HashMap<String, f64>,
+    entity_attrs: &HashMap<String, HashMap<String, String>>,
+) -> Option<StabilityResult> {
+    use std::f64::consts::PI;
+    let op = recover_switcher_op(netlist, entity_attrs)?;
+    let k = op.loop_k?;
+    let inv = instance_net_voltages(netlist, net_voltages);
+    let near = |a: f64, b: f64| (a - b).abs() < 0.1 * b.max(1.0);
+    let role_is = |inst: &bhdl_netlist::Instance, class: &str| {
+        classify_component(netlist, inst.definition, &inst.attributes).as_deref() == Some(class)
+    };
+
+    // Output capacitor bank: sum C, and combine each cap's REAL ESR in
+    // parallel. Real-Data Policy (docs/spec/Real_Data_Policy.md): the ESR must
+    // come from the part's catalogue/datasheet `esr` value — NEVER a
+    // dielectric/package estimate, and NOT `sim_max_esr` (that is the max-ESR
+    // *requirement* a part must beat, not its actual ESR). A cap with no real
+    // ESR is recorded; if any output cap lacks it the phase margin is reported
+    // UNCHECKED rather than computed from a fabricated number.
+    let (mut c_out, mut g_esr) = (0.0f64, 0.0f64); // g_esr = Σ 1/ESR_i (parallel)
+    let mut missing_esr: Vec<String> = Vec::new();
+    for inst in netlist.instances.values() {
+        if !role_is(inst, "capacitor") {
+            continue;
+        }
+        let Some(vs) = inv.get(&inst.name) else { continue };
+        if vs.iter().any(|v| near(*v, op.v_out)) && !vs.iter().any(|v| near(*v, op.v_in)) {
+            let Some(c) = inst.attributes.get("value").and_then(|s| parse_si(s)) else {
+                continue;
+            };
+            c_out += c;
+            match inst
+                .attributes
+                .get("esr")
+                .and_then(|s| parse_si(s))
+                .filter(|e| *e > 0.0)
+            {
+                Some(esr) => g_esr += 1.0 / esr,
+                None => missing_esr.push(inst.name.clone()),
+            }
+        }
+    }
+    if !(c_out > 0.0) {
+        return None;
+    }
+
+    let f_co = k / (op.v_out * c_out); // needs only the real C_out
+    let crossover_ok = f_co < op.f_sw * op.loop_ratio;
+
+    // Divider-top resistor: a resistor touching V_out and V_ref (the FB node).
+    let r_top = netlist.instances.values().find_map(|inst| {
+        if !role_is(inst, "resistor") {
+            return None;
+        }
+        let vs = inv.get(&inst.name)?;
+        if vs.iter().any(|v| near(*v, op.v_out)) && vs.iter().any(|v| near(*v, op.v_ref)) {
+            inst.attributes.get("value").and_then(|s| parse_si(s))
+        } else {
+            None
+        }
+    });
+    // Feedforward cap: a cap across the divider top (touches V_out and V_ref).
+    let ff_present = netlist.instances.values().any(|inst| {
+        role_is(inst, "capacitor")
+            && inv.get(&inst.name).is_some_and(|vs| {
+                vs.iter().any(|v| near(*v, op.v_out)) && vs.iter().any(|v| near(*v, op.v_ref))
+            })
+    });
+
+    // Phase margin needs the ESR zero, which needs real ESR. Missing ⇒ UNCHECKED.
+    if !missing_esr.is_empty() {
+        return Some(StabilityResult {
+            f_co,
+            f_sw: op.f_sw,
+            crossover_ok,
+            f_z_esr: None,
+            ff_present,
+            r_top,
+            c_ff_required: None,
+            missing_esr,
+            verdict: StabilityVerdict::Unchecked,
+        });
+    }
+
+    let f_z_esr = 1.0 / (2.0 * PI * (1.0 / g_esr) * c_out);
+    // The ESR zero only boosts phase at crossover if it sits at/below it; well
+    // above (low ESR) ⇒ negligible boost ⇒ low margin without a feedforward cap.
+    let esr_zero_high = f_z_esr > 10.0 * f_co;
+    let c_ff_required = if esr_zero_high && !ff_present {
+        r_top.map(|rt| 1.0 / (2.0 * PI * f_co * rt))
+    } else {
+        None
+    };
+    let verdict = if !crossover_ok {
+        StabilityVerdict::FastCrossover
+    } else if esr_zero_high && !ff_present {
+        StabilityVerdict::LowMargin
+    } else {
+        StabilityVerdict::Stable
+    };
+
+    Some(StabilityResult {
+        f_co,
+        f_sw: op.f_sw,
+        crossover_ok,
+        f_z_esr: Some(f_z_esr),
+        ff_present,
+        r_top,
+        c_ff_required,
+        missing_esr: Vec::new(),
+        verdict,
+    })
+}
+
+/// Render the stability assessment as a report section.
+pub fn format_stability(s: &StabilityResult) -> String {
+    let mut out = String::from("\n## Control-loop stability (analytic, datasheet model)\n\n");
+    let verdict = match s.verdict {
+        StabilityVerdict::Stable => "STABLE",
+        StabilityVerdict::LowMargin => "LOW PHASE MARGIN",
+        StabilityVerdict::FastCrossover => "CROSSOVER TOO FAST",
+        StabilityVerdict::Unchecked => "UNCHECKED",
+    };
+    out.push_str(&format!(
+        "- crossover f_co = {} (target < {} = f_sw·loop_ratio): {}\n",
+        fmt_si(s.f_co, "Hz"),
+        fmt_si(s.f_sw * 0.1, "Hz"),
+        if s.crossover_ok { "OK" } else { "OVER" },
+    ));
+    match s.f_z_esr {
+        Some(fz) => {
+            let high = fz > 10.0 * s.f_co;
+            out.push_str(&format!(
+                "- ESR zero f_z(esr) = {} ({} crossover ⇒ {}); feedforward cap {}\n",
+                fmt_si(fz, "Hz"),
+                if high { "≫" } else { "≤" },
+                if high {
+                    "no phase boost there"
+                } else {
+                    "adds phase boost"
+                },
+                if s.ff_present { "present" } else { "absent" },
+            ));
+        }
+        None => out.push_str(&format!(
+            "- ESR zero: **not computable — output cap(s) {} provide no real ESR data**\n",
+            s.missing_esr.join(", "),
+        )),
+    }
+    out.push_str(&format!("- **verdict: {verdict}**\n"));
+    if let Some(cff) = s.c_ff_required {
+        out.push_str(&format!(
+            "_Add a feedforward cap C_ff ≈ {} across the FB divider top{} to boost \
+             phase margin (datasheet Eq 16). Until then loop stability is marginal._\n",
+            fmt_si(cff, "F"),
+            s.r_top
+                .map(|rt| format!(" (R_top={})", fmt_si(rt, "Ω")))
+                .unwrap_or_default(),
+        ));
+    }
+    if s.verdict == StabilityVerdict::Unchecked {
+        out.push_str(
+            "_Phase margin needs the output-cap ESR, and the catalogue provides none \
+             (ceramics are specified by dissipation factor / impedance, not a single ESR). \
+             Per the Real-Data Policy no value is fabricated; source ESR/DF into the \
+             catalogue, or prefer parts/vendors that publish it._\n",
+        );
+    }
+    out
 }
 
 /// A value-step that was APPLIED to the netlist (Stage C → BOM closure).

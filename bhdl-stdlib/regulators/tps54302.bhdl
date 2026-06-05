@@ -133,6 +133,13 @@ entity TPS54302() {
     attribute switching_frequency = BUCK_PARAMS.switching_frequency;
     attribute efficiency = BUCK_PARAMS.efficiency;
     attribute dropout_voltage = BUCK_PARAMS.dropout_voltage;
+
+    // Control-loop stability constants (datasheet SLVSDG6C, internally
+    // compensated). f_co = loop_crossover_k / (V_out · C_out) [Eq 14];
+    // target f_co < f_sw · loop_crossover_max_ratio; ceramic C_out needs a
+    // feedforward cap C_ff = 1/(2π·f_co·R_top) [Eq 16] for phase margin.
+    attribute loop_crossover_k = 5.1;
+    attribute loop_crossover_max_ratio = 0.1;
     attribute feedback_voltage = 0.6V;  // Internal reference
     
     // Impedance characteristics
