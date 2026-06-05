@@ -1212,12 +1212,14 @@ fn select_resistor_physical(
     let value_str = attrs.get("value")?;
     let resistance = parse_unit_value(value_str)?;
 
-    // Get current from GLACIER results (use absolute value)
-    let current = instance_currents
-        .get(inst_name)
-        .copied()
-        .unwrap_or(0.0)
-        .abs();
+    // Real-Data Policy HARD-REJECT: the resistor's operating current must come
+    // from a REAL GLACIER solve. No entry for this instance ⇒ we cannot verify
+    // its dissipation / voltage rating, so we do NOT select a part on a
+    // fabricated zero — return None, leaving it unselected (→ DNP downstream).
+    // A real solved zero (`Some(0.0)`) is fine; only a MISSING entry rejects.
+    // (P=I²R and V=I·R below are then EXACT physics from this real current, not
+    // estimates.)
+    let current = instance_currents.get(inst_name).copied()?.abs();
 
     // Calculate power rating: use GLACIER power if available, else I²R
     let power = instance_power
@@ -1276,12 +1278,11 @@ fn select_capacitor_physical(
     let value_str = attrs.get("value")?;
     let capacitance = parse_unit_value(value_str)?;
 
-    // For capacitors, use max voltage across connected nets (not P/I which is 0/0 for DC).
-    let max_voltage = instance_max_voltages
-        .get(inst_name)
-        .copied()
-        .unwrap_or(0.0)
-        .abs();
+    // Real-Data Policy HARD-REJECT: a capacitor's voltage rating needs the REAL
+    // max node voltage (from GLACIER, or a declared rail). No entry ⇒ we don't
+    // fabricate 0 V (which would pick the smallest, possibly under-rated cap) —
+    // return None, leaving it unselected (→ DNP downstream).
+    let max_voltage = instance_max_voltages.get(inst_name).copied()?.abs();
 
     let voltage_rating = calculator.calculate_capacitor_voltage_rating(max_voltage);
 
