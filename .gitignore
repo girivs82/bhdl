@@ -79,3 +79,8 @@ tests/scratch/
 !/tests/**/*.txt
 !/tests/**/*.csv
 !/docs/**/*.txt
+
+# Secrets / credentials — never commit
+.env
+*.env
+!.env.example
