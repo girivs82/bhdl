@@ -11,8 +11,8 @@ Audit of every fabricated value in the analysis / selection path (per
 - [x] `signoff.rs:162` ripple_ratio `.unwrap_or(0.3)` — done (sweep 1/N, b23f589). Now `Option`; tps54302 declares `ripple_ratio = 0.35` (K_IND); None → stepping UNCHECKED.
 - [x] `signoff.rs:169` loop_ratio `.unwrap_or(0.1)` — done (sweep 1/N). Crossover target now `f_sw·loop_ratio` from the real entity attr.
 - [x] `signoff.rs:174` v_ref `.unwrap_or(0.6)` — done (sweep 1/N). Real `feedback_voltage` or stability UNCHECKED.
-- [ ] `glacier_physical_selection.rs:642` tolerance `.unwrap_or(2.0)`.
-- [ ] `glacier_physical_selection.rs:1185` current `.unwrap_or(0.0)`; `:1192` power `I²R` proxy; `:1201` voltage `I·R` proxy — UNCHECKED when GLACIER data absent.
+- [~] `glacier_physical_selection.rs` tolerance `.unwrap_or(2.0)` — **KEPT** (sweep 5/N). This is the value-MATCH WINDOW (how close the catalogue nominal must be), a selection knob the stdlib always declares (`tolerance = 0.05`), NOT a fabricated part measurement. Left as a selection-policy default (allowed, like the E-series grids / derate factors).
+- [x] `glacier_physical_selection.rs` resistor current `.unwrap_or(0.0)` + capacitor voltage `.unwrap_or(0.0)` — **HARD-REJECT done (sweep 5/N)**. `select_resistor_physical` / `select_capacitor_physical` now return `None` (→ component left unselected / DNP) when the REAL GLACIER stress entry is *absent*, instead of fabricating zero stress (which would pick the smallest, possibly under-rated part). A real solved zero (`Some(0.0)`) still proceeds. The `P=I²R` / `V=I·R` derivations are KEPT — they're EXACT physics from the real current, not estimates. Measured: connectivity oracle 51/51; buck still resolves 8 MPNs (real GLACIER data); components GLACIER can't solve get no physical selection.
 - [x] ~~`spice_extraction.rs` resistor tolerance / LED Vf·If·r_d / diode Vf·Is~~
   — **NOT a live violation: dead code.** 329/401 lines are commented out and
   there are ZERO live callers of any `extract_*` function (verified). Its
