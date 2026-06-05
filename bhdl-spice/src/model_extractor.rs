@@ -89,7 +89,7 @@ impl ComponentModelExtractor {
             .ok_or_else(|| anyhow::anyhow!("No module type specified"))?;
         
         debug!("Extracting model for '{}' of type '{}'", name, module_type);
-        
+
         // Get component type from registry
         let component_type = self.component_registry.get_component_type(&module_type, &data)
             .ok_or_else(|| anyhow::anyhow!("Unknown component type: {}", module_type))?;
@@ -287,10 +287,28 @@ impl ComponentModelExtractor {
             .ok_or_else(|| anyhow::anyhow!("No spice_model attribute found"))?;
         
         let component_type = self.parse_component_type(model_type)?;
-        
+
         // Extract SPICE parameters (spice_* attributes)
-        let parameters = self.extract_spice_parameters(user_attrs)?;
-        
+        let mut parameters = self.extract_spice_parameters(user_attrs)?;
+
+        // The resolved component value lives in the `value` attribute
+        // (e.g. "22.1kΩ", "4.7uH", "100nF"). extract_spice_parameters only
+        // pulls spice_*-prefixed keys, so without this the primary parameter
+        // (resistance/capacitance/inductance) is never populated and the
+        // converter falls back to its 1kΩ/1µF default — which makes a feedback
+        // divider solve as two equal resistors (equal power, FB = VOUT/2).
+        // Map `value` onto the type's primary parameter, the same way
+        // extract_from_data does.
+        if let Some(val) = user_attrs.get("value").and_then(|v| self.parse_value(v)) {
+            match component_type {
+                ComponentType::Resistor => { parameters.insert("resistance".to_string(), val); }
+                ComponentType::Capacitor => { parameters.insert("capacitance".to_string(), val); }
+                ComponentType::Inductor => { parameters.insert("inductance".to_string(), val); }
+                ComponentType::VoltageSource => { parameters.insert("voltage".to_string(), val); }
+                _ => {}
+            }
+        }
+
         // All attributes are passed through
         let attributes = user_attrs.clone();
         
