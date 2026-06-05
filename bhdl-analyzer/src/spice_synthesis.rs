@@ -239,33 +239,24 @@ impl SpiceSynthesis {
         })
     }
     
-    /// Calculate voltage divider resistor values
+    /// Calculate voltage divider resistor values.
+    ///
+    /// Real-Data Policy: divider auto-sizing requires a REAL load current AND a
+    /// REAL supply voltage. This entry has neither — the old code fabricated
+    /// both (1 mA load, hardcoded 12 V supply) to produce a value. Rather than
+    /// synthesise R from assumed operating conditions, it hard-errors and
+    /// directs the designer to declare the divider's resistors explicitly.
     fn resolve_voltage_divider(
         &self,
         component: &UnresolvedComponent,
-        target_ratio: f64,
-        load_current: Option<f64>,
+        _target_ratio: f64,
+        _load_current: Option<f64>,
     ) -> Result<Resolution> {
-        // For voltage dividers, we typically want the current through the divider
-        // to be 10x the load current for good regulation
-        let divider_current = load_current.unwrap_or(0.001) * 10.0;
-        
-        // This is a simplified calculation - in practice we'd need both R1 and R2
-        let r_total = 12.0 / divider_current;  // Assuming 12V supply
-        let r1 = r_total * (1.0 - target_ratio);
-        
-        let r_standard = find_nearest_e12_value(r1);
-        
-        Ok(Resolution {
-            component: component.instance_name.clone(),
-            parameter: "value".to_string(),
-            calculated_value: r1,
-            selected_value: r_standard,
-            reasoning: format!(
-                "Voltage divider for {:.1}% ratio: {:.0}Ω",
-                target_ratio * 100.0, r_standard
-            ),
-        })
+        Err(anyhow::anyhow!(
+            "voltage-divider auto-sizing for '{}' would require a real supply voltage and load \
+             current, which are not available here — Real-Data Policy: declare the divider's R \
+             values explicitly instead of synthesising them from assumed operating conditions",
+            component.instance_name))
     }
     
     /// Validate all components with specified values
