@@ -13,15 +13,25 @@ Audit of every fabricated value in the analysis / selection path (per
 - [x] `signoff.rs:174` v_ref `.unwrap_or(0.6)` — done (sweep 1/N). Real `feedback_voltage` or stability UNCHECKED.
 - [ ] `glacier_physical_selection.rs:642` tolerance `.unwrap_or(2.0)`.
 - [ ] `glacier_physical_selection.rs:1185` current `.unwrap_or(0.0)`; `:1192` power `I²R` proxy; `:1201` voltage `I·R` proxy — UNCHECKED when GLACIER data absent.
-- [ ] `spice_extraction.rs:45,178` resistor tolerance `.unwrap_or(5.0)`.
-- [ ] `spice_extraction.rs:205,209,214` LED Vf=2.0 / If=0.020 / r_d=10.
-- [ ] `spice_extraction.rs:238,244` diode Vf=0.7 / Is=1e-9.
+- [x] ~~`spice_extraction.rs` resistor tolerance / LED Vf·If·r_d / diode Vf·Is~~
+  — **NOT a live violation: dead code.** 329/401 lines are commented out and
+  there are ZERO live callers of any `extract_*` function (verified). Its
+  fabricated defaults never execute. Only `parse_unit_value` is live (imported
+  by 4 synthesizer files) and is fine. The audit mis-targeted this file; the
+  real LED/diode/R defaults live in `model_extractor.rs` (below).
 - [ ] `lib.rs:813,1089` param parse `.unwrap_or(0.0)`.
 - [ ] `lib.rs:966,1219` supply_voltage `.unwrap_or(5.0)`.
 - [ ] `unified_simulation.rs:597` R=1000 / `:616` C=100n / `:621` ESR=0.1 / `:622` ESL=1n.
 - [ ] `spice_synthesis.rs:251` divider load_current `.unwrap_or(0.001)`.
 - [ ] `netlist_converter.rs` regulator vout `.unwrap_or(5.0)`; read_param defaults (rds_on=0.2, f_sw=500e3, t_sw=80n, i_quiescent=5e-3); 10kΩ dropout.
-- [ ] `model_extractor.rs:107-133` default params (resistance=1000, capacitance=1e-9, inductance=1e-6, Vf=0.7/2.0, voltage=5, Koren nominals).
+- [ ] `model_extractor.rs:107-133` default params (resistance=1000, capacitance=1e-9, inductance=1e-6, Vf=0.7/2.0, voltage=5, Koren nominals). **LIVE** (`ComponentModelExtractor`, exported). Seeds a fabricated default per SPICE-model type, THEN overrides with entity values — so the default only "wins" for an under-declared component. This + `netlist_converter.rs` (rds_on/f_sw/t_sw/i_q/vout) + `unified_simulation.rs` (R/C/ESR/ESL) form ONE chained device-model default stack in the live SPICE-sim path.
+  - DESIGN DECISION needed before enforcing: removing the seed makes
+    `ExtractedModel.parameters` potentially empty → must decide how UNCHECKED
+    propagates through model_extractor → netlist_converter → unified_simulation
+    (skip the component / drop confidence to 0 + warn / hard-error the sim).
+    Validation surface is the SPICE-sim suite, NOT the connectivity oracle
+    (which this path never touches). Blast radius: any sim of an under-declared
+    Res/Cap/diode/regulator.
 
 ## C. Proxies (a different real value substituted)
 - [ ] `signoff.rs:147` `i_out` = regulator rated output_current used as the actual per-rail load. Real load must come from the rail / a declared load.
