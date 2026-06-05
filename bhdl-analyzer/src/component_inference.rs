@@ -543,79 +543,77 @@ impl ComponentInferenceContext {
             // Check if this is for LED current limiting
             if context.has_led_in_series {
                 if let (Some(supply_v), Some(led_color)) = (requirements.supply_voltage, &context.led_color) {
-                    // Try to get LED parameters from module resolver (stdlib)
-                    let (vf, if_target) = if let Some(resolver) = &mut self.module_resolver {
-                        // Try to resolve LED module to get parameters
-                        if let Ok(led_module) = resolver.resolve("LED") {
-                            // Extract forward voltage and current from electrical specs
-                            let vf = led_module.metadata.electrical_specs.get(&format!("{}_forward_voltage", led_color))
-                                .and_then(|v| v.parse::<f64>().ok())
-                                .unwrap_or_else(|| match led_color.as_str() {
-                                    "red" => 2.0,
-                                    "green" => 2.2,
-                                    "blue" => 3.2,
-                                    "yellow" => 2.1,
-                                    "white" => 3.3,
-                                    _ => 2.0,
-                                });
-                            let if_target = led_module.metadata.electrical_specs.get(&format!("{}_forward_current", led_color))
-                                .and_then(|v| v.parse::<f64>().ok())
-                                .unwrap_or(0.020);
+                    // Real-Data Policy: the LED's forward voltage AND forward
+                    // current must be REAL declared values — `{color}_forward_voltage`
+                    // / `{color}_forward_current` in the LED entity's electrical_specs.
+                    // NO color→Vf table, NO 20mA default. If they are not declared we
+                    // cannot size the current-limiting resistor on real data, so we
+                    // skip inference and warn (the designer declares the LED's real
+                    // operating point, or sets the resistor value explicitly).
+                    let (vf, if_target): (Option<f64>, Option<f64>) = self.module_resolver
+                        .as_mut()
+                        .and_then(|resolver| resolver.resolve("LED").ok())
+                        .map(|led_module| {
+                            // Real declared value: the per-color spec if present,
+                            // else the entity's plain `forward_voltage`/`_current`
+                            // (entity = datasheet — a declared attribute is real).
+                            let specs = &led_module.metadata.electrical_specs;
+                            // Unit-aware parse so "2.0V" → 2.0 and "20mA" → 0.02.
+                            let parse = |s: &String| crate::spice_extraction::parse_unit_value(s);
+                            let vf = specs.get(&format!("{}_forward_voltage", led_color))
+                                .or_else(|| specs.get("forward_voltage"))
+                                .and_then(parse);
+                            let if_target = specs.get(&format!("{}_forward_current", led_color))
+                                .or_else(|| specs.get("forward_current"))
+                                .and_then(parse);
                             (vf, if_target)
-                        } else {
-                            // Fallback to defaults if LED module not found
-                            let vf = match led_color.as_str() {
-                                "red" => 2.0,
-                                "green" => 2.2,
-                                "blue" => 3.2,
-                                "yellow" => 2.1,
-                                "white" => 3.3,
-                                _ => 2.0,
-                            };
-                            (vf, 0.020)
+                        })
+                        .unwrap_or((None, None));
+
+                    match (vf, if_target) {
+                        (Some(vf), Some(if_target)) => {
+                            let resistance = (supply_v - vf) / if_target;
+                            let resistance_standard = find_nearest_e_series_value(resistance, 12);
+
+                            parameters.push(InferredParameter {
+                                name: "value".to_string(),
+                                value: ParameterValue::Resistance(resistance_standard),
+                                confidence: 0.95,
+                                reasoning: format!("Current limiting for {} LED: R = ({:.1}V - {:.1}V) / {:.3}A = {:.0}Ω",
+                                                 led_color, supply_v, vf, if_target, resistance),
+                            });
+
+                            reasoning = "LED current limiting resistor".to_string();
+                            confidence = 0.95;
+
+                            // Check if voltage drop is too small
+                            let voltage_drop = supply_v - vf;
+                            if voltage_drop < 0.5 {
+                                self.warnings.push(format!(
+                                    "Very small voltage drop ({:.1}V) across current limiting resistor for {} LED. Consider using a higher supply voltage or different LED color.",
+                                    voltage_drop, led_color
+                                ));
+                            }
+
+                            // Calculate power dissipation
+                            let power = voltage_drop * if_target;
+                            if power > 0.25 * self.design_rules.power_derating_factor {
+                                self.warnings.push(format!(
+                                    "High power dissipation ({:.2}W) in current limiting resistor. Consider higher power rating.",
+                                    power
+                                ));
+                            }
                         }
-                    } else {
-                        // No module resolver, use defaults
-                        let vf = match led_color.as_str() {
-                            "red" => 2.0,
-                            "green" => 2.2,
-                            "blue" => 3.2,
-                            "yellow" => 2.1,
-                            "white" => 3.3,
-                            _ => 2.0,
-                        };
-                        (vf, 0.020)
-                    };
-                    let resistance = (supply_v - vf) / if_target;
-                    let resistance_standard = find_nearest_e_series_value(resistance, 12);
-                    
-                    parameters.push(InferredParameter {
-                        name: "value".to_string(),
-                        value: ParameterValue::Resistance(resistance_standard),
-                        confidence: 0.95,
-                        reasoning: format!("Current limiting for {} LED: R = ({:.1}V - {:.1}V) / {:.3}A = {:.0}Ω", 
-                                         led_color, supply_v, vf, if_target, resistance),
-                    });
-                    
-                    reasoning = format!("LED current limiting resistor");
-                    confidence = 0.95;
-                    
-                    // Check if voltage drop is too small
-                    let voltage_drop = supply_v - vf;
-                    if voltage_drop < 0.5 {
-                        self.warnings.push(format!(
-                            "Very small voltage drop ({:.1}V) across current limiting resistor for {} LED. Consider using a higher supply voltage or different LED color.",
-                            voltage_drop, led_color
-                        ));
-                    }
-                    
-                    // Calculate power dissipation
-                    let power = voltage_drop * if_target;
-                    if power > 0.25 * self.design_rules.power_derating_factor {
-                        self.warnings.push(format!(
-                            "High power dissipation ({:.2}W) in current limiting resistor. Consider higher power rating.",
-                            power
-                        ));
+                        _ => {
+                            self.warnings.push(format!(
+                                "cannot auto-size the current-limiting resistor for the {0} LED — its \
+                                 forward voltage and/or forward current is not declared \
+                                 (electrical_specs '{0}_forward_voltage' / '{0}_forward_current'). \
+                                 Real-Data Policy: declare the LED's real operating point on the \
+                                 entity, or set the resistor value explicitly.",
+                                led_color
+                            ));
+                        }
                     }
                 }
             }
