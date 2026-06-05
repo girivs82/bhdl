@@ -4,13 +4,13 @@ Audit of every fabricated value in the analysis / selection path (per
 `Real_Data_Policy.md`). 31 violations. Status: in progress.
 
 ## A. Estimate tables (typical-value lookups)
-- [ ] `ripple_calculator.rs:39` `typical_esr_mohm(dielectric,package)` — whole table. Used by output-cap bank sizing (`ripple_calculator.rs:117`) and input-cap bank sizing (`input_cap_calculator.rs:132`). ESR must be the part's real catalogue value.
+- [x] `ripple_calculator.rs:39` `typical_esr_mohm(dielectric,package)` — done (sweep 2/N). Table deleted; output- and input-cap banks drop the ESR-sized `mid_freq` tier and size the bulk tier on the capacitive ripple term alone (full ripple budget). ESR ripple is now loudly noted UNACCOUNTED in the tier rationale + estimated ripple. Cap-sizing runs only under `bom --simulate`, not the `freeze` oracle path → oracle 51/51.
 - [x] (signoff stability) — removed `typical_esr_mohm` from the stability path; now UNCHECKED when ESR absent.
 
 ## B. Defaults / unwrap_or (fabricated when real data absent)
-- [ ] `signoff.rs:162` ripple_ratio `.unwrap_or(0.3)` — declare on entity (datasheet K_IND) or stepping UNCHECKED.
-- [ ] `signoff.rs:169` loop_ratio `.unwrap_or(0.1)` — entity declares it (tps54302 does); remove default.
-- [ ] `signoff.rs:174` v_ref `.unwrap_or(0.6)` — entity declares feedback_voltage; remove default.
+- [x] `signoff.rs:162` ripple_ratio `.unwrap_or(0.3)` — done (sweep 1/N, b23f589). Now `Option`; tps54302 declares `ripple_ratio = 0.35` (K_IND); None → stepping UNCHECKED.
+- [x] `signoff.rs:169` loop_ratio `.unwrap_or(0.1)` — done (sweep 1/N). Crossover target now `f_sw·loop_ratio` from the real entity attr.
+- [x] `signoff.rs:174` v_ref `.unwrap_or(0.6)` — done (sweep 1/N). Real `feedback_voltage` or stability UNCHECKED.
 - [ ] `glacier_physical_selection.rs:642` tolerance `.unwrap_or(2.0)`.
 - [ ] `glacier_physical_selection.rs:1185` current `.unwrap_or(0.0)`; `:1192` power `I²R` proxy; `:1201` voltage `I·R` proxy — UNCHECKED when GLACIER data absent.
 - [ ] `spice_extraction.rs:45,178` resistor tolerance `.unwrap_or(5.0)`.

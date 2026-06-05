@@ -12,7 +12,7 @@
 // For linear regulators, input caps handle load transients:
 //     C_transient = ΔI × dt / ΔV
 
-use crate::ripple_calculator::{CapTier, typical_esr_mohm, standardize_bulk_cap};
+use crate::ripple_calculator::{CapTier, standardize_bulk_cap};
 
 /// Classification of downstream regulator type.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -82,8 +82,10 @@ pub fn compute_input_bank(
 
                 // Minimum capacitance to keep ripple below budget:
                 // C_min = I_out × D / (f_sw × ΔV_cap_budget)
-                // Use 50% of ripple budget for capacitive component
-                let ripple_cap_budget = max_ripple_v * 0.5;
+                // Full ripple budget on the capacitive term: ESR ripple is
+                // unaccounted (no real cap ESR data — Real-Data Policy), so
+                // there is no ESR sub-budget to reserve.
+                let ripple_cap_budget = max_ripple_v;
                 let c_min = reg.i_load * d / (reg.f_sw * ripple_cap_budget);
                 total_c_min += c_min;
             }
@@ -92,7 +94,7 @@ pub fn compute_input_bank(
                 // demands during load steps. Assume 50% load step in 10µs.
                 let delta_i = reg.i_load * 0.5; // 50% load step
                 let dt = 10e-6; // 10µs response time
-                let ripple_cap_budget = max_ripple_v * 0.5;
+                let ripple_cap_budget = max_ripple_v; // ESR ripple unaccounted
                 let c_transient = delta_i * dt / ripple_cap_budget;
                 total_c_min += c_transient;
 
@@ -123,36 +125,13 @@ pub fn compute_input_bank(
         rationale: "High-frequency input bypass (100nF C0G)".to_string(),
     });
 
-    // Split ripple budget: 50% ESR, 50% capacitive
-    let ripple_esr_budget = max_ripple_v * 0.5;
+    // Real-Data Policy: no ESR-sized mid-frequency tier. Capacitor ESR is
+    // not synthesised from a dielectric/package estimate, and the catalogue
+    // carries no real per-MPN ESR/DF, so the ESR ripple (I_rms · ESR_total)
+    // is UNACCOUNTED. The bulk tier is sized to meet the full ripple target
+    // on capacitance alone; real input ripple will exceed it by the ESR term.
 
-    // ── Tier 2: Mid-frequency — X7R, sized for ESR at switching freq ──
-    // V_ripple_esr = I_rms × ESR_total
-    // N_mid = ceil(I_rms × ESR_single / ripple_esr_budget)
-    let esr_single = typical_esr_mohm("X7R", "0805") * 1e-3; // 5mΩ
-    let mid_count = if ripple_esr_budget > 0.0 && total_rms > 0.0 {
-        ((total_rms * esr_single) / ripple_esr_budget).ceil() as usize
-    } else {
-        1
-    };
-    let mid_count = mid_count.max(1);
-
-    tiers.push(CapTier {
-        role: "mid_freq",
-        capacitance: 4.7e-6,
-        count: mid_count,
-        dielectric_hint: "X7R",
-        rationale: format!(
-            "Mid-freq ESR: I_rms={:.2}A × {:.1}mΩ/{} = {:.1}mV (budget {:.1}mV)",
-            total_rms,
-            esr_single * 1e3,
-            mid_count,
-            total_rms * esr_single / mid_count as f64 * 1e3,
-            ripple_esr_budget * 1e3,
-        ),
-    });
-
-    // ── Tier 3: Bulk — X5R, sized for capacitive ripple ───────────────
+    // ── Tier 2: Bulk — X5R, sized for capacitive ripple ───────────────
     let (bulk_per_unit, bulk_count) = standardize_bulk_cap(total_c_min);
 
     tiers.push(CapTier {
@@ -161,7 +140,8 @@ pub fn compute_input_bank(
         count: bulk_count,
         dielectric_hint: "X5R",
         rationale: format!(
-            "Bulk input: C_min={:.1}µF → {}× {:.0}µF (from {} regulator(s), ripple target {:.0}mV)",
+            "Bulk input: C_min={:.1}µF → {}× {:.0}µF (from {} regulator(s), ripple target {:.0}mV; \
+             capacitive ripple only; ESR ripple UNACCOUNTED — no real cap ESR data, Real-Data Policy)",
             total_c_min * 1e6,
             bulk_count,
             bulk_per_unit * 1e6,
@@ -170,10 +150,10 @@ pub fn compute_input_bank(
         ),
     });
 
-    // Compute totals
+    // Compute totals. Capacitive term ONLY — the ESR term (I_rms · ESR_total)
+    // is unaccounted (no real per-MPN ESR; Real-Data Policy). Actual input
+    // ripple is this value PLUS the unaccounted ESR contribution.
     let total_c: f64 = tiers.iter().map(|t| t.capacitance * t.count as f64).sum();
-    let esr_total = esr_single / mid_count as f64;
-    let v_ripple_esr = total_rms * esr_total;
     let v_ripple_cap = if total_c_min > 0.0 {
         // Approximate: use the largest switching regulator's contribution
         regulators.iter()
@@ -186,7 +166,7 @@ pub fn compute_input_bank(
     } else {
         0.0
     };
-    let estimated_ripple = v_ripple_esr + v_ripple_cap;
+    let estimated_ripple = v_ripple_cap;
 
     InputBankSpec {
         tiers,
@@ -240,15 +220,14 @@ mod tests {
 
         let bank = compute_input_bank(24.0, &regs, 50e-3);
 
-        assert_eq!(bank.tiers.len(), 3, "expected 3 tiers");
+        // Real-Data Policy: no ESR-sized mid_freq tier — 2 tiers (hf + bulk).
+        assert_eq!(bank.tiers.len(), 2, "expected 2 tiers");
+        assert!(bank.tiers.iter().all(|t| t.role != "mid_freq"),
+            "ESR-sized mid_freq tier must not exist (no real cap ESR data)");
 
         let hf = bank.tiers.iter().find(|t| t.role == "hf_bypass").unwrap();
         assert_eq!(hf.count, 1);
         assert_eq!(hf.dielectric_hint, "C0G");
-
-        let mid = bank.tiers.iter().find(|t| t.role == "mid_freq").unwrap();
-        assert!(mid.count >= 1);
-        assert_eq!(mid.dielectric_hint, "X7R");
 
         let bulk = bank.tiers.iter().find(|t| t.role == "bulk").unwrap();
         assert!(bulk.count >= 1);
@@ -281,7 +260,7 @@ mod tests {
 
         let bank = compute_input_bank(24.0, &regs, 50e-3);
 
-        assert_eq!(bank.tiers.len(), 3);
+        assert_eq!(bank.tiers.len(), 2);
 
         // Should include contributions from both regulators
         let bulk = bank.tiers.iter().find(|t| t.role == "bulk").unwrap();
@@ -303,7 +282,7 @@ mod tests {
 
         let bank = compute_input_bank(5.0, &regs, 100e-3);
 
-        assert_eq!(bank.tiers.len(), 3);
+        assert_eq!(bank.tiers.len(), 2);
         // Linear-only should have modest capacitance (transient-based)
         let bulk = bank.tiers.iter().find(|t| t.role == "bulk").unwrap();
         let total_bulk_uf = bulk.capacitance * bulk.count as f64 * 1e6;

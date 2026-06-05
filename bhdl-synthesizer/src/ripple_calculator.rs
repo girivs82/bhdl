@@ -34,28 +34,6 @@ pub struct RippleBankSpec {
     pub estimated_ripple_v: f64,
 }
 
-/// Typical ESR values (mΩ) for common dielectric/package combinations.
-/// Used to estimate ESR contribution to ripple voltage.
-pub fn typical_esr_mohm(dielectric: &str, package: &str) -> f64 {
-    match (dielectric, package) {
-        ("C0G", "0402") => 50.0,
-        ("C0G", "0603") => 30.0,
-        ("C0G", "0805") => 10.0,
-        ("X7R", "0402") => 100.0,
-        ("X7R", "0603") => 30.0,
-        ("X7R", "0805") => 5.0,
-        ("X7R", "1206") => 3.0,
-        ("X5R", "0805") => 5.0,
-        ("X5R", "1206") => 3.0,
-        ("X5R", "1210") => 2.0,
-        // Defaults for unknown combos
-        ("C0G", _) => 20.0,
-        ("X7R", _) => 10.0,
-        ("X5R", _) => 5.0,
-        _ => 10.0,
-    }
-}
-
 /// Compute a multi-tier capacitor bank for a buck converter output.
 ///
 /// # Parameters
@@ -106,38 +84,18 @@ pub fn compute_ripple_bank(
         rationale: "High-frequency bypass (100nF C0G)".to_string(),
     });
 
-    // Split ripple budget: 50% ESR, 50% capacitive
-    let ripple_esr_budget = max_ripple_v * 0.5;
-    let ripple_cap_budget = max_ripple_v * 0.5;
+    // Real-Data Policy: capacitor ESR is not synthesised from a
+    // dielectric/package estimate. With no real per-MPN ESR/DF data in the
+    // catalogue, the ESR contribution to ripple cannot be computed, so the
+    // bank is sized to meet the FULL ripple target on the capacitive term
+    // alone (ΔI / (8·f_sw·C)). The ESR ripple (ΔI · ESR_total) is therefore
+    // UNACCOUNTED — real output ripple will exceed this estimate by the ESR
+    // term until cap ESR reaches the catalogue. There is no ESR-sized
+    // mid-frequency tier any more (it existed only to absorb estimated ESR
+    // ripple).
+    let ripple_cap_budget = max_ripple_v;
 
-    // ── Tier 2: Mid-frequency — X7R, sized for ESR at f_sw ───────────
-    // V_ripple_esr = ΔI × ESR_total
-    // ESR_total = ESR_single / N_mid
-    // N_mid = ceil(ΔI × ESR_single / ripple_esr_budget)
-    let esr_single = typical_esr_mohm("X7R", "0805") * 1e-3; // 5mΩ per 4.7µF X7R/0805
-    let mid_count = if ripple_esr_budget > 0.0 {
-        ((delta_i * esr_single) / ripple_esr_budget).ceil() as usize
-    } else {
-        1
-    };
-    let mid_count = mid_count.max(1);
-
-    tiers.push(CapTier {
-        role: "mid_freq",
-        capacitance: 4.7e-6, // 4.7µF per unit
-        count: mid_count,
-        dielectric_hint: "X7R",
-        rationale: format!(
-            "Mid-freq ESR: ΔI={:.2}A × {:.1}mΩ/{} = {:.1}mV (budget {:.1}mV)",
-            delta_i,
-            esr_single * 1e3,
-            mid_count,
-            delta_i * esr_single / mid_count as f64 * 1e3,
-            ripple_esr_budget * 1e3,
-        ),
-    });
-
-    // ── Tier 3: Bulk — X5R, sized for capacitive ripple ──────────────
+    // ── Tier 2: Bulk — X5R, sized for capacitive ripple ──────────────
     // V_ripple_cap = ΔI / (8 × f_sw × C_bulk)
     // C_bulk = ΔI / (8 × f_sw × ripple_cap_budget)
     let c_bulk = delta_i / (8.0 * f_sw * ripple_cap_budget);
@@ -151,7 +109,8 @@ pub fn compute_ripple_bank(
         count: bulk_count,
         dielectric_hint: "X5R",
         rationale: format!(
-            "Bulk cap: ΔI={:.2}A / (8 × {:.0}kHz × {:.1}mV) = {:.1}µF → {}× {:.0}µF",
+            "Bulk cap: ΔI={:.2}A / (8 × {:.0}kHz × {:.1}mV) = {:.1}µF → {}× {:.0}µF \
+             (capacitive ripple only; ESR ripple UNACCOUNTED — no real cap ESR data, Real-Data Policy)",
             delta_i,
             f_sw / 1e3,
             ripple_cap_budget * 1e3,
@@ -161,12 +120,12 @@ pub fn compute_ripple_bank(
         ),
     });
 
-    // Compute total capacitance and estimated ripple
+    // Compute total capacitance and estimated ripple.
+    // Capacitive term ONLY — the ESR term (ΔI · ESR_total) is unaccounted
+    // because no real per-MPN ESR is available (Real-Data Policy). Actual
+    // ripple is this value PLUS the unaccounted ESR contribution.
     let total_c: f64 = tiers.iter().map(|t| t.capacitance * t.count as f64).sum();
-    let esr_total = esr_single / mid_count as f64;
-    let v_ripple_esr = delta_i * esr_total;
-    let v_ripple_cap = delta_i / (8.0 * f_sw * (bulk_per_unit * bulk_count as f64));
-    let estimated_ripple = v_ripple_esr + v_ripple_cap;
+    let estimated_ripple = delta_i / (8.0 * f_sw * (bulk_per_unit * bulk_count as f64));
 
     RippleBankSpec {
         tiers,
@@ -241,17 +200,15 @@ mod tests {
         // 24V→5V, 2A, 500kHz, 33µH, 5mV target
         let bank = compute_ripple_bank(24.0, 5.0, 2.0, 500e3, 33e-6, 5e-3);
 
-        // Should have 3 tiers
-        assert_eq!(bank.tiers.len(), 3, "expected 3 tiers, got {}", bank.tiers.len());
+        // Real-Data Policy: no ESR-sized mid-freq tier — 2 tiers (hf + bulk).
+        assert_eq!(bank.tiers.len(), 2, "expected 2 tiers, got {}", bank.tiers.len());
+        assert!(bank.tiers.iter().all(|t| t.role != "mid_freq"),
+            "ESR-sized mid_freq tier must not exist (no real cap ESR data)");
 
         let hf = bank.tiers.iter().find(|t| t.role == "hf_bypass").unwrap();
         assert_eq!(hf.count, 1);
         assert_eq!(hf.dielectric_hint, "C0G");
         assert!((hf.capacitance - 100e-9).abs() < 1e-12);
-
-        let mid = bank.tiers.iter().find(|t| t.role == "mid_freq").unwrap();
-        assert!(mid.count >= 1, "mid-freq should have at least 1 cap");
-        assert_eq!(mid.dielectric_hint, "X7R");
 
         let bulk = bank.tiers.iter().find(|t| t.role == "bulk").unwrap();
         assert!(bulk.count >= 1, "bulk should have at least 1 cap");
@@ -280,24 +237,15 @@ mod tests {
         // 12V→3.3V, 10A, 500kHz, 10µH, 10mV target
         let bank = compute_ripple_bank(12.0, 3.3, 10.0, 500e3, 10e-6, 10e-3);
 
-        assert_eq!(bank.tiers.len(), 3);
-
-        let mid = bank.tiers.iter().find(|t| t.role == "mid_freq").unwrap();
-        // High current → more mid-freq caps for lower ESR
-        assert!(mid.count >= 1, "high current should need multiple mid-freq caps");
+        // 2 tiers (hf + bulk); no ESR-sized mid_freq tier.
+        assert_eq!(bank.tiers.len(), 2);
+        assert!(bank.tiers.iter().all(|t| t.role != "mid_freq"));
 
         let bulk = bank.tiers.iter().find(|t| t.role == "bulk").unwrap();
         // High current → more bulk capacitance
         let total_bulk_uf = bulk.capacitance * bulk.count as f64 * 1e6;
         assert!(total_bulk_uf >= 10.0,
             "high current bulk should be >= 10µF, got {:.1}µF", total_bulk_uf);
-    }
-
-    #[test]
-    fn test_esr_lookup() {
-        assert!((typical_esr_mohm("X7R", "0805") - 5.0).abs() < 0.01);
-        assert!((typical_esr_mohm("C0G", "0603") - 30.0).abs() < 0.01);
-        assert!((typical_esr_mohm("X5R", "1210") - 2.0).abs() < 0.01);
     }
 
     #[test]
