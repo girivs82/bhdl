@@ -9,6 +9,7 @@ members = [
     "bhdl-lsp", "bhdl-ast", "bhdl-analyzer", "bhdl-schematic", "bhdl-components", "bhdl-common", "bhdl-spice", "bhdl-stdlib", "bhdl-safety", "bhdl-sim", "bhdl-testbench", "bhdl-simulation", "bhdl-pnr",
     "bhdl-kicad-import",
     "bhdl-jlcparts-provider",
+    "bhdl-digikey-provider",
 ]
 
 # Use the latest resolver for better dependency management.

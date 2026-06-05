@@ -35,6 +35,22 @@ Derate factors (CAP 2×, RES 2×, IND 1.25×), SIGNOFF_MARGIN 1.2, 2π, E-series
 grids, entity-declared datasheet constants (loop_crossover_k, feedback_voltage,
 switching_frequency, output_current). These are policy/physics/datasheet, allowed.
 
+## Data source: DigiKey provider (lands real ESR for non-ceramics)
+`bhdl-digikey-provider` (DigiKey Product Information API v4, OAuth2
+client-credentials, self-contained ureq+rustls — no curl/fetch) is built and
+live-verified. It emits real per-MPN `esr_ohms` (+ `esr_test_freq_hz`) for
+**electrolytic / tantalum / polymer** caps (e.g. Vishay T55A107M007C0070 →
+0.07 Ω @ 100 kHz). **Finding (measured live): DigiKey carries neither ESR nor
+Dissipation Factor for ceramics (MLCCs)** — the ceramic Parameters array has
+only Temperature Coefficient / Tolerance / Voltage / Capacitance. So **ceramic
+ESR stays UNCHECKED even with DigiKey**; the earlier "DF → derive ceramic ESR"
+premise does not hold on this catalogue. Ceramic ESR needs manufacturer
+impedance curves (datasheet extraction), not a vendor parameter.
+- [ ] WIRE-UP (next): extend `PluginSelection` (analyzer plugin.rs) with
+  `esr_ohms`/`esr_test_freq_hz`; wire the resolved ESR into the netlist cap
+  `esr` attribute so sign-off stability + cap-sizing read real data and flip
+  out of UNCHECKED/UNACCOUNTED for non-ceramic output caps.
+
 ## The blocker: enforcement is gated on DATA AVAILABILITY
 Most of B/C/A cannot become "real value or UNCHECKED" usefully until the
 catalogue/datasheets actually carry the data (cap ESR/DF, diode/LED Vf·Is,

@@ -1,0 +1,19 @@
+[package]
+name = "bhdl-digikey-provider"
+version = "0.1.0"
+edition = "2021"
+description = "BHDL supply-chain provider — DigiKey Product Information API v4. Resolves parametric passives to real, orderable DigiKey parts (MPN + manufacturer + stock + price) AND extracts real per-MPN ESR for electrolytic/tantalum/polymer capacitors (Real-Data Policy). OAuth2 client-credentials over a self-contained Rust HTTP/TLS client (ureq + rustls) — no external `curl`/`fetch`, no system TLS, no async runtime."
+
+[[bin]]
+name = "bhdl-digikey-provider"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+# Self-contained blocking HTTP with pure-Rust TLS (rustls). No external binary
+# (curl/fetch), no system OpenSSL/SecureTransport, no tokio — a single
+# statically-linked executable, consistent with the jlcparts provider's
+# zero-runtime-dependency design.
+ureq = { version = "2", features = ["tls"] }
