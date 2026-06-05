@@ -140,6 +140,8 @@ entity TPS54302() {
     // feedforward cap C_ff = 1/(2π·f_co·R_top) [Eq 16] for phase margin.
     attribute loop_crossover_k = 5.1;
     attribute loop_crossover_max_ratio = 0.1;
+    // Inductor ripple-current ratio K_IND (datasheet Eq 8). ΔI_L / I_out.
+    attribute ripple_ratio = 0.35;
     attribute feedback_voltage = 0.6V;  // Internal reference
     
     // Impedance characteristics
