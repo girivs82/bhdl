@@ -35,6 +35,56 @@ pins the IP behind core PRs — the exact problem `design {}` blocks
 The device tells GLACIER what it is, instead of GLACIER pattern-matching the
 topology (fragile) or carrying a model per part (bloat).
 
+## 1A. The governing principle — GLACIER is the power expert, stdlib is the datasheet
+
+The mental model for every simulation/analysis decision:
+
+> **GLACIER is a power expert. The stdlib is the datasheet that briefs the
+> expert on a specific chip.** The expert knows *physics* — Kirchhoff, an
+> inductor is a DC short, a switcher has an inductor / feedback / a bias point,
+> ripple scales as `1/(f_sw·C)`. The expert knows *nothing* device-specific:
+> that `U5` is a buck, which pin is `SW`, which is `FB`, what `FB` regulates to,
+> the bias expectations — all of that is the datasheet's job. The datasheet
+> (the stdlib entity) hands the expert the topology, the pinout, and the
+> behavioural model; the expert applies its generic physics to *that*.
+
+Concretely, the line is drawn as:
+
+| Question | Answered by |
+|---|---|
+| How do I solve a network of branches? Inductor short? R power? Cap ripple physics? | **GLACIER** (generic) |
+| Is `U5` a buck / LDO / charge pump? Which pin is `SW` / `FB` / `BOOT`? | **stdlib** (entity pins + `topology`) |
+| What does `FB` regulate to (V_ref)? What's the bias point / loop model? | **stdlib** (`simulation { model {} }`) |
+| `f_sw`, efficiency, I_out rating, ripple targets | **stdlib** (entity attributes / `design`) |
+| What support parts does this regulator need (L, C_in, C_out, divider)? | **stdlib** (`expansion {}`) |
+
+GLACIER must never grow a `match` on part names or bake in "a buck's output is
+its SW pin driven to 5 V." When it needs a device specific, it asks the
+datasheet.
+
+### Current state vs. the principle (honest gap)
+
+Today the split is only **partly** realised:
+
+- **Already datasheet-driven:** pin identity/role comes from the entity's pin
+  *types* (`pin SW: power out`, `pin FB: feedback in`), and `component_class` /
+  `topology` / `f_sw` / `output_current` / ripple targets come from entity
+  attributes. The support topology comes from `expansion {}`. ✓
+- **Still hardcoded in GLACIER (to be migrated):** the regulator's DC *model*
+  is baked into the SPICE converter (`netlist_converter.rs` decomposes any
+  voltage regulator into "output `VoltageSource` + dropout resistor," defaults
+  `V_out`, and does nothing with `FB` — it has no notion that the loop forces
+  `FB = V_ref`). The analytic ripple/stress model lives in core
+  (`signoff.rs`) as an in-tree *reference*, not yet declared by the device.
+
+Both hardcoded pieces are exactly what the §5 `model {}` and §4 `stress {}`
+surfaces are meant to absorb. **North star for future work:** when we next
+touch regulator modelling (the FB/bias accuracy, the stability surface §6A,
+new device classes), the new device knowledge lands in the entity's
+`simulation {}` block — never as another hardcoded case in GLACIER. Core only
+ever gains *generic* capability (a new builtin model class, a better solver);
+device specifics flow from the datasheet.
+
 ## 2. The block — third sibling to `design {}` and `expansion {}`
 
 ```
