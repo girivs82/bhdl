@@ -45,6 +45,9 @@ entity TPS54302() {
     // datasheet-characterised constant.
     attribute loop_crossover_k = 5.1;
     attribute loop_crossover_max_ratio = 0.1;
+    // Inductor ripple-current ratio K_IND (datasheet §7.2.3.5.1, Eq 8 design
+    // example): ΔI_L / I_out. Drives the sign-off inductor value-stepping.
+    attribute ripple_ratio = 0.35;
 
     // Protection features
     attribute has_thermal_protection = true;

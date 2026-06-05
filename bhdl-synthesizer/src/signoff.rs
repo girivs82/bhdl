@@ -92,22 +92,21 @@ struct SwitcherOp {
     i_out: f64,
     f_sw: f64,
     duty: f64,
-    /// Target inductor ripple ratio ΔI_L/I_out (datasheet 0.2–0.4). From the
-    /// regulator's `ripple_ratio` attribute, else the 0.3 default. Drives the
-    /// Stage-C inductor value-stepping.
-    ripple_ratio: f64,
+    /// Target inductor ripple ratio ΔI_L/I_out from the regulator's
+    /// `ripple_ratio` datasheet attribute. `None` ⇒ not declared ⇒ inductor
+    /// value-stepping is not attempted (Real-Data Policy: no default).
+    ripple_ratio: Option<f64>,
     /// Control-loop crossover constant K in `f_co = K / (V_out·C_out)` (the
     /// device's `loop_crossover_k` datasheet constant). `None` ⇒ no loop model
     /// declared ⇒ stability reported unchecked.
     loop_k: Option<f64>,
     /// Crossover must stay below `f_sw · loop_ratio` (datasheet ≈ f_sw/10).
-    loop_ratio: f64,
-    /// Feedback reference voltage (regulation point), for divider-top detection.
-    v_ref: f64,
+    /// `None` ⇒ not declared ⇒ stability unchecked.
+    loop_ratio: Option<f64>,
+    /// Feedback reference voltage (regulation point), for divider-top
+    /// detection. `None` ⇒ not declared ⇒ stability unchecked.
+    v_ref: Option<f64>,
 }
-
-/// Default inductor ripple-ratio target when the regulator declares none.
-const DEFAULT_RIPPLE_RATIO: f64 = 0.3;
 
 /// Recover the buck operating point from the netlist: `f_sw` and `i_out`
 /// from the switching regulator's attributes, `v_in`/`v_out` from the
@@ -156,22 +155,23 @@ fn recover_switcher_op(
             .or_else(|| get("output_current_max"))
             .and_then(|s| parse_si(s))
             .filter(|i| *i > 0.0)?;
+        // Real-Data Policy: each of these is the device's own datasheet
+        // attribute or `None` — never a fabricated default. A `None` makes the
+        // dependent check (stepping / stability) report unchecked, not run on a
+        // guessed value.
         let ripple_ratio = get("ripple_ratio")
             .and_then(|s| parse_si(s))
-            .filter(|r| *r > 0.0)
-            .unwrap_or(DEFAULT_RIPPLE_RATIO);
+            .filter(|r| *r > 0.0);
         let loop_k = get("loop_crossover_k")
             .and_then(|s| parse_si(s))
             .filter(|k| *k > 0.0);
         let loop_ratio = get("loop_crossover_max_ratio")
             .and_then(|s| parse_si(s))
-            .filter(|r| *r > 0.0)
-            .unwrap_or(0.1);
+            .filter(|r| *r > 0.0);
         let v_ref = get("feedback_voltage")
             .or_else(|| get("v_ref"))
             .and_then(|s| parse_si(s))
-            .filter(|v| *v > 0.0)
-            .unwrap_or(0.6);
+            .filter(|v| *v > 0.0);
         Some((f_sw, i_out, ripple_ratio, loop_k, loop_ratio, v_ref))
     })?;
     let rails: Vec<f64> = declared_net_voltages(netlist)
@@ -228,16 +228,19 @@ fn e12_ceil(target: f64) -> f64 {
 /// the ratio meets target, with the resulting ratio. `L_target =
 /// (V_in−V_out)·D / (f_sw · ripple_ratio · I_out)`, ceiled onto E12. Larger L ⇒
 /// less ripple, strictly monotone and stability-benign, so no search is needed.
-/// Returns `None` when the current value already meets the target.
-fn inductor_value_step(op: &SwitcherOp, l_current: f64, d_il: f64) -> Option<(f64, f64)> {
+/// Returns `(l_step, new_ratio, target)`, or `None` when the value already
+/// meets the target OR no `ripple_ratio` is declared (Real-Data Policy — no
+/// default target).
+fn inductor_value_step(op: &SwitcherOp, l_current: f64, d_il: f64) -> Option<(f64, f64, f64)> {
+    let target = op.ripple_ratio?;
     let ratio = d_il / op.i_out;
-    if ratio <= op.ripple_ratio + 1e-9 {
+    if ratio <= target + 1e-9 {
         return None; // already within target
     }
-    let l_target = (op.v_in - op.v_out) * op.duty / (op.f_sw * op.ripple_ratio * op.i_out);
+    let l_target = (op.v_in - op.v_out) * op.duty / (op.f_sw * target * op.i_out);
     let l_step = e12_ceil(l_target.max(l_current));
     let d_il_new = (op.v_in - op.v_out) * op.duty / (op.f_sw * l_step);
-    Some((l_step, d_il_new / op.i_out))
+    Some((l_step, d_il_new / op.i_out, target))
 }
 
 /// The output inductor's ripple current `ΔI_L = (V_in−V_out)·D / (f_sw·L)`,
@@ -320,6 +323,8 @@ pub enum StabilityVerdict {
 pub struct StabilityResult {
     pub f_co: f64,
     pub f_sw: f64,
+    /// Datasheet crossover target f_sw·loop_ratio (real, not 0.1·f_sw).
+    pub crossover_target: f64,
     pub crossover_ok: bool,
     /// ESR zero `1/(2π·ESR·C_out)` of the output bank — `None` when the real
     /// ESR is not available (verdict then `Unchecked`).
@@ -343,7 +348,12 @@ pub fn compute_stability(
 ) -> Option<StabilityResult> {
     use std::f64::consts::PI;
     let op = recover_switcher_op(netlist, entity_attrs)?;
+    // Real-Data Policy: the loop model exists only if the device declares all
+    // of K, the crossover ratio, and V_ref. Any absent ⇒ no loop model ⇒ no
+    // stability section (distinct from ESR-data-missing, which is UNCHECKED).
     let k = op.loop_k?;
+    let loop_ratio = op.loop_ratio?;
+    let v_ref = op.v_ref?;
     let inv = instance_net_voltages(netlist, net_voltages);
     let near = |a: f64, b: f64| (a - b).abs() < 0.1 * b.max(1.0);
     let role_is = |inst: &bhdl_netlist::Instance, class: &str| {
@@ -385,7 +395,8 @@ pub fn compute_stability(
     }
 
     let f_co = k / (op.v_out * c_out); // needs only the real C_out
-    let crossover_ok = f_co < op.f_sw * op.loop_ratio;
+    let crossover_target = op.f_sw * loop_ratio;
+    let crossover_ok = f_co < crossover_target;
 
     // Divider-top resistor: a resistor touching V_out and V_ref (the FB node).
     let r_top = netlist.instances.values().find_map(|inst| {
@@ -393,7 +404,7 @@ pub fn compute_stability(
             return None;
         }
         let vs = inv.get(&inst.name)?;
-        if vs.iter().any(|v| near(*v, op.v_out)) && vs.iter().any(|v| near(*v, op.v_ref)) {
+        if vs.iter().any(|v| near(*v, op.v_out)) && vs.iter().any(|v| near(*v, v_ref)) {
             inst.attributes.get("value").and_then(|s| parse_si(s))
         } else {
             None
@@ -403,7 +414,7 @@ pub fn compute_stability(
     let ff_present = netlist.instances.values().any(|inst| {
         role_is(inst, "capacitor")
             && inv.get(&inst.name).is_some_and(|vs| {
-                vs.iter().any(|v| near(*v, op.v_out)) && vs.iter().any(|v| near(*v, op.v_ref))
+                vs.iter().any(|v| near(*v, op.v_out)) && vs.iter().any(|v| near(*v, v_ref))
             })
     });
 
@@ -412,6 +423,7 @@ pub fn compute_stability(
         return Some(StabilityResult {
             f_co,
             f_sw: op.f_sw,
+        crossover_target,
             crossover_ok,
             f_z_esr: None,
             ff_present,
@@ -442,6 +454,7 @@ pub fn compute_stability(
     Some(StabilityResult {
         f_co,
         f_sw: op.f_sw,
+        crossover_target,
         crossover_ok,
         f_z_esr: Some(f_z_esr),
         ff_present,
@@ -464,7 +477,7 @@ pub fn format_stability(s: &StabilityResult) -> String {
     out.push_str(&format!(
         "- crossover f_co = {} (target < {} = f_sw·loop_ratio): {}\n",
         fmt_si(s.f_co, "Hz"),
-        fmt_si(s.f_sw * 0.1, "Hz"),
+        fmt_si(s.crossover_target, "Hz"),
         if s.crossover_ok { "OK" } else { "OVER" },
     ));
     match s.f_z_esr {
@@ -551,7 +564,7 @@ pub fn apply_inductor_stepping(
     let mut applied = Vec::new();
     for (id, vstr, l) in targets {
         let d_il = (op.v_in - op.v_out) * op.duty / (op.f_sw * l);
-        if let Some((l_step, ratio_new)) = inductor_value_step(&op, l, d_il) {
+        if let Some((l_step, ratio_new, target)) = inductor_value_step(&op, l, d_il) {
             let new_str = fmt_si(l_step, "H");
             if let Some(inst) = netlist.instances.get_mut(id) {
                 inst.attributes.insert("value".to_string(), new_str.clone());
@@ -560,9 +573,8 @@ pub fn apply_inductor_stepping(
                     from: vstr,
                     to: new_str,
                     note: format!(
-                        "ripple ratio {:.2}→{ratio_new:.2}, target {:.2}",
+                        "ripple ratio {:.2}→{ratio_new:.2}, target {target:.2}",
                         d_il / op.i_out,
-                        op.ripple_ratio
                     ),
                 });
             }
@@ -695,14 +707,16 @@ pub fn compute_signoff(
                         // the E12 step-up that meets it (larger L ⇒ less ripple,
                         // monotone — the value-fixable axis, distinct from the
                         // current *rating* margin which is the supply gate's job).
-                        if let Some((l_step, ratio_new)) = inductor_value_step(op, l, dil) {
+                        if let Some((l_step, ratio_new, target)) =
+                            inductor_value_step(op, l, dil)
+                        {
                             step = Some(format!(
                                 "{} → {} (ratio {:.2}→{:.2}, target {:.2})",
                                 fmt_si(l, "H"),
                                 fmt_si(l_step, "H"),
                                 dil / op.i_out,
                                 ratio_new,
-                                op.ripple_ratio,
+                                target,
                             ));
                         }
                     }
