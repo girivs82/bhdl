@@ -155,6 +155,10 @@ struct Selection {
     /// Test frequency (Hz) at which the ESR is specified, when stated.
     #[serde(skip_serializing_if = "Option::is_none")]
     esr_test_freq_hz: Option<f64>,
+    /// The part's dielectric / temperature-coefficient (e.g. `"X7R"`), real
+    /// per-MPN data — lets sign-off identify a ceramic (structurally low ESR).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dielectric: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     note: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -391,6 +395,7 @@ struct Cand {
     tol_pct: Option<f64>,
     esr_ohms: Option<f64>,
     esr_freq_hz: Option<f64>,
+    dielectric: Option<String>,
     pkg_confirmed: bool,
 }
 
@@ -448,6 +453,7 @@ fn score_and_pick(req: &Requirement, cands: &[Cand], w: Weights, tol: f64) -> Op
         lead_time_weeks: c.lead_weeks,
         esr_ohms: c.esr_ohms,
         esr_test_freq_hz: c.esr_freq_hz,
+        dielectric: c.dielectric.clone(),
         note: Some(note),
         error: None,
     })
@@ -588,9 +594,14 @@ fn resolve(
             .and_then(|v0| v0.get("DigiKeyProductNumber"))
             .and_then(|d| d.as_str()).map(|s| s.to_string());
 
+        // Dielectric / temperature coefficient (ceramics) — real per-MPN.
+        let dielectric = pm.get("Temperature Coefficient")
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty() && s != "-");
+
         cands.push(Cand {
             mpn, manufacturer, dk_part, unit_price, stock, lead_weeks,
-            value_err, tol_pct, esr_ohms, esr_freq_hz, pkg_confirmed,
+            value_err, tol_pct, esr_ohms, esr_freq_hz, dielectric, pkg_confirmed,
         });
     }
 

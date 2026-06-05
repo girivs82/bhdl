@@ -63,6 +63,20 @@ pub struct PluginSelection {
     pub stock: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lead_time_weeks: Option<u32>,
+    /// Real published ESR (ohms) for this part, when the provider/catalogue
+    /// carries it (electrolytic/tantalum/polymer caps). Real-Data Policy: this
+    /// is a measured per-MPN value, never an estimate — absent for ceramics
+    /// (DigiKey carries no ceramic ESR/DF), which keeps stability UNCHECKED.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub esr_ohms: Option<f64>,
+    /// Frequency (Hz) the ESR is specified at, when stated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub esr_test_freq_hz: Option<f64>,
+    /// The selected part's dielectric / temperature-coefficient code (e.g.
+    /// `"X7R"`, `"C0G"`) for ceramics. Real per-MPN data — lets sign-off
+    /// identify a ceramic output cap (structurally low ESR) without an estimate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dielectric: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

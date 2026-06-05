@@ -2010,6 +2010,9 @@ async fn cmd_bom(
                     manufacturer: p.manufacturer.clone(),
                     vendor_sku: p.vendor_sku.clone(),
                     provider: p.provider.clone(),
+                    esr_ohms: p.esr_ohms,
+                    esr_test_freq_hz: p.esr_test_freq_hz,
+                    dielectric: p.dielectric.clone(),
                 })
                 .collect();
             let n = gps::apply_locked_parts(&mut netlist, &pins);
@@ -2067,6 +2070,9 @@ async fn cmd_bom(
                                 manufacturer: r.manufacturer.clone(),
                                 vendor_sku: r.vendor_sku.clone(),
                                 provider: r.provider.clone(),
+                                esr_ohms: r.esr_ohms,
+                                esr_test_freq_hz: r.esr_test_freq_hz,
+                                dielectric: r.dielectric.clone(),
                             })
                             .collect(),
                     );

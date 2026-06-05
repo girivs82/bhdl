@@ -225,6 +225,11 @@ struct Selection {
     note: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    /// The selected ceramic cap's dielectric code (e.g. `"X7R"`), parsed from
+    /// the catalogue description. Lets downstream sign-off identify a ceramic
+    /// (structurally low ESR) from real per-MPN data.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dielectric: Option<String>,
 }
 
 // ── Class → catalogue mapping ────────────────────────────────────
@@ -366,6 +371,18 @@ fn parse_tempco_ppm(text: &str, class: &str) -> Option<f64> {
         return dielectric_drift(text);
     }
     None
+}
+
+/// The ceramic dielectric code present in a description (`"X7R"`, `"C0G"`, …),
+/// if any. Returns the canonical code as it appears in the table below — real
+/// per-MPN data parsed from the catalogue, not an estimate.
+fn parse_dielectric(text: &str) -> Option<String> {
+    let up = text.to_ascii_uppercase();
+    const CODES: &[&str] = &[
+        "C0G", "NP0", "U2J", "X8R", "X8L", "X7R", "X7S", "X7T", "X6S", "X6T",
+        "X5R", "Y5V", "Z5U", "Y5U",
+    ];
+    CODES.iter().find(|c| up.contains(*c)).map(|c| c.to_string())
 }
 
 /// Map a ceramic dielectric code → representative drift (ppm-equiv) for
@@ -781,6 +798,11 @@ impl Catalogue {
                 }
             }
             let tempco = parse_tempco_ppm(&description, &req.class);
+            let dielectric = if req.class == "capacitor" {
+                parse_dielectric(&description)
+            } else {
+                None
+            };
             let basic: i64 = row.get(2).unwrap_or(0);
             let preferred: i64 = row.get(3).unwrap_or(0);
             let stock: i64 = row.get(4).unwrap_or(0);
@@ -793,6 +815,7 @@ impl Catalogue {
                 unit_price: price_at_qty(&price_json, qty),
                 tol_pct,
                 tempco,
+                dielectric,
                 // assembly-fee proxy: basic parts are free to place, preferred
                 // mid, extended carries the per-part fee + feeder setup
                 assembly: if basic == 1 {
@@ -830,6 +853,8 @@ struct Cand {
     tol_pct: Option<f64>,
     /// temperature drift (ppm/°C or dielectric proxy), lower = better
     tempco: Option<f64>,
+    /// ceramic dielectric code parsed from the description (real per-MPN data)
+    dielectric: Option<String>,
     note: &'static str,
 }
 
@@ -928,6 +953,7 @@ fn score_and_pick(req: &Requirement, cands: &[Cand], w: Weights, tol: f64) -> Op
         currency: Some("USD".to_string()),
         note: Some(c.note.to_string()),
         error: None,
+        dielectric: c.dielectric.clone(),
     })
 }
 
@@ -1110,6 +1136,7 @@ mod tests {
             stock,
             tol_pct: None,
             tempco: None,
+            dielectric: None,
             note,
         }
     }
@@ -1126,6 +1153,7 @@ mod tests {
             stock: 100_000,
             tol_pct: Some(tol),
             tempco: Some(tempco),
+            dielectric: None,
             note,
         }
     }

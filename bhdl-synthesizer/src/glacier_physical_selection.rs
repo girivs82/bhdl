@@ -549,6 +549,26 @@ pub struct ResolvedPart {
     pub manufacturer: Option<String>,
     pub vendor_sku: Option<String>,
     pub provider: Option<String>,
+    /// Real published ESR (ohms), when the provider supplied it. Written onto
+    /// the instance's `esr` attribute so sign-off reads real data.
+    pub esr_ohms: Option<f64>,
+    pub esr_test_freq_hz: Option<f64>,
+    /// The selected part's dielectric (e.g. `"X7R"`) — written onto the
+    /// instance's `dielectric` attribute so sign-off can identify a ceramic.
+    pub dielectric: Option<String>,
+}
+
+/// Write a part's real ESR (ohms) onto an instance as the `esr` attribute (the
+/// SI value sign-off parses). No-op when the part publishes no ESR — that is
+/// the Real-Data Policy honest state (e.g. ceramics), which keeps the
+/// dependent stability/ripple checks UNCHECKED rather than guessing.
+fn write_esr_attr(inst: &mut bhdl_netlist::Instance, esr_ohms: Option<f64>, esr_freq: Option<f64>) {
+    if let Some(esr) = esr_ohms.filter(|e| *e > 0.0) {
+        inst.attributes.insert("esr".to_string(), format!("{esr}"));
+        if let Some(f) = esr_freq.filter(|f| *f > 0.0) {
+            inst.attributes.insert("esr_test_freq_hz".to_string(), format!("{f}"));
+        }
+    }
 }
 
 /// Apply previously-pinned MPNs (from `bhdl.lock`) onto matching instances by
@@ -570,6 +590,10 @@ pub fn apply_locked_parts(netlist: &mut Netlist, parts: &[ResolvedPart]) -> usiz
         }
         if let Some(sku) = &p.vendor_sku {
             inst.attributes.insert("lcsc_pn".to_string(), sku.clone());
+        }
+        write_esr_attr(inst, p.esr_ohms, p.esr_test_freq_hz);
+        if let Some(d) = &p.dielectric {
+            inst.attributes.insert("dielectric".to_string(), d.clone());
         }
         n += 1;
     }
@@ -866,12 +890,22 @@ pub fn apply_supply_chain_mpns(
                 if let Some(s) = sel.and_then(|s| s.stock) {
                     inst.attributes.insert("stock".to_string(), s.to_string());
                 }
+                let esr_ohms = sel.and_then(|s| s.esr_ohms);
+                let esr_test_freq_hz = sel.and_then(|s| s.esr_test_freq_hz);
+                let dielectric = sel.and_then(|s| s.dielectric.clone());
+                write_esr_attr(inst, esr_ohms, esr_test_freq_hz);
+                if let Some(d) = &dielectric {
+                    inst.attributes.insert("dielectric".to_string(), d.clone());
+                }
                 resolved.push(ResolvedPart {
                     refdes: inst.name.clone(),
                     mpn: mpn.clone(),
                     manufacturer: sel.and_then(|s| s.manufacturer.clone()),
                     vendor_sku: sel.and_then(|s| s.vendor_sku.clone()),
                     provider: Some(provider_name.clone()),
+                    esr_ohms,
+                    esr_test_freq_hz,
+                    dielectric,
                 });
             }
             None => {
