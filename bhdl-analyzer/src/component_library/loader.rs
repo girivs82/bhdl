@@ -149,17 +149,39 @@ impl LibraryLoader {
             None => return Ok(None),
         };
         
-        // Create basic module structure
-        // TODO: Properly parse parameters, pins, metadata, etc.
+        // Parse the entity's `attribute name = value;` declarations into the
+        // module metadata. This is what makes the stdlib entity the "datasheet":
+        // downstream analyses (e.g. LED current-limit resistor sizing) read the
+        // REAL declared values (forward_voltage, forward_current, …) instead of
+        // falling back to fabricated defaults (Real-Data Policy). Without this,
+        // `electrical_specs` was always empty and every consumer guessed.
+        let mut metadata = ComponentMetadata::default();
+        for attr in node.descendants().filter_map(bhdl_ast::AttributeDecl::cast) {
+            let (Some(name_tok), Some(value_expr)) = (attr.name(), attr.value()) else {
+                continue;
+            };
+            let attr_name = name_tok.text().to_string();
+            // Raw value text, with any surrounding quotes/whitespace stripped
+            // ("2.0V", "20mA", "synchronous_buck", "Device:LED").
+            let value = value_expr.syntax().text().to_string().trim().trim_matches('"').to_string();
+            match attr_name.as_str() {
+                "component_class" => metadata.component_class = Some(value.clone()),
+                "kicad_symbol" => metadata.kicad_symbol = Some(value.clone()),
+                _ => {}
+            }
+            metadata.electrical_specs.insert(attr_name, value);
+        }
+        // TODO: parse parameters/pins from the AST too (still stubbed).
+
         let module = ComponentModule {
             name,
             source_file: source_file.to_path_buf(),
             parameters: Vec::new(),
             pins: Vec::new(),
-            metadata: ComponentMetadata::default(),
+            metadata,
             conditionals: Vec::new(),
         };
-        
+
         Ok(Some(module))
     }
 }
