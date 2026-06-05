@@ -1941,6 +1941,44 @@ async fn cmd_bom(
                 n
             );
         }
+
+        // 4.65. Apply Stage-C sign-off value-stepping to the BOM (`--simulate`).
+        //       The inductor ripple-ratio step is analytic (operating point from
+        //       the rails + regulator attributes, no GLACIER solve), so it runs
+        //       here, after the snap and BEFORE MPN resolution: mutate the value,
+        //       re-package at the new value, then the supply gate below resolves
+        //       the stepped part's real MPN. This closes the loop from
+        //       "recommend 6.8µH" to a BOM that actually carries it.
+        if simulate {
+            let applied = bhdl_synthesizer::signoff::apply_inductor_stepping(
+                &mut netlist,
+                &analysis.entity_attribute_index,
+            );
+            if !applied.is_empty() {
+                for a in &applied {
+                    println!(
+                        "  {} sign-off step applied: {} {} → {} ({})",
+                        "✓".green(),
+                        a.refdes,
+                        a.from,
+                        a.to,
+                        a.note
+                    );
+                }
+                // Re-package the stepped part(s) at their new value.
+                let declared_v =
+                    bhdl_synthesizer::glacier_physical_selection::declared_net_voltages(&netlist);
+                let empty = std::collections::HashMap::new();
+                bhdl_synthesizer::glacier_physical_selection::apply_catalog_physical_selection(
+                    &mut netlist,
+                    &harvest_catalog_families(),
+                    &empty,
+                    &empty,
+                    &declared_v,
+                );
+            }
+        }
+
         // Resolve real, orderable MPNs. Reproducibility model (mirrors
         // Cargo): a project's `bhdl.lock` (next to `bhdl.toml`) pins each
         // refdes→MPN. If pins exist and `--update-lock` was not given, reuse
