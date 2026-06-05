@@ -310,6 +310,65 @@ treatment §11.3 already defines for divider ratios.
 **Until the stability surface is built**, the ripple stepper must not present a
 `C_out` increase as fully signed-off — it `log`s that loop stability was not
 checked for the stepped value, so the change is never silently assumed safe.
+
+### 6A.2 Concrete v1 model — analytic current-mode buck loop
+
+The first build is a single, defensible analytic model, with everything that
+depends on the external components computed from the netlist and everything
+device-specific declared by the datasheet (the entity). Scope for v1:
+**peak/valley current-mode buck** (the TPS5430x/5433x class) — voltage-mode
+(LC double pole, needs Type-III comp) is deferred.
+
+**Plant** (from the netlist — GLACIER's generic part):
+- output pole `f_p = 1 / (2π · R_load · C_out)`, with `R_load = V_out / I_out`
+  and `C_out` the output **bank** total (per the parallel-cap model);
+- ESR zero `f_z(esr) = 1 / (2π · ESR · C_out)`, `ESR` from the cap family/attr;
+- high-frequency pole `f_hf = f_sw / 2` (sampling/ current-loop).
+
+In current mode the LC double pole collapses to the single `f_p`, which is why
+`C_out` moves the dominant pole directly — the heart of the §6A.1 coupling.
+
+**Compensation + gains** (from the datasheet — the device's part). For an
+**internally-compensated** part (TPS54302), these are fixed datasheet constants
+the entity declares; for an externally-compensated part they come from the comp
+network children. v1 needs, per device:
+- the error-amp / comp transfer as an integrator + one comp zero
+  `f_z(comp)` (Type-II), OR, as the simplest sufficient surrogate, a declared
+  **target crossover** `f_c` (datasheet "typical crossover") and the comp zero;
+- the total DC loop gain constant (so the integrator's 0 dB crossing lands at
+  `f_c`).
+
+**Phase margin** at crossover `f_c` (the reported number):
+```
+PM = 180° + ∠T(j2π f_c)
+∠T = −90°              (integrator)
+     + atan(f_c / f_z_comp)    (comp zero)
+     − atan(f_c / f_p)         (output pole — moves with C_out)
+     + atan(f_c / f_z_esr)     (ESR zero — moves with C_out)
+     − atan(f_c / f_hf)        (HF pole)
+```
+Verdict bands mirror §4: PM ≥ `PM_target` (e.g. 45°) signs off; a band below
+that is UNDER-MARGIN; PM ≤ 0 is OVER-STRESS (unstable). Gain margin is a v2
+refinement.
+
+**The payoff — gating `C_out` stepping:** the ripple stepper (a) may step
+`C_out` up to cut ripple, but each candidate `C_out` re-evaluates `f_p`,
+`f_z_esr` and hence PM; a step that drops PM below `PM_target` is rejected and
+the part flagged "ripple-limited by loop stability" — the two-sided window
+§6A.1 calls for. (`C_out` *up* lowers `f_p`, which usually *raises* PM in
+current mode — but a too-large `C_out` pushes `f_z_esr` and the comp zero out
+of useful range; the evaluator decides per device rather than assuming.)
+
+**Honest limitations (v1):** current-mode buck only; single-dominant-pole
+linearization (no full Bode of every parasitic); `ESR` is a catalogue estimate,
+not the as-built part's; internally-compensated parts need the datasheet
+constants declared. A vendor AC `.lib` model (provenance rung 1) supersedes all
+of this when present; absent both, stability is reported **unchecked**.
+
+**Reference-model first (the §4 pattern):** as with the ripple model, v1 lands
+as a core analytic evaluator parameterised by device **attributes** (the
+datasheet constants on the entity), with the HDL `simulation { stability {} }`
+block as the proper home it migrates into — never hardcoded per part name.
 This is the honest v1 stance; the stability surface removes the caveat.
 
 ## 7. Open questions
