@@ -239,6 +239,68 @@ fn parse_si(s: &str) -> Option<f64> {
     bhdl_analyzer::value_snap::parse_value_string(s.trim())
 }
 
+/// A value-step that was APPLIED to the netlist (Stage C → BOM closure).
+#[derive(Debug, Clone)]
+pub struct AppliedStep {
+    pub refdes: String,
+    pub from: String,
+    pub to: String,
+    pub note: String,
+}
+
+/// Apply Stage-C inductor ripple-ratio stepping directly to the netlist:
+/// for each output inductor over its ripple-ratio target, mutate its `value`
+/// to the E12 step-up that meets the target, returning the changes. This is
+/// the analytic, no-solve case (the operating point is recovered from rails +
+/// regulator attributes), so it can run right after the snap and before part
+/// re-selection. Caller is responsible for re-packaging / re-resolving the
+/// MPN of the stepped parts. Returns empty for non-switching designs.
+pub fn apply_inductor_stepping(
+    netlist: &mut Netlist,
+    entity_attrs: &HashMap<String, HashMap<String, String>>,
+) -> Vec<AppliedStep> {
+    let Some(op) = recover_switcher_op(netlist, entity_attrs) else {
+        return Vec::new();
+    };
+    // Collect inductor targets (immutable borrow) before mutating.
+    let targets: Vec<(bhdl_netlist::InstanceId, String, f64)> = netlist
+        .instances
+        .iter()
+        .filter_map(|(id, inst)| {
+            if classify_component(netlist, inst.definition, &inst.attributes).as_deref()
+                != Some("inductor")
+            {
+                return None;
+            }
+            let vstr = inst.attributes.get("value")?.clone();
+            let l = parse_si(&vstr).filter(|l| *l > 0.0)?;
+            Some((id, vstr, l))
+        })
+        .collect();
+
+    let mut applied = Vec::new();
+    for (id, vstr, l) in targets {
+        let d_il = (op.v_in - op.v_out) * op.duty / (op.f_sw * l);
+        if let Some((l_step, ratio_new)) = inductor_value_step(&op, l, d_il) {
+            let new_str = fmt_si(l_step, "H");
+            if let Some(inst) = netlist.instances.get_mut(id) {
+                inst.attributes.insert("value".to_string(), new_str.clone());
+                applied.push(AppliedStep {
+                    refdes: inst.name.clone(),
+                    from: vstr,
+                    to: new_str,
+                    note: format!(
+                        "ripple ratio {:.2}→{ratio_new:.2}, target {:.2}",
+                        d_il / op.i_out,
+                        op.ripple_ratio
+                    ),
+                });
+            }
+        }
+    }
+    applied
+}
+
 /// Compute the per-passive sign-off rows for a (snapped) netlist given a
 /// GLACIER operating point: `net_voltages` (node name → V), `instance_power`
 /// (refdes → W), `instance_currents` (refdes → A).
