@@ -46,7 +46,7 @@ fn test_rc_circuit_with_digital_control() {
     let mut netlist = create_test_netlist();
     
     // Create nets
-    let vin_net = netlist.add_net_with_class(Some("VIN".to_string()), NetClass::Power(5.0));
+    let vin_net = netlist.add_net_with_class(Some("VIN".to_string()), NetClass::Power { voltage: 5.0, current: None });
     let vout_net = netlist.add_net(Some("VOUT".to_string()));
     let gnd_net = netlist.add_net_with_class(Some("GND".to_string()), NetClass::Ground);
     let ctrl_net = netlist.add_net(Some("CTRL".to_string()));
@@ -191,9 +191,9 @@ fn test_power_on_reset_sequence() {
     let reg_module = netlist.add_module("VoltageRegulator".to_string(), ModuleKind::PhysicalComponent);
     
     // Nets
-    let vcc_net = netlist.add_net_with_class(Some("VCC".to_string()), NetClass::Power(5.0));
+    let vcc_net = netlist.add_net_with_class(Some("VCC".to_string()), NetClass::Power { voltage: 5.0, current: None });
     let rst_net = netlist.add_net(Some("RESET".to_string()));
-    let _vreg_out = netlist.add_net_with_class(Some("VREG_3V3".to_string()), NetClass::Power(3.3));
+    let _vreg_out = netlist.add_net_with_class(Some("VREG_3V3".to_string()), NetClass::Power { voltage: 3.3, current: None });
     
     // Simulate POR behavior with converters
     let adc_config = ADCConfig {

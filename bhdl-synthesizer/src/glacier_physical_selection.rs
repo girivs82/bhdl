@@ -958,7 +958,7 @@ pub fn apply_supply_chain_mpns(
 pub fn declared_net_voltages(netlist: &Netlist) -> HashMap<String, f64> {
     let mut out = HashMap::new();
     for (_id, net) in netlist.nets.iter() {
-        if let bhdl_netlist::types::NetClass::Power(v) = net.net_class {
+        if let bhdl_netlist::types::NetClass::Power { voltage: v, .. } = net.net_class {
             if let Some(name) = &net.name {
                 out.insert(name.clone(), v);
             }

@@ -803,10 +803,14 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                         .and_then(|v| parse_electrical_value_str(&v))
                         .unwrap_or(0.0);
                     
-                    let current = power_decl.current()
-                        .and_then(|c| parse_electrical_value_str(&c))
-                        .unwrap_or(1.0);
-                    
+                    // Real-Data Policy: preserve whether `@ I` was actually
+                    // declared. `current` keeps the 1.0A estimate default for the
+                    // legacy max_current field; `declared_current` stays None when
+                    // absent so sign-off reports UNCHECKED instead of a proxy.
+                    let declared_current = power_decl.current()
+                        .and_then(|c| parse_electrical_value_str(&c));
+                    let current = declared_current.unwrap_or(1.0);
+
                     // Power domains are nets with special attributes
                     let mut power_symbol = Symbol::new_decl(
                         name,
@@ -819,7 +823,7 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                     );
                     
                     // Add power domain attributes
-                    let mut attr = NetAttribute::new_power_domain(voltage, current);
+                    let mut attr = NetAttribute::new_power_domain(voltage, current, declared_current);
 
                     // Extract stage chain: |> stage1(params) |> stage2
                     let stages = power_decl.stages_with_params();

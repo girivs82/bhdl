@@ -199,7 +199,7 @@ impl NetlistToSpiceConverter {
             .collect();
         circuit.add_node("GND".to_string(), None);
         for (_net_id, net) in &netlist.nets {
-            let bhdl_netlist::types::NetClass::Power(v) = net.net_class else {
+            let bhdl_netlist::types::NetClass::Power { voltage: v, .. } = net.net_class else {
                 continue;
             };
             let Some(name) = net.name.clone() else { continue };

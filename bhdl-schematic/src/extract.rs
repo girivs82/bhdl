@@ -1030,7 +1030,7 @@ pub fn extract_schematic_data(
 
     let mut power_rails = Vec::new();
     for (net_id, net) in netlist.nets.iter() {
-        if let NetClass::Power(voltage) = net.net_class {
+        if let NetClass::Power { voltage, .. } = net.net_class {
             let net_name = net_names.get(&net_id).cloned().unwrap_or_default();
 
             // Find connected instances that are actually in the schematic
@@ -1113,7 +1113,7 @@ pub fn extract_schematic_data(
 fn classify_net(net_class: &NetClass) -> (String, Option<f64>) {
     match net_class {
         NetClass::Signal => ("signal".to_string(), None),
-        NetClass::Power(v) => ("power".to_string(), Some(*v)),
+        NetClass::Power { voltage: v, .. } => ("power".to_string(), Some(*v)),
         NetClass::Ground => ("ground".to_string(), None),
         NetClass::DifferentialPair { .. } => ("signal".to_string(), None),
         NetClass::Bus { .. } => ("signal".to_string(), None),
@@ -1626,7 +1626,7 @@ mod tests {
         nl.top_level_module = Some(board_id);
 
         // Create a power net
-        let vcc_net = nl.add_net_with_class(Some("VCC".into()), NetClass::Power(5.0));
+        let vcc_net = nl.add_net_with_class(Some("VCC".into()), NetClass::Power { voltage: 5.0, current: None });
 
         // Resistor connected to VCC
         let res_def = nl.add_module("Res".into(), ModuleKind::PhysicalComponent);

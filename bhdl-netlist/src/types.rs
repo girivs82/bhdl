@@ -138,7 +138,13 @@ impl fmt::Display for Quantity {
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 pub enum NetClass {
     Signal,
-    Power(f64), // With voltage level
+    /// A power rail. `voltage` is the declared rail voltage; `current` is the
+    /// declared per-rail load budget from a `power X = V @ I` decl (the `@ I`
+    /// part), or `None` when the source omits it. Real-Data Policy: this is the
+    /// design's declared load — never a fabricated default. Consumers that need
+    /// the load (e.g. sign-off `i_out`) must treat `None` as UNCHECKED rather
+    /// than substituting a proxy (such as a regulator's rated output current).
+    Power { voltage: f64, current: Option<f64> },
     Ground,
     DifferentialPair {
         pair_name: String,

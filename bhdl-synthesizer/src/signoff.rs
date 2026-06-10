@@ -15,9 +15,10 @@
 //! head-room.
 
 use crate::glacier_physical_selection::{
-    classify_component, compute_instance_max_voltages, declared_net_voltages,
+    classify_component, compute_instance_max_voltages,
 };
 use bhdl_netlist::Netlist;
+use bhdl_netlist::types::NetClass;
 use std::collections::HashMap;
 
 /// Derate factors — kept in sync with `value_snap.rs`.
@@ -89,7 +90,13 @@ pub struct SignoffRow {
 struct SwitcherOp {
     v_in: f64,
     v_out: f64,
-    i_out: f64,
+    /// The actual per-rail load on the regulated output, taken from the output
+    /// rail's source-declared budget (`power VOUT = V @ I`). `None` ⇒ the rail
+    /// declares no load ⇒ the i_out-dependent stresses (inductor peak current,
+    /// ripple-ratio stepping, input-cap ripple) are reported UNCHECKED.
+    /// Real-Data Policy: never the regulator's *rated* output current (a
+    /// capability, not the load) as a proxy.
+    i_out: Option<f64>,
     f_sw: f64,
     duty: f64,
     /// Target inductor ripple ratio ΔI_L/I_out from the regulator's
@@ -122,7 +129,7 @@ fn recover_switcher_op(
     // onto the netlist instance or module (only `entity_attribute_index`
     // carries them), so look up each key in three places, instance first:
     //   instance attrs → module attrs → entity_attribute_index[entity name].
-    let (f_sw, i_out, ripple_ratio, loop_k, loop_ratio, v_ref) =
+    let (f_sw, ripple_ratio, loop_k, loop_ratio, v_ref) =
         netlist.instances.values().find_map(|inst| {
         let module = netlist.modules.get(inst.definition);
         let ent = module.and_then(|m| entity_attrs.get(&m.name));
@@ -143,18 +150,15 @@ fn recover_switcher_op(
         if !is_switcher {
             return None;
         }
-        // I_out: the regulator's rated output current. (The per-rail `@ <I>`
-        // budget on a `power` decl is not yet carried in NetClass, so the
-        // rated current is the available proxy — slightly conservative.)
         let f_sw = get("switching_frequency")
             .or_else(|| get("f_sw"))
             .and_then(|s| parse_si(s))
             .filter(|f| *f > 0.0)?;
-        let i_out = get("output_current")
-            .or_else(|| get("i_out_max"))
-            .or_else(|| get("output_current_max"))
-            .and_then(|s| parse_si(s))
-            .filter(|i| *i > 0.0)?;
+        // NOTE: I_out is deliberately NOT taken from the regulator's rated
+        // `output_current` — that is the device's *capability*, not the actual
+        // load. The real per-rail load is the OUTPUT rail's declared `@ I`
+        // budget, read below from the netlist (Real-Data Policy: a different
+        // real value must not be substituted as a proxy).
         // Real-Data Policy: each of these is the device's own datasheet
         // attribute or `None` — never a fabricated default. A `None` makes the
         // dependent check (stepping / stability) report unchecked, not run on a
@@ -172,21 +176,32 @@ fn recover_switcher_op(
             .or_else(|| get("v_ref"))
             .and_then(|s| parse_si(s))
             .filter(|v| *v > 0.0);
-        Some((f_sw, i_out, ripple_ratio, loop_k, loop_ratio, v_ref))
+        Some((f_sw, ripple_ratio, loop_k, loop_ratio, v_ref))
     })?;
-    let rails: Vec<f64> = declared_net_voltages(netlist)
-        .into_values()
-        .filter(|v| *v > 0.0)
+    // Power rails carry their source-declared per-rail load budget (`@ I`) on
+    // the net class. V_in = the highest rail; V_out = the highest rail strictly
+    // below it; `i_out` = the OUTPUT rail's declared current — the actual load,
+    // or `None` when that rail omits `@ I` (→ i_out-dependent stresses UNCHECKED).
+    let rails: Vec<(f64, Option<f64>)> = netlist
+        .nets
+        .values()
+        .filter_map(|net| match &net.net_class {
+            NetClass::Power { voltage, current } if *voltage > 0.0 => Some((*voltage, *current)),
+            _ => None,
+        })
         .collect();
     if rails.len() < 2 {
         return None;
     }
-    let v_in = rails.iter().cloned().fold(f64::MIN, f64::max);
-    let v_out = rails
+    let v_in = rails.iter().map(|(v, _)| *v).fold(f64::MIN, f64::max);
+    let (v_out, i_out) = match rails
         .iter()
-        .cloned()
-        .filter(|v| *v < v_in - 1e-9)
-        .fold(f64::MIN, f64::max);
+        .filter(|(v, _)| *v < v_in - 1e-9)
+        .max_by(|(a, _), (b, _)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+    {
+        Some(&(v, i)) => (v, i),
+        None => return None,
+    };
     if !(v_out > 0.0 && v_out < v_in) {
         return None;
     }
@@ -228,19 +243,21 @@ fn e12_ceil(target: f64) -> f64 {
 /// the ratio meets target, with the resulting ratio. `L_target =
 /// (V_in−V_out)·D / (f_sw · ripple_ratio · I_out)`, ceiled onto E12. Larger L ⇒
 /// less ripple, strictly monotone and stability-benign, so no search is needed.
-/// Returns `(l_step, new_ratio, target)`, or `None` when the value already
-/// meets the target OR no `ripple_ratio` is declared (Real-Data Policy — no
-/// default target).
-fn inductor_value_step(op: &SwitcherOp, l_current: f64, d_il: f64) -> Option<(f64, f64, f64)> {
+/// Returns `(l_step, from_ratio, new_ratio, target)`, or `None` when the value
+/// already meets the target, OR no `ripple_ratio` is declared, OR the output
+/// rail declares no load (`op.i_out` is `None`) — all Real-Data Policy: no
+/// default target and no proxy load.
+fn inductor_value_step(op: &SwitcherOp, l_current: f64, d_il: f64) -> Option<(f64, f64, f64, f64)> {
     let target = op.ripple_ratio?;
-    let ratio = d_il / op.i_out;
+    let i_out = op.i_out?; // no declared load ⇒ ratio is UNCHECKED ⇒ no step
+    let ratio = d_il / i_out;
     if ratio <= target + 1e-9 {
         return None; // already within target
     }
-    let l_target = (op.v_in - op.v_out) * op.duty / (op.f_sw * target * op.i_out);
+    let l_target = (op.v_in - op.v_out) * op.duty / (op.f_sw * target * i_out);
     let l_step = e12_ceil(l_target.max(l_current));
     let d_il_new = (op.v_in - op.v_out) * op.duty / (op.f_sw * l_step);
-    Some((l_step, d_il_new / op.i_out, target))
+    Some((l_step, ratio, d_il_new / i_out, target))
 }
 
 /// The output inductor's ripple current `ΔI_L = (V_in−V_out)·D / (f_sw·L)`,
@@ -638,7 +655,7 @@ pub fn apply_inductor_stepping(
     let mut applied = Vec::new();
     for (id, vstr, l) in targets {
         let d_il = (op.v_in - op.v_out) * op.duty / (op.f_sw * l);
-        if let Some((l_step, ratio_new, target)) = inductor_value_step(&op, l, d_il) {
+        if let Some((l_step, ratio_from, ratio_new, target)) = inductor_value_step(&op, l, d_il) {
             let new_str = fmt_si(l_step, "H");
             if let Some(inst) = netlist.instances.get_mut(id) {
                 inst.attributes.insert("value".to_string(), new_str.clone());
@@ -647,8 +664,7 @@ pub fn apply_inductor_stepping(
                     from: vstr,
                     to: new_str,
                     note: format!(
-                        "ripple ratio {:.2}→{ratio_new:.2}, target {target:.2}",
-                        d_il / op.i_out,
+                        "ripple ratio {ratio_from:.2}→{ratio_new:.2}, target {target:.2}",
                     ),
                 });
             }
@@ -773,22 +789,34 @@ pub fn compute_signoff(
                 "inductor" => {
                     // Peak current is the saturation-critical stress, not DC avg.
                     if let Some(l) = parse_si(&value).filter(|l| *l > 0.0) {
+                        // ΔI_L is independent of the load; the peak current
+                        // (the saturation-critical stress) needs the real load.
                         let dil = (op.v_in - op.v_out) * op.duty / (op.f_sw * l);
-                        let i_pk = op.i_out + dil / 2.0;
-                        stress = Some(i_pk);
-                        ripple = Some(format!("ΔI_L={dil:.3}A → I_pk={i_pk:.3}A"));
+                        ripple = Some(match op.i_out {
+                            Some(i_out) => {
+                                let i_pk = i_out + dil / 2.0;
+                                stress = Some(i_pk);
+                                format!("ΔI_L={dil:.3}A → I_pk={i_pk:.3}A")
+                            }
+                            // Real-Data Policy: no declared output-rail load ⇒
+                            // peak current is UNCHECKED (no rated-current proxy).
+                            None => format!(
+                                "ΔI_L={dil:.3}A → I_pk UNCHECKED (output rail declares no `@ I` load)"
+                            ),
+                        });
                         // Stage C: if the ripple ratio is over target, recommend
                         // the E12 step-up that meets it (larger L ⇒ less ripple,
                         // monotone — the value-fixable axis, distinct from the
                         // current *rating* margin which is the supply gate's job).
-                        if let Some((l_step, ratio_new, target)) =
+                        // Returns None when the load is undeclared (ratio UNCHECKED).
+                        if let Some((l_step, ratio_from, ratio_new, target)) =
                             inductor_value_step(op, l, dil)
                         {
                             step = Some(format!(
                                 "{} → {} (ratio {:.2}→{:.2}, target {:.2})",
                                 fmt_si(l, "H"),
                                 fmt_si(l_step, "H"),
-                                dil / op.i_out,
+                                ratio_from,
                                 ratio_new,
                                 target,
                             ));
@@ -812,12 +840,23 @@ pub fn compute_signoff(
                         ));
                     } else if near(v_dc, op.v_in) && c_in_total > 0.0 {
                         // Input cap: ripple voltage (stress stays the rail).
-                        let dv = op.i_out * op.duty * (1.0 - op.duty) / (op.f_sw * c_in_total);
-                        ripple = Some(format!(
-                            "ΔV_in={:.1}mV (bank {})",
-                            dv * 1000.0,
-                            fmt_si(c_in_total, "F")
-                        ));
+                        // The input ripple current is load-driven, so it needs
+                        // the real output-rail load — UNCHECKED without it.
+                        ripple = Some(match op.i_out {
+                            Some(i_out) => {
+                                let dv = i_out * op.duty * (1.0 - op.duty)
+                                    / (op.f_sw * c_in_total);
+                                format!(
+                                    "ΔV_in={:.1}mV (bank {})",
+                                    dv * 1000.0,
+                                    fmt_si(c_in_total, "F")
+                                )
+                            }
+                            None => format!(
+                                "ΔV_in UNCHECKED — output rail declares no `@ I` load (bank {})",
+                                fmt_si(c_in_total, "F")
+                            ),
+                        });
                     }
                 }
                 _ => {}

@@ -619,21 +619,26 @@ fn classify_net(
     simulation: Option<&SimulationAnnotations>,
 ) -> PnrNetClass {
     match net_class {
-        NetClass::Power(voltage) => {
-            let current = simulation
-                .and_then(|sim| {
-                    // Use net voltage to validate, estimate current from connected instances
-                    sim.net_voltages.get(net_name)?;
-                    // Sum currents of instances on this net as an estimate
-                    Some(
-                        sim.instance_currents
-                            .values()
-                            .map(|c| c.abs())
-                            .fold(0.0_f64, f64::max)
-                            .max(0.1),
-                    )
-                })
-                .unwrap_or(0.5);
+        NetClass::Power { voltage, current: declared } => {
+            // Prefer the source-declared per-rail budget (`@ I`). Only when it
+            // is absent fall back to the sim-derived estimate (and, last, 0.5A)
+            // for trace-width sizing.
+            let current = declared.unwrap_or_else(|| {
+                simulation
+                    .and_then(|sim| {
+                        // Use net voltage to validate, estimate current from connected instances
+                        sim.net_voltages.get(net_name)?;
+                        // Sum currents of instances on this net as an estimate
+                        Some(
+                            sim.instance_currents
+                                .values()
+                                .map(|c| c.abs())
+                                .fold(0.0_f64, f64::max)
+                                .max(0.1),
+                        )
+                    })
+                    .unwrap_or(0.5)
+            });
             PnrNetClass::Power {
                 voltage: *voltage,
                 current,
@@ -1028,7 +1033,7 @@ fn count_power_domains(netlist: &Netlist) -> usize {
     netlist
         .nets
         .values()
-        .filter(|net| matches!(net.net_class, NetClass::Power(_)))
+        .filter(|net| matches!(net.net_class, NetClass::Power { .. }))
         .count()
 }
 

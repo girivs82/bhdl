@@ -74,7 +74,7 @@ fn create_test_netlist() -> Netlist {
     let _buf1 = netlist.add_instance("BUF1".to_string(), buf_module).unwrap();
     
     // Create nets
-    let _vcc = netlist.add_net_with_class(Some("VCC".to_string()), NetClass::Power(5.0));
+    let _vcc = netlist.add_net_with_class(Some("VCC".to_string()), NetClass::Power { voltage: 5.0, current: None });
     let _gnd = netlist.add_net_with_class(Some("GND".to_string()), NetClass::Ground);
     let _sig1 = netlist.add_net(Some("signal1".to_string()));
     

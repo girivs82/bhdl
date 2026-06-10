@@ -9,6 +9,12 @@ pub enum NetAttribute {
         voltage: f64,
         tolerance: f64,
         max_current: f64,
+        /// The per-rail load budget actually declared via `power X = V @ I`
+        /// (the `@ I` part), or `None` when the source omits it. Distinct from
+        /// `max_current` (which carries a 1.0A estimate default for trace-width
+        /// sizing): Real-Data Policy consumers (e.g. sign-off `i_out`) must use
+        /// this and treat `None` as UNCHECKED, never the estimate.
+        declared_current: Option<f64>,
         controllable: bool,
         enable_signal: Option<String>,
         startup_delay_ms: f64,
@@ -25,11 +31,12 @@ pub enum NetAttribute {
 
 impl NetAttribute {
     /// Create a new power domain attribute
-    pub fn new_power_domain(voltage: f64, max_current: f64) -> Self {
+    pub fn new_power_domain(voltage: f64, max_current: f64, declared_current: Option<f64>) -> Self {
         NetAttribute::PowerDomain {
             voltage,
             tolerance: 5.0, // 5% default
             max_current,
+            declared_current,
             controllable: true,
             enable_signal: None,
             startup_delay_ms: 1.0,

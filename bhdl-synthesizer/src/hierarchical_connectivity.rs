@@ -102,7 +102,7 @@ impl HierarchicalContext {
                     // Check if this net has a power or ground class
                     use bhdl_netlist::NetClass;
                     match &net.net_class {
-                        NetClass::Power(_) | NetClass::Ground => return true,
+                        NetClass::Power { .. } | NetClass::Ground => return true,
                         _ => {}
                     }
                 }
