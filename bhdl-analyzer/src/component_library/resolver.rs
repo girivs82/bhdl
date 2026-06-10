@@ -84,6 +84,14 @@ impl ModuleResolver {
         }
     }
     
+    /// Seed the resolver's cache with an in-memory module under `name`,
+    /// bypassing the filesystem search. Used to inject a known module (e.g. a
+    /// LED with declared `electrical_specs`) without a stdlib on disk —
+    /// primarily for tests and embedding callers.
+    pub fn insert_module(&mut self, name: &str, module: ComponentModule) {
+        self.cache.insert(name.to_string(), Arc::new(module));
+    }
+
     /// Resolve a module by name
     pub fn resolve(&mut self, module_name: &str) -> Result<Arc<ComponentModule>> {
         // Check cache first

@@ -1139,8 +1139,28 @@ mod tests {
 
     #[test]
     fn test_resistor_inference_led_current_limiting() {
+        use crate::component_library::{ComponentModule, ComponentMetadata, ModuleResolver};
+
         let mut context = ComponentInferenceContext::new();
-        
+
+        // Real-Data Policy: current-limit sizing needs the LED's REAL declared
+        // forward voltage AND current (no color→Vf table, no 20mA default). Seed
+        // the resolver with a LED whose entity declares them — the "datasheet"
+        // the inference reads. Vf=2.0V, If=20mA ⇒ R=(5−2)/0.02=150Ω.
+        let mut led = ComponentModule {
+            name: "LED".to_string(),
+            source_file: std::path::PathBuf::new(),
+            parameters: Vec::new(),
+            pins: Vec::new(),
+            metadata: ComponentMetadata::default(),
+            conditionals: Vec::new(),
+        };
+        led.metadata.electrical_specs.insert("forward_voltage".to_string(), "2.0V".to_string());
+        led.metadata.electrical_specs.insert("forward_current".to_string(), "20mA".to_string());
+        let mut resolver = ModuleResolver::new();
+        resolver.insert_module("LED", led);
+        context.set_module_resolver(resolver);
+
         let requirements = CircuitRequirements {
             supply_voltage: Some(5.0),
             required_current: None,
@@ -1151,24 +1171,54 @@ mod tests {
             tolerance: None,
             package_constraint: None,
         };
-        
+
         let circuit_context = CircuitContext {
             has_led_in_series: true,
             led_color: Some("red".to_string()),
             ..Default::default()
         };
-        
+
         let suggestion = context.infer_component_parameters("Res", &requirements, &circuit_context);
         assert!(suggestion.is_some());
-        
+
         let suggestion = suggestion.unwrap();
         assert_eq!(suggestion.component_type, "Res");
         assert_eq!(suggestion.parameters.len(), 1);
         assert_eq!(suggestion.parameters[0].name, "value");
-        
+
         if let ParameterValue::Resistance(r) = suggestion.parameters[0].value {
             assert!(r > 100.0 && r < 200.0); // Should be around 150Ω for red LED
         }
+    }
+
+    #[test]
+    fn test_led_current_limiting_skips_without_real_vf_if() {
+        // Real-Data Policy: with NO resolver/declared Vf·If, the current-limit
+        // resistor must NOT be auto-sized from a fabricated operating point —
+        // inference yields no `value` parameter (and warns) instead of guessing.
+        let mut context = ComponentInferenceContext::new();
+        let requirements = CircuitRequirements {
+            supply_voltage: Some(5.0),
+            required_current: None,
+            load_current: None,
+            frequency: None,
+            max_power: None,
+            temperature_range: None,
+            tolerance: None,
+            package_constraint: None,
+        };
+        let circuit_context = CircuitContext {
+            has_led_in_series: true,
+            led_color: Some("red".to_string()),
+            ..Default::default()
+        };
+        let suggestion = context
+            .infer_component_parameters("Res", &requirements, &circuit_context)
+            .expect("a suggestion is still returned, just without a sized value");
+        assert!(
+            !suggestion.parameters.iter().any(|p| p.name == "value"),
+            "must not fabricate a current-limit value without real Vf/If"
+        );
     }
 
     #[test]
