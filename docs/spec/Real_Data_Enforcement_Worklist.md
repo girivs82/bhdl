@@ -34,12 +34,15 @@ Audit of every fabricated value in the analysis / selection path (per
 - [ ] (shared) glacier I²R / I·R above.
 
 ## D. Unit/shape assumptions
-- [ ] `ripple_calculator.rs` / `input_cap_calculator.rs` hardcoded tier dielectrics (C0G/X7R/X5R) — must reflect a real catalogue part.
+- [x] `ripple_calculator.rs` / `input_cap_calculator.rs` hardcoded tier dielectrics (C0G/X7R/X5R) — **done (sweep 10/N)**. Resolution: the hardcoded tier dielectric is a `dielectric_hint` — a *sourcing recommendation* (which dielectric to look for, like the E-series grids / derate factors), NOT a measured property of a chosen part, so it is **legitimate selection policy** (moved to the list below) **provided it never feeds a verdict**. The actual violation was the FALLBACK in `signoff.rs::cap_is_ceramic`, which read the real `dielectric` (stamped by glacier from the selected MPN) *or else* the `dielectric_hint` — so an un-selected cap carrying only a hint got a real `CeramicStructural` ESR-zero phase-margin verdict from a fabricated dielectric. Removed the `.or_else(dielectric_hint)`: the ceramic determination now uses only the real selected-part `dielectric`; a cap with only a hint is treated as unknown ⇒ UNCHECKED (the three-way split's `Unchecked` arm). Measured: TPS54302 buck unchanged (its output caps had no real `dielectric` ⇒ already UNCHECKED; the hint fallback was a latent footgun, not firing here); connectivity oracle 51/51; synthesizer lib 74/74. The hardcoded hint strings stay as sourcing policy.
 
 ## Policy constants (legitimate — NOT violations)
 Derate factors (CAP 2×, RES 2×, IND 1.25×), SIGNOFF_MARGIN 1.2, 2π, E-series
 grids, entity-declared datasheet constants (loop_crossover_k, feedback_voltage,
-switching_frequency, output_current). These are policy/physics/datasheet, allowed.
+switching_frequency, output_current), and the cap-tier `dielectric_hint`
+strings (a sourcing recommendation, like the E-series grids — legitimate so
+long as they never feed a verdict; see D). These are policy/physics/datasheet,
+allowed.
 
 ## Data source: DigiKey provider (lands real ESR for non-ceramics)
 `bhdl-digikey-provider` (DigiKey Product Information API v4, OAuth2

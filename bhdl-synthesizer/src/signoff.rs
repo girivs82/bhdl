@@ -389,14 +389,16 @@ const CERAMIC_DIELECTRICS: &[&str] = &[
     "Y5V", "Z5U", "Y5U",
 ];
 
-/// Is this capacitor a ceramic (MLCC)? Decided from the real `dielectric` /
-/// `dielectric_hint` attribute (set by the provider selection / cap sizer).
+/// Is this capacitor a ceramic (MLCC)? Decided ONLY from the real `dielectric`
+/// attribute — the dielectric of the part actually selected from the catalogue
+/// (glacier stamps it from the chosen MPN). Real-Data Policy: the sizer's
+/// `dielectric_hint` is a *sourcing recommendation* (which dielectric to look
+/// for), NOT a measured property of a chosen part, so it must never feed the
+/// ESR-zero stability verdict — a cap carrying only a hint is treated as
+/// unknown (→ UNCHECKED), never as a structurally-negligible-ESR ceramic.
 /// `None`-dielectric ⇒ not identifiable as ceramic (caller treats as unknown).
 fn cap_is_ceramic(inst: &bhdl_netlist::Instance) -> bool {
-    let d = inst
-        .attributes
-        .get("dielectric")
-        .or_else(|| inst.attributes.get("dielectric_hint"));
+    let d = inst.attributes.get("dielectric");
     match d {
         Some(s) => {
             let up = s.to_ascii_uppercase();
