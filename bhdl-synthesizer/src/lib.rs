@@ -1354,7 +1354,11 @@ impl NetlistGenerator {
                 let net_class = if domain_name.contains("GND") || domain_info.voltage == 0.0 {
                     NetClass::Ground
                 } else {
-                    NetClass::Power(domain_info.voltage)
+                    // Carry the source-declared per-rail load budget (`@ I`) onto
+                    // the net. `None` when undeclared — sign-off then reports the
+                    // i_out-dependent checks UNCHECKED rather than substituting the
+                    // regulator's rated output current as a proxy (Real-Data).
+                    NetClass::Power { voltage: domain_info.voltage, current: domain_info.declared_current }
                 };
 
                 let net_id = self.find_or_create_net(domain_name, net_class.clone());
@@ -1513,7 +1517,7 @@ impl NetlistGenerator {
                 // Create the net with appropriate class
                 let net_id = self.netlist.add_net_with_class(
                     Some(connection.source_net.clone()),
-                    bhdl_netlist::types::NetClass::Power(3.3) // Default voltage, should be from domain spec
+                    bhdl_netlist::types::NetClass::Power { voltage: 3.3, current: None } // Default voltage, should be from domain spec
                 );
                 self.ast_to_net.insert(connection.source_net.clone(), net_id);
                 net_id

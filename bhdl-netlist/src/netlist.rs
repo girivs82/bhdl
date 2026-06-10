@@ -59,7 +59,7 @@ impl Netlist {
         // Determine net class based on name
         let net_class = if let Some(ref n) = name {
             if n.contains("VCC") || n.contains("VDD") || n.contains("VIN") {
-                NetClass::Power(5.0) // Default voltage, should be updated
+                NetClass::Power { voltage: 5.0, current: None } // Default voltage, should be updated
             } else if n.contains("GND") || n.contains("VSS") {
                 NetClass::Ground
             } else {

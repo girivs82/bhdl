@@ -23,6 +23,11 @@ pub struct PowerDomain {
     pub tolerance: f64,
     /// Maximum current capability in amperes
     pub max_current: f64,
+    /// The per-rail load budget actually declared via `power X = V @ I`, or
+    /// `None` when omitted. Distinct from `max_current` (a 1.0A estimate
+    /// default). Real-Data Policy: an absent budget stays `None` (UNCHECKED
+    /// downstream), never a fabricated value.
+    pub declared_current: Option<f64>,
     /// Power sequencing dependencies
     pub dependencies: Vec<String>,
     /// Whether this domain is always-on or can be controlled
@@ -43,6 +48,7 @@ impl PowerDomain {
             voltage,
             tolerance: 5.0, // 5% default tolerance
             max_current: 1.0, // 1A default max current
+            declared_current: None, // Real-Data: only set when source declares `@ I`
             dependencies: Vec::new(),
             controllable: true,
             enable_signal: None,
@@ -502,9 +508,10 @@ fn load_power_domains_from_symbols(context: &mut PowerAnalysisContext, symbol_ta
         if symbol.kind == SymbolKind::Net {
             if let Some(net_attr) = &symbol.net_attributes {
                 match net_attr {
-                    NetAttribute::PowerDomain { voltage, max_current, tolerance, controllable, enable_signal, startup_delay_ms, sequence_priority, dependencies, .. } => {
+                    NetAttribute::PowerDomain { voltage, max_current, declared_current, tolerance, controllable, enable_signal, startup_delay_ms, sequence_priority, dependencies, .. } => {
                         let mut domain = PowerDomain::new(name.clone(), *voltage);
                         domain.max_current = *max_current;
+                        domain.declared_current = *declared_current;
                         domain.tolerance = *tolerance;
                         domain.controllable = *controllable;
                         domain.enable_signal = enable_signal.clone();
@@ -595,14 +602,17 @@ fn analyze_power_declaration(node: &SyntaxNode<BhdlLanguage>, context: &mut Powe
                 .and_then(|v| parse_electrical_value(&v))
                 .unwrap_or(0.0);
                 
-            // Parse current value
-            let current = power_decl.current()
-                .and_then(|c| parse_electrical_value(&c))
-                .unwrap_or(1.0);
-            
+            // Parse current value. Real-Data Policy: keep the genuinely-declared
+            // budget (`@ I`) as an Option; `max_current` keeps the 1.0A estimate
+            // default only for the trace-width/validation consumers.
+            let declared_current = power_decl.current()
+                .and_then(|c| parse_electrical_value(&c));
+            let current = declared_current.unwrap_or(1.0);
+
             // Create power domain
             let mut domain = PowerDomain::new(name.clone(), voltage);
             domain.max_current = current;
+            domain.declared_current = declared_current;
             
             // Add to context
             context.add_domain(domain);

@@ -42,7 +42,7 @@ fn main() {
     let led2 = netlist.add_instance("LED2".to_string(), led_module).unwrap();
     
     // Create nets
-    let vcc = netlist.add_net_with_class(Some("VCC".to_string()), NetClass::Power(5.0));
+    let vcc = netlist.add_net_with_class(Some("VCC".to_string()), NetClass::Power { voltage: 5.0, current: None });
     let gnd = netlist.add_net_with_class(Some("GND".to_string()), NetClass::Ground);
     let filtered = netlist.add_net(Some("filtered_signal".to_string()));
     let gpio1_net = netlist.add_net(Some("gpio1_net".to_string()));

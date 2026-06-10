@@ -888,7 +888,7 @@ fn read_board_context(
     for (pin_name, &pin_inst) in &cand.pin_instances {
         if let Some(net_id) = find_net_for_pin_instance(netlist, pin_inst) {
             if let Some(net) = netlist.nets.get(net_id) {
-                if let bhdl_netlist::NetClass::Power(v) = net.net_class {
+                if let bhdl_netlist::NetClass::Power { voltage: v, .. } = net.net_class {
                     board.insert(pin_name.clone(), v);
                 }
             }
@@ -940,7 +940,7 @@ fn switch_bias_design(netlist: &Netlist, cand: &ExpansionCandidate) -> Option<f6
     let vbb_pin = *cand.pin_instances.get("VBB")?;
     let vbb_net = find_net_for_pin_instance(netlist, vbb_pin)?;
     let v_bb = match &netlist.nets.get(vbb_net)?.net_class {
-        bhdl_netlist::NetClass::Power(v) => *v,
+        bhdl_netlist::NetClass::Power { voltage: v, .. } => *v,
         _ => {
             warn!("switch intent on '{}': VBB pin is not on a power rail — \
                    keeping expansion defaults", cand.instance_name);
@@ -985,7 +985,7 @@ fn amplifier_bias_design(
     let vbb_pin = *cand.pin_instances.get("VBB")?;
     let vbb_net = find_net_for_pin_instance(netlist, vbb_pin)?;
     let v_bb = match &netlist.nets.get(vbb_net)?.net_class {
-        bhdl_netlist::NetClass::Power(v) => *v,
+        bhdl_netlist::NetClass::Power { voltage: v, .. } => *v,
         _ => {
             warn!("amplifier intent on '{}': VBB pin is not on a power rail \
                    — keeping expansion defaults", cand.instance_name);

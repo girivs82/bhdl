@@ -104,7 +104,7 @@ entity MotorModule() {
     for (_net_id, net) in &netlist.nets {
         if let Some(ref name) = net.name {
             match &net.net_class {
-                bhdl_netlist::NetClass::Power(voltage) => {
+                bhdl_netlist::NetClass::Power { voltage, .. } => {
                     println!("  {} - {}V power domain", name, voltage);
                 },
                 bhdl_netlist::NetClass::Ground => {
@@ -214,7 +214,7 @@ fn analyze_filter_passive_requirements(instance_name: &str, netlist: &bhdl_netli
             if let Some(ref name) = net.name {
                 if name.contains(&instance_name) {
                     match &net.net_class {
-                        bhdl_netlist::NetClass::Power(voltage) => Some(*voltage),
+                        bhdl_netlist::NetClass::Power { voltage, .. } => Some(*voltage),
                         _ => None
                     }
                 } else {

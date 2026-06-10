@@ -451,7 +451,7 @@ impl EntityVariantManager {
         // Create internal power net
         let _internal_power_net = netlist.add_net_with_class(
             Some(format!("{}_internal", pin_name)),
-            NetClass::Power(3.3) // Default 3.3V, should be parameterized
+            NetClass::Power { voltage: 3.3, current: None } // Default 3.3V, should be parameterized
         );
 
         // Note: For virtual components, we would need a module ID for the protection components
@@ -474,7 +474,7 @@ impl EntityVariantManager {
         // Add net for external connection
         let _external_net = netlist.add_net_with_class(
             Some(pin_name.to_string()),
-            NetClass::Power(3.3) // Default 3.3V, should be parameterized
+            NetClass::Power { voltage: 3.3, current: None } // Default 3.3V, should be parameterized
         );
 
         // TODO: Add actual connections between components, nets, and pins
@@ -742,7 +742,7 @@ impl EntityVariantManager {
         // Create power output net and pin
         let power_net = netlist.add_net_with_class(
             Some(format!("{}_out", pin_name)),
-            NetClass::Power(domain_voltage)
+            NetClass::Power { voltage: domain_voltage, current: None }
         );
 
         netlist.add_pin(module_id, pin_name.to_string(), PinDirection::Out, PinType::Power);

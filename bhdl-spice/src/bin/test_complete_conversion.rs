@@ -72,7 +72,7 @@ fn create_realistic_netlist() -> Netlist {
     }
     
     // Create nets
-    let vcc = netlist.add_net_with_class(Some("VCC".to_string()), NetClass::Power(5.0));
+    let vcc = netlist.add_net_with_class(Some("VCC".to_string()), NetClass::Power { voltage: 5.0, current: None });
     let gnd = netlist.add_net_with_class(Some("GND".to_string()), NetClass::Ground);
     let led_anode = netlist.add_net(Some("LED_ANODE".to_string()));
     let voltage_divider = netlist.add_net(Some("VDIV".to_string()));

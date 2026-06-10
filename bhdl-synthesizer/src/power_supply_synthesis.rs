@@ -184,7 +184,7 @@ impl NetlistGenerator {
 
             // Find relevant nets - we need SW, VOUT, GND, FB nets
             let sw_net = self.find_or_create_net(&format!("{}_SW", ic_name), NetClass::Signal);
-            let vout_net = self.find_or_create_net("VOUT", NetClass::Power(5.0)); // TODO: Get actual voltage
+            let vout_net = self.find_or_create_net("VOUT", NetClass::Power { voltage: 5.0, current: None }); // TODO: Get actual voltage
             let gnd_net = self.find_or_create_net("GND", NetClass::Ground);
             let fb_net = self.find_or_create_net(&format!("{}_FB", ic_name), NetClass::Signal);
 
