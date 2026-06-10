@@ -1,7 +1,12 @@
 # Real-Data Policy — Enforcement Worklist
 
 Audit of every fabricated value in the analysis / selection path (per
-`Real_Data_Policy.md`). 31 violations. Status: in progress.
+`Real_Data_Policy.md`). 31 violations. Status: **complete** (sweeps 1–10).
+Every live violation is now either real-value-or-UNCHECKED, hard-errored, or
+reclassified as legitimate selection/physics policy; see per-item notes. The
+standing constraint is DATA AVAILABILITY (catalogue/datasheet coverage of cap
+ESR/DF, diode/LED Vf·Is, regulator rds_on/t_sw/i_q): where the data is absent
+the analysis degrades to UNCHECKED by design rather than fabricating.
 
 ## A. Estimate tables (typical-value lookups)
 - [x] `ripple_calculator.rs:39` `typical_esr_mohm(dielectric,package)` — done (sweep 2/N). Table deleted; output- and input-cap banks drop the ESR-sized `mid_freq` tier and size the bulk tier on the capacitive ripple term alone (full ripple budget). ESR ripple is now loudly noted UNACCOUNTED in the tier rationale + estimated ripple. Cap-sizing runs only under `bom --simulate`, not the `freeze` oracle path → oracle 51/51.
@@ -31,7 +36,7 @@ Audit of every fabricated value in the analysis / selection path (per
 
 ## C. Proxies (a different real value substituted)
 - [x] `signoff.rs:147` `i_out` = regulator rated output_current used as the actual per-rail load — **done (sweep 9/N)**. The actual load is a *design* property (the rail's declared `@ I` budget), not a *device* datasheet attribute (`GLACIER=power-expert, stdlib=datasheet` — the load is neither). Carried it end-to-end: `NetClass::Power(f64)` → `Power { voltage, current: Option<f64> }` (the chosen home; PnR's trace-width path now consumes the REAL rail current too, dropping its `unwrap_or(0.5)` estimate to a fallback). Plumbed `PowerDecl::current()` (already parsed) → analyzer `PowerDomain.declared_current` / `NetAttribute::PowerDomain.declared_current` (distinct from the legacy `max_current` 1.0A estimate) → synth net build → `SwitcherOp.i_out: Option<f64>`. Sign-off now reads the **output rail's** declared current; absent `@ I` ⇒ `None` ⇒ inductor peak-current, ripple-ratio stepping, and input-cap ripple all report **UNCHECKED** (no rated-current proxy). Measured: TPS54302 buck (`VOUT = 5V @ 2A`) now reports `I_pk = 2.0A + ΔI_L/2 = 2.292A` (real 2A load, was the rated 3A); strip the `@ 2A` and it reports `I_pk UNCHECKED`. Connectivity oracle green; synthesizer lib 74/74; no new analyzer-test regressions (the one pre-existing `test_resistor_inference_led_current_limiting` fail is the sweep-7 LED test-harness `electrical_specs` gap, untouched here).
-- [ ] (shared) glacier I²R / I·R above.
+- [x] (shared) glacier I²R / I·R — **resolved by sweep 5** (back-reference, not a separate item). The resistor power stress is GLACIER's simulated dissipation (`instance_power`, exact `P=I²R` from the real solved branch current) derated 2×; the cap voltage stress is `V=I·R`-equivalent from real node voltages. These derivations are EXACT physics from real data (kept), and an *absent* GLACIER stress hard-rejects in `select_resistor_physical`/`select_capacitor_physical` (→ DNP) and is honestly ungated-and-noted ("no V/I/P stress gate") in the requirement-builder path — no fabricated value on either path.
 
 ## D. Unit/shape assumptions
 - [x] `ripple_calculator.rs` / `input_cap_calculator.rs` hardcoded tier dielectrics (C0G/X7R/X5R) — **done (sweep 10/N)**. Resolution: the hardcoded tier dielectric is a `dielectric_hint` — a *sourcing recommendation* (which dielectric to look for, like the E-series grids / derate factors), NOT a measured property of a chosen part, so it is **legitimate selection policy** (moved to the list below) **provided it never feeds a verdict**. The actual violation was the FALLBACK in `signoff.rs::cap_is_ceramic`, which read the real `dielectric` (stamped by glacier from the selected MPN) *or else* the `dielectric_hint` — so an un-selected cap carrying only a hint got a real `CeramicStructural` ESR-zero phase-margin verdict from a fabricated dielectric. Removed the `.or_else(dielectric_hint)`: the ceramic determination now uses only the real selected-part `dielectric`; a cap with only a hint is treated as unknown ⇒ UNCHECKED (the three-way split's `Unchecked` arm). Measured: TPS54302 buck unchanged (its output caps had no real `dielectric` ⇒ already UNCHECKED; the hint fallback was a latent footgun, not firing here); connectivity oracle 51/51; synthesizer lib 74/74. The hardcoded hint strings stay as sourcing policy.
