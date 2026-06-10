@@ -74,6 +74,7 @@ fn create_symbol_information(
         ASymbolKind::Board => SymbolKind::CLASS,
         ASymbolKind::Entity => SymbolKind::MODULE,
         ASymbolKind::Component => SymbolKind::STRUCT,
+        ASymbolKind::PartFamily => SymbolKind::CLASS, // v0.2 catalog family (groups part candidates for an entity)
         ASymbolKind::Interface => SymbolKind::INTERFACE,
         ASymbolKind::Net => SymbolKind::VARIABLE,
         ASymbolKind::Pin => SymbolKind::FIELD,
