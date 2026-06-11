@@ -5,9 +5,30 @@ use crate::syntax::SyntaxKind;
 use super::core::{Parser, SyntaxKindExt};
 
 impl<'t> Parser<'t> {
-    // Alias for compatibility
+    // Alias for compatibility. Used INSIDE an already-open node (e.g. a
+    // DESIGN_ASSIGNMENT), so it must NOT start a root node of its own.
     pub(crate) fn parse_expression(&mut self) {
         self.parse_expr(0);
+    }
+
+    /// Parse a *standalone* expression (the `bhdl_parser::parse_expression`
+    /// entry point) wrapped in a SOURCE_FILE root. rowan requires the green
+    /// tree to have exactly one root node; a bare expression that is a single
+    /// parenthesized group (e.g. `(a - b)`) parses its `(`/`)` as loose tokens
+    /// with no enclosing node, which without this wrapper leaves multiple root
+    /// children and panics the green builder. Consumers locate the real
+    /// expression via `descendants().find_map(Expr::cast)`, so the extra root
+    /// is transparent to them.
+    pub(crate) fn parse_expression_root(&mut self) {
+        self.builder.start_node(SyntaxKind::SOURCE_FILE.into());
+        self.parse_expr(0);
+        // Drain any trailing tokens into the root too, so malformed trailing
+        // input can't reintroduce loose root siblings.
+        self.skip_trivia();
+        while self.peek().is_some() {
+            self.bump_any();
+        }
+        self.builder.finish_node();
     }
 
     // --- Expression Parsing (Precedence Climbing) ---
@@ -194,11 +215,33 @@ impl<'t> Parser<'t> {
                 // Consume the operator
                 self.bump();
 
-                // Wrap the LHS and operator with RHS into a BINARY_EXPR node
+                // Wrap the LHS and operator with RHS into a BINARY_EXPR node.
                 self.builder.start_node_at(checkpoint, SyntaxKind::BINARY_EXPR.into());
                 self.parse_expr(r_bp); // Parse the right-hand side (RHS)
                 self.builder.finish_node(); // Finish BINARY_EXPR
-                checkpoint = self.builder.checkpoint(); // Update checkpoint after binary expr
+
+                // Checkpoint policy by operator class:
+                //  • Flow/connection operators (`->`, `<->`, `|>`, `<=>`) keep
+                //    the legacy behaviour — reset the checkpoint so a chain
+                //    `A -> B -> C` parses as a FLAT sibling sequence of
+                //    connection segments, which the connection lowering relies
+                //    on.
+                //  • Arithmetic/logical operators must LEFT-NEST: the node just
+                //    created is the LHS of the next operator, so the checkpoint
+                //    must stay at the original LHS start. Resetting it here made
+                //    `a * b / c` (and `a - b + c`) parse as sibling nodes — the
+                //    second node began with the operator and had no LHS — so
+                //    expression evaluators silently dropped everything after the
+                //    first operator. Keeping it fixed yields `((a * b) / c)`.
+                if matches!(
+                    current_op,
+                    SyntaxKind::FLOW_OP
+                        | SyntaxKind::INTERFACE_OP
+                        | SyntaxKind::BI_ARROW
+                        | SyntaxKind::ARROW
+                ) {
+                    checkpoint = self.builder.checkpoint();
+                }
             } else {
                 break; // Not a binary operator we handle or end of expression part
             }

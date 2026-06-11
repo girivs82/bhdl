@@ -80,7 +80,7 @@ pub fn parse_expression(text: &str) -> ParseResult {
     let tokens: Vec<_> = LexerToken::lexer(text).spanned().collect();
     let mapped_tokens = map_token_stream(tokens, text);
     let mut parser = core::Parser::new(&mapped_tokens);
-    parser.parse_expression(); // Parse as expression
+    parser.parse_expression_root(); // Parse as expression, wrapped in a single root
     let (green_node, errors) = parser.finish();
     ParseResult {
         green_node,
