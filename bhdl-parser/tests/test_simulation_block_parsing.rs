@@ -71,9 +71,8 @@ entity Buck(f_sw: frequency = 500kHz) {
 }
 
 #[test]
-fn test_model_block_reserved_parses() {
-    // §5 model block is reserved: it must parse (balanced braces) without error
-    // even though it is not yet interpreted.
+fn test_model_block_parses_node_stmts() {
+    // §5 primitive-composition form: `node <net> source/draws = <expr>;`.
     let code = r#"
 entity Buck(v_out: voltage = 5V, v_in: voltage = 12V, f_sw: frequency = 500kHz) {
     pin VIN: power in;
@@ -88,8 +87,13 @@ entity Buck(v_out: voltage = 5V, v_in: voltage = 12V, f_sw: frequency = 500kHz) 
     }
 }
 "#;
-    assert!(has_kind(code, SyntaxKind::MODEL_BLOCK));
-    assert!(has_kind(code, SyntaxKind::STRESS_BLOCK));
+    let parsed = bhdl_parser::parse(code);
+    assert!(parsed.errors().is_empty(), "Parse errors: {:?}", parsed.errors());
+    let syntax = parsed.syntax();
+    assert!(syntax.descendants().any(|n| n.kind() == SyntaxKind::MODEL_BLOCK), "MODEL_BLOCK");
+    assert!(syntax.descendants().any(|n| n.kind() == SyntaxKind::STRESS_BLOCK), "STRESS_BLOCK");
+    let nodes = syntax.descendants().filter(|n| n.kind() == SyntaxKind::MODEL_NODE_STMT).count();
+    assert_eq!(nodes, 2, "expected 2 MODEL_NODE_STMT, got {nodes}");
 }
 
 #[test]

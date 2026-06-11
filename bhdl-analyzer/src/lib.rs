@@ -314,6 +314,8 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
     // through pass1 in a later stage; today's targets declare the block in the
     // board file alongside the instance.
     let stress_recipes = extract_stress_recipes(source_file);
+    // Extract model recipes (simulation { model { } }, §5) from the main source.
+    let model_recipes = extract_model_recipes(source_file);
 
     // Extract board-level SKU variants from the main source file.
     // Variants are board-local (a `variant` block can only patch
@@ -480,6 +482,7 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
         expansion_recipes, // Move ownership (Pass 8.5)
         design_recipes, // Move ownership (Pass 8.5)
         stress_recipes, // Move ownership (§4 stress surface)
+        model_recipes, // Move ownership (§5 model surface)
         variants,
         entity_attribute_index,
         entity_param_names,
@@ -1926,6 +1929,70 @@ pub fn extract_stress_recipes(
                 if recipe.has_statements() {
                     println!("  Extracted stress recipe for '{entity_name}': {} statement(s)",
                              recipe.statements.len());
+                    all.insert(entity_name.clone(), recipe);
+                }
+            }
+        }
+    }
+
+    all
+}
+
+/// Extract one [`ModelRecipe`] per entity that declares a
+/// `simulation { model { } }` block (Vendor_Simulation_Blocks.md §5). Keyed by
+/// entity name; only the primitive-composition `node <net> <role> = <expr>;`
+/// statements are captured (builtin/vendor forms are skipped). Entities without
+/// a model block are absent (the converter then uses its hardcoded decomposition).
+pub fn extract_model_recipes(
+    source_file: &SourceFile,
+) -> std::collections::HashMap<String, bhdl_common::model::ModelRecipe> {
+    use bhdl_common::model::{ModelNode, ModelRecipe, ModelRole};
+    use bhdl_ast::{Entity, HasName, SyntaxKind};
+    use rowan::ast::AstNode;
+
+    let mut all: std::collections::HashMap<String, ModelRecipe> =
+        std::collections::HashMap::new();
+
+    for item in source_file.items() {
+        let entity = match Entity::cast(item.syntax().clone()) {
+            Some(e) => e,
+            None => continue,
+        };
+        let entity_name = entity.name().map(|t| t.text().to_string()).unwrap_or_default();
+        if entity_name.is_empty() { continue; }
+
+        for sim_node in entity.syntax().children()
+            .filter(|n| n.kind() == SyntaxKind::SIM_BLOCK)
+        {
+            for model_node in sim_node.children()
+                .filter(|n| n.kind() == SyntaxKind::MODEL_BLOCK)
+            {
+                let mut recipe = ModelRecipe::new(entity_name.clone());
+                for stmt in model_node.children()
+                    .filter(|n| n.kind() == SyntaxKind::MODEL_NODE_STMT)
+                {
+                    // node <net> <role> = <expr>;  — the leading `node` is itself
+                    // a (contextual-keyword) IDENT token, so skip it: the next two
+                    // direct IDENT tokens are the net and the role.
+                    let idents: Vec<String> = stmt.children_with_tokens()
+                        .filter_map(|el| el.into_token())
+                        .filter(|t| t.kind() == SyntaxKind::IDENT)
+                        .map(|t| t.text().to_string())
+                        .skip(1)
+                        .take(2)
+                        .collect();
+                    let (Some(net), Some(role_str)) = (idents.first(), idents.get(1)) else { continue };
+                    let role = match role_str.as_str() {
+                        "source" => ModelRole::Source,
+                        "draws" => ModelRole::Draws,
+                        _ => continue, // unknown role keyword — skip
+                    };
+                    let Some(expr) = text_between(&stmt, SyntaxKind::EQ, SyntaxKind::SEMI) else { continue };
+                    recipe.nodes.push(ModelNode { net: net.clone(), role, expr });
+                }
+                if recipe.has_nodes() {
+                    println!("  Extracted model recipe for '{entity_name}': {} node(s)",
+                             recipe.nodes.len());
                     all.insert(entity_name.clone(), recipe);
                 }
             }

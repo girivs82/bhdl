@@ -398,7 +398,8 @@ pub enum SyntaxKind {
     SIM_BLOCK,             // simulation { stress { ... } model { ... } }
     STRESS_BLOCK,          // stress { const ...; <child>.<axis> = <expr>; }
     STRESS_ASSIGNMENT,     // <child_name>.<axis> = <expr>;
-    MODEL_BLOCK,           // model { ... }   (§5, reserved — parsed, not yet consumed)
+    MODEL_BLOCK,           // model { ... }   (§5 device-model surface)
+    MODEL_NODE_STMT,       // node <net> <source|draws> = <expr>;
 
     // Symbol and layout definition nodes
     SYMBOL_DEF,            // symbol EntityName { ... }

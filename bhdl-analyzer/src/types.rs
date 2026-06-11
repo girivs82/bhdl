@@ -465,6 +465,12 @@ pub struct AnalysisResult {
     /// per-child overrides, falling back to the hardcoded reference ripple
     /// model when the entity declares no block.
     pub stress_recipes: HashMap<String, bhdl_common::stress::StressRecipe>,
+    /// Model recipes extracted from entity `simulation { model { } }` blocks
+    /// (Vendor_Simulation_Blocks.md §5). Keyed by entity name. The SPICE
+    /// converter consults this when stamping a device, using the entity's
+    /// authored `node source/draws` branches in place of its hardcoded
+    /// decomposition (fallback when absent).
+    pub model_recipes: HashMap<String, bhdl_common::model::ModelRecipe>,
     /// Board-level SKU variants extracted from `variant <Name> { }`
     /// blocks. Keyed by board name → variant name → patch set.
     /// Empty when no variant blocks are declared (existing boards
@@ -522,6 +528,7 @@ impl Default for AnalysisResult {
             expansion_recipes: HashMap::new(),
             design_recipes: HashMap::new(),
             stress_recipes: HashMap::new(),
+            model_recipes: HashMap::new(),
             variants: HashMap::new(),
             entity_attribute_index: HashMap::new(),
             entity_param_names: HashMap::new(),

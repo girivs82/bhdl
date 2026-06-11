@@ -16,6 +16,7 @@ pub mod safety;
 pub mod expansion;
 pub mod design;
 pub mod stress;
+pub mod model;
 pub mod placement_recipe;
 pub mod symbol;
 pub mod layout_meta;
