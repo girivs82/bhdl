@@ -1,0 +1,60 @@
+// Stage-3a demonstration of the §5 `simulation { model { } }` surface
+// (docs/spec/Vendor_Simulation_Blocks.md). A minimal linear regulator whose
+// output-source voltage is authored in HDL via `node VOUT source = self.v_out`
+// instead of the converter's hardcoded `output_voltage` attribute.
+//
+// DELIBERATE MISMATCH to make the override observable:
+//   - hardcoded baseline `output_voltage` = 3.3V
+//   - model `self.v_out`                  = 5.0V
+// so the chosen output-source voltage can only be 5V if the model block
+// overrode the hardcoded decomposition.
+//
+// Verified (RUST_LOG=info): the converter logs
+//   "Regulator reg VOUT from model block: 5V (was 3.3V hardcoded)"
+//   "... decomposition ... vout_voltage=5V"
+// i.e. the §5 model surface supplied the output source. (The c_out sign-off
+// row shows "—" rather than 5V because, with no rail declared, VOUT is an
+// internal net the sign-off view prunes for this no-inductor LDO topology;
+// the converter log at the override site is the authoritative evidence.)
+
+board ModelSourceDemo {
+    power VIN  = 12V @ 1A;
+    ground GND;
+    // VOUT is NOT declared as a rail: it is driven solely by the regulator's
+    // output source, so the solved VOUT reflects whichever path (model vs
+    // hardcoded) supplied it — no rail to mask the result.
+
+    @VIN -> reg: DemoLDO().VIN;
+    reg.GND  -> @GND;
+    reg.VOUT -> @VOUT;
+
+    @VOUT -> c_out:  Cap(10uF).1;  c_out.2  -> @GND;
+    @VOUT -> r_load: Res(50).1;    r_load.2 -> @GND;
+}
+
+entity DemoLDO() {
+    pin VIN:  power in;
+    pin VOUT: power out;   // direct output pin (drives the VOUT rail)
+    pin GND:  ground;
+
+    attribute component_class = "voltage_regulator";  // → recognised as a regulator
+    attribute output_voltage  = 3.3V;                 // hardcoded-decomposition baseline
+    attribute v_out           = 5.0V;                 // the model's self.v_out
+    attribute i_quiescent     = 5mA;                  // required by the decomposition
+
+    simulation {
+        model {
+            node VOUT source = self.v_out;   // authored output source (§5)
+        }
+    }
+}
+
+entity Cap(value: capacitance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+}
+
+entity Res(value: resistance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+}
