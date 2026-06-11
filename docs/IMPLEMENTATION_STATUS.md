@@ -4,20 +4,37 @@
 
 This document tracks the implementation status of BHDL (Board Hardware Description Language) - a complete toolchain for electronic circuit design, analysis, and manufacturing.
 
+> **Status note (refreshed 2026-06-11):** the earlier "is the BHDL→netlist
+> pipeline real?" open questions below are resolved — the full
+> source→analysis→netlist→synthesis→GLACIER DC solve→sign-off→BOM flow runs
+> end-to-end today (`bhdl-cli … bom --simulate`). Sections marked with the old
+> ❓ have been corrected. Visualization/PnR exist as crates but their
+> end-to-end SVG output was not re-verified in this pass and is left as-is.
+
 ## Architecture Overview
 
 ```
 BHDL Source Code
       ↓
-   Parser (Phase 1)
+   Parser            (bhdl-parser: rowan CST)
       ↓
-   AST + Analysis (Phase 1) 
+   AST + Analysis    (bhdl-ast, bhdl-analyzer: multi-pass; recipes, attrs, power)
       ↓
-   Netlist Generation (Phase 2)
+   Synthesis         (bhdl-synthesizer: analysis → structural netlist;
+      ↓               design/expansion/simulation recipes; value snapping)
+   Netlist           (bhdl-netlist)
       ↓
-   Component Intelligence (Phase 3) ← **COMPLETED**
+   ┌─────────────────┴───────────────────────────────┐
+   ↓                                                   ↓
+   Component Intelligence          Circuit Simulation & Sign-off
+   (bhdl-components: DB +           (bhdl-spice: netlist→SPICE circuit;
+    supplier APIs + synthesis;       GLACIER DC solver; Real-Data margin
+    bhdl-{digikey,jlcparts}-          sign-off; vendor simulation blocks)
+    provider: live ESR/stock)
+      ↓                                                   ↓
+   BOM (bhdl-cli `bom` / `bom --simulate`) ←─────────────┘
       ↓
-   Layout & Visualization (Ongoing)
+   Layout & Visualization   (bhdl-pnr, bhdl-schematic — present, not re-verified)
 ```
 
 ## Phase 1: BHDL Foundation ✅ **COMPLETE**
@@ -110,60 +127,104 @@ BHDL Source Code
   - `src/kicad/` - KiCad symbol library import and parsing
   - `tests/integration/` - Real-world integration test suite
 
-## Phase 4: Layout & Visualization 🔄 **IN PROGRESS**
+## Phase 4: Synthesis → Netlist ✅ **WORKING**
 
-### Current Implementation
-- **SVG Generation**: Basic circuit diagram rendering
-- **Component Symbols**: Library of common component symbols
-- **Placement Algorithms**: Multiple placement strategies available
-- **Routing Engine**: Basic interconnect routing with pathfinding
+`bhdl-synthesizer` converts the analyzed design into a structural `Netlist`
+and drives the value/part resolution loop. This is exercised on every
+`bhdl-cli bom` / `bom --simulate` run.
 
-### 🔍 **Current Status Assessment Needed**
-- ❓ **BHDL → Netlist Integration**: Can we generate netlists from BHDL source?
-- ❓ **Semantic Context Preservation**: Are circuit roles/functions preserved?
-- ❓ **Visualization Pipeline**: Does netlist → layout → SVG work end-to-end?
+- **Analysis → Netlist**: instances, nets, hierarchical connectivity, and
+  semantic roles (power/regulator/passive class) are materialised.
+- **Expansion recipes** (`expansion {}`): a vendor entity's support topology
+  (L, C_in, C_out, divider, …) is instantiated from the entity, not hardcoded.
+- **Design recipes** (`design for <intent> {}`): vendor-authored value sizing
+  from electrical targets, evaluated by `design_evaluator` (with a sandboxed
+  foreign-language body hook).
+- **Value snapping** to E-series, attribute stamping onto instances,
+  variant/SKU patches.
+
+## Phase 5: Circuit Simulation & Sign-off ✅ **WORKING**
+
+`bhdl-spice` turns the netlist into a circuit and solves it; `bhdl-cli
+bom --simulate` reports per-part margins.
+
+- **GLACIER DC solver**: modified-nodal-analysis DC operating point; regulators
+  decomposed from pin types (controlled output source + loss model).
+- **Margin sign-off** (`signoff.rs`): each passive's stress (cap voltage,
+  resistor power, inductor peak current) vs its derated catalogue rating;
+  analytic switcher ripple model + Stage-C inductor value-stepping;
+  control-loop stability (crossover + ESR-zero classification).
+- **Real-Data Policy**: every value in the analysis/selection path is real
+  (catalogue/datasheet/entity-declared) or loudly `UNCHECKED`/hard-error — no
+  fabricated defaults. Enforcement worklist complete (sweeps 1–10).
+- **Vendor `simulation {}` blocks** (Vendor_Simulation_Blocks.md): device IP
+  authored on the entity, GLACIER/sign-off stay generic —
+  - `stress {}` (§4): how a device stresses its support parts (ripple/peak
+    current), overriding the hardcoded reference model.
+  - `model {}` (§5): how a device stamps into the solve — `node VOUT source`
+    overrides the output voltage; `node VIN draws` is a datasheet-specific
+    efficiency loss model that supersedes the generic physics loss model.
+  - Both work on inline *and* imported (stdlib) entities.
+
+## Phase 6: Supply-Chain Providers ✅ **WORKING**
+
+- `bhdl-digikey-provider` (DigiKey Product Information API v4, OAuth2,
+  self-contained ureq+rustls): live per-MPN real ESR for electrolytic/
+  tantalum/polymer caps, fed into sign-off stability.
+- `bhdl-jlcparts-provider`: JLCPARTS catalogue (stock/price/MPN), the default
+  selection backend for `bom --simulate`.
+- Selections are pinned in `bhdl.lock` for reproducibility.
+
+## Phase 7: Layout & Visualization 🔄 **PRESENT, not re-verified this pass**
+
+- `bhdl-pnr` — placement + routing engine.
+- `bhdl-schematic` — schematic extraction / SVG.
+- These crates exist and build; their end-to-end SVG output was not exercised
+  in this refresh, so their status is left conservative.
 
 ## Integration Status
 
-### ✅ **Working Pipelines**
-1. **BHDL Source → AST → Analysis**: Complete semantic processing
-2. **Component Requirements → Real Parts**: Live supplier integration
-3. **KiCad Libraries → Database**: Symbol import and cataloging
-4. **Cost Analysis → Optimization**: Volume pricing and alternatives
+### ✅ **Working Pipelines (verified)**
+1. **BHDL Source → AST → Analysis** — multi-pass semantic processing.
+2. **Analysis → Netlist (synthesis)** — structural representation with roles.
+3. **Netlist → SPICE circuit → GLACIER DC solve → margin sign-off** — the
+   `bom --simulate` flow.
+4. **Component Requirements → Real Parts** — live supplier integration
+   (DigiKey/JLCPARTS), pinned in `bhdl.lock`.
+5. **Vendor extensibility** — `design`/`expansion`/`simulation` blocks authored
+   on entities drive sizing, topology, and device-simulation IP.
 
-### ❓ **Status Unknown / Needs Assessment**
-1. **BHDL → Netlist Generation**: Bridge from analysis to structural representation
-2. **Semantic Context in Netlist**: Preservation of functional roles for visualization
-3. **Netlist → Visualization**: Layout generation from structural data
-4. **End-to-End Flow**: Complete source-to-SVG pipeline
-
-### 🎯 **Next Priority: Synthesizer Assessment**
-
-**Immediate Tasks:**
-1. **Test BHDL → Netlist Pipeline**: Can we generate netlists from BHDL source code?
-2. **Semantic Context Analysis**: Are functional roles (regulators, filters, etc.) preserved?
-3. **Visualization Integration**: Does the layout engine use semantic information?
-4. **End-to-End Demo**: Complete BHDL source → schematic SVG workflow
-
-**Key Questions:**
-- Does the synthesizer successfully convert analyzed BHDL to netlist format?
-- Are semantic annotations (power regulation, filtering, interfaces) maintained?
-- Can the visualizer use semantic context for intelligent placement/routing?
-- What's missing for a complete design-to-schematic flow?
+### 🔄 **Not re-verified / remaining**
+1. **Netlist → Layout → SVG** — PnR/schematic crates present; end-to-end not
+   re-checked in this pass.
+2. **§5 `builtin`/`vendor spice` model forms** — deferred by spec (only the
+   primitive `node source/draws` composition is built).
+3. **Data sourcing** — the standing Real-Data constraint: where the catalogue/
+   datasheet lacks coverage (ceramic ESR, diode/LED Vf·Is, regulator
+   rds_on/t_sw/i_q) the analysis degrades to `UNCHECKED` by design.
 
 ## File Structure
 
 ```
 bhdl-new/
-├── bhdl-parser/          # Phase 1: Language parsing
-├── bhdl-ast/             # Phase 1: AST generation  
-├── bhdl-analyzer/        # Phase 1: Semantic analysis
-├── bhdl-netlist/         # Phase 2: Structural representation
-├── bhdl-components/      # Phase 3: Component intelligence ✅
-├── bhdl-visualizer/      # Phase 4: Layout & visualization ❓
-├── bhdl-synthesizer/     # Phase 4: BHDL → Netlist bridge ❓
-├── bhdl-cli/             # Command-line interface (placeholder)
-└── bhdl-lsp/             # Language server (placeholder)
+├── bhdl-parser/             # Lexing + rowan CST
+├── bhdl-ast/                # Typed AST / semantic wrappers
+├── bhdl-analyzer/           # Multi-pass analysis; recipe extraction
+├── bhdl-common/             # Shared recipe/data types (design/stress/model/…)
+├── bhdl-netlist/            # Structural circuit representation
+├── bhdl-synthesizer/        # Analysis → Netlist; design/stress/model evaluators ✅
+├── bhdl-spice/              # Netlist → SPICE; GLACIER DC solver; sign-off ✅
+├── bhdl-components/         # Component DB + supplier synthesis ✅
+├── bhdl-digikey-provider/   # Live DigiKey ESR/stock provider ✅
+├── bhdl-jlcparts-provider/  # JLCPARTS selection backend ✅
+├── bhdl-stdlib/             # Vendor entity library (.bhdl)
+├── bhdl-kicad-import/       # KiCad symbol/footprint import
+├── bhdl-pnr/                # Placement + routing 🔄
+├── bhdl-schematic/          # Schematic extraction / SVG 🔄
+├── bhdl-sim/ bhdl-simulation/ bhdl-testbench/  # transient/testbench sim
+├── bhdl-safety/             # safety_goal / fault analysis
+├── bhdl-cli/                # Command-line interface (`bom`, `bom --simulate`, `doc`, …)
+└── bhdl-lsp/                # Language server
 ```
 
 ## Technology Stack
@@ -186,7 +247,12 @@ bhdl-new/
 
 ## Next Steps
 
-1. **🔍 Synthesizer Assessment**: Evaluate current BHDL → Netlist capability
-2. **🎯 Semantic Context**: Ensure functional roles are preserved in netlists
-3. **🖼️ Visualization Integration**: Connect semantic context to intelligent layout
-4. **📋 End-to-End Demo**: Complete source-to-schematic workflow demonstration
+1. **🖼️ Visualization end-to-end**: re-verify (or build out) the netlist →
+   PnR → schematic-SVG path; mark its real status.
+2. **🔌 Data sourcing**: enrich catalogue/datasheet coverage (ceramic ESR,
+   diode/LED Vf·Is, regulator rds_on/t_sw/i_q) so fewer analyses go
+   `UNCHECKED` — the standing Real-Data unblocker.
+3. **🧩 §5 vendor model forms**: `builtin <model>` and `vendor spice "…"`
+   wrappers (deferred by spec) when a real vendor model needs adapting.
+4. **🪣 Parallel-bank addressing** for `stress {}` child references (today a
+   child name resolves to one instance; a cap *bank* needs a convention).
