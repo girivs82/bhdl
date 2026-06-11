@@ -138,7 +138,22 @@ If a needed input is absent (no regulator, no `f_sw`, no output rail), the block
 does not evaluate and the parts fall back to GLACIER's generic DC stress —
 ripple is purely additive head-room.
 
-## 4. Stress surface (build now — for task #5)
+## 4. Stress surface (**BUILT** — see implementation note)
+
+> **Status: implemented.** The entity-level `simulation { stress { } }` block is
+> parsed (contextual `simulation`/`stress` keywords, distinct from the testbench
+> block), extracted to a `bhdl_common::stress::StressRecipe`, evaluated by
+> `bhdl_synthesizer::stress_evaluator` over the shared design-block expression
+> engine, and folded into `compute_signoff`: an entity's `i_peak`/`v_ripple`
+> outputs override the hardcoded reference ripple model per part, with a clean
+> fallback to that model when no block is declared (every existing circuit stays
+> byte-identical). Demonstrated by `tests/circuits/realistic/test_stress_block_demo.bhdl`
+> — the inductor/cap rows carry `(stress block)` provenance and reproduce the
+> analytic forms. Surfacing the two parser bugs this exposed (leading-paren
+> standalone parse, chained same-precedence associativity) were fixed in the
+> same series. Open follow-ups: stress-recipe import-merge (so stdlib entities,
+> not just board-file entities, can carry blocks) and a parallel-bank addressing
+> convention (today a child reference resolves to one like-named instance).
 
 ### 4.1 What it produces
 

@@ -1,0 +1,80 @@
+// Stage-5 demonstration of the §4 `simulation { stress { } }` surface
+// (docs/spec/Vendor_Simulation_Blocks.md). A self-contained 12V→5V buck whose
+// regulator entity authors its ripple/peak-current model in HDL instead of
+// relying on the hardcoded reference model in signoff.rs. One part per role
+// (L_out / C_out / C_in) named to match the stress block's child references.
+//
+// Expected sign-off (analytic, the same forms the hardcoded model uses):
+//   duty = 5/12 = 0.4167
+//   ΔI_L = (12−5)·duty / (f_sw·L) = 7·0.4167 / (500k·10µ) = 0.583A
+//   L_out.i_peak  = i_out + ΔI_L/2 = 2 + 0.292 = 2.292A
+//   C_out.v_ripple = ΔI_L / (8·f_sw·C_out) = 0.583 / (8·500k·47µ) ≈ 3.1mV
+//   C_in.v_ripple  = i_out·duty·(1−duty) / (f_sw·C_in) ≈ 44.2mV
+// The inductor/cap rows carry "(stress block)" provenance, proving the values
+// came from the entity's block rather than the hardcoded path.
+
+board StressBlockBuck {
+    power VIN = 12V @ 3A;
+    power VOUT = 5V @ 2A;     // the `@ 2A` is the real per-rail load (i_out)
+    ground GND;
+
+    @VIN -> C_in: Cap(22uF).1;  C_in.2 -> @GND;
+
+    @VIN -> reg: DemoBuck().VIN;
+    reg.GND -> @GND;
+    @VIN -> reg.EN;
+
+    reg.PH -> L_out: Ind(10uH).1;  L_out.2 -> @VOUT;
+
+    @VOUT -> C_out: Cap(47uF).1;  C_out.2 -> @GND;
+
+    @VOUT -> r_fb1: Res(22k).1;  r_fb1.2 -> reg.FB;
+    reg.FB -> r_fb2: Res(3k).1;  r_fb2.2 -> @GND;
+}
+
+entity DemoBuck() {
+    pin VIN: power in;
+    pin GND: ground;
+    pin PH: power out;     // switching node → inductor
+    pin EN: signal in;
+    pin FB: signal in;
+
+    // Switcher identity + datasheet constants (so the operating point and the
+    // stress block's `self.<param>` resolve).
+    attribute component_class = "voltage_regulator";
+    attribute topology = "buck";
+    attribute switching_frequency = 500kHz;
+    attribute f_sw = 500kHz;          // alias the stress block reads as self.f_sw
+    attribute ripple_ratio = 0.35;
+    attribute loop_crossover_k = 5.1;
+    attribute loop_crossover_max_ratio = 0.1;
+    attribute feedback_voltage = 0.6V;
+
+    // §4 device-stress IP authored in HDL: how THIS device stresses its support
+    // parts. Reads the operating point (vin/vout/i_out), self params, and each
+    // child's snapped value; writes per-child stress axes.
+    simulation {
+        stress {
+            const duty = vout / vin;
+            const d_il = (vin - vout) * duty / (self.f_sw * L_out.value);
+            L_out.i_peak   = i_out + d_il / 2;
+            C_out.v_ripple = d_il / (8 * self.f_sw * C_out.value);
+            C_in.v_ripple  = i_out * duty * (1 - duty) / (self.f_sw * C_in.value);
+        }
+    }
+}
+
+entity Cap(value: capacitance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+}
+
+entity Res(value: resistance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+}
+
+entity Ind(value: inductance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+}
