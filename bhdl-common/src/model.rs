@@ -41,6 +41,17 @@ pub struct ModelRecipe {
     pub nodes: Vec<ModelNode>,
 }
 
+/// The evaluated branches a model recipe contributes at circuit-build time.
+/// Plain data (lives here, not in the evaluator's crate) so the SPICE
+/// converter can consume it without depending on the synthesizer.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct EvaluatedModel {
+    /// net → controlled-source voltage (`node N source = …`).
+    pub sources: std::collections::HashMap<String, f64>,
+    /// net → current draw (`node N draws = …`).
+    pub draws: std::collections::HashMap<String, f64>,
+}
+
 impl ModelRecipe {
     pub fn new(entity_name: String) -> Self {
         Self { entity_name, nodes: Vec::new() }

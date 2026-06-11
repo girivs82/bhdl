@@ -17,7 +17,9 @@
 
 use std::collections::HashMap;
 
-use bhdl_common::model::{ModelRecipe, ModelRole};
+use bhdl_common::model::{EvaluatedModel, ModelRecipe, ModelRole};
+use bhdl_netlist::Netlist;
+use bhdl_netlist::types::NetClass;
 
 use crate::design_evaluator::{evaluate_text, DesignEvalError, EvalLookup};
 
@@ -63,15 +65,6 @@ impl EvalLookup for ModelContext<'_> {
     }
 }
 
-/// The evaluated branches a model recipe contributes.
-#[derive(Debug, Default, Clone, PartialEq)]
-pub struct EvaluatedModel {
-    /// net → controlled-source voltage (`node N source = …`).
-    pub sources: HashMap<String, f64>,
-    /// net → current draw (`node N draws = …`).
-    pub draws: HashMap<String, f64>,
-}
-
 /// Evaluate a model recipe's `node source/draws` expressions. Any eval error
 /// (e.g. a referenced param the design didn't supply) propagates — the caller
 /// then falls back to the hardcoded device decomposition rather than stamping a
@@ -90,6 +83,71 @@ pub fn evaluate_model_recipe(
         }
     }
     Ok(out)
+}
+
+/// Build the per-entity model overrides for a netlist: for every instantiated
+/// entity that declares a `model { }` recipe, evaluate it and return
+/// `entity_name → EvaluatedModel`. Inputs come from the entity's declared
+/// attributes (`self.<param>`) and the output rail's declared current
+/// (`i_out` = the `@ I` budget on the rail whose voltage matches `self.v_out`).
+/// An entity whose recipe fails to evaluate (a referenced param the design
+/// didn't supply) is omitted — the converter then uses its hardcoded
+/// decomposition.
+pub fn evaluate_model_overrides(
+    netlist: &Netlist,
+    model_recipes: &HashMap<String, ModelRecipe>,
+    entity_attrs: &HashMap<String, HashMap<String, String>>,
+) -> HashMap<String, EvaluatedModel> {
+    let mut out: HashMap<String, EvaluatedModel> = HashMap::new();
+    if model_recipes.is_empty() {
+        return out;
+    }
+    let parse_si = |s: &str| bhdl_analyzer::value_snap::parse_value_string(s.trim());
+
+    // Declared power rails as (voltage, current) for the i_out lookup.
+    let rails: Vec<(f64, Option<f64>)> = netlist
+        .nets
+        .values()
+        .filter_map(|net| match &net.net_class {
+            NetClass::Power { voltage, current } if *voltage > 0.0 => Some((*voltage, *current)),
+            _ => None,
+        })
+        .collect();
+
+    for inst in netlist.instances.values() {
+        let Some(module) = netlist.modules.get(inst.definition) else { continue };
+        let entity = module.name.as_str();
+        if out.contains_key(entity) {
+            continue;
+        }
+        let Some(recipe) = model_recipes.get(entity) else { continue };
+
+        let self_params: HashMap<String, f64> = entity_attrs
+            .get(entity)
+            .map(|m| {
+                m.iter()
+                    .filter_map(|(k, v)| parse_si(v).map(|n| (k.clone(), n)))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // i_out = the declared load on the rail at the device's output voltage.
+        let mut bare: HashMap<String, f64> = HashMap::new();
+        if let Some(v_out) = self_params.get("v_out").copied() {
+            if let Some((_, Some(i))) = rails
+                .iter()
+                .find(|(v, _)| (*v - v_out).abs() < 0.1 * v_out.max(1.0))
+            {
+                bare.insert("i_out".to_string(), *i);
+            }
+        }
+
+        let inputs = ModelInputs { self_params, bare };
+        if let Ok(m) = evaluate_model_recipe(recipe, &inputs) {
+            out.insert(entity.to_string(), m);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
