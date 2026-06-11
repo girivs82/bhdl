@@ -459,6 +459,12 @@ pub struct AnalysisResult {
     /// runs the intent-driven designer for an instance, it consults this
     /// map first and falls back to the Rust reference designer on miss.
     pub design_recipes: HashMap<String, HashMap<String, bhdl_common::design::DesignRecipe>>,
+    /// Stress recipes extracted from entity `simulation { stress { } }` blocks
+    /// (Vendor_Simulation_Blocks.md §4). Keyed by entity name. When sign-off
+    /// computes per-part stress for a switcher, it evaluates this recipe for
+    /// per-child overrides, falling back to the hardcoded reference ripple
+    /// model when the entity declares no block.
+    pub stress_recipes: HashMap<String, bhdl_common::stress::StressRecipe>,
     /// Board-level SKU variants extracted from `variant <Name> { }`
     /// blocks. Keyed by board name → variant name → patch set.
     /// Empty when no variant blocks are declared (existing boards
@@ -515,6 +521,7 @@ impl Default for AnalysisResult {
             monomorphization: crate::passes::MonomorphizationResult::new(),
             expansion_recipes: HashMap::new(),
             design_recipes: HashMap::new(),
+            stress_recipes: HashMap::new(),
             variants: HashMap::new(),
             entity_attribute_index: HashMap::new(),
             entity_param_names: HashMap::new(),
