@@ -2126,6 +2126,14 @@ async fn cmd_bom(
     //    runs on the values that actually landed on the BOM.
     if simulate {
         let mut conv = NetlistToSpiceConverter::new();
+        // §5 device-model surface: pre-evaluate any `simulation { model { } }`
+        // blocks and hand the converter the resulting output-source voltages,
+        // which override its hardcoded regulator decomposition.
+        conv.set_model_overrides(bhdl_synthesizer::model_evaluator::evaluate_model_overrides(
+            &netlist,
+            &analysis.model_recipes,
+            &analysis.entity_attribute_index,
+        ));
         match conv.convert(&netlist) {
             Ok(circuit) => {
                 let circuit_ref = circuit.clone();

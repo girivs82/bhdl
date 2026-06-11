@@ -48,6 +48,12 @@ pub struct NetlistToSpiceConverter {
     symbol_table: HashMap<String, HashMap<String, String>>,
     /// Component registry for type lookup
     component_registry: crate::component_registry::ComponentRegistry,
+    /// Pre-evaluated device-model overrides keyed by entity name
+    /// (Vendor_Simulation_Blocks.md §5). When an entity declares a
+    /// `simulation { model { } }` block, its evaluated `node source` voltages
+    /// replace the hardcoded regulator decomposition's output voltage. Empty
+    /// ⇒ every regulator uses the hardcoded fallback.
+    model_overrides: HashMap<String, bhdl_common::model::EvaluatedModel>,
 }
 
 impl NetlistToSpiceConverter {
@@ -59,12 +65,21 @@ impl NetlistToSpiceConverter {
             instance_models: HashMap::new(),
             symbol_table: HashMap::new(),
             component_registry: crate::component_registry::ComponentRegistry::new(),
+            model_overrides: HashMap::new(),
         }
     }
-    
+
     /// Set symbol table data from analyzer
     pub fn set_symbol_table(&mut self, symbol_table: HashMap<String, HashMap<String, String>>) {
         self.symbol_table = symbol_table;
+    }
+
+    /// Set pre-evaluated device-model overrides (§5), keyed by entity name.
+    pub fn set_model_overrides(
+        &mut self,
+        overrides: HashMap<String, bhdl_common::model::EvaluatedModel>,
+    ) {
+        self.model_overrides = overrides;
     }
     
     /// Convert BHDL netlist to SPICE circuit with proper models
@@ -619,7 +634,7 @@ impl NetlistToSpiceConverter {
         if extracted_model.component_type == ComponentType::VoltageRegulator {
             // Real-Data Policy: the regulator's output voltage must be a real
             // entity-declared value — no fabricated 5 V fallback.
-            let vout_voltage = extracted_model.parameters.get("vout").copied()
+            let mut vout_voltage = extracted_model.parameters.get("vout").copied()
                 .or(extracted_model.parameters.get("output_voltage").copied())
                 .or(extracted_model.parameters.get("voltage").copied())
                 .ok_or_else(|| anyhow::anyhow!(
@@ -628,6 +643,28 @@ impl NetlistToSpiceConverter {
                     instance_name))?;
 
             let pin_info = Self::get_pin_net_info(netlist, instance_id);
+
+            // §5 device-model override: if this instance's entity declares a
+            // `model { node <pin> source = … }` block, its evaluated voltage
+            // supplies the output source in place of the hardcoded `vout`
+            // attribute. Keyed by entity name → pin name (the model's `node`
+            // net is the entity pin). Everything else (dropout path, loss
+            // metadata) is unchanged — the input-current `draws` branch is a
+            // later stage.
+            let entity_name = netlist.instances.get(instance_id)
+                .and_then(|i| netlist.modules.get(i.definition))
+                .map(|m| m.name.clone());
+            let vout_pin_name = pin_info.iter()
+                .find(|p| p.pin_type == bhdl_netlist::PinType::Power
+                       && p.pin_direction == bhdl_netlist::PinDirection::Out)
+                .map(|p| p.pin_name.clone());
+            if let (Some(ent), Some(pin)) = (&entity_name, &vout_pin_name) {
+                if let Some(v) = self.model_overrides.get(ent).and_then(|m| m.sources.get(pin)) {
+                    info!("Regulator {} VOUT from model block: {}V (was {}V hardcoded)",
+                          instance_name, v, vout_voltage);
+                    vout_voltage = *v;
+                }
+            }
 
             // Classify pins by their type and direction from stdlib definitions
             let vin_net = pin_info.iter()
