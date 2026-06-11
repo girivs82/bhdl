@@ -2396,6 +2396,10 @@ fn build_simulation_annotations(
         rds_on: f64,            // MOSFET on-resistance (Ω) — switching only
         f_sw: f64,              // switching frequency (Hz) — switching only
         t_sw: f64,              // switching transition time (s) — switching only
+        // §5 model surface: vendor-authored input current (A) from a
+        // `model { node VIN draws = … }` block. `Some` ⇒ supersede the physics
+        // loss model with the efficiency model (P_in − P_out).
+        model_i_in: Option<f64>,
     }
     let mut regulators: Vec<RegInfo> = Vec::new();
 
@@ -2453,6 +2457,8 @@ fn build_simulation_annotations(
                         f_sw: read_meta_f64(branch, bhdl_spice::META_F_SW, 500e3),
                         t_sw: read_meta_f64(branch, bhdl_spice::META_T_SW, 80e-9),
                         i_quiescent: read_meta_f64(branch, bhdl_spice::META_I_QUIESCENT, 5e-3),
+                        model_i_in: branch.metadata.get(bhdl_spice::META_MODEL_I_IN)
+                            .and_then(|s| s.parse::<f64>().ok()),
                     });
                 }
             }
@@ -2600,7 +2606,13 @@ fn build_simulation_annotations(
         let v_in = annotations.net_voltages.get(&reg.vin_node).copied().unwrap_or(0.0);
         let v_out = annotations.net_voltages.get(&reg.vout_node).copied().unwrap_or(0.0);
         let p_quiescent = v_in * reg.i_quiescent;
-        let total_power = if reg.is_switching && v_in > 0.0 {
+        let total_power = if let Some(i_in) = reg.model_i_in {
+            // §5: the entity authored its input current (efficiency model). It
+            // supersedes the generic physics loss model — the vendor's
+            // datasheet-specific correction. Regulator loss = P_in − P_out
+            // (the efficiency already accounts for conduction/switching/bias).
+            (i_in * v_in - current * v_out).max(0.0)
+        } else if reg.is_switching && v_in > 0.0 {
             let d = v_out / v_in;  // duty cycle (CCM)
             let p_conduction = current * current * reg.rds_on * d;
             let p_switching = v_in * current * reg.f_sw * reg.t_sw / 2.0;

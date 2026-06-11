@@ -1,0 +1,62 @@
+// Stage-3b demonstration of the §5 model surface's `node VIN draws` branch.
+// The regulator authors its INPUT CURRENT (an efficiency model) in HDL; the
+// post-sim power computation then uses P_in − P_out for this device in place
+// of the generic physics loss model (rds_on/f_sw). Per the agreed policy:
+// physics is authoritative by default; a vendor-authored `draws` is the
+// datasheet-specific correction that supersedes it only when present.
+//
+// VOUT rail is declared at 5V (matching the model's self.v_out, so no
+// double-drive conflict) and carries the load budget @ 1A → i_out = 1A.
+//
+//   i_in = i_out·v_out / (v_in·η) = 1·5 / (12·0.9) = 0.4630A
+//   P_in  = i_in·v_in = 0.4630·12 = 5.556W
+//   P_out = i_out·v_out = 1·5    = 5.0W
+//   regulator loss = P_in − P_out = 0.556W   (vs the physics model's number)
+
+board ModelDrawsDemo {
+    power VIN  = 12V @ 2A;
+    power VOUT = 5V @ 1A;
+    ground GND;
+
+    @VIN -> reg: EffBuck().VIN;
+    reg.GND  -> @GND;
+    reg.VOUT -> @VOUT;
+
+    @VOUT -> c_out:  Cap(47uF).1;  c_out.2  -> @GND;
+    @VOUT -> r_load: Res(5).1;     r_load.2 -> @GND;
+}
+
+entity EffBuck() {
+    pin VIN:  power in;
+    pin VOUT: power out;
+    pin GND:  ground;
+
+    attribute component_class = "switching_regulator";
+    attribute output_voltage  = 5.0V;
+    attribute v_out           = 5.0V;
+    attribute v_in            = 12.0V;
+    attribute efficiency      = 0.9;
+    // Loss-model params in plain base units (the decomposition's req_param
+    // reads these with a bare f64 parse, not a unit-aware one):
+    attribute i_quiescent     = 0.005;      // 5 mA
+    attribute rds_on          = 0.03;       // 30 mΩ  (generic physics default,
+    attribute f_sw            = 500000.0;   // 500 kHz  superseded by draws here)
+    attribute t_sw            = 0.00000002; // 20 ns
+
+    simulation {
+        model {
+            node VOUT source = self.v_out;
+            node VIN  draws  = i_out * self.v_out / (self.v_in * efficiency);
+        }
+    }
+}
+
+entity Cap(value: capacitance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+}
+
+entity Res(value: resistance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+}

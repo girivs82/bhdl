@@ -40,7 +40,8 @@ entity DemoLDO() {
     attribute component_class = "voltage_regulator";  // → recognised as a regulator
     attribute output_voltage  = 3.3V;                 // hardcoded-decomposition baseline
     attribute v_out           = 5.0V;                 // the model's self.v_out
-    attribute i_quiescent     = 5mA;                  // required by the decomposition
+    attribute i_quiescent     = 0.005;                // 5 mA (plain base units: the
+                                                      // decomposition's req_param is a bare f64 parse)
 
     simulation {
         model {
