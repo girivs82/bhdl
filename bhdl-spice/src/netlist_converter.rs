@@ -12,7 +12,7 @@ use crate::{
     circuit::{
         DeviceKind,
         META_PARENT_INSTANCE, META_DECOMPOSITION_ROLE, META_COMPONENT_CLASS,
-        META_RDS_ON, META_F_SW, META_T_SW, META_I_QUIESCENT,
+        META_RDS_ON, META_F_SW, META_T_SW, META_I_QUIESCENT, META_MODEL_I_IN,
         META_TOLERANCE, META_POWER_RATING, META_ESR, META_VOLTAGE_RATING, META_DCR,
         META_SATURATION_CURRENT, META_EMISSION_COEFFICIENT, META_THERMAL_VOLTAGE,
         META_FORWARD_VOLTAGE, META_FORWARD_CURRENT,
@@ -722,6 +722,23 @@ impl NetlistToSpiceConverter {
                     vout_meta.insert(META_RDS_ON.to_string(), req_param("rds_on")?.to_string());
                     vout_meta.insert(META_F_SW.to_string(), req_param("f_sw")?.to_string());
                     vout_meta.insert(META_T_SW.to_string(), req_param("t_sw")?.to_string());
+                }
+                // §5 Stage 3b: if the entity's model block authors a VIN current
+                // draw, record it. Post-sim power then uses this vendor
+                // efficiency model (P_in − P_out) in place of the generic
+                // physics loss model — the datasheet-specific correction
+                // supersedes the generic computation only when explicitly given.
+                let vin_pin_name = pin_info.iter()
+                    .find(|p| p.pin_type == bhdl_netlist::PinType::Power
+                           && (p.pin_direction == bhdl_netlist::PinDirection::In
+                               || p.pin_direction == bhdl_netlist::PinDirection::InOut))
+                    .map(|p| p.pin_name.clone());
+                if let (Some(ent), Some(pin)) = (&entity_name, &vin_pin_name) {
+                    if let Some(i_in) = self.model_overrides.get(ent).and_then(|m| m.draws.get(pin)) {
+                        vout_meta.insert(META_MODEL_I_IN.to_string(), i_in.to_string());
+                        info!("Regulator {} input current from model block: {}A (efficiency model)",
+                              instance_name, i_in);
+                    }
                 }
                 circuit.add_branch_with_metadata(
                     format!("{}_vout", instance_name),

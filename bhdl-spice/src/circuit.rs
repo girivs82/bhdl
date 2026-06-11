@@ -22,6 +22,12 @@ pub const META_RDS_ON: &str = "rds_on";
 pub const META_F_SW: &str = "f_sw";
 pub const META_T_SW: &str = "t_sw";
 pub const META_I_QUIESCENT: &str = "i_quiescent";
+/// Metadata key: input current authored by an entity `simulation { model {
+/// node VIN draws = … } }` block (Vendor_Simulation_Blocks.md §5). When
+/// present it supersedes the generic physics loss model for that regulator —
+/// the vendor's datasheet-specific efficiency model is the correction. Power
+/// is then `P_in − P_out = i_in·V_in − i_out·V_out`.
+pub const META_MODEL_I_IN: &str = "model_i_in";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SPICE-relevant stdlib attribute keys (P0 metadata bridge).
