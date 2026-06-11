@@ -67,7 +67,7 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
     let mut resolved_constants = ResolvedConstants::new();
 
     // Pass 1: Build scope registry with base path for imports
-    let (mut scope_registry, alias_specializations, imported_expansion_recipes, imported_symbol_definitions, imported_layout_definitions, imported_placement_recipes, imported_design_recipes, imported_entity_attr_index, imported_entity_param_index) = pass1::build_scope_registry_with_base(source_file, base_path);
+    let (mut scope_registry, alias_specializations, imported_expansion_recipes, imported_symbol_definitions, imported_layout_definitions, imported_placement_recipes, imported_design_recipes, imported_stress_recipes, imported_model_recipes, imported_entity_attr_index, imported_entity_param_index) = pass1::build_scope_registry_with_base(source_file, base_path);
     // Extract legacy data structures for backward compatibility with existing passes
     let global_scope = scope_registry.extract_global_scope();
     let definition_scopes = scope_registry.extract_definition_scopes();
@@ -313,9 +313,13 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
     // source file. Import-merge (for stdlib-defined entities) is threaded
     // through pass1 in a later stage; today's targets declare the block in the
     // board file alongside the instance.
-    let stress_recipes = extract_stress_recipes(source_file);
+    // Imported entities first (stdlib parts carrying the blocks), then the main
+    // source file overlaid on top (a board-file entity of the same name wins).
+    let mut stress_recipes = imported_stress_recipes;
+    stress_recipes.extend(extract_stress_recipes(source_file));
     // Extract model recipes (simulation { model { } }, §5) from the main source.
-    let model_recipes = extract_model_recipes(source_file);
+    let mut model_recipes = imported_model_recipes;
+    model_recipes.extend(extract_model_recipes(source_file));
 
     // Extract board-level SKU variants from the main source file.
     // Variants are board-local (a `variant` block can only patch

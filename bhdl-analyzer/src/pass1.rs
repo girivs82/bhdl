@@ -43,6 +43,10 @@ struct Pass1Context {
     // Design recipes extracted from imported entity `design { }` blocks,
     // keyed by entity name → intent name → recipe.
     design_recipes: HashMap<String, HashMap<String, bhdl_common::design::DesignRecipe>>,
+    // Stress recipes (simulation { stress { } }, §4) from imported entities.
+    stress_recipes: HashMap<String, bhdl_common::stress::StressRecipe>,
+    // Model recipes (simulation { model { } }, §5) from imported entities.
+    model_recipes: HashMap<String, bhdl_common::model::ModelRecipe>,
     // Symbol definitions extracted from imported files
     symbol_definitions: HashMap<String, bhdl_common::SymbolDefinition>,
     // Layout definitions extracted from imported files
@@ -76,6 +80,8 @@ impl Pass1Context {
             alias_specializations: Vec::new(),
             expansion_recipes: HashMap::new(),
             design_recipes: HashMap::new(),
+            stress_recipes: HashMap::new(),
+            model_recipes: HashMap::new(),
             symbol_definitions: HashMap::new(),
             layout_definitions: HashMap::new(),
             placement_recipes: HashMap::new(),
@@ -125,7 +131,7 @@ pub fn populate_global_scope_and_build_definition_scopes_with_base(
     source_file: &SourceFile,
     base_path: &Path
 ) -> (SymbolTable, HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>) {
-    let (registry, _alias_specializations, _expansion_recipes, _symbol_defs, _layout_defs, _placement_recipes, _design_recipes, _entity_attr_index, _entity_param_index) = build_scope_registry_with_base(source_file, base_path);
+    let (registry, _alias_specializations, _expansion_recipes, _symbol_defs, _layout_defs, _placement_recipes, _design_recipes, _stress_recipes, _model_recipes, _entity_attr_index, _entity_param_index) = build_scope_registry_with_base(source_file, base_path);
     // Extract legacy data structures for backward compatibility
     let global_scope = registry.extract_global_scope();
     let definition_scopes = registry.extract_definition_scopes();
@@ -152,6 +158,9 @@ pub fn build_scope_registry_with_base(
     HashMap<String, bhdl_common::LayoutDefinition>,
     HashMap<String, bhdl_common::PlacementRecipe>,
     HashMap<String, HashMap<String, bhdl_common::design::DesignRecipe>>,
+    // §4/§5 device-simulation recipes from imported entities.
+    HashMap<String, bhdl_common::stress::StressRecipe>,
+    HashMap<String, bhdl_common::model::ModelRecipe>,
     // Stage 6 cross-file: per-entity attribute defaults from imported
     // files. Threaded into the main-file's extract_expansion_recipes
     // call as an overlay so cross-file device discovery works for
@@ -209,9 +218,11 @@ pub fn build_scope_registry_with_base(
     let layout_definitions = context.layout_definitions;
     let placement_recipes = context.placement_recipes;
     let design_recipes = context.design_recipes;
+    let stress_recipes = context.stress_recipes;
+    let model_recipes = context.model_recipes;
     let entity_attribute_index = context.entity_attribute_index;
     let entity_param_index = context.entity_param_index;
-    (context.registry, alias_specializations, expansion_recipes, symbol_definitions, layout_definitions, placement_recipes, design_recipes, entity_attribute_index, entity_param_index)
+    (context.registry, alias_specializations, expansion_recipes, symbol_definitions, layout_definitions, placement_recipes, design_recipes, stress_recipes, model_recipes, entity_attribute_index, entity_param_index)
 }
 
 // Pass 1 recursive helper (takes Pass1Context)
@@ -1095,6 +1106,15 @@ fn process_import(import: &ImportStmt, context: &mut Pass1Context) {
             let imported_designs = crate::extract_design_recipes(&imported_source);
             for (entity, by_intent) in imported_designs {
                 context.design_recipes.entry(entity).or_default().extend(by_intent);
+            }
+            // Extract vendor `simulation { stress {} model {} }` recipes (§4/§5)
+            // from imported entities, so stdlib parts (not just board-file
+            // entities) can carry device-simulation IP.
+            for (entity, recipe) in crate::extract_stress_recipes(&imported_source) {
+                context.stress_recipes.insert(entity, recipe);
+            }
+            for (entity, recipe) in crate::extract_model_recipes(&imported_source) {
+                context.model_recipes.insert(entity, recipe);
             }
 
             // Extract symbol and layout definitions from imported files
