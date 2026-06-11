@@ -253,8 +253,26 @@ pub fn evaluate_recipe(
     Ok(out)
 }
 
+/// Resolution surface for the shared expression engine. The engine
+/// (`evaluate_text` / `evaluate_expr`) is identical across block kinds — only
+/// identifier resolution differs (a `design { }` block resolves
+/// `intent`/`self`/device params; a `stress { }` block resolves the operating
+/// point + child values). Implementors provide `lookup`; the engine handles
+/// literals, operators, and primitive functions.
+pub(crate) trait EvalLookup {
+    fn lookup(&self, name: &str) -> Result<f64, DesignEvalError>;
+}
+
+impl EvalLookup for DesignContext<'_> {
+    fn lookup(&self, name: &str) -> Result<f64, DesignEvalError> {
+        // Concrete-type call resolves to the inherent method (Rust prefers
+        // inherent over trait), so this is delegation, not recursion.
+        DesignContext::lookup(self, name)
+    }
+}
+
 /// Parse `text` as a BHDL expression and evaluate it against `ctx`.
-fn evaluate_text(text: &str, ctx: &DesignContext) -> Result<f64, DesignEvalError> {
+pub(crate) fn evaluate_text<C: EvalLookup>(text: &str, ctx: &C) -> Result<f64, DesignEvalError> {
     let parse = bhdl_parser::parse_expression(text);
     if !parse.errors().is_empty() {
         return Err(DesignEvalError::EvalError(
@@ -268,7 +286,7 @@ fn evaluate_text(text: &str, ctx: &DesignContext) -> Result<f64, DesignEvalError
 }
 
 /// Walk an `Expr` AST and produce a number.
-fn evaluate_expr(expr: &Expr, ctx: &DesignContext) -> Result<f64, DesignEvalError> {
+fn evaluate_expr<C: EvalLookup>(expr: &Expr, ctx: &C) -> Result<f64, DesignEvalError> {
     match expr {
         Expr::PrefixExpr(p) => {
             let inner = p.expr().ok_or_else(|| DesignEvalError::EvalError(

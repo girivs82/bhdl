@@ -77,6 +77,7 @@ pub mod expansion_interpreter;
 // Evaluator for vendor-authored `design { }` blocks (stage 3 of the
 // vendor-extensibility surface — see docs/spec/Vendor_Design_Blocks.md).
 pub mod design_evaluator;
+pub mod stress_evaluator;
 pub mod variant_apply;
 
 // Input capacitor bank physics computation
