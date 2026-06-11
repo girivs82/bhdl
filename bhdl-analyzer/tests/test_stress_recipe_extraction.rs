@@ -76,6 +76,30 @@ entity Buck(f_sw: frequency = 500kHz) {
 }
 
 #[test]
+fn extracts_model_node_statements() {
+    use bhdl_analyzer::extract_model_recipes;
+    use bhdl_common::model::ModelRole;
+    let sf = source_file(r#"
+entity DemoBuck(v_out: voltage = 5V, v_in: voltage = 12V, efficiency: float = 0.9) {
+    pin VIN: power in;
+    pin VOUT: power out;
+    simulation {
+        model {
+            node VOUT source = self.v_out;
+            node VIN  draws  = i_out * self.v_out / (self.v_in * efficiency);
+        }
+    }
+}
+"#);
+    let recipes = extract_model_recipes(&sf);
+    let r = recipes.get("DemoBuck").expect("model recipe for DemoBuck");
+    assert_eq!(r.nodes.len(), 2);
+    assert_eq!(r.source_for("VOUT"), Some("self.v_out"));
+    assert_eq!(r.nodes[1].role, ModelRole::Draws);
+    assert_eq!(r.draws_for("VIN"), Some("i_out * self.v_out / (self.v_in * efficiency)"));
+}
+
+#[test]
 fn entity_without_stress_block_is_absent() {
     let sf = source_file(r#"
 entity Plain(r: resistance = 1kΩ) {

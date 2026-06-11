@@ -2243,20 +2243,38 @@ impl<'t> Parser<'t> {
     // model { ... }  (Vendor_Simulation_Blocks.md §5 — reserved). Captured as a
     // balanced-brace node so it round-trips, but not yet interpreted (the device
     // model still comes from the hardcoded converter fallback).
+    // model { node <net> source = <expr>;  node <net> draws = <expr>; ... }
+    // (Vendor_Simulation_Blocks.md §5). The primitive-composition form (`node
+    // … source/draws`) is parsed into MODEL_NODE_STMT. The richer `builtin`/
+    // `vendor` forms (§5.1 forms 1–2) are deferred: any non-`node` content is
+    // consumed with loose recovery (skip to the next `;` at brace-depth 0) so
+    // it round-trips without cascading errors.
     fn parse_model_block(&mut self) {
         self.builder.start_node(SyntaxKind::MODEL_BLOCK.into());
         self.bump(); // consume the `model` IDENT
         self.expect(SyntaxKind::L_BRACE);
-        let mut depth = 1usize;
-        while depth > 0 {
+        loop {
+            self.skip_trivia();
             match self.peek() {
-                Some(SyntaxKind::L_BRACE) => { depth += 1; self.bump(); }
-                Some(SyntaxKind::R_BRACE) => {
-                    depth -= 1;
-                    if depth == 0 { break; }
-                    self.bump();
+                Some(SyntaxKind::R_BRACE) => break,
+                Some(SyntaxKind::IDENT) if self.peek_text().as_deref() == Some("node") => {
+                    self.parse_model_node_stmt();
                 }
-                Some(_) => self.bump_any(),
+                Some(_) => {
+                    // Deferred builtin/vendor form — skip to the statement end
+                    // (next `;` at depth 0), balancing any nested braces.
+                    let mut depth = 0i32;
+                    loop {
+                        match self.peek() {
+                            Some(SyntaxKind::SEMI) if depth == 0 => { self.bump(); break; }
+                            Some(SyntaxKind::L_BRACE) => { depth += 1; self.bump(); }
+                            Some(SyntaxKind::R_BRACE) if depth == 0 => break,
+                            Some(SyntaxKind::R_BRACE) => { depth -= 1; self.bump(); }
+                            Some(_) => self.bump_any(),
+                            None => break,
+                        }
+                    }
+                }
                 None => {
                     self.error("Unexpected end of file in model block".to_string());
                     break;
@@ -2264,6 +2282,18 @@ impl<'t> Parser<'t> {
             }
         }
         self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
+    // node <net_ident> <role_ident: source|draws> = <expr>;
+    fn parse_model_node_stmt(&mut self) {
+        self.builder.start_node(SyntaxKind::MODEL_NODE_STMT.into());
+        self.bump(); // consume the `node` IDENT
+        self.expect(SyntaxKind::IDENT); // net name (e.g. VOUT)
+        self.expect(SyntaxKind::IDENT); // role: source | draws
+        self.expect(SyntaxKind::EQ);
+        self.parse_expression();
+        self.expect(SyntaxKind::SEMI);
         self.builder.finish_node();
     }
 
