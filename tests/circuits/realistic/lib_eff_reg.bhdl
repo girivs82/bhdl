@@ -1,0 +1,22 @@
+// A regulator entity carrying §5 device-simulation IP, intended to be IMPORTED
+// by a board — proving stress/model blocks work on stdlib-style imported
+// entities, not just inline board-file ones.
+entity EffReg() {
+    pin VIN:  power in;
+    pin VOUT: power out;
+    pin GND:  ground;
+
+    attribute component_class = "voltage_regulator";
+    attribute output_voltage  = 3.3V;   // hardcoded baseline (≠ model, to show override)
+    attribute v_out           = 5.0V;
+    attribute v_in            = 12.0V;
+    attribute efficiency      = 0.9;
+    attribute i_quiescent     = 0.005;
+
+    simulation {
+        model {
+            node VOUT source = self.v_out;
+            node VIN  draws  = i_out * self.v_out / (self.v_in * efficiency);
+        }
+    }
+}

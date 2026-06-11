@@ -1,0 +1,20 @@
+// Stage: §4/§5 import-merge — the regulator entity (with its model block) is
+// defined in a SEPARATE imported file, not inline. If the override still fires,
+// recipes are being extracted from imported entities (stdlib-style).
+import { EffReg } from "tests/circuits/realistic/lib_eff_reg.bhdl";
+
+board ModelImportDemo {
+    power VIN  = 12V @ 2A;
+    power VOUT = 5V @ 1A;
+    ground GND;
+
+    @VIN -> reg: EffReg().VIN;
+    reg.GND  -> @GND;
+    reg.VOUT -> @VOUT;
+
+    @VOUT -> c_out:  Cap(47uF).1;  c_out.2  -> @GND;
+    @VOUT -> r_load: Res(5).1;     r_load.2 -> @GND;
+}
+
+entity Cap(value: capacitance) { pin 1: signal inout; pin 2: signal inout; }
+entity Res(value: resistance) { pin 1: signal inout; pin 2: signal inout; }
