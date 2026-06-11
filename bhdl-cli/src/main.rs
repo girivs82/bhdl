@@ -2178,6 +2178,7 @@ async fn cmd_bom(
                             &ann.instance_power,
                             &ann.instance_currents,
                             &analysis.entity_attribute_index,
+                            &analysis.stress_recipes,
                         );
                         if let Some(report) =
                             bhdl_synthesizer::signoff::format_signoff_report(&rows)

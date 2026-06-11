@@ -19,6 +19,8 @@ use crate::glacier_physical_selection::{
 };
 use bhdl_netlist::Netlist;
 use bhdl_netlist::types::NetClass;
+use bhdl_common::stress::StressRecipe;
+use crate::stress_evaluator::{evaluate_stress_recipe, StressInputs};
 use std::collections::HashMap;
 
 /// Derate factors — kept in sync with `value_snap.rs`.
@@ -678,12 +680,88 @@ pub fn apply_inductor_stepping(
 /// Compute the per-passive sign-off rows for a (snapped) netlist given a
 /// GLACIER operating point: `net_voltages` (node name → V), `instance_power`
 /// (refdes → W), `instance_currents` (refdes → A).
+/// Evaluate the per-instance stress overrides contributed by entities that
+/// declare a `simulation { stress { } }` block (Vendor_Simulation_Blocks.md §4,
+/// Stage 4). Returns a map keyed by `(instance_name, axis)` (e.g.
+/// `("L_out","i_peak")`) → value. A stress recipe's child references resolve to
+/// the netlist instance of the SAME name. The result is empty when no
+/// instantiated entity declares a recipe — in which case sign-off uses the
+/// hardcoded reference ripple model unchanged (the graceful-degradation
+/// fallback; this is what keeps every existing circuit byte-identical).
+fn stress_overrides(
+    netlist: &Netlist,
+    entity_attrs: &HashMap<String, HashMap<String, String>>,
+    stress_recipes: &HashMap<String, StressRecipe>,
+    op: &SwitcherOp,
+) -> HashMap<(String, String), f64> {
+    let mut out: HashMap<(String, String), f64> = HashMap::new();
+    if stress_recipes.is_empty() {
+        return out;
+    }
+    // Operating point exposed to every block: the recovered switcher point.
+    let mut operating_point = HashMap::from([
+        ("vin".to_string(), op.v_in),
+        ("vout".to_string(), op.v_out),
+    ]);
+    if let Some(i) = op.i_out {
+        operating_point.insert("i_out".to_string(), i);
+    }
+    // `<child>.value` resolves to the snapped value of the like-named instance.
+    let child_values: HashMap<String, f64> = netlist
+        .instances
+        .values()
+        .filter_map(|inst| {
+            inst.attributes
+                .get("value")
+                .and_then(|s| parse_si(s))
+                .map(|v| (inst.name.clone(), v))
+        })
+        .collect();
+
+    // Evaluate the recipe of every instantiated entity that declares one.
+    let mut seen_entities: Vec<&str> = Vec::new();
+    for inst in netlist.instances.values() {
+        let Some(module) = netlist.modules.get(inst.definition) else { continue };
+        let entity = module.name.as_str();
+        if seen_entities.contains(&entity) {
+            continue;
+        }
+        let Some(recipe) = stress_recipes.get(entity) else { continue };
+        seen_entities.push(entity);
+
+        // `self.<param>` ← the entity's declared attributes (numeric ones).
+        let self_params: HashMap<String, f64> = entity_attrs
+            .get(entity)
+            .map(|m| {
+                m.iter()
+                    .filter_map(|(k, v)| parse_si(v).map(|n| (k.clone(), n)))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let inputs = StressInputs {
+            operating_point: operating_point.clone(),
+            self_params,
+            child_values: child_values.clone(),
+        };
+        // A failed `require` or any eval error means the model does not apply —
+        // skip it (those parts keep their generic/hardcoded stress).
+        if let Ok(overrides) = evaluate_stress_recipe(recipe, &inputs) {
+            for (key, val) in overrides {
+                out.insert(key, val);
+            }
+        }
+    }
+    out
+}
+
 pub fn compute_signoff(
     netlist: &Netlist,
     net_voltages: &HashMap<String, f64>,
     instance_power: &HashMap<String, f64>,
     instance_currents: &HashMap<String, f64>,
     entity_attrs: &HashMap<String, HashMap<String, String>>,
+    stress_recipes: &HashMap<String, StressRecipe>,
 ) -> Vec<SignoffRow> {
     let inst_v = compute_instance_max_voltages(netlist, net_voltages);
     // Analytic reference ripple model (switching topologies). `d_il` is the
@@ -691,6 +769,13 @@ pub fn compute_signoff(
     // and the output/input cap ripple-voltage derivations below.
     let op = recover_switcher_op(netlist, entity_attrs);
     let d_il = op.as_ref().and_then(|op| inductor_ripple_current(netlist, op));
+    // Per-instance overrides from vendor `stress { }` blocks (§4). Empty unless
+    // an instantiated entity declares one — then these win over the hardcoded
+    // reference ripple model below, per the graceful-degradation ladder.
+    let overrides = op
+        .as_ref()
+        .map(|op| stress_overrides(netlist, entity_attrs, stress_recipes, op))
+        .unwrap_or_default();
     // Parallel caps on a rail SHARE the switching ripple current — the ripple
     // voltage is set by the TOTAL bank capacitance, not each cap alone (else a
     // 100nF HF bypass next to a 22µF bulk cap reads an absurd multi-volt
@@ -788,6 +873,13 @@ pub fn compute_signoff(
         let mut step: Option<String> = None;
         if let (Some(op), Some(d_il)) = (op.as_ref(), d_il) {
             match class.as_str() {
+                "inductor" if overrides.contains_key(&(inst.name.clone(), "i_peak".to_string())) => {
+                    // A vendor stress block supplied this inductor's peak current
+                    // directly (§4) — it wins over the hardcoded reference model.
+                    let i_pk = overrides[&(inst.name.clone(), "i_peak".to_string())];
+                    stress = Some(i_pk);
+                    ripple = Some(format!("I_pk={i_pk:.3}A (stress block)"));
+                }
                 "inductor" => {
                     // Peak current is the saturation-critical stress, not DC avg.
                     if let Some(l) = parse_si(&value).filter(|l| *l > 0.0) {
@@ -824,6 +916,14 @@ pub fn compute_signoff(
                             ));
                         }
                     }
+                }
+                "capacitor" if overrides.contains_key(&(inst.name.clone(), "v_ripple".to_string())) => {
+                    // A vendor stress block supplied this cap's ripple voltage
+                    // directly (§4). Total voltage stress = V_dc + ΔV/2.
+                    let dv = overrides[&(inst.name.clone(), "v_ripple".to_string())];
+                    let v_dc = stress.unwrap_or(0.0);
+                    stress = Some(v_dc + dv / 2.0);
+                    ripple = Some(format!("ΔV={:.1}mV (stress block)", dv * 1000.0));
                 }
                 "capacitor" => {
                     // Ripple voltage is a per-RAIL quantity set by the whole
