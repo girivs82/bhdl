@@ -309,6 +309,12 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
         design_recipes.entry(entity).or_default().extend(by_intent);
     }
 
+    // Extract stress recipes (simulation { stress { } }, §4) from the main
+    // source file. Import-merge (for stdlib-defined entities) is threaded
+    // through pass1 in a later stage; today's targets declare the block in the
+    // board file alongside the instance.
+    let stress_recipes = extract_stress_recipes(source_file);
+
     // Extract board-level SKU variants from the main source file.
     // Variants are board-local (a `variant` block can only patch
     // instances declared in the surrounding board), so we don't
@@ -473,6 +479,7 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
         monomorphization: mono_result, // Move ownership (Pass 2.5)
         expansion_recipes, // Move ownership (Pass 8.5)
         design_recipes, // Move ownership (Pass 8.5)
+        stress_recipes, // Move ownership (§4 stress surface)
         variants,
         entity_attribute_index,
         entity_param_names,
@@ -1878,6 +1885,94 @@ pub fn extract_design_recipes(
     }
 
     all
+}
+
+/// Extract one [`StressRecipe`] per entity that declares a
+/// `simulation { stress { } }` block (Vendor_Simulation_Blocks.md §4).
+/// Keyed by entity name. Entities without a stress block are absent from the
+/// map (sign-off then uses the hardcoded reference model). The reserved
+/// `model { }` sub-block (§5) is ignored here.
+pub fn extract_stress_recipes(
+    source_file: &SourceFile,
+) -> std::collections::HashMap<String, bhdl_common::stress::StressRecipe> {
+    use bhdl_common::stress::StressRecipe;
+    use bhdl_ast::{Entity, HasName, SyntaxKind};
+    use rowan::ast::AstNode;
+
+    let mut all: std::collections::HashMap<String, StressRecipe> =
+        std::collections::HashMap::new();
+
+    for item in source_file.items() {
+        let entity = match Entity::cast(item.syntax().clone()) {
+            Some(e) => e,
+            None => continue,
+        };
+        let entity_name = entity.name().map(|t| t.text().to_string()).unwrap_or_default();
+        if entity_name.is_empty() { continue; }
+
+        // entity → SIM_BLOCK → STRESS_BLOCK → statements.
+        for sim_node in entity.syntax().children()
+            .filter(|n| n.kind() == SyntaxKind::SIM_BLOCK)
+        {
+            for stress_node in sim_node.children()
+                .filter(|n| n.kind() == SyntaxKind::STRESS_BLOCK)
+            {
+                let mut recipe = StressRecipe::new(entity_name.clone());
+                for child in stress_node.children() {
+                    if let Some(s) = extract_stress_statement(&child) {
+                        recipe.statements.push(s);
+                    }
+                }
+                if recipe.has_statements() {
+                    println!("  Extracted stress recipe for '{entity_name}': {} statement(s)",
+                             recipe.statements.len());
+                    all.insert(entity_name.clone(), recipe);
+                }
+            }
+        }
+    }
+
+    all
+}
+
+/// Extract one statement of a `stress { }` block. `const`/`require` share the
+/// design-block node kinds (PARAM_DECL / DESIGN_REQUIRE_STMT); the stress
+/// assignment is the dotted-LHS STRESS_ASSIGNMENT.
+fn extract_stress_statement(
+    node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>,
+) -> Option<bhdl_common::stress::StressStatement> {
+    use bhdl_common::stress::StressStatement;
+    use bhdl_ast::SyntaxKind;
+    match node.kind() {
+        SyntaxKind::PARAM_DECL => {
+            // const NAME = EXPR;
+            let name = first_token_text(node, SyntaxKind::IDENT)?;
+            let expr = text_between(node, SyntaxKind::EQ, SyntaxKind::SEMI)?;
+            Some(StressStatement::Let { name, expr })
+        }
+        SyntaxKind::DESIGN_REQUIRE_STMT => {
+            // require EXPR else "MSG";
+            let condition = text_between(node, SyntaxKind::REQUIRE_KW, SyntaxKind::ELSE_KW)?;
+            let raw = first_token_text(node, SyntaxKind::STRING)?;
+            let message = raw.trim_matches('"').to_string();
+            Some(StressStatement::Require { condition, message })
+        }
+        SyntaxKind::STRESS_ASSIGNMENT => {
+            // CHILD.AXIS = EXPR;  — the LHS is the first two IDENT tokens
+            // (separated by DOT), the RHS is the text between EQ and SEMI.
+            let idents: Vec<String> = node.children_with_tokens()
+                .filter_map(|el| el.into_token())
+                .filter(|t| t.kind() == SyntaxKind::IDENT)
+                .map(|t| t.text().to_string())
+                .take(2)
+                .collect();
+            let child_name = idents.first()?.clone();
+            let axis = idents.get(1)?.clone();
+            let expr = text_between(node, SyntaxKind::EQ, SyntaxKind::SEMI)?;
+            Some(StressStatement::Assign { child_name, axis, expr })
+        }
+        _ => None,
+    }
 }
 
 /// Collect IDENT names from a DESIGN_INPUTS_DECL or DESIGN_OUTPUTS_DECL
