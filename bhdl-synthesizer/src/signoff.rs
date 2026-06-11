@@ -919,10 +919,16 @@ pub fn compute_signoff(
                 }
                 "capacitor" if overrides.contains_key(&(inst.name.clone(), "v_ripple".to_string())) => {
                     // A vendor stress block supplied this cap's ripple voltage
-                    // directly (§4). Total voltage stress = V_dc + ΔV/2.
+                    // directly (§4). Per §4.1 the voltage stress is bumped to
+                    // V_dc + ΔV/2 only on the OUTPUT rail; an input cap's stress
+                    // "stays the rail" (its ripple is a separate target check),
+                    // matching the hardcoded model's convention.
                     let dv = overrides[&(inst.name.clone(), "v_ripple".to_string())];
                     let v_dc = stress.unwrap_or(0.0);
-                    stress = Some(v_dc + dv / 2.0);
+                    let near = |a: f64, b: f64| (a - b).abs() < 0.1 * b.max(1.0);
+                    if near(v_dc, op.v_out) {
+                        stress = Some(v_dc + dv / 2.0);
+                    }
                     ripple = Some(format!("ΔV={:.1}mV (stress block)", dv * 1000.0));
                 }
                 "capacitor" => {
