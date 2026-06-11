@@ -391,6 +391,15 @@ pub enum SyntaxKind {
     DESIGN_OUTPUTS_DECL,   // outputs { name; name; ... }       (Stage 5)
     DESIGN_BODY_HOOK,      // body <lang> r#"..."#              (Stage 5)
 
+    // Entity-level simulation block nodes (vendor device-simulation IP —
+    // docs/spec/Vendor_Simulation_Blocks.md). Distinct from the testbench
+    // SIMULATION_BLOCK (a sim *config* block). The stress surface (§4) is
+    // built first; the model surface (§5) is reserved.
+    SIM_BLOCK,             // simulation { stress { ... } model { ... } }
+    STRESS_BLOCK,          // stress { const ...; <child>.<axis> = <expr>; }
+    STRESS_ASSIGNMENT,     // <child_name>.<axis> = <expr>;
+    MODEL_BLOCK,           // model { ... }   (§5, reserved — parsed, not yet consumed)
+
     // Symbol and layout definition nodes
     SYMBOL_DEF,            // symbol EntityName { ... }
     SYMBOL_BODY_HINT,      // body rectangle;

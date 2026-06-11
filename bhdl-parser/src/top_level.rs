@@ -221,10 +221,17 @@ impl<'t> Parser<'t> {
                 Some(SyntaxKind::INTERFACE_KW) => self.parse_interface_field_decl(),
                 Some(SyntaxKind::ALIASES_KW) => self.parse_entity_aliases_block(),
                 Some(SyntaxKind::IDENT) => {
-                    // Check if this is an entity instantiation or connection
-                    // Entity instantiation: instance_name: EntityType(params) { ... }
-                    // Connection: signal -> other_signal;
-                    self.parse_entity_item();
+                    // `simulation` is a contextual keyword (not lexed as a kw, to
+                    // avoid colliding with the testbench `simulation` config block
+                    // and stdlib identifiers). At entity scope it opens the
+                    // device-simulation IP block (Vendor_Simulation_Blocks.md).
+                    if self.peek_text().as_deref() == Some("simulation") {
+                        self.parse_sim_block();
+                    } else {
+                        // Entity instantiation: instance_name: EntityType(params) { ... }
+                        // Connection: signal -> other_signal;
+                        self.parse_entity_item();
+                    }
                 }
                 Some(_) => {
                     self.error("Unexpected token in entity definition".to_string());
@@ -2158,6 +2165,105 @@ impl<'t> Parser<'t> {
         self.expect(SyntaxKind::EQ);
         self.parse_expression();
         self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+
+    // Entity-level device-simulation IP block (Vendor_Simulation_Blocks.md §2):
+    //   simulation { stress { ... }  model { ... } }
+    // `simulation`, `stress`, `model` are contextual keywords (matched by text).
+    fn parse_sim_block(&mut self) {
+        self.builder.start_node(SyntaxKind::SIM_BLOCK.into());
+        self.bump(); // consume the `simulation` IDENT
+        self.expect(SyntaxKind::L_BRACE);
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) => break,
+                Some(SyntaxKind::IDENT) => match self.peek_text().as_deref() {
+                    Some("stress") => self.parse_stress_block(),
+                    Some("model") => self.parse_model_block(),
+                    _ => {
+                        self.error("Expected 'stress' or 'model' in simulation block".to_string());
+                        self.bump_any();
+                    }
+                },
+                Some(_) => {
+                    self.error("Unexpected token in simulation block".to_string());
+                    self.bump_any();
+                }
+                None => {
+                    self.error("Unexpected end of file in simulation block".to_string());
+                    break;
+                }
+            }
+        }
+        self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
+    // stress { const N = expr; require expr else "msg"; <child>.<axis> = expr; }
+    // const/require reuse the design-block parsers (identical grammar).
+    fn parse_stress_block(&mut self) {
+        self.builder.start_node(SyntaxKind::STRESS_BLOCK.into());
+        self.bump(); // consume the `stress` IDENT
+        self.expect(SyntaxKind::L_BRACE);
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) => break,
+                Some(SyntaxKind::CONST_KW) => self.parse_design_const_decl(),
+                Some(SyntaxKind::REQUIRE_KW) => self.parse_design_require_stmt(),
+                Some(SyntaxKind::IDENT) => self.parse_stress_assignment(),
+                Some(_) => {
+                    self.error("Unexpected token in stress block".to_string());
+                    self.bump_any();
+                }
+                None => {
+                    self.error("Unexpected end of file in stress block".to_string());
+                    break;
+                }
+            }
+        }
+        self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
+    // <child_name>.<axis> = <expr>;   (e.g. `L_out.i_peak = i_out + d_il / 2;`)
+    fn parse_stress_assignment(&mut self) {
+        self.builder.start_node(SyntaxKind::STRESS_ASSIGNMENT.into());
+        self.expect(SyntaxKind::IDENT); // child name
+        self.expect(SyntaxKind::DOT);
+        self.expect(SyntaxKind::IDENT); // stress axis (i_peak / v_ripple / i_rms / …)
+        self.expect(SyntaxKind::EQ);
+        self.parse_expression();
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+
+    // model { ... }  (Vendor_Simulation_Blocks.md §5 — reserved). Captured as a
+    // balanced-brace node so it round-trips, but not yet interpreted (the device
+    // model still comes from the hardcoded converter fallback).
+    fn parse_model_block(&mut self) {
+        self.builder.start_node(SyntaxKind::MODEL_BLOCK.into());
+        self.bump(); // consume the `model` IDENT
+        self.expect(SyntaxKind::L_BRACE);
+        let mut depth = 1usize;
+        while depth > 0 {
+            match self.peek() {
+                Some(SyntaxKind::L_BRACE) => { depth += 1; self.bump(); }
+                Some(SyntaxKind::R_BRACE) => {
+                    depth -= 1;
+                    if depth == 0 { break; }
+                    self.bump();
+                }
+                Some(_) => self.bump_any(),
+                None => {
+                    self.error("Unexpected end of file in model block".to_string());
+                    break;
+                }
+            }
+        }
+        self.expect(SyntaxKind::R_BRACE);
         self.builder.finish_node();
     }
 
