@@ -11,6 +11,11 @@ pub struct ImportLoader {
     /// Cache of loaded modules from imports
     /// Key is the entity name, value is the parsed Entity AST
     loaded_entities: HashMap<String, Entity>,
+    /// Generic arguments captured from alias specializations
+    /// (`alias LM7805 = LinearRegulator<5V>;` → "LM7805" → ["5V"]). The
+    /// attribute stamper substitutes these for the target entity's generic
+    /// parameter names so e.g. `attribute output_voltage = V_OUT` resolves.
+    alias_generic_args: HashMap<String, Vec<String>>,
     
     /// Cache of full source file ASTs for cross-import resolution
     /// Key is the file path, value is the parsed SourceFile AST
@@ -33,6 +38,7 @@ impl ImportLoader {
     pub fn new(base_path: impl Into<String>) -> Self {
         Self {
             loaded_entities: HashMap::new(),
+            alias_generic_args: HashMap::new(),
             loaded_source_files: HashMap::new(),
             base_path: base_path.into(),
             resolver: None,
@@ -159,6 +165,22 @@ impl ImportLoader {
                     if module_names.contains(&alias_name) {
                         if let Some(target_entity) = file_modules.get(&target_name) {
                             println!("IMPORT_LOADER: Found alias {} -> {} (LOADING)", alias_name, target_name);
+                            // Capture the specialization's generic arguments
+                            // (the text between < and > on the alias RHS).
+                            let alias_text = child.text().to_string();
+                            if let (Some(lt), Some(gt)) = (alias_text.find('<'), alias_text.rfind('>')) {
+                                if lt < gt {
+                                    let args: Vec<String> = alias_text[lt + 1..gt]
+                                        .split(',')
+                                        .map(|a| a.trim().to_string())
+                                        .filter(|a| !a.is_empty())
+                                        .collect();
+                                    if !args.is_empty() {
+                                        println!("IMPORT_LOADER: Alias {} generic args: {:?}", alias_name, args);
+                                        self.alias_generic_args.insert(alias_name.clone(), args);
+                                    }
+                                }
+                            }
                             self.loaded_entities.insert(alias_name, target_entity.clone());
                         } else {
                             println!("IMPORT_LOADER: Target entity {} not found for alias {}", target_name, alias_name);
@@ -191,6 +213,12 @@ impl ImportLoader {
     /// Get a loaded module by name
     pub fn get_entity(&self, name: &str) -> Option<&Entity> {
         self.loaded_entities.get(name)
+    }
+
+    /// Generic arguments of an alias specialization, if `name` was loaded via
+    /// `alias <name> = <Target><args…>;`.
+    pub fn get_alias_generic_args(&self, name: &str) -> Option<&Vec<String>> {
+        self.alias_generic_args.get(name)
     }
     
     /// Get all loaded modules
