@@ -427,8 +427,26 @@ impl NetlistToSpiceConverter {
                 }
             }
             ModuleKind::Module => {
-                // For now, skip logical modules
-                debug!("Skipping logical module: {}", instance.name);
+                // A regulator ENTITY imports as a logical Module, but it is an
+                // electrically meaningful device: route it through the physical
+                // path so the regulator decomposition (VOUT source + dropout
+                // connectivity) stamps into the solve. Without this, an
+                // imported stdlib LDO/buck was silently skipped and its output
+                // rail was never driven. Other logical modules stay skipped.
+                if extracted_model.component_type
+                    == crate::components::ComponentType::VoltageRegulator
+                {
+                    self.add_physical_component(
+                        circuit,
+                        netlist,
+                        &instance.name,
+                        instance_id,
+                        &connected_nets,
+                        extracted_model,
+                    )?;
+                } else {
+                    debug!("Skipping logical module: {}", instance.name);
+                }
             }
             _ => {
                 debug!("Skipping module kind {:?} for {}", module.kind, instance.name);
@@ -698,8 +716,12 @@ impl NetlistToSpiceConverter {
             // hard error (the device datasheet must supply rds_on / f_sw / …).
             let req_param = |name: &str| -> anyhow::Result<f64> {
                 extracted_model.parameters.get(name).copied()
+                    // Unit-aware fallback: stdlib attributes are written
+                    // idiomatically with SI units (`3.4mA`, `500kHz`, `90mΩ`);
+                    // a bare f64 parse silently failed on all of them, making
+                    // the regulator decompose reject correctly-declared parts.
                     .or_else(|| extracted_model.attributes.get(name)
-                        .and_then(|s| s.parse::<f64>().ok()))
+                        .and_then(|s| crate::model_factory::parse_value(s)))
                     .ok_or_else(|| anyhow::anyhow!(
                         "regulator '{}' is missing real SPICE parameter '{}' — Real-Data \
                          Policy: declare it on the stdlib entity (the datasheet)",

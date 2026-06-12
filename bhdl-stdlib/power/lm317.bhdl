@@ -35,6 +35,11 @@ entity LM317(v_out: voltage = 5V) {
     attribute family          = "LM317";
     attribute output_voltage  = v_out;
     attribute role            = "adjustable-ldo";
+    // Datasheet (SLVS044) constants for the regulator decomposition / power model:
+    attribute feedback_voltage = 1.25V; // V_REF between OUT and ADJ
+    attribute i_quiescent      = 50uA;  // ADJ pin current, typ (ground-path quiescent)
+    attribute output_current   = 1.5A;  // rated output
+    attribute dropout_voltage  = 2V;    // V_IN−V_OUT for regulation at rated load
 
     // Plain design block (v0.2 §5.2). Computes the feedback-
     // divider values from `v_out`. Runs once per instance, after

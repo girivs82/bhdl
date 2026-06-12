@@ -143,6 +143,16 @@ entity TPS54302() {
     // Inductor ripple-current ratio K_IND (datasheet Eq 8). ΔI_L / I_out.
     attribute ripple_ratio = 0.35;
     attribute feedback_voltage = 0.6V;  // Internal reference
+
+    // Loss-model constants (datasheet SLVSDG6, electrical characteristics).
+    // Consumed by the GLACIER regulator decomposition / post-sim power model:
+    //   P = I²·rds_on·D + V_in·I·f_sw·t_sw/2 + V_in·i_quiescent
+    attribute i_quiescent = 85μA;   // non-switching operating quiescent (typ)
+    attribute rds_on = 98mΩ;        // high-side FET on-resistance (typ; LS 49mΩ)
+    attribute t_sw = 20ns;          // SW transition time for switching-loss estimate
+    // NOTE: no `output_voltage` attribute — the TPS54302 output is ADJUSTABLE
+    // (set by the FB divider), so a device-fixed V_OUT would be fabricated
+    // data. The declared output rail drives the DC solve instead.
     
     // Impedance characteristics
     attribute output_impedance = BUCK_PARAMS.impedance.output_impedance;

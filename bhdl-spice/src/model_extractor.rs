@@ -128,8 +128,28 @@ impl ComponentModelExtractor {
                     "inductance" | "l" => { parameters.insert("inductance".to_string(), num_value); }
                     "voltage" | "v" => { parameters.insert("voltage".to_string(), num_value); }
                     "output_voltage" => { parameters.insert("output_voltage".to_string(), num_value); }
+                    "vout" => { parameters.insert("vout".to_string(), num_value); }
                     "current" | "i" => { parameters.insert("current".to_string(), num_value); }
                     "power" | "p" => { parameters.insert("power_rating".to_string(), num_value); }
+                    // Diode / LED operating point (datasheet). Without these
+                    // arms the required-parameter gate below could NEVER be
+                    // satisfied for diodes/LEDs — the declared value sat in
+                    // `data` but was never mapped into `parameters`.
+                    "forward_voltage" | "vf" => { parameters.insert("forward_voltage".to_string(), num_value); }
+                    "forward_current" => { parameters.insert("forward_current".to_string(), num_value); }
+                    "saturation_current" | "is" => { parameters.insert("saturation_current".to_string(), num_value); }
+                    // Regulator loss-model constants (datasheet). Mapping them
+                    // here makes them UNIT-AWARE (parse_value handles `3.4mA`,
+                    // `500kHz`, `90mΩ`) — the decomposition's req_param reads
+                    // parameters first, so stdlib entities can declare these
+                    // idiomatically with units.
+                    "i_quiescent" | "quiescent_current" => { parameters.insert("i_quiescent".to_string(), num_value); }
+                    "rds_on" => { parameters.insert("rds_on".to_string(), num_value); }
+                    "switching_frequency" | "f_sw" => { parameters.insert("f_sw".to_string(), num_value); }
+                    "t_sw" => { parameters.insert("t_sw".to_string(), num_value); }
+                    "dropout" | "dropout_voltage" => { parameters.insert("dropout".to_string(), num_value); }
+                    "efficiency" => { parameters.insert("efficiency".to_string(), num_value); }
+                    "feedback_voltage" => { parameters.insert("feedback_voltage".to_string(), num_value); }
                     // Koren triode parameters.
                     "mu" => { parameters.insert("mu".to_string(), num_value); }
                     "ex" => { parameters.insert("ex".to_string(), num_value); }

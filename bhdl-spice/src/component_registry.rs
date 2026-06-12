@@ -124,6 +124,10 @@ impl ComponentRegistry {
             "mosfet" | "fet" => Some(ComponentType::MOSFET),
             "opamp" | "op_amp" | "operational_amplifier" => Some(ComponentType::OpAmp),
             "voltage_regulator" | "linear_regulator" => Some(ComponentType::VoltageRegulator),
+            // The stdlib LDO entities (LM317, NCP1117, LP2985, XC6206, AP2112…)
+            // declare `component_class = "ldo"`; without this arm they were
+            // "Unknown component type" and never decomposed as regulators.
+            "ldo" => Some(ComponentType::VoltageRegulator),
             "switching_regulator" => Some(ComponentType::VoltageRegulator),
             "triode" | "vacuum_triode" => Some(ComponentType::Triode),
             "power_source" => Some(ComponentType::VoltageSource),

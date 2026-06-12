@@ -6,6 +6,7 @@ entity TVSDiode(voltage: voltage) {
 
     attribute component_class = "tvs_diode";
     attribute breakdown_voltage = voltage;
+    attribute forward_voltage = 1.1V;  // forward-conduction drop (unidirectional TVS, datasheet class)
     attribute max_current = 1A;
     attribute kicad_symbol = "Device:D_TVS";
 }

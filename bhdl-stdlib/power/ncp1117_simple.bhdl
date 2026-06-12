@@ -22,6 +22,8 @@ entity NCP1117_Simple(part_no: string = "NCP1117-5.0_SOT223") {
     attribute output_voltage  = 5.0;
     attribute output_current  = 1.0;
     attribute dropout_v       = 1.2;
+    attribute dropout_voltage = 1.2V;  // datasheet typ at 800mA
+    attribute i_quiescent     = 5.2mA; // ground-pin current, typ class at load
     attribute pkg             = "SOT-223";
     attribute part_number     = part_no;
 }

@@ -19,6 +19,8 @@ entity LP2985_Simple(part_no: string = "LP2985-3.3") {
     attribute output_voltage  = 3.3;
     attribute output_current  = 0.15;
     attribute dropout_v       = 0.28;
+    attribute dropout_voltage = 280mV;  // datasheet typ at 150mA
+    attribute i_quiescent     = 850uA;  // ground-pin current at rated 150mA load (typ)
     attribute pkg             = "SOT-23-5";
     attribute part_number     = part_no;
 }

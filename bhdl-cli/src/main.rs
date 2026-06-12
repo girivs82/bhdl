@@ -2180,6 +2180,25 @@ async fn cmd_bom(
                                 break;
                             }
                         }
+                        // A regulator-driven output net has no inductor to
+                        // re-derive across (LDOs): restore it directly from the
+                        // decomposition's VOUT source branch (its value IS the
+                        // net's DC voltage). Without this an LDO's output-side
+                        // parts read "—" (UNCHECKED) despite a solved 5V rail.
+                        for (e, b) in circuit_ref.branches() {
+                            if b.component_type == "VoltageSource"
+                                && b.metadata
+                                    .get(bhdl_spice::META_DECOMPOSITION_ROLE)
+                                    .map(|r| r.as_str())
+                                    == Some("vout")
+                            {
+                                if let Some((a, _)) = circuit_ref.branch_nodes(e) {
+                                    if let Some(name) = circuit_ref.get_node_name(a) {
+                                        sv.entry(name.to_string()).or_insert(b.value);
+                                    }
+                                }
+                            }
+                        }
                         let rows = bhdl_synthesizer::signoff::compute_signoff(
                             &netlist,
                             &sv,

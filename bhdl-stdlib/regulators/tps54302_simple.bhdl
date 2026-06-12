@@ -45,6 +45,11 @@ entity TPS54302() {
     // datasheet-characterised constant.
     attribute loop_crossover_k = 5.1;
     attribute loop_crossover_max_ratio = 0.1;
+
+    // Loss-model constants (datasheet SLVSDG6) — see tps54302.bhdl.
+    attribute i_quiescent = 85uA;   // non-switching operating quiescent (typ)
+    attribute rds_on = 98mohm;      // high-side FET on-resistance (typ; LS 49mohm)
+    attribute t_sw = 20ns;          // SW transition time for switching-loss estimate
     // Inductor ripple-current ratio K_IND (datasheet §7.2.3.5.1, Eq 8 design
     // example): ΔI_L / I_out. Drives the sign-off inductor value-stepping.
     attribute ripple_ratio = 0.35;
