@@ -190,6 +190,90 @@ pub fn extract_module_attributes_resolved(entity: &Entity) -> HashMap<String, St
     attrs
 }
 
+/// The entity's generic parameters in declaration order:
+/// `(name, default-value-text-if-any)`. For
+/// `entity LinearRegulator<V_OUT: voltage, HAS_EN: bool = false>` this returns
+/// `[("V_OUT", None), ("HAS_EN", Some("false"))]`. Used to bind an alias
+/// specialization's arguments (`alias LM7805 = LinearRegulator<5V>;`) so
+/// attribute values that reference a generic (`attribute output_voltage =
+/// V_OUT`) can be substituted with the concrete argument.
+pub fn extract_generic_param_info(entity: &Entity) -> Vec<(String, Option<String>)> {
+    let mut out = Vec::new();
+    for gp_list in entity
+        .syntax()
+        .children()
+        .filter(|c| c.kind() == SyntaxKind::GENERIC_PARAMS)
+    {
+        for gp in gp_list
+            .children()
+            .filter(|c| c.kind() == SyntaxKind::GENERIC_PARAM)
+        {
+            // GENERIC_PARAM = IDENT name [: IDENT type] [= value]. The name is
+            // the FIRST IDENT; a type IDENT follows the COLON; the default is
+            // everything after EQ.
+            let mut name: Option<String> = None;
+            let mut saw_eq = false;
+            let mut default = String::new();
+            for el in gp.children_with_tokens() {
+                match el {
+                    rowan::NodeOrToken::Token(t) => match t.kind() {
+                        SyntaxKind::IDENT if name.is_none() => {
+                            name = Some(t.text().to_string());
+                        }
+                        SyntaxKind::EQ => saw_eq = true,
+                        k if saw_eq && !matches!(k, SyntaxKind::WHITESPACE) => {
+                            default.push_str(t.text());
+                        }
+                        _ => {}
+                    },
+                    rowan::NodeOrToken::Node(n) if saw_eq => {
+                        default.push_str(n.text().to_string().trim());
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(n) = name {
+                let d = default.trim();
+                out.push((n, if d.is_empty() { None } else { Some(d.to_string()) }));
+            }
+        }
+    }
+    out
+}
+
+/// Substitute generic-parameter references in attribute VALUES with concrete
+/// bindings. A value participates only when it is EXACTLY a generic parameter
+/// name (the `attribute output_voltage = V_OUT` shape). Bound → replaced;
+/// declared-but-unbound (no argument, no default) → dropped, mirroring the
+/// unresolvable-reference policy above (never leave literal identifier text
+/// where downstream expects a number).
+pub fn substitute_generic_attr_refs(
+    attrs: &mut HashMap<String, String>,
+    generic_params: &[(String, Option<String>)],
+    args: &[String],
+) {
+    let mut bindings: HashMap<&str, String> = HashMap::new();
+    let mut declared: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for (i, (name, default)) in generic_params.iter().enumerate() {
+        declared.insert(name.as_str());
+        if let Some(v) = args.get(i).cloned().or_else(|| default.clone()) {
+            bindings.insert(name.as_str(), v);
+        }
+    }
+    let mut drop: Vec<String> = Vec::new();
+    for (k, v) in attrs.iter_mut() {
+        let t = v.trim();
+        if let Some(bound) = bindings.get(t) {
+            *v = bound.clone();
+        } else if declared.contains(t) {
+            drop.push(k.clone());
+        }
+    }
+    for k in drop {
+        attrs.remove(&k);
+    }
+}
+
 fn unquote(s: &str) -> String {
     let s = s.trim();
     if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {

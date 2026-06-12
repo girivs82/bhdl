@@ -1957,12 +1957,32 @@ impl NetlistGenerator {
         let updates: Vec<(InstanceId, std::collections::HashMap<String, String>)> = id_names
             .into_iter()
             .filter_map(|(id, name)| {
-                let attrs = self
+                let mut attrs = self
                     .import_loader
                     .get_entity(&name)
                     .map(extract_attrs)
                     .filter(|a| !a.is_empty())
                     .or_else(|| stdlib_attrs.get(&name).cloned())?;
+                // Alias specialization (`alias LM7805 = LinearRegulator<5V>;`):
+                // bind the alias's generic arguments to the target entity's
+                // generic parameters and substitute attribute values that
+                // reference them (`attribute output_voltage = V_OUT` → `5V`).
+                // Without this the literal text "V_OUT" was stamped, which the
+                // regulator decomposition can't parse as a voltage.
+                if let (Some(args), Some(entity)) = (
+                    self.import_loader.get_alias_generic_args(&name),
+                    self.import_loader.get_entity(&name),
+                ) {
+                    let generic_params =
+                        bhdl_analyzer::attribute_extraction::extract_generic_param_info(entity);
+                    if !generic_params.is_empty() {
+                        bhdl_analyzer::attribute_extraction::substitute_generic_attr_refs(
+                            &mut attrs,
+                            &generic_params,
+                            args,
+                        );
+                    }
+                }
                 if attrs.is_empty() {
                     None
                 } else {
