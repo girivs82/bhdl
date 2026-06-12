@@ -1,9 +1,9 @@
 // Simple 7805 regulator circuit - avoiding lexer issues
 board LinearRegulator {
     nets {
-        net VIN: power;
-        net VOUT: power;
-        net GND: ground;
+        power;
+        power;
+        ground;
     }
     
     components {

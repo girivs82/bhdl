@@ -1,8 +1,8 @@
 // Minimal test to debug parser issues
 board TestBoard {
     nets {
-        net A: signal;
-        net B: signal;
+        signal;
+        signal;
     }
     
     components {

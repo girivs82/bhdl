@@ -524,10 +524,6 @@ fn process_entity_body(
                 // Bare connection: process as flow (creates instances + wires in one pass)
                 process_connection_stmt_as_flow(&child, netlist, context, analysis, import_preprocessor)?;
             }
-            SyntaxKind::NET_FLOW_STMT => {
-                debug!("Found NET_FLOW_STMT in module");
-                process_net_flow_statement(&child, netlist, context, analysis, import_preprocessor)?;
-            }
             _ => {}
         }
     }
@@ -569,14 +565,7 @@ fn process_board_body(
             }
             SyntaxKind::CONNECTION_STMT => {
                 // Bare connection like: VCC -> r1: Res(330).1 -> r1.2 -> led1: LED("red").A;
-                // Process like a NET_FLOW_STMT but without a declared net name
                 process_connection_stmt_as_flow(&child, netlist, context, analysis, import_preprocessor)?;
-            }
-            SyntaxKind::NET_FLOW_STMT => {
-                // Handle net flow statements like: net led_circuit: @VCC -> R1: Res(330).1 -> ...
-                println!("Found NET_FLOW_STMT in board - processing it!");
-                info!("Found NET_FLOW_STMT in board");
-                process_net_flow_statement(&child, netlist, context, analysis, import_preprocessor)?;
             }
             _ => {}
         }
@@ -1471,89 +1460,6 @@ pub fn generate_spice_subcircuits(
     }
     
     Ok(spice_output)
-}
-
-/// Process a net flow statement
-fn process_net_flow_statement(
-    node: &SyntaxNode<BhdlLanguage>,
-    netlist: &mut Netlist,
-    context: &mut HierarchicalContext,
-    analysis: &AnalysisResult,
-    import_preprocessor: Option<&crate::import_preprocessor::ImportPreprocessor>,
-) -> Result<()> {
-    println!("=== Processing NET_FLOW_STMT ===");
-    info!("Processing NET_FLOW_STMT");
-    println!("Full NET_FLOW_STMT text: '{}'", node.text());
-    info!("Full NET_FLOW_STMT text: '{}'", node.text());
-    
-    // Extract the net name and flow expression
-    let mut net_name: Option<String> = None;
-    let mut flow_text: Option<String> = None;
-    
-    // Debug: Show all children
-    println!("NET_FLOW_STMT children:");
-    info!("NET_FLOW_STMT children:");
-    for (i, child) in node.children_with_tokens().enumerate() {
-        if let Some(token) = child.as_token() {
-            println!("  Child {} (token): kind={:?}, text='{}'", i, token.kind(), token.text());
-            info!("  Child {} (token): kind={:?}, text='{}'", i, token.kind(), token.text());
-        } else if let Some(node) = child.as_node() {
-            println!("  Child {} (node): kind={:?}, text='{}'", i, node.kind(), node.text());
-            info!("  Child {} (node): kind={:?}, text='{}'", i, node.kind(), node.text());
-        }
-    }
-    
-    // Find the net name (before the colon)
-    for child in node.children_with_tokens() {
-        if let Some(token) = child.as_token() {
-            match token.kind() {
-                SyntaxKind::NET_KW => {
-                    // Skip the 'net' keyword
-                    continue;
-                }
-                SyntaxKind::IDENT => {
-                    if net_name.is_none() {
-                        net_name = Some(token.text().to_string());
-                        info!("Found net name: {}", token.text());
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    
-    // Find the flow expression (after the colon)
-    let full_text = node.text().to_string();
-    if let Some(colon_pos) = full_text.find(':') {
-        let after_colon = &full_text[colon_pos + 1..];
-        // Remove trailing semicolon and 'for' clause if present
-        let flow_end = after_colon.find(" for ").unwrap_or_else(|| {
-            after_colon.find(';').unwrap_or(after_colon.len())
-        });
-        flow_text = Some(after_colon[..flow_end].trim().to_string());
-        println!("Found flow expression: {}", flow_text.as_ref().unwrap());
-        info!("Found flow expression: {}", flow_text.as_ref().unwrap());
-    }
-    
-    if let (Some(net_name), Some(flow_text)) = (net_name, flow_text) {
-        // Extract the flow endpoints from the AST (skips the `net NAME :` prefix).
-        let parts = extract_flow_chain_ast(node);
-        println!("Parsed {} parts from flow expression", parts.len());
-        info!("Parsed {} parts from flow expression", parts.len());
-
-        // Create or resolve the named net from the NET_FLOW_STMT declaration
-        let declared_net_id = context.resolve_net(&net_name, netlist)?;
-        println!("Resolved declared net '{}' to {:?}", net_name, declared_net_id);
-        info!("Resolved declared net '{}' to {:?}", net_name, declared_net_id);
-
-        // Process the flow chain starting from the declared net
-        process_flow_parts(&parts, Some(declared_net_id), netlist, context, analysis, import_preprocessor)?;
-
-    } else {
-        warn!("Failed to extract net name or flow expression from NET_FLOW_STMT");
-    }
-
-    Ok(())
 }
 
 /// Process a bare CONNECTION_STMT (no `net` keyword) as a flow statement.
@@ -2867,7 +2773,7 @@ fn translate_via_xwire(
     module.attributes.get(&key).cloned().unwrap_or_else(|| sig.to_string())
 }
 
-/// Shared flow processing logic used by both NET_FLOW_STMT and CONNECTION_STMT handlers.
+/// Shared flow processing logic for CONNECTION_STMT handlers.
 ///
 /// Walks through flow parts left-to-right, creating inline instances and connecting pins.
 /// The key invariant: after processing each part, `last_net_id` holds the net that the
@@ -3268,8 +3174,6 @@ fn find_instance_by_name_in_context(
 /// text munging at the call sites — both are forms of re-parsing already-
 /// parsed structure. Walking tokens is robust to anything the lexer already
 /// disambiguates (arrows inside string arguments, nested parens, etc.):
-///   - for a `NET_FLOW_STMT`, the leading `net NAME :` prefix is skipped
-///     (it ends at the first `COLON` token);
 ///   - accumulation stops at a `for` / `where` clause keyword or the
 ///     terminating `;`, so intent / where clauses never leak into the last
 ///     endpoint.
@@ -3278,11 +3182,10 @@ fn find_instance_by_name_in_context(
 /// `["@VIN", "c_in: Cap(22uF).1"]` — the same shape `process_flow_parts`
 /// already consumes.
 fn extract_flow_chain_ast(node: &SyntaxNode<BhdlLanguage>) -> Vec<String> {
-    let is_net_flow = node.kind() == SyntaxKind::NET_FLOW_STMT;
     let mut parts: Vec<String> = Vec::new();
     let mut current = String::new();
-    // CONNECTION_STMT has no `net NAME :` prefix to skip.
-    let mut prefix_done = !is_net_flow;
+    // CONNECTION_STMT has no statement prefix to skip.
+    let mut prefix_done = true;
 
     let flush = |parts: &mut Vec<String>, current: &mut String| {
         let trimmed = current.trim();

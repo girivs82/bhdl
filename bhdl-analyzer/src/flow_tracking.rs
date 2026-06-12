@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use bhdl_ast::{Board, Statement, AstNode, SyntaxKind};
 use bhdl_ast::BoardV2Ext;
-use bhdl_ast::v2_statements::{NetFlowStmt, IntentClause};
+use bhdl_ast::v2_statements::IntentClause;
 use bhdl_common::{IntentCall, IntentRegistry, IntentResult, SimMode};
 use crate::symbol_table::{SymbolTable, SymbolKind};
 use crate::net_attributes::NetAttribute;
@@ -98,24 +98,6 @@ impl FlowTracker {
         // Use BoardV2Ext trait to get statements
         for statement in board.statements() {
             match statement {
-                Statement::NetFlowStmt(net_flow) => {
-                    if let Some(intent_clause) = net_flow.intent_clause() {
-                        // Extract the net name
-                        if let Some(net_name) = net_flow.name() {
-                            let net_name_str = net_name.text().to_string();
-
-                            // Parse the intent
-                            if let Some(intent_call) = self.parse_intent_clause(&intent_clause) {
-                                // Create a new flow path for this intent
-                                let flow_id = self.create_flow_path(net_name_str.clone(), intent_call);
-
-                                // Trace the flow to find all connected components and nets
-                                // The flow expression is stored as children of NET_FLOW_STMT
-                                self.trace_net_flow_contents(&net_flow, flow_id, symbol_table, &mut diagnostics);
-                            }
-                        }
-                    }
-                }
                 Statement::ConnectionStmt(conn_stmt) => {
                     // Check if this CONNECTION_STMT has a `for` intent clause
                     self.process_connection_stmt_intent(conn_stmt.syntax(), symbol_table, &mut diagnostics);
@@ -515,18 +497,6 @@ impl FlowTracker {
         flow_id
     }
 
-    /// Trace the contents of a NET_FLOW_STMT to find all connected components
-    fn trace_net_flow_contents(
-        &mut self,
-        net_flow: &NetFlowStmt,
-        flow_id: usize,
-        _symbol_table: &SymbolTable,
-        _diagnostics: &mut Vec<Diagnostic>,
-    ) {
-        // Walk through the syntax tree of the net flow statement
-        self.trace_syntax_node(net_flow.syntax(), flow_id);
-    }
-    
     /// Recursively trace a syntax node to find components and nets
     fn trace_syntax_node(
         &mut self,

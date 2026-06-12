@@ -11,7 +11,7 @@ board IntentSystemDemo {
     // ============================================================================
     // 1. VOLTAGE REGULATION with precise specs
     // ============================================================================
-    net regulated_5v: @VIN -> reg5v: LM7805().IN; reg5v.OUT -> @VCC_5V
+    @VIN -> reg5v: LM7805().IN; reg5v.OUT -> @VCC_5V
         for voltage_regulation(
             output_voltage: 5V,
             load_regulation: 0.5%,
@@ -30,7 +30,7 @@ board IntentSystemDemo {
     // ============================================================================
     // 2. CURRENT SENSING for monitoring
     // ============================================================================
-    net current_monitor: @VCC_5V -> rsense: Res(0.1).1; rsense.2 -> sense_amp: CurrentSenseAmp().IN
+    @VCC_5V -> rsense: Res(0.1).1; rsense.2 -> sense_amp: CurrentSenseAmp().IN
         for current_sensing(
             max_current: 1A,
             accuracy: 1%,
@@ -40,19 +40,19 @@ board IntentSystemDemo {
     // ============================================================================
     // 3. POWER MANAGEMENT with sequencing
     // ============================================================================
-    net power_good: reg5v.PG -> supervisor: SupervisorIC().PG_IN -> supervisor.PG_OUT -> system_enable
+    reg5v.PG -> supervisor: SupervisorIC().PG_IN -> supervisor.PG_OUT -> system_enable
         for power_good_signal(delay: 100µs)
         for voltage_monitoring(threshold: 4.5V, hysteresis: 100mV);
 
     // Secondary regulator with power sequencing
-    net regulated_3v3: @VCC_5V -> reg3v3: LDO_3V3().IN; reg3v3.OUT -> @VCC_3V3
+    @VCC_5V -> reg3v3: LDO_3V3().IN; reg3v3.OUT -> @VCC_3V3
         for voltage_regulation(output_voltage: 3.3V, ripple: 10mV)
         for power_sequencing(order: 2, delay: 10ms);
 
     // ============================================================================
     // 4. SAFETY-CRITICAL: Automotive safety with ESD protection
     // ============================================================================
-    net input_protected: sensor_in -> tvs: TVSDiode(15V).K; tvs.A -> @GND
+    sensor_in -> tvs: TVSDiode(15V).K; tvs.A -> @GND
         for input_protection(overvoltage: 15V, current_limit: 100mA)
         for esd_protection(level: 8kV)
         for automotive_safety(level: "ASIL_D");
@@ -60,14 +60,14 @@ board IntentSystemDemo {
     // ============================================================================
     // 5. COMMUNICATION INTERFACE: I2C bus
     // ============================================================================
-    net i2c_sda: @VCC_3V3 -> rpull_sda: Res(4.7k).1; rpull_sda.2 -> mcu.SDA -> sensor: TempSensor().SDA
+    @VCC_3V3 -> rpull_sda: Res(4.7k).1; rpull_sda.2 -> mcu.SDA -> sensor: TempSensor().SDA
         for communication_interface(
             protocol: "i2c",
             speed: 400kHz,
             voltage: 3.3V
         );
 
-    net i2c_scl: @VCC_3V3 -> rpull_scl: Res(4.7k).1; rpull_scl.2 -> mcu.SCL -> sensor.SCL
+    @VCC_3V3 -> rpull_scl: Res(4.7k).1; rpull_scl.2 -> mcu.SCL -> sensor.SCL
         for communication_interface(
             protocol: "i2c",
             speed: 400kHz,
@@ -77,7 +77,7 @@ board IntentSystemDemo {
     // ============================================================================
     // 6. WATCHDOG MONITORING for system reliability
     // ============================================================================
-    net watchdog: mcu.WDT_OUT -> wdt: WatchdogIC().WDI; wdt.RST -> mcu.RESET
+    mcu.WDT_OUT -> wdt: WatchdogIC().WDI; wdt.RST -> mcu.RESET
         for watchdog_monitoring(
             timeout: 1s,
             reset_type: "hard"
@@ -86,30 +86,30 @@ board IntentSystemDemo {
     // ============================================================================
     // 7. SIGNAL INTEGRITY: High-speed SPI
     // ============================================================================
-    net spi_clk: mcu.SCLK -> rterm: Res(33).1; rterm.2 -> flash: SPIFlash().SCLK
+    mcu.SCLK -> rterm: Res(33).1; rterm.2 -> flash: SPIFlash().SCLK
         for communication_interface(protocol: "spi", speed: 10MHz)
         for signal_integrity(impedance: 50, max_reflection: -20dB);
 
     // ============================================================================
     // 8. CLOCK DISTRIBUTION with timing constraints
     // ============================================================================
-    net clock_out: osc: Oscillator(50MHz).OUT -> buf: ClockBuffer().IN
+    osc: Oscillator(50MHz).OUT -> buf: ClockBuffer().IN
         for clock_distribution(
             skew: 100ps,
             jitter: 50ps,
             fanout: 4
         );
 
-    net clk_mcu: buf.OUT1 -> mcu.CLK
+    buf.OUT1 -> mcu.CLK
         for clock_distribution(skew: 100ps, jitter: 50ps);
 
-    net clk_flash: buf.OUT2 -> flash.CLK
+    buf.OUT2 -> flash.CLK
         for clock_distribution(skew: 100ps, jitter: 50ps);
 
     // ============================================================================
     // 9. POWER OPTIMIZATION for battery operation
     // ============================================================================
-    net battery_supply: battery: Battery(3.7V).POS -> dcdc: BuckConverter().VIN; dcdc.VOUT -> @VCC_5V
+    battery: Battery(3.7V).POS -> dcdc: BuckConverter().VIN; dcdc.VOUT -> @VCC_5V
         for power_optimization(
             target_power: 500mW,
             sleep_current: 50µA,
@@ -120,7 +120,7 @@ board IntentSystemDemo {
     // ============================================================================
     // 10. THERMAL MANAGEMENT for power components
     // ============================================================================
-    net power_path: @VIN -> mosfet: PowerMOSFET().D; mosfet.S -> load_out
+    @VIN -> mosfet: PowerMOSFET().D; mosfet.S -> load_out
         for thermal_management(
             max_temp: 85C,
             power: 5W
@@ -130,7 +130,7 @@ board IntentSystemDemo {
     // ============================================================================
     // 11. EMI FILTERING for compliance
     // ============================================================================
-    net emi_filtered: @VIN -> emi_filter: EMIFilter().IN; emi_filter.OUT -> @VIN_CLEAN
+    @VIN -> emi_filter: EMIFilter().IN; emi_filter.OUT -> @VIN_CLEAN
         for emi_filtering(
             class: "CISPR11_ClassB",
             attenuation: -40dB
@@ -139,7 +139,7 @@ board IntentSystemDemo {
     // ============================================================================
     // 12. ISOLATION for safety
     // ============================================================================
-    net isolated_signal: high_voltage_side -> iso: Optocoupler().IN; iso.OUT -> low_voltage_side
+    high_voltage_side -> iso: Optocoupler().IN; iso.OUT -> low_voltage_side
         for isolation(
             voltage: 2500V,
             type: "optical"
@@ -148,7 +148,7 @@ board IntentSystemDemo {
     // ============================================================================
     // 13. DIGITAL TIMING: Reset generation
     // ============================================================================
-    net system_reset: reset_button -> rc: Res(10k).1; rc.2 -> creset: Cap(1µF).1; creset.2 -> @GND
+    reset_button -> rc: Res(10k).1; rc.2 -> creset: Cap(1µF).1; creset.2 -> @GND
         for reset_generation(
             duration: 100ms,
             assert_level: "low"
@@ -158,20 +158,20 @@ board IntentSystemDemo {
     // ============================================================================
     // 14. MEASUREMENT: Precision ADC input
     // ============================================================================
-    net adc_input: sensor_out -> rfilter: Res(1k).1; rfilter.2 -> cfilter: Cap(100nF).1; cfilter.2 -> @GND
+    sensor_out -> rfilter: Res(1k).1; rfilter.2 -> cfilter: Cap(100nF).1; cfilter.2 -> @GND
         for precision_measurement(accuracy: 0.1%)
         for anti_alias(cutoff: 10kHz);
 
     // ============================================================================
     // 15. TEST POINTS for debugging
     // ============================================================================
-    net debug_5v: @VCC_5V -> tp_5v: TestPoint().SIG
+    @VCC_5V -> tp_5v: TestPoint().SIG
         for test_point(
             purpose: "debug",
             max_loading: 10pF
         );
 
-    net debug_3v3: @VCC_3V3 -> tp_3v3: TestPoint().SIG
+    @VCC_3V3 -> tp_3v3: TestPoint().SIG
         for test_point(
             purpose: "production_test",
             max_loading: 5pF
@@ -180,8 +180,7 @@ board IntentSystemDemo {
     // ============================================================================
     // 16. REDUNDANCY for critical power
     // ============================================================================
-    net redundant_power:
-        primary: Battery(3.7V).POS -> mux: PowerMux().A
+            primary: Battery(3.7V).POS -> mux: PowerMux().A
         backup: Supercap(5V).POS -> mux.B
         mux.OUT -> critical_load
         for redundancy(
@@ -193,7 +192,7 @@ board IntentSystemDemo {
     // ============================================================================
     // 17. SIGNAL PROCESSING: Control loop
     // ============================================================================
-    net feedback_loop: @output_voltage -> rdiv1: Res(10k).1; rdiv1.2 -> fb_node -> rdiv2: Res(2k).1; rdiv2.2 -> @GND
+    @output_voltage -> rdiv1: Res(10k).1; rdiv1.2 -> fb_node -> rdiv2: Res(2k).1; rdiv2.2 -> @GND
         for control_loop(
             bandwidth: 10kHz,
             stability_margin: 45
@@ -203,13 +202,13 @@ board IntentSystemDemo {
     // ============================================================================
     // 18. BOOT SEQUENCING for multi-stage startup
     // ============================================================================
-    net boot_stage1: supervisor.BOOT1 -> mcu.BOOT_EN
+    supervisor.BOOT1 -> mcu.BOOT_EN
         for boot_sequencing(
             stage: 1,
             timeout: 5s
         );
 
-    net boot_stage2: mcu.BOOT_DONE -> peripherals.EN
+    mcu.BOOT_DONE -> peripherals.EN
         for boot_sequencing(
             stage: 2,
             timeout: 3s

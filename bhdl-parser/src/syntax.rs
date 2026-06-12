@@ -367,7 +367,6 @@ pub enum SyntaxKind {
     INTENT_CALL,       // intent_name(params)
     INTENT_PARAMS,     // (param1, param2: value, ...)
     INTENT_NAMED_PARAM,// name: value in intent parameters
-    NET_FLOW_STMT,     // net name: flow_expr for intent;
 
     // Expansion block nodes (entity-level application circuit recipes)
     EXPANSION_BLOCK,       // expansion { ... }

@@ -19,7 +19,7 @@ board TubeAmpCrossFile {
 
     U_acme: SignalStage_Acme();
 
-    net amp_in: SIGIN -> U_acme.IN for amplifier(gain: 14);
+    SIGIN -> U_acme.IN for amplifier(gain: 14);
 
     VBB -> U_acme.VBB;
     U_acme.GND -> GND;

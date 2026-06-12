@@ -18,8 +18,8 @@ board TubeAmpPair {
     U_a: SignalTubeStage();
     U_b: SignalTubeStage();
 
-    net in_a: SIGIN -> U_a.IN for amplifier(gain: 14);
-    net in_b: SIGIN -> U_b.IN for amplifier(gain: 14);
+    SIGIN -> U_a.IN for amplifier(gain: 14);
+    SIGIN -> U_b.IN for amplifier(gain: 14);
 
     VBB -> U_a.VBB;
     VBB -> U_b.VBB;

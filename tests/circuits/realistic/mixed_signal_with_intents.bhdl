@@ -11,21 +11,25 @@ board MixedSignalBoard {
         pin GND: ground inout;
     }
 
-    net button_raw: btn: Button().OUT;
-    net button_debounced: @button_raw -> R1: Res(10k).1; R1.2 -> C1: Cap(1u).1; C1.2 -> @GND
+    btn: Button().OUT -> @button_raw;
+    @button_raw -> @button_debounced;
+    @button_debounced -> R1: Res(10k).1; R1.2 -> C1: Cap(1u).1; C1.2 -> @GND
         for debounce(time: 20ms);
 
     // Signal buffering for multiple loads
-    net buffered_signal: @button_debounced -> buf: Buffer().IN; buf.OUT
+    @button_debounced -> @buffered_signal;
+    @buffered_signal -> buf: Buffer().IN; buf.OUT
         for signal_buffering(fanout: 8, drive: high);
 
     // Fast digital path for immediate response
-    net fast_path: @buffered_signal -> R2: Res(100).1; R2.2 -> led1: LED(red).A; led1.K -> @GND
+    @buffered_signal -> @fast_path;
+    @fast_path -> R2: Res(100).1; R2.2 -> led1: LED(red).A; led1.K -> @GND
         for delay(10ns)
         for current_limiting(max: 20mA);
 
     // Slow digital path with delay
-    net slow_path: @buffered_signal -> R3: Res(1k).1 -> C2: Cap(1u).1 -> R3.2 -> led2: LED(yellow).A; led2.K -> @GND
+    @buffered_signal -> @slow_path;
+    @slow_path -> R3: Res(1k).1 -> C2: Cap(1u).1 -> R3.2 -> led2: LED(yellow).A; led2.K -> @GND
         for delay(1ms)
         for current_limiting(max: 10mA);
 
@@ -48,7 +52,8 @@ board MixedSignalBoard {
         pin GND: ground inout;
     }
 
-    net sensor_filtered: sensor.OUT -> Rf: Res(1k).1; Rf.2 -> Cf: Cap(100n).1; Cf.2 -> @GND
+    sensor.OUT -> @sensor_filtered;
+    @sensor_filtered -> Rf: Res(1k).1; Rf.2 -> Cf: Cap(100n).1; Cf.2 -> @GND
         for anti_alias(before: adc, cutoff: 1kHz);
 
     @sensor_filtered -> adc: ADC().IN;
@@ -56,6 +61,7 @@ board MixedSignalBoard {
     adc.GND -> @GND;
 
     // ADC output - debug only, not production
-    net adc_data: adc.DATA -> R4: Res(1k).1
+    adc.DATA -> @adc_data;
+    @adc_data -> R4: Res(1k).1
         for debug_only();
 }

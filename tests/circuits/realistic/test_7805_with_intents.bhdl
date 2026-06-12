@@ -17,7 +17,7 @@ board PowerSupply_7805_Intent {
     ground GND;
 
     // LEFT ZONE: Input protection with intent
-    net input_protected: VIN -> fuse: Fuse(1A).1; fuse.2 -> @protected_vin
+    VIN -> fuse: Fuse(1A).1; fuse.2 -> @protected_vin
         for input_protection(15V, 1A);
 
     // Add TVS protection
@@ -25,7 +25,7 @@ board PowerSupply_7805_Intent {
     TVSDiode(15V).A -> GND;
 
     // CENTER ZONE: Input filtering with intent
-    net input_filtered: @protected_vin -> c_in1: ElectrolyticCap(100µF, 25V).pos
+    @protected_vin -> c_in1: ElectrolyticCap(100µF, 25V).pos
         for noise_filtering(100Hz, 40dB);
 
     @protected_vin -> c_in2: Cap(0.1µF).1;
@@ -33,13 +33,13 @@ board PowerSupply_7805_Intent {
     c_in2.2 -> GND;
 
     // TOP ZONE: Power regulation with intent
-    net regulated: @protected_vin -> reg: LM7805().IN; reg.OUT -> VCC
+    @protected_vin -> reg: LM7805().IN; reg.OUT -> VCC
         for voltage_regulation(5V, 12V);
 
     reg.GND -> GND;
 
     // CENTER ZONE: Output filtering with intent
-    net output_filtered: VCC -> c_out1: ElectrolyticCap(10µF, 10V).pos
+    VCC -> c_out1: ElectrolyticCap(10µF, 10V).pos
         for noise_filtering(10kHz, 60dB);
 
     VCC -> c_out2: Cap(0.1µF).1;
@@ -47,16 +47,16 @@ board PowerSupply_7805_Intent {
     c_out2.2 -> GND;
 
     // RIGHT ZONE: LED indicator with intent
-    net led_drive: VCC -> r_led: Res(330Ω).1; r_led.2 -> led: LED(green).A
+    VCC -> r_led: Res(330Ω).1; r_led.2 -> led: LED(green).A
         for current_limiting(20mA);
 
     led.K -> GND;
 
     // BOTTOM ZONE: Test points for measurement with intent
-    net measurement: @protected_vin -> tp_vin: TestPoint().1
+    @protected_vin -> tp_vin: TestPoint().1
         for voltage_monitoring(12V);
 
-    net output_measure: VCC -> tp_vout: TestPoint().1
+    VCC -> tp_vout: TestPoint().1
         for voltage_monitoring(5V);
 
     GND -> tp_gnd: TestPoint().1;

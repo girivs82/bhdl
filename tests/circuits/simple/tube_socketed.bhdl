@@ -33,13 +33,13 @@ board TubeSocketed {
     V1: SocketedTriode_Octal();
 
     // Plate sees a load resistor.
-    net plate_load: VBB -> Rload: Res(22000).1; Rload.2 -> V1.P;
+    VBB -> Rload: Res(22000).1; Rload.2 -> V1.P;
 
     // Grid grounded through a leak resistor.
-    net grid_path: V1.G -> Rg: Res(1000000).1; Rg.2 -> GND;
+    V1.G -> Rg: Res(1000000).1; Rg.2 -> GND;
 
     // Cathode self-biased.
-    net cathode_path: V1.K -> Rk: Res(820).1; Rk.2 -> GND;
+    V1.K -> Rk: Res(820).1; Rk.2 -> GND;
 
     // Heater between the heater rail and ground.
     HTR -> V1.H1;

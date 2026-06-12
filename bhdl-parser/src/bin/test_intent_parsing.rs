@@ -82,8 +82,8 @@ fn print_tree(node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>, indent: usize
 }
 
 fn find_intents(node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>, depth: usize) {
-    if node.kind() == SyntaxKind::NET_FLOW_STMT {
-        println!("Found NET_FLOW_STMT at depth {}", depth);
+    if node.kind() == SyntaxKind::CONNECTION_STMT {
+        println!("Found CONNECTION_STMT at depth {}", depth);
         
         // Look for intent clause
         for child in node.children() {

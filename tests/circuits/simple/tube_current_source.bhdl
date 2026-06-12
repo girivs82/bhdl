@@ -17,7 +17,7 @@ board TubeCurrentSourceTest {
     // its plate; with I_p = 5 mA and the 20 kΩ load, ≈ 100 V drops across
     // the load and the plate sits near 200 V — exactly the headroom the
     // designer assumed.
-    net cs_top: VBB -> Rload: Res(20000).1; Rload.2 -> Itail.OUT
+    VBB -> Rload: Res(20000).1; Rload.2 -> Itail.OUT
         for current_source(current: 5mA);
     Itail.K -> GND;
 }
