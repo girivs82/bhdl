@@ -133,7 +133,6 @@ impl<'t> Parser<'t> {
                 Some(SyntaxKind::POWER_KW) => self.parse_power_decl(),
                 Some(SyntaxKind::GROUND_KW) => self.parse_ground_decl(),
                 Some(SyntaxKind::POWER_DOMAIN_KW) => self.parse_power_domain_def(),
-                Some(SyntaxKind::NET_KW) => self.parse_net_flow_stmt(),
                 Some(SyntaxKind::GENERATE_KW) => self.parse_generate_block(),
                 Some(SyntaxKind::ATTRIBUTE_KW) => self.parse_attribute_decl(),
                 Some(SyntaxKind::WHEN_KW) => self.parse_when_block(),
@@ -1910,7 +1909,6 @@ impl<'t> Parser<'t> {
                 Some(SyntaxKind::CONST_KW) => self.parse_const_decl(),
                 Some(SyntaxKind::POWER_KW) => self.parse_power_decl(),
                 Some(SyntaxKind::GROUND_KW) => self.parse_ground_decl(),
-                Some(SyntaxKind::NET_KW) => self.parse_net_flow_stmt(),
                 Some(SyntaxKind::GENERATE_KW) => self.parse_generate_block(),
                 Some(SyntaxKind::ATTRIBUTE_KW) => self.parse_attribute_decl(),
                 // `socket <held> in <socket>;` — composition pairing for

@@ -429,18 +429,21 @@ mod tests {
     // ---------------------------------------------------------------
 
     #[test]
-    fn parse_net_flow_with_intent() {
+    fn parse_connection_with_intent() {
+        // The `net NAME:` flow form was REMOVED; intents attach directly to
+        // connection statements.
         let input = r#"
             board Test {
                 power VCC = 5V;
                 ground GND;
-                net protection: VCC -> Res(1k).1 -> Res(1k).2 -> GND
+                VCC -> Res(1k).1 -> Res(1k).2 -> GND
                     for input_protection(overvoltage: 6V);
             }
         "#;
         let result = parse(input);
-        let net_flow = find_node(&result.syntax(), NET_FLOW_STMT);
-        assert!(net_flow.is_some(), "Expected NET_FLOW_STMT");
+        assert!(result.errors().is_empty(), "Parse errors: {:?}", result.errors());
+        let clause = find_node(&result.syntax(), INTENT_CLAUSE);
+        assert!(clause.is_some(), "Expected INTENT_CLAUSE on the connection");
     }
 
     // ---------------------------------------------------------------

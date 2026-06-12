@@ -377,56 +377,6 @@ impl AstNode for ConditionalStmt {
     }
 }
 
-/// Net flow statement with intent: `net name: flow_expr for intent;`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct NetFlowStmt(SyntaxNode<BhdlLanguage>);
-
-impl AstNode for NetFlowStmt {
-    type Language = BhdlLanguage;
-    
-    fn can_cast(kind: SyntaxKind) -> bool {
-        kind == SyntaxKind::NET_FLOW_STMT
-    }
-    
-    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> {
-        if Self::can_cast(syntax.kind()) {
-            Some(Self(syntax))
-        } else {
-            None
-        }
-    }
-    
-    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> {
-        &self.0
-    }
-}
-
-impl NetFlowStmt {
-    /// Get the net name
-    pub fn name(&self) -> Option<SyntaxToken<BhdlLanguage>> {
-        self.syntax()
-            .children_with_tokens()
-            .filter_map(|element| element.into_token())
-            .skip_while(|token| token.kind() != SyntaxKind::NET_KW)
-            .skip(1) // Skip NET_KW
-            .find(|token| token.kind() == SyntaxKind::IDENT)
-    }
-    
-    /// Get the flow expression
-    pub fn flow_expr(&self) -> Option<crate::flow::FlowExpr> {
-        self.syntax()
-            .children()
-            .find_map(crate::flow::FlowExpr::cast)
-    }
-    
-    /// Get the intent clause
-    pub fn intent_clause(&self) -> Option<IntentClause> {
-        self.syntax()
-            .children()
-            .find_map(IntentClause::cast)
-    }
-}
-
 /// Intent clause: `for intent_name(params)`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IntentClause(SyntaxNode<BhdlLanguage>);
@@ -534,7 +484,6 @@ pub enum Statement {
     FlowStmt(FlowStmt),
     GenerateStmt(GenerateStmt),
     ConditionalStmt(ConditionalStmt),
-    NetFlowStmt(NetFlowStmt),
 }
 
 impl AstNode for Statement {
@@ -546,8 +495,7 @@ impl AstNode for Statement {
         ConnectionStmt::can_cast(kind) ||
         FlowStmt::can_cast(kind) ||
         GenerateStmt::can_cast(kind) ||
-        ConditionalStmt::can_cast(kind) ||
-        NetFlowStmt::can_cast(kind)
+        ConditionalStmt::can_cast(kind)
     }
     
     fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> {
@@ -563,8 +511,6 @@ impl AstNode for Statement {
             Some(Statement::GenerateStmt(GenerateStmt::cast(syntax)?))
         } else if ConditionalStmt::can_cast(syntax.kind()) {
             Some(Statement::ConditionalStmt(ConditionalStmt::cast(syntax)?))
-        } else if NetFlowStmt::can_cast(syntax.kind()) {
-            Some(Statement::NetFlowStmt(NetFlowStmt::cast(syntax)?))
         } else {
             None
         }
@@ -578,7 +524,6 @@ impl AstNode for Statement {
             Statement::FlowStmt(s) => s.syntax(),
             Statement::GenerateStmt(s) => s.syntax(),
             Statement::ConditionalStmt(s) => s.syntax(),
-            Statement::NetFlowStmt(s) => s.syntax(),
         }
     }
 }

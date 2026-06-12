@@ -5,11 +5,11 @@
 board LinearRegulator7805 {
     // Net declarations
     nets {
-        net VIN: power;
-        net VOUT: power;
-        net GND: ground;
-        net reg_vin: power;
-        net reg_out: power;
+        power;
+        power;
+        ground;
+        power;
+        power;
     }
     
     // Component declarations

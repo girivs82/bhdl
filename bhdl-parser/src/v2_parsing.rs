@@ -376,25 +376,6 @@ impl<'t> Parser<'t> {
         }
     }
     
-    /// Parse net flow statement: net name: flow_expr for intent;
-    pub(crate) fn parse_net_flow_stmt(&mut self) {
-        self.builder.start_node(SyntaxKind::NET_FLOW_STMT.into());
-        self.expect(SyntaxKind::NET_KW);
-        self.expect(SyntaxKind::IDENT); // Net name
-        self.expect(SyntaxKind::COLON);
-        
-        // Parse the flow expression
-        self.parse_expr(0);
-        
-        // Check for optional intent clause
-        if self.has_intent_clause() {
-            self.parse_intent_clause();
-        }
-        
-        self.expect(SyntaxKind::SEMI);
-        self.builder.finish_node();
-    }
-    
     /// Parse connection constraint: where trace_length < 10mm, impedance = 50Ω
     pub(crate) fn parse_connection_constraint(&mut self) {
         self.builder.start_node(SyntaxKind::CONNECTION_CONSTRAINT.into());

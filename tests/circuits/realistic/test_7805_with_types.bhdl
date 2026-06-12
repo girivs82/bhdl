@@ -29,9 +29,9 @@ component Capacitor {
 // Main board definition
 board LinearRegulator {
     nets {
-        net VIN: power;
-        net VOUT: power;
-        net GND: ground;
+        power;
+        power;
+        ground;
     }
     
     components {

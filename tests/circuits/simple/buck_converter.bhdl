@@ -18,7 +18,7 @@ board SimpleBuck {
 
     // Buck converter — VOUT virtual pin auto-expands inductor, diode, cap
     c_in.1 -> buck: LM2596_5V().VIN;
-    net buck_output: buck.VOUT -> @V5
+    buck.VOUT -> @V5
         for output_filtering(max_ripple: 5mV);
     buck.GND -> GND;
 

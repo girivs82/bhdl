@@ -16,7 +16,7 @@ board TubeAmpIntent {
     U1: SignalTubeStage();
 
     // The amplifier intent rides the net into the stage's input.
-    net amp_in: SIGIN -> U1.IN
+    SIGIN -> U1.IN
         for amplifier(gain: 15);
 
     VBB -> U1.VBB;

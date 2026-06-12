@@ -12,23 +12,23 @@ board IntentLayoutDemo {
     ground GND;
 
     // LEFT ZONE: Input protection
-    net protected: VIN -> tvs: TVSDiode(15V).K for input_protection(15V, 500mA);
+    VIN -> tvs: TVSDiode(15V).K for input_protection(15V, 500mA);
     tvs.A -> GND;
 
     // CENTER ZONE: Input filtering
-    net filtered_in: tvs.K -> c1: Cap(100µF).1 for noise_filtering(100Hz, 40dB);
+    tvs.K -> c1: Cap(100µF).1 for noise_filtering(100Hz, 40dB);
     c1.2 -> GND;
 
     // TOP ZONE: Voltage regulation
-    net vin_filtered: c1.1 -> reg: LM7805().VI; reg.VO -> VOUT for voltage_regulation(5V, 12V);
+    c1.1 -> reg: LM7805().VI; reg.VO -> VOUT for voltage_regulation(5V, 12V);
     reg.GND -> GND;
 
     // CENTER ZONE: Output filtering
-    net filtered_out: VOUT -> c2: Cap(10µF).1 for noise_filtering(10kHz, 60dB);
+    VOUT -> c2: Cap(10µF).1 for noise_filtering(10kHz, 60dB);
     c2.2 -> GND;
 
     // RIGHT ZONE: LED indicator with current sensing
-    net indicator: VOUT -> r1: Res(330).1 for current_limiting(20mA);
-    net sensed: r1.2 -> sense: Res(0.1).1; sense.2 -> led: LED("green").A for current_sensing(20mA, 1%);
+    VOUT -> r1: Res(330).1 for current_limiting(20mA);
+    r1.2 -> sense: Res(0.1).1; sense.2 -> led: LED("green").A for current_sensing(20mA, 1%);
     led.K -> GND;
 }

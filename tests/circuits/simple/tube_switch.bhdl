@@ -16,7 +16,7 @@ board TubeSwitchTest {
     SW.GND -> GND;
 
     // The intent rides the net into SW.IN.
-    net sw_in: DRIVE -> SW.IN  for digital_switch();
+    DRIVE -> SW.IN  for digital_switch();
 
     // A next-stage grid-leak as the load.
     SW.OUT -> Rload: Res(1000000).1;
