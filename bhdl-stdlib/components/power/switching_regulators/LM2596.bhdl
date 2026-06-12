@@ -8,6 +8,18 @@ entity LM2596(
     vout_target: voltage = 5V,          // Target output voltage for feedback
     enable: bool = true                 // Enable control
 ) {
+    // Datasheet electrical data (GLACIER decomposition + switching-loss model).
+    attribute component_class      = "switching_regulator";
+    attribute topology             = "buck";
+    attribute output_voltage       = vout_target;
+    attribute output_current       = 3A;
+    attribute switching_frequency  = 150kHz;
+    attribute feedback_voltage     = 1.23V;
+    attribute i_quiescent          = 5mA;   // quiescent, typ (no load)
+    // Bipolar NPN switch: effective on-resistance from V_SAT(3A)=1.16V typ.
+    attribute rds_on               = 0.39;
+    attribute t_sw                 = 50ns;  // transition class figure (loss estimate)
+
     // Power pins
     pin VIN: power in {
         voltage_range: (4.5V, 40V),     // Wide input range

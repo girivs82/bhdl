@@ -74,8 +74,10 @@ entity LM2596(fixed_voltage: voltage? = null) {
         }
     };
     
-    // Component attributes
-    attribute component_class = "voltage_regulator";
+    // Component attributes. `switching_regulator` (not the generic
+    // voltage_regulator): the GLACIER decomposition keys its switching-loss
+    // model (rds_on/f_sw/t_sw) off this class.
+    attribute component_class = "switching_regulator";
     attribute regulator_type = "switching_buck";
     attribute topology = "buck";
     attribute fixed_output = fixed_voltage != null;
@@ -88,6 +90,16 @@ entity LM2596(fixed_voltage: voltage? = null) {
     attribute switching_frequency = BUCK_PARAMS.switching_frequency;
     attribute efficiency = BUCK_PARAMS.efficiency;
     attribute dropout_voltage = BUCK_PARAMS.dropout_voltage;
+
+    // Loss-model constants (datasheet SNVS124 electrical characteristics).
+    attribute i_quiescent = 5mA;        // quiescent current, typ (no load)
+    attribute feedback_voltage = 1.23V; // FB reference
+    // The LM2596 switch is a bipolar NPN: conduction loss is set by V_SAT
+    // (1.16V typ at 3A), expressed here as the EFFECTIVE on-resistance
+    // V_SAT/I_rated = 1.16/3 ≈ 0.39Ω for the I²·R·D loss form.
+    attribute rds_on = 0.39;
+    attribute t_sw = 50ns;              // switch transition class figure for the
+                                        // 150kHz bipolar switcher (loss estimate)
     
     // Impedance characteristics
     attribute output_impedance = BUCK_PARAMS.impedance.output_impedance;

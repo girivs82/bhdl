@@ -58,28 +58,43 @@ pub fn parse_value(value_str: &str) -> Option<f64> {
             "meg" | "mega" => value *= 1e6,
             "k" | "kilo" => value *= 1e3,
             "m" | "milli" => value *= 1e-3,
-            "u" | "micro" | "μ" => value *= 1e-6,
+            // Both Unicode micros: GREEK SMALL LETTER MU (μ, U+03BC) and
+            // MICRO SIGN (µ, U+00B5) — keyboards and datasheets produce either.
+            "u" | "micro" | "μ" | "µ" => value *= 1e-6,
             "n" | "nano" => value *= 1e-9,
             "p" | "pico" => value *= 1e-12,
             "f" | "femto" => value *= 1e-15,
-            
+
+            // Time units (exact) — datasheet switching times (`20ns`, `1us`)
+            "s" | "sec" => {}
+            "ms" => value *= 1e-3,
+            "us" | "μs" | "µs" => value *= 1e-6,
+            "ns" => value *= 1e-9,
+            "ps" => value *= 1e-12,
+
+            // Frequency — datasheet switching frequencies (`500kHz`; `1.2MHz`
+            // is caught by the uppercase-M mega check above)
+            "hz" => {}
+            s if s.starts_with("k") && s.ends_with("hz") => value *= 1e3,
+            s if s.starts_with("g") && s.ends_with("hz") => value *= 1e9,
+
             // Common electrical units with prefixes
             s if s.starts_with("k") && (s.ends_with("ω") || s.ends_with("ohm") || s.ends_with("r")) => value *= 1e3,
             s if s.starts_with("m") && (s.ends_with("ω") || s.ends_with("ohm") || s.ends_with("r")) => value *= 1e-3,
-            s if s.starts_with("μ") && (s.ends_with("f") || s.ends_with("farad")) => value *= 1e-6,
+            s if (s.starts_with("μ") || s.starts_with("µ") || s.starts_with("u")) && (s.ends_with("f") || s.ends_with("farad")) => value *= 1e-6,
             s if s.starts_with("n") && (s.ends_with("f") || s.ends_with("farad")) => value *= 1e-9,
             s if s.starts_with("p") && (s.ends_with("f") || s.ends_with("farad")) => value *= 1e-12,
             s if s.starts_with("m") && (s.ends_with("h") || s.ends_with("henry")) => value *= 1e-3,
-            s if s.starts_with("μ") && (s.ends_with("h") || s.ends_with("henry")) => value *= 1e-6,
+            s if (s.starts_with("μ") || s.starts_with("µ") || s.starts_with("u")) && (s.ends_with("h") || s.ends_with("henry")) => value *= 1e-6,
             s if s.starts_with("n") && (s.ends_with("h") || s.ends_with("henry")) => value *= 1e-9,
             s if s.starts_with("m") && (s.ends_with("a") || s.ends_with("amp")) => value *= 1e-3,
-            s if s.starts_with("μ") && (s.ends_with("a") || s.ends_with("amp")) => value *= 1e-6,
+            s if (s.starts_with("μ") || s.starts_with("µ") || s.starts_with("u")) && (s.ends_with("a") || s.ends_with("amp")) => value *= 1e-6,
             s if s.starts_with("n") && (s.ends_with("a") || s.ends_with("amp")) => value *= 1e-9,
             s if s.starts_with("k") && (s.ends_with("v") || s.ends_with("volt")) => value *= 1e3,
             s if s.starts_with("m") && (s.ends_with("v") || s.ends_with("volt")) => value *= 1e-3,
-            s if s.starts_with("μ") && (s.ends_with("v") || s.ends_with("volt")) => value *= 1e-6,
+            s if (s.starts_with("μ") || s.starts_with("µ") || s.starts_with("u")) && (s.ends_with("v") || s.ends_with("volt")) => value *= 1e-6,
             s if s.starts_with("m") && (s.ends_with("w") || s.ends_with("watt")) => value *= 1e-3,
-            s if s.starts_with("μ") && (s.ends_with("w") || s.ends_with("watt")) => value *= 1e-6,
+            s if (s.starts_with("μ") || s.starts_with("µ") || s.starts_with("u")) && (s.ends_with("w") || s.ends_with("watt")) => value *= 1e-6,
             
             // No unit or unrecognized unit - return as is
             _ => {}

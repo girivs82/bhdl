@@ -192,6 +192,8 @@ entity VReg78xx(voltage: voltage = 5V, package: string = "TO-220") {
     
     // Safety parameters for analysis
     attribute vout_nominal = params.vout_nominal;
+    attribute output_voltage = params.vout_nominal; // canonical name (decomposition)
+    attribute i_quiescent = params.iq;              // canonical name (power model)
     attribute dropout = params.dropout;
     attribute vin_max = params.vin_max;
     attribute iout_max = params.iout_max;
@@ -292,6 +294,10 @@ entity LM317(package: string = "TO-220") {
     
     // Electrical characteristics
     attribute vref = LM317_PARAMS.vref;
+    attribute feedback_voltage = LM317_PARAMS.vref; // canonical name (stability model)
+    attribute i_quiescent = LM317_PARAMS.iq;        // canonical name (power model)
+    // No `output_voltage`: adjustable part — the output is set by the divider
+    // (a device-fixed V_OUT would be fabricated data); the rail drives the solve.
     attribute vout_min = LM317_PARAMS.vout_min;
     attribute vout_max = LM317_PARAMS.vout_max;
     attribute vin_max = LM317_PARAMS.vin_max;
@@ -379,6 +385,9 @@ entity LDO(voltage: voltage = 3.3V, current: current = 800mA, package: string = 
     
     attribute component_class = "voltage_regulator";
     attribute regulator_type = "ldo";
+    attribute output_voltage = voltage;       // canonical name (decomposition)
+    attribute i_quiescent = LDO_PARAMS.iq;    // canonical name (power model)
+    attribute dropout_voltage = LDO_PARAMS.dropout;
     attribute part_number = voltage == 3.3V ? "LM1117-3.3" :
                           voltage == 5V ? "LM1117-5.0" :
                           voltage == 2.5V ? "LM1117-2.5" : "LM1117";

@@ -35,6 +35,7 @@ entity TVSDiode(voltage: voltage) {
     // Electrical specifications
     attribute standoff_voltage = params.standoff_voltage;
     attribute breakdown_voltage = params.breakdown_voltage;
+    attribute forward_voltage = 1.1V;  // forward-conduction drop (unidirectional TVS, datasheet class)
     attribute clamping_voltage = params.clamping_voltage;
     attribute peak_power = params.peak_pulse_power;
     attribute response_time = params.response_time;

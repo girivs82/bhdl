@@ -12,6 +12,14 @@ import {
 entity LM7805(
     enable: bool = true  // Optional enable for power control
 ) {
+    // Datasheet electrical data (consumed by the GLACIER regulator
+    // decomposition + power model; values mirror the spec blocks below).
+    attribute component_class = "voltage_regulator";
+    attribute output_voltage  = 5V;
+    attribute output_current  = 1.5A;
+    attribute dropout_voltage = 2V;
+    attribute i_quiescent     = 6mA;   // ground-pin current, typ
+
     // Pin definitions with complete metadata
     pin VIN: power in {
         voltage_range: (7V, 35V),       // Absolute maximum 35V

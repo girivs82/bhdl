@@ -5,6 +5,14 @@ entity LM317(
     vout: voltage = 5V,     // Target output voltage
     iout: current = 500mA   // Expected output current
 ) {
+    // Datasheet electrical data (GLACIER decomposition + power model).
+    attribute component_class  = "voltage_regulator";
+    attribute output_voltage   = vout;
+    attribute output_current   = 1.5A;
+    attribute dropout_voltage  = 3V;     // recommended V_IN−V_OUT headroom
+    attribute feedback_voltage = 1.25V;  // V_REF (OUT→ADJ)
+    attribute i_quiescent      = 3.5mA;  // operating/min-load current, typ
+
     // Pin definitions
     pin VIN: power in {
         description: "Input voltage",

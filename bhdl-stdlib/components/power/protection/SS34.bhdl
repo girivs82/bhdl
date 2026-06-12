@@ -12,6 +12,14 @@ entity SS34() {
     pin K: signal inout {  
         description: "Cathode"
     };
+
+    // Datasheet electrical data (mirrors SS34_ELECTRICAL/_SIMULATION below) —
+    // exposed as attributes so the SPICE model extractor sees real values.
+    attribute component_class = "diode";
+    attribute forward_voltage = 0.55V;          // typ at 3A, 25°C
+    attribute forward_current = 3A;             // IF(AV)
+    attribute saturation_current = 4.352e-6;    // SPICE IS (own model block)
+    attribute reverse_voltage = 40V;            // VRRM
 }
 
 // Alternate name for better readability
