@@ -266,10 +266,11 @@ impl<'t> Parser<'t> {
             // Start a node for each parameter
             self.builder.start_node(SyntaxKind::PARAM_DECL.into());
             
-            // Parameter name
-            self.expect(SyntaxKind::IDENT);
+            // Parameter name — accepts contextual keywords like `package`
+            // (a valid param name; only special as a layout-block head).
+            self.expect_name();
             self.expect(SyntaxKind::COLON);
-            
+
             // Parameter type
             self.parse_type_ref();
             

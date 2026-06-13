@@ -261,6 +261,17 @@ impl<'t> Parser<'t> {
                 // Net reference: @NETNAME
                 self.parse_net_ref();
             }
+            // Contextual keyword used as a value reference: `package` is only a
+            // keyword at a layout-block statement head; as an expression operand
+            // (`when package == "TO-220"`, ternaries over `package`, …) it is an
+            // ordinary identifier. Relabel to IDENT and wrap as a simple ref —
+            // these never take call/instantiation/pin-access forms.
+            Some(SyntaxKind::PACKAGE_KW) => {
+                let checkpoint = self.builder.checkpoint();
+                self.bump_remap(SyntaxKind::IDENT);
+                self.builder.start_node_at(checkpoint, SyntaxKind::IDENT_REF.into());
+                self.builder.finish_node();
+            }
             Some(SyntaxKind::IDENT) => {
                 // Get the identifier text to check if it's a built-in function
                 let ident_text = if let Some((_, text)) = self.tokens.get(self.pos) {

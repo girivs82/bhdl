@@ -1,0 +1,40 @@
+// LM7805 — fixed 5V 3-pin linear regulator (clean layer-2 entity).
+//
+// Regenerated to the current v2 standard. The pre-v2 entities
+// (regulators/lm7805.bhdl, regulators/lm7805_fixed.bhdl,
+// components/power/linear_regulators/LM7805.bhdl) used struct-block pin
+// definitions (`pin VIN: power in { voltage_range: (7V,35V), … }`), `package`
+// as a constructor parameter, and ternary-heavy attribute expressions — none
+// of which the current parser accepts, so they failed to load on import.
+//
+// Modeled on power/lm317.bhdl: VIN/VOUT/GND, datasheet attributes consumed by
+// the GLACIER regulator decomposition + power model, and an `expansion { }`
+// that materialises the datasheet's input/output bypass capacitors. A fixed
+// 78xx needs no feedback divider, so (unlike LM317) there is no design block.
+//
+// Use site (board):
+//     U1: LM7805();
+//     @VIN -> U1.VIN;  U1.GND -> @GND;  U1.VOUT -> @VCC_5V;
+
+entity LM7805() {
+    pin VIN:  power in;
+    pin VOUT: power out virtual;
+    pin GND:  ground;
+
+    attribute component_class = "voltage_regulator";
+    attribute family          = "LM7805";
+    attribute output_voltage  = 5V;
+    // Datasheet (TI LM340A/LM7805) electrical characteristics, consumed by the
+    // regulator decomposition + linear-loss power model
+    // (P = (V_in − V_out)·I_load + V_in·I_q):
+    attribute output_current  = 1.5A;   // rated output (with adequate heatsinking)
+    attribute dropout_voltage = 2V;     // V_IN − V_OUT required for regulation
+    attribute i_quiescent     = 6mA;    // ground-pin (quiescent) current, typ
+
+    // Datasheet application circuit: input + output bypass capacitors
+    // (0.33µF input near the device, 0.1µF output for transient response).
+    expansion {
+        VIN  -> C_in:  Cap(0.33µF).1;  C_in.2  -> GND;
+        VOUT -> C_out: Cap(0.1µF).1;   C_out.2 -> GND;
+    }
+}

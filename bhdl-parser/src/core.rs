@@ -126,6 +126,42 @@ impl<'t> Parser<'t> {
         }
     }
 
+    /// Like [`Self::bump`], but emits the consumed token into the tree under a
+    /// SUBSTITUTED kind. Used to admit a contextual keyword in a position where
+    /// only an identifier is meaningful (e.g. `package` as a constructor-param
+    /// name) while keeping the green tree's token kind as IDENT so name-based
+    /// extraction (which filters on IDENT) still sees it.
+    pub(crate) fn bump_remap(&mut self, kind: SyntaxKind) {
+        self.skip_trivia();
+        if self.pos < self.tokens.len() {
+            let (_orig, text) = self.tokens[self.pos].clone();
+            self.builder.token(kind.into(), &text);
+            self.pos += 1;
+        } else {
+            self.error("Internal error: bump_remap called at EOF".to_string());
+        }
+    }
+
+    /// Expect a NAME (constructor parameter, attribute, …). Accepts a plain
+    /// IDENT or a contextual keyword that is only special elsewhere (notably
+    /// `package`, which heads a `layout { package … }` block but is a valid
+    /// parameter/attribute name); the keyword is relabelled to IDENT in the
+    /// tree so it round-trips as the name text.
+    pub(crate) fn expect_name(&mut self) {
+        match self.peek() {
+            Some(SyntaxKind::IDENT) => self.bump(),
+            Some(SyntaxKind::PACKAGE_KW)
+            | Some(SyntaxKind::OUTPUT_KW)
+            | Some(SyntaxKind::INPUT_KW)
+            | Some(SyntaxKind::SIGNAL_KW)
+            | Some(SyntaxKind::POWER_KW)
+            | Some(SyntaxKind::GROUND_KW)
+            | Some(SyntaxKind::CLOCK_KW)
+            | Some(SyntaxKind::TYPE_KW) => self.bump_remap(SyntaxKind::IDENT),
+            _ => self.error(format!("Expected a name, found {:?}", self.peek())),
+        }
+    }
+
     /// Consumes the current token *without* skipping trivia first. Used for recovery.
     /// Adds the token (potentially trivia or error) to the node builder.
     pub(crate) fn bump_any(&mut self) {
