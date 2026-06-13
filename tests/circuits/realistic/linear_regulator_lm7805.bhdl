@@ -1,3 +1,6 @@
+import { LM7805 } from "bhdl-stdlib/power/lm7805.bhdl";
+import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+
 // Test circuit for LM7805 linear regulator with virtual pin
 board LinearRegulatorBoard {
     power VIN = 12V @ 2A;
