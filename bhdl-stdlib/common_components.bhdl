@@ -10,10 +10,10 @@ import { Inductor, Ind } from "./passives/inductor.bhdl";
 import { TVSDiode, TVS } from "./passives/tvs_diode.bhdl";
 import { Fuse } from "./passives/fuse.bhdl";
 
-// Import voltage regulators
-import { LM7805 } from "./regulators/lm7805.bhdl";
-import { LM2596 } from "./regulators/lm2596.bhdl";
-import { LM317 } from "./components/power/linear_regulators/LM317.bhdl";
+// Import voltage regulators (clean v2 canonical entities)
+import { LM7805 } from "./power/lm7805.bhdl";
+import { LM2596 } from "./components/power/switching_regulators/LM2596.bhdl";
+import { LM317 } from "./power/lm317.bhdl";
 
 // Import connectors
 import { TestPoint } from "./connectors/testpoint.bhdl";
