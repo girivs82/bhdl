@@ -3,8 +3,7 @@
 
 // Import required components from the standard library
 import { LM7805 } from "bhdl-stdlib/power/lm7805.bhdl";
-import { Fuse } from "bhdl-stdlib/passives/inline_passives.bhdl";
-import { TVSDiode } from "bhdl-stdlib/protection/tvs.bhdl";
+import { Fuse, TVSDiode } from "bhdl-stdlib/protection/tvs.bhdl";
 import { ElectrolyticCap, Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
 import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
@@ -17,8 +16,8 @@ board PowerSupply_7805 {
     ground GND;
     
     // Input protection and filtering
-    VIN -> fuse: Fuse("1A").A;
-    fuse.B -> @protected_vin -> TVSDiode(15V).K;
+    VIN -> fuse: Fuse(1A).1;
+    fuse.2 -> @protected_vin -> TVSDiode(15V).K;
     @protected_vin -> c_in1: ElectrolyticCap(100µF, 25V).pos;
     @protected_vin -> c_in2: Cap(0.1µF).1;
     

@@ -560,8 +560,11 @@ fn stdlib_entity_file(entity: &str) -> &'static str {
         "Varistor"                        => "passives/varistor.bhdl",
         "Barrel_Jack_Switch"              => "connectors/barrel_jack.bhdl",
         "SolderJumper_2_Open"             => "passives/solder_jumper.bhdl",
-        "Bead"
-            | "Fuse"                      => "passives/inline_passives.bhdl",
+        "Bead"                            => "passives/inline_passives.bhdl",
+        // Fuse is a canonical current-rated entity; its physical part is
+        // resolved through the supplier plugins like any other component
+        // (no KiCad-specific part-number passthrough).
+        "Fuse"                            => "protection/tvs.bhdl",
         "Fiducial"                        => "mechanical/fiducial.bhdl",
         // No parser-compatible Bead / Fuse / TestPoint / Schottky /
         // BJT / MOSFET yet — they live only in the rich tier.
