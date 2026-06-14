@@ -5,7 +5,7 @@
 import { Cap, Capacitor, ElectrolyticCap } from "./passives/capacitor.bhdl";
 import { Res, Resistor } from "./passives/resistor.bhdl";
 import { LED } from "./optoelectronic/led.bhdl";
-import { LM7805 } from "./regulators/lm7805.bhdl";
+import { LM7805 } from "./power/lm7805.bhdl";
 import { TVSDiode, TVS } from "./protection/tvs.bhdl";
 import { Fuse } from "./protection/tvs.bhdl";
 

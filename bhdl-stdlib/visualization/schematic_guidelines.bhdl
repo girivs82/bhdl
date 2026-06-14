@@ -262,7 +262,7 @@ enum SchematicOrganization {
 // ==================== EXAMPLE APPLICATIONS ====================
 
 // Example: Apply visualization to LM7805
-extend entity LM7805 from "../regulators/lm7805.bhdl" {
+extend entity LM7805 from "../power/lm7805.bhdl" {
     apply LinearRegulatorVisualization;
     
     @visualization(

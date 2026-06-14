@@ -27,8 +27,7 @@ export * from "./ics/operational_amplifier.bhdl";
 export * from "./ics/logic_gate.bhdl";
 
 // Voltage Regulators
-export * from "./regulators/linear_regulator_base.bhdl";
-export * from "./regulators/lm7805.bhdl";
+export * from "./power/lm7805.bhdl";
 
 // Connectors and Test Points
 export * from "./connectors/testpoint.bhdl";

@@ -2,7 +2,7 @@
 // Demonstrates intent-driven spatial zone placement
 
 // Import required components from the standard library
-import { LM7805 } from "bhdl-stdlib/components/power/linear_regulators/LM7805.bhdl";
+import { LM7805 } from "bhdl-stdlib/power/lm7805.bhdl";
 import { Fuse } from "bhdl-stdlib/protection/tvs.bhdl";
 import { TVSDiode } from "bhdl-stdlib/protection/tvs.bhdl";
 import { ElectrolyticCap, Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
