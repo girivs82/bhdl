@@ -1957,10 +1957,20 @@ impl NetlistGenerator {
         let updates: Vec<(InstanceId, std::collections::HashMap<String, String>)> = id_names
             .into_iter()
             .filter_map(|(id, name)| {
+                // The instance's already-stamped constructor args (Phase 4.4)
+                // override the entity's param defaults, so a `v_out`-referencing
+                // attribute resolves to the board's `LM317(v_out=9V)` rather
+                // than the entity default.
+                let inst_args: std::collections::HashMap<String, String> = self
+                    .netlist
+                    .instances
+                    .get(id)
+                    .map(|i| i.attributes.clone())
+                    .unwrap_or_default();
                 let mut attrs = self
                     .import_loader
                     .get_entity(&name)
-                    .map(extract_attrs)
+                    .map(|e| bhdl_analyzer::attribute_extraction::extract_module_attributes_resolved_with(e, &inst_args))
                     .filter(|a| !a.is_empty())
                     .or_else(|| stdlib_attrs.get(&name).cloned())?;
                 // Alias specialization (`alias LM7805 = LinearRegulator<5V>;`):
