@@ -6,7 +6,7 @@
 // the product of the two per-stage gains (positive — two inversions
 // cancel). One line of HDL declares each stage; bhdl designs both.
 import { SignalTubeStage } from "bhdl-stdlib/actives/triode.bhdl";
-import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 
 board TwoStageTubeAmp {
     power VBB = 300V @ 200mA;

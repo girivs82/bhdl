@@ -1,7 +1,7 @@
 // Intent-driven layout demo using actual database components
 // This version uses components from the KiCad database
-import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
-import { Cap } from "bhdl-stdlib/passive/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
 import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
 import { TVSDiode } from "bhdl-stdlib/protection/tvs.bhdl";
 import { LM7805 } from "bhdl-stdlib/power/regulator.bhdl";

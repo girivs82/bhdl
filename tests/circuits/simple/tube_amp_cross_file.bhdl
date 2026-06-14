@@ -10,7 +10,7 @@
 // different from a 6SN7-designed stage.
 
 import { SignalStage_Acme } from "tests/circuits/simple/vendor_acme_stage.bhdl";
-import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 
 board TubeAmpCrossFile {
     power VBB = 300V @ 100mA;

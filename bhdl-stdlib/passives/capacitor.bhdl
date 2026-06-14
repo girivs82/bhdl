@@ -1,233 +1,33 @@
-// Standard Capacitor Component Module
-// Supports Cap(100n) style instantiation with SPICE parameters
+// Capacitor — v2 canonical passive.
+//
+// `voltage` is an OPTIONAL second positional param (the voltage rating). A
+// bare `Cap(100nF)` keeps the historical 50V default; `Cap(22µF, 25V)` (or
+// the `Capacitor` alias, kept for the older generic-style call sites) declares
+// the real datasheet rating, which the sign-off voltage margin reads. Making
+// the rating caller-supplied rather than hardcoded is the Real-Data-Policy
+// improvement that motivated folding the old passives/ generics into here.
 
-import { ImpedanceCharacteristics } from "../types/electrical_types.bhdl";
+entity Cap(value: capacitance, voltage: voltage = 50V) {
+    pin 1: signal inout;
+    pin 2: signal inout;
 
-// Capacitor parameters including SPICE model
-type CapacitorParams = {
-    capacitance: capacitance,
-    tolerance: percentage,
-    voltage_rating: voltage,
-    esr: resistance,        // Equivalent series resistance
-    esl: inductance,        // Equivalent series inductance
-    rleak: resistance,      // Leakage resistance
-    vc1: float,            // Voltage coefficient (ppm/V)
-    tc1: float,            // Temperature coefficient (ppm/°C)
-    impedance: ImpedanceCharacteristics,
-};
-
-entity Cap(value: capacitance, voltage: voltage = 50V, type: string = "auto") {
-    pin 1: signal inout @metadata(
-        function="Terminal",
-        description="First terminal (positive for polarized)",
-        electrical_type="passive",
-        // Schematic visualization
-        schematic_side="top",
-        schematic_position=1,
-        schematic_label="1"
-    );  // Terminal 1 (non-polarized)
-    pin 2: signal inout @metadata(
-        function="Terminal",
-        description="Second terminal (negative for polarized)",
-        electrical_type="passive",
-        // Schematic visualization
-        schematic_side="bottom",
-        schematic_position=1,
-        schematic_label="2"
-    );  // Terminal 2 (non-polarized)
-    
-    // Determine capacitor type
-    const cap_type = type == "auto" ? 
-        (value >= 10µF ? "electrolytic" : "ceramic") : type;
-    
-    // Define parameters for different types
-    const CERAMIC_PARAMS: CapacitorParams = {
-        capacitance: value,
-        tolerance: 10%,
-        voltage_rating: voltage,
-        esr: 0.01 / sqrt(value * 1e6),  // ESR decreases with C
-        esl: 0.5e-9,                     // 0.5nH typical
-        rleak: 10e9,                     // 10GΩ
-        vc1: -1000,                      // -1000 ppm/V for X7R
-        tc1: -750,                       // ±15% over temp
-        impedance: {
-            dc_resistance: 10e9,
-            output_impedance: 0.01 / sqrt(value * 1e6),
-            input_impedance: 10e9,
-            can_source_current: false,
-            can_sink_current: false,
-            max_source_current: null,
-            max_sink_current: null,
-            power_domain_isolation: true,
-            voltage_drop: null,
-            current_limiting: false,
-            transient_response: null,
-            inrush_current: null
-        }
-    };
-    
-    const ELECTROLYTIC_PARAMS: CapacitorParams = {
-        capacitance: value,
-        tolerance: 20%,
-        voltage_rating: voltage,
-        esr: 0.5 / sqrt(value * 1e6),   // Higher ESR
-        esl: 10e-9,                      // 10nH typical
-        rleak: value * 1e6,              // Leakage current spec
-        vc1: 0,
-        tc1: -2000,                      // Large temp variation
-        impedance: {
-            dc_resistance: value * 1e6,
-            output_impedance: 0.5 / sqrt(value * 1e6),
-            input_impedance: value * 1e6,
-            can_source_current: false,
-            can_sink_current: false,
-            max_source_current: null,
-            max_sink_current: null,
-            power_domain_isolation: true,
-            voltage_drop: null,
-            current_limiting: false,
-            transient_response: null,
-            inrush_current: null
-        }
-    };
-    
-    // Select parameters
-    const params = cap_type == "electrolytic" ? ELECTROLYTIC_PARAMS : CERAMIC_PARAMS;
-    
-    // Metadata for component database
     attribute component_class = "capacitor";
-    attribute capacitance = params.capacitance;
-    attribute tolerance = params.tolerance;
-    attribute voltage_rating = params.voltage_rating;
-    attribute capacitor_type = cap_type;
-    
-    // SPICE model parameters
-    attribute spice_model = "capacitor";
-    attribute spice_capacitance = params.capacitance;
-    attribute spice_esr = params.esr;
-    attribute spice_esl = params.esl;
-    attribute spice_rleak = params.rleak;
-    attribute spice_vc1 = params.vc1;
-    attribute spice_tc1 = params.tc1;
-    attribute spice_voltage_rating = params.voltage_rating;
-    attribute spice_tnom = 27;
-    
-    // KiCad symbol mapping based on type
-    attribute kicad_symbol = cap_type == "electrolytic" ? "Device:CP" : "Device:C";
-    
-    // Available packages
-    attribute packages = cap_type == "electrolytic" ? 
-                        "THT_Radial_D5.0,THT_Radial_D6.3,THT_Radial_D8.0" :
-                        "0603,0805,1206";
-                   
-    attribute default_package = cap_type == "electrolytic" ? "THT_Radial_D5.0" : "0805";
-    
-    // ==================== SCHEMATIC VISUALIZATION ====================
-    
-    // Symbol appearance based on capacitor type
-    attribute schematic_symbol = cap_type == "electrolytic" ? "polarized_capacitor" : "capacitor";
-    attribute schematic_width = 15;    // mm - compact for passives
-    attribute schematic_height = 30;   // mm - vertical orientation preferred
-    attribute schematic_label = value;  // Show capacitance value
-    attribute schematic_label_position = "side";  // Next to symbol, not on it
-    attribute schematic_orientation = "vertical";  // Preferred vertical placement
-    
-    // Signal flow and placement preferences
-    attribute signal_flow = "bidirectional";  // Current can flow either direction
-    attribute functional_group = "filtering";  // Group with other filter components
-    attribute placement_priority = "medium";   // Place near associated circuits
-    
-    // Spacing preferences for power supply applications
-    attribute min_spacing_left = 2;    // Grid units (5.08mm)
-    attribute min_spacing_right = 2;
-    attribute min_spacing_top = 2;
-    attribute min_spacing_bottom = 2;
-    
-    // Professional drawing conventions for capacitors
-    attribute drawing_style = "vertical_passive";
-    attribute component_section = cap_type == "electrolytic" ? "power_filter" : "signal_filter";
-    
-    // Common placement contexts and hints
-    attribute typical_placement = cap_type == "electrolytic" ? 
-        "near_power_pins_bulk_filtering" : "near_ic_bypass_filtering";
-    attribute preferred_orientation = "vertical";  // Vertical is standard for power caps
-    attribute ground_connection = "bottom";  // Bottom terminal typically to ground
-    attribute power_connection = "top";     // Top terminal typically to power/signal
-    
-    // Routing preferences
-    attribute trace_width = cap_type == "electrolytic" ? "thick" : "normal";
-    attribute trace_style = "straight";    // Keep connections simple and direct
-    attribute minimize_trace_length = true;  // Especially important for bypass caps
-    
-    // Placement relative to other components
-    attribute place_near_power_pins = true;  // Stay close to the pins being decoupled
-    attribute avoid_high_frequency_traces = cap_type == "electrolytic";  // Electrolytics away from fast edges
-    
-    // Value display preferences
-    attribute show_value = true;           // Always show capacitance value
-    attribute show_voltage_rating = cap_type == "electrolytic";  // Show voltage for electrolytics
-    attribute show_tolerance = false;      // Don't clutter with tolerance unless critical
-    
-    // Type-specific visualization hints
-    attribute polarity_marking = cap_type == "electrolytic";  // Show + marking for electrolytics
-    attribute size_indication = cap_type == "electrolytic" ? "large" : "small";
-    
-    // Wire routing quality preferences
-    attribute prefer_straight_connections = true;
-    attribute power_trace_clearance = cap_type == "electrolytic" ? 0.3 : 0.2;  // mm clearance
+    attribute capacitance = value;
+    attribute voltage_rating = voltage;
+    attribute tolerance = 0.10;
+    attribute kicad_symbol = "Device:C";
 }
 
-// Alias for full name
 alias Capacitor = Cap;
 
-// Polarized Capacitor Module
-entity ElectrolyticCap(value: capacitance, voltage: voltage = 25V) {
-    pin +: signal in @metadata(
-        function="PositiveTerminal",
-        description="Positive terminal (anode)",
-        electrical_type="passive_positive",
-        // Schematic visualization
-        schematic_side="top",
-        schematic_position=1,
-        schematic_label="+"
-    );   // Positive terminal
-    pin -: signal out @metadata(
-        function="NegativeTerminal",
-        description="Negative terminal (cathode)",
-        electrical_type="passive_negative",
-        // Schematic visualization
-        schematic_side="bottom",
-        schematic_position=1,
-        schematic_label="-"
-    );  // Negative terminal
-    
-    attribute component_class = "capacitor_polarized";
-    attribute value = value;
+entity ElectrolyticCap(value: capacitance, voltage: voltage) {
+    pin pos: signal inout;
+    pin neg: signal inout;
+
+    attribute component_class = "capacitor";
+    attribute capacitance = value;
     attribute voltage_rating = voltage;
-    attribute tolerance = "20%";
+    attribute tolerance = 0.20;
+    attribute polarized = true;
     attribute kicad_symbol = "Device:CP";
-    attribute packages = "THT_Radial_D5.0,THT_Radial_D6.3,THT_Radial_D8.0";
-    attribute default_package = "THT_Radial_D6.3";
-    
-    // ==================== SCHEMATIC VISUALIZATION ====================
-    
-    // Polarized capacitor symbol
-    attribute schematic_symbol = "polarized_capacitor";
-    attribute schematic_width = 20;    // mm - slightly larger for polarity marking
-    attribute schematic_height = 35;   // mm - vertical orientation
-    attribute schematic_label = value + " " + voltage;  // Show both value and voltage
-    attribute schematic_label_position = "side";
-    attribute schematic_orientation = "vertical";  // Always vertical for electrolytics
-    
-    // Polarity and placement
-    attribute polarity_marking = true;     // Always show + marking
-    attribute positive_terminal = "top";   // + terminal on top
-    attribute negative_terminal = "bottom"; // - terminal on bottom
-    attribute show_voltage_rating = true;  // Always show voltage for polarized caps
-    
-    // Typical power supply placement
-    attribute functional_group = "power_filtering";
-    attribute typical_placement = "bulk_power_filtering";
-    attribute component_section = "power_supply";
-    attribute placement_priority = "high";  // Important for power filtering
 }

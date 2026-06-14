@@ -1,7 +1,7 @@
 // Multi-rail power supply: 12V → 5V → 3.3V with indicator LEDs on each rail
 // Tests: cascaded regulators, parallel branches at each rail, multiple shunts
-import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
-import { Cap } from "bhdl-stdlib/passive/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
 import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
 import { LM7805, LM1117_33 } from "bhdl-stdlib/power/regulator.bhdl";
 

@@ -3,7 +3,7 @@
 // The triode flows through the whole pipeline: parse → analyze → synthesize
 // → netlist → SPICE converter, where it becomes a multi-terminal device
 // (DeviceKind::Triode) that GLACIER solves for its DC operating point.
-import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 import { Triode } from "bhdl-stdlib/actives/triode.bhdl";
 
 board TriodeGainStage {

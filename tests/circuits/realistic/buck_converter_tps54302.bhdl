@@ -2,9 +2,9 @@
 // 12V to 5V @ 2A switching regulator
 
 import { TPS54302 } from "bhdl-stdlib/regulators/tps54302_simple.bhdl";
-import { Capacitor } from "bhdl-stdlib/passives/capacitor_simple.bhdl";
-import { Resistor } from "bhdl-stdlib/passives/resistor_simple.bhdl";
-import { Inductor } from "bhdl-stdlib/passives/inductor_simple.bhdl";
+import { Capacitor } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Resistor } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Inductor } from "bhdl-stdlib/passives/inductor.bhdl";
 
 board BuckConverterTPS54302 {
     // Power domains

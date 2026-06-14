@@ -5,7 +5,7 @@
 // current; the unbypassed R_k delivers the high output impedance that
 // makes the stage *act* like a current source at signal frequencies.
 import { TubeCurrentSource } from "bhdl-stdlib/actives/triode.bhdl";
-import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 
 board TubeCurrentSourceTest {
     power VBB = 300V @ 100mA;

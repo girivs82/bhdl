@@ -1,5 +1,5 @@
 import { LM317 } from "bhdl-stdlib/power/lm317.bhdl";
-import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
 
 // Test circuit for LM317 adjustable regulator with virtual pin expansion

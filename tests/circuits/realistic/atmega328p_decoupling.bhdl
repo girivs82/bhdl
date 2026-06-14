@@ -6,7 +6,7 @@
 // including the chip's `expansion { }` block.
 
 import { ATmega328P_DIP28 } from "bhdl-stdlib/actives/atmega328p.bhdl";
-import { Cap } from "bhdl-stdlib/passive/capacitor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
 
 board ATmega328P_Decoupling_Test {
     power VCC = 5V @ 200mA;

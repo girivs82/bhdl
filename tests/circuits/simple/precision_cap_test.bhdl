@@ -12,8 +12,8 @@
 // `bhdl bom` (with a jlcparts DB) then hard-gates that cap to a C0G part,
 // while an ordinary bulk-decoupling cap stays on the cheap X7R jellybean.
 
-import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
-import { Cap } from "bhdl-stdlib/passive/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
 
 board PrecisionCapTest {
     power V = 3.3V @ 10mA;

@@ -4,11 +4,11 @@
 // Import all basic passive components
 import { Cap, Capacitor, ElectrolyticCap } from "./passives/capacitor.bhdl";
 import { Res, Resistor } from "./passives/resistor.bhdl";
-import { LED } from "./passives/led.bhdl";
+import { LED } from "./optoelectronic/led.bhdl";
 import { Diode } from "./passives/diode.bhdl";
 import { Inductor, Ind } from "./passives/inductor.bhdl";
-import { TVSDiode, TVS } from "./passives/tvs_diode.bhdl";
-import { Fuse } from "./passives/fuse.bhdl";
+import { TVSDiode, TVS } from "./protection/tvs.bhdl";
+import { Fuse } from "./protection/tvs.bhdl";
 
 // Import voltage regulators (clean v2 canonical entities)
 import { LM7805 } from "./power/lm7805.bhdl";

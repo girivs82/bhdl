@@ -15,7 +15,7 @@
 // description) is ≥ that, while an unconstrained inductor is free to be a
 // small/cheap one.
 
-import { Ind } from "bhdl-stdlib/passive/inductor.bhdl";
+import { Ind } from "bhdl-stdlib/passives/inductor.bhdl";
 
 board PowerInductorTest {
     power V = 5V @ 3A;

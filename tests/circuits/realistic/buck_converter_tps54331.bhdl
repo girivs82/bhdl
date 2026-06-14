@@ -4,8 +4,8 @@
 
 import { TPS54331 } from "bhdl-stdlib/power/tps54331.bhdl";
 import { SS34, SchottkyDiode } from "bhdl-stdlib/components/power/protection/SS34.bhdl";
-import { Cap } from "bhdl-stdlib/passive/capacitor.bhdl";
-import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 import { TestPoint } from "bhdl-stdlib/connectors/testpoint.bhdl";
 
 board BuckConverterTPS54331 {

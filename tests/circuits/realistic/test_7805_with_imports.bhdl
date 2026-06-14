@@ -3,10 +3,10 @@
 
 // Import required components from the standard library
 import { LM7805 } from "bhdl-stdlib/power/lm7805.bhdl";
-import { Fuse } from "bhdl-stdlib/passive/inline_passives.bhdl";
+import { Fuse } from "bhdl-stdlib/passives/inline_passives.bhdl";
 import { TVSDiode } from "bhdl-stdlib/protection/tvs.bhdl";
-import { ElectrolyticCap, Cap } from "bhdl-stdlib/passive/capacitor.bhdl";
-import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+import { ElectrolyticCap, Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
 import { TestPoint } from "bhdl-stdlib/connectors/testpoint.bhdl";
 

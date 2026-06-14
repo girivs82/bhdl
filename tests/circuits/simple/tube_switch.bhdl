@@ -3,7 +3,7 @@
 // leaves it at V_bb. A digital switch with vacuum-tube primitives.
 // (`switch` is a reserved keyword in bhdl, hence `digital_switch`.)
 import { TubeSwitch } from "bhdl-stdlib/actives/triode.bhdl";
-import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 
 board TubeSwitchTest {
     power VBB = 300V @ 100mA;

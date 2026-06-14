@@ -8,7 +8,7 @@
 //     correct nets.
 
 import { LM317 } from "bhdl-stdlib/power/lm317.bhdl";
-import { Cap, Res } from "bhdl-stdlib/passive/capacitor.bhdl";
+import { Cap, Res } from "bhdl-stdlib/passives/capacitor.bhdl";
 
 board LM317_5V_Test {
     power VIN  = 12V @ 500mA;

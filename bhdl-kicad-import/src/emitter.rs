@@ -268,7 +268,7 @@ fn emit_subsheet_entity(
 
     // Parameter list. BHDL entity port syntax (per the spec and
     // the `entity Res(value: resistance) { pin 1: signal inout }`
-    // examples in `bhdl-stdlib/passive/`):
+    // examples in `bhdl-stdlib/passives/`):
     //   `entity Name(...) { pin X: <kind>; ... <body>; }`
     // Ports live INSIDE the body as `pin X: <kind>;` declarations,
     // not in the parenthesised parameter list (which is for
@@ -508,31 +508,21 @@ fn collect_used_stdlib_entities(
 /// `bhdl-stdlib/`'s directory layout.
 ///
 /// **Discipline**: each target file MUST be parser-compatible
-/// (parseable by the current `bhdl-parser`). bhdl-stdlib ships
-/// two grammar tiers — the rich `passives/resistor.bhdl`
-/// (`@metadata(...)`, complex type exprs — currently un-parseable)
-/// and the parser-compatible `passives/resistor_simple.bhdl`
-/// / `passive/resistor.bhdl` (v2.0 grammar). The importer points
-/// at the latter tier so emitted BHDL round-trips through the
-/// real synthesizer. When the parser/stdlib grammar gap closes,
-/// flip the table back to the rich variants for richer
-/// downstream analysis.
+/// (parseable by the current `bhdl-parser`). The canonical passive
+/// entities live in the unified `passives/` tree and export both the
+/// short names (`Res`, `Cap`, `Ind`) and the PascalCase aliases
+/// (`Resistor`, `Capacitor`, `Inductor`) the import registry emits, so
+/// both spellings resolve to the same source file.
 fn stdlib_entity_file(entity: &str) -> &'static str {
     match entity {
-        // Passives: parser-compatible "_simple" variants (already
-        // export the PascalCase names our mapping registry uses).
-        "Resistor"                       => "passives/resistor_simple.bhdl",
-        "Capacitor"                      => "passives/capacitor_simple.bhdl",
-        "Inductor"                       => "passives/inductor_simple.bhdl",
-        // Short-name aliases (`Res`, `Cap`, `Ind`) live in the v2
-        // `passive/` (singular) tree — used when callers reference
-        // them directly. The importer's registry currently always
-        // emits the PascalCase names, so these branches are for
-        // safety / future use.
-        "Res"                            => "passive/resistor.bhdl",
-        "Cap" | "ElectrolyticCap"        => "passive/capacitor.bhdl",
-        "Ind"                            => "passive/inductor.bhdl",
-        "Diode"                          => "passive/diode.bhdl",
+        // Passive families — PascalCase names the registry emits resolve
+        // to the canonical entities (which carry the optional rating
+        // params: Cap voltage, Res tolerance, Ind rated_current).
+        "Resistor" | "Res"               => "passives/resistor.bhdl",
+        "Capacitor" | "Cap"
+            | "ElectrolyticCap"          => "passives/capacitor.bhdl",
+        "Inductor" | "Ind"               => "passives/inductor.bhdl",
+        "Diode"                          => "passives/diode.bhdl",
         "LED"                            => "optoelectronic/led.bhdl",
         // Protection / specials — point at the small v2 tree where
         // a parser-compatible variant exists.
@@ -563,15 +553,15 @@ fn stdlib_entity_file(entity: &str) -> &'static str {
         "LP2985_Simple"                   => "power/lp2985_simple.bhdl",
         "Crystal"
             | "Crystal_GND2"
-            | "Crystal_GND24"             => "passive/crystal.bhdl",
+            | "Crystal_GND24"             => "passives/crystal.bhdl",
         "R_Pack04_Split"                  => "passives/resistor_pack.bhdl",
         "SW_Push"
             | "SW_Tactile_4Pad"           => "electromechanical/switch.bhdl",
-        "Varistor"                        => "passive/varistor.bhdl",
+        "Varistor"                        => "passives/varistor.bhdl",
         "Barrel_Jack_Switch"              => "connectors/barrel_jack.bhdl",
-        "SolderJumper_2_Open"             => "passive/solder_jumper.bhdl",
+        "SolderJumper_2_Open"             => "passives/solder_jumper.bhdl",
         "Bead"
-            | "Fuse"                      => "passive/inline_passives.bhdl",
+            | "Fuse"                      => "passives/inline_passives.bhdl",
         "Fiducial"                        => "mechanical/fiducial.bhdl",
         // No parser-compatible Bead / Fuse / TestPoint / Schottky /
         // BJT / MOSFET yet — they live only in the rich tier.

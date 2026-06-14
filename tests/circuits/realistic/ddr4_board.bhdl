@@ -1,6 +1,6 @@
 import { DDR4_SDRAM_x8 } from "bhdl-stdlib/actives/ddr4_sdram.bhdl";
-import { Cap } from "bhdl-stdlib/passive/capacitor.bhdl";
-import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 
 board DDR4Board {
     power VDD = 1.2V @ 2A;

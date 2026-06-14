@@ -4,7 +4,7 @@
 // covers every member of the LQFP-48 product line.
 
 import { STM32F103Cx } from "bhdl-stdlib/actives/stm32f103cx.bhdl";
-import { Cap, Res } from "bhdl-stdlib/passive/capacitor.bhdl";
+import { Cap, Res } from "bhdl-stdlib/passives/capacitor.bhdl";
 
 board STM32_CBT6_Variant {
     power VDD = 3.3V @ 100mA;

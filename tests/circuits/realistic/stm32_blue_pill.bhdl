@@ -4,7 +4,7 @@
 // arch-independent.
 
 import { STM32F103Cx } from "bhdl-stdlib/actives/stm32f103cx.bhdl";
-import { Cap, Res } from "bhdl-stdlib/passive/capacitor.bhdl";
+import { Cap, Res } from "bhdl-stdlib/passives/capacitor.bhdl";
 
 board STM32_Blue_Pill {
     power VDD = 3.3V @ 100mA;

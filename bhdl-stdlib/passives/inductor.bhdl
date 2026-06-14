@@ -1,163 +1,19 @@
-// Inductor Component Module  
-// Supports various core types with SPICE parameters
+// Inductor — v2 canonical passive.
+//
+// `rated_current` is an OPTIONAL second positional param (the saturation/RMS
+// current rating). A bare `Ind(10µH)` keeps a 1A default; `Ind(4.7µH, 3A)`
+// (or the `Inductor` alias, kept for the older generic-style call sites), or
+// the named `Ind(l_value, rated_current = …)` form the sized regulators use,
+// declares the real rating, which the sign-off current margin reads.
 
-import { ImpedanceCharacteristics } from "../types/electrical_types.bhdl";
+entity Ind(value: inductance, rated_current: current = 1A) {
+    pin 1: signal inout;
+    pin 2: signal inout;
 
-// Inductor parameters including SPICE model
-type InductorParams = {
-    inductance: inductance,
-    tolerance: percentage,
-    current_rating: current,
-    dcr: resistance,           // DC resistance
-    isat: current?,            // Saturation current
-    rcore: resistance?,        // Core loss resistance
-    cpar: capacitance?,        // Parasitic capacitance
-    tc1: float?,               // Temperature coefficient (ppm/°C)
-    core_type: string,
-    impedance: ImpedanceCharacteristics,
-};
-
-entity Ind(
-    value: inductance,
-    current: current = 1A,
-    core: string = "ferrite",
-    package: string = "auto"
-) {
-    pin 1: signal inout @metadata(
-        function="Terminal",
-        description="First terminal of inductor",
-        electrical_type="passive"
-    );
-    pin 2: signal inout @metadata(
-        function="Terminal",
-        description="Second terminal of inductor",
-        electrical_type="passive"
-    );
-    
-    // Ferrite core parameters
-    const FERRITE_PARAMS: InductorParams = {
-        inductance: value,
-        tolerance: 20%,
-        current_rating: current,
-        dcr: 0.01 * sqrt(value * 1e6),      // Rough approximation
-        isat: current,
-        rcore: 50 / sqrt(value * 1e6),      // Core losses
-        cpar: 0.5e-12,                      // 0.5pF parasitic
-        tc1: 200,                           // 200 ppm/°C
-        core_type: "ferrite",
-        impedance: {
-            dc_resistance: 0.01 * sqrt(value * 1e6),
-            output_impedance: 0.01 * sqrt(value * 1e6),
-            input_impedance: 0.01 * sqrt(value * 1e6),
-            can_source_current: false,
-            can_sink_current: false,
-            max_source_current: null,
-            max_sink_current: null,
-            power_domain_isolation: false,
-            voltage_drop: null,
-            current_limiting: false,
-            transient_response: null,
-            inrush_current: null
-        }
-    };
-    
-    // Air core parameters (for RF)
-    const AIR_CORE_PARAMS: InductorParams = {
-        inductance: value,
-        tolerance: 5%,
-        current_rating: current,
-        dcr: 0.001 * sqrt(value * 1e9),    // Very low DCR
-        isat: null,                         // No saturation
-        rcore: 10000,                       // Very low losses
-        cpar: 0.1e-12,                      // Minimal parasitic
-        tc1: 50,                            // 50 ppm/°C
-        core_type: "air",
-        impedance: {
-            dc_resistance: 0.001 * sqrt(value * 1e9),
-            output_impedance: 0.001 * sqrt(value * 1e9),
-            input_impedance: 0.001 * sqrt(value * 1e9),
-            can_source_current: false,
-            can_sink_current: false,
-            max_source_current: null,
-            max_sink_current: null,
-            power_domain_isolation: false,
-            voltage_drop: null,
-            current_limiting: false,
-            transient_response: null,
-            inrush_current: null
-        }
-    };
-    
-    // Iron powder parameters
-    const IRON_POWDER_PARAMS: InductorParams = {
-        inductance: value,
-        tolerance: 10%,
-        current_rating: current,
-        dcr: 0.02 * sqrt(value * 1e6),
-        isat: current,
-        rcore: 20 / sqrt(value * 1e6),
-        cpar: 1e-12,
-        tc1: 150,
-        core_type: "iron_powder",
-        impedance: {
-            dc_resistance: 0.02 * sqrt(value * 1e6),
-            output_impedance: 0.02 * sqrt(value * 1e6),
-            input_impedance: 0.02 * sqrt(value * 1e6),
-            can_source_current: false,
-            can_sink_current: false,
-            max_source_current: null,
-            max_sink_current: null,
-            power_domain_isolation: false,
-            voltage_drop: null,
-            current_limiting: false,
-            transient_response: null,
-            inrush_current: null
-        }
-    };
-    
-    // Select parameters based on core type
-    const params: InductorParams = 
-        core == "ferrite" ? FERRITE_PARAMS :
-        core == "air" ? AIR_CORE_PARAMS :
-        core == "iron" || core == "iron_powder" ? IRON_POWDER_PARAMS :
-        FERRITE_PARAMS;  // Default to ferrite
-    
-    // Component metadata
     attribute component_class = "inductor";
-    attribute inductance = params.inductance;
-    attribute tolerance = params.tolerance;
-    attribute current_rating = params.current_rating;
-    attribute dcr = params.dcr;
-    attribute core_type = params.core_type;
-    
-    // SPICE model parameters
-    attribute spice_model = "inductor";
-    attribute spice_inductance = params.inductance;
-    attribute spice_dcr = params.dcr;
-    attribute spice_isat = params.isat;
-    attribute spice_rcore = params.rcore;
-    attribute spice_cpar = params.cpar;
-    attribute spice_tc1 = params.tc1;
-    attribute spice_current_rating = params.current_rating;
-    attribute spice_tnom = 27;
-    
-    // KiCad symbol
+    attribute inductance = value;
+    attribute current_rating = rated_current;
     attribute kicad_symbol = "Device:L";
-    
-    // Package selection
-    attribute package = 
-        package == "auto" ? (
-            value < 10µH ? "0805" :
-            value < 100µH ? "1210" :
-            "THT"
-        ) :
-        package == "0603" ? "Inductor_SMD:L_0603_1608Metric" :
-        package == "0805" ? "Inductor_SMD:L_0805_2012Metric" :
-        package == "1008" ? "Inductor_SMD:L_1008_2520Metric" :
-        package == "1210" ? "Inductor_SMD:L_1210_3225Metric" :
-        package == "THT" ? "Inductor_THT:L_Axial_L7.0mm_D3.0mm_P10.00mm_Horizontal" :
-        "Inductor_SMD:L_0805_2012Metric";
 }
 
-// Alias for full name
 alias Inductor = Ind;

@@ -1,5 +1,5 @@
 // Voltage divider — two resistors, no nonlinear components
-import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 
 board VoltageDivider {
     power VIN = 12V @ 100mA;

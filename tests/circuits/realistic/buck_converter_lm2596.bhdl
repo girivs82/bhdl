@@ -3,8 +3,8 @@
 // 24V to 12V @ 2A
 
 import { LM2596 } from "bhdl-stdlib/components/power/switching_regulators/LM2596.bhdl";
-import { Cap } from "bhdl-stdlib/passive/capacitor.bhdl";
-import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 import { TestPoint } from "bhdl-stdlib/connectors/testpoint.bhdl";
 
 board BuckConverterLM2596 {
