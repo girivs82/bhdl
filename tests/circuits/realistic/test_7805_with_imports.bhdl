@@ -2,12 +2,12 @@
 // A complete 12V to 5V power supply with proper filtering and protection
 
 // Import required components from the standard library
-import { LM7805 } from "bhdl-stdlib/components/power/linear_regulators/LM7805.bhdl";
-import { Fuse } from "bhdl-stdlib/passives/fuse.bhdl";
-import { TVSDiode } from "bhdl-stdlib/passives/tvs_diode.bhdl";
-import { ElectrolyticCap, Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
-import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
-import { LED } from "bhdl-stdlib/passives/led.bhdl";
+import { LM7805 } from "bhdl-stdlib/power/lm7805.bhdl";
+import { Fuse } from "bhdl-stdlib/passive/inline_passives.bhdl";
+import { TVSDiode } from "bhdl-stdlib/protection/tvs.bhdl";
+import { ElectrolyticCap, Cap } from "bhdl-stdlib/passive/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
 import { TestPoint } from "bhdl-stdlib/connectors/testpoint.bhdl";
 
 board PowerSupply_7805 {
@@ -17,15 +17,15 @@ board PowerSupply_7805 {
     ground GND;
     
     // Input protection and filtering
-    VIN -> fuse: Fuse(1A).1;
-    fuse.2 -> @protected_vin -> TVSDiode(15V).K;
+    VIN -> fuse: Fuse("1A").A;
+    fuse.B -> @protected_vin -> TVSDiode(15V).K;
     @protected_vin -> c_in1: ElectrolyticCap(100µF, 25V).pos;
     @protected_vin -> c_in2: Cap(0.1µF).1;
     
     // Linear regulator circuit
-    @protected_vin -> reg: LM7805().IN;
+    @protected_vin -> reg: LM7805().VIN;
     reg.GND -> GND;
-    reg.OUT -> VCC;
+    reg.VOUT -> VCC;
     
     // Output filtering
     VCC -> c_out1: ElectrolyticCap(10µF, 10V).pos;
@@ -33,7 +33,7 @@ board PowerSupply_7805 {
     
     // LED power indicator
     VCC -> r_led: Res(330Ω).1;
-    r_led.2 -> led: LED(green).A;
+    r_led.2 -> led: LED("green").A;
     led.K -> GND;
     
     // All grounds connected
