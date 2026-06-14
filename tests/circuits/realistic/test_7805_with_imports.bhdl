@@ -3,7 +3,10 @@
 
 // Import required components from the standard library
 import { LM7805 } from "bhdl-stdlib/power/lm7805.bhdl";
-import { Fuse, TVSDiode } from "bhdl-stdlib/protection/tvs.bhdl";
+// Two separate import lines from the same file — exercises the
+// per-(path,names) import dedup (a single combined line also works).
+import { Fuse } from "bhdl-stdlib/protection/tvs.bhdl";
+import { TVSDiode } from "bhdl-stdlib/protection/tvs.bhdl";
 import { ElectrolyticCap, Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
 import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";

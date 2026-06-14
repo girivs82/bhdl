@@ -1051,17 +1051,30 @@ fn process_import(import: &ImportStmt, context: &mut Pass1Context) {
         }
     };
     
-    // Check if already imported
-    if context.imported_modules.contains_key(&path) {
-        return;
-    }
-    
-    // Mark as imported
-    context.imported_modules.insert(path.clone(), ());
-    
-    // Get the imported names (for destructuring imports)
+    // Get the imported names first so the dedup guard can distinguish
+    // separate import statements that pull DIFFERENT names from the SAME
+    // file — e.g. `import { Fuse } from "x"` followed by
+    // `import { TVSDiode } from "x"`. Keying the guard on the path alone
+    // silently dropped the second statement's names (the file was already
+    // marked "imported", so the second statement's requested entities were
+    // never registered → spurious "Undefined component type").
     let imported_names = import.imported_names();
     let is_destructuring = !imported_names.is_empty();
+
+    // Duplicate / cycle guard, keyed by (path, requested names). A true
+    // import cycle still terminates: the set of distinct (path, names)
+    // pairs in a program is finite (one per import statement), and each is
+    // processed at most once. The \u{0} separator can't occur in a path
+    // or identifier, so the composite key is unambiguous.
+    let import_key = {
+        let mut names = imported_names.clone();
+        names.sort();
+        format!("{}\u{0}{}", path, names.join("\u{0}"))
+    };
+    if context.imported_modules.contains_key(&import_key) {
+        return;
+    }
+    context.imported_modules.insert(import_key, ());
     
     // Resolve the import path
     let resolved_path = resolve_import_path(&path, &context.base_path);
