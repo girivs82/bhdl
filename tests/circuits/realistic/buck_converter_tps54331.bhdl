@@ -2,9 +2,11 @@
 // Tests virtual pin expansion and synthesis knowledge
 // 12V to 5V @ 2A using TPS54331's virtual VOUT pin
 
-import { TPS54331 } from "../../../bhdl-stdlib/components/power/switching_regulators/TPS54331.bhdl";
-import { SS34 } from "../../../bhdl-stdlib/components/power/protection/SS34.bhdl";
-import { Cap } from "../../../bhdl-stdlib/components/passives/capacitors/Capacitor.bhdl";
+import { TPS54331 } from "bhdl-stdlib/power/tps54331.bhdl";
+import { SS34, SchottkyDiode } from "bhdl-stdlib/components/power/protection/SS34.bhdl";
+import { Cap } from "bhdl-stdlib/passive/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+import { TestPoint } from "bhdl-stdlib/connectors/testpoint.bhdl";
 
 board BuckConverterTPS54331 {
     // Power domains
@@ -19,7 +21,7 @@ board BuckConverterTPS54331 {
     C_IN2.2 -> GND;
     
     // Buck controller with virtual pin
-    U1: TPS54331(vout=5V);
+    U1: TPS54331(v_out=5V);
     VIN -> U1.VIN;
     U1.GND -> GND;
     U1.EN -> VIN;  // Always enabled

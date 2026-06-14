@@ -1,3 +1,7 @@
+import { LM317 } from "bhdl-stdlib/power/lm317.bhdl";
+import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
+
 // Test circuit for LM317 adjustable regulator with virtual pin expansion
 // Configured for 9V output from 12V input
 
@@ -7,7 +11,7 @@ board AdjustableRegulatorBoard {
     ground GND;
     
     // LM317 configured for 9V output
-    U1: LM317(vout=9V, iout=500mA);
+    U1: LM317(v_out=9V);
     
     // Input connections
     @VIN -> U1.VIN;
@@ -23,6 +27,6 @@ board AdjustableRegulatorBoard {
     
     // LED indicator
     @VOUT_9V -> R_LED: Res(470).1;
-    R_LED.2 -> D_LED: LED(green).A;
+    R_LED.2 -> D_LED: LED("green").A;
     D_LED.K -> @GND;
 }

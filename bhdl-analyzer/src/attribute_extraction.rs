@@ -76,6 +76,20 @@ pub fn extract_module_attributes(entity: &Entity) -> HashMap<String, String> {
 /// `extract_module_attributes` produced it — the resolution is purely
 /// additive and never fails.
 pub fn extract_module_attributes_resolved(entity: &Entity) -> HashMap<String, String> {
+    extract_module_attributes_resolved_with(entity, &HashMap::new())
+}
+
+/// Like [`extract_module_attributes_resolved`], but `arg_overrides` (an
+/// instance's actual constructor arguments, e.g. `v_out = "9V"`) take
+/// precedence over the entity's parameter DEFAULTS when resolving an attribute
+/// value that references a parameter. Without this, `attribute output_voltage =
+/// v_out` always resolved to the entity default regardless of a board's
+/// `LM317(v_out=9V)` — so a configurable regulator silently designed at its
+/// default voltage.
+pub fn extract_module_attributes_resolved_with(
+    entity: &Entity,
+    arg_overrides: &HashMap<String, String>,
+) -> HashMap<String, String> {
     let mut attrs = extract_module_attributes(entity);
     let syntax = entity.syntax();
 
@@ -169,6 +183,14 @@ pub fn extract_module_attributes_resolved(entity: &Entity) -> HashMap<String, St
     // that can't resolve and must be DROPPED — stamping the literal text "value"
     // would make the SPICE converter fall back to a 1kΩ default and corrupt the
     // operating point.
+    // Instance constructor args override the entity's parameter defaults, so a
+    // `v_out`-referencing attribute resolves to the board's actual argument.
+    for (k, v) in arg_overrides {
+        if param_names.contains(k.as_str()) {
+            param_defaults.insert(k.clone(), unquote(v.trim()));
+        }
+    }
+
     let is_reference = |text: &str| -> bool {
         let head = text.trim().split('.').next().unwrap_or("");
         !head.is_empty() && (param_names.contains(head) || consts.contains_key(head))
