@@ -8,7 +8,7 @@
 // design recipe on both instances (same tube, same intent).
 
 import { SignalTubeStage } from "bhdl-stdlib/actives/triode.bhdl";
-import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 
 board TubeAmpPair {
     power VBB = 300V @ 100mA;

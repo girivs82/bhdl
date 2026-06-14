@@ -1,8 +1,8 @@
 // Intent-driven layout test with simplified stdlib
 // Uses v2.0-compatible simplified components
 
-import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
-import { Cap, ElectrolyticCap } from "bhdl-stdlib/passive/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap, ElectrolyticCap } from "bhdl-stdlib/passives/capacitor.bhdl";
 import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
 import { TVSDiode, Fuse } from "bhdl-stdlib/protection/tvs.bhdl";
 import { LM7805 } from "bhdl-stdlib/power/regulator.bhdl";

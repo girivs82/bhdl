@@ -11,6 +11,11 @@ entity TVSDiode(voltage: voltage) {
     attribute kicad_symbol = "Device:D_TVS";
 }
 
+// Aliases kept for the older generic-style call sites folded in from the
+// retired passives/tvs_diode.bhdl.
+alias TVS = TVSDiode;
+alias TransientSuppressor = TVSDiode;
+
 entity Fuse(current: current) {
     pin 1: signal inout;
     pin 2: signal inout;
@@ -20,3 +25,7 @@ entity Fuse(current: current) {
     attribute voltage_rating = 250V;
     attribute kicad_symbol = "Device:Fuse";
 }
+
+// Alias kept for the older call sites folded in from the retired
+// passives/fuse.bhdl.
+alias F = Fuse;

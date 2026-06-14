@@ -3,11 +3,11 @@
 
 // Import required components from the standard library
 import { LM7805 } from "bhdl-stdlib/components/power/linear_regulators/LM7805.bhdl";
-import { Fuse } from "bhdl-stdlib/passives/fuse.bhdl";
-import { TVSDiode } from "bhdl-stdlib/passives/tvs_diode.bhdl";
+import { Fuse } from "bhdl-stdlib/protection/tvs.bhdl";
+import { TVSDiode } from "bhdl-stdlib/protection/tvs.bhdl";
 import { ElectrolyticCap, Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
 import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
-import { LED } from "bhdl-stdlib/passives/led.bhdl";
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
 import { TestPoint } from "bhdl-stdlib/connectors/testpoint.bhdl";
 
 board PowerSupply_7805_Intent {

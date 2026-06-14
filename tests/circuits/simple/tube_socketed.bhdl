@@ -23,7 +23,7 @@
 // which file loaded first.
 import { Triode, SocketedTriode_Octal } from "bhdl-stdlib/actives/triode.bhdl";
 import { TubeSocket_Octal } from "bhdl-stdlib/connectors/tube_socket.bhdl";
-import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 
 board TubeSocketed {
     power VBB = 300V @ 100mA;

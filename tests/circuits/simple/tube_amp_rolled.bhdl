@@ -22,7 +22,7 @@
 // against different Koren parameters per stage.
 
 import { SignalTubeStage, SignalTubeStage12AU7, Triode, Triode12AU7 } from "bhdl-stdlib/actives/triode.bhdl";
-import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 
 board TubeAmpRolled {
     power VBB = 300V @ 100mA;

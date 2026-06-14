@@ -6,7 +6,7 @@
 // actually delivers a gain of 15. This is the simulate → parameterize →
 // finalize loop reaching the HDL surface.
 import { SignalTubeStage } from "bhdl-stdlib/actives/triode.bhdl";
-import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 
 board TubeAmpIntent {
     power VBB = 300V @ 100mA;

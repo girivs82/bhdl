@@ -5,7 +5,7 @@
 // issues in that file do not affect the design surface. Vendors
 // adding new BJT entities for design-block use add them here.
 
-import { Res } from "../passive/resistor.bhdl";
+import { Res } from "../passives/resistor.bhdl";
 
 // Flat-attribute BJT entities for the vendor design-block surface.
 //

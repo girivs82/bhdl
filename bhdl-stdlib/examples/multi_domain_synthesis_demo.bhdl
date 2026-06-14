@@ -2,7 +2,7 @@
 // Demonstrates correct pull-up rail selection for chips with multiple power domains
 
 import { MCU_MultiDomain } from "../ics/microcontroller_multi_domain.bhdl";
-import { LED } from "../passives/led.bhdl";
+import { LED } from "../optoelectronic/led.bhdl";
 
 board MultiDomainSynthesisDemo {
     // === MULTIPLE POWER SUPPLIES ===

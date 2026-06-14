@@ -2,7 +2,7 @@
 // Shows how pin characteristics enable automatic component insertion
 
 import { MCU_GPIO } from "../ics/microcontroller.bhdl";
-import { LED } from "../passives/led.bhdl";
+import { LED } from "../optoelectronic/led.bhdl";
 
 board IntelligentSynthesisDemo {
     // Power domains

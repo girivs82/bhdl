@@ -2,8 +2,8 @@
 // Tests the new parser with TPS54302 component
 
 import { TPS54302 } from "bhdl-stdlib/regulators/tps54302_simple.bhdl";
-import { Capacitor } from "bhdl-stdlib/passives/capacitor_simple.bhdl";
-import { Resistor } from "bhdl-stdlib/passives/resistor_simple.bhdl";
+import { Capacitor } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Resistor } from "bhdl-stdlib/passives/resistor.bhdl";
 
 board SimpleTPS {
     // Power domains  

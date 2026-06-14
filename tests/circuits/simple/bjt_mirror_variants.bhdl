@@ -15,7 +15,7 @@
 //   bhdl-cli tests/circuits/simple/bjt_mirror_variants.bhdl list-skus
 
 import { NPN_2N3904, BjtCurrentMirror } from "bhdl-stdlib/actives/bjt_design.bhdl";
-import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 
 board BjtMirrorVariants {
     power VCC = 12V @ 100mA;

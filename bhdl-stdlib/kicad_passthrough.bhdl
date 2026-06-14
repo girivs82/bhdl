@@ -195,7 +195,7 @@ entity kicad_passthrough(
 // instances of those types parse and analyze cleanly; they
 // behave as opaque passthroughs at the netlist layer. Each
 // alias drops away when a real entity ships in stdlib.
-// Bead / Fuse: now real typed entities in passive/inline_passives.bhdl
+// Bead / Fuse: now real typed entities in passives/inline_passives.bhdl
 // with A/B pins. Aliases removed; the mapping registry routes
 // Device:FerriteBead / Device:Fuse directly.
 // MOSFET: now has a real entity in actives/mosfet_simple.bhdl

@@ -5,7 +5,7 @@
 // `aliases { }` block.
 
 import { ATmega328P_DIP28 } from "bhdl-stdlib/actives/atmega328p.bhdl";
-import { Cap, Res } from "bhdl-stdlib/passive/capacitor.bhdl";
+import { Cap, Res } from "bhdl-stdlib/passives/capacitor.bhdl";
 
 board ATmega328P_GPIO_Alias_Test {
     power VCC = 5V @ 200mA;

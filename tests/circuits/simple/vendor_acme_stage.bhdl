@@ -6,8 +6,8 @@
 // entity-attribute index.
 
 import { Triode_AcmeUltra } from "tests/circuits/simple/vendor_acme_tube.bhdl";
-import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
-import { Cap } from "bhdl-stdlib/passive/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
 
 entity SignalStage_Acme() {
     pin IN:  signal in;

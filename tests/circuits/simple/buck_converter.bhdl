@@ -2,8 +2,8 @@
 // The BuckRegulator's VOUT is marked `virtual` — the toolchain
 // auto-expands an inductor, catch diode, and output capacitor.
 
-import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
-import { Cap } from "bhdl-stdlib/passive/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
 import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
 import { LM2596_5V } from "bhdl-stdlib/power/regulator.bhdl";
 

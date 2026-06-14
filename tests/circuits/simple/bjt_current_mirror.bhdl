@@ -16,7 +16,7 @@
 // generalises beyond triodes with zero bhdl-core changes.
 
 import { NPN_2N3904, BjtCurrentMirror } from "bhdl-stdlib/actives/bjt_design.bhdl";
-import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 
 board BjtCurrentMirrorDemo {
     power VCC = 12V @ 100mA;

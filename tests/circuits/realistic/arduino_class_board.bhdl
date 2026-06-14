@@ -26,7 +26,7 @@
 
 import { LM317 } from "bhdl-stdlib/power/lm317.bhdl";
 import { ATmega328P_DIP28 } from "bhdl-stdlib/actives/atmega328p.bhdl";
-import { Cap, Res } from "bhdl-stdlib/passive/capacitor.bhdl";
+import { Cap, Res } from "bhdl-stdlib/passives/capacitor.bhdl";
 
 board Arduino_Class_Board {
     power VIN  = 12V @ 500mA;

@@ -14,9 +14,9 @@
 //! - 50+ power connections
 //! - 30+ decoupling capacitors
 
-import { Resistor } from "bhdl-stdlib/passives/resistor_simple.bhdl";
-import { Capacitor } from "bhdl-stdlib/passives/capacitor_simple.bhdl";
-import { Inductor } from "bhdl-stdlib/passives/inductor_simple.bhdl";
+import { Resistor } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Capacitor } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Inductor } from "bhdl-stdlib/passives/inductor.bhdl";
 
 board MultiVoltageSystem {
     // ===== 1.0V Core Components =====

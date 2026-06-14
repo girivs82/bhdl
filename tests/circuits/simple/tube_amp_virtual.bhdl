@@ -6,7 +6,7 @@
 // Cout), all wired and valued automatically. This is the tube analogue of
 // the buck regulator's virtual-pin expansion.
 import { SignalTubeStage } from "bhdl-stdlib/actives/triode.bhdl";
-import { Res } from "bhdl-stdlib/passive/resistor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 
 board TubeAmp {
     power VBB = 300V @ 100mA;
