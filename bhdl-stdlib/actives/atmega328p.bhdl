@@ -7,9 +7,7 @@
 //
 // Pin names follow the standard datasheet port nomenclature:
 // PD0..PD7, PB0..PB7, PC0..PC6, plus the power/clock/reset
-// pins (VCC, GND, AVCC, AREF, RESET, XTAL1, XTAL2). The
-// importer's `kicad-symbol-mapping.toml` translates KiCad's
-// numeric pin labels (1..28) to these port names via pin_map.
+// pins (VCC, GND, AVCC, AREF, RESET, XTAL1, XTAL2).
 //
 // Grammar discipline: parser-compatible v2.0 subset. No
 // `@metadata(...)`, no complex type expressions, no SPICE

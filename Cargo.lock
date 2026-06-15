@@ -348,21 +348,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bhdl-kicad-import"
-version = "0.1.0"
-dependencies = [
- "bhdl-analyzer",
- "bhdl-ast",
- "bhdl-netlist",
- "bhdl-parser",
- "bhdl-synthesizer",
- "serde",
- "thiserror",
- "tokio",
- "toml",
-]
-
-[[package]]
 name = "bhdl-lsp"
 version = "0.1.0"
 dependencies = [

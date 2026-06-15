@@ -1,13 +1,10 @@
 // Ferrite bead — a 2-pin in-line passive that shares the resistor
 // shape but carries its own electrical semantics (lossy inductor for
-// HF noise damping), with no inherent polarity. KiCad's
-// `Device:FerriteBead` symbol maps to it (in kicad_passthrough) so
-// the analyzer can reason about pin connectivity.
+// HF noise damping), with no inherent polarity.
 //
-// The canonical over-current Fuse lives in protection/tvs.bhdl —
-// `Fuse(current)`, carrying the real current rating so its physical
-// part is chosen through the supplier plugins like any other
-// component. There is no KiCad-specific part-number Fuse passthrough.
+// The over-current Fuse lives in protection/tvs.bhdl — `Fuse(current)`,
+// carrying the real current rating so its physical part is chosen
+// through the supplier plugins like any other component.
 //
 // Grammar discipline: parser-compatible v2.0 subset.
 
