@@ -156,14 +156,28 @@ impl LibraryLoader {
         // falling back to fabricated defaults (Real-Data Policy). Without this,
         // `electrical_specs` was always empty and every consumer guessed.
         let mut metadata = ComponentMetadata::default();
+        // Resolve attribute values that REFERENCE a constructor param or const
+        // to that param's default — e.g. `attribute tolerance = tolerance` →
+        // 5%, `attribute voltage_rating = voltage` → 50V — instead of storing
+        // the raw reference text. Storing the literal token (e.g. "tolerance")
+        // would later read as a bogus string spec and poison the part-selection
+        // grade gate. `extract_module_attributes_resolved` keeps plain literals
+        // untouched and drops un-defaulted references, so the per-attribute
+        // `unwrap_or(raw)` below preserves the old behaviour everywhere except
+        // the references it can now resolve.
+        let resolved = bhdl_ast::Entity::cast(node.clone())
+            .map(|e| crate::attribute_extraction::extract_module_attributes_resolved(&e))
+            .unwrap_or_default();
         for attr in node.descendants().filter_map(bhdl_ast::AttributeDecl::cast) {
             let (Some(name_tok), Some(value_expr)) = (attr.name(), attr.value()) else {
                 continue;
             };
             let attr_name = name_tok.text().to_string();
             // Raw value text, with any surrounding quotes/whitespace stripped
-            // ("2.0V", "20mA", "synchronous_buck", "Device:LED").
-            let value = value_expr.syntax().text().to_string().trim().trim_matches('"').to_string();
+            // ("2.0V", "20mA", "synchronous_buck", "Device:LED"); the fallback
+            // for plain literals not present in the resolved map.
+            let raw = value_expr.syntax().text().to_string().trim().trim_matches('"').to_string();
+            let value = resolved.get(&attr_name).cloned().unwrap_or(raw);
             match attr_name.as_str() {
                 "component_class" => metadata.component_class = Some(value.clone()),
                 "kicad_symbol" => metadata.kicad_symbol = Some(value.clone()),
