@@ -2661,9 +2661,17 @@ pub fn populate_instance_attributes(
                     
                     println!("DEBUG: Setting parameter '{}' = '{}' for instance {:?}", param.name, param_value, instance_id);
                     
-                    // Store the parameter in the netlist instance attributes
+                    // Store the parameter in the netlist instance attributes,
+                    // but DON'T clobber a value already stamped from the
+                    // instance's own constructor args (Phase 4.4). A parent
+                    // design block writing `Res(r_top_value, tolerance = 1%)`
+                    // stamps tolerance=1% on the instance; this inference pass
+                    // only carries the entity DEFAULT (5%), so an unconditional
+                    // insert here silently overrode the design-block's choice.
+                    // `or_insert` lets the explicit arg win and still fills in
+                    // params the instance didn't specify.
                     if let Some(instance) = netlist.instances.get_mut(instance_id) {
-                        instance.attributes.insert(param.name.clone(), param_value);
+                        instance.attributes.entry(param.name.clone()).or_insert(param_value);
                         println!("DEBUG: Successfully stored parameter in netlist instance");
                     } else {
                         println!("DEBUG: Failed to find instance {:?} in netlist", instance_id);

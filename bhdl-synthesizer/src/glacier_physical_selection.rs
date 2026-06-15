@@ -936,13 +936,18 @@ pub fn apply_supply_chain_mpns(
                         .insert("stress_gate".to_string(), gate.to_string());
                 }
                 log::warn!(
-                    "⚠ UNPOPULATED {refdes}{}: {reason} — required {gate}. \
+                    "⚠ UNPOPULATED {refdes}{}: {reason} — required {gate} \
+                     [tolerance {}]. \
                      No part substituted; populate manually or relax the operating point.",
                     if class.is_empty() {
                         String::new()
                     } else {
                         format!(" ({class})")
                     },
+                    inst.attributes
+                        .get("tolerance")
+                        .map(|t| t.as_str())
+                        .unwrap_or("unset"),
                 );
             }
         }
