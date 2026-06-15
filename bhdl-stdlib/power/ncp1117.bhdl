@@ -12,7 +12,7 @@
 //
 // Grammar discipline: parser-compatible v2.0 subset.
 
-entity NCP1117_Simple(part_no: string = "NCP1117-5.0_SOT223") {
+entity NCP1117(part_no: string = "NCP1117-5.0_SOT223") {
     pin GND: signal inout;   // (pin 1)
     pin VO:  signal inout;   // regulated output (pin 2)
     pin VI:  signal inout;   // unregulated input (pin 3)

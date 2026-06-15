@@ -1,118 +1,503 @@
-// Buck Converter Module with Embedded Behavioral Models
-// This demonstrates how optimization requirements come from the component library
+// Complete Buck Converter with Embedded Simulation Models
+// Demonstrates component-embedded simulation architecture
+
+import { SimulationLevel, ModelMetadata, OptimizationStrategy } from "../simulation/simulation_models.bhdl";
+import { Inductor } from "../passives/inductor.bhdl";
+import { Capacitor } from "../passives/capacitor.bhdl";
+import { Resistor } from "../passives/resistor.bhdl";
 
 entity BuckConverter(
-    vin_nom: voltage,
-    vout_target: voltage,
-    iout_max: current,
-    fsw: frequency = 500kHz
+    vin_nom: voltage = 12V,
+    vin_min: voltage = 10V, 
+    vin_max: voltage = 14V,
+    vout: voltage = 5V,
+    iout_max: current = 2A,
+    vout_ripple_max: voltage = 50mV,
+    f_sw: frequency = 500kHz
 ) {
+    // === PINS ===
     pin VIN: power in;
     pin VOUT: power out;
     pin GND: ground;
-    pin EN: signal in;
-    pin FB: signal out;
+    pin EN: signal in;      // Enable
+    pin FB: signal in;      // Feedback
+    pin COMP: signal inout; // Compensation node
+    pin SW: signal out;     // Switch node
     
-    // Behavioral models define how to simulate this component
+    // === INTERNAL COMPONENTS ===
+    // These get sized by optimization
+    L: Inductor(value=22µH);  // Will be optimized
+    C_out: Capacitor(value=100µF, voltage_rating=10V);
+    R_fb_top: Resistor(value=10kΩ);
+    R_fb_bot: Resistor(value=2.2kΩ);
+    
+    // Compensation network
+    R_comp: Resistor(value=10kΩ);
+    C_comp: Capacitor(value=4.7nF);
+    C_comp2: Capacitor(value=100pF);
+    
+    // === BEHAVIORAL MODEL: ANALYTICAL (Level 0) ===
     @behavioral_model analytical {
-        model_type: "buck_analytical",
-        // Critical inductance calculation
-        L_critical: "(vin_nom - vout_target) * vout_target / (vin_nom * 0.3 * iout_max * fsw)",
-        // Minimum capacitance for ripple
-        C_min: "0.3 * iout_max / (8 * fsw * 0.01 * vout_target)",
-        // Efficiency estimation
-        efficiency: "0.95 - 0.02 * (vin_nom/vout_target - 1) - 0.01 * (iout_max/5)",
-        // Simulation runtime
-        runtime: 1ms,
-        accuracy: 0.75,
+        metadata: {
+            name: "analytical",
+            level: SimulationLevel.ANALYTICAL,
+            typical_runtime: 1ms,
+            accuracy: 0.7,  // 70% accurate for initial sizing
+            provides_outputs: ["L_min", "C_min", "efficiency_estimate"],
+        },
+        
+        // Pure equations - no simulation needed
+        equations: {
+            // Inductor sizing for CCM
+            L_min: "(vin_max - vout) * vout / (vin_max * 0.3 * iout_max * f_sw)",
+            
+            // Output capacitor for ripple
+            C_min: "0.3 * iout_max / (8 * f_sw * vout_ripple_max)",
+            
+            // Rough efficiency estimate
+            efficiency_estimate: "vout / (vout + 0.5)",  // Assumes 0.5V total losses
+            
+            // Duty cycle
+            duty_cycle: "vout / vin_nom",
+            
+            // Current ripple
+            ripple_current: "(vin_nom - vout) * duty_cycle / (L * f_sw)",
+        },
+        
+        use_when: "initial_sizing || quick_check",
     }
     
-    @behavioral_model state_space {
-        model_type: "averaged_state_space",
-        // Small signal transfer functions
-        Gvd: "vout_target/vin_nom * (1 + s*L/R) / (1 + s*L/R + s²*L*C)",
-        Gvi: "R * (1 - D) / (1 + s*L/R + s²*L*C)",
-        // Loop gain calculation
-        loop_gain: "Gvd * Hfb * Gc",
-        phase_margin: "180 - angle(loop_gain @ fc)",
-        crossover_freq: "fc where |loop_gain| = 1",
-        runtime: 100ms,
-        accuracy: 0.90,
+    // === BEHAVIORAL MODEL: STATE-SPACE AVERAGED (Level 1) ===
+    @behavioral_model averaged {
+        metadata: {
+            name: "averaged", 
+            level: SimulationLevel.BEHAVIORAL,
+            typical_runtime: 100ms,
+            accuracy: 0.9,  // 90% accurate for control loop
+            
+            valid_conditions: {
+                frequency_range: (0Hz, f_sw/10),  // Valid below fsw/10
+                duty_cycle_range: (0.1, 0.9),
+            },
+            
+            provides_outputs: [
+                "transfer_functions",
+                "phase_margin", 
+                "crossover_frequency",
+                "dc_operating_point"
+            ],
+        },
+        
+        // State-space matrices for averaged buck
+        state_space: {
+            // State variables: [iL, vC]
+            // Inputs: [vin, d]
+            // Outputs: [vout, iL]
+            
+            // dx/dt = A*x + B*u
+            A_matrix: [
+                [-(R_dcr + (1-D)*R_load_eq)/L,  -(1-D)/L],
+                [(1-D)/C,                        -1/(R_load_eq*C)]
+            ],
+            
+            B_matrix: [
+                [D/L,     (vin_nom - vout)/L],
+                [0,       0]
+            ],
+            
+            C_matrix: [
+                [0,       1],  // vout = vC
+                [1,       0]   // iL
+            ],
+            
+            D_matrix: [[0, 0], [0, 0]],
+        },
+        
+        // Transfer functions derived from state-space
+        transfer_functions: {
+            // Control-to-output transfer function
+            Gvd: "vin_nom * (1 + s*R_esr*C) / (1 + s*(L/R_load + R_esr*C) + s²*L*C)",
+            
+            // Input-to-output (audio susceptibility)
+            Gvi: "D * (1 + s*R_esr*C) / (1 + s*(L/R_load + R_esr*C) + s²*L*C)",
+            
+            // Output impedance
+            Zout: "(s*L + R_dcr) || (1/(s*C) + R_esr)",
+        },
+        
+        // Small-signal AC analysis
+        ac_analysis: {
+            method: "bode_plot",
+            frequency_range: (1Hz, f_sw/2),
+            injection_point: "error_amp_output",
+            
+            measure: {
+                loop_gain: "error_amp * compensation * Gvd * feedback_divider",
+                phase_margin: "180° + phase(loop_gain) @ |loop_gain|=1",
+                gain_margin: "-|loop_gain|dB @ phase=-180°",
+                crossover_frequency: "freq @ |loop_gain|=1",
+            }
+        },
+        
+        use_when: "control_loop_design || stability_analysis",
     }
     
-    @behavioral_model switching {
-        model_type: "simplified_switching",
-        switching_frequency: fsw,
-        duty_cycle: "vout_target / vin_nom",
-        conduction_losses: "iout² * (Ron_hs * D + Ron_ls * (1-D))",
-        switching_losses: "0.5 * vin_nom * iout * (tr + tf) * fsw",
-        core_losses: "Kc * B^2.4 * fsw^1.2 * Vcore",
-        runtime: 5s,
-        accuracy: 0.95,
+    // === BEHAVIORAL MODEL: SIMPLIFIED SWITCHING (Level 2) ===
+    @behavioral_model switching_behavioral {
+        metadata: {
+            name: "switching_behavioral",
+            level: SimulationLevel.SWITCHING_SIMPLE,
+            typical_runtime: 10s,
+            accuracy: 0.95,
+            
+            provides_outputs: [
+                "switching_ripple",
+                "efficiency",
+                "transient_response",
+                "startup_time"
+            ],
+        },
+        
+        // Simplified switching model
+        switch_model: {
+            high_side: {
+                type: "ideal_switch",
+                on_resistance: 50mΩ,
+                off_resistance: 10MΩ,
+                transition_time: 20ns,
+            },
+            
+            low_side: {
+                type: "ideal_diode",  // Or synchronous FET
+                forward_drop: 0.7V,
+                on_resistance: 30mΩ,
+            },
+            
+            gate_driver: {
+                rise_time: 10ns,
+                fall_time: 10ns,
+                propagation_delay: 50ns,
+            }
+        },
+        
+        pwm_controller: {
+            type: "voltage_mode",
+            ramp_amplitude: 1V,
+            ramp_frequency: f_sw,
+            
+            // Simplified - no need for full PWM generation
+            duty_to_switch: "d > ramp ? on : off",
+        },
+        
+        // Measure ripple and efficiency
+        measurements: {
+            voltage_ripple: "max(vout) - min(vout) after settling",
+            current_ripple: "max(iL) - min(iL)",
+            
+            efficiency: {
+                conduction_loss: "I²R losses in switches and inductor",
+                switching_loss: "0.5 * V * I * (tr + tf) * fsw",
+                total: "Pout / (Pout + losses)",
+            },
+            
+            transient: {
+                overshoot: "max(vout) / vout_nom - 1 during load step",
+                settling_time: "time to reach ±2% of final value",
+            }
+        },
+        
+        use_when: "ripple_verification || efficiency_calculation || transient_test",
     }
     
-    // THIS IS WHERE OPTIMIZATION REQUIREMENTS COME FROM - NOT HARDCODED!
+    // === SIMULATION REQUIREMENTS ===
+    @simulation_requirements {
+        dc_analysis: {
+            required: true,
+            solve_for: ["operating_point", "duty_cycle"],
+            convergence_aids: ["ramp_input_voltage", "source_stepping"],
+        },
+        
+        ac_analysis: {
+            required: true,
+            frequency_range: (1Hz, f_sw/2),
+            points_per_decade: 50,
+            extract: ["loop_gain", "phase_margin", "gain_margin"],
+        },
+        
+        transient_analysis: {
+            required: true,
+            time_span: 10ms,
+            max_timestep: 1/(f_sw * 100),  // 100 points per switching cycle
+            
+            events: [
+                "startup",
+                "load_step_50_to_100",
+                "line_step_10V_to_14V"
+            ],
+        },
+        
+        monte_carlo: {
+            required: false,  // Optional
+            parameters: ["L", "C", "comp_values"],
+            variations: ["±20%", "±20%", "±10%"],
+            samples: 100,
+        }
+    }
+    
+    // === OPTIMIZATION STRATEGY ===
     @optimization_strategy {
-        // Target specifications (from datasheet/design requirements)
-        target_efficiency: 0.92,      // 92% efficiency target for this converter
-        min_phase_margin: 60,         // 60 degrees for good stability
-        max_crossover_freq: "fsw/10", // Crossover < fsw/10 for stability
-        
-        // Optimization objectives
-        objectives: [
-            "maximize: efficiency",
-            "minimize: total_size",
-            "minimize: cost",
-            "target: phase_margin = 60°",
+        phases: [
+            // Phase 1: Initial sizing with equations
+            {
+                name: "initial_sizing",
+                model_level: SimulationLevel.ANALYTICAL,
+                parameters: ["L", "C"],
+                
+                objectives: [
+                    {metric: "size", goal: "minimize", weight: 0.3},
+                    {metric: "cost", goal: "minimize", weight: 0.3},
+                    {metric: "efficiency", goal: "maximize", weight: 0.4},
+                ],
+                
+                constraints: [
+                    {metric: "L", condition: ">", value: "L_min", hard: true},
+                    {metric: "C", condition: ">", value: "C_min", hard: true},
+                ],
+                
+                algorithm: "grid_search",  // Fast for 2D
+            },
+            
+            // Phase 2: Control loop optimization
+            {
+                name: "control_loop_optimization",
+                model_level: SimulationLevel.BEHAVIORAL,
+                parameters: ["L", "C", "R_comp", "C_comp", "C_comp2"],
+                
+                objectives: [
+                    {metric: "crossover_frequency", goal: "maximize", weight: 0.5},
+                    {metric: "phase_margin", goal: "target", target_value: 60, weight: 0.5},
+                ],
+                
+                constraints: [
+                    {metric: "phase_margin", condition: ">", value: 45, hard: true},
+                    {metric: "gain_margin", condition: ">", value: 10, hard: true},
+                    {metric: "crossover_frequency", condition: "<", value: f_sw/10, hard: true},
+                ],
+                
+                algorithm: "nelder_mead",  // Good for nonlinear optimization
+            },
+            
+            // Phase 3: Final verification
+            {
+                name: "verification",
+                model_level: SimulationLevel.SWITCHING_SIMPLE,
+                parameters: [],  // No optimization, just verify
+                
+                objectives: [],  // Just checking constraints
+                
+                constraints: [
+                    {metric: "voltage_ripple", condition: "<", value: vout_ripple_max, hard: true},
+                    {metric: "efficiency", condition: ">", value: 0.85, hard: true},
+                    {metric: "overshoot", condition: "<", value: 0.1, hard: true},
+                ],
+                
+                algorithm: "none",  // Just simulate and check
+            }
         ],
         
-        // Hard constraints
-        constraints: [
-            "output_ripple < 0.01 * vout_target",  // 1% ripple
-            "phase_margin > 45°",                   // Minimum for stability
-            "crossover_frequency < fsw/10",         // Nyquist requirement
-            "temperature_rise < 40°C",              // Thermal limit
-        ],
+        convergence_criteria: {
+            all_constraints_met: true,
+            objective_change: 0.01,  // Stop if < 1% improvement
+            iteration_limit: 20,
+            time_limit: 60s,
+        },
         
-        // Search strategy
-        search_method: "progressive_refinement",
-        initial_model: "analytical",
-        refinement_model: "state_space",
-        verification_model: "switching",
+        max_iterations: 50,
+        timeout: 5min,
     }
     
-    // Component selection knowledge
+    // === COMPONENT KNOWLEDGE ===
     @component_knowledge {
-        // Inductor selection rules
-        inductor_selection: {
-            core_material: "fsw > 200kHz ? Ferrite : Iron_Powder",
-            current_rating: "1.3 * iout_max",  // 30% derating
-            dcr_max: "0.05 * vout_target / iout_max",  // Max 5% loss
-        },
-        
-        // Capacitor selection rules
-        capacitor_selection: {
-            type: "fsw > 100kHz ? Ceramic_X7R : Electrolytic",
-            voltage_rating: "1.5 * max(vin_nom, vout_target * 1.2)",
-            esr_max: "0.01 * vout_target / iout_max",
-        },
-        
-        // MOSFET selection
-        mosfet_selection: {
-            vds_rating: "1.5 * vin_nom",
-            id_rating: "2 * iout_max",
-            rds_on_max: "0.01 * vout_target / iout_max",
-        },
-        
-        // Layout guidelines
-        layout_hints: [
-            "Keep SW node area minimal",
-            "Place input caps close to FETs",
-            "Separate power and signal grounds",
-            "Use thermal vias under FETs",
+        good_starting_points: [
+            {
+                conditions: "f_sw == 500kHz && vout == 5V && iout_max <= 2A",
+                values: {
+                    L: 22µH,
+                    C: 100µF,
+                    R_comp: 10kΩ,
+                    C_comp: 4.7nF,
+                    C_comp2: 100pF,
+                },
+                expected_performance: {
+                    phase_margin: 60°,
+                    crossover_frequency: 50kHz,
+                    efficiency: 92%,
+                    ripple: 30mV,
+                }
+            },
+            {
+                conditions: "f_sw > 1MHz",
+                values: {
+                    L: 4.7µH,
+                    C: 47µF,
+                    R_comp: 22kΩ,
+                    C_comp: 2.2nF,
+                    C_comp2: 47pF,
+                },
+                expected_performance: {
+                    phase_margin: 55°,
+                    crossover_frequency: 100kHz,
+                    efficiency: 94%,
+                }
+            }
         ],
+        
+        scaling_rules: {
+            "L inversely proportional to frequency",
+            "L inversely proportional to current",
+            "C proportional to current for same ripple",
+            "Crossover frequency should be fsw/10 to fsw/5",
+        },
+        
+        coupled_parameters: [
+            ["L", "C"],  // Output filter
+            ["R_comp", "C_comp", "C_comp2"],  // Compensation network
+        ],
+        
+        common_issues: [
+            {
+                name: "subharmonic_oscillation",
+                detection_condition: "duty_cycle > 0.5 && !slope_compensation",
+                symptoms: ["alternating pulse widths", "increased ripple"],
+                fixes: ["add_slope_compensation", "reduce_duty_cycle"],
+            },
+            {
+                name: "poor_transient_response", 
+                detection_condition: "crossover_frequency < f_sw/20",
+                symptoms: ["slow settling", "large overshoot"],
+                fixes: ["increase_bandwidth", "reduce_output_capacitance"],
+            },
+            {
+                name: "instability",
+                detection_condition: "phase_margin < 30°",
+                symptoms: ["oscillation", "ringing"],
+                fixes: ["increase_phase_margin", "reduce_crossover_frequency"],
+            }
+        ]
     }
     
-    // The actual circuit implementation would go here
-    // Values marked as TBD will be optimized by the simulation engine
+    // === TEST SEQUENCES ===
+    @test_sequences {
+        stability_test: {
+            name: "stability",
+            description: "Verify control loop stability",
+            
+            setup: {
+                initial_conditions: {
+                    vin: vin_nom,
+                    load: iout_max/2,
+                },
+                wait_for_steady_state: true,
+            },
+            
+            stimulus: {
+                type: "ac_sweep",
+                parameters: {
+                    injection_point: "comp_node",
+                    amplitude: 10mV,
+                    frequency_range: (1Hz, f_sw/2),
+                },
+            },
+            
+            measurements: {
+                measure: ["loop_gain", "phase"],
+                extract: ["phase_margin", "gain_margin", "crossover_frequency"],
+                pass_criteria: {
+                    phase_margin: "> 45°",
+                    gain_margin: "> 10dB",
+                }
+            }
+        },
+        
+        load_step_test: {
+            name: "load_step",
+            description: "Transient response to load change",
+            
+            setup: {
+                initial_conditions: {
+                    vin: vin_nom,
+                    load: iout_max/2,
+                },
+                wait_for_steady_state: true,
+            },
+            
+            stimulus: {
+                type: "step",
+                parameters: {
+                    load_change: "50% to 100%",
+                    rise_time: 1µs,
+                },
+                apply_at: "output_load",
+            },
+            
+            measurements: {
+                measure: ["vout", "iout"],
+                extract: ["overshoot", "undershoot", "settling_time"],
+                pass_criteria: {
+                    overshoot: "< 5%",
+                    settling_time: "< 100µs",
+                }
+            }
+        },
+        
+        efficiency_test: {
+            name: "efficiency",
+            description: "Measure efficiency vs load",
+            
+            stimulus: {
+                type: "sweep",
+                parameters: {
+                    load_sweep: "10% to 100% in 10% steps",
+                },
+            },
+            
+            measurements: {
+                measure: ["pin", "pout"],
+                extract: ["efficiency_curve"],
+                pass_criteria: {
+                    efficiency_at_full_load: "> 85%",
+                    efficiency_at_half_load: "> 90%",
+                }
+            }
+        }
+    }
+    
+    // === MODEL SELECTOR ===
+    @model_selector {
+        function select_model(phase: string, time_budget: duration) -> string {
+            if (phase == "initial_exploration") {
+                return "analytical";  // Fastest
+            }
+            
+            if (phase == "control_loop_design") {
+                return "averaged";  // Best for frequency domain
+            }
+            
+            if (phase == "verification" && time_budget > 30s) {
+                return "switching_behavioral";  // Most accurate behavioral
+            }
+            
+            if (phase == "final_validation" && time_budget > 10min) {
+                return "switching_spice";  // Full accuracy
+            }
+            
+            // Default based on time
+            if (time_budget < 1s) return "analytical";
+            if (time_budget < 10s) return "averaged";
+            return "switching_behavioral";
+        }
+    }
 }
+
+// Export the complete buck converter
+export { BuckConverter };

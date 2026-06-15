@@ -1,7 +1,7 @@
 // Simple Buck Converter Test Circuit
 // Uses new simplified library components
 
-import { TPS54302 } from "bhdl-stdlib/regulators/tps54302_simple.bhdl";
+import { TPS54302 } from "bhdl-stdlib/power/tps54302.bhdl";
 import { Capacitor } from "bhdl-stdlib/passives/capacitor.bhdl";
 import { Resistor } from "bhdl-stdlib/passives/resistor.bhdl";
 import { Inductor } from "bhdl-stdlib/passives/inductor.bhdl";

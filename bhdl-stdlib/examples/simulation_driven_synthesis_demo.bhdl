@@ -1,7 +1,7 @@
 // Simulation-Driven Synthesis Demo
 // Shows the complete feedback loop with automatic optimization
 
-import { BuckConverter } from "../power/buck_converter_complete.bhdl";
+import { BuckConverter } from "../power/buck_converter.bhdl";
 import { SimulationEngine } from "../simulation/simulation_engine.bhdl";
 
 // Real-world power supply design problem

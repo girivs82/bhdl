@@ -2,7 +2,7 @@
 // Orchestrates simulation using component's built-in intelligence
 
 import { SimulationLevel, BehavioralModel, OptimizationStrategy } from "./simulation_models.bhdl";
-import { BuckConverter } from "../power/buck_converter_complete.bhdl";
+import { BuckConverter } from "../power/buck_converter.bhdl";
 
 // Main simulation engine
 entity SimulationEngine {

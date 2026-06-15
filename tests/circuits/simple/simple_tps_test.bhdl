@@ -1,7 +1,7 @@
 // Simple TPS54302 Test Circuit
 // Tests the new parser with TPS54302 component
 
-import { TPS54302 } from "bhdl-stdlib/regulators/tps54302_simple.bhdl";
+import { TPS54302 } from "bhdl-stdlib/power/tps54302.bhdl";
 import { Capacitor } from "bhdl-stdlib/passives/capacitor.bhdl";
 import { Resistor } from "bhdl-stdlib/passives/resistor.bhdl";
 

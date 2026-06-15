@@ -6,9 +6,9 @@
 //
 // We model this as an enumerated family — the catalog scan can
 // match any of the listed voltages when the user instantiates the
-// generic `NCP1117_Simple` entity.
+// generic `NCP1117` entity.
 
-part_family ON_NCP1117_50 : NCP1117_Simple {
+part_family ON_NCP1117_50 : NCP1117 {
     attribute manufacturer  = "ON Semiconductor";
     attribute mpn           = "NCP1117ST50T3G";
     attribute output_v      = 5.0;

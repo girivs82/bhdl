@@ -3,7 +3,7 @@
 // One MPN per output-voltage variant. Arduino UNO and Leonardo use
 // the 3.3 V version (LP2985-33DBVR in TI's SOT-23-5 / DBV package).
 
-part_family TI_LP2985_33 : LP2985_Simple {
+part_family TI_LP2985_33 : LP2985 {
     attribute manufacturer  = "Texas Instruments";
     attribute mpn           = "LP2985-33DBVR";
     attribute output_v      = 3.3;

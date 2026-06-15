@@ -1,7 +1,7 @@
 // Multi-Converter Optimization with Coupled Constraints
 // Shows how simulation handles interacting power supplies
 
-import { BuckConverter } from "../power/buck_converter_complete.bhdl";
+import { BuckConverter } from "../power/buck_converter.bhdl";
 import { BoostConverter } from "../power/boost_converter.bhdl";
 import { LDO } from "../power/ldo_regulator.bhdl";
 

@@ -7,7 +7,7 @@
 //
 // Grammar discipline: parser-compatible v2.0 subset.
 
-entity LP2985_Simple(part_no: string = "LP2985-3.3") {
+entity LP2985(part_no: string = "LP2985-3.3") {
     pin VIN:  signal inout;   // unregulated input              (pin 1)
     pin GND:  signal inout;   //                                (pin 2)
     pin EN:   signal inout;   // active-low enable (ON/OFF)     (pin 3)

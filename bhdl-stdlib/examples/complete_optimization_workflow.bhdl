@@ -2,7 +2,7 @@
 // Demonstrates the full simulation-driven synthesis process with real convergence
 
 import { SimulationCoordinator, CoordinatorConfig } from "../simulation/simulation_coordinator.bhdl";
-import { BuckConverter } from "../power/buck_converter_complete.bhdl";
+import { BuckConverter } from "../power/buck_converter.bhdl";
 import { BoostConverter } from "../power/boost_converter.bhdl";
 
 // Example: USB-powered device with multiple rails
