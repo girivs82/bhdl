@@ -1053,7 +1053,26 @@ fn get_or_create_component_module(
             }
         });
     if let Some(ref entity) = entity_ast {
-        let mut entity_attrs = bhdl_analyzer::attribute_extraction::extract_module_attributes(entity);
+        // Resolve attribute values that reference a constructor param with a
+        // default — `attribute tolerance = tolerance` → 5%,
+        // `attribute voltage_rating = voltage` → 50V — so the module (and every
+        // instance that copies its attributes) carries the real value, not the
+        // literal reference text. Storing the raw token poisoned the
+        // part-selection grade gate, which read a resistor's tolerance as the
+        // bogus string "tolerance". Un-defaulted param refs (`value`) and
+        // generic refs (`V_OUT`, substituted by the alias pass below) have no
+        // resolved entry and fall back to the raw text via the per-key
+        // unwrap_or — same contract as the component-library loader.
+        let resolved =
+            bhdl_analyzer::attribute_extraction::extract_module_attributes_resolved(entity);
+        let mut entity_attrs: std::collections::HashMap<String, String> =
+            bhdl_analyzer::attribute_extraction::extract_module_attributes(entity)
+                .into_iter()
+                .map(|(k, raw)| {
+                    let v = resolved.get(&k).cloned().unwrap_or(raw);
+                    (k, v)
+                })
+                .collect();
 
         // If this is an alias specialization, substitute generic param references
         // in attribute values with concrete values (e.g., "V_OUT" → "5")
