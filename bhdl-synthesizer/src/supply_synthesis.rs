@@ -72,6 +72,14 @@ pub struct Candidate {
     pub ic_price: Option<f64>,
     pub ic_mpn: Option<String>,
     pub ic_sku: Option<String>,
+    /// Summed catalogue price of the SEED-sized support parts (expansion
+    /// children resolved to class+value: literals, param defaults, and the
+    /// L/C/divider closed forms), priced through the provider's passive
+    /// path in one batch. None when the provider/DB is absent.
+    pub support_cost: Option<f64>,
+    /// Support parts that could not be resolved or priced (diodes, exotic
+    /// values, un-resolvable refs) — counted and stated, never silent.
+    pub unpriced_parts: usize,
 }
 
 /// Result of the desugar pass over one source file.
@@ -234,6 +242,7 @@ fn desugar_one(
                 i_out_n,
                 spec_num("efficiency_min"),
                 spec_num("i_q_max"),
+                spec_num("ripple_max"),
                 &profile,
             )?
         }
@@ -636,12 +645,14 @@ fn choose_part(
     i_out: f64,
     efficiency_min: Option<f64>,
     i_q_max: Option<f64>,
+    ripple_max: Option<f64>,
     profile: &str,
 ) -> Result<(String, Vec<Candidate>)> {
     let mut files = Vec::new();
     collect_bhdl(stdlib_root, &mut files);
 
     let mut survey: Vec<Candidate> = Vec::new();
+    let mut src_of: HashMap<String, String> = HashMap::new();
     for f in &files {
         let Ok(src) = std::fs::read_to_string(f) else { continue };
         // Every entity in the file whose class is a regulator class.
@@ -803,6 +814,9 @@ fn choose_part(
             }
 
             let all_pass = gates.iter().all(|(_, _, ok)| *ok);
+            if all_pass {
+                src_of.insert(name.clone(), src.clone());
+            }
             // Support-part count: the entity's expansion children (each
             // `-> Name:` instantiation inside the expansion block).
             let support_parts = count_expansion_children(&src, &name);
@@ -823,6 +837,8 @@ fn choose_part(
                 ic_price: None,
                 ic_mpn: None,
                 ic_sku: None,
+                support_cost: None,
+                unpriced_parts: 0,
             });
         }
     }
@@ -838,6 +854,22 @@ fn choose_part(
             c.ic_mpn = sel.1;
             c.ic_sku = sel.2;
         }
+        // Support parts: resolve the expansion children to (class, value)
+        // using literals, constructor defaults, and the seed closed forms,
+        // then price them through the provider's passive path in one batch.
+        if let Some(src) = src_of.get(&c.part) {
+            let (reqs, unresolved) = support_part_values(
+                src, &c.part, v_in, v_out, i_out, ripple_max,
+            );
+            c.unpriced_parts = unresolved;
+            if !reqs.is_empty() {
+                let (total, unpriced) = price_supports(&reqs);
+                c.support_cost = total;
+                c.unpriced_parts += unpriced;
+            } else {
+                c.support_cost = Some(0.0);
+            }
+        }
     }
 
     // Rank the survivors per the requested profile:
@@ -848,8 +880,14 @@ fn choose_part(
         let loss = c.loss_w.unwrap_or(f64::MAX);
         match profile {
             "cost" => (
-                c.ic_price.unwrap_or(f64::MAX),
-                c.support_parts as f64,
+                match (c.ic_price, c.support_cost) {
+                    // Total BOM money when both sides priced; IC-only and
+                    // unpriced candidates rank after fully-priced ones.
+                    (Some(ic), Some(sup)) => ic + sup,
+                    (Some(ic), None) => ic + 1e3,
+                    _ => f64::MAX,
+                },
+                c.unpriced_parts as f64 * 1e3 + c.support_parts as f64,
                 loss,
             ),
             _ => (loss, c.support_parts as f64, 0.0),
@@ -883,6 +921,220 @@ fn choose_part(
             }
             bail!(msg)
         }
+    }
+}
+
+/// Resolve an entity's expansion children to priceable (class, value-SI)
+/// requirements. Values come from, in order: a numeric literal in the
+/// instantiation (`Cap(100nF)`), the referenced constructor default
+/// (`Cap(c_in)` → the `c_in` param's default), or the SEED closed forms for
+/// the design-block outputs (`Ind(l_value)`, `Cap(c_out_value)`,
+/// `Res(r_top_value)`), computed from the operating point exactly as the
+/// design block will. Unresolvable children (diodes, exotic classes,
+/// unmatched refs) are counted, not guessed.
+fn support_part_values(
+    src: &str,
+    name: &str,
+    v_in: f64,
+    v_out: f64,
+    i_out: f64,
+    ripple_max: Option<f64>,
+) -> (Vec<(String, f64)>, usize) {
+    let attrs = entity_attrs_txt(src, name);
+    let num_attr = |k: &str| {
+        attrs.get(k).and_then(|v| {
+            parse_si_txt(v).or_else(|| {
+                entity_param_default(src, name, v.trim()).and_then(|d| parse_si_txt(&d))
+            })
+        })
+    };
+    let f_sw = num_attr("f_sw")
+        .or_else(|| num_attr("switching_frequency"))
+        .unwrap_or(0.0);
+    let duty = if v_in > 0.0 { v_out / v_in } else { 0.0 };
+    let d_il = 0.3 * i_out;
+    let v_ref = num_attr("feedback_voltage").unwrap_or(0.0);
+    let r_bot = entity_param_default(src, name, "r_fb_bot")
+        .and_then(|d| parse_si_txt(&d))
+        .unwrap_or(0.0);
+
+    // Seed closed forms keyed by the design-output variable names the stdlib
+    // expansion blocks reference.
+    let seed = |ident: &str| -> Option<f64> {
+        match ident {
+            "l_value" if f_sw > 0.0 && d_il > 0.0 => {
+                Some((v_in - v_out) * duty / (f_sw * d_il))
+            }
+            "c_out_value" | "c_out" if f_sw > 0.0 => {
+                let dv = ripple_max.unwrap_or(0.05);
+                Some(d_il / (8.0 * f_sw * dv))
+            }
+            "c_in_value" | "c_in" if f_sw > 0.0 => {
+                Some(i_out * duty * (1.0 - duty) / (f_sw * 0.15))
+            }
+            "r_top_value" if v_ref > 0.0 && r_bot > 0.0 => {
+                Some(r_bot * (v_out - v_ref) / v_ref)
+            }
+            "r_fb_bot" => Some(r_bot).filter(|r| *r > 0.0),
+            _ => None,
+        }
+    };
+
+    let Some(at) = find_entity_decl(src, name) else { return (Vec::new(), 0) };
+    let mut reqs = Vec::new();
+    let mut unresolved = 0usize;
+    let mut in_exp = false;
+    for line in src[at..].lines() {
+        let l = line.split("//").next().unwrap_or("").trim();
+        if l.starts_with("expansion {") || l == "expansion" {
+            in_exp = true;
+            continue;
+        }
+        if !in_exp {
+            continue;
+        }
+        if l == "}" {
+            break;
+        }
+        // Each `Name: Type(arg…)` instantiation on the line.
+        let mut rest = l;
+        while let Some(pos) = rest.find(": ") {
+            let after = &rest[pos + 2..];
+            let ty: String = after
+                .chars()
+                .take_while(|ch| ch.is_alphanumeric() || *ch == '_')
+                .collect();
+            let tail = &after[ty.len()..];
+            if !tail.starts_with('(') || ty.is_empty()
+                || !ty.chars().next().unwrap().is_ascii_uppercase()
+            {
+                rest = &rest[pos + 2..];
+                continue;
+            }
+            let arg: String = tail[1..]
+                .chars()
+                .take_while(|ch| *ch != ',' && *ch != ')')
+                .collect();
+            let arg = arg.trim();
+            let class = match ty.as_str() {
+                "Cap" | "Capacitor" => Some("capacitor"),
+                "Res" | "Resistor" => Some("resistor"),
+                "Ind" | "Inductor" => Some("inductor"),
+                _ => None,
+            };
+            match class {
+                Some(cls) => {
+                    // Literals/defaults are already standard values; SEED
+                    // closed-form outputs are raw numbers and must be snapped
+                    // to the E-series grid before pricing — the catalogue's
+                    // value window (rightly) rejects a 31.25kΩ or 65µH that
+                    // no one manufactures. Same snap the design flow applies.
+                    let value = parse_si_txt(arg)
+                        .or_else(|| {
+                            entity_param_default(src, name, arg)
+                                .and_then(|d| parse_si_txt(&d))
+                        })
+                        .or_else(|| {
+                            seed(arg).map(|v| {
+                                if cls == "resistor" {
+                                    e_series_nearest(v, 96)
+                                } else {
+                                    e_series_nearest(v, 12)
+                                }
+                            })
+                        });
+                    match value.filter(|v| *v > 0.0) {
+                        Some(v) => reqs.push((cls.to_string(), v)),
+                        None => unresolved += 1,
+                    }
+                }
+                None => unresolved += 1,
+            }
+            rest = &rest[pos + 2..];
+        }
+    }
+    (reqs, unresolved)
+}
+
+/// Nearest standard E-series value (E12 for reactives, E96 for resistors) —
+/// the pricing-side analogue of the design flow's snap stage.
+fn e_series_nearest(v: f64, series: u32) -> f64 {
+    if !(v > 0.0) {
+        return v;
+    }
+    let decade = 10f64.powf(v.log10().floor());
+    let mut best = v;
+    let mut best_err = f64::MAX;
+    let n = series as i32;
+    for dec in [decade / 10.0, decade, decade * 10.0] {
+        for k in 0..n {
+            let base = 10f64.powf(k as f64 / n as f64);
+            // Round to the 2- or 3-significant-digit convention.
+            let base = if series <= 24 {
+                (base * 10.0).round() / 10.0
+            } else {
+                (base * 100.0).round() / 100.0
+            };
+            let cand = base * dec;
+            let err = ((cand - v) / v).abs();
+            if err < best_err {
+                best_err = err;
+                best = cand;
+            }
+        }
+    }
+    best
+}
+
+/// Price a batch of (class, value-SI) support parts through the provider's
+/// passive path. Returns (sum of unit prices when at least one priced,
+/// count that came back unpriced).
+fn price_supports(reqs: &[(String, f64)]) -> (Option<f64>, usize) {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("bhdl-jlcparts-provider")))
+        .filter(|p| p.exists())
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "bhdl-jlcparts-provider".to_string());
+    let requirements: Vec<serde_json::Value> = reqs
+        .iter()
+        .enumerate()
+        .map(|(i, (cls, v))| {
+            serde_json::json!({"class_index": i, "class": cls, "value": v})
+        })
+        .collect();
+    let req = serde_json::json!({"protocol": 1, "requirements": requirements});
+    let run = || -> Option<serde_json::Value> {
+        let mut child = Command::new(&exe)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok()?;
+        child.stdin.take()?.write_all(req.to_string().as_bytes()).ok()?;
+        let out = child.wait_with_output().ok()?;
+        serde_json::from_slice(&out.stdout).ok()
+    };
+    let Some(v) = run() else { return (None, reqs.len()) };
+    let empty = Vec::new();
+    let sels = v
+        .get("selections")
+        .and_then(|s| s.as_array())
+        .unwrap_or(&empty);
+    let mut total = 0.0;
+    let mut priced = 0usize;
+    for sel in sels {
+        if let Some(p) = sel.get("unit_price").and_then(|p| p.as_f64()) {
+            total += p;
+            priced += 1;
+        }
+    }
+    if priced == 0 {
+        (None, reqs.len())
+    } else {
+        (Some(total), reqs.len() - priced)
     }
 }
 

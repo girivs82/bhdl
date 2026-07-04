@@ -489,8 +489,8 @@ async fn main() -> Result<()> {
                 }
                 if !su.survey.is_empty() {
                     println!("\n### Candidate survey (S2 chooser)\n");
-                    println!("| Part | Verdict | Est. loss | Support parts | IC price | MPN (LCSC) |");
-                    println!("|---|---|---|---|---|---|");
+                    println!("| Part | Verdict | Est. loss | Support | IC price | Support cost | Total | MPN (LCSC) |");
+                    println!("|---|---|---|---|---|---|---|---|");
                     for c in &su.survey {
                         let verdict = if c.chosen {
                             "**CHOSEN**".to_string()
@@ -517,9 +517,18 @@ async fn main() -> Result<()> {
                             (Some(m), Some(k)) => format!("{m} ({k})"),
                             _ => "—".into(),
                         };
+                        let sup = match (c.support_cost, c.unpriced_parts) {
+                            (Some(sc), 0) => format!("${sc:.3}"),
+                            (Some(sc), n) => format!("${sc:.3} (+{n} unpriced)"),
+                            (None, _) => "—".into(),
+                        };
+                        let total = match (c.ic_price, c.support_cost) {
+                            (Some(a), Some(b)) => format!("${:.3}", a + b),
+                            _ => "—".into(),
+                        };
                         println!(
-                            "| {} | {} | {} | {} | {} | {} |",
-                            c.part, verdict, loss, c.support_parts, price, mpn
+                            "| {} | {} | {} | {} | {} | {} | {} | {} |",
+                            c.part, verdict, loss, c.support_parts, price, sup, total, mpn
                         );
                     }
                     println!("\n#### Per-candidate gate detail\n");
