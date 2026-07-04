@@ -65,6 +65,13 @@ pub struct Candidate {
     /// Loss-model params for the report curves:
     /// (is_switcher, rds_on Ω, f_sw Hz, t_sw s, i_q A).
     pub loss_params: Option<(bool, f64, f64, f64, f64)>,
+    /// Real catalogue price of the regulator itself (cheapest in-stock MPN
+    /// with this part-name prefix, via the jlcparts provider's mpn_query) —
+    /// the `profile: cost` primary key. None when the provider/DB is absent
+    /// or the prefix matches nothing (stated in the survey, never silent).
+    pub ic_price: Option<f64>,
+    pub ic_mpn: Option<String>,
+    pub ic_sku: Option<String>,
 }
 
 /// Result of the desugar pass over one source file.
@@ -813,21 +820,39 @@ fn choose_part(
                 support_parts,
                 chosen: false,
                 loss_params,
+                ic_price: None,
+                ic_mpn: None,
+                ic_sku: None,
             });
         }
     }
 
+    // Price the qualifiers through the supplier plugin (all part selection
+    // goes through plugins — no direct catalogue coupling here): cheapest
+    // in-stock MPN with the part-name prefix. Missing provider/DB ⇒ prices
+    // stay None and the ranking falls back to part count (stated below).
+    let prefer = format!("{v_out:.1}V");
+    for c in survey.iter_mut().filter(|c| c.loss_w.is_some()) {
+        if let Some(sel) = price_via_provider(&c.part, &prefer) {
+            c.ic_price = sel.0;
+            c.ic_mpn = sel.1;
+            c.ic_sku = sel.2;
+        }
+    }
+
     // Rank the survivors per the requested profile:
-    //   cost     → fewest support parts (BOM size), then lowest loss —
-    //              a 2-cap LDO beats a 7-part buck when both qualify;
+    //   cost     → real regulator price (support parts count then loss as
+    //              tiebreaks; support-part PRICING is the remaining S3 gap);
     //   balanced / grade → lowest loss, then fewest parts.
-    // Real per-candidate catalogue pricing (regulator MPN + sized support
-    // parts) is the S3 remainder; until then the key is stated, not silent.
-    let key = |c: &Candidate| -> (f64, f64) {
+    let key = |c: &Candidate| -> (f64, f64, f64) {
         let loss = c.loss_w.unwrap_or(f64::MAX);
         match profile {
-            "cost" => (c.support_parts as f64, loss),
-            _ => (loss, c.support_parts as f64),
+            "cost" => (
+                c.ic_price.unwrap_or(f64::MAX),
+                c.support_parts as f64,
+                loss,
+            ),
+            _ => (loss, c.support_parts as f64, 0.0),
         }
     };
     let winner = survey
@@ -859,6 +884,53 @@ fn choose_part(
             bail!(msg)
         }
     }
+}
+
+/// Price a regulator through the bundled jlcparts provider's `mpn_query`
+/// mode. Provider binary resolved next to the current executable (the
+/// normal target-dir layout), else on PATH; the provider finds the in-tree
+/// DB itself (its own walk-up). Returns (unit_price, mpn, lcsc_sku).
+fn price_via_provider(
+    part: &str,
+    prefer: &str,
+) -> Option<(Option<f64>, Option<String>, Option<String>)> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("bhdl-jlcparts-provider")))
+        .filter(|p| p.exists())
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "bhdl-jlcparts-provider".to_string());
+    let req = serde_json::json!({
+        "protocol": 1,
+        "requirements": [{
+            "class_index": 0, "class": "ic",
+            "mpn_query": part, "mpn_prefer": prefer
+        }]
+    });
+    let mut child = Command::new(&exe)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    child
+        .stdin
+        .take()?
+        .write_all(req.to_string().as_bytes())
+        .ok()?;
+    let out = child.wait_with_output().ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    let sel = v.get("selections")?.get(0)?;
+    if sel.get("error").is_some() {
+        return None;
+    }
+    Some((
+        sel.get("unit_price").and_then(|p| p.as_f64()),
+        sel.get("mpn").and_then(|m| m.as_str()).map(str::to_string),
+        sel.get("vendor_sku").and_then(|m| m.as_str()).map(str::to_string),
+    ))
 }
 
 /// Report design curves (S3): computed from the same closed forms the

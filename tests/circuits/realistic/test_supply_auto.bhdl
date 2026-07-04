@@ -5,9 +5,11 @@
 // regulator loss, and instantiates the winner. `bhdl … report` shows the
 // full candidate survey with per-gate verdicts and computed numbers.
 //
-// 12V → 3.3V @ 1.5A: every linear rejects on pass-element dissipation
-// ((12−3.3)·1.5 ≈ 13W against ~2W packages); the buck with the lowest
-// estimated loss wins.
+// 12V → 3.3V @ 1.5A, profile: balanced — every linear rejects on
+// pass-element dissipation ((12−3.3)·1.5 ≈ 13W against ~2W packages); of
+// the two qualifying bucks the LOWEST-LOSS part wins (TPS54331 0.30W vs
+// LM2596 0.44W). `profile: cost` would rank by the real catalogue price of
+// the regulator instead (see test_supply_ldo).
 
 board SupplyAutoS2 {
     power VIN = 12V @ 3A;
@@ -17,6 +19,6 @@ board SupplyAutoS2 {
     supply @VCC_3V3 from @VIN {
         ripple_max: 30mV;
         i_q_max:    5mA;
-        profile:    cost;
+        profile:    balanced;
     }
 }

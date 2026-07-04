@@ -489,8 +489,8 @@ async fn main() -> Result<()> {
                 }
                 if !su.survey.is_empty() {
                     println!("\n### Candidate survey (S2 chooser)\n");
-                    println!("| Part | Verdict | Est. loss | Support parts |");
-                    println!("|---|---|---|---|");
+                    println!("| Part | Verdict | Est. loss | Support parts | IC price | MPN (LCSC) |");
+                    println!("|---|---|---|---|---|---|");
                     for c in &su.survey {
                         let verdict = if c.chosen {
                             "**CHOSEN**".to_string()
@@ -509,7 +509,18 @@ async fn main() -> Result<()> {
                             .loss_w
                             .map(|w| format!("{w:.2}W"))
                             .unwrap_or_else(|| "—".into());
-                        println!("| {} | {} | {} | {} |", c.part, verdict, loss, c.support_parts);
+                        let price = c
+                            .ic_price
+                            .map(|p| format!("${p:.3}"))
+                            .unwrap_or_else(|| "—".into());
+                        let mpn = match (&c.ic_mpn, &c.ic_sku) {
+                            (Some(m), Some(k)) => format!("{m} ({k})"),
+                            _ => "—".into(),
+                        };
+                        println!(
+                            "| {} | {} | {} | {} | {} | {} |",
+                            c.part, verdict, loss, c.support_parts, price, mpn
+                        );
                     }
                     println!("\n#### Per-candidate gate detail\n");
                     for c in &su.survey {

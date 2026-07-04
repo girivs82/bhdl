@@ -88,6 +88,19 @@ struct Requirement {
     /// Per-requirement build quantity (overrides the top-level one).
     #[serde(default)]
     quantity: Option<u64>,
+    /// MPN-prefix lookup mode (ICs — the power-supply chooser pricing
+    /// regulator candidates): when set, `class`/`value` are ignored and the
+    /// cheapest in-stock part whose `mfr` starts with this prefix is
+    /// returned (basic-tier preferred on price ties).
+    #[serde(default)]
+    mpn_query: Option<String>,
+    /// Variant preference for mpn_query: when set (e.g. `"3.3V"`), matches
+    /// whose catalogue description contains it are preferred — picks the
+    /// right fixed-output variant of a family (LP2985-33 not LP2985-50)
+    /// without hardcoding per-family suffix conventions. Falls back to all
+    /// matches when none contain it.
+    #[serde(default)]
+    mpn_prefer: Option<String>,
 }
 
 /// An optimization objective: either a named profile or an explicit weight
@@ -578,6 +591,83 @@ impl Catalogue {
     ///    still considered confirmed.
     /// 3. **Value-only** — last resort, no package constraint, with a
     ///    warning that the footprint could not be confirmed.
+    /// MPN-prefix lookup: cheapest in-stock `mfr LIKE '<q>%'` at `qty`
+    /// (basic-tier parts win price ties — no extended-part reel fee).
+    fn resolve_mpn(
+        &mut self,
+        class_index: usize,
+        q: &str,
+        prefer: Option<&str>,
+        qty: u64,
+    ) -> Selection {
+        let sql = "SELECT mfr, manufacturer, lcsc, stock, price, basic, description \
+                   FROM v_components \
+                   WHERE mfr LIKE ?1 || '%' AND stock > 0 \
+                   ORDER BY stock DESC LIMIT 200";
+        let mut stmt = match self.conn.prepare(sql) {
+            Ok(st) => st,
+            Err(e) => {
+                return Selection {
+                    class_index,
+                    error: Some(format!("mpn query prepare failed: {e}")),
+                    ..Default::default()
+                }
+            }
+        };
+        let rows = stmt.query_map([q], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, String>(6)?,
+            ))
+        });
+        let all: Vec<_> = match rows {
+            Ok(r) => r.flatten().collect(),
+            Err(_) => Vec::new(),
+        };
+        // Variant preference: keep only description matches when any exist.
+        let pool: Vec<_> = match prefer {
+            Some(pref) if all.iter().any(|r| r.6.contains(pref)) => {
+                all.iter().filter(|r| r.6.contains(pref)).cloned().collect()
+            }
+            _ => all,
+        };
+        let mut best: Option<(String, String, i64, i64, f64, i64)> = None;
+        for (mfr, man, lcsc, stock, price_json, basic, _desc) in pool {
+            let Some(p) = price_at_qty(&price_json, qty) else { continue };
+            let better = match &best {
+                None => true,
+                Some((_, _, _, _, bp, bb)) => (p, -basic) < (*bp, -*bb),
+            };
+            if better {
+                best = Some((mfr, man, lcsc, stock, p, basic));
+            }
+        }
+        match best {
+            Some((mfr, man, lcsc, stock, p, basic)) => Selection {
+                class_index,
+                mpn: Some(mfr),
+                manufacturer: Some(man),
+                vendor: Some("LCSC".into()),
+                vendor_sku: Some(format!("C{lcsc}")),
+                stock: Some(stock.max(0) as u64),
+                unit_price: Some(p),
+                currency: Some("USD".into()),
+                note: Some(if basic > 0 { "basic".into() } else { "extended".into() }),
+                ..Default::default()
+            },
+            None => Selection {
+                class_index,
+                error: Some(format!("no in-stock part with MPN prefix '{q}'")),
+                ..Default::default()
+            },
+        }
+    }
+
     fn resolve(
         &mut self,
         req: &Requirement,
@@ -1048,6 +1138,16 @@ fn main() {
     // one compiled regex per unit (cheap; ≤3 distinct units)
     let mut res: HashMap<char, Regex> = HashMap::new();
     for req in &reqs.requirements {
+        if let Some(q) = &req.mpn_query {
+            let qty = req.quantity.unwrap_or(default_qty).max(1);
+            selections.push(cat.resolve_mpn(
+                req.class_index,
+                q,
+                req.mpn_prefer.as_deref(),
+                qty,
+            ));
+            continue;
+        }
         let unit = match unit_for(&req.class) {
             Some(u) => u,
             None => {

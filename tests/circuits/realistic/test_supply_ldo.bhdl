@@ -1,8 +1,11 @@
-// Power-supply synthesis S3: profile-aware ranking. 5V → 3.3V @ 100mA with
-// `profile: cost` — both an LDO and the bucks pass every capability gate,
-// and the COST profile prefers the fewest support parts: the LP2985
-// (P_pass = (5−3.3)·0.1 + 5·850µA ≈ 0.17W ≤ 400mW/2) beats the 7-part
-// bucks despite their loss numbers. `balanced` would rank by loss instead.
+// Power-supply synthesis S3: cost profile ranked by the REAL catalogue
+// price of the regulator (via the jlcparts provider's mpn_query, variant-
+// preferred to the 3.3V part). 5V → 3.3V @ 100mA: an LDO and both bucks
+// pass every capability gate; LP2985 (~$0.10, 0 support parts,
+// P_pass ≈ 0.17W ≤ 400mW/2) beats TPS54331 (~$0.34) and the LM2596 clone
+// (~$0.27) — and would still win the part-count fallback if the catalogue
+// DB were absent (that fallback is stated in the survey, never silent).
+// `balanced` ranks by loss instead (see test_supply_auto).
 
 board SupplyLdoS3 {
     power VIN_5V = 5V @ 1A;
