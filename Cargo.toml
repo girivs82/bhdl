@@ -21,6 +21,15 @@ resolver = "2"
 # the round-trip test; the Arduino UNO fixture takes minutes.
 # The settings below trade some compile time for runtime speed.
 
+# Debug info: line tables only. Full debuginfo (the dev default) was
+# the dominant byte count in target/ — multiplied across every binary
+# and the incremental caches it ballooned a workspace build to ~150GB.
+# Line tables keep readable backtraces (file:line) for panics and
+# profilers; full variable/type info is only needed under an actual
+# debugger session — flip to `debug = 2` locally when stepping through.
+[profile.dev]
+debug = "line-tables-only"
+
 # External deps: opt-level=3. Heavy first-build cost (paid once
 # and cached) but they almost never change, and bhdl-synthesizer
 # leans on them (rhai, tokio, slotmap, rowan, serde) every single
