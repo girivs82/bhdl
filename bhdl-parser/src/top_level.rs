@@ -143,9 +143,17 @@ impl<'t> Parser<'t> {
                 // only. See docs/spec/Board_SKU_Variants.md.
                 Some(SyntaxKind::VARIANT_KW) => self.parse_variant_block(),
                 Some(SyntaxKind::IDENT) => {
+                    // `supply` is a contextual keyword at board scope (not
+                    // lexed as a kw — same discipline as `simulation`): it
+                    // opens a power-supply requirement statement
+                    // (docs/spec/Power_Supply_Synthesis.md §2).
+                    if self.peek_text().as_deref() == Some("supply") {
+                        self.parse_supply_stmt();
+                        continue;
+                    }
                     // Check if this is an entity/component instantiation or connection
                     use crate::v2_fixes::NamedDeclarationType;
-                    
+
                     match self.is_v2_named_declaration() {
                         NamedDeclarationType::EntityInstance => {
                             self.parse_entity_instance();
@@ -2191,6 +2199,83 @@ impl<'t> Parser<'t> {
                 }
                 None => {
                     self.error("Unexpected end of file in simulation block".to_string());
+                    break;
+                }
+            }
+        }
+        self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
+    // supply @TARGET from @SOURCE { key: value; ... }
+    // Power-supply requirement statement (Power_Supply_Synthesis.md §2).
+    // The rails carry the electrical operating point; the spec block carries
+    // only the axes a rail cannot (ripple_max, efficiency_min, i_q_max,
+    // profile, and — S1 — the explicit `using: <Part>`). Values are kept as
+    // raw token runs per entry (VALUE `30mV`, IDENT `cost` / `TPS54331`);
+    // the desugar pass interprets them.
+    fn parse_supply_stmt(&mut self) {
+        self.builder.start_node(SyntaxKind::SUPPLY_STMT.into());
+        self.bump(); // consume the `supply` IDENT
+        self.skip_trivia();
+        // Target rail: `@NAME` (the `@` is optional, matching connection refs).
+        if self.peek() == Some(SyntaxKind::AT) {
+            self.bump();
+        }
+        self.expect(SyntaxKind::IDENT);
+        self.skip_trivia();
+        // `from` is contextual here (FROM_KW is only produced in import
+        // position by the lexer) — accept either token flavour.
+        if self.peek() == Some(SyntaxKind::FROM_KW)
+            || self.peek_text().as_deref() == Some("from")
+        {
+            self.bump_any();
+        } else {
+            self.error("Expected `from` in supply statement".to_string());
+        }
+        self.skip_trivia();
+        // Source rail.
+        if self.peek() == Some(SyntaxKind::AT) {
+            self.bump();
+        }
+        self.expect(SyntaxKind::IDENT);
+        self.skip_trivia();
+        self.expect(SyntaxKind::L_BRACE);
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) => break,
+                Some(SyntaxKind::IDENT) => {
+                    // key: value;
+                    self.builder.start_node(SyntaxKind::SUPPLY_SPEC_ENTRY.into());
+                    self.bump(); // key
+                    self.expect(SyntaxKind::COLON);
+                    // Value: everything up to the terminating `;` (a VALUE
+                    // token, an IDENT, or a short token run like `85 %`).
+                    loop {
+                        self.skip_trivia();
+                        match self.peek() {
+                            Some(SyntaxKind::SEMI) => {
+                                self.bump();
+                                break;
+                            }
+                            Some(SyntaxKind::R_BRACE) | None => {
+                                self.error(
+                                    "Expected ';' after supply spec value".to_string(),
+                                );
+                                break;
+                            }
+                            Some(_) => self.bump_any(),
+                        }
+                    }
+                    self.builder.finish_node();
+                }
+                Some(_) => {
+                    self.error("Unexpected token in supply spec block".to_string());
+                    self.bump_any();
+                }
+                None => {
+                    self.error("Unexpected end of file in supply statement".to_string());
                     break;
                 }
             }

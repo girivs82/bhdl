@@ -400,6 +400,11 @@ pub enum SyntaxKind {
     MODEL_BLOCK,           // model { ... }   (§5 device-model surface)
     MODEL_NODE_STMT,       // node <net> <source|draws> = <expr>;
 
+    // Power-supply synthesis (docs/spec/Power_Supply_Synthesis.md §2):
+    // supply @TARGET from @SOURCE { ripple_max: 30mV; using: TPS54331; ... }
+    SUPPLY_STMT,           // the whole statement (board scope)
+    SUPPLY_SPEC_ENTRY,     // one `key: value;` entry in the spec block
+
     // Symbol and layout definition nodes
     SYMBOL_DEF,            // symbol EntityName { ... }
     SYMBOL_BODY_HINT,      // body rectangle;

@@ -1,0 +1,20 @@
+// Power-supply synthesis S1 (docs/spec/Power_Supply_Synthesis.md):
+// the board states the REQUIREMENT; bhdl desugars it into the equivalent
+// hand-written instantiation (import + spec-threaded constructor + wiring),
+// then the whole existing pipeline runs — TPS54331's design{} sizes L/C and
+// the FB divider for 3.3V, expansion materialises them, the §4 stress block
+// rates the as-built values, sign-off gates the margins, and the supplier
+// plugins pick MPNs. Verified: C_out is sized so the achieved ripple
+// (ΔV≈27.9mV, stress-block provenance) meets the 30mV spec.
+
+board SupplyStmtS1 {
+    power VIN = 12V @ 3A;
+    power VCC_3V3 = 3.3V @ 1.5A;
+    ground GND;
+
+    supply @VCC_3V3 from @VIN {
+        ripple_max: 30mV;
+        profile:    cost;
+        using:      TPS54331;   // S1: explicit part; S2 adds the chooser
+    }
+}

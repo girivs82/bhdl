@@ -338,7 +338,40 @@ async fn main() -> Result<()> {
     // Read input file
     let input_content = fs::read_to_string(&cli.input)
         .with_context(|| format!("Failed to read file: {}", cli.input.display()))?;
-    
+
+    // Power-supply synthesis (docs/spec/Power_Supply_Synthesis.md): desugar
+    // any `supply` requirement statements into the equivalent hand-written
+    // instantiation + wiring BEFORE the main parse, so every downstream pass
+    // sees plain BHDL. Prints the generated text — it is the report's
+    // "winner and instantiation" section, and the user should see exactly
+    // what their requirement compiled to.
+    let input_content = match bhdl_synthesizer::supply_synthesis::desugar_supplies(
+        &input_content,
+        std::path::Path::new("bhdl-stdlib"),
+    ) {
+        Ok(Some(d)) => {
+            for su in &d.supplies {
+                println!(
+                    "{} supply @{} from @{} → {} ({})",
+                    "⚡".yellow(),
+                    su.target_rail,
+                    su.source_rail,
+                    su.part,
+                    su.instance
+                );
+                for line in su.generated.lines() {
+                    println!("    {}", line.trim_start());
+                }
+            }
+            d.source
+        }
+        Ok(None) => input_content,
+        Err(e) => {
+            eprintln!("{} {e:#}", "supply synthesis error:".red().bold());
+            std::process::exit(1);
+        }
+    };
+
     // Always start with parsing
     let parse_result = parse(&input_content);
     

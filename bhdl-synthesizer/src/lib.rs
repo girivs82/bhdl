@@ -42,6 +42,9 @@ pub mod package_selector;
 
 // GLACIER-driven component physical selection
 pub mod glacier_physical_selection;
+// Power-supply synthesis: the `supply` statement desugar (S1).
+// docs/spec/Power_Supply_Synthesis.md.
+pub mod supply_synthesis;
 
 // Simulation-refined margin & sign-off report (spec: Simulation_Margin_Signoff.md).
 pub mod signoff;
