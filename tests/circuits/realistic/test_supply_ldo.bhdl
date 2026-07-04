@@ -1,0 +1,16 @@
+// Power-supply synthesis S3: profile-aware ranking. 5V → 3.3V @ 100mA with
+// `profile: cost` — both an LDO and the bucks pass every capability gate,
+// and the COST profile prefers the fewest support parts: the LP2985
+// (P_pass = (5−3.3)·0.1 + 5·850µA ≈ 0.17W ≤ 400mW/2) beats the 7-part
+// bucks despite their loss numbers. `balanced` would rank by loss instead.
+
+board SupplyLdoS3 {
+    power VIN_5V = 5V @ 1A;
+    power VCC_3V3 = 3.3V @ 100mA;
+    ground GND;
+
+    supply @VCC_3V3 from @VIN_5V {
+        ripple_max: 50mV;
+        profile:    cost;
+    }
+}

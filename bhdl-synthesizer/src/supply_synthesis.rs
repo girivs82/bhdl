@@ -40,6 +40,10 @@ pub struct SupplyDesugar {
     /// verdicts and the ranking score. Empty when the part was named
     /// explicitly (`using:`) — that override is itself recorded in the report.
     pub survey: Vec<Candidate>,
+    /// Report design curves (S3): (title, x-label, y-label, points, note).
+    /// Computed from the same closed forms the chooser/sizer use — seed
+    /// values, marked as such.
+    pub curves: Vec<(String, String, String, Vec<(f64, f64)>, String)>,
 }
 
 /// One surveyed regulator candidate (report sections 3–4).
@@ -53,7 +57,14 @@ pub struct Candidate {
     /// P ≈ I²·R_ds·D + V_IN·I·f_sw·t_sw + V_IN·I_q. `None` when the part
     /// failed a hard gate.
     pub loss_w: Option<f64>,
+    /// Support parts the entity's expansion materialises (BOM-size proxy —
+    /// the `profile: cost` ranking key until real per-candidate catalogue
+    /// pricing lands).
+    pub support_parts: usize,
     pub chosen: bool,
+    /// Loss-model params for the report curves:
+    /// (is_switcher, rds_on Ω, f_sw Hz, t_sw s, i_q A).
+    pub loss_params: Option<(bool, f64, f64, f64, f64)>,
 }
 
 /// Result of the desugar pass over one source file.
@@ -204,6 +215,11 @@ fn desugar_one(
                 .ok_or_else(|| anyhow!("supply @{target}: unparseable target rail voltage `{}`", t.voltage))?;
             let i_out_n = parse_si_txt(&i_out)
                 .ok_or_else(|| anyhow!("supply @{target}: unparseable rail load `{i_out}`"))?;
+            let profile = specs
+                .iter()
+                .find(|(k, _)| k == "profile")
+                .map(|(_, v)| v.clone())
+                .unwrap_or_else(|| "balanced".into());
             choose_part(
                 stdlib_root,
                 v_in_n,
@@ -211,6 +227,7 @@ fn desugar_one(
                 i_out_n,
                 spec_num("efficiency_min"),
                 spec_num("i_q_max"),
+                &profile,
             )?
         }
     };
@@ -287,6 +304,21 @@ fn desugar_one(
         format!("import {{ {part} }} from \"{}\";", part_path.display())
     };
 
+    // S3 design curves — only when the chooser ran (it computed the numeric
+    // operating point). Seed closed forms, marked as such in the note.
+    let curves = if survey.is_empty() {
+        Vec::new()
+    } else {
+        build_curves(
+            &survey,
+            &part,
+            parse_si_txt(&s.voltage).unwrap_or(0.0),
+            parse_si_txt(&t.voltage).unwrap_or(0.0),
+            parse_si_txt(&i_out).unwrap_or(0.0),
+            spec_num("ripple_max"),
+        )
+    };
+
     Ok(SupplyDesugar {
         target_rail: target,
         source_rail,
@@ -296,6 +328,7 @@ fn desugar_one(
         generated: g,
         import_line,
         survey,
+        curves,
     })
 }
 
@@ -596,6 +629,7 @@ fn choose_part(
     i_out: f64,
     efficiency_min: Option<f64>,
     i_q_max: Option<f64>,
+    profile: &str,
 ) -> Result<(String, Vec<Candidate>)> {
     let mut files = Vec::new();
     collect_bhdl(stdlib_root, &mut files);
@@ -762,20 +796,44 @@ fn choose_part(
             }
 
             let all_pass = gates.iter().all(|(_, _, ok)| *ok);
+            // Support-part count: the entity's expansion children (each
+            // `-> Name:` instantiation inside the expansion block).
+            let support_parts = count_expansion_children(&src, &name);
+            let loss_params = Some((
+                is_switcher,
+                attr_si("rds_on").unwrap_or(0.0),
+                attr_si("f_sw").or_else(|| attr_si("switching_frequency")).unwrap_or(0.0),
+                attr_si("t_sw").unwrap_or(0.0),
+                i_q.unwrap_or(0.0),
+            ));
             survey.push(Candidate {
                 part: name,
                 gates,
                 loss_w: if all_pass { loss } else { None },
+                support_parts,
                 chosen: false,
+                loss_params,
             });
         }
     }
 
-    // Rank the survivors by estimated loss.
+    // Rank the survivors per the requested profile:
+    //   cost     → fewest support parts (BOM size), then lowest loss —
+    //              a 2-cap LDO beats a 7-part buck when both qualify;
+    //   balanced / grade → lowest loss, then fewest parts.
+    // Real per-candidate catalogue pricing (regulator MPN + sized support
+    // parts) is the S3 remainder; until then the key is stated, not silent.
+    let key = |c: &Candidate| -> (f64, f64) {
+        let loss = c.loss_w.unwrap_or(f64::MAX);
+        match profile {
+            "cost" => (c.support_parts as f64, loss),
+            _ => (loss, c.support_parts as f64),
+        }
+    };
     let winner = survey
         .iter()
         .filter(|c| c.loss_w.is_some())
-        .min_by(|a, b| a.loss_w.partial_cmp(&b.loss_w).unwrap_or(std::cmp::Ordering::Equal))
+        .min_by(|a, b| key(a).partial_cmp(&key(b)).unwrap_or(std::cmp::Ordering::Equal))
         .map(|c| c.part.clone());
     match winner {
         Some(w) => {
@@ -801,6 +859,138 @@ fn choose_part(
             bail!(msg)
         }
     }
+}
+
+/// Report design curves (S3): computed from the same closed forms the
+/// chooser and the part's design block use — SEED values, labelled as such
+/// (sign-off checks the as-built snapped values; these curves show the
+/// design space around the chosen point).
+fn build_curves(
+    survey: &[Candidate],
+    part: &str,
+    v_in: f64,
+    v_out: f64,
+    i_out: f64,
+    ripple_max: Option<f64>,
+) -> Vec<(String, String, String, Vec<(f64, f64)>, String)> {
+    let Some(c) = survey.iter().find(|c| c.part == part) else { return Vec::new() };
+    let Some((is_sw, rds, f_sw, t_sw, i_q)) = c.loss_params else { return Vec::new() };
+    if !(v_in > 0.0 && v_out > 0.0 && i_out > 0.0) {
+        return Vec::new();
+    }
+    let duty = v_out / v_in;
+    let mut curves = Vec::new();
+
+    // Efficiency vs load — the loss model swept over 20…100 % load.
+    let loss_at = |i: f64| -> f64 {
+        if is_sw {
+            i * i * rds * duty + v_in * i * f_sw * t_sw + v_in * i_q
+        } else {
+            (v_in - v_out) * i + v_in * i_q
+        }
+    };
+    let pts: Vec<(f64, f64)> = [0.2, 0.4, 0.6, 0.8, 1.0]
+        .iter()
+        .map(|frac| {
+            let i = frac * i_out;
+            let p = loss_at(i);
+            (i, 100.0 * (v_out * i) / (v_out * i + p))
+        })
+        .collect();
+    curves.push((
+        format!("Estimated efficiency vs load — {part}"),
+        "I_load (A)".into(),
+        "η (%)".into(),
+        pts,
+        if is_sw {
+            "loss model I²·R_ds·D + V·I·f_sw·t_sw + V·I_q (datasheet attrs); \
+             seed closed form — sign-off gates the as-built values"
+                .into()
+        } else {
+            "linear P = (V_IN−V_OUT)·I + V_IN·I_q; efficiency is topology-bound \
+             at V_OUT/V_IN"
+                .into()
+        },
+    ));
+
+    // Output ripple vs C_out (switchers with a ripple budget): ΔV = ΔI_L /
+    // (8·f_sw·C), ΔI_L at the seed ripple ratio 0.3·I_out.
+    if is_sw && f_sw > 0.0 {
+        if let Some(dv_max) = ripple_max {
+            let d_il = 0.3 * i_out;
+            let c_req = d_il / (8.0 * f_sw * dv_max);
+            let pts: Vec<(f64, f64)> = [0.5, 0.75, 1.0, 1.5, 2.0]
+                .iter()
+                .map(|k| {
+                    let cap = k * c_req;
+                    (cap * 1e6, 1000.0 * d_il / (8.0 * f_sw * cap))
+                })
+                .collect();
+            curves.push((
+                format!("Output ripple vs C_out — {part}"),
+                "C_out (µF)".into(),
+                "ΔV (mV)".into(),
+                pts,
+                format!(
+                    "ΔV = ΔI_L/(8·f_sw·C), ΔI_L = 0.3·I_out = {d_il:.2}A seed; \
+                     spec ≤ {:.0}mV ⇒ C_out ≥ {:.1}µF (design block sizes, \
+                     sign-off verifies the snapped value)",
+                    dv_max * 1000.0,
+                    c_req * 1e6
+                ),
+            ));
+        }
+    }
+    curves
+}
+
+/// Number of instantiations inside the entity's `expansion { }` block
+/// (`X -> Name: Type(...)` lines) — the support-part BOM-size proxy.
+fn count_expansion_children(src: &str, name: &str) -> usize {
+    let Some(at) = find_entity_decl(src, name) else { return 0 };
+    let mut in_exp = false;
+    let mut n = 0usize;
+    for line in src[at..].lines() {
+        let l = line.split("//").next().unwrap_or("").trim();
+        if l.starts_with("expansion {") || l == "expansion" {
+            in_exp = true;
+            continue;
+        }
+        if in_exp {
+            if l == "}" {
+                break;
+            }
+            // Each `Name: Type(` instantiation (standalone or mid-flow):
+            // count only `: ` followed by an Uppercase type ident that is
+            // immediately called with `(` — this excludes intent-annotation
+            // args (`for filter(rail: VIN, …)`) and value fields, which
+            // previously inflated the count and mis-ranked the cost profile.
+            let bytes = l.as_bytes();
+            let mut i = 0usize;
+            while let Some(rel) = l[i..].find(": ") {
+                let mut j = i + rel + 2;
+                while j < bytes.len() && bytes[j] == b' ' {
+                    j += 1;
+                }
+                if j < bytes.len() && bytes[j].is_ascii_uppercase() {
+                    let mut k = j;
+                    while k < bytes.len()
+                        && (bytes[k].is_ascii_alphanumeric() || bytes[k] == b'_')
+                    {
+                        k += 1;
+                    }
+                    if k < bytes.len() && bytes[k] == b'(' {
+                        n += 1;
+                    }
+                }
+                i += rel + 2;
+            }
+        }
+        if l.starts_with("entity ") && n > 0 {
+            break;
+        }
+    }
+    n
 }
 
 fn fmt_a(v: f64) -> String {

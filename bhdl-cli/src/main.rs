@@ -489,7 +489,7 @@ async fn main() -> Result<()> {
                 }
                 if !su.survey.is_empty() {
                     println!("\n### Candidate survey (S2 chooser)\n");
-                    println!("| Part | Verdict | Est. loss | Detail |");
+                    println!("| Part | Verdict | Est. loss | Support parts |");
                     println!("|---|---|---|---|");
                     for c in &su.survey {
                         let verdict = if c.chosen {
@@ -509,7 +509,7 @@ async fn main() -> Result<()> {
                             .loss_w
                             .map(|w| format!("{w:.2}W"))
                             .unwrap_or_else(|| "—".into());
-                        println!("| {} | {} | {} | |", c.part, verdict, loss);
+                        println!("| {} | {} | {} | {} |", c.part, verdict, loss, c.support_parts);
                     }
                     println!("\n#### Per-candidate gate detail\n");
                     for c in &su.survey {
@@ -521,6 +521,15 @@ async fn main() -> Result<()> {
                     }
                 } else if su.specs.iter().any(|(k, _)| k == "using") {
                     println!("\n_Part named explicitly (`using:`) — engineer override; no candidate survey run._");
+                }
+                for (title, xl, yl, pts, note) in &su.curves {
+                    println!("\n### {title}\n");
+                    println!("| {xl} | {yl} |");
+                    println!("|---|---|");
+                    for (x, y) in pts {
+                        println!("| {x:.3} | {y:.1} |");
+                    }
+                    println!("\n_{note}_");
                 }
                 println!("\n### Instantiation (using: {})\n", su.part);
                 println!("```bhdl");
