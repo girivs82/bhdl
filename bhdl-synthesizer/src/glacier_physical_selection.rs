@@ -405,16 +405,33 @@ pub fn apply_glacier_physical_selection(
 /// unparseable reply ⇒ leaves the catalogue result untouched (no MPN),
 /// never errors the build. Reuses the JSON stdin/stdout plugin protocol
 /// (`bhdl_analyzer::plugin`).
-/// Zero-config default: the bundled Rust `bhdl-jlcparts-provider`, used
-/// only when a catalogue DB is available via `$BHDL_JLCPARTS_DB`. Resolves
-/// the binary next to the current executable first (the normal install
-/// layout), then falls back to bare `bhdl-jlcparts-provider` on `PATH`.
-/// Returns the whitespace-joined `program [db-path]` spec, or `None` when
-/// no DB is configured (so the build stays MPN-less rather than erroring).
+/// Zero-config default: the bundled Rust `bhdl-jlcparts-provider`, used when
+/// a catalogue DB is available via `$BHDL_JLCPARTS_DB` — or, when the env var
+/// is unset, via the in-tree default `data/jlcpcb-components.sqlite3`
+/// (gitignored; see data/README.md), searched from the CWD upward. The same
+/// walk-up lives in the provider binary itself; duplicating it here is what
+/// makes the whole chain zero-config — without it the CALLER never spawned
+/// the provider at all when the env var was missing. Resolves the binary next
+/// to the current executable first (the normal install layout), then falls
+/// back to bare `bhdl-jlcparts-provider` on `PATH`. Returns the
+/// whitespace-joined `program db-path` spec, or `None` when no DB can be
+/// found (so the build stays MPN-less rather than erroring).
 fn default_provider_spec() -> Option<String> {
     let db = std::env::var("BHDL_JLCPARTS_DB")
         .ok()
-        .filter(|s| !s.trim().is_empty())?;
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            let mut dir = std::env::current_dir().ok()?;
+            loop {
+                let cand = dir.join("data/jlcpcb-components.sqlite3");
+                if cand.exists() {
+                    return Some(cand.to_string_lossy().into_owned());
+                }
+                if !dir.pop() {
+                    return None;
+                }
+            }
+        })?;
     let exe = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.join("bhdl-jlcparts-provider")))
