@@ -167,6 +167,21 @@ entity TPS54331(
         FB -> R_bot: Res(r_fb_bot, tolerance = 1%, supply_profile = "grade").1; R_bot.2 -> GND;
         BOOT -> C_boot: Cap(100nF).1; C_boot.2 -> SW;
     }
+
+    // §4 device-stress IP: how this buck stresses its own expansion children
+    // at the solved operating point (child references are the expansion names
+    // above — sign-off maps them onto the prefixed refdes, U1_L_out …). Same
+    // TI application forms the design block sizes with, but run against the
+    // SNAPPED values, so the margins reflect the as-built parts.
+    simulation {
+        stress {
+            const duty = vout / vin;
+            const d_il = (vin - vout) * duty / (self.f_sw * L_out.value);
+            L_out.i_peak   = i_out + d_il / 2;
+            C_out.v_ripple = d_il / (8 * self.f_sw * C_out.value);
+            C_in.v_ripple  = i_out * duty * (1 - duty) / (self.f_sw * C_in.value);
+        }
+    }
 }
 
 // SKU aliases bind `v_out` positionally (first param) — same alias-with-

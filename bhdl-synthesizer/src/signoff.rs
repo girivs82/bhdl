@@ -718,16 +718,17 @@ fn stress_overrides(
         })
         .collect();
 
-    // Evaluate the recipe of every instantiated entity that declares one.
-    let mut seen_entities: Vec<&str> = Vec::new();
+    // Evaluate each recipe once per INSTANCE of its entity (not once per
+    // entity): a block's child references may name that instance's own
+    // EXPANSION children, whose netlist refdes is prefixed with the parent
+    // name (`U1_L_out` for the recipe's `L_out`). For each instance we build
+    // a local view mapping the recipe-visible LOCAL child name to the snapped
+    // value, layered over the board-level (unprefixed) names, and rewrite the
+    // produced override keys back to the full refdes the sign-off table uses.
     for inst in netlist.instances.values() {
         let Some(module) = netlist.modules.get(inst.definition) else { continue };
         let entity = module.name.as_str();
-        if seen_entities.contains(&entity) {
-            continue;
-        }
         let Some(recipe) = stress_recipes.get(entity) else { continue };
-        seen_entities.push(entity);
 
         // `self.<param>` ← the entity's declared attributes (numeric ones).
         let self_params: HashMap<String, f64> = entity_attrs
@@ -739,16 +740,57 @@ fn stress_overrides(
             })
             .unwrap_or_default();
 
+        // This instance's expansion children: local name → full refdes.
+        let prefix = format!("{}_", inst.name);
+        let local_children: HashMap<String, String> = netlist
+            .instances
+            .values()
+            .filter(|c| {
+                c.attributes.get("expansion_parent").map(String::as_str)
+                    == Some(inst.name.as_str())
+            })
+            .filter_map(|c| {
+                c.name
+                    .strip_prefix(&prefix)
+                    .map(|local| (local.to_string(), c.name.clone()))
+            })
+            .collect();
+
+        // Board-level names first, local expansion-child names layered on top
+        // (a local `L_out` must win over an unrelated board-level `L_out`).
+        let mut inst_child_values = child_values.clone();
+        for (local, full) in &local_children {
+            if let Some(v) = child_values.get(full) {
+                inst_child_values.insert(local.clone(), *v);
+            }
+        }
+
         let inputs = StressInputs {
             operating_point: operating_point.clone(),
             self_params,
-            child_values: child_values.clone(),
+            child_values: inst_child_values,
         };
         // A failed `require` or any eval error means the model does not apply —
-        // skip it (those parts keep their generic/hardcoded stress).
-        if let Ok(overrides) = evaluate_stress_recipe(recipe, &inputs) {
-            for (key, val) in overrides {
-                out.insert(key, val);
+        // skip it (those parts keep their generic/hardcoded stress). The debug
+        // log is the discoverability hook: a recipe that never applies
+        // otherwise looks identical to no recipe at all.
+        match evaluate_stress_recipe(recipe, &inputs) {
+            Ok(overrides) => {
+                for ((child, axis), val) in overrides {
+                    let refdes = local_children
+                        .get(&child)
+                        .cloned()
+                        .unwrap_or(child);
+                    out.insert((refdes, axis), val);
+                }
+            }
+            Err(e) => {
+                log::debug!(
+                    "stress recipe for '{entity}' (instance {}) skipped: {e:?} \
+                     [local children: {:?}]",
+                    inst.name,
+                    local_children.keys().collect::<Vec<_>>(),
+                );
             }
         }
     }

@@ -104,6 +104,18 @@ entity LM2596(
         FB -> R_bot: Res(r_fb_bot, tolerance = 1%, supply_profile = "grade").1; R_bot.2 -> GND;
         VOUT -> C_ff: Cap(100pF).1; C_ff.2 -> FB;
     }
+
+    // §4 device-stress IP: buck stress on this part's own expansion children
+    // at the solved operating point, against the SNAPPED values (the board
+    // supplies its own input bulk caps, so there is no C_in axis here).
+    simulation {
+        stress {
+            const duty = vout / vin;
+            const d_il = (vin - vout) * duty / (self.switching_frequency * L_out.value);
+            L_out.i_peak   = i_out + d_il / 2;
+            C_out.v_ripple = d_il / (8 * self.switching_frequency * C_out.value);
+        }
+    }
 }
 
 symbol LM2596 {

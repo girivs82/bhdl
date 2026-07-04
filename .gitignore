@@ -84,3 +84,6 @@ tests/scratch/
 .env
 *.env
 !.env.example
+
+# Local catalogue DBs (see data/README.md) — big binaries, never committed
+/data/*.sqlite3

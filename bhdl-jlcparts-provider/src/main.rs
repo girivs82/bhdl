@@ -962,9 +962,27 @@ fn emit(resp: &Response) {
 }
 
 fn main() {
+    // DB resolution order: argv[1] → $BHDL_JLCPARTS_DB → the in-tree default
+    // `data/jlcpcb-components.sqlite3` (gitignored; see data/README.md for the
+    // download command). The in-tree fallback makes a fresh checkout
+    // zero-config once the DB has been downloaded — no env var to remember,
+    // and it survives reboots unlike a /tmp path. Searched relative to the
+    // CWD and each ancestor so it works from crate subdirs too.
     let db_path = std::env::args()
         .nth(1)
-        .or_else(|| std::env::var("BHDL_JLCPARTS_DB").ok());
+        .or_else(|| std::env::var("BHDL_JLCPARTS_DB").ok())
+        .or_else(|| {
+            let mut dir = std::env::current_dir().ok()?;
+            loop {
+                let cand = dir.join("data/jlcpcb-components.sqlite3");
+                if cand.exists() {
+                    return Some(cand.to_string_lossy().into_owned());
+                }
+                if !dir.pop() {
+                    return None;
+                }
+            }
+        });
 
     let mut input = String::new();
     if std::io::stdin().read_to_string(&mut input).is_err() {

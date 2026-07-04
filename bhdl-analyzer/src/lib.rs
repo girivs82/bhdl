@@ -1475,7 +1475,24 @@ pub fn extract_entity_attribute_index(
     for item in source_file.items() {
         if let Some(entity) = Entity::cast(item.syntax().clone()) {
             if let Some(name_token) = entity.name() {
-                let attrs = crate::attribute_extraction::extract_module_attributes(&entity);
+                // Raw values, then overlay the resolvable param/const
+                // references with the param's default (`attribute f_sw = f_sw`
+                // → "570kHz") — same per-key unwrap_or(raw) contract as the
+                // component-library loader and module propagation. Without
+                // this, a stress block's `self.f_sw` on an entity that
+                // declares the attribute as a param ref got the literal text
+                // "f_sw", was dropped by the numeric filter, and the whole
+                // recipe silently didn't apply. Un-defaulted refs (`value`)
+                // and generic refs stay raw for the downstream per-instance
+                // substitution passes.
+                let mut attrs = crate::attribute_extraction::extract_module_attributes(&entity);
+                let resolved =
+                    crate::attribute_extraction::extract_module_attributes_resolved(&entity);
+                for (k, v) in attrs.iter_mut() {
+                    if let Some(r) = resolved.get(k) {
+                        *v = r.clone();
+                    }
+                }
                 if !attrs.is_empty() {
                     idx.insert(name_token.text().to_string(), attrs);
                 }
