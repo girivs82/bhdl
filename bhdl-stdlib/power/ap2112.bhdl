@@ -17,10 +17,19 @@ entity AP2112K<V_OUT: voltage>(
     attribute output_voltage = V_OUT;
     attribute dropout_voltage = dropout;
     attribute i_quiescent = i_quiescent;
+    attribute power_rating = 400mW;  // SOT-23-5 free-air ((125−25)°C / ~250°C/W)
 
     expansion {
         VIN -> C_in: Cap(c_in).1; C_in.2 -> GND;
         VOUT -> C_out: Cap(c_out).1; C_out.2 -> GND;
+    }
+    // §4 device-stress IP: linear pass-element dissipation at the solved
+    // operating point — P = (V_IN − V_OUT)·I_out + V_IN·I_q, gated against
+    // the package power_rating. Skips (UNCHECKED) without a declared load.
+    simulation {
+        stress {
+            self.p_diss = (vin - vout) * i_out + vin * self.i_quiescent;
+        }
     }
 }
 

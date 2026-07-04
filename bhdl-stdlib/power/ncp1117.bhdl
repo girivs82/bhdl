@@ -24,6 +24,18 @@ entity NCP1117(part_no: string = "NCP1117-5.0_SOT223") {
     attribute dropout_v       = 1.2;
     attribute dropout_voltage = 1.2V;  // datasheet typ at 800mA
     attribute i_quiescent     = 5.2mA; // ground-pin current, typ class at load
+    attribute power_rating    = 1.5W;  // SOT-223 with ~1in² copper pad ((125−25)°C / ~67°C/W)
     attribute pkg             = "SOT-223";
     attribute part_number     = part_no;
+    // §4 device-stress IP: linear pass-element dissipation at the solved
+    // operating point — P = (V_IN − V_OUT)·I_out + V_IN·I_q. `self.p_diss`
+    // targets THIS device's own sign-off row, gated against the package
+    // `power_rating` (free-air datasheet dissipation). Needs the output
+    // rail's declared `@ I` load; without it the recipe skips and the
+    // dissipation stays UNCHECKED (Real-Data Policy).
+    simulation {
+        stress {
+            self.p_diss = (vin - vout) * i_out + vin * self.i_quiescent;
+        }
+    }
 }

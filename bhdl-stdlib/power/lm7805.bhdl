@@ -30,11 +30,23 @@ entity LM7805() {
     attribute output_current  = 1.5A;   // rated output (with adequate heatsinking)
     attribute dropout_voltage = 2V;     // V_IN − V_OUT required for regulation
     attribute i_quiescent     = 6mA;    // ground-pin (quiescent) current, typ
+    attribute power_rating    = 2W;  // TO-220 free-air dissipation (no heatsink), datasheet class
 
     // Datasheet application circuit: input + output bypass capacitors
     // (0.33µF input near the device, 0.1µF output for transient response).
     expansion {
         VIN  -> C_in:  Cap(0.33µF).1;  C_in.2  -> GND;
         VOUT -> C_out: Cap(0.1µF).1;   C_out.2 -> GND;
+    }
+    // §4 device-stress IP: linear pass-element dissipation at the solved
+    // operating point — P = (V_IN − V_OUT)·I_out + V_IN·I_q. `self.p_diss`
+    // targets THIS device's own sign-off row, gated against the package
+    // `power_rating` (free-air datasheet dissipation). Needs the output
+    // rail's declared `@ I` load; without it the recipe skips and the
+    // dissipation stays UNCHECKED (Real-Data Policy).
+    simulation {
+        stress {
+            self.p_diss = (vin - vout) * i_out + vin * self.i_quiescent;
+        }
     }
 }

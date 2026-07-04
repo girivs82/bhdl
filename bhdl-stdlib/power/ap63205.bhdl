@@ -24,6 +24,7 @@ entity AP63205(
     attribute rds_on = rds_on;
     attribute t_sw = t_sw;
     attribute i_quiescent = i_quiescent;
+    attribute power_rating = 1.1W;  // TSOT-26 free-air ((125−25)°C / ~90°C/W with pad)
 
     expansion {
         // Synchronous — no catch diode (integrated low-side FET)
@@ -42,6 +43,17 @@ entity AP63205(
         C_out at (6.0, 0.0) rot 90;
         C_in  at (-6.0, 0.0) rot 90;
         C_bst at (3.5, -4.5) rot 0;
+    }
+    // §4 device-stress IP: buck stress on this part's expansion children at
+    // the solved operating point, against the SNAPPED values.
+    simulation {
+        stress {
+            const duty = vout / vin;
+            const d_il = (vin - vout) * duty / (self.f_sw * L_out.value);
+            L_out.i_peak   = i_out + d_il / 2;
+            C_out.v_ripple = d_il / (8 * self.f_sw * C_out.value);
+            C_in.v_ripple  = i_out * duty * (1 - duty) / (self.f_sw * C_in.value);
+        }
     }
 }
 

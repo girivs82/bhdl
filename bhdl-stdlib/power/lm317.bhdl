@@ -38,6 +38,7 @@ entity LM317(v_out: voltage = 5V) {
     // Datasheet (SLVS044) constants for the regulator decomposition / power model:
     attribute feedback_voltage = 1.25V; // V_REF between OUT and ADJ
     attribute i_quiescent      = 50uA;  // ADJ pin current, typ (ground-path quiescent)
+    attribute power_rating    = 2W;  // TO-220 free-air dissipation (no heatsink), datasheet class
     attribute output_current   = 1.5A;  // rated output
     attribute dropout_voltage  = 2V;    // V_IN−V_OUT for regulation at rated load
 
@@ -72,5 +73,16 @@ entity LM317(v_out: voltage = 5V) {
         VOUT -> C_out: Cap(22µF).1;             C_out.2 -> GND;
         VOUT -> R1:    Res(r1_value).1;         R1.2    -> ADJ;
         ADJ  -> R2:    Res(r2_value).1;         R2.2    -> GND;
+    }
+    // §4 device-stress IP: linear pass-element dissipation at the solved
+    // operating point — P = (V_IN − V_OUT)·I_out + V_IN·I_q. `self.p_diss`
+    // targets THIS device's own sign-off row, gated against the package
+    // `power_rating` (free-air datasheet dissipation). Needs the output
+    // rail's declared `@ I` load; without it the recipe skips and the
+    // dissipation stays UNCHECKED (Real-Data Policy).
+    simulation {
+        stress {
+            self.p_diss = (vin - vout) * i_out + vin * self.i_quiescent;
+        }
     }
 }

@@ -180,10 +180,25 @@ fn recover_switcher_op(
             .filter(|v| *v > 0.0);
         Some((f_sw, ripple_ratio, loop_k, loop_ratio, v_ref))
     })?;
-    // Power rails carry their source-declared per-rail load budget (`@ I`) on
-    // the net class. V_in = the highest rail; V_out = the highest rail strictly
-    // below it; `i_out` = the OUTPUT rail's declared current — the actual load,
-    // or `None` when that rail omits `@ I` (→ i_out-dependent stresses UNCHECKED).
+    let (v_in, v_out, i_out) = rail_operating_point(netlist)?;
+    Some(SwitcherOp {
+        v_in,
+        v_out,
+        i_out,
+        f_sw,
+        duty: v_out / v_in,
+        ripple_ratio,
+        loop_k,
+        loop_ratio,
+        v_ref,
+    })
+}
+
+/// Power rails carry their source-declared per-rail load budget (`@ I`) on
+/// the net class. V_in = the highest rail; V_out = the highest rail strictly
+/// below it; `i_out` = the OUTPUT rail's declared current — the actual load,
+/// or `None` when that rail omits `@ I` (→ i_out-dependent stresses UNCHECKED).
+fn rail_operating_point(netlist: &Netlist) -> Option<(f64, f64, Option<f64>)> {
     let rails: Vec<(f64, Option<f64>)> = netlist
         .nets
         .values()
@@ -207,16 +222,47 @@ fn recover_switcher_op(
     if !(v_out > 0.0 && v_out < v_in) {
         return None;
     }
+    Some((v_in, v_out, i_out))
+}
+
+/// LINEAR-regulator operating point for the §4 stress path: the same rail
+/// recovery as the switcher, minus the switching requirements. Returned as a
+/// `SwitcherOp` (f_sw = 0, no ripple/loop constants) purely so vendor stress
+/// blocks get their `vin`/`vout`/`i_out` — it must NOT be used for the
+/// analytic switching-ripple model (the caller keeps `op = None` there, so
+/// the d_il / cap-bank paths stay off for linear boards).
+fn recover_linear_op(
+    netlist: &Netlist,
+    entity_attrs: &HashMap<String, HashMap<String, String>>,
+) -> Option<SwitcherOp> {
+    let has_linear_regulator = netlist.instances.values().any(|inst| {
+        let module = netlist.modules.get(inst.definition);
+        let ent = module.and_then(|m| entity_attrs.get(&m.name));
+        let get = |k: &str| {
+            inst.attributes
+                .get(k)
+                .or_else(|| module.and_then(|m| m.attributes.get(k)))
+                .or_else(|| ent.and_then(|e| e.get(k)))
+        };
+        matches!(
+            get("component_class").map(String::as_str),
+            Some("voltage_regulator") | Some("ldo")
+        )
+    });
+    if !has_linear_regulator {
+        return None;
+    }
+    let (v_in, v_out, i_out) = rail_operating_point(netlist)?;
     Some(SwitcherOp {
         v_in,
         v_out,
         i_out,
-        f_sw,
+        f_sw: 0.0,
         duty: v_out / v_in,
-        ripple_ratio,
-        loop_k,
-        loop_ratio,
-        v_ref,
+        ripple_ratio: None,
+        loop_k: None,
+        loop_ratio: None,
+        v_ref: None,
     })
 }
 
@@ -777,10 +823,14 @@ fn stress_overrides(
         match evaluate_stress_recipe(recipe, &inputs) {
             Ok(overrides) => {
                 for ((child, axis), val) in overrides {
-                    let refdes = local_children
-                        .get(&child)
-                        .cloned()
-                        .unwrap_or(child);
+                    // `self.<axis> = …` targets the declaring instance itself —
+                    // the linear-regulator pass-element dissipation form
+                    // (`self.p_diss = (vin−vout)·i_out + vin·self.i_quiescent`).
+                    let refdes = if child == "self" {
+                        inst.name.clone()
+                    } else {
+                        local_children.get(&child).cloned().unwrap_or(child)
+                    };
                     out.insert((refdes, axis), val);
                 }
             }
@@ -814,10 +864,15 @@ pub fn compute_signoff(
     // Per-instance overrides from vendor `stress { }` blocks (§4). Empty unless
     // an instantiated entity declares one — then these win over the hardcoded
     // reference ripple model below, per the graceful-degradation ladder.
-    let overrides = op
-        .as_ref()
-        .map(|op| stress_overrides(netlist, entity_attrs, stress_recipes, op))
-        .unwrap_or_default();
+    // Linear boards have no switcher op; recover the rail-only operating point
+    // (vin/vout/i_out) for the vendor blocks alone — `op` itself stays None so
+    // the analytic switching-ripple model below remains off.
+    let overrides = match op.as_ref() {
+        Some(op) => stress_overrides(netlist, entity_attrs, stress_recipes, op),
+        None => recover_linear_op(netlist, entity_attrs)
+            .map(|lop| stress_overrides(netlist, entity_attrs, stress_recipes, &lop))
+            .unwrap_or_default(),
+    };
     // Parallel caps on a rail SHARE the switching ripple current — the ripple
     // voltage is set by the TOTAL bank capacitance, not each cap alone (else a
     // 100nF HF bypass next to a 22µF bulk cap reads an absurd multi-volt
@@ -1039,6 +1094,65 @@ pub fn compute_signoff(
             dnp,
             ripple,
             step,
+        });
+    }
+
+    // §4 self-stress rows: a vendor stress block that assigned an axis to the
+    // DEVICE ITSELF (`self.p_diss = …`, mapped to the instance refdes by
+    // stress_overrides) gets its own sign-off row — the linear-regulator
+    // pass-element dissipation gate, checked against the entity's declared
+    // package `power_rating` with the same derate discipline as resistors.
+    // Only instances outside the passive classes above (those already rowed).
+    for inst in netlist.instances.values() {
+        let key = (inst.name.clone(), "p_diss".to_string());
+        let Some(&p_diss) = overrides.get(&key) else { continue };
+        // Skip abstract stdlib module definitions surfacing as bare instances
+        // (an instance literally named after its entity, e.g. `LM7805 :
+        // LM7805`) — the same class of phantom the passive loop's empty-value
+        // guard drops. Only real placed regulators get a dissipation row.
+        if netlist
+            .modules
+            .get(inst.definition)
+            .map(|m| m.name == inst.name)
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let get = |k: &str| inst.attributes.get(k);
+        let class = get("component_class").cloned().unwrap_or_default();
+        if matches!(class.as_str(), "resistor" | "capacitor" | "inductor") {
+            continue; // passives already have their own axis rows
+        }
+        let value = get("part_number")
+            .or_else(|| get("output_voltage"))
+            .cloned()
+            .unwrap_or_default();
+        let dnp = get("dnp").map(|v| v == "true").unwrap_or(false);
+        let rating = get("power_rating").and_then(|s| parse_si(s));
+        let derated = Some(p_diss * RES_POWER_DERATE);
+        let margin = match (rating, derated) {
+            (Some(r), Some(d)) if d > 0.0 => Some(r / d),
+            _ => None,
+        };
+        let verdict = match margin {
+            Some(m) if m >= SIGNOFF_MARGIN => Verdict::SignedOff,
+            Some(m) if m >= 1.0 => Verdict::UnderMargin,
+            Some(_) => Verdict::OverStress,
+            None => Verdict::NoData,
+        };
+        rows.push(SignoffRow {
+            refdes: inst.name.clone(),
+            class,
+            axis: "P",
+            value,
+            stress: Some(p_diss),
+            derated,
+            rating,
+            margin,
+            verdict,
+            dnp,
+            ripple: Some(format!("P_pass={:.3}W (stress block)", p_diss)),
+            step: None,
         });
     }
 
