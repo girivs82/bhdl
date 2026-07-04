@@ -14,6 +14,7 @@ board SupplyStmtS1 {
 
     supply @VCC_3V3 from @VIN {
         ripple_max: 30mV;
+        i_q_max:    5mA;
         profile:    cost;
         using:      TPS54331;   // S1: explicit part; S2 adds the chooser
     }

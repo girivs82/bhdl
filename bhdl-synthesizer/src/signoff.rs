@@ -1156,6 +1156,117 @@ pub fn compute_signoff(
         });
     }
 
+    // Requirement rows (Power_Supply_Synthesis.md §5): a `supply` statement's
+    // spec axes ride the synthesized instance as `supply_*` attributes; each
+    // becomes a gated row checked against the AS-BUILT value — the
+    // requirement is verified, not satisfied by construction. An axis whose
+    // achieved value cannot be computed reports NoData (UNCHECKED), never a
+    // silent pass.
+    for inst in netlist.instances.values() {
+        let get = |k: &str| inst.attributes.get(k);
+        let class_of = |v: &str| format!("requirement ({v})");
+
+        // ripple_max vs the achieved output ripple — the §4 stress block's
+        // v_ripple on this instance's own C_out expansion child.
+        if let Some(spec) = get("supply_ripple_max").and_then(|s| parse_si(s)) {
+            let achieved = overrides
+                .iter()
+                .filter(|((child, axis), _)| {
+                    axis == "v_ripple" && child.starts_with(&format!("{}_C_out", inst.name))
+                })
+                .map(|(_, v)| *v)
+                .fold(None::<f64>, |acc, v| Some(acc.map_or(v, |a| a.max(v))));
+            let margin = achieved.filter(|a| *a > 0.0).map(|a| spec / a);
+            let verdict = match margin {
+                Some(m) if m >= SIGNOFF_MARGIN => Verdict::SignedOff,
+                Some(m) if m >= 1.0 => Verdict::UnderMargin,
+                Some(_) => Verdict::OverStress,
+                None => Verdict::NoData,
+            };
+            rows.push(SignoffRow {
+                refdes: inst.name.clone(),
+                class: class_of("ripple"),
+                axis: "V",
+                value: fmt_si(spec, "V"),
+                stress: achieved,
+                derated: achieved,
+                rating: Some(spec),
+                margin,
+                verdict,
+                dnp: false,
+                ripple: Some(match achieved {
+                    Some(a) => format!(
+                        "spec ≤ {}; achieved ΔV={:.1}mV (stress block)",
+                        fmt_si(spec, "V"),
+                        a * 1000.0
+                    ),
+                    None => format!(
+                        "spec ≤ {}; achieved UNCHECKED (no stress-block ripple)",
+                        fmt_si(spec, "V")
+                    ),
+                }),
+                step: None,
+            });
+        }
+
+        // i_q_max vs the part's declared quiescent current.
+        if let Some(spec) = get("supply_i_q_max").and_then(|s| parse_si(s)) {
+            let achieved = get("i_quiescent").and_then(|s| parse_si(s));
+            let margin = achieved.filter(|a| *a > 0.0).map(|a| spec / a);
+            let verdict = match margin {
+                Some(m) if m >= SIGNOFF_MARGIN => Verdict::SignedOff,
+                Some(m) if m >= 1.0 => Verdict::UnderMargin,
+                Some(_) => Verdict::OverStress,
+                None => Verdict::NoData,
+            };
+            rows.push(SignoffRow {
+                refdes: inst.name.clone(),
+                class: class_of("i_q"),
+                axis: "I",
+                value: fmt_si(spec, "A"),
+                stress: achieved,
+                derated: achieved,
+                rating: Some(spec),
+                margin,
+                verdict,
+                dnp: false,
+                ripple: Some(match achieved {
+                    Some(a) => format!(
+                        "spec ≤ {}; datasheet i_q={} (attr)",
+                        fmt_si(spec, "A"),
+                        fmt_si(a, "A")
+                    ),
+                    None => format!(
+                        "spec ≤ {}; achieved UNCHECKED (no i_quiescent attr)",
+                        fmt_si(spec, "A")
+                    ),
+                }),
+                step: None,
+            });
+        }
+
+        // efficiency_min: no loss model surfaced to sign-off yet — always an
+        // explicit UNCHECKED row rather than a silent pass.
+        if let Some(spec_txt) = get("supply_efficiency_min") {
+            rows.push(SignoffRow {
+                refdes: inst.name.clone(),
+                class: class_of("efficiency"),
+                axis: "P",
+                value: spec_txt.clone(),
+                stress: None,
+                derated: None,
+                rating: parse_si(spec_txt),
+                margin: None,
+                verdict: Verdict::NoData,
+                dnp: false,
+                ripple: Some(format!(
+                    "spec ≥ {spec_txt}; achieved UNCHECKED (loss model not yet surfaced)"
+                )),
+                step: None,
+            });
+        }
+    }
+
     rows.sort_by(|a, b| a.refdes.cmp(&b.refdes));
     rows
 }

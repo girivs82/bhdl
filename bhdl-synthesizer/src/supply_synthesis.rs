@@ -208,6 +208,12 @@ fn desugar_one(
     if let Some(r) = spec_val("ripple_max") {
         args.push(format!("supply_ripple_max={r}"));
     }
+    if let Some(e) = spec_val("efficiency_min") {
+        args.push(format!("supply_efficiency_min={e}"));
+    }
+    if let Some(q) = spec_val("i_q_max") {
+        args.push(format!("supply_i_q_max={q}"));
+    }
     if let Some(p) = spec_val("profile") {
         args.push(format!("supply_profile=\"{p}\""));
     }
