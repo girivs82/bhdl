@@ -24,7 +24,7 @@
 //     );
 //
 // The data path and command/address bus are exposed as DDR4
-// interface fields (see interfaces/ddr4.bhdl). Pins are materialised
+// interface fields (historic interfaces/ddr4.bhdl, retired). Pins are materialised
 // from the interface (dat.DQ0 … dat.DQS.N, ca.CK_t …); ball-map
 // bindings to physical FBGA designators are a follow-up once the
 // v0.4 binding grammar supports hierarchical (`DQS.P = ball`) names.

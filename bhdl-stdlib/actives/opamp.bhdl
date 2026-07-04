@@ -1,279 +1,46 @@
-// Operational Amplifier Component Module
-// Supports various op-amp types with SPICE parameters
+// OpAmp — general-purpose operational amplifier (single device view:
+// non-inverting/inverting inputs, output, supply pair).
+//
+// Regenerated to the current v2 standard. The pre-v2 file selected per-part
+// parameter structs out of `const OPAMP_LM741 = { … }` knowledge maps with
+// ternary chains, and used `IN+` / `V-` pin names — the `+`/`-` characters
+// are themselves unparseable in a pin identifier today. Same treatment as
+// mosfet/bjt: keep the datasheet data, express it in the parseable idiom.
+// Pins follow the INP/INN/OUT/VCC/VEE convention.
+//
+// Electrical axes are constructor params (defaults = LM741); each SKU alias
+// binds its datasheet values positionally. `slew_rate` is in V/µs (bare float
+// — no unit type for V/µs yet); `channels` is the per-package device count
+// (the entity models ONE amplifier; a dual/quad shares supplies).
+//
+// Datasheet sources: TI LM741 / TL072 / LM358, ADI OP07.
 
-import { ImpedanceCharacteristics } from "../types/electrical_types.bhdl";
+entity OpAmp(
+    part_no: string        = "LM741",
+    gbw: frequency         = 1MHz,    // gain-bandwidth product
+    slew_rate: float       = 0.5,     // V/µs
+    input_offset: voltage  = 2mV,     // input offset voltage, typ
+    i_supply: current      = 1.7mA,   // supply current per package
+    channels: float        = 1        // amplifiers per package
+) {
+    pin INP: signal in;   // Non-inverting input (+)
+    pin INN: signal in;   // Inverting input (−)
+    pin OUT: signal out;
+    pin VCC: power in;    // Positive supply
+    pin VEE: power in;    // Negative supply (or GND, single-supply parts)
 
-// Op-amp electrical characteristics and SPICE parameters
-type OpAmpParams = {
-    // Basic characteristics
-    gain_bandwidth: frequency,        // Gain-bandwidth product
-    slew_rate: float,                // V/µs
-    supply_current: current,         // Quiescent current
-    input_offset_voltage: voltage,   // Input offset voltage
-    input_bias_current: current,     // Input bias current
-    input_offset_current: current,   // Input offset current
-    
-    // SPICE parameters
-    aol: float,                     // Open-loop gain (V/V)
-    gbw: frequency,                 // Gain-bandwidth product
-    rin: resistance,                // Input resistance
-    rout: resistance,               // Output resistance
-    cin: capacitance,               // Input capacitance
-    vos: voltage,                   // Input offset voltage
-    ios: current,                   // Input offset current
-    ib: current,                    // Input bias current
-    cmrr: float,                    // Common-mode rejection ratio (dB)
-    psrr: float,                    // Power supply rejection ratio (dB)
-    sr: float,                      // Slew rate (V/s)
-    vsat_p: voltage,                // Positive saturation voltage
-    vsat_n: voltage,                // Negative saturation voltage
-    iq: current,                    // Quiescent current
-    en: float,                      // Input noise voltage (nV/√Hz)
-    in: float,                      // Input noise current (pA/√Hz)
-    
-    // Temperature
-    tnom: temperature,              // Nominal temperature
-    
-    impedance: ImpedanceCharacteristics,
-};
-
-entity OpAmp(part: string = "LM741", package: string = "DIP-8") {
-    pin IN+: signal in;      // Non-inverting input
-    pin IN-: signal in;      // Inverting input
-    pin OUT: signal out;     // Output
-    pin V+: power in;        // Positive supply
-    pin V-: power in;        // Negative supply
-    
-    // Common op-amp parameters
-    const OPAMP_LM741: OpAmpParams = {
-        // Basic characteristics
-        gain_bandwidth: 1MHz,
-        slew_rate: 0.5,              // V/µs
-        supply_current: 1.7mA,
-        input_offset_voltage: 2mV,
-        input_bias_current: 80nA,
-        input_offset_current: 20nA,
-        
-        // SPICE parameters
-        aol: 200000,                 // 106 dB
-        gbw: 1e6,
-        rin: 2e6,
-        rout: 75,
-        cin: 1.4e-12,
-        vos: 2e-3,
-        ios: 20e-9,
-        ib: 80e-9,
-        cmrr: 90,                    // dB
-        psrr: 90,                    // dB
-        sr: 0.5e6,                   // V/s
-        vsat_p: 2.0,                 // V below V+
-        vsat_n: 2.0,                 // V above V-
-        iq: 1.7e-3,
-        en: 18,                      // nV/√Hz
-        in: 0.5,                     // pA/√Hz
-        tnom: 27°C,
-        
-        impedance: {
-            dc_resistance: 75,
-            output_impedance: 75,
-            input_impedance: 2e6,
-            can_source_current: true,
-            can_sink_current: true,
-            max_source_current: 25mA,
-            max_sink_current: 25mA,
-            power_domain_isolation: false,
-            voltage_drop: 2V,
-            current_limiting: true,
-            transient_response: 2µs,
-            inrush_current: null
-        }
-    };
-    
-    const OPAMP_TL072: OpAmpParams = {
-        // Basic characteristics
-        gain_bandwidth: 3MHz,
-        slew_rate: 13,               // V/µs
-        supply_current: 1.4mA,
-        input_offset_voltage: 3mV,
-        input_bias_current: 65pA,
-        input_offset_current: 5pA,
-        
-        // SPICE parameters
-        aol: 200000,
-        gbw: 3e6,
-        rin: 1e12,                   // JFET input
-        rout: 100,
-        cin: 3e-12,
-        vos: 3e-3,
-        ios: 5e-12,
-        ib: 65e-12,
-        cmrr: 100,
-        psrr: 100,
-        sr: 13e6,
-        vsat_p: 1.5,
-        vsat_n: 1.5,
-        iq: 1.4e-3,
-        en: 18,
-        in: 0.01,
-        tnom: 27°C,
-        
-        impedance: {
-            dc_resistance: 100,
-            output_impedance: 100,
-            input_impedance: 1e12,
-            can_source_current: true,
-            can_sink_current: true,
-            max_source_current: 20mA,
-            max_sink_current: 20mA,
-            power_domain_isolation: false,
-            voltage_drop: 1.5V,
-            current_limiting: true,
-            transient_response: 100ns,
-            inrush_current: null
-        }
-    };
-    
-    const OPAMP_LM358: OpAmpParams = {
-        // Basic characteristics
-        gain_bandwidth: 1MHz,
-        slew_rate: 0.5,
-        supply_current: 0.7mA,
-        input_offset_voltage: 2mV,
-        input_bias_current: 45nA,
-        input_offset_current: 5nA,
-        
-        // SPICE parameters
-        aol: 100000,
-        gbw: 1e6,
-        rin: 5e6,
-        rout: 60,
-        cin: 2e-12,
-        vos: 2e-3,
-        ios: 5e-9,
-        ib: 45e-9,
-        cmrr: 85,
-        psrr: 100,
-        sr: 0.5e6,
-        vsat_p: 1.5,
-        vsat_n: 0.2,                 // Can go to ground
-        iq: 0.7e-3,
-        en: 40,
-        in: 0.5,
-        tnom: 27°C,
-        
-        impedance: {
-            dc_resistance: 60,
-            output_impedance: 60,
-            input_impedance: 5e6,
-            can_source_current: true,
-            can_sink_current: true,
-            max_source_current: 30mA,
-            max_sink_current: 20mA,
-            power_domain_isolation: false,
-            voltage_drop: 1.5V,
-            current_limiting: false,
-            transient_response: 2µs,
-            inrush_current: null
-        }
-    };
-    
-    const OPAMP_OP07: OpAmpParams = {
-        // Basic characteristics (precision op-amp)
-        gain_bandwidth: 600kHz,
-        slew_rate: 0.3,
-        supply_current: 2.5mA,
-        input_offset_voltage: 75µV,
-        input_bias_current: 2nA,
-        input_offset_current: 0.8nA,
-        
-        // SPICE parameters
-        aol: 3000000,                // 130 dB
-        gbw: 600e3,
-        rin: 8e6,
-        rout: 60,
-        cin: 3e-12,
-        vos: 75e-6,
-        ios: 0.8e-9,
-        ib: 2e-9,
-        cmrr: 120,
-        psrr: 120,
-        sr: 0.3e6,
-        vsat_p: 2.0,
-        vsat_n: 2.0,
-        iq: 2.5e-3,
-        en: 10,                      // Low noise
-        in: 0.35,
-        tnom: 27°C,
-        
-        impedance: {
-            dc_resistance: 60,
-            output_impedance: 60,
-            input_impedance: 8e6,
-            can_source_current: true,
-            can_sink_current: true,
-            max_source_current: 25mA,
-            max_sink_current: 25mA,
-            power_domain_isolation: false,
-            voltage_drop: 2V,
-            current_limiting: true,
-            transient_response: 3µs,
-            inrush_current: null
-        }
-    };
-    
-    // Get parameters based on part number
-    const params: OpAmpParams = 
-        part == "LM741" || part == "UA741" || part == "741" ? OPAMP_LM741 :
-        part == "TL072" || part == "TL082" ? OPAMP_TL072 :
-        part == "LM358" || part == "LM324" ? OPAMP_LM358 :
-        part == "OP07" || part == "OP77" ? OPAMP_OP07 :
-        OPAMP_LM741;  // Default to LM741
-    
-    // Component metadata
     attribute component_class = "opamp";
-    attribute part_number = part;
-    
-    // Electrical characteristics
-    attribute gain_bandwidth = params.gain_bandwidth;
-    attribute slew_rate = params.slew_rate;
-    attribute supply_current = params.supply_current;
-    attribute input_offset_voltage = params.input_offset_voltage;
-    attribute input_bias_current = params.input_bias_current;
-    
-    // SPICE model parameters
-    attribute spice_model = "opamp";
-    attribute spice_aol = params.aol;
-    attribute spice_gbw = params.gbw;
-    attribute spice_rin = params.rin;
-    attribute spice_rout = params.rout;
-    attribute spice_cin = params.cin;
-    attribute spice_vos = params.vos;
-    attribute spice_ios = params.ios;
-    attribute spice_ib = params.ib;
-    attribute spice_cmrr = params.cmrr;
-    attribute spice_psrr = params.psrr;
-    attribute spice_sr = params.sr;
-    attribute spice_vsat_p = params.vsat_p;
-    attribute spice_vsat_n = params.vsat_n;
-    attribute spice_iq = params.iq;
-    attribute spice_en = params.en;
-    attribute spice_in = params.in;
-    attribute spice_tnom = params.tnom;
-    
-    // KiCad symbol
-    attribute kicad_symbol = "Amplifier_Operational:LM741";
-    
-    // Package selection
-    attribute package = 
-        package == "DIP-8" ? "Package_DIP:DIP-8_W7.62mm" :
-        package == "SOIC-8" ? "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm" :
-        package == "DIP-14" ? "Package_DIP:DIP-14_W7.62mm" :
-        package == "SOIC-14" ? "Package_SO:SOIC-14_3.9x8.7mm_P1.27mm" :
-        "Package_DIP:DIP-8_W7.62mm";
+    attribute part_number     = part_no;
+    attribute gain_bandwidth  = gbw;
+    attribute slew_rate       = slew_rate;
+    attribute input_offset    = input_offset;
+    attribute i_supply        = i_supply;
+    attribute channels        = channels;
+    attribute kicad_symbol    = "Amplifier_Operational:LM741";
 }
 
-// Aliases for common parts
-alias LM741 = OpAmp("LM741");
-alias TL072 = OpAmp("TL072");
-alias LM358 = OpAmp("LM358");
-alias OP07 = OpAmp("OP07");
+// SKU aliases bind the datasheet values positionally.
+alias OPAMP_LM741 = OpAmp("LM741", 1MHz, 0.5, 2mV, 1.7mA, 1);
+alias OPAMP_TL072 = OpAmp("TL072", 3MHz, 13, 3mV, 1.4mA, 2);   // JFET input
+alias OPAMP_LM358 = OpAmp("LM358", 1MHz, 0.5, 2mV, 0.7mA, 2);  // single-supply
+alias OPAMP_OP07  = OpAmp("OP07", 600kHz, 0.3, 75µV, 2.5mA, 1); // precision

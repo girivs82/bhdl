@@ -5,7 +5,7 @@ import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
 import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
 import { TVSDiode } from "bhdl-stdlib/protection/tvs.bhdl";
 import { LM7805 } from "bhdl-stdlib/power/regulator.bhdl";
-import { OpAmp } from "bhdl-stdlib/analog/opamp.bhdl";
+import { OpAmp } from "bhdl-stdlib/actives/opamp.bhdl";
 
 board SensorInterface {
     power VIN = 12V @ 500mA;

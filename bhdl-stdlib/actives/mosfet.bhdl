@@ -1,402 +1,50 @@
-// MOSFET Component Module
-// Supports N-channel and P-channel MOSFETs with SPICE parameters
+// MOSFET — 3-terminal discrete FET (gate/drain/source), N- or P-channel.
+//
+// Regenerated to the current v2 standard. The pre-v2 file selected a per-part
+// parameter struct out of `const MOSFET_2N7000 = { … }` knowledge maps with
+// ternary chains — none of which the current parser accepts, so the file
+// failed to parse and the entity was only reachable through partial-parse
+// tolerance. Same treatment as LM2596/LM7805: keep the datasheet data, express
+// it in the parseable idiom.
+//
+// The electrical axes live as constructor params (defaults = 2N7000, the
+// classic small-signal NFET); each SKU alias binds its real datasheet values
+// positionally — so `MOSFET_IRF540()` carries 100V/33A/44mΩ without any map
+// lookup. The body/bulk pin isn't modelled: discrete MOSFETs tie body to
+// source internally, and 3-pin symbols are the norm.
+//
+// Datasheet sources: onsemi 2N7000 / BS250P, IR IRF540N / IRF9540N.
+// P-channel ratings are stored as magnitudes with channel = "pmos" carrying
+// the polarity (per-axis signs made every downstream magnitude comparison
+// sign-aware for no analytical gain).
 
-import { ImpedanceCharacteristics } from "../types/electrical_types.bhdl";
-
-// MOSFET electrical characteristics and SPICE parameters
-type MOSFETParams = {
-    // Basic characteristics
-    type: string,                   // "nmos" or "pmos"
-    vds_max: voltage,              // Maximum drain-source voltage
-    id_max: current,               // Maximum continuous drain current
-    id_pulse: current?,            // Maximum pulse drain current
-    rds_on: resistance,            // On-state resistance
-    vgs_max: voltage,              // Maximum gate-source voltage
-    vgs_th_min: voltage,           // Minimum threshold voltage
-    vgs_th_max: voltage,           // Maximum threshold voltage
-    qg: charge?,                   // Total gate charge
-    power_dissipation: power,      // Maximum power dissipation
-    
-    // SPICE Level 1 parameters
-    level: int,                    // Model level (1, 2, or 3)
-    vto: voltage,                  // Zero-bias threshold voltage
-    kp: float,                     // Transconductance parameter (A/V²)
-    gamma: float,                  // Bulk threshold parameter
-    phi: voltage,                  // Surface potential
-    lambda: float,                 // Channel length modulation (1/V)
-    
-    // Geometry
-    w: length,                     // Channel width
-    l: length,                     // Channel length
-    ld: length?,                   // Lateral diffusion
-    tox: length?,                  // Oxide thickness
-    
-    // Capacitances
-    cgso: capacitance?,            // Gate-source overlap capacitance per width
-    cgdo: capacitance?,            // Gate-drain overlap capacitance per width
-    cgbo: capacitance?,            // Gate-bulk overlap capacitance per length
-    cbd: capacitance?,             // Drain-bulk capacitance
-    cbs: capacitance?,             // Source-bulk capacitance
-    cgs: capacitance?,             // Gate-source capacitance (total)
-    cgd: capacitance?,             // Gate-drain capacitance (total)
-    
-    // Resistances
-    rd: resistance,                // Drain resistance
-    rs: resistance,                // Source resistance
-    rg: resistance?,               // Gate resistance
-    
-    // Substrate parameters
-    nsub: float?,                  // Substrate doping (1/cm³)
-    nss: float?,                   // Surface state density (1/cm²)
-    is: float,                     // Bulk junction saturation current
-    js: float?,                    // Bulk junction saturation current density
-    pb: voltage,                   // Bulk junction potential
-    
-    // Temperature parameters
-    tnom: temperature,             // Nominal temperature
-    
-    impedance: ImpedanceCharacteristics,
-};
-
-entity MOSFET(part: string = "2N7000", package: string = "TO-92") {
+entity MOSFET(
+    part_no: string     = "2N7000",
+    channel: string     = "nmos",    // "nmos" | "pmos"
+    vds_max: voltage    = 60V,       // drain-source breakdown (magnitude)
+    id_max:  current    = 200mA,     // continuous drain current (magnitude)
+    rds_on:  resistance = 5Ω,        // on-resistance at datasheet V_GS
+    vgs_th_max: voltage = 3V,        // gate threshold, max (magnitude)
+    power_rating: power = 400mW      // package dissipation
+) {
     pin G: signal in;     // Gate
     pin D: signal inout;  // Drain
     pin S: signal inout;  // Source
-    
-    // Common MOSFET parameters
-    const MOSFET_2N7000: MOSFETParams = {
-        // Basic characteristics
-        type: "nmos",
-        vds_max: 60V,
-        id_max: 200mA,
-        id_pulse: 500mA,
-        rds_on: 5Ω,
-        vgs_max: 20V,
-        vgs_th_min: 0.8V,
-        vgs_th_max: 3V,
-        qg: 0.3nC,
-        power_dissipation: 400mW,
-        
-        // SPICE parameters
-        level: 1,
-        vto: 1.8,
-        kp: 0.2133e-3,         // A/V² (was incorrectly in mA/V²)
-        gamma: 0,
-        phi: 0.6,
-        lambda: 0.0264,
-        
-        // Geometry
-        w: 0.035e-3,           // 35µm channel width
-        l: 2.5e-6,
-        ld: 0,
-        tox: null,
-        
-        // Capacitances
-        cgso: null,
-        cgdo: null,
-        cgbo: null,
-        cbd: null,
-        cbs: null,
-        cgs: 29e-12,
-        cgd: 6.6e-12,
-        
-        // Resistances
-        rd: 1.387,
-        rs: 0,
-        rg: null,
-        
-        // Substrate
-        nsub: null,
-        nss: null,
-        is: 1e-14,
-        js: null,
-        pb: 0.8,
-        
-        // Temperature
-        tnom: 27°C,
-        
-        impedance: {
-            dc_resistance: 5Ω,  // RDS(on)
-            output_impedance: 5Ω,
-            input_impedance: 1e9,  // Very high gate impedance
-            can_source_current: true,
-            can_sink_current: true,
-            max_source_current: 200mA,
-            max_sink_current: 200mA,
-            power_domain_isolation: true,  // Gate isolated
-            voltage_drop: null,
-            current_limiting: false,
-            transient_response: 10ns,
-            inrush_current: null
-        }
-    };
-    
-    const MOSFET_BS250: MOSFETParams = {
-        // Basic characteristics
-        type: "pmos",
-        vds_max: -45V,
-        id_max: 230mA,
-        id_pulse: 800mA,
-        rds_on: 14Ω,
-        vgs_max: -20V,
-        vgs_th_min: -0.8V,
-        vgs_th_max: -3.5V,
-        qg: 2nC,
-        power_dissipation: 700mW,
-        
-        // SPICE parameters
-        level: 1,
-        vto: -3.2,
-        kp: 0.195e-3,          // A/V² (was incorrectly in mA/V²)
-        gamma: 0,
-        phi: 0.6,
-        lambda: 0.008,
-        
-        // Geometry
-        w: 0.19e-3,            // 190µm channel width
-        l: 2e-6,
-        ld: 0,
-        tox: null,
-        
-        // Capacitances
-        cgso: null,
-        cgdo: null,
-        cgbo: null,
-        cbd: null,
-        cbs: null,
-        cgs: 60e-12,
-        cgd: 40e-12,
-        
-        // Resistances
-        rd: 5.0,
-        rs: 0,
-        rg: null,
-        
-        // Substrate
-        nsub: null,
-        nss: null,
-        is: 1e-14,
-        js: null,
-        pb: 0.8,
-        
-        // Temperature
-        tnom: 27°C,
-        
-        impedance: {
-            dc_resistance: 14Ω,
-            output_impedance: 14Ω,
-            input_impedance: 1e9,
-            can_source_current: true,
-            can_sink_current: true,
-            max_source_current: 230mA,
-            max_sink_current: 230mA,
-            power_domain_isolation: true,
-            voltage_drop: null,
-            current_limiting: false,
-            transient_response: 15ns,
-            inrush_current: null
-        }
-    };
-    
-    const MOSFET_IRF540: MOSFETParams = {
-        // Basic characteristics
-        type: "nmos",
-        vds_max: 100V,
-        id_max: 33A,
-        id_pulse: 110A,
-        rds_on: 44mΩ,
-        vgs_max: 20V,
-        vgs_th_min: 2V,
-        vgs_th_max: 4V,
-        qg: 71nC,
-        power_dissipation: 130W,
-        
-        // SPICE parameters
-        level: 3,
-        vto: 3.8,
-        kp: 20.85e-6,          // A/V² (power MOSFET)
-        gamma: 0,
-        phi: 0.6,
-        lambda: 0.001,
-        
-        // Geometry
-        w: 0.68e-3,            // 680µm channel width
-        l: 2e-6,
-        ld: 0,
-        tox: 100e-9,
-        
-        // Capacitances
-        cgso: 1.75e-9,
-        cgdo: 1e-9,
-        cgbo: 0,
-        cbd: 7.46e-10,
-        cbs: 0,
-        cgs: null,  // Use overlap capacitances
-        cgd: null,
-        
-        // Resistances
-        rd: 44e-3,
-        rs: 0,
-        rg: 2,
-        
-        // Substrate
-        nsub: null,
-        nss: null,
-        is: 2.4e-10,
-        js: null,
-        pb: 0.8,
-        
-        // Temperature
-        tnom: 27°C,
-        
-        impedance: {
-            dc_resistance: 44e-3,
-            output_impedance: 44e-3,
-            input_impedance: 1e9,
-            can_source_current: true,
-            can_sink_current: true,
-            max_source_current: 33A,
-            max_sink_current: 33A,
-            power_domain_isolation: true,
-            voltage_drop: null,
-            current_limiting: false,
-            transient_response: 20ns,
-            inrush_current: null
-        }
-    };
-    
-    const MOSFET_IRF9540: MOSFETParams = {
-        // Basic characteristics
-        type: "pmos",
-        vds_max: -100V,
-        id_max: 19A,
-        id_pulse: 76A,
-        rds_on: 200mΩ,
-        vgs_max: -20V,
-        vgs_th_min: -2V,
-        vgs_th_max: -4V,
-        qg: 63nC,
-        power_dissipation: 125W,
-        
-        // SPICE parameters
-        level: 3,
-        vto: -3.6,
-        kp: 8.8e-6,            // A/V² (power MOSFET)
-        gamma: 0,
-        phi: 0.6,
-        lambda: 0.001,
-        
-        // Geometry
-        w: 1.0e-3,             // 1mm channel width
-        l: 2e-6,
-        ld: 0,
-        tox: 100e-9,
-        
-        // Capacitances
-        cgso: 1.5e-9,
-        cgdo: 0.8e-9,
-        cgbo: 0,
-        cbd: 1.5e-9,
-        cbs: 0,
-        cgs: null,
-        cgd: null,
-        
-        // Resistances
-        rd: 200e-3,
-        rs: 0,
-        rg: 2,
-        
-        // Substrate
-        nsub: null,
-        nss: null,
-        is: 1e-10,
-        js: null,
-        pb: 0.8,
-        
-        // Temperature
-        tnom: 27°C,
-        
-        impedance: {
-            dc_resistance: 200e-3,
-            output_impedance: 200e-3,
-            input_impedance: 1e9,
-            can_source_current: true,
-            can_sink_current: true,
-            max_source_current: 19A,
-            max_sink_current: 19A,
-            power_domain_isolation: true,
-            voltage_drop: null,
-            current_limiting: false,
-            transient_response: 25ns,
-            inrush_current: null
-        }
-    };
-    
-    // Get parameters based on part number
-    const params: MOSFETParams = 
-        part == "2N7000" ? MOSFET_2N7000 :
-        part == "BS250" ? MOSFET_BS250 :
-        part == "IRF540" || part == "IRF540N" ? MOSFET_IRF540 :
-        part == "IRF9540" || part == "IRF9540N" ? MOSFET_IRF9540 :
-        MOSFET_2N7000;  // Default to 2N7000
-    
-    // Component metadata
+
     attribute component_class = "mosfet";
-    attribute transistor_type = params.type;
-    attribute part_number = part;
-    
-    // Electrical characteristics
-    attribute vds_max = params.vds_max;
-    attribute id_max = params.id_max;
-    attribute rds_on = params.rds_on;
-    attribute vgs_max = params.vgs_max;
-    attribute vgs_th_min = params.vgs_th_min;
-    attribute vgs_th_max = params.vgs_th_max;
-    attribute power_dissipation = params.power_dissipation;
-    
-    // SPICE model parameters
-    attribute spice_model = "mosfet";
-    attribute spice_type = params.type;
-    attribute spice_level = params.level;
-    attribute spice_vto = params.vto;
-    attribute spice_kp = params.kp;
-    attribute spice_gamma = params.gamma;
-    attribute spice_phi = params.phi;
-    attribute spice_lambda = params.lambda;
-    attribute spice_w = params.w;
-    attribute spice_l = params.l;
-    attribute spice_ld = params.ld;
-    attribute spice_tox = params.tox;
-    attribute spice_cgso = params.cgso;
-    attribute spice_cgdo = params.cgdo;
-    attribute spice_cgbo = params.cgbo;
-    attribute spice_cbd = params.cbd;
-    attribute spice_cbs = params.cbs;
-    attribute spice_cgs = params.cgs;
-    attribute spice_cgd = params.cgd;
-    attribute spice_rd = params.rd;
-    attribute spice_rs = params.rs;
-    attribute spice_rg = params.rg;
-    attribute spice_is = params.is;
-    attribute spice_js = params.js;
-    attribute spice_pb = params.pb;
-    attribute spice_tnom = params.tnom;
-    
-    // KiCad symbol
-    attribute kicad_symbol = params.type == "nmos" ? "Device:Q_NMOS_GDS" : "Device:Q_PMOS_GDS";
-    
-    // Package selection
-    attribute package = 
-        package == "TO-92" ? "Package_TO_SOT_THT:TO-92_Inline" :
-        package == "SOT-23" ? "Package_TO_SOT_SMD:SOT-23" :
-        package == "TO-220" ? "Package_TO_SOT_THT:TO-220-3_Vertical" :
-        package == "TO-247" ? "Package_TO_SOT_THT:TO-247-3_Vertical" :
-        package == "D2PAK" ? "Package_TO_SOT_SMD:TO-263-3_TabPin2" :
-        "Package_TO_SOT_THT:TO-92_Inline";
+    attribute transistor_type = channel;
+    attribute part_number     = part_no;
+    attribute vds_max         = vds_max;
+    attribute id_max          = id_max;
+    attribute rds_on          = rds_on;
+    attribute vgs_th_max      = vgs_th_max;
+    attribute power_rating    = power_rating;
+    attribute kicad_symbol    = "Device:Q_NMOS_GDS";
 }
 
-// Aliases for common parts
-alias 2N7000 = MOSFET("2N7000");
-alias BS250 = MOSFET("BS250");
-alias IRF540 = MOSFET("IRF540");
-alias IRF9540 = MOSFET("IRF9540");
+// SKU aliases bind the datasheet values positionally (same alias-with-
+// constructor-args form as the regulator SKUs).
+alias MOSFET_2N7000  = MOSFET("2N7000", "nmos", 60V, 200mA, 5Ω, 3V, 400mW);
+alias MOSFET_BS250   = MOSFET("BS250", "pmos", 45V, 230mA, 14Ω, 3.5V, 700mW);
+alias MOSFET_IRF540  = MOSFET("IRF540N", "nmos", 100V, 33A, 44mΩ, 4V, 130W);
+alias MOSFET_IRF9540 = MOSFET("IRF9540N", "pmos", 100V, 19A, 200mΩ, 4V, 125W);

@@ -34,23 +34,5 @@ alias REG = LM7805;      // Regulator shorthand
 alias TVS_DIODE = TVSDiode;
 alias PROTECTION = TVSDiode;
 
-// Export everything for use in other modules
-export {
-    // Basic passives
-    Cap, Capacitor, ElectrolyticCap, C,
-    Res, Resistor, R,
-    LED,
-    Diode, D,
-    Inductor, Ind, L,
-    
-    // Protection components
-    TVSDiode, TVS, TVS_DIODE, PROTECTION,
-    Fuse,
-    
-    // ICs and regulators
-    LM7805, LM2596, LM317,
-    U_7805, IC1, REG,
-    
-    // Connectors
-    TestPoint, TP
-};
+// (v2 exports are implicit — `import { X } from` this file works without an
+// export declaration; the old v1 `export { … }` tail was unparseable.)

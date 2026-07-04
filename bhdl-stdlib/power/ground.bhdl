@@ -2,7 +2,6 @@
 // This is used internally when processing ground declarations like:
 // ground GND;
 
-import { ImpedanceCharacteristics } from "../types/electrical_types.bhdl";
 
 // Ground characteristics
 type GroundParams = {
