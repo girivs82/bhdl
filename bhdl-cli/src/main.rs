@@ -301,6 +301,10 @@ enum Commands {
 
     /// List the SKU variants declared by the board. Prints "default"
     /// when no `variant` blocks are present.
+    /// Full synthesis report (Markdown on stdout): requirements,
+    /// generated instantiation, design values, simulation/stress results,
+    /// sign-off incl. requirement rows, and the BOM with MPNs.
+    Report {},
     ListSkus,
 }
 
@@ -345,32 +349,33 @@ async fn main() -> Result<()> {
     // sees plain BHDL. Prints the generated text — it is the report's
     // "winner and instantiation" section, and the user should see exactly
     // what their requirement compiled to.
-    let input_content = match bhdl_synthesizer::supply_synthesis::desugar_supplies(
-        &input_content,
-        std::path::Path::new("bhdl-stdlib"),
-    ) {
-        Ok(Some(d)) => {
-            for su in &d.supplies {
-                println!(
-                    "{} supply @{} from @{} → {} ({})",
-                    "⚡".yellow(),
-                    su.target_rail,
-                    su.source_rail,
-                    su.part,
-                    su.instance
-                );
-                for line in su.generated.lines() {
-                    println!("    {}", line.trim_start());
+    let (input_content, supply_syntheses) =
+        match bhdl_synthesizer::supply_synthesis::desugar_supplies(
+            &input_content,
+            std::path::Path::new("bhdl-stdlib"),
+        ) {
+            Ok(Some(d)) => {
+                for su in &d.supplies {
+                    println!(
+                        "{} supply @{} from @{} → {} ({})",
+                        "⚡".yellow(),
+                        su.target_rail,
+                        su.source_rail,
+                        su.part,
+                        su.instance
+                    );
+                    for line in su.generated.lines() {
+                        println!("    {}", line.trim_start());
+                    }
                 }
+                (d.source, d.supplies)
             }
-            d.source
-        }
-        Ok(None) => input_content,
-        Err(e) => {
-            eprintln!("{} {e:#}", "supply synthesis error:".red().bold());
-            std::process::exit(1);
-        }
-    };
+            Ok(None) => (input_content, Vec::new()),
+            Err(e) => {
+                eprintln!("{} {e:#}", "supply synthesis error:".red().bold());
+                std::process::exit(1);
+            }
+        };
 
     // Always start with parsing
     let parse_result = parse(&input_content);
@@ -453,6 +458,51 @@ async fn main() -> Result<()> {
 
         Some(Commands::ListSkus) => {
             cmd_list_skus(&source_file).await?;
+        }
+
+        Some(Commands::Report {}) => {
+            // Synthesis report skeleton (Power_Supply_Synthesis.md §4):
+            // Markdown on stdout — requirements + generated instantiation,
+            // then the full bom+simulate output (sizing, stress, sign-off
+            // incl. requirement rows, BOM w/ MPNs). Redirect to a file for
+            // the document form; single-file -o capture arrives with the
+            // report refactor, and sections 2–4 (topology math + candidate
+            // survey) arrive with the S2 chooser.
+            println!("# Synthesis report — {}\n", cli.input.display());
+            if supply_syntheses.is_empty() {
+                println!("_No `supply` requirement statements on this board — \
+                          sections below cover the hand-instantiated design._\n");
+            }
+            for su in &supply_syntheses {
+                println!("## Requirement: @{} from @{}\n", su.target_rail, su.source_rail);
+                println!("| Spec | Value |");
+                println!("|---|---|");
+                for (k, v) in &su.specs {
+                    println!("| {k} | {v} |");
+                }
+                println!("\n### Instantiation (S1, using: {})\n", su.part);
+                println!("```bhdl");
+                if !su.import_line.is_empty() {
+                    println!("{}", su.import_line);
+                }
+                println!("{}", su.generated);
+                println!("```\n");
+            }
+            println!("## Design, simulation, sign-off and BOM\n");
+            cmd_bom(
+                &source_file,
+                &cli.input,
+                None,
+                "markdown",
+                cli.sku.as_deref(),
+                None,
+                None,
+                Vec::new(),
+                cli.update_lock,
+                cli.locked,
+                true,
+            )
+            .await?;
         }
 
         Some(Commands::Intents { show_hints, show_rules, filter, format }) => {
