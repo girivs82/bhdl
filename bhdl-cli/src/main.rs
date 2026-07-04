@@ -357,12 +357,19 @@ async fn main() -> Result<()> {
             Ok(Some(d)) => {
                 for su in &d.supplies {
                     println!(
-                        "{} supply @{} from @{} → {} ({})",
+                        "{} supply @{} from @{} → {} ({}){}",
                         "⚡".yellow(),
                         su.target_rail,
                         su.source_rail,
                         su.part,
-                        su.instance
+                        su.instance,
+                        if su.survey.is_empty() {
+                            " [using: explicit]".to_string()
+                        } else {
+                            let n = su.survey.len();
+                            let pass = su.survey.iter().filter(|c| c.loss_w.is_some()).count();
+                            format!(" [chosen from {n} candidates, {pass} passed all gates]")
+                        }
                     );
                     for line in su.generated.lines() {
                         println!("    {}", line.trim_start());
@@ -480,7 +487,42 @@ async fn main() -> Result<()> {
                 for (k, v) in &su.specs {
                     println!("| {k} | {v} |");
                 }
-                println!("\n### Instantiation (S1, using: {})\n", su.part);
+                if !su.survey.is_empty() {
+                    println!("\n### Candidate survey (S2 chooser)\n");
+                    println!("| Part | Verdict | Est. loss | Detail |");
+                    println!("|---|---|---|---|");
+                    for c in &su.survey {
+                        let verdict = if c.chosen {
+                            "**CHOSEN**".to_string()
+                        } else if c.loss_w.is_some() {
+                            "pass".to_string()
+                        } else {
+                            let (g, d, _) = c
+                                .gates
+                                .iter()
+                                .find(|(_, _, ok)| !ok)
+                                .cloned()
+                                .unwrap_or_default();
+                            format!("REJECT ({g}: {d})")
+                        };
+                        let loss = c
+                            .loss_w
+                            .map(|w| format!("{w:.2}W"))
+                            .unwrap_or_else(|| "—".into());
+                        println!("| {} | {} | {} | |", c.part, verdict, loss);
+                    }
+                    println!("\n#### Per-candidate gate detail\n");
+                    for c in &su.survey {
+                        println!("**{}**{}", c.part, if c.chosen { " ← chosen (lowest estimated loss)" } else { "" });
+                        for (g, d, ok) in &c.gates {
+                            println!("- {} {g}: {d}", if *ok { "✔" } else { "✘" });
+                        }
+                        println!();
+                    }
+                } else if su.specs.iter().any(|(k, _)| k == "using") {
+                    println!("\n_Part named explicitly (`using:`) — engineer override; no candidate survey run._");
+                }
+                println!("\n### Instantiation (using: {})\n", su.part);
                 println!("```bhdl");
                 if !su.import_line.is_empty() {
                     println!("{}", su.import_line);

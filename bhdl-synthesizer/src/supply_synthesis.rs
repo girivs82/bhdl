@@ -36,6 +36,24 @@ pub struct SupplyDesugar {
     pub generated: String,
     /// The generated import line (empty when the board already imports the part).
     pub import_line: String,
+    /// S2 candidate survey — every regulator considered, with per-gate
+    /// verdicts and the ranking score. Empty when the part was named
+    /// explicitly (`using:`) — that override is itself recorded in the report.
+    pub survey: Vec<Candidate>,
+}
+
+/// One surveyed regulator candidate (report sections 3–4).
+#[derive(Debug, Clone)]
+pub struct Candidate {
+    pub part: String,
+    /// (gate name, detail with computed numbers, passed).
+    pub gates: Vec<(String, String, bool)>,
+    /// Estimated regulator loss in watts (the ranking score, lower = better):
+    /// linears P = (V_IN−V_OUT)·I + V_IN·I_q; switchers
+    /// P ≈ I²·R_ds·D + V_IN·I·f_sw·t_sw + V_IN·I_q. `None` when the part
+    /// failed a hard gate.
+    pub loss_w: Option<f64>,
+    pub chosen: bool,
 }
 
 /// Result of the desugar pass over one source file.
@@ -147,17 +165,6 @@ fn desugar_one(
         specs.push((key, value));
     }
 
-    let part = specs
-        .iter()
-        .find(|(k, _)| k == "using")
-        .map(|(_, v)| v.clone())
-        .ok_or_else(|| {
-            anyhow!(
-                "supply @{target}: no `using: <Part>;` — automatic part selection (S2) \
-                 is not built yet; name the regulator explicitly"
-            )
-        })?;
-
     // Rails: the whole derivation depends on the real operating point.
     let t = rails.get(&target).ok_or_else(|| {
         anyhow!("supply @{target}: no `power {target} = …;` rail declared on the board")
@@ -173,6 +180,40 @@ fn desugar_one(
             v = t.voltage
         )
     })?;
+
+    // Part: explicit `using:` (recorded as an engineer override), else the
+    // S2 chooser — capability gates + loss ranking over the stdlib catalogue
+    // (Power_Supply_Synthesis.md §3), with the full survey kept for the
+    // report.
+    let spec_num = |k: &str| {
+        specs
+            .iter()
+            .find(|(sk, _)| sk == k)
+            .and_then(|(_, v)| parse_si_txt(v))
+    };
+    let explicit = specs
+        .iter()
+        .find(|(k, _)| k == "using")
+        .map(|(_, v)| v.clone());
+    let (part, survey) = match explicit {
+        Some(p) => (p, Vec::new()),
+        None => {
+            let v_in_n = parse_si_txt(&s.voltage)
+                .ok_or_else(|| anyhow!("supply @{target}: unparseable source rail voltage `{}`", s.voltage))?;
+            let v_out_n = parse_si_txt(&t.voltage)
+                .ok_or_else(|| anyhow!("supply @{target}: unparseable target rail voltage `{}`", t.voltage))?;
+            let i_out_n = parse_si_txt(&i_out)
+                .ok_or_else(|| anyhow!("supply @{target}: unparseable rail load `{i_out}`"))?;
+            choose_part(
+                stdlib_root,
+                v_in_n,
+                v_out_n,
+                i_out_n,
+                spec_num("efficiency_min"),
+                spec_num("i_q_max"),
+            )?
+        }
+    };
 
     // Resolve the part in the stdlib and read its constructor params + pins.
     let (part_path, entity_src) = find_entity(stdlib_root, &part)?;
@@ -254,6 +295,7 @@ fn desugar_one(
         specs,
         generated: g,
         import_line,
+        survey,
     })
 }
 
@@ -434,6 +476,341 @@ fn entity_pin_names(src: &str, name: &str) -> Vec<String> {
         }
     }
     pins
+}
+
+// ───────────────────────── S2: the chooser ─────────────────────────
+
+/// Numeric SI parse for datasheet attribute text: `"12V"`, `"3.4mA"`,
+/// `"90mΩ"/"90mohm"`, `"570kHz"`, `"2W"`, `"85%"` (→ 0.85), `"20ns"`,
+/// plain numbers. Returns `None` for anything non-numeric.
+fn parse_si_txt(s: &str) -> Option<f64> {
+    let t = s.trim().trim_matches('"');
+    let num_end = t
+        .char_indices()
+        .take_while(|(_, c)| c.is_ascii_digit() || *c == '.' || *c == '-' || *c == '+')
+        .map(|(i, c)| i + c.len_utf8())
+        .last()?;
+    let num: f64 = t[..num_end].parse().ok()?;
+    let unit = t[num_end..].trim();
+    if unit == "%" {
+        return Some(num / 100.0);
+    }
+    // Strip the unit letters (V/A/W/F/H/Hz/s/ohm/Ω) to isolate the prefix.
+    let prefix = unit
+        .trim_end_matches("Hz")
+        .trim_end_matches("ohm")
+        .trim_end_matches(['V', 'A', 'W', 'F', 'H', 's', 'Ω']);
+    let scale = match prefix {
+        "" => 1.0,
+        "p" => 1e-12,
+        "n" => 1e-9,
+        "u" | "µ" => 1e-6,
+        "m" => 1e-3,
+        "k" => 1e3,
+        "M" => 1e6,
+        "G" => 1e9,
+        _ => return None,
+    };
+    Some(num * scale)
+}
+
+/// `attribute <key> = <value>;` map of the named entity (comment-stripped,
+/// quotes trimmed), scanned textually from the entity block.
+fn entity_attrs_txt(src: &str, name: &str) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let Some(at) = find_entity_decl(src, name) else { return out };
+    for line in src[at..].lines() {
+        if line.trim_end() == "}" {
+            break;
+        }
+        let l = line.split("//").next().unwrap_or("").trim();
+        let Some(rest) = l.strip_prefix("attribute ") else { continue };
+        if let Some((k, v)) = rest.split_once('=') {
+            out.insert(
+                k.trim().to_string(),
+                v.trim().trim_end_matches(';').trim().trim_matches('"').to_string(),
+            );
+        }
+    }
+    out
+}
+
+/// Default value text of one constructor param, e.g. `i_out_max` → `"2A"`.
+fn entity_param_default(src: &str, name: &str, param: &str) -> Option<String> {
+    // Reuse the comment-safe walker by re-deriving the raw chunks.
+    let Some(ent_at) = find_entity_decl(src, name) else { return None };
+    let after = &src[ent_at..];
+    let open_rel = after.find('(')?;
+    let mut depth = 0usize;
+    let mut chunks = Vec::new();
+    let mut cur = String::new();
+    let mut chars = after[open_rel + 1..].chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '/' && chars.peek() == Some(&'/') {
+            for k in chars.by_ref() {
+                if k == '\n' {
+                    break;
+                }
+            }
+            continue;
+        }
+        match c {
+            '(' => {
+                depth += 1;
+                cur.push(c);
+            }
+            ')' if depth == 0 => {
+                chunks.push(cur.clone());
+                break;
+            }
+            ')' => {
+                depth -= 1;
+                cur.push(c);
+            }
+            ',' if depth == 0 => {
+                chunks.push(cur.clone());
+                cur.clear();
+            }
+            _ => cur.push(c),
+        }
+    }
+    for ch in chunks {
+        let (n, rest) = ch.split_once(':')?;
+        if n.trim() == param {
+            return rest.split_once('=').map(|(_, d)| d.trim().to_string());
+        }
+    }
+    None
+}
+
+/// The S2 chooser (Power_Supply_Synthesis.md §3): survey every stdlib
+/// regulator, hard-gate on the datasheet capability attributes, rank the
+/// survivors by estimated regulator loss. Every verdict carries the computed
+/// numbers — the survey IS report sections 3–4, and a rejection with no
+/// stated reason would be a fabricated default.
+#[allow(clippy::too_many_arguments)]
+fn choose_part(
+    stdlib_root: &Path,
+    v_in: f64,
+    v_out: f64,
+    i_out: f64,
+    efficiency_min: Option<f64>,
+    i_q_max: Option<f64>,
+) -> Result<(String, Vec<Candidate>)> {
+    let mut files = Vec::new();
+    collect_bhdl(stdlib_root, &mut files);
+
+    let mut survey: Vec<Candidate> = Vec::new();
+    for f in &files {
+        let Ok(src) = std::fs::read_to_string(f) else { continue };
+        // Every entity in the file whose class is a regulator class.
+        for line in src.lines() {
+            let l = line.trim_start();
+            let Some(rest) = l.strip_prefix("entity ") else { continue };
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if name.is_empty() {
+                continue;
+            }
+            let attrs = entity_attrs_txt(&src, &name);
+            let class = attrs.get("component_class").map(String::as_str).unwrap_or("");
+            if !matches!(class, "voltage_regulator" | "ldo" | "switching_regulator") {
+                continue;
+            }
+            // Generic templates (no package → no honest power_rating; generic
+            // `<V_OUT>` entities) are not selectable parts.
+            if src[find_entity_decl(&src, &name).unwrap_or(0)..]
+                .lines()
+                .next()
+                .map(|l| l.contains('<'))
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            // Numeric attr with param-ref resolution: `attribute rds_on =
+            // rds_on;` stores the literal param NAME textually — resolve it
+            // through the constructor default (the same `attribute X = X`
+            // discipline the analyzer applies, done textually here because
+            // the chooser runs pre-parse). A bare-identifier value that
+            // matches no param yields None (honest UNCHECKED downstream).
+            let attr_si = |k: &str| {
+                let v = attrs.get(k)?;
+                parse_si_txt(v).or_else(|| {
+                    let ident = v.trim();
+                    if ident.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                        entity_param_default(&src, &name, ident)
+                            .and_then(|d| parse_si_txt(&d))
+                    } else {
+                        None
+                    }
+                })
+            };
+            let is_switcher = class == "switching_regulator"
+                || attr_si("f_sw").is_some()
+                || attr_si("switching_frequency").is_some();
+
+            let mut gates: Vec<(String, String, bool)> = Vec::new();
+            let mut push = |g: &str, d: String, ok: bool| gates.push((g.to_string(), d, ok));
+
+            // v_out reachability.
+            let adjustable = ["v_out", "vout_target"]
+                .iter()
+                .find(|p| entity_param_default(&src, &name, p).is_some());
+            match (adjustable, attr_si("output_voltage")) {
+                (Some(p), _) => {
+                    let dropout = attr_si("dropout_voltage").unwrap_or(0.0);
+                    let ok = v_out < v_in - dropout;
+                    push(
+                        "v_out",
+                        format!(
+                            "adjustable via `{p}`; needs {v_out:.2}V ≤ {v_in:.1}V − {dropout:.2}V dropout"
+                        ),
+                        ok,
+                    );
+                }
+                (None, Some(fixed)) => {
+                    let ok = (fixed - v_out).abs() <= 0.01 * v_out.max(0.1);
+                    push("v_out", format!("fixed {fixed:.2}V vs required {v_out:.2}V"), ok);
+                }
+                (None, None) => push(
+                    "v_out",
+                    "no output-voltage capability declared (no v_out param, no attr)".into(),
+                    false,
+                ),
+            }
+
+            // Input range (when declared; missing = UNCHECKED pass, stated).
+            match (attr_si("input_voltage_min"), attr_si("input_voltage_max")) {
+                (Some(lo), Some(hi)) => push(
+                    "v_in range",
+                    format!("{lo:.1}–{hi:.1}V covers {v_in:.1}V"),
+                    v_in >= lo && v_in <= hi,
+                ),
+                _ => push("v_in range", "UNCHECKED (no input range attrs)".into(), true),
+            }
+
+            // Load within rating: output_current attr, else the i_out_max
+            // param default as the declared design envelope.
+            let i_cap = attr_si("output_current").or_else(|| {
+                entity_param_default(&src, &name, "i_out_max").and_then(|d| parse_si_txt(&d))
+            });
+            match i_cap {
+                Some(cap) => push(
+                    "i_out",
+                    format!("{i_out:.2}A load vs {cap:.2}A capability"),
+                    i_out <= cap,
+                ),
+                None => push("i_out", "UNCHECKED (no current capability declared)".into(), true),
+            }
+
+            let i_q = attr_si("i_quiescent");
+            // Linear dissipation — the §4 self.p_diss form as a predictor.
+            let mut loss = None;
+            if !is_switcher {
+                let p = (v_in - v_out) * i_out + v_in * i_q.unwrap_or(0.0);
+                match attr_si("power_rating") {
+                    Some(rating) => push(
+                        "p_diss",
+                        format!(
+                            "(({v_in:.1}−{v_out:.2})·{i_out:.2} + {v_in:.1}·I_q) = {p:.2}W vs {rating:.2}W/2 derated"
+                        ),
+                        p <= rating / 2.0,
+                    ),
+                    None => push("p_diss", format!("{p:.2}W but no power_rating declared"), false),
+                }
+                if let Some(eff_min) = efficiency_min {
+                    let eff = v_out / v_in;
+                    push(
+                        "efficiency",
+                        format!("linear η = {v_out:.2}/{v_in:.1} = {:.1}% vs ≥{:.1}%", eff * 100.0, eff_min * 100.0),
+                        eff >= eff_min,
+                    );
+                }
+                loss = Some(p);
+            } else {
+                // Switcher loss estimate from the loss-model attrs.
+                let duty = v_out / v_in;
+                let rds = attr_si("rds_on").unwrap_or(0.0);
+                let f_sw = attr_si("f_sw").or_else(|| attr_si("switching_frequency")).unwrap_or(0.0);
+                let t_sw = attr_si("t_sw").unwrap_or(0.0);
+                let p = i_out * i_out * rds * duty
+                    + v_in * i_out * f_sw * t_sw
+                    + v_in * i_q.unwrap_or(0.0);
+                push(
+                    "loss model",
+                    format!(
+                        "I²·R_ds·D + V·I·f_sw·t_sw + V·I_q = {p:.2}W (η ≈ {:.1}%)",
+                        100.0 * (v_out * i_out) / (v_out * i_out + p)
+                    ),
+                    true,
+                );
+                loss = Some(p);
+            }
+
+            // Quiescent ceiling.
+            if let Some(qmax) = i_q_max {
+                match i_q {
+                    Some(q) => push(
+                        "i_q",
+                        format!("{} vs ≤ {}", fmt_a(q), fmt_a(qmax)),
+                        q <= qmax,
+                    ),
+                    None => push("i_q", "UNCHECKED (no i_quiescent attr)".into(), true),
+                }
+            }
+
+            let all_pass = gates.iter().all(|(_, _, ok)| *ok);
+            survey.push(Candidate {
+                part: name,
+                gates,
+                loss_w: if all_pass { loss } else { None },
+                chosen: false,
+            });
+        }
+    }
+
+    // Rank the survivors by estimated loss.
+    let winner = survey
+        .iter()
+        .filter(|c| c.loss_w.is_some())
+        .min_by(|a, b| a.loss_w.partial_cmp(&b.loss_w).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|c| c.part.clone());
+    match winner {
+        Some(w) => {
+            for c in survey.iter_mut() {
+                c.chosen = c.part == w;
+            }
+            Ok((w, survey))
+        }
+        None => {
+            let mut msg = String::from(
+                "supply: no stdlib regulator passes every capability gate for this \
+                 requirement. Survey:\n",
+            );
+            for c in &survey {
+                let first_fail = c
+                    .gates
+                    .iter()
+                    .find(|(_, _, ok)| !ok)
+                    .map(|(g, d, _)| format!("{g}: {d}"))
+                    .unwrap_or_else(|| "?".into());
+                msg.push_str(&format!("  {} — REJECT: {}\n", c.part, first_fail));
+            }
+            bail!(msg)
+        }
+    }
+}
+
+fn fmt_a(v: f64) -> String {
+    if v >= 1.0 {
+        format!("{v:.2}A")
+    } else if v >= 1e-3 {
+        format!("{:.1}mA", v * 1e3)
+    } else {
+        format!("{:.0}µA", v * 1e6)
+    }
 }
 
 /// Byte offset of `entity <name>` in `src`, resolving one level of

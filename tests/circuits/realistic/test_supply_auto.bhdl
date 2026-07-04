@@ -1,0 +1,22 @@
+// Power-supply synthesis S2 (docs/spec/Power_Supply_Synthesis.md §3):
+// no `using:` — the CHOOSER surveys every stdlib regulator, hard-gates on the
+// datasheet capability attributes (v_out reachability, input range, load,
+// the §4 linear-dissipation form, i_q), ranks the survivors by estimated
+// regulator loss, and instantiates the winner. `bhdl … report` shows the
+// full candidate survey with per-gate verdicts and computed numbers.
+//
+// 12V → 3.3V @ 1.5A: every linear rejects on pass-element dissipation
+// ((12−3.3)·1.5 ≈ 13W against ~2W packages); the buck with the lowest
+// estimated loss wins.
+
+board SupplyAutoS2 {
+    power VIN = 12V @ 3A;
+    power VCC_3V3 = 3.3V @ 1.5A;
+    ground GND;
+
+    supply @VCC_3V3 from @VIN {
+        ripple_max: 30mV;
+        i_q_max:    5mA;
+        profile:    cost;
+    }
+}
