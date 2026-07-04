@@ -1,7 +1,11 @@
 // Simple TPS54302 Buck Converter Test
-// 12V to 5V buck converter without imports
+// 12V to 5V buck converter using the canonical stdlib TPS54302 (which carries
+// the §4 simulation { stress { } } device-stress model). Support parts are
+// named l_out / c_out1 / c_in1 to match the part's stress-block references.
 
-board TPS54302_Buck_Simple {
+import { TPS54302 } from "bhdl-stdlib/power/tps54302.bhdl";
+
+board TPS54302_Buck {
     // Power domains
     power VIN = 12V @ 3A;
     power VOUT = 5V @ 2A;
@@ -31,16 +35,7 @@ board TPS54302_Buck_Simple {
     reg.BOOT -> c_boot: Cap(100nF).1; c_boot.2 -> reg.PH;
 }
 
-// Simplified component modules
-entity TPS54302() {
-    pin VIN: power in;
-    pin GND: ground;
-    pin PH: power out;    // Phase/Switching node (connects to inductor)
-    pin EN: signal in;    // Enable
-    pin FB: signal in;    // Feedback
-    pin BOOT: signal inout; // Bootstrap
-}
-
+// Simplified passive stubs (the regulator is the canonical stdlib part).
 entity Cap(value: capacitance) {
     pin 1: signal inout;
     pin 2: signal inout;

@@ -48,7 +48,7 @@ entity TPS54302() {
 
     // Loss-model constants (datasheet SLVSDG6) — see tps54302.bhdl.
     attribute i_quiescent = 85uA;   // non-switching operating quiescent (typ)
-    attribute rds_on = 98mohm;      // high-side FET on-resistance (typ; LS 49mohm)
+    attribute rds_on = 98mΩ;      // high-side FET on-resistance (typ; LS 49mohm)
     attribute t_sw = 20ns;          // SW transition time for switching-loss estimate
     // Inductor ripple-current ratio K_IND (datasheet §7.2.3.5.1, Eq 8 design
     // example): ΔI_L / I_out. Drives the sign-off inductor value-stepping.
@@ -81,6 +81,37 @@ entity TPS54302() {
     attribute spice_switching_frequency = 500kHz;
     attribute spice_duty_cycle = "variable";
     attribute spice_feedback_reference = 0.6V;
+
+    // §4 device-stress IP (docs/spec/Vendor_Simulation_Blocks.md), authored in
+    // HDL so the part's device-level stress model travels with the part — the
+    // datasheet limits stay attached to it the way its electrical attributes
+    // do, instead of living only in the sign-off's hardcoded reference model.
+    //
+    // How THIS synchronous buck stresses its support parts at the solved
+    // operating point. Resolves the operating point (vin / vout / i_out), the
+    // part's own attributes (`self.switching_frequency`), and each support
+    // part's snapped value by board instance name — l_out / c_out1 / c_in1,
+    // the TI SLVSDG6C application-circuit designators. Writes the per-part
+    // stress axes the sign-off derate gate compares against the selected
+    // catalogue rating. A board that names its support parts differently just
+    // doesn't match these references: the eval is skipped and those parts keep
+    // the generic stress model (no error).
+    //
+    // Buck application forms (SLVSDG6C §7.2.3.5):
+    //   duty = V_OUT / V_IN
+    //   ΔI_L = (V_IN − V_OUT)·duty / (f_sw·L)
+    //   inductor peak current  = I_out + ΔI_L/2
+    //   output-cap ripple      = ΔI_L / (8·f_sw·C_out)
+    //   input-cap ripple       = I_out·duty·(1−duty) / (f_sw·C_in)
+    simulation {
+        stress {
+            const duty = vout / vin;
+            const d_il = (vin - vout) * duty / (self.switching_frequency * l_out.value);
+            l_out.i_peak    = i_out + d_il / 2;
+            c_out1.v_ripple = d_il / (8 * self.switching_frequency * c_out1.value);
+            c_in1.v_ripple  = i_out * duty * (1 - duty) / (self.switching_frequency * c_in1.value);
+        }
+    }
 }
 
 layout TPS54302 {
