@@ -36,6 +36,67 @@ struct PinNetInfo {
     pin_direction: bhdl_netlist::PinDirection,
 }
 
+/// Parse a resistance/voltage value string ("31.6kΩ", "10k", "0.8V") for
+/// the closed-loop divider derivation.
+fn parse_res_val(txt: &str) -> Option<f64> {
+    let t = txt.trim().trim_end_matches('V').trim_end_matches('Ω')
+        .trim_end_matches("ohm").trim();
+    let (num, mult) = match t.chars().last()? {
+        'k' | 'K' => (&t[..t.len() - 1], 1e3),
+        'M' => (&t[..t.len() - 1], 1e6),
+        'm' => (&t[..t.len() - 1], 1e-3),
+        'u' | 'µ' => (&t[..t.len() - 1], 1e-6),
+        _ => (t, 1.0),
+    };
+    num.trim().parse::<f64>().ok().map(|v| v * mult)
+}
+
+/// Find the FB divider on `fb_net`: exactly one two-terminal resistor to a
+/// non-ground net (Rtop) and one to ground (Rbot). Anything else → None
+/// (ambiguous networks are never guessed into a closed-loop model).
+fn divider_at(netlist: &Netlist, fb_net: NetId) -> Option<(f64, f64)> {
+    let mut rt: Option<f64> = None;
+    let mut rb: Option<f64> = None;
+    for inst in netlist.instances.values() {
+        if inst.attributes.get("component_class").map(String::as_str) != Some("resistor") {
+            continue;
+        }
+        let pins: Vec<Option<NetId>> = netlist
+            .pin_instances
+            .values()
+            .filter(|pi| {
+                netlist.instances.iter().any(|(id, i)| {
+                    std::ptr::eq(i, inst) && pi.instance == id
+                })
+            })
+            .map(|pi| pi.net)
+            .collect();
+        if pins.len() != 2 {
+            continue;
+        }
+        let (a, b) = (pins[0], pins[1]);
+        let other = match (a, b) {
+            (Some(x), Some(y)) if x == fb_net => y,
+            (Some(x), Some(y)) if y == fb_net => x,
+            _ => continue,
+        };
+        let val = inst.attributes.get("value").and_then(|v| parse_res_val(v));
+        let Some(val) = val.filter(|v| *v > 0.0) else { continue };
+        let grounded = matches!(
+            netlist.nets.get(other).map(|n| &n.net_class),
+            Some(bhdl_netlist::NetClass::Ground)
+        );
+        if grounded {
+            if rb.replace(val).is_some() {
+                return None; // two bottom legs — ambiguous
+            }
+        } else if rt.replace(val).is_some() {
+            return None; // two top legs — ambiguous
+        }
+    }
+    Some((rt?, rb?))
+}
+
 /// Enhanced netlist converter with proper SPICE model creation
 pub struct NetlistToSpiceConverter {
     /// Component model extractor
@@ -681,6 +742,39 @@ impl NetlistToSpiceConverter {
                     info!("Regulator {} VOUT from model block: {}V (was {}V hardcoded)",
                           instance_name, v, vout_voltage);
                     vout_voltage = *v;
+                }
+            }
+
+            // ── Closed-loop DC (review finding: the FB chicken-and-egg) ──
+            // Physically the loop forces FB = VREF and VOUT FOLLOWS the
+            // divider: VOUT = VREF·(1 + Rtop/Rbot) with the PLACED (snapped)
+            // resistors. Pinning VOUT at the declared nominal inverted the
+            // causality — the solver back-derived FB (793mV) from the
+            // declaration and ERASED the divider snap error (+0.85% here),
+            // which is real verification data. The loop's DC fixed point is
+            // algebraic, so no iteration is needed: when the part declares
+            // feedback_voltage and its FB pin has a resolvable divider, the
+            // source voltage is DERIVED from it. Falls back to the declared
+            // nominal when either input is absent (Real-Data).
+            let vref = extracted_model.parameters.get("feedback_voltage").copied()
+                .or_else(|| {
+                    netlist.instances.get(instance_id)
+                        .and_then(|i| i.attributes.get("feedback_voltage"))
+                        .and_then(|v| parse_res_val(v))
+                });
+            if let Some(vref) = vref.filter(|v| *v > 0.0) {
+                let fb_net = pin_info.iter()
+                    .find(|p| p.pin_name.eq_ignore_ascii_case("FB"))
+                    .map(|p| p.net_id);
+                if let Some(fb_net) = fb_net {
+                    if let Some((rt, rb)) = divider_at(netlist, fb_net) {
+                        let derived = vref * (1.0 + rt / rb);
+                        info!(
+                            "Regulator {}: closed-loop DC — VOUT derived from FB divider:                              {:.3}V = {:.3}V·(1 + {:.1}/{:.1}) (declared nominal was {}V)",
+                            instance_name, derived, vref, rt, rb, vout_voltage
+                        );
+                        vout_voltage = derived;
+                    }
                 }
             }
 
