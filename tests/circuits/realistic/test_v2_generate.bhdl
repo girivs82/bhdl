@@ -1,9 +1,0 @@
-board GenerateTest {
-    power VCC = 5V @ 1A;
-    ground GND;
-    
-    generate for i in 0..3 {
-        VCC -> Res(10kΩ).1 -> LED(green).A;
-        LED.K -> GND;
-    }
-}

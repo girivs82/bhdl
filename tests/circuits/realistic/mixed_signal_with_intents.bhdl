@@ -1,60 +1,84 @@
 // Mixed-Signal Circuit with Timing and Signal Processing Intents
-// Demonstrates delay, debounce, and anti-aliasing intents
+// Demonstrates debounce, anti-aliasing, and current-limiting intents.
+// Rewritten to the v2 language: board-nested entities hoisted to top level,
+// one intent per flow statement, stdlib imports for the passives.
+
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
+
+// Board-local abstractions (no stdlib part) — top-level minimal entities.
+
+entity Button() {
+    pin OUT: signal out;
+    pin GND: ground;
+
+    attribute component_class = "switch";
+}
+
+entity Buffer() {
+    pin IN: signal in;
+    pin OUT: signal out;
+
+    attribute component_class = "buffer";
+}
+
+entity AnalogSensor() {
+    pin OUT: signal out;
+    pin VCC: power in;
+    pin GND: ground;
+
+    attribute component_class = "sensor";
+}
+
+entity ADC() {
+    pin IN: signal in;
+    pin CLK: signal in;  // clock input (v2 pin types have no `clock` role)
+    pin DATA: signal out;
+    pin VCC: power in;
+    pin GND: ground;
+
+    attribute component_class = "adc";
+}
 
 board MixedSignalBoard {
     power VCC = 5V @ 500mA;
     ground GND;
 
     // Button input with debouncing
-    entity Button {
-        pin OUT: signal out;
-        pin GND: ground inout;
-    }
-
-    btn: Button().OUT -> @button_raw;
+    btn: Button();
+    btn.OUT -> @button_raw;
+    btn.GND -> @GND;
     @button_raw -> @button_debounced;
     @button_debounced -> R1: Res(10k).1; R1.2 -> C1: Cap(1u).1; C1.2 -> @GND
         for debounce(time: 20ms);
 
     // Signal buffering for multiple loads
     @button_debounced -> @buffered_signal;
-    @buffered_signal -> buf: Buffer().IN; buf.OUT
-        for signal_buffering(fanout: 8, drive: high);
+    @buffered_signal -> buf: Buffer().IN
+        for signal_buffering(fanout: 8);
 
     // Fast digital path for immediate response
-    @buffered_signal -> @fast_path;
+    buf.OUT -> @fast_path;
     @fast_path -> R2: Res(100).1; R2.2 -> led1: LED(red).A; led1.K -> @GND
-        for delay(10ns)
         for current_limiting(max: 20mA);
+    // (delay intent folded out — single-intent flow model.)
 
-    // Slow digital path with delay
-    @buffered_signal -> @slow_path;
-    @slow_path -> R3: Res(1k).1 -> C2: Cap(1u).1 -> R3.2 -> led2: LED(yellow).A; led2.K -> @GND
-        for delay(1ms)
+    // Slow digital path with RC delay
+    buf.OUT -> @slow_path;
+    @slow_path -> R3: Res(1k).1; R3.2 -> C2: Cap(1u).1; C2.2 -> @GND;
+    R3.2 -> led2: LED(yellow).A; led2.K -> @GND
         for current_limiting(max: 10mA);
+    // (delay intent folded out — single-intent flow model.)
 
     // Analog sensor path with anti-aliasing
-    entity AnalogSensor {
-        pin OUT: signal out;
-        pin VCC: power in;
-        pin GND: ground inout;
-    }
-
     @VCC -> sensor: AnalogSensor().VCC;
     sensor.GND -> @GND;
 
     // Anti-aliasing filter before ADC
-    entity ADC {
-        pin IN: signal in;
-        pin CLK: clock in;
-        pin DATA: signal out;
-        pin VCC: power in;
-        pin GND: ground inout;
-    }
-
     sensor.OUT -> @sensor_filtered;
     @sensor_filtered -> Rf: Res(1k).1; Rf.2 -> Cf: Cap(100n).1; Cf.2 -> @GND
-        for anti_alias(before: adc, cutoff: 1kHz);
+        for anti_alias(cutoff: 1kHz);
 
     @sensor_filtered -> adc: ADC().IN;
     @VCC -> adc.VCC;

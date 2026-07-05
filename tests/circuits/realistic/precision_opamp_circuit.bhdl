@@ -1,188 +1,69 @@
-// Precision op-amp circuit with topology-aware connections
-// Shows how pin-to-pin connections preserve analog signal paths
+// Precision op-amp signal chain on ±12V rails — regenerated to v2 from the
+// v1 structural-entity dialect (nested entity blocks with embedded
+// connections, `where` layout clauses, V+/V− pin names, type=/package=
+// reserved-word args). The v1 offset-trim stage (Potentiometer +
+// VoltageReference) is dropped pending stdlib entities for those parts.
+//
+// Chain: input RC conditioning → unity buffer → ×10 non-inverting gain
+// (0.1% feedback pair, declared as a precision path) → output RC filter →
+// buffered, current-sensed, clamped output.
+// Exercises: negative rail declaration (`power VEE = -12V`), ERC023
+// precision-path gating (0.1% parts in a 0.1% path — compliant), Schottky
+// rail clamps.
+
+import { OpAmp } from "bhdl-stdlib/actives/opamp.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { SchottkyDiode } from "bhdl-stdlib/passives/diode.bhdl";
+import { TestPoint } from "bhdl-stdlib/connectors/testpoint.bhdl";
 
 board PrecisionAmplifier {
     power VCC = 12V @ 50mA;
     power VEE = -12V @ 50mA;
     ground GND;
-    
-    // Input signal conditioning
-    entity InputStage {
-        // Input protection and filtering
-        @INPUT -> R_IN.1 where trace_length < 20mm;
-        R_IN: Res(1kΩ, tolerance=0.1%);
-        R_IN.2 -> C_IN.1;
-        C_IN: Cap(100nF, type="C0G");
-        C_IN.2 -> @GND;
-        
-        // Input buffer with guard ring
-        R_IN.2 -> U1: PrecisionOpAmp().IN_P where guard_ring, shielded;
-        U1.IN_N -> U1.OUT;  // Unity gain buffer
-        
-        // Power supply bypassing - right at the IC
-        @VCC -> C_VCC.1 where trace_length < 5mm;
-        C_VCC: Cap(0.1uF, type="X7R", package="0603");
-        C_VCC.2 -> U1.V+ where trace_length < 5mm;
-        U1.V+ -> @VCC;
-        
-        @VEE -> C_VEE.1 where trace_length < 5mm;
-        C_VEE: Cap(0.1uF, type="X7R", package="0603");
-        C_VEE.2 -> U1.V- where trace_length < 5mm;
-        U1.V- -> @VEE;
-        
-        // Output
-        @BUFFERED: U1.OUT;
-    }
-    
-    // Gain stage with precise resistor ratios
-    entity GainStage {
-        // Non-inverting amplifier with gain = 1 + Rf/Rg = 10
-        @BUFFERED -> U2: PrecisionOpAmp().IN_P;
-        
-        // Feedback network - critical for accuracy
-        U2.OUT -> RF.1;
-        RF: Res(90kΩ, tolerance=0.1%, tempco=25ppm);
-        RF.2 -> RG.1;
-        RG: Res(10kΩ, tolerance=0.1%, tempco=25ppm);
-        RG.2 -> @GND;
-        
-        // Feedback to inverting input
-        RF.2 -> U2.IN_N where trace_length < 15mm, away_from="noisy_signals";
-        
-        // Compensation capacitor for stability
-        U2.OUT -> CC.1;
-        CC: Cap(22pF, type="C0G");
-        CC.2 -> U2.IN_N;
-        
-        // Output
-        @AMPLIFIED: U2.OUT;
-    }
-    
-    // Output filter and driver
-    entity OutputStage {
-        // Low-pass filter to remove noise
-        @AMPLIFIED -> R_FILT.1;
-        R_FILT: Res(100Ω);
-        R_FILT.2 -> C_FILT.1;
-        C_FILT: Cap(1nF, type="C0G");
-        C_FILT.2 -> @GND;
-        
-        // Output buffer with current limiting
-        R_FILT.2 -> U3: PrecisionOpAmp().IN_P;
-        U3.IN_N -> R_SENSE.1;
-        R_SENSE: Res(10Ω, power=0.25W);
-        R_SENSE.2 -> U3.OUT;
-        
-        // Output protection
-        U3.OUT -> R_OUT.1;
-        R_OUT: Res(50Ω);
-        R_OUT.2 -> @OUTPUT;
-        
-        // Output clamp diodes
-        @OUTPUT -> D1: SchottkyDiode().A;
-        D1.K -> @VCC;
-        @OUTPUT -> D2: SchottkyDiode().K;
-        D2.A -> @VEE;
-    }
-    
-    // Voltage reference for offset trimming
-    entity VoltageReference {
-        // Precision voltage reference
-        @VCC -> U_REF: VoltageReference(2.5V).VIN;
-        U_REF.GND -> @GND;
-        
-        // Reference filter
-        U_REF.VOUT -> R_REF.1;
-        R_REF: Res(100Ω);
-        R_REF.2 -> C_REF.1;
-        C_REF: Cap(10uF, type="tantalum");
-        C_REF.2 -> @GND;
-        
-        // Offset adjustment divider
-        R_REF.2 -> R_TRIM1.1;
-        R_TRIM1: Res(10kΩ);
-        R_TRIM1.2 -> POT.1;
-        POT: Potentiometer(10kΩ);
-        POT.2 -> R_TRIM2.1;
-        R_TRIM2: Res(10kΩ);
-        R_TRIM2.2 -> @GND;
-        
-        // Trimmed reference output
-        @VREF_TRIM: POT.wiper;
-    }
-}
 
-// Group all sensitive analog signals
-with routing(shielded = true, guard_trace = "GND") {
-    // Input paths
-    @INPUT -> R_IN.1;
-    R_IN.2 -> U1.IN_P;
-    
-    // Feedback paths - most critical
-    with trace_width = 0.2mm {
-        RF.2 -> U2.IN_N;
-        CC.2 -> U2.IN_N;
-        U3.IN_N -> R_SENSE.1;
-    }
-}
+    // ── Input conditioning: 1k / 100nF low-pass, then a unity buffer ──
+    @SIG_IN -> r_in: Res(1k, tolerance=0.1%).1;
+    r_in.2 -> c_in: Cap(100nF).1; c_in.2 -> @GND;
 
-// Star ground for analog stages
-with routing(star_point = "C_VCC.2") {
-    C_IN.2 -> @GND;
-    RG.2 -> @GND;
-    C_FILT.2 -> @GND;
-    U_REF.GND -> @GND;
-}
+    u1: OpAmp();
+    @VCC -> u1.VCC; @VEE -> u1.VEE;
+    r_in.2 -> u1.INP;
+    u1.INN -> u1.OUT;            // unity-gain buffer
 
-// Power distribution with Kelvin connections
-with power(topology = "star", kelvin_sense = true) {
-    // Each op-amp gets individual bypass caps
-    @VCC -> C_VCC.1;
-    @VCC -> C_VCC2.1;
-    @VCC -> C_VCC3.1;
-    
-    // Sense lines back to regulator (if present)
-    U1.V+ -> @VCC_SENSE where trace_width = 0.15mm;
-}
+    // Supply bypassing at the IC.
+    @VCC -> c_vcc1: Cap(100nF).1; c_vcc1.2 -> @GND;
+    @VEE -> c_vee1: Cap(100nF).1; c_vee1.2 -> @GND;
 
-// Thermal considerations
-constraints thermal {
-    // Power resistors need thermal relief
-    place R_SENSE with thermal_pad;
-    place R_OUT near edge for cooling;
-    
-    // Precision resistors need matching
-    place RF, RG {
-        thermal_coupling = true;
-        orientation = "same";
-        distance < 5mm;
-    }
-}
+    // ── Gain stage: non-inverting, G = 1 + 90k/10k = 10 ──
+    u2: OpAmp();
+    @VCC -> u2.VCC; @VEE -> u2.VEE;
+    u1.OUT -> u2.INP;
 
-entity PrecisionOpAmp() {
-    pin IN_P: signal in;   // Non-inverting input
-    pin IN_N: signal in;   // Inverting input
-    pin OUT: signal out;   // Output
-    pin V+: power in;      // Positive supply
-    pin V-: power in;      // Negative supply
-    
-    // Characteristics for layout
-    attribute input_bias_current = 50pA;
-    attribute offset_voltage = 25uV;
-    attribute CMRR = 120dB;
-}
+    u2.OUT -> r_f: Res(90k, tolerance=0.1%).1;
+    r_f.2 -> r_g: Res(10k, tolerance=0.1%).1; r_g.2 -> @GND
+        for precision_measurement(accuracy: 0.1%);
+    r_f.2 -> u2.INN;
+    u2.OUT -> c_comp: Cap(22pF).1; c_comp.2 -> u2.INN;
 
-entity VoltageReference(voltage: voltage) {
-    pin VIN: power in;
-    pin VOUT: signal out;
-    pin GND: ground;
-    
-    attribute accuracy = 0.05%;
-    attribute tempco = 10ppm;
-}
+    // ── Output stage: RC noise filter → buffer with sense → clamped out ──
+    u2.OUT -> r_filt: Res(100).1;
+    r_filt.2 -> c_filt: Cap(1nF).1; c_filt.2 -> @GND;
 
-entity Potentiometer(resistance: resistance) {
-    pin 1: signal;
-    pin 2: signal;
-    pin wiper: signal out;
+    u3: OpAmp();
+    @VCC -> u3.VCC; @VEE -> u3.VEE;
+    r_filt.2 -> u3.INP;
+    u3.INN -> r_sense: Res(10).1; r_sense.2 -> u3.OUT;
+
+    u3.OUT -> r_out: Res(50).1;
+    r_out.2 -> @SIG_OUT;
+
+    // Board-edge access — the signal nets terminate at test points (a
+    // single-member edge net is otherwise an honest ERC008 warning).
+    @SIG_IN -> tp_in: TestPoint().1;
+    @SIG_OUT -> tp_out: TestPoint().1;
+
+    // Rail clamps on the output.
+    @SIG_OUT -> d1: SchottkyDiode().A; d1.K -> @VCC;
+    @SIG_OUT -> d2: SchottkyDiode().K; d2.A -> @VEE;
 }

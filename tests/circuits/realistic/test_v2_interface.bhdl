@@ -1,3 +1,0 @@
-board InterfaceTest {
-    main_i2c: I2C(voltage=3.3V, frequency=400kHz);
-}

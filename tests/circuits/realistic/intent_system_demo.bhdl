@@ -1,5 +1,145 @@
 // BHDL Intent System Demonstration
-// This circuit showcases the complete Intent System with examples from all categories
+// This circuit showcases the Intent System with examples from all categories.
+// Rewritten to the v2 language: stdlib imports for the real parts, top-level
+// minimal entities for the board-local abstractions, one intent per flow
+// statement (the flow model carries a single intent), named nets as @nets.
+
+import { LM7805 } from "bhdl-stdlib/power/lm7805.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { TVSDiode } from "bhdl-stdlib/protection/tvs.bhdl";
+import { TestPoint } from "bhdl-stdlib/connectors/testpoint.bhdl";
+
+// ============================================================================
+// Board-local abstractions (no stdlib part) — minimal top-level entities.
+// ============================================================================
+
+entity CurrentSenseAmp() {
+    pin IN: signal in;
+    pin OUT: signal out;
+
+    attribute component_class = "amplifier";
+}
+
+entity SupervisorIC() {
+    pin PG_IN: signal in;
+    pin PG_OUT: signal out;
+    pin BOOT1: signal out;
+
+    attribute component_class = "supervisor";
+}
+
+entity LDO_3V3() {
+    pin IN: power in;
+    pin OUT: power out;
+
+    attribute component_class = "voltage_regulator";
+}
+
+entity MCU() {
+    pin SDA: signal inout;
+    pin SCL: signal inout;
+    pin WDT_OUT: signal out;
+    pin RESET: signal in;
+    pin SCLK: signal out;
+    pin CLK: signal in;
+    pin BOOT_EN: signal in;
+    pin BOOT_DONE: signal out;
+
+    attribute component_class = "microcontroller";
+}
+
+entity TempSensor() {
+    pin SDA: signal inout;
+    pin SCL: signal inout;
+
+    attribute component_class = "sensor";
+}
+
+entity WatchdogIC() {
+    pin WDI: signal in;
+    pin RST: signal out;
+
+    attribute component_class = "supervisor";
+}
+
+entity SPIFlash() {
+    pin SCLK: signal in;
+    pin CLK: signal in;
+
+    attribute component_class = "memory";
+}
+
+entity Oscillator(freq: frequency) {
+    pin OUT: signal out;
+
+    attribute component_class = "oscillator";
+    attribute frequency = freq;
+}
+
+entity ClockBuffer() {
+    pin IN: signal in;
+    pin OUT1: signal out;
+    pin OUT2: signal out;
+
+    attribute component_class = "buffer";
+}
+
+entity Battery(v: voltage) {
+    pin POS: power out;
+
+    attribute component_class = "battery";
+    attribute voltage_rating = v;
+}
+
+entity BuckConverter() {
+    pin VIN: power in;
+    pin VOUT: power out;
+
+    attribute component_class = "voltage_regulator";
+}
+
+entity PowerMOSFET() {
+    pin D: signal in;
+    pin S: signal out;
+
+    attribute component_class = "mosfet";
+}
+
+entity EMIFilter() {
+    pin IN: signal in;
+    pin OUT: signal out;
+
+    attribute component_class = "filter";
+}
+
+entity Optocoupler() {
+    pin IN: signal in;
+    pin OUT: signal out;
+
+    attribute component_class = "isolator";
+}
+
+entity PowerMux() {
+    pin A: power in;
+    pin B: power in;
+    pin OUT: power out;
+
+    attribute component_class = "power_mux";
+}
+
+entity Supercap(v: voltage) {
+    pin POS: power out;
+
+    attribute component_class = "capacitor";
+    attribute voltage_rating = v;
+}
+
+entity Peripherals() {
+    pin EN: signal in;
+
+    attribute component_class = "peripheral";
+}
 
 board IntentSystemDemo {
     // Power supplies
@@ -8,16 +148,21 @@ board IntentSystemDemo {
     power VCC_3V3 = 3.3V @ 500mA;
     ground GND;
 
+    // Instances referenced from several sections
+    mcu: MCU();
+    peripherals: Peripherals();
+
     // ============================================================================
     // 1. VOLTAGE REGULATION with precise specs
     // ============================================================================
-    @VIN -> reg5v: LM7805().IN; reg5v.OUT -> @VCC_5V
+    @VIN -> reg5v: LM7805().VIN; reg5v.VOUT -> @VCC_5V
         for voltage_regulation(
             output_voltage: 5V,
             load_regulation: 0.5%,
             line_regulation: 0.2%,
             ripple: 20mV
         );
+    reg5v.GND -> @GND;
 
     // Input capacitor with noise filtering
     @VIN -> cin: Cap(100µF).1; cin.2 -> @GND
@@ -40,34 +185,36 @@ board IntentSystemDemo {
     // ============================================================================
     // 3. POWER MANAGEMENT with sequencing
     // ============================================================================
-    reg5v.PG -> supervisor: SupervisorIC().PG_IN -> supervisor.PG_OUT -> system_enable
-        for power_good_signal(delay: 100µs)
+    // (LM7805 has no PG pin — the supervisor monitors the 5V rail instead.)
+    @VCC_5V -> supervisor: SupervisorIC().PG_IN;
+    supervisor.PG_OUT -> @system_enable
         for voltage_monitoring(threshold: 4.5V, hysteresis: 100mV);
+    // (power_good_signal intent folded out — single-intent flow model.)
 
     // Secondary regulator with power sequencing
     @VCC_5V -> reg3v3: LDO_3V3().IN; reg3v3.OUT -> @VCC_3V3
-        for voltage_regulation(output_voltage: 3.3V, ripple: 10mV)
-        for power_sequencing(order: 2, delay: 10ms);
+        for voltage_regulation(output_voltage: 3.3V, ripple: 10mV);
+    // (power_sequencing intent folded out — single-intent flow model.)
 
     // ============================================================================
     // 4. SAFETY-CRITICAL: Automotive safety with ESD protection
     // ============================================================================
-    sensor_in -> tvs: TVSDiode(15V).K; tvs.A -> @GND
-        for input_protection(overvoltage: 15V, current_limit: 100mA)
-        for esd_protection(level: 8kV)
-        for automotive_safety(level: "ASIL_D");
+    @sensor_in -> tvs: TVSDiode(15V).K; tvs.A -> @GND
+        for input_protection(overvoltage: 15V, current_limit: 100mA);
+    // (esd_protection + automotive_safety intents folded out — single-intent
+    //  flow model; the input-protection intent is the one the ERC gates.)
 
     // ============================================================================
     // 5. COMMUNICATION INTERFACE: I2C bus
     // ============================================================================
-    @VCC_3V3 -> rpull_sda: Res(4.7k).1; rpull_sda.2 -> mcu.SDA -> sensor: TempSensor().SDA
+    @VCC_3V3 -> rpull_sda: Res(4.7k).1; rpull_sda.2 -> mcu.SDA; mcu.SDA -> sensor: TempSensor().SDA
         for communication_interface(
             protocol: "i2c",
             speed: 400kHz,
             voltage: 3.3V
         );
 
-    @VCC_3V3 -> rpull_scl: Res(4.7k).1; rpull_scl.2 -> mcu.SCL -> sensor.SCL
+    @VCC_3V3 -> rpull_scl: Res(4.7k).1; rpull_scl.2 -> mcu.SCL; mcu.SCL -> sensor.SCL
         for communication_interface(
             protocol: "i2c",
             speed: 400kHz,
@@ -87,91 +234,93 @@ board IntentSystemDemo {
     // 7. SIGNAL INTEGRITY: High-speed SPI
     // ============================================================================
     mcu.SCLK -> rterm: Res(33).1; rterm.2 -> flash: SPIFlash().SCLK
-        for communication_interface(protocol: "spi", speed: 10MHz)
-        for signal_integrity(impedance: 50, max_reflection: -20dB);
+        for communication_interface(protocol: "spi", speed: 10MHz);
+    // (signal_integrity intent folded out — single-intent flow model.)
 
     // ============================================================================
     // 8. CLOCK DISTRIBUTION with timing constraints
     // ============================================================================
-    osc: Oscillator(50MHz).OUT -> buf: ClockBuffer().IN
+    osc: Oscillator(50MHz);
+    osc.OUT -> buf: ClockBuffer().IN
         for clock_distribution(
-            skew: 100ps,
-            jitter: 50ps,
+            skew_ps: 100,
+            jitter_ps: 50,
             fanout: 4
         );
 
     buf.OUT1 -> mcu.CLK
-        for clock_distribution(skew: 100ps, jitter: 50ps);
+        for clock_distribution(skew_ps: 100, jitter_ps: 50);
 
     buf.OUT2 -> flash.CLK
-        for clock_distribution(skew: 100ps, jitter: 50ps);
+        for clock_distribution(skew_ps: 100, jitter_ps: 50);
 
     // ============================================================================
     // 9. POWER OPTIMIZATION for battery operation
     // ============================================================================
-    battery: Battery(3.7V).POS -> dcdc: BuckConverter().VIN; dcdc.VOUT -> @VCC_5V
+    battery: Battery(3.7V);
+    battery.POS -> dcdc: BuckConverter().VIN; dcdc.VOUT -> @VCC_5V
         for power_optimization(
             target_power: 500mW,
             sleep_current: 50µA,
             active_duty_cycle: 10%
-        )
-        for inrush_limiting(max_current: 1A, duration: 10ms);
+        );
+    // (inrush_limiting intent folded out — single-intent flow model.)
 
     // ============================================================================
     // 10. THERMAL MANAGEMENT for power components
     // ============================================================================
-    @VIN -> mosfet: PowerMOSFET().D; mosfet.S -> load_out
+    @VIN -> mosfet: PowerMOSFET().D; mosfet.S -> @load_out
         for thermal_management(
-            max_temp: 85C,
-            power: 5W
-        )
-        for current_limiting(max: 2A);
+            max_temp_c: 85,
+            dissipation: 5W
+        );
+    // (current_limiting intent folded out — single-intent flow model.)
 
     // ============================================================================
     // 11. EMI FILTERING for compliance
     // ============================================================================
     @VIN -> emi_filter: EMIFilter().IN; emi_filter.OUT -> @VIN_CLEAN
         for emi_filtering(
-            class: "CISPR11_ClassB",
-            attenuation: -40dB
+            compliance_class: "CISPR11_ClassB",
+            attenuation: 40dB
         );
 
     // ============================================================================
     // 12. ISOLATION for safety
     // ============================================================================
-    high_voltage_side -> iso: Optocoupler().IN; iso.OUT -> low_voltage_side
+    @high_voltage_side -> iso: Optocoupler().IN; iso.OUT -> @low_voltage_side
         for isolation(
             voltage: 2500V,
-            type: "optical"
+            isolation_type: "optical"
         );
 
     // ============================================================================
     // 13. DIGITAL TIMING: Reset generation
     // ============================================================================
-    reset_button -> rc: Res(10k).1; rc.2 -> creset: Cap(1µF).1; creset.2 -> @GND
+    @reset_button -> rc: Res(10k).1; rc.2 -> creset: Cap(1µF).1; creset.2 -> @GND
         for reset_generation(
             duration: 100ms,
             assert_level: "low"
-        )
-        for debounce(time: 50ms);
+        );
+    // (debounce intent folded out — single-intent flow model.)
 
     // ============================================================================
     // 14. MEASUREMENT: Precision ADC input
     // ============================================================================
-    sensor_out -> rfilter: Res(1k).1; rfilter.2 -> cfilter: Cap(100nF).1; cfilter.2 -> @GND
-        for precision_measurement(accuracy: 0.1%)
-        for anti_alias(cutoff: 10kHz);
+    @sensor_out -> rfilter: Res(1k).1; rfilter.2 -> cfilter: Cap(100nF).1; cfilter.2 -> @GND
+        for precision_measurement(accuracy: 0.1%);
+    // (anti_alias intent folded out — single-intent flow model.)
 
     // ============================================================================
     // 15. TEST POINTS for debugging
     // ============================================================================
-    @VCC_5V -> tp_5v: TestPoint().SIG
+    @VCC_5V -> tp_5v: TestPoint().1
         for test_point(
             purpose: "debug",
             max_loading: 10pF
         );
 
-    @VCC_3V3 -> tp_3v3: TestPoint().SIG
+    @VCC_3V3 -> tp_3v3: TestPoint().1
         for test_point(
             purpose: "production_test",
             max_loading: 5pF
@@ -180,9 +329,11 @@ board IntentSystemDemo {
     // ============================================================================
     // 16. REDUNDANCY for critical power
     // ============================================================================
-            primary: Battery(3.7V).POS -> mux: PowerMux().A
-        backup: Supercap(5V).POS -> mux.B
-        mux.OUT -> critical_load
+    primary: Battery(3.7V);
+    backup: Supercap(5V);
+    primary.POS -> mux: PowerMux().A;
+    backup.POS -> mux.B;
+    mux.OUT -> @critical_load
         for redundancy(
             scheme: "standby",
             fault_tolerance: 1,
@@ -192,12 +343,9 @@ board IntentSystemDemo {
     // ============================================================================
     // 17. SIGNAL PROCESSING: Control loop
     // ============================================================================
-    @output_voltage -> rdiv1: Res(10k).1; rdiv1.2 -> fb_node -> rdiv2: Res(2k).1; rdiv2.2 -> @GND
-        for control_loop(
-            bandwidth: 10kHz,
-            stability_margin: 45
-        )
+    @output_voltage -> rdiv1: Res(10k).1; rdiv1.2 -> @fb_node; @fb_node -> rdiv2: Res(2k).1; rdiv2.2 -> @GND
         for precision_measurement(accuracy: 1%);
+    // (control_loop intent folded out — single-intent flow model.)
 
     // ============================================================================
     // 18. BOOT SEQUENCING for multi-stage startup

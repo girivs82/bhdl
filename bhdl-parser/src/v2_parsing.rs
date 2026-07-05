@@ -45,9 +45,14 @@ impl<'t> Parser<'t> {
         self.builder.finish_node();
     }
     
-    /// Parse power specification: 12V @ 1A
+    /// Parse power specification: 12V @ 1A (voltage may be negative —
+    /// `power VEE = -12V @ 50mA;` is how a ±supply's negative rail is
+    /// declared).
     fn parse_power_spec(&mut self) {
-        // Parse voltage
+        // Parse voltage (optional leading sign)
+        if self.peek() == Some(SyntaxKind::MINUS) {
+            self.bump();
+        }
         self.expect(SyntaxKind::NUMBER);
         if self.peek_unit_token() {
             self.bump(); // Consume unit

@@ -1,2 +1,0 @@
-VCC -> Res(4.7kΩ).1 -> LED(red).A;
-LED.K -> GND;

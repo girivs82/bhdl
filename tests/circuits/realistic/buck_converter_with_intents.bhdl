@@ -1,6 +1,12 @@
 // Buck Converter with Intent-Driven Design
 // Demonstrates control loop, current limiting, and precision measurement intents
 
+import { TVSDiode } from "bhdl-stdlib/protection/tvs.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Inductor } from "bhdl-stdlib/passives/inductor.bhdl";
+import { TPS54302 } from "bhdl-stdlib/power/tps54302.bhdl";
+
 board BuckConverter {
     power VIN = 12V @ 2A;
     ground GND;
@@ -15,14 +21,8 @@ board BuckConverter {
     @vin_filtered -> Cin: Cap(100u).1; Cin.2 -> @GND
         for noise_filtering(cutoff: 10kHz);
 
-    // Buck converter controller
-    entity TPS54302 {
-        pin VIN: power in;
-        pin SW: signal out;
-        pin FB: signal in;
-        pin GND: ground inout;
-    }
-
+    // Buck converter controller (stdlib part; the v1 nested-entity decl
+    // inside board scope is retired — entities live at top level).
     @vin_filtered -> ctrl: TPS54302().VIN;
     ctrl.GND -> @GND;
 
@@ -37,10 +37,11 @@ board BuckConverter {
     Cout.2 -> @GND;
 
     // Feedback network with precision requirements
-    @output_unfiltered -> @feedback;
-    @feedback -> R1: Res(10k).1; R1.2 -> @GND
-        for control_loop(bandwidth: 10kHz, stability_margin: 45deg)
-        for precision_measurement(accuracy: 1%, resolution: 12bit);
+    @output_unfiltered -> @fb_node;
+    @fb_node -> R1: Res(10k).1; R1.2 -> @GND
+        for precision_measurement(accuracy: 1%, resolution_bits: 12);
+    // (control_loop intent folded out — the flow model carries ONE intent
+    // per statement; the precision requirement is the one the ERC gates.)
 
     R1.2 -> ctrl.FB;
 
@@ -51,6 +52,6 @@ board BuckConverter {
     // Load current measurement
     @VOUT -> @load_current;
     @load_current -> Rload: Res(3.3).1; Rload.2 -> @GND
-        for current_limiting(max: 1.5A)
         for precision_measurement(accuracy: 0.5%);
+    // (current_limiting intent folded out — single-intent flow model.)
 }
