@@ -1,0 +1,18 @@
+// ERC waiver fixture: the SAME rail-budget violation as erc_semantic, but
+// the design records an engineering decision — `erc_waive` on an instance
+// moves the finding to the waived table WITH its reason (reported, excluded
+// from --erc-fail-on gating, never hidden).
+
+import { Draw40 } from "tests/circuits/erc/erc_lib.bhdl";
+
+board ErcWaived {
+    power VBAT = 3.3V @ 50mA;
+    ground GND;
+
+    l1: Draw40(erc_waive="ERC016: loads are duty-cycled, never simultaneous — budget intentionally shared");
+    l2: Draw40();
+    @VBAT -> l1.VCC; l1.GND -> @GND;
+    @VBAT -> l2.VCC; l2.GND -> @GND;
+    l1.IN -> l2.IN2;
+    l2.OUT -> l1.IN2;
+}

@@ -50,3 +50,13 @@ entity Shifter() {
 
     attribute component_class = "level_shifter";
 }
+
+entity Draw40() {
+    pin VCC: power in;
+    pin GND: ground;
+    pin IN: signal in;
+    pin IN2: signal in;
+    pin OUT: signal out;
+
+    attribute i_supply = 40mA;
+}

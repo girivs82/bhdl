@@ -7,6 +7,16 @@ use bhdl_analyzer::AnalysisResult;
 use std::collections::{HashMap, HashSet};
 use log::{info, warn, error};
 
+/// Process-wide unwaived-finding counters for the CLI's `--erc-fail-on`
+/// gate. Cumulative across DRC runs in one invocation; waived findings are
+/// excluded (a waiver is a recorded engineering decision, not a suppression).
+pub static ERC_GATE_CRITICAL: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+pub static ERC_GATE_ERRORS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+pub static ERC_GATE_WARNINGS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 /// Design rule categories
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuleCategory {
@@ -435,6 +445,67 @@ impl DesignRuleChecker {
         }
         
         // Count violations by severity
+        
+        
+        // Store violations in history
+        self.violation_history.extend(all_violations.clone());
+        
+        // Waivers: an instance attribute `erc_waive = "ERC016: reason[; …]"`
+        // moves matching findings to the waived list — reported WITH the
+        // recorded reason and excluded from gating, never hidden. A finding
+        // located on a net is waivable by any instance on that net.
+        let waiver_for = |v: &DRCViolation| -> Option<String> {
+            let attr_of_inst = |id: bhdl_netlist::types::InstanceId| {
+                netlist
+                    .instances
+                    .get(id)
+                    .and_then(|i| i.attributes.get("erc_waive"))
+                    .cloned()
+            };
+            let texts: Vec<String> = match &v.location {
+                ViolationLocation::Component(id) => attr_of_inst(*id).into_iter().collect(),
+                ViolationLocation::Net(net_id) => netlist
+                    .nets
+                    .get(*net_id)
+                    .map(|n| {
+                        n.connections
+                            .iter()
+                            .filter_map(|cp| match cp {
+                                bhdl_netlist::types::ConnectionPoint::PinInstance(pi) => {
+                                    netlist
+                                        .pin_instances
+                                        .get(*pi)
+                                        .and_then(|p| attr_of_inst(p.instance))
+                                }
+                                _ => None,
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                _ => Vec::new(),
+            };
+            for t in texts {
+                for clause in t.split(';') {
+                    let clause = clause.trim();
+                    if clause.starts_with(&v.rule_id) {
+                        return Some(clause.to_string());
+                    }
+                }
+            }
+            None
+        };
+        let mut waived: Vec<(DRCViolation, String)> = Vec::new();
+        let mut active: Vec<DRCViolation> = Vec::new();
+        for v in all_violations {
+            match waiver_for(&v) {
+                Some(reason) => waived.push((v, reason)),
+                None => active.push(v),
+            }
+        }
+        let all_violations = active;
+
+        // Severity counts AFTER the waiver partition — the summary, the
+        // report struct and the gate must all describe the unwaived set.
         let critical_count = all_violations.iter()
             .filter(|v| v.severity == ViolationSeverity::Critical).count();
         let error_count = all_violations.iter()
@@ -443,7 +514,6 @@ impl DesignRuleChecker {
             .filter(|v| v.severity == ViolationSeverity::Warning).count();
         let info_count = all_violations.iter()
             .filter(|v| v.severity == ViolationSeverity::Info).count();
-        
         let pass_rate = if rules_checked > 0 {
             ((rules_checked - (critical_count + error_count)) as f64 / rules_checked as f64) * 100.0
         } else {
@@ -451,15 +521,38 @@ impl DesignRuleChecker {
         };
         
         let manufacturing_ready = critical_count == 0 && error_count == 0;
-        
-        // Store violations in history
-        self.violation_history.extend(all_violations.clone());
-        
+
         for v in &all_violations {
             log::warn!(
                 "DRC {} [{}] {:?}: {} (fix: {})",
                 v.rule_id, v.rule_name, v.severity, v.description, v.fix_suggestion
             );
+        }
+        if !waived.is_empty() {
+            println!("\n## Waived design-rule findings\n");
+            println!("| Rule | Finding | Waiver (recorded reason) |");
+            println!("|---|---|---|");
+            for (v, reason) in &waived {
+                println!("| {} {} | {} | {} |", v.rule_id, v.rule_name, v.description, reason);
+                log::warn!("DRC WAIVED {} [{}]: {} — waiver: {}", v.rule_id, v.rule_name, v.description, reason);
+            }
+            println!();
+        }
+        // Gate counters for `--erc-fail-on` (waived findings excluded).
+        {
+            use std::sync::atomic::Ordering;
+            let (mut c, mut e, mut w) = (0usize, 0usize, 0usize);
+            for v in &all_violations {
+                match v.severity {
+                    ViolationSeverity::Critical => c += 1,
+                    ViolationSeverity::Error => e += 1,
+                    ViolationSeverity::Warning => w += 1,
+                    _ => {}
+                }
+            }
+            ERC_GATE_CRITICAL.fetch_add(c, Ordering::Relaxed);
+            ERC_GATE_ERRORS.fetch_add(e, Ordering::Relaxed);
+            ERC_GATE_WARNINGS.fetch_add(w, Ordering::Relaxed);
         }
         info!("DRC Complete: {} violations found ({} critical, {} errors, {} warnings, {} info)",
               all_violations.len(), critical_count, error_count, warning_count, info_count);

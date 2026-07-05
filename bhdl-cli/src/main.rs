@@ -33,6 +33,11 @@ struct Cli {
     #[arg(value_name = "FILE")]
     input: PathBuf,
 
+    /// Fail the run when unwaived ERC/DRC findings reach this severity:
+    /// `critical`, `error`, or `warning`. Default: report-only.
+    #[arg(long, value_name = "LEVEL")]
+    erc_fail_on: Option<String>,
+
     /// Enable verbose output
     #[arg(short, long)]
     verbose: bool,
@@ -578,6 +583,37 @@ async fn main() -> Result<()> {
 
         Some(Commands::Intents { show_hints, show_rules, filter, format }) => {
             run_intents_analysis(&source_file, show_hints, show_rules, filter, &format).await?;
+        }
+    }
+
+    // ERC gate: fail the run when unwaived findings reached the requested
+    // severity (waived findings never count — they are recorded decisions).
+    if let Some(level) = &cli.erc_fail_on {
+        use bhdl_synthesizer::design_rule_checker::{
+            ERC_GATE_CRITICAL, ERC_GATE_ERRORS, ERC_GATE_WARNINGS,
+        };
+        use std::sync::atomic::Ordering;
+        let (c, e, w) = (
+            ERC_GATE_CRITICAL.load(Ordering::Relaxed),
+            ERC_GATE_ERRORS.load(Ordering::Relaxed),
+            ERC_GATE_WARNINGS.load(Ordering::Relaxed),
+        );
+        let gate = match level.as_str() {
+            "critical" => c,
+            "error" => c + e,
+            "warning" => c + e + w,
+            other => {
+                eprintln!("--erc-fail-on: unknown level '{other}' (critical|error|warning)");
+                std::process::exit(2);
+            }
+        };
+        if gate > 0 {
+            eprintln!(
+                "{} ERC gate: {gate} unwaived finding(s) at or above '{level}' \
+                 ({c} critical, {e} errors, {w} warnings) — failing the build",
+                "✖".red().bold()
+            );
+            std::process::exit(3);
         }
     }
 
