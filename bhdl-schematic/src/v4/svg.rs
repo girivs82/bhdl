@@ -242,7 +242,25 @@ impl Svg {
         } else {
             vec![from, (from.0, to.1), to]
         };
-        self.wire(&pts);
+        // ORTHOGONALITY GUARANTEE: the exact endpoints don't lie on the
+        // routing grid, and a degenerate search (start and goal snapping
+        // into adjacent cells) can yield a direct segment — insert the
+        // missing corner wherever a step moves in BOTH axes. Schematic
+        // wires are orthogonal, always.
+        let mut ortho: Vec<(f64, f64)> = Vec::with_capacity(pts.len() + 2);
+        ortho.push(pts[0]);
+        for &p in &pts[1..] {
+            let l = *ortho.last().unwrap();
+            if (l.0 - p.0).abs() > 0.01 && (l.1 - p.1).abs() > 0.01 {
+                ortho.push((p.0, l.1));
+            }
+            if (ortho.last().unwrap().0 - p.0).abs() > 0.01
+                || (ortho.last().unwrap().1 - p.1).abs() > 0.01
+            {
+                ortho.push(p);
+            }
+        }
+        self.wire(&ortho);
     }
     /// Ground symbol, stem entering at (x, y) from above.
     fn ground(&mut self, x: f64, y: f64) {
