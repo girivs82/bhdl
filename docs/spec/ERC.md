@@ -1,9 +1,10 @@
 # ERC — Electrical Rules Above the Netlist
 
-> **Status:** T1 batch 1 (ERC001–005), batch 2 (ERC006–020, the subset not
-> requiring new grammar), severity gating (`--erc-fail-on`), reasoned waivers
-> (`erc_waive`), and T2 part-carried `check {}` rules (ERC025) are BUILT.
-> T3 (policy plugins) and the remaining batch-3 rules are specified here.
+> **Status:** all three tiers are BUILT — T1 batches 1–2 plus ERC019/ERC026,
+> T2 part-carried `check {}` rules (ERC025), T3 policy plugins
+> (`BHDL_ERC_PLUGINS`), severity gating (`--erc-fail-on`), and reasoned
+> waivers (`erc_waive`). Remaining specified-only: ERC022/023/024, the
+> ERC019 solved-DC upgrade, and the T2 predicate extensions.
 
 ## 1. Why BHDL can check more than an EDA netlist tool
 
@@ -16,7 +17,7 @@ A traditional ERC sees pins and nets. BHDL's design database also carries:
 | Datasheet attributes | `dropout_voltage`, `input_voltage_max`, `i_supply`, `polarized` | dropout, abs-max, reversed electrolytic |
 | Solved operating point | GLACIER node voltages, §4 stress values | polarity vs real DC, ripple vs spec |
 | Intents & requirements | `for noise_filtering(cutoff:…)`, `supply { ripple_max }` | intent-contradiction, requirement gates |
-| The part itself | its `design{}` / `simulation{}` / (future) `check{}` blocks | vendor rules shipped with the part |
+| The part itself | its `design{}` / `simulation{}` / `check{}` blocks | vendor rules shipped with the part |
 
 The design-engineer stance: a rule should fire with the NUMBERS (both domain
 voltages, the summed draw vs the budget), and a rule that cannot resolve its
@@ -73,12 +74,28 @@ learns to emit the application circuit (S4 follow-up).
 (наming conventions, forbidden vendors, creepage classes) as an external
 process receiving a serialized design summary and returning findings — the
 same plugin protocol discipline as the supply-chain providers. Proprietary
-rules never need to live in-tree.
+rules never need to live in-tree. — **BUILT.**
 
-Severity gating (`--erc-level error` fails the build) and waivers
+Configuration: `BHDL_ERC_PLUGINS` — colon-separated executable paths. Each
+plugin receives one DesignSummary (`protocol_version`, `kind:
+"erc_policy_check"`, `instances[{refdes, entity, attributes, pins[{name,
+direction, net?}]}]`, `nets[{name, class, voltage?, budget_a?, members}]`)
+on stdin and replies `{protocol_version, findings[{rule_id, severity,
+description, fix?, instance?, net?}], warnings[]}` on stdout. Findings are
+anchored back onto the named instance/net (Global fallback) and enter the
+report BEFORE the waiver partition — org rule ids gate (`--erc-fail-on`)
+and waive (`erc_waive = "NAMING-001: reason"`) exactly like built-ins.
+Failure semantics: a plugin that can't spawn, exits non-zero, or replies
+malformed JSON becomes ONE visible `ERC-PLUGIN` Warning — a broken policy
+gate must be seen, but a tooling failure never fabricates design errors
+(Real-Data Policy applied to tooling). Reference implementation:
+`scripts/erc-policy-example.py` (refdes prefix convention + unbudgeted-rail
+rule); fixture `tests/circuits/erc/erc_policy.bhdl`.
+
+Severity gating (`--erc-fail-on error` fails the build, exit 3) and waivers
 (`attribute erc_waive = "ERC016: shared budget with X"` — waives WITH a
-recorded reason, surfaced in the report) are extension-milestone items that
-apply uniformly across tiers.
+recorded reason, surfaced in the report) are BUILT and apply uniformly
+across all three tiers.
 
 ## 3. Rule catalog
 

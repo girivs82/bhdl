@@ -49,6 +49,9 @@ pub mod supply_synthesis;
 // diff-pair polarity, TX/RX crossing, voltage domains, I2C pull-ups).
 pub mod erc;
 
+// T3 org-policy ERC plugins (BHDL_ERC_PLUGINS, JSON over stdio).
+pub mod erc_plugin;
+
 // Simulation-refined margin & sign-off report (spec: Simulation_Margin_Signoff.md).
 pub mod signoff;
 

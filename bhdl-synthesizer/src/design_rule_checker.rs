@@ -461,6 +461,20 @@ impl DesignRuleChecker {
                 all_violations.extend(violations);
             }
         }
+
+        // T3 — org-policy plugins (BHDL_ERC_PLUGINS, docs/spec/ERC.md §2).
+        // Runs BEFORE the waiver partition below so org findings gate and
+        // waive exactly like built-in rules.
+        let (plugin_violations, plugins_ran) =
+            crate::erc_plugin::run_policy_plugins(netlist, analysis);
+        if plugins_ran > 0 {
+            info!(
+                "ERC policy plugins: {plugins_ran} ran, {} finding(s)",
+                plugin_violations.len()
+            );
+            rules_checked += plugins_ran;
+            all_violations.extend(plugin_violations);
+        }
         
         // Count violations by severity
         
@@ -478,7 +492,10 @@ impl DesignRuleChecker {
                     .instances
                     .get(id)
                     .and_then(|i| i.attributes.get("erc_waive"))
-                    .cloned()
+                    // Some stamping paths (positional-param entities like
+                    // Cap) keep the literal string quotes; the ctor-arg path
+                    // (imported entities) strips them. Normalize here.
+                    .map(|s| s.trim().trim_matches('"').to_string())
             };
             let texts: Vec<String> = match &v.location {
                 ViolationLocation::Component(id) => attr_of_inst(*id).into_iter().collect(),

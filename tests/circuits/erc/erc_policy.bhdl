@@ -1,0 +1,36 @@
+// T3 policy-plugin fixture (docs/spec/ERC.md §2). Run with:
+//   BHDL_ERC_PLUGINS=scripts/erc-policy-example.py bhdl-cli … bom
+//
+// Expected WITHOUT the env var: 0 violations (T3 is opt-in; the board is
+// electrically clean). Expected WITH the example plugin:
+//   NAMING-001 Warning  bypass1 is a capacitor not following the c… prefix
+//   RAIL-001   Info     rail VCC_NOBUDGET declares no `@ I` budget
+//   (waived)   NAMING-001 on bypass2 — org rule ids waive through the same
+//              erc_waive machinery as built-ins, reason recorded.
+
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+
+import { Mcu, Radio } from "tests/circuits/erc/erc_lib.bhdl";
+
+board ErcPolicy {
+    power VCC_3V3 = 3.3V @ 1A;
+    power VCC_NOBUDGET = 5V;
+    ground GND;
+
+    m: Mcu();   @VCC_3V3 -> m.VCC;  m.GND -> @GND;
+    g: Radio(); @VCC_3V3 -> g.VCC;  g.GND -> @GND;
+
+    m.OUT1 -> g.IN1;
+    g.OUT1 -> m.IN1;
+    m.D_P -> g.D_P;
+    m.D_N -> g.D_N;
+    m.TX -> g.RX;
+    g.TX -> m.RX;
+
+    // House-rule bait: a capacitor whose refdes ignores the c… convention.
+    @VCC_3V3 -> bypass1: Cap(100nF).1; bypass1.2 -> @GND;
+
+    // Same offense, but waived with a recorded reason.
+    @VCC_NOBUDGET -> bypass2: Cap(100nF, erc_waive="NAMING-001: legacy schematic name kept for the assembly-house diff").1;
+    bypass2.2 -> @GND;
+}
