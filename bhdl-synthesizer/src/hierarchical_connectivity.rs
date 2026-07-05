@@ -590,41 +590,65 @@ fn process_entity_instance(
         .map(|t| t.text().to_string())
         .ok_or_else(|| anyhow::anyhow!("Entity instance missing type"))?;
 
-    // Get or create entity variant based on parameters
-    let module_id = context.variant_manager.get_or_create_variant(
-        entity_inst,
-        netlist,
-        analysis
-    )?;
-    
-    // Create instance
-    let instance_id = netlist.add_instance(instance_name.clone(), module_id)
-        .ok_or_else(|| anyhow::anyhow!("Failed to add instance"))?;
-
-    // Propagate module-level attributes (including component_class) to instance
-    if let Some(module) = netlist.modules.get(module_id) {
-        let module_attrs = module.attributes.clone();
-        if let Some(instance) = netlist.instances.get_mut(instance_id) {
-            for (key, value) in &module_attrs {
-                if !instance.attributes.contains_key(key) {
-                    instance.attributes.insert(key.clone(), value.clone());
-                }
-            }
-        }
-    }
-
-    // Store instance path
     let instance_path = if context.current_path.is_empty() {
         instance_name.clone()
     } else {
         format!("{}.{}", context.current_path_string(), instance_name)
     };
+
+    // Reuse an instance the earlier symbol-driven pass
+    // (generate_database_component_instances) already created under this
+    // name — the same dedup create_component_instance applies to v2
+    // COMPONENT_INSTs. Without it every block-form entity instance
+    // existed TWICE in the netlist (one wired copy from this pass, one
+    // disconnected copy from the earlier pass, each with its own module
+    // definition), making bare-name instance lookups nondeterministic
+    // and polluting ERC/BOM. Checked BEFORE get_or_create_variant so
+    // the duplicate module isn't minted either.
+    let existing_instance = netlist.instances.iter()
+        .find(|(_, inst)| inst.name == instance_path || inst.name == instance_name)
+        .map(|(id, _)| id);
+
+    let instance_id = if let Some(instance_id) = existing_instance {
+        debug!("Entity instance '{}' already exists, reusing (pins were \
+                materialized by the earlier pass)", instance_name);
+        instance_id
+    } else {
+        // Get or create entity variant based on parameters
+        let module_id = context.variant_manager.get_or_create_variant(
+            entity_inst,
+            netlist,
+            analysis
+        )?;
+
+        // Create instance
+        let instance_id = netlist.add_instance(instance_name.clone(), module_id)
+            .ok_or_else(|| anyhow::anyhow!("Failed to add instance"))?;
+
+        // Propagate module-level attributes (including component_class) to instance
+        if let Some(module) = netlist.modules.get(module_id) {
+            let module_attrs = module.attributes.clone();
+            if let Some(instance) = netlist.instances.get_mut(instance_id) {
+                for (key, value) in &module_attrs {
+                    if !instance.attributes.contains_key(key) {
+                        instance.attributes.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+        }
+
+        // Create pin instances
+        netlist.create_pin_instances(instance_id)
+            .map_err(|e| anyhow::anyhow!("Failed to create pin instances: {}", e))?;
+
+        instance_id
+    };
+
+    // Store instance path (for both the fresh and the reused instance —
+    // port-mapping resolution prefers this registry over bare-name scans)
     context.instance_path_to_id.insert(instance_path.clone(), instance_id);
-    
-    // Create pin instances
-    netlist.create_pin_instances(instance_id)
-        .map_err(|e| anyhow::anyhow!("Failed to create pin instances: {}", e))?;
-    
+
+
     // Transfer component parameters from analyzer to instance
     populate_instance_attributes(netlist, instance_id, &instance_name, analysis);
     
@@ -640,7 +664,11 @@ fn process_entity_instance(
     let has_entity_def = context.variant_manager.find_entity_definition(&entity_type).is_some();
 
     if has_entity_def {
-        // Push the instance context
+        // Push the instance context (definition of whichever instance —
+        // fresh or reused — this pass settled on)
+        let module_id = netlist.instances.get(instance_id)
+            .map(|inst| inst.definition)
+            .ok_or_else(|| anyhow::anyhow!("Instance {:?} vanished", instance_id))?;
         context.push_module(instance_name.clone(), module_id);
 
         // Clone the entity definition to avoid borrow issues

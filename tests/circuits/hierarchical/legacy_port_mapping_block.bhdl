@@ -7,6 +7,8 @@
 // BUFOUT, which feeds back into both u1.D[i] inputs — every signal
 // net has one driver and at least one receiver.
 // Expected: exit 0, 0 DRC violations.
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+
 entity Fpga() {
     pin VCCO[4]: power in;
     pin D[2]:    signal in;
@@ -41,4 +43,7 @@ board LegacyPortMappingBlock {
         OUT -> b1.IN;    // qualified pin-to-pin target (joins BUFIN)
         GND <- GND;
     }
+
+    // Decoupling on the rail (keeps ERC020 quiet — and realistic)
+    @V3 -> c1: Cap(100nF).1; c1.2 -> @GND;
 }

@@ -566,7 +566,14 @@ fn instance_rails(netlist: &Netlist) -> HashMap<String, Vec<(NetId, f64)>> {
             continue;
         };
         let Some(inst) = netlist.instances.get(pi.instance) else { continue };
-        out.entry(inst.name.clone()).or_default().push((net_id, voltage));
+        let entry = out.entry(inst.name.clone()).or_default();
+        // One entry per (instance, rail): several power pins of one part on
+        // the same rail (an expanded bus bank — VCCO[0..3] — or paired VCC
+        // pins) are ONE supply relationship, not N. Per-pin entries made
+        // every consumer (ERC017/ERC019/ERC020) emit N duplicate findings.
+        if !entry.iter().any(|(n, _)| *n == net_id) {
+            entry.push((net_id, voltage));
+        }
     }
     out
 }
