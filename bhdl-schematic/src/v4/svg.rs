@@ -27,6 +27,17 @@ use bhdl_common::symbol::{PinSide, SymbolDefinition};
 pub struct SheetDecor<'a> {
     pub sim: Option<&'a SimulationAnnotations>,
     pub symbols: Option<&'a std::collections::HashMap<String, SymbolDefinition>>,
+    /// handle → synthesis refdes (R1/C3/U1…). Sheets label parts by REFDES —
+    /// BHDL handles are long and descriptive (good for source, bad for ink).
+    pub refdes: Option<&'a HashMap<String, String>>,
+}
+
+fn label_of<'a>(decor: &'a SheetDecor, inst: &'a str) -> &'a str {
+    decor
+        .refdes
+        .and_then(|m| m.get(inst))
+        .map(String::as_str)
+        .unwrap_or(inst)
 }
 
 const SHUNT_PITCH: f64 = 70.0;
@@ -118,6 +129,29 @@ impl Svg {
         }
         self.wire(&[(x + 48.0, y), (x + 56.0, y)]);
     }
+    /// Diode drawn vertically, anode at top (x, y), cathode at (x, y+34).
+    fn diode_v(&mut self, x: f64, y: f64) {
+        self.wire(&[(x, y), (x, y + 10.0)]);
+        let _ = writeln!(
+            self.body,
+            r##"<path d="M {:.1} {:.1} L {:.1} {:.1} L {:.1} {:.1} Z" fill="none" stroke="#222" stroke-width="1.6"/>"##,
+            x - 9.0, y + 10.0, x + 9.0, y + 10.0, x, y + 24.0
+        );
+        self.wire(&[(x - 9.0, y + 24.0), (x + 9.0, y + 24.0)]);
+        self.wire(&[(x, y + 24.0), (x, y + 34.0)]);
+    }
+    /// Diode drawn vertically with CATHODE at top (x, y) — the catch-diode
+    /// orientation: current flows from ground up into the node.
+    fn diode_v_up(&mut self, x: f64, y: f64) {
+        self.wire(&[(x, y), (x, y + 10.0)]);
+        self.wire(&[(x - 9.0, y + 10.0), (x + 9.0, y + 10.0)]);
+        let _ = writeln!(
+            self.body,
+            r##"<path d="M {:.1} {:.1} L {:.1} {:.1} L {:.1} {:.1} Z" fill="none" stroke="#222" stroke-width="1.6"/>"##,
+            x - 9.0, y + 24.0, x + 9.0, y + 24.0, x, y + 10.0
+        );
+        self.wire(&[(x, y + 24.0), (x, y + 34.0)]);
+    }
     /// Capacitor drawn horizontally: in left (x, y), out at (x+34, y).
     fn cap_h(&mut self, x: f64, y: f64) {
         self.wire(&[(x, y), (x + 13.0, y)]);
@@ -191,7 +225,7 @@ fn class_of_name(netlist: &Netlist, inst: &str) -> String {
 }
 
 /// A shunt column: stem from the bus at (x, y_bus), symbol, ground.
-fn draw_shunt(svg: &mut Svg, netlist: &Netlist, inst: &str, x: f64, y_bus: f64) {
+fn draw_shunt(svg: &mut Svg, netlist: &Netlist, decor: &SheetDecor, inst: &str, x: f64, y_bus: f64) {
     svg.dot(x, y_bus);
     let class = class_of_name(netlist, inst);
     let sym_top = y_bus + 16.0;
@@ -201,6 +235,38 @@ fn draw_shunt(svg: &mut Svg, netlist: &Netlist, inst: &str, x: f64, y_bus: f64) 
             svg.res_v(x, sym_top);
             sym_top + 40.0
         }
+        "diode" => {
+            // Orientation from the netlist: if the CATHODE (K) sits on the
+            // tap net, current flows ground→node (catch diode) — bar at
+            // the top. Otherwise anode-at-top.
+            let cathode_up = netlist
+                .instances
+                .iter()
+                .find(|(_, i)| i.name == inst)
+                .map(|(iid, _)| {
+                    netlist.pin_instances.values().any(|pi| {
+                        pi.instance == iid
+                            && netlist
+                                .pins
+                                .get(pi.pin_def)
+                                .map(|p| p.name == "K")
+                                .unwrap_or(false)
+                            && pi.net.is_some()
+                            && netlist
+                                .nets
+                                .get(pi.net.unwrap())
+                                .map(|n| !matches!(n.net_class, NetClass::Ground))
+                                .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false);
+            if cathode_up {
+                svg.diode_v_up(x, sym_top);
+            } else {
+                svg.diode_v(x, sym_top);
+            }
+            sym_top + 34.0
+        }
         _ => {
             svg.cap_v(x, sym_top);
             sym_top + 34.0
@@ -208,7 +274,7 @@ fn draw_shunt(svg: &mut Svg, netlist: &Netlist, inst: &str, x: f64, y_bus: f64) 
     };
     svg.wire(&[(x, sym_bot), (x, sym_bot + 10.0)]);
     svg.ground(x, sym_bot + 10.0);
-    svg.text(x + 8.0, sym_top + 12.0, inst, "ref");
+    svg.text(x + 8.0, sym_top + 12.0, label_of(decor, inst), "ref");
     let v = value_of(netlist, inst);
     if !v.is_empty() {
         svg.text(x + 8.0, sym_top + 26.0, &v, "val");
@@ -246,7 +312,7 @@ fn draw_stage(
         .collect();
     for inst in &src_shunts {
         x += SHUNT_PITCH;
-        draw_shunt(svg, netlist, inst, x, spine);
+        draw_shunt(svg, netlist, decor, inst, x, spine);
     }
     x += SHUNT_PITCH;
 
@@ -266,7 +332,7 @@ fn draw_stage(
                     r##"<rect x="{bx:.1}" y="{by:.1}" width="{IC_W:.1}" height="{IC_H:.1}" fill="#f7f7f2" stroke="#222" stroke-width="1.8"/>"##
                 );
                 svg.grow(bx + IC_W, by + IC_H);
-                svg.text(bx + 8.0, by - 6.0, inst, "ref");
+                svg.text(bx + 8.0, by - 6.0, label_of(decor, inst), "ref");
                 // Part name inside.
                 let part = netlist
                     .instances
@@ -280,68 +346,236 @@ fn draw_stage(
                         svg.text(bx + 8.0, by + 32.0, &format!("{:.2}W", p), "sim");
                     }
                 }
-                // Stdlib-declared symbol geometry: the part's own
-                // `symbol { left{…} right{…} }` block decides pin sides;
-                // the TI-convention heuristic is only the fallback.
-                let pin_side = |pin: &str| -> Option<PinSide> {
-                    decor
-                        .symbols?
-                        .get(&part)
-                        .map(|sd| sd.pin_sides().get(pin).copied())?
-                };
-                let _ = &pin_side; // consumed below per stub
-                // in pin stub (left mid).
+                // in pin stub (left mid) — flow pins are IDIOM-owned: the
+                // sheet reads left→right, so in/out stay on the flow sides
+                // regardless of declaration.
                 svg.text(bx + 6.0, spine + 4.0, in_pin, "val");
                 // out pin stub (right, upper-mid).
                 let out_y = spine;
-                svg.wire(&[(bx + IC_W, out_y), (bx + IC_W + 14.0, out_y)]);
                 svg.text(bx + IC_W - 8.0 * out_pin.len() as f64, out_y - 5.0, out_pin, "val");
                 // GND stub (bottom center) + ground symbol.
                 let gx = bx + IC_W / 2.0;
                 svg.wire(&[(gx, by + IC_H), (gx, by + IC_H + 10.0)]);
                 svg.ground(gx, by + IC_H + 10.0);
                 svg.text(gx + 6.0, by + IC_H + 12.0, "GND", "val");
-                // FB stub (right side, lower) if a loop returns here.
-                if let Some(l) = stage.loops.iter().find(|l| l.into_inst == *inst) {
-                    let fy = spine + IC_H * 0.30;
-                    svg.wire(&[(bx + IC_W, fy), (bx + IC_W + 14.0, fy)]);
-                    svg.text(
-                        bx + IC_W - 8.0 * l.into_pin.len() as f64,
-                        fy - 5.0,
-                        &l.into_pin,
-                        "val",
-                    );
-                    fb_stub = Some((bx + IC_W + 14.0, fy));
+
+                // ── Aux pins: DECLARED sides drive the stubs ──
+                // Every CONNECTED pin that isn't flow or ground gets a stub.
+                // Side = the part's `symbol {}` declaration (stdlib-assisted
+                // drawing); heuristic fallback: loop→Right, strap→Top,
+                // In→Left, else Right. Slots fill outward from the flow row
+                // in declaration order.
+                let declared_side = |pin: &str| -> Option<PinSide> {
+                    decor
+                        .symbols
+                        .and_then(|m| m.get(&part))
+                        .and_then(|sd| sd.pin_sides().get(pin).copied())
+                };
+                let loop_pin: Option<&str> = stage
+                    .loops
+                    .iter()
+                    .find(|l| l.into_inst == *inst)
+                    .map(|l| l.into_pin.as_str());
+                let strap_pins: Vec<&str> =
+                    stage.straps.iter().map(|st| st.ic_pin.as_str()).collect();
+                let aux: Vec<(String, PinSide, Option<NetId>)> = netlist
+                    .instances
+                    .iter()
+                    .find(|(_, i)| i.name == *inst)
+                    .map(|(iid, _)| {
+                        netlist
+                            .pin_instances
+                            .values()
+                            .filter(|pi| pi.instance == iid && pi.net.is_some())
+                            .filter_map(|pi| {
+                                let pin = netlist.pins.get(pi.pin_def)?;
+                                if pin.is_virtual {
+                                    // Virtual pins model post-network nodes
+                                    // (TPS54331's VOUT = the rail after the
+                                    // LC) — they are not package pins and
+                                    // never draw on the body; the rail flag
+                                    // already represents that node.
+                                    return None;
+                                }
+                                if pin.name == *in_pin || pin.name == *out_pin {
+                                    return None;
+                                }
+                                if matches!(
+                                    pin.direction,
+                                    bhdl_netlist::types::PinDirection::Ground
+                                ) {
+                                    return None;
+                                }
+                                let side = declared_side(&pin.name).unwrap_or_else(|| {
+                                    if Some(pin.name.as_str()) == loop_pin {
+                                        PinSide::Right
+                                    } else if strap_pins.contains(&pin.name.as_str()) {
+                                        PinSide::Top
+                                    } else if matches!(
+                                        pin.direction,
+                                        bhdl_netlist::types::PinDirection::In
+                                    ) {
+                                        PinSide::Left
+                                    } else {
+                                        PinSide::Right
+                                    }
+                                });
+                                Some((pin.name.clone(), side, pi.net))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                // Slot coordinates per side; record each stub endpoint.
+                let mut slot: HashMap<&'static str, usize> = HashMap::new();
+                let mut stubs: HashMap<String, (f64, f64, PinSide)> = HashMap::new();
+                for (pname, side, _net) in &aux {
+                    let k = {
+                        let key = match side {
+                            PinSide::Left => "L",
+                            PinSide::Right => "R",
+                            PinSide::Top => "T",
+                            PinSide::Bottom => "B",
+                        };
+                        let e = slot.entry(key).or_insert(0);
+                        let k = *e;
+                        *e += 1;
+                        k
+                    };
+                    let (sx, sy, lx, ly) = match side {
+                        PinSide::Left => {
+                            let y = spine + 24.0 + k as f64 * 20.0;
+                            (bx - 14.0, y, bx + 6.0, y + 4.0)
+                        }
+                        PinSide::Right => {
+                            let y = spine + 24.0 + k as f64 * 20.0;
+                            (bx + IC_W + 14.0, y, bx + IC_W - 8.0 * pname.len() as f64, y + 4.0)
+                        }
+                        PinSide::Top => {
+                            let xx = bx + IC_W * 0.72 - k as f64 * 24.0;
+                            (xx, by - 14.0, xx - 8.0 * pname.len() as f64 + 6.0, by + 12.0)
+                        }
+                        PinSide::Bottom => {
+                            let xx = gx + 26.0 + k as f64 * 24.0;
+                            (xx, by + IC_H + 14.0, xx + 4.0, by + IC_H - 4.0)
+                        }
+                    };
+                    // Stub line from the box edge to the endpoint.
+                    match side {
+                        PinSide::Left => svg.wire(&[(bx, sy), (sx, sy)]),
+                        PinSide::Right => svg.wire(&[(bx + IC_W, sy), (sx, sy)]),
+                        PinSide::Top => svg.wire(&[(sx, by), (sx, sy)]),
+                        PinSide::Bottom => svg.wire(&[(sx, by + IC_H), (sx, sy)]),
+                    }
+                    svg.text(lx, ly, pname, "val");
+                    stubs.insert(pname.clone(), (sx, sy, *side));
+                }
+
+                if let Some(lp) = loop_pin {
+                    fb_stub = stubs.get(lp).map(|(x, y, _)| (*x, *y));
                 }
                 x = bx + IC_W + 34.0; // room after the box for strap taps
                 svg.wire(&[(bx + IC_W, out_y), (x, out_y)]);
                 ic_right = x;
 
-                // Straps (bootstrap cap): stub on the box TOP, bridge over
-                // the corner in the guaranteed-clear airspace above the IC,
-                // tap DOWN onto the out-net segment with a junction dot.
-                for (k, strap) in stage
-                    .straps
+                // Intermediate-net shunts (the catch diode on the switch
+                // node): everything the classifier claimed must be drawn —
+                // they hang off the out-net segment before the series
+                // element.
+                let mid_shunts: Vec<&str> = stage
+                    .shunts
                     .iter()
-                    .filter(|st| {
-                        // this IC's straps only (single-IC stages for now)
-                        true
+                    .filter(|sh| {
+                        sh.tap != stage.source_rail && sh.tap != stage.target_rail
                     })
-                    .enumerate()
-                {
-                    let stub_x = bx + IC_W * 0.72 + k as f64 * 18.0;
-                    let bridge_y = by - 26.0 - k as f64 * 22.0;
+                    .map(|sh| sh.inst.as_str())
+                    .collect();
+                for m in &mid_shunts {
+                    x += SHUNT_PITCH;
+                    draw_shunt(svg, netlist, decor, m, x, out_y);
+                }
+                if !mid_shunts.is_empty() {
+                    x += 24.0; // label clearance before the series element
+                    svg.wire(&[(ic_right, out_y), (x, out_y)]);
+                    ic_right = x;
+                }
+
+                // ── Route aux nets ──
+                // source-rail ties (EN → VIN): hook from the stub back onto
+                // the input bus with a junction dot; anything not resolved
+                // by an idiom gets a named NET FLAG — long-range notation,
+                // honest and unambiguous.
+                for (pname, _side, net) in &aux {
+                    let Some((sx, sy, side)) = stubs.get(pname).copied() else { continue };
+                    let Some(net) = net else { continue };
+                    if *net == stage.source_rail {
+                        match side {
+                            PinSide::Left => {
+                                let hook_x = bx - 16.0;
+                                svg.wire(&[(sx, sy), (hook_x, sy), (hook_x, spine)]);
+                                svg.dot(hook_x, spine);
+                            }
+                            _ => {
+                                svg.text(sx + 4.0, sy - 6.0, &net_label(netlist, *net), "rail");
+                            }
+                        }
+                    } else if Some(pname.as_str()) == loop_pin
+                        || strap_pins.contains(&pname.as_str())
+                    {
+                        // drawn by the loop/strap idioms below
+                    } else {
+                        // Named net flag.
+                        let nname = netlist
+                            .nets
+                            .get(*net)
+                            .and_then(|n| n.name.clone())
+                            .unwrap_or_default();
+                        if !nname.is_empty() {
+                            svg.text(sx + 4.0, sy - 6.0, &nname, "rail");
+                        }
+                    }
+                }
+
+                // ── Straps: bridge from the DECLARED stub over the clear
+                // airspace above the IC, tap onto the out-net segment. ──
+                for strap in stage.straps.iter() {
+                    let Some((sx, sy, side)) = stubs.get(&strap.ic_pin).copied() else {
+                        continue;
+                    };
+                    let bridge_y = by - 26.0;
                     let tap_x = bx + IC_W + 20.0;
-                    svg.wire(&[(stub_x, by), (stub_x, bridge_y)]);
-                    svg.text(stub_x - 8.0 * strap.ic_pin.len() as f64 + 6.0, by + 12.0, &strap.ic_pin, "val");
-                    svg.wire(&[(stub_x, bridge_y), (tap_x - 34.0 - 6.0, bridge_y)]);
-                    svg.cap_h(tap_x - 34.0 - 6.0, bridge_y);
-                    svg.wire(&[(tap_x - 6.0, bridge_y), (tap_x, bridge_y), (tap_x, out_y)]);
+                    match side {
+                        PinSide::Top => svg.wire(&[(sx, sy), (sx, bridge_y)]),
+                        PinSide::Left => {
+                            let fl = bx - 16.0;
+                            svg.wire(&[(sx, sy), (fl, sy), (fl, bridge_y), (sx, bridge_y)]);
+                        }
+                        _ => svg.wire(&[(sx, sy), (sx, bridge_y)]),
+                    }
+                    let cap_x = tap_x - 40.0;
+                    svg.wire(&[(sx.min(cap_x), bridge_y), (cap_x, bridge_y)]);
+                    // Symbol by class — a strap can be an inductor or a
+                    // resistor, not only the bootstrap cap.
+                    let sym_w = match class_of_name(netlist, &strap.inst).as_str() {
+                        "inductor" => {
+                            svg.ind_h(cap_x, bridge_y);
+                            56.0
+                        }
+                        "resistor" => {
+                            svg.box_h(cap_x, bridge_y, 34.0);
+                            34.0
+                        }
+                        _ => {
+                            svg.cap_h(cap_x, bridge_y);
+                            34.0
+                        }
+                    };
+                    svg.wire(&[(cap_x + sym_w, bridge_y), (tap_x, bridge_y), (tap_x, out_y)]);
                     svg.dot(tap_x, out_y);
-                    svg.text(stub_x + 12.0, bridge_y - 6.0, &strap.inst, "ref");
+                    svg.text(cap_x - 8.0, bridge_y - 8.0, label_of(decor, &strap.inst), "ref");
                     let v = value_of(netlist, &strap.inst);
                     if !v.is_empty() {
-                        svg.text(stub_x + 12.0, bridge_y + 16.0, &v, "val");
+                        svg.text(cap_x - 8.0, bridge_y + 18.0, &v, "val");
                     }
                 }
             }
@@ -352,7 +586,7 @@ fn draw_stage(
                     "inductor" => svg.ind_h(x + 7.0, spine),
                     _ => svg.box_h(x + 7.0, spine, 56.0),
                 }
-                svg.text(x + 14.0, spine - 12.0, inst, "ref");
+                svg.text(x + 14.0, spine - 12.0, label_of(decor, inst), "ref");
                 let v = value_of(netlist, inst);
                 if !v.is_empty() {
                     svg.text(x + 14.0, spine + 22.0, &v, "val");
@@ -378,7 +612,7 @@ fn draw_stage(
         .collect();
     for inst in &tgt_shunts {
         x += SHUNT_PITCH;
-        draw_shunt(svg, netlist, inst, x, spine);
+        draw_shunt(svg, netlist, decor, inst, x, spine);
     }
 
     // Feedback divider off the target bus (extra clearance from the last
@@ -390,7 +624,7 @@ fn draw_stage(
         svg.wire(&[(dx, spine), (dx, spine + 10.0)]);
         // top leg
         svg.res_v(dx, spine + 10.0);
-        svg.text(dx + 10.0, spine + 28.0, l.insts.first().map(String::as_str).unwrap_or(""), "ref");
+        svg.text(dx + 10.0, spine + 28.0, label_of(decor, l.insts.first().map(String::as_str).unwrap_or("")), "ref");
         let mid = spine + 50.0;
         svg.dot(dx, mid);
         // Solved FB-node voltage (the reference the loop regulates to).
@@ -419,7 +653,7 @@ fn draw_stage(
         // bottom leg
         if l.insts.len() > 1 {
             svg.res_v(dx, mid);
-            svg.text(dx + 10.0, mid + 18.0, &l.insts[1], "ref");
+            svg.text(dx + 10.0, mid + 18.0, label_of(decor, &l.insts[1]), "ref");
             svg.wire(&[(dx, mid + 40.0), (dx, mid + 48.0)]);
             svg.ground(dx, mid + 48.0);
         }
@@ -486,7 +720,7 @@ pub fn render_sheet_svg(netlist: &Netlist, title: &str, decor: &SheetDecor) -> (
         for inst in &plan.residue {
             let ry = y + 30.0;
             svg.box_h(x, ry, 56.0);
-            svg.text(x + 4.0, ry - 14.0, inst, "ref");
+            svg.text(x + 4.0, ry - 14.0, &format!("{} ({inst})", label_of(decor, inst)), "ref");
             // Net flags for each connected pin.
             let mut fy = ry + 22.0;
             if let Some((iid, _)) = netlist.instances.iter().find(|(_, i)| i.name == *inst) {

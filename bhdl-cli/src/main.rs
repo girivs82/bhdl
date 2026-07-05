@@ -1262,9 +1262,41 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
+        // Refdes labels: same persistent sidecar LUT the HTML extraction
+        // uses, so both views agree on R1/C3/U1 numbering.
+        let lut_path = source_path.with_extension("bhdl.refdes");
+        let mut lut = bhdl_schematic::RefDesLut::load(&lut_path);
+        lut.version = 1;
+        let mut refdes_map = std::collections::HashMap::new();
+        for inst in netlist.instances.values() {
+            let is_phantom = netlist
+                .modules
+                .get(inst.definition)
+                .map(|m| m.name == inst.name)
+                .unwrap_or(false);
+            if is_phantom {
+                continue;
+            }
+            let class = inst
+                .attributes
+                .get("component_class")
+                .map(String::as_str)
+                .unwrap_or("");
+            let category = match class {
+                "voltage_regulator" | "ldo" | "switching_regulator" => "regulator",
+                "" => "ic",
+                other => other,
+            };
+            let prefix = bhdl_schematic::category_to_prefix(category);
+            let prefix = if prefix == "X" { "U" } else { prefix };
+            refdes_map.insert(inst.name.clone(), lut.assign(prefix, &inst.name));
+        }
+        let _ = lut.save(&lut_path);
+
         let decor = bhdl_schematic::v4::svg::SheetDecor {
             sim: sim_annotations.as_ref(),
             symbols: Some(&analysis.symbol_definitions),
+            refdes: Some(&refdes_map),
         };
         let (svg, unidiomized) = bhdl_schematic::v4::render_sheet_svg(&netlist, &title, &decor);
         std::fs::write(svg_path, svg)?;

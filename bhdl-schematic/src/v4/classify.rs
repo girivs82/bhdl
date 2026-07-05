@@ -294,9 +294,27 @@ fn walk_stage(
     let exit = ic_pins
         .iter()
         .filter(|(_, d, n)| matches!(d, PinDirection::Out) && n.is_some())
-        .find(|(name, _, _)| {
-            let u = name.to_uppercase();
-            u == "VOUT" || u == "SW" || u == "PH" || u == "VO" || u == "OUT"
+        .min_by_key(|(name, _, _)| {
+            // Exit priority: the PHYSICAL switch node outranks a virtual
+            // VOUT — on parts declaring both (TPS54331: SW + `power out
+            // virtual` VOUT), walking VOUT jumps straight to the rail and
+            // misclassifies the real power path (the inductor became a
+            // strap drawn with a capacitor symbol; the catch diode fell to
+            // residue).
+            match name.to_uppercase().as_str() {
+                "SW" => 0usize,
+                "PH" => 1,
+                "VO" => 2,
+                "VOUT" => 3,
+                "OUT" => 4,
+                _ => 99,
+            }
+        })
+        .filter(|(name, _, _)| {
+            matches!(
+                name.to_uppercase().as_str(),
+                "SW" | "PH" | "VO" | "VOUT" | "OUT"
+            )
         })
         .cloned()?;
     let (out_pin, _, out_net) = exit;
