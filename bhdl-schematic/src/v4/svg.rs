@@ -322,18 +322,22 @@ fn draw_stage(
             svg.wire(&[(dx, mid + 40.0), (dx, mid + 48.0)]);
             svg.ground(dx, mid + 48.0);
         }
-        // Return path: INWARD (leftward) from the mid node — the natural
-        // short path to the FB stub. It crosses the output shunts' vertical
-        // stems in their plain-wire region just below the symbol bodies;
-        // a crossing WITHOUT a junction dot is standard schematic
-        // vocabulary and unambiguous (dots mark real joins).
+        // Return path policy: AVOID crossings when possible; cross only
+        // under congestion. The non-crossing route exists here: exit the
+        // mid node on the divider's NEAR (left) flank, dive down in the
+        // clear channel between the divider and the last shunt column, run
+        // under the ground row, and rise into the FB stub — no crossings,
+        // and no far-side detour (the earlier loop-under exited RIGHT,
+        // adding travel away from the pin it was connecting).
         if let Some((fx, fy)) = fb_stub {
-            let cross_y = mid + 6.0; // below cap plates, above grounds
-            let up_x = ic_right + 10.0;
+            let flank_x = dx - 26.0; // left of the divider, right of the last shunt
+            let clear_y = spine + 160.0; // below every ground symbol
+            let up_x = ic_right + 10.0; // clear channel right of the IC
             svg.wire(&[
                 (dx, mid),
-                (dx, cross_y),
-                (up_x, cross_y),
+                (flank_x, mid),
+                (flank_x, clear_y),
+                (up_x, clear_y),
                 (up_x, fy),
                 (fx, fy),
             ]);
