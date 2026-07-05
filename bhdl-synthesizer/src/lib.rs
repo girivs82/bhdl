@@ -2145,8 +2145,18 @@ impl NetlistGenerator {
         }
 
         // First check if this component was imported via preprocessor
-        let (pin_definitions, has_virtual_pins) = if let Some(ref preprocessor) = self.import_preprocessor {
-            if let Some(entity) = preprocessor.get_imported_entity(component_type) {
+        // ROOT-CAUSE NOTE (connectivity bug family, docs/spec/ERC.md): this
+        // chain previously nested the preprocessor lookup — when a
+        // preprocessor EXISTED but the type wasn't imported (any board with
+        // one import plus a same-file entity), the inner miss returned EMPTY
+        // pins instead of cascading, hollowing out the whole netlist.
+        let preprocessed_entity = self
+            .import_preprocessor
+            .as_ref()
+            .and_then(|p| p.get_imported_entity(component_type))
+            .cloned();
+        let (pin_definitions, has_virtual_pins) = if let Some(entity) = preprocessed_entity.as_ref() {
+            {
                 println!("SYNTHESIZER: Using preprocessed imported entity definition for '{}'", component_type);
 
                 // Extract pins from the imported entity
@@ -2187,10 +2197,6 @@ impl NetlistGenerator {
                 
                 let has_virtual = pins.iter().any(|p| p.is_virtual);
                 (pins, has_virtual)
-            } else {
-                // No preprocessor available - use empty pin definitions
-                warn!("No import preprocessor available for component {} - cannot extract pins", component_type);
-                (Vec::new(), false)
             }
         } else if let Some(entity) = self.import_loader.get_entity(component_type) {
             // Legacy path: check import_loader if no preprocessor
