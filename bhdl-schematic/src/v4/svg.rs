@@ -322,16 +322,18 @@ fn draw_stage(
             svg.wire(&[(dx, mid + 40.0), (dx, mid + 48.0)]);
             svg.ground(dx, mid + 48.0);
         }
-        // Return path: mid node → below the shunt zone → up into FB stub.
+        // Return path: INWARD (leftward) from the mid node — the natural
+        // short path to the FB stub. It crosses the output shunts' vertical
+        // stems in their plain-wire region just below the symbol bodies;
+        // a crossing WITHOUT a junction dot is standard schematic
+        // vocabulary and unambiguous (dots mark real joins).
         if let Some((fx, fy)) = fb_stub {
-            let clear_y = spine + 150.0;
+            let cross_y = mid + 6.0; // below cap plates, above grounds
             let up_x = ic_right + 10.0;
-            svg.wire(&[(dx, mid)]); // anchor (dot drawn already)
             svg.wire(&[
                 (dx, mid),
-                (dx + 18.0, mid),
-                (dx + 18.0, clear_y),
-                (up_x, clear_y),
+                (dx, cross_y),
+                (up_x, cross_y),
                 (up_x, fy),
                 (fx, fy),
             ]);
