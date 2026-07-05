@@ -1120,6 +1120,41 @@ fn draw_stage(
             // no equation (Real-Data). Line 1 substitutes refdes, line 2
             // substitutes values + the reference, and cites the RAIL's own
             // voltage as the result rather than evaluating anything.
+            // CONSISTENCY RULE (review finding): the numeric line must be
+            // one solution set, never a mix. The declared 800mV reference
+            // times the snapped ratio gives 3.33V — pasting the declared
+            // 3.30V rail after an "=" was false arithmetic. With a solve,
+            // use the SOLVED pair (FB voltage → rail voltage: GLACIER
+            // holds the rail and derives FB, so they satisfy the equation
+            // by construction). Without one, show substituted declared
+            // values but NO "= result" tail — an equality we did not
+            // compute is an equality we do not print.
+            let solved_fb = decor.sim.and_then(|sim| {
+                netlist
+                    .instances
+                    .iter()
+                    .find(|(_, i)| i.name == l.into_inst)
+                    .and_then(|(iid, _)| {
+                        netlist.pin_instances.values().find(|pi| {
+                            pi.instance == iid
+                                && netlist
+                                    .pins
+                                    .get(pi.pin_def)
+                                    .map(|p| p.name == l.into_pin)
+                                    .unwrap_or(false)
+                        })
+                    })
+                    .and_then(|pi| pi.net)
+                    .and_then(|nid| netlist.nets.get(nid).and_then(|n| n.name.clone()))
+                    .and_then(|name| sim.net_voltages.get(&name).copied())
+            });
+            let solved_rail = decor.sim.and_then(|sim| {
+                netlist
+                    .nets
+                    .get(stage.target_rail)
+                    .and_then(|n| n.name.clone())
+                    .and_then(|name| sim.net_voltages.get(&name).copied())
+            });
             let template = netlist
                 .instances
                 .values()
@@ -1135,25 +1170,23 @@ fn draw_stage(
                     .replace("{R2}", r2)
                     .replace("{VREF}", "VREF")
                     .replace('*', "·");
-                let rail_v = netlist
-                    .nets
-                    .get(stage.target_rail)
-                    .map(|n| match n.net_class {
-                        NetClass::Power { voltage, .. } => voltage,
-                        _ => 0.0,
-                    })
-                    .unwrap_or(0.0);
+                // One solution set per line: solved(FB, rail) together,
+                // or declared VREF with no claimed result.
+                let (vref_shown, result_tail) = match (solved_fb, solved_rail) {
+                    (Some(fb), Some(rail)) => (fb, format!(" = {:.2}V", rail)),
+                    _ => (vref, String::new()),
+                };
                 let line2 = format!(
-                    "{} = {:.2}V",
+                    "{}{}",
                     tpl.split('=')
                         .nth(1)
                         .unwrap_or("")
                         .trim()
                         .replace("{R1}", &top_val)
                         .replace("{R2}", &bot_val)
-                        .replace("{VREF}", &fmt_sim_v(vref))
+                        .replace("{VREF}", &fmt_sim_v(vref_shown))
                         .replace('*', "·"),
-                    rail_v
+                    result_tail
                 );
                 let eq_y = mid + 48.0 + 40.0;
                 svg.text(dx - 60.0, eq_y, &line1, "val");
