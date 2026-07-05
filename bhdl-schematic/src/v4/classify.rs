@@ -290,39 +290,76 @@ fn walk_stage(
         out_pin: out_pin.clone(),
     });
 
-    // Follow series parts until a Power-class net.
-    let mut target: Option<NetId> = None;
-    for _hop in 0..16 {
+    // Follow series parts until a Power-class net. A net can carry several
+    // two-terminal neighbours (the switch node holds BOTH the output
+    // inductor and the bootstrap strap) — greedy first-pick dead-ends, so
+    // the follow BACKTRACKS: depth-first over candidate hops, keeping the
+    // path that reaches a rail.
+    fn follow(
+        netlist: &Netlist,
+        pins_by_net: &HashMap<NetId, Vec<(InstanceId, String, PinDirection)>>,
+        already: &HashSet<InstanceId>,
+        ic: InstanceId,
+        cur: NetId,
+        seen: &mut HashSet<NetId>,
+        depth: usize,
+    ) -> Option<(Vec<InstanceId>, NetId)> {
         if matches!(netlist.nets.get(cur).map(|n| &n.net_class), Some(NetClass::Power { .. })) {
-            target = Some(cur);
-            break;
+            return Some((Vec::new(), cur));
         }
-        seen_nets.insert(cur);
-        // Collect shunts on this intermediate net.
-        let members = pins_by_net.get(&cur).cloned().unwrap_or_default();
-        let mut next: Option<(InstanceId, NetId)> = None;
-        for (m, _mp, _md) in &members {
-            if *m == ic || already.contains(m) || is_phantom(netlist, *m) {
+        if depth >= 8 {
+            return None;
+        }
+        seen.insert(cur);
+        for (m, _mp, _md) in pins_by_net.get(&cur).cloned().unwrap_or_default() {
+            if m == ic || already.contains(&m) || is_phantom(netlist, m) {
                 continue;
             }
-            if let Some(other) = shunt_other_side(netlist, *m, cur) {
+            let Some(other) = shunt_other_side(netlist, m, cur) else { continue };
+            if is_ground_net(netlist, other) || seen.contains(&other) {
+                continue;
+            }
+            if let Some((mut chain, target)) =
+                follow(netlist, pins_by_net, already, ic, other, seen, depth + 1)
+            {
+                chain.insert(0, m);
+                return Some((chain, target));
+            }
+        }
+        seen.remove(&cur);
+        None
+    }
+
+    let (chain, target) = follow(
+        netlist,
+        pins_by_net,
+        already,
+        ic,
+        cur,
+        &mut seen_nets,
+        0,
+    )?;
+    // Replay the chosen path: record series elements and collect shunts on
+    // every intermediate net along it.
+    for series_inst in chain {
+        // Shunts on the net BEFORE this hop.
+        for (m, _mp, _md) in pins_by_net.get(&cur).cloned().unwrap_or_default() {
+            if m == ic || m == series_inst || already.contains(&m) || is_phantom(netlist, m) {
+                continue;
+            }
+            if let Some(other) = shunt_other_side(netlist, m, cur) {
                 if is_ground_net(netlist, other) {
-                    shunts.push(Shunt {
-                        inst: inst_name(netlist, *m),
-                        tap: cur,
-                    });
-                } else if !seen_nets.contains(&other) && next.is_none() {
-                    next = Some((*m, other));
+                    shunts.push(Shunt { inst: inst_name(netlist, m), tap: cur });
                 }
             }
         }
-        let (series_inst, series_net) = next?;
         backbone.push(BackboneElem::Series {
             inst: inst_name(netlist, series_inst),
         });
-        cur = series_net;
+        cur = shunt_other_side(netlist, series_inst, cur)
+            .expect("series element is two-terminal by construction");
     }
-    let target = target?;
+    debug_assert_eq!(cur, target);
 
     // Shunts hanging directly on the target rail (output bank).
     for (m, _mp, _md) in pins_by_net.get(&target).cloned().unwrap_or_default() {

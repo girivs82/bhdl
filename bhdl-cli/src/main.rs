@@ -141,6 +141,9 @@ enum Commands {
         #[arg(long)]
         validate: bool,
 
+        /// Also write the V4 idiom-composed SVG schematic to this path
+        #[arg(long, value_name = "SVG")]
+        svg_v4: Option<String>,
         /// Print ASCII schematic to terminal (requires Node.js)
         #[arg(long)]
         ascii: bool,
@@ -427,8 +430,8 @@ async fn main() -> Result<()> {
             run_freeze(&source_file, &cli.input, output, frozen_libraries).await?;
         }
         
-        Some(Commands::Visualize { output, json, validate, ascii }) => {
-            run_visualization(&source_file, output, json, validate, ascii, &cli.input).await?;
+        Some(Commands::Visualize { output, json, validate, ascii, svg_v4 }) => {
+            run_visualization(&source_file, output, json, validate, ascii, &cli.input, svg_v4.as_deref()).await?;
         }
         
         Some(Commands::Spice { analysis, output, use_metadata }) => {
@@ -1192,7 +1195,7 @@ async fn run_freeze(
     Ok(())
 }
 
-async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, json_output: bool, validate: bool, ascii: bool, source_path: &Path) -> Result<()> {
+async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, json_output: bool, validate: bool, ascii: bool, source_path: &Path, svg_v4: Option<&str>) -> Result<()> {
     // Run full pipeline to get netlist
     let analysis = analyze(source_file);
 
@@ -1224,6 +1227,22 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
 
     // Snap computed passive values to catalog E-series before sim/viz.
     snap_catalog_values(&mut netlist);
+
+    // V4 idiom-composed SVG (docs/spec/Schematic_V4.md) — rendered from the
+    // same netlist, written beside the HTML when requested.
+    if let Some(svg_path) = svg_v4 {
+        let title = source_path
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let (svg, unidiomized) = bhdl_schematic::v4::render_sheet_svg(&netlist, &title);
+        std::fs::write(svg_path, svg)?;
+        println!(
+            "  {} V4 SVG: {svg_path} ({} unidiomized)",
+            "✓".green(),
+            unidiomized
+        );
+    }
 
     // Run GLACIER DC simulation for voltage/current annotation
     let sim_annotations = {

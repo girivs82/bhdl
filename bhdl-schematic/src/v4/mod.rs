@@ -7,5 +7,7 @@
 //! and counted in the render's absence ledger.
 
 pub mod classify;
+pub mod svg;
 
+pub use svg::render_sheet_svg;
 pub use classify::{classify_sheet, SheetPlan, StagePlan, BackboneElem, Shunt, LoopChain};
