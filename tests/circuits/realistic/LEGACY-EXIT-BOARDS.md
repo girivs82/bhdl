@@ -21,6 +21,12 @@ Indexed bus-pin refs (`fpga.VCCO[0]`) now parse in v2 arrow statements
 (`pin VCCO[4]` / `pin D[7:0]`) expand to indexed pin instances in the
 netlist, and a suffix-less ref (`fpga.VCCO`) ties the whole bank to a
 net as a unit. fpga_dev_board_comprehensive wires VCCO per-index.
-Still open: the legacy port-mapping block form (`inst: Type() { PIN <-
-net; }`) parses but does not lower connections — v2 arrow statements
-are the supported form.
+The legacy port-mapping block form (`inst: Type() { PIN <- net; }`) now
+lowers to net connections in `process_port_mapping`
+(bhdl-synthesizer/src/hierarchical_connectivity.rs): indexed bus pins
+(`VCCO[0] <- V3`) resolve to their expanded pin instances, a suffix-less
+reference to a declared bus pin ties every member to the net, and a
+qualified target (`OUT -> other.IN`) connects pin-to-pin instead of
+minting a net literally named `other.IN`. Regression board:
+tests/circuits/hierarchical/legacy_port_mapping_block.bhdl. v2 arrow
+statements remain the preferred form.

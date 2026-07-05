@@ -664,33 +664,105 @@ fn process_port_mapping(
     netlist: &mut Netlist,
     context: &mut HierarchicalContext,
 ) -> Result<()> {
-    // Get the pin name from the port mapping
+    // Full pin-ref text including any bus suffix: expanded bus pins
+    // live in the netlist under their indexed names ("VCCO[0]"), so
+    // taking just the name token would never find them.
     let pin_name = port_mapping.pin_ref()
-        .and_then(|p| p.name())
-        .map(|n| n.text().to_string())
+        .map(|p| p.syntax().text().to_string().split_whitespace().collect::<String>())
+        .filter(|s| !s.is_empty())
         .ok_or_else(|| anyhow::anyhow!("Port mapping missing pin name"))?;
-    
-    // Get the target net name from the connection target
-    let target_net_name = port_mapping.connection_target()
-        .map(|t| t.syntax().text().to_string().trim().to_string())
+
+    let target = port_mapping.connection_target()
+        .map(|t| t.syntax().text().to_string().split_whitespace().collect::<String>())
+        .filter(|s| !s.is_empty())
         .ok_or_else(|| anyhow::anyhow!("Port mapping missing connection target"))?;
-    
-    // Find the pin instance for this pin
-    let pin_inst_id = netlist.find_pin_instance(instance_id, &pin_name)
-        .ok_or_else(|| anyhow::anyhow!("Pin instance not found for pin {} on instance {:?}", pin_name, instance_id))?;
-    
+
+    let instance_name = netlist.instances.get(instance_id)
+        .map(|i| i.name.clone())
+        .unwrap_or_else(|| "<unknown>".to_string());
+
+    // Qualified target `other.PIN` naming a sibling instance is a
+    // pin-to-pin mapping, not a net name. Left to resolve_net it
+    // would mint a net literally named "other.PIN" and leave the
+    // real pin unconnected (silent ERC007).
+    if let Some(dot) = target.find('.') {
+        let (tgt_inst_name, tgt_pin_name) = (&target[..dot], &target[dot + 1..]);
+        // Prefer the instance this extraction pass created (registered
+        // in instance_path_to_id by process_entity_instance): other
+        // pipeline passes may have pre-created a same-named instance,
+        // and a bare name lookup would wire the wrong (unwired) copy.
+        let tgt_path = if context.current_path.is_empty() {
+            tgt_inst_name.to_string()
+        } else {
+            format!("{}.{}", context.current_path_string(), tgt_inst_name)
+        };
+        let resolved = context.instance_path_to_id.get(&tgt_path).copied()
+            .or_else(|| find_instance_by_name_in_context(netlist, context, tgt_inst_name));
+        if let Some(tgt_inst_id) = resolved {
+            let pin_inst_id = netlist.find_pin_instance(instance_id, &pin_name)
+                .ok_or_else(|| anyhow::anyhow!(
+                    "Port mapping: pin {} not found on instance {}", pin_name, instance_name))?;
+            let tgt_pin_inst_id = netlist.find_pin_instance(tgt_inst_id, tgt_pin_name)
+                .ok_or_else(|| anyhow::anyhow!(
+                    "Port mapping: pin {} not found on instance {}", tgt_pin_name, tgt_inst_name))?;
+            // Share whichever net either pin already sits on (connect()
+            // merges if both have one); only connect pins not already
+            // on it, so a pin mapped earlier isn't double-entered.
+            let net_id = netlist.get_pin_instance(pin_inst_id).and_then(|p| p.net)
+                .or_else(|| netlist.get_pin_instance(tgt_pin_inst_id).and_then(|p| p.net))
+                .unwrap_or_else(|| {
+                    let net_name = format!("{}_{}", instance_name, pin_name).replace(['[', ']'], "_");
+                    netlist.add_net(Some(net_name))
+                });
+            for pi in [pin_inst_id, tgt_pin_inst_id] {
+                if netlist.get_pin_instance(pi).and_then(|p| p.net) != Some(net_id) {
+                    netlist.connect(net_id, ConnectionPoint::PinInstance(pi))
+                        .map_err(|e| anyhow::anyhow!("Failed to connect pin to net: {}", e))?;
+                }
+            }
+            debug!("Connected {}:{} to {}:{}", instance_name, pin_name, tgt_inst_name, tgt_pin_name);
+            return Ok(());
+        }
+        // Not an instance in scope — fall through and treat the dotted
+        // form as an interface-signal net reference (resolve_net's job).
+    }
+
     // Resolve the net in current context
-    let net_id = context.resolve_net(&target_net_name, netlist)?;
-    
-    // Connect the pin instance to the net
-    netlist.connect(net_id, ConnectionPoint::PinInstance(pin_inst_id))
-        .map_err(|e| anyhow::anyhow!("Failed to connect pin to net: {}", e))?;
-    
-    debug!("Connected {}:{} to net {}", 
-           netlist.instances.get(instance_id).map(|i| &i.name).unwrap_or(&"<unknown>".to_string()),
-           pin_name, 
-           target_net_name);
-    
+    let net_id = context.resolve_net(&target, netlist)?;
+
+    if let Some(pin_inst_id) = netlist.find_pin_instance(instance_id, &pin_name) {
+        netlist.connect(net_id, ConnectionPoint::PinInstance(pin_inst_id))
+            .map_err(|e| anyhow::anyhow!("Failed to connect pin to net: {}", e))?;
+    } else if !pin_name.contains('[') {
+        // Suffix-less reference to a declared bus pin ("VCCO <- V3")
+        // ties every expanded member to the net — same semantics as
+        // the v2 arrow path's whole-bus handling in connect_pin_to_net.
+        let bus_prefix = format!("{}[", pin_name);
+        let member_names: Vec<String> = netlist.instances.get(instance_id)
+            .and_then(|inst| netlist.modules.get(inst.definition))
+            .map(|module| module.pins.iter()
+                .filter_map(|&pid| netlist.pins.get(pid))
+                .filter(|p| p.name.starts_with(&bus_prefix))
+                .map(|p| p.name.clone())
+                .collect())
+            .unwrap_or_default();
+        if member_names.is_empty() {
+            return Err(anyhow::anyhow!(
+                "Pin instance not found for pin {} on instance {}", pin_name, instance_name));
+        }
+        for member in &member_names {
+            if let Some(pin_inst_id) = netlist.find_pin_instance(instance_id, member) {
+                netlist.connect(net_id, ConnectionPoint::PinInstance(pin_inst_id))
+                    .map_err(|e| anyhow::anyhow!("Failed to connect pin to net: {}", e))?;
+            }
+        }
+    } else {
+        return Err(anyhow::anyhow!(
+            "Pin instance not found for pin {} on instance {}", pin_name, instance_name));
+    }
+
+    debug!("Connected {}:{} to net {}", instance_name, pin_name, target);
+
     Ok(())
 }
 

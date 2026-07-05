@@ -1,0 +1,44 @@
+// Regression: legacy port-mapping block form must lower to net
+// connections (it used to parse and then silently drop, leaving pins
+// unconnected — ERC007). Exercises every target shape:
+//   plain pin <- net, indexed bus pin, whole-bus reference, and a
+//   qualified `other.PIN` pin-to-pin target.
+// Signal loop: u1.OUT -> b1.IN (pin-to-pin, net BUFIN), b1.OUT drives
+// BUFOUT, which feeds back into both u1.D[i] inputs — every signal
+// net has one driver and at least one receiver.
+// Expected: exit 0, 0 DRC violations.
+entity Fpga() {
+    pin VCCO[4]: power in;
+    pin D[2]:    signal in;
+    pin OUT:     signal out;
+    pin GND:     ground;
+
+    attribute component_class = "fpga";
+}
+
+entity Buf() {
+    pin IN:  signal in;
+    pin OUT: signal out;
+    pin GND: ground;
+
+    attribute component_class = "buffer";
+}
+
+board LegacyPortMappingBlock {
+    power V3 = 3.3V @ 1A;
+    ground GND;
+
+    b1: Buf() {
+        IN <- BUFIN;
+        OUT -> BUFOUT;
+        GND <- GND;
+    }
+
+    u1: Fpga() {
+        VCCO <- V3;      // whole-bus: all four VCCO[i] tie to V3
+        D[0] <- BUFOUT;  // indexed bus pins, driven by b1.OUT
+        D[1] <- BUFOUT;
+        OUT -> b1.IN;    // qualified pin-to-pin target (joins BUFIN)
+        GND <- GND;
+    }
+}
