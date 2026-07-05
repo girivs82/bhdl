@@ -549,9 +549,16 @@ async fn main() -> Result<()> {
                 }
                 for (title, xl, yl, pts, note) in &su.curves {
                     println!("\n### {title}\n");
+                    // Inline SVG chart (GFM renders it); the table below
+                    // keeps the exact numbers at ~6 sample points.
+                    let svg = bhdl_synthesizer::supply_synthesis::curve_svg(title, xl, yl, pts);
+                    if !svg.is_empty() {
+                        println!("{svg}\n");
+                    }
                     println!("| {xl} | {yl} |");
                     println!("|---|---|");
-                    for (x, y) in pts {
+                    let step = (pts.len() / 5).max(1);
+                    for (x, y) in pts.iter().step_by(step) {
                         println!("| {x:.3} | {y:.1} |");
                     }
                     println!("\n_{note}_");

@@ -1466,10 +1466,11 @@ fn build_curves(
             (v_in - v_out) * i + v_in * i_q
         }
     };
-    let pts: Vec<(f64, f64)> = [0.2, 0.4, 0.6, 0.8, 1.0]
-        .iter()
-        .map(|frac| {
-            let i = frac * i_out;
+    // 25 samples 4%…100% load — dense enough for a smooth SVG polyline;
+    // the report table prints every 5th row for exact numbers.
+    let pts: Vec<(f64, f64)> = (1..=25)
+        .map(|k| {
+            let i = (k as f64 / 25.0) * i_out;
             let p = loss_at(i);
             (i, 100.0 * (v_out * i) / (v_out * i + p))
         })
@@ -1496,10 +1497,10 @@ fn build_curves(
         if let Some(dv_max) = ripple_max {
             let d_il = 0.3 * i_out;
             let c_req = d_il / (8.0 * f_sw * dv_max);
-            let pts: Vec<(f64, f64)> = [0.5, 0.75, 1.0, 1.5, 2.0]
-                .iter()
+            let pts: Vec<(f64, f64)> = (0..25)
                 .map(|k| {
-                    let cap = k * c_req;
+                    let mult = 0.5 + 1.5 * (k as f64 / 24.0);
+                    let cap = mult * c_req;
                     (cap * 1e6, 1000.0 * d_il / (8.0 * f_sw * cap))
                 })
                 .collect();
@@ -1614,4 +1615,83 @@ fn find_entity_decl(src: &str, name: &str) -> Option<usize> {
         }
     }
     None
+}
+
+/// Render one design curve as a self-contained inline SVG line chart for the
+/// synthesis report (GitHub-flavored Markdown renders inline SVG). Clean
+/// engineer style: light grid, labeled ticks, a single polyline with point
+/// markers. Pure data in, one string out — no external assets.
+pub fn curve_svg(title: &str, xl: &str, yl: &str, pts: &[(f64, f64)]) -> String {
+    if pts.len() < 2 {
+        return String::new();
+    }
+    let (w, h) = (640.0, 320.0);
+    let (ml, mr, mt, mb) = (64.0, 16.0, 34.0, 44.0); // margins
+    let (pw, ph) = (w - ml - mr, h - mt - mb);
+    let (mut x0, mut x1) = (f64::MAX, f64::MIN);
+    let (mut y0, mut y1) = (f64::MAX, f64::MIN);
+    for &(x, y) in pts {
+        x0 = x0.min(x); x1 = x1.max(x);
+        y0 = y0.min(y); y1 = y1.max(y);
+    }
+    if !(x1 > x0) { x1 = x0 + 1.0; }
+    // A little vertical headroom so the trace doesn't hug the frame.
+    let pad = ((y1 - y0) * 0.08).max(y1.abs() * 1e-6).max(1e-12);
+    y0 -= pad; y1 += pad;
+    let sx = |x: f64| ml + (x - x0) / (x1 - x0) * pw;
+    let sy = |y: f64| mt + (1.0 - (y - y0) / (y1 - y0)) * ph;
+    let fmt = |v: f64| -> String {
+        let a = v.abs();
+        if a >= 100.0 { format!("{v:.0}") }
+        else if a >= 1.0 { format!("{v:.1}") }
+        else { format!("{v:.3}") }
+    };
+    let esc = |t: &str| t.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+
+    let mut svg = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {w} {h}\" \
+         width=\"{w}\" height=\"{h}\" role=\"img\" aria-label=\"{}\">\n\
+         <style>text{{font:12px sans-serif;fill:#444}}.t{{font:13px sans-serif;font-weight:600;fill:#222}}</style>\n\
+         <rect x=\"0\" y=\"0\" width=\"{w}\" height=\"{h}\" fill=\"white\"/>\n\
+         <text class=\"t\" x=\"{}\" y=\"20\" text-anchor=\"middle\">{}</text>\n",
+        esc(title), w / 2.0, esc(title)
+    );
+    // Grid + ticks (5 divisions each way).
+    for k in 0..=5 {
+        let fx = x0 + (x1 - x0) * k as f64 / 5.0;
+        let px = sx(fx);
+        svg += &format!(
+            "<line x1=\"{px:.1}\" y1=\"{mt}\" x2=\"{px:.1}\" y2=\"{:.1}\" stroke=\"#e5e5e5\"/>\n\
+             <text x=\"{px:.1}\" y=\"{:.1}\" text-anchor=\"middle\">{}</text>\n",
+            mt + ph, mt + ph + 16.0, fmt(fx)
+        );
+        let fy = y0 + (y1 - y0) * k as f64 / 5.0;
+        let py = sy(fy);
+        svg += &format!(
+            "<line x1=\"{ml}\" y1=\"{py:.1}\" x2=\"{:.1}\" y2=\"{py:.1}\" stroke=\"#e5e5e5\"/>\n\
+             <text x=\"{:.1}\" y=\"{:.1}\" text-anchor=\"end\">{}</text>\n",
+            ml + pw, ml - 6.0, py + 4.0, fmt(fy)
+        );
+    }
+    // Axes frame + labels.
+    svg += &format!(
+        "<rect x=\"{ml}\" y=\"{mt}\" width=\"{pw}\" height=\"{ph}\" fill=\"none\" stroke=\"#999\"/>\n\
+         <text x=\"{:.1}\" y=\"{:.1}\" text-anchor=\"middle\">{}</text>\n\
+         <text x=\"14\" y=\"{:.1}\" text-anchor=\"middle\" transform=\"rotate(-90 14 {:.1})\">{}</text>\n",
+        ml + pw / 2.0, h - 8.0, esc(xl), mt + ph / 2.0, mt + ph / 2.0, esc(yl)
+    );
+    // The trace.
+    let path: Vec<String> = pts.iter().map(|&(x, y)| format!("{:.1},{:.1}", sx(x), sy(y))).collect();
+    svg += &format!(
+        "<polyline points=\"{}\" fill=\"none\" stroke=\"#2266cc\" stroke-width=\"2\"/>\n",
+        path.join(" ")
+    );
+    for &(x, y) in pts {
+        svg += &format!(
+            "<circle cx=\"{:.1}\" cy=\"{:.1}\" r=\"2.4\" fill=\"#2266cc\"/>\n",
+            sx(x), sy(y)
+        );
+    }
+    svg += "</svg>";
+    svg
 }

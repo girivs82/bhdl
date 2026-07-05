@@ -161,7 +161,10 @@ passes.
 - **S2** — drop `using:`: capability filter + topology rule over the scan
   index; report sections 2–4 (decision math + full candidate survey).
 - **S3** — `profile: cost` ranked by real jlcparts prices across the whole
-  derived BOM; charts (efficiency vs load, ripple vs C_out) as embedded SVG.
+  derived BOM; charts (efficiency vs load, ripple vs C_out) as embedded SVG
+  — BUILT: each design curve renders as a self-contained inline SVG line
+  chart (25-sample sweep of the loss/ripple closed forms) followed by a
+  compact exact-numbers table; GFM renders the SVG directly in the report.
 - **S4a — application-circuit emission (BUILT).** A regulator IC alone is
   not a supply: the desugar emits the datasheet support parts around the
   chosen part, shape-driven by its pins.
