@@ -1424,6 +1424,152 @@ pub fn check_interface_completeness(
     out
 }
 
+// ──────────────────── ERC022 — intent contradiction ────────────────────
+
+/// ERC022 — a filtering intent whose declared cutoff the PLACED values
+/// contradict. `for noise_filtering(cutoff: 10kHz)` on an RC whose placed
+/// R·C gives 1.59kHz is a stated intent the board does not implement —
+/// exactly the class of error a netlist-only tool cannot see.
+///
+/// v1 topology scope (Real-Data: anything more ambiguous SKIPS):
+/// - anchor on the annotated shunt CAPACITOR (one pin on a ground-class
+///   net, one on the hot net);
+/// - exactly one resistor on the hot net → RC low-pass, f_c = 1/(2πRC);
+/// - exactly one inductor and no resistor → LC, f_0 = 1/(2π√(LC));
+/// - anything else (no ground side, several/zero series parts, missing
+///   values, no parseable cutoff) → skip.
+/// More than ONE OCTAVE off the declared cutoff → Error with all numbers.
+pub fn check_intent_contradiction(
+    netlist: &Netlist,
+    analysis: &AnalysisResult,
+) -> Vec<DRCViolation> {
+    const FILTER_INTENTS: [&str; 4] =
+        ["noise_filtering", "anti_alias", "filter", "filtering"];
+    let mut out = Vec::new();
+    let members = net_members(netlist);
+
+    for (inst_id, inst) in &netlist.instances {
+        if is_phantom(netlist, inst) {
+            continue;
+        }
+        let Some(intent) = inst.attributes.get("intent_name") else { continue };
+        if !FILTER_INTENTS.contains(&intent.as_str()) {
+            continue;
+        }
+        if attr_of(netlist, analysis, inst, "component_class").as_deref() != Some("capacitor") {
+            continue; // anchor once, on the shunt cap of the network
+        }
+        // Declared cutoff: named param first, positional first-arg fallback.
+        let declared = ["intent_cutoff", "intent_param_0"]
+            .iter()
+            .find_map(|k| inst.attributes.get(*k).and_then(|v| parse_si_txt(v)))
+            .filter(|f| *f > 0.0);
+        let Some(f_decl) = declared else { continue };
+        let Some(c_val) = inst.attributes.get("value").and_then(|v| parse_si_txt(v))
+        else { continue };
+
+        // Shunt topology: one pin on ground, the other is the hot net.
+        let mut hot: Option<NetId> = None;
+        let mut grounded = false;
+        for pi in netlist.pin_instances.values() {
+            if pi.instance != inst_id {
+                continue;
+            }
+            let Some(nid) = pi.net else { continue };
+            match netlist.nets.get(nid).map(|n| &n.net_class) {
+                Some(NetClass::Ground) => grounded = true,
+                _ => hot = Some(nid),
+            }
+        }
+        let (true, Some(hot)) = (grounded, hot) else { continue };
+        // Only SIGNAL-net filters: a shunt cap on a declared power rail has
+        // no meaningful series R among net-local members (rails are
+        // low-impedance; a load resistor on the rail is not a filter
+        // element — that misread produced a false 48Hz \"cutoff\" from an
+        // LED resistor). Rail-filter verification needs ESR/source-impedance
+        // data this pass does not have (Real-Data: skip, don't guess).
+        if !is_signal_net(netlist, hot) {
+            continue;
+        }
+
+        // Series parts on the hot net (values via attr, entity fallback).
+        let (mut rs, mut ls): (Vec<f64>, Vec<f64>) = (Vec::new(), Vec::new());
+        for m in members.get(&hot).into_iter().flatten() {
+            if m.inst == inst.name {
+                continue;
+            }
+            let Some(other) = netlist.instances.values().find(|i| i.name == m.inst)
+            else { continue };
+            let class = attr_of(netlist, analysis, other, "component_class")
+                .unwrap_or_default();
+            let val = other.attributes.get("value").and_then(|v| parse_si_txt(v));
+            match (class.as_str(), val) {
+                ("resistor", Some(v)) if v > 0.0 => rs.push(v),
+                ("inductor", Some(v)) if v > 0.0 => ls.push(v),
+                _ => {}
+            }
+        }
+        let (f_actual, network) = match (rs.as_slice(), ls.as_slice()) {
+            ([r], []) => (
+                1.0 / (2.0 * std::f64::consts::PI * r * c_val),
+                format!("R={} × C={}", fmt_eng(*r, "Ω"), fmt_eng(c_val, "F")),
+            ),
+            ([], [l]) => (
+                1.0 / (2.0 * std::f64::consts::PI * (l * c_val).sqrt()),
+                format!("L={} × C={}", fmt_eng(*l, "H"), fmt_eng(c_val, "F")),
+            ),
+            _ => continue, // ambiguous network — never guess
+        };
+        let octaves = (f_actual / f_decl).log2().abs();
+        if octaves > 1.0 {
+            out.push(DRCViolation {
+                rule_id: "ERC022".into(),
+                rule_name: "Intent contradiction".into(),
+                category: RuleCategory::Electrical,
+                severity: ViolationSeverity::Error,
+                description: format!(
+                    "{} declares {intent}(cutoff: {}) but the placed network \
+                     {network} gives f_c = {} — {octaves:.1} octaves off the \
+                     stated intent",
+                    inst.name,
+                    fmt_eng(f_decl, "Hz"),
+                    fmt_eng(f_actual, "Hz"),
+                ),
+                location: ViolationLocation::Component(inst_id),
+                fix_suggestion: "re-size the network for the declared cutoff, or \
+                                 correct the intent annotation to what the board \
+                                 actually builds"
+                    .into(),
+                standard_reference: None,
+            });
+        }
+    }
+    out
+}
+
+/// Engineering-notation formatter for rule messages (1.59e3,"Hz" → "1.59kHz").
+fn fmt_eng(v: f64, unit: &str) -> String {
+    let (scale, prefix) = if v >= 1e6 {
+        (1e6, "M")
+    } else if v >= 1e3 {
+        (1e3, "k")
+    } else if v >= 1.0 {
+        (1.0, "")
+    } else if v >= 1e-3 {
+        (1e-3, "m")
+    } else if v >= 1e-6 {
+        (1e-6, "µ")
+    } else if v >= 1e-9 {
+        (1e-9, "n")
+    } else {
+        (1e-12, "p")
+    };
+    let n = v / scale;
+    let s = format!("{n:.2}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    format!("{s}{prefix}{unit}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

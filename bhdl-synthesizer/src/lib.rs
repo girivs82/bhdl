@@ -631,6 +631,15 @@ impl NetlistGenerator {
             info!("Component compatibility analysis phase completed");
         }
         
+        // Phase 12.5: Stamp intent attributes onto instances BEFORE the DRC
+        // phase — intent-aware rules (ERC022) read `intent_name` /
+        // `intent_<param>` from instance attributes. The CLI's post-
+        // generation stamping call remains for consumers of its own netlist
+        // copies; re-stamping the same values is idempotent.
+        if let Some(ft) = analysis.flow_tracker.as_ref() {
+            crate::intent_attribute_stamper::stamp_intent_attributes(&mut self.netlist, ft);
+        }
+
         // Phase 13: Run design rule checking (DRC)
         if self.config.enable_design_rule_check {
             info!("Starting design rule checking phase...");

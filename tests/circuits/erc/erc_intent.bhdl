@@ -1,0 +1,35 @@
+// ERC022 fixture — intent contradiction (docs/spec/ERC.md batch 3).
+// Two RC low-pass networks, each carrying a `for noise_filtering(cutoff:)`
+// annotation:
+//   r_bad/c_bad:   R=1kΩ, C=100nF → f_c = 1.59kHz, declared 10kHz —
+//                  2.65 octaves off → ERC022 Error (the numbers in the
+//                  finding).
+//   r_ok/c_ok:     R=1.6kΩ, C=100nF → f_c = 995Hz, declared 1kHz —
+//                  0.007 octaves → silent.
+// Expected: exactly 1 violation (1 error).
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+
+import { Mcu } from "tests/circuits/erc/erc_lib.bhdl";
+
+board ErcIntent {
+    power VCC_3V3 = 3.3V @ 1A;
+    ground GND;
+
+    m: Mcu(); @VCC_3V3 -> m.VCC; m.GND -> @GND;
+    // Keep the Mcu's other inputs quiet.
+    m.OUT1 -> m.IN1;
+    m.TX -> m.RX;
+
+    // Stated 10kHz, built 1.59kHz — the intent is contradicted.
+    m.IO -> r_bad: Res(1k).1; r_bad.2 -> c_bad: Cap(100nF).1; c_bad.2 -> @GND
+        for noise_filtering(cutoff: 10kHz);
+
+    // Stated 1kHz, built 995Hz — honest annotation, stays silent.
+    m.D_P -> r_ok: Res(1.6k).1; r_ok.2 -> c_ok: Cap(100nF).1; c_ok.2 -> @GND
+        for noise_filtering(cutoff: 1kHz);
+
+    // Rail decoupling keeps ERC020 quiet.
+    @VCC_3V3 -> c1: Cap(100nF).1; c1.2 -> @GND;
+}

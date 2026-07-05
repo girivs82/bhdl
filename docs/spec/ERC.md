@@ -5,7 +5,7 @@
 > (`BHDL_ERC_PLUGINS`), severity gating (`--erc-fail-on`), and reasoned
 > waivers (`erc_waive`), the T2 predicate extensions (exists / value-eq /
 > same_net), and the ERC024 absence ledger. Remaining specified-only:
-> ERC022/023 and the ERC019 solved-DC upgrade.
+> ERC023 and the ERC019 solved-DC upgrade; ERC022 is BUILT.
 
 ## 1. Why BHDL can check more than an EDA netlist tool
 
@@ -143,8 +143,16 @@ across all three tiers.
   voltage; signal nets skip per Real-Data) — catches the classic
   reversed-across-a-rail error. Upgrade to GLACIER-solved node voltages
   when the DC solution is plumbed into the DRC phase.
-- **ERC022** intent contradiction: `for noise_filtering(cutoff: X)` whose
-  RC against the surrounding network misses X by >an octave.
+- **ERC022** intent contradiction — BUILT (Error): a filtering intent
+  (`for noise_filtering(cutoff: X)` / `anti_alias` / `filter`) whose
+  declared cutoff the PLACED values contradict by more than one octave,
+  with all numbers in the finding ("R=1kΩ × C=100nF gives f_c = 1.59kHz —
+  2.7 octaves off"). v1 topology scope, everything else skips per
+  Real-Data: anchor on the annotated shunt cap on a SIGNAL net (rail caps
+  skip — a load resistor on a rail is not a filter element, and rail
+  filtering needs ESR/source-impedance data this pass lacks); exactly one
+  series R → RC, exactly one L → LC. Enabled by stamping intent
+  attributes during generation (phase 12.5), before the DRC phase.
 - **ERC023** precision-path grade mismatch: a `grade`-profile / 1% part fed
   through 5% parts on the same declared measurement path.
 - **ERC024** UNCHECKED visibility — BUILT (the absence ledger): every

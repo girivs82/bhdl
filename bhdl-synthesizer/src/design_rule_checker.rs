@@ -232,6 +232,12 @@ impl DesignRuleChecker {
                 "Half-wired I2C/SPI interfaces (data without clock, SDA without SCL)",
                 crate::erc::check_interface_completeness,
             ),
+            (
+                "ERC022",
+                "Intent contradiction",
+                "Declared filter cutoff vs the corner frequency the placed R/L/C actually build",
+                crate::erc::check_intent_contradiction,
+            ),
         ] {
             self.rules.push(DesignRule {
                 id: id.to_string(),
