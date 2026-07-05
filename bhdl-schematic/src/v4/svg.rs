@@ -76,11 +76,16 @@ struct Svg {
     /// Wire segments: labels avoid them; routes may CROSS at a cost
     /// (a dotless crossing is legitimate schematic vocabulary).
     wire_segs: Vec<Rect>,
+    /// Reserved WIRING CHANNELS: the stage declares its loop-under lane
+    /// and riser lane up front. Labels must stay out (a label parked in a
+    /// channel blocks the route that needs it — the chicken-and-egg that
+    /// killed tidy routing); wires route through them freely.
+    channels: Vec<Rect>,
 }
 
 impl Svg {
     fn new() -> Self {
-        Svg { body: String::new(), w: 0.0, h: 0.0, solids: Vec::new(), wire_segs: Vec::new() }
+        Svg { body: String::new(), w: 0.0, h: 0.0, solids: Vec::new(), wire_segs: Vec::new(), channels: Vec::new() }
     }
     fn solid(&mut self, r: Rect) {
         self.solids.push(r);
@@ -142,7 +147,8 @@ impl Svg {
             let y = ay + dy;
             let r = Self::text_rect(t, x, y);
             let clear = !self.solids.iter().any(|s| s.overlaps(&r.pad(1.0)))
-                && !self.wire_segs.iter().any(|w| w.overlaps(&r));
+                && !self.wire_segs.iter().any(|w| w.overlaps(&r))
+                && !self.channels.iter().any(|c| c.overlaps(&r));
             if clear {
                 self.text(x, y, t, cls);
                 return;
@@ -169,7 +175,8 @@ impl Svg {
             let y = ay + dy;
             let r = Rect { x0: x - 1.0, y0: y - 10.0, x1: x + w, y1: y + 16.0 };
             let clear = !self.solids.iter().any(|s| s.overlaps(&r.pad(1.0)))
-                && !self.wire_segs.iter().any(|wr| wr.overlaps(&r));
+                && !self.wire_segs.iter().any(|wr| wr.overlaps(&r))
+                && !self.channels.iter().any(|c| c.overlaps(&r));
             if clear {
                 self.text(x, y, l1, c1);
                 if !l2.is_empty() {
@@ -196,7 +203,8 @@ impl Svg {
             let y = ay + dy;
             let r = Self::text_rect(t, x, y);
             let clear = !self.solids.iter().any(|s| s.overlaps(&r.pad(1.0)))
-                && !self.wire_segs.iter().any(|w| w.overlaps(&r));
+                && !self.wire_segs.iter().any(|w| w.overlaps(&r))
+                && !self.channels.iter().any(|c| c.overlaps(&r));
             if clear {
                 self.text(x, y, t, cls);
                 return;
@@ -259,7 +267,7 @@ impl Svg {
                 if blocked(nx, ny) && !(nx == tx && ny == ty) {
                     continue;
                 }
-                let bend = if nd as u8 != d { 5 } else { 0 };
+                let bend = if nd as u8 != d { 12 } else { 0 };
                 let nc = c + 1 + bend + wire_cost(nx, ny);
                 let key = (nx, ny, nd as u8);
                 if nc < best.get(&key).copied().unwrap_or(u32::MAX) {
@@ -312,6 +320,94 @@ impl Svg {
                 || (ortho.last().unwrap().1 - p.1).abs() > 0.01
             {
                 ortho.push(p);
+            }
+        }
+        // ── POST-ROUTE STRAIGHTENING — the part local search can't do. ──
+        // A shortest path is happy with stair-steps; a designer slides the
+        // whole segment. Repeatedly collapse Z-jogs (H-V-H / V-H-V with
+        // parallel outer segments) by moving the middle onto the far
+        // segment's axis when the swept corridor is clear of SOLIDS
+        // (crossing wires stays legal). Also drop zero-length and merge
+        // collinear runs. Runs to fixpoint.
+        let seg_clear = |a: (f64, f64), b: (f64, f64), solids: &[Rect]| -> bool {
+            let r = Rect {
+                x0: a.0.min(b.0) - 2.0,
+                y0: a.1.min(b.1) - 2.0,
+                x1: a.0.max(b.0) + 2.0,
+                y1: a.1.max(b.1) + 2.0,
+            };
+            if let Some(hit) = solids.iter().find(|s2| s2.overlaps(&r)) {
+                if std::env::var("BHDL_V4_DEBUG").is_ok() {
+                    eprintln!("[v4-route]   corridor {a:?}->{b:?} blocked by {hit:?}");
+                }
+                return false;
+            }
+            true
+        };
+        let solids_for_route: Vec<Rect> = self
+            .solids
+            .iter()
+            .filter(|r| !r.pad(2.0).hit(from.0, from.1) && !r.pad(2.0).hit(to.0, to.1))
+            .cloned()
+            .collect();
+        for _pass in 0..8 {
+            let mut changed = false;
+            // Merge collinear + drop duplicates first.
+            let mut merged: Vec<(f64, f64)> = vec![ortho[0]];
+            for &p in &ortho[1..] {
+                let l = *merged.last().unwrap();
+                if (l.0 - p.0).abs() < 0.01 && (l.1 - p.1).abs() < 0.01 {
+                    continue;
+                }
+                if merged.len() >= 2 {
+                    let ll = merged[merged.len() - 2];
+                    let col = (ll.0 - l.0).abs() < 0.01 && (l.0 - p.0).abs() < 0.01
+                        || (ll.1 - l.1).abs() < 0.01 && (l.1 - p.1).abs() < 0.01;
+                    if col {
+                        *merged.last_mut().unwrap() = p;
+                        continue;
+                    }
+                }
+                merged.push(p);
+            }
+            ortho = merged;
+            // Z-collapse: for interior corner pairs (i, i+1), if the
+            // segments before and after are PARALLEL, slide the middle
+            // segment onto the LATER one's axis (biasing jogs toward the
+            // destination) when both replacement corridors are clear.
+            let n = ortho.len();
+            if n >= 4 {
+                'scan: for i in 1..n - 2 {
+                    let (a, b, c, d) = (ortho[i - 1], ortho[i], ortho[i + 1], ortho[i + 2]);
+                    let ab_h = (a.1 - b.1).abs() < 0.01;
+                    let cd_h = (c.1 - d.1).abs() < 0.01;
+                    if ab_h != cd_h {
+                        continue;
+                    }
+                    // Dogleg removal: slide the MIDDLE segment onto an END.
+                    // (The first cut of this pass computed (b.x, d.y) —
+                    // which keeps the middle where it was: a no-op. The
+                    // correct corners are the two L-paths between a and d.)
+                    for nb in [(d.0, a.1), (a.0, d.1)] {
+                        if std::env::var("BHDL_V4_DEBUG").is_ok() {
+                            eprintln!(
+                                "[v4-route] try collapse i={i} a={a:?} d={d:?} nb={nb:?}: leg1={} leg2={}",
+                                seg_clear(a, nb, &solids_for_route),
+                                seg_clear(nb, d, &solids_for_route)
+                            );
+                        }
+                        if seg_clear(a, nb, &solids_for_route)
+                            && seg_clear(nb, d, &solids_for_route)
+                        {
+                            ortho.splice(i..i + 2, [nb]);
+                            changed = true;
+                            break 'scan;
+                        }
+                    }
+                }
+            }
+            if !changed {
+                break;
             }
         }
         self.wire(&ortho);
@@ -563,6 +659,22 @@ fn draw_stage(
     let stage = &plan.stages[stage_idx];
     let spine = y0 + 120.0;
     let mut x = 40.0;
+
+    // Channel reservation (micro-PnR): the FB return's natural lane is
+    // the MID-NODE ROW — it threads the gap between the divider's top and
+    // bottom legs by construction (that is where the mid node lives), and
+    // it is the straight shot back to the FB stub. Reserve it across the
+    // stage BEFORE any label is placed, so no label squats in the lane and
+    // forces the route into stair-steps between the shunt columns.
+    if !stage.loops.is_empty() {
+        let lane_y = spine + 50.0; // the divider mid row
+        svg.channels.push(Rect {
+            x0: 40.0,
+            y0: lane_y - 6.0,
+            x1: 40.0 + 1400.0,
+            y1: lane_y + 6.0,
+        });
+    }
 
     // Source flag + bus (+ solved operating point when GLACIER ran).
     svg.rail_flag(x, spine, &net_label(netlist, stage.source_rail), true);
