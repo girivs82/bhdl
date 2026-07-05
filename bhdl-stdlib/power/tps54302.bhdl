@@ -36,6 +36,9 @@ entity TPS54302() {
     // divider; the top leg follows from V_OUT and the 0.6V reference. Read
     // by the S4 supply application-circuit emitter.
     attribute fb_divider_bottom = 10kΩ;
+    // Display form of the FB relation for the schematic sheet (datasheet
+    // Eq. 1). Placeholders: {R1}/{R2} = top/bottom leg, {VREF} = the ref.
+    attribute fb_equation = "VOUT = {VREF}*(1 + {R1}/{R2})";
 
     // Control-loop stability constants (datasheet SLVSDG6C). The part is
     // INTERNALLY COMPENSATED — TI does not publish the internal comp R/C, so

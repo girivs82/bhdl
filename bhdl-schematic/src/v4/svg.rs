@@ -150,6 +150,39 @@ impl Svg {
         }
         self.text(ax + 8.0, ay + 4.0, t, cls);
     }
+    /// Place a refdes+value PAIR as one block: the two lines search for a
+    /// combined slot beside the symbol and move TOGETHER — independent
+    /// placement let the sim annotation steal the prime slot and scatter a
+    /// resistor's value away from its body.
+    fn place_label_pair(&mut self, ax: f64, ay: f64, l1: &str, c1: &str, l2: &str, c2: &str) {
+        const CAND: [(f64, f64); 6] = [
+            (10.0, 0.0),
+            (10.0, -14.0),
+            (-10.0, 0.0),
+            (10.0, 14.0),
+            (-10.0, -14.0),
+            (10.0, 28.0),
+        ];
+        let w = 6.8 * l1.len().max(l2.len()) as f64;
+        for (dx, dy) in CAND {
+            let x = if dx < 0.0 { ax + dx - w } else { ax + dx };
+            let y = ay + dy;
+            let r = Rect { x0: x - 1.0, y0: y - 10.0, x1: x + w, y1: y + 16.0 };
+            let clear = !self.solids.iter().any(|s| s.overlaps(&r.pad(1.0)))
+                && !self.wire_segs.iter().any(|wr| wr.overlaps(&r));
+            if clear {
+                self.text(x, y, l1, c1);
+                if !l2.is_empty() {
+                    self.text(x, y + 13.0, l2, c2);
+                }
+                return;
+            }
+        }
+        self.text(ax + 10.0, ay, l1, c1);
+        if !l2.is_empty() {
+            self.text(ax + 10.0, ay + 13.0, l2, c2);
+        }
+    }
     /// Place a SIM decoration near its subject or not at all: only the
     /// close candidate slots are tried — a solved value that drifts into
     /// another net's lane reads as annotating THAT net (misplacement is
@@ -514,11 +547,7 @@ fn draw_shunt(svg: &mut Svg, netlist: &Netlist, decor: &SheetDecor, inst: &str, 
     };
     svg.wire(&[(x, sym_bot), (x, sym_bot + 10.0)]);
     svg.ground(x, sym_bot + 10.0);
-    svg.place_label(x, sym_top + 8.0, label_of(decor, inst), "ref");
-    let v = value_of(netlist, inst);
-    if !v.is_empty() {
-        svg.place_label(x, sym_top + 24.0, &v, "val");
-    }
+    svg.place_label_pair(x, sym_top + 8.0, label_of(decor, inst), "ref", &value_of(netlist, inst), "val");
 }
 
 /// Render one stage; returns the height consumed.
@@ -827,11 +856,14 @@ fn draw_stage(
                     "inductor" => svg.ind_h(x + 7.0, spine),
                     _ => svg.box_h(x + 7.0, spine, 56.0),
                 }
-                svg.place_label(x + 14.0, spine - 16.0, label_of(decor, inst), "ref");
-                let v = value_of(netlist, inst);
-                if !v.is_empty() {
-                    svg.place_label(x + 14.0, spine + 18.0, &v, "val");
-                }
+                svg.place_label_pair(
+                    x + 28.0,
+                    spine - 20.0,
+                    label_of(decor, inst),
+                    "ref",
+                    &value_of(netlist, inst),
+                    "val",
+                );
                 if let Some(txt) = decor
                     .sim
                     .and_then(|s| s.instance_currents.get(inst))
@@ -869,7 +901,14 @@ fn draw_stage(
         svg.wire(&[(dx, spine), (dx, spine + 10.0)]);
         // top leg
         svg.res_v(dx, spine + 10.0);
-        svg.place_label(dx, spine + 24.0, label_of(decor, l.insts.first().map(String::as_str).unwrap_or("")), "ref");
+        svg.place_label_pair(
+            dx + 9.0,
+            spine + 24.0,
+            label_of(decor, l.insts.first().map(String::as_str).unwrap_or("")),
+            "ref",
+            &value_of(netlist, l.insts.first().map(String::as_str).unwrap_or("")),
+            "val",
+        );
         let mid = spine + 50.0;
         svg.dot(dx, mid);
         // Solved FB-node voltage (the reference the loop regulates to).
@@ -896,17 +935,17 @@ fn draw_stage(
             }
         }
         let top_val = value_of(netlist, l.insts.first().map(String::as_str).unwrap_or(""));
-        if !top_val.is_empty() {
-            svg.place_label(dx, spine + 34.0, &top_val, "val");
-        }
         // bottom leg
         if l.insts.len() > 1 {
             svg.res_v(dx, mid);
-            svg.place_label(dx, mid + 14.0, label_of(decor, &l.insts[1]), "ref");
-            let bot_val = value_of(netlist, &l.insts[1]);
-            if !bot_val.is_empty() {
-                svg.place_label(dx, mid + 28.0, &bot_val, "val");
-            }
+            svg.place_label_pair(
+                dx + 9.0,
+                mid + 14.0,
+                label_of(decor, &l.insts[1]),
+                "ref",
+                &value_of(netlist, &l.insts[1]),
+                "val",
+            );
             svg.wire(&[(dx, mid + 40.0), (dx, mid + 48.0)]);
             svg.ground(dx, mid + 48.0);
 
@@ -947,28 +986,51 @@ fn draw_stage(
                             .and_then(|name| sim.net_voltages.get(&name).copied())
                     })
                 });
-            if let (Some(vref), Some(rt), Some(rb)) =
-                (vref, parse_val(&top_val), parse_val(&value_of(netlist, &l.insts[1])))
-            {
-                if rb > 0.0 && vref > 0.0 {
-                    let vout = vref * (1.0 + rt / rb);
-                    let r1 = label_of(decor, l.insts.first().map(String::as_str).unwrap_or(""));
-                    let r2 = label_of(decor, &l.insts[1]);
-                    let eq_y = mid + 48.0 + 40.0;
-                    svg.text(dx - 60.0, eq_y, &format!("VOUT = VREF·(1 + {r1}/{r2})"), "val");
-                    svg.text(
-                        dx - 60.0,
-                        eq_y + 14.0,
-                        &format!(
-                            "= {}·(1 + {}/{}) = {:.2}V",
-                            fmt_sim_v(vref),
-                            top_val,
-                            value_of(netlist, &l.insts[1]),
-                            vout
-                        ),
-                        "val",
-                    );
-                }
+            // The equation comes from the PART (stdlib-declared
+            // `fb_equation` template) — divider relations differ across
+            // parts (an LM317 is 1.25·(1+R2/R1)+IADJ·R2), so a hardcoded
+            // form would be wrong ink under the wrong IC. No declaration →
+            // no equation (Real-Data). Line 1 substitutes refdes, line 2
+            // substitutes values + the reference, and cites the RAIL's own
+            // voltage as the result rather than evaluating anything.
+            let template = netlist
+                .instances
+                .values()
+                .find(|i| i.name == l.into_inst)
+                .and_then(|i| i.attributes.get("fb_equation").cloned())
+                .map(|t| t.trim_matches('"').to_string());
+            if let (Some(tpl), Some(vref)) = (template, vref) {
+                let bot_val = value_of(netlist, &l.insts[1]);
+                let r1 = label_of(decor, l.insts.first().map(String::as_str).unwrap_or(""));
+                let r2 = label_of(decor, &l.insts[1]);
+                let line1 = tpl
+                    .replace("{R1}", r1)
+                    .replace("{R2}", r2)
+                    .replace("{VREF}", "VREF")
+                    .replace('*', "·");
+                let rail_v = netlist
+                    .nets
+                    .get(stage.target_rail)
+                    .map(|n| match n.net_class {
+                        NetClass::Power { voltage, .. } => voltage,
+                        _ => 0.0,
+                    })
+                    .unwrap_or(0.0);
+                let line2 = format!(
+                    "{} = {:.2}V",
+                    tpl.split('=')
+                        .nth(1)
+                        .unwrap_or("")
+                        .trim()
+                        .replace("{R1}", &top_val)
+                        .replace("{R2}", &bot_val)
+                        .replace("{VREF}", &fmt_sim_v(vref))
+                        .replace('*', "·"),
+                    rail_v
+                );
+                let eq_y = mid + 48.0 + 40.0;
+                svg.text(dx - 60.0, eq_y, &line1, "val");
+                svg.text(dx - 60.0, eq_y + 14.0, &format!("= {line2}"), "val");
             }
         }
         // Return path policy: AVOID crossings when possible; cross only

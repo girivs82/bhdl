@@ -91,6 +91,10 @@ entity TPS54331(
     // Datasheet SLVS839 efficiency curves: ~89% typical mid-load for the
     // 12V→3.3V application (Fig. 1). Read by the S4b input-draw stamp.
     attribute efficiency = 89%;
+    // 0.8V internal reference (SLVS839 §7.3.2) + the sheet's display form
+    // of the FB relation (datasheet Eq. 1).
+    attribute feedback_voltage = 0.8V;
+    attribute fb_equation = "VOUT = {VREF}*(1 + {R1}/{R2})";
 
     // Reactive + divider sizing. Runs once per instance, after
     // constructor binding, before expansion materialisation. Each line
