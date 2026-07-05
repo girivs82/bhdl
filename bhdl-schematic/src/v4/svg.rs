@@ -46,15 +46,44 @@ const IC_H: f64 = 100.0;
 const SERIES_W: f64 = 70.0;
 const STAGE_GAP: f64 = 300.0;
 
+#[derive(Clone, Copy, Debug)]
+struct Rect {
+    x0: f64,
+    y0: f64,
+    x1: f64,
+    y1: f64,
+}
+
+impl Rect {
+    fn pad(&self, p: f64) -> Rect {
+        Rect { x0: self.x0 - p, y0: self.y0 - p, x1: self.x1 + p, y1: self.y1 + p }
+    }
+    fn hit(&self, x: f64, y: f64) -> bool {
+        x >= self.x0 && x <= self.x1 && y >= self.y0 && y <= self.y1
+    }
+    fn overlaps(&self, o: &Rect) -> bool {
+        self.x0 < o.x1 && o.x0 < self.x1 && self.y0 < o.y1 && o.y0 < self.y1
+    }
+}
+
 struct Svg {
     body: String,
     w: f64,
     h: f64,
+    /// Solid obstacles (symbol glyphs, text): wires must route AROUND,
+    /// labels must not overlap.
+    solids: Vec<Rect>,
+    /// Wire segments: labels avoid them; routes may CROSS at a cost
+    /// (a dotless crossing is legitimate schematic vocabulary).
+    wire_segs: Vec<Rect>,
 }
 
 impl Svg {
     fn new() -> Self {
-        Svg { body: String::new(), w: 0.0, h: 0.0 }
+        Svg { body: String::new(), w: 0.0, h: 0.0, solids: Vec::new(), wire_segs: Vec::new() }
+    }
+    fn solid(&mut self, r: Rect) {
+        self.solids.push(r);
     }
     fn grow(&mut self, x: f64, y: f64) {
         self.w = self.w.max(x);
@@ -70,6 +99,15 @@ impl Svg {
         for &(x, y) in pts {
             self.grow(x + 20.0, y + 20.0);
         }
+        for w in pts.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            self.wire_segs.push(Rect {
+                x0: a.0.min(b.0) - 1.0,
+                y0: a.1.min(b.1) - 1.0,
+                x1: a.0.max(b.0) + 1.0,
+                y1: a.1.max(b.1) + 1.0,
+            });
+        }
     }
     fn dot(&mut self, x: f64, y: f64) {
         let _ = writeln!(self.body, r##"<circle cx="{x:.1}" cy="{y:.1}" r="3" fill="#222"/>"##);
@@ -78,9 +116,137 @@ impl Svg {
         let esc = t.replace('&', "&amp;").replace('<', "&lt;");
         let _ = writeln!(self.body, r#"<text x="{x:.1}" y="{y:.1}" class="{cls}">{esc}</text>"#);
         self.grow(x + 8.0 * t.len() as f64, y + 14.0);
+        self.solid(Rect { x0: x - 1.0, y0: y - 10.0, x1: x + 6.8 * t.len() as f64, y1: y + 3.0 });
+    }
+    fn text_rect(t: &str, x: f64, y: f64) -> Rect {
+        Rect { x0: x - 1.0, y0: y - 10.0, x1: x + 6.8 * t.len() as f64, y1: y + 3.0 }
+    }
+    /// PLACE a label: try candidate offsets around the anchor until one
+    /// neither overlaps a solid nor sits on a wire — no more fixed-offset
+    /// collisions. Falls back to the first candidate if all collide
+    /// (never drops information).
+    fn place_label(&mut self, ax: f64, ay: f64, t: &str, cls: &str) {
+        const CAND: [(f64, f64); 8] = [
+            (8.0, 4.0),
+            (8.0, -8.0),
+            (8.0, 16.0),
+            (-8.0, 4.0),   // left-of (adjusted by len below)
+            (8.0, 28.0),
+            (-8.0, -8.0),
+            (20.0, 4.0),
+            (8.0, 40.0),
+        ];
+        let len_w = 6.8 * t.len() as f64;
+        for (dx, dy) in CAND {
+            let x = if dx < 0.0 { ax + dx - len_w } else { ax + dx };
+            let y = ay + dy;
+            let r = Self::text_rect(t, x, y);
+            let clear = !self.solids.iter().any(|s| s.overlaps(&r.pad(1.0)))
+                && !self.wire_segs.iter().any(|w| w.overlaps(&r));
+            if clear {
+                self.text(x, y, t, cls);
+                return;
+            }
+        }
+        self.text(ax + 8.0, ay + 4.0, t, cls);
+    }
+    /// Route an orthogonal wire from `from` to `to`: BFS on an 8px grid.
+    /// Solids are WALLS (minus the endpoints' own hosts); existing wires
+    /// cross at a cost; bends cost extra. Falls back to a plain L if the
+    /// search fails — drawn anyway, never dropped.
+    fn route(&mut self, from: (f64, f64), to: (f64, f64)) {
+        const G: f64 = 8.0;
+        let snap = |v: f64| (v / G).round() as i32;
+        let (sx, sy) = (snap(from.0), snap(from.1));
+        let (tx, ty) = (snap(to.0), snap(to.1));
+        let solids: Vec<Rect> = self
+            .solids
+            .iter()
+            .filter(|r| !r.pad(2.0).hit(from.0, from.1) && !r.pad(2.0).hit(to.0, to.1))
+            .cloned()
+            .collect();
+        let blocked = |x: i32, y: i32| -> bool {
+            let (px, py) = (x as f64 * G, y as f64 * G);
+            solids.iter().any(|r| r.pad(3.0).hit(px, py))
+        };
+        let wire_cost = |x: i32, y: i32| -> u32 {
+            let (px, py) = (x as f64 * G, y as f64 * G);
+            if self.wire_segs.iter().any(|r| r.hit(px, py)) { 6 } else { 0 }
+        };
+        use std::cmp::Reverse;
+        use std::collections::{BinaryHeap, HashMap as Map};
+        let mut best: Map<(i32, i32, u8), u32> = Map::new();
+        let mut prev: Map<(i32, i32, u8), (i32, i32, u8)> = Map::new();
+        let mut heap = BinaryHeap::new();
+        for d in 0..4u8 {
+            heap.push(Reverse((0u32, sx, sy, d)));
+            best.insert((sx, sy, d), 0);
+        }
+        const DIRS: [(i32, i32); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+        let mut goal: Option<(i32, i32, u8)> = None;
+        let mut expanded = 0usize;
+        while let Some(Reverse((c, x, y, d))) = heap.pop() {
+            if best.get(&(x, y, d)).copied().unwrap_or(u32::MAX) < c {
+                continue;
+            }
+            if x == tx && y == ty {
+                goal = Some((x, y, d));
+                break;
+            }
+            expanded += 1;
+            if expanded > 40_000 {
+                break;
+            }
+            for (nd, (dx, dy)) in DIRS.iter().enumerate() {
+                let (nx, ny) = (x + dx, y + dy);
+                if (nx - sx).abs() > 200 || (ny - sy).abs() > 200 {
+                    continue;
+                }
+                if blocked(nx, ny) && !(nx == tx && ny == ty) {
+                    continue;
+                }
+                let bend = if nd as u8 != d { 5 } else { 0 };
+                let nc = c + 1 + bend + wire_cost(nx, ny);
+                let key = (nx, ny, nd as u8);
+                if nc < best.get(&key).copied().unwrap_or(u32::MAX) {
+                    best.insert(key, nc);
+                    prev.insert(key, (x, y, d));
+                    heap.push(Reverse((nc, nx, ny, nd as u8)));
+                }
+            }
+        }
+        let pts: Vec<(f64, f64)> = if let Some(mut cur) = goal {
+            let mut cells = vec![(cur.0, cur.1)];
+            while let Some(&p) = prev.get(&cur) {
+                if (p.0, p.1) != (*cells.last().unwrap()) {
+                    cells.push((p.0, p.1));
+                }
+                if p.0 == sx && p.1 == sy {
+                    break;
+                }
+                cur = p;
+            }
+            cells.push((sx, sy));
+            cells.reverse();
+            // Collapse collinear runs.
+            let mut out: Vec<(f64, f64)> = vec![from];
+            for w in cells.windows(3) {
+                let (a, b, c2) = (w[0], w[1], w[2]);
+                let col = (a.0 == b.0 && b.0 == c2.0) || (a.1 == b.1 && b.1 == c2.1);
+                if !col {
+                    out.push((b.0 as f64 * G, b.1 as f64 * G));
+                }
+            }
+            out.push(to);
+            out
+        } else {
+            vec![from, (from.0, to.1), to]
+        };
+        self.wire(&pts);
     }
     /// Ground symbol, stem entering at (x, y) from above.
     fn ground(&mut self, x: f64, y: f64) {
+        self.solid(Rect { x0: x - 13.0, y0: y + 9.0, x1: x + 13.0, y1: y + 22.0 });
         self.wire(&[(x, y), (x, y + 10.0)]);
         for (i, w) in [12.0, 8.0, 4.0].iter().enumerate() {
             let yy = y + 10.0 + i as f64 * 5.0;
@@ -100,6 +266,7 @@ impl Svg {
     }
     /// Capacitor drawn vertically: wire in at top (x, y), out at (x, y+34).
     fn cap_v(&mut self, x: f64, y: f64) {
+        self.solid(Rect { x0: x - 12.0, y0: y + 11.0, x1: x + 12.0, y1: y + 23.0 });
         self.wire(&[(x, y), (x, y + 13.0)]);
         self.wire(&[(x - 11.0, y + 13.0), (x + 11.0, y + 13.0)]);
         self.wire(&[(x - 11.0, y + 21.0), (x + 11.0, y + 21.0)]);
@@ -107,6 +274,7 @@ impl Svg {
     }
     /// Resistor drawn vertically (IEC box): in top (x,y), out (x, y+40).
     fn res_v(&mut self, x: f64, y: f64) {
+        self.solid(Rect { x0: x - 9.0, y0: y + 7.0, x1: x + 9.0, y1: y + 33.0 });
         self.wire(&[(x, y), (x, y + 8.0)]);
         let _ = writeln!(
             self.body,
@@ -118,6 +286,7 @@ impl Svg {
     }
     /// Inductor drawn horizontally: in left (x,y), out (x+56, y).
     fn ind_h(&mut self, x: f64, y: f64) {
+        self.solid(Rect { x0: x + 7.0, y0: y - 7.0, x1: x + 49.0, y1: y + 2.0 });
         self.wire(&[(x, y), (x + 8.0, y)]);
         for k in 0..4 {
             let cx = x + 8.0 + 5.0 + k as f64 * 10.0;
@@ -131,6 +300,7 @@ impl Svg {
     }
     /// Diode drawn vertically, anode at top (x, y), cathode at (x, y+34).
     fn diode_v(&mut self, x: f64, y: f64) {
+        self.solid(Rect { x0: x - 10.0, y0: y + 9.0, x1: x + 10.0, y1: y + 25.0 });
         self.wire(&[(x, y), (x, y + 10.0)]);
         let _ = writeln!(
             self.body,
@@ -143,6 +313,7 @@ impl Svg {
     /// Diode drawn vertically with CATHODE at top (x, y) — the catch-diode
     /// orientation: current flows from ground up into the node.
     fn diode_v_up(&mut self, x: f64, y: f64) {
+        self.solid(Rect { x0: x - 10.0, y0: y + 9.0, x1: x + 10.0, y1: y + 25.0 });
         self.wire(&[(x, y), (x, y + 10.0)]);
         self.wire(&[(x - 9.0, y + 10.0), (x + 9.0, y + 10.0)]);
         let _ = writeln!(
@@ -154,6 +325,7 @@ impl Svg {
     }
     /// Capacitor drawn horizontally: in left (x, y), out at (x+34, y).
     fn cap_h(&mut self, x: f64, y: f64) {
+        self.solid(Rect { x0: x + 11.0, y0: y - 12.0, x1: x + 23.0, y1: y + 12.0 });
         self.wire(&[(x, y), (x + 13.0, y)]);
         self.wire(&[(x + 13.0, y - 11.0), (x + 13.0, y + 11.0)]);
         self.wire(&[(x + 21.0, y - 11.0), (x + 21.0, y + 11.0)]);
@@ -161,6 +333,7 @@ impl Svg {
     }
     /// Generic 2-terminal fallback (horizontal box).
     fn box_h(&mut self, x: f64, y: f64, w: f64) {
+        self.solid(Rect { x0: x, y0: y - 10.0, x1: x + w, y1: y + 10.0 });
         let _ = writeln!(
             self.body,
             r##"<rect x="{:.1}" y="{:.1}" width="{:.1}" height="18" fill="none" stroke="#222" stroke-width="1.6"/>"##,
@@ -274,10 +447,10 @@ fn draw_shunt(svg: &mut Svg, netlist: &Netlist, decor: &SheetDecor, inst: &str, 
     };
     svg.wire(&[(x, sym_bot), (x, sym_bot + 10.0)]);
     svg.ground(x, sym_bot + 10.0);
-    svg.text(x + 8.0, sym_top + 12.0, label_of(decor, inst), "ref");
+    svg.place_label(x, sym_top + 8.0, label_of(decor, inst), "ref");
     let v = value_of(netlist, inst);
     if !v.is_empty() {
-        svg.text(x + 8.0, sym_top + 26.0, &v, "val");
+        svg.place_label(x, sym_top + 24.0, &v, "val");
     }
 }
 
@@ -332,6 +505,7 @@ fn draw_stage(
                     r##"<rect x="{bx:.1}" y="{by:.1}" width="{IC_W:.1}" height="{IC_H:.1}" fill="#f7f7f2" stroke="#222" stroke-width="1.8"/>"##
                 );
                 svg.grow(bx + IC_W, by + IC_H);
+                svg.solid(Rect { x0: bx, y0: by, x1: bx + IC_W, y1: by + IC_H });
                 svg.text(bx + 8.0, by - 6.0, label_of(decor, inst), "ref");
                 // Part name inside.
                 let part = netlist
@@ -512,7 +686,7 @@ fn draw_stage(
                         match side {
                             PinSide::Left => {
                                 let hook_x = bx - 16.0;
-                                svg.wire(&[(sx, sy), (hook_x, sy), (hook_x, spine)]);
+                                svg.route((sx, sy), (hook_x, spine));
                                 svg.dot(hook_x, spine);
                             }
                             _ => {
@@ -572,10 +746,10 @@ fn draw_stage(
                     };
                     svg.wire(&[(cap_x + sym_w, bridge_y), (tap_x, bridge_y), (tap_x, out_y)]);
                     svg.dot(tap_x, out_y);
-                    svg.text(cap_x - 8.0, bridge_y - 8.0, label_of(decor, &strap.inst), "ref");
+                    svg.place_label(cap_x - 8.0, bridge_y - 14.0, label_of(decor, &strap.inst), "ref");
                     let v = value_of(netlist, &strap.inst);
                     if !v.is_empty() {
-                        svg.text(cap_x - 8.0, bridge_y + 18.0, &v, "val");
+                        svg.place_label(cap_x - 8.0, bridge_y + 14.0, &v, "val");
                     }
                 }
             }
@@ -586,13 +760,13 @@ fn draw_stage(
                     "inductor" => svg.ind_h(x + 7.0, spine),
                     _ => svg.box_h(x + 7.0, spine, 56.0),
                 }
-                svg.text(x + 14.0, spine - 12.0, label_of(decor, inst), "ref");
+                svg.place_label(x + 14.0, spine - 16.0, label_of(decor, inst), "ref");
                 let v = value_of(netlist, inst);
                 if !v.is_empty() {
-                    svg.text(x + 14.0, spine + 22.0, &v, "val");
+                    svg.place_label(x + 14.0, spine + 18.0, &v, "val");
                 }
                 if let Some(i) = decor.sim.and_then(|s| s.instance_currents.get(inst)) {
-                    svg.text(x + 14.0, spine + 36.0, &format!("{:.2}A", i.abs()), "sim");
+                    svg.place_label(x + 14.0, spine + 32.0, &format!("{:.2}A", i.abs()), "sim");
                 }
                 let _ = &mid_shunt_zone;
                 x += 7.0 + 56.0;
@@ -624,7 +798,7 @@ fn draw_stage(
         svg.wire(&[(dx, spine), (dx, spine + 10.0)]);
         // top leg
         svg.res_v(dx, spine + 10.0);
-        svg.text(dx + 10.0, spine + 28.0, label_of(decor, l.insts.first().map(String::as_str).unwrap_or("")), "ref");
+        svg.place_label(dx, spine + 24.0, label_of(decor, l.insts.first().map(String::as_str).unwrap_or("")), "ref");
         let mid = spine + 50.0;
         svg.dot(dx, mid);
         // Solved FB-node voltage (the reference the loop regulates to).
@@ -647,13 +821,13 @@ fn draw_stage(
                 .and_then(|nid| netlist.nets.get(nid).and_then(|n| n.name.clone()))
                 .and_then(|name| sim.net_voltages.get(&name).copied());
             if let Some(v) = fb_net_v {
-                svg.text(dx + 26.0, mid + 4.0, &format!("= {}", fmt_sim_v(v)), "sim");
+                svg.place_label(dx + 12.0, mid, &format!("= {}", fmt_sim_v(v)), "sim");
             }
         }
         // bottom leg
         if l.insts.len() > 1 {
             svg.res_v(dx, mid);
-            svg.text(dx + 10.0, mid + 18.0, label_of(decor, &l.insts[1]), "ref");
+            svg.place_label(dx, mid + 14.0, label_of(decor, &l.insts[1]), "ref");
             svg.wire(&[(dx, mid + 40.0), (dx, mid + 48.0)]);
             svg.ground(dx, mid + 48.0);
         }
@@ -665,17 +839,11 @@ fn draw_stage(
         // and no far-side detour (the earlier loop-under exited RIGHT,
         // adding travel away from the pin it was connecting).
         if let Some((fx, fy)) = fb_stub {
-            let flank_x = dx - 26.0; // left of the divider, right of the last shunt
-            let clear_y = spine + 160.0; // below every ground symbol
-            let up_x = ic_right + 10.0; // clear channel right of the IC
-            svg.wire(&[
-                (dx, mid),
-                (flank_x, mid),
-                (flank_x, clear_y),
-                (up_x, clear_y),
-                (up_x, fy),
-                (fx, fy),
-            ]);
+            // Routed by the micro-PnR: symbols and labels are walls, plain
+            // wires crossable at cost, bends penalized — the near-flank
+            // loop-under emerges from the costs instead of hand-picked
+            // coordinates that break when anchors move.
+            svg.route((dx, mid), (fx, fy));
         }
         x += SHUNT_PITCH;
     }
