@@ -124,6 +124,7 @@ entity TPS54302() {
         // legitimately wire either.
         check {
             require connected(BOOT) else "BOOT needs the 100nF bootstrap cap to SW/PH (datasheet 7.3.1) — the high-side FET cannot drive without it";
+            require c_boot.value == self.bootstrap_capacitor else "the bootstrap cap must be the datasheet 100nF (7.3.1) — other values compromise high-side gate drive";
         }
     }
 }

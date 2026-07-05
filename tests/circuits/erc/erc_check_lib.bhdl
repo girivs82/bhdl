@@ -2,6 +2,28 @@
 // connection rules travel with the entity, exactly like its §4 stress model.
 // EN floating is undefined on real LDOs of this shape (LP2985 family) — the
 // part itself says so.
+// Exercises the extended T2 predicates: exists(child), <child>.value
+// comparison against a datasheet attribute, and same_net(P1, P2) pin
+// strapping. MODE strapped to GND = forced-PWM (the datasheet says so).
+entity CheckedBuck() {
+    pin VIN: power in;
+    pin GND: ground;
+    pin SW: power out;
+    pin BOOT: signal inout;
+    pin MODE: signal in;
+
+    attribute component_class = "voltage_regulator";
+    attribute bootstrap_capacitor = 100nF;
+
+    simulation {
+        check {
+            require exists(c_boot) else "add the bootstrap cap (100nF, BOOT to SW)";
+            require c_boot.value == self.bootstrap_capacitor else "bootstrap cap must be the datasheet 100nF";
+            require same_net(MODE, GND) else "MODE must be strapped to GND (forced-PWM) on this design";
+        }
+    }
+}
+
 entity CheckedLdo() {
     pin VIN: power in;
     pin VOUT: power out;

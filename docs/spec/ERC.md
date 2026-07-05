@@ -3,8 +3,9 @@
 > **Status:** all three tiers are BUILT — T1 batches 1–2 plus ERC019/ERC026,
 > T2 part-carried `check {}` rules (ERC025), T3 policy plugins
 > (`BHDL_ERC_PLUGINS`), severity gating (`--erc-fail-on`), and reasoned
-> waivers (`erc_waive`). Remaining specified-only: ERC022/023/024, the
-> ERC019 solved-DC upgrade, and the T2 predicate extensions.
+> waivers (`erc_waive`), and the T2 predicate extensions (exists /
+> value-eq / same_net). Remaining specified-only: ERC022/023/024 and the
+> ERC019 solved-DC upgrade.
 
 ## 1. Why BHDL can check more than an EDA netlist tool
 
@@ -50,10 +51,13 @@ entity LP2985(…) {
 
 A `check { }` block sits beside `stress { }` inside `simulation { }` and
 holds `require <predicate> else "MSG";` statements. The predicate grammar is
-the ordinary expression grammar plus `connected(PIN)`, which the ERC
-evaluator substitutes from the netlist (connected = on a net with at least
-one OTHER member). `self.<attribute>` resolves through the entity's
-datasheet attributes; multiple conditions are written as multiple requires —
+the ordinary expression grammar plus the netlist predicates
+`connected(PIN)` (on a net with at least one OTHER member),
+`exists(CHILD)` (support part reachable by local name), and
+`same_net(P1, P2)` (pin strapping). `self.<attribute>` resolves through
+the entity's datasheet attributes and `<child>.value` through the support
+part's snapped value, with `==`/`!=` comparing at engineering tolerance;
+multiple conditions are written as multiple requires —
 each failure is its own finding with its own vendor message (ERC025, Error,
 located on the instance; the message doubles as the fix suggestion). A
 predicate that cannot be resolved (unknown pin, unresolvable identifier)
@@ -145,9 +149,15 @@ across all three tiers.
   through 5% parts on the same declared measurement path.
 - **ERC024** UNCHECKED visibility: stress/requirement axes that skipped for
   missing data surfaced as Info findings (the absence ledger).
-- **ERC025** T2 surface: entity-carried `check {}` blocks — BUILT (see §2).
-  Future predicate extensions: `exists(child)`, child-value comparisons
-  (`C_boot.value == 100nF`), `connected(PIN, @RAIL)` rail-targeted form.
+- **ERC025** T2 surface: entity-carried `check {}` blocks — BUILT (see §2),
+  including the predicate extensions: `exists(CHILD)` (expansion child /
+  S4-stamped sibling / board-level bare name), `<child>.value` comparisons
+  against datasheet attributes with engineering equality (`==`/`!=` at
+  1e-6 relative tolerance — `c_boot.value == self.bootstrap_capacitor`),
+  and `same_net(P1, P2)` pin strapping (`same_net(MODE, GND)`). A
+  rail-targeted `connected(PIN, @RAIL)` form was considered and REJECTED:
+  a part cannot know board rail names — strapping intent is expressible
+  as `same_net` against the part's own pins.
 - **ERC026** interface completeness — BUILT: I2C half-wired (SDA xor SCL
   connected — Error on the instance, both directions); SPI data pin
   connected without SCK/SCLK (Error) and clock connected with neither

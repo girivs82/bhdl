@@ -1002,58 +1002,96 @@ pub fn check_missing_decoupling(
 
 // ───────────────────────── ERC025 — part-carried checks (T2) ─────────────────────────
 
-/// Substitute every `connected(PIN)` term in a check predicate with `1`/`0`
-/// resolved from the netlist. Returns `None` (Real-Data skip) when the
-/// referenced pin is not declared on the instance's entity — a vendor rule
-/// naming a pin the part doesn't have cannot be honestly evaluated.
-///
-/// "Connected" means the pin landed on a net AND that net has at least one
-/// OTHER member (a pin alone on a net is electrically floating; ERC008
-/// separately flags the likely-typo'd net name).
-fn substitute_connected(
+/// Substitute every `NAME(args…)` call of one predicate function in a check
+/// condition with `1`/`0`. `eval` answers per call: `Some(bool)` substitutes,
+/// `None` makes the whole require skip (Real-Data — an unanswerable
+/// reference, e.g. a pin the entity doesn't declare, is never guessed).
+/// Non-call mentions of the name (identifiers merely containing it) pass
+/// through untouched.
+fn substitute_fn(
     condition: &str,
-    inst_pins: &HashMap<String, bool>,
+    fname: &str,
+    mut eval: impl FnMut(&[&str]) -> Option<bool>,
 ) -> Option<String> {
     let mut out = String::with_capacity(condition.len());
     let mut rest = condition;
-    while let Some(pos) = rest.find("connected") {
-        let after = &rest[pos + "connected".len()..];
+    while let Some(pos) = rest.find(fname) {
+        let after = &rest[pos + fname.len()..];
         let after_trim = after.trim_start();
-        if !after_trim.starts_with('(') {
-            // Not a call — copy through and keep scanning.
-            out.push_str(&rest[..pos + "connected".len()]);
+        // Must be a standalone identifier followed by `(`.
+        let prev_ok = rest[..pos]
+            .chars()
+            .last()
+            .map(|c| !c.is_alphanumeric() && c != '_' && c != '.')
+            .unwrap_or(true);
+        let next_ok = after
+            .chars()
+            .next()
+            .map(|c| !c.is_alphanumeric() && c != '_')
+            .unwrap_or(true);
+        if !prev_ok || !next_ok || !after_trim.starts_with('(') {
+            out.push_str(&rest[..pos + fname.len()]);
             rest = after;
             continue;
         }
         let close = after_trim.find(')')?;
-        let pin = after_trim[1..close].trim();
-        let val = inst_pins.get(pin)?; // pin not on entity → skip rule
+        let args: Vec<&str> = after_trim[1..close]
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let val = eval(&args)?;
         out.push_str(&rest[..pos]);
-        out.push_str(if *val { "1" } else { "0" });
+        out.push_str(if val { "1" } else { "0" });
         rest = &after_trim[close + 1..];
     }
     out.push_str(rest);
     Some(out)
 }
 
-/// Numeric context for the non-`connected()` remainder of a check predicate:
-/// `self.<attr>` resolves through the entity's datasheet attributes. Anything
-/// else is unresolvable here — the require skips (Real-Data Policy).
+/// Substitute every `connected(PIN)` term with `1`/`0` from the netlist.
+/// "Connected" means the pin landed on a net AND that net has at least one
+/// OTHER member (a pin alone on a net is electrically floating; ERC008
+/// separately flags the likely-typo'd net name). Unknown pin → `None`.
+fn substitute_connected(
+    condition: &str,
+    inst_pins: &HashMap<String, bool>,
+) -> Option<String> {
+    substitute_fn(condition, "connected", |args| match args {
+        [pin] => inst_pins.get(*pin).copied(),
+        _ => None,
+    })
+}
+
+/// Numeric context for the non-predicate remainder of a check condition:
+/// `self.<attr>` resolves through the entity's datasheet attributes and
+/// `<child>.value` through the instance's support parts (expansion children
+/// and S4-stamped siblings first, then a board-level instance of that bare
+/// name). Anything else is unresolvable — the require skips (Real-Data
+/// Policy).
 struct CheckCtx<'a> {
     attrs: HashMap<String, &'a str>,
+    child_values: HashMap<String, f64>,
 }
 
 impl crate::design_evaluator::EvalLookup for CheckCtx<'_> {
     fn lookup(&self, name: &str) -> Result<f64, crate::design_evaluator::DesignEvalError> {
         let name = name.trim();
-        if let Some(("self", field)) = name.split_once('.') {
-            if let Some(v) = self.attrs.get(field).and_then(|s| parse_si_txt(s)) {
-                return Ok(v);
+        if let Some((ns, field)) = name.split_once('.') {
+            if ns == "self" {
+                if let Some(v) = self.attrs.get(field).and_then(|s| parse_si_txt(s)) {
+                    return Ok(v);
+                }
+            } else if field == "value" {
+                if let Some(v) = self.child_values.get(ns) {
+                    return Ok(*v);
+                }
             }
         }
         Err(crate::design_evaluator::DesignEvalError::EvalError(format!(
             "identifier '{name}' is not resolvable in a check block \
-             (recognised: connected(PIN), self.<attribute>)"
+             (recognised: connected(PIN), exists(CHILD), same_net(P1, P2), \
+             self.<attribute>, <child>.value)"
         )))
     }
 }
@@ -1084,8 +1122,9 @@ pub fn check_part_carried(
             continue;
         }
 
-        // This instance's declared pins → connected?
+        // This instance's declared pins → connected? / → net?
         let mut inst_pins: HashMap<String, bool> = HashMap::new();
+        let mut pin_nets: HashMap<String, Option<NetId>> = HashMap::new();
         for pi in netlist.pin_instances.values() {
             if pi.instance != inst_id {
                 continue;
@@ -1103,6 +1142,39 @@ pub fn check_part_carried(
             // A pin can appear once per instantiation path; connected wins.
             let e = inst_pins.entry(pin.name.clone()).or_insert(false);
             *e = *e || connected;
+            let n = pin_nets.entry(pin.name.clone()).or_insert(None);
+            if n.is_none() {
+                *n = pi.net;
+            }
+        }
+
+        // Support parts reachable by LOCAL name: expansion children and
+        // S4-stamped siblings ({inst}_c_boot with expansion_parent) take
+        // precedence; a board-level instance of the bare name (the
+        // hand-wired `c_boot: Cap(100nF)` idiom) is the fallback.
+        let mut children: HashMap<String, f64> = HashMap::new();
+        let val_of = |c: &bhdl_netlist::instance::Instance| {
+            c.attributes.get("value").and_then(|v| parse_si_txt(v))
+        };
+        for c in netlist.instances.values() {
+            if c.attributes.get("expansion_parent").map(String::as_str)
+                != Some(inst.name.as_str())
+            {
+                continue;
+            }
+            if let Some(local) = c.name.strip_prefix(&format!("{}_", inst.name)) {
+                if let Some(v) = val_of(c) {
+                    children.insert(local.to_string(), v);
+                }
+            }
+        }
+        for c in netlist.instances.values() {
+            if is_phantom(netlist, c) || children.contains_key(&c.name) {
+                continue;
+            }
+            if let Some(v) = val_of(c) {
+                children.entry(c.name.clone()).or_insert(v);
+            }
         }
 
         let ctx = CheckCtx {
@@ -1111,13 +1183,35 @@ pub fn check_part_carried(
                 .get(&module.name)
                 .map(|m| m.iter().map(|(k, v)| (k.clone(), v.as_str())).collect())
                 .unwrap_or_default(),
+            child_values: children.clone(),
         };
 
         for chk in &recipe.checks {
-            let Some(substituted) = substitute_connected(&chk.condition, &inst_pins) else {
+            let substituted = substitute_connected(&chk.condition, &inst_pins)
+                .and_then(|c| {
+                    // exists(CHILD) — always answerable from the netlist.
+                    substitute_fn(&c, "exists", |args| match args {
+                        [name] => Some(children.contains_key(*name)),
+                        _ => None,
+                    })
+                })
+                .and_then(|c| {
+                    // same_net(P1, P2) — both pins on the SAME net (a pin
+                    // strapped to another, e.g. CS tied to GND). Unknown
+                    // pin → skip; a floating pin is honestly `false`.
+                    substitute_fn(&c, "same_net", |args| match args {
+                        [a, b] => {
+                            let na = pin_nets.get(*a)?;
+                            let nb = pin_nets.get(*b)?;
+                            Some(matches!((na, nb), (Some(x), Some(y)) if x == y))
+                        }
+                        _ => None,
+                    })
+                });
+            let Some(substituted) = substituted else {
                 log::debug!(
                     "ERC025: check on {} ({}) skipped — predicate '{}' references \
-                     an unknown pin",
+                     an unknown pin or malformed call",
                     inst.name, module.name, chk.condition
                 );
                 continue;
@@ -1353,10 +1447,51 @@ mod tests {
     }
 
     #[test]
+    fn generic_predicate_substitution() {
+        // exists(): always answerable.
+        let kids: std::collections::HashSet<&str> = ["c_boot"].into_iter().collect();
+        let sub = substitute_fn("exists(c_boot)", "exists", |a| match a {
+            [n] => Some(kids.contains(n)),
+            _ => None,
+        });
+        assert_eq!(sub.as_deref(), Some("1"));
+        // Two-arg same_net with mixed answers.
+        let sub = substitute_fn("same_net(MODE, GND)", "same_net", |a| match a {
+            [x, y] => Some(x == &"MODE" && y == &"GND"),
+            _ => None,
+        });
+        assert_eq!(sub.as_deref(), Some("1"));
+        // Identifier merely containing the name is untouched.
+        let sub = substitute_fn("coexists(x) + 1", "exists", |_| Some(true));
+        assert_eq!(sub.as_deref(), Some("coexists(x) + 1"));
+        // Unanswerable call skips the whole predicate.
+        assert_eq!(substitute_fn("exists(?)", "exists", |_| None), None);
+    }
+
+    #[test]
+    fn check_ctx_resolves_child_values_and_equality() {
+        use crate::design_evaluator::evaluate_text;
+        let ctx = CheckCtx {
+            attrs: HashMap::from([("bootstrap_capacitor".to_string(), "100nF")]),
+            child_values: HashMap::from([("c_boot".to_string(), 1.0e-7)]),
+        };
+        // Engineering equality across parse/format round-trips.
+        assert_eq!(
+            evaluate_text("c_boot.value == self.bootstrap_capacitor", &ctx).unwrap(),
+            1.0
+        );
+        assert_eq!(
+            evaluate_text("c_boot.value != self.bootstrap_capacitor", &ctx).unwrap(),
+            0.0
+        );
+    }
+
+    #[test]
     fn check_ctx_resolves_self_attrs() {
         use crate::design_evaluator::{evaluate_text, EvalLookup};
         let ctx = CheckCtx {
             attrs: HashMap::from([("input_voltage_max".to_string(), "28V")]),
+            child_values: HashMap::new(),
         };
         assert_eq!(evaluate_text("self.input_voltage_max >= 12", &ctx).unwrap(), 1.0);
         assert!(ctx.lookup("vin").is_err()); // bare names unresolvable here

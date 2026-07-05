@@ -1,15 +1,21 @@
 // ERC025 fixture — part-carried `check { }` rules (docs/spec/ERC.md, T2).
 // CheckedLdo ships its own connection requirements; the board violates them
 // on u1 (EN left floating) and satisfies them on u2 (EN tied to the input
-// rail). Expected findings: 2 × ERC025 Error on u1 (EN + VOUT) plus the
-// generic ERC006 Warning on the same floating EN — the T1 rule warns
-// generically, the part-carried rule escalates with the vendor's message.
-// u2 stays silent.
+// rail). CheckedBuck exercises the extended predicates (exists /
+// <child>.value equality / same_net): b1 violates two, b2 all-clean.
+// Expected findings (6 total: 4 errors, 2 warnings):
+//   ERC025 Error ×2  u1: connected(EN), connected(VOUT)
+//   ERC025 Error     b1: c_boot.value == self.bootstrap_capacitor (220nF)
+//   ERC025 Error     b1: same_net(MODE, GND) (MODE floating)
+//   ERC006 Warning×2 u1.EN, b1.MODE — the T1 rule warns generically, the
+//                    part-carried rule escalates with the vendor's message.
+// u2 and b2 stay silent; b1's exists(c_boot) PASSES via the
+// expansion_parent-stamped local name.
 
 import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
 
-import { CheckedLdo } from "tests/circuits/erc/erc_check_lib.bhdl";
+import { CheckedLdo, CheckedBuck } from "tests/circuits/erc/erc_check_lib.bhdl";
 
 board ErcCheck {
     power VCC_5V = 5V @ 1A;
@@ -22,6 +28,21 @@ board ErcCheck {
     u2: CheckedLdo(); @VCC_5V -> u2.VIN; u2.GND -> @GND;
     @VCC_5V -> u2.EN;
     u2.VOUT -> r_load: Res(10k).1; r_load.2 -> @GND;
+
+    // b1: exercises the extended predicates and VIOLATES two of them —
+    // bootstrap cap present but the WRONG value (220nF vs the datasheet
+    // 100nF → value-eq ERC025), MODE left floating (same_net ERC025 +
+    // the generic ERC006 Warning). exists(c_boot) itself passes via the
+    // expansion_parent-stamped local name, the S4-emitter idiom.
+    b1: CheckedBuck(); @VCC_5V -> b1.VIN; b1.GND -> @GND;
+    b1.BOOT -> b1_c_boot: Cap(220nF, expansion_parent="b1").1;
+    b1_c_boot.2 -> b1.SW;
+
+    // b2: satisfies all three — correct 100nF, MODE strapped to ground.
+    b2: CheckedBuck(); @VCC_5V -> b2.VIN; b2.GND -> @GND;
+    b2.BOOT -> b2_c_boot: Cap(100nF, expansion_parent="b2").1;
+    b2_c_boot.2 -> b2.SW;
+    b2.MODE -> @GND;
 
     // Rail decoupling keeps ERC020 quiet.
     @VCC_5V -> c1: Cap(100nF).1; c1.2 -> @GND;

@@ -372,6 +372,13 @@ fn strip_outer_parens(s: &str) -> &str {
     s
 }
 
+/// Relative-tolerance equality (1e-6, absolute floor 1e-15) — `100nF ==
+/// 100nF` must hold across parse/format round-trips.
+fn approx_eq(a: f64, b: f64) -> bool {
+    let scale = a.abs().max(b.abs()).max(1e-15);
+    (a - b).abs() <= 1e-6 * scale
+}
+
 fn apply_binop(op: SyntaxKind, lhs: f64, rhs: f64) -> Result<f64, DesignEvalError> {
     match op {
         SyntaxKind::PLUS    => Ok(lhs + rhs),
@@ -382,6 +389,10 @@ fn apply_binop(op: SyntaxKind, lhs: f64, rhs: f64) -> Result<f64, DesignEvalErro
         SyntaxKind::R_ANGLE => Ok(if lhs >  rhs { 1.0 } else { 0.0 }),
         SyntaxKind::LTEQ    => Ok(if lhs <= rhs { 1.0 } else { 0.0 }),
         SyntaxKind::GTEQ    => Ok(if lhs >= rhs { 1.0 } else { 0.0 }),
+        // Engineering equality: nominal values compared through snapping /
+        // unit round-trips need a relative tolerance, not bit equality.
+        SyntaxKind::EQEQ => Ok(if approx_eq(lhs, rhs) { 1.0 } else { 0.0 }),
+        SyntaxKind::NEQ  => Ok(if approx_eq(lhs, rhs) { 0.0 } else { 1.0 }),
         other => Err(DesignEvalError::EvalError(
             format!("unsupported binary operator {other:?}"))),
     }
