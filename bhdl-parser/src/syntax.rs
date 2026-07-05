@@ -399,6 +399,7 @@ pub enum SyntaxKind {
     STRESS_ASSIGNMENT,     // <child_name>.<axis> = <expr>;
     MODEL_BLOCK,           // model { ... }   (§5 device-model surface)
     MODEL_NODE_STMT,       // node <net> <source|draws> = <expr>;
+    CHECK_BLOCK,           // check { require <pred> else "MSG"; } (T2/ERC025)
 
     // Power-supply synthesis (docs/spec/Power_Supply_Synthesis.md §2):
     // supply @TARGET from @SOURCE { ripple_max: 30mV; using: TPS54331; ... }

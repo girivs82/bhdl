@@ -999,3 +999,188 @@ pub fn check_missing_decoupling(
     }
     out
 }
+
+// ───────────────────────── ERC025 — part-carried checks (T2) ─────────────────────────
+
+/// Substitute every `connected(PIN)` term in a check predicate with `1`/`0`
+/// resolved from the netlist. Returns `None` (Real-Data skip) when the
+/// referenced pin is not declared on the instance's entity — a vendor rule
+/// naming a pin the part doesn't have cannot be honestly evaluated.
+///
+/// "Connected" means the pin landed on a net AND that net has at least one
+/// OTHER member (a pin alone on a net is electrically floating; ERC008
+/// separately flags the likely-typo'd net name).
+fn substitute_connected(
+    condition: &str,
+    inst_pins: &HashMap<String, bool>,
+) -> Option<String> {
+    let mut out = String::with_capacity(condition.len());
+    let mut rest = condition;
+    while let Some(pos) = rest.find("connected") {
+        let after = &rest[pos + "connected".len()..];
+        let after_trim = after.trim_start();
+        if !after_trim.starts_with('(') {
+            // Not a call — copy through and keep scanning.
+            out.push_str(&rest[..pos + "connected".len()]);
+            rest = after;
+            continue;
+        }
+        let close = after_trim.find(')')?;
+        let pin = after_trim[1..close].trim();
+        let val = inst_pins.get(pin)?; // pin not on entity → skip rule
+        out.push_str(&rest[..pos]);
+        out.push_str(if *val { "1" } else { "0" });
+        rest = &after_trim[close + 1..];
+    }
+    out.push_str(rest);
+    Some(out)
+}
+
+/// Numeric context for the non-`connected()` remainder of a check predicate:
+/// `self.<attr>` resolves through the entity's datasheet attributes. Anything
+/// else is unresolvable here — the require skips (Real-Data Policy).
+struct CheckCtx<'a> {
+    attrs: HashMap<String, &'a str>,
+}
+
+impl crate::design_evaluator::EvalLookup for CheckCtx<'_> {
+    fn lookup(&self, name: &str) -> Result<f64, crate::design_evaluator::DesignEvalError> {
+        let name = name.trim();
+        if let Some(("self", field)) = name.split_once('.') {
+            if let Some(v) = self.attrs.get(field).and_then(|s| parse_si_txt(s)) {
+                return Ok(v);
+            }
+        }
+        Err(crate::design_evaluator::DesignEvalError::EvalError(format!(
+            "identifier '{name}' is not resolvable in a check block \
+             (recognised: connected(PIN), self.<attribute>)"
+        )))
+    }
+}
+
+/// ERC025 — part-carried `check { require … else "…"; }` rules
+/// (docs/spec/ERC.md T2). The part's connection requirements are device IP
+/// and travel with the entity like its stress model; each failed require is
+/// one finding on the instance, with the vendor's message as the fix. A
+/// require whose predicate cannot be resolved (unknown pin, unresolvable
+/// identifier) is skipped, never guessed.
+pub fn check_part_carried(
+    netlist: &Netlist,
+    analysis: &AnalysisResult,
+) -> Vec<DRCViolation> {
+    let mut out = Vec::new();
+    if analysis.stress_recipes.is_empty() {
+        return out;
+    }
+    let members = net_members(netlist);
+
+    for (inst_id, inst) in &netlist.instances {
+        if is_phantom(netlist, inst) {
+            continue;
+        }
+        let Some(module) = netlist.modules.get(inst.definition) else { continue };
+        let Some(recipe) = analysis.stress_recipes.get(&module.name) else { continue };
+        if recipe.checks.is_empty() {
+            continue;
+        }
+
+        // This instance's declared pins → connected?
+        let mut inst_pins: HashMap<String, bool> = HashMap::new();
+        for pi in netlist.pin_instances.values() {
+            if pi.instance != inst_id {
+                continue;
+            }
+            let Some(pin) = netlist.pins.get(pi.pin_def) else { continue };
+            let connected = pi
+                .net
+                .map(|nid| {
+                    members
+                        .get(&nid)
+                        .map(|m| m.len() >= 2)
+                        .unwrap_or(false)
+                })
+                .unwrap_or(false);
+            // A pin can appear once per instantiation path; connected wins.
+            let e = inst_pins.entry(pin.name.clone()).or_insert(false);
+            *e = *e || connected;
+        }
+
+        let ctx = CheckCtx {
+            attrs: analysis
+                .entity_attribute_index
+                .get(&module.name)
+                .map(|m| m.iter().map(|(k, v)| (k.clone(), v.as_str())).collect())
+                .unwrap_or_default(),
+        };
+
+        for chk in &recipe.checks {
+            let Some(substituted) = substitute_connected(&chk.condition, &inst_pins) else {
+                log::debug!(
+                    "ERC025: check on {} ({}) skipped — predicate '{}' references \
+                     an unknown pin",
+                    inst.name, module.name, chk.condition
+                );
+                continue;
+            };
+            let holds = match crate::design_evaluator::evaluate_text(&substituted, &ctx) {
+                Ok(v) => v != 0.0,
+                Err(e) => {
+                    log::debug!(
+                        "ERC025: check on {} ({}) skipped — '{}' unresolvable: {e:?}",
+                        inst.name, module.name, chk.condition
+                    );
+                    continue; // Real-Data Policy: absence of data ≠ pass/fail
+                }
+            };
+            if !holds {
+                out.push(DRCViolation {
+                    rule_id: "ERC025".into(),
+                    rule_name: "Part-carried check".into(),
+                    category: RuleCategory::Electrical,
+                    severity: ViolationSeverity::Error,
+                    description: format!(
+                        "{} ({}): require {} failed — {}",
+                        inst.name, module.name, chk.condition.trim(), chk.message
+                    ),
+                    location: ViolationLocation::Component(inst_id),
+                    fix_suggestion: chk.message.clone(),
+                    standard_reference: None,
+                });
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn connected_substitution() {
+        let pins = HashMap::from([("EN".to_string(), true), ("BOOT".to_string(), false)]);
+        assert_eq!(substitute_connected("connected(EN)", &pins).as_deref(), Some("1"));
+        assert_eq!(substitute_connected("connected(BOOT)", &pins).as_deref(), Some("0"));
+        assert_eq!(
+            substitute_connected("connected( EN ) + connected(BOOT)", &pins).as_deref(),
+            Some("1 + 0")
+        );
+        // Unknown pin → Real-Data skip.
+        assert_eq!(substitute_connected("connected(NOPIN)", &pins), None);
+        // Non-call mention passes through untouched.
+        assert_eq!(
+            substitute_connected("self.connected_max > 2", &pins).as_deref(),
+            Some("self.connected_max > 2")
+        );
+    }
+
+    #[test]
+    fn check_ctx_resolves_self_attrs() {
+        use crate::design_evaluator::{evaluate_text, EvalLookup};
+        let ctx = CheckCtx {
+            attrs: HashMap::from([("input_voltage_max".to_string(), "28V")]),
+        };
+        assert_eq!(evaluate_text("self.input_voltage_max >= 12", &ctx).unwrap(), 1.0);
+        assert!(ctx.lookup("vin").is_err()); // bare names unresolvable here
+    }
+}

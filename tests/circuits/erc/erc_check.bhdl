@@ -1,0 +1,28 @@
+// ERC025 fixture — part-carried `check { }` rules (docs/spec/ERC.md, T2).
+// CheckedLdo ships its own connection requirements; the board violates them
+// on u1 (EN left floating) and satisfies them on u2 (EN tied to the input
+// rail). Expected findings: 2 × ERC025 Error on u1 (EN + VOUT) plus the
+// generic ERC006 Warning on the same floating EN — the T1 rule warns
+// generically, the part-carried rule escalates with the vendor's message.
+// u2 stays silent.
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+
+import { CheckedLdo } from "tests/circuits/erc/erc_check_lib.bhdl";
+
+board ErcCheck {
+    power VCC_5V = 5V @ 1A;
+    ground GND;
+
+    // u1: VIOLATES its own checks — EN floating, VOUT driving nothing.
+    u1: CheckedLdo(); @VCC_5V -> u1.VIN; u1.GND -> @GND;
+
+    // u2: satisfies them — EN tied to the input rail, VOUT loaded.
+    u2: CheckedLdo(); @VCC_5V -> u2.VIN; u2.GND -> @GND;
+    @VCC_5V -> u2.EN;
+    u2.VOUT -> r_load: Res(10k).1; r_load.2 -> @GND;
+
+    // Rail decoupling keeps ERC020 quiet.
+    @VCC_5V -> c1: Cap(100nF).1; c1.2 -> @GND;
+}

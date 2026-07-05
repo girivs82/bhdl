@@ -1,0 +1,19 @@
+// Carries a part-authored `check { }` block (T2/ERC025): the vendor's own
+// connection rules travel with the entity, exactly like its §4 stress model.
+// EN floating is undefined on real LDOs of this shape (LP2985 family) — the
+// part itself says so.
+entity CheckedLdo() {
+    pin VIN: power in;
+    pin VOUT: power out;
+    pin GND: ground;
+    pin EN: signal in;
+
+    attribute component_class = "voltage_regulator";
+
+    simulation {
+        check {
+            require connected(EN) else "EN must not float — tie it to VIN or drive it";
+            require connected(VOUT) else "VOUT unconnected — the regulator drives nothing";
+        }
+    }
+}

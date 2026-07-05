@@ -1,9 +1,9 @@
 # ERC — Electrical Rules Above the Netlist
 
-> **Status:** T1 batch 1 (ERC001–005) and batch 2 (ERC006–020, the subset not
-> requiring new grammar) are BUILT. T2 (part-carried `check {}` rules) and T3
-> (policy plugins) are specified here and land with the extensions milestone,
-> together with severity gating and waivers.
+> **Status:** T1 batch 1 (ERC001–005), batch 2 (ERC006–020, the subset not
+> requiring new grammar), severity gating (`--erc-fail-on`), reasoned waivers
+> (`erc_waive`), and T2 part-carried `check {}` rules (ERC025) are BUILT.
+> T3 (policy plugins) and the remaining batch-3 rules are specified here.
 
 ## 1. Why BHDL can check more than an EDA netlist tool
 
@@ -31,27 +31,43 @@ part-specific or org-specific knowledge. Individually enable/disable-able;
 thresholds configurable via `configurable_params`. Hardcoding these is
 CORRECT: they are the semantics of electricity, not policy.
 
-**T2 — part-carried rules (HDL, the §4 pattern).** A part's connection
-requirements are device IP and travel WITH the entity, exactly like its
-stress model:
+**T2 — part-carried rules (HDL, the §4 pattern) — BUILT (ERC025).** A part's
+connection requirements are device IP and travel WITH the entity, exactly
+like its stress model:
 
 ```bhdl
-entity TPS54331(…) {
+entity LP2985(…) {
     …
     simulation {
         check {
             require connected(EN)
-                else "EN must not float — tie to VIN or drive it";
-            require exists(C_boot) && C_boot.value == 100nF
-                else "BOOT needs the datasheet 100nF bootstrap cap";
+                else "EN (ON/OFF) must not float — tie it to VIN or drive it";
         }
     }
 }
 ```
 
-Evaluated per instance with net context. Adding a part to the stdlib adds its
-rules; no central registry to update. (Same argument that made the chooser's
-candidate set "the catalogue is the universe".)
+A `check { }` block sits beside `stress { }` inside `simulation { }` and
+holds `require <predicate> else "MSG";` statements. The predicate grammar is
+the ordinary expression grammar plus `connected(PIN)`, which the ERC
+evaluator substitutes from the netlist (connected = on a net with at least
+one OTHER member). `self.<attribute>` resolves through the entity's
+datasheet attributes; multiple conditions are written as multiple requires —
+each failure is its own finding with its own vendor message (ERC025, Error,
+located on the instance; the message doubles as the fix suggestion). A
+predicate that cannot be resolved (unknown pin, unresolvable identifier)
+SKIPS per the Real-Data Policy. Recipes ride the same extraction/import
+plumbing as §4 stress recipes — one vendor-model surface per entity.
+
+Evaluated per instance with net context. Adding a part to the stdlib adds
+its rules; no central registry to update. (Same argument that made the
+chooser's candidate set "the catalogue is the universe".) First adopters:
+LP2985 (`connected(EN)` — floating ON/OFF is undefined) and TPS54302
+(`connected(BOOT)` — no bootstrap cap, no switching; EN deliberately NOT
+required since the part has an internal EN pull-up). Note the desugared
+`supply` circuit currently instantiates no support parts, so the TPS54302
+BOOT rule truthfully flags generated buck supplies until supply synthesis
+learns to emit the application circuit (S4 follow-up).
 
 **T3 — policy plugins (JSON over stdio).** Org-wide review policy
 (наming conventions, forbidden vendors, creepage classes) as an external
@@ -109,19 +125,22 @@ apply uniformly across tiers.
   through 5% parts on the same declared measurement path.
 - **ERC024** UNCHECKED visibility: stress/requirement axes that skipped for
   missing data surfaced as Info findings (the absence ledger).
-- **ERC025** T2 surface: entity-carried `check {}` blocks (grammar +
-  extractor + per-instance evaluator, reusing the §4 machinery).
+- **ERC025** T2 surface: entity-carried `check {}` blocks — BUILT (see §2).
+  Future predicate extensions: `exists(child)`, child-value comparisons
+  (`C_boot.value == 100nF`), `connected(PIN, @RAIL)` rail-targeted form.
 - **ERC026** interface completeness: declared I2C/SPI/UART interface with
   unconnected member signals.
 - Diff-pair extensions: pair split across unrelated endpoints; length/skew
   intents once layout lands.
-- **Known connectivity quirks the checks currently work around** (root-cause
-  fixes belong to the synthesizer): (a) an electrically-merged node can be
-  left split across two Net objects (ERC008 exempts pins listed in multiple
-  connection lists); (b) `pin -> @named-net` indirection drops same-file
-  entity pin instances entirely — direct pin-to-pin wiring works (the ERC
-  fixtures use it; fixing the indirection un-blinds every net-based rule for
-  that wiring style).
+- **Known connectivity quirks — RESOLVED at root** (synthesizer commit
+  `2bdcf81`): the hollow-netlist family (same-file entity pins dropping on
+  any board with imports, `pin -> @net` indirection losses, apparent fan-out
+  fragmentation) was ONE bug — a nested preprocessor-miss branch in
+  `add_pins_for_component` returned empty pins instead of cascading to the
+  local-entity source. One cosmetic residue remains: net merging can leave a
+  vestigial EMPTY duplicate Net object (zero connections). The ERC-side
+  defenses stay: `net_members` trusts the `pin_instance.net` back-pointer,
+  and ERC008 exempts pins listed in multiple connection lists.
 - VIL/VIH-aware domain rule: replace ERC004's 5% rail comparison with pin
   `vih_min`/`vil_max`/`io_tolerant_v` attributes when declared.
 

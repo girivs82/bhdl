@@ -111,6 +111,16 @@ entity TPS54302() {
             c_out1.v_ripple = d_il / (8 * self.switching_frequency * c_out1.value);
             c_in1.v_ripple  = i_out * duty * (1 - duty) / (self.switching_frequency * c_in1.value);
         }
+        // T2/ERC025 part-carried rule (docs/spec/ERC.md): the converter
+        // cannot switch without the BOOT-SW bootstrap cap (datasheet §7.3.1,
+        // 100nF). EN is deliberately NOT required — this part has an internal
+        // EN pull-up (floating = enabled is datasheet-sanctioned), unlike
+        // LDOs where floating EN is undefined. No `connected(SW)` rule: this
+        // entity exposes the one switch node as both SW and PH, and boards
+        // legitimately wire either.
+        check {
+            require connected(BOOT) else "BOOT needs the 100nF bootstrap cap to SW/PH (datasheet 7.3.1) — the high-side FET cannot drive without it";
+        }
     }
 }
 

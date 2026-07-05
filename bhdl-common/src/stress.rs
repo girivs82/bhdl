@@ -23,6 +23,22 @@ pub struct StressRecipe {
     /// the `<child>.<axis> = <expr>;` stress assignments and are evaluated
     /// top-to-bottom (a `const` is visible to later statements).
     pub statements: Vec<StressStatement>,
+    /// Part-carried connection rules from the sibling `check { }` block
+    /// (docs/spec/ERC.md, T2/ERC025). Each failed `require` becomes one ERC
+    /// finding on the instance — unlike a stress `require`, whose failure
+    /// only means "this stress model does not apply".
+    pub checks: Vec<CheckRequire>,
+}
+
+/// One `require <predicate> else "MSG";` inside a `check { }` block. The
+/// predicate text may use `connected(PIN)` (substituted from the netlist by
+/// the ERC evaluator) alongside the ordinary expression grammar.
+#[derive(Debug, Clone)]
+pub struct CheckRequire {
+    /// Raw predicate source text (re-parsed by the ERC evaluator).
+    pub condition: String,
+    /// The vendor's message — doubles as the fix suggestion.
+    pub message: String,
 }
 
 /// A statement inside a `stress { }` block. Expressions are kept as raw source
@@ -45,11 +61,17 @@ pub enum StressStatement {
 impl StressRecipe {
     /// Create a new empty recipe for `entity_name`.
     pub fn new(entity_name: String) -> Self {
-        Self { entity_name, statements: Vec::new() }
+        Self { entity_name, statements: Vec::new(), checks: Vec::new() }
     }
 
     /// True if the recipe carries any statements.
     pub fn has_statements(&self) -> bool {
         !self.statements.is_empty()
+    }
+
+    /// True if the recipe carries anything at all (stress statements or
+    /// part-carried checks) — the analyzer's keep-this-recipe gate.
+    pub fn has_content(&self) -> bool {
+        self.has_statements() || !self.checks.is_empty()
     }
 }

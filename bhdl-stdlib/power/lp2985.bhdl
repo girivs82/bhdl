@@ -34,5 +34,11 @@ entity LP2985(part_no: string = "LP2985-3.3") {
         stress {
             self.p_diss = (vin - vout) * i_out + vin * self.i_quiescent;
         }
+        // T2/ERC025 part-carried rule (docs/spec/ERC.md): the datasheet
+        // forbids floating ON/OFF — "the EN pin must not be left floating;
+        // connect to VIN when not used". Travels with the part.
+        check {
+            require connected(EN) else "EN (ON/OFF) must not float — tie it to VIN to enable, or drive it";
+        }
     }
 }

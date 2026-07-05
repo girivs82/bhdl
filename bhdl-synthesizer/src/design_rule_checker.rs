@@ -214,6 +214,12 @@ impl DesignRuleChecker {
                 "Active parts on rails with no capacitor at all",
                 crate::erc::check_missing_decoupling,
             ),
+            (
+                "ERC025",
+                "Part-carried checks",
+                "Vendor `check { require … }` rules shipped with the entity (T2)",
+                crate::erc::check_part_carried,
+            ),
         ] {
             self.rules.push(DesignRule {
                 id: id.to_string(),

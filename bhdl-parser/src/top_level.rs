@@ -2188,8 +2188,9 @@ impl<'t> Parser<'t> {
                 Some(SyntaxKind::IDENT) => match self.peek_text().as_deref() {
                     Some("stress") => self.parse_stress_block(),
                     Some("model") => self.parse_model_block(),
+                    Some("check") => self.parse_check_block(),
                     _ => {
-                        self.error("Expected 'stress' or 'model' in simulation block".to_string());
+                        self.error("Expected 'stress', 'model' or 'check' in simulation block".to_string());
                         self.bump_any();
                     }
                 },
@@ -2303,6 +2304,33 @@ impl<'t> Parser<'t> {
                 }
                 None => {
                     self.error("Unexpected end of file in stress block".to_string());
+                    break;
+                }
+            }
+        }
+        self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
+    // check { require <pred> else "msg"; ... }  (docs/spec/ERC.md T2/ERC025)
+    // Part-carried connection rules. Only `require` statements (each failed
+    // require is one ERC finding); the predicate reuses the design-require
+    // grammar, so `connected(EN)` parses as an ordinary function-call expr.
+    fn parse_check_block(&mut self) {
+        self.builder.start_node(SyntaxKind::CHECK_BLOCK.into());
+        self.bump(); // consume the `check` IDENT
+        self.expect(SyntaxKind::L_BRACE);
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) => break,
+                Some(SyntaxKind::REQUIRE_KW) => self.parse_design_require_stmt(),
+                Some(_) => {
+                    self.error("Expected 'require' in check block".to_string());
+                    self.bump_any();
+                }
+                None => {
+                    self.error("Unexpected end of file in check block".to_string());
                     break;
                 }
             }

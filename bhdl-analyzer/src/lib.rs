@@ -1934,25 +1934,43 @@ pub fn extract_stress_recipes(
         let entity_name = entity.name().map(|t| t.text().to_string()).unwrap_or_default();
         if entity_name.is_empty() { continue; }
 
-        // entity → SIM_BLOCK → STRESS_BLOCK → statements.
+        // entity → SIM_BLOCK → { STRESS_BLOCK statements, CHECK_BLOCK requires }.
+        // One recipe per entity carries both vendor-model surfaces: §4 stress
+        // and the T2/ERC025 part-carried checks (docs/spec/ERC.md).
+        let mut recipe = StressRecipe::new(entity_name.clone());
         for sim_node in entity.syntax().children()
             .filter(|n| n.kind() == SyntaxKind::SIM_BLOCK)
         {
             for stress_node in sim_node.children()
                 .filter(|n| n.kind() == SyntaxKind::STRESS_BLOCK)
             {
-                let mut recipe = StressRecipe::new(entity_name.clone());
                 for child in stress_node.children() {
                     if let Some(s) = extract_stress_statement(&child) {
                         recipe.statements.push(s);
                     }
                 }
-                if recipe.has_statements() {
-                    println!("  Extracted stress recipe for '{entity_name}': {} statement(s)",
-                             recipe.statements.len());
-                    all.insert(entity_name.clone(), recipe);
+            }
+            for check_node in sim_node.children()
+                .filter(|n| n.kind() == SyntaxKind::CHECK_BLOCK)
+            {
+                for child in check_node.children() {
+                    if child.kind() != SyntaxKind::DESIGN_REQUIRE_STMT { continue; }
+                    let Some(condition) =
+                        text_between(&child, SyntaxKind::REQUIRE_KW, SyntaxKind::ELSE_KW)
+                    else { continue };
+                    let Some(raw) = first_token_text(&child, SyntaxKind::STRING)
+                    else { continue };
+                    recipe.checks.push(bhdl_common::stress::CheckRequire {
+                        condition,
+                        message: raw.trim_matches('"').to_string(),
+                    });
                 }
             }
+        }
+        if recipe.has_content() {
+            println!("  Extracted stress recipe for '{entity_name}': {} statement(s), {} check(s)",
+                     recipe.statements.len(), recipe.checks.len());
+            all.insert(entity_name.clone(), recipe);
         }
     }
 
