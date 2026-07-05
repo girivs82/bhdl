@@ -80,8 +80,13 @@ pub fn legalize(board: &mut Board, snap_grid_mm: f64) {
         let bh = board.config.outline.height();
         for comp in board.components.iter_mut() {
             if comp.placement.is_fixed() { continue; }
-            let hw = comp.width_mm / 2.0;
-            let hh = comp.height_mm / 2.0;
+            // Rotation-aware: clamping with the unrotated dims let a
+            // 90°-rotated elongated part sit with its true (rotated)
+            // envelope outside the edge — the exact sibling of the
+            // verify-side phantom-overlap bug.
+            let (rw, rh) = comp.rotated_bbox();
+            let hw = rw / 2.0;
+            let hh = rh / 2.0;
             comp.x = comp.x.clamp(ec + hw, bw - ec - hw);
             comp.y = comp.y.clamp(ec + hh, bh - ec - hh);
         }
