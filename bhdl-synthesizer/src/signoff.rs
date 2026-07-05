@@ -1373,6 +1373,51 @@ pub fn format_signoff_report(rows: &[SignoffRow]) -> Option<String> {
         );
     }
 
+    // ── ERC024 — the absence ledger (docs/spec/ERC.md batch 3) ──
+    //
+    // Real-Data Policy makes axes SKIP rather than guess; this section makes
+    // every skip VISIBLE as an Info finding. An unchecked axis is not a
+    // pass — it is a hole in the verification, and the engineer signs the
+    // report knowing exactly which holes remain. Deliberately not waivable:
+    // a waived absence is still an absence.
+    let unchecked: Vec<&SignoffRow> = rows
+        .iter()
+        .filter(|r| {
+            matches!(r.verdict, Verdict::NoData)
+                || r.ripple.as_deref().is_some_and(|t| t.contains("UNCHECKED"))
+        })
+        .collect();
+    if !unchecked.is_empty() {
+        out.push_str(&format!(
+            "\n### Unchecked axes (ERC024 — absence ledger, {} Info)\n\n",
+            unchecked.len()
+        ));
+        out.push_str("| Ref des | Class | Axis | What is missing |\n");
+        out.push_str("|---------|-------|------|------------------|\n");
+        for r in &unchecked {
+            let why = match r.ripple.as_deref() {
+                Some(t) if t.contains("UNCHECKED") => t.to_string(),
+                _ => "no DC stress or no selected rating to compare \
+                      (transient/AC stress is not modelled in this pass)"
+                    .to_string(),
+            };
+            out.push_str(&format!(
+                "| {} | {} | {} | {} |\n",
+                r.refdes, r.class, r.axis, why
+            ));
+            log::info!(
+                "DRC ERC024 [Unchecked axis] Info: {} {} axis {} — {}",
+                r.refdes, r.class, r.axis, why
+            );
+        }
+        out.push_str(
+            "\n_Every row here is an axis the Real-Data Policy refused to guess. \
+             Supply the missing datum (declared `@ I` load, stress block, \
+             datasheet attribute) to convert it into a gated verdict; the \
+             phase-margin section reports its own UNCHECKED state separately._\n",
+        );
+    }
+
     // Stage C — value-stepping recommendations (reactive parts over their
     // ripple target). Currently the inductor ripple-ratio case; the value is
     // recommended, not yet applied to the BOM (re-selecting the stepped part's

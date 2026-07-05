@@ -3,9 +3,9 @@
 > **Status:** all three tiers are BUILT — T1 batches 1–2 plus ERC019/ERC026,
 > T2 part-carried `check {}` rules (ERC025), T3 policy plugins
 > (`BHDL_ERC_PLUGINS`), severity gating (`--erc-fail-on`), and reasoned
-> waivers (`erc_waive`), and the T2 predicate extensions (exists /
-> value-eq / same_net). Remaining specified-only: ERC022/023/024 and the
-> ERC019 solved-DC upgrade.
+> waivers (`erc_waive`), the T2 predicate extensions (exists / value-eq /
+> same_net), and the ERC024 absence ledger. Remaining specified-only:
+> ERC022/023 and the ERC019 solved-DC upgrade.
 
 ## 1. Why BHDL can check more than an EDA netlist tool
 
@@ -147,8 +147,14 @@ across all three tiers.
   RC against the surrounding network misses X by >an octave.
 - **ERC023** precision-path grade mismatch: a `grade`-profile / 1% part fed
   through 5% parts on the same declared measurement path.
-- **ERC024** UNCHECKED visibility: stress/requirement axes that skipped for
-  missing data surfaced as Info findings (the absence ledger).
+- **ERC024** UNCHECKED visibility — BUILT (the absence ledger): every
+  sign-off axis that skipped for missing data (NoData verdict or an
+  UNCHECKED provenance note) renders as an Info row in a dedicated
+  "Unchecked axes" section of the sign-off report, naming exactly which
+  datum is missing. Lives at the sign-off render site (the skip facts
+  don't exist yet at DRC time) and is deliberately NOT waivable — a
+  waived absence is still an absence. The phase-margin section reports
+  its own UNCHECKED state separately.
 - **ERC025** T2 surface: entity-carried `check {}` blocks — BUILT (see §2),
   including the predicate extensions: `exists(CHILD)` (expansion child /
   S4-stamped sibling / board-level bare name), `<child>.value` comparisons
