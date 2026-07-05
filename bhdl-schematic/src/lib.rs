@@ -9,6 +9,7 @@ pub mod extract;
 pub mod html_bundle;
 pub mod refdes;
 pub mod sub_layout;
+pub mod v4;
 
 pub use types::*;
 pub use extract::extract_schematic_data;

@@ -824,12 +824,12 @@ mod tests {
         ].into_iter().collect();
 
         recipe.instances = vec![
-            ExpansionInstance { name: "L_out".to_string(), component_type: "Ind".to_string(), params: vec!["10µH".to_string()], attributes: HashMap::new() },
-            ExpansionInstance { name: "D_catch".to_string(), component_type: "Diode".to_string(), params: vec!["0.45V".to_string()], attributes: HashMap::new() },
-            ExpansionInstance { name: "C_out".to_string(), component_type: "Cap".to_string(), params: vec!["22µF".to_string()], attributes: HashMap::new() },
-            ExpansionInstance { name: "R_top".to_string(), component_type: "Res".to_string(), params: vec!["31.6kΩ".to_string()], attributes: HashMap::new() },
-            ExpansionInstance { name: "R_bot".to_string(), component_type: "Res".to_string(), params: vec!["10kΩ".to_string()], attributes: HashMap::new() },
-            ExpansionInstance { name: "C_boot".to_string(), component_type: "Cap".to_string(), params: vec!["100nF".to_string()], attributes: HashMap::new() },
+            ExpansionInstance { layout_intents: Vec::new(), name: "L_out".to_string(), component_type: "Ind".to_string(), params: vec!["10µH".to_string()], attributes: HashMap::new() },
+            ExpansionInstance { layout_intents: Vec::new(), name: "D_catch".to_string(), component_type: "Diode".to_string(), params: vec!["0.45V".to_string()], attributes: HashMap::new() },
+            ExpansionInstance { layout_intents: Vec::new(), name: "C_out".to_string(), component_type: "Cap".to_string(), params: vec!["22µF".to_string()], attributes: HashMap::new() },
+            ExpansionInstance { layout_intents: Vec::new(), name: "R_top".to_string(), component_type: "Res".to_string(), params: vec!["31.6kΩ".to_string()], attributes: HashMap::new() },
+            ExpansionInstance { layout_intents: Vec::new(), name: "R_bot".to_string(), component_type: "Res".to_string(), params: vec!["10kΩ".to_string()], attributes: HashMap::new() },
+            ExpansionInstance { layout_intents: Vec::new(), name: "C_boot".to_string(), component_type: "Cap".to_string(), params: vec!["100nF".to_string()], attributes: HashMap::new() },
         ];
 
         recipe.connections = vec![

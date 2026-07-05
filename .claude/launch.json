@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "schemview",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8971", "--directory", "/tmp/schemview"],
+      "port": 8971
+    }
+  ]
+}
