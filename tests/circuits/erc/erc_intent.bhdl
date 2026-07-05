@@ -6,7 +6,10 @@
 //                  finding).
 //   r_ok/c_ok:     R=1.6kΩ, C=100nF → f_c = 995Hz, declared 1kHz —
 //                  0.007 octaves → silent.
-// Expected: exactly 1 violation (1 error).
+// Plus ERC023: a divider declaring precision_measurement(accuracy: 1%)
+// built with a default 5% resistor (r_meas → Error, both numbers) next to
+// a compliant 1%-tolerance twin (r_prec → silent).
+// Expected: exactly 2 violations (2 errors).
 
 import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
@@ -29,6 +32,16 @@ board ErcIntent {
     // Stated 1kHz, built 995Hz — honest annotation, stays silent.
     m.D_P -> r_ok: Res(1.6k).1; r_ok.2 -> c_ok: Cap(100nF).1; c_ok.2 -> @GND
         for noise_filtering(cutoff: 1kHz);
+
+    // ERC023: declared 1% accuracy, built with the default 5% part.
+    m.D_N -> r_meas: Res(10k).1; r_meas.2 -> @GND
+        for precision_measurement(accuracy: 1%);
+
+    // Compliant twin — explicit 1% tolerance (named arg: the inline
+    // positional-tolerance stamping gap is a separate known issue), off
+    // the rail so no I2C pin is misused. Stays silent.
+    @VCC_3V3 -> r_prec: Res(10k, tolerance=1%).1; r_prec.2 -> @GND
+        for precision_measurement(accuracy: 1%);
 
     // Rail decoupling keeps ERC020 quiet.
     @VCC_3V3 -> c1: Cap(100nF).1; c1.2 -> @GND;

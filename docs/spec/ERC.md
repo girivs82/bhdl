@@ -4,9 +4,9 @@
 > T2 part-carried `check {}` rules (ERC025), T3 policy plugins
 > (`BHDL_ERC_PLUGINS`), severity gating (`--erc-fail-on`), and reasoned
 > waivers (`erc_waive`), the T2 predicate extensions (exists / value-eq /
-> same_net), and the ERC024 absence ledger. Remaining specified-only: ERC023
-> (needs a measurement-path concept); ERC022 and the ERC019 solved-DC
-> upgrade are BUILT.
+> same_net), and the ERC024 absence ledger. The FULL catalog through ERC026 is
+> BUILT — batches 1-3, all three tiers, gating, waivers, the ERC024
+> absence ledger, and the ERC019 solved-DC upgrade.
 
 ## 1. Why BHDL can check more than an EDA netlist tool
 
@@ -156,8 +156,14 @@ across all three tiers.
   filtering needs ESR/source-impedance data this pass lacks); exactly one
   series R → RC, exactly one L → LC. Enabled by stamping intent
   attributes during generation (phase 12.5), before the DRC phase.
-- **ERC023** precision-path grade mismatch: a `grade`-profile / 1% part fed
-  through 5% parts on the same declared measurement path.
+- **ERC023** precision-path grade mismatch — BUILT (Error): a part inside
+  a `for precision_measurement(accuracy: X%)` flow whose declared
+  tolerance is coarser than X. The intent stamping (generation phase
+  12.5) marks every component in the flow, so no separate
+  measurement-path concept is needed — the annotation IS the path. Both
+  numbers in the finding ("declares 1.00% accuracy but is a
+  5.0%-tolerance part"). Parts without a declared tolerance skip; their
+  absence belongs to the ERC024 ledger, not to a guess.
 - **ERC024** UNCHECKED visibility — BUILT (the absence ledger): every
   sign-off axis that skipped for missing data (NoData verdict or an
   UNCHECKED provenance note) renders as an Info row in a dedicated

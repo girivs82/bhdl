@@ -797,22 +797,33 @@ fn process_component_instantiation_v2(
     let mut parameter_overrides = std::collections::HashMap::new();
     if !has_placeholder {
         println!("DEBUG: Extracting normal parameters for {}", component_type);
-        // Only extract normal parameters if there's no placeholder
+        // Only extract normal parameters if there's no placeholder.
+        // Positional parameters are named by INDEX against the known
+        // passive signatures — naming EVERY positional "value" silently
+        // dropped the second one (Res(10k, 1%) lost its tolerance,
+        // Cap(22uF, 35V) its voltage rating).
+        let mut positional_idx = 0usize;
         for param_assign in comp_inst.parameter_assignments() {
             if let Some(value) = param_assign.value() {
-                // Get parameter name, or infer it for positional parameters based on component type
                 let param_name = param_assign.name()
                     .map(|n| n.text().to_string())
                     .unwrap_or_else(|| {
-                        // For positional parameters, infer name based on component type
-                        match component_type.as_str() {
-                            "Res" | "Resistor" => "value".to_string(),
-                            "Cap" | "Capacitor" => "value".to_string(),
-                            "LED" => "color".to_string(),
-                            "Fuse" => "current_rating".to_string(),
-                            "TVSDiode" => "voltage_rating".to_string(),
-                            _ => "value".to_string(), // Default fallback
-                        }
+                        let sig: &[&str] = match component_type.as_str() {
+                            "Res" | "Resistor" => &["value", "tolerance"],
+                            "Cap" | "Capacitor" => &["value", "voltage"],
+                            "Ind" | "Inductor" => &["value", "rated_current"],
+                            "LED" => &["color"],
+                            "Fuse" => &["current_rating"],
+                            "TVSDiode" => &["voltage_rating"],
+                            _ => &["value"],
+                        };
+                        let name = sig
+                            .get(positional_idx)
+                            .copied()
+                            .map(str::to_string)
+                            .unwrap_or_else(|| format!("param_{positional_idx}"));
+                        positional_idx += 1;
+                        name
                     });
                     
                 let param_value = value.syntax().text().to_string();
@@ -1006,10 +1017,19 @@ fn process_component_instantiation_v2(
             // Add parameter overrides for interfaces
             suggestion.parameter_overrides = parameter_overrides.clone();
             
-            // Add user-specified parameters to the suggestion
+            // Add user-specified parameters to the suggestion. A
+            // user-specified param REPLACES a same-named inferred default —
+            // the skip-if-present form silently kept the entity default
+            // (tolerance 5%) over the instantiation's explicit
+            // tolerance=1%.
             for param in extracted_params {
-                // Don't duplicate parameters that were already inferred
-                if !suggestion.parameters.iter().any(|p| p.name == param.name) {
+                if let Some(existing) = suggestion
+                    .parameters
+                    .iter_mut()
+                    .find(|p| p.name == param.name)
+                {
+                    *existing = param;
+                } else {
                     suggestion.parameters.push(param);
                 }
             }

@@ -1575,6 +1575,73 @@ fn fmt_eng(v: f64, unit: &str) -> String {
     format!("{s}{prefix}{unit}")
 }
 
+// ──────────────────── ERC023 — precision-path grade mismatch ────────────────────
+
+/// Parse a percentage in either idiom: "1%" → 0.01, "0.05" (already a
+/// fraction ≤ 1) → 0.05. Anything else → None.
+fn parse_percent(txt: &str) -> Option<f64> {
+    let t = txt.trim();
+    if let Some(p) = t.strip_suffix('%') {
+        return p.trim().parse::<f64>().ok().map(|v| v / 100.0);
+    }
+    t.parse::<f64>().ok().filter(|v| *v > 0.0 && *v <= 1.0)
+}
+
+/// ERC023 — a part inside a declared precision path whose grade cannot
+/// deliver the declared accuracy: `for precision_measurement(accuracy: 1%)`
+/// marks every component in the flow (intent stamping, generation phase
+/// 12.5); a 5%-tolerance resistor in that flow contradicts the declared
+/// accuracy before a single measurement is taken. Error, both numbers in
+/// the finding. Parts without a declared tolerance skip (Real-Data — the
+/// absence ledger, not this rule, is where unknowns surface).
+pub fn check_grade_mismatch(
+    netlist: &Netlist,
+    analysis: &AnalysisResult,
+) -> Vec<DRCViolation> {
+    let mut out = Vec::new();
+    for (inst_id, inst) in &netlist.instances {
+        if is_phantom(netlist, inst) {
+            continue;
+        }
+        if inst.attributes.get("intent_name").map(String::as_str)
+            != Some("precision_measurement")
+        {
+            continue;
+        }
+        let Some(accuracy) = ["intent_accuracy", "intent_param_0"]
+            .iter()
+            .find_map(|k| inst.attributes.get(*k).and_then(|v| parse_percent(v)))
+        else { continue };
+        let Some(tolerance) = attr_of(netlist, analysis, inst, "tolerance")
+            .and_then(|v| parse_percent(&v))
+        else { continue };
+        if tolerance > accuracy {
+            out.push(DRCViolation {
+                rule_id: "ERC023".into(),
+                rule_name: "Precision-path grade mismatch".into(),
+                category: RuleCategory::Electrical,
+                severity: ViolationSeverity::Error,
+                description: format!(
+                    "{} sits in a precision_measurement path declaring \
+                     {:.2}% accuracy but is a {:.1}%-tolerance part — the \
+                     path cannot meet its own declaration",
+                    inst.name,
+                    accuracy * 100.0,
+                    tolerance * 100.0,
+                ),
+                location: ViolationLocation::Component(inst_id),
+                fix_suggestion: format!(
+                    "use a ≤{:.2}% part (E96/E192 grade), or relax the \
+                     declared accuracy",
+                    accuracy * 100.0
+                ),
+                standard_reference: None,
+            });
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

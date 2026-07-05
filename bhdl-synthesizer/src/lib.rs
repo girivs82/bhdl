@@ -2749,17 +2749,24 @@ pub fn populate_instance_attributes(
                     
                     println!("DEBUG: Setting parameter '{}' = '{}' for instance {:?}", param.name, param_value, instance_id);
                     
-                    // Store the parameter in the netlist instance attributes,
-                    // but DON'T clobber a value already stamped from the
-                    // instance's own constructor args (Phase 4.4). A parent
-                    // design block writing `Res(r_top_value, tolerance = 1%)`
-                    // stamps tolerance=1% on the instance; this inference pass
-                    // only carries the entity DEFAULT (5%), so an unconditional
-                    // insert here silently overrode the design-block's choice.
-                    // `or_insert` lets the explicit arg win and still fills in
-                    // params the instance didn't specify.
+                    // Store the parameter in the netlist instance attributes.
+                    // Two provenance classes, two policies:
+                    //  - USER-SPECIFIED params (confidence == 1.0, extracted
+                    //    from the instantiation's own arg list) OVERRIDE —
+                    //    inline instantiations never pass through Phase 4.4,
+                    //    so this is the only stamping their explicit args
+                    //    get; an or_insert here let an earlier-stamped
+                    //    entity default (5%) beat the user's tolerance=1%.
+                    //    (When Phase 4.4 DID stamp the same ctor arg, the
+                    //    values are identical — the override is a no-op.)
+                    //  - Inference DEFAULTS keep or_insert: they must never
+                    //    clobber a design-block or ctor-stamped choice.
                     if let Some(instance) = netlist.instances.get_mut(instance_id) {
-                        instance.attributes.entry(param.name.clone()).or_insert(param_value);
+                        if (param.confidence - 1.0).abs() < f64::EPSILON {
+                            instance.attributes.insert(param.name.clone(), param_value);
+                        } else {
+                            instance.attributes.entry(param.name.clone()).or_insert(param_value);
+                        }
                         println!("DEBUG: Successfully stored parameter in netlist instance");
                     } else {
                         println!("DEBUG: Failed to find instance {:?} in netlist", instance_id);

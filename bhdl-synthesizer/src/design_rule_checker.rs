@@ -238,6 +238,12 @@ impl DesignRuleChecker {
                 "Declared filter cutoff vs the corner frequency the placed R/L/C actually build",
                 crate::erc::check_intent_contradiction,
             ),
+            (
+                "ERC023",
+                "Precision-path grade mismatch",
+                "Part tolerance coarser than the precision_measurement path's declared accuracy",
+                crate::erc::check_grade_mismatch,
+            ),
         ] {
             self.rules.push(DesignRule {
                 id: id.to_string(),
