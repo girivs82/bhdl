@@ -1,4 +1,7 @@
 // Test unified component types with flow syntax
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
 board SimpleTest {
     VCC -> Res(4.7kΩ).1 -> LED(red).A;
     LED.K -> GND;

@@ -1,6 +1,16 @@
 // Test circuit for Advanced Pattern Matching feature
 // Tests even/odd keywords, explicit lists, and stepped ranges
 
+
+// Board-local test entity: minimal analog temp-sensor shape.
+entity TempSensor() {
+    pin VCC: power in;
+    pin GND: ground;
+    pin OUT: signal out;
+
+    attribute component_class = "sensor";
+}
+
 board AdvancedPatternTest {
     // Create 16 sensor instances manually for pattern testing
     sensor_0: TempSensor();

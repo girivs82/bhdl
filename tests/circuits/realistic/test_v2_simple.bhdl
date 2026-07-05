@@ -1,12 +1,14 @@
 // Simple v2.0 test to verify basic constructs
 
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
 board SimpleTest {
     // Test 1: Power declaration
     power VCC = 5V @ 1A;
     
-    // Test 2: Interface declaration
-    main_i2c: I2C(voltage=3.3V, frequency=400kHz);
-    
+    // (The v1 interface-instantiation form `main_i2c: I2C(…)` was retired
+    // with the interface-as-component concept — buses are wired as nets.)
     // Test 3: Simple connection
     VCC -> Res(10k).1 -> LED(red).A;
 }

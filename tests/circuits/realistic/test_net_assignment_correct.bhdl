@@ -1,4 +1,8 @@
 // Correct usage of net assignment pattern in BHDL v2.0
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+
+import { Fuse, TVSDiode } from "bhdl-stdlib/protection/tvs.bhdl";
+
 board NetAssignmentTest {
     power VIN = 12V @ 1A;
     ground GND;

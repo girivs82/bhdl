@@ -1,6 +1,28 @@
 // Comprehensive test for power domain scalability features
 // Demonstrates: wildcard expansion, range expansion, and decoupling generation
 
+import { LM7805 } from "bhdl-stdlib/power/lm7805.bhdl";
+
+
+// Board-local test entity: minimal analog temp-sensor shape.
+entity TempSensor() {
+    pin VCC: power in;
+    pin GND: ground;
+    pin OUT: signal out;
+
+    attribute component_class = "sensor";
+}
+
+// Board-local test entity: FPGA power-pin shape for the scalability test.
+entity FPGA() {
+    pin VCCINT: power in;
+    pin VCCAUX: power in;
+    pin VCCO[8]: power in;
+    pin GND: ground;
+
+    attribute component_class = "fpga";
+}
+
 board MultiSensorBoard {
     // Component instances for wildcard expansion test
     sensor_0: TempSensor();

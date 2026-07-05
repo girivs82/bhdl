@@ -1,6 +1,13 @@
 // Simple Buck Converter for End-to-End Testing
 // 12V to 5V @ 2A using LM2596 (assuming it's in the component library)
 
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { SchottkyDiode } from "bhdl-stdlib/passives/diode.bhdl";
+import { Inductor } from "bhdl-stdlib/passives/inductor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+import { LM2596 } from "bhdl-stdlib/components/power/switching_regulators/LM2596.bhdl";
+
 board SimpleBuckConverter {
     // Power domains
     power VIN = 12V @ 3A;

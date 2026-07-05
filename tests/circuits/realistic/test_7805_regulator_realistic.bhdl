@@ -1,6 +1,14 @@
 // Realistic 7805 Linear Regulator Circuit - BHDL v2.0
 // A complete 12V to 5V power supply with proper filtering and protection
 
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
+import { Cap, ElectrolyticCap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { LM7805 } from "bhdl-stdlib/power/lm7805.bhdl";
+
+import { TestPoint } from "bhdl-stdlib/connectors/testpoint.bhdl";
+import { Fuse, TVSDiode } from "bhdl-stdlib/protection/tvs.bhdl";
+
 board PowerSupply_7805 {
     // Power domains
     power VIN = 12V @ 1A;      // Input voltage from DC adapter
@@ -16,7 +24,7 @@ board PowerSupply_7805 {
     // Linear regulator circuit
     @protected_vin -> reg: LM7805().IN;
     reg.GND -> GND;
-    reg.OUT -> VCC;
+    reg.VOUT -> VCC;
     
     // Output filtering
     VCC -> c_out1: ElectrolyticCap(10µF, 10V).pos;

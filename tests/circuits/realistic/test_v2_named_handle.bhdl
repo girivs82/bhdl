@@ -1,4 +1,12 @@
+// Named-handle instantiation inside a connection chain (v2 canonical).
+// Regenerated from the v1 `LinearReg(3.3V, 1A)` generic-call form.
+import { LM1117_33 } from "bhdl-stdlib/power/regulator.bhdl";
+
 board NamedHandleTest {
     power VCC = 5V @ 1A;
-    VCC -> regulator: LinearReg(3.3V, 1A).IN;
+    power VCC_3V3 = 3.3V @ 500mA;
+    ground GND;
+    VCC -> regulator: LM1117_33().VI;
+    regulator.GND -> @GND;
+    regulator.VO -> @VCC_3V3;
 }

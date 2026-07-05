@@ -1,3 +1,5 @@
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
+
 board ArrayIndexTest {
     power VCC = 5V @ 1A;
     ground GND;
