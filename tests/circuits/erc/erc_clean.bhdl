@@ -1,0 +1,84 @@
+// ERC control board — the same building blocks wired CORRECTLY; every one
+// of the five checks must stay silent (no false positives):
+//   UART crossed (TX→RX both ways), diff pair straight (P→P, N→N),
+//   output→input, the 3.3V↔5V link goes through a declared level shifter,
+//   and SDA/SCL carry 4.7k pull-ups to the bus rail.
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+board ErcClean {
+    power VCC_3V3 = 3.3V @ 1A;
+    power VCC_5V = 5V @ 1A;
+    ground GND;
+
+    m: Mcu();       @VCC_3V3 -> m.VCC;  m.GND -> @GND;
+    g: Radio();     @VCC_3V3 -> g.VCC;  g.GND -> @GND;
+    f: FiveLogic(); @VCC_5V -> f.VCC;   f.GND -> @GND;
+    s: Sensor();    @VCC_3V3 -> s.VCC;  s.GND -> @GND;
+    ls: Shifter();  @VCC_3V3 -> ls.VCCA; @VCC_5V -> ls.VCCB; ls.GND -> @GND;
+
+    m.OUT1 -> g.IN1;    // proper driver → sink
+    g.OUT1 -> m.IN1;
+
+    m.D_P -> g.D_P;     // diff pair straight
+    m.D_N -> g.D_N;
+
+    m.TX -> g.RX;       // UART crossed
+    g.TX -> m.RX;
+
+    m.IO -> ls.A;       // domain crossing through the level shifter
+    ls.B -> f.A;
+
+    m.SDA -> @sda; @sda -> s.SDA;   // I2C with pull-ups to the bus rail
+    m.SCL -> @scl; @scl -> s.SCL;
+    @sda -> r_sda: Res(4.7k).1; r_sda.2 -> @VCC_3V3;
+    @scl -> r_scl: Res(4.7k).1; r_scl.2 -> @VCC_3V3;
+}
+
+entity Mcu() {
+    pin VCC: power in;
+    pin GND: ground;
+    pin OUT1: signal out;
+    pin IN1: signal in;
+    pin D_P: signal inout;
+    pin D_N: signal inout;
+    pin TX: signal out;
+    pin RX: signal in;
+    pin IO: signal out;
+    pin SDA: signal inout;
+    pin SCL: signal inout;
+}
+
+entity Radio() {
+    pin VCC: power in;
+    pin GND: ground;
+    pin OUT1: signal out;
+    pin IN1: signal in;
+    pin D_P: signal inout;
+    pin D_N: signal inout;
+    pin TX: signal out;
+    pin RX: signal in;
+}
+
+entity FiveLogic() {
+    pin VCC: power in;
+    pin GND: ground;
+    pin A: signal in;
+}
+
+entity Sensor() {
+    pin VCC: power in;
+    pin GND: ground;
+    pin SDA: signal inout;
+    pin SCL: signal inout;
+}
+
+entity Shifter() {
+    pin VCCA: power in;
+    pin VCCB: power in;
+    pin GND: ground;
+    pin A: signal in;
+    pin B: signal out;
+
+    attribute component_class = "level_shifter";
+}

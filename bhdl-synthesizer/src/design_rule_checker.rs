@@ -129,6 +129,51 @@ impl DesignRuleChecker {
     
     /// Add common design rules applicable to all standards
     fn add_common_rules(&mut self) {
+        // ── Electrical rule checks (crate::erc) — the real content ──
+        for (id, name, desc, f) in [
+            (
+                "ERC001",
+                "Driver conflicts",
+                "Push-pull outputs shorted together / nets with no possible driver",
+                crate::erc::check_driver_conflicts
+                    as fn(&Netlist, &AnalysisResult) -> Vec<DRCViolation>,
+            ),
+            (
+                "ERC002",
+                "Differential polarity",
+                "P and N of a differential pair landing on the same net",
+                crate::erc::check_differential_polarity,
+            ),
+            (
+                "ERC003",
+                "UART crossover",
+                "TX-to-TX / RX-to-RX between devices (link must cross)",
+                crate::erc::check_tx_rx_cross,
+            ),
+            (
+                "ERC004",
+                "Voltage domains",
+                "Signal nets joining different supply domains without a level shifter",
+                crate::erc::check_voltage_domains,
+            ),
+            (
+                "ERC005",
+                "I2C pull-ups",
+                "Open-drain I2C nets without a pull-up (or pulled to the wrong rail)",
+                crate::erc::check_i2c_pullups,
+            ),
+        ] {
+            self.rules.push(DesignRule {
+                id: id.to_string(),
+                name: name.to_string(),
+                category: RuleCategory::Electrical,
+                description: desc.to_string(),
+                check_function: f,
+                enabled: true,
+                configurable_params: HashMap::new(),
+            });
+        }
+
         // Rule: Check for unconnected pins
         self.rules.push(DesignRule {
             id: "DRC001".to_string(),
@@ -368,6 +413,12 @@ impl DesignRuleChecker {
         // Store violations in history
         self.violation_history.extend(all_violations.clone());
         
+        for v in &all_violations {
+            log::warn!(
+                "DRC {} [{}] {:?}: {} (fix: {})",
+                v.rule_id, v.rule_name, v.severity, v.description, v.fix_suggestion
+            );
+        }
         info!("DRC Complete: {} violations found ({} critical, {} errors, {} warnings, {} info)",
               all_violations.len(), critical_count, error_count, warning_count, info_count);
         

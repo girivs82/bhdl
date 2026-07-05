@@ -45,6 +45,9 @@ pub mod glacier_physical_selection;
 // Power-supply synthesis: the `supply` statement desugar (S1).
 // docs/spec/Power_Supply_Synthesis.md.
 pub mod supply_synthesis;
+// Electrical rule checks — the real DRC content (driver conflicts,
+// diff-pair polarity, TX/RX crossing, voltage domains, I2C pull-ups).
+pub mod erc;
 
 // Simulation-refined margin & sign-off report (spec: Simulation_Margin_Signoff.md).
 pub mod signoff;
@@ -318,6 +321,11 @@ pub struct NetlistGenerator {
     import_loader: ImportLoader,
     // Import preprocessor for pre-processed imports
     import_preprocessor: Option<ImportPreprocessor>,
+    // Same-file entity definitions (board-local `entity X { … }` blocks),
+    // captured at synthesis start so add_pins_for_component can read their
+    // DECLARED pin directions — previously local entities silently fell to
+    // "default pins" and every direction-dependent check (ERC) saw junk.
+    local_entities: HashMap<String, bhdl_ast::Entity>,
     // Component calculator for automatic supporting component generation
     component_calculator: ComponentCalculator,
     // Supporting component instances for virtual pin expansion
@@ -365,6 +373,7 @@ impl NetlistGenerator {
             type_mapper: ComponentTypeMapper::new(),
             import_loader,
             import_preprocessor: None,
+            local_entities: HashMap::new(),
             component_calculator: ComponentCalculator::new(),
             supporting_component_instances: HashMap::new(),
             cost_optimizer: None, // Will be initialized when cost optimization is enabled
@@ -415,6 +424,15 @@ impl NetlistGenerator {
     
     /// Internal implementation that handles both cases
     async fn generate_from_ast_and_analysis_internal(&mut self, ast: Option<&SourceFile>, analysis: &AnalysisResult) -> Result<Netlist> {
+        // Capture same-file entity definitions for pin-direction resolution
+        // (see `local_entities` field doc).
+        if let Some(src) = ast {
+            for e in src.entities() {
+                if let Some(n) = bhdl_ast::HasName::name(&e) {
+                    self.local_entities.insert(n.text().to_string(), e.clone());
+                }
+            }
+        }
         info!("Starting netlist generation from analysis results");
         
         // Phase 0a: Process imports if AST is available - do this FIRST
@@ -2145,12 +2163,15 @@ impl NetlistGenerator {
                             (bhdl_netlist::types::PinDirection::Out, bhdl_netlist::types::PinType::Power)
                         } else if pin_text.contains("ground") {
                             (bhdl_netlist::types::PinDirection::Ground, bhdl_netlist::types::PinType::Ground)
-                        } else if pin_text.contains("signal in") {
-                            (bhdl_netlist::types::PinDirection::In, bhdl_netlist::types::PinType::Signal)
+                        } else if pin_text.contains("signal inout") {
+                            // inout before in/out: "signal in" is a substring
+                            // of "signal inout" — the old order mapped every
+                            // imported inout pin (SDA/SCL, buses) to In.
+                            (bhdl_netlist::types::PinDirection::InOut, bhdl_netlist::types::PinType::Signal)
                         } else if pin_text.contains("signal out") {
                             (bhdl_netlist::types::PinDirection::Out, bhdl_netlist::types::PinType::Signal)
-                        } else if pin_text.contains("signal inout") {
-                            (bhdl_netlist::types::PinDirection::InOut, bhdl_netlist::types::PinType::Signal)
+                        } else if pin_text.contains("signal in") {
+                            (bhdl_netlist::types::PinDirection::In, bhdl_netlist::types::PinType::Signal)
                         } else {
                             (bhdl_netlist::types::PinDirection::Passive, bhdl_netlist::types::PinType::Passive)
                         };
@@ -2189,12 +2210,16 @@ impl NetlistGenerator {
                         (bhdl_netlist::types::PinDirection::Out, bhdl_netlist::types::PinType::Power)
                     } else if pin_text.contains("ground") {
                         (bhdl_netlist::types::PinDirection::Ground, bhdl_netlist::types::PinType::Ground)
-                    } else if pin_text.contains("signal in") {
-                        (bhdl_netlist::types::PinDirection::In, bhdl_netlist::types::PinType::Signal)
+                    } else if pin_text.contains("signal inout") {
+                        // inout before in/out: "signal in" is a substring of
+                        // "signal inout" — the old order mapped every inout
+                        // pin to In (latent since the imported-entity path
+                        // was written; surfaced by the ERC direction checks).
+                        (bhdl_netlist::types::PinDirection::InOut, bhdl_netlist::types::PinType::Signal)
                     } else if pin_text.contains("signal out") {
                         (bhdl_netlist::types::PinDirection::Out, bhdl_netlist::types::PinType::Signal)
-                    } else if pin_text.contains("signal inout") {
-                        (bhdl_netlist::types::PinDirection::InOut, bhdl_netlist::types::PinType::Signal)
+                    } else if pin_text.contains("signal in") {
+                        (bhdl_netlist::types::PinDirection::In, bhdl_netlist::types::PinType::Signal)
                     } else {
                         (bhdl_netlist::types::PinDirection::Passive, bhdl_netlist::types::PinType::Passive)
                     };
@@ -2208,6 +2233,41 @@ impl NetlistGenerator {
                 }
             }
             
+            let has_virtual = pins.iter().any(|p| p.is_virtual);
+            (pins, has_virtual)
+        } else if let Some(entity) = self.local_entities.get(component_type).cloned() {
+            // Same-file entity definition: read the DECLARED pin directions
+            // (`pin TX: signal out;`) exactly like the imported-entity path.
+            let mut pins = Vec::new();
+            for pin in entity.pins() {
+                if let Some(name) = pin.name() {
+                    let pin_text = pin.syntax().text().to_string();
+                    let is_virtual = pin_text.contains("virtual");
+                    let (direction, pin_type) = if pin_text.contains("power in") {
+                        (bhdl_netlist::types::PinDirection::Power, bhdl_netlist::types::PinType::Power)
+                    } else if pin_text.contains("power out") {
+                        (bhdl_netlist::types::PinDirection::Out, bhdl_netlist::types::PinType::Power)
+                    } else if pin_text.contains("ground") {
+                        (bhdl_netlist::types::PinDirection::Ground, bhdl_netlist::types::PinType::Ground)
+                    } else if pin_text.contains("signal inout") {
+                        // NOTE: inout MUST be tested before in/out — the
+                        // substring "signal in" matches inside "signal inout".
+                        (bhdl_netlist::types::PinDirection::InOut, bhdl_netlist::types::PinType::Signal)
+                    } else if pin_text.contains("signal out") {
+                        (bhdl_netlist::types::PinDirection::Out, bhdl_netlist::types::PinType::Signal)
+                    } else if pin_text.contains("signal in") {
+                        (bhdl_netlist::types::PinDirection::In, bhdl_netlist::types::PinType::Signal)
+                    } else {
+                        (bhdl_netlist::types::PinDirection::Passive, bhdl_netlist::types::PinType::Passive)
+                    };
+                    pins.push(bhdl_stdlib::StdlibPinDefinition {
+                        name: name.text().to_string(),
+                        direction,
+                        pin_type,
+                        is_virtual,
+                    });
+                }
+            }
             let has_virtual = pins.iter().any(|p| p.is_virtual);
             (pins, has_virtual)
         } else {

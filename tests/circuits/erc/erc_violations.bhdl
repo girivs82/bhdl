@@ -1,0 +1,71 @@
+// ERC test board — deliberately wires all five classic schematic-review
+// errors (see bhdl-synthesizer/src/erc.rs). Expected DRC findings:
+//   ERC001  m.OUT1↔g.OUT1 (two push-pull drivers), m.IN1↔g.IN1 and
+//           m.RX↔g.RX (input-only nets, nothing driving)
+//   ERC002  m.D_P↔g.D_N / m.D_N↔g.D_P (differential pair crossed)
+//   ERC003  m.TX↔g.TX and m.RX↔g.RX (UART not crossed)
+//   ERC004  m.IO (3.3V domain) → f.A (5V domain), no level shifter
+//   ERC005  SDA/SCL with no pull-up resistors
+
+board ErcViolations {
+    power VCC_3V3 = 3.3V @ 1A;
+    power VCC_5V = 5V @ 1A;
+    ground GND;
+
+    m: Mcu();       @VCC_3V3 -> m.VCC;  m.GND -> @GND;
+    g: Radio();     @VCC_3V3 -> g.VCC;  g.GND -> @GND;
+    f: FiveLogic(); @VCC_5V -> f.VCC;   f.GND -> @GND;
+    s: Sensor();    @VCC_3V3 -> s.VCC;  s.GND -> @GND;
+
+    m.OUT1 -> g.OUT1;   // ERC001: output to output
+    m.IN1 -> g.IN1;     // ERC001: input to input (undriven)
+
+    m.D_P -> g.D_N;     // ERC002: P/N crossed
+    m.D_N -> g.D_P;
+
+    m.TX -> g.TX;       // ERC003: TX straight-through
+    m.RX -> g.RX;       // ERC003: RX straight-through
+
+    m.IO -> f.A;        // ERC004: 3.3V driver into 5V-domain input
+
+    m.SDA -> s.SDA;     // ERC005: open-drain bus, no pull-ups
+    m.SCL -> s.SCL;
+}
+
+entity Mcu() {
+    pin VCC: power in;
+    pin GND: ground;
+    pin OUT1: signal out;
+    pin IN1: signal in;
+    pin D_P: signal inout;
+    pin D_N: signal inout;
+    pin TX: signal out;
+    pin RX: signal in;
+    pin IO: signal out;
+    pin SDA: signal inout;
+    pin SCL: signal inout;
+}
+
+entity Radio() {
+    pin VCC: power in;
+    pin GND: ground;
+    pin OUT1: signal out;
+    pin IN1: signal in;
+    pin D_P: signal inout;
+    pin D_N: signal inout;
+    pin TX: signal out;
+    pin RX: signal in;
+}
+
+entity FiveLogic() {
+    pin VCC: power in;
+    pin GND: ground;
+    pin A: signal in;
+}
+
+entity Sensor() {
+    pin VCC: power in;
+    pin GND: ground;
+    pin SDA: signal inout;
+    pin SCL: signal inout;
+}

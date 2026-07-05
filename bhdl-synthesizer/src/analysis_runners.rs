@@ -198,6 +198,21 @@ impl NetlistGenerator {
         // Use IPC-2221 as default standard
         let mut checker = DesignRuleChecker::new(IndustryStandard::IPC2221);
         let report = checker.run_checks(&self.netlist, analysis);
+        // Surface violations in the synthesis/BOM output as a Markdown
+        // section (they also go to the log). An engineer's report carries
+        // the rule findings next to the sign-off — not buried in a log.
+        if !report.violations.is_empty() {
+            println!("\n## Design rule check\n");
+            println!("| Rule | Severity | Finding | Suggested fix |");
+            println!("|---|---|---|---|");
+            for v in &report.violations {
+                println!(
+                    "| {} {} | {:?} | {} | {} |",
+                    v.rule_id, v.rule_name, v.severity, v.description, v.fix_suggestion
+                );
+            }
+            println!();
+        }
         
         info!("DRC Results:");
         info!("  - Rules checked: {}", report.rules_checked);
