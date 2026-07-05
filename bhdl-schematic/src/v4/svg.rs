@@ -434,6 +434,18 @@ fn net_label(netlist: &Netlist, id: NetId) -> String {
     }
 }
 
+/// Parse "31.6k" / "10kΩ" / "0.8" → f64 for the divider equation.
+fn parse_val(txt: &str) -> Option<f64> {
+    let t = txt.trim().trim_end_matches('Ω').trim_end_matches("ohm").trim();
+    let (num, mult) = match t.chars().last()? {
+        'k' | 'K' => (&t[..t.len() - 1], 1e3),
+        'M' => (&t[..t.len() - 1], 1e6),
+        'm' => (&t[..t.len() - 1], 1e-3),
+        _ => (t, 1.0),
+    };
+    num.trim().parse::<f64>().ok().map(|v| v * mult)
+}
+
 fn value_of(netlist: &Netlist, inst: &str) -> String {
     netlist
         .instances
@@ -883,12 +895,81 @@ fn draw_stage(
                 svg.place_sim_label(dx + 12.0, mid, &format!("= {}", fmt_sim_v(v)), "sim");
             }
         }
+        let top_val = value_of(netlist, l.insts.first().map(String::as_str).unwrap_or(""));
+        if !top_val.is_empty() {
+            svg.place_label(dx, spine + 34.0, &top_val, "val");
+        }
         // bottom leg
         if l.insts.len() > 1 {
             svg.res_v(dx, mid);
             svg.place_label(dx, mid + 14.0, label_of(decor, &l.insts[1]), "ref");
+            let bot_val = value_of(netlist, &l.insts[1]);
+            if !bot_val.is_empty() {
+                svg.place_label(dx, mid + 28.0, &bot_val, "val");
+            }
             svg.wire(&[(dx, mid + 40.0), (dx, mid + 48.0)]);
             svg.ground(dx, mid + 48.0);
+
+            // The designer's equation — WHY these values (review ask): the
+            // divider sets VOUT = VREF·(1 + Rtop/Rbot). VREF from the IC's
+            // declared feedback_voltage, else the SOLVED FB voltage (in
+            // regulation they are the same node). Rendered only when every
+            // input is real (Real-Data).
+            let vref = netlist
+                .instances
+                .values()
+                .find(|i| i.name == l.into_inst)
+                .and_then(|i| i.attributes.get("feedback_voltage").cloned())
+                .and_then(|v| {
+                    let t = v.trim_end_matches('V');
+                    t.parse::<f64>().ok()
+                })
+                .or_else(|| {
+                    decor.sim.and_then(|sim| {
+                        netlist
+                            .instances
+                            .iter()
+                            .find(|(_, i)| i.name == l.into_inst)
+                            .and_then(|(iid, _)| {
+                                netlist.pin_instances.values().find(|pi| {
+                                    pi.instance == iid
+                                        && netlist
+                                            .pins
+                                            .get(pi.pin_def)
+                                            .map(|p| p.name == l.into_pin)
+                                            .unwrap_or(false)
+                                })
+                            })
+                            .and_then(|pi| pi.net)
+                            .and_then(|nid| {
+                                netlist.nets.get(nid).and_then(|n| n.name.clone())
+                            })
+                            .and_then(|name| sim.net_voltages.get(&name).copied())
+                    })
+                });
+            if let (Some(vref), Some(rt), Some(rb)) =
+                (vref, parse_val(&top_val), parse_val(&value_of(netlist, &l.insts[1])))
+            {
+                if rb > 0.0 && vref > 0.0 {
+                    let vout = vref * (1.0 + rt / rb);
+                    let r1 = label_of(decor, l.insts.first().map(String::as_str).unwrap_or(""));
+                    let r2 = label_of(decor, &l.insts[1]);
+                    let eq_y = mid + 48.0 + 40.0;
+                    svg.text(dx - 60.0, eq_y, &format!("VOUT = VREF·(1 + {r1}/{r2})"), "val");
+                    svg.text(
+                        dx - 60.0,
+                        eq_y + 14.0,
+                        &format!(
+                            "= {}·(1 + {}/{}) = {:.2}V",
+                            fmt_sim_v(vref),
+                            top_val,
+                            value_of(netlist, &l.insts[1]),
+                            vout
+                        ),
+                        "val",
+                    );
+                }
+            }
         }
         // Return path policy: AVOID crossings when possible; cross only
         // under congestion. The non-crossing route exists here: exit the
