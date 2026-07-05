@@ -1248,14 +1248,19 @@ pub fn check_part_carried(
 
 // ──────────────────── ERC019 — reversed polarized capacitor ────────────────────
 
-/// DC potential of a net from its DECLARED class: ground = 0V, a power rail =
-/// its declared voltage, anything else = unknown. This is the declared-rail
-/// approximation of the spec's GLACIER-solved form — it catches the classic
-/// reversed-electrolytic-across-a-rail error; nets whose potential the
-/// declaration doesn't pin down are skipped (Real-Data Policy). Upgrade path:
-/// feed solved node voltages in once the DC solution reaches the DRC phase.
-fn net_potential(netlist: &Netlist, id: NetId) -> Option<f64> {
-    match netlist.nets.get(id)?.net_class {
+/// DC potential of a net: the SOLVED node voltage when the unified DC
+/// analysis succeeded (keyed by net name — this also gives signal nets a
+/// potential), else the DECLARED class (ground = 0V, power rail = its
+/// declared voltage). Nets neither solved nor declared skip (Real-Data
+/// Policy) — a potential is never guessed.
+fn net_potential(netlist: &Netlist, analysis: &AnalysisResult, id: NetId) -> Option<f64> {
+    let net = netlist.nets.get(id)?;
+    if let Some(dc) = analysis.simulation_data.dc_analysis.as_ref() {
+        if let Some(v) = net.name.as_ref().and_then(|n| dc.node_voltages.get(n)) {
+            return Some(*v);
+        }
+    }
+    match net.net_class {
         NetClass::Ground => Some(0.0),
         NetClass::Power { voltage, .. } => Some(voltage),
         _ => None,
@@ -1291,7 +1296,7 @@ pub fn check_polarized_orientation(
                 "neg" | "N" | "-" => "neg",
                 _ => continue,
             };
-            if let Some(v) = pi.net.and_then(|nid| net_potential(netlist, nid)) {
+            if let Some(v) = pi.net.and_then(|nid| net_potential(netlist, analysis, nid)) {
                 pin_v.insert(key, v);
             }
         }

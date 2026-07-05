@@ -4,8 +4,9 @@
 > T2 part-carried `check {}` rules (ERC025), T3 policy plugins
 > (`BHDL_ERC_PLUGINS`), severity gating (`--erc-fail-on`), and reasoned
 > waivers (`erc_waive`), the T2 predicate extensions (exists / value-eq /
-> same_net), and the ERC024 absence ledger. Remaining specified-only:
-> ERC023 and the ERC019 solved-DC upgrade; ERC022 is BUILT.
+> same_net), and the ERC024 absence ledger. Remaining specified-only: ERC023
+> (needs a measurement-path concept); ERC022 and the ERC019 solved-DC
+> upgrade are BUILT.
 
 ## 1. Why BHDL can check more than an EDA netlist tool
 
@@ -141,8 +142,10 @@ across all three tiers.
   true` part whose `pos` pin sits at a LOWER DC potential than its `neg`
   pin. v1 uses DECLARED potentials (ground = 0V, power rail = its declared
   voltage; signal nets skip per Real-Data) — catches the classic
-  reversed-across-a-rail error. Upgrade to GLACIER-solved node voltages
-  when the DC solution is plumbed into the DRC phase.
+  reversed-across-a-rail error. UPGRADED: when the unified DC analysis
+  succeeded, the SOLVED node voltage (by net name) takes precedence over
+  the declared class — which also gives signal nets a potential; declared
+  potentials remain the fallback, and nets with neither still skip.
 - **ERC022** intent contradiction — BUILT (Error): a filtering intent
   (`for noise_filtering(cutoff: X)` / `anti_alias` / `filter`) whose
   declared cutoff the PLACED values contradict by more than one octave,
