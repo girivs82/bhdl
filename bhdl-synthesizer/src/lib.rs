@@ -2198,15 +2198,20 @@ impl NetlistGenerator {
                             (bhdl_netlist::types::PinDirection::Passive, bhdl_netlist::types::PinType::Passive)
                         };
                         
-                        pins.push(bhdl_stdlib::StdlibPinDefinition {
-                            name: name.text().to_string(),
-                            direction,
-                            pin_type,
-                            is_virtual,
-                        });
+                        // Literal bus pin (`pin VCCO[4]` / `pin D[7:0]`):
+                        // expand to indexed pin definitions so indexed
+                        // references (`inst.VCCO[0]`) resolve.
+                        for pin_name in crate::hierarchical_connectivity::expand_bus_pin_names(&pin, name.text()) {
+                            pins.push(bhdl_stdlib::StdlibPinDefinition {
+                                name: pin_name,
+                                direction,
+                                pin_type,
+                                is_virtual,
+                            });
+                        }
                     }
                 }
-                
+
                 let has_virtual = pins.iter().any(|p| p.is_virtual);
                 (pins, has_virtual)
             }
@@ -2242,15 +2247,18 @@ impl NetlistGenerator {
                         (bhdl_netlist::types::PinDirection::Passive, bhdl_netlist::types::PinType::Passive)
                     };
                     
-                    pins.push(bhdl_stdlib::StdlibPinDefinition {
-                        name: name.text().to_string(),
-                        direction,
-                        pin_type,
-                        is_virtual,
-                    });
+                    // Literal bus pin: expand to indexed pin definitions.
+                    for pin_name in crate::hierarchical_connectivity::expand_bus_pin_names(&pin, name.text()) {
+                        pins.push(bhdl_stdlib::StdlibPinDefinition {
+                            name: pin_name,
+                            direction,
+                            pin_type,
+                            is_virtual,
+                        });
+                    }
                 }
             }
-            
+
             let has_virtual = pins.iter().any(|p| p.is_virtual);
             (pins, has_virtual)
         } else if let Some(entity) = self.local_entities.get(component_type).cloned() {
@@ -2278,12 +2286,15 @@ impl NetlistGenerator {
                     } else {
                         (bhdl_netlist::types::PinDirection::Passive, bhdl_netlist::types::PinType::Passive)
                     };
-                    pins.push(bhdl_stdlib::StdlibPinDefinition {
-                        name: name.text().to_string(),
-                        direction,
-                        pin_type,
-                        is_virtual,
-                    });
+                    // Literal bus pin: expand to indexed pin definitions.
+                    for pin_name in crate::hierarchical_connectivity::expand_bus_pin_names(&pin, name.text()) {
+                        pins.push(bhdl_stdlib::StdlibPinDefinition {
+                            name: pin_name,
+                            direction,
+                            pin_type,
+                            is_virtual,
+                        });
+                    }
                 }
             }
             let has_virtual = pins.iter().any(|p| p.is_virtual);
@@ -3027,7 +3038,7 @@ fn load_synthesis_knowledge_for_component(component_type: &str) -> Result<Synthe
     Err(anyhow::anyhow!("Not implemented"))
 }
 
-/// Extract parameters from a netlist instance for synthesis calculations  
+/// Extract parameters from a netlist instance for synthesis calculations
 fn extract_instance_parameters(netlist: &Netlist, instance_id: InstanceId) -> HashMap<String, String> {
     HashMap::new()
 }

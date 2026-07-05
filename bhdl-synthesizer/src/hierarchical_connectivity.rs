@@ -1217,6 +1217,22 @@ fn add_component_pins(
             }
         }
 
+        // Literal bus-size pin declaration: `pin VCCO[4]` (size form) or
+        // `pin D[7:0]` (range form). Expand with the same indexed naming
+        // the parameterized (resolved_bus_sizes) path uses, so indexed
+        // references (`inst.VCCO[0]`) resolve to real pin instances.
+        // A non-literal suffix (`pin VCCO[N]` on an unspecialized generic)
+        // parses as neither form and falls through to the single-pin path.
+        if let Some(indices) = literal_bus_indices(pin) {
+            for i in indices {
+                let indexed_name = format!("{}[{}]", pin_name_str, i);
+                debug!("Adding expanded bus pin '{}' for component '{}'", indexed_name, component_type);
+                netlist.add_port(module_id, indexed_name.clone(), port_direction, None);
+                netlist.add_pin(module_id, indexed_name, pin_direction, pin_type);
+            }
+            return;
+        }
+
         debug!("Adding pin '{}' for component '{}'", pin_name_str, component_type);
         netlist.add_port(module_id, pin_name_str.clone(), port_direction, None);
         let pin_id = netlist.add_pin(module_id, pin_name_str, pin_direction, pin_type);
@@ -3056,6 +3072,29 @@ fn connect_pin_to_net(
                 break;
             }
         }
+        // Whole-bus reference: `inst.VCCO` where VCCO was declared as a bus
+        // pin (`pin VCCO[4]`) and expanded to VCCO[0]..VCCO[N-1]. A
+        // suffix-less reference ties the whole bank to the net as a unit.
+        if !connected && !pin_name.contains('[') {
+            let bus_prefix = format!("{}[", pin_name);
+            let member_names: Vec<String> = netlist.instances.get(inst_id)
+                .and_then(|inst| netlist.modules.get(inst.definition))
+                .map(|module| module.pins.iter()
+                    .filter_map(|&pid| netlist.pins.get(pid))
+                    .filter(|p| p.name.starts_with(&bus_prefix))
+                    .map(|p| p.name.clone())
+                    .collect())
+                .unwrap_or_default();
+            for member in &member_names {
+                if let Some(pin_inst_id) = netlist.find_pin_instance(inst_id, member) {
+                    netlist.connect(net_id, ConnectionPoint::PinInstance(pin_inst_id))
+                        .map_err(|e| anyhow::anyhow!("Failed to connect pin: {}", e))?;
+                    println!("  Connected {} to {} (bus member '{}')", desc, target_desc, member);
+                    info!("  Connected {} to {} (bus member '{}')", desc, target_desc, member);
+                    connected = true;
+                }
+            }
+        }
         if !connected {
             warn!("  Could not find pin '{}' on instance", pin_name);
         }
@@ -3217,6 +3256,43 @@ fn find_instance_by_name_in_context(
 /// Endpoints are returned with their original inner spacing trimmed, e.g.
 /// `["@VIN", "c_in: Cap(22uF).1"]` — the same shape `process_flow_parts`
 /// already consumes.
+/// Literal bus indices of a bus pin declaration, if its suffix is a
+/// compile-time literal. `pin VCCO[4]` (size form) → `[0, 1, 2, 3]`;
+/// `pin D[7:0]` (range form) → `[0..=7]`. Returns `None` for plain pins
+/// and for parameterized suffixes (`pin VCCO[N]`), which are resolved by
+/// monomorphization (`resolved_bus_sizes`) instead.
+/// Names a pin declaration contributes to its module: a plain pin yields
+/// its own name; a literal bus pin (`pin VCCO[4]` / `pin D[7:0]`) yields
+/// one indexed name per member (`VCCO[0]`..`VCCO[3]`) — the same naming
+/// the monomorphization (resolved_bus_sizes) expansion uses, so indexed
+/// references (`inst.VCCO[0]`) resolve to real pin instances.
+pub(crate) fn expand_bus_pin_names(pin: &bhdl_ast::common::PinDecl, base_name: &str) -> Vec<String> {
+    match literal_bus_indices(pin) {
+        Some(indices) => indices
+            .iter()
+            .map(|i| format!("{}[{}]", base_name, i))
+            .collect(),
+        None => vec![base_name.to_string()],
+    }
+}
+
+pub(crate) fn literal_bus_indices(pin: &bhdl_ast::common::PinDecl) -> Option<Vec<i64>> {
+    let suffix = pin.bus_suffix()?;
+    let text = suffix.syntax().text().to_string();
+    let inner = text.trim().trim_start_matches('[').trim_end_matches(']').trim().to_string();
+    if let Some((h, l)) = inner.split_once(':') {
+        match (h.trim().parse::<i64>(), l.trim().parse::<i64>()) {
+            (Ok(h), Ok(l)) => {
+                let (lo, hi) = if l <= h { (l, h) } else { (h, l) };
+                Some((lo..=hi).collect())
+            }
+            _ => None,
+        }
+    } else {
+        inner.parse::<i64>().ok().filter(|n| *n > 0).map(|n| (0..n).collect())
+    }
+}
+
 fn extract_flow_chain_ast(node: &SyntaxNode<BhdlLanguage>) -> Vec<String> {
     let mut parts: Vec<String> = Vec::new();
     let mut current = String::new();
@@ -3254,4 +3330,52 @@ fn extract_flow_chain_ast(node: &SyntaxNode<BhdlLanguage>) -> Vec<String> {
     }
     flush(&mut parts, &mut current);
     parts
+}
+#[cfg(test)]
+mod bus_pin_tests {
+    use super::*;
+
+    /// Parse a snippet and pull out the first PinDecl of the first entity.
+    fn first_pin_decl(src: &str) -> bhdl_ast::common::PinDecl {
+        let parsed = bhdl_parser::parse(src);
+        assert!(parsed.errors().is_empty(), "parse errors: {:?}", parsed.errors());
+        parsed
+            .syntax()
+            .descendants()
+            .find_map(bhdl_ast::common::PinDecl::cast)
+            .expect("no PinDecl in snippet")
+    }
+
+    #[test]
+    fn literal_size_bus_pin_expands_zero_based() {
+        let pin = first_pin_decl("entity E() { pin VCCO[4]: power in; }");
+        assert_eq!(literal_bus_indices(&pin), Some(vec![0, 1, 2, 3]));
+        assert_eq!(
+            expand_bus_pin_names(&pin, "VCCO"),
+            vec!["VCCO[0]", "VCCO[1]", "VCCO[2]", "VCCO[3]"]
+        );
+    }
+
+    #[test]
+    fn literal_range_bus_pin_expands_inclusive() {
+        let pin = first_pin_decl("entity E() { pin D[7:0]: signal inout; }");
+        assert_eq!(
+            literal_bus_indices(&pin),
+            Some((0..=7).collect::<Vec<i64>>())
+        );
+        assert_eq!(expand_bus_pin_names(&pin, "D").len(), 8);
+    }
+
+    #[test]
+    fn plain_pin_is_not_expanded() {
+        let pin = first_pin_decl("entity E() { pin VCC: power in; }");
+        assert_eq!(literal_bus_indices(&pin), None);
+        assert_eq!(expand_bus_pin_names(&pin, "VCC"), vec!["VCC"]);
+    }
+
+    #[test]
+    fn parameterized_bus_pin_is_left_to_monomorphization() {
+        let pin = first_pin_decl("entity E(N: int) { pin VCCO[N]: power in; }");
+        assert_eq!(literal_bus_indices(&pin), None);
+    }
 }

@@ -726,4 +726,67 @@ alias LM1117_33 = LinearRegulator<3.3V>;
         }
         None
     }
+
+    // ---------------------------------------------------------------
+    // Indexed bus-pin references in v2 connection statements
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn parse_indexed_bus_pin_ref_in_connection() {
+        let input = r#"
+            entity FPGA() {
+                pin VCCO[4]: power in;
+                pin GND: ground;
+            }
+
+            board BusBoard {
+                power VCC_3V3 = 3.3V @ 1A;
+                ground GND;
+
+                fpga: FPGA();
+                @VCC_3V3 -> fpga.VCCO[0];
+                @VCC_3V3 -> fpga.VCCO[3];
+                fpga.GND -> @GND;
+            }
+        "#;
+        let result = parse(input);
+        assert!(result.errors.is_empty(), "Parse errors: {:?}", result.errors);
+
+        let root = result.syntax();
+        let board = find_node(&root, BOARD_DEF).expect("No BOARD_DEF");
+
+        // The indexed refs must parse as PIN_REF nodes carrying a
+        // BUS_SUFFIX child (not choke on the '[').
+        let pin_refs: Vec<_> = find_all_nodes(&board, PIN_REF)
+            .into_iter()
+            .filter(|n| n.text().to_string().contains("VCCO"))
+            .collect();
+        assert_eq!(pin_refs.len(), 2, "Expected two VCCO pin refs, got: {:?}",
+            pin_refs.iter().map(|n| n.text().to_string()).collect::<Vec<_>>());
+        for pin_ref in &pin_refs {
+            let suffix = find_all_nodes(pin_ref, BUS_SUFFIX);
+            assert_eq!(suffix.len(), 1,
+                "PIN_REF '{}' should carry one BUS_SUFFIX", pin_ref.text());
+        }
+        assert!(pin_refs.iter().any(|n| n.text().to_string().contains("[0]")));
+        assert!(pin_refs.iter().any(|n| n.text().to_string().contains("[3]")));
+    }
+
+    #[test]
+    fn parse_indexed_bus_pin_ref_on_inline_instantiation() {
+        // Bus index after an inline component instantiation's pin access:
+        // `fpga2: FPGA().VCCO[1]`.
+        let input = r#"
+            entity FPGA() {
+                pin VCCO[4]: power in;
+            }
+
+            board BusBoard2 {
+                power VCC_3V3 = 3.3V @ 1A;
+                @VCC_3V3 -> fpga2: FPGA().VCCO[1];
+            }
+        "#;
+        let result = parse(input);
+        assert!(result.errors.is_empty(), "Parse errors: {:?}", result.errors);
+    }
 }

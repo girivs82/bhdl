@@ -302,6 +302,10 @@ impl<'t> Parser<'t> {
                                 match self.peek() {
                                     Some(SyntaxKind::IDENT) | Some(SyntaxKind::NUMBER) | Some(SyntaxKind::UNIT_IDENTIFIER) => {
                                         self.bump(); // Consume pin identifier/number/unit (for pins like .A, .K)
+                                        // Bus index on the pin: FPGA().VCCO[0]
+                                        if self.peek() == Some(SyntaxKind::L_BRACKET) {
+                                            self.parse_bus_suffix();
+                                        }
                                     }
                                     Some(SyntaxKind::PLUS) | Some(SyntaxKind::MINUS) => {
                                         self.bump(); // Consume + or - as pin names (for capacitor pins)
@@ -385,6 +389,13 @@ impl<'t> Parser<'t> {
                                     self.error("Expected pin name after '.'".to_string());
                                 }
                             }
+                            // Optional bus index on the pin segment:
+                            // fpga.VCCO[0] — indexed reference into a bus
+                            // pin (pin VCCO[4]), parsed as a BUS_SUFFIX
+                            // child of the PIN_REF.
+                            if self.peek() == Some(SyntaxKind::L_BRACKET) {
+                                self.parse_bus_suffix();
+                            }
                             // Continue consuming `.IDENT` segments for nested
                             // sub-interface field access.
                             while self.peek() == Some(SyntaxKind::DOT) {
@@ -403,6 +414,11 @@ impl<'t> Parser<'t> {
                                     | Some(SyntaxKind::UNIT_IDENTIFIER) => {
                                         self.bump(); // DOT
                                         self.bump(); // segment
+                                        // Bus index on a nested segment too:
+                                        // mc.lane0.DQ[3]
+                                        if self.peek() == Some(SyntaxKind::L_BRACKET) {
+                                            self.parse_bus_suffix();
+                                        }
                                     }
                                     _ => break,
                                 }

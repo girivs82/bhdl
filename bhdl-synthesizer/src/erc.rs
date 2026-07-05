@@ -784,6 +784,12 @@ pub fn check_rail_budget(
     let mut out = Vec::new();
     // rail net → (declared draw sum, declared count, undeclared count, names)
     let mut per_rail: HashMap<NetId, (f64, usize, usize, Vec<String>)> = HashMap::new();
+    // The declared draw (`i_supply`) is a PER-INSTANCE figure. An instance
+    // with several power pins on the same rail (an expanded bus bank —
+    // VCCO[0..3] — or paired VCC pins) must count once per rail, not once
+    // per pin.
+    let mut seen: std::collections::HashSet<(NetId, bhdl_netlist::types::InstanceId)> =
+        std::collections::HashSet::new();
     for pi in netlist.pin_instances.values() {
         let Some(pin) = netlist.pins.get(pi.pin_def) else { continue };
         if !matches!(pin.direction, PinDirection::Power) {
@@ -798,6 +804,9 @@ pub fn check_rail_budget(
         }
         let Some(inst) = netlist.instances.get(pi.instance) else { continue };
         if is_phantom(netlist, inst) {
+            continue;
+        }
+        if !seen.insert((net_id, pi.instance)) {
             continue;
         }
         let draw = ["i_supply", "supply_current", "i_quiescent"]

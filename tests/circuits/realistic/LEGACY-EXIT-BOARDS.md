@@ -14,10 +14,13 @@ Every board in the corpus now passes. Across the three passes: 27 → 51 →
   tests, and coverage duplicates (each deletion recorded in the git log
   of commits 9f6d346 and the campaign-closing commit).
 
-## Known toolchain gap (discovered by fpga_dev_board_comprehensive)
+## Toolchain gap (discovered by fpga_dev_board_comprehensive) — FIXED
 
-Bus-pin DECLARATIONS parse (`pin VCCO[4]: power in;`) but indexed refs
-(`fpga.VCCO[0]`) do NOT parse in v2 arrow statements (the PIN_REF path in
-bhdl-parser/src/expressions.rs has no bracket handling), and the legacy
-port-mapping block parses but silently fails to lower connections. Until
-fixed, bus pins are wired as a unit.
+Indexed bus-pin refs (`fpga.VCCO[0]`) now parse in v2 arrow statements
+(PIN_REF carries a BUS_SUFFIX), literal bus-pin declarations
+(`pin VCCO[4]` / `pin D[7:0]`) expand to indexed pin instances in the
+netlist, and a suffix-less ref (`fpga.VCCO`) ties the whole bank to a
+net as a unit. fpga_dev_board_comprehensive wires VCCO per-index.
+Still open: the legacy port-mapping block form (`inst: Type() { PIN <-
+net; }`) parses but does not lower connections — v2 arrow statements
+are the supported form.

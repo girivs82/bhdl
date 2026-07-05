@@ -233,6 +233,30 @@ impl EntityVariantManager {
                             info!("Processing virtual pin '{}' in entity", pin_name_str);
                             // TODO: Retrieve intent information from analysis result for this virtual pin
                             self.expand_virtual_pin(netlist, variant_id, &pin_name_str, pin_type, direction, None)?;
+                        } else if let Some(indices) =
+                            crate::hierarchical_connectivity::literal_bus_indices(&pin_decl)
+                        {
+                            // Literal bus pin (`pin VCCO[4]` / `pin D[7:0]`):
+                            // expand to indexed pins — same naming as the
+                            // monomorphization (resolved_bus_sizes) path — so
+                            // indexed references (`inst.VCCO[0]`) resolve to
+                            // real pin instances.
+                            for i in indices {
+                                let indexed_name = format!("{}[{}]", pin_name_str, i);
+                                info!("Adding expanded bus pin '{}' to entity variant", indexed_name);
+                                netlist.add_port(
+                                    variant_id,
+                                    indexed_name.clone(),
+                                    PortDirection::InOut,
+                                    None
+                                );
+                                netlist.add_pin(
+                                    variant_id,
+                                    indexed_name,
+                                    direction,
+                                    pin_type
+                                );
+                            }
                         } else {
                             // Regular pin - add normally
                             // Add port and pin to the variant

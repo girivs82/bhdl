@@ -3,10 +3,11 @@
 // pins (VCCO[4]), a two-branch supply tree off VIN_5V (both rails
 // chooser-picked, drawing from ONE shared input bank on VIN_5V),
 // per-rail decoupling, and a blinky so signal nets exist.
-// NOTE: the bus-pin DECLARATION (pin VCCO[4]) parses, but indexed refs
-// (fpga.VCCO[0]) don't parse in v2 arrow statements, and the legacy
-// port-mapping block parses without lowering connections — so the VCCO
-// bank is tied to its rail as a unit (the netlist carries it as one pin).
+// NOTE: bus pins are fully supported: the declaration (pin VCCO[4])
+// expands to indexed pin instances (VCCO[0]..VCCO[3]) in the netlist,
+// and v2 arrow statements accept per-index refs (fpga.VCCO[0]) — wired
+// per-index below. A suffix-less ref (fpga.VCCO) still ties the whole
+// bank to a net as a unit.
 // Expected: 0 DRC violations.
 
 import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
@@ -57,7 +58,10 @@ board FPGADevBoard {
     fpga: FPGA();
     @VCC_1V2 -> fpga.VCCINT;
     @VCC_3V3 -> fpga.VCCAUX;
-    @VCC_3V3 -> fpga.VCCO;       // VCCO[0..3] I/O-bank bus, tied as a unit
+    @VCC_3V3 -> fpga.VCCO[0];    // four I/O banks, wired per-index
+    @VCC_3V3 -> fpga.VCCO[1];
+    @VCC_3V3 -> fpga.VCCO[2];
+    @VCC_3V3 -> fpga.VCCO[3];
     fpga.GND -> @GND;
 
     // ── Clock source + blinky + DONE test point ──
