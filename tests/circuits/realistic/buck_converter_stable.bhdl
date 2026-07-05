@@ -1,70 +1,58 @@
-// Realistic Buck Converter with Proper Compensation
-// 12V to 5V @ 3A with Type II compensation
+// Buck converter with staged output banks + Type II compensation network —
+// regenerated to v2 from the v1 dialect (alias Module controller, inline
+// `X -> NAME(args).1` instantiation, type=/power= reserved-word args).
+//
+// 12V → 5V @ 3A, hand-wired TPS54302. The v1 board's discrete controller had
+// a COMP pin for its Type II compensation network; the TPS54302 is internally
+// compensated and has no COMP pin, so the v1 network (10k + 4.7nF series to
+// ground, 47pF parallel) is preserved off the FB node as this fixture's RC
+// subject — the values are the point, not loop math.
+
+import { TPS54302 } from "bhdl-stdlib/power/tps54302.bhdl";
+import { Cap, ElectrolyticCap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Ind } from "bhdl-stdlib/passives/inductor.bhdl";
 
 board BuckConverterStable {
-    // Power declarations
     power VIN_12V = 12V @ 5A;
     power VOUT_5V = 5V @ 3A;
     ground GND;
-    
-    // Input filtering with damped LC
-    VIN_12V -> CIN_BULK(470uF, voltage=25V).1;
-    CIN_BULK.2 -> CIN_ESR(20mOhm).1 -> GND;
-    
-    // High frequency ceramic bypass
-    VIN_12V -> CIN_HF(10uF, voltage=25V, type="X7R").1;
-    CIN_HF.2 -> GND;
-    
-    // Buck controller IC (placeholder for real controller)
-    alias BuckController = Module {
-        pin VIN: power in;
-        pin SW: power out;
-        pin FB: signal in;
-        pin COMP: signal inout;
-        pin GND: ground in;
-    };
-    
-    // Controller connections
-    VIN_12V -> CTRL(BuckController).VIN;
-    CTRL.GND -> GND;
-    
-    // Power stage with realistic inductor
-    CTRL.SW -> L1(15uH, current=5A, dcr=8mOhm).1;
-    L1.2 -> VOUT_5V;
-    
-    // Output capacitor bank for low impedance
-    // Bulk electrolytic for energy storage
-    VOUT_5V -> COUT_BULK(220uF, voltage=10V, esr=50mOhm).1;
-    COUT_BULK.2 -> GND;
-    
-    // Mid-frequency ceramic
-    VOUT_5V -> COUT_MID(47uF, voltage=10V, type="X7R").1;
-    COUT_MID.2 -> GND;
-    
-    // High-frequency ceramic near load
-    VOUT_5V -> COUT_HF(10uF, voltage=10V, type="X7R").1;
-    COUT_HF.2 -> GND;
-    
-    // Feedback divider (5V -> 0.8V reference)
-    VOUT_5V -> RFB_TOP(52.3k, tolerance=1%).1;
-    RFB_TOP.2 -> CTRL.FB;
-    CTRL.FB -> RFB_BOT(10k, tolerance=1%).1;
-    RFB_BOT.2 -> GND;
-    
-    // Type II compensation network
-    // Zero at ~3kHz for phase boost
-    CTRL.FB -> RCOMP(22k).1;
-    RCOMP.2 -> CTRL.COMP;
-    
-    // Pole at origin for DC gain
-    CTRL.COMP -> CCOMP1(4.7nF, type="C0G").1;
-    CCOMP1.2 -> GND;
-    
-    // High frequency pole at ~150kHz
-    CTRL.COMP -> CCOMP2(47pF, type="C0G").1;
-    CCOMP2.2 -> CTRL.FB;
-    
-    // Load
-    VOUT_5V -> RLOAD(1.67, power=10W).1;
-    RLOAD.2 -> GND;
+
+    // ── Input bank: bulk electrolytic + HF ceramic ──
+    @VIN_12V -> c_in_bulk: ElectrolyticCap(470uF, 25V).pos;
+    c_in_bulk.neg -> @GND;
+    @VIN_12V -> c_in_hf: Cap(10uF, 25V).1; c_in_hf.2 -> @GND;
+
+    // ── Regulator ──
+    @VIN_12V -> u1: TPS54302().VIN;
+    @VIN_12V -> u1.EN;              // always enabled
+    u1.GND -> @GND;
+
+    // Bootstrap: BOOT → 100nF → PH.
+    u1.BOOT -> c_boot: Cap(100nF).1; c_boot.2 -> u1.PH;
+
+    // ── Power stage: SW → 8.2µH → VOUT ──
+    u1.SW -> l1: Ind(8.2uH, 5A).1;
+    l1.2 -> @VOUT_5V;
+
+    // ── Staged output bank: bulk electrolytic + mid/HF ceramics ──
+    @VOUT_5V -> c_out_bulk: ElectrolyticCap(100uF, 10V).pos;
+    c_out_bulk.neg -> @GND;
+    @VOUT_5V -> c_out_mid: Cap(47uF, 10V).1; c_out_mid.2 -> @GND;
+    @VOUT_5V -> c_out_hf: Cap(10uF, 10V).1; c_out_hf.2 -> @GND;
+
+    // ── Feedback divider: Vout = 0.596V · (1 + 22k/3k) ≈ 5V ──
+    @VOUT_5V -> r_fb_top: Res(22k, tolerance=1%).1;
+    r_fb_top.2 -> u1.FB;
+    u1.FB -> r_fb_bot: Res(3k, tolerance=1%).1; r_fb_bot.2 -> @GND;
+
+    // ── Type II compensation network (v1 values, kept off the FB node) ──
+    // Series R-C to ground (zero for phase boost) …
+    u1.FB -> r_comp: Res(10k).1;
+    r_comp.2 -> c_comp1: Cap(4.7nF).1; c_comp1.2 -> @GND;
+    // … plus a parallel HF-pole cap across the same node.
+    u1.FB -> c_comp2: Cap(47pF).1; c_comp2.2 -> r_comp.2;
+
+    // ── Load ──
+    @VOUT_5V -> r_load: Res(1.67).1; r_load.2 -> @GND;
 }

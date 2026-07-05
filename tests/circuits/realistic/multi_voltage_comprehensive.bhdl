@@ -1,231 +1,87 @@
-//! Comprehensive Multi-Voltage Domain Integration Test
-//! Tests all power domain features with realistic multi-voltage design
-//!
-//! Features tested:
-//! - Multiple voltage domains (1.0V, 1.8V, 3.3V, 5V)
-//! - Wildcard expansion (sensor[*])
-//! - Range patterns (led[0..7])
-//! - Near-component decoupling
-//! - Distributed decoupling
-//! - Pattern detection in documentation
-//!
-//! Expected Results:
-//! - 4 power domains
-//! - 50+ power connections
-//! - 30+ decoupling capacitors
+// Multi-voltage supply-tree showcase — regenerated to v2 from the v1
+// wildcard/range-pattern dialect (sensor[*], led[0..7], distributed
+// decoupling annotations). The v2 point: the ENTIRE power architecture is
+// supply statements — 12V → 5V (named TPS54302), then 3.3V and 1.8V both
+// cascaded from the 5V rail (chooser-selected, sharing one input bank on
+// VCC_5V), with ERC016 rail budgets covering the declared loads PLUS each
+// generated regulator's stamped input draw, and power-up order derived from
+// the tree. Expected: 0 DRC violations.
 
-import { Resistor } from "bhdl-stdlib/passives/resistor.bhdl";
-import { Capacitor } from "bhdl-stdlib/passives/capacitor.bhdl";
-import { Inductor } from "bhdl-stdlib/passives/inductor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { TestPoint } from "bhdl-stdlib/connectors/testpoint.bhdl";
 
-board MultiVoltageSystem {
-    // ===== 1.0V Core Components =====
-    // FPGA or processor core (high current)
-    core_0: Resistor(1);  // Simulating core power pins
-    core_1: Resistor(1);
-    core_2: Resistor(1);
-    core_3: Resistor(1);
+// ── Board-local load abstractions ──
 
-    // ===== 1.8V I/O Components =====
-    // DDR memory and high-speed I/O
-    ddr_chip_0: Resistor(10);
-    ddr_chip_1: Resistor(10);
-    io_buffer_0: Resistor(100);
-    io_buffer_1: Resistor(100);
+entity Mcu() {
+    pin VCC: power in;
+    pin GND: ground;
+    pin TX: signal out;
+    pin STATUS: signal out;
 
-    // ===== 3.3V Logic Components =====
-    // Sensors with wildcard expansion
-    sensor_0: Resistor(1k);
-    sensor_1: Resistor(1k);
-    sensor_2: Resistor(1k);
-    sensor_3: Resistor(1k);
-    sensor_4: Resistor(1k);
-    sensor_5: Resistor(1k);
-    sensor_6: Resistor(1k);
-    sensor_7: Resistor(1k);
-
-    // MCU and peripherals
-    mcu: Resistor(100);
-    flash: Resistor(10k);
-    eeprom: Resistor(10k);
-
-    // ===== 5V Power Components =====
-    // Motor drivers and high-power peripherals
-    motor_driver: Resistor(5);
-    relay_driver_0: Resistor(100);
-    relay_driver_1: Resistor(100);
-
-    // LED array for pattern testing
-    led_0: Resistor(470);
-    led_1: Resistor(470);
-    led_2: Resistor(470);
-    led_3: Resistor(470);
-    led_4: Resistor(470);
-    led_5: Resistor(470);
-    led_6: Resistor(470);
-    led_7: Resistor(470);
-
-    // ===== Power Domain: 1.0V Core =====
-    power_domain @VCCINT = 1.0V @ 10A {
-        sources {
-            // High current buck converter
-        }
-
-        distribution {
-            // All core power pins
-            core_0.1;
-            core_1.1;
-            core_2.1;
-            core_3.1;
-        }
-
-        decoupling {
-            // Bulk capacitance for core
-            near core_0: 220µF @ 2;
-            near core_0: 100µF @ 4;
-
-            // High-frequency decoupling at each core pin
-            near core_0: 100nF @ 4;
-            near core_1: 100nF @ 4;
-            near core_2: 100nF @ 4;
-            near core_3: 100nF @ 4;
-
-            // Distributed across board
-            distributed: 22µF @ 4;
-            distributed: 10µF @ 8;
-            distributed: 1µF @ 8;
-        }
-    }
-
-    // ===== Power Domain: 1.8V DDR/IO =====
-    power_domain @VDD_DDR = 1.8V @ 3A {
-        sources {
-            // LDO from 3.3V
-        }
-
-        distribution {
-            // DDR chips
-            ddr_chip_0.1;
-            ddr_chip_1.1;
-
-            // I/O buffers
-            io_buffer_0.1;
-            io_buffer_1.1;
-        }
-
-        decoupling {
-            // Near DDR chips
-            near ddr_chip_0: 100µF @ 2;
-            near ddr_chip_0: 47µF @ 2;
-            near ddr_chip_0: 10µF @ 4;
-            near ddr_chip_1: 100µF @ 2;
-            near ddr_chip_1: 47µF @ 2;
-            near ddr_chip_1: 10µF @ 4;
-
-            // Near I/O buffers
-            near io_buffer_0: 10µF;
-            near io_buffer_0: 1µF;
-            near io_buffer_0: 100nF;
-            near io_buffer_1: 10µF;
-            near io_buffer_1: 1µF;
-            near io_buffer_1: 100nF;
-
-            // Distributed
-            distributed: 22µF @ 2;
-            distributed: 10µF @ 4;
-            distributed: 1µF @ 8;
-        }
-    }
-
-    // ===== Power Domain: 3.3V Logic =====
-    power_domain @VCC_3V3 = 3.3V @ 5A {
-        sources {
-            // Main system regulator
-        }
-
-        distribution {
-            // Sensor array - wildcard expansion
-            sensor[*].1;
-
-            // MCU and memories
-            mcu.1;
-            flash.1;
-            eeprom.1;
-        }
-
-        decoupling {
-            // Near MCU
-            near mcu: 100µF;
-            near mcu: 47µF;
-            near mcu: 10µF @ 2;
-            near mcu: 1µF @ 4;
-
-            // Near memories
-            near flash: 10µF;
-            near flash: 1µF;
-            near flash: 100nF;
-            near eeprom: 10µF;
-            near eeprom: 1µF;
-            near eeprom: 100nF;
-
-            // Distributed for sensors
-            distributed: 47µF @ 4;
-            distributed: 10µF @ 8;
-            distributed: 1µF @ 16;
-            distributed: 100nF @ 8;
-        }
-    }
-
-    // ===== Power Domain: 5V Power =====
-    power_domain @VCC_5V = 5V @ 3A {
-        sources {
-            // External power supply or boost converter
-        }
-
-        distribution {
-            // Motor and relay drivers
-            motor_driver.1;
-            relay_driver_0.1;
-            relay_driver_1.1;
-
-            // LED array - use wildcard for all
-            led[*].1;
-        }
-
-        decoupling {
-            // Bulk near motor driver
-            near motor_driver: 470µF @ 2;
-            near motor_driver: 220µF @ 2;
-
-            // Near relay drivers
-            near relay_driver_0: 100µF;
-            near relay_driver_0: 47µF;
-            near relay_driver_1: 100µF;
-            near relay_driver_1: 47µF;
-
-            // Distributed
-            distributed: 100µF @ 2;
-            distributed: 47µF @ 4;
-            distributed: 10µF @ 8;
-        }
-    }
-
-    // ===== Ground =====
-    ground GND;
+    attribute component_class = "microcontroller";
+    attribute i_supply = 150mA;
 }
 
-// Expected Statistics:
-// - Power Domains: 4
-// - Total Connections:
-//   * VCCINT: 4 (core pins)
-//   * VDD_DDR: 4 (2 DDR + 2 I/O buffers)
-//   * VCC_3V3: 11 (8 sensors + 3 peripherals)
-//   * VCC_5V: 11 (1 motor + 2 relay + 8 LEDs)
-//   Total: 30 power connections
-//
-// - Decoupling Capacitors:
-//   * VCCINT: 22 caps (bulk + per-pin + distributed)
-//   * VDD_DDR: 26 caps (DDR + I/O + distributed)
-//   * VCC_3V3: 43 caps (MCU + memories + distributed)
-//   * VCC_5V: 20 caps (motor + relays + distributed)
-//   Total: ~111 capacitors
+entity Radio() {
+    pin VCC: power in;
+    pin GND: ground;
+    pin RX: signal in;
+
+    attribute component_class = "transceiver";
+    attribute i_supply = 80mA;
+}
+
+entity CoreLogic() {
+    pin VCC: power in;
+    pin GND: ground;
+    pin EN: signal in;
+
+    attribute component_class = "logic";
+    attribute i_supply = 120mA;
+}
+
+board MultiVoltageSystem {
+    power VIN_12V = 12V @ 4A;
+    power VCC_5V = 5V @ 2A;
+    power VCC_3V3 = 3.3V @ 1A;
+    power VCC_1V8 = 1.8V @ 300mA;
+    ground GND;
+
+    // ── Power tree — all regulation auto-generated ──
+    supply @VCC_5V from @VIN_12V {
+        ripple_max: 50mV;
+        using: TPS54302;
+    }
+
+    supply @VCC_3V3 from @VCC_5V {
+        ripple_max: 30mV;
+        profile: efficiency;
+    }
+
+    // profile: cost picks the LM317 here, which trips ERC017 (2V dropout
+    // won't regulate 5V → 1.8V) — so let the chooser optimize efficiency.
+    supply @VCC_1V8 from @VCC_5V {
+        ripple_max: 20mV;
+        profile: efficiency;
+    }
+
+    // ── Loads, one per generated rail ──
+    // Mcu lives on 3.3V so its TX drives the radio in-domain (ERC004).
+    mcu: Mcu();
+    @VCC_3V3 -> mcu.VCC; mcu.GND -> @GND;
+
+    radio: Radio();
+    @VCC_3V3 -> radio.VCC; radio.GND -> @GND;
+    mcu.TX -> radio.RX;
+
+    core: CoreLogic();
+    @VCC_1V8 -> core.VCC; core.GND -> @GND;
+    @VCC_1V8 -> core.EN;             // enable strapped to its own rail
+    @STATUS_LED_NET -> tp_status: TestPoint().1;
+    mcu.STATUS -> @STATUS_LED_NET;
+
+    // ── Decoupling per load rail ──
+    @VCC_5V -> c_dec_5v: Cap(100nF).1; c_dec_5v.2 -> @GND;
+    @VCC_3V3 -> c_dec_3v3: Cap(100nF).1; c_dec_3v3.2 -> @GND;
+    @VCC_1V8 -> c_dec_1v8: Cap(100nF).1; c_dec_1v8.2 -> @GND;
+}
