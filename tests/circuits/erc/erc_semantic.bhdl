@@ -1,0 +1,64 @@
+// ERC batch-2 test board — datasheet/budget/connectivity mistakes a design
+// engineer catches that a netlist-only tool cannot. Expected findings:
+//   ERC017  ldo: 3.3V rail < 3.0V out + 0.5V dropout (cannot regulate)
+//   ERC018  six: 12V rail exceeds the part's 6V input_voltage_max
+//   ERC016  VBAT_3V3 declares 50mA; l1+l2 declare 40mA each (80mA total)
+//   ERC009  sh.GND wired onto the 12V rail (rail-ground short)
+//   ERC008  @lonely: single-member net (typo'd name)
+//   ERC007  fl.VCC unconnected (dead part)   ERC006 floating inputs
+//   ERC011  r1 with a dangling leg
+//   ERC020  rails carry no capacitors (Info)
+
+board ErcSemantic {
+    power VBAT_3V3 = 3.3V @ 50mA;
+    power VIN_12V = 12V @ 100mA;
+    power V30 = 3.0V @ 10mA;
+    ground GND;
+
+    ldo: TightLdo();   @VBAT_3V3 -> ldo.VIN;  ldo.GND -> @GND;  ldo.VOUT -> @V30;
+    six: SixVoltMax(); @VIN_12V -> six.VCC;   six.GND -> @GND;
+    l1: Load40();      @VBAT_3V3 -> l1.VCC;   l1.GND -> @GND;   l1.IN -> six.OUT2;
+    l2: Load40();      @VBAT_3V3 -> l2.VCC;   l2.GND -> @GND;   l2.IN -> six.OUT3;
+    sh: Load40();      @VIN_12V -> sh.VCC;    sh.GND -> @VIN_12V;   // short!
+    fl: Load40();      fl.IN -> six.OUT4;     // VCC/GND never wired
+
+    six.OUT -> @lonely;                        // nothing else on this net
+
+    @VBAT_3V3 -> r1: Res(1k).1;                // leg 2 dangles
+}
+
+entity TightLdo() {
+    pin VIN: power in;
+    pin GND: ground;
+    pin VOUT: power out;
+
+    attribute component_class = "ldo";
+    attribute output_voltage  = 3.0V;
+    attribute dropout_voltage = 0.5V;
+}
+
+entity SixVoltMax() {
+    pin VCC: power in;
+    pin GND: ground;
+    pin OUT: signal out;
+    pin OUT2: signal out;
+    pin OUT3: signal out;
+    pin OUT4: signal out;
+
+    attribute input_voltage_max = 6V;
+}
+
+entity Load40() {
+    pin VCC: power in;
+    pin GND: ground;
+    pin IN: signal in;
+
+    attribute i_supply = 40mA;
+}
+
+entity Res(value: resistance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+
+    attribute component_class = "resistor";
+}

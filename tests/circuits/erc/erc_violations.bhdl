@@ -7,6 +7,8 @@
 //   ERC004  m.IO (3.3V domain) → f.A (5V domain), no level shifter
 //   ERC005  SDA/SCL with no pull-up resistors
 
+import { Mcu, Radio, FiveLogic, Sensor, Shifter } from "tests/circuits/erc/erc_lib.bhdl";
+
 board ErcViolations {
     power VCC_3V3 = 3.3V @ 1A;
     power VCC_5V = 5V @ 1A;
@@ -30,42 +32,4 @@ board ErcViolations {
 
     m.SDA -> s.SDA;     // ERC005: open-drain bus, no pull-ups
     m.SCL -> s.SCL;
-}
-
-entity Mcu() {
-    pin VCC: power in;
-    pin GND: ground;
-    pin OUT1: signal out;
-    pin IN1: signal in;
-    pin D_P: signal inout;
-    pin D_N: signal inout;
-    pin TX: signal out;
-    pin RX: signal in;
-    pin IO: signal out;
-    pin SDA: signal inout;
-    pin SCL: signal inout;
-}
-
-entity Radio() {
-    pin VCC: power in;
-    pin GND: ground;
-    pin OUT1: signal out;
-    pin IN1: signal in;
-    pin D_P: signal inout;
-    pin D_N: signal inout;
-    pin TX: signal out;
-    pin RX: signal in;
-}
-
-entity FiveLogic() {
-    pin VCC: power in;
-    pin GND: ground;
-    pin A: signal in;
-}
-
-entity Sensor() {
-    pin VCC: power in;
-    pin GND: ground;
-    pin SDA: signal inout;
-    pin SCL: signal inout;
 }

@@ -1,0 +1,52 @@
+// Shared test entities for the ERC fixtures. IMPORTED (not same-file) on
+// purpose: same-file entity pins currently drop out of connectivity in
+// several wiring forms (docs/spec/ERC.md batch-3 known quirks) — the import
+// path is the reliable one, and it is also how real boards use real parts.
+
+entity Mcu() {
+    pin VCC: power in;
+    pin GND: ground;
+    pin OUT1: signal out;
+    pin IN1: signal in;
+    pin D_P: signal inout;
+    pin D_N: signal inout;
+    pin TX: signal out;
+    pin RX: signal in;
+    pin IO: signal out;
+    pin SDA: signal inout;
+    pin SCL: signal inout;
+}
+
+entity Radio() {
+    pin VCC: power in;
+    pin GND: ground;
+    pin OUT1: signal out;
+    pin IN1: signal in;
+    pin D_P: signal inout;
+    pin D_N: signal inout;
+    pin TX: signal out;
+    pin RX: signal in;
+}
+
+entity FiveLogic() {
+    pin VCC: power in;
+    pin GND: ground;
+    pin A: signal in;
+}
+
+entity Sensor() {
+    pin VCC: power in;
+    pin GND: ground;
+    pin SDA: signal inout;
+    pin SCL: signal inout;
+}
+
+entity Shifter() {
+    pin VCCA: power in;
+    pin VCCB: power in;
+    pin GND: ground;
+    pin A: signal in;
+    pin B: signal out;
+
+    attribute component_class = "level_shifter";
+}

@@ -162,6 +162,48 @@ impl DesignRuleChecker {
                 "Open-drain I2C nets without a pull-up (or pulled to the wrong rail)",
                 crate::erc::check_i2c_pullups,
             ),
+            (
+                "ERC006/007/011",
+                "Unconnected pins",
+                "Floating inputs, unpowered parts, orphan passives",
+                crate::erc::check_unconnected_pins_real,
+            ),
+            (
+                "ERC008",
+                "Single-pin nets",
+                "Nets with exactly one member (typo'd net names)",
+                crate::erc::check_single_pin_nets,
+            ),
+            (
+                "ERC009",
+                "Rail-ground shorts",
+                "Power rails wired to ground-direction pins",
+                crate::erc::check_rail_ground_short,
+            ),
+            (
+                "ERC016",
+                "Rail budgets",
+                "Sum of declared draws vs the rail's declared `@ I` budget",
+                crate::erc::check_rail_budget,
+            ),
+            (
+                "ERC017",
+                "Regulator dropout",
+                "Input rail below output_voltage + dropout_voltage",
+                crate::erc::check_regulator_dropout,
+            ),
+            (
+                "ERC018",
+                "Absolute-maximum input",
+                "Supply rail above the part's declared input_voltage_max",
+                crate::erc::check_abs_max_input,
+            ),
+            (
+                "ERC020",
+                "Decoupling presence",
+                "Active parts on rails with no capacitor at all",
+                crate::erc::check_missing_decoupling,
+            ),
         ] {
             self.rules.push(DesignRule {
                 id: id.to_string(),

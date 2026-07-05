@@ -532,7 +532,7 @@ fn entity_pin_names(src: &str, name: &str) -> Vec<String> {
 /// Numeric SI parse for datasheet attribute text: `"12V"`, `"3.4mA"`,
 /// `"90mΩ"/"90mohm"`, `"570kHz"`, `"2W"`, `"85%"` (→ 0.85), `"20ns"`,
 /// plain numbers. Returns `None` for anything non-numeric.
-fn parse_si_txt(s: &str) -> Option<f64> {
+pub(crate) fn parse_si_txt(s: &str) -> Option<f64> {
     let t = s.trim().trim_matches('"');
     let num_end = t
         .char_indices()
