@@ -150,6 +150,27 @@ impl Svg {
         }
         self.text(ax + 8.0, ay + 4.0, t, cls);
     }
+    /// Place a SIM decoration near its subject or not at all: only the
+    /// close candidate slots are tried — a solved value that drifts into
+    /// another net's lane reads as annotating THAT net (misplacement is
+    /// worse than absence for decorations; the report still carries the
+    /// number).
+    fn place_sim_label(&mut self, ax: f64, ay: f64, t: &str, cls: &str) {
+        const NEAR: [(f64, f64); 3] = [(8.0, 4.0), (8.0, -8.0), (-8.0, 4.0)];
+        let len_w = 6.8 * t.len() as f64;
+        for (dx, dy) in NEAR {
+            let x = if dx < 0.0 { ax + dx - len_w } else { ax + dx };
+            let y = ay + dy;
+            let r = Self::text_rect(t, x, y);
+            let clear = !self.solids.iter().any(|s| s.overlaps(&r.pad(1.0)))
+                && !self.wire_segs.iter().any(|w| w.overlaps(&r));
+            if clear {
+                self.text(x, y, t, cls);
+                return;
+            }
+        }
+        // No clear near slot — drop the decoration.
+    }
     /// Route an orthogonal wire from `from` to `to`: BFS on an 8px grid.
     /// Solids are WALLS (minus the endpoints' own hosts); existing wires
     /// cross at a cost; bends cost extra. Falls back to a plain L if the
@@ -381,6 +402,22 @@ fn solved_v(decor: &SheetDecor, netlist: &Netlist, id: NetId) -> Option<f64> {
     decor.sim?.net_voltages.get(&name).copied()
 }
 
+/// Engineering current format. Returns None below 1µA — a numerically-zero
+/// annotation conveys nothing (and a fixed "%.2fA" format truncated a real
+/// 80µA divider-only load into a meaningless 0.00A).
+fn fmt_sim_i(i: f64) -> Option<String> {
+    let a = i.abs();
+    if a >= 1.0 {
+        Some(format!("{a:.2}A"))
+    } else if a >= 1e-3 {
+        Some(format!("{:.1}mA", a * 1e3))
+    } else if a >= 1e-6 {
+        Some(format!("{:.0}µA", a * 1e6))
+    } else {
+        None
+    }
+}
+
 fn fmt_sim_v(v: f64) -> String {
     if v.abs() >= 1.0 { format!("{v:.2}V") } else { format!("{:.0}mV", v * 1000.0) }
 }
@@ -489,7 +526,7 @@ fn draw_stage(
     // Source flag + bus (+ solved operating point when GLACIER ran).
     svg.rail_flag(x, spine, &net_label(netlist, stage.source_rail), true);
     if let Some(v) = solved_v(decor, netlist, stage.source_rail) {
-        svg.text(x + 4.0, spine + 22.0, &format!("= {}", fmt_sim_v(v)), "sim");
+        svg.place_sim_label(x + 4.0, spine + 20.0, &format!("= {}", fmt_sim_v(v)), "sim");
     }
     x += 20.0;
     let src_bus_start = x;
@@ -535,7 +572,7 @@ fn draw_stage(
                 svg.text(bx + 8.0, by + 16.0, &part, "part");
                 if let Some(p) = decor.sim.and_then(|s| s.instance_power.get(inst)) {
                     if *p > 1e-3 {
-                        svg.text(bx + 8.0, by + 32.0, &format!("{:.2}W", p), "sim");
+                        svg.place_sim_label(bx + 8.0, by + 30.0, &format!("{:.2}W", p), "sim");
                     }
                 }
                 // in pin stub (left mid) — flow pins are IDIOM-owned: the
@@ -783,8 +820,12 @@ fn draw_stage(
                 if !v.is_empty() {
                     svg.place_label(x + 14.0, spine + 18.0, &v, "val");
                 }
-                if let Some(i) = decor.sim.and_then(|s| s.instance_currents.get(inst)) {
-                    svg.place_label(x + 14.0, spine + 32.0, &format!("{:.2}A", i.abs()), "sim");
+                if let Some(txt) = decor
+                    .sim
+                    .and_then(|s| s.instance_currents.get(inst))
+                    .and_then(|i| fmt_sim_i(*i))
+                {
+                    svg.place_sim_label(x + 14.0, spine + 32.0, &txt, "sim");
                 }
                 let _ = &mid_shunt_zone;
                 x += 7.0 + 56.0;
@@ -839,7 +880,7 @@ fn draw_stage(
                 .and_then(|nid| netlist.nets.get(nid).and_then(|n| n.name.clone()))
                 .and_then(|name| sim.net_voltages.get(&name).copied());
             if let Some(v) = fb_net_v {
-                svg.place_label(dx + 12.0, mid, &format!("= {}", fmt_sim_v(v)), "sim");
+                svg.place_sim_label(dx + 12.0, mid, &format!("= {}", fmt_sim_v(v)), "sim");
             }
         }
         // bottom leg
@@ -870,7 +911,7 @@ fn draw_stage(
     svg.wire(&[(tgt_bus_start, spine), (x, spine)]);
     svg.rail_flag(x, spine, &net_label(netlist, stage.target_rail), false);
     if let Some(v) = solved_v(decor, netlist, stage.target_rail) {
-        svg.text(x + 4.0, spine + 22.0, &format!("= {}", fmt_sim_v(v)), "sim");
+        svg.place_sim_label(x + 4.0, spine + 20.0, &format!("= {}", fmt_sim_v(v)), "sim");
     }
     // Also draw the source bus under its shunts.
     svg.wire(&[(src_bus_start, spine), (tgt_bus_start.min(src_bus_start + 1.0).max(src_bus_start), spine)]);
