@@ -1,0 +1,24 @@
+// S4c fixture — shared input bank. Two buck supplies both draw from
+// @VIN_12V: instead of two per-supply c_in1 caps, ONE bank sized for the
+// summed demand is emitted on the input rail (anchored to the file-first
+// supply's stress model; the second supply's input-ripple axis goes to the
+// ERC024 ledger rather than being guessed). The report also derives the
+// power-up order from the tree. Expected: 0 DRC violations, exactly one
+// *_c_in1 instance on VIN_12V.
+
+board SharedBank {
+    power VIN_12V = 12V @ 4A;
+    power VCC_5V = 5V @ 1A;
+    power VCC_3V3 = 3.3V @ 1A;
+    ground GND;
+
+    supply @VCC_5V from @VIN_12V {
+        ripple_max: 50mV;
+        using: TPS54302;
+    }
+
+    supply @VCC_3V3 from @VIN_12V {
+        ripple_max: 30mV;
+        using: TPS54302;
+    }
+}

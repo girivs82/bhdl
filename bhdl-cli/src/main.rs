@@ -571,6 +571,50 @@ async fn main() -> Result<()> {
                 println!("{}", su.generated);
                 println!("```\n");
             }
+            // S4c: the supply tree implies the power-up order — a rail
+            // cannot come up before its source. Derived purely from the
+            // supply edges (declared design facts, no timing guesses).
+            if supply_syntheses.len() > 1
+                || supply_syntheses
+                    .first()
+                    .map(|s| supply_syntheses.iter().any(|o| o.source_rail == s.target_rail))
+                    .unwrap_or(false)
+            {
+                println!("## Power-up order (from the supply tree)\n");
+                let targets: std::collections::HashSet<_> =
+                    supply_syntheses.iter().map(|s| s.target_rail.clone()).collect();
+                let mut level: Vec<String> = supply_syntheses
+                    .iter()
+                    .filter(|s| !targets.contains(&s.source_rail))
+                    .map(|s| s.source_rail.clone())
+                    .collect::<std::collections::HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                level.sort();
+                let mut stage = 1usize;
+                let mut seen: std::collections::HashSet<String> = level.iter().cloned().collect();
+                while !level.is_empty() {
+                    println!("{stage}. {}", level.join(", "));
+                    let mut next: Vec<String> = supply_syntheses
+                        .iter()
+                        .filter(|s| level.contains(&s.source_rail) && !seen.contains(&s.target_rail))
+                        .map(|s| s.target_rail.clone())
+                        .collect();
+                    next.sort();
+                    next.dedup();
+                    for r in &next {
+                        seen.insert(r.clone());
+                    }
+                    level = next;
+                    stage += 1;
+                }
+                println!(
+                    "\n_A rail is listed after its source; sequencing hardware \
+                     (supervisors, EN daisy-chains) is the designer's to add — \
+                     this section states the ORDER the tree implies._\n"
+                );
+            }
+
             println!("## Design, simulation, sign-off and BOM\n");
             cmd_bom(
                 &source_file,

@@ -117,13 +117,29 @@ pub fn desugar_supplies(source: &str, stdlib_root: &Path) -> Result<Option<Desug
     let rails = parse_rails(source);
     let ground = parse_ground(source).unwrap_or_else(|| "GND".to_string());
 
+    // S4c — shared input banks: supplies drawing from the SAME source rail
+    // share one input bank sized for the summed demand instead of each
+    // emitting its own c_in1. Pre-count supplies per source; statements are
+    // processed back-to-front, so each contributor adds its demand and the
+    // FILE-FIRST supply of the group (processed last) emits the bank.
+    let mut shared_c_in: HashMap<String, SharedBank> = HashMap::new();
+    for stmt in &stmts {
+        if let Some(src_rail) = supply_stmt_source(stmt) {
+            shared_c_in
+                .entry(src_rail)
+                .or_insert_with(SharedBank::default)
+                .remaining += 1;
+        }
+    }
+    shared_c_in.retain(|_, b| b.remaining > 1);
+
     let mut supplies = Vec::new();
     // Splice back-to-front so earlier byte ranges stay valid.
     let mut out = source.to_string();
     let mut import_lines: Vec<String> = Vec::new();
 
     for stmt in stmts.iter().rev() {
-        let d = desugar_one(stmt, &rails, &ground, source, stdlib_root)?;
+        let d = desugar_one(stmt, &rails, &ground, source, stdlib_root, &mut shared_c_in)?;
         let range = stmt.text_range();
         let (start, end) = (usize::from(range.start()), usize::from(range.end()));
         out.replace_range(start..end, &d.generated);
@@ -149,12 +165,38 @@ pub fn desugar_supplies(source: &str, stdlib_root: &Path) -> Result<Option<Desug
     Ok(Some(DesugaredSource { source: out, supplies }))
 }
 
+/// S4c accumulator for one shared source rail: how many supplies still owe
+/// their input-cap demand, the running total, and who contributed.
+#[derive(Default)]
+struct SharedBank {
+    remaining: usize,
+    total_c: f64,
+    contributors: Vec<String>,
+}
+
+/// The SOURCE rail name of a supply statement (second rail ident).
+fn supply_stmt_source(stmt: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>) -> Option<String> {
+    let idents: Vec<String> = stmt
+        .children_with_tokens()
+        .filter_map(|el| el.into_token())
+        .filter(|t| t.kind() == SyntaxKind::IDENT)
+        .map(|t| t.text().to_string())
+        .collect();
+    idents
+        .iter()
+        .skip(1)
+        .filter(|t| t.as_str() != "from")
+        .nth(1)
+        .cloned()
+}
+
 fn desugar_one(
     stmt: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>,
     rails: &HashMap<String, RailDecl>,
     ground: &str,
     original: &str,
     stdlib_root: &Path,
+    shared_c_in: &mut HashMap<String, SharedBank>,
 ) -> Result<SupplyDesugar> {
     // Statement-level identifiers: [target, source] are the first two IDENT
     // tokens after the leading `supply` keyword token.
@@ -452,15 +494,49 @@ fn desugar_one(
     // Input cap across the source rail.
     let c_in_seed = (f_sw > 0.0)
         .then(|| i_out_f * duty * (1.0 - duty) / (f_sw * 0.15));
-    if let Some(c) = cap_value(c_in_seed, &["input_capacitor_rec", "input_capacitor_min"])
-        .filter(|_| !self_expanding)
-    {
-        used_cap = true;
-        g.push_str(&format!(
-            "{indent}@{source_rail} -> {instance}_c_in1: Cap({}, expansion_parent=\"{instance}\").1;\n",
-            fmt_si(c, "F")
-        ));
-        g.push_str(&format!("{indent}{instance}_c_in1.2 -> @{ground};\n"));
+    let own_c_in = cap_value(c_in_seed, &["input_capacitor_rec", "input_capacitor_min"])
+        .filter(|_| !self_expanding);
+    match shared_c_in.get_mut(&source_rail) {
+        Some(bank) => {
+            // S4c: pool this supply's demand into the shared bank. EVERY
+            // group member decrements the countdown (a self-expanding part
+            // contributes no S4 demand — its own expansion carries its
+            // input cap — but must not strand the bank); the member that
+            // zeroes it emits the whole bank, sized Σ demands, snapped.
+            if let Some(c) = own_c_in {
+                bank.total_c += c;
+                bank.contributors.push(instance.clone());
+            }
+            bank.remaining -= 1;
+            if bank.remaining == 0 && bank.total_c > 0.0 {
+                // Named as THIS supply's c_in1 (expansion_parent) so its §4
+                // stress model gates the bank; the other contributors'
+                // input-ripple axes go UNCHECKED (ERC024 ledger) rather
+                // than guessed.
+                let total = e_series_nearest(bank.total_c, 12);
+                used_cap = true;
+                g.push_str(&format!(
+                    "{indent}// shared input bank for {} (S4c) — Σ of {} supplies' demand\n",
+                    source_rail,
+                    bank.contributors.len()
+                ));
+                g.push_str(&format!(
+                    "{indent}@{source_rail} -> {instance}_c_in1: Cap({}, expansion_parent=\"{instance}\").1;\n",
+                    fmt_si(total, "F")
+                ));
+                g.push_str(&format!("{indent}{instance}_c_in1.2 -> @{ground};\n"));
+            }
+        }
+        None => {
+            if let Some(c) = own_c_in {
+                used_cap = true;
+                g.push_str(&format!(
+                    "{indent}@{source_rail} -> {instance}_c_in1: Cap({}, expansion_parent=\"{instance}\").1;\n",
+                    fmt_si(c, "F")
+                ));
+                g.push_str(&format!("{indent}{instance}_c_in1.2 -> @{ground};\n"));
+            }
+        }
     }
     // Output cap across the target rail — the ripple form uses the ACTUAL
     // ripple spec when given.

@@ -205,8 +205,18 @@ passes.
   materializing their circuit themselves — S4a emission is for bare
   entities only (both at once would parallel two inductors on SW).
   Fixture: tests/circuits/realistic/test_supply_tree.bhdl.
-  Remaining S4b scope, NOT built: shared input banks, sequencing
-  constraints (the analyzer's power-sequencing pass is the substrate).
+- **S4c — shared input banks + power-up order (BUILT).** Supplies drawing
+  from the SAME source rail share ONE input bank sized for the summed
+  demand (Σ per-supply c_in, E12-snapped) instead of per-supply c_in1s —
+  emitted once, anchored to the file-first supply's stress model
+  (expansion_parent); the other contributors' input-ripple axes go to the
+  ERC024 absence ledger rather than being guessed. Self-expanding parts
+  join the group bookkeeping but contribute no S4 demand (their own
+  expansion carries their input cap). The synthesis report derives the
+  power-up ORDER from the supply tree (a rail after its source, staged
+  BFS) — declared design facts only; sequencing hardware (supervisors,
+  EN daisy-chains) remains the designer's, and timed sequencing
+  constraints are NOT built.
 
 ## 7. Non-goals (for now)
 
