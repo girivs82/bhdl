@@ -55,6 +55,17 @@ pub struct LoopChain {
     pub into_pin: String,
 }
 
+/// A strap: a two-terminal part bridging an IC auxiliary pin to a net on
+/// the stage backbone (the bootstrap cap from BOOT to the switch node).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Strap {
+    pub inst: String,
+    /// The IC pin the strap hangs off (e.g. BOOT).
+    pub ic_pin: String,
+    /// The backbone net the other end taps.
+    pub tap: NetId,
+}
+
 /// One rail-to-rail stage.
 #[derive(Debug, Clone)]
 pub struct StagePlan {
@@ -63,6 +74,7 @@ pub struct StagePlan {
     pub backbone: Vec<BackboneElem>,
     pub shunts: Vec<Shunt>,
     pub loops: Vec<LoopChain>,
+    pub straps: Vec<Strap>,
 }
 
 /// The classified sheet.
@@ -185,6 +197,11 @@ pub fn classify_sheet(netlist: &Netlist) -> SheetPlan {
                     if let Some(id) = find_inst(netlist, i) {
                         claimed.insert(id);
                     }
+                }
+            }
+            for st in &stage.straps {
+                if let Some(id) = find_inst(netlist, &st.inst) {
+                    claimed.insert(id);
                 }
             }
             plan.stages.push(stage);
@@ -433,12 +450,52 @@ fn walk_stage(
         }
     }
 
+    // Straps: a two-terminal part from an IC auxiliary pin's net to a net
+    // on the stage backbone (bootstrap cap BOOT → switch node). Stage nets
+    // = source + intermediates + target.
+    let mut stage_nets: HashSet<NetId> = seen_nets.clone();
+    stage_nets.insert(source);
+    stage_nets.insert(target);
+    // Instances this stage already placed in another idiom (the FB
+    // divider's top leg would otherwise re-match as a strap via the FB
+    // pin's net).
+    let stage_used: HashSet<String> = backbone
+        .iter()
+        .map(|e| e.inst().to_string())
+        .chain(shunts.iter().map(|x| x.inst.clone()))
+        .chain(loops.iter().flat_map(|l| l.insts.iter().cloned()))
+        .collect();
+    let mut straps = Vec::new();
+    for (pin_name, _dir, pnet) in &ic_pins {
+        let Some(pnet) = pnet else { continue };
+        if stage_nets.contains(pnet) || is_ground_net(netlist, *pnet) {
+            continue;
+        }
+        for (m, _mp, _md) in pins_by_net.get(pnet).cloned().unwrap_or_default() {
+            if m == ic || already.contains(&m) || is_phantom(netlist, m) {
+                continue;
+            }
+            if stage_used.contains(&inst_name(netlist, m)) {
+                continue;
+            }
+            let Some(other) = shunt_other_side(netlist, m, *pnet) else { continue };
+            if stage_nets.contains(&other) {
+                straps.push(Strap {
+                    inst: inst_name(netlist, m),
+                    ic_pin: pin_name.clone(),
+                    tap: other,
+                });
+            }
+        }
+    }
+
     Some(StagePlan {
         source_rail: source,
         target_rail: target,
         backbone,
         shunts,
         loops,
+        straps,
     })
 }
 
@@ -456,6 +513,7 @@ mod tests {
         n.add_pin(reg_m, "VIN".into(), PinDirection::Power, PinType::Power);
         n.add_pin(reg_m, "SW".into(), PinDirection::Out, PinType::Power);
         n.add_pin(reg_m, "FB".into(), PinDirection::In, PinType::Signal);
+        n.add_pin(reg_m, "BOOT".into(), PinDirection::InOut, PinType::Signal);
         n.add_pin(reg_m, "GND".into(), PinDirection::Ground, PinType::Ground);
 
         let two = |n: &mut Netlist, name: &str| {
@@ -479,6 +537,7 @@ mod tests {
         let c_out = place(&mut n, "c_out", c_m);
         let r1 = place(&mut n, "r1", r_m);
         let r2 = place(&mut n, "r2", r_m);
+        let c_boot = place(&mut n, "c_boot", c_m);
 
         let vin = n.add_net_with_class(
             Some("VIN".into()),
@@ -491,6 +550,7 @@ mod tests {
         let sw = n.add_net(Some("sw".into()));
         let fb = n.add_net(Some("fb".into()));
         let gnd = n.add_net_with_class(Some("GND".into()), NetClass::Ground);
+        let boot = n.add_net(Some("boot".into()));
 
         let pi = |n: &mut Netlist, inst, pin: &str| {
             n.pin_instances
@@ -522,6 +582,9 @@ mod tests {
         wire(&mut n, fb, r2, "1");
         wire(&mut n, gnd, r2, "2");
         wire(&mut n, fb, reg, "FB");
+        wire(&mut n, boot, reg, "BOOT");
+        wire(&mut n, boot, c_boot, "1");
+        wire(&mut n, sw, c_boot, "2");
 
         n
     }
@@ -548,6 +611,10 @@ mod tests {
         let mut loop_insts = s.loops[0].insts.clone();
         loop_insts.sort();
         assert_eq!(loop_insts, vec!["r1", "r2"]);
+
+        assert_eq!(s.straps.len(), 1, "the bootstrap strap");
+        assert_eq!(s.straps[0].inst, "c_boot");
+        assert_eq!(s.straps[0].ic_pin, "BOOT");
 
         assert!(plan.residue.is_empty(), "everything idiomized: {:?}", plan.residue);
     }

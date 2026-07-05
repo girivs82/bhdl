@@ -107,6 +107,13 @@ impl Svg {
         }
         self.wire(&[(x + 48.0, y), (x + 56.0, y)]);
     }
+    /// Capacitor drawn horizontally: in left (x, y), out at (x+34, y).
+    fn cap_h(&mut self, x: f64, y: f64) {
+        self.wire(&[(x, y), (x + 13.0, y)]);
+        self.wire(&[(x + 13.0, y - 11.0), (x + 13.0, y + 11.0)]);
+        self.wire(&[(x + 21.0, y - 11.0), (x + 21.0, y + 11.0)]);
+        self.wire(&[(x + 21.0, y), (x + 34.0, y)]);
+    }
     /// Generic 2-terminal fallback (horizontal box).
     fn box_h(&mut self, x: f64, y: f64, w: f64) {
         let _ = writeln!(
@@ -267,8 +274,37 @@ fn draw_stage(
                     );
                     fb_stub = Some((bx + IC_W + 14.0, fy));
                 }
-                x = bx + IC_W + 14.0;
+                x = bx + IC_W + 34.0; // room after the box for strap taps
+                svg.wire(&[(bx + IC_W, out_y), (x, out_y)]);
                 ic_right = x;
+
+                // Straps (bootstrap cap): stub on the box TOP, bridge over
+                // the corner in the guaranteed-clear airspace above the IC,
+                // tap DOWN onto the out-net segment with a junction dot.
+                for (k, strap) in stage
+                    .straps
+                    .iter()
+                    .filter(|st| {
+                        // this IC's straps only (single-IC stages for now)
+                        true
+                    })
+                    .enumerate()
+                {
+                    let stub_x = bx + IC_W * 0.72 + k as f64 * 18.0;
+                    let bridge_y = by - 26.0 - k as f64 * 22.0;
+                    let tap_x = bx + IC_W + 20.0;
+                    svg.wire(&[(stub_x, by), (stub_x, bridge_y)]);
+                    svg.text(stub_x - 8.0 * strap.ic_pin.len() as f64 + 6.0, by + 12.0, &strap.ic_pin, "val");
+                    svg.wire(&[(stub_x, bridge_y), (tap_x - 34.0 - 6.0, bridge_y)]);
+                    svg.cap_h(tap_x - 34.0 - 6.0, bridge_y);
+                    svg.wire(&[(tap_x - 6.0, bridge_y), (tap_x, bridge_y), (tap_x, out_y)]);
+                    svg.dot(tap_x, out_y);
+                    svg.text(stub_x + 12.0, bridge_y - 6.0, &strap.inst, "ref");
+                    let v = value_of(netlist, &strap.inst);
+                    if !v.is_empty() {
+                        svg.text(stub_x + 12.0, bridge_y + 16.0, &v, "val");
+                    }
+                }
             }
             BackboneElem::Series { inst } => {
                 let class = class_of_name(netlist, inst);
