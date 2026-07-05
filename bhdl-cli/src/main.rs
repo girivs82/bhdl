@@ -1228,22 +1228,6 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
     // Snap computed passive values to catalog E-series before sim/viz.
     snap_catalog_values(&mut netlist);
 
-    // V4 idiom-composed SVG (docs/spec/Schematic_V4.md) — rendered from the
-    // same netlist, written beside the HTML when requested.
-    if let Some(svg_path) = svg_v4 {
-        let title = source_path
-            .file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_default();
-        let (svg, unidiomized) = bhdl_schematic::v4::render_sheet_svg(&netlist, &title);
-        std::fs::write(svg_path, svg)?;
-        println!(
-            "  {} V4 SVG: {svg_path} ({} unidiomized)",
-            "✓".green(),
-            unidiomized
-        );
-    }
-
     // Run GLACIER DC simulation for voltage/current annotation
     let sim_annotations = {
         let mut converter = NetlistToSpiceConverter::new();
@@ -1269,6 +1253,27 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
             }
         }
     };
+
+    // V4 idiom-composed SVG (docs/spec/Schematic_V4.md) — rendered from the
+    // same netlist AFTER the DC solve, so the sheet carries the solved
+    // operating point and the stdlib symbol declarations.
+    if let Some(svg_path) = svg_v4 {
+        let title = source_path
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let decor = bhdl_schematic::v4::svg::SheetDecor {
+            sim: sim_annotations.as_ref(),
+            symbols: Some(&analysis.symbol_definitions),
+        };
+        let (svg, unidiomized) = bhdl_schematic::v4::render_sheet_svg(&netlist, &title, &decor);
+        std::fs::write(svg_path, svg)?;
+        println!(
+            "  {} V4 SVG: {svg_path} ({} unidiomized)",
+            "✓".green(),
+            unidiomized
+        );
+    }
 
     // Auto-create input filter caps for rails with |> input_filtering in stage chain
     if let Some(ref flow_tracker) = analysis.flow_tracker {

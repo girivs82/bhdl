@@ -129,6 +129,14 @@ entity TPS54302() {
     }
 }
 
+symbol TPS54302 {
+    body rectangle;
+    left { VIN, EN }
+    right { SW, PH, FB }
+    top { BOOT }
+    bottom { GND }
+}
+
 layout TPS54302 {
     package SOT-23-6;
 }

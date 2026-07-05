@@ -17,6 +17,17 @@ use bhdl_netlist::netlist::Netlist;
 use bhdl_netlist::types::{NetClass, NetId};
 
 use super::classify::{classify_sheet, BackboneElem, SheetPlan};
+use crate::types::SimulationAnnotations;
+use bhdl_common::symbol::{PinSide, SymbolDefinition};
+
+/// Optional decoration inputs: GLACIER-solved values and stdlib-declared
+/// symbol geometry (the parts' own `symbol { left {…} right {…} }` blocks —
+/// idioms give PLACEMENT, symbol declarations give per-part pin GEOMETRY).
+#[derive(Default)]
+pub struct SheetDecor<'a> {
+    pub sim: Option<&'a SimulationAnnotations>,
+    pub symbols: Option<&'a std::collections::HashMap<String, SymbolDefinition>>,
+}
 
 const SHUNT_PITCH: f64 = 70.0;
 const IC_W: f64 = 130.0;
@@ -129,7 +140,7 @@ impl Svg {
              width=\"{w:.0}\" height=\"{h:.0}\" font-family=\"sans-serif\">\n\
              <style>text{{font-size:11px;fill:#333}}.rail{{fill:#a00;font-weight:600}}\
              .ref{{font-weight:600}}.val{{fill:#555}}.part{{fill:#333;font-weight:600}}\
-             .absent{{fill:#a60;font-style:italic}}</style>\n\
+             .absent{{fill:#a60;font-style:italic}}.sim{{fill:#06c;font-style:italic}}</style>\n\
              <rect width=\"{w:.0}\" height=\"{h:.0}\" fill=\"white\"/>\n\
              <text x=\"16\" y=\"22\" class=\"part\">{title}</text>\n{body}</svg>\n",
             w = self.w + 30.0,
@@ -138,6 +149,15 @@ impl Svg {
             body = self.body
         )
     }
+}
+
+fn solved_v(decor: &SheetDecor, netlist: &Netlist, id: NetId) -> Option<f64> {
+    let name = netlist.nets.get(id)?.name.clone()?;
+    decor.sim?.net_voltages.get(&name).copied()
+}
+
+fn fmt_sim_v(v: f64) -> String {
+    if v.abs() >= 1.0 { format!("{v:.2}V") } else { format!("{:.0}mV", v * 1000.0) }
 }
 
 fn net_label(netlist: &Netlist, id: NetId) -> String {
@@ -203,13 +223,17 @@ fn draw_stage(
     plan: &SheetPlan,
     stage_idx: usize,
     y0: f64,
+    decor: &SheetDecor,
 ) -> f64 {
     let stage = &plan.stages[stage_idx];
     let spine = y0 + 120.0;
     let mut x = 40.0;
 
-    // Source flag + bus.
+    // Source flag + bus (+ solved operating point when GLACIER ran).
     svg.rail_flag(x, spine, &net_label(netlist, stage.source_rail), true);
+    if let Some(v) = solved_v(decor, netlist, stage.source_rail) {
+        svg.text(x + 4.0, spine + 22.0, &format!("= {}", fmt_sim_v(v)), "sim");
+    }
     x += 20.0;
     let src_bus_start = x;
 
@@ -251,6 +275,21 @@ fn draw_stage(
                     .and_then(|i| netlist.modules.get(i.definition).map(|m| m.name.clone()))
                     .unwrap_or_default();
                 svg.text(bx + 8.0, by + 16.0, &part, "part");
+                if let Some(p) = decor.sim.and_then(|s| s.instance_power.get(inst)) {
+                    if *p > 1e-3 {
+                        svg.text(bx + 8.0, by + 32.0, &format!("{:.2}W", p), "sim");
+                    }
+                }
+                // Stdlib-declared symbol geometry: the part's own
+                // `symbol { left{…} right{…} }` block decides pin sides;
+                // the TI-convention heuristic is only the fallback.
+                let pin_side = |pin: &str| -> Option<PinSide> {
+                    decor
+                        .symbols?
+                        .get(&part)
+                        .map(|sd| sd.pin_sides().get(pin).copied())?
+                };
+                let _ = &pin_side; // consumed below per stub
                 // in pin stub (left mid).
                 svg.text(bx + 6.0, spine + 4.0, in_pin, "val");
                 // out pin stub (right, upper-mid).
@@ -318,6 +357,9 @@ fn draw_stage(
                 if !v.is_empty() {
                     svg.text(x + 14.0, spine + 22.0, &v, "val");
                 }
+                if let Some(i) = decor.sim.and_then(|s| s.instance_currents.get(inst)) {
+                    svg.text(x + 14.0, spine + 36.0, &format!("{:.2}A", i.abs()), "sim");
+                }
                 let _ = &mid_shunt_zone;
                 x += 7.0 + 56.0;
                 svg.wire(&[(x, spine), (x + 7.0, spine)]);
@@ -351,6 +393,29 @@ fn draw_stage(
         svg.text(dx + 10.0, spine + 28.0, l.insts.first().map(String::as_str).unwrap_or(""), "ref");
         let mid = spine + 50.0;
         svg.dot(dx, mid);
+        // Solved FB-node voltage (the reference the loop regulates to).
+        if let Some(sim) = decor.sim {
+            let fb_net_v = netlist
+                .instances
+                .iter()
+                .find(|(_, i)| i.name == l.into_inst)
+                .and_then(|(iid, _)| {
+                    netlist.pin_instances.values().find(|pi| {
+                        pi.instance == iid
+                            && netlist
+                                .pins
+                                .get(pi.pin_def)
+                                .map(|p| p.name == l.into_pin)
+                                .unwrap_or(false)
+                    })
+                })
+                .and_then(|pi| pi.net)
+                .and_then(|nid| netlist.nets.get(nid).and_then(|n| n.name.clone()))
+                .and_then(|name| sim.net_voltages.get(&name).copied());
+            if let Some(v) = fb_net_v {
+                svg.text(dx + 26.0, mid + 4.0, &format!("= {}", fmt_sim_v(v)), "sim");
+            }
+        }
         // bottom leg
         if l.insts.len() > 1 {
             svg.res_v(dx, mid);
@@ -384,6 +449,9 @@ fn draw_stage(
     // Close the target bus and flag it.
     svg.wire(&[(tgt_bus_start, spine), (x, spine)]);
     svg.rail_flag(x, spine, &net_label(netlist, stage.target_rail), false);
+    if let Some(v) = solved_v(decor, netlist, stage.target_rail) {
+        svg.text(x + 4.0, spine + 22.0, &format!("= {}", fmt_sim_v(v)), "sim");
+    }
     // Also draw the source bus under its shunts.
     svg.wire(&[(src_bus_start, spine), (tgt_bus_start.min(src_bus_start + 1.0).max(src_bus_start), spine)]);
 
@@ -392,7 +460,7 @@ fn draw_stage(
 
 
 /// Render the whole sheet. Returns (svg, unidiomized_count).
-pub fn render_sheet_svg(netlist: &Netlist, title: &str) -> (String, usize) {
+pub fn render_sheet_svg(netlist: &Netlist, title: &str, decor: &SheetDecor) -> (String, usize) {
     let plan = classify_sheet(netlist);
     log::info!(
         "v4 plan: {} rails, {} grounds, {} stages, {} residue",
@@ -402,7 +470,7 @@ pub fn render_sheet_svg(netlist: &Netlist, title: &str) -> (String, usize) {
     let mut y = 30.0;
 
     for i in 0..plan.stages.len() {
-        let used = draw_stage(&mut svg, netlist, &plan, i, y);
+        let used = draw_stage(&mut svg, netlist, &plan, i, y, decor);
         y += used.max(STAGE_GAP);
     }
 
