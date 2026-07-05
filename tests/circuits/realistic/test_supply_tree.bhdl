@@ -1,0 +1,25 @@
+// S4b supply tree — cascaded supplies with rail-budget propagation.
+// 12V → 5V (TPS54302, bare entity: S4a emits the full application circuit
+// incl. bootstrap + FB divider) → 3.3V (chooser picks TPS54331, a
+// self-expanding entity: its OWN expansion materializes the circuit, S4a
+// stands down). Each generated regulator stamps its computed INPUT draw as
+// i_supply (switcher: V_out·I_out/(η·V_in) from the datasheet efficiency),
+// so ERC016 gates every intermediate rail: shrink VCC_5V's budget below
+// ~371mA and the build reports exactly which cascade overloads it.
+// Expected: 0 DRC violations.
+board SupplyTree {
+    power VIN_12V = 12V @ 3A;
+    power VCC_5V = 5V @ 2A;
+    power VCC_3V3 = 3.3V @ 500mA;
+    ground GND;
+
+    supply @VCC_5V from @VIN_12V {
+        ripple_max: 50mV;
+        using: TPS54302;
+    }
+
+    supply @VCC_3V3 from @VCC_5V {
+        ripple_max: 30mV;
+        profile: efficiency;
+    }
+}

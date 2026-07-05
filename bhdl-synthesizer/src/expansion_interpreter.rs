@@ -1242,8 +1242,12 @@ fn component_type_pins(component_type: &str) -> Option<Vec<(&'static str, bool)>
         "Ind" | "Inductor"  => vec![("1", true), ("2", true)],
         "Cap" | "Capacitor" => vec![("1", true), ("2", true)],
         "Res" | "Resistor"  => vec![("1", true), ("2", true)],
-        "Diode"             => vec![("A", false), ("K", false)],
-        "TVSDiode"          => vec![("A", false), ("K", false)],
+        // Diode terminals are a passive conduction path, not a driven pin
+        // pair — the `false` here made find_or_create_module map K to
+        // PinDirection::Out, and ERC001 then read a catch diode's cathode
+        // on a switch node as a contending push-pull driver.
+        "Diode"             => vec![("A", true), ("K", true)],
+        "TVSDiode"          => vec![("A", true), ("K", true)],
         // The canonical Triode is kept here for the case where the
         // expansion block uses it but doesn't reference every pin in
         // its connection list (so derivation would miss one). All

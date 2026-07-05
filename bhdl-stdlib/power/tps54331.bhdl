@@ -88,6 +88,9 @@ entity TPS54331(
     attribute rds_on = rds_on;
     attribute t_sw = t_sw;
     attribute i_quiescent = i_quiescent;
+    // Datasheet SLVS839 efficiency curves: ~89% typical mid-load for the
+    // 12V→3.3V application (Fig. 1). Read by the S4b input-draw stamp.
+    attribute efficiency = 89%;
 
     // Reactive + divider sizing. Runs once per instance, after
     // constructor binding, before expansion materialisation. Each line

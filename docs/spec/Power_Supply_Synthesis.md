@@ -187,8 +187,23 @@ passes.
   - Voltage class of the rail caps is left to physical selection (it
     derates against the rail when picking the real MPN; an unpopulatable
     class surfaces as UNPOPULATED) — same convention as hand-wired boards.
-- **S4b** — multi-rail supply trees: cascaded `supply` statements, shared
-  input banks, sequencing constraints. NOT built.
+- **S4b — supply trees: cascade + rail-budget propagation (BUILT).**
+  Cascaded `supply` statements compose (each stage desugars against its
+  declared rails; the chooser sees the intermediate rail's voltage like
+  any source). The load side is made VISIBLE to the budget machinery:
+  each generated regulator stamps its computed INPUT draw as `i_supply` —
+  linear: I_in = I_out + I_q (exact physics); switcher: I_in =
+  V_out·I_out/(η·V_in) with η from the part's declared `efficiency`
+  attribute; underivable → NO stamp, and ERC016 honestly counts the
+  stage among the UNDECLARED draws. ERC016 then gates every intermediate
+  rail: a 5V rail budgeted at 200mA feeding a 3.3V/500mA stage reports
+  "declared draws already total 371mA (psu_vcc_3v3 370.8mA)".
+  Parts carrying their OWN `expansion { }` block (TPS54331 style) keep
+  materializing their circuit themselves — S4a emission is for bare
+  entities only (both at once would parallel two inductors on SW).
+  Fixture: tests/circuits/realistic/test_supply_tree.bhdl.
+  Remaining S4b scope, NOT built: shared input banks, sequencing
+  constraints (the analyzer's power-sequencing pass is the substrate).
 
 ## 7. Non-goals (for now)
 

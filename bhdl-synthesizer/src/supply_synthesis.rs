@@ -304,6 +304,55 @@ fn desugar_one(
         args.push(format!("supply_profile=\"{p}\""));
     }
 
+    // Part datasheet attributes + numeric operating point — used by the
+    // input-draw stamp below and the S4 application-circuit emitter.
+    let part_attrs = entity_attrs_txt(&entity_src, &part);
+    let attr_num = |k: &str| {
+        part_attrs.get(k).and_then(|v| {
+            parse_si_txt(v).or_else(|| {
+                entity_param_default(&entity_src, &part, v.trim())
+                    .and_then(|d| parse_si_txt(&d))
+            })
+        })
+    };
+    let v_in_f = parse_si_txt(&s.voltage).unwrap_or(0.0);
+    let v_out_f = parse_si_txt(&t.voltage).unwrap_or(0.0);
+    let i_out_f = parse_si_txt(&i_out).unwrap_or(0.0);
+    let f_sw = attr_num("switching_frequency")
+        .or_else(|| attr_num("f_sw"))
+        .unwrap_or(0.0);
+
+    // ── S4b: rail-budget propagation (supply trees) ──
+    //
+    // Stamp the supply's INPUT draw as `i_supply` so ERC016 gates the
+    // SOURCE rail against everything hanging off it — a cascaded supply
+    // is just another declared load on its upstream rail. Derivation is
+    // physics or datasheet, never a guess (Real-Data Policy):
+    //  - linear (no switching frequency): I_in = I_out + I_q exactly;
+    //  - switcher: I_in = V_out·I_out / (η·V_in), with η from the part's
+    //    declared `efficiency`; no efficiency attr → NO stamp, and ERC016
+    //    honestly counts this instance among the UNDECLARED draws.
+    let i_q = attr_num("i_quiescent").unwrap_or(0.0);
+    let i_in = if f_sw <= 0.0 {
+        (i_out_f > 0.0).then(|| i_out_f + i_q)
+    } else {
+        let eff = part_attrs.get("efficiency").and_then(|v| {
+            let v = v.trim();
+            if let Some(pct) = v.strip_suffix('%') {
+                pct.trim().parse::<f64>().ok().map(|p| p / 100.0)
+            } else {
+                parse_si_txt(v).filter(|e| *e > 0.0 && *e <= 1.0)
+            }
+        });
+        match (eff, v_in_f > 0.0 && i_out_f > 0.0) {
+            (Some(e), true) if e > 0.0 => Some(v_out_f * i_out_f / (e * v_in_f)),
+            _ => None,
+        }
+    };
+    if let Some(i) = i_in.filter(|i| *i > 0.0) {
+        args.push(format!("i_supply={}", fmt_si(i, "A")));
+    }
+
     let instance = format!("psu_{}", target.to_lowercase());
     let indent = line_indent(original, usize::from(stmt.text_range().start()));
 
@@ -337,22 +386,20 @@ fn desugar_one(
     // part's own stress model. A value that cannot be derived from spec or
     // datasheet is SKIPPED, not defaulted (Real-Data Policy); the part's
     // own T2 `check{}` rules then flag anything load-bearing that is
-    // missing.
-    let part_attrs = entity_attrs_txt(&entity_src, &part);
-    let attr_num = |k: &str| {
-        part_attrs.get(k).and_then(|v| {
-            parse_si_txt(v).or_else(|| {
-                entity_param_default(&entity_src, &part, v.trim())
-                    .and_then(|d| parse_si_txt(&d))
-            })
+    // missing. (part_attrs / attr_num / the numeric operating point are
+    // hoisted above the instantiation for the S4b input-draw stamp.)
+    //
+    // Parts that carry their OWN `expansion { }` block (TPS54331, LM317
+    // style) materialize their application circuit themselves — emitting
+    // S4 support parts too would put two inductors in parallel on the
+    // switch node. S4 emission is for BARE entities only.
+    let self_expanding = find_entity_decl(&entity_src, &part)
+        .map(|at| {
+            let tail = &entity_src[at..];
+            let end = tail[1..].find("\nentity ").map(|p| p + 1).unwrap_or(tail.len());
+            tail[..end].contains("expansion {")
         })
-    };
-    let v_in_f = parse_si_txt(&s.voltage).unwrap_or(0.0);
-    let v_out_f = parse_si_txt(&t.voltage).unwrap_or(0.0);
-    let i_out_f = parse_si_txt(&i_out).unwrap_or(0.0);
-    let f_sw = attr_num("switching_frequency")
-        .or_else(|| attr_num("f_sw"))
-        .unwrap_or(0.0);
+        .unwrap_or(false);
     let duty = if v_in_f > 0.0 { v_out_f / v_in_f } else { 0.0 };
     let d_il = 0.3 * i_out_f;
     let mut used_cap = false;
@@ -374,7 +421,7 @@ fn desugar_one(
 
     // Switch node first: a SW-shaped part needs the output inductor to make
     // @target exist at all.
-    if has_pin("SW") && f_sw > 0.0 && d_il > 0.0 && v_in_f > v_out_f {
+    if !self_expanding && has_pin("SW") && f_sw > 0.0 && d_il > 0.0 && v_in_f > v_out_f {
         let l = e_series_nearest((v_in_f - v_out_f) * duty / (f_sw * d_il), 12);
         if l > 0.0 {
             used_ind = true;
@@ -386,7 +433,7 @@ fn desugar_one(
         }
     }
     // Bootstrap cap — only with the part's declared datasheet value.
-    if has_pin("SW") && (has_pin("BOOT") || has_pin("BST")) {
+    if !self_expanding && has_pin("SW") && (has_pin("BOOT") || has_pin("BST")) {
         if let Some(cb) = attr_num("bootstrap_capacitor").filter(|v| *v > 0.0) {
             let boot = if has_pin("BOOT") { "BOOT" } else { "BST" };
             used_cap = true;
@@ -405,7 +452,9 @@ fn desugar_one(
     // Input cap across the source rail.
     let c_in_seed = (f_sw > 0.0)
         .then(|| i_out_f * duty * (1.0 - duty) / (f_sw * 0.15));
-    if let Some(c) = cap_value(c_in_seed, &["input_capacitor_rec", "input_capacitor_min"]) {
+    if let Some(c) = cap_value(c_in_seed, &["input_capacitor_rec", "input_capacitor_min"])
+        .filter(|_| !self_expanding)
+    {
         used_cap = true;
         g.push_str(&format!(
             "{indent}@{source_rail} -> {instance}_c_in1: Cap({}, expansion_parent=\"{instance}\").1;\n",
@@ -419,7 +468,9 @@ fn desugar_one(
         let dv = spec_num("ripple_max").unwrap_or(0.05);
         d_il / (8.0 * f_sw * dv)
     });
-    if let Some(c) = cap_value(c_out_seed, &["output_capacitor_rec", "output_capacitor_min"]) {
+    if let Some(c) = cap_value(c_out_seed, &["output_capacitor_rec", "output_capacitor_min"])
+        .filter(|_| !self_expanding)
+    {
         used_cap = true;
         g.push_str(&format!(
             "{indent}@{target} -> {instance}_c_out1: Cap({}, expansion_parent=\"{instance}\").1;\n",
@@ -429,7 +480,7 @@ fn desugar_one(
     }
     // Feedback divider — needs the FB pin, the reference, and the part's
     // datasheet-recommended bottom-leg value (`fb_divider_bottom`).
-    if has_pin("FB") {
+    if !self_expanding && has_pin("FB") {
         let v_ref = attr_num("feedback_voltage").unwrap_or(0.0);
         let r_bot = attr_num("fb_divider_bottom").unwrap_or(0.0);
         if v_ref > 0.0 && r_bot > 0.0 && v_out_f > v_ref {
@@ -455,10 +506,18 @@ fn desugar_one(
     // Import lines, repo-root-relative (the loader's convention), skipped
     // when the board already imports the entity. May be multi-line (part +
     // support passives); the caller dedupes per line.
+    // Only actual `import` lines count — a bare substring scan read a
+    // COMMENT mentioning "TPS54302, …" as an existing import and skipped
+    // the real one.
     let already_imported = |name: &str| {
-        original.contains(&format!("{{ {name} }}"))
-            || original.contains(&format!("{name},"))
-            || original.contains(&format!(", {name} }}"))
+        original.lines().any(|l| {
+            let l = l.trim_start();
+            l.starts_with("import")
+                && (l.contains(&format!("{{ {name} }}"))
+                    || l.contains(&format!("{{ {name},"))
+                    || l.contains(&format!(" {name},"))
+                    || l.contains(&format!(", {name} }}")))
+        })
     };
     let mut import_vec: Vec<String> = Vec::new();
     if !already_imported(&part) {

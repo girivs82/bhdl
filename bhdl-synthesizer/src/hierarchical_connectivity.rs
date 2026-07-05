@@ -1188,6 +1188,20 @@ fn add_component_pins(
             Some("signal") => PinType::Signal,
             _ => PinType::Signal,
         };
+        // `power in` / `ground` pins carry their electrical ROLE as the
+        // netlist direction — the add_pins_for_component convention every
+        // power-aware ERC rule keys on (instance_rails, ERC007 unpowered,
+        // ERC016 rail budget). Mapping only the in/out token here left
+        // inline-instantiated parts' VIN as plain In and made those rules
+        // blind to them.
+        let pin_direction = match (pin_type, direction_str.as_deref()) {
+            // `power out` (a regulator's SW/VOUT) DRIVES — it keeps Out;
+            // only `power in` is a supply pin (the ERC007/ERC016 sense).
+            (PinType::Power, Some("out")) => pin_direction,
+            (PinType::Power, _) => PinDirection::Power,
+            (PinType::Ground, _) => PinDirection::Ground,
+            _ => pin_direction,
+        };
 
         // Check if this pin has a resolved bus size from generics
         if let Some(spec) = specialized {
@@ -1269,8 +1283,11 @@ fn add_component_pins(
             // Add anode and cathode
             netlist.add_port(module_id, "A".to_string(), PortDirection::InOut, None);
             netlist.add_port(module_id, "K".to_string(), PortDirection::InOut, None);
-            netlist.add_pin(module_id, "A".to_string(), PinDirection::In, PinType::Signal);
-            netlist.add_pin(module_id, "K".to_string(), PinDirection::Out, PinType::Signal);
+            // Passive conduction path — same fix as expansion_interpreter's
+            // component_type_pins: A/K as In/Out made ERC001 read a diode
+            // cathode as a push-pull driver.
+            netlist.add_pin(module_id, "A".to_string(), PinDirection::InOut, PinType::Passive);
+            netlist.add_pin(module_id, "K".to_string(), PinDirection::InOut, PinType::Passive);
         }
         _ => {
             debug!("Using default pins for unknown component type: {}", component_type);

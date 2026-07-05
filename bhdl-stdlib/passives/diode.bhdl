@@ -1,8 +1,12 @@
 // Simplified Diode - v2.0 compatible
 
 entity Diode(vf: voltage = 0.7V) {
-    pin A: signal in;
-    pin K: signal out;
+    // Passive two-terminal conduction path — NOT a driven pin pair. `in`/
+    // `out` here made ERC001 read a catch diode's cathode on a switch node
+    // as a contending push-pull driver, and ERC006 read a floating anode
+    // as a floating CMOS input.
+    pin A: signal inout;
+    pin K: signal inout;
 
     attribute component_class = "diode";
     attribute forward_voltage = vf;
