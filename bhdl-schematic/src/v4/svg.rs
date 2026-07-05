@@ -76,6 +76,8 @@ struct Svg {
     /// Wire segments: labels avoid them; routes may CROSS at a cost
     /// (a dotless crossing is legitimate schematic vocabulary).
     wire_segs: Vec<Rect>,
+    /// SIM decorations queued for post-route placement.
+    pending_sims: Vec<(f64, f64, String, String)>,
     /// Reserved WIRING CHANNELS: the stage declares its loop-under lane
     /// and riser lane up front. Labels must stay out (a label parked in a
     /// channel blocks the route that needs it — the chicken-and-egg that
@@ -85,7 +87,7 @@ struct Svg {
 
 impl Svg {
     fn new() -> Self {
-        Svg { body: String::new(), w: 0.0, h: 0.0, solids: Vec::new(), wire_segs: Vec::new(), channels: Vec::new() }
+        Svg { body: String::new(), w: 0.0, h: 0.0, solids: Vec::new(), wire_segs: Vec::new(), channels: Vec::new(), pending_sims: Vec::new() }
     }
     fn solid(&mut self, r: Rect) {
         self.solids.push(r);
@@ -190,27 +192,37 @@ impl Svg {
             self.text(ax + 10.0, ay + 13.0, l2, c2);
         }
     }
-    /// Place a SIM decoration near its subject or not at all: only the
-    /// close candidate slots are tried — a solved value that drifts into
-    /// another net's lane reads as annotating THAT net (misplacement is
-    /// worse than absence for decorations; the report still carries the
-    /// number).
-    fn place_sim_label(&mut self, ax: f64, ay: f64, t: &str, cls: &str) {
-        const NEAR: [(f64, f64); 3] = [(8.0, 4.0), (8.0, -8.0), (-8.0, 4.0)];
-        let len_w = 6.8 * t.len() as f64;
-        for (dx, dy) in NEAR {
-            let x = if dx < 0.0 { ax + dx - len_w } else { ax + dx };
-            let y = ay + dy;
-            let r = Self::text_rect(t, x, y);
-            let clear = !self.solids.iter().any(|s| s.overlaps(&r.pad(1.0)))
-                && !self.wire_segs.iter().any(|w| w.overlaps(&r))
-                && !self.channels.iter().any(|c| c.overlaps(&r));
-            if clear {
-                self.text(x, y, t, cls);
-                return;
+    /// QUEUE a SIM decoration for placement AFTER all routes are drawn
+    /// (the ordering refinement): during drawing, channels are reserved
+    /// and wires don't exist yet — placing then either blocks lanes or
+    /// judges against reservations instead of real geometry. Queued
+    /// decorations place last, against the FINISHED sheet, channels
+    /// released.
+    fn queue_sim(&mut self, ax: f64, ay: f64, t: &str, cls: &str) {
+        self.pending_sims.push((ax, ay, t.to_string(), cls.to_string()));
+    }
+    /// Place all queued SIM decorations near their subjects or not at all.
+    /// Candidates never slide LEFT of the anchor — a current label that
+    /// travels left of its element lands beside the PREVIOUS part and
+    /// reads as annotating it (the 79µA-next-to-D1 review finding).
+    fn flush_sims(&mut self) {
+        self.channels.clear();
+        let pending = std::mem::take(&mut self.pending_sims);
+        for (ax, ay, t, cls) in pending {
+            const NEAR: [(f64, f64); 4] =
+                [(8.0, 4.0), (8.0, -8.0), (8.0, 18.0), (14.0, 4.0)];
+            for (dx, dy) in NEAR {
+                let (x, y) = (ax + dx, ay + dy);
+                let r = Self::text_rect(&t, x, y);
+                let clear = !self.solids.iter().any(|s| s.overlaps(&r.pad(1.0)))
+                    && !self.wire_segs.iter().any(|w| w.overlaps(&r));
+                if clear {
+                    self.text(x, y, &t, &cls);
+                    break;
+                }
             }
+            // No clear near slot — decoration dropped.
         }
-        // No clear near slot — drop the decoration.
     }
     /// Route an orthogonal wire from `from` to `to`: BFS on an 8px grid.
     /// Solids are WALLS (minus the endpoints' own hosts); existing wires
@@ -679,7 +691,7 @@ fn draw_stage(
     // Source flag + bus (+ solved operating point when GLACIER ran).
     svg.rail_flag(x, spine, &net_label(netlist, stage.source_rail), true);
     if let Some(v) = solved_v(decor, netlist, stage.source_rail) {
-        svg.place_sim_label(x + 4.0, spine + 20.0, &format!("= {}", fmt_sim_v(v)), "sim");
+        svg.queue_sim(x + 4.0, spine + 20.0, &format!("= {}", fmt_sim_v(v)), "sim");
     }
     x += 20.0;
     let src_bus_start = x;
@@ -725,7 +737,7 @@ fn draw_stage(
                 svg.text(bx + 8.0, by + 16.0, &part, "part");
                 if let Some(p) = decor.sim.and_then(|s| s.instance_power.get(inst)) {
                     if *p > 1e-3 {
-                        svg.place_sim_label(bx + 8.0, by + 30.0, &format!("{:.2}W", p), "sim");
+                        svg.queue_sim(bx + 8.0, by + 30.0, &format!("{:.2}W", p), "sim");
                     }
                 }
                 // in pin stub (left mid) — flow pins are IDIOM-owned: the
@@ -981,7 +993,10 @@ fn draw_stage(
                     .and_then(|s| s.instance_currents.get(inst))
                     .and_then(|i| fmt_sim_i(*i))
                 {
-                    svg.place_sim_label(x + 14.0, spine + 32.0, &txt, "sim");
+                    // Currents ride ON the net: anchored just ABOVE the
+                    // outgoing wire segment, immediately after the element
+                    // — touching the conductor it measures, unambiguous.
+                    svg.queue_sim(x + 72.0, spine - 16.0, &txt, "sim");
                 }
                 let _ = &mid_shunt_zone;
                 x += 7.0 + 56.0;
@@ -1043,7 +1058,7 @@ fn draw_stage(
                 .and_then(|nid| netlist.nets.get(nid).and_then(|n| n.name.clone()))
                 .and_then(|name| sim.net_voltages.get(&name).copied());
             if let Some(v) = fb_net_v {
-                svg.place_sim_label(dx + 12.0, mid, &format!("= {}", fmt_sim_v(v)), "sim");
+                svg.queue_sim(dx + 12.0, mid, &format!("= {}", fmt_sim_v(v)), "sim");
             }
         }
         let top_val = value_of(netlist, l.insts.first().map(String::as_str).unwrap_or(""));
@@ -1166,7 +1181,7 @@ fn draw_stage(
     svg.wire(&[(tgt_bus_start, spine), (x, spine)]);
     svg.rail_flag(x, spine, &net_label(netlist, stage.target_rail), false);
     if let Some(v) = solved_v(decor, netlist, stage.target_rail) {
-        svg.place_sim_label(x + 4.0, spine + 20.0, &format!("= {}", fmt_sim_v(v)), "sim");
+        svg.queue_sim(x + 4.0, spine + 20.0, &format!("= {}", fmt_sim_v(v)), "sim");
     }
     // Also draw the source bus under its shunts.
     svg.wire(&[(src_bus_start, spine), (tgt_bus_start.min(src_bus_start + 1.0).max(src_bus_start), spine)]);
@@ -1223,6 +1238,8 @@ pub fn render_sheet_svg(netlist: &Netlist, title: &str, decor: &SheetDecor) -> (
         }
         y += 110.0;
     }
+
+    svg.flush_sims();
 
     let n_res = plan.residue.len();
     svg.grow(200.0, y);
