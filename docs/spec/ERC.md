@@ -115,10 +115,13 @@ apply uniformly across tiers.
   capacitor at all (Info — datasheet-habit check; the part-specific version
   belongs to T2).
 
-### Batch 3 — solved-point & intent (needs analysis plumbing; extensions)
-- **ERC019** reversed polarized capacitor: `polarized = true` part whose
-  positive pin sits at a LOWER solved DC voltage than its negative pin —
-  uses GLACIER node voltages, beyond any netlist-only tool.
+### Batch 3 — solved-point & intent
+- **ERC019** reversed polarized capacitor — BUILT (Critical): `polarized =
+  true` part whose `pos` pin sits at a LOWER DC potential than its `neg`
+  pin. v1 uses DECLARED potentials (ground = 0V, power rail = its declared
+  voltage; signal nets skip per Real-Data) — catches the classic
+  reversed-across-a-rail error. Upgrade to GLACIER-solved node voltages
+  when the DC solution is plumbed into the DRC phase.
 - **ERC022** intent contradiction: `for noise_filtering(cutoff: X)` whose
   RC against the surrounding network misses X by >an octave.
 - **ERC023** precision-path grade mismatch: a `grade`-profile / 1% part fed
@@ -128,8 +131,12 @@ apply uniformly across tiers.
 - **ERC025** T2 surface: entity-carried `check {}` blocks — BUILT (see §2).
   Future predicate extensions: `exists(child)`, child-value comparisons
   (`C_boot.value == 100nF`), `connected(PIN, @RAIL)` rail-targeted form.
-- **ERC026** interface completeness: declared I2C/SPI/UART interface with
-  unconnected member signals.
+- **ERC026** interface completeness — BUILT: I2C half-wired (SDA xor SCL
+  connected — Error on the instance, both directions); SPI data pin
+  connected without SCK/SCLK (Error) and clock connected with neither
+  MOSI nor MISO (Warning). UART deliberately unchecked — TX-only and
+  RX-only links are legitimate. v1 matches conventional exact pin names;
+  numbered multi-bus parts (SDA0/SDA1) are future scope.
 - Diff-pair extensions: pair split across unrelated endpoints; length/skew
   intents once layout lands.
 - **Known connectivity quirks — RESOLVED at root** (synthesizer commit

@@ -1152,6 +1152,184 @@ pub fn check_part_carried(
     out
 }
 
+// ──────────────────── ERC019 — reversed polarized capacitor ────────────────────
+
+/// DC potential of a net from its DECLARED class: ground = 0V, a power rail =
+/// its declared voltage, anything else = unknown. This is the declared-rail
+/// approximation of the spec's GLACIER-solved form — it catches the classic
+/// reversed-electrolytic-across-a-rail error; nets whose potential the
+/// declaration doesn't pin down are skipped (Real-Data Policy). Upgrade path:
+/// feed solved node voltages in once the DC solution reaches the DRC phase.
+fn net_potential(netlist: &Netlist, id: NetId) -> Option<f64> {
+    match netlist.nets.get(id)?.net_class {
+        NetClass::Ground => Some(0.0),
+        NetClass::Power { voltage, .. } => Some(voltage),
+        _ => None,
+    }
+}
+
+/// ERC019 — a `polarized = true` part whose `pos` pin sits at a LOWER
+/// declared DC potential than its `neg` pin. Reverse-biased electrolytics
+/// vent — this is a board-killer, Critical.
+pub fn check_polarized_orientation(
+    netlist: &Netlist,
+    analysis: &AnalysisResult,
+) -> Vec<DRCViolation> {
+    let mut out = Vec::new();
+    for (inst_id, inst) in &netlist.instances {
+        if is_phantom(netlist, inst) {
+            continue;
+        }
+        let polarized = attr_of(netlist, analysis, inst, "polarized")
+            .map(|v| v == "true")
+            .unwrap_or(false);
+        if !polarized {
+            continue;
+        }
+        let mut pin_v: HashMap<&str, f64> = HashMap::new();
+        for pi in netlist.pin_instances.values() {
+            if pi.instance != inst_id {
+                continue;
+            }
+            let Some(pin) = netlist.pins.get(pi.pin_def) else { continue };
+            let key = match pin.name.as_str() {
+                "pos" | "P" | "+" => "pos",
+                "neg" | "N" | "-" => "neg",
+                _ => continue,
+            };
+            if let Some(v) = pi.net.and_then(|nid| net_potential(netlist, nid)) {
+                pin_v.insert(key, v);
+            }
+        }
+        let (Some(&vp), Some(&vn)) = (pin_v.get("pos"), pin_v.get("neg")) else {
+            continue; // a floating or signal-net pin: potential unknown → skip
+        };
+        if vp < vn {
+            out.push(DRCViolation {
+                rule_id: "ERC019".into(),
+                rule_name: "Reversed polarized capacitor".into(),
+                category: RuleCategory::Electrical,
+                severity: ViolationSeverity::Critical,
+                description: format!(
+                    "{} is a polarized capacitor mounted REVERSED: pos sits at \
+                     {vp:.2}V, neg at {vn:.2}V — reverse bias vents/destroys \
+                     electrolytics",
+                    inst.name
+                ),
+                location: ViolationLocation::Component(inst_id),
+                fix_suggestion: "swap the pos/neg connections (or the rail polarity)".into(),
+                standard_reference: None,
+            });
+        }
+    }
+    out
+}
+
+// ──────────────────── ERC026 — interface completeness ────────────────────
+
+/// ERC026 — a part using PART of a bus interface it declares pins for:
+/// - I2C: SDA and SCL must both connect if either does (half an I2C bus
+///   cannot work) — Error.
+/// - SPI: a connected data pin (MOSI/MISO) with no clock (SCK/SCLK) — Error;
+///   a connected clock with neither data pin — Warning (suspicious, but
+///   clock-only streaming parts exist).
+/// UART is deliberately NOT checked: TX-only (debug console) and RX-only
+/// links are legitimate. Matching is by exact conventional pin name; parts
+/// with multiple numbered buses (SDA0/SDA1) are out of v1 scope.
+pub fn check_interface_completeness(
+    netlist: &Netlist,
+    _analysis: &AnalysisResult,
+) -> Vec<DRCViolation> {
+    let mut out = Vec::new();
+    let members = net_members(netlist);
+    for (inst_id, inst) in &netlist.instances {
+        if is_phantom(netlist, inst) {
+            continue;
+        }
+        // pin name → connected? (present pins only)
+        let mut pins: HashMap<String, bool> = HashMap::new();
+        for pi in netlist.pin_instances.values() {
+            if pi.instance != inst_id {
+                continue;
+            }
+            let Some(pin) = netlist.pins.get(pi.pin_def) else { continue };
+            let connected = pi
+                .net
+                .map(|nid| members.get(&nid).map(|m| m.len() >= 2).unwrap_or(false))
+                .unwrap_or(false);
+            let e = pins.entry(pin.name.to_uppercase()).or_insert(false);
+            *e = *e || connected;
+        }
+        let has = |n: &str| pins.contains_key(n);
+        let conn = |n: &str| pins.get(n).copied().unwrap_or(false);
+
+        // I2C: both or neither.
+        if has("SDA") && has("SCL") && (conn("SDA") != conn("SCL")) {
+            let (wired, missing) = if conn("SDA") { ("SDA", "SCL") } else { ("SCL", "SDA") };
+            out.push(DRCViolation {
+                rule_id: "ERC026".into(),
+                rule_name: "Incomplete interface".into(),
+                category: RuleCategory::Electrical,
+                severity: ViolationSeverity::Error,
+                description: format!(
+                    "{}: I2C is half-wired — {wired} is connected but {missing} \
+                     is not; the bus cannot work without both",
+                    inst.name
+                ),
+                location: ViolationLocation::Component(inst_id),
+                fix_suggestion: format!("connect {}.{missing} to the bus", inst.name),
+                standard_reference: None,
+            });
+        }
+
+        // SPI: data needs clock; clock without data is suspicious.
+        let sck = conn("SCK") || conn("SCLK");
+        let has_sck = has("SCK") || has("SCLK");
+        let data_conn = conn("MOSI") || conn("MISO");
+        let has_data = has("MOSI") || has("MISO");
+        if has_sck && has_data {
+            if data_conn && !sck {
+                out.push(DRCViolation {
+                    rule_id: "ERC026".into(),
+                    rule_name: "Incomplete interface".into(),
+                    category: RuleCategory::Electrical,
+                    severity: ViolationSeverity::Error,
+                    description: format!(
+                        "{}: SPI data ({}) is connected but the clock is not — \
+                         nothing can shift without SCK",
+                        inst.name,
+                        ["MOSI", "MISO"]
+                            .iter()
+                            .filter(|p| conn(p))
+                            .copied()
+                            .collect::<Vec<_>>()
+                            .join("+"),
+                    ),
+                    location: ViolationLocation::Component(inst_id),
+                    fix_suggestion: format!("connect {}.SCK to the bus clock", inst.name),
+                    standard_reference: None,
+                });
+            } else if sck && !data_conn {
+                out.push(DRCViolation {
+                    rule_id: "ERC026".into(),
+                    rule_name: "Incomplete interface".into(),
+                    category: RuleCategory::Electrical,
+                    severity: ViolationSeverity::Warning,
+                    description: format!(
+                        "{}: SPI clock is connected but neither MOSI nor MISO is — \
+                         a clock into nothing is usually a wiring slip",
+                        inst.name
+                    ),
+                    location: ViolationLocation::Component(inst_id),
+                    fix_suggestion: "connect the data line(s), or remove the clock run".into(),
+                    standard_reference: None,
+                });
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

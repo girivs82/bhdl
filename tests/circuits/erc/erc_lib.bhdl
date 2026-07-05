@@ -51,6 +51,17 @@ entity Shifter() {
     attribute component_class = "level_shifter";
 }
 
+// SPI peripheral for the ERC026 interface-completeness fixture. Bus pins are
+// inout so the fixture exercises ONLY the interface rule (no ERC006 noise).
+entity SpiDev() {
+    pin VCC: power in;
+    pin GND: ground;
+    pin SCK: signal inout;
+    pin MOSI: signal inout;
+    pin MISO: signal inout;
+    pin CS: signal inout;
+}
+
 entity Draw40() {
     pin VCC: power in;
     pin GND: ground;

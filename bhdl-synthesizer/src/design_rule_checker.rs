@@ -220,6 +220,18 @@ impl DesignRuleChecker {
                 "Vendor `check { require … }` rules shipped with the entity (T2)",
                 crate::erc::check_part_carried,
             ),
+            (
+                "ERC019",
+                "Polarized capacitor orientation",
+                "polarized=true part with pos at a lower declared DC potential than neg",
+                crate::erc::check_polarized_orientation,
+            ),
+            (
+                "ERC026",
+                "Interface completeness",
+                "Half-wired I2C/SPI interfaces (data without clock, SDA without SCL)",
+                crate::erc::check_interface_completeness,
+            ),
         ] {
             self.rules.push(DesignRule {
                 id: id.to_string(),

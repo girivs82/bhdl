@@ -1,0 +1,51 @@
+// ERC batch-3 fixture — ERC019 (reversed polarized capacitor, declared-rail
+// potentials) and ERC026 (interface completeness).
+//
+// Expected findings (8 total: 1 critical, 4 errors, 3 warnings):
+//   ERC019 Critical  c_rev mounted reversed (pos at 0V, neg at 5V)
+//   ERC026 Error ×2  m and s: I2C half-wired (SDA connected, SCL not)
+//   ERC026 Error     d1: SPI data (MOSI) connected, clock not
+//   ERC005 Error     the half-wired SDA net has no pull-ups (true, and stays)
+//   ERC026 Warning   d2: SPI clock connected, no data line
+//   ERC006 Warning×2 m.IN1 / m.RX floating inputs (Mcu pins this fixture
+//                    doesn't use — kept, they prove the rules coexist)
+// c_ok (correctly oriented electrolytic) and the fully-unused SPI pins of a
+// part with NOTHING connected must stay silent.
+
+import { Cap, ElectrolyticCap } from "bhdl-stdlib/passives/capacitor.bhdl";
+
+import { Mcu, Sensor, SpiDev } from "tests/circuits/erc/erc_lib.bhdl";
+
+board ErcBatch3 {
+    power VCC_5V = 5V @ 1A;
+    ground GND;
+
+    m: Mcu();    @VCC_5V -> m.VCC;  m.GND -> @GND;
+    s: Sensor(); @VCC_5V -> s.VCC;  s.GND -> @GND;
+
+    // I2C half-wired: SDA runs between them, SCL forgotten on both ends.
+    m.SDA -> s.SDA;
+
+    // SPI device with data but no clock (Error) …
+    d1: SpiDev(); @VCC_5V -> d1.VCC; d1.GND -> @GND;
+    m.OUT1 -> d1.MOSI;
+
+    // … and one with a clock into nothing (Warning).
+    d2: SpiDev(); @VCC_5V -> d2.VCC; d2.GND -> @GND;
+    m.TX -> d2.SCK;
+
+    // ERC019: electrolytic across the rail REVERSED — pos on ground, neg on
+    // the 5V rail. A vent-and-smoke error no netlist-only tool with unnamed
+    // pins can see.
+    c_rev: ElectrolyticCap(100uF, 16V);
+    c_rev.pos -> @GND;
+    c_rev.neg -> @VCC_5V;
+
+    // Correctly oriented twin — must stay silent.
+    c_ok: ElectrolyticCap(100uF, 16V);
+    c_ok.pos -> @VCC_5V;
+    c_ok.neg -> @GND;
+
+    // Rail decoupling keeps ERC020 quiet.
+    @VCC_5V -> c1: Cap(100nF).1; c1.2 -> @GND;
+}
