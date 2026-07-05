@@ -24,6 +24,11 @@ entity LP2985(part_no: string = "LP2985-3.3") {
     attribute power_rating    = 400mW;  // SOT-23-5 free-air ((125−25)°C / ~250°C/W)
     attribute pkg             = "SOT-23-5";
     attribute part_number     = part_no;
+    // Datasheet §8.2.2 application circuit: 1µF input cap, 1µF low-ESR
+    // ceramic output cap (stability requires ≥1µF). Read by the S4 supply
+    // application-circuit emitter.
+    attribute input_capacitor_rec  = 1uF;
+    attribute output_capacitor_rec = 1uF;
     // §4 device-stress IP: linear pass-element dissipation at the solved
     // operating point — P = (V_IN − V_OUT)·I_out + V_IN·I_q. `self.p_diss`
     // targets THIS device's own sign-off row, gated against the package

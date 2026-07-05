@@ -1172,7 +1172,13 @@ pub fn compute_signoff(
             let achieved = overrides
                 .iter()
                 .filter(|((child, axis), _)| {
-                    axis == "v_ripple" && child.starts_with(&format!("{}_C_out", inst.name))
+                    // Case-insensitive: hand-authored expansions name the
+                    // child C_out, the S4 emitter uses the TI designator
+                    // c_out1 — both are this instance's output bank.
+                    axis == "v_ripple"
+                        && child
+                            .to_lowercase()
+                            .starts_with(&format!("{}_c_out", inst.name.to_lowercase()))
                 })
                 .map(|(_, v)| *v)
                 .fold(None::<f64>, |acc, v| Some(acc.map_or(v, |a| a.max(v))));

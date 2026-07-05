@@ -162,8 +162,33 @@ passes.
   index; report sections 2–4 (decision math + full candidate survey).
 - **S3** — `profile: cost` ranked by real jlcparts prices across the whole
   derived BOM; charts (efficiency vs load, ripple vs C_out) as embedded SVG.
-- **S4** — multi-rail supply trees: cascaded `supply` statements, shared
-  input banks, sequencing constraints.
+- **S4a — application-circuit emission (BUILT).** A regulator IC alone is
+  not a supply: the desugar emits the datasheet support parts around the
+  chosen part, shape-driven by its pins.
+  - Wiring shape: `VOUT -> @target` when the part has VOUT; `SW -> l_out ->
+    @target` when it has a switch node (both for virtual-VOUT switchers);
+    `BOOT/BST -> c_boot -> SW` with the part's declared
+    `bootstrap_capacitor`; FB divider (`r_fb_top`/`r_fb_bot`) from
+    `feedback_voltage` + the part's datasheet `fb_divider_bottom`; input
+    and output caps across their rails.
+  - Sizing: `max(ripple closed form, datasheet
+    input/output_capacitor_rec/min)`, snapped to the CANONICAL E-series
+    (IEC 60063 preferred-number tables for E12/E24 — 8.2uH and 47uF, not
+    the rounded geometric grid's 8.3/46). A value derivable from neither
+    spec nor datasheet is SKIPPED, not defaulted (Real-Data Policy) — the
+    part's own T2 `check{}` rules then flag anything load-bearing that is
+    missing.
+  - Support instances use the TI-style designators
+    (`{psu}_c_in1`, `_c_out1`, `_l_out`, …) and are stamped
+    `expansion_parent={psu}`, so the part's §4 stress block resolves them
+    by local name: the GENERATED supply signs off under the part's own
+    stress model (`(stress block)` provenance) and the `ripple_max`
+    requirement row gates against the achieved ΔV.
+  - Voltage class of the rail caps is left to physical selection (it
+    derates against the rail when picking the real MPN; an unpopulatable
+    class surfaces as UNPOPULATED) — same convention as hand-wired boards.
+- **S4b** — multi-rail supply trees: cascaded `supply` statements, shared
+  input banks, sequencing constraints. NOT built.
 
 ## 7. Non-goals (for now)
 

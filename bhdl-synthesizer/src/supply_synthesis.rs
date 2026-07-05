@@ -127,8 +127,13 @@ pub fn desugar_supplies(source: &str, stdlib_root: &Path) -> Result<Option<Desug
         let range = stmt.text_range();
         let (start, end) = (usize::from(range.start()), usize::from(range.end()));
         out.replace_range(start..end, &d.generated);
-        if !d.import_line.is_empty() && !import_lines.contains(&d.import_line) {
-            import_lines.push(d.import_line.clone());
+        // import_line may carry several lines (part + support passives, S4);
+        // dedupe per line so two supplies sharing Cap don't double-import.
+        for line in d.import_line.lines() {
+            let line = line.to_string();
+            if !line.is_empty() && !import_lines.contains(&line) {
+                import_lines.push(line);
+            }
         }
         supplies.push(d);
     }
@@ -252,13 +257,20 @@ fn desugar_one(
     let (part_path, entity_src) = find_entity(stdlib_root, &part)?;
     let params = entity_param_names(&entity_src, &part);
     let pins = entity_pin_names(&entity_src, &part);
-    for required in ["VIN", "VOUT", "GND"] {
+    for required in ["VIN", "GND"] {
         if !pins.iter().any(|p| p == required) {
             bail!(
                 "supply @{target}: part `{part}` has no {required} pin — not a \
                  regulator entity this statement can wire"
             );
         }
+    }
+    let has_pin = |p: &str| pins.iter().any(|x| x == p);
+    if !has_pin("VOUT") && !has_pin("SW") {
+        bail!(
+            "supply @{target}: part `{part}` has neither a VOUT nor a SW pin — \
+             not a regulator shape this statement can wire"
+        );
     }
 
     // Spec → constructor threading, intersected with the entity's params.
@@ -304,21 +316,164 @@ fn desugar_one(
         args.join(", ")
     ));
     g.push_str(&format!("{indent}{instance}.GND -> @{ground};\n"));
-    if pins.iter().any(|p| p == "EN") {
+    if has_pin("EN") {
         g.push_str(&format!("{indent}@{source_rail} -> {instance}.EN;\n"));
     }
-    g.push_str(&format!("{indent}{instance}.VOUT -> @{target};"));
+    if has_pin("VOUT") {
+        g.push_str(&format!("{indent}{instance}.VOUT -> @{target};\n"));
+    }
 
-    // Import line, repo-root-relative (the loader's convention), skipped when
-    // the board already imports the part.
-    let already_imported = original.contains(&format!("{{ {part} }}"))
-        || original.contains(&format!("{part},"))
-        || original.contains(&format!(", {part} }}"));
-    let import_line = if already_imported {
-        String::new()
-    } else {
-        format!("import {{ {part} }} from \"{}\";", part_path.display())
+    // ── S4: the application circuit (Power_Supply_Synthesis.md §5) ──
+    //
+    // A regulator IC alone is not a supply. Emit the datasheet support
+    // parts around the chosen part, sized from the SAME closed forms the
+    // chooser priced (E-series snapped) combined with the part's declared
+    // datasheet recommendations — max(ripple closed form, datasheet rec),
+    // both real data, never a bare guess. Support instances are named with
+    // the TI-style application-circuit designators ({instance}_c_in1, …)
+    // and stamped `expansion_parent={instance}` so the part's §4 stress
+    // block resolves them by local name (c_in1 / c_out1 / l_out) exactly
+    // like expansion children — the generated supply signs off under the
+    // part's own stress model. A value that cannot be derived from spec or
+    // datasheet is SKIPPED, not defaulted (Real-Data Policy); the part's
+    // own T2 `check{}` rules then flag anything load-bearing that is
+    // missing.
+    let part_attrs = entity_attrs_txt(&entity_src, &part);
+    let attr_num = |k: &str| {
+        part_attrs.get(k).and_then(|v| {
+            parse_si_txt(v).or_else(|| {
+                entity_param_default(&entity_src, &part, v.trim())
+                    .and_then(|d| parse_si_txt(&d))
+            })
+        })
     };
+    let v_in_f = parse_si_txt(&s.voltage).unwrap_or(0.0);
+    let v_out_f = parse_si_txt(&t.voltage).unwrap_or(0.0);
+    let i_out_f = parse_si_txt(&i_out).unwrap_or(0.0);
+    let f_sw = attr_num("switching_frequency")
+        .or_else(|| attr_num("f_sw"))
+        .unwrap_or(0.0);
+    let duty = if v_in_f > 0.0 { v_out_f / v_in_f } else { 0.0 };
+    let d_il = 0.3 * i_out_f;
+    let mut used_cap = false;
+    let mut used_ind = false;
+    let mut used_res = false;
+
+    // max(closed-form seed, datasheet rec), E12-snapped. Either source alone
+    // is enough; neither → None (skip).
+    let cap_value = |seed: Option<f64>, rec_keys: &[&str]| -> Option<f64> {
+        let rec = rec_keys.iter().find_map(|k| attr_num(k)).filter(|v| *v > 0.0);
+        let seed = seed.filter(|v| *v > 0.0);
+        match (seed, rec) {
+            (Some(a), Some(b)) => Some(e_series_nearest(a.max(b), 12)),
+            (Some(a), None) => Some(e_series_nearest(a, 12)),
+            (None, Some(b)) => Some(e_series_nearest(b, 12)),
+            (None, None) => None,
+        }
+    };
+
+    // Switch node first: a SW-shaped part needs the output inductor to make
+    // @target exist at all.
+    if has_pin("SW") && f_sw > 0.0 && d_il > 0.0 && v_in_f > v_out_f {
+        let l = e_series_nearest((v_in_f - v_out_f) * duty / (f_sw * d_il), 12);
+        if l > 0.0 {
+            used_ind = true;
+            g.push_str(&format!(
+                "{indent}{instance}.SW -> {instance}_l_out: Ind({}, expansion_parent=\"{instance}\").1;\n",
+                fmt_si(l, "H")
+            ));
+            g.push_str(&format!("{indent}{instance}_l_out.2 -> @{target};\n"));
+        }
+    }
+    // Bootstrap cap — only with the part's declared datasheet value.
+    if has_pin("SW") && (has_pin("BOOT") || has_pin("BST")) {
+        if let Some(cb) = attr_num("bootstrap_capacitor").filter(|v| *v > 0.0) {
+            let boot = if has_pin("BOOT") { "BOOT" } else { "BST" };
+            used_cap = true;
+            g.push_str(&format!(
+                "{indent}{instance}.{boot} -> {instance}_c_boot: Cap({}, expansion_parent=\"{instance}\").1;\n",
+                fmt_si(cb, "F")
+            ));
+            g.push_str(&format!("{indent}{instance}_c_boot.2 -> {instance}.SW;\n"));
+        }
+    }
+    // Rail caps carry the entity's default voltage rating, like hand-wired
+    // application circuits do — the required voltage CLASS is physical
+    // selection's job (it derates against the rail and picks the real MPN;
+    // an unpopulatable class surfaces as its UNPOPULATED warning, never a
+    // silent pass).
+    // Input cap across the source rail.
+    let c_in_seed = (f_sw > 0.0)
+        .then(|| i_out_f * duty * (1.0 - duty) / (f_sw * 0.15));
+    if let Some(c) = cap_value(c_in_seed, &["input_capacitor_rec", "input_capacitor_min"]) {
+        used_cap = true;
+        g.push_str(&format!(
+            "{indent}@{source_rail} -> {instance}_c_in1: Cap({}, expansion_parent=\"{instance}\").1;\n",
+            fmt_si(c, "F")
+        ));
+        g.push_str(&format!("{indent}{instance}_c_in1.2 -> @{ground};\n"));
+    }
+    // Output cap across the target rail — the ripple form uses the ACTUAL
+    // ripple spec when given.
+    let c_out_seed = (f_sw > 0.0).then(|| {
+        let dv = spec_num("ripple_max").unwrap_or(0.05);
+        d_il / (8.0 * f_sw * dv)
+    });
+    if let Some(c) = cap_value(c_out_seed, &["output_capacitor_rec", "output_capacitor_min"]) {
+        used_cap = true;
+        g.push_str(&format!(
+            "{indent}@{target} -> {instance}_c_out1: Cap({}, expansion_parent=\"{instance}\").1;\n",
+            fmt_si(c, "F")
+        ));
+        g.push_str(&format!("{indent}{instance}_c_out1.2 -> @{ground};\n"));
+    }
+    // Feedback divider — needs the FB pin, the reference, and the part's
+    // datasheet-recommended bottom-leg value (`fb_divider_bottom`).
+    if has_pin("FB") {
+        let v_ref = attr_num("feedback_voltage").unwrap_or(0.0);
+        let r_bot = attr_num("fb_divider_bottom").unwrap_or(0.0);
+        if v_ref > 0.0 && r_bot > 0.0 && v_out_f > v_ref {
+            let r_top = e_series_nearest(r_bot * (v_out_f - v_ref) / v_ref, 96);
+            used_res = true;
+            g.push_str(&format!(
+                "{indent}@{target} -> {instance}_r_fb_top: Res({}, expansion_parent=\"{instance}\").1;\n",
+                fmt_si(r_top, "")
+            ));
+            g.push_str(&format!("{indent}{instance}_r_fb_top.2 -> {instance}.FB;\n"));
+            g.push_str(&format!(
+                "{indent}{instance}.FB -> {instance}_r_fb_bot: Res({}, expansion_parent=\"{instance}\").1;\n",
+                fmt_si(r_bot, "")
+            ));
+            g.push_str(&format!("{indent}{instance}_r_fb_bot.2 -> @{ground};\n"));
+        }
+    }
+    // Trim the trailing newline so the splice stays statement-shaped.
+    while g.ends_with('\n') {
+        g.pop();
+    }
+
+    // Import lines, repo-root-relative (the loader's convention), skipped
+    // when the board already imports the entity. May be multi-line (part +
+    // support passives); the caller dedupes per line.
+    let already_imported = |name: &str| {
+        original.contains(&format!("{{ {name} }}"))
+            || original.contains(&format!("{name},"))
+            || original.contains(&format!(", {name} }}"))
+    };
+    let mut import_vec: Vec<String> = Vec::new();
+    if !already_imported(&part) {
+        import_vec.push(format!("import {{ {part} }} from \"{}\";", part_path.display()));
+    }
+    for (used, name, file) in [
+        (used_cap, "Cap", "bhdl-stdlib/passives/capacitor.bhdl"),
+        (used_ind, "Ind", "bhdl-stdlib/passives/inductor.bhdl"),
+        (used_res, "Res", "bhdl-stdlib/passives/resistor.bhdl"),
+    ] {
+        if used && !already_imported(name) {
+            import_vec.push(format!("import {{ {name} }} from \"{file}\";"));
+        }
+    }
+    let import_line = import_vec.join("\n");
 
     // S3 design curves — only when the chooser ran (it computed the numeric
     // operating point). Seed closed forms, marked as such in the note.
@@ -1056,6 +1211,32 @@ fn support_part_values(
     (reqs, unresolved)
 }
 
+/// Format a value in engineering notation for generated BHDL source —
+/// `2.2e-5, "F"` → `"22uF"`, `1e4, ""` → `"10k"` (bare form for resistors,
+/// matching the `Res(4.7k)` fixture idiom). Uses `u` (not `µ`) for micro.
+fn fmt_si(v: f64, unit: &str) -> String {
+    let (scale, prefix) = if v >= 1e6 {
+        (1e6, "M")
+    } else if v >= 1e3 {
+        (1e3, "k")
+    } else if v >= 1.0 {
+        (1.0, "")
+    } else if v >= 1e-3 {
+        (1e-3, "m")
+    } else if v >= 1e-6 {
+        (1e-6, "u")
+    } else if v >= 1e-9 {
+        (1e-9, "n")
+    } else {
+        (1e-12, "p")
+    };
+    let n = v / scale;
+    // Up to 3 significant digits, trailing zeros trimmed.
+    let s = format!("{n:.2}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    format!("{s}{prefix}{unit}")
+}
+
 /// Nearest standard E-series value (E12 for reactives, E96 for resistors) —
 /// the pricing-side analogue of the design flow's snap stage.
 fn e_series_nearest(v: f64, series: u32) -> f64 {
@@ -1065,16 +1246,29 @@ fn e_series_nearest(v: f64, series: u32) -> f64 {
     let decade = 10f64.powf(v.log10().floor());
     let mut best = v;
     let mut best_err = f64::MAX;
-    let n = series as i32;
+    // E12/E24 use the HISTORICAL preferred-number tables, not the rounded
+    // geometric grid — IEC 60063 kept pre-war values (2.7, 3.3, 3.9, 4.7,
+    // 8.2) where naive rounding gives 2.6/3.2/3.8/4.6/8.3. Generated source
+    // must name values an engineer can actually buy. E96 has no such
+    // exceptions: 3-significant-digit rounding of the grid IS the table.
+    const E12: [f64; 12] =
+        [1.0, 1.2, 1.5, 1.8, 2.2, 2.7, 3.3, 3.9, 4.7, 5.6, 6.8, 8.2];
+    const E24: [f64; 24] = [
+        1.0, 1.1, 1.2, 1.3, 1.5, 1.6, 1.8, 2.0, 2.2, 2.4, 2.7, 3.0,
+        3.3, 3.6, 3.9, 4.3, 4.7, 5.1, 5.6, 6.2, 6.8, 7.5, 8.2, 9.1,
+    ];
+    let table: Vec<f64> = match series {
+        12 => E12.to_vec(),
+        24 => E24.to_vec(),
+        n => (0..n)
+            .map(|k| {
+                let b = 10f64.powf(k as f64 / n as f64);
+                (b * 100.0).round() / 100.0
+            })
+            .collect(),
+    };
     for dec in [decade / 10.0, decade, decade * 10.0] {
-        for k in 0..n {
-            let base = 10f64.powf(k as f64 / n as f64);
-            // Round to the 2- or 3-significant-digit convention.
-            let base = if series <= 24 {
-                (base * 10.0).round() / 10.0
-            } else {
-                (base * 100.0).round() / 100.0
-            };
+        for base in &table {
             let cand = base * dec;
             let err = ((cand - v) / v).abs();
             if err < best_err {

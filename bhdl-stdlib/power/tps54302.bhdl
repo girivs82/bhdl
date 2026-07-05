@@ -32,6 +32,10 @@ entity TPS54302() {
     attribute efficiency = 92%;
     attribute dropout_voltage = 0.5V;
     attribute feedback_voltage = 0.6V;
+    // Datasheet §7.2.3.5 design example: R_bottom = 10.0kΩ for the FB
+    // divider; the top leg follows from V_OUT and the 0.6V reference. Read
+    // by the S4 supply application-circuit emitter.
+    attribute fb_divider_bottom = 10kΩ;
 
     // Control-loop stability constants (datasheet SLVSDG6C). The part is
     // INTERNALLY COMPENSATED — TI does not publish the internal comp R/C, so

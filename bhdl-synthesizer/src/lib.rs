@@ -2725,7 +2725,14 @@ pub fn populate_instance_attributes(
                         ParameterValue::Capacitance(c) => c.to_string(),
                         ParameterValue::Voltage(v) => v.to_string(),
                         ParameterValue::Current(i) => i.to_string(),
-                        ParameterValue::String(s) => s.clone(),
+                        // Strip the literal string quotes the source form
+                        // carries — the ctor-arg path (Phase 4.4) stamps
+                        // unquoted values, and attribute consumers
+                        // (erc_waive clause match, expansion_parent
+                        // stress-designator mapping) compare against bare
+                        // text. Quoted-vs-bare split the two paths' values
+                        // for the same attribute.
+                        ParameterValue::String(s) => s.trim().trim_matches('"').to_string(),
                         ParameterValue::Real(r) => r.to_string(),
                         ParameterValue::Integer(i) => i.to_string(),
                         _ => continue, // Skip unsupported parameter types

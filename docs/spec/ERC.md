@@ -65,10 +65,10 @@ its rules; no central registry to update. (Same argument that made the
 chooser's candidate set "the catalogue is the universe".) First adopters:
 LP2985 (`connected(EN)` — floating ON/OFF is undefined) and TPS54302
 (`connected(BOOT)` — no bootstrap cap, no switching; EN deliberately NOT
-required since the part has an internal EN pull-up). Note the desugared
-`supply` circuit currently instantiates no support parts, so the TPS54302
-BOOT rule truthfully flags generated buck supplies until supply synthesis
-learns to emit the application circuit (S4 follow-up).
+required since the part has an internal EN pull-up). The desugared `supply`
+circuit emits the full application circuit (S4a,
+Power_Supply_Synthesis.md §6) — generated buck supplies satisfy the
+TPS54302 BOOT rule with their emitted bootstrap cap, verified end-to-end.
 
 **T3 — policy plugins (JSON over stdio).** Org-wide review policy
 (наming conventions, forbidden vendors, creepage classes) as an external
