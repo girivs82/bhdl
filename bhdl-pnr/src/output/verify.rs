@@ -89,8 +89,13 @@ pub fn verify(board: &Board, routes: &[Route]) -> VerifyReport {
     // 1. Boundary violations
     let mut boundary_violations = Vec::new();
     for comp in &board.components {
-        let hw = comp.width_mm / 2.0;
-        let hh = comp.height_mm / 2.0;
+        // Rotation-aware: a 90°-rotated part swaps its footprint w/h. The
+        // legalizer separates with rotated_bbox(); measuring here with the
+        // UNROTATED dims reported phantom violations on every rotated
+        // elongated part (and could miss real ones).
+        let (rw, rh) = comp.rotated_bbox();
+        let hw = rw / 2.0;
+        let hh = rh / 2.0;
         let left = comp.x - hw;
         let right = comp.x + hw;
         let top = comp.y - hh;
@@ -121,10 +126,12 @@ pub fn verify(board: &Board, routes: &[Route]) -> VerifyReport {
         for j in (i + 1)..board.components.len() {
             let a = &board.components[i];
             let b = &board.components[j];
+            let (aw, ah) = a.rotated_bbox();
+            let (bw2, bh2) = b.rotated_bbox();
             let dx = (a.x - b.x).abs();
             let dy = (a.y - b.y).abs();
-            let min_dx = (a.width_mm + b.width_mm) / 2.0 + 0.15; // min spacing
-            let min_dy = (a.height_mm + b.height_mm) / 2.0 + 0.15;
+            let min_dx = (aw + bw2) / 2.0 + 0.15; // min spacing, rotation-aware
+            let min_dy = (ah + bh2) / 2.0 + 0.15;
             if dx < min_dx && dy < min_dy {
                 overlaps.push(OverlapViolation {
                     refdes_a: a.refdes.clone(),
