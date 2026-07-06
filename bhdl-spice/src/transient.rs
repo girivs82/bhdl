@@ -49,6 +49,7 @@ use crate::companion_models::{
 use crate::components::{ComponentModel, ElectricalLimits};
 use crate::errors::{Result, SpiceError};
 use crate::glacier_production::GlacierSolver;
+use log::warn;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public types
@@ -916,32 +917,222 @@ pub fn run_transient_nonlinear(
     }
 
     let h = params.timestep;
+
+    // Op-amps in the nonlinear route: each amp is stamped into the
+    // companion circuit as a Thevenin guess (source ṽ_a behind Rout) and a
+    // small NEWTON loop makes ṽ_a consistent with the amp's BE-discretised
+    // single-pole dynamics, v_a' = α·v_a + β·v_d — the network's v_d
+    // sensitivity to each amp source is measured by perturbed GLACIER
+    // solves (so diodes re-linearise inside every pass, and amp↔diode
+    // circuits like precision rectifiers solve correctly). Slew/rail
+    // limits pin ṽ_a exactly as in the linear route.
+    struct NlAmp {
+        name: String,
+        p_net: String,
+        n_net: String,
+        out_net: String,
+        alpha: f64,
+        beta: f64,
+        rout: f64,
+        vos: f64,
+        sr_v_per_s: f64,
+        vmax: f64,
+        vmin: f64,
+    }
+    let nl_amps: Vec<NlAmp> = circuit
+        .branches()
+        .filter_map(|(_, b)| {
+            if b.component_type != "OpAmp" || b.nodes.len() != 3 {
+                return None;
+            }
+            let name_of =
+                |i: usize| node_name.get(&b.nodes[i]).cloned().unwrap_or_default();
+            let mf = |k: &str| b.metadata.get(k).and_then(|s| s.parse::<f64>().ok());
+            let aol = b.value.max(1.0);
+            let (alpha, beta) = match mf(META_GBW) {
+                Some(g) if g > 0.0 => {
+                    let wp = 2.0 * std::f64::consts::PI * g / aol;
+                    let d = 1.0 + h * wp;
+                    (1.0 / d, h * wp * aol / d)
+                }
+                _ => (0.0, aol),
+            };
+            Some(NlAmp {
+                name: b.name.clone(),
+                p_net: name_of(0),
+                n_net: name_of(1),
+                out_net: name_of(2),
+                alpha,
+                beta,
+                rout: mf(META_ROUT).unwrap_or(1.0).max(1e-3),
+                vos: mf(META_VOS).unwrap_or(0.0),
+                sr_v_per_s: mf(META_SLEW).map(|s| s * 1e6).unwrap_or(f64::INFINITY),
+                vmax: mf(META_VSAT_P).unwrap_or(f64::INFINITY),
+                vmin: mf(META_VSAT_N).unwrap_or(f64::NEG_INFINITY),
+            })
+        })
+        .collect();
+    let n_amps = nl_amps.len();
+    let mut amp_v_a: Vec<f64> = vec![0.0; n_amps];
+
     let mut t = 0.0;
     for _ in 0..n_steps {
         t += h;
         let t_clamped = t.min(params.duration);
         let stim = params.stimulus.at(t_clamped);
 
-        // 1. Build the companion circuit for this step.
-        let (comp_circuit, comp_models) = build_companion_circuit(
-            circuit, models, &cap_v, &ind_i, &node_name,
-            &ground_name, &params.input_node, stim, h,
-        )?;
+        // One GLACIER solve of the companion circuit at given amp sources.
+        let solve_with = |amp_vals: &[f64]| -> Result<HashMap<String, f64>> {
+            let stamps: Vec<(String, String, f64, f64)> = nl_amps
+                .iter()
+                .zip(amp_vals)
+                .map(|(a, v)| (a.name.clone(), a.out_net.clone(), *v, a.rout))
+                .collect();
+            let (comp_circuit, comp_models) = build_companion_circuit(
+                circuit, models, &cap_v, &ind_i, &node_name,
+                &ground_name, &params.input_node, stim, h, &stamps,
+            )?;
+            let mut solver = GlacierSolver::new(comp_circuit);
+            solver.enable_multi_region = false;
+            for (nm, model) in &comp_models {
+                solver.add_model(nm.clone(), model.clone());
+            }
+            let solutions = solver.solve()?;
+            let solution = solutions
+                .into_iter()
+                .min_by(|a, b| a.final_error.partial_cmp(&b.final_error)
+                    .unwrap_or(std::cmp::Ordering::Equal))
+                .ok_or_else(|| SpiceError::AnalysisFailed(
+                    "GLACIER returned no solution for transient step".to_string()))?;
+            Ok(solution.node_voltages)
+        };
+        let v_d_of = |nv: &HashMap<String, f64>, a: &NlAmp| -> f64 {
+            nv.get(&a.p_net).copied().unwrap_or(0.0)
+                - nv.get(&a.n_net).copied().unwrap_or(0.0)
+                + a.vos
+        };
 
-        // 2. Solve it with GLACIER (single deterministic operating point).
-        let mut solver = GlacierSolver::new(comp_circuit);
-        solver.enable_multi_region = false;
-        for (nm, model) in &comp_models {
-            solver.add_model(nm.clone(), model.clone());
+        let node_v: HashMap<String, f64>;
+        let mut v_new = amp_v_a.clone();
+        if n_amps == 0 {
+            node_v = solve_with(&[])?;
+        } else {
+            let mut outer = 0usize;
+            loop {
+                outer += 1;
+                // The active set is PER PASS: a rail pin decided on a stale
+                // affine model (wrong diode region) must be reconsidered
+                // once the fresh solve reveals the true neighbourhood —
+                // carrying pins across passes wedged the precision
+                // rectifier at the rail for entire half-cycles.
+                let mut pinned: Vec<Option<f64>> = vec![None; n_amps];
+                let g0 = v_new.clone();
+                let base = solve_with(&g0)?;
+                let vd0: Vec<f64> =
+                    nl_amps.iter().map(|a| v_d_of(&base, a)).collect();
+                // Sensitivity of every v_d to every amp source, by
+                // perturbed solves — the network is (piecewise) linear so
+                // this Jacobian is exact within a diode region.
+                const DELTA: f64 = 1e-3;
+                let mut jac = DMatrix::<f64>::zeros(n_amps, n_amps);
+                for j in 0..n_amps {
+                    let mut vp = g0.clone();
+                    vp[j] += DELTA;
+                    let sol = solve_with(&vp)?;
+                    for i in 0..n_amps {
+                        jac[(i, j)] = (v_d_of(&sol, &nl_amps[i]) - vd0[i]) / DELTA;
+                    }
+                }
+                // Affine model v_d(x) = vd0 + J·(x − g0); solve the fixed
+                // point x = α·v_a + β·v_d(x) over the FREE amps, pinning
+                // any that violate slew/rail limits (constants), until the
+                // active set stabilises. No further GLACIER solves here.
+                loop {
+                    let free: Vec<usize> =
+                        (0..n_amps).filter(|k| pinned[*k].is_none()).collect();
+                    let mut x = g0.clone();
+                    for k in 0..n_amps {
+                        if let Some(v) = pinned[k] {
+                            x[k] = v;
+                        }
+                    }
+                    if !free.is_empty() {
+                        let nf = free.len();
+                        let mut a_m = DMatrix::<f64>::zeros(nf, nf);
+                        let mut b_v = DVector::<f64>::zeros(nf);
+                        for (ri, &i) in free.iter().enumerate() {
+                            let amp = &nl_amps[i];
+                            let mut rhs_i =
+                                amp.alpha * amp_v_a[i] + amp.beta * vd0[i];
+                            for j in 0..n_amps {
+                                rhs_i -= amp.beta * jac[(i, j)] * g0[j];
+                            }
+                            for j in 0..n_amps {
+                                if pinned[j].is_some() {
+                                    rhs_i += amp.beta * jac[(i, j)] * x[j];
+                                }
+                            }
+                            for (cj, &j) in free.iter().enumerate() {
+                                a_m[(ri, cj)] = if i == j { 1.0 } else { 0.0 }
+                                    - amp.beta * jac[(i, j)];
+                            }
+                            b_v[ri] = rhs_i;
+                        }
+                        let sol = a_m
+                            .lu()
+                            .solve(&b_v)
+                            .ok_or(SpiceError::SingularMatrix)?;
+                        for (ri, &i) in free.iter().enumerate() {
+                            x[i] = sol[ri];
+                        }
+                    }
+                    let mut grew = false;
+                    for k in 0..n_amps {
+                        if pinned[k].is_some() {
+                            continue;
+                        }
+                        let amp = &nl_amps[k];
+                        let cap = amp.sr_v_per_s * h;
+                        let lim = x[k]
+                            .max(amp_v_a[k] - cap)
+                            .min(amp_v_a[k] + cap)
+                            .max(amp.vmin)
+                            .min(amp.vmax);
+                        if (lim - x[k]).abs() > 1e-9 {
+                            pinned[k] = Some(lim);
+                            grew = true;
+                        }
+                    }
+                    if !grew {
+                        v_new = x;
+                        break;
+                    }
+                }
+                // Verify at the accepted point: if a diode changed region
+                // the affine model (and J) were stale — re-run the pass.
+                let ver = solve_with(&v_new)?;
+                let mut model_err = 0.0f64;
+                for (i, amp) in nl_amps.iter().enumerate() {
+                    let pred: f64 = vd0[i]
+                        + (0..n_amps)
+                            .map(|j| jac[(i, j)] * (v_new[j] - g0[j]))
+                            .sum::<f64>();
+                    model_err = model_err.max((v_d_of(&ver, amp) - pred).abs());
+                }
+                if model_err < 1e-4 || outer >= 4 {
+                    if model_err >= 1e-4 {
+                        warn!(
+                            "nonlinear transient: amp affine model residual \
+                             {model_err:.2e} V after {outer} passes at t={t_clamped:.3e}s"
+                        );
+                    }
+                    node_v = ver;
+                    break;
+                }
+            }
+            amp_v_a = v_new;
         }
-        let solutions = solver.solve()?;
-        let solution = solutions
-            .into_iter()
-            .min_by(|a, b| a.final_error.partial_cmp(&b.final_error)
-                .unwrap_or(std::cmp::Ordering::Equal))
-            .ok_or_else(|| SpiceError::AnalysisFailed(
-                "GLACIER returned no solution for transient step".to_string()))?;
-        let node_v = &solution.node_voltages;
+
         let v_at = |idx: NodeIndex| -> f64 {
             node_name.get(&idx)
                 .and_then(|nm| node_v.get(nm))
@@ -1004,6 +1195,7 @@ fn build_companion_circuit(
     input_node: &str,
     stimulus_value: f64,
     h: f64,
+    amp_stamps: &[(String, String, f64, f64)], // (name, out net, ṽ_a, rout)
 ) -> Result<(Circuit, HashMap<String, ComponentModel>)> {
     let mut c = Circuit::new();
     let mut m: HashMap<String, ComponentModel> = HashMap::new();
@@ -1019,6 +1211,28 @@ fn build_companion_circuit(
     m.insert("__VIN__".to_string(), ComponentModel::VoltageSource {
         voltage: stimulus_value, internal_resistance: Some(0.0),
     });
+
+    // Op-amp output stages at the CURRENT Newton guess: each amp is a
+    // Thevenin source ṽ_a behind its open-loop Rout (internal node →
+    // source to ground, resistor to the OUT net). The outer Newton loop
+    // owns making ṽ_a consistent with the solved differential input.
+    for (name, out_net, v_a, rout) in amp_stamps {
+        let int_node = format!("__{name}_amp_int__");
+        c.add_node(int_node.clone(), None);
+        let src = format!("__{name}_amp_src__");
+        c.add_branch(src.clone(), &int_node, ground_name,
+            "VoltageSource".to_string(), *v_a, None);
+        m.insert(src, ComponentModel::VoltageSource {
+            voltage: *v_a, internal_resistance: Some(0.0),
+        });
+        let res = format!("__{name}_amp_rout__");
+        c.add_branch(res.clone(), &int_node, out_net,
+            "Resistor".to_string(), *rout, None);
+        m.insert(res, ComponentModel::Resistor {
+            resistance: *rout, tolerance: 0.0,
+            limits: ElectricalLimits::default(),
+        });
+    }
 
     for (edge, branch) in circuit.branches() {
         if branch.nodes.len() != 2 { continue; }
@@ -1066,8 +1280,29 @@ fn build_companion_circuit(
                 let comp = inductor_bdf1_with_dcr(branch.value, h, i_prev, dcr);
                 add_companion(&mut c, &mut m, &branch.name, &na, &nb, comp);
             }
+            "OpAmp" => { /* stamped above from amp_stamps (three-terminal) */ }
             _ => { /* unmodelled component types contribute nothing */ }
         }
+    }
+
+    // Op-amp differential input resistance: an ordinary resistor between
+    // the inputs when the part declares one.
+    for (_edge, branch) in circuit.branches() {
+        if branch.component_type != "OpAmp" || branch.nodes.len() != 3 {
+            continue;
+        }
+        let Some(rin) = branch.metadata.get(META_RIN)
+            .and_then(|s| s.parse::<f64>().ok())
+            .filter(|r| r.is_finite() && *r > 0.0)
+        else { continue };
+        let np = node_name.get(&branch.nodes[0]).cloned().unwrap_or_default();
+        let nn = node_name.get(&branch.nodes[1]).cloned().unwrap_or_default();
+        let name = format!("__{}_amp_rin__", branch.name);
+        c.add_branch(name.clone(), &np, &nn, "Resistor".to_string(), rin, None);
+        m.insert(name, ComponentModel::Resistor {
+            resistance: rin, tolerance: 0.0,
+            limits: ElectricalLimits::default(),
+        });
     }
 
     // Multi-terminal devices (the triode) are memoryless nonlinear elements:
@@ -1991,6 +2226,60 @@ mod tests {
             (amp - 1.25).abs() < 0.2,
             "slew-bound amplitude {amp:.3} V, expected ~1.25 V (SR·T/4)"
         );
+    }
+
+    /// Precision rectifier (super-diode): the diode sits INSIDE the amp's
+    /// feedback loop (INN sensed after the diode), so closed-loop action
+    /// hides the ~0.7 V forward drop — positive half-cycles pass at full
+    /// amplitude, negative halves are cut at ~0 V while the amp rails
+    /// negative. This is the canonical amp↔diode interplay: each half-
+    /// cycle transition flips the diode's region, forcing the Newton loop
+    /// to re-measure the network. An open-loop diode would peak at
+    /// ~1.3 V; the loop must deliver ~2.0 V.
+    #[test]
+    fn nonlinear_precision_rectifier_hides_the_diode_drop() {
+        let mut circuit = Circuit::new();
+        circuit.add_node("Vin".to_string(), None);
+        circuit.add_node("Vamp".to_string(), None);
+        circuit.add_node("Vout".to_string(), None);
+        circuit.add_node("GND".to_string(), None);
+        circuit.add_branch("D1".to_string(), "Vamp", "Vout", "Diode".to_string(), 0.0, None);
+        circuit.add_branch("RL".to_string(), "Vout", "GND", "Resistor".to_string(), 10_000.0, None);
+        let mut meta = HashMap::new();
+        meta.insert(META_VSAT_P.to_string(), "12".to_string());
+        meta.insert(META_VSAT_N.to_string(), "-12".to_string());
+        // INN senses AFTER the diode: feedback through the nonlinearity.
+        circuit.add_opamp_branch("U1".to_string(), "Vin", "Vout", "Vamp", 2e5, None, meta);
+
+        let mut models = HashMap::new();
+        models.insert("D1".to_string(), ComponentModel::Diode {
+            forward_voltage: 0.7,
+            forward_resistance: 0.0,
+            reverse_current: 1e-9,
+            saturation_current: Some(1e-12),
+            emission_coefficient: Some(1.0),
+            limits: ElectricalLimits::default(),
+        });
+
+        let params = TransientParams::new(
+            "Vin",
+            Stimulus::Sine { amplitude: 2.0, frequency_hz: 1000.0, dc_offset: 0.0 },
+            vec!["Vout"],
+            2e-3,
+            1e-5, // 100 points per cycle
+        );
+        let result = run_transient_nonlinear(&circuit, &models, &params).unwrap();
+        let vout = &result.probe_voltages["Vout"];
+        let max = vout.iter().cloned().fold(f64::MIN, f64::max);
+        let min = vout.iter().cloned().fold(f64::MAX, f64::min);
+        // Positive peak at ~the full 2 V input — the loop absorbed the
+        // diode drop (an open-loop diode would stop near 1.3 V).
+        assert!(
+            max > 1.9 && max < 2.1,
+            "precision-rectified peak {max:.3} V, expected ~2.0 V"
+        );
+        // Negative halves clamp near zero (diode off, load pulled down).
+        assert!(min > -0.2, "negative half reached {min:.3} V, expected ~0 V");
     }
 }
 
