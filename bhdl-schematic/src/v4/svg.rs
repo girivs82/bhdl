@@ -1508,10 +1508,19 @@ fn draw_chain(
     let mut depth = spine + 90.0;
     let mut x = 60.0;
 
+    // Solved-DC on a SIGNAL flag is information only when NONZERO (a real
+    // bias point / offset). Zero is the solver's default for an externally
+    // driven path — the 0A-on-FB rule: an annotation that conveys nothing
+    // is not printed. (Rails differ: a 0V rail would be alarming, so rail
+    // annotations always print.)
+    let chain_dc = |v: f64| v.abs() >= 1e-3;
+
     let in_net = chain.spine_nets[0];
     svg.sig_flag(x, spine, &net_label(netlist, in_net), true);
     if let Some(v) = solved_v(decor, netlist, in_net) {
-        svg.queue_sim(x + 4.0, spine + 8.0, &format!("= {}", fmt_sim_v(v)), "sim");
+        if chain_dc(v) {
+            svg.queue_sim(x + 4.0, spine + 8.0, &format!("= {}", fmt_sim_v(v)), "sim");
+        }
     }
     svg.wire(&[(x, spine), (x + 24.0, spine)]);
     x += 24.0;
@@ -1558,7 +1567,9 @@ fn draw_chain(
     x += 18.0;
     svg.sig_flag(x, spine, &net_label(netlist, out_net), false);
     if let Some(v) = solved_v(decor, netlist, out_net) {
-        svg.queue_sim(x + 4.0, spine + 8.0, &format!("= {}", fmt_sim_v(v)), "sim");
+        if chain_dc(v) {
+            svg.queue_sim(x + 4.0, spine + 8.0, &format!("= {}", fmt_sim_v(v)), "sim");
+        }
     }
 
     depth - y0 + 50.0
