@@ -8,8 +8,8 @@
 
 board SharedBank {
     power VIN_12V = 12V @ 4A;
-    power VCC_5V = 5V @ 1A;
-    power VCC_3V3 = 3.3V @ 1A;
+    port VCC_5V: power out = 5V @ 1A;
+    port VCC_3V3: power out = 3.3V @ 1A;
     ground GND;
 
     supply @VCC_5V from @VIN_12V {

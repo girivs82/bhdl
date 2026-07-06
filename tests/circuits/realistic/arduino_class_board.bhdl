@@ -30,7 +30,7 @@ import { Cap, Res } from "bhdl-stdlib/passives/capacitor.bhdl";
 
 board Arduino_Class_Board {
     power VIN  = 12V @ 500mA;
-    power VCC  = 5V  @ 300mA;
+    port VCC: power out = 5V  @ 300mA;
     ground GND;
 
     // 12V → 5V regulator. LM317's expansion provides C_in, C_out,

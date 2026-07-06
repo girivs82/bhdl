@@ -5,7 +5,7 @@ import { LM7805 } from "bhdl-stdlib/power/lm7805.bhdl";
 board VoltageRegulator {
     // Power domains
     power VIN = 12V @ 500mA;
-    power VOUT = 5V @ 400mA;
+    port VOUT: power out = 5V @ 400mA;
     ground GND;
     
     // Simple regulator circuit with minimal components

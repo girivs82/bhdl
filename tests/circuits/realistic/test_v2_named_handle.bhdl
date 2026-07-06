@@ -4,7 +4,7 @@ import { LM1117_33 } from "bhdl-stdlib/power/regulator.bhdl";
 
 board NamedHandleTest {
     power VCC = 5V @ 1A;
-    power VCC_3V3 = 3.3V @ 500mA;
+    port VCC_3V3: power out = 3.3V @ 500mA;
     ground GND;
     VCC -> regulator: LM1117_33().VI;
     regulator.GND -> @GND;

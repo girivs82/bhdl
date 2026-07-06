@@ -15,7 +15,7 @@ import { TestPoint } from "bhdl-stdlib/connectors/testpoint.bhdl";
 board PowerSupply_7805 {
     // Power domains
     power VIN = 12V @ 1A;      // Input voltage from DC adapter
-    power VCC = 5V @ 1A;       // Regulated output
+    port VCC: power out = 5V @ 1A;       // Regulated output
     ground GND;
     
     // Input protection and filtering

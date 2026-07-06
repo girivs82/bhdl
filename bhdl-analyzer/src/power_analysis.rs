@@ -705,11 +705,17 @@ fn record_board_port(node: &SyntaxNode<BhdlLanguage>, context: &mut PowerAnalysi
             }
         }
         // `power_domain @VCC = 5V @ 10A { sources {...} ... }` — the
-        // scalability spelling of a declared rail; its sources block is
-        // where external power enters, so the domain is a boundary too.
+        // scalability spelling of a declared rail. Direction comes from the
+        // declaration itself: a non-empty `sources { }` block names the
+        // on-board generator (rail is power-OUT); an empty/absent block
+        // means power arrives from outside (power-IN boundary).
         SyntaxKind::POWER_DOMAIN_DEF => {
             let Some(decl) = bhdl_ast::items::PowerDomain::cast(node.clone()) else { return };
             let Some(name) = decl.net_name() else { return };
+            let generated = decl
+                .sources_block()
+                .map(|sb| sb.syntax().children().next().is_some())
+                .unwrap_or(false);
             // Token scan of the header: `= <NUMBER><unit> @ <NUMBER><unit> {`.
             let mut found_eq = false;
             let mut past_at = false;
@@ -743,7 +749,7 @@ fn record_board_port(node: &SyntaxNode<BhdlLanguage>, context: &mut PowerAnalysi
             BoardPortInfo {
                 name,
                 kind: BoardPortKind::Power,
-                direction: BoardPortDir::In,
+                direction: if generated { BoardPortDir::Out } else { BoardPortDir::In },
                 voltage,
                 current,
                 explicit: false,

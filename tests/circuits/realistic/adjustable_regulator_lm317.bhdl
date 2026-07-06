@@ -7,7 +7,7 @@ import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
 
 board AdjustableRegulatorBoard {
     power VIN = 12V @ 1A;
-    power VOUT_9V = 9V @ 500mA;
+    port VOUT_9V: power out = 9V @ 500mA;
     ground GND;
     
     // LM317 configured for 9V output

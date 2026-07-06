@@ -100,13 +100,29 @@ pub fn expand_power_domains(
 
 /// Expand power domains in a single board
 fn expand_board_power_domains(board: &Board, instance_registry: &InstanceRegistry, expansion: &mut PowerDomainExpansion) {
-    // Record declared ground nets (`ground GND;`) so the synthesizer can
-    // tie ground pins of connected loads when there is exactly one
+    // Record declared ground nets (`ground GND;` or its explicit boundary-
+    // port spelling `port GND: ground;` — ports doctrine, one declaration)
+    // so the synthesizer can tie ground pins of connected loads when there
+    // is exactly one.
     for ground_decl in board.ground_decls() {
         if let Some(name) = ground_decl.name() {
             let name = name.text().to_string();
             if !expansion.ground_nets.contains(&name) {
                 expansion.ground_nets.push(name);
+            }
+        }
+    }
+    for port in board
+        .syntax()
+        .children()
+        .filter_map(bhdl_ast::BoardPortDecl::cast)
+    {
+        if port.port_type() == Some(bhdl_ast::BoardPortType::Ground) {
+            if let Some(name) = port.name() {
+                let name = name.text().to_string();
+                if !expansion.ground_nets.contains(&name) {
+                    expansion.ground_nets.push(name);
+                }
             }
         }
     }
@@ -717,5 +733,33 @@ fn expand_cap_spec(
         } else if let Some(ref comp) = near_component {
             println!("  Generated cap: {} = {} (near {})", instance_name, value_str, comp);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Ports doctrine: `port GND: ground;` must land in ground_nets exactly
+    /// like the `ground GND;` sugar — the synthesizer's single-ground tie
+    /// (and with it the whole solved operating point) depends on it.
+    #[test]
+    fn ground_port_recorded_in_ground_nets() {
+        let src = "board B {\n\
+                       port VIN: power in = 12V @ 1A;\n\
+                       port GND: ground;\n\
+                   }";
+        let parsed = bhdl_parser::parse(src);
+        let sf = SourceFile::cast(parsed.syntax()).expect("SOURCE_FILE");
+        let reg = InstanceRegistry::new();
+        let exp = expand_power_domains(&sf, &reg);
+        assert_eq!(exp.ground_nets, vec!["GND".to_string()]);
+
+        // The sugar spelling records identically (and only once).
+        let src2 = "board B { ground GND; }";
+        let parsed2 = bhdl_parser::parse(src2);
+        let sf2 = SourceFile::cast(parsed2.syntax()).expect("SOURCE_FILE");
+        let exp2 = expand_power_domains(&sf2, &reg);
+        assert_eq!(exp2.ground_nets, vec!["GND".to_string()]);
     }
 }

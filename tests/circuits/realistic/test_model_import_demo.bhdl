@@ -5,7 +5,7 @@ import { EffReg } from "tests/circuits/realistic/lib_eff_reg.bhdl";
 
 board ModelImportDemo {
     power VIN  = 12V @ 2A;
-    power VOUT = 5V @ 1A;
+    port VOUT: power out = 5V @ 1A;
     ground GND;
 
     @VIN -> reg: EffReg().VIN;

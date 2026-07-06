@@ -39,8 +39,8 @@ entity Oscillator() {
 
 board FPGADevBoard {
     power VIN_5V = 5V @ 2A;
-    power VCC_3V3 = 3.3V @ 1A;
-    power VCC_1V2 = 1.2V @ 800mA;
+    port VCC_3V3: power out = 3.3V @ 1A;
+    port VCC_1V2: power out = 1.2V @ 800mA;
     ground GND;
 
     // ── Supply tree: both rails from VIN_5V, sharing one input bank ──

@@ -10,7 +10,7 @@ import { TestPoint } from "bhdl-stdlib/connectors/testpoint.bhdl";
 board BuckConverterLM2596 {
     // Power domains
     power VIN = 24V @ 3A;
-    power VOUT_12V = 12V @ 2A;
+    port VOUT_12V: power out = 12V @ 2A;
     ground GND;
     
     // Input filtering (required but not part of virtual pin)

@@ -9,7 +9,7 @@
 
 board SupplyStmtS1 {
     power VIN = 12V @ 3A;
-    power VCC_3V3 = 3.3V @ 1.5A;
+    port VCC_3V3: power out = 3.3V @ 1.5A;
     ground GND;
 
     supply @VCC_3V3 from @VIN {

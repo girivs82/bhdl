@@ -42,9 +42,9 @@ entity CoreLogic() {
 
 board MultiVoltageSystem {
     power VIN_12V = 12V @ 4A;
-    power VCC_5V = 5V @ 2A;
-    power VCC_3V3 = 3.3V @ 1A;
-    power VCC_1V8 = 1.8V @ 300mA;
+    port VCC_5V: power out = 5V @ 2A;
+    port VCC_3V3: power out = 3.3V @ 1A;
+    port VCC_1V8: power out = 1.8V @ 300mA;
     ground GND;
 
     // ── Power tree — all regulation auto-generated ──

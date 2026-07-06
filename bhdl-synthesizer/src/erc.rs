@@ -1809,11 +1809,43 @@ mod tests {
     }
 
     #[test]
-    fn erc028_port_on_driven_rail_silent() {
-        // A rail generated on-board (regulator VOUT): its desugared port is
-        // not the boundary source, so no connector is demanded.
+    fn erc028_in_port_on_driven_rail_errors() {
+        // A rail generated on-board (regulator VOUT) spelled power-IN: the
+        // declaration claims an external supply that doesn't exist.
         let (mut nl, net) = anchoring_fixture("", PinDirection::Out, PinType::Power);
         add_board_port(&mut nl, net, bhdl_netlist::types::PortDirection::Input);
+        let v = check_rail_anchoring(&nl, &AnalysisResult::default());
+        assert_eq!(v.len(), 1, "expected the internal-rail-as-boundary Error");
+        assert_eq!(v[0].rule_id, "ERC028");
+        assert!(matches!(v[0].severity, ViolationSeverity::Error));
+    }
+
+    #[test]
+    fn erc028_out_port_on_driven_rail_silent() {
+        // The honest spelling of a generated rail: `port X: power out = V @ I;`
+        // with the regulator actually driving it.
+        let (mut nl, net) = anchoring_fixture("", PinDirection::Out, PinType::Power);
+        add_board_port(&mut nl, net, bhdl_netlist::types::PortDirection::Output);
+        assert!(check_rail_anchoring(&nl, &AnalysisResult::default()).is_empty());
+    }
+
+    #[test]
+    fn erc028_out_port_without_driver_errors() {
+        // An OUT port claims on-board generation; nothing drives the net.
+        let (mut nl, net) = anchoring_fixture("", PinDirection::Power, PinType::Power);
+        add_board_port(&mut nl, net, bhdl_netlist::types::PortDirection::Output);
+        let v = check_rail_anchoring(&nl, &AnalysisResult::default());
+        assert_eq!(v.len(), 1, "expected the no-generator Error");
+        assert_eq!(v[0].rule_id, "ERC028");
+        assert!(matches!(v[0].severity, ViolationSeverity::Error));
+    }
+
+    #[test]
+    fn erc028_inout_port_unchecked() {
+        // A battery+charger bus rail: externally fed AND driven — INOUT
+        // makes no single-boundary claim.
+        let (mut nl, net) = anchoring_fixture("", PinDirection::Power, PinType::Power);
+        add_board_port(&mut nl, net, bhdl_netlist::types::PortDirection::InOut);
         assert!(check_rail_anchoring(&nl, &AnalysisResult::default()).is_empty());
     }
 }
@@ -2038,13 +2070,24 @@ fn is_connector_class(class: &str) -> bool {
 /// this fires on nets that became Power-class some other way (net-name
 /// heuristics, imports) without a source.
 ///
+/// Error — "internal rail declared as external boundary": a power-IN port on
+/// a DRIVEN rail. The rail is generated on-board; declaring it power-in
+/// (usually via the `power X = V @ I` sugar) claims an external supply that
+/// doesn't exist on the built board. Generated rails are spelled
+/// `port X: power out = V @ I;` — the spec lives on the port declaration,
+/// the direction tells the truth.
+///
+/// Error — "generated rail has no generator": the converse; a power-OUT port
+/// whose net nothing drives.
+///
 /// Warning — "nothing to solder": a power-in board port that is the rail's
 /// actual boundary source (net has no on-board driver, so the DC solve puts
 /// the ideal source at this port) but whose net touches no connector-class
 /// instance. The board declares power arriving from outside yet provides no
-/// physical part for it to arrive through. Ports on internally-generated
-/// rails (a regulator drives the net) are not boundaries in the built board
-/// and are skipped.
+/// physical part for it to arrive through.
+///
+/// INOUT power ports (battery + charger bus rails — both externally fed and
+/// on-board driven) make no single-boundary claim and are not checked.
 pub fn check_rail_anchoring(
     netlist: &Netlist,
     _analysis: &AnalysisResult,
@@ -2117,36 +2160,85 @@ pub fn check_rail_anchoring(
                     });
                 }
             }
-            Some((port_name, direction)) => {
-                // Only in-direction ports that are the rail's real boundary
-                // source need a physical entry point.
-                if !matches!(direction, bhdl_netlist::types::PortDirection::Input)
-                    || has_driver
-                {
-                    continue;
-                }
-                let has_connector = pins.iter().any(|p| is_connector_class(&p.class));
-                if !has_connector {
+            Some((port_name, direction)) => match direction {
+                // An IN port claims power ENTERS here. On a driven rail
+                // that claim is false — the rail is generated on-board, and
+                // the declaration form (usually the `power X = V @ I` sugar)
+                // is spelling an internal rail as an external boundary.
+                bhdl_netlist::types::PortDirection::Input if has_driver => {
                     out.push(DRCViolation {
                         rule_id: "ERC028".into(),
-                        rule_name: "Port has no physical connector".into(),
+                        rule_name: "Internal rail declared as external boundary".into(),
                         category: RuleCategory::Electrical,
-                        severity: ViolationSeverity::Warning,
+                        severity: ViolationSeverity::Error,
                         description: format!(
-                            "Board port '{port_name}' supplies rail '{}' from outside, \
-                             but the net touches no connector-class instance — nothing \
-                             to solder",
+                            "Rail '{}' is generated ON-board (an output pin drives \
+                             it), but port '{port_name}' declares it power-IN — an \
+                             external supply that doesn't exist on the built board",
+                            net_name(netlist, net_id)
+                        ),
+                        location: ViolationLocation::Net(net_id),
+                        fix_suggestion: format!(
+                            "declare it as generated: `port {port_name}: power out = \
+                             V @ I;` (a bench supply overriding a generated rail is a \
+                             testbench construct, not a board declaration)"
+                        ),
+                        standard_reference: None,
+                    });
+                }
+                // An IN port on an undriven rail IS the boundary source (the
+                // DC solve puts the ideal source here) — it needs a physical
+                // entry point.
+                bhdl_netlist::types::PortDirection::Input => {
+                    let has_connector =
+                        pins.iter().any(|p| is_connector_class(&p.class));
+                    if !has_connector {
+                        out.push(DRCViolation {
+                            rule_id: "ERC028".into(),
+                            rule_name: "Port has no physical connector".into(),
+                            category: RuleCategory::Electrical,
+                            severity: ViolationSeverity::Warning,
+                            description: format!(
+                                "Board port '{port_name}' supplies rail '{}' from \
+                                 outside, but the net touches no connector-class \
+                                 instance — nothing to solder",
+                                net_name(netlist, net_id)
+                            ),
+                            location: ViolationLocation::Net(net_id),
+                            fix_suggestion:
+                                "add the physical entry (dc-jack/header/usb/testpoint) \
+                                 the power arrives through, and wire it to the rail"
+                                    .into(),
+                            standard_reference: None,
+                        });
+                    }
+                }
+                // An OUT port claims the rail is generated on-board. With no
+                // driver, that claim is false too.
+                bhdl_netlist::types::PortDirection::Output if !has_driver => {
+                    out.push(DRCViolation {
+                        rule_id: "ERC028".into(),
+                        rule_name: "Generated rail has no generator".into(),
+                        category: RuleCategory::Electrical,
+                        severity: ViolationSeverity::Error,
+                        description: format!(
+                            "Port '{port_name}' declares rail '{}' as generated \
+                             on-board (power out), but nothing drives the net",
                             net_name(netlist, net_id)
                         ),
                         location: ViolationLocation::Net(net_id),
                         fix_suggestion:
-                            "add the physical entry (dc-jack/header/usb/testpoint) the \
-                             power arrives through, and wire it to the rail"
+                            "add the supply stage / regulator that produces the rail, \
+                             or declare it `power in` and give it a connector"
                                 .into(),
                         standard_reference: None,
                     });
                 }
-            }
+                // OUT with a driver: honest generated rail. INOUT: a bus
+                // rail (battery + charger) — both externally fed and driven;
+                // no single-boundary claim to check.
+                _ => {}
+            },
         }
     }
     out

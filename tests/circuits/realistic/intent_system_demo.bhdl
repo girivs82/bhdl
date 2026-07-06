@@ -144,8 +144,8 @@ entity Peripherals() {
 board IntentSystemDemo {
     // Power supplies
     power VIN = 12V @ 2A;
-    power VCC_5V = 5V @ 1A;
-    power VCC_3V3 = 3.3V @ 500mA;
+    port VCC_5V: power out = 5V @ 1A;
+    port VCC_3V3: power out = 3.3V @ 500mA;
     ground GND;
 
     // Instances referenced from several sections
