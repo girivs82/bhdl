@@ -167,13 +167,19 @@ impl Svg {
     /// placement let the sim annotation steal the prime slot and scatter a
     /// resistor's value away from its body.
     fn place_label_pair(&mut self, ax: f64, ay: f64, l1: &str, c1: &str, l2: &str, c2: &str) {
-        const CAND: [(f64, f64); 6] = [
+        const CAND: [(f64, f64); 9] = [
             (10.0, 0.0),
             (10.0, -14.0),
             (-10.0, 0.0),
             (10.0, 14.0),
             (-10.0, -14.0),
             (10.0, 28.0),
+            // Escape slots beside the ground symbol (whose solid spans
+            // ±13px) — a shunt column crossed by a reserved wiring lane
+            // has no clear side slot at symbol height.
+            (18.0, 44.0),
+            (-18.0, 44.0),
+            (18.0, 58.0),
         ];
         let w = 6.8 * l1.len().max(l2.len()) as f64;
         for (dx, dy) in CAND {
@@ -192,6 +198,9 @@ impl Svg {
             }
         }
         self.collisions += 1;
+        if std::env::var("BHDL_V4_DEBUG").is_ok() {
+            eprintln!("[v4] label pair fallback (collision): '{l1}' / '{l2}' at ({ax:.0},{ay:.0})");
+        }
         self.text(ax + 10.0, ay, l1, c1);
         if !l2.is_empty() {
             self.text(ax + 10.0, ay + 13.0, l2, c2);
@@ -669,12 +678,53 @@ fn parse_val(txt: &str) -> Option<f64> {
 }
 
 fn value_of(netlist: &Netlist, inst: &str) -> String {
-    netlist
+    let raw = netlist
         .instances
         .values()
         .find(|i| i.name == inst)
         .and_then(|i| i.attributes.get("value").cloned())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    // Synthesized parts carry RAW f64 strings ("0.0000149999…") — print
+    // them in engineering notation with the class's unit (15µF): the same
+    // number, readable ink. Values that already carry a unit ("100nF",
+    // "10kΩ") don't parse as bare floats and pass through untouched.
+    if let Ok(v) = raw.trim().parse::<f64>() {
+        let unit = match class_of_name(netlist, inst).as_str() {
+            "capacitor" => "F",
+            "resistor" => "Ω",
+            "inductor" => "H",
+            _ => "",
+        };
+        if !unit.is_empty() && v != 0.0 {
+            return fmt_eng_value(v, unit);
+        }
+    }
+    raw
+}
+
+/// Engineering-notation formatter: 1.4999999e-5, "F" → "15µF".
+fn fmt_eng_value(v: f64, unit: &str) -> String {
+    const PREFIXES: [(f64, &str); 8] = [
+        (1e9, "G"),
+        (1e6, "M"),
+        (1e3, "k"),
+        (1.0, ""),
+        (1e-3, "m"),
+        (1e-6, "µ"),
+        (1e-9, "n"),
+        (1e-12, "p"),
+    ];
+    let a = v.abs();
+    let (scale, prefix) = PREFIXES
+        .iter()
+        .find(|(s, _)| a >= *s * 0.9995)
+        .copied()
+        .unwrap_or((1e-12, "p"));
+    let scaled = v / scale;
+    // Three significant-ish digits, trailing zeros trimmed.
+    let s = format!("{scaled:.3}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    format!("{s}{prefix}{unit}")
 }
 
 /// The designer's DECLARED intent on an instance (`for intent(...)` in
