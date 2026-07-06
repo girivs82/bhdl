@@ -2118,7 +2118,52 @@ fn render_sheet_svg_with_blocks(
         let mut row_h: f64 = 0.0;
         for b in blocks {
             let max_pin = b.ports.iter().map(|(p, ..)| p.len()).max().unwrap_or(0);
-            let max_net = b.ports.iter().map(|(_, n, ..)| n.len()).max().unwrap_or(0);
+            // MEASURED port current: the GLACIER-solved current of the
+            // group's DOMINANT carrier on the net (>=10x every other
+            // member, or the sole significant one) — an ambiguous split is
+            // not a port current and is not printed. Computed up front so
+            // the cell reserves width for it: this ink sits ON its row,
+            // deterministically (a slot-searched decoration that slides to
+            // another row reads as the wrong port's current).
+            let port_current = |insts: &[String]| -> Option<String> {
+                let sim = decor.sim?;
+                let mut currents: Vec<f64> = insts
+                    .iter()
+                    .filter_map(|i| {
+                        if *i == b.inst {
+                            // The PARENT contributes only through its explicit
+                            // load-draw branch ("{inst}_draw") — its bare-name
+                            // branch is the regulator model's internal output
+                            // source, whose current would leak onto every row
+                            // the chip's pins touch (49.9mA on the VIN row).
+                            sim.instance_currents.get(&format!("{i}_draw"))
+                        } else {
+                            sim.instance_currents.get(i)
+                        }
+                    })
+                    .map(|i| i.abs())
+                    .filter(|i| *i >= 1e-6)
+                    .collect();
+                currents.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+                let dominant = match currents.as_slice() {
+                    [one] => Some(*one),
+                    [first, second, ..] if *first >= 10.0 * *second => Some(*first),
+                    _ => None,
+                }?;
+                if std::env::var("BHDL_V4_DEBUG").is_ok() {
+                    eprintln!("[v4] port current {dominant:.4}A from candidates {insts:?}: {:?}",
+                        insts.iter().map(|i| sim.instance_currents.get(i).copied()).collect::<Vec<_>>());
+                }
+                Some(format!("= {}", fmt_sim_i(dominant)?))
+            };
+            let max_net = b
+                .ports
+                .iter()
+                .map(|(_, n, _, _, insts)| {
+                    n.len() + port_current(insts).map(|c| c.len() + 2).unwrap_or(0)
+                })
+                .max()
+                .unwrap_or(0);
             let box_w = (34.0 + 6.8 * max_pin as f64).max(120.0);
             let visible: Vec<_> = b.ports.iter().filter(|(_, _, _, g, _)| !g).collect();
             let box_h = (30.0 + visible.len() as f64 * 15.0).max(56.0);
@@ -2157,35 +2202,13 @@ fn render_sheet_svg_with_blocks(
                         if *is_p { "rail" } else { "part" },
                     );
                 }
-                // MEASURED port current: the GLACIER-solved branch current
-                // of the group's DOMINANT carrier on this net (the series
-                // element or the load's draw). Printed only when one member
-                // clearly carries the net (≥10× every other) — an ambiguous
-                // split is not a port current and is not invented.
-                if let Some(sim) = decor.sim {
-                    let mut currents: Vec<f64> = insts
-                        .iter()
-                        .filter_map(|i| sim.instance_currents.get(i))
-                        .map(|i| i.abs())
-                        .filter(|i| *i >= 1e-6)
-                        .collect();
-                    currents.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
-                    let dominant = match currents.as_slice() {
-                        [one] => Some(*one),
-                        [first, second, ..] if *first >= 10.0 * *second => Some(*first),
-                        _ => None,
-                    };
-                    if let Some(i) = dominant.and_then(fmt_sim_i) {
-                        // Anchor so the first NEAR slot (+8,+4) lands ON the
-                        // port's own row — a slot below reads as the next
-                        // port's current.
-                        svg.queue_sim(
-                            bx + box_w + 13.0 + 6.8 * nname.len() as f64 + 4.0,
-                            sy - 1.0,
-                            &format!("= {i}"),
-                            "sim",
-                        );
-                    }
+                if let Some(label) = port_current(insts) {
+                    svg.text(
+                        bx + box_w + 13.0 + 6.8 * nname.len() as f64 + 8.0,
+                        sy + 3.0,
+                        &label,
+                        "sim",
+                    );
                 }
                 slot += 1;
             }

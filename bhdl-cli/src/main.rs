@@ -2881,6 +2881,19 @@ fn build_simulation_annotations(
         }
     }
 
+    // CurrentSource branches (model-declared loads) carry their DEFINED
+    // current — the solver has nothing to compute for them, so they never
+    // appear in branch_currents. Without this the one branch a load block
+    // exists to annotate is the one with no number.
+    for (_, branch) in circuit.branches() {
+        if branch.component_type == "CurrentSource" {
+            annotations
+                .instance_currents
+                .entry(branch.name.clone())
+                .or_insert(branch.value);
+        }
+    }
+
     // Classify power nets: a net is "power" if any branch connected to it carries
     // current above the threshold. We iterate all branches and mark both endpoint
     // nets as power when the branch current is significant.
