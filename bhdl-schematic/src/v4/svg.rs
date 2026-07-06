@@ -1310,19 +1310,6 @@ fn chain_node(
     spine: f64,
     depth: &mut f64,
 ) -> f64 {
-    for (tnet, tname) in &chain.taps {
-        if *tnet != net {
-            continue;
-        }
-        // Lead in first — a tap right at the node plants its stub through
-        // the net flag's label.
-        svg.wire(&[(x, spine), (x + 28.0, spine)]);
-        x += 28.0;
-        svg.dot(x, spine);
-        svg.testpoint(x, spine, label_of(decor, tname));
-        svg.wire(&[(x, spine), (x + 18.0, spine)]);
-        x += 18.0;
-    }
     for s in chain.shunts.iter().filter(|s| s.tap == net) {
         draw_shunt(svg, netlist, decor, &s.inst, x, spine);
         *depth = depth.max(spine + 130.0);
@@ -1369,6 +1356,22 @@ fn chain_node(
             label_of(decor, &c.inst), "ref", &value_of(netlist, &c.inst), "val");
         svg.wire(&[(x, spine), (x + 40.0, spine)]);
         x += 40.0;
+    }
+    // Taps LAST — their label search must see the clamp/shunt glyphs
+    // already drawn, or it parks the label under a diode (placement-order
+    // doctrine: judge against final geometry).
+    for (tnet, tname) in &chain.taps {
+        if *tnet != net {
+            continue;
+        }
+        // Lead in first — a tap right at the node plants its stub through
+        // the net flag's label.
+        svg.wire(&[(x, spine), (x + 28.0, spine)]);
+        x += 28.0;
+        svg.dot(x, spine);
+        svg.testpoint(x, spine, label_of(decor, tname));
+        svg.wire(&[(x, spine), (x + 18.0, spine)]);
+        x += 18.0;
     }
     x
 }
