@@ -16,10 +16,29 @@ use rowan::TextRange;
 pub struct PowerDomainExpansion {
     /// Expanded connections from power domain to loads
     pub connections: Vec<ExpandedConnection>,
+    /// Connections from sources{} entries (e.g. `reg: LM7805().VOUT;`) —
+    /// the named instance's pin drives the domain rail net
+    pub source_connections: Vec<ExpandedConnection>,
+    /// Per-domain rail specifications (voltage/current from `= 3.3V @ 5A`)
+    pub rails: Vec<RailSpec>,
+    /// Ground net names declared on the boards (`ground GND;`) — used to
+    /// tie ground pins of connected loads when unambiguous (exactly one)
+    pub ground_nets: Vec<String>,
     /// Generated decoupling capacitors
     pub decoupling_caps: Vec<DecouplingCapacitor>,
     /// Diagnostics generated during expansion
     pub diagnostics: Vec<Diagnostic>,
+}
+
+/// Rail specification parsed from a power domain header
+#[derive(Debug, Clone)]
+pub struct RailSpec {
+    /// Rail net name (e.g., "VCC_3V3")
+    pub name: String,
+    /// Nominal voltage in volts, if parseable
+    pub voltage: Option<f64>,
+    /// Maximum current in amperes, if parseable
+    pub current: Option<f64>,
 }
 
 /// Expanded connection from source to load
@@ -53,6 +72,9 @@ impl PowerDomainExpansion {
     pub fn new() -> Self {
         Self {
             connections: Vec::new(),
+            source_connections: Vec::new(),
+            rails: Vec::new(),
+            ground_nets: Vec::new(),
             decoupling_caps: Vec::new(),
             diagnostics: Vec::new(),
         }
@@ -78,6 +100,17 @@ pub fn expand_power_domains(
 
 /// Expand power domains in a single board
 fn expand_board_power_domains(board: &Board, instance_registry: &InstanceRegistry, expansion: &mut PowerDomainExpansion) {
+    // Record declared ground nets (`ground GND;`) so the synthesizer can
+    // tie ground pins of connected loads when there is exactly one
+    for ground_decl in board.ground_decls() {
+        if let Some(name) = ground_decl.name() {
+            let name = name.text().to_string();
+            if !expansion.ground_nets.contains(&name) {
+                expansion.ground_nets.push(name);
+            }
+        }
+    }
+
     // Process each power domain
     for power_domain in board.power_domains() {
         expand_single_power_domain(&power_domain, instance_registry, expansion);
@@ -113,6 +146,40 @@ fn expand_single_power_domain(domain: &PowerDomain, instance_registry: &Instance
             format!("Power domain @{} missing current specification", net_name),
             TextRange::empty(rowan::TextSize::from(0)),
         ));
+    }
+
+    // Record the rail specification (voltage/current) for net creation
+    expansion.rails.push(RailSpec {
+        name: net_name.clone(),
+        voltage: domain.voltage().and_then(|e| parse_magnitude(&e.syntax().text().to_string())),
+        current: domain.current().and_then(|e| parse_magnitude(&e.syntax().text().to_string())),
+    });
+
+    // Expand sources block (connect each source instance pin to the rail)
+    if let Some(sources_block) = domain.sources_block() {
+        for source in sources_block.sources() {
+            let handle = source.handle().map(|t| t.text().to_string());
+            let pin = source.pin_name();
+            match (handle, pin) {
+                (Some(handle), Some(pin)) => {
+                    expansion.source_connections.push(ExpandedConnection {
+                        source_net: net_name.clone(),
+                        component: handle,
+                        pin,
+                    });
+                }
+                _ => {
+                    expansion.diagnostics.push(Diagnostic::new(
+                        format!(
+                            "Power domain @{}: source entry '{}' missing instance handle or pin name",
+                            net_name,
+                            source.syntax().text().to_string().trim()
+                        ),
+                        TextRange::empty(rowan::TextSize::from(0)),
+                    ));
+                }
+            }
+        }
     }
 
     // Expand distribution block (create connections from domain to all loads)
@@ -319,6 +386,28 @@ fn expand_pin_list(
             }
         }
     }
+}
+
+/// Parse a magnitude with an optional SI prefix and unit from expression
+/// text like "3.3V", "500mA", "5A", "100mV". Returns the value in base
+/// units (volts/amperes), or None if the leading number doesn't parse.
+fn parse_magnitude(text: &str) -> Option<f64> {
+    let text = text.trim();
+    let num_end = text
+        .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+'))
+        .unwrap_or(text.len());
+    let value: f64 = text[..num_end].parse().ok()?;
+    let suffix = text[num_end..].trim();
+    let multiplier = match suffix.chars().next() {
+        Some('p') => 1e-12,
+        Some('n') => 1e-9,
+        Some('µ') | Some('u') => 1e-6,
+        Some('m') => 1e-3,
+        Some('k') | Some('K') => 1e3,
+        Some('M') => 1e6,
+        _ => 1.0,
+    };
+    Some(value * multiplier)
 }
 
 /// Extract a number from an expression (for range expansion)

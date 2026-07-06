@@ -53,6 +53,7 @@ pub use instance_registry::{
 pub use power_domain_expansion::{
     PowerDomainExpansion,
     ExpandedConnection,
+    RailSpec,
     DecouplingCapacitor,
     expand_power_domains,
 };

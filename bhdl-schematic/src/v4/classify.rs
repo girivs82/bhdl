@@ -84,6 +84,9 @@ pub struct StagePlan {
 pub struct LoadPlan {
     pub rail: NetId,
     pub insts: Vec<String>,
+    /// Rail→ground two-terminal parts (the rail's decoupling bank) on a
+    /// rail no stage claimed — drawn as shunt columns on the consumer bus.
+    pub shunts: Vec<String>,
 }
 
 /// The classified sheet.
@@ -318,9 +321,11 @@ pub fn classify_sheet(netlist: &Netlist) -> SheetPlan {
     }
 
     // ── Shunts on rails that no stage claimed (plain decoupling) ──
-    // Attach to the rail's stage if one targets/sources it; else residue
-    // keeps them honest. Handled during compose; classifier records them
-    // as shunts of the closest stage by rail identity.
+    // Attach to the rail's stage if one targets/sources it; when NO stage
+    // owns the rail (a pure distribution sheet — one rail, no upstream),
+    // they are still a real idiom: the rail's decoupling bank. Hold them
+    // for the rail's consumer row (LoadPlan) built below.
+    let mut orphan_shunts: HashMap<NetId, Vec<String>> = HashMap::new();
     for &rail in &plan.rails {
         let members = pins_by_net.get(&rail).cloned().unwrap_or_default();
         for (inst, _pin, _dir) in members {
@@ -338,6 +343,12 @@ pub fn classify_sheet(netlist: &Netlist) -> SheetPlan {
                             inst: inst_name(netlist, inst),
                             tap: rail,
                         });
+                        claimed.insert(inst);
+                    } else {
+                        orphan_shunts
+                            .entry(rail)
+                            .or_default()
+                            .push(inst_name(netlist, inst));
                         claimed.insert(inst);
                     }
                 }
@@ -380,7 +391,26 @@ pub fn classify_sheet(netlist: &Netlist) -> SheetPlan {
             plan.loads.push(LoadPlan {
                 rail,
                 insts: members.into_iter().map(|(_, n)| n).collect(),
+                shunts: Vec::new(),
             });
+        }
+    }
+
+    // Attach orphan decoupling banks to their rail's consumer row; a rail
+    // carrying only decoupling still gets a row so the bank is drawn.
+    {
+        let mut rails: Vec<NetId> = orphan_shunts.keys().cloned().collect();
+        rails.sort_by_key(|r| {
+            netlist.nets.get(*r).and_then(|n| n.name.clone()).unwrap_or_default()
+        });
+        for rail in rails {
+            let mut shunts = orphan_shunts.remove(&rail).unwrap();
+            shunts.sort();
+            if let Some(load) = plan.loads.iter_mut().find(|l| l.rail == rail) {
+                load.shunts = shunts;
+            } else {
+                plan.loads.push(LoadPlan { rail, insts: Vec::new(), shunts });
+            }
         }
     }
 

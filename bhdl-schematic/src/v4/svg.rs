@@ -1266,8 +1266,17 @@ pub fn render_sheet_svg(
         if let Some(v) = solved_v(decor, netlist, load.rail) {
             svg.queue_sim(x0 - 16.0, bus_y + 18.0, &format!("= {}", fmt_sim_v(v)), "sim");
         }
-        let bus_end = x0 + load.insts.len() as f64 * pitch;
+        let boxes_end = x0 + load.insts.len() as f64 * pitch;
+        let bus_end = boxes_end + load.shunts.len() as f64 * SHUNT_PITCH;
         svg.wire(&[(x0 - 20.0, bus_y), (bus_end, bus_y)]);
+        // Decoupling bank: shunt columns continue along the consumer bus.
+        {
+            let mut sx = boxes_end;
+            for inst in &load.shunts {
+                draw_shunt(&mut svg, netlist, decor, inst, sx, bus_y);
+                sx += SHUNT_PITCH;
+            }
+        }
         for (k, inst) in load.insts.iter().enumerate() {
             let bx = x0 + k as f64 * pitch;
             let by = bus_y + 26.0;

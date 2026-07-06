@@ -883,6 +883,13 @@ impl NetlistGenerator {
                     if let Some(instance_id) = instance_id {
                         debug!("Created component instance: {} -> {:?}", name, instance_id);
 
+                        // Register the instance by its board handle so later
+                        // phases (power-domain distribution lowering, Phase
+                        // 2.7) can resolve it — the semantic path does this
+                        // but this path historically didn't, leaving every
+                        // power_domain distribution{} pin floating.
+                        self.ast_to_instance.insert(name.clone(), instance_id);
+
                         // Add pins for the component based on database or default pins.
                         // `get_or_create_module` hands back a *shared* module per
                         // component type, so only the first instance of a given
@@ -1528,51 +1535,116 @@ impl NetlistGenerator {
 
         let expansion = &analysis.power_domain_expansion;
 
-        // Get or create GND net for capacitor connections
-        let gnd_net_id = if let Some(&net_id) = self.ast_to_net.get("GND") {
+        // Determine the board ground net name. Exactly one `ground X;`
+        // declaration makes the choice unambiguous; otherwise fall back to
+        // "GND" for decoupling caps and skip the automatic load ground tie.
+        let unambiguous_ground = expansion.ground_nets.len() == 1;
+        let gnd_name = expansion.ground_nets.first().map(|s| s.as_str()).unwrap_or("GND");
+        if expansion.ground_nets.len() > 1 {
+            warn!("Multiple ground nets declared ({}); load ground pins will not be tied automatically",
+                  expansion.ground_nets.join(", "));
+        }
+
+        // Get or create the ground net for capacitor and load connections
+        let gnd_net_id = if let Some(&net_id) = self.ast_to_net.get(gnd_name) {
             net_id
         } else {
             let net_id = self.netlist.add_net_with_class(
-                Some("GND".to_string()),
+                Some(gnd_name.to_string()),
                 bhdl_netlist::types::NetClass::Ground
             );
-            self.ast_to_net.insert("GND".to_string(), net_id);
+            self.ast_to_net.insert(gnd_name.to_string(), net_id);
             net_id
         };
 
-        // Process expanded power distribution connections
-        for connection in &expansion.connections {
-            info!("  Power connection: @{} -> {}.{}",
+        // Lower sources{} entries first (the rail drivers), then the
+        // distribution{} entries (the loads). Both connect a named instance
+        // pin to the domain rail net; unresolvable entries are hard
+        // warnings — never silently dropped (Real-Data policy).
+        let mut connected_load_instances: Vec<bhdl_netlist::types::InstanceId> = Vec::new();
+        let all_connections = expansion.source_connections.iter().map(|c| (c, true))
+            .chain(expansion.connections.iter().map(|c| (c, false)));
+        for (connection, is_source) in all_connections {
+            info!("  Power {}: @{} -> {}.{}",
+                  if is_source { "source" } else { "connection" },
                   connection.source_net, connection.component, connection.pin);
 
-            // Get or create the source net
+            // Get or create the rail net, using the parsed domain spec
             let source_net_id = if let Some(&net_id) = self.ast_to_net.get(&connection.source_net) {
                 net_id
             } else {
-                // Create the net with appropriate class
+                let rail = expansion.rails.iter().find(|r| r.name == connection.source_net);
                 let net_id = self.netlist.add_net_with_class(
                     Some(connection.source_net.clone()),
-                    bhdl_netlist::types::NetClass::Power { voltage: 3.3, current: None } // Default voltage, should be from domain spec
+                    bhdl_netlist::types::NetClass::Power {
+                        voltage: rail.and_then(|r| r.voltage).unwrap_or(3.3),
+                        current: rail.and_then(|r| r.current),
+                    }
                 );
                 self.ast_to_net.insert(connection.source_net.clone(), net_id);
                 net_id
             };
 
-            // Get the component instance
-            if let Some(&instance_id) = self.ast_to_instance.get(&connection.component) {
-                // Find the pin instance for this component's pin
-                if let Some(pin_inst_id) = self.netlist.find_pin_instance(instance_id, &connection.pin) {
-                    // Connect the power net to this pin instance
-                    if let Err(e) = self.netlist.connect(source_net_id, ConnectionPoint::PinInstance(pin_inst_id)) {
-                        debug!("  Failed to connect power to {}.{}: {}", connection.component, connection.pin, e);
-                    } else {
-                        debug!("  Connected: @{} -> {}.{}", connection.source_net, connection.component, connection.pin);
-                    }
-                } else {
-                    debug!("  Pin instance not found for {}.{}", connection.component, connection.pin);
-                }
+            // Resolve the component instance: prefer the handle map, fall
+            // back to a name scan (instance-creation paths differ in which
+            // maps they populate).
+            let instance_id = self.ast_to_instance.get(&connection.component).copied()
+                .or_else(|| self.netlist.instances.iter()
+                    .find(|(_, inst)| inst.name == connection.component)
+                    .map(|(id, _)| id));
+
+            let Some(instance_id) = instance_id else {
+                warn!("Power domain @{}: unresolved entry '{}.{}' — no instance named '{}'; pin left unconnected",
+                      connection.source_net, connection.component, connection.pin, connection.component);
+                continue;
+            };
+
+            let Some(pin_inst_id) = self.netlist.find_pin_instance(instance_id, &connection.pin) else {
+                warn!("Power domain @{}: unresolved entry '{}.{}' — instance '{}' has no pin '{}'; pin left unconnected",
+                      connection.source_net, connection.component, connection.pin,
+                      connection.component, connection.pin);
+                continue;
+            };
+
+            if let Err(e) = self.netlist.connect(source_net_id, ConnectionPoint::PinInstance(pin_inst_id)) {
+                warn!("Power domain @{}: failed to connect {}.{}: {}",
+                      connection.source_net, connection.component, connection.pin, e);
             } else {
-                debug!("  Component instance not yet created: {}", connection.component);
+                debug!("  Connected: @{} -> {}.{}", connection.source_net, connection.component, connection.pin);
+                if !is_source && !connected_load_instances.contains(&instance_id) {
+                    connected_load_instances.push(instance_id);
+                }
+            }
+        }
+
+        // Tie ground pins of connected loads to the board ground net when
+        // the choice is unambiguous (exactly one `ground` declaration).
+        // Only untied pins are touched — explicit wiring wins.
+        if unambiguous_ground {
+            for instance_id in connected_load_instances {
+                let ground_pin_names: Vec<String> = self.netlist.instances.get(instance_id)
+                    .and_then(|inst| self.netlist.modules.get(inst.definition))
+                    .map(|module| module.pins.iter()
+                        .filter_map(|&pin_id| self.netlist.pins.get(pin_id))
+                        .filter(|pin| pin.pin_type == bhdl_netlist::types::PinType::Ground)
+                        .map(|pin| pin.name.clone())
+                        .collect())
+                    .unwrap_or_default();
+
+                for pin_name in ground_pin_names {
+                    let Some(pin_inst_id) = self.netlist.find_pin_instance(instance_id, &pin_name) else { continue };
+                    let already_tied = self.netlist.pin_instances.get(pin_inst_id)
+                        .map(|pi| pi.net.is_some())
+                        .unwrap_or(true);
+                    if already_tied {
+                        continue;
+                    }
+                    if let Err(e) = self.netlist.connect(gnd_net_id, ConnectionPoint::PinInstance(pin_inst_id)) {
+                        warn!("Power domain ground tie: failed to connect ground pin '{}': {}", pin_name, e);
+                    } else {
+                        debug!("  Ground tie: {} -> {}", pin_name, gnd_name);
+                    }
+                }
             }
         }
 
@@ -1580,30 +1652,54 @@ impl NetlistGenerator {
         let cap_module_id = if let Some(&module_id) = self.ast_to_module.get("Capacitor") {
             module_id
         } else {
-            // Create the Capacitor module with + and - pins
             let module_id = self.netlist.add_module(
                 "Capacitor".to_string(),
                 bhdl_netlist::types::ModuleKind::Component
             );
+            self.ast_to_module.insert("Capacitor".to_string(), module_id);
+            debug!("Created Capacitor module");
+            module_id
+        };
 
-            // Add pins to the capacitor module
+        // The module may pre-exist from an import with no pin definitions
+        // registered yet (the stdlib Capacitor uses pins "1"/"2") — an
+        // instance of a pin-less module gets zero pin instances and can
+        // never be connected. Ensure two terminals exist.
+        let cap_module_pinless = self.netlist.modules.get(cap_module_id)
+            .map(|m| m.pins.is_empty())
+            .unwrap_or(false);
+        if cap_module_pinless {
             self.netlist.add_pin(
-                module_id,
-                "+".to_string(),
+                cap_module_id,
+                "1".to_string(),
                 bhdl_netlist::types::PinDirection::InOut,
                 bhdl_netlist::types::PinType::Power
             );
             self.netlist.add_pin(
-                module_id,
-                "-".to_string(),
+                cap_module_id,
+                "2".to_string(),
                 bhdl_netlist::types::PinDirection::InOut,
                 bhdl_netlist::types::PinType::Ground
             );
+            debug!("Added terminal pins 1/2 to pin-less Capacitor module");
+        }
 
-            self.ast_to_module.insert("Capacitor".to_string(), module_id);
-            debug!("Created Capacitor module with + and - pins");
-            module_id
+        // Resolve the module's terminal pin names once: positive prefers
+        // +/1/pos, negative prefers -/2/neg, falling back to declared order.
+        let cap_pin_names: Vec<String> = self.netlist.modules.get(cap_module_id)
+            .map(|m| m.pins.iter()
+                .filter_map(|&pid| self.netlist.pins.get(pid))
+                .map(|p| p.name.clone())
+                .collect())
+            .unwrap_or_default();
+        let pick = |prefs: &[&str], fallback: usize| -> Option<String> {
+            prefs.iter()
+                .find_map(|p| cap_pin_names.iter().find(|n| n == p))
+                .or_else(|| cap_pin_names.get(fallback))
+                .cloned()
         };
+        let cap_pos_pin = pick(&["+", "1", "pos"], 0);
+        let cap_neg_pin = pick(&["-", "2", "neg"], 1);
 
         // Process decoupling capacitors
         for cap in &expansion.decoupling_caps {
@@ -1620,35 +1716,47 @@ impl NetlistGenerator {
                 if let Ok(pin_instances) = self.netlist.create_pin_instances(inst_id) {
                     debug!("  Created {} pin instances for {}", pin_instances.len(), cap.instance_name);
 
-                    // Find the power net to connect to
-                    // Assumption: All decoupling caps connect to the same power domain that generated them
-                    // In a real implementation, we'd need to track which domain each cap belongs to
-                    let power_net_id = if let Some(first_conn) = expansion.connections.first() {
-                        self.ast_to_net.get(&first_conn.source_net).copied()
+                    // Each cap decouples the rail of the domain that
+                    // generated it (DecouplingCapacitor::domain).
+                    let power_net_id = if let Some(&net_id) = self.ast_to_net.get(&cap.domain) {
+                        Some(net_id)
                     } else {
-                        None
+                        let rail = expansion.rails.iter().find(|r| r.name == cap.domain);
+                        let net_id = self.netlist.add_net_with_class(
+                            Some(cap.domain.clone()),
+                            bhdl_netlist::types::NetClass::Power {
+                                voltage: rail.and_then(|r| r.voltage).unwrap_or(3.3),
+                                current: rail.and_then(|r| r.current),
+                            }
+                        );
+                        self.ast_to_net.insert(cap.domain.clone(), net_id);
+                        Some(net_id)
                     };
 
                     if let Some(power_net) = power_net_id {
-                        // Connect capacitor + pin to power net
-                        if let Some(plus_pin_inst) = self.netlist.find_pin_instance(inst_id, "+") {
+                        // Connect the positive terminal to the rail
+                        if let Some(plus_pin_inst) = cap_pos_pin.as_ref()
+                            .and_then(|p| self.netlist.find_pin_instance(inst_id, p)) {
                             if let Err(e) = self.netlist.connect(power_net, ConnectionPoint::PinInstance(plus_pin_inst)) {
-                                debug!("  Failed to connect {} + pin to power: {}", cap.instance_name, e);
+                                warn!("  Failed to connect {} positive pin to @{}: {}", cap.instance_name, cap.domain, e);
                             } else {
-                                debug!("  Connected {} + pin to power net", cap.instance_name);
+                                debug!("  Connected {} positive pin to @{}", cap.instance_name, cap.domain);
                             }
+                        } else {
+                            warn!("  Decoupling cap {} has no positive terminal pin; left unconnected", cap.instance_name);
                         }
 
-                        // Connect capacitor - pin to GND
-                        if let Some(minus_pin_inst) = self.netlist.find_pin_instance(inst_id, "-") {
+                        // Connect the negative terminal to ground
+                        if let Some(minus_pin_inst) = cap_neg_pin.as_ref()
+                            .and_then(|p| self.netlist.find_pin_instance(inst_id, p)) {
                             if let Err(e) = self.netlist.connect(gnd_net_id, ConnectionPoint::PinInstance(minus_pin_inst)) {
-                                debug!("  Failed to connect {} - pin to GND: {}", cap.instance_name, e);
+                                warn!("  Failed to connect {} negative pin to {}: {}", cap.instance_name, gnd_name, e);
                             } else {
-                                debug!("  Connected {} - pin to GND", cap.instance_name);
+                                debug!("  Connected {} negative pin to {}", cap.instance_name, gnd_name);
                             }
+                        } else {
+                            warn!("  Decoupling cap {} has no negative terminal pin; left unconnected", cap.instance_name);
                         }
-                    } else {
-                        debug!("  No power net found for capacitor connections");
                     }
 
                     // Store capacitor value as instance attribute

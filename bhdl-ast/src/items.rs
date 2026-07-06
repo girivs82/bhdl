@@ -939,12 +939,25 @@ impl DistributionPinList {
             .map(|t| t.text().to_string())
     }
 
-    /// Get the pin name (last identifier after dot)
+    /// Get the pin name: the token after the last dot outside brackets.
+    /// Pins may be named (`fpga.VCCAUX`) or numeric (`resistor[*].1`) —
+    /// a NUMBER after the dot is a pin name too, not an index.
     pub fn pin_name(&self) -> Option<String> {
-        self.0.children_with_tokens()
+        let tokens: Vec<_> = self.0.children_with_tokens()
             .filter_map(|e| e.into_token())
-            .filter(|t| t.kind() == SyntaxKind::IDENT)
-            .last()
+            .collect();
+        let mut depth = 0i32;
+        let mut last_dot = None;
+        for (i, t) in tokens.iter().enumerate() {
+            match t.kind() {
+                SyntaxKind::L_BRACKET => depth += 1,
+                SyntaxKind::R_BRACKET => depth -= 1,
+                SyntaxKind::DOT if depth == 0 => last_dot = Some(i),
+                _ => {}
+            }
+        }
+        tokens[last_dot? + 1..].iter()
+            .find(|t| matches!(t.kind(), SyntaxKind::IDENT | SyntaxKind::NUMBER))
             .map(|t| t.text().to_string())
     }
 
@@ -1017,9 +1030,9 @@ impl DistributionPinList {
                         saw_dot_before_star = false;
                     }
                     SyntaxKind::NUMBER => {
-                        if in_brackets {
-                            current_segment.push_str(token.text());
-                        }
+                        // Inside brackets: an index/range bound. Outside:
+                        // a numeric pin segment (`resistor[*].1`).
+                        current_segment.push_str(token.text());
                         saw_dot_before_star = false;
                     }
                     SyntaxKind::SEMI => {

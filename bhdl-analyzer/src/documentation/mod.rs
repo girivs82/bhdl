@@ -99,11 +99,7 @@ mod tests {
     #[test]
     fn test_documentation_generation() {
         // Create a minimal power domain expansion
-        let expansion = PowerDomainExpansion {
-            connections: vec![],
-            decoupling_caps: vec![],
-            diagnostics: vec![],
-        };
+        let expansion = PowerDomainExpansion::new();
 
         let options = DocumentationOptions::default();
         let result = generate_documentation(&expansion, options);

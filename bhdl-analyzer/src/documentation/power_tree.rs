@@ -177,11 +177,7 @@ mod tests {
     fn test_find_root_domains() {
         // Test with empty context
         let context = DocumentationContext::new(
-            crate::passes::power_domain_expansion::PowerDomainExpansion {
-                connections: Vec::new(),
-                decoupling_caps: Vec::new(),
-                diagnostics: Vec::new(),
-            },
+            crate::passes::power_domain_expansion::PowerDomainExpansion::new(),
             super::super::DocumentationOptions::default(),
         );
 
