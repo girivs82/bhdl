@@ -856,6 +856,12 @@ fn process_connection_in_module(
                         // Check for simple identifiers that might be power/ground nets
                         // These are endpoints without dots (not pin references) and without @ prefix
                         if !endpoint.contains('.') && !endpoint.contains(':') {
+                            // A bare instance reference is series threading,
+                            // not a net name — never resolve it as a net
+                            // (resolve_net would mint one).
+                            if find_instance_by_name_in_context(netlist, context, endpoint).is_some() {
+                                continue;
+                            }
                             // This might be a simple net name like GND, VIN, VOUT
                             // Try to resolve it - if it exists, use it
                             if let Ok(net_id) = context.resolve_net(endpoint, netlist) {
@@ -927,6 +933,16 @@ fn process_connection_in_module(
                                 }
                             } else {
                                 warn!("    Instance {} not found", inst_name);
+                            }
+                        } else if let Some(inst_id) =
+                            find_instance_by_name_in_context(netlist, context, endpoint)
+                        {
+                            // Bare instance reference: thread the chain
+                            // through the two-terminal part in series.
+                            if let Some((_entry_net, exit_net)) =
+                                thread_chain_through_instance(endpoint, inst_id, current_net_id, netlist)?
+                            {
+                                current_net_id = Some(exit_net);
                             }
                         } else {
                             // Simple identifier - could be a net name
@@ -3062,13 +3078,37 @@ fn process_flow_parts(
                 last_net_id = Some(net_id);
                 last_was_component_pin = true;
             } else {
-                println!("  Instance {} not found", instance_name);
-                warn!("  Instance {} not found", instance_name);
+                let msg = format!(
+                    "flow endpoint '{}' references instance '{}' which does not \
+                     exist — pin '{}' left unconnected",
+                    endpoint, instance_name, pin_name);
+                error!("{}", msg);
+                eprintln!("warning: {}", msg);
             }
         } else {
-            // Simple identifier — power/ground net name like VCC, GND (without @ prefix)
+            // Simple identifier — a bare instance reference (series
+            // threading, `VCC -> R1 -> GND`) or a power/ground/intermediate
+            // net name like VCC, GND, divider (without @ prefix). Instance
+            // names take precedence: a declared part is never a net.
             println!("  Simple identifier: '{}'", endpoint);
             info!("  Simple identifier: '{}'", endpoint);
+
+            if let Some(inst_id) = find_instance_by_name_in_context(netlist, context, endpoint) {
+                if let Some((entry_net, exit_net)) =
+                    thread_chain_through_instance(endpoint, inst_id, last_net_id, netlist)?
+                {
+                    // A dangling inline-instantiation pin from the previous
+                    // part joins the entry net (same as the @net branch).
+                    if last_was_component_pin && last_net_id.is_none() && i > 0 {
+                        connect_previous_pin_to_net(parts, i, netlist, context, entry_net)?;
+                    }
+                    last_net_id = Some(exit_net);
+                    last_was_component_pin = true;
+                }
+                // On None a hard warning was already issued; leave the
+                // chain state untouched rather than minting a bogus net.
+                continue;
+            }
 
             match context.resolve_net(endpoint, netlist) {
                 Ok(resolved_net_id) => {
@@ -3132,6 +3172,71 @@ fn connect_previous_pin_to_net(
     Ok(())
 }
 
+/// Thread a flow chain THROUGH a bare instance reference.
+///
+/// A bare instance name as a chain endpoint (`VCC -> R1 -> LED1 -> GND`)
+/// means "the chain passes through this part in series": the FIRST declared
+/// pin joins the incoming net and the SECOND declared pin lands on a fresh
+/// intermediate net, returned for the next endpoint to join. Declaration
+/// order carries polarity — `LED { pin A; pin K; }` enters at the anode.
+///
+/// Only a two-terminal part has an unambiguous through-path. Anything else
+/// is a HARD WARNING naming the endpoint (never a silent skip, per the
+/// Real-Data rule) and returns `None` with no nets created.
+///
+/// Returns `Some((entry_net, exit_net))` on success; `entry_net` is the
+/// incoming net, or a fresh auto-net when the part opens the chain.
+fn thread_chain_through_instance(
+    endpoint: &str,
+    inst_id: InstanceId,
+    incoming_net: Option<NetId>,
+    netlist: &mut Netlist,
+) -> Result<Option<(NetId, NetId)>> {
+    let pin_names: Vec<String> = netlist.instances.get(inst_id)
+        .and_then(|inst| netlist.modules.get(inst.definition))
+        .map(|module| module.pins.iter()
+            .filter_map(|&pid| netlist.pins.get(pid).map(|p| p.name.clone()))
+            .collect())
+        .unwrap_or_default();
+
+    if pin_names.len() != 2 {
+        let msg = format!(
+            "flow endpoint '{}' names an instance with {} pins — a bare instance \
+             reference threads the chain through a two-terminal part; connect a \
+             multi-pin part by naming its pins ('… -> {}.<pin>; {}.<pin> -> …'). \
+             Left unconnected.",
+            endpoint, pin_names.len(), endpoint, endpoint);
+        error!("{}", msg);
+        eprintln!("warning: {}", msg);
+        return Ok(None);
+    }
+
+    let entry_net = match incoming_net {
+        Some(net) => net,
+        None => {
+            // Chain opens on the part (`R1 -> GND`): fresh auto-net for the
+            // entry pin, merged later if a net reference follows elsewhere.
+            let name = format!("auto_{}_{}", endpoint, pin_names[0]).replace('.', "_");
+            let net = netlist.add_net(Some(name.clone()));
+            println!("  Created auto-net '{}' ({:?}) for chain-opening instance", name, net);
+            net
+        }
+    };
+    connect_pin_to_net(netlist, inst_id, &pin_names[0], entry_net,
+        &format!("{}.{}", endpoint, pin_names[0]), "chain entry net")?;
+
+    let exit_name = format!("net_{}_{}", endpoint, pin_names[1]).replace('.', "_");
+    let exit_net = netlist.add_net(Some(exit_name.clone()));
+    println!("  Threaded chain through '{}': {} in, {} out on '{}'",
+        endpoint, pin_names[0], pin_names[1], exit_name);
+    info!("  Threaded chain through '{}': {} in, {} out on '{}'",
+        endpoint, pin_names[0], pin_names[1], exit_name);
+    connect_pin_to_net(netlist, inst_id, &pin_names[1], exit_net,
+        &format!("{}.{}", endpoint, pin_names[1]), "chain exit net")?;
+
+    Ok(Some((entry_net, exit_net)))
+}
+
 /// Helper: connect a pin to a net, trying alternative pin names if needed
 fn connect_pin_to_net(
     netlist: &mut Netlist,
@@ -3157,8 +3262,8 @@ fn connect_pin_to_net(
         info!("  Connected {} to {}", desc, target_desc);
     } else {
         let alt_pins = match pin_name {
-            "cathode" | "K" => vec!["K", "2", "-"],
-            "anode" | "A" => vec!["A", "1", "+"],
+            "cathode" | "K" | "-" | "neg" => vec!["K", "2", "-", "neg", "cathode"],
+            "anode" | "A" | "+" | "pos" => vec!["A", "1", "+", "pos", "anode"],
             _ => vec![]
         };
         let mut connected = false;
@@ -3196,7 +3301,14 @@ fn connect_pin_to_net(
             }
         }
         if !connected {
-            warn!("  Could not find pin '{}' on instance", pin_name);
+            let inst_name = netlist.instances.get(inst_id)
+                .map(|i| i.name.clone())
+                .unwrap_or_else(|| format!("{:?}", inst_id));
+            let msg = format!(
+                "no pin '{}' on instance '{}' — {} left unconnected to {}",
+                pin_name, inst_name, desc, target_desc);
+            error!("{}", msg);
+            eprintln!("warning: {}", msg);
         }
     }
     Ok(())
