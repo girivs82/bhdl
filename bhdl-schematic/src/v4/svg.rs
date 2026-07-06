@@ -1255,6 +1255,83 @@ pub fn render_sheet_svg(
         y += used.max(STAGE_GAP);
     }
 
+    // ── Load rows: rail consumers fanned out under a shared bus ──
+    for load in &plan.loads {
+        let bus_y = y + 40.0;
+        let box_w = 96.0;
+        let box_h = 60.0;
+        let pitch = 130.0;
+        let x0 = 60.0;
+        svg.rail_flag(x0 - 20.0, bus_y, &net_label(netlist, load.rail), true);
+        if let Some(v) = solved_v(decor, netlist, load.rail) {
+            svg.queue_sim(x0 - 16.0, bus_y + 18.0, &format!("= {}", fmt_sim_v(v)), "sim");
+        }
+        let bus_end = x0 + load.insts.len() as f64 * pitch;
+        svg.wire(&[(x0 - 20.0, bus_y), (bus_end, bus_y)]);
+        for (k, inst) in load.insts.iter().enumerate() {
+            let bx = x0 + k as f64 * pitch;
+            let by = bus_y + 26.0;
+            let _ = writeln!(
+                svg.body,
+                r##"<rect x="{bx:.1}" y="{by:.1}" width="{box_w:.1}" height="{box_h:.1}" fill="#f7f7f2" stroke="#222" stroke-width="1.8"/>"##
+            );
+            svg.grow(bx + box_w, by + box_h);
+            svg.solid(Rect { x0: bx, y0: by, x1: bx + box_w, y1: by + box_h });
+            svg.text(bx + 4.0, by - 6.0, label_of(decor, inst), "ref");
+            let part = netlist
+                .instances
+                .values()
+                .find(|i| i.name == *inst)
+                .and_then(|i| netlist.modules.get(i.definition).map(|m| m.name.clone()))
+                .unwrap_or_default();
+            svg.text(bx + 4.0, by + 14.0, &part, "part");
+            // Power stub up to the bus with a junction dot; GND stub down.
+            let px = bx + box_w / 2.0;
+            svg.wire(&[(px, by), (px, bus_y)]);
+            svg.dot(px, bus_y);
+            // Pins: gnd → ground below; other connected pins → right-side
+            // stubs with net flags (long-range notation — the fan-out row
+            // doesn't wire signals point-to-point).
+            let mut slot = 0usize;
+            if let Some((iid, _)) = netlist.instances.iter().find(|(_, i)| i.name == *inst) {
+                for pin_i in netlist.pin_instances.values().filter(|p| p.instance == iid) {
+                    let (Some(pin), Some(nid)) = (netlist.pins.get(pin_i.pin_def), pin_i.net)
+                    else {
+                        continue;
+                    };
+                    if pin.is_virtual {
+                        continue;
+                    }
+                    if matches!(pin.direction, bhdl_netlist::types::PinDirection::Ground) {
+                        let gx = bx + box_w / 2.0;
+                        svg.wire(&[(gx, by + box_h), (gx, by + box_h + 8.0)]);
+                        svg.ground(gx, by + box_h + 8.0);
+                        continue;
+                    }
+                    if nid == load.rail {
+                        continue; // the power stub above
+                    }
+                    let nname = netlist
+                        .nets
+                        .get(nid)
+                        .and_then(|n| n.name.clone())
+                        .unwrap_or_default();
+                    let sy = by + 14.0 + slot as f64 * 14.0;
+                    if sy > by + box_h - 6.0 {
+                        continue; // box full — remaining pins live in the report
+                    }
+                    svg.wire(&[(bx + box_w, sy), (bx + box_w + 10.0, sy)]);
+                    svg.text(bx + box_w - 8.0 * pin.name.len() as f64, sy - 3.0, &pin.name, "val");
+                    if !nname.is_empty() {
+                        svg.text(bx + box_w + 12.0, sy + 3.0, &nname, "rail");
+                    }
+                    slot += 1;
+                }
+            }
+        }
+        y = bus_y + 26.0 + box_h + 70.0;
+    }
+
     // Residue: honest fallback row with net flags.
     if !plan.residue.is_empty() {
         svg.text(

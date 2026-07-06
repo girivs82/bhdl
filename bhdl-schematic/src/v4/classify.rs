@@ -77,12 +77,22 @@ pub struct StagePlan {
     pub straps: Vec<Strap>,
 }
 
+/// A rail's consumer row: load ICs fanned out under a shared bus — the
+/// complement of the supply stage (power_domain boards: N sensors + an
+/// FPGA hanging off one rail).
+#[derive(Debug, Clone)]
+pub struct LoadPlan {
+    pub rail: NetId,
+    pub insts: Vec<String>,
+}
+
 /// The classified sheet.
 #[derive(Debug, Clone, Default)]
 pub struct SheetPlan {
     pub rails: Vec<NetId>,
     pub grounds: Vec<NetId>,
     pub stages: Vec<StagePlan>,
+    pub loads: Vec<LoadPlan>,
     /// Instances no idiom claimed — the honest fallback set.
     pub residue: Vec<String>,
 }
@@ -332,6 +342,45 @@ pub fn classify_sheet(netlist: &Netlist) -> SheetPlan {
                     }
                 }
             }
+        }
+    }
+
+    // ── Fan-out loads: unclaimed parts drawing power from a rail ──
+    // A part with a Power-direction pin on a rail is that rail's CONSUMER.
+    // Multi-rail parts join the row of the FIRST rail their pins name (the
+    // other supplies render as flags on the box — honest, and the common
+    // case is one rail per part).
+    {
+        let mut by_rail: HashMap<NetId, Vec<(InstanceId, String)>> = HashMap::new();
+        for (id, inst) in &netlist.instances {
+            if claimed.contains(&id) || is_phantom(netlist, id) {
+                continue;
+            }
+            let first_rail = instance_pins(netlist, id)
+                .into_iter()
+                .find(|(_, d, n)| {
+                    matches!(d, PinDirection::Power)
+                        && n.map(|nid| plan.rails.contains(&nid)).unwrap_or(false)
+                })
+                .and_then(|(_, _, n)| n);
+            if let Some(rail) = first_rail {
+                by_rail.entry(rail).or_default().push((id, inst.name.clone()));
+            }
+        }
+        let mut rails: Vec<NetId> = by_rail.keys().cloned().collect();
+        rails.sort_by_key(|r| {
+            netlist.nets.get(*r).and_then(|n| n.name.clone()).unwrap_or_default()
+        });
+        for rail in rails {
+            let mut members = by_rail.remove(&rail).unwrap();
+            members.sort_by(|a, b| a.1.cmp(&b.1));
+            for (id, _) in &members {
+                claimed.insert(*id);
+            }
+            plan.loads.push(LoadPlan {
+                rail,
+                insts: members.into_iter().map(|(_, n)| n).collect(),
+            });
         }
     }
 
@@ -704,6 +753,53 @@ mod tests {
         wire(&mut n, sw, c_boot, "2");
 
         n
+    }
+
+    #[test]
+    fn fans_out_rail_consumers() {
+        // rail VCC feeds two sensors (VCC/GND/OUT) — no supply stage at
+        // all; both become the rail's load row, residue empty.
+        let mut n = Netlist::new();
+        let s_m = n.add_module("Sensor".into(), ModuleKind::PhysicalComponent);
+        n.add_pin(s_m, "VCC".into(), PinDirection::Power, PinType::Power);
+        n.add_pin(s_m, "GND".into(), PinDirection::Ground, PinType::Ground);
+        n.add_pin(s_m, "OUT".into(), PinDirection::Out, PinType::Signal);
+        let mut place = |n: &mut Netlist, name: &str, m| {
+            let id = n.add_instance(name.into(), m).unwrap();
+            n.create_pin_instances(id).unwrap();
+            id
+        };
+        let s1 = place(&mut n, "sensor_0", s_m);
+        let s2 = place(&mut n, "sensor_1", s_m);
+        let vcc = n.add_net_with_class(
+            Some("VCC".into()),
+            NetClass::Power { voltage: 3.3, current: Some(0.2) },
+        );
+        let gnd = n.add_net_with_class(Some("GND".into()), NetClass::Ground);
+        let pi = |n: &Netlist, inst, pin: &str| {
+            n.pin_instances
+                .iter()
+                .find(|(_, p)| {
+                    p.instance == inst
+                        && n.pins.get(p.pin_def).map(|d| d.name == pin).unwrap_or(false)
+                })
+                .map(|(id, _)| id)
+                .unwrap()
+        };
+        let mut wire = |n: &mut Netlist, net, inst, pin: &str| {
+            let id = pi(n, inst, pin);
+            n.connect(net, ConnectionPoint::PinInstance(id)).unwrap();
+            n.pin_instances.get_mut(id).unwrap().net = Some(net);
+        };
+        wire(&mut n, vcc, s1, "VCC");
+        wire(&mut n, gnd, s1, "GND");
+        wire(&mut n, vcc, s2, "VCC");
+        wire(&mut n, gnd, s2, "GND");
+
+        let plan = classify_sheet(&n);
+        assert_eq!(plan.loads.len(), 1);
+        assert_eq!(plan.loads[0].insts, vec!["sensor_0", "sensor_1"]);
+        assert!(plan.residue.is_empty(), "residue: {:?}", plan.residue);
     }
 
     #[test]
