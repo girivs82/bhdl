@@ -7,6 +7,7 @@
 // so ERC016 gates every intermediate rail: shrink VCC_5V's budget below
 // ~371mA and the build reports exactly which cascade overloads it.
 import { Mcu } from "bhdl-stdlib/actives/mcu.bhdl";
+import { Barrel_Jack_Switch } from "bhdl-stdlib/connectors/barrel_jack.bhdl";
 
 // Expected: 0 DRC violations.
 //
@@ -34,4 +35,10 @@ board SupplyTree {
     mcu: Mcu(0.05);
     @VCC_3V3 -> mcu.VCC;
     mcu.GND -> @GND;
+
+    // Power is not magic: the 12V arrives THROUGH a connector. The rail
+    // declaration above is the boundary spec; this is the physical entry.
+    j1: Barrel_Jack_Switch();
+    @VIN_12V -> j1.TIP;
+    j1.SLEEVE -> @GND;
 }

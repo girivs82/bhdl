@@ -2110,6 +2110,58 @@ fn render_sheet_svg_with_blocks(
         y += used.max(240.0);
     }
 
+    // Promote flow-connected interconnect parts (connectors, loads) into
+    // the block diagram: a part that shares a net with a block port IS
+    // part of the power story — the barrel jack feeding VIN belongs in
+    // the flow, not stranded in the signal row. Promoted parts become
+    // linkless pseudo-blocks; their pins are the ports.
+    let mut blocks: Vec<super::sheets::BlockSpec> = blocks.to_vec();
+    let mut promoted: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if !blocks.is_empty() {
+        let block_nets: std::collections::HashSet<String> = blocks
+            .iter()
+            .flat_map(|b| b.ports.iter().map(|(_, n, ..)| n.clone()))
+            .collect();
+        for inst in &plan.signal_row {
+            let Some((iid, i)) = netlist.instances.iter().find(|(_, i)| i.name == *inst) else {
+                continue;
+            };
+            let mut ports = Vec::new();
+            let mut touches = false;
+            for pi in netlist.pin_instances.values().filter(|p| p.instance == iid) {
+                let (Some(pin), Some(nid)) = (netlist.pins.get(pi.pin_def), pi.net) else {
+                    continue;
+                };
+                if pin.is_virtual {
+                    continue;
+                }
+                let Some(net) = netlist.nets.get(nid) else { continue };
+                let nname = net.name.clone().unwrap_or_default();
+                let is_p = matches!(net.net_class, NetClass::Power { .. });
+                let is_g = matches!(net.net_class, NetClass::Ground);
+                if block_nets.contains(&nname) && !is_g {
+                    touches = true;
+                }
+                ports.push((pin.name.clone(), nname, is_p, is_g, Vec::new()));
+            }
+            if touches {
+                ports.sort_by(|a, b| (&a.1, &a.0).cmp(&(&b.1, &b.0)));
+                blocks.push(super::sheets::BlockSpec {
+                    inst: inst.clone(),
+                    part: netlist
+                        .modules
+                        .get(i.definition)
+                        .map(|m| m.name.clone())
+                        .unwrap_or_default(),
+                    href: String::new(),
+                    ports,
+                });
+                promoted.insert(inst.clone());
+            }
+        }
+    }
+    let blocks = &blocks[..];
+
     // ── Entity blocks as a FLOW DIAGRAM: blocks ordered by cascade,
     // inputs on the left edge, outputs on the right, and every
     // producer→consumer net drawn as a real WIRE labeled once with the
@@ -2276,15 +2328,23 @@ fn render_sheet_svg_with_blocks(
             bx += 6.8 * left_flag as f64 + if left_flag > 0 { 26.0 } else { 0.0 };
             row_h = row_h.max(box_h + if has_gnd { 46.0 } else { 6.0 });
 
-            let _ = writeln!(svg.body, r##"<a href="{}">"##, b.href);
+            let linked = !b.href.is_empty();
+            if linked {
+                let _ = writeln!(svg.body, r##"<a href="{}">"##, b.href);
+            }
             let _ = writeln!(
                 svg.body,
-                r##"<rect x="{bx:.1}" y="{by:.1}" width="{box_w:.1}" height="{box_h:.1}" fill="#eef2fa" stroke="#225" stroke-width="2.2" rx="4"/>"##
+                r##"<rect x="{bx:.1}" y="{by:.1}" width="{box_w:.1}" height="{box_h:.1}" fill="{}" stroke="#225" stroke-width="2.2" rx="4"/>"##,
+                if linked { "#eef2fa" } else { "#f7f7f2" }
             );
             svg.text(bx + 2.0, by - 6.0, label_of(decor, &b.inst), "ref");
             svg.text(bx + 6.0, by + 16.0, &b.part, "part");
-            svg.text(bx + 6.0, by + 30.0, "▸ sheet", "sim");
-            let _ = writeln!(svg.body, "</a>");
+            if linked {
+                svg.text(bx + 6.0, by + 30.0, "▸ sheet", "sim");
+            }
+            if linked {
+                let _ = writeln!(svg.body, "</a>");
+            }
             svg.solid(Rect { x0: bx, y0: by, x1: bx + box_w, y1: by + box_h });
             svg.grow(bx + box_w + 60.0, by + box_h + 40.0);
 
@@ -2357,7 +2417,11 @@ fn render_sheet_svg_with_blocks(
                     lane += 1;
                     svg.wire(&[(px, py), (gx, py), (gx, cy), (cx, cy)]);
                     if !labeled {
+                        // Producer's boundary current; a linkless pseudo-
+                        // block (connector) has none — the consumer's is
+                        // the same wire's flow.
                         let cur = port_current(&blocks[a], &p.net)
+                            .or_else(|| port_current(&blocks[c], &p.net))
                             .map(|cstr| format!(" = {cstr}"))
                             .unwrap_or_default();
                         let label = format!("{}{}", p.net, cur);
@@ -2466,6 +2530,8 @@ fn render_sheet_svg_with_blocks(
     }
 
     // ── Signal-interconnect boxes + flagged passive strip ──
+    let mut plan = plan;
+    plan.signal_row.retain(|i| !promoted.contains(i));
     y += draw_signal_row(&mut svg, netlist, &plan, y, decor);
     y += draw_passive_strip(&mut svg, netlist, &plan, y, decor);
 

@@ -63,7 +63,7 @@ pub fn category_to_prefix(category: &str) -> &str {
         "regulator" | "ic" | "opamp" => "U",
         "buffer" => "U",
         "oscillator" => "Y",
-        "connector" => "J",
+        "connector" | "dc-jack" | "jack" | "header" | "usb" => "J",
         _ => "X",
     }
 }
