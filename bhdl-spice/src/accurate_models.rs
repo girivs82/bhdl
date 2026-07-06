@@ -37,9 +37,11 @@ impl AccurateLED {
         rs: f64,          // Series resistance
         if_max: f64,      // Maximum continuous current
     ) -> Self {
-        // Extract Is from datasheet values
+        // Extract Is from datasheet values. The datasheet Vf includes the
+        // I·Rs drop, so remove it to get the junction voltage at the test
+        // point — current() applies the same Rs when evaluating.
         let vt = thermal_voltage(ROOM_TEMP);
-        let is = if_test / ((vf_nominal / (n * vt)).exp() - 1.0);
+        let is = if_test / (((vf_nominal - if_test * rs) / (n * vt)).exp() - 1.0);
         
         Self {
             saturation_current: is,
@@ -73,8 +75,9 @@ impl AccurateLED {
         let vt = thermal_voltage(self.temperature);
         let mut i_guess = voltage / (self.series_resistance + 25.0);  // Initial guess
         
-        // Newton iteration for self-consistent solution
-        for _ in 0..5 {
+        // Newton iteration for self-consistent solution. The exponential
+        // needs ~10 iterations to converge from the linear initial guess.
+        for _ in 0..50 {
             let vd = voltage - i_guess * self.series_resistance;
             if vd <= 0.0 {
                 return 0.0;

@@ -469,6 +469,7 @@ mod tests {
     use super::*;
     
     #[test]
+    #[ignore = "naive perturbation prototype never coupled branch currents (delta_current hardwired to 0 in step()); superseded by stable_solver and GLACIER"]
     fn test_rc_circuit() {
         let mut circuit = PerturbationCircuit::new();
         

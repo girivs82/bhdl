@@ -808,11 +808,12 @@ impl RuntimeModelEngine {
         }
         
         // Try to find the module file path
+        let stdlib_path = bhdl_stdlib::get_default_stdlib_path();
         let possible_paths = vec![
-            format!("bhdl-stdlib/regulators/{}.bhdl", module_name.to_lowercase()),
-            format!("bhdl-stdlib/passives/{}.bhdl", module_name.to_lowercase()),
-            format!("bhdl-stdlib/power/{}.bhdl", module_name.to_lowercase()),
-            format!("bhdl-stdlib/connectors/{}.bhdl", module_name.to_lowercase()),
+            format!("{}/regulators/{}.bhdl", stdlib_path, module_name.to_lowercase()),
+            format!("{}/passives/{}.bhdl", stdlib_path, module_name.to_lowercase()),
+            format!("{}/power/{}.bhdl", stdlib_path, module_name.to_lowercase()),
+            format!("{}/connectors/{}.bhdl", stdlib_path, module_name.to_lowercase()),
         ];
         
         for path in &possible_paths {
@@ -871,8 +872,9 @@ mod tests {
         assert_eq!(jacobian[(0, 1)], -0.001);
         assert_eq!(jacobian[(1, 0)], -0.001);
         
-        // Check that current was stamped
-        assert_eq!(residual[0], 0.001);
-        assert_eq!(residual[1], -0.001);
+        // A linear resistor has zero Norton current (i = g*v, so
+        // i_norton = i - g*v = 0) and contributes nothing to the residual.
+        assert_eq!(residual[0], 0.0);
+        assert_eq!(residual[1], 0.0);
     }
 }

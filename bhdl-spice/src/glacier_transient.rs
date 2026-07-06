@@ -579,12 +579,15 @@ mod tests {
                 MixedVariable {
                     id: 0,
                     var_type: VariableType::Voltage,
-                    value: 5.0,
+                    value: 9.0,
                     node_id: Some(NodeIndex::new(0)),
                     branch_id: None,
                 }
             ],
-            history: vec![vec![4.0], vec![4.5]],  // Shows increasing voltage
+            // Gradient (|9-5| + |5-1|)/2 = 4.0 lands in the controller's
+            // moderate band (1, 10], which scales dt strictly between the
+            // dt_min and dt_max bounds.
+            history: vec![vec![1.0], vec![5.0]],  // Shows increasing voltage
             companion_models: HashMap::new(),
         };
         

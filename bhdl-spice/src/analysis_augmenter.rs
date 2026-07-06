@@ -59,8 +59,11 @@ impl SpiceAnalysisAugmenter {
                 .entry(instance.name.clone())
                 .or_insert_with(InstanceAnalysisData::default);
             
-            // Determine SPICE component type
-            let spice_type = self.determine_spice_type(&module.name, &instance.attributes)?;
+            // Determine SPICE component type. `component_class` lives on the
+            // entity definition; instance attributes override it if present.
+            let mut merged_attributes = module.attributes.clone();
+            merged_attributes.extend(instance.attributes.clone());
+            let spice_type = self.determine_spice_type(&module.name, &merged_attributes)?;
             instance_analysis.spice_type = Some(spice_type.clone());
             
             // Extract electrical parameters

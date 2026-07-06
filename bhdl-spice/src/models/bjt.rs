@@ -227,8 +227,10 @@ impl BjtModel {
             1.0
         };
         
-        // Terminal currents (Ebers-Moll)
-        let ic = (if_current / self.params.bf - ir_current) * early_factor;
+        // Terminal currents (Ebers-Moll transport form): the collector
+        // carries the full transport current If - Ir; the /bf term belongs
+        // only in Ib below.
+        let ic = (if_current - ir_current) * early_factor - ir_current / self.params.br;
         let ib = if_current / self.params.bf + ir_current / self.params.br;
         let ie = ic + ib;
         

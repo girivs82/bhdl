@@ -57,26 +57,28 @@ impl StdlibReader {
         // Load passive components
         self.load_component_file("passives/resistor.bhdl")?;
         self.load_component_file("passives/capacitor.bhdl")?;
-        self.load_component_file("passives/led.bhdl")?;
         self.load_component_file("passives/diode.bhdl")?;
-        self.load_component_file("passives/fuse.bhdl")?;
-        self.load_component_file("passives/tvs_diode.bhdl")?;
-        
+
+        // Load optoelectronic components
+        self.load_component_file("optoelectronic/led.bhdl")?;
+
+        // Load protection components (TVSDiode + Fuse)
+        self.load_component_file("protection/tvs.bhdl")?;
+
         // Load active components
         self.load_component_file("actives/custom_diode.bhdl")?;
-        
+
         // Load regulators
-        self.load_component_file("regulators/lm7805.bhdl")?;
-        
+        self.load_component_file("power/lm7805.bhdl")?;
+
         // Load switching regulators
-        self.load_component_file("components/power/switching_regulators/TPS54331.bhdl")?;
+        self.load_component_file("power/tps54331.bhdl")?;
         self.load_component_file("components/power/switching_regulators/LM2596.bhdl")?;
-        
+
         // Load connectors
         self.load_component_file("connectors/testpoint.bhdl")?;
-        
+
         // Load power components
-        self.load_component_file("power/power.bhdl")?;
         self.load_component_file("power/ground.bhdl")?;
         
         Ok(())
@@ -711,10 +713,18 @@ impl StdlibReader {
     }
 }
 
-/// Get the default stdlib path relative to the project root
+/// Get the default stdlib path.
+///
+/// Prefers `bhdl-stdlib` relative to the current directory (deployed layouts,
+/// running from the workspace root), falling back to this crate's source
+/// directory so test binaries — which cargo runs with the package dir as CWD —
+/// resolve the stdlib too.
 pub fn get_default_stdlib_path() -> String {
-    // This assumes we're running from the project root
-    "bhdl-stdlib".to_string()
+    let relative = std::path::Path::new("bhdl-stdlib");
+    if relative.is_dir() {
+        return "bhdl-stdlib".to_string();
+    }
+    env!("CARGO_MANIFEST_DIR").to_string()
 }
 
 #[cfg(test)]

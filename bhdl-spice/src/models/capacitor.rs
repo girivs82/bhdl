@@ -95,7 +95,9 @@ impl CapacitorParams {
             vc2: 0.0,
             tc1: -2000.0,                     // Large temperature variation
             voltage_rating: voltage,
-            rleak: capacitance * 1e6,        // Leakage current spec
+            // Electrolytic leakage spec is I_leak ≈ 0.01·C·V, so
+            // R_leak ≈ 1/(0.01·C): bigger caps leak more (lower R).
+            rleak: 100.0 / capacitance,
             da: 2.0,                          // Higher dielectric absorption
             ..Default::default()
         }
@@ -112,7 +114,7 @@ impl CapacitorParams {
             vc2: 0.0,
             tc1: -500.0,
             voltage_rating: voltage,
-            rleak: capacitance * 5e6,
+            rleak: 500.0 / capacitance,  // ~5x lower leakage than aluminum
             da: 1.0,
             ..Default::default()
         }
@@ -290,8 +292,9 @@ mod tests {
         let cap = CapacitorModel::from_value("test", 100e-6, "electrolytic", 25.0);
         let current = cap.current(&[0.0, 10.0], 27.0);
         
-        // Should have small leakage current
+        // Should have small leakage current. A 100µF electrolytic at 10V
+        // leaks ~10µA (I_leak ≈ 0.01·C·V), so bound at 100µA.
         assert!(current > 0.0);
-        assert!(current < 1e-6); // Less than 1µA
+        assert!(current < 100e-6);
     }
 }

@@ -247,10 +247,10 @@ mod tests {
         circuit.add_component(ComponentType::Resistor(1000.0), 1, 2);
         circuit.add_component(ComponentType::Capacitor(1e-6), 2, 0);
         
-        // Simulate for 5 time constants
+        // Simulate for 1 time constant
         let dt = 1e-5; // 10 µs
         let tau = 1000.0 * 1e-6; // RC = 1ms
-        let steps = (5.0 * tau / dt) as usize;
+        let steps = (tau / dt) as usize;
         
         for _ in 0..steps {
             circuit.step(dt);

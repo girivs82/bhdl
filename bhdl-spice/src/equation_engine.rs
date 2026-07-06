@@ -67,7 +67,7 @@ enum TokenKind {
     Number, Ident, 
     Plus, Minus, Star, Slash, Caret,
     LParen, RParen, LBrace, RBrace,
-    Gt, Lt, Gte, Lte, Eq, Neq,
+    Gt, Lt, Gte, Lte, Eq, Neq, Assign,
     AndAnd, OrOr, Not,
     If, Else, Let, Semicolon,
     Question, Colon, Comma,
@@ -222,7 +222,9 @@ impl Tokenizer {
                     self.advance();
                     Ok(Token { kind: TokenKind::Eq, text: "==".to_string() })
                 } else {
-                    bail!("Single '=' not allowed, use '==' for equality")
+                    // Single '=' only binds in `let name = ...`; the parser
+                    // rejects it anywhere a comparison was meant.
+                    Ok(Token { kind: TokenKind::Assign, text: "=".to_string() })
                 }
             }
             Some('!') => {
@@ -332,7 +334,7 @@ impl Parser {
                 Token { kind: TokenKind::Ident, text } => text.clone(),
                 _ => bail!("Expected identifier after 'let'"),
             };
-            self.expect(TokenKind::Eq)?;
+            self.expect(TokenKind::Assign)?;
             let value = Box::new(self.parse_expr()?);
             self.expect(TokenKind::Semicolon)?;
             let body = Box::new(self.parse_expr()?);
@@ -572,7 +574,12 @@ impl EquationEngine {
         // Parse
         let mut parser = Parser::new(tokens);
         let ast = parser.parse_expr()?;
-        
+        match parser.peek().kind {
+            TokenKind::Eof => {}
+            TokenKind::Assign => bail!("Single '=' not allowed, use '==' for equality"),
+            kind => bail!("Unexpected trailing token {:?} in equation", kind),
+        }
+
         self.equations.insert(name.to_string(), ast);
         Ok(())
     }
