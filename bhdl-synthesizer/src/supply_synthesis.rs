@@ -472,6 +472,13 @@ fn desugar_one(
                 fmt_si(l, "H")
             ));
             g.push_str(&format!("{indent}{instance}_l_out.2 -> @{target};\n"));
+            // The entity's logical output port (virtual on SW-shaped parts —
+            // the copper leaves through the inductor) joins the rail so the
+            // port carries its declared NAME: block diagrams and closed-loop
+            // DC read `VOUT`, not an anonymous boundary net.
+            if has_pin("VOUT") {
+                g.push_str(&format!("{indent}{instance}.VOUT -> @{target};\n"));
+            }
         }
     }
     // Bootstrap cap — only with the part's declared datasheet value.

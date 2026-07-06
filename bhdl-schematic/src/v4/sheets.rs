@@ -170,13 +170,22 @@ pub fn block_specs(
             if !outside && !is_power && !is_ground {
                 continue;
             }
-            // Parent pin on this net, if any (nicest label).
-            let pin = netlist
+            // Parent pin on this net, if any. A block is the LOGICAL view
+            // of the entity, so VIRTUAL pins are first-class labels here —
+            // they exist precisely to name the entity's ports (VOUT), and
+            // the produced rail often touches no physical parent pin at
+            // all (it exits through the inductor child). Physical pins
+            // still win when both sit on the net.
+            let parent_pins: Vec<&bhdl_netlist::portpin::Pin> = netlist
                 .pin_instances
                 .values()
-                .find(|pi| pi.instance == parent_id && pi.net == Some(*nid))
-                .and_then(|pi| netlist.pins.get(pi.pin_def))
-                .filter(|p| !p.is_virtual)
+                .filter(|pi| pi.instance == parent_id && pi.net == Some(*nid))
+                .filter_map(|pi| netlist.pins.get(pi.pin_def))
+                .collect();
+            let pin = parent_pins
+                .iter()
+                .find(|p| !p.is_virtual)
+                .or_else(|| parent_pins.first())
                 .map(|p| p.name.clone())
                 .unwrap_or_default();
             ports.push((

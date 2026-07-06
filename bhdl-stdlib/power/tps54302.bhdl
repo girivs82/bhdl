@@ -6,6 +6,10 @@ entity TPS54302() {
     pin VIN: power in;
     pin GND: ground;
     pin SW: power out;
+    // Logical output port: no package pin — the output leaves through the
+    // external inductor — but the ENTITY's interface has a named output
+    // (block diagrams, closed-loop DC, the S4 emitter's rail tie).
+    pin VOUT: power out virtual;
     
     // Control pins
     pin FB: signal in;
