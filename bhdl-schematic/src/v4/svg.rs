@@ -1623,6 +1623,220 @@ fn draw_amp(
     ox + 24.0
 }
 
+fn net_kind(netlist: &Netlist, id: NetId) -> (String, bool, bool) {
+    // (name, is_power, is_ground)
+    match netlist.nets.get(id) {
+        Some(n) => (
+            n.name.clone().unwrap_or_default(),
+            matches!(n.net_class, NetClass::Power { .. }),
+            matches!(n.net_class, NetClass::Ground),
+        ),
+        None => (String::new(), false, false),
+    }
+}
+
+/// Signal-interconnect boxes: multi-pin actives as IC boxes with per-pin
+/// net flags (long-range notation — how every digital section is drawn).
+/// Returns the height consumed.
+fn draw_signal_row(
+    svg: &mut Svg,
+    netlist: &Netlist,
+    plan: &SheetPlan,
+    y0: f64,
+    decor: &SheetDecor,
+) -> f64 {
+    if plan.signal_row.is_empty() {
+        return 0.0;
+    }
+    let per_row = 5usize;
+    let x0 = 60.0;
+    let mut y = y0 + 30.0;
+    let mut row_h: f64 = 0.0;
+    let mut bx = x0;
+    for (k, inst) in plan.signal_row.iter().enumerate() {
+        if k > 0 && k % per_row == 0 {
+            y += row_h + 60.0;
+            row_h = 0.0;
+            bx = x0;
+        }
+        let Some((iid, _)) = netlist.instances.iter().find(|(_, i)| i.name == *inst) else {
+            continue;
+        };
+        // Connected pins: ground pins draw as a bottom ground stub; the
+        // rest get right-side stubs with pin name + net flag.
+        let mut flagged: Vec<(String, NetId)> = Vec::new();
+        let mut has_gnd = false;
+        for pi in netlist.pin_instances.values().filter(|p| p.instance == iid) {
+            let (Some(pin), Some(nid)) = (netlist.pins.get(pi.pin_def), pi.net) else {
+                continue;
+            };
+            if pin.is_virtual {
+                continue;
+            }
+            let (_, _, is_g) = net_kind(netlist, nid);
+            if is_g || matches!(pin.direction, bhdl_netlist::types::PinDirection::Ground) {
+                has_gnd = true;
+            } else {
+                flagged.push((pin.name.clone(), nid));
+            }
+        }
+        flagged.sort();
+        // Adaptive geometry: the box holds its longest pin name; the cell
+        // advances past its longest net flag — long names never overprint
+        // the neighbour.
+        let max_pin = flagged.iter().map(|(p, _)| p.len()).max().unwrap_or(0);
+        let max_net = flagged
+            .iter()
+            .map(|(_, n)| net_kind(netlist, *n).0.len())
+            .max()
+            .unwrap_or(0);
+        let box_w = (30.0 + 6.8 * max_pin as f64).max(104.0);
+        let box_h = (26.0 + flagged.len() as f64 * 15.0).max(48.0);
+        row_h = row_h.max(box_h + if has_gnd { 40.0 } else { 0.0 });
+        let _ = writeln!(
+            svg.body,
+            r##"<rect x="{bx:.1}" y="{y:.1}" width="{box_w:.1}" height="{box_h:.1}" fill="#f7f7f2" stroke="#222" stroke-width="1.8"/>"##
+        );
+        svg.grow(bx + box_w + 90.0, y + box_h);
+        svg.solid(Rect { x0: bx, y0: y, x1: bx + box_w, y1: y + box_h });
+        svg.text(bx + 2.0, y - 6.0, label_of(decor, inst), "ref");
+        let part = netlist
+            .instances
+            .get(iid)
+            .and_then(|i| netlist.modules.get(i.definition).map(|m| m.name.clone()))
+            .unwrap_or_default();
+        svg.text(bx + 4.0, y + 14.0, &part, "part");
+        for (slot, (pin, nid)) in flagged.iter().enumerate() {
+            let sy = y + 26.0 + slot as f64 * 15.0;
+            svg.wire(&[(bx + box_w, sy), (bx + box_w + 10.0, sy)]);
+            svg.text(bx + box_w - 6.8 * pin.len() as f64 - 4.0, sy + 3.0, pin, "val");
+            let (nname, is_p, _) = net_kind(netlist, *nid);
+            if !nname.is_empty() {
+                svg.text(bx + box_w + 13.0, sy + 3.0, &nname, if is_p { "rail" } else { "part" });
+            }
+        }
+        if has_gnd {
+            let gx = bx + box_w / 2.0;
+            svg.wire(&[(gx, y + box_h), (gx, y + box_h + 8.0)]);
+            svg.ground(gx, y + box_h + 8.0);
+        }
+        bx += box_w + 26.0 + 6.8 * max_net as f64 + 40.0;
+    }
+    y + row_h + 70.0 - y0
+}
+
+/// Flagged passive strip: support passives with no structural idiom drawn
+/// as vertical columns — net flag on top, symbol, ground/second flag below.
+/// Returns the height consumed.
+fn draw_passive_strip(
+    svg: &mut Svg,
+    netlist: &Netlist,
+    plan: &SheetPlan,
+    y0: f64,
+    decor: &SheetDecor,
+) -> f64 {
+    if plan.passive_strip.is_empty() {
+        return 0.0;
+    }
+    let per_row = 9usize;
+    let x0 = 70.0;
+    let mut top = y0 + 44.0;
+    let mut x = x0;
+    for (k, inst) in plan.passive_strip.iter().enumerate() {
+        if k > 0 && k % per_row == 0 {
+            top += 190.0;
+            x = x0;
+        }
+        let Some((iid, _)) = netlist.instances.iter().find(|(_, i)| i.name == *inst) else {
+            continue;
+        };
+        let mut nets: Vec<NetId> = netlist
+            .pin_instances
+            .values()
+            .filter(|p| p.instance == iid)
+            .filter_map(|p| p.net)
+            .collect();
+        nets.dedup();
+        // Top = rail if present else the first signal net (pull-ups read
+        // rail-on-top naturally); bottom = ground if present else the
+        // remaining signal net.
+        let gnd_net = nets.iter().copied().find(|&n| net_kind(netlist, n).2);
+        let rail_net = nets.iter().copied().find(|&n| net_kind(netlist, n).1);
+        let others: Vec<NetId> = nets
+            .iter()
+            .copied()
+            .filter(|n| Some(*n) != gnd_net && Some(*n) != rail_net)
+            .collect();
+        let top_net = rail_net.or_else(|| others.first().copied());
+        let bot_net = gnd_net.or_else(|| {
+            others
+                .get(if rail_net.is_some() { 0 } else { 1 })
+                .copied()
+        });
+
+        // Top flag.
+        if let Some(tn) = top_net {
+            let (nname, is_p, _) = net_kind(netlist, tn);
+            svg.text(x - 12.0, top - 10.0, &nname, if is_p { "rail" } else { "part" });
+        }
+        svg.wire(&[(x, top), (x, top + 12.0)]);
+        // Symbol (single-pin parts draw as a test point instead).
+        let class = class_of_name(netlist, inst);
+        let single_pin = netlist
+            .pin_instances
+            .values()
+            .filter(|p| p.instance == iid)
+            .count()
+            == 1;
+        let sym_bot = if single_pin {
+            svg.dot(x, top + 12.0);
+            svg.testpoint(x, top + 30.0, label_of(decor, inst));
+            svg.wire(&[(x, top + 12.0), (x, top + 30.0)]);
+            top + 30.0
+        } else {
+            let sb = match class.as_str() {
+                "resistor" => {
+                    svg.res_v(x, top + 12.0);
+                    top + 52.0
+                }
+                "diode" | "led" | "protection" => {
+                    svg.diode_v(x, top + 12.0);
+                    top + 46.0
+                }
+                _ => {
+                    svg.cap_v(x, top + 12.0);
+                    top + 46.0
+                }
+            };
+            svg.place_label_pair(x + 4.0, top + 24.0, label_of(decor, inst), "ref", &value_of(netlist, inst), "val");
+            sb
+        };
+        // Bottom end.
+        if !single_pin {
+            if let Some(bn) = bot_net {
+                let (nname, is_p, is_g) = net_kind(netlist, bn);
+                if is_g {
+                    svg.wire(&[(x, sym_bot), (x, sym_bot + 8.0)]);
+                    svg.ground(x, sym_bot + 8.0);
+                } else {
+                    svg.wire(&[(x, sym_bot), (x, sym_bot + 14.0)]);
+                    svg.text(x - 12.0, sym_bot + 28.0, &nname, if is_p { "rail" } else { "part" });
+                }
+            }
+        }
+        svg.grow(x + 60.0, top + 130.0);
+        // Advance past this column's widest flag text.
+        let widest = nets
+            .iter()
+            .map(|&n| net_kind(netlist, n).0.len())
+            .max()
+            .unwrap_or(0);
+        x += (6.8 * widest as f64 + 44.0).max(120.0);
+    }
+    let rows = plan.passive_strip.len().div_ceil(per_row);
+    44.0 + rows as f64 * 190.0
+}
+
 /// Render one op-amp signal chain; returns the height consumed.
 fn draw_chain(
     svg: &mut Svg,
@@ -1875,6 +2089,10 @@ pub fn render_sheet_svg(
         }
         y = bus_y + 26.0 + box_h + 70.0;
     }
+
+    // ── Signal-interconnect boxes + flagged passive strip ──
+    y += draw_signal_row(&mut svg, netlist, &plan, y, decor);
+    y += draw_passive_strip(&mut svg, netlist, &plan, y, decor);
 
     // Residue: honest fallback row with net flags.
     if !plan.residue.is_empty() {

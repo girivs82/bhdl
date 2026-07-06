@@ -145,6 +145,14 @@ pub struct SheetPlan {
     pub stages: Vec<StagePlan>,
     pub chains: Vec<ChainPlan>,
     pub loads: Vec<LoadPlan>,
+    /// Signal-interconnect boxes: multi-pin ACTIVE parts wired net-to-net
+    /// (MCU ↔ peripherals) — drawn as IC boxes with per-pin net flags, the
+    /// standard long-range notation for digital sections.
+    pub signal_row: Vec<String>,
+    /// Support passives with no structural idiom (pull-ups, terminators,
+    /// TVS on signal nets, lone RC bits, test points) — drawn as flagged
+    /// columns: symbol + net flag per side, ground drawn as ground.
+    pub passive_strip: Vec<String>,
     /// Instances no idiom claimed — the honest fallback set.
     pub residue: Vec<String>,
 }
@@ -201,7 +209,6 @@ fn is_phantom(netlist: &Netlist, id: InstanceId) -> bool {
         .unwrap_or(false)
 }
 
-#[allow(dead_code)] // composer (V4.2) picks symbols by class
 fn class_of(netlist: &Netlist, id: InstanceId) -> String {
     netlist
         .instances
@@ -474,6 +481,38 @@ pub fn classify_sheet(netlist: &Netlist) -> SheetPlan {
             }
         }
     }
+
+    // ── Signal-interconnect boxes + flagged passive strip ──
+    // What remains after the structural idioms is still real schematic
+    // vocabulary: multi-pin actives wired net-to-net draw as boxes with
+    // per-pin net flags (how every digital section is drawn), and support
+    // passives draw as flagged columns. A part only lands in residue when
+    // it can't even be drawn THAT way (no connected pins at all).
+    const PASSIVE_CLASSES: [&str; 8] = [
+        "resistor", "capacitor", "inductor", "diode", "led", "fuse",
+        "protection", "crystal",
+    ];
+    for (id, inst) in &netlist.instances {
+        if claimed.contains(&id) || is_phantom(netlist, id) {
+            continue;
+        }
+        let pins = instance_pins(netlist, id);
+        let connected = pins.iter().filter(|(_, _, n)| n.is_some()).count();
+        if connected == 0 {
+            continue; // nothing to draw — residue below
+        }
+        let class = class_of(netlist, id);
+        let is_passive = PASSIVE_CLASSES.contains(&class.as_str())
+            || (class.is_empty() && pins.len() <= 2);
+        if pins.len() <= 2 && is_passive {
+            plan.passive_strip.push(inst.name.clone());
+        } else {
+            plan.signal_row.push(inst.name.clone());
+        }
+        claimed.insert(id);
+    }
+    plan.signal_row.sort();
+    plan.passive_strip.sort();
 
     // ── Residue: everything placed and unclaimed ──
     for (id, inst) in &netlist.instances {
