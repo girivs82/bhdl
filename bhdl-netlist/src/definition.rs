@@ -6,7 +6,7 @@ use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 
 // Represents a definition of a module/component/interface/board
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ModuleDefinition {
     pub name: String,
     pub kind: ModuleKind, // E.g., Module, Component, Interface, Board, PhysicalComponent

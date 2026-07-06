@@ -9,7 +9,7 @@ use serde::{Serialize, Deserialize};
 use bhdl_common::analysis_interface::AnalysisData;
 
 // Main Netlist Structure
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Netlist {
     pub modules: SlotMap<ModuleId, ModuleDefinition>,
     pub instances: SlotMap<InstanceId, Instance>,

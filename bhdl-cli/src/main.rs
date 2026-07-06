@@ -1300,11 +1300,37 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
             symbols: Some(&analysis.symbol_definitions),
             refdes: Some(&refdes_map),
         };
-        let (svg, unidiomized, collisions) =
-            bhdl_schematic::v4::render_sheet_svg(&netlist, &title, &decor);
-        std::fs::write(svg_path, svg)?;
+        // Hierarchical boards render as a SHEET TREE: the top sheet's
+        // entity blocks hyperlink (native SVG <a>) to per-entity sheets
+        // written as sibling files "{stem}__{entity}.svg".
+        let out_path = std::path::Path::new(svg_path);
+        let stem = out_path
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "sheet".into());
+        let slugify = |s: &str| -> String {
+            s.chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+                .collect()
+        };
+        let href_for = |parent: &str| format!("{stem}__{}.svg", slugify(parent));
+        let sheets = bhdl_schematic::v4::render_sheet_tree(&netlist, &title, &decor, &href_for);
+        let n_sheets = sheets.len();
+        let (mut unidiomized, mut collisions) = (0usize, 0usize);
+        for sheet in sheets {
+            unidiomized += sheet.unidiomized;
+            collisions += sheet.collisions;
+            if sheet.slug.is_empty() {
+                std::fs::write(out_path, sheet.svg)?;
+            } else {
+                let child = out_path.with_file_name(format!("{stem}__{}.svg", slugify(&sheet.slug)));
+                std::fs::write(&child, sheet.svg)?;
+                println!("    {} sheet: {}", "→".cyan(), child.display());
+            }
+        }
+        let pages = if n_sheets > 1 { format!(", {n_sheets} sheets") } else { String::new() };
         println!(
-            "  {} V4 SVG: {svg_path} ({unidiomized} unidiomized, {collisions} collisions)",
+            "  {} V4 SVG: {svg_path} ({unidiomized} unidiomized, {collisions} collisions{pages})",
             "✓".green(),
         );
     }

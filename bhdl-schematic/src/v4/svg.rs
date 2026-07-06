@@ -2035,6 +2035,62 @@ pub fn render_sheet_svg(
     title: &str,
     decor: &SheetDecor,
 ) -> (String, usize, usize) {
+    render_sheet_svg_with_blocks(netlist, title, decor, &[])
+}
+
+/// One rendered sheet of a hierarchical board.
+pub struct SheetOut {
+    /// File-name slug ("" = the top sheet).
+    pub slug: String,
+    pub title: String,
+    pub svg: String,
+    pub unidiomized: usize,
+    pub collisions: usize,
+}
+
+/// Render a hierarchical board as a sheet tree: a top sheet with each
+/// expanded entity drawn as a LINKED block (native SVG hyperlinks — the
+/// interactive binding needs no scripting), plus one sheet per entity
+/// holding the parent IC and its expansion children. Flat boards return
+/// the single sheet unchanged. `href_for` maps a parent instance name to
+/// the (relative) href/slug its block links to.
+pub fn render_sheet_tree(
+    netlist: &Netlist,
+    title: &str,
+    decor: &SheetDecor,
+    href_for: &dyn Fn(&str) -> String,
+) -> Vec<SheetOut> {
+    let Some(groups) = super::sheets::partition_sheets(netlist) else {
+        let (svg, unidiomized, collisions) = render_sheet_svg(netlist, title, decor);
+        return vec![SheetOut { slug: String::new(), title: title.to_string(), svg, unidiomized, collisions }];
+    };
+    let blocks = super::sheets::block_specs(netlist, &groups, href_for);
+    let mut out = Vec::new();
+    for g in &groups {
+        let sub = super::sheets::subset_netlist(netlist, &g.members);
+        match &g.parent {
+            None => {
+                let (svg, unidiomized, collisions) =
+                    render_sheet_svg_with_blocks(&sub, title, decor, &blocks);
+                out.push(SheetOut { slug: String::new(), title: title.to_string(), svg, unidiomized, collisions });
+            }
+            Some(parent) => {
+                let sheet_title = format!("{title} · {parent}");
+                let (svg, unidiomized, collisions) =
+                    render_sheet_svg_with_blocks(&sub, &sheet_title, decor, &[]);
+                out.push(SheetOut { slug: parent.clone(), title: sheet_title, svg, unidiomized, collisions });
+            }
+        }
+    }
+    out
+}
+
+fn render_sheet_svg_with_blocks(
+    netlist: &Netlist,
+    title: &str,
+    decor: &SheetDecor,
+    blocks: &[super::sheets::BlockSpec],
+) -> (String, usize, usize) {
     let plan = classify_sheet(netlist);
     log::info!(
         "v4 plan: {} rails, {} grounds, {} stages, {} residue",
@@ -2052,6 +2108,60 @@ pub fn render_sheet_svg(
     for i in 0..plan.chains.len() {
         let used = draw_chain(&mut svg, netlist, &plan, i, y, decor);
         y += used.max(240.0);
+    }
+
+    // ── Entity blocks: expanded subcircuits as LINKED boxes with their
+    // port pins and net flags — clicking one opens its sheet. ──
+    if !blocks.is_empty() {
+        let mut bx = 60.0;
+        let by = y + 30.0;
+        let mut row_h: f64 = 0.0;
+        for b in blocks {
+            let max_pin = b.ports.iter().map(|(p, ..)| p.len()).max().unwrap_or(0);
+            let max_net = b.ports.iter().map(|(_, n, ..)| n.len()).max().unwrap_or(0);
+            let box_w = (34.0 + 6.8 * max_pin as f64).max(120.0);
+            let visible: Vec<_> = b.ports.iter().filter(|(_, _, _, g)| !g).collect();
+            let box_h = (30.0 + visible.len() as f64 * 15.0).max(56.0);
+            row_h = row_h.max(box_h + 46.0);
+            let _ = writeln!(svg.body, r##"<a href="{}">"##, b.href);
+            let _ = writeln!(
+                svg.body,
+                r##"<rect x="{bx:.1}" y="{by:.1}" width="{box_w:.1}" height="{box_h:.1}" fill="#eef2fa" stroke="#225" stroke-width="2.2" rx="4"/>"##
+            );
+            svg.text(bx + 2.0, by - 6.0, label_of(decor, &b.inst), "ref");
+            svg.text(bx + 6.0, by + 16.0, &b.part, "part");
+            svg.text(bx + 6.0, by + 30.0, "▸ sheet", "sim");
+            let _ = writeln!(svg.body, "</a>");
+            svg.solid(Rect { x0: bx, y0: by, x1: bx + box_w, y1: by + box_h });
+            svg.grow(bx + box_w + 90.0, by + box_h + 40.0);
+            let mut slot = 0usize;
+            let mut drew_gnd = false;
+            for (pin, nname, is_p, is_g) in &b.ports {
+                if *is_g {
+                    if !drew_gnd {
+                        let gx = bx + box_w / 2.0;
+                        svg.wire(&[(gx, by + box_h), (gx, by + box_h + 8.0)]);
+                        svg.ground(gx, by + box_h + 8.0);
+                        drew_gnd = true;
+                    }
+                    continue;
+                }
+                let sy = by + 44.0 + slot as f64 * 15.0 - 14.0;
+                svg.wire(&[(bx + box_w, sy), (bx + box_w + 10.0, sy)]);
+                svg.text(bx + box_w - 6.8 * pin.len() as f64 - 4.0, sy + 3.0, pin, "val");
+                if !nname.is_empty() {
+                    svg.text(
+                        bx + box_w + 13.0,
+                        sy + 3.0,
+                        nname,
+                        if *is_p { "rail" } else { "part" },
+                    );
+                }
+                slot += 1;
+            }
+            bx += box_w + 26.0 + 6.8 * max_net as f64 + 46.0;
+        }
+        y = by + row_h + 30.0;
     }
 
     // ── Load rows: rail consumers fanned out under a shared bus ──
