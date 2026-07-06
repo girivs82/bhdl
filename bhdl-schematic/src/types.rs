@@ -240,6 +240,11 @@ pub struct SimulationAnnotations {
     /// The renderer should suppress annotations on these to avoid overlapping labels.
     #[serde(default, skip_serializing_if = "HashSet::is_empty")]
     pub internal_nets: HashSet<String>,
+    /// EXACT block-port currents on hierarchical sheets: the net injection
+    /// of each sheet group's branches into each boundary net, keyed
+    /// "parent::net". Physical boundary flow — no per-part heuristics.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub port_currents: HashMap<String, f64>,
     /// Stimulus-response measurement over a signal chain: a sine driven at
     /// the chain input by the transient solver, its output amplitude
     /// MEASURED at the chain output (never derived from nominal gain).

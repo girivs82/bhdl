@@ -2125,42 +2125,19 @@ fn render_sheet_svg_with_blocks(
             // the cell reserves width for it: this ink sits ON its row,
             // deterministically (a slot-searched decoration that slides to
             // another row reads as the wrong port's current).
-            let port_current = |insts: &[String]| -> Option<String> {
+            // EXACT port current: the solved net injection of this block's
+            // branches into the port net (computed in the CLI against the
+            // final circuit) — physical boundary flow, no heuristics.
+            let port_current = |nname: &str| -> Option<String> {
                 let sim = decor.sim?;
-                let mut currents: Vec<f64> = insts
-                    .iter()
-                    .filter_map(|i| {
-                        if *i == b.inst {
-                            // The PARENT contributes only through its explicit
-                            // load-draw branch ("{inst}_draw") — its bare-name
-                            // branch is the regulator model's internal output
-                            // source, whose current would leak onto every row
-                            // the chip's pins touch (49.9mA on the VIN row).
-                            sim.instance_currents.get(&format!("{i}_draw"))
-                        } else {
-                            sim.instance_currents.get(i)
-                        }
-                    })
-                    .map(|i| i.abs())
-                    .filter(|i| *i >= 1e-6)
-                    .collect();
-                currents.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
-                let dominant = match currents.as_slice() {
-                    [one] => Some(*one),
-                    [first, second, ..] if *first >= 10.0 * *second => Some(*first),
-                    _ => None,
-                }?;
-                if std::env::var("BHDL_V4_DEBUG").is_ok() {
-                    eprintln!("[v4] port current {dominant:.4}A from candidates {insts:?}: {:?}",
-                        insts.iter().map(|i| sim.instance_currents.get(i).copied()).collect::<Vec<_>>());
-                }
-                Some(format!("= {}", fmt_sim_i(dominant)?))
+                let i = sim.port_currents.get(&format!("{}::{}", b.inst, nname))?;
+                Some(format!("= {}", fmt_sim_i(*i)?))
             };
             let max_net = b
                 .ports
                 .iter()
-                .map(|(_, n, _, _, insts)| {
-                    n.len() + port_current(insts).map(|c| c.len() + 2).unwrap_or(0)
+                .map(|(_, n, ..)| {
+                    n.len() + port_current(n).map(|c| c.len() + 2).unwrap_or(0)
                 })
                 .max()
                 .unwrap_or(0);
@@ -2181,7 +2158,7 @@ fn render_sheet_svg_with_blocks(
             svg.grow(bx + box_w + 90.0, by + box_h + 40.0);
             let mut slot = 0usize;
             let mut drew_gnd = false;
-            for (pin, nname, is_p, is_g, insts) in &b.ports {
+            for (pin, nname, is_p, is_g, _insts) in &b.ports {
                 if *is_g {
                     if !drew_gnd {
                         let gx = bx + box_w / 2.0;
@@ -2202,7 +2179,7 @@ fn render_sheet_svg_with_blocks(
                         if *is_p { "rail" } else { "part" },
                     );
                 }
-                if let Some(label) = port_current(insts) {
+                if let Some(label) = port_current(nname) {
                     svg.text(
                         bx + box_w + 13.0 + 6.8 * nname.len() as f64 + 8.0,
                         sy + 3.0,

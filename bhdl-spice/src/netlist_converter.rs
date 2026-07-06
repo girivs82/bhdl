@@ -991,6 +991,17 @@ impl NetlistToSpiceConverter {
                 // computation from physics, not lumped estimates.
                 // I_quiescent applies to both linear and switching regulators.
                 vout_meta.insert(META_I_QUIESCENT.to_string(), req_param("i_quiescent")?.to_string());
+                // Efficiency (fraction) for the input-draw fixpoint:
+                // "92%" / "0.92" / "92" all accepted; absent → no stamp
+                // (the fixpoint then uses the linear i_in ≈ i_out).
+                if let Some(eff) = extracted_model.attributes.get("efficiency")
+                    .and_then(|e| e.trim().trim_end_matches('%').trim().parse::<f64>().ok())
+                {
+                    let eff = if eff > 1.0 { eff / 100.0 } else { eff };
+                    if eff > 0.0 && eff <= 1.0 {
+                        vout_meta.insert(crate::circuit::META_EFFICIENCY.to_string(), eff.to_string());
+                    }
+                }
                 if is_switching {
                     vout_meta.insert(META_RDS_ON.to_string(), req_param("rds_on")?.to_string());
                     vout_meta.insert(META_F_SW.to_string(), req_param("f_sw")?.to_string());

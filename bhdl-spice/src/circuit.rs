@@ -66,6 +66,9 @@ pub const META_ROUT: &str = "rout_ohm";
 pub const META_VOS: &str = "vos_v";
 /// Op-amp slew rate, in V/µs.
 pub const META_SLEW: &str = "slew_v_per_us";
+/// Regulator efficiency (fraction 0..1) — stamped on the output-source
+/// branch so the input-draw fixpoint can compute i_in from i_out.
+pub const META_EFFICIENCY: &str = "efficiency";
 /// Capacitor or device voltage rating, in volts.
 pub const META_VOLTAGE_RATING: &str = "voltage_rating";
 /// Inductor DC resistance, in ohms.
@@ -390,6 +393,19 @@ impl Circuit {
         idx
     }
     
+    /// Update an existing branch's value in place (upsert-by-name support
+    /// for the DC input-draw fixpoint). Returns false when no branch of
+    /// that name exists.
+    pub fn set_branch_value(&mut self, name: &str, value: f64) -> bool {
+        if let Some(&idx) = self.branch_map.get(name) {
+            if let Some(b) = self.graph.edge_weight_mut(idx) {
+                b.value = value;
+                return true;
+            }
+        }
+        false
+    }
+
     /// Get all nodes
     pub fn nodes(&self) -> impl Iterator<Item = (NodeIndex, &Node)> {
         self.graph.node_indices()

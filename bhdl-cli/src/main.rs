@@ -1242,13 +1242,16 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
         ));
         match converter.convert(&netlist) {
             Ok(circuit) => {
-                let circuit_ref = circuit.clone();
-                let solver = bhdl_spice::GlacierDcSolver::new();
-                match solver.solve(circuit) {
-                    Ok(result) => {
+                // Input-draw fixpoint: regulators pull their efficiency-
+                // derived input current from their SOLVED output current,
+                // so cascade rails carry real numbers. Annotate against
+                // the FINAL circuit (it holds the _in_draw branches).
+                match bhdl_spice::input_draw::solve_dc_with_input_draws(circuit, &regulator_hints(&netlist)) {
+                    Ok((result, circuit_ref)) => {
                         info!("GLACIER DC simulation converged in {} iterations (error: {:.2e})",
                               result.iterations, result.final_error);
                         let mut ann = build_simulation_annotations(&result, &circuit_ref);
+                        ann.port_currents = compute_port_currents(&result, &circuit_ref, &netlist);
                         ann.stimulus = run_chain_stimulus(&netlist, &circuit_ref);
                         Some(ann)
                     }
@@ -2470,8 +2473,11 @@ async fn cmd_bom(
         ));
         match conv.convert(&netlist) {
             Ok(circuit) => {
-                let circuit_ref = circuit.clone();
-                match bhdl_spice::GlacierDcSolver::new().solve(circuit) {
+                let circuit_ref = match bhdl_spice::input_draw::solve_dc_with_input_draws(circuit.clone(), &regulator_hints(&netlist)) {
+                    Ok((_, final_circuit)) => final_circuit,
+                    Err(_) => circuit.clone(),
+                };
+                match bhdl_spice::GlacierDcSolver::new().solve(circuit_ref.clone()) {
                     Ok(result) => {
                         let ann = build_simulation_annotations(&result, &circuit_ref);
                         // build_simulation_annotations prunes "internal"
@@ -2671,6 +2677,163 @@ async fn cmd_doc(
 const POWER_THRESHOLD_AMPS: f64 = 1e-3;
 
 /// Map GLACIER DC solver results (NodeIndex/EdgeIndex) back to schematic-level
+/// Netlist-exact regulator hints for the input-draw fixpoint: input net,
+/// output net (VIRTUAL pins count — a buck's VOUT is its logical output),
+/// owning instance, and datasheet efficiency.
+fn regulator_hints(
+    netlist: &bhdl_netlist::netlist::Netlist,
+) -> std::collections::HashMap<String, bhdl_spice::input_draw::RegulatorHint> {
+    let mut out = std::collections::HashMap::new();
+    for (iid, inst) in &netlist.instances {
+        let class = inst
+            .attributes
+            .get("component_class")
+            .or_else(|| {
+                netlist
+                    .modules
+                    .get(inst.definition)
+                    .and_then(|m| m.attributes.get("component_class"))
+            })
+            .map(String::as_str)
+            .unwrap_or("");
+        if !matches!(class, "voltage_regulator" | "ldo" | "switching_regulator") {
+            continue;
+        }
+        let net_of = |pred: &dyn Fn(&bhdl_netlist::portpin::Pin) -> bool| {
+            netlist.pin_instances.values().find_map(|pi| {
+                (pi.instance == iid)
+                    .then(|| netlist.pins.get(pi.pin_def))
+                    .flatten()
+                    .filter(|p| pred(p))
+                    .and_then(|_| pi.net)
+                    .and_then(|nid| netlist.nets.get(nid))
+                    .and_then(|n| n.name.clone())
+            })
+        };
+        let vin = net_of(&|p| p.name.eq_ignore_ascii_case("VIN") || p.name.eq_ignore_ascii_case("IN"));
+        let vout = net_of(&|p| {
+            p.name.eq_ignore_ascii_case("VOUT")
+                || p.name.eq_ignore_ascii_case("OUT")
+                || p.name.eq_ignore_ascii_case("VO")
+        });
+        let eff = inst
+            .attributes
+            .get("efficiency")
+            .and_then(|e| e.trim().trim_end_matches('%').trim().parse::<f64>().ok())
+            .map(|e| if e > 1.0 { e / 100.0 } else { e });
+        if let (Some(vin_net), Some(vout_net)) = (vin, vout) {
+            out.insert(
+                inst.name.clone(),
+                bhdl_spice::input_draw::RegulatorHint {
+                    vin_net,
+                    vout_net,
+                    instance: iid,
+                    efficiency: eff,
+                },
+            );
+        }
+    }
+    out
+}
+
+/// EXACT block-port currents: for every hierarchical sheet group, the net
+/// injection of the group's branches into each net — the physical current
+/// crossing the block boundary, no dominant-carrier heuristics. Keyed
+/// "parent::net".
+fn compute_port_currents(
+    dc: &bhdl_spice::DcAnalysisResult,
+    circuit: &bhdl_spice::circuit::Circuit,
+    netlist: &bhdl_netlist::netlist::Netlist,
+) -> std::collections::HashMap<String, f64> {
+    let mut out = std::collections::HashMap::new();
+    let Some(groups) = bhdl_schematic::v4::partition_sheets(netlist) else {
+        return out;
+    };
+    let hints = regulator_hints(netlist);
+    for g in &groups {
+        let Some(parent) = &g.parent else { continue };
+        // Nets DRIVEN by this group's parent (its output pins): the board
+        // rail's own ideal source on such a net electrically IS this
+        // regulator's output stage (double-drive prevention leaves exactly
+        // one source) and must count as a group member, or the source and
+        // the downstream draws cancel inside the complement.
+        let driven: std::collections::HashSet<&str> = hints
+            .get(parent)
+            .map(|h| std::iter::once(h.vout_net.as_str()).collect())
+            .unwrap_or_default();
+        // Group membership by instance NAME (branches carry instance ids;
+        // synthesized branches like "{inst}_draw"/"_vout" carry the
+        // parent's id, so id→name→group is exact).
+        let member_names: std::collections::HashSet<String> = g
+            .members
+            .iter()
+            .filter_map(|id| netlist.instances.get(*id).map(|i| i.name.clone()))
+            .collect();
+        // Signed injection per net, member side and complement side. By
+        // KCL they are equal and opposite when every branch current is
+        // known; a CLAMPED source (the solver pins the node instead of
+        // modelling a source branch) hides its current from one side, so
+        // the side with the LARGER magnitude is the complete one.
+        let mut inj_member: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+        let mut inj_other: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+        let is_member = |b: &bhdl_spice::circuit::Branch| -> bool {
+            b.instance_id
+                .and_then(|id| netlist.instances.get(id))
+                .map(|i| member_names.contains(&i.name))
+                .unwrap_or(false)
+                || b.metadata
+                    .get(bhdl_spice::circuit::META_PARENT_INSTANCE)
+                    .map(|p| member_names.contains(p))
+                    .unwrap_or(false)
+                || (b.component_type == "VoltageSource"
+                    && b.instance_id.is_none()
+                    && b.nodes
+                        .iter()
+                        .filter_map(|&n| circuit.get_node_name(n))
+                        .any(|n| driven.contains(n)))
+        };
+        for (edge, b) in circuit.branches() {
+            if b.nodes.len() != 2 {
+                continue;
+            }
+            // Membership by instance id OR by parent metadata — decomposed
+            // regulator branches (vout source, dropout) carry the parent in
+            // METADATA; missing them puts the source in the complement,
+            // where it cancels against the very draw it supplies.
+            let member = is_member(b);
+            let i = dc.branch_currents.get(&edge).copied().unwrap_or_else(|| {
+                if b.component_type == "CurrentSource" { b.value } else { 0.0 }
+            });
+            let sink = if member { &mut inj_member } else { &mut inj_other };
+            let name_of = |n| circuit.get_node_name(n).map(str::to_string);
+            if let Some(a) = name_of(b.nodes[0]) {
+                *sink.entry(a).or_insert(0.0) -= i;
+            }
+            if let Some(bn) = name_of(b.nodes[1]) {
+                *sink.entry(bn).or_insert(0.0) += i;
+            }
+        }
+        // Only report nets the group actually touches.
+        let touched: std::collections::HashSet<String> = circuit
+            .branches()
+            .filter(|(_, b)| is_member(b))
+            .flat_map(|(_, b)| b.nodes.iter().filter_map(|&n| circuit.get_node_name(n).map(str::to_string)).collect::<Vec<_>>())
+            .collect();
+        for net in touched {
+            let m = inj_member.get(&net).copied().unwrap_or(0.0).abs();
+            let o = inj_other.get(&net).copied().unwrap_or(0.0).abs();
+            let i = m.max(o);
+            if std::env::var("BHDL_V4_DEBUG").is_ok() {
+                eprintln!("[v4] port {parent}::{net} member={m:.6} other={o:.6}");
+            }
+            if i >= 1e-6 {
+                out.insert(format!("{parent}::{net}"), i);
+            }
+        }
+    }
+    out
+}
+
 /// Stimulus-response experiment over the sheet's signal chain (task #41):
 /// drive a 100 mV / 1 kHz sine at the chain's input net through the linear
 /// transient solver (which stamps the ideal op-amp rows) and MEASURE the
