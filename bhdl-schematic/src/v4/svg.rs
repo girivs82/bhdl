@@ -2110,41 +2110,172 @@ fn render_sheet_svg_with_blocks(
         y += used.max(240.0);
     }
 
-    // ── Entity blocks: expanded subcircuits as LINKED boxes with their
-    // port pins and net flags — clicking one opens its sheet. ──
+    // ── Entity blocks as a FLOW DIAGRAM: blocks ordered by cascade,
+    // inputs on the left edge, outputs on the right, and every
+    // producer→consumer net drawn as a real WIRE labeled once with the
+    // net and its solved boundary current — at one level of hierarchy a
+    // wire reads immediately; matching flags does not. Ports whose net
+    // has no partner block keep a flag. ──
     if !blocks.is_empty() {
-        let mut bx = 60.0;
+        #[derive(Clone)]
+        struct Port {
+            pin: String,
+            net: String,
+            is_p: bool,
+            is_g: bool,
+            input: Option<bool>, // None = unknown
+        }
+        let dir_of = |pin: &str| -> Option<bool> {
+            let up = pin.to_uppercase();
+            if ["VIN", "VCC", "IN", "VDD", "EN"].contains(&up.as_str()) {
+                Some(true)
+            } else if ["VOUT", "OUT", "VO", "SW", "PH"].contains(&up.as_str()) {
+                Some(false)
+            } else {
+                None
+            }
+        };
+        let mut bports: Vec<Vec<Port>> = blocks
+            .iter()
+            .map(|b| {
+                b.ports
+                    .iter()
+                    .map(|(pin, net, is_p, is_g, _)| Port {
+                        pin: pin.clone(),
+                        net: net.clone(),
+                        is_p: *is_p,
+                        is_g: *is_g,
+                        input: dir_of(pin),
+                    })
+                    .collect()
+            })
+            .collect();
+        // Net-level resolution: a net with a known producer makes its
+        // unknown ports consumers, and vice versa.
+        {
+            let mut has_out: HashMap<String, bool> = HashMap::new();
+            let mut has_in: HashMap<String, bool> = HashMap::new();
+            for ps in &bports {
+                for p in ps {
+                    match p.input {
+                        Some(false) => {
+                            has_out.insert(p.net.clone(), true);
+                        }
+                        Some(true) => {
+                            has_in.insert(p.net.clone(), true);
+                        }
+                        None => {}
+                    }
+                }
+            }
+            for ps in &mut bports {
+                for p in ps {
+                    if p.input.is_none() {
+                        if has_out.get(&p.net).copied().unwrap_or(false) {
+                            p.input = Some(true);
+                        } else if has_in.get(&p.net).copied().unwrap_or(false) {
+                            p.input = Some(false);
+                        }
+                    }
+                }
+            }
+        }
+        // Cascade order: producer before consumer (Kahn; stable fallback).
+        let n_blocks = blocks.len();
+        let order: Vec<usize> = {
+            let mut edges: Vec<(usize, usize)> = Vec::new();
+            for (a, pa) in bports.iter().enumerate() {
+                for p in pa {
+                    if p.input != Some(false) || p.is_g {
+                        continue;
+                    }
+                    for (c, pc) in bports.iter().enumerate() {
+                        if c != a
+                            && pc.iter().any(|q| q.net == p.net && q.input == Some(true))
+                        {
+                            edges.push((a, c));
+                        }
+                    }
+                }
+            }
+            let mut indeg = vec![0usize; n_blocks];
+            for &(_, c) in &edges {
+                indeg[c] += 1;
+            }
+            let mut queue: Vec<usize> =
+                (0..n_blocks).filter(|i| indeg[*i] == 0).collect();
+            let mut out = Vec::new();
+            while let Some(k) = queue.pop() {
+                out.push(k);
+                for &(a, c) in &edges {
+                    if a == k {
+                        indeg[c] -= 1;
+                        if indeg[c] == 0 {
+                            queue.push(c);
+                        }
+                    }
+                }
+            }
+            for i in 0..n_blocks {
+                if !out.contains(&i) {
+                    out.push(i); // cycles fall back to declaration order
+                }
+            }
+            out
+        };
+
+        let port_current = |b: &super::sheets::BlockSpec, nname: &str| -> Option<String> {
+            let sim = decor.sim?;
+            let i = sim.port_currents.get(&format!("{}::{}", b.inst, nname))?;
+            fmt_sim_i(*i)
+        };
+
+        // Geometry + anchors. Left margin per block covers its unwired
+        // left flags; the inter-block gap carries the wire lanes.
         let by = y + 30.0;
+        let mut bx = 60.0;
         let mut row_h: f64 = 0.0;
-        for b in blocks {
-            let max_pin = b.ports.iter().map(|(p, ..)| p.len()).max().unwrap_or(0);
-            // MEASURED port current: the GLACIER-solved current of the
-            // group's DOMINANT carrier on the net (>=10x every other
-            // member, or the sole significant one) — an ambiguous split is
-            // not a port current and is not printed. Computed up front so
-            // the cell reserves width for it: this ink sits ON its row,
-            // deterministically (a slot-searched decoration that slides to
-            // another row reads as the wrong port's current).
-            // EXACT port current: the solved net injection of this block's
-            // branches into the port net (computed in the CLI against the
-            // final circuit) — physical boundary flow, no heuristics.
-            let port_current = |nname: &str| -> Option<String> {
-                let sim = decor.sim?;
-                let i = sim.port_currents.get(&format!("{}::{}", b.inst, nname))?;
-                Some(format!("= {}", fmt_sim_i(*i)?))
-            };
-            let max_net = b
-                .ports
+        // (block idx, net) → (x, y, is_output_side)
+        let mut anchors: HashMap<(usize, String), (f64, f64, bool)> = HashMap::new();
+        // Which nets get wires: producer + ≥1 consumer among blocks.
+        let wired: std::collections::HashSet<String> = {
+            let mut set = std::collections::HashSet::new();
+            for (a, pa) in bports.iter().enumerate() {
+                for p in pa {
+                    if p.is_g || p.input != Some(false) {
+                        continue;
+                    }
+                    if bports.iter().enumerate().any(|(c, pc)| {
+                        c != a && pc.iter().any(|q| q.net == p.net && q.input == Some(true))
+                    }) {
+                        set.insert(p.net.clone());
+                    }
+                }
+            }
+            set
+        };
+
+        for &bi in &order {
+            let b = &blocks[bi];
+            let ports = &bports[bi];
+            let lefts: Vec<&Port> = ports.iter().filter(|p| !p.is_g && p.input == Some(true)).collect();
+            let rights: Vec<&Port> =
+                ports.iter().filter(|p| !p.is_g && p.input != Some(true)).collect();
+            let has_gnd = ports.iter().any(|p| p.is_g);
+            let max_pin = ports.iter().map(|p| p.pin.len()).max().unwrap_or(0);
+            let box_w = (44.0 + 6.8 * max_pin as f64).max(120.0);
+            let rows = lefts.len().max(rights.len());
+            let box_h = (50.0 + rows as f64 * 15.0).max(64.0);
+            // Left margin: unwired left flags need room.
+            let left_flag = lefts
                 .iter()
-                .map(|(_, n, ..)| {
-                    n.len() + port_current(n).map(|c| c.len() + 2).unwrap_or(0)
-                })
+                .filter(|p| !wired.contains(&p.net))
+                .map(|p| p.net.len() + port_current(b, &p.net).map(|c| c.len() + 3).unwrap_or(0))
                 .max()
                 .unwrap_or(0);
-            let box_w = (34.0 + 6.8 * max_pin as f64).max(120.0);
-            let visible: Vec<_> = b.ports.iter().filter(|(_, _, _, g, _)| !g).collect();
-            let box_h = (30.0 + visible.len() as f64 * 15.0).max(56.0);
-            row_h = row_h.max(box_h + 46.0);
+            bx += 6.8 * left_flag as f64 + if left_flag > 0 { 26.0 } else { 0.0 };
+            row_h = row_h.max(box_h + if has_gnd { 46.0 } else { 6.0 });
+
             let _ = writeln!(svg.body, r##"<a href="{}">"##, b.href);
             let _ = writeln!(
                 svg.body,
@@ -2155,42 +2286,96 @@ fn render_sheet_svg_with_blocks(
             svg.text(bx + 6.0, by + 30.0, "▸ sheet", "sim");
             let _ = writeln!(svg.body, "</a>");
             svg.solid(Rect { x0: bx, y0: by, x1: bx + box_w, y1: by + box_h });
-            svg.grow(bx + box_w + 90.0, by + box_h + 40.0);
-            let mut slot = 0usize;
-            let mut drew_gnd = false;
-            for (pin, nname, is_p, is_g, _insts) in &b.ports {
-                if *is_g {
-                    if !drew_gnd {
-                        let gx = bx + box_w / 2.0;
-                        svg.wire(&[(gx, by + box_h), (gx, by + box_h + 8.0)]);
-                        svg.ground(gx, by + box_h + 8.0);
-                        drew_gnd = true;
-                    }
-                    continue;
-                }
-                let sy = by + 44.0 + slot as f64 * 15.0 - 14.0;
-                svg.wire(&[(bx + box_w, sy), (bx + box_w + 10.0, sy)]);
-                svg.text(bx + box_w - 6.8 * pin.len() as f64 - 4.0, sy + 3.0, pin, "val");
-                if !nname.is_empty() {
+            svg.grow(bx + box_w + 60.0, by + box_h + 40.0);
+
+            for (k, p) in lefts.iter().enumerate() {
+                let sy = by + 46.0 + k as f64 * 15.0;
+                svg.wire(&[(bx - 12.0, sy), (bx, sy)]);
+                svg.text(bx + 4.0, sy + 3.0, &p.pin, "val");
+                anchors.insert((bi, p.net.clone()), (bx - 12.0, sy, false));
+                if !wired.contains(&p.net) && !p.net.is_empty() {
+                    let cur = port_current(b, &p.net)
+                        .map(|c| format!(" = {c}"))
+                        .unwrap_or_default();
+                    let label = format!("{}{}", p.net, cur);
                     svg.text(
-                        bx + box_w + 13.0,
-                        sy + 3.0,
-                        nname,
-                        if *is_p { "rail" } else { "part" },
-                    );
-                }
-                if let Some(label) = port_current(nname) {
-                    svg.text(
-                        bx + box_w + 13.0 + 6.8 * nname.len() as f64 + 8.0,
+                        bx - 16.0 - 6.8 * label.len() as f64,
                         sy + 3.0,
                         &label,
-                        "sim",
+                        if p.is_p { "rail" } else { "part" },
                     );
                 }
-                slot += 1;
             }
-            bx += box_w + 26.0 + 6.8 * max_net as f64 + 46.0;
+            for (k, p) in rights.iter().enumerate() {
+                let sy = by + 46.0 + k as f64 * 15.0;
+                svg.wire(&[(bx + box_w, sy), (bx + box_w + 12.0, sy)]);
+                svg.text(bx + box_w - 6.8 * p.pin.len() as f64 - 4.0, sy + 3.0, &p.pin, "val");
+                anchors.insert((bi, p.net.clone()), (bx + box_w + 12.0, sy, true));
+                if !wired.contains(&p.net) && !p.net.is_empty() {
+                    let cur = port_current(b, &p.net)
+                        .map(|c| format!(" = {c}"))
+                        .unwrap_or_default();
+                    svg.text(
+                        bx + box_w + 16.0,
+                        sy + 3.0,
+                        &format!("{}{}", p.net, cur),
+                        if p.is_p { "rail" } else { "part" },
+                    );
+                }
+            }
+            if has_gnd {
+                let gx = bx + box_w / 2.0;
+                svg.wire(&[(gx, by + box_h), (gx, by + box_h + 8.0)]);
+                svg.ground(gx, by + box_h + 8.0);
+            }
+            // Gap after this block: room for its unwired right flags plus
+            // wire lanes.
+            let right_flag = rights
+                .iter()
+                .filter(|p| !wired.contains(&p.net))
+                .map(|p| p.net.len() + port_current(b, &p.net).map(|c| c.len() + 3).unwrap_or(0))
+                .max()
+                .unwrap_or(0);
+            bx += box_w + 6.8 * right_flag as f64 + 110.0;
         }
+
+        // Wires: producer anchor → each consumer anchor, one lane each.
+        let mut lane = 0usize;
+        for (a, pa) in bports.iter().enumerate() {
+            for p in pa {
+                if p.is_g || p.input != Some(false) || !wired.contains(&p.net) {
+                    continue;
+                }
+                let Some(&(px, py, _)) = anchors.get(&(a, p.net.clone())) else { continue };
+                let mut labeled = false;
+                for (c, pc) in bports.iter().enumerate() {
+                    if c == a || !pc.iter().any(|q| q.net == p.net && q.input == Some(true)) {
+                        continue;
+                    }
+                    let Some(&(cx, cy, _)) = anchors.get(&(c, p.net.clone())) else { continue };
+                    let gx = px + 18.0 + (lane % 5) as f64 * 10.0;
+                    lane += 1;
+                    svg.wire(&[(px, py), (gx, py), (gx, cy), (cx, cy)]);
+                    if !labeled {
+                        let cur = port_current(&blocks[a], &p.net)
+                            .map(|cstr| format!(" = {cstr}"))
+                            .unwrap_or_default();
+                        let label = format!("{}{}", p.net, cur);
+                        // Midpoint of the span, centred — a label pinned at
+                        // the producer's lane ran into the consumer's box.
+                        let mid = (px + cx) / 2.0 - 6.8 * label.len() as f64 / 2.0;
+                        svg.place_label(
+                            mid,
+                            py.min(cy) - 14.0,
+                            &label,
+                            if p.is_p { "rail" } else { "part" },
+                        );
+                        labeled = true;
+                    }
+                }
+            }
+        }
+
         y = by + row_h + 30.0;
     }
 
