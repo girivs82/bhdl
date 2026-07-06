@@ -375,25 +375,29 @@ mod tests {
         assert!(!serial_results.is_empty());
         assert!(!parallel_results.is_empty());
         
-        // Extract LED currents from best solutions
-        let serial_current = serial_results.last().unwrap().3
-            .branch_currents.values()
-            .find(|&&c| c.abs() > 1e-6 && c.abs() < 1.0)
-            .map(|&c| c.abs())
-            .unwrap_or(0.0);
-            
-        let parallel_current = parallel_results.last().unwrap().3
-            .branch_currents.values()
-            .find(|&&c| c.abs() > 1e-6 && c.abs() < 1.0)
-            .map(|&c| c.abs())
-            .unwrap_or(0.0);
-        
-        // Should be within 1% tolerance
-        let diff = (serial_current - parallel_current).abs();
-        let tolerance = 0.01 * serial_current;
-        
-        assert!(diff < tolerance, 
-                "Current mismatch: serial={:.6}, parallel={:.6}, diff={:.6}", 
-                serial_current, parallel_current, diff);
+        // Compare like-for-like BY BRANCH KEY. The old form pulled "some
+        // branch in a magnitude window" via HashMap::values().find() —
+        // nondeterministic iteration order, so serial and parallel could
+        // (and on some machines did) pick DIFFERENT branches and report a
+        // 3× "mismatch" between two correct numbers.
+        let serial_map = &serial_results.last().unwrap().3.branch_currents;
+        let parallel_map = &parallel_results.last().unwrap().3.branch_currents;
+        let mut compared = 0usize;
+        for (name, &sc) in serial_map {
+            if sc.abs() <= 1e-6 || sc.abs() >= 1.0 {
+                continue;
+            }
+            let pc = parallel_map.get(name).copied().unwrap_or_else(|| {
+                panic!("branch {name:?} present in serial but not parallel results")
+            });
+            let diff = (sc.abs() - pc.abs()).abs();
+            let tolerance = 0.01 * sc.abs();
+            assert!(
+                diff < tolerance,
+                "Current mismatch on branch {name:?}: serial={sc:.6}, parallel={pc:.6}, diff={diff:.6}"
+            );
+            compared += 1;
+        }
+        assert!(compared > 0, "no branch in the comparison window — vacuous test");
     }
 }
