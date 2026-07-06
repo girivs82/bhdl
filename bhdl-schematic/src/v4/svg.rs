@@ -538,6 +538,24 @@ impl Svg {
         self.solid(Rect { x0: x - 5.0, y0: y_net - 26.0, x1: x + 5.0, y1: y_net - 16.0 });
         self.place_label(x, y_net - 34.0, label, "ref");
     }
+    /// Waveform glyph: two cycles of a sine, 36×16, drawn in sim blue.
+    /// Pure decoration — registers as a solid so labels avoid it.
+    fn sine_glyph(&mut self, x: f64, y: f64) {
+        let mut pts = String::new();
+        for i in 0..=24 {
+            let t = i as f64 / 24.0;
+            let px = x + t * 36.0;
+            let py = y - (t * 2.0 * std::f64::consts::PI * 2.0).sin() * 8.0;
+            let _ = write!(pts, "{px:.1},{py:.1} ");
+        }
+        let _ = writeln!(
+            self.body,
+            r##"<polyline points="{}" fill="none" stroke="#06c" stroke-width="1.4"/>"##,
+            pts.trim_end()
+        );
+        self.grow(x + 40.0, y + 12.0);
+        self.solid(Rect { x0: x - 2.0, y0: y - 10.0, x1: x + 38.0, y1: y + 10.0 });
+    }
     /// Capacitor drawn horizontally: in left (x, y), out at (x+34, y).
     fn cap_h(&mut self, x: f64, y: f64) {
         self.solid(Rect { x0: x + 11.0, y0: y - 12.0, x1: x + 23.0, y1: y + 12.0 });
@@ -591,6 +609,16 @@ fn fmt_sim_i(i: f64) -> Option<String> {
         Some(format!("{:.0}µA", a * 1e6))
     } else {
         None
+    }
+}
+
+fn fmt_freq(f: f64) -> String {
+    if f >= 1e6 {
+        format!("{:.0}MHz", f / 1e6)
+    } else if f >= 1e3 {
+        format!("{:.0}kHz", f / 1e3)
+    } else {
+        format!("{f:.0}Hz")
     }
 }
 
@@ -1522,6 +1550,24 @@ fn draw_chain(
             svg.queue_sim(x + 4.0, spine + 8.0, &format!("= {}", fmt_sim_v(v)), "sim");
         }
     }
+    // Stimulus-response decoration: sine glyph + STIMULUS label at the
+    // input, drawn only when a transient actually ran on this chain.
+    let stim = decor
+        .sim
+        .and_then(|s| s.stimulus.as_ref())
+        .filter(|s| {
+            Some(s.input_net.as_str())
+                == netlist.nets.get(in_net).and_then(|n| n.name.as_deref())
+        });
+    if let Some(s) = stim {
+        svg.sine_glyph(x + 6.0, spine - 44.0);
+        svg.queue_sim(
+            x + 44.0,
+            spine - 48.0,
+            &format!("{} · {}", fmt_sim_v(s.vin_amplitude), fmt_freq(s.frequency_hz)),
+            "sim",
+        );
+    }
     svg.wire(&[(x, spine), (x + 24.0, spine)]);
     x += 24.0;
 
@@ -1570,6 +1616,28 @@ fn draw_chain(
         if chain_dc(v) {
             svg.queue_sim(x + 4.0, spine + 8.0, &format!("= {}", fmt_sim_v(v)), "sim");
         }
+    }
+    // MEASURED response at the output — the transient's amplitude over the
+    // final stimulus cycle, never nominal-gain arithmetic.
+    let stim_out = decor
+        .sim
+        .and_then(|s| s.stimulus.as_ref())
+        .filter(|s| {
+            Some(s.output_net.as_str())
+                == netlist.nets.get(out_net).and_then(|n| n.name.as_deref())
+        });
+    if let Some(s) = stim_out {
+        svg.sine_glyph(x - 44.0, spine - 44.0);
+        svg.queue_sim(
+            x - 2.0,
+            spine - 48.0,
+            &format!(
+                "= {}{}",
+                fmt_sim_v(s.vout_amplitude),
+                if s.clipped { " CLIPPED" } else { "" }
+            ),
+            "sim",
+        );
     }
 
     depth - y0 + 50.0

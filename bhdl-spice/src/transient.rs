@@ -38,7 +38,7 @@ use std::collections::HashMap;
 use nalgebra::{DMatrix, DVector};
 use petgraph::graph::{EdgeIndex, NodeIndex};
 
-use crate::circuit::{Circuit, DeviceKind, META_DCR, META_ESR};
+use crate::circuit::{Circuit, DeviceKind, META_DCR, META_ESR, META_VSAT_N, META_VSAT_P};
 use crate::companion_models::{
     capacitor_advance_v_c, capacitor_advance_v_c_bdf2,
     capacitor_bdf1_with_esr, capacitor_bdf2_with_esr,
@@ -444,8 +444,93 @@ fn take_one_step(
     y[(input_idx, input_idx)] = 1.0;
     rhs[input_idx] = stimulus.at(t_start + h);
 
-    // 3. Solve.
-    let solution = y.lu().solve(&rhs).ok_or(SpiceError::SingularMatrix)?;
+    // 2b. Ideal op-amps (`nodes = [inp, inn, out]`, value = A): the OUT
+    // node's KCL row is REPLACED by the amp equation
+    //     v_out − A·(v_p − v_n) = 0
+    // — the standard ideal-VCVS formulation (infinite input impedance: no
+    // stamps on the input rows; zero output impedance: the output row
+    // belongs to the amp, which supplies whatever current KCL needs).
+    // Rail saturation is an active-set iteration: solve, and any amp whose
+    // linear output leaves [vsat_n, vsat_p] gets its row pinned at that
+    // rail and the system re-solved. The pinned set only grows, so the
+    // loop terminates in at most n_amps + 1 solves.
+    struct OpAmpRow {
+        out: usize,
+        p: Option<usize>, // None = input tied to ground (0 V)
+        n_in: Option<usize>,
+        gain: f64,
+        vmax: f64,
+        vmin: f64,
+    }
+    let mut amps: Vec<OpAmpRow> = Vec::new();
+    for (_edge, branch) in circuit.branches() {
+        if branch.component_type != "OpAmp" || branch.nodes.len() != 3 {
+            continue;
+        }
+        let Some(out) = nodes.get(branch.nodes[2]) else { continue };
+        if out == input_idx {
+            continue; // the stimulus owns that row
+        }
+        amps.push(OpAmpRow {
+            out,
+            p: nodes.get(branch.nodes[0]),
+            n_in: nodes.get(branch.nodes[1]),
+            gain: branch.value,
+            vmax: branch.metadata.get(META_VSAT_P)
+                .and_then(|s| s.parse::<f64>().ok())
+                .unwrap_or(f64::INFINITY),
+            vmin: branch.metadata.get(META_VSAT_N)
+                .and_then(|s| s.parse::<f64>().ok())
+                .unwrap_or(f64::NEG_INFINITY),
+        });
+    }
+
+    // 3. Solve (with the op-amp active-set loop when amps are present).
+    let solution = if amps.is_empty() {
+        y.lu().solve(&rhs).ok_or(SpiceError::SingularMatrix)?
+    } else {
+        let mut pinned: Vec<Option<f64>> = vec![None; amps.len()];
+        loop {
+            let mut y2 = y.clone();
+            let mut rhs2 = rhs.clone();
+            for (k, amp) in amps.iter().enumerate() {
+                for j in 0..n {
+                    y2[(amp.out, j)] = 0.0;
+                }
+                y2[(amp.out, amp.out)] = 1.0;
+                match pinned[k] {
+                    Some(rail) => rhs2[amp.out] = rail,
+                    None => {
+                        if let Some(p) = amp.p {
+                            y2[(amp.out, p)] -= amp.gain;
+                        }
+                        if let Some(m) = amp.n_in {
+                            y2[(amp.out, m)] += amp.gain;
+                        }
+                        rhs2[amp.out] = 0.0;
+                    }
+                }
+            }
+            let sol = y2.lu().solve(&rhs2).ok_or(SpiceError::SingularMatrix)?;
+            let mut grew = false;
+            for (k, amp) in amps.iter().enumerate() {
+                if pinned[k].is_some() {
+                    continue;
+                }
+                let v = sol[amp.out];
+                if v > amp.vmax {
+                    pinned[k] = Some(amp.vmax);
+                    grew = true;
+                } else if v < amp.vmin {
+                    pinned[k] = Some(amp.vmin);
+                    grew = true;
+                }
+            }
+            if !grew {
+                break sol;
+            }
+        }
+    };
 
     // 4. Build the post-step state by advancing each reactive device's
     //    internal variable from the solved node voltages.
@@ -1664,4 +1749,94 @@ mod tests {
             "at plate-min the grid should be above −8 V, got {:.3} V", grid[arg_pmin]
         );
     }
+
+    // ── Ideal op-amp rows in the linear transient (task #41) ────────────
+
+    /// Unity buffer: INN wired to OUT, 100 mV 1 kHz sine at INP → the
+    /// output must track the input (closed-loop gain 1, error ~1/A).
+    #[test]
+    fn opamp_unity_buffer_tracks_the_input() {
+        let mut circuit = Circuit::new();
+        circuit.add_node("Vin".to_string(), None);
+        circuit.add_node("Vout".to_string(), None);
+        circuit.add_node("GND".to_string(), None);
+        // Load so Vout's row would otherwise be floating KCL.
+        circuit.add_branch("RL".to_string(), "Vout", "GND", "Resistor".to_string(), 10_000.0, None);
+        circuit.add_opamp_branch(
+            "U1".to_string(), "Vin", "Vout", "Vout", 2e5, None, HashMap::new());
+
+        let params = TransientParams::new(
+            "Vin",
+            Stimulus::Sine { amplitude: 0.1, frequency_hz: 1000.0, dc_offset: 0.0 },
+            vec!["Vout"],
+            2e-3,
+            5e-6,
+        );
+        let result = run_transient(&circuit, &params).unwrap();
+        let vout = &result.probe_voltages["Vout"];
+        let max = vout.iter().cloned().fold(f64::MIN, f64::max);
+        let min = vout.iter().cloned().fold(f64::MAX, f64::min);
+        assert!((max - 0.1).abs() < 1e-3, "buffer peak {max:.4} V, expected 0.1 V");
+        assert!((min + 0.1).abs() < 1e-3, "buffer trough {min:.4} V, expected -0.1 V");
+    }
+
+    /// Non-inverting amp, G = 1 + 90k/10k = 10: 100 mV in → 1 V out.
+    /// The feedback divider closes the loop through the amp row.
+    #[test]
+    fn opamp_noninverting_gain_of_ten() {
+        let mut circuit = Circuit::new();
+        circuit.add_node("Vin".to_string(), None);
+        circuit.add_node("Vout".to_string(), None);
+        circuit.add_node("FB".to_string(), None);
+        circuit.add_node("GND".to_string(), None);
+        circuit.add_branch("Rf".to_string(), "Vout", "FB", "Resistor".to_string(), 90_000.0, None);
+        circuit.add_branch("Rg".to_string(), "FB", "GND", "Resistor".to_string(), 10_000.0, None);
+        circuit.add_opamp_branch(
+            "U1".to_string(), "Vin", "FB", "Vout", 2e5, None, HashMap::new());
+
+        let params = TransientParams::new(
+            "Vin",
+            Stimulus::Sine { amplitude: 0.1, frequency_hz: 1000.0, dc_offset: 0.0 },
+            vec!["Vout"],
+            2e-3,
+            5e-6,
+        );
+        let result = run_transient(&circuit, &params).unwrap();
+        let vout = &result.probe_voltages["Vout"];
+        let max = vout.iter().cloned().fold(f64::MIN, f64::max);
+        assert!((max - 1.0).abs() < 5e-3, "gain-10 peak {max:.4} V, expected 1.0 V");
+    }
+
+    /// Rail saturation: gain-10 with a 2 V input sine would want ±20 V,
+    /// but ±12 V rails clamp it — the active-set iteration must pin the
+    /// output at the rail, not let the linear row overshoot.
+    #[test]
+    fn opamp_output_clamps_at_the_rails() {
+        let mut circuit = Circuit::new();
+        circuit.add_node("Vin".to_string(), None);
+        circuit.add_node("Vout".to_string(), None);
+        circuit.add_node("FB".to_string(), None);
+        circuit.add_node("GND".to_string(), None);
+        circuit.add_branch("Rf".to_string(), "Vout", "FB", "Resistor".to_string(), 90_000.0, None);
+        circuit.add_branch("Rg".to_string(), "FB", "GND", "Resistor".to_string(), 10_000.0, None);
+        let mut meta = HashMap::new();
+        meta.insert(META_VSAT_P.to_string(), "12".to_string());
+        meta.insert(META_VSAT_N.to_string(), "-12".to_string());
+        circuit.add_opamp_branch("U1".to_string(), "Vin", "FB", "Vout", 2e5, None, meta);
+
+        let params = TransientParams::new(
+            "Vin",
+            Stimulus::Sine { amplitude: 2.0, frequency_hz: 1000.0, dc_offset: 0.0 },
+            vec!["Vout"],
+            2e-3,
+            5e-6,
+        );
+        let result = run_transient(&circuit, &params).unwrap();
+        let vout = &result.probe_voltages["Vout"];
+        let max = vout.iter().cloned().fold(f64::MIN, f64::max);
+        let min = vout.iter().cloned().fold(f64::MAX, f64::min);
+        assert!((max - 12.0).abs() < 1e-6, "clipped peak {max:.4} V, expected exactly 12 V");
+        assert!((min + 12.0).abs() < 1e-6, "clipped trough {min:.4} V, expected exactly -12 V");
+    }
 }
+

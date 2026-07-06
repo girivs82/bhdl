@@ -887,6 +887,7 @@ mod tests {
             instance_power: HashMap::new(),
             power_nets: HashSet::new(),
             internal_nets: HashSet::new(),
+            stimulus: None,
         };
         ann.net_voltages.insert("V5_BUCK".to_string(), 5.0);
         ann.net_voltages.insert("V3_3".to_string(), 3.3);
@@ -1032,6 +1033,7 @@ mod tests {
             instance_power: HashMap::new(),
             power_nets: HashSet::new(),
             internal_nets: HashSet::new(),
+            stimulus: None,
         };
         let results = size_output_filter_caps(&mut nl, &ann);
         assert!(results.is_empty(), "no candidates = no results");

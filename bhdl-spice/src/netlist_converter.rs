@@ -448,6 +448,72 @@ impl NetlistToSpiceConverter {
             return Ok(());
         }
 
+        // Op-amps become a three-terminal ideal-VCVS branch the linear
+        // transient stamps as a replaced OUT row (v_out = A·(v+ − v−),
+        // clamped to the supply rails). Until this branch existed the
+        // converter dropped amps entirely — every "solved" signal chain
+        // was an amplifier-free passive network (task #41 finding).
+        if class == "opamp" {
+            let pin_info = Self::get_pin_net_info(netlist, instance_id);
+            let net_of = |pin: &str| {
+                pin_info
+                    .iter()
+                    .find(|p| p.pin_name.eq_ignore_ascii_case(pin))
+                    .map(|p| p.net_name.clone())
+            };
+            let (Some(inp), Some(inn), Some(out)) =
+                (net_of("INP"), net_of("INN"), net_of("OUT"))
+            else {
+                warn!(
+                    "Op-amp {} missing a resolvable INP/INN/OUT net — no SPICE device emitted",
+                    instance.name
+                );
+                return Ok(());
+            };
+            // Open-loop gain: datasheet attribute when declared, else the
+            // documented ideal default (2e5 ≈ LM741 typ; closed-loop results
+            // are insensitive to A at feedback-network gains).
+            let gain = instance
+                .attributes
+                .get("spice_aol")
+                .or_else(|| instance.attributes.get("open_loop_gain"))
+                .and_then(|s| s.trim().parse::<f64>().ok())
+                .unwrap_or(2e5);
+            // Saturation = the REAL supply rails this instance is wired to
+            // (net-class voltages), not an assumed headroom.
+            let mut meta = std::collections::HashMap::new();
+            let rail_v = |pin: &str| {
+                pin_info
+                    .iter()
+                    .find(|p| p.pin_name.eq_ignore_ascii_case(pin))
+                    .and_then(|p| netlist.nets.get(p.net_id))
+                    .and_then(|n| match n.net_class {
+                        bhdl_netlist::types::NetClass::Power { voltage, .. } => Some(voltage),
+                        _ => None,
+                    })
+            };
+            if let Some(v) = rail_v("VCC") {
+                meta.insert(crate::circuit::META_VSAT_P.to_string(), v.to_string());
+            }
+            if let Some(v) = rail_v("VEE") {
+                meta.insert(crate::circuit::META_VSAT_N.to_string(), v.to_string());
+            }
+            info!(
+                "Added op-amp {}: {}→{} (INN {}), A={:.0e}",
+                instance.name, inp, out, inn, gain
+            );
+            circuit.add_opamp_branch(
+                instance.name.clone(),
+                &inp,
+                &inn,
+                &out,
+                gain,
+                Some(instance_id),
+                meta,
+            );
+            return Ok(());
+        }
+
         // Extract model based on available information
         let extracted_model = self.extract_model_for_instance(
             &instance.name,

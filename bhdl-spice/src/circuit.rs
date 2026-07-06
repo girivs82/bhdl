@@ -51,6 +51,10 @@ pub const META_TOLERANCE: &str = "tolerance";
 pub const META_POWER_RATING: &str = "power_rating";
 /// Equivalent series resistance for capacitors, in ohms.
 pub const META_ESR: &str = "esr";
+/// Op-amp positive output saturation (volts) — the positive supply rail.
+pub const META_VSAT_P: &str = "vsat_p";
+/// Op-amp negative output saturation (volts) — the negative supply rail.
+pub const META_VSAT_N: &str = "vsat_n";
 /// Capacitor or device voltage rating, in volts.
 pub const META_VOLTAGE_RATING: &str = "voltage_rating";
 /// Inductor DC resistance, in ohms.
@@ -302,6 +306,44 @@ impl Circuit {
         };
 
         let idx = self.graph.add_edge(n1, n2, branch);
+        self.branch_map.insert(name, idx);
+        idx
+    }
+
+    /// Add an ideal op-amp as a THREE-terminal branch: `nodes = [inp, inn,
+    /// out]`, `value` = open-loop gain A. The linear transient solver
+    /// replaces the OUT node's KCL row with `v_out − A·(v_p − v_n) = 0`
+    /// (infinite input impedance, zero output impedance), clamped to the
+    /// META_VSAT_P / META_VSAT_N rails when present. The petgraph edge runs
+    /// inp→out; solvers must read `branch.nodes`, not the edge endpoints.
+    pub fn add_opamp_branch(
+        &mut self,
+        name: String,
+        inp: &str,
+        inn: &str,
+        out: &str,
+        open_loop_gain: f64,
+        instance_id: Option<InstanceId>,
+        metadata: HashMap<String, String>,
+    ) -> EdgeIndex {
+        let n_p = self.node_map.get(inp).copied()
+            .unwrap_or_else(|| self.add_node(inp.to_string(), None));
+        let n_n = self.node_map.get(inn).copied()
+            .unwrap_or_else(|| self.add_node(inn.to_string(), None));
+        let n_o = self.node_map.get(out).copied()
+            .unwrap_or_else(|| self.add_node(out.to_string(), None));
+
+        let branch = Branch {
+            name: name.clone(),
+            instance_id,
+            component_type: "OpAmp".to_string(),
+            value: open_loop_gain,
+            current: None,
+            nodes: vec![n_p, n_n, n_o],
+            metadata,
+        };
+
+        let idx = self.graph.add_edge(n_p, n_o, branch);
         self.branch_map.insert(name, idx);
         idx
     }

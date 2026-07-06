@@ -1239,7 +1239,9 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
                     Ok(result) => {
                         info!("GLACIER DC simulation converged in {} iterations (error: {:.2e})",
                               result.iterations, result.final_error);
-                        Some(build_simulation_annotations(&result, &circuit_ref))
+                        let mut ann = build_simulation_annotations(&result, &circuit_ref);
+                        ann.stimulus = run_chain_stimulus(&netlist, &circuit_ref);
+                        Some(ann)
                     }
                     Err(e) => {
                         eprintln!("{}", format!("  DC simulation failed: {} (schematic will lack V/I annotations)", e).yellow());
@@ -2634,6 +2636,82 @@ async fn cmd_doc(
 const POWER_THRESHOLD_AMPS: f64 = 1e-3;
 
 /// Map GLACIER DC solver results (NodeIndex/EdgeIndex) back to schematic-level
+/// Stimulus-response experiment over the sheet's signal chain (task #41):
+/// drive a 100 mV / 1 kHz sine at the chain's input net through the linear
+/// transient solver (which stamps the ideal op-amp rows) and MEASURE the
+/// output amplitude over the final cycle. Returns None when the sheet has
+/// no op-amp chain or the transient fails — an absent annotation, never a
+/// fabricated one.
+fn run_chain_stimulus(
+    netlist: &bhdl_netlist::netlist::Netlist,
+    circuit: &bhdl_spice::circuit::Circuit,
+) -> Option<bhdl_schematic::StimulusResponse> {
+    let plan = bhdl_schematic::v4::classify_sheet(netlist);
+    let chain = plan.chains.first()?;
+    let net_name =
+        |id: bhdl_netlist::types::NetId| netlist.nets.get(id).and_then(|n| n.name.clone());
+    let input_net: String = net_name(*chain.spine_nets.first()?)?;
+    let output_net: String = net_name(*chain.spine_nets.last()?)?;
+
+    const AMP: f64 = 0.1; // 100 mV — inside the rails at any sane gain
+    const FREQ: f64 = 1_000.0;
+    let params = bhdl_spice::transient::TransientParams::new(
+        input_net.clone(),
+        bhdl_spice::transient::Stimulus::Sine {
+            amplitude: AMP,
+            frequency_hz: FREQ,
+            dc_offset: 0.0,
+        },
+        vec![input_net.clone(), output_net.clone()],
+        5.0 / FREQ,       // five cycles — settle, then measure the last
+        1.0 / FREQ / 200.0, // 200 points per cycle
+    );
+    let result = match bhdl_spice::transient::run_transient(circuit, &params) {
+        Ok(r) => r,
+        Err(e) => {
+            info!("chain stimulus transient failed: {e} — no waveform annotation");
+            return None;
+        }
+    };
+    let vout = result.probe_voltages.get(&output_net)?;
+    if vout.is_empty() {
+        return None;
+    }
+    // Final cycle = last 200 samples.
+    let tail = &vout[vout.len().saturating_sub(200)..];
+    let max = tail.iter().cloned().fold(f64::MIN, f64::max);
+    let min = tail.iter().cloned().fold(f64::MAX, f64::min);
+    let vout_amplitude = (max - min) / 2.0;
+    // Clipped = the measured extremes sit ON an op-amp rail (within 1 mV).
+    let clipped = circuit.branches().any(|(_, b)| {
+        b.component_type == "OpAmp"
+            && [
+                (bhdl_spice::circuit::META_VSAT_P, max),
+                (bhdl_spice::circuit::META_VSAT_N, min),
+            ]
+            .iter()
+            .any(|(key, v)| {
+                b.metadata
+                    .get(*key)
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .map(|rail| (v - rail).abs() < 1e-3)
+                    .unwrap_or(false)
+            })
+    });
+    info!(
+        "chain stimulus: {AMP} V @ {FREQ} Hz at {input_net} -> {vout_amplitude:.4} V at {output_net}{}",
+        if clipped { " (CLIPPED)" } else { "" }
+    );
+    Some(bhdl_schematic::StimulusResponse {
+        input_net,
+        output_net,
+        frequency_hz: FREQ,
+        vin_amplitude: AMP,
+        vout_amplitude,
+        clipped,
+    })
+}
+
 /// net names and instance names, producing a `SimulationAnnotations` struct
 /// that the JS renderer can consume for wire coloring and hover annotations.
 fn build_simulation_annotations(

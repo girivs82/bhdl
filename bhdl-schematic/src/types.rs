@@ -240,6 +240,25 @@ pub struct SimulationAnnotations {
     /// The renderer should suppress annotations on these to avoid overlapping labels.
     #[serde(default, skip_serializing_if = "HashSet::is_empty")]
     pub internal_nets: HashSet<String>,
+    /// Stimulus-response measurement over a signal chain: a sine driven at
+    /// the chain input by the transient solver, its output amplitude
+    /// MEASURED at the chain output (never derived from nominal gain).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stimulus: Option<StimulusResponse>,
+}
+
+/// One transient stimulus-response run over a signal chain.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StimulusResponse {
+    pub input_net: String,
+    pub output_net: String,
+    pub frequency_hz: f64,
+    /// Stimulus amplitude applied at the input (the experiment parameter).
+    pub vin_amplitude: f64,
+    /// Output amplitude measured over the final stimulus cycle.
+    pub vout_amplitude: f64,
+    /// True when the output ran into an op-amp rail during the run.
+    pub clipped: bool,
 }
 
 /// A power rail shown at the top/bottom of the schematic.
