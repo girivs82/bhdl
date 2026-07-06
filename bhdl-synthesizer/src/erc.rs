@@ -1731,3 +1731,201 @@ mod tests {
         assert!(ctx.lookup("vin").is_err()); // bare names unresolvable here
     }
 }
+
+// ──────────────── ERC027 — amplifier stage-gain consistency ────────────────
+
+/// ERC027 — the gain triangle on op-amp stages: DERIVED (evaluated from the
+/// placed feedback network), MEASURED (a small-signal stimulus transient
+/// through the behavioral amp models — 100 mV / 1 kHz at the chain input,
+/// per-stage amplitude ratio OUT/INP over the final cycle), and DECLARED
+/// (a `gain`/`gain_stage` intent when the designer stated one). Any pair
+/// disagreeing by more than 25% is an Error carrying every number.
+///
+/// Real-Data skips: a stage whose feedback the classifier can't derive
+/// contributes only measured-vs-declared; an unexcited stage (input
+/// amplitude < 5 mV) or one whose output sits on its own rail (clipped —
+/// amplitude ratios are meaningless there) is skipped; no chain, no
+/// convertible circuit, or a failed transient → no violations invented.
+/// The linear transient ignores diode branches — valid for this small-signal
+/// probe (output clamps are reverse-biased far from the rails).
+pub fn check_stage_gain(netlist: &Netlist, analysis: &AnalysisResult) -> Vec<DRCViolation> {
+    use bhdl_schematic::v4::classify::ChainElem;
+    use bhdl_spice::transient::{run_transient, Stimulus, TransientParams};
+
+    let mut out = Vec::new();
+    let plan = bhdl_schematic::v4::classify_sheet(netlist);
+    if plan.chains.is_empty() {
+        return out;
+    }
+    let mut converter = bhdl_spice::NetlistToSpiceConverter::new();
+    let Ok(circuit) = converter.convert(netlist) else { return out };
+
+    let net_nm = |id: NetId| netlist.nets.get(id).and_then(|n| n.name.clone());
+    let inst_by_name =
+        |n: &str| netlist.instances.iter().find(|(_, i)| i.name == n);
+    let value_of = |n: &str| -> Option<f64> {
+        inst_by_name(n)
+            .and_then(|(_, i)| i.attributes.get("value").cloned())
+            .and_then(|v| parse_si_txt(&v))
+    };
+    let class_of = |n: &str| -> String {
+        inst_by_name(n)
+            .and_then(|(_, i)| attr_of(netlist, analysis, i, "component_class"))
+            .unwrap_or_default()
+    };
+    // Declared gain intent on the amp or any feedback part.
+    const GAIN_INTENTS: [&str; 4] = ["gain", "gain_stage", "amplification", "amplifier"];
+    let declared_gain = |parts: &[&str]| -> Option<f64> {
+        parts.iter().find_map(|p| {
+            let (_, i) = inst_by_name(p)?;
+            let name = i.attributes.get("intent_name")?;
+            if !GAIN_INTENTS.contains(&name.as_str()) {
+                return None;
+            }
+            ["intent_gain", "intent_g", "intent_param_0"]
+                .iter()
+                .find_map(|k| i.attributes.get(*k).and_then(|v| parse_si_txt(v)))
+        })
+    };
+    let rails_of = |inst_name: &str| -> Vec<f64> {
+        let Some((iid, _)) = inst_by_name(inst_name) else { return Vec::new() };
+        netlist
+            .pin_instances
+            .values()
+            .filter(|pi| pi.instance == iid)
+            .filter_map(|pi| netlist.nets.get(pi.net?))
+            .filter_map(|n| match n.net_class {
+                NetClass::Power { voltage, .. } => Some(voltage),
+                _ => None,
+            })
+            .collect()
+    };
+
+    for chain in &plan.chains {
+        // Per-amp: (name, inp net, out net, derived G).
+        struct Stage<'a> {
+            inst: &'a str,
+            inp: String,
+            outn: String,
+            derived: Option<f64>,
+            declared: Option<f64>,
+        }
+        let mut stages: Vec<Stage> = Vec::new();
+        for (i, elem) in chain.elems.iter().enumerate() {
+            let ChainElem::Amp { inst, fb_parts, gnd_leg, unity } = elem else { continue };
+            let (Some(inp), Some(outn)) = (
+                net_nm(chain.spine_nets[i]),
+                net_nm(chain.spine_nets[i + 1]),
+            ) else {
+                continue;
+            };
+            let derived = if *unity {
+                Some(1.0)
+            } else {
+                let rf = fb_parts.iter().find(|p| class_of(p) == "resistor");
+                let rg = gnd_leg.iter().find(|p| class_of(p) == "resistor");
+                match (rf, rg) {
+                    (Some(rf), Some(rg)) => match (value_of(rf), value_of(rg)) {
+                        (Some(vf), Some(vg)) if vg > 0.0 => Some(1.0 + vf / vg),
+                        _ => None,
+                    },
+                    (Some(_), None) if gnd_leg.is_empty() => Some(1.0),
+                    _ => None,
+                }
+            };
+            let mut intent_hosts: Vec<&str> = vec![inst.as_str()];
+            intent_hosts.extend(fb_parts.iter().map(String::as_str));
+            intent_hosts.extend(gnd_leg.iter().map(String::as_str));
+            stages.push(Stage {
+                inst,
+                inp,
+                outn,
+                derived,
+                declared: declared_gain(&intent_hosts),
+            });
+        }
+        if stages.is_empty() {
+            continue;
+        }
+        let Some(input_net) = chain.spine_nets.first().copied().and_then(net_nm) else {
+            continue;
+        };
+
+        const AMP: f64 = 0.1;
+        const FREQ: f64 = 1_000.0;
+        let mut probes: Vec<String> = vec![input_net.clone()];
+        for s in &stages {
+            for n in [&s.inp, &s.outn] {
+                if !probes.contains(n) {
+                    probes.push(n.clone());
+                }
+            }
+        }
+        let params = TransientParams::new(
+            input_net,
+            Stimulus::Sine { amplitude: AMP, frequency_hz: FREQ, dc_offset: 0.0 },
+            probes,
+            5.0 / FREQ,
+            1.0 / FREQ / 200.0,
+        );
+        let Ok(result) = run_transient(&circuit, &params) else { continue };
+        let tail_amp = |net: &str| -> Option<(f64, f64, f64)> {
+            let v = result.probe_voltages.get(net)?;
+            let tail = &v[v.len().saturating_sub(200)..];
+            let max = tail.iter().cloned().fold(f64::MIN, f64::max);
+            let min = tail.iter().cloned().fold(f64::MAX, f64::min);
+            Some(((max - min) / 2.0, max, min))
+        };
+
+        for s in &stages {
+            let Some((a_in, _, _)) = tail_amp(&s.inp) else { continue };
+            let Some((a_out, omax, omin)) = tail_amp(&s.outn) else { continue };
+            if a_in < 5e-3 {
+                continue; // unexcited — a ratio of noise is not a measurement
+            }
+            let clipped = rails_of(s.inst)
+                .iter()
+                .any(|r| (omax - r).abs() < 1e-3 || (omin - r).abs() < 1e-3);
+            let measured = if clipped { None } else { Some(a_out / a_in) };
+
+            // The triangle: every resolvable pair must agree within 25%.
+            let pairs: [(&str, Option<f64>, &str, Option<f64>); 3] = [
+                ("derived", s.derived, "measured", measured),
+                ("declared", s.declared, "derived", s.derived),
+                ("declared", s.declared, "measured", measured),
+            ];
+            for (an, a, bn, b) in pairs {
+                let (Some(a), Some(b)) = (a, b) else { continue };
+                if a <= 0.0 || b <= 0.0 {
+                    continue;
+                }
+                let ratio = if a > b { a / b } else { b / a };
+                if ratio > 1.25 {
+                    let (iid, _) = inst_by_name(s.inst).expect("stage instance exists");
+                    out.push(DRCViolation {
+                        rule_id: "ERC027".into(),
+                        rule_name: "Stage-gain consistency".into(),
+                        category: RuleCategory::Electrical,
+                        severity: ViolationSeverity::Error,
+                        description: format!(
+                            "{}: {an} gain ×{a:.2} disagrees with {bn} gain ×{b:.2} \
+                             ({:.0}% apart; derived {}, declared {}, measured {})",
+                            s.inst,
+                            (ratio - 1.0) * 100.0,
+                            s.derived.map(|g| format!("×{g:.2}")).unwrap_or_else(|| "—".into()),
+                            s.declared.map(|g| format!("×{g:.2}")).unwrap_or_else(|| "—".into()),
+                            measured.map(|g| format!("×{g:.2}")).unwrap_or_else(|| "—".into()),
+                        ),
+                        location: ViolationLocation::Component(iid),
+                        fix_suggestion: "re-size the feedback network for the stated gain, \
+                             correct the intent, or fix the wiring the simulation is seeing"
+                            .into(),
+                        standard_reference: None,
+                    });
+                    break; // one violation per stage carries the whole triangle
+                }
+            }
+        }
+    }
+    out
+}

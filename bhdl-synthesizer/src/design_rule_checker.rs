@@ -244,6 +244,12 @@ impl DesignRuleChecker {
                 "Part tolerance coarser than the precision_measurement path's declared accuracy",
                 crate::erc::check_grade_mismatch,
             ),
+            (
+                "ERC027",
+                "Stage-gain consistency",
+                "Op-amp stage gain triangle: derived (placed feedback) vs measured (stimulus transient) vs declared (gain intent)",
+                crate::erc::check_stage_gain,
+            ),
         ] {
             self.rules.push(DesignRule {
                 id: id.to_string(),
