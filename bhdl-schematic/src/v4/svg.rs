@@ -1351,7 +1351,7 @@ pub fn render_sheet_svg(
         );
         let mut x = 40.0;
         for inst in &plan.residue {
-            let ry = y + 30.0;
+            let ry = y + 44.0;
             svg.box_h(x, ry, 56.0);
             svg.text(x + 4.0, ry - 14.0, &format!("{} ({inst})", label_of(decor, inst)), "ref");
             // Net flags for each connected pin.
@@ -1372,7 +1372,7 @@ pub fn render_sheet_svg(
             }
             x += 150.0;
         }
-        y += 110.0;
+        y += 124.0;
     }
 
     svg.flush_sims();

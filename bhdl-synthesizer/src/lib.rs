@@ -1762,6 +1762,7 @@ impl NetlistGenerator {
                     // Store capacitor value as instance attribute
                     if let Some(instance) = self.netlist.instances.get_mut(inst_id) {
                         instance.attributes.insert("value".to_string(), cap.value.clone());
+                        instance.attributes.insert("component_class".to_string(), "capacitor".to_string());
                         if let Some(ref near_comp) = cap.near_component {
                             instance.attributes.insert("placement".to_string(), format!("near {}", near_comp));
                             info!("    Placement: near {}", near_comp);

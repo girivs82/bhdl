@@ -1290,6 +1290,8 @@ mod tests {
             power_w: None,
             objective: None,
             quantity: None,
+            mpn_query: None,
+            mpn_prefer: None,
         }
     }
 
