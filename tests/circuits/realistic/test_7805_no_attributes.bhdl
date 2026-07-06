@@ -22,7 +22,7 @@ board PowerSupply_7805 {
     protected_vin -> c_in2: Cap(0.1µF).1;
     
     // Linear regulator circuit
-    protected_vin -> reg: LM7805().IN;
+    protected_vin -> reg: LM7805().VIN;
     reg.GND -> GND;
     reg.VOUT -> VCC;
     

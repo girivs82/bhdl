@@ -169,19 +169,118 @@ pub fn classify_sheet(netlist: &Netlist) -> SheetPlan {
         // Candidate stage entries on this rail: ICs entered by a power-in
         // pin, or series two-terminal parts (not shunts).
         let members = pins_by_net.get(&source).cloned().unwrap_or_default();
+        // Entries: (leading series chain, entry net, IC, in_pin). Direct
+        // attachments first; else walk THROUGH series two-terminals (fuse,
+        // ferrite — the protection-chain idiom: VIN → fuse → TVS-guarded
+        // net → regulator) up to 3 hops looking for an IC power-in.
+        let mut entries: Vec<(Vec<InstanceId>, NetId, InstanceId, String)> = Vec::new();
         for (inst, in_pin, dir) in &members {
             if claimed.contains(inst) || is_phantom(netlist, *inst) {
                 continue;
             }
-            // ICs only: enter by a Power-direction pin (`power in`).
-            if !matches!(dir, PinDirection::Power) {
+            if matches!(dir, PinDirection::Power) {
+                entries.push((Vec::new(), source, *inst, in_pin.clone()));
+            }
+        }
+        if entries.is_empty() {
+            // Leading-series search.
+            let mut chain: Vec<InstanceId> = Vec::new();
+            let mut cur = source;
+            let mut seen: HashSet<NetId> = HashSet::from([source]);
+            'lead: for _hop in 0..3 {
+                let mems = pins_by_net.get(&cur).cloned().unwrap_or_default();
+                // An IC power-in on this net?
+                for (m, mp, md) in &mems {
+                    if !claimed.contains(m)
+                        && !is_phantom(netlist, *m)
+                        && matches!(md, PinDirection::Power)
+                        && cur != source
+                    {
+                        entries.push((chain.clone(), cur, *m, mp.clone()));
+                        break 'lead;
+                    }
+                }
+                // Else: exactly one series two-terminal onward.
+                let mut next: Option<(InstanceId, NetId)> = None;
+                for (m, _mp, _md) in &mems {
+                    if claimed.contains(m) || is_phantom(netlist, *m) || chain.contains(m) {
+                        continue;
+                    }
+                    let Some(other) = shunt_other_side(netlist, *m, cur) else { continue };
+                    if is_ground_net(netlist, other) || seen.contains(&other) {
+                        continue;
+                    }
+                    if next.replace((*m, other)).is_some() {
+                        break 'lead; // ambiguous fan — don't guess
+                    }
+                }
+                let Some((m, other)) = next else { break };
+                chain.push(m);
+                seen.insert(other);
+                cur = other;
+            }
+        }
+        for (leading, entry_net, inst, in_pin) in entries {
+            if claimed.contains(&inst) {
                 continue;
             }
-            let Some(stage) =
-                walk_stage(netlist, &pins_by_net, source, *inst, in_pin, &claimed)
+            let Some(mut stage) =
+                walk_stage(netlist, &pins_by_net, entry_net, inst, &in_pin, &claimed)
             else {
                 continue;
             };
+            // Leading chain becomes the backbone head; the stage's source
+            // is the REAL rail; shunts on the leading intermediate nets
+            // (the TVS on the protected node) are collected.
+            if !leading.is_empty() {
+                let mut head: Vec<BackboneElem> = leading
+                    .iter()
+                    .map(|m| BackboneElem::Series { inst: inst_name(netlist, *m) })
+                    .collect();
+                head.extend(stage.backbone);
+                stage.backbone = head;
+                let mut lead_net = source;
+                for m in &leading {
+                    for (mm, _p, _d) in pins_by_net.get(&lead_net).cloned().unwrap_or_default() {
+                        if mm == *m || claimed.contains(&mm) || is_phantom(netlist, mm) {
+                            continue;
+                        }
+                        if leading.contains(&mm) {
+                            continue;
+                        }
+                        if let Some(o) = shunt_other_side(netlist, mm, lead_net) {
+                            if is_ground_net(netlist, o) {
+                                stage.shunts.push(Shunt {
+                                    inst: inst_name(netlist, mm),
+                                    tap: lead_net,
+                                });
+                            }
+                        }
+                    }
+                    lead_net = shunt_other_side(netlist, *m, lead_net)
+                        .expect("leading element is two-terminal");
+                }
+                // Shunts on the IC entry net itself.
+                for (mm, _p, _d) in pins_by_net.get(&lead_net).cloned().unwrap_or_default() {
+                    if claimed.contains(&mm) || is_phantom(netlist, mm) || mm == inst {
+                        continue;
+                    }
+                    if stage.backbone.iter().any(|e| e.inst() == inst_name(netlist, mm))
+                        || stage.shunts.iter().any(|x| x.inst == inst_name(netlist, mm))
+                    {
+                        continue;
+                    }
+                    if let Some(o) = shunt_other_side(netlist, mm, lead_net) {
+                        if is_ground_net(netlist, o) {
+                            stage.shunts.push(Shunt {
+                                inst: inst_name(netlist, mm),
+                                tap: lead_net,
+                            });
+                        }
+                    }
+                }
+                stage.source_rail = source;
+            }
             for e in &stage.backbone {
                 if let Some(id) = find_inst(netlist, e.inst()) {
                     claimed.insert(id);
@@ -605,6 +704,78 @@ mod tests {
         wire(&mut n, sw, c_boot, "2");
 
         n
+    }
+
+    #[test]
+    fn enters_through_a_leading_series_chain() {
+        // rail VIN → fuse → pv (TVS shunt to GND) → ldo(VIN in, VOUT out)
+        // → VOUT rail with an output cap. The IC is NOT on the rail.
+        let mut n = Netlist::new();
+        let ldo_m = n.add_module("Ldo".into(), ModuleKind::PhysicalComponent);
+        n.add_pin(ldo_m, "VIN".into(), PinDirection::Power, PinType::Power);
+        n.add_pin(ldo_m, "VOUT".into(), PinDirection::Out, PinType::Power);
+        n.add_pin(ldo_m, "GND".into(), PinDirection::Ground, PinType::Ground);
+        let two = |n: &mut Netlist, name: &str| {
+            let m = n.add_module(name.into(), ModuleKind::PhysicalComponent);
+            n.add_pin(m, "1".into(), PinDirection::InOut, PinType::Passive);
+            n.add_pin(m, "2".into(), PinDirection::InOut, PinType::Passive);
+            m
+        };
+        let fuse_m = two(&mut n, "Fuse");
+        let tvs_m = two(&mut n, "TVSDiode");
+        let cap_m = two(&mut n, "Cap");
+        let mut place = |n: &mut Netlist, name: &str, m| {
+            let id = n.add_instance(name.into(), m).unwrap();
+            n.create_pin_instances(id).unwrap();
+            id
+        };
+        let ldo = place(&mut n, "reg", ldo_m);
+        let fuse = place(&mut n, "fuse", fuse_m);
+        let tvs = place(&mut n, "tvs", tvs_m);
+        let cout = place(&mut n, "c_out", cap_m);
+        let vin = n.add_net_with_class(
+            Some("VIN".into()),
+            NetClass::Power { voltage: 12.0, current: Some(1.0) },
+        );
+        let vout = n.add_net_with_class(
+            Some("VOUT".into()),
+            NetClass::Power { voltage: 5.0, current: Some(0.5) },
+        );
+        let pv = n.add_net(Some("pv".into()));
+        let gnd = n.add_net_with_class(Some("GND".into()), NetClass::Ground);
+        let pi = |n: &Netlist, inst, pin: &str| {
+            n.pin_instances
+                .iter()
+                .find(|(_, p)| {
+                    p.instance == inst
+                        && n.pins.get(p.pin_def).map(|d| d.name == pin).unwrap_or(false)
+                })
+                .map(|(id, _)| id)
+                .unwrap()
+        };
+        let mut wire = |n: &mut Netlist, net, inst, pin: &str| {
+            let id = pi(n, inst, pin);
+            n.connect(net, ConnectionPoint::PinInstance(id)).unwrap();
+            n.pin_instances.get_mut(id).unwrap().net = Some(net);
+        };
+        wire(&mut n, vin, fuse, "1");
+        wire(&mut n, pv, fuse, "2");
+        wire(&mut n, pv, tvs, "1");
+        wire(&mut n, gnd, tvs, "2");
+        wire(&mut n, pv, ldo, "VIN");
+        wire(&mut n, gnd, ldo, "GND");
+        wire(&mut n, vout, ldo, "VOUT");
+        wire(&mut n, vout, cout, "1");
+        wire(&mut n, gnd, cout, "2");
+
+        let plan = classify_sheet(&n);
+        assert_eq!(plan.stages.len(), 1, "one stage entered through the fuse");
+        let s = &plan.stages[0];
+        let names: Vec<&str> = s.backbone.iter().map(|e| e.inst()).collect();
+        assert_eq!(names, vec!["fuse", "reg"], "fuse leads the backbone");
+        assert!(s.shunts.iter().any(|x| x.inst == "tvs"), "TVS collected on the guarded net");
+        assert!(s.shunts.iter().any(|x| x.inst == "c_out"));
+        assert!(plan.residue.is_empty(), "residue: {:?}", plan.residue);
     }
 
     #[test]

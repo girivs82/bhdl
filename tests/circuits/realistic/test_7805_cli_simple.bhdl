@@ -9,7 +9,7 @@ board VoltageRegulator {
     ground GND;
     
     // Simple regulator circuit with minimal components
-    @VIN -> U1: LM7805().IN;
+    @VIN -> U1: LM7805().VIN;
     U1.GND -> @GND;
     U1.VOUT -> @VOUT;
 }

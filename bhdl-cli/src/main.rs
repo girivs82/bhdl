@@ -1298,12 +1298,12 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
             symbols: Some(&analysis.symbol_definitions),
             refdes: Some(&refdes_map),
         };
-        let (svg, unidiomized) = bhdl_schematic::v4::render_sheet_svg(&netlist, &title, &decor);
+        let (svg, unidiomized, collisions) =
+            bhdl_schematic::v4::render_sheet_svg(&netlist, &title, &decor);
         std::fs::write(svg_path, svg)?;
         println!(
-            "  {} V4 SVG: {svg_path} ({} unidiomized)",
+            "  {} V4 SVG: {svg_path} ({unidiomized} unidiomized, {collisions} collisions)",
             "✓".green(),
-            unidiomized
         );
     }
 

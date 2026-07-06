@@ -78,6 +78,10 @@ struct Svg {
     wire_segs: Vec<Rect>,
     /// SIM decorations queued for post-route placement.
     pending_sims: Vec<(f64, f64, String, String)>,
+    /// Placement failures: labels that found NO clear slot and fell back
+    /// to an overlapping position. The sweep gates on this — sheet
+    /// quality as a NUMBER, like the unidiomized count.
+    collisions: usize,
     /// Reserved WIRING CHANNELS: the stage declares its loop-under lane
     /// and riser lane up front. Labels must stay out (a label parked in a
     /// channel blocks the route that needs it — the chicken-and-egg that
@@ -87,7 +91,7 @@ struct Svg {
 
 impl Svg {
     fn new() -> Self {
-        Svg { body: String::new(), w: 0.0, h: 0.0, solids: Vec::new(), wire_segs: Vec::new(), channels: Vec::new(), pending_sims: Vec::new() }
+        Svg { body: String::new(), w: 0.0, h: 0.0, solids: Vec::new(), wire_segs: Vec::new(), channels: Vec::new(), pending_sims: Vec::new(), collisions: 0 }
     }
     fn solid(&mut self, r: Rect) {
         self.solids.push(r);
@@ -187,6 +191,7 @@ impl Svg {
                 return;
             }
         }
+        self.collisions += 1;
         self.text(ax + 10.0, ay, l1, c1);
         if !l2.is_empty() {
             self.text(ax + 10.0, ay + 13.0, l2, c2);
@@ -709,15 +714,18 @@ fn draw_stage(
     }
     x += SHUNT_PITCH;
 
-    // Backbone.
+    // Backbone. `wire_from` tracks how far the spine conductor is drawn —
+    // leading series elements (fuse → regulator) draw BEFORE the IC, so
+    // the bus can no longer be one src→IC stroke.
     let mut fb_stub: Option<(f64, f64)> = None;
     let mut ic_right = x;
+    let mut wire_from = src_bus_start;
     let mut mid_shunt_zone: Vec<(String, f64)> = Vec::new();
     for elem in &stage.backbone {
         match elem {
             BackboneElem::Ic { inst, in_pin, out_pin } => {
-                // Bus into the IC.
-                svg.wire(&[(src_bus_start, spine), (x, spine)]);
+                // Bus from wherever the spine currently ends into the IC.
+                svg.wire(&[(wire_from, spine), (x, spine)]);
                 let bx = x;
                 let by = spine - IC_H / 2.0;
                 let _ = writeln!(
@@ -893,6 +901,7 @@ fn draw_stage(
                     svg.wire(&[(ic_right, out_y), (x, out_y)]);
                     ic_right = x;
                 }
+                wire_from = x;
 
                 // ── Route aux nets ──
                 // source-rail ties (EN → VIN): hook from the stub back onto
@@ -975,6 +984,9 @@ fn draw_stage(
             }
             BackboneElem::Series { inst } => {
                 let class = class_of_name(netlist, inst);
+                if x > wire_from {
+                    svg.wire(&[(wire_from, spine), (x, spine)]);
+                }
                 svg.wire(&[(x, spine), (x + 7.0, spine)]);
                 match class.as_str() {
                     "inductor" => svg.ind_h(x + 7.0, spine),
@@ -1002,6 +1014,7 @@ fn draw_stage(
                 x += 7.0 + 56.0;
                 svg.wire(&[(x, spine), (x + 7.0, spine)]);
                 x += 7.0;
+                wire_from = x;
             }
         }
     }
@@ -1224,7 +1237,11 @@ fn draw_stage(
 
 
 /// Render the whole sheet. Returns (svg, unidiomized_count).
-pub fn render_sheet_svg(netlist: &Netlist, title: &str, decor: &SheetDecor) -> (String, usize) {
+pub fn render_sheet_svg(
+    netlist: &Netlist,
+    title: &str,
+    decor: &SheetDecor,
+) -> (String, usize, usize) {
     let plan = classify_sheet(netlist);
     log::info!(
         "v4 plan: {} rails, {} grounds, {} stages, {} residue",
@@ -1275,6 +1292,7 @@ pub fn render_sheet_svg(netlist: &Netlist, title: &str, decor: &SheetDecor) -> (
     svg.flush_sims();
 
     let n_res = plan.residue.len();
+    let n_coll = svg.collisions;
     svg.grow(200.0, y);
-    (svg.finish(title), n_res)
+    (svg.finish(title), n_res, n_coll)
 }

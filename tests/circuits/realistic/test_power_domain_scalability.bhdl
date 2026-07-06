@@ -39,7 +39,7 @@ board MultiSensorBoard {
     // Power domain with all scalability features
     power_domain @VCC_3V3 = 3.3V @ 5A {
         sources {
-            reg: LM7805().OUT;
+            reg: LM7805().VOUT;
         }
 
         distribution {
