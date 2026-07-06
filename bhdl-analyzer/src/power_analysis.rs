@@ -148,11 +148,51 @@ pub enum PowerAction {
     CheckVoltage,
 }
 
+/// A board-level boundary port (ports doctrine: power pins are not magic —
+/// every board-level external connection is a top-level port). Recorded for
+/// BOTH the explicit `port NAME: type dir [= spec];` form and the
+/// `power X = V @ I;` / `ground X;` sugar, which desugars here: one record
+/// shape, one lowering path into the netlist's Port objects.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BoardPortInfo {
+    /// Port name == the boundary net's name.
+    pub name: String,
+    /// power | ground | signal.
+    pub kind: BoardPortKind,
+    /// Declared direction, or the type default (power → in,
+    /// ground/signal → inout).
+    pub direction: BoardPortDir,
+    /// Declared rail voltage from the `= V @ I` spec (power ports).
+    pub voltage: Option<f64>,
+    /// Declared rail budget (`@ I`), None when the source omits it
+    /// (Real-Data: never a fabricated default).
+    pub current: Option<f64>,
+    /// true for the explicit `port` spelling, false for the sugar.
+    pub explicit: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoardPortKind {
+    Power,
+    Ground,
+    Signal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoardPortDir {
+    In,
+    Out,
+    InOut,
+}
+
 /// Power analysis context
 #[derive(Debug)]
 pub struct PowerAnalysisContext {
     /// All power domains in the design
     pub domains: HashMap<String, PowerDomain>,
+    /// Board-level boundary ports (explicit `port` decls + desugared
+    /// power/ground decls), in source order.
+    pub board_ports: Vec<BoardPortInfo>,
     /// Signals that need level shifting
     pub level_shifted_signals: Vec<LevelShiftedSignal>,
     /// Generated power sequence
@@ -231,6 +271,7 @@ impl PowerAnalysisContext {
     pub fn new() -> Self {
         let mut ctx = Self {
             domains: HashMap::new(),
+            board_ports: Vec::new(),
             level_shifted_signals: Vec::new(),
             power_sequence: Vec::new(),
             component_domains: HashMap::new(),
@@ -567,7 +608,16 @@ pub fn analyze_power_domains(
 /// Visit nodes in the syntax tree for power analysis
 fn visit_node_for_power_analysis(node: &SyntaxNode<BhdlLanguage>, context: &mut PowerAnalysisContext) {
     match node.kind() {
-        // Power and ground declarations are now loaded from symbol table
+        // Power and ground declarations are now loaded from symbol table.
+        // Their BOUNDARY-PORT record, however, is made here: the sugar
+        // desugars to a board port, the explicit `port` form records
+        // directly — one record shape (ports doctrine).
+        SyntaxKind::POWER_DECL
+        | SyntaxKind::GROUND_DECL
+        | SyntaxKind::PORT_DECL
+        | SyntaxKind::POWER_DOMAIN_DEF => {
+            record_board_port(node, context);
+        }
         SyntaxKind::COMPONENT_INST => {
             analyze_component_power_requirements(node, context);
         }
@@ -586,6 +636,125 @@ fn visit_node_for_power_analysis(node: &SyntaxNode<BhdlLanguage>, context: &mut 
     // Recursively visit children
     for child in node.children() {
         visit_node_for_power_analysis(&child, context);
+    }
+}
+
+/// Record a board-level boundary port from either spelling.
+///
+/// Board scope only: `power`/`ground` declarations inside entity expansion
+/// blocks are internal to the generated circuit, not board boundaries.
+fn record_board_port(node: &SyntaxNode<BhdlLanguage>, context: &mut PowerAnalysisContext) {
+    use bhdl_ast::{AstNode, BoardPortDecl, BoardPortDirection, BoardPortType, GroundDecl, PowerDecl};
+
+    if !node.ancestors().any(|a| a.kind() == SyntaxKind::BOARD_DEF) {
+        return;
+    }
+
+    let info = match node.kind() {
+        SyntaxKind::PORT_DECL => {
+            let Some(decl) = BoardPortDecl::cast(node.clone()) else { return };
+            let Some(name) = decl.name() else { return };
+            let kind = match decl.port_type() {
+                Some(BoardPortType::Power) => BoardPortKind::Power,
+                Some(BoardPortType::Ground) => BoardPortKind::Ground,
+                Some(BoardPortType::Signal) => BoardPortKind::Signal,
+                None => return,
+            };
+            let direction = match decl.direction() {
+                Some(BoardPortDirection::In) => BoardPortDir::In,
+                Some(BoardPortDirection::Out) => BoardPortDir::Out,
+                Some(BoardPortDirection::InOut) => BoardPortDir::InOut,
+                // Type defaults: a power port is supplied from outside;
+                // ground and signal are bidirectional unless said otherwise.
+                None => match kind {
+                    BoardPortKind::Power => BoardPortDir::In,
+                    _ => BoardPortDir::InOut,
+                },
+            };
+            BoardPortInfo {
+                name: name.text().to_string(),
+                kind,
+                direction,
+                voltage: decl.voltage().and_then(|v| parse_electrical_value(&v)),
+                current: decl.current().and_then(|c| parse_electrical_value(&c)),
+                explicit: true,
+            }
+        }
+        SyntaxKind::POWER_DECL => {
+            let Some(decl) = PowerDecl::cast(node.clone()) else { return };
+            let Some(name) = decl.name() else { return };
+            BoardPortInfo {
+                name: name.text().to_string(),
+                kind: BoardPortKind::Power,
+                direction: BoardPortDir::In,
+                voltage: decl.voltage().and_then(|v| parse_electrical_value(&v)),
+                current: decl.current().and_then(|c| parse_electrical_value(&c)),
+                explicit: false,
+            }
+        }
+        SyntaxKind::GROUND_DECL => {
+            let Some(decl) = GroundDecl::cast(node.clone()) else { return };
+            let Some(name) = decl.name() else { return };
+            BoardPortInfo {
+                name: name.text().to_string(),
+                kind: BoardPortKind::Ground,
+                direction: BoardPortDir::InOut,
+                voltage: None,
+                current: None,
+                explicit: false,
+            }
+        }
+        // `power_domain @VCC = 5V @ 10A { sources {...} ... }` — the
+        // scalability spelling of a declared rail; its sources block is
+        // where external power enters, so the domain is a boundary too.
+        SyntaxKind::POWER_DOMAIN_DEF => {
+            let Some(decl) = bhdl_ast::items::PowerDomain::cast(node.clone()) else { return };
+            let Some(name) = decl.net_name() else { return };
+            // Token scan of the header: `= <NUMBER><unit> @ <NUMBER><unit> {`.
+            let mut found_eq = false;
+            let mut past_at = false;
+            let mut voltage: Option<f64> = None;
+            let mut current: Option<f64> = None;
+            let mut pending_num: Option<String> = None;
+            for token in node
+                .children_with_tokens()
+                .filter_map(|el| el.into_token())
+            {
+                match token.kind() {
+                    SyntaxKind::EQ => found_eq = true,
+                    SyntaxKind::L_BRACE => break,
+                    SyntaxKind::AT if found_eq => {
+                        past_at = true;
+                        pending_num = None;
+                    }
+                    SyntaxKind::NUMBER if found_eq => pending_num = Some(token.text().to_string()),
+                    SyntaxKind::UNIT_IDENTIFIER | SyntaxKind::IDENT if pending_num.is_some() => {
+                        let txt = format!("{}{}", pending_num.take().unwrap(), token.text());
+                        let v = parse_electrical_value(&txt);
+                        if past_at {
+                            current = current.or(v);
+                        } else {
+                            voltage = voltage.or(v);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            BoardPortInfo {
+                name,
+                kind: BoardPortKind::Power,
+                direction: BoardPortDir::In,
+                voltage,
+                current,
+                explicit: false,
+            }
+        }
+        _ => return,
+    };
+
+    // One port per boundary net name — a redeclaration is the same boundary.
+    if !context.board_ports.iter().any(|p| p.name == info.name) {
+        context.board_ports.push(info);
     }
 }
 

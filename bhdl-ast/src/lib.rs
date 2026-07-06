@@ -65,7 +65,7 @@ pub use semantic_analysis::{SemanticAnalyzer, SemanticContext, SemanticError, Bh
 pub use enums::{EnumDef, EnumVariant, MatchExpr, MatchArm, MatchPattern, PatternKind};
 pub use traits::{TraitDef, TraitImpl, TraitPin, TraitConst};
 pub use constraint_resolver::{ConstraintResolver, Constraint, ConstraintType, ConstraintRule, ConstraintSeverity, ConstraintContext, ConstraintViolation, ConstraintResult, ComparisonOp, resolve_board_constraints, board_satisfies_constraints, is_standard_resistor_value};
-pub use v2_statements::{Statement, PowerDecl, GroundDecl, ConnectionStmt, FlowStmt as V2FlowStmt, GenerateStmt as V2GenerateStmt, ConditionalStmt as V2ConditionalStmt, IntentClause, IntentCall, IntentParams};
+pub use v2_statements::{Statement, PowerDecl, GroundDecl, BoardPortDecl, BoardPortType, BoardPortDirection, ConnectionStmt, FlowStmt as V2FlowStmt, GenerateStmt as V2GenerateStmt, ConditionalStmt as V2ConditionalStmt, IntentClause, IntentCall, IntentParams};
 pub use v2_board::{BoardV2Ext, BoardBody, BoardBodyExt};
 pub use interfaces::{InterfaceSignal, InterfaceRequirement, InterfacePerspective, InterfaceInst, SignalDirection};
 pub use testbench::{TestbenchDef, SimulationBlock, ScopeDef, StimulusBlock, VerifyBlock, MeasureBlock, 

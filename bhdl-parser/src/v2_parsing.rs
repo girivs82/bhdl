@@ -36,6 +36,49 @@ impl<'t> Parser<'t> {
         self.builder.finish_node();
     }
     
+    /// Parse a board-level port declaration — the honest boundary object
+    /// behind the ports doctrine (power pins are not magic; every board-level
+    /// external connection is a top-level port):
+    ///
+    ///   port VIN_12V: power in = 12V @ 3A;
+    ///   port GND: ground;
+    ///   port SIG_OUT: signal out;
+    ///
+    /// `power X = V @ I;` and `ground X;` are sugar for power-in / ground
+    /// ports — both forms lower through the same path.
+    pub(crate) fn parse_board_port_decl(&mut self) {
+        self.builder.start_node(SyntaxKind::PORT_DECL.into());
+        self.expect(SyntaxKind::PORT_KW);
+        self.expect(SyntaxKind::IDENT); // Port name
+
+        self.expect(SyntaxKind::COLON);
+
+        // Port type: power | ground | signal
+        match self.peek() {
+            Some(SyntaxKind::POWER_KW)
+            | Some(SyntaxKind::GROUND_KW)
+            | Some(SyntaxKind::SIGNAL_KW) => self.bump(),
+            _ => self.error("Expected port type (power, ground, signal)".to_string()),
+        }
+
+        // Optional direction: in | out | inout
+        if matches!(
+            self.peek(),
+            Some(SyntaxKind::IN_KW) | Some(SyntaxKind::OUT_KW) | Some(SyntaxKind::INOUT_KW)
+        ) {
+            self.bump();
+        }
+
+        // Optional boundary spec: = 12V @ 3A (same shape as the power sugar)
+        if self.peek() == Some(SyntaxKind::EQ) {
+            self.bump();
+            self.parse_power_spec();
+        }
+
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+
     /// Parse ground declaration: ground GND;
     pub(crate) fn parse_ground_decl(&mut self) {
         self.builder.start_node(SyntaxKind::GROUND_DECL.into());

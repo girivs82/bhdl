@@ -14,7 +14,7 @@ use bhdl_ast::{
     v2_statements::ConnectionStmt,
     expr::{Expr, BinaryExpr},
     interfaces::{InterfaceSignal, InterfaceInst, SignalDirection},
-    PowerDecl, GroundDecl,
+    PowerDecl, GroundDecl, BoardPortDecl, BoardPortType,
 };
 
 use crate::symbol_table::{Symbol, SymbolKind, SymbolTable, PortDirectionKind}; // Use crate:: for local module
@@ -482,8 +482,43 @@ fn visit_node_pass1_recursive(node: &SyntaxNode<BhdlLanguage>, context: &mut Pas
                 }
             }
         }
-         SyntaxKind::PORT_DECL => { 
-             if let Some(decl) = PortDecl::cast(node.clone()) {
+         SyntaxKind::PORT_DECL => {
+             // Board-level boundary port: `port VIN: power in = 12V @ 3A;`.
+             // Lowers to the SAME net symbol the power/ground sugar produces —
+             // one lowering path, the port form is just the honest spelling.
+             if let Some(port_decl) = BoardPortDecl::cast(node.clone()) {
+                 if let Some(name_token) = port_decl.name() {
+                     let name = name_token.text();
+                     let mut port_symbol = Symbol::new_decl(
+                         name,
+                         SymbolKind::Net,
+                         name_token.text_range(),
+                         node,
+                         None,
+                         None,
+                         None,
+                     );
+                     match port_decl.port_type() {
+                         Some(BoardPortType::Power) => {
+                             let voltage = port_decl.voltage()
+                                 .and_then(|v| parse_electrical_value_str(&v))
+                                 .unwrap_or(0.0);
+                             let declared_current = port_decl.current()
+                                 .and_then(|c| parse_electrical_value_str(&c));
+                             let current = declared_current.unwrap_or(1.0);
+                             port_symbol.net_attributes = Some(
+                                 NetAttribute::new_power_domain(voltage, current, declared_current),
+                             );
+                         }
+                         Some(BoardPortType::Ground) => {
+                             port_symbol.net_attributes = Some(NetAttribute::new_ground_domain());
+                         }
+                         // Signal ports are plain named nets at the boundary.
+                         Some(BoardPortType::Signal) | None => {}
+                     }
+                     context.current_scope_mut().insert(port_symbol);
+                 }
+             } else if let Some(decl) = PortDecl::cast(node.clone()) {
                if let Some(name_token) = decl.name() {
                    let (bus_high, bus_low) = decl.bus_suffix()
                        .and_then(|suffix| suffix.range())

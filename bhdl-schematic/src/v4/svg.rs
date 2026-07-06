@@ -658,7 +658,16 @@ fn net_label(netlist: &Netlist, id: NetId) -> String {
         Some(n) => n,
         None => return String::new(),
     };
-    let name = net.name.clone().unwrap_or_default();
+    // Ports doctrine: when a board Port anchors this net, the flag IS that
+    // boundary object — its name comes from the Port, not inferred from the
+    // net. (A port's name equals its boundary net's name by construction,
+    // so sugar-declared boards render identically.)
+    let port_name = netlist
+        .ports
+        .iter()
+        .find(|(_, p)| Some(p.module) == netlist.top_level_module && p.net == Some(id))
+        .map(|(_, p)| p.name.clone());
+    let name = port_name.or_else(|| net.name.clone()).unwrap_or_default();
     match net.net_class {
         NetClass::Power { voltage, .. } => format!("{name} ({voltage:.1}V)"),
         _ => name,

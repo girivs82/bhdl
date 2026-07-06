@@ -243,6 +243,161 @@ impl GroundDecl {
     }
 }
 
+/// The port's declared type: which base type keyword follows the colon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BoardPortType {
+    Power,
+    Ground,
+    Signal,
+}
+
+/// The port's declared direction (absent → type-dependent default).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BoardPortDirection {
+    In,
+    Out,
+    InOut,
+}
+
+/// Board-level port declaration — the honest boundary object of the ports
+/// doctrine: `port VIN_12V: power in = 12V @ 3A;`, `port GND: ground;`,
+/// `port SIG_OUT: signal out;`. `power X = V @ I;` / `ground X;` are sugar
+/// that lowers through the same path.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct BoardPortDecl(SyntaxNode<BhdlLanguage>);
+
+impl AstNode for BoardPortDecl {
+    type Language = BhdlLanguage;
+
+    fn can_cast(kind: SyntaxKind) -> bool {
+        kind == SyntaxKind::PORT_DECL
+    }
+
+    fn cast(syntax: SyntaxNode<BhdlLanguage>) -> Option<Self> {
+        // A board port is a PORT_DECL whose type is one of the base-type
+        // keywords (power/ground/signal); entity-shaped PORT_DECLs (typed
+        // via TYPE_REF) don't cast.
+        if Self::can_cast(syntax.kind()) {
+            let decl = Self(syntax);
+            if decl.port_type().is_some() {
+                return Some(decl);
+            }
+        }
+        None
+    }
+
+    fn syntax(&self) -> &SyntaxNode<BhdlLanguage> {
+        &self.0
+    }
+}
+
+impl BoardPortDecl {
+    /// Get the port name (e.g., "VIN_12V")
+    pub fn name(&self) -> Option<SyntaxToken<BhdlLanguage>> {
+        self.syntax()
+            .children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .find(|token| token.kind() == SyntaxKind::IDENT)
+    }
+
+    /// The declared base type: power, ground, or signal.
+    pub fn port_type(&self) -> Option<BoardPortType> {
+        self.syntax()
+            .children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .find_map(|token| match token.kind() {
+                SyntaxKind::POWER_KW => Some(BoardPortType::Power),
+                SyntaxKind::GROUND_KW => Some(BoardPortType::Ground),
+                SyntaxKind::SIGNAL_KW => Some(BoardPortType::Signal),
+                _ => None,
+            })
+    }
+
+    /// The declared direction, if written. Defaults are type-dependent and
+    /// applied by the consumer: power → in, ground → inout, signal → inout.
+    pub fn direction(&self) -> Option<BoardPortDirection> {
+        self.syntax()
+            .children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .find_map(|token| match token.kind() {
+                SyntaxKind::IN_KW => Some(BoardPortDirection::In),
+                SyntaxKind::OUT_KW => Some(BoardPortDirection::Out),
+                SyntaxKind::INOUT_KW => Some(BoardPortDirection::InOut),
+                _ => None,
+            })
+    }
+
+    /// Get the voltage value from the boundary spec (e.g., "12V"). Same
+    /// token discipline as PowerDecl::voltage(), incl. negative rails.
+    pub fn voltage(&self) -> Option<String> {
+        let mut found_eq = false;
+        let mut negative = false;
+        let mut voltage_num: Option<String> = None;
+        let mut voltage_unit: Option<String> = None;
+
+        for token in self
+            .syntax()
+            .children_with_tokens()
+            .filter_map(|element| element.into_token())
+        {
+            match token.kind() {
+                SyntaxKind::EQ => found_eq = true,
+                SyntaxKind::MINUS if found_eq && voltage_num.is_none() => negative = true,
+                SyntaxKind::NUMBER if found_eq && voltage_num.is_none() => {
+                    let n = token.text();
+                    voltage_num = Some(if negative { format!("-{n}") } else { n.to_string() });
+                }
+                SyntaxKind::UNIT_IDENTIFIER | SyntaxKind::IDENT
+                    if found_eq && voltage_num.is_some() && voltage_unit.is_none() =>
+                {
+                    voltage_unit = Some(token.text().to_string());
+                }
+                SyntaxKind::AT => break,
+                _ => {}
+            }
+        }
+
+        match (voltage_num, voltage_unit) {
+            (Some(num), Some(unit)) => Some(format!("{}{}", num, unit)),
+            (Some(num), None) => Some(num),
+            _ => None,
+        }
+    }
+
+    /// Get the current value from the boundary spec (e.g., "3A").
+    pub fn current(&self) -> Option<String> {
+        let mut found_at = false;
+        let mut current_num: Option<String> = None;
+        let mut current_unit: Option<String> = None;
+
+        for token in self
+            .syntax()
+            .children_with_tokens()
+            .filter_map(|element| element.into_token())
+        {
+            match token.kind() {
+                SyntaxKind::AT => found_at = true,
+                SyntaxKind::NUMBER if found_at && current_num.is_none() => {
+                    current_num = Some(token.text().to_string());
+                }
+                SyntaxKind::UNIT_IDENTIFIER | SyntaxKind::IDENT
+                    if found_at && current_num.is_some() && current_unit.is_none() =>
+                {
+                    current_unit = Some(token.text().to_string());
+                }
+                SyntaxKind::SEMI => break,
+                _ => {}
+            }
+        }
+
+        match (current_num, current_unit) {
+            (Some(num), Some(unit)) => Some(format!("{}{}", num, unit)),
+            (Some(num), None) => Some(num),
+            _ => None,
+        }
+    }
+}
+
 /// Connection statement for v2.0 flow syntax
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ConnectionStmt(SyntaxNode<BhdlLanguage>);

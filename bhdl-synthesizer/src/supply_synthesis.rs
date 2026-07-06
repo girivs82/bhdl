@@ -651,29 +651,48 @@ struct RailDecl {
     current: Option<String>,
 }
 
-/// Textual rail scan: `power NAME = 12V @ 3A;` lines. The desugar runs before
+/// Textual rail scan: `power NAME = 12V @ 3A;` lines and their explicit
+/// boundary-port spelling `port NAME: power [dir] = 12V @ 3A;` (ports
+/// doctrine — the two forms are one declaration). The desugar runs before
 /// analysis, so this stays a plain line scan rather than a CST walk.
 fn parse_rails(source: &str) -> HashMap<String, RailDecl> {
     let mut rails = HashMap::new();
     for line in source.lines() {
         let l = line.trim();
-        let Some(rest) = l.strip_prefix("power ") else { continue };
-        let Some((name, rhs)) = rest.split_once('=') else { continue };
+        let (name, rhs) = if let Some(rest) = l.strip_prefix("power ") {
+            let Some((name, rhs)) = rest.split_once('=') else { continue };
+            (name.trim().to_string(), rhs)
+        } else if let Some(rest) = l.strip_prefix("port ") {
+            // `port NAME: power [in|out|inout] = V @ I;`
+            let Some((name, decl)) = rest.split_once(':') else { continue };
+            if decl.trim_start().strip_prefix("power").is_none() {
+                continue;
+            }
+            let Some((_, rhs)) = decl.split_once('=') else { continue };
+            (name.trim().to_string(), rhs)
+        } else {
+            continue;
+        };
         let rhs = rhs.trim().trim_end_matches(';').trim();
         let (voltage, current) = match rhs.split_once('@') {
             Some((v, i)) => (v.trim().to_string(), Some(i.trim().to_string())),
             None => (rhs.to_string(), None),
         };
-        rails.insert(name.trim().to_string(), RailDecl { voltage, current });
+        rails.insert(name, RailDecl { voltage, current });
     }
     rails
 }
 
 fn parse_ground(source: &str) -> Option<String> {
     source.lines().find_map(|l| {
-        l.trim()
-            .strip_prefix("ground ")
-            .map(|g| g.trim_end_matches(';').trim().to_string())
+        let l = l.trim();
+        if let Some(g) = l.strip_prefix("ground ") {
+            return Some(g.trim_end_matches(';').trim().to_string());
+        }
+        // `port NAME: ground;` — the explicit boundary-port spelling.
+        let rest = l.strip_prefix("port ")?;
+        let (name, decl) = rest.split_once(':')?;
+        decl.trim().trim_end_matches(';').trim().eq("ground").then(|| name.trim().to_string())
     })
 }
 

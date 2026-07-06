@@ -1730,6 +1730,92 @@ mod tests {
         assert_eq!(evaluate_text("self.input_voltage_max >= 12", &ctx).unwrap(), 1.0);
         assert!(ctx.lookup("vin").is_err()); // bare names unresolvable here
     }
+
+    // ── ERC028 fixtures: a board, one Power rail, one member instance ──
+
+    fn anchoring_fixture(
+        class: &str,
+        pin_dir: PinDirection,
+        pin_type: PinType,
+    ) -> (Netlist, NetId) {
+        use bhdl_netlist::types::ModuleKind;
+        let mut nl = Netlist::new();
+        let board = nl.add_module("B".into(), ModuleKind::Board);
+        nl.top_level_module = Some(board);
+        let comp = nl.add_module("Comp".into(), ModuleKind::Component);
+        nl.add_pin(comp, "P1".into(), pin_dir, pin_type).unwrap();
+        let inst = nl.add_instance("u1".into(), comp).unwrap();
+        if !class.is_empty() {
+            nl.instances
+                .get_mut(inst)
+                .unwrap()
+                .attributes
+                .insert("component_class".into(), class.into());
+        }
+        let pis = nl.create_pin_instances(inst).unwrap();
+        let net = nl.add_net_with_class(
+            Some("VIN".into()),
+            NetClass::Power { voltage: 12.0, current: None },
+        );
+        nl.connect(net, ConnectionPoint::PinInstance(pis[0])).unwrap();
+        (nl, net)
+    }
+
+    fn add_board_port(nl: &mut Netlist, net: NetId, dir: bhdl_netlist::types::PortDirection) {
+        let top = nl.top_level_module.unwrap();
+        let pid = nl.add_port(top, "VIN".into(), dir, None).unwrap();
+        nl.ports.get_mut(pid).unwrap().net = Some(net);
+    }
+
+    #[test]
+    fn erc028_unanchored_rail_errors() {
+        // A Power net feeding a plain load, with no port and no driver —
+        // floating fiat.
+        let (nl, _) = anchoring_fixture("", PinDirection::Power, PinType::Power);
+        let v = check_rail_anchoring(&nl, &AnalysisResult::default());
+        assert_eq!(v.len(), 1, "expected exactly the unanchored-rail Error");
+        assert_eq!(v[0].rule_id, "ERC028");
+        assert!(matches!(v[0].severity, ViolationSeverity::Error));
+    }
+
+    #[test]
+    fn erc028_driven_rail_silent() {
+        // A regulator-style `power out` pin drives the rail — anchored
+        // on-board, no port needed.
+        let (nl, _) = anchoring_fixture("", PinDirection::Out, PinType::Power);
+        assert!(check_rail_anchoring(&nl, &AnalysisResult::default()).is_empty());
+    }
+
+    #[test]
+    fn erc028_port_without_connector_warns() {
+        // The port declares power arriving from outside, but nothing on the
+        // net is solderable.
+        let (mut nl, net) = anchoring_fixture("", PinDirection::Power, PinType::Power);
+        add_board_port(&mut nl, net, bhdl_netlist::types::PortDirection::Input);
+        let v = check_rail_anchoring(&nl, &AnalysisResult::default());
+        assert_eq!(v.len(), 1, "expected exactly the no-connector Warning");
+        assert_eq!(v[0].rule_id, "ERC028");
+        assert!(matches!(v[0].severity, ViolationSeverity::Warning));
+    }
+
+    #[test]
+    fn erc028_port_with_connector_silent() {
+        // Port + dc-jack on the rail: the declared boundary has its
+        // physical entry.
+        let (mut nl, net) =
+            anchoring_fixture("dc-jack", PinDirection::InOut, PinType::Signal);
+        add_board_port(&mut nl, net, bhdl_netlist::types::PortDirection::Input);
+        assert!(check_rail_anchoring(&nl, &AnalysisResult::default()).is_empty());
+    }
+
+    #[test]
+    fn erc028_port_on_driven_rail_silent() {
+        // A rail generated on-board (regulator VOUT): its desugared port is
+        // not the boundary source, so no connector is demanded.
+        let (mut nl, net) = anchoring_fixture("", PinDirection::Out, PinType::Power);
+        add_board_port(&mut nl, net, bhdl_netlist::types::PortDirection::Input);
+        assert!(check_rail_anchoring(&nl, &AnalysisResult::default()).is_empty());
+    }
 }
 
 // ──────────────── ERC027 — amplifier stage-gain consistency ────────────────
@@ -1923,6 +2009,142 @@ pub fn check_stage_gain(netlist: &Netlist, analysis: &AnalysisResult) -> Vec<DRC
                         standard_reference: None,
                     });
                     break; // one violation per stage carries the whole triangle
+                }
+            }
+        }
+    }
+    out
+}
+
+// ──────────────── ERC028 — unanchored power rail / connectorless port ────────────────
+
+/// Connector-class instances are the solderable physical entry points. Same
+/// class set the schematic layer promotes into the flow diagram, plus
+/// testpoints (probeable is solderable).
+fn is_connector_class(class: &str) -> bool {
+    matches!(
+        class,
+        "dc-jack" | "jack" | "connector" | "header" | "usb" | "testpoint"
+    ) || class.contains("connector")
+}
+
+/// ERC028 — the ports-doctrine anchor check. Power is not magic: every rail's
+/// energy has an accountable origin.
+///
+/// Error — "unanchored rail": a Power-class net with NO board port and NO
+/// on-board driver (a regulator/source pin declared `power out`, a model
+/// source, or a power-symbol instance). Nothing physical or declared feeds
+/// it — its voltage is fiat. Declared rails always lower to a board port, so
+/// this fires on nets that became Power-class some other way (net-name
+/// heuristics, imports) without a source.
+///
+/// Warning — "nothing to solder": a power-in board port that is the rail's
+/// actual boundary source (net has no on-board driver, so the DC solve puts
+/// the ideal source at this port) but whose net touches no connector-class
+/// instance. The board declares power arriving from outside yet provides no
+/// physical part for it to arrive through. Ports on internally-generated
+/// rails (a regulator drives the net) are not boundaries in the built board
+/// and are skipped.
+pub fn check_rail_anchoring(
+    netlist: &Netlist,
+    _analysis: &AnalysisResult,
+) -> Vec<DRCViolation> {
+    let mut out = Vec::new();
+    let members = net_members(netlist);
+
+    // Board ports on the top-level module, by net.
+    let mut port_by_net: HashMap<NetId, (&str, bhdl_netlist::types::PortDirection)> =
+        HashMap::new();
+    for (_, port) in &netlist.ports {
+        if Some(port.module) != netlist.top_level_module {
+            continue;
+        }
+        if let Some(net_id) = port.net {
+            port_by_net.insert(net_id, (port.name.as_str(), port.direction));
+        }
+    }
+
+    for (net_id, net) in &netlist.nets {
+        if !matches!(net.net_class, NetClass::Power { .. }) {
+            continue;
+        }
+        let pins = members.get(&net_id).map(Vec::as_slice).unwrap_or(&[]);
+        if pins.is_empty() && port_by_net.get(&net_id).is_none() {
+            continue; // dead net — no members, no boundary; not a rail at all
+        }
+
+        // On-board driver: any push-pull output pin (a regulator's
+        // `power out` VOUT/SW, or a filter/buffer `signal out` feeding a
+        // net that is Power-class by name heuristic), a model source, or a
+        // power-symbol instance (+5V-style module).
+        let has_driver = pins.iter().any(|p| {
+            matches!(p.dir, PinDirection::Out)
+                || matches!(p.class.as_str(), "power_source" | "battery")
+        }) || net.connections.iter().any(|cp| {
+            let bhdl_netlist::types::ConnectionPoint::PinInstance(pi_id) = cp else {
+                return false;
+            };
+            netlist
+                .pin_instances
+                .get(*pi_id)
+                .filter(|pi| pi.net == Some(net_id))
+                .and_then(|pi| netlist.instances.get(pi.instance))
+                .and_then(|i| netlist.modules.get(i.definition))
+                .map(|m| m.name.starts_with('+'))
+                .unwrap_or(false)
+        });
+
+        match port_by_net.get(&net_id) {
+            None => {
+                if !has_driver {
+                    out.push(DRCViolation {
+                        rule_id: "ERC028".into(),
+                        rule_name: "Unanchored power rail".into(),
+                        category: RuleCategory::Electrical,
+                        severity: ViolationSeverity::Error,
+                        description: format!(
+                            "Power rail '{}' has no board port and no on-board \
+                             driver — its voltage is fiat: nothing physical or \
+                             declared feeds it",
+                            net_name(netlist, net_id)
+                        ),
+                        location: ViolationLocation::Net(net_id),
+                        fix_suggestion:
+                            "declare the boundary (`port X: power in = V @ I;` or the \
+                             `power X = V @ I;` sugar) or wire the rail to a source"
+                                .into(),
+                        standard_reference: None,
+                    });
+                }
+            }
+            Some((port_name, direction)) => {
+                // Only in-direction ports that are the rail's real boundary
+                // source need a physical entry point.
+                if !matches!(direction, bhdl_netlist::types::PortDirection::Input)
+                    || has_driver
+                {
+                    continue;
+                }
+                let has_connector = pins.iter().any(|p| is_connector_class(&p.class));
+                if !has_connector {
+                    out.push(DRCViolation {
+                        rule_id: "ERC028".into(),
+                        rule_name: "Port has no physical connector".into(),
+                        category: RuleCategory::Electrical,
+                        severity: ViolationSeverity::Warning,
+                        description: format!(
+                            "Board port '{port_name}' supplies rail '{}' from outside, \
+                             but the net touches no connector-class instance — nothing \
+                             to solder",
+                            net_name(netlist, net_id)
+                        ),
+                        location: ViolationLocation::Net(net_id),
+                        fix_suggestion:
+                            "add the physical entry (dc-jack/header/usb/testpoint) the \
+                             power arrives through, and wire it to the rail"
+                                .into(),
+                        standard_reference: None,
+                    });
                 }
             }
         }

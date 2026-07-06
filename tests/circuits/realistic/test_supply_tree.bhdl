@@ -16,10 +16,16 @@ import { Barrel_Jack_Switch } from "bhdl-stdlib/connectors/barrel_jack.bhdl";
 // measured values, and the top level shows supply blocks AND the load
 // block they exist to feed.
 board SupplyTree {
-    power VIN_12V = 12V @ 3A;
+    // Ports doctrine: power pins are not magic — the board's external
+    // connections are top-level ports. VIN_12V and GND are the real
+    // boundary (energy enters at the port, through the jack below); the
+    // intermediate rails are generated ON-board by the supply tree, so
+    // they keep the rail-budget sugar (`power X = V @ I` — itself just
+    // sugar for a port declaration).
+    port VIN_12V: power in = 12V @ 3A;
+    port GND: ground;
     power VCC_5V = 5V @ 2A;
     power VCC_3V3 = 3.3V @ 500mA;
-    ground GND;
 
     supply @VCC_5V from @VIN_12V {
         ripple_max: 50mV;

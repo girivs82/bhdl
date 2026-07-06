@@ -268,13 +268,28 @@ impl NetlistToSpiceConverter {
         //          by a regulator (`vsource_nodes`) or a power symbol (an
         //          existing VoltageSource branch) so a rail is never
         //          double-driven.
+        //
+        //          Ports doctrine: the ideal source is the BOUNDARY CONDITION
+        //          of a board port — power enters through the port, so the
+        //          source belongs to that boundary object (the schematic layer
+        //          draws it as the port's boundary flag). Every declared rail
+        //          lowers to a Port on the top-level module, so an undriven
+        //          Power net normally has one; rails that only exist by net-
+        //          name heuristics (VCC/VDD/VIN substrings, KiCad imports)
+        //          have no Port and keep the legacy net-level attribution.
+        let board_ports: std::collections::HashMap<&str, bhdl_netlist::types::NetId> = netlist
+            .ports
+            .iter()
+            .filter(|(_, p)| Some(p.module) == netlist.top_level_module && p.net.is_some())
+            .map(|(_, p)| (p.name.as_str(), p.net.unwrap()))
+            .collect();
         let mut driven: std::collections::HashSet<crate::circuit::NodeId> = circuit
             .branches()
             .filter(|(_, b)| b.component_type == "VoltageSource")
             .flat_map(|(_, b)| b.nodes.iter().copied())
             .collect();
         circuit.add_node("GND".to_string(), None);
-        for (_net_id, net) in &netlist.nets {
+        for (net_id, net) in &netlist.nets {
             let bhdl_netlist::types::NetClass::Power { voltage: v, .. } = net.net_class else {
                 continue;
             };
@@ -298,7 +313,14 @@ impl NetlistToSpiceConverter {
                 None,
             );
             driven.insert(idx);
-            info!("Added declared power rail {} as VoltageSource {}V → GND", name, v);
+            if board_ports.get(name.as_str()) == Some(&net_id) {
+                info!(
+                    "Energised board port {} — boundary VoltageSource {}V → GND at the port",
+                    name, v
+                );
+            } else {
+                info!("Added declared power rail {} as VoltageSource {}V → GND", name, v);
+            }
         }
 
         info!("Created SPICE circuit with {} nodes and {} components",

@@ -250,6 +250,12 @@ impl DesignRuleChecker {
                 "Op-amp stage gain triangle: derived (placed feedback) vs measured (stimulus transient) vs declared (gain intent)",
                 crate::erc::check_stage_gain,
             ),
+            (
+                "ERC028",
+                "Rail anchoring",
+                "Power rails with neither a board port nor an on-board driver (Error); power-in ports whose net touches no connector-class instance (Warning)",
+                crate::erc::check_rail_anchoring,
+            ),
         ] {
             self.rules.push(DesignRule {
                 id: id.to_string(),

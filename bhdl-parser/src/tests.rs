@@ -93,6 +93,51 @@ mod tests {
     }
 
     #[test]
+    fn parse_board_with_board_ports() {
+        // Ports doctrine: board-level `port` declarations — all three types,
+        // with and without direction and boundary spec.
+        let input = "board PortBoard {\n\
+                         port VIN_12V: power in = 12V @ 3A;\n\
+                         port VEE: power = -12V;\n\
+                         port GND: ground;\n\
+                         port SIG_OUT: signal out;\n\
+                     }";
+        let result = parse(input);
+        assert!(result.errors.is_empty(), "Expected no parse errors: {:?}", result.errors);
+        let root = result.syntax();
+        let board = find_node(&root, BOARD_DEF).expect("No BOARD_DEF");
+        let ports = find_all_nodes(&board, PORT_DECL);
+        assert_eq!(ports.len(), 4, "Expected 4 PORT_DECL nodes");
+
+        // Each PORT_DECL carries its type keyword and terminates properly.
+        let kinds: Vec<Vec<SyntaxKind>> = ports
+            .iter()
+            .map(|p| {
+                p.children_with_tokens()
+                    .filter_map(|el| el.into_token())
+                    .map(|t| t.kind())
+                    .filter(|k| !k.is_trivia())
+                    .collect()
+            })
+            .collect();
+        assert!(kinds[0].contains(&POWER_KW) && kinds[0].contains(&IN_KW) && kinds[0].contains(&AT));
+        assert!(kinds[1].contains(&POWER_KW) && kinds[1].contains(&MINUS));
+        assert!(kinds[2].contains(&GROUND_KW));
+        assert!(kinds[3].contains(&SIGNAL_KW) && kinds[3].contains(&OUT_KW));
+        for k in &kinds {
+            assert_eq!(*k.last().unwrap(), SEMI, "PORT_DECL must end with SEMI");
+        }
+
+        // The sugar still parses alongside the explicit form.
+        let sugared = parse("board B { power VCC = 5V @ 1A; ground GND; port SIG: signal; }");
+        assert!(sugared.errors.is_empty());
+        let sroot = sugared.syntax();
+        assert_eq!(find_all_nodes(&sroot, POWER_DECL).len(), 1);
+        assert_eq!(find_all_nodes(&sroot, GROUND_DECL).len(), 1);
+        assert_eq!(find_all_nodes(&sroot, PORT_DECL).len(), 1);
+    }
+
+    #[test]
     fn parse_board_with_const() {
         let input = "board ConstBoard { const max_current: int = 10; }";
         let result = parse(input);

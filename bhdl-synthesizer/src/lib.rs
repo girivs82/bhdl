@@ -530,6 +530,13 @@ impl NetlistGenerator {
             self.extract_connectivity_limited(analysis)?;
         }
 
+        // Phase 4.1: Materialise board-level boundary ports (ports doctrine:
+        // power pins are not magic — every board-level external connection is
+        // a top-level Port object port-mapped to the named net). Both the
+        // explicit `port` form and the power/ground sugar arrive here through
+        // the same BoardPortInfo records.
+        self.create_board_ports(analysis)?;
+
         // Phase 4.4: Stamp constructor arguments onto instances.
         // A board like `U1: LM317(v_out=5V);` carries the arg
         // `v_out=5V` on the COMPONENT_INST AST node, but the
@@ -1409,6 +1416,55 @@ impl NetlistGenerator {
                 debug!("Created power net '{}' with voltage {:?} and class {:?}",
                        domain_name, domain_info.voltage, net_class);
             }
+        }
+        Ok(())
+    }
+
+    /// Materialise the board's boundary ports as netlist Port objects.
+    ///
+    /// Each BoardPortInfo (explicit `port` decl or desugared power/ground
+    /// decl) becomes a Port on the top-level module with `net` pointing at
+    /// the named boundary net. The net itself is created exactly as
+    /// `create_power_nets` would (same NetClass) — the Port is the honest
+    /// boundary object layered on top, not a second lowering path.
+    fn create_board_ports(&mut self, analysis: &AnalysisResult) -> Result<()> {
+        use bhdl_analyzer::power_analysis::{BoardPortDir, BoardPortKind};
+
+        let Some(top_module) = self.netlist.top_level_module else {
+            // No board (library file) — nothing has a boundary.
+            return Ok(());
+        };
+
+        for port in &analysis.power_analysis.board_ports {
+            let net_class = match port.kind {
+                BoardPortKind::Power => NetClass::Power {
+                    voltage: port.voltage.unwrap_or(0.0),
+                    current: port.current,
+                },
+                BoardPortKind::Ground => NetClass::Ground,
+                BoardPortKind::Signal => NetClass::Signal,
+            };
+            let net_id = self.find_or_create_net(&port.name, net_class);
+            self.ast_to_net.entry(port.name.clone()).or_insert(net_id);
+
+            let direction = match port.direction {
+                BoardPortDir::In => PortDirection::Input,
+                BoardPortDir::Out => PortDirection::Output,
+                BoardPortDir::InOut => PortDirection::InOut,
+            };
+            let Some(port_id) =
+                self.netlist.add_port(top_module, port.name.clone(), direction, None)
+            else {
+                warn!("Could not add board port '{}' to top-level module", port.name);
+                continue;
+            };
+            if let Some(p) = self.netlist.ports.get_mut(port_id) {
+                p.net = Some(net_id);
+            }
+            debug!(
+                "Created board port '{}' ({:?} {:?}, explicit={}) -> net {:?}",
+                port.name, port.kind, port.direction, port.explicit, net_id
+            );
         }
         Ok(())
     }
