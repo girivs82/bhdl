@@ -594,7 +594,8 @@ impl Svg {
              width=\"{w:.0}\" height=\"{h:.0}\" font-family=\"sans-serif\">\n\
              <style>text{{font-size:11px;fill:#333}}.rail{{fill:#a00;font-weight:600}}\
              .ref{{font-weight:600}}.val{{fill:#555}}.part{{fill:#333;font-weight:600}}\
-             .absent{{fill:#a60;font-style:italic}}.sim{{fill:#06c;font-style:italic}}</style>\n\
+             .absent{{fill:#a60;font-style:italic}}.sim{{fill:#06c;font-style:italic}}\
+             .intent{{fill:#862d86;font-style:italic}}</style>\n\
              <rect width=\"{w:.0}\" height=\"{h:.0}\" fill=\"white\"/>\n\
              <text x=\"16\" y=\"22\" class=\"part\">{title}</text>\n{body}</svg>\n",
             w = self.w + 30.0,
@@ -674,6 +675,62 @@ fn value_of(netlist: &Netlist, inst: &str) -> String {
         .find(|i| i.name == inst)
         .and_then(|i| i.attributes.get("value").cloned())
         .unwrap_or_default()
+}
+
+/// The designer's DECLARED intent on an instance (`for intent(...)` in
+/// bhdl), formatted "name (k: v, …)". None when no intent was declared.
+fn intent_of(netlist: &Netlist, inst: &str) -> Option<String> {
+    let attrs = &netlist.instances.values().find(|i| i.name == inst)?.attributes;
+    let name = attrs.get("intent_name")?;
+    let mut params: Vec<String> = attrs
+        .iter()
+        .filter(|(k, _)| k.starts_with("intent_") && *k != "intent_name")
+        .map(|(k, v)| format!("{}: {}", k.trim_start_matches("intent_"), v))
+        .collect();
+    params.sort();
+    Some(if params.is_empty() {
+        name.clone()
+    } else {
+        format!("{} ({})", name, params.join(", "))
+    })
+}
+
+/// The stage's DERIVED role, from netlist structure and placed values —
+/// never guessed: unity wire → buffer; resistive feedback with a ground
+/// leg → the non-inverting gain equation evaluated from the placed R's;
+/// resistive feedback with NO ground leg → still a follower (G = 1).
+/// Reactive/exotic feedback → None (an equation we did not derive is an
+/// equation we do not print).
+fn amp_role(
+    netlist: &Netlist,
+    decor: &SheetDecor,
+    fb_parts: &[String],
+    gnd_leg: &[String],
+    unity: bool,
+) -> Option<String> {
+    if unity {
+        return Some("buffer".to_string());
+    }
+    let rf = fb_parts.iter().find(|p| class_of_name(netlist, p) == "resistor");
+    let rg = gnd_leg.iter().find(|p| class_of_name(netlist, p) == "resistor");
+    match (rf, rg) {
+        (Some(rf), Some(rg)) => {
+            let vf = parse_val(&value_of(netlist, rf))?;
+            let vg = parse_val(&value_of(netlist, rg))?;
+            if vg <= 0.0 {
+                return None;
+            }
+            Some(format!(
+                "G = 1+{}/{} = ×{:.2}",
+                label_of(decor, rf),
+                label_of(decor, rg),
+                1.0 + vf / vg
+            ))
+        }
+        // Feedback resistor, no divider to ground: a follower.
+        (Some(_), None) if gnd_leg.is_empty() => Some("buffer".to_string()),
+        _ => None,
+    }
 }
 
 fn class_of_name(netlist: &Netlist, inst: &str) -> String {
@@ -1467,6 +1524,28 @@ fn draw_amp(
     let fb_x = tx - 16.0; // INN / feedback node column
     let tap_x = ox + 12.0; // feedback tap on the OUT lead
 
+    // Stage caption: the DERIVED role (structure + placed values), and the
+    // designer's DECLARED intent when a stage part carries one — two
+    // different truths, two different inks. Drawn under the stage's own
+    // feedback zone, where the geometry is this amp's to spend.
+    let role = amp_role(netlist, decor, fb_parts, gnd_leg, unity);
+    let intent = std::iter::once(inst)
+        .chain(fb_parts.iter().map(String::as_str))
+        .chain(gnd_leg.iter().map(String::as_str))
+        .find_map(|p| intent_of(netlist, p));
+    let mut caption_at = |svg: &mut Svg, y: f64| {
+        let mut cy = y;
+        if let Some(r) = &role {
+            svg.place_label(fb_x + 26.0, cy, r, "val");
+            cy += 15.0;
+        }
+        if let Some(i) = &intent {
+            svg.place_label(fb_x + 26.0, cy, i, "intent");
+            cy += 15.0;
+        }
+        cy
+    };
+
     if unity {
         svg.dot(tap_x, spine);
         svg.wire(&[
@@ -1476,7 +1555,8 @@ fn draw_amp(
             (fb_x, spine + 12.0),
             (tx, spine + 12.0),
         ]);
-        *depth = depth.max(spine + 74.0);
+        let end = caption_at(svg, spine + 76.0);
+        *depth = depth.max(end.max(spine + 74.0));
     } else {
         svg.wire(&[(tx, spine + 12.0), (fb_x, spine + 12.0)]);
         let n = fb_parts.len().max(1);
@@ -1531,6 +1611,13 @@ fn draw_amp(
                 label_of(decor, g), "ref", &value_of(netlist, g), "val");
             *depth = depth.max(last_lane + sym_h + 60.0);
         }
+        let caption_y = if gnd_leg.is_empty() {
+            last_lane + 28.0
+        } else {
+            last_lane + 96.0 // below the ground-leg column
+        };
+        let end = caption_at(svg, caption_y);
+        *depth = depth.max(end);
     }
 
     ox + 24.0
