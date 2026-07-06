@@ -1,0 +1,46 @@
+// Generic microcontroller LOAD — the demand side of a supply tree.
+//
+// The entity models what a power designer needs from an MCU: a declared
+// supply draw (the §5 `model { node VCC draws }` surface — GLACIER emits a
+// real CurrentSource, so rail currents on the sheet are MEASURED, never
+// assumed) and the local decoupling every datasheet mandates (expansion
+// children, so the MCU forms its own schematic sheet with a linked block
+// on the top level).
+//
+// `i_active` is the run-mode supply current in AMPS (plain float, same
+// bare-f64 discipline as EffBuck's model attributes — the model evaluator
+// reads attributes with a plain parse).
+
+entity Mcu(
+    i_active: float = 0.05    // run-mode supply current, A (50mA default)
+) {
+    pin VCC: power in;
+    pin GND: ground;
+    pin SDA: signal inout;
+    pin SCL: signal inout;
+    pin GPIO0: signal inout;
+    pin GPIO1: signal inout;
+
+    attribute component_class = "microcontroller";
+    attribute i_active = i_active;
+    // Read by the S4b rail-budget stamp (ERC016 gates the rail on it).
+    attribute i_supply = i_active;
+
+    simulation {
+        model {
+            node VCC draws = self.i_active;
+        }
+    }
+
+    // Datasheet-standard local decoupling: bulk + HF ceramic at the pin.
+    expansion {
+        VCC -> C_bulk: Cap(10uF).1; C_bulk.2 -> GND;
+        VCC -> C_hf: Cap(100nF).1; C_hf.2 -> GND;
+    }
+}
+
+symbol Mcu {
+    left   { VCC }
+    right  { SDA, SCL, GPIO0, GPIO1 }
+    bottom { GND }
+}

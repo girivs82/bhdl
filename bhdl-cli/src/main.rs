@@ -1231,6 +1231,15 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
     // Run GLACIER DC simulation for voltage/current annotation
     let sim_annotations = {
         let mut converter = NetlistToSpiceConverter::new();
+        // §5 device-model surface: without the evaluated model overrides the
+        // sheet's DC solve never sees vendor-authored sources OR loads — an
+        // MCU's declared draw would be invisible and every rail current a
+        // placeholder.
+        converter.set_model_overrides(bhdl_synthesizer::model_evaluator::evaluate_model_overrides(
+            &netlist,
+            &analysis.model_recipes,
+            &analysis.entity_attribute_index,
+        ));
         match converter.convert(&netlist) {
             Ok(circuit) => {
                 let circuit_ref = circuit.clone();

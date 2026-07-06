@@ -151,22 +151,21 @@ fn find_expansion_candidates(
             None => continue,
         };
 
-        // The `virtual` keyword is the trigger: an entity is expanded only
-        // if it declares a virtual pin. The `expansion { }` block is the
-        // *definition*; the virtual pin is what *activates* it — so `virtual`
-        // is functional, not decorative. An expansion block with no virtual
-        // pin is inert (and worth flagging).
-        let has_virtual_pin = mod_def.pins.iter().any(|&pid| {
+        // A declared `expansion { }` block IS the activation: the recipe
+        // exists because the part's datasheet mandates its support circuit.
+        // (The old rule required a virtual pin as a trigger — regulator-era
+        // thinking that left every virtual-pin-less entity's expansion
+        // SILENTLY INERT: xc6206, ap2112 and the generic regulator never
+        // materialized their decoupling, and a load entity like Mcu could
+        // never form its sheet. Virtual pins remain what they are — logical
+        // ports — not an activation switch.)
+        if !mod_def.pins.iter().any(|&pid| {
             netlist.pins.get(pid).map(|p| p.is_virtual).unwrap_or(false)
-        });
-        if !has_virtual_pin {
-            warn!(
-                "Instance '{}' ({}) has an expansion {{ }} block but no \
-                 virtual pin — declare a `virtual` pin to activate it; \
-                 skipping expansion",
+        }) {
+            info!(
+                "Instance '{}' ({}): expansion activates without a virtual pin",
                 inst.name, mod_def.name
             );
-            continue;
         }
 
         // Skip instances that are already expansion children

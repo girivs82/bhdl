@@ -6,7 +6,14 @@
 // i_supply (switcher: V_out·I_out/(η·V_in) from the datasheet efficiency),
 // so ERC016 gates every intermediate rail: shrink VCC_5V's budget below
 // ~371mA and the build reports exactly which cascade overloads it.
+import { Mcu } from "bhdl-stdlib/actives/mcu.bhdl";
+
 // Expected: 0 DRC violations.
+//
+// The 3.3V rail carries a REAL load: an MCU block (50mA declared draw,
+// modeled as a GLACIER current source) — so the sheet's rail currents are
+// measured values, and the top level shows supply blocks AND the load
+// block they exist to feed.
 board SupplyTree {
     power VIN_12V = 12V @ 3A;
     power VCC_5V = 5V @ 2A;
@@ -22,4 +29,9 @@ board SupplyTree {
         ripple_max: 30mV;
         profile: efficiency;
     }
+
+    // The load the tree exists to feed.
+    mcu: Mcu(0.05);
+    @VCC_3V3 -> mcu.VCC;
+    mcu.GND -> @GND;
 }

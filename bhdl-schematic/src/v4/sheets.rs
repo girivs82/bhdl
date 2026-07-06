@@ -121,8 +121,9 @@ pub struct BlockSpec {
     /// Relative href of the child sheet this block opens.
     pub href: String,
     /// (parent pin name when one sits on the net — else "", net name,
-    /// net-is-power, net-is-ground).
-    pub ports: Vec<(String, String, bool, bool)>,
+    /// net-is-power, net-is-ground, names of GROUP instances on the net —
+    /// the current-annotation candidates).
+    pub ports: Vec<(String, String, bool, bool, Vec<String>)>,
 }
 
 /// Build the top sheet's block specs from the FULL netlist.
@@ -147,19 +148,25 @@ pub fn block_specs(
 
         // Nets touched by the group, split into inside-only vs boundary.
         use std::collections::HashMap as Map;
-        let mut touched: Map<bhdl_netlist::types::NetId, (bool, bool)> = Map::new(); // (inside, outside)
+        let mut touched: Map<bhdl_netlist::types::NetId, (bool, bool, Vec<String>)> =
+            Map::new(); // (inside, outside, inside instance names)
         for pi in netlist.pin_instances.values() {
             let Some(nid) = pi.net else { continue };
-            let e = touched.entry(nid).or_insert((false, false));
+            let e = touched.entry(nid).or_insert((false, false, Vec::new()));
             if g.members.contains(&pi.instance) {
                 e.0 = true;
+                if let Some(i) = netlist.instances.get(pi.instance) {
+                    if !e.2.contains(&i.name) {
+                        e.2.push(i.name.clone());
+                    }
+                }
             } else {
                 e.1 = true;
             }
         }
 
         let mut ports = Vec::new();
-        for (nid, (inside, outside)) in &touched {
+        for (nid, (inside, outside, insts)) in &touched {
             if !inside {
                 continue;
             }
@@ -193,6 +200,7 @@ pub fn block_specs(
                 net.name.clone().unwrap_or_default(),
                 is_power,
                 is_ground,
+                insts.clone(),
             ));
         }
         ports.sort_by(|a, b| (&a.1, &a.0).cmp(&(&b.1, &b.0)));

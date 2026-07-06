@@ -561,6 +561,50 @@ impl NetlistToSpiceConverter {
             return Ok(());
         }
 
+        // §5 model surface, LOAD side: an entity whose model block authors
+        // `draws` on a pin is a real DC load — emit a CurrentSource from
+        // that pin's net to ground so GLACIER solves genuine rail currents
+        // (the buck inductor carries the MCU's declared draw, not a
+        // placeholder). Opt-in strictly by model declaration — datasheet
+        // attributes like i_supply never imply "model me as a load".
+        // Regulators keep their dedicated branch (draws is an efficiency
+        // correction there, not a load).
+        if !matches!(class, "voltage_regulator" | "ldo" | "switching_regulator") {
+            let entity_name = netlist.instances.get(instance_id)
+                .and_then(|i| netlist.modules.get(i.definition))
+                .map(|m| m.name.clone());
+            if let Some(model) = entity_name.as_ref().and_then(|e| self.model_overrides.get(e)) {
+                if !model.draws.is_empty() {
+                    let gnd_name = netlist.nets.iter()
+                        .find(|(_, n)| matches!(n.net_class, bhdl_netlist::types::NetClass::Ground))
+                        .and_then(|(_, n)| n.name.clone())
+                        .unwrap_or_else(|| "GND".to_string());
+                    let pin_info = Self::get_pin_net_info(netlist, instance_id);
+                    let mut emitted = false;
+                    for p in &pin_info {
+                        let Some(i_draw) = model.draws.get(&p.pin_name) else { continue };
+                        let mut meta = HashMap::new();
+                        meta.insert(META_PARENT_INSTANCE.to_string(), instance.name.clone());
+                        circuit.add_branch_with_metadata(
+                            format!("{}_draw", instance.name),
+                            &p.net_name,
+                            &gnd_name,
+                            "CurrentSource".to_string(),
+                            *i_draw,
+                            Some(instance_id),
+                            meta,
+                        );
+                        info!("Load {}: model-declared draw {}A on {} ({})",
+                              instance.name, i_draw, p.pin_name, p.net_name);
+                        emitted = true;
+                    }
+                    if emitted {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
         // Extract model based on available information
         let extracted_model = self.extract_model_for_instance(
             &instance.name,

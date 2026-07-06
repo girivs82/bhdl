@@ -2120,7 +2120,7 @@ fn render_sheet_svg_with_blocks(
             let max_pin = b.ports.iter().map(|(p, ..)| p.len()).max().unwrap_or(0);
             let max_net = b.ports.iter().map(|(_, n, ..)| n.len()).max().unwrap_or(0);
             let box_w = (34.0 + 6.8 * max_pin as f64).max(120.0);
-            let visible: Vec<_> = b.ports.iter().filter(|(_, _, _, g)| !g).collect();
+            let visible: Vec<_> = b.ports.iter().filter(|(_, _, _, g, _)| !g).collect();
             let box_h = (30.0 + visible.len() as f64 * 15.0).max(56.0);
             row_h = row_h.max(box_h + 46.0);
             let _ = writeln!(svg.body, r##"<a href="{}">"##, b.href);
@@ -2136,7 +2136,7 @@ fn render_sheet_svg_with_blocks(
             svg.grow(bx + box_w + 90.0, by + box_h + 40.0);
             let mut slot = 0usize;
             let mut drew_gnd = false;
-            for (pin, nname, is_p, is_g) in &b.ports {
+            for (pin, nname, is_p, is_g, insts) in &b.ports {
                 if *is_g {
                     if !drew_gnd {
                         let gx = bx + box_w / 2.0;
@@ -2156,6 +2156,36 @@ fn render_sheet_svg_with_blocks(
                         nname,
                         if *is_p { "rail" } else { "part" },
                     );
+                }
+                // MEASURED port current: the GLACIER-solved branch current
+                // of the group's DOMINANT carrier on this net (the series
+                // element or the load's draw). Printed only when one member
+                // clearly carries the net (≥10× every other) — an ambiguous
+                // split is not a port current and is not invented.
+                if let Some(sim) = decor.sim {
+                    let mut currents: Vec<f64> = insts
+                        .iter()
+                        .filter_map(|i| sim.instance_currents.get(i))
+                        .map(|i| i.abs())
+                        .filter(|i| *i >= 1e-6)
+                        .collect();
+                    currents.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+                    let dominant = match currents.as_slice() {
+                        [one] => Some(*one),
+                        [first, second, ..] if *first >= 10.0 * *second => Some(*first),
+                        _ => None,
+                    };
+                    if let Some(i) = dominant.and_then(fmt_sim_i) {
+                        // Anchor so the first NEAR slot (+8,+4) lands ON the
+                        // port's own row — a slot below reads as the next
+                        // port's current.
+                        svg.queue_sim(
+                            bx + box_w + 13.0 + 6.8 * nname.len() as f64 + 4.0,
+                            sy - 1.0,
+                            &format!("= {i}"),
+                            "sim",
+                        );
+                    }
                 }
                 slot += 1;
             }
