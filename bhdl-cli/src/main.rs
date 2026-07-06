@@ -2653,8 +2653,58 @@ fn run_chain_stimulus(
     let input_net: String = net_name(*chain.spine_nets.first()?)?;
     let output_net: String = net_name(*chain.spine_nets.last()?)?;
 
+    // Stage probes: pins the parts THEMSELVES declared via
+    // `attribute sim_probe = "<pin>"` (stdlib policy — when to measure a
+    // stage and where, decided by the part, not the renderer).
+    let chain_insts: Vec<&str> = chain
+        .elems
+        .iter()
+        .filter_map(|e| match e {
+            bhdl_schematic::v4::classify::ChainElem::Amp { inst, .. } => Some(inst.as_str()),
+            _ => None,
+        })
+        .collect();
+    let mut stage_probes: Vec<(String, String)> = Vec::new(); // (instance, net)
+    for inst_name in &chain_insts {
+        let Some((iid, inst)) = netlist.instances.iter().find(|(_, i)| i.name == *inst_name)
+        else {
+            continue;
+        };
+        let probe_pin = inst
+            .attributes
+            .get("sim_probe")
+            .or_else(|| {
+                netlist
+                    .modules
+                    .get(inst.definition)
+                    .and_then(|m| m.attributes.get("sim_probe"))
+            })
+            .cloned();
+        let Some(pin) = probe_pin else { continue };
+        let pin = pin.trim_matches('"').to_string();
+        let net = netlist.pin_instances.values().find_map(|pi| {
+            (pi.instance == iid
+                && netlist
+                    .pins
+                    .get(pi.pin_def)
+                    .map(|d| d.name.eq_ignore_ascii_case(&pin))
+                    .unwrap_or(false))
+                .then_some(pi.net)
+                .flatten()
+        });
+        if let Some(nname) = net.and_then(net_name) {
+            stage_probes.push((inst_name.to_string(), nname));
+        }
+    }
+
     const AMP: f64 = 0.1; // 100 mV — inside the rails at any sane gain
     const FREQ: f64 = 1_000.0;
+    let mut probes = vec![input_net.clone(), output_net.clone()];
+    for (_, n) in &stage_probes {
+        if !probes.contains(n) {
+            probes.push(n.clone());
+        }
+    }
     let params = bhdl_spice::transient::TransientParams::new(
         input_net.clone(),
         bhdl_spice::transient::Stimulus::Sine {
@@ -2662,7 +2712,7 @@ fn run_chain_stimulus(
             frequency_hz: FREQ,
             dc_offset: 0.0,
         },
-        vec![input_net.clone(), output_net.clone()],
+        probes,
         5.0 / FREQ,       // five cycles — settle, then measure the last
         1.0 / FREQ / 200.0, // 200 points per cycle
     );
@@ -2698,9 +2748,58 @@ fn run_chain_stimulus(
                     .unwrap_or(false)
             })
     });
+    // Per-stage measurements at the declared probe nets, clipping judged
+    // against EACH instance's own supply rails.
+    let rails_of = |inst_name: &str| -> (Option<f64>, Option<f64>) {
+        let Some((iid, _)) = netlist.instances.iter().find(|(_, i)| i.name == inst_name)
+        else {
+            return (None, None);
+        };
+        let rail = |pin: &str| {
+            netlist.pin_instances.values().find_map(|pi| {
+                (pi.instance == iid
+                    && netlist
+                        .pins
+                        .get(pi.pin_def)
+                        .map(|d| d.name.eq_ignore_ascii_case(pin))
+                        .unwrap_or(false))
+                    .then_some(pi.net)
+                    .flatten()
+                    .and_then(|nid| netlist.nets.get(nid))
+                    .and_then(|n| match n.net_class {
+                        bhdl_netlist::types::NetClass::Power { voltage, .. } => Some(voltage),
+                        _ => None,
+                    })
+            })
+        };
+        (rail("VCC"), rail("VEE"))
+    };
+    let stages: Vec<bhdl_schematic::StageResponse> = stage_probes
+        .iter()
+        .filter_map(|(inst, nname)| {
+            let v = result.probe_voltages.get(nname)?;
+            let tail = &v[v.len().saturating_sub(200)..];
+            let smax = tail.iter().cloned().fold(f64::MIN, f64::max);
+            let smin = tail.iter().cloned().fold(f64::MAX, f64::min);
+            let (vp, vn) = rails_of(inst);
+            let stage_clipped = vp.map(|r| (smax - r).abs() < 1e-3).unwrap_or(false)
+                || vn.map(|r| (smin - r).abs() < 1e-3).unwrap_or(false);
+            Some(bhdl_schematic::StageResponse {
+                instance: inst.clone(),
+                net: nname.clone(),
+                amplitude: (smax - smin) / 2.0,
+                clipped: stage_clipped,
+            })
+        })
+        .collect();
     info!(
-        "chain stimulus: {AMP} V @ {FREQ} Hz at {input_net} -> {vout_amplitude:.4} V at {output_net}{}",
-        if clipped { " (CLIPPED)" } else { "" }
+        "chain stimulus: {AMP} V @ {FREQ} Hz at {input_net} -> {vout_amplitude:.4} V at {output_net}{}; stages: {}",
+        if clipped { " (CLIPPED)" } else { "" },
+        stages
+            .iter()
+            .map(|s| format!("{}={:.4}V{}", s.instance, s.amplitude, if s.clipped { "!" } else { "" }))
+            .collect::<Vec<_>>()
+            .join(", ")
     );
     Some(bhdl_schematic::StimulusResponse {
         input_net,
@@ -2709,6 +2808,7 @@ fn run_chain_stimulus(
         vin_amplitude: AMP,
         vout_amplitude,
         clipped,
+        stages,
     })
 }
 

@@ -214,8 +214,22 @@ impl Svg {
         self.channels.clear();
         let pending = std::mem::take(&mut self.pending_sims);
         for (ax, ay, t, cls) in pending {
-            const NEAR: [(f64, f64); 4] =
-                [(8.0, 4.0), (8.0, -8.0), (8.0, 18.0), (14.0, 4.0)];
+            // A wider ring than the label placer: decorations must survive
+            // dense neighbourhoods (an amp output crowds a feedback riser,
+            // the next part's label and the spine wire) — but still never
+            // LEFT of the anchor.
+            const NEAR: [(f64, f64); 10] = [
+                (8.0, 4.0),
+                (8.0, -8.0),
+                (8.0, 18.0),
+                (14.0, 4.0),
+                (8.0, -22.0),
+                (22.0, -8.0),
+                (22.0, 4.0),
+                (8.0, 32.0),
+                (30.0, -22.0),
+                (30.0, 18.0),
+            ];
             for (dx, dy) in NEAR {
                 let (x, y) = (ax + dx, ay + dy);
                 let r = Self::text_rect(&t, x, y);
@@ -1603,6 +1617,28 @@ fn draw_chain(
             }
             ChainElem::Amp { inst, fb_parts, gnd_leg, unity } => {
                 x = draw_amp(svg, netlist, decor, inst, fb_parts, gnd_leg, *unity, x, spine, &mut depth);
+                // Per-stage measured amplitude at the pin this part
+                // DECLARED as its probe point (stdlib sim_probe policy) —
+                // the stage's transformation, visible at its output.
+                // Skipped when the probe net IS the chain output: the
+                // output flag already carries that measurement.
+                let stage = decor.sim.and_then(|s| s.stimulus.as_ref()).and_then(|s| {
+                    s.stages
+                        .iter()
+                        .find(|st| st.instance == *inst && st.net != s.output_net)
+                });
+                if let Some(st) = stage {
+                    svg.queue_sim(
+                        x - 20.0,
+                        spine - 18.0,
+                        &format!(
+                            "= {}{}",
+                            fmt_sim_v(st.amplitude),
+                            if st.clipped { " CLIPPED" } else { "" }
+                        ),
+                        "sim",
+                    );
+                }
             }
         }
     }

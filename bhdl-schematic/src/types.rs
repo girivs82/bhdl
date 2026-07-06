@@ -259,6 +259,25 @@ pub struct StimulusResponse {
     pub vout_amplitude: f64,
     /// True when the output ran into an op-amp rail during the run.
     pub clipped: bool,
+    /// Per-stage measurements at pins the parts THEMSELVES declared as
+    /// probe points (`attribute sim_probe = "OUT"` in stdlib) — the
+    /// when/where of stage annotations is part policy, not renderer
+    /// guesswork.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stages: Vec<StageResponse>,
+}
+
+/// Amplitude measured at one declared probe pin during the stimulus run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StageResponse {
+    /// Instance whose declared probe pin was measured.
+    pub instance: String,
+    /// The probe pin's net.
+    pub net: String,
+    /// Amplitude over the final stimulus cycle.
+    pub amplitude: f64,
+    /// True when this stage's extremes sit on ITS OWN supply rails.
+    pub clipped: bool,
 }
 
 /// A power rail shown at the top/bottom of the schematic.

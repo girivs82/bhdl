@@ -46,6 +46,12 @@ entity OpAmp(
     attribute open_loop_gain    = aol;
     attribute input_resistance  = r_in;
     attribute output_resistance = r_out;
+    // Stimulus-run probe policy: this part ASKS to be measured at OUT.
+    // Presence of the attribute = annotate this stage on the schematic;
+    // its value = which pin's net carries the measurement. Any entity can
+    // declare its own (comparator OUT, filter VOUT, …) — the renderer
+    // never guesses probe points.
+    attribute sim_probe = "OUT";
     attribute kicad_symbol    = "Amplifier_Operational:LM741";
 }
 
