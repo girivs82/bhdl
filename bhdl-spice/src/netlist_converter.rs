@@ -470,18 +470,65 @@ impl NetlistToSpiceConverter {
                 );
                 return Ok(());
             };
+            // Unit-aware magnitude parse: "1MHz", "2MΩ", "75µV", "0.5".
+            // Case-exact multipliers ('m' = milli, 'M' = mega) so "mV" and
+            // "MHz" both read correctly.
+            let parse_qty = |s: &str| -> Option<f64> {
+                let s = s.trim();
+                let num_end = s
+                    .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+' || c == 'e' || c == 'E'))
+                    .unwrap_or(s.len());
+                // 'e' may be a unit start ("e" isn't) — retry without exp chars on failure.
+                let v: f64 = s[..num_end].parse().ok().or_else(|| {
+                    let ne = s
+                        .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+'))
+                        .unwrap_or(s.len());
+                    s[..ne].parse().ok()
+                })?;
+                let suffix = s[num_end..].trim_start_matches(|c: char| c == 'e' || c == 'E');
+                Some(v * match suffix.chars().next() {
+                    Some('p') => 1e-12,
+                    Some('n') => 1e-9,
+                    Some('µ') | Some('u') => 1e-6,
+                    Some('m') => 1e-3,
+                    Some('k') | Some('K') => 1e3,
+                    Some('M') => 1e6,
+                    Some('G') => 1e9,
+                    Some('T') => 1e12,
+                    _ => 1.0,
+                })
+            };
+            let attr = |names: &[&str]| -> Option<f64> {
+                names.iter().find_map(|n| {
+                    instance
+                        .attributes
+                        .get(*n)
+                        .or_else(|| module.attributes.get(*n))
+                        .and_then(|s| parse_qty(s))
+                })
+            };
             // Open-loop gain: datasheet attribute when declared, else the
             // documented ideal default (2e5 ≈ LM741 typ; closed-loop results
             // are insensitive to A at feedback-network gains).
-            let gain = instance
-                .attributes
-                .get("spice_aol")
-                .or_else(|| instance.attributes.get("open_loop_gain"))
-                .and_then(|s| s.trim().parse::<f64>().ok())
-                .unwrap_or(2e5);
+            let gain = attr(&["spice_aol", "open_loop_gain"]).unwrap_or(2e5);
+            // The full behavioral parameter set — every value comes from the
+            // part's OWN stdlib declaration; absent attributes leave the
+            // corresponding physics out of the model (no GBW → memoryless,
+            // no slew → unlimited), never a fabricated stand-in.
+            let mut meta = std::collections::HashMap::new();
+            for (key, names) in [
+                (crate::circuit::META_GBW, &["spice_gbw", "gain_bandwidth"][..]),
+                (crate::circuit::META_RIN, &["spice_rin", "input_resistance"][..]),
+                (crate::circuit::META_ROUT, &["spice_rout", "output_resistance"][..]),
+                (crate::circuit::META_VOS, &["spice_vos", "input_offset"][..]),
+                (crate::circuit::META_SLEW, &["spice_slew_rate", "slew_rate"][..]),
+            ] {
+                if let Some(v) = attr(names) {
+                    meta.insert(key.to_string(), v.to_string());
+                }
+            }
             // Saturation = the REAL supply rails this instance is wired to
             // (net-class voltages), not an assumed headroom.
-            let mut meta = std::collections::HashMap::new();
             let rail_v = |pin: &str| {
                 pin_info
                     .iter()

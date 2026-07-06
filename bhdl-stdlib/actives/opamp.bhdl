@@ -21,7 +21,14 @@ entity OpAmp(
     slew_rate: float       = 0.5,     // V/µs
     input_offset: voltage  = 2mV,     // input offset voltage, typ
     i_supply: current      = 1.7mA,   // supply current per package
-    channels: float        = 1        // amplifiers per package
+    channels: float        = 1,       // amplifiers per package
+    // Behavioral simulation parameters (defaults = LM741 typicals). The
+    // transient solver builds each amp's single-pole model from THESE —
+    // one generic model, per-part numbers, so any cascade of any SKUs
+    // simulates from its own datasheet values.
+    aol: float             = 200000,  // open-loop DC gain, V/V (200 V/mV)
+    r_in: resistance       = 2MΩ,     // differential input resistance
+    r_out: resistance      = 75Ω      // open-loop output resistance
 ) {
     pin INP: signal in;   // Non-inverting input (+)
     pin INN: signal in;   // Inverting input (−)
@@ -36,11 +43,18 @@ entity OpAmp(
     attribute input_offset    = input_offset;
     attribute i_supply        = i_supply;
     attribute channels        = channels;
+    attribute open_loop_gain    = aol;
+    attribute input_resistance  = r_in;
+    attribute output_resistance = r_out;
     attribute kicad_symbol    = "Amplifier_Operational:LM741";
 }
 
-// SKU aliases bind the datasheet values positionally.
-alias OPAMP_LM741 = OpAmp("LM741", 1MHz, 0.5, 2mV, 1.7mA, 1);
-alias OPAMP_TL072 = OpAmp("TL072", 3MHz, 13, 3mV, 1.4mA, 2);   // JFET input
-alias OPAMP_LM358 = OpAmp("LM358", 1MHz, 0.5, 2mV, 0.7mA, 2);  // single-supply
-alias OPAMP_OP07  = OpAmp("OP07", 600kHz, 0.3, 75µV, 2.5mA, 1); // precision
+// SKU aliases bind the datasheet values positionally. Aol/Rin per the
+// datasheets (TI LM741 §6.5: 200 V/mV, 2 MΩ, Ro 75 Ω; TI TL072 §6.5:
+// 200 V/mV, 10¹² Ω JFET input; TI LM358 §6.5: 100 V/mV; ADI OP07:
+// 400 V/mV min, 33 MΩ, Ro 60 Ω). Where a datasheet doesn't state Ro the
+// entity default (75 Ω, LM741-class) applies.
+alias OPAMP_LM741 = OpAmp("LM741", 1MHz, 0.5, 2mV, 1.7mA, 1, 200000, 2MΩ, 75Ω);
+alias OPAMP_TL072 = OpAmp("TL072", 3MHz, 13, 3mV, 1.4mA, 2, 200000, 1000000MΩ, 75Ω);   // JFET input
+alias OPAMP_LM358 = OpAmp("LM358", 1MHz, 0.5, 2mV, 0.7mA, 2, 100000, 2MΩ, 75Ω);  // single-supply
+alias OPAMP_OP07  = OpAmp("OP07", 600kHz, 0.3, 75µV, 2.5mA, 1, 400000, 33MΩ, 60Ω); // precision

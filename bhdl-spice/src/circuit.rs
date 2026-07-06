@@ -55,6 +55,17 @@ pub const META_ESR: &str = "esr";
 pub const META_VSAT_P: &str = "vsat_p";
 /// Op-amp negative output saturation (volts) — the negative supply rail.
 pub const META_VSAT_N: &str = "vsat_n";
+/// Op-amp gain-bandwidth product, in Hz (sets the dominant pole together
+/// with the open-loop gain carried in `Branch::value`).
+pub const META_GBW: &str = "gbw_hz";
+/// Op-amp differential input resistance, in ohms.
+pub const META_RIN: &str = "rin_ohm";
+/// Op-amp open-loop output resistance, in ohms.
+pub const META_ROUT: &str = "rout_ohm";
+/// Op-amp input offset voltage, in volts (added to the differential input).
+pub const META_VOS: &str = "vos_v";
+/// Op-amp slew rate, in V/µs.
+pub const META_SLEW: &str = "slew_v_per_us";
 /// Capacitor or device voltage rating, in volts.
 pub const META_VOLTAGE_RATING: &str = "voltage_rating";
 /// Inductor DC resistance, in ohms.

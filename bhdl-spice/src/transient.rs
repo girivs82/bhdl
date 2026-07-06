@@ -38,7 +38,7 @@ use std::collections::HashMap;
 use nalgebra::{DMatrix, DVector};
 use petgraph::graph::{EdgeIndex, NodeIndex};
 
-use crate::circuit::{Circuit, DeviceKind, META_DCR, META_ESR, META_VSAT_N, META_VSAT_P};
+use crate::circuit::{Circuit, DeviceKind, META_DCR, META_ESR, META_GBW, META_RIN, META_ROUT, META_SLEW, META_VOS, META_VSAT_N, META_VSAT_P};
 use crate::companion_models::{
     capacitor_advance_v_c, capacitor_advance_v_c_bdf2,
     capacitor_bdf1_with_esr, capacitor_bdf2_with_esr,
@@ -273,10 +273,12 @@ pub fn run_transient(
     // history is incomplete and we fall back to BDF1.
     let mut cap_v_c: HashMap<EdgeIndex, (f64, f64)> = HashMap::new();
     let mut ind_i_l: HashMap<EdgeIndex, (f64, f64)> = HashMap::new();
+    let mut amp_v_a: HashMap<EdgeIndex, f64> = HashMap::new();
     for (edge, branch) in circuit.branches() {
         match branch.component_type.as_str() {
             "Capacitor" => { cap_v_c.insert(edge, (0.0, 0.0)); }
             "Inductor"  => { ind_i_l.insert(edge, (0.0, 0.0)); }
+            "OpAmp"     => { amp_v_a.insert(edge, 0.0); }
             _ => {}
         }
     }
@@ -307,7 +309,7 @@ pub fn run_transient(
     //               (the LTE estimate) is within tolerance, otherwise
     //               shrink h and retry.
     let n = nodes.size();
-    let mut state = TransientState { cap_v_c, ind_i_l };
+    let mut state = TransientState { cap_v_c, ind_i_l, amp_v_a };
     let mut t = 0.0;
     let mut h = params.timestep;
     let mut step_count = 0usize;
@@ -365,6 +367,9 @@ struct TransientState {
     cap_v_c: HashMap<EdgeIndex, (f64, f64)>,
     /// Per-inductor `(i_L_n, i_L_n_minus_1)`.
     ind_i_l: HashMap<EdgeIndex, (f64, f64)>,
+    /// Per-op-amp internal gain-stage voltage `v_a` — the single-pole
+    /// compensated state, BE-integrated (memoryless when no GBW declared).
+    amp_v_a: HashMap<EdgeIndex, f64>,
 }
 
 /// Output of a single timestep: the post-step state plus the solved node
@@ -444,26 +449,45 @@ fn take_one_step(
     y[(input_idx, input_idx)] = 1.0;
     rhs[input_idx] = stimulus.at(t_start + h);
 
-    // 2b. Ideal op-amps (`nodes = [inp, inn, out]`, value = A): the OUT
-    // node's KCL row is REPLACED by the amp equation
-    //     v_out − A·(v_p − v_n) = 0
-    // — the standard ideal-VCVS formulation (infinite input impedance: no
-    // stamps on the input rows; zero output impedance: the output row
-    // belongs to the amp, which supplies whatever current KCL needs).
-    // Rail saturation is an active-set iteration: solve, and any amp whose
-    // linear output leaves [vsat_n, vsat_p] gets its row pinned at that
-    // rail and the system re-solved. The pinned set only grows, so the
-    // loop terminates in at most n_amps + 1 solves.
-    struct OpAmpRow {
-        out: usize,
-        p: Option<usize>, // None = input tied to ground (0 V)
+    // 2b. Behavioral op-amps (`nodes = [inp, inn, out]`, value = open-loop
+    // gain A). Each amp carries an internal single-pole gain-stage state
+    // `v_a` (dominant-pole compensation):
+    //
+    //     dv_a/dt = ωp·(A·v_d − v_a),   ωp = 2π·GBW/A,   v_d = (v+ − v−) + Vos
+    //
+    // BE-discretised:  v_a' = α·v_a + β·v_d,  α = 1/(1+h·ωp),
+    // β = h·ωp·A/(1+h·ωp).  With no GBW declared the pole is dropped
+    // (α = 0, β = A: the memoryless limit). The OUTPUT stage is a Norton
+    // companion into the OUT node through the open-loop output resistance:
+    //
+    //     i_out = (v_a' − v_out)/Rout
+    //
+    // Substituting the (linear-in-v_d) v_a' expression keeps the whole
+    // stamp LINEAR — no row replacement, so amps load one another and any
+    // cascade topology solves as an ordinary network. The differential
+    // input resistance Rin stamps between the inputs. Slew-rate and rail
+    // limits are enforced by an active-set loop: solve, and any amp whose
+    // v_a' violates a limit gets it PINNED at the limited value (a
+    // constant) and the system re-solved; the pinned set only grows.
+    struct AmpStamp {
+        edge: EdgeIndex,
+        p: Option<usize>,
         n_in: Option<usize>,
-        gain: f64,
+        out: usize,
+        alpha: f64,
+        beta: f64,
+        g_out: f64,
+        vos: f64,
+        v_a_prev: f64,
+        sr_v_per_s: f64,
         vmax: f64,
         vmin: f64,
     }
-    let mut amps: Vec<OpAmpRow> = Vec::new();
-    for (_edge, branch) in circuit.branches() {
+    let meta_f64 = |branch: &crate::circuit::Branch, key: &str| {
+        branch.metadata.get(key).and_then(|s| s.parse::<f64>().ok())
+    };
+    let mut amps: Vec<AmpStamp> = Vec::new();
+    for (edge, branch) in circuit.branches() {
         if branch.component_type != "OpAmp" || branch.nodes.len() != 3 {
             continue;
         }
@@ -471,58 +495,90 @@ fn take_one_step(
         if out == input_idx {
             continue; // the stimulus owns that row
         }
-        amps.push(OpAmpRow {
-            out,
+        let aol = branch.value.max(1.0);
+        let (alpha, beta) = match meta_f64(branch, META_GBW) {
+            Some(gbw) if gbw > 0.0 => {
+                let omega_p = 2.0 * std::f64::consts::PI * gbw / aol;
+                let d = 1.0 + h * omega_p;
+                (1.0 / d, h * omega_p * aol / d)
+            }
+            _ => (0.0, aol),
+        };
+        let rout = meta_f64(branch, META_ROUT).unwrap_or(1.0).max(1e-3);
+        // Rin stamps as an ordinary conductance between the inputs.
+        if let Some(rin) = meta_f64(branch, META_RIN) {
+            if rin.is_finite() && rin > 0.0 {
+                stamp(
+                    nodes,
+                    branch.nodes[0],
+                    branch.nodes[1],
+                    Companion { g_eq: 1.0 / rin, i_eq: 0.0 },
+                    &mut y,
+                    &mut rhs,
+                );
+            }
+        }
+        amps.push(AmpStamp {
+            edge,
             p: nodes.get(branch.nodes[0]),
             n_in: nodes.get(branch.nodes[1]),
-            gain: branch.value,
-            vmax: branch.metadata.get(META_VSAT_P)
-                .and_then(|s| s.parse::<f64>().ok())
+            out,
+            alpha,
+            beta,
+            g_out: 1.0 / rout,
+            vos: meta_f64(branch, META_VOS).unwrap_or(0.0),
+            v_a_prev: state.amp_v_a.get(&edge).copied().unwrap_or(0.0),
+            sr_v_per_s: meta_f64(branch, META_SLEW)
+                .map(|s| s * 1e6)
                 .unwrap_or(f64::INFINITY),
-            vmin: branch.metadata.get(META_VSAT_N)
-                .and_then(|s| s.parse::<f64>().ok())
-                .unwrap_or(f64::NEG_INFINITY),
+            vmax: meta_f64(branch, META_VSAT_P).unwrap_or(f64::INFINITY),
+            vmin: meta_f64(branch, META_VSAT_N).unwrap_or(f64::NEG_INFINITY),
         });
     }
 
     // 3. Solve (with the op-amp active-set loop when amps are present).
+    let mut amp_pinned: Vec<Option<f64>> = vec![None; amps.len()];
     let solution = if amps.is_empty() {
         y.lu().solve(&rhs).ok_or(SpiceError::SingularMatrix)?
     } else {
-        let mut pinned: Vec<Option<f64>> = vec![None; amps.len()];
         loop {
             let mut y2 = y.clone();
             let mut rhs2 = rhs.clone();
             for (k, amp) in amps.iter().enumerate() {
-                for j in 0..n {
-                    y2[(amp.out, j)] = 0.0;
+                if amp.out == input_idx {
+                    continue;
                 }
-                y2[(amp.out, amp.out)] = 1.0;
-                match pinned[k] {
-                    Some(rail) => rhs2[amp.out] = rail,
+                y2[(amp.out, amp.out)] += amp.g_out;
+                match amp_pinned[k] {
+                    Some(v_a) => rhs2[amp.out] += v_a * amp.g_out,
                     None => {
                         if let Some(p) = amp.p {
-                            y2[(amp.out, p)] -= amp.gain;
+                            y2[(amp.out, p)] -= amp.beta * amp.g_out;
                         }
                         if let Some(m) = amp.n_in {
-                            y2[(amp.out, m)] += amp.gain;
+                            y2[(amp.out, m)] += amp.beta * amp.g_out;
                         }
-                        rhs2[amp.out] = 0.0;
+                        rhs2[amp.out] +=
+                            (amp.alpha * amp.v_a_prev + amp.beta * amp.vos) * amp.g_out;
                     }
                 }
             }
             let sol = y2.lu().solve(&rhs2).ok_or(SpiceError::SingularMatrix)?;
             let mut grew = false;
             for (k, amp) in amps.iter().enumerate() {
-                if pinned[k].is_some() {
+                if amp_pinned[k].is_some() {
                     continue;
                 }
-                let v = sol[amp.out];
-                if v > amp.vmax {
-                    pinned[k] = Some(amp.vmax);
-                    grew = true;
-                } else if v < amp.vmin {
-                    pinned[k] = Some(amp.vmin);
+                let vp = amp.p.map(|i| sol[i]).unwrap_or(0.0);
+                let vn = amp.n_in.map(|i| sol[i]).unwrap_or(0.0);
+                let v_a = amp.alpha * amp.v_a_prev + amp.beta * (vp - vn + amp.vos);
+                let slew_cap = amp.sr_v_per_s * h;
+                let mut limited = v_a
+                    .max(amp.v_a_prev - slew_cap)
+                    .min(amp.v_a_prev + slew_cap);
+                limited = limited.max(amp.vmin).min(amp.vmax);
+                if (limited - v_a).abs() > 1e-9 {
+                    amp_pinned[k] = Some(limited);
                     grew = true;
                 }
             }
@@ -582,6 +638,20 @@ fn take_one_step(
             }
             _ => {}
         }
+    }
+
+    // Persist each amp's internal state: the pinned (slew/rail-limited)
+    // value when the active set claimed it, else the linear BE update.
+    for (k, amp) in amps.iter().enumerate() {
+        let v_a_new = match amp_pinned[k] {
+            Some(v) => v,
+            None => {
+                let vp = amp.p.map(|i| solution[i]).unwrap_or(0.0);
+                let vn = amp.n_in.map(|i| solution[i]).unwrap_or(0.0);
+                amp.alpha * amp.v_a_prev + amp.beta * (vp - vn + amp.vos)
+            }
+        };
+        new_state.amp_v_a.insert(amp.edge, v_a_new);
     }
 
     Ok(StepResult { state: new_state, solution })
@@ -1835,8 +1905,92 @@ mod tests {
         let vout = &result.probe_voltages["Vout"];
         let max = vout.iter().cloned().fold(f64::MIN, f64::max);
         let min = vout.iter().cloned().fold(f64::MAX, f64::min);
-        assert!((max - 12.0).abs() < 1e-6, "clipped peak {max:.4} V, expected exactly 12 V");
-        assert!((min + 12.0).abs() < 1e-6, "clipped trough {min:.4} V, expected exactly -12 V");
+        // The internal stage pins at ±12 V; the OUTPUT sees that through
+        // the (default 1 Ω) open-loop output resistance into the 100 kΩ
+        // feedback load — a ~0.001% sag, physical, not numerical.
+        assert!((max - 12.0).abs() < 1e-3, "clipped peak {max:.4} V, expected ~12 V");
+        assert!((min + 12.0).abs() < 1e-3, "clipped trough {min:.4} V, expected ~-12 V");
+    }
+
+    /// Finite GBW: a gain-10 amp with a 1 MHz GBW has its closed-loop pole
+    /// at 100 kHz — probing AT the pole must measure |H| = 10/√2, not 10.
+    /// This is the single-pole dynamic the ideal-row model couldn't show.
+    #[test]
+    fn opamp_gbw_rolls_off_the_closed_loop() {
+        let mut circuit = Circuit::new();
+        circuit.add_node("Vin".to_string(), None);
+        circuit.add_node("Vout".to_string(), None);
+        circuit.add_node("FB".to_string(), None);
+        circuit.add_node("GND".to_string(), None);
+        circuit.add_branch("Rf".to_string(), "Vout", "FB", "Resistor".to_string(), 90_000.0, None);
+        circuit.add_branch("Rg".to_string(), "FB", "GND", "Resistor".to_string(), 10_000.0, None);
+        let mut meta = HashMap::new();
+        meta.insert(META_GBW.to_string(), "1e6".to_string());
+        circuit.add_opamp_branch("U1".to_string(), "Vin", "FB", "Vout", 2e5, None, meta);
+
+        let f = 100_000.0; // exactly the closed-loop corner
+        let params = TransientParams::new(
+            "Vin",
+            Stimulus::Sine { amplitude: 0.1, frequency_hz: f, dc_offset: 0.0 },
+            vec!["Vout"],
+            6.0 / f,        // six cycles: settle, then measure
+            1.0 / f / 400.0, // 400 points per cycle (h ≪ the 1.6 µs pole)
+        );
+        let result = run_transient(&circuit, &params).unwrap();
+        let vout = &result.probe_voltages["Vout"];
+        let tail = &vout[vout.len() - 400..];
+        let max = tail.iter().cloned().fold(f64::MIN, f64::max);
+        let min = tail.iter().cloned().fold(f64::MAX, f64::min);
+        let amp = (max - min) / 2.0;
+        let expected = 1.0 / 2f64.sqrt(); // 10·0.1 V at −3 dB
+        assert!(
+            (amp - expected).abs() / expected < 0.05,
+            "at the closed-loop corner |H|·Vin = {amp:.4} V, expected {expected:.4} V ±5%"
+        );
+    }
+
+    /// Slew limiting: a unity buffer with SR = 0.5 V/µs asked to follow a
+    /// 5 V / 100 kHz sine (which demands π V/µs) must produce a slew-bound
+    /// triangle — max slope ≤ SR, amplitude collapsed to ~SR·T/4 = 1.25 V.
+    #[test]
+    fn opamp_slew_rate_bounds_the_output()  {
+        let mut circuit = Circuit::new();
+        circuit.add_node("Vin".to_string(), None);
+        circuit.add_node("Vout".to_string(), None);
+        circuit.add_node("GND".to_string(), None);
+        circuit.add_branch("RL".to_string(), "Vout", "GND", "Resistor".to_string(), 10_000.0, None);
+        let mut meta = HashMap::new();
+        meta.insert(META_SLEW.to_string(), "0.5".to_string()); // V/µs
+        circuit.add_opamp_branch("U1".to_string(), "Vin", "Vout", "Vout", 2e5, None, meta);
+
+        let f = 100_000.0;
+        let h = 1.0 / f / 200.0;
+        let params = TransientParams::new(
+            "Vin",
+            Stimulus::Sine { amplitude: 5.0, frequency_hz: f, dc_offset: 0.0 },
+            vec!["Vout"],
+            4.0 / f,
+            h,
+        );
+        let result = run_transient(&circuit, &params).unwrap();
+        let vout = &result.probe_voltages["Vout"];
+        let max_slope = vout
+            .windows(2)
+            .map(|w| ((w[1] - w[0]) / h).abs())
+            .fold(0.0f64, f64::max);
+        assert!(
+            max_slope <= 0.5e6 * 1.05,
+            "max slope {:.3} V/µs exceeds the 0.5 V/µs slew limit",
+            max_slope / 1e6
+        );
+        let tail = &vout[vout.len() - 200..];
+        let amp = (tail.iter().cloned().fold(f64::MIN, f64::max)
+            - tail.iter().cloned().fold(f64::MAX, f64::min))
+            / 2.0;
+        assert!(
+            (amp - 1.25).abs() < 0.2,
+            "slew-bound amplitude {amp:.3} V, expected ~1.25 V (SR·T/4)"
+        );
     }
 }
 
