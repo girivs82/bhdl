@@ -16,7 +16,7 @@ use std::fmt::Write as _;
 use bhdl_netlist::netlist::Netlist;
 use bhdl_netlist::types::{NetClass, NetId};
 
-use super::classify::{classify_sheet, BackboneElem, SheetPlan};
+use super::classify::{classify_sheet, BackboneElem, ChainElem, SheetPlan};
 use crate::types::SimulationAnnotations;
 use bhdl_common::symbol::{PinSide, SymbolDefinition};
 
@@ -508,6 +508,36 @@ impl Svg {
         );
         self.wire(&[(x, y + 24.0), (x, y + 34.0)]);
     }
+    /// Resistor drawn horizontally (IEC box): in left (x, y), out (x+40, y).
+    fn res_h(&mut self, x: f64, y: f64) {
+        self.solid(Rect { x0: x + 7.0, y0: y - 9.0, x1: x + 33.0, y1: y + 9.0 });
+        self.wire(&[(x, y), (x + 8.0, y)]);
+        let _ = writeln!(
+            self.body,
+            r##"<rect x="{:.1}" y="{:.1}" width="24" height="16" fill="none" stroke="#222" stroke-width="1.6"/>"##,
+            x + 8.0,
+            y - 8.0
+        );
+        self.wire(&[(x + 32.0, y), (x + 40.0, y)]);
+    }
+    /// Signal-net flag: the rail-flag arrow shape with signal styling.
+    fn sig_flag(&mut self, x: f64, y: f64, label: &str, leftward: bool) {
+        let d = if leftward { -1.0 } else { 1.0 };
+        self.wire(&[(x, y), (x + d * 14.0, y - 10.0)]);
+        self.wire(&[(x, y), (x + d * 14.0, y + 10.0)]);
+        self.text(x + 4.0, y - 14.0, label, "part");
+    }
+    /// Test point: a small open circle riding a stub above the net.
+    fn testpoint(&mut self, x: f64, y_net: f64, label: &str) {
+        self.wire(&[(x, y_net), (x, y_net - 16.0)]);
+        let _ = writeln!(
+            self.body,
+            r##"<circle cx="{x:.1}" cy="{:.1}" r="4.5" fill="none" stroke="#222" stroke-width="1.6"/>"##,
+            y_net - 21.0
+        );
+        self.solid(Rect { x0: x - 5.0, y0: y_net - 26.0, x1: x + 5.0, y1: y_net - 16.0 });
+        self.place_label(x, y_net - 34.0, label, "ref");
+    }
     /// Capacitor drawn horizontally: in left (x, y), out at (x+34, y).
     fn cap_h(&mut self, x: f64, y: f64) {
         self.solid(Rect { x0: x + 11.0, y0: y - 12.0, x1: x + 23.0, y1: y + 12.0 });
@@ -565,6 +595,9 @@ fn fmt_sim_i(i: f64) -> Option<String> {
 }
 
 fn fmt_sim_v(v: f64) -> String {
+    // Clamp numeric dust to a true zero — "-0mV" is a formatting artifact,
+    // not a measurement.
+    let v = if v.abs() < 5e-4 { 0.0 } else { v };
     if v.abs() >= 1.0 { format!("{v:.2}V") } else { format!("{:.0}mV", v * 1000.0) }
 }
 
@@ -1237,6 +1270,297 @@ fn draw_stage(
 
 
 /// Render the whole sheet. Returns (svg, unidiomized_count).
+fn pin_net_name(netlist: &Netlist, inst: &str, pin: &str) -> Option<String> {
+    let (iid, _) = netlist.instances.iter().find(|(_, i)| i.name == inst)?;
+    let pi = netlist.pin_instances.values().find(|p| {
+        p.instance == iid
+            && netlist
+                .pins
+                .get(p.pin_def)
+                .map(|d| d.name == pin)
+                .unwrap_or(false)
+    })?;
+    netlist.nets.get(pi.net?)?.name.clone()
+}
+
+fn pin_on_net(netlist: &Netlist, inst: &str, pin: &str, net: NetId) -> bool {
+    let Some((iid, _)) = netlist.instances.iter().find(|(_, i)| i.name == inst) else {
+        return false;
+    };
+    netlist.pin_instances.values().any(|p| {
+        p.instance == iid
+            && p.net == Some(net)
+            && netlist
+                .pins
+                .get(p.pin_def)
+                .map(|d| d.name == pin)
+                .unwrap_or(false)
+    })
+}
+
+/// Node decorations for one chain net at the running x cursor: test-point
+/// stubs, ground-shunt columns, rail-clamp columns. Returns the advanced x.
+fn chain_node(
+    svg: &mut Svg,
+    netlist: &Netlist,
+    decor: &SheetDecor,
+    chain: &super::classify::ChainPlan,
+    net: NetId,
+    mut x: f64,
+    spine: f64,
+    depth: &mut f64,
+) -> f64 {
+    for (tnet, tname) in &chain.taps {
+        if *tnet != net {
+            continue;
+        }
+        // Lead in first — a tap right at the node plants its stub through
+        // the net flag's label.
+        svg.wire(&[(x, spine), (x + 28.0, spine)]);
+        x += 28.0;
+        svg.dot(x, spine);
+        svg.testpoint(x, spine, label_of(decor, tname));
+        svg.wire(&[(x, spine), (x + 18.0, spine)]);
+        x += 18.0;
+    }
+    for s in chain.shunts.iter().filter(|s| s.tap == net) {
+        draw_shunt(svg, netlist, decor, &s.inst, x, spine);
+        *depth = depth.max(spine + 130.0);
+        svg.wire(&[(x, spine), (x + 44.0, spine)]);
+        x += 44.0;
+    }
+    for c in chain.clamps.iter().filter(|c| c.tap == net) {
+        let v = match netlist.nets.get(c.rail).map(|n| &n.net_class) {
+            Some(NetClass::Power { voltage, .. }) => *voltage,
+            _ => 1.0,
+        };
+        let up = v >= 0.0; // positive rail clamps point up, negative down
+        let k_on_tap = pin_on_net(netlist, &c.inst, "K", c.tap);
+        svg.dot(x, spine);
+        let rail_name = netlist
+            .nets
+            .get(c.rail)
+            .and_then(|n| n.name.clone())
+            .unwrap_or_default();
+        if up {
+            // Column bottom = net, top = rail. Cathode at rail unless the
+            // netlist says otherwise (Real-Data: draw what is wired).
+            svg.wire(&[(x, spine), (x, spine - 16.0)]);
+            if k_on_tap {
+                svg.diode_v(x, spine - 50.0);
+            } else {
+                svg.diode_v_up(x, spine - 50.0);
+            }
+            svg.wire(&[(x, spine - 50.0), (x, spine - 60.0)]);
+            svg.text(x - 12.0, spine - 66.0, &rail_name, "rail");
+        } else {
+            // Column top = net, bottom = rail.
+            svg.wire(&[(x, spine), (x, spine + 16.0)]);
+            if k_on_tap {
+                svg.diode_v_up(x, spine + 16.0);
+            } else {
+                svg.diode_v(x, spine + 16.0);
+            }
+            svg.wire(&[(x, spine + 50.0), (x, spine + 60.0)]);
+            svg.text(x - 12.0, spine + 74.0, &rail_name, "rail");
+            *depth = depth.max(spine + 90.0);
+        }
+        svg.place_label_pair(x + 4.0, if up { spine - 40.0 } else { spine + 30.0 },
+            label_of(decor, &c.inst), "ref", &value_of(netlist, &c.inst), "val");
+        svg.wire(&[(x, spine), (x + 40.0, spine)]);
+        x += 40.0;
+    }
+    x
+}
+
+/// The op-amp glyph with its feedback: triangle entered at INP (upper-left,
+/// via a small jog), INN on the lower-left, OUT at the apex. Feedback draws
+/// BELOW the amp — the unity wire as a single loop, a network as horizontal
+/// lanes between the OUT tap and the INN node column, with the ground leg
+/// (r_g) continuing down from the node to ground. Supply pins render as
+/// short labeled stubs. Returns the new x cursor (end of the OUT lead).
+#[allow(clippy::too_many_arguments)]
+fn draw_amp(
+    svg: &mut Svg,
+    netlist: &Netlist,
+    decor: &SheetDecor,
+    inst: &str,
+    fb_parts: &[String],
+    gnd_leg: &[String],
+    unity: bool,
+    x: f64,
+    spine: f64,
+    depth: &mut f64,
+) -> f64 {
+    // Jog up into INP.
+    svg.wire(&[(x, spine), (x + 12.0, spine), (x + 12.0, spine - 12.0), (x + 28.0, spine - 12.0)]);
+    let tx = x + 28.0;
+    let _ = writeln!(
+        svg.body,
+        r##"<polygon points="{tx:.1},{:.1} {tx:.1},{:.1} {:.1},{spine:.1}" fill="#f7f7f2" stroke="#222" stroke-width="1.8"/>"##,
+        spine - 28.0,
+        spine + 28.0,
+        tx + 60.0
+    );
+    svg.grow(tx + 60.0, spine + 28.0);
+    svg.solid(Rect { x0: tx, y0: spine - 28.0, x1: tx + 60.0, y1: spine + 28.0 });
+    svg.text(tx + 5.0, spine - 8.0, "+", "part");
+    svg.text(tx + 5.0, spine + 17.0, "−", "part");
+    svg.place_label(tx + 18.0, spine - 40.0, label_of(decor, inst), "ref");
+
+    // Supply stubs off the triangle's sloped edges.
+    for (pin, dy) in [("VCC", -1.0), ("VEE", 1.0)] {
+        if let Some(nname) = pin_net_name(netlist, inst, pin) {
+            let ex = tx + 18.0;
+            svg.wire(&[(ex, spine + dy * 19.0), (ex, spine + dy * 44.0)]);
+            svg.place_label(ex - 4.0, spine + dy * 52.0, &nname, "rail");
+        }
+    }
+
+    let ox = tx + 60.0;
+    svg.wire(&[(ox, spine), (ox + 24.0, spine)]);
+    let fb_x = tx - 16.0; // INN / feedback node column
+    let tap_x = ox + 12.0; // feedback tap on the OUT lead
+
+    if unity {
+        svg.dot(tap_x, spine);
+        svg.wire(&[
+            (tap_x, spine),
+            (tap_x, spine + 58.0),
+            (fb_x, spine + 58.0),
+            (fb_x, spine + 12.0),
+            (tx, spine + 12.0),
+        ]);
+        *depth = depth.max(spine + 74.0);
+    } else {
+        svg.wire(&[(tx, spine + 12.0), (fb_x, spine + 12.0)]);
+        let n = fb_parts.len().max(1);
+        let lane0 = spine + 66.0;
+        let lane_h = 40.0;
+        let last_lane = lane0 + (n as f64 - 1.0) * lane_h;
+        svg.wire(&[(fb_x, spine + 12.0), (fb_x, last_lane)]);
+        svg.dot(tap_x, spine);
+        svg.wire(&[(tap_x, spine), (tap_x, last_lane)]);
+        for (k, p) in fb_parts.iter().enumerate() {
+            let lane = lane0 + k as f64 * lane_h;
+            if k + 1 < n {
+                svg.dot(fb_x, lane);
+                svg.dot(tap_x, lane);
+            }
+            let class = class_of_name(netlist, p);
+            let w = if class == "capacitor" { 34.0 } else { 40.0 };
+            let sx = fb_x + ((tap_x - fb_x) - w) / 2.0;
+            svg.wire(&[(fb_x, lane), (sx, lane)]);
+            match class.as_str() {
+                "capacitor" => svg.cap_h(sx, lane),
+                _ => svg.res_h(sx, lane),
+            }
+            svg.wire(&[(sx + w, lane), (tap_x, lane)]);
+            // Label OUTSIDE the right riser — between the risers every
+            // candidate slot crosses a wire and the pair falls back.
+            svg.place_label_pair(tap_x + 2.0, lane - 2.0,
+                label_of(decor, p), "ref", &value_of(netlist, p), "val");
+        }
+        *depth = depth.max(last_lane + 30.0);
+        for (k, g) in gnd_leg.iter().enumerate() {
+            let gx = fb_x - k as f64 * 46.0;
+            if k > 0 {
+                svg.wire(&[(fb_x, last_lane), (gx, last_lane)]);
+            }
+            svg.dot(gx, last_lane);
+            svg.wire(&[(gx, last_lane), (gx, last_lane + 8.0)]);
+            let class = class_of_name(netlist, g);
+            let sym_h = match class.as_str() {
+                "capacitor" => {
+                    svg.cap_v(gx, last_lane + 8.0);
+                    34.0
+                }
+                _ => {
+                    svg.res_v(gx, last_lane + 8.0);
+                    40.0
+                }
+            };
+            svg.wire(&[(gx, last_lane + 8.0 + sym_h), (gx, last_lane + 16.0 + sym_h)]);
+            svg.ground(gx, last_lane + 16.0 + sym_h);
+            svg.place_label_pair(gx + 8.0, last_lane + 20.0,
+                label_of(decor, g), "ref", &value_of(netlist, g), "val");
+            *depth = depth.max(last_lane + sym_h + 60.0);
+        }
+    }
+
+    ox + 24.0
+}
+
+/// Render one op-amp signal chain; returns the height consumed.
+fn draw_chain(
+    svg: &mut Svg,
+    netlist: &Netlist,
+    plan: &SheetPlan,
+    ci: usize,
+    y0: f64,
+    decor: &SheetDecor,
+) -> f64 {
+    let chain = &plan.chains[ci];
+    let spine = y0 + 90.0;
+    let mut depth = spine + 90.0;
+    let mut x = 60.0;
+
+    let in_net = chain.spine_nets[0];
+    svg.sig_flag(x, spine, &net_label(netlist, in_net), true);
+    if let Some(v) = solved_v(decor, netlist, in_net) {
+        svg.queue_sim(x + 4.0, spine + 8.0, &format!("= {}", fmt_sim_v(v)), "sim");
+    }
+    svg.wire(&[(x, spine), (x + 24.0, spine)]);
+    x += 24.0;
+
+    for (i, elem) in chain.elems.iter().enumerate() {
+        x = chain_node(svg, netlist, decor, chain, chain.spine_nets[i], x, spine, &mut depth);
+        match elem {
+            ChainElem::Series { inst } => {
+                let class = class_of_name(netlist, inst);
+                let w = match class.as_str() {
+                    "capacitor" => {
+                        svg.cap_h(x, spine);
+                        34.0
+                    }
+                    "inductor" => {
+                        svg.ind_h(x, spine);
+                        56.0
+                    }
+                    "resistor" => {
+                        svg.res_h(x, spine);
+                        40.0
+                    }
+                    _ => {
+                        svg.wire(&[(x, spine), (x + 40.0, spine)]);
+                        svg.box_h(x, spine, 40.0);
+                        40.0
+                    }
+                };
+                svg.place_label_pair(x + w / 2.0 - 6.0, spine - 26.0,
+                    label_of(decor, inst), "ref", &value_of(netlist, inst), "val");
+                x += w;
+                svg.wire(&[(x, spine), (x + 16.0, spine)]);
+                x += 16.0;
+            }
+            ChainElem::Amp { inst, fb_parts, gnd_leg, unity } => {
+                x = draw_amp(svg, netlist, decor, inst, fb_parts, gnd_leg, *unity, x, spine, &mut depth);
+            }
+        }
+    }
+
+    let out_net = *chain.spine_nets.last().expect("chain has nets");
+    x = chain_node(svg, netlist, decor, chain, out_net, x, spine, &mut depth);
+    svg.wire(&[(x, spine), (x + 18.0, spine)]);
+    x += 18.0;
+    svg.sig_flag(x, spine, &net_label(netlist, out_net), false);
+    if let Some(v) = solved_v(decor, netlist, out_net) {
+        svg.queue_sim(x + 4.0, spine + 8.0, &format!("= {}", fmt_sim_v(v)), "sim");
+    }
+
+    depth - y0 + 50.0
+}
+
 pub fn render_sheet_svg(
     netlist: &Netlist,
     title: &str,
@@ -1253,6 +1577,12 @@ pub fn render_sheet_svg(
     for i in 0..plan.stages.len() {
         let used = draw_stage(&mut svg, netlist, &plan, i, y, decor);
         y += used.max(STAGE_GAP);
+    }
+
+    // ── Signal chains: op-amp paths on a horizontal spine ──
+    for i in 0..plan.chains.len() {
+        let used = draw_chain(&mut svg, netlist, &plan, i, y, decor);
+        y += used.max(240.0);
     }
 
     // ── Load rows: rail consumers fanned out under a shared bus ──

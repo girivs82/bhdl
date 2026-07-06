@@ -88,16 +88,23 @@ impl PowerDecl {
             .collect();
         
         let mut found_eq = false;
+        let mut negative = false;
         let mut voltage_num = None;
         let mut voltage_unit = None;
-        
+
         for token in tokens {
             match token.kind() {
                 SyntaxKind::EQ => {
                     found_eq = true;
                 }
+                // `power VEE = -12V` — the sign is its own token before the
+                // NUMBER; dropping it silently flipped negative rails.
+                SyntaxKind::MINUS if found_eq && voltage_num.is_none() => {
+                    negative = true;
+                }
                 SyntaxKind::NUMBER if found_eq && voltage_num.is_none() => {
-                    voltage_num = Some(token.text().to_string());
+                    let n = token.text();
+                    voltage_num = Some(if negative { format!("-{n}") } else { n.to_string() });
                 }
                 SyntaxKind::UNIT_IDENTIFIER | SyntaxKind::IDENT if found_eq && voltage_num.is_some() && voltage_unit.is_none() => {
                     voltage_unit = Some(token.text().to_string());
