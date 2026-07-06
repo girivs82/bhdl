@@ -409,7 +409,7 @@ fn test_debug_only_intent() {
 fn test_all_intents_registered() {
     let registry = create_registry();
 
-    // Verify all 16 intents are registered
+    // Verify every stdlib intent is registered
     let expected_intents = vec![
         // Timing (3)
         "delay", "debounce", "pulse_stretch",
@@ -417,24 +417,41 @@ fn test_all_intents_registered() {
         "input_protection", "overvoltage_protection",
         // Signal Processing (3)
         "anti_alias", "low_noise", "noise_filtering",
-        // Analog (4)
+        // Analog (7)
         "current_limiting", "level_shifting", "voltage_division", "signal_amplification",
+        "amplifier", "current_source", "digital_switch",
         // Digital (1)
         "signal_buffering",
         // Measurement (2)
         "precision_measurement", "control_loop",
         // Development (1)
         "debug_only",
+        // Safety (4)
+        "automotive_safety", "industrial_control", "medical_safety", "esd_protection",
+        // Power Management (4)
+        "power_sequencing", "voltage_monitoring", "power_good_signal", "inrush_limiting",
+        // Digital Timing (3)
+        "clock_distribution", "reset_generation", "boot_sequencing",
+        // Advanced (4)
+        "signal_integrity", "emi_filtering", "isolation", "thermal_management",
+        // Core filtering/regulation (bhdl-common) (4)
+        "output_filtering", "input_filtering", "regulation", "loading",
+        // Specialized (7)
+        "voltage_regulation", "current_sensing", "communication_interface",
+        "watchdog_monitoring", "power_optimization", "test_point", "redundancy",
     ];
 
-    for intent_name in expected_intents {
+    for intent_name in &expected_intents {
         assert!(registry.get(intent_name).is_some(),
                 "Intent '{}' should be registered", intent_name);
     }
 
-    // Verify count
-    assert_eq!(registry.registered_intents().len(), 16,
-               "Should have exactly 16 intents registered");
+    // Verify count against the enumerated list so this test fails loudly —
+    // with the name of the change, not a bare number — whenever an intent is
+    // added or removed without updating the enumeration above.
+    assert_eq!(registry.registered_intents().len(), expected_intents.len(),
+               "Registry has intents not in this test's enumeration (or vice versa): {:?}",
+               registry.registered_intents());
 }
 
 #[test]
