@@ -117,23 +117,84 @@ struct SwitcherOp {
     v_ref: Option<f64>,
 }
 
-/// Recover the buck operating point from the netlist: `f_sw` and `i_out`
-/// from the switching regulator's attributes, `v_in`/`v_out` from the
-/// declared power rails (highest rail = input, next = regulated output).
-/// Returns `None` for non-switching topologies or when an input is missing
-/// — the parts then keep their generic DC stress (ripple is additive).
-fn recover_switcher_op(
+/// All netlist instances in NAME order. Every sign-off derivation iterates
+/// through this instead of `instances.values()`: SlotMap iteration is
+/// insertion order, and instance-creation order upstream is NOT stable
+/// run-to-run (HashMap ordering during elaboration) — any "first match wins"
+/// walk over it made the report nondeterministic on multi-switcher boards.
+fn sorted_instances(netlist: &Netlist) -> Vec<(bhdl_netlist::InstanceId, &bhdl_netlist::Instance)> {
+    let mut v: Vec<_> = netlist.instances.iter().collect();
+    v.sort_by(|(_, a), (_, b)| a.name.cmp(&b.name));
+    v
+}
+
+/// Recover the buck operating point of EVERY switching regulator on the
+/// board, keyed by the regulator's instance name and returned in name order
+/// (deterministic). Each stage's `v_out` is its OWN regulated rail —
+/// resolved from the instance's `v_out`/`output_voltage` attribute first,
+/// else structurally from the power rails its pins actually touch (VOUT →
+/// rail), never from global rail ranking (which can only describe ONE
+/// stage). `v_in` is the touched rail above `v_out`; `i_out` is the output
+/// rail's declared `@ I` budget. A stage whose rails cannot be resolved is
+/// dropped (its parts keep generic DC stress) — except a board's SOLE
+/// switcher, which keeps the historical global-rail fallback (highest rail =
+/// input, next = output).
+fn recover_switcher_ops(
     netlist: &Netlist,
     entity_attrs: &HashMap<String, HashMap<String, String>>,
-) -> Option<SwitcherOp> {
+) -> Vec<(String, SwitcherOp)> {
+    // Declared power rails (voltage, load budget).
+    let rails: Vec<(f64, Option<f64>)> = netlist
+        .nets
+        .values()
+        .filter_map(|net| match &net.net_class {
+            NetClass::Power { voltage, current } if *voltage > 0.0 => Some((*voltage, *current)),
+            _ => None,
+        })
+        .collect();
+    // Structural rail contact: instance name → power rails any of its pins
+    // connect to. This is real connectivity (the regulator's VIN/VOUT pins),
+    // available pre-solve.
+    let mut touching: HashMap<String, Vec<(f64, Option<f64>)>> = HashMap::new();
+    for net in netlist.nets.values() {
+        let NetClass::Power { voltage, current } = &net.net_class else { continue };
+        if !(*voltage > 0.0) {
+            continue;
+        }
+        for conn in &net.connections {
+            let inst_id = match conn {
+                bhdl_netlist::ConnectionPoint::InstancePort(iid, _)
+                | bhdl_netlist::ConnectionPoint::InstancePin(iid, _) => Some(*iid),
+                bhdl_netlist::ConnectionPoint::PinInstance(pi) => {
+                    netlist.pin_instances.get(*pi).map(|p| p.instance)
+                }
+                _ => None,
+            };
+            if let Some(inst) = inst_id.and_then(|iid| netlist.instances.get(iid)) {
+                let rails = touching.entry(inst.name.clone()).or_default();
+                if !rails.iter().any(|(v, _)| v == voltage) {
+                    rails.push((*voltage, *current));
+                }
+            }
+        }
+    }
+    let near = |a: f64, b: f64| (a - b).abs() < 0.1 * b.max(1.0);
+
     // The regulator's class/topology/f_sw are declared on the stdlib ENTITY.
     // For an entity WITHOUT an expansion/design block they are never stamped
     // onto the netlist instance or module (only `entity_attribute_index`
     // carries them), so look up each key in three places, instance first:
     //   instance attrs → module attrs → entity_attribute_index[entity name].
-    let (f_sw, ripple_ratio, loop_k, loop_ratio, v_ref) =
-        netlist.instances.values().find_map(|inst| {
+    let mut switchers: Vec<(String, f64, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>)> = Vec::new();
+    for (_id, inst) in sorted_instances(netlist) {
         let module = netlist.modules.get(inst.definition);
+        // Skip abstract stdlib module definitions surfacing as bare instances
+        // (an instance literally named after its entity, e.g. `TPS54331 :
+        // TPS54331`) — the same phantom class the sign-off loops drop. Only
+        // real placed regulators are stages.
+        if module.map(|m| m.name == inst.name).unwrap_or(true) {
+            continue;
+        }
         let ent = module.and_then(|m| entity_attrs.get(&m.name));
         let get = |k: &str| {
             inst.attributes
@@ -150,12 +211,15 @@ fn recover_switcher_op(
             || (class == "voltage_regulator"
                 && (get("switching_frequency").is_some() || get("f_sw").is_some()));
         if !is_switcher {
-            return None;
+            continue;
         }
-        let f_sw = get("switching_frequency")
+        let Some(f_sw) = get("switching_frequency")
             .or_else(|| get("f_sw"))
             .and_then(|s| parse_si(s))
-            .filter(|f| *f > 0.0)?;
+            .filter(|f| *f > 0.0)
+        else {
+            continue;
+        };
         // NOTE: I_out is deliberately NOT taken from the regulator's rated
         // `output_current` — that is the device's *capability*, not the actual
         // load. The real per-rail load is the OUTPUT rail's declared `@ I`
@@ -178,20 +242,77 @@ fn recover_switcher_op(
             .or_else(|| get("v_ref"))
             .and_then(|s| parse_si(s))
             .filter(|v| *v > 0.0);
-        Some((f_sw, ripple_ratio, loop_k, loop_ratio, v_ref))
-    })?;
-    let (v_in, v_out, i_out) = rail_operating_point(netlist)?;
-    Some(SwitcherOp {
-        v_in,
-        v_out,
-        i_out,
-        f_sw,
-        duty: v_out / v_in,
-        ripple_ratio,
-        loop_k,
-        loop_ratio,
-        v_ref,
-    })
+        // Per-instance declared output voltage. Instance attrs only — an
+        // entity-level value can't distinguish two instances regulated to
+        // different voltages. `v_out` (the constructor parameter the S4
+        // synthesizer passes, always this instance's own) BEFORE
+        // `output_voltage`: when one entity is instantiated at two different
+        // output voltages, the stamped `output_voltage` (an entity attribute
+        // expression) can carry the OTHER instance's resolved value.
+        let v_out_attr = inst
+            .attributes
+            .get("v_out")
+            .or_else(|| inst.attributes.get("output_voltage"))
+            .and_then(|s| parse_si(s))
+            .filter(|v| *v > 0.0);
+        switchers.push((inst.name.clone(), f_sw, ripple_ratio, loop_k, loop_ratio, v_ref, v_out_attr));
+    }
+
+    let sole = switchers.len() == 1;
+    let mut ops = Vec::new();
+    for (name, f_sw, ripple_ratio, loop_k, loop_ratio, v_ref, v_out_attr) in switchers {
+        let touched = touching.get(&name).map(Vec::as_slice).unwrap_or(&[]);
+        let t_max = touched.iter().map(|(v, _)| *v).fold(f64::MIN, f64::max);
+        // v_out: declared attr → highest touched rail below the highest one
+        // touched (VIN) → global two-rail ranking, sole switcher only.
+        let v_out = v_out_attr
+            .or_else(|| {
+                touched
+                    .iter()
+                    .map(|(v, _)| *v)
+                    .filter(|v| *v < t_max - 1e-9)
+                    .fold(None::<f64>, |acc, v| Some(acc.map_or(v, |a| a.max(v))))
+            })
+            .or_else(|| sole.then(|| rail_operating_point(netlist).map(|(_, v, _)| v)).flatten());
+        let Some(v_out) = v_out.filter(|v| *v > 0.0) else { continue };
+        // v_in: highest touched rail above v_out → highest declared rail
+        // above v_out (an entity whose VIN pin reaches the rail through a
+        // filter element touches no rail directly).
+        let v_in = touched
+            .iter()
+            .map(|(v, _)| *v)
+            .filter(|v| *v > v_out + 1e-9)
+            .fold(None::<f64>, |acc, v| Some(acc.map_or(v, |a| a.max(v))))
+            .or_else(|| {
+                rails
+                    .iter()
+                    .map(|(v, _)| *v)
+                    .filter(|v| *v > v_out + 1e-9)
+                    .fold(None::<f64>, |acc, v| Some(acc.map_or(v, |a| a.max(v))))
+            });
+        let Some(v_in) = v_in.filter(|v| v_out < *v) else { continue };
+        // The output rail's declared `@ I` load budget (None ⇒ UNCHECKED).
+        let i_out = rails
+            .iter()
+            .filter(|(v, _)| near(*v, v_out))
+            .filter_map(|(_, i)| *i)
+            .fold(None::<f64>, |acc, i| Some(acc.map_or(i, |a| a.max(i))));
+        ops.push((
+            name,
+            SwitcherOp {
+                v_in,
+                v_out,
+                i_out,
+                f_sw,
+                duty: v_out / v_in,
+                ripple_ratio,
+                loop_k,
+                loop_ratio,
+                v_ref,
+            },
+        ));
+    }
+    ops
 }
 
 /// Power rails carry their source-declared per-rail load budget (`@ I`) on
@@ -308,20 +429,38 @@ fn inductor_value_step(op: &SwitcherOp, l_current: f64, d_il: f64) -> Option<(f6
     Some((l_step, ratio, d_il_new / i_out, target))
 }
 
-/// The output inductor's ripple current `ΔI_L = (V_in−V_out)·D / (f_sw·L)`,
-/// found from the (first) inductor's snapped value. Shared by the inductor
-/// peak-current and the output-cap ripple-voltage derivations.
-fn inductor_ripple_current(netlist: &Netlist, op: &SwitcherOp) -> Option<f64> {
-    netlist.instances.values().find_map(|inst| {
+/// The output inductor's ripple current `ΔI_L = (V_in−V_out)·D / (f_sw·L)`
+/// for ONE regulator stage — from the stage's own output inductor (its
+/// `expansion_parent` names the regulator instance). A board's sole switcher
+/// falls back to the first inductor by name (hand-authored expansions carry
+/// no parent tag). Shared by the inductor peak-current and the output-cap
+/// ripple-voltage derivations.
+fn inductor_ripple_current(
+    netlist: &Netlist,
+    stage: &str,
+    op: &SwitcherOp,
+    sole_stage: bool,
+) -> Option<f64> {
+    let mut fallback: Option<f64> = None;
+    for (_id, inst) in sorted_instances(netlist) {
         if classify_component(netlist, inst.definition, &inst.attributes).as_deref()
-            == Some("inductor")
+            != Some("inductor")
         {
-            let l = parse_si(inst.attributes.get("value")?).filter(|l| *l > 0.0)?;
-            Some((op.v_in - op.v_out) * op.duty / (op.f_sw * l))
-        } else {
-            None
+            continue;
         }
-    })
+        let Some(l) = inst.attributes.get("value").and_then(|s| parse_si(s)).filter(|l| *l > 0.0)
+        else {
+            continue;
+        };
+        let d_il = (op.v_in - op.v_out) * op.duty / (op.f_sw * l);
+        if inst.attributes.get("expansion_parent").map(String::as_str) == Some(stage) {
+            return Some(d_il);
+        }
+        if sole_stage && fallback.is_none() {
+            fallback = Some(d_il);
+        }
+    }
+    fallback
 }
 
 /// Parse a rating/stress attribute like `"50V"`, `"250mW"`, `"2A"`, `"0.1"`
@@ -429,6 +568,29 @@ pub struct StabilityResult {
     pub verdict: StabilityVerdict,
 }
 
+/// Stability of ONE regulator stage — sign-off assesses each switching
+/// stage against its OWN loop, not one blended board-level loop.
+#[derive(Debug, Clone)]
+pub struct StageStability {
+    /// The regulator instance (e.g. `psu_vcc_5v`).
+    pub stage: String,
+    /// The stage's regulated output voltage.
+    pub v_out: f64,
+    pub outcome: StageOutcome,
+}
+
+#[derive(Debug, Clone)]
+pub enum StageOutcome {
+    Assessed(StabilityResult),
+    /// The device declares no closed-form loop model (no `loop_crossover_k` /
+    /// `loop_crossover_max_ratio` / `feedback_voltage`) — e.g. an externally
+    /// compensated part. Real-Data Policy: not assessed, never guessed.
+    NoLoopModel,
+    /// Loop model declared but no output cap bank was identifiable near the
+    /// stage's regulated rail in the solved voltages.
+    NoOutputBank,
+}
+
 /// Ceramic (Class-I/II) dielectric codes. A cap tagged with one of these has
 /// structurally low ESR (single-digit mΩ) — enough to place its ESR zero far
 /// above any practical crossover (see `EsrBasis::CeramicStructural`).
@@ -456,23 +618,40 @@ fn cap_is_ceramic(inst: &bhdl_netlist::Instance) -> bool {
     }
 }
 
-/// Evaluate loop stability from the netlist + operating point. Returns `None`
-/// when there is no switcher, no declared loop constant (`loop_crossover_k`),
-/// or no identifiable output cap bank — i.e. stability is then *unchecked*,
-/// never silently "passed".
+/// Evaluate loop stability per regulator stage, in stage-name order
+/// (deterministic run-to-run). Returns one entry per switching stage: an
+/// assessed loop, or an explicit not-assessed outcome — a device without a
+/// declared loop model (`loop_crossover_k` / ratio / `feedback_voltage`) or
+/// without an identifiable output bank is *unchecked*, never silently
+/// "passed". Empty for non-switching boards.
 pub fn compute_stability(
     netlist: &Netlist,
     net_voltages: &HashMap<String, f64>,
     entity_attrs: &HashMap<String, HashMap<String, String>>,
-) -> Option<StabilityResult> {
+) -> Vec<StageStability> {
+    recover_switcher_ops(netlist, entity_attrs)
+        .into_iter()
+        .map(|(stage, op)| {
+            let v_out = op.v_out;
+            let outcome = compute_stage_stability(netlist, net_voltages, &op);
+            StageStability { stage, v_out, outcome }
+        })
+        .collect()
+}
+
+/// One stage's stability from its own operating point.
+fn compute_stage_stability(
+    netlist: &Netlist,
+    net_voltages: &HashMap<String, f64>,
+    op: &SwitcherOp,
+) -> StageOutcome {
     use std::f64::consts::PI;
-    let op = recover_switcher_op(netlist, entity_attrs)?;
     // Real-Data Policy: the loop model exists only if the device declares all
-    // of K, the crossover ratio, and V_ref. Any absent ⇒ no loop model ⇒ no
-    // stability section (distinct from ESR-data-missing, which is UNCHECKED).
-    let k = op.loop_k?;
-    let loop_ratio = op.loop_ratio?;
-    let v_ref = op.v_ref?;
+    // of K, the crossover ratio, and V_ref. Any absent ⇒ no loop model ⇒ this
+    // stage is not assessed (distinct from ESR-data-missing, → UNCHECKED).
+    let (Some(k), Some(loop_ratio), Some(v_ref)) = (op.loop_k, op.loop_ratio, op.v_ref) else {
+        return StageOutcome::NoLoopModel;
+    };
     let inv = instance_net_voltages(netlist, net_voltages);
     let near = |a: f64, b: f64| (a - b).abs() < 0.1 * b.max(1.0);
     let role_is = |inst: &bhdl_netlist::Instance, class: &str| {
@@ -495,7 +674,7 @@ pub fn compute_stability(
     let mut real_esr_count = 0usize;
     let mut ceramic_present = false;
     let mut missing_esr: Vec<String> = Vec::new();
-    for inst in netlist.instances.values() {
+    for (_id, inst) in sorted_instances(netlist) {
         if !role_is(inst, "capacitor") {
             continue;
         }
@@ -513,7 +692,7 @@ pub fn compute_stability(
         }
     }
     if !(c_out > 0.0) {
-        return None;
+        return StageOutcome::NoOutputBank;
     }
 
     let f_co = k / (op.v_out * c_out); // needs only the real C_out
@@ -521,7 +700,7 @@ pub fn compute_stability(
     let crossover_ok = f_co < crossover_target;
 
     // Divider-top resistor: a resistor touching V_out and V_ref (the FB node).
-    let r_top = netlist.instances.values().find_map(|inst| {
+    let r_top = sorted_instances(netlist).into_iter().find_map(|(_id, inst)| {
         if !role_is(inst, "resistor") {
             return None;
         }
@@ -534,6 +713,7 @@ pub fn compute_stability(
     });
     // Feedforward cap: a cap across the divider top (touches V_out and V_ref).
     let ff_present = netlist.instances.values().any(|inst| {
+        // (any() is order-independent — no sorted walk needed here)
         role_is(inst, "capacitor")
             && inv.get(&inst.name).is_some_and(|vs| {
                 vs.iter().any(|v| near(*v, op.v_out)) && vs.iter().any(|v| near(*v, v_ref))
@@ -543,7 +723,7 @@ pub fn compute_stability(
     // An output cap whose ESR *and* type are both unknown ⇒ genuinely
     // UNCHECKED (can't apply the real ESR zero nor the ceramic argument).
     if !missing_esr.is_empty() {
-        return Some(StabilityResult {
+        return StageOutcome::Assessed(StabilityResult {
             f_co,
             f_sw: op.f_sw,
             crossover_target,
@@ -586,7 +766,7 @@ pub fn compute_stability(
         StabilityVerdict::Stable
     };
 
-    Some(StabilityResult {
+    StageOutcome::Assessed(StabilityResult {
         f_co,
         f_sw: op.f_sw,
         crossover_target,
@@ -601,9 +781,45 @@ pub fn compute_stability(
     })
 }
 
-/// Render the stability assessment as a report section.
-pub fn format_stability(s: &StabilityResult) -> String {
+/// Render the per-stage stability assessments as ONE report section.
+/// `None` when no stage was actually assessed (no switcher, or no stage
+/// declares a loop model) — matching the historical "no section" behavior.
+/// Single-stage boards keep the historical unlabelled block; multi-stage
+/// boards get one labelled block per stage, INCLUDING an explicit
+/// not-assessed line for stages without a loop model (an absent check is a
+/// visible hole, not a silent pass).
+pub fn format_stability(stages: &[StageStability]) -> Option<String> {
+    if !stages.iter().any(|s| matches!(s.outcome, StageOutcome::Assessed(_))) {
+        return None;
+    }
     let mut out = String::from("\n## Control-loop stability (analytic, datasheet model)\n\n");
+    let multi = stages.len() > 1;
+    for s in stages {
+        if multi {
+            out.push_str(&format!("**{}** (V_out={}):\n", s.stage, fmt_si(s.v_out, "V")));
+        }
+        match &s.outcome {
+            StageOutcome::Assessed(r) => out.push_str(&format_stability_block(r)),
+            StageOutcome::NoLoopModel => out.push_str(
+                "- no closed-form loop model declared (`loop_crossover_k` / \
+                 `loop_crossover_max_ratio` / `feedback_voltage`) — e.g. an externally \
+                 compensated device — **stability not assessed**\n",
+            ),
+            StageOutcome::NoOutputBank => out.push_str(
+                "- no output capacitor bank identifiable on the regulated rail — \
+                 **stability not assessed**\n",
+            ),
+        }
+        if multi {
+            out.push('\n');
+        }
+    }
+    Some(out)
+}
+
+/// Render one assessed stage's bullets + verdict.
+fn format_stability_block(s: &StabilityResult) -> String {
+    let mut out = String::new();
     let verdict = match s.verdict {
         StabilityVerdict::Stable => "STABLE",
         StabilityVerdict::LowMargin => "LOW PHASE MARGIN",
@@ -683,13 +899,18 @@ pub fn apply_inductor_stepping(
     netlist: &mut Netlist,
     entity_attrs: &HashMap<String, HashMap<String, String>>,
 ) -> Vec<AppliedStep> {
-    let Some(op) = recover_switcher_op(netlist, entity_attrs) else {
+    let ops = recover_switcher_ops(netlist, entity_attrs);
+    if ops.is_empty() {
         return Vec::new();
-    };
-    // Collect inductor targets (immutable borrow) before mutating.
-    let targets: Vec<(bhdl_netlist::InstanceId, String, f64)> = netlist
-        .instances
-        .iter()
+    }
+    let sole = ops.len() == 1;
+    // Collect inductor targets (immutable borrow) before mutating, in name
+    // order (deterministic), each paired with ITS OWN stage's operating point
+    // (expansion parent; a board's sole switcher steps every inductor as
+    // before). A multi-stage board's parentless inductor is skipped — no
+    // basis to pick a stage for it.
+    let targets: Vec<(bhdl_netlist::InstanceId, String, f64, usize)> = sorted_instances(netlist)
+        .into_iter()
         .filter_map(|(id, inst)| {
             if classify_component(netlist, inst.definition, &inst.attributes).as_deref()
                 != Some("inductor")
@@ -698,14 +919,20 @@ pub fn apply_inductor_stepping(
             }
             let vstr = inst.attributes.get("value")?.clone();
             let l = parse_si(&vstr).filter(|l| *l > 0.0)?;
-            Some((id, vstr, l))
+            let op_idx = inst
+                .attributes
+                .get("expansion_parent")
+                .and_then(|p| ops.iter().position(|(n, _)| n == p))
+                .or(if sole { Some(0) } else { None })?;
+            Some((id, vstr, l, op_idx))
         })
         .collect();
 
     let mut applied = Vec::new();
-    for (id, vstr, l) in targets {
+    for (id, vstr, l, op_idx) in targets {
+        let op = &ops[op_idx].1;
         let d_il = (op.v_in - op.v_out) * op.duty / (op.f_sw * l);
-        if let Some((l_step, ratio_from, ratio_new, target)) = inductor_value_step(&op, l, d_il) {
+        if let Some((l_step, ratio_from, ratio_new, target)) = inductor_value_step(op, l, d_il) {
             let new_str = fmt_si(l_step, "H");
             if let Some(inst) = netlist.instances.get_mut(id) {
                 inst.attributes.insert("value".to_string(), new_str.clone());
@@ -738,20 +965,13 @@ fn stress_overrides(
     netlist: &Netlist,
     entity_attrs: &HashMap<String, HashMap<String, String>>,
     stress_recipes: &HashMap<String, StressRecipe>,
-    op: &SwitcherOp,
+    ops: &[(String, SwitcherOp)],
 ) -> HashMap<(String, String), f64> {
     let mut out: HashMap<(String, String), f64> = HashMap::new();
-    if stress_recipes.is_empty() {
+    if stress_recipes.is_empty() || ops.is_empty() {
         return out;
     }
-    // Operating point exposed to every block: the recovered switcher point.
-    let mut operating_point = HashMap::from([
-        ("vin".to_string(), op.v_in),
-        ("vout".to_string(), op.v_out),
-    ]);
-    if let Some(i) = op.i_out {
-        operating_point.insert("i_out".to_string(), i);
-    }
+    let sole = ops.len() == 1;
     // `<child>.value` resolves to the snapped value of the like-named instance.
     let child_values: HashMap<String, f64> = netlist
         .instances
@@ -775,6 +995,37 @@ fn stress_overrides(
         let Some(module) = netlist.modules.get(inst.definition) else { continue };
         let entity = module.name.as_str();
         let Some(recipe) = stress_recipes.get(entity) else { continue };
+
+        // Operating point exposed to this block: the declaring instance's OWN
+        // stage — the recipe usually lives on the regulator entity itself
+        // (matched by instance name), else the instance's expansion parent's
+        // stage, else the board's sole recovered operating point. A recipe on
+        // a multi-stage board with no resolvable stage is skipped (Real-Data
+        // Policy: no blended board-level vin/vout guess).
+        let stage_op = ops
+            .iter()
+            .find(|(n, _)| *n == inst.name)
+            .or_else(|| {
+                inst.attributes
+                    .get("expansion_parent")
+                    .and_then(|p| ops.iter().find(|(n, _)| n == p))
+            })
+            .or_else(|| if sole { ops.first() } else { None });
+        let Some((_, op)) = stage_op else {
+            log::debug!(
+                "stress recipe for '{entity}' (instance {}) skipped: no per-stage \
+                 operating point resolvable on a multi-stage board",
+                inst.name,
+            );
+            continue;
+        };
+        let mut operating_point = HashMap::from([
+            ("vin".to_string(), op.v_in),
+            ("vout".to_string(), op.v_out),
+        ]);
+        if let Some(i) = op.i_out {
+            operating_point.insert("i_out".to_string(), i);
+        }
 
         // `self.<param>` ← the entity's declared attributes (numeric ones).
         let self_params: HashMap<String, f64> = entity_attrs
@@ -812,7 +1063,7 @@ fn stress_overrides(
         }
 
         let inputs = StressInputs {
-            operating_point: operating_point.clone(),
+            operating_point,
             self_params,
             child_values: inst_child_values,
         };
@@ -856,33 +1107,46 @@ pub fn compute_signoff(
     stress_recipes: &HashMap<String, StressRecipe>,
 ) -> Vec<SignoffRow> {
     let inst_v = compute_instance_max_voltages(netlist, net_voltages);
-    // Analytic reference ripple model (switching topologies). `d_il` is the
-    // output inductor's ripple current, shared by the inductor peak-current
-    // and the output/input cap ripple-voltage derivations below.
-    let op = recover_switcher_op(netlist, entity_attrs);
-    let d_il = op.as_ref().and_then(|op| inductor_ripple_current(netlist, op));
+    let near = |a: f64, b: f64| (a - b).abs() < 0.1 * b.max(1.0);
+    // Analytic reference ripple model (switching topologies), PER regulator
+    // stage: each stage's own operating point and its own output inductor's
+    // ripple current ΔI_L, shared by that stage's inductor peak-current and
+    // cap ripple-voltage derivations below.
+    let ops = recover_switcher_ops(netlist, entity_attrs);
+    let sole = ops.len() == 1;
+    let d_il_by_stage: HashMap<&str, f64> = ops
+        .iter()
+        .filter_map(|(n, op)| {
+            inductor_ripple_current(netlist, n, op, sole).map(|d| (n.as_str(), d))
+        })
+        .collect();
     // Per-instance overrides from vendor `stress { }` blocks (§4). Empty unless
     // an instantiated entity declares one — then these win over the hardcoded
     // reference ripple model below, per the graceful-degradation ladder.
     // Linear boards have no switcher op; recover the rail-only operating point
-    // (vin/vout/i_out) for the vendor blocks alone — `op` itself stays None so
-    // the analytic switching-ripple model below remains off.
-    let overrides = match op.as_ref() {
-        Some(op) => stress_overrides(netlist, entity_attrs, stress_recipes, op),
-        None => recover_linear_op(netlist, entity_attrs)
-            .map(|lop| stress_overrides(netlist, entity_attrs, stress_recipes, &lop))
-            .unwrap_or_default(),
+    // (vin/vout/i_out) for the vendor blocks alone — `ops` itself stays empty
+    // so the analytic switching-ripple model below remains off.
+    let overrides = if !ops.is_empty() {
+        stress_overrides(netlist, entity_attrs, stress_recipes, &ops)
+    } else {
+        recover_linear_op(netlist, entity_attrs)
+            .map(|lop| {
+                stress_overrides(netlist, entity_attrs, stress_recipes, &[(String::new(), lop)])
+            })
+            .unwrap_or_default()
     };
     // Parallel caps on a rail SHARE the switching ripple current — the ripple
     // voltage is set by the TOTAL bank capacitance, not each cap alone (else a
     // 100nF HF bypass next to a 22µF bulk cap reads an absurd multi-volt
-    // ripple). Sum the input-side and output-side bank capacitance, classified
-    // by each cap's DC node voltage.
-    let (c_in_total, c_out_total) = match op.as_ref() {
-        Some(op) => {
-            let near = |a: f64, b: f64| (a - b).abs() < 0.1 * b.max(1.0);
+    // ripple). Per stage, sum the input-side and output-side bank capacitance,
+    // classified by each cap's DC node voltage (the bank is physical: in a
+    // cascade the mid rail is stage N's output bank AND stage N+1's input
+    // bank — every cap on the rail belongs to both).
+    let banks: HashMap<&str, (f64, f64)> = ops
+        .iter()
+        .map(|(n, op)| {
             let (mut cin, mut cout) = (0.0, 0.0);
-            for inst in netlist.instances.values() {
+            for (_id, inst) in sorted_instances(netlist) {
                 if classify_component(netlist, inst.definition, &inst.attributes).as_deref()
                     != Some("capacitor")
                 {
@@ -898,13 +1162,22 @@ pub fn compute_signoff(
                     cin += c;
                 }
             }
-            (cin, cout)
-        }
-        None => (0.0, 0.0),
+            (n.as_str(), (cin, cout))
+        })
+        .collect();
+    // Associate a passive with its regulator stage: its expansion parent's
+    // stage first (a stage's own C_in on a cascade's mid rail must read as
+    // that stage's INPUT cap, not the upstream stage's output cap), else the
+    // board's sole stage.
+    let stage_by_parent = |inst: &bhdl_netlist::Instance| -> Option<&(String, SwitcherOp)> {
+        inst.attributes
+            .get("expansion_parent")
+            .and_then(|p| ops.iter().find(|(n, _)| n == p))
+            .or_else(|| if sole { ops.first() } else { None })
     };
     let mut rows = Vec::new();
 
-    for (id, inst) in netlist.instances.iter() {
+    for (id, inst) in sorted_instances(netlist) {
         let _ = id;
         let Some(class) = classify_component(netlist, inst.definition, &inst.attributes) else {
             continue;
@@ -968,7 +1241,7 @@ pub fn compute_signoff(
         // non-switching designs keep the generic stress above.
         let mut ripple: Option<String> = None;
         let mut step: Option<String> = None;
-        if let (Some(op), Some(d_il)) = (op.as_ref(), d_il) {
+        if !ops.is_empty() {
             match class.as_str() {
                 "inductor" if overrides.contains_key(&(inst.name.clone(), "i_peak".to_string())) => {
                     // A vendor stress block supplied this inductor's peak current
@@ -979,7 +1252,10 @@ pub fn compute_signoff(
                 }
                 "inductor" => {
                     // Peak current is the saturation-critical stress, not DC avg.
-                    if let Some(l) = parse_si(&value).filter(|l| *l > 0.0) {
+                    // The operating point is the inductor's OWN stage's.
+                    if let (Some((_, op)), Some(l)) =
+                        (stage_by_parent(inst), parse_si(&value).filter(|l| *l > 0.0))
+                    {
                         // ΔI_L is independent of the load; the peak current
                         // (the saturation-critical stress) needs the real load.
                         let dil = (op.v_in - op.v_out) * op.duty / (op.f_sw * l);
@@ -1022,46 +1298,63 @@ pub fn compute_signoff(
                     // matching the hardcoded model's convention.
                     let dv = overrides[&(inst.name.clone(), "v_ripple".to_string())];
                     let v_dc = stress.unwrap_or(0.0);
-                    let near = |a: f64, b: f64| (a - b).abs() < 0.1 * b.max(1.0);
-                    if near(v_dc, op.v_out) {
+                    // The bump applies only when this cap sits on ITS stage's
+                    // OUTPUT rail — a cascade mid-rail cap owned by the
+                    // downstream stage is that stage's INPUT cap and stays
+                    // the rail.
+                    let on_own_output = match stage_by_parent(inst) {
+                        Some((_, op)) => near(v_dc, op.v_out),
+                        None => ops.iter().any(|(_, op)| near(v_dc, op.v_out)),
+                    };
+                    if on_own_output {
                         stress = Some(v_dc + dv / 2.0);
                     }
                     ripple = Some(format!("ΔV={:.1}mV (stress block)", dv * 1000.0));
                 }
                 "capacitor" => {
                     // Ripple voltage is a per-RAIL quantity set by the whole
-                    // parallel bank (c_*_total), shared by every cap on the
-                    // rail — not a function of this cap's own value.
+                    // parallel bank, shared by every cap on the rail — not a
+                    // function of this cap's own value. The stage is the cap's
+                    // own (expansion parent) so a cascade mid-rail cap reads
+                    // as its downstream stage's INPUT cap; a board-level cap
+                    // matches whichever stage regulates (else feeds) its rail.
                     let v_dc = stress.unwrap_or(0.0);
-                    let near = |a: f64, b: f64| (a - b).abs() < 0.1 * b.max(1.0);
-                    if near(v_dc, op.v_out) && c_out_total > 0.0 {
-                        // Output cap: total voltage = V_out + ΔV_out/2.
-                        let dv = d_il / (8.0 * op.f_sw * c_out_total);
-                        stress = Some(op.v_out + dv / 2.0);
-                        ripple = Some(format!(
-                            "ΔV_out={:.1}mV (bank {})",
-                            dv * 1000.0,
-                            fmt_si(c_out_total, "F")
-                        ));
-                    } else if near(v_dc, op.v_in) && c_in_total > 0.0 {
-                        // Input cap: ripple voltage (stress stays the rail).
-                        // The input ripple current is load-driven, so it needs
-                        // the real output-rail load — UNCHECKED without it.
-                        ripple = Some(match op.i_out {
-                            Some(i_out) => {
-                                let dv = i_out * op.duty * (1.0 - op.duty)
-                                    / (op.f_sw * c_in_total);
-                                format!(
-                                    "ΔV_in={:.1}mV (bank {})",
-                                    dv * 1000.0,
+                    let assoc = stage_by_parent(inst)
+                        .or_else(|| ops.iter().find(|(_, op)| near(v_dc, op.v_out)))
+                        .or_else(|| ops.iter().find(|(_, op)| near(v_dc, op.v_in)));
+                    if let Some((sname, op)) = assoc {
+                        let (c_in_total, c_out_total) =
+                            banks.get(sname.as_str()).copied().unwrap_or((0.0, 0.0));
+                        let d_il = d_il_by_stage.get(sname.as_str()).copied();
+                        if near(v_dc, op.v_out) && c_out_total > 0.0 && d_il.is_some() {
+                            // Output cap: total voltage = V_out + ΔV_out/2.
+                            let dv = d_il.unwrap() / (8.0 * op.f_sw * c_out_total);
+                            stress = Some(op.v_out + dv / 2.0);
+                            ripple = Some(format!(
+                                "ΔV_out={:.1}mV (bank {})",
+                                dv * 1000.0,
+                                fmt_si(c_out_total, "F")
+                            ));
+                        } else if near(v_dc, op.v_in) && c_in_total > 0.0 {
+                            // Input cap: ripple voltage (stress stays the rail).
+                            // The input ripple current is load-driven, so it needs
+                            // the real output-rail load — UNCHECKED without it.
+                            ripple = Some(match op.i_out {
+                                Some(i_out) => {
+                                    let dv = i_out * op.duty * (1.0 - op.duty)
+                                        / (op.f_sw * c_in_total);
+                                    format!(
+                                        "ΔV_in={:.1}mV (bank {})",
+                                        dv * 1000.0,
+                                        fmt_si(c_in_total, "F")
+                                    )
+                                }
+                                None => format!(
+                                    "ΔV_in UNCHECKED — output rail declares no `@ I` load (bank {})",
                                     fmt_si(c_in_total, "F")
-                                )
-                            }
-                            None => format!(
-                                "ΔV_in UNCHECKED — output rail declares no `@ I` load (bank {})",
-                                fmt_si(c_in_total, "F")
-                            ),
-                        });
+                                ),
+                            });
+                        }
                     }
                 }
                 _ => {}

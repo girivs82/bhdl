@@ -2552,13 +2552,15 @@ async fn cmd_bom(
                         {
                             print!("{report}");
                         }
-                        // Control-loop stability (analytic, datasheet model).
-                        if let Some(stab) = bhdl_synthesizer::signoff::compute_stability(
+                        // Control-loop stability (analytic, datasheet model),
+                        // one assessment per regulator stage.
+                        let stages = bhdl_synthesizer::signoff::compute_stability(
                             &netlist,
                             &sv,
                             &analysis.entity_attribute_index,
-                        ) {
-                            print!("{}", bhdl_synthesizer::signoff::format_stability(&stab));
+                        );
+                        if let Some(stab) = bhdl_synthesizer::signoff::format_stability(&stages) {
+                            print!("{stab}");
                         }
                     }
                     Err(e) => eprintln!(
