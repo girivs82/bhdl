@@ -147,6 +147,14 @@ pub struct ComponentMetadata {
     pub default_package: Option<String>,
     pub db_component_id: Option<String>,
     pub electrical_specs: HashMap<String, String>,
+    /// For each electrical spec whose entity `attribute` value is a bare
+    /// reference to a constructor parameter (`attribute output_voltage =
+    /// v_out;`), the referenced parameter's name. `electrical_specs` holds
+    /// that reference resolved against the parameter DEFAULT (this metadata
+    /// is per-entity); per-instance consumers use this map to re-resolve the
+    /// attribute against the instance's own constructor arguments.
+    #[serde(default)]
+    pub attr_param_refs: HashMap<String, String>,
 }
 
 /// Conditional blocks in modules

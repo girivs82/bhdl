@@ -165,8 +165,18 @@ impl LibraryLoader {
         // untouched and drops un-defaulted references, so the per-attribute
         // `unwrap_or(raw)` below preserves the old behaviour everywhere except
         // the references it can now resolve.
-        let resolved = bhdl_ast::Entity::cast(node.clone())
-            .map(|e| crate::attribute_extraction::extract_module_attributes_resolved(&e))
+        // This pass is per-entity, so a param reference can only resolve to
+        // the param's DEFAULT here; `attr_param_refs` records which attrs are
+        // param-bound so per-instance consumers re-resolve them against the
+        // instance's own constructor arguments.
+        let entity_ast = bhdl_ast::Entity::cast(node.clone());
+        let resolved = entity_ast
+            .as_ref()
+            .map(crate::attribute_extraction::extract_module_attributes_resolved)
+            .unwrap_or_default();
+        metadata.attr_param_refs = entity_ast
+            .as_ref()
+            .map(crate::attribute_extraction::extract_module_attribute_param_refs)
             .unwrap_or_default();
         for attr in node.descendants().filter_map(bhdl_ast::AttributeDecl::cast) {
             let (Some(name_tok), Some(value_expr)) = (attr.name(), attr.value()) else {

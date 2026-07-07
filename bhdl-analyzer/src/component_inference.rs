@@ -946,14 +946,38 @@ impl ComponentInferenceContext {
             });
         }
         
-        // Add electrical specs
+        // Add electrical specs. A spec whose entity attribute is a bare
+        // constructor-param reference (`attribute output_voltage = v_out;`)
+        // re-resolves against THIS instance's explicit arguments: the value
+        // in `electrical_specs` was resolved once per entity against the
+        // param DEFAULT, so without the override every instance stamped the
+        // default (both TPS54331s carried output_voltage = 3.3V regardless
+        // of their v_out). Instance-arg-derived values are confidence 1.0 —
+        // user-specified, they must override, not or_insert, downstream.
+        let explicit = circuit_context.explicit_params.as_ref();
         for (key, value) in &module.metadata.electrical_specs {
-            parameters.push(InferredParameter {
-                name: key.clone(),
-                value: ParameterValue::String(value.clone()),
-                confidence: 0.95,
-                reasoning: format!("Electrical spec from module: {}", key),
-            });
+            let inst_value = module
+                .metadata
+                .attr_param_refs
+                .get(key)
+                .and_then(|p| explicit.and_then(|m| m.get(p)));
+            match inst_value {
+                Some(v) => parameters.push(InferredParameter {
+                    name: key.clone(),
+                    value: ParameterValue::String(v.trim().trim_matches('"').to_string()),
+                    confidence: 1.0,
+                    reasoning: format!(
+                        "Entity attribute '{}' resolved from this instance's '{}' argument",
+                        key, module.metadata.attr_param_refs[key]
+                    ),
+                }),
+                None => parameters.push(InferredParameter {
+                    name: key.clone(),
+                    value: ParameterValue::String(value.clone()),
+                    confidence: 0.95,
+                    reasoning: format!("Electrical spec from module: {}", key),
+                }),
+            }
         }
         
         // Create the suggestion

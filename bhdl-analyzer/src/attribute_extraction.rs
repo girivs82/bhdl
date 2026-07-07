@@ -212,6 +212,43 @@ pub fn extract_module_attributes_resolved_with(
     attrs
 }
 
+/// Map each entity `attribute` whose value is EXACTLY a bare reference to one
+/// of the entity's constructor parameters onto that parameter's name
+/// (`attribute output_voltage = v_out;` → `"output_voltage" → "v_out"`).
+///
+/// [`extract_module_attributes_resolved`] can only resolve such a reference
+/// against the parameter's DEFAULT — the per-entity component-library pass has
+/// no instance in hand. This map records WHICH attributes are param-bound so a
+/// later per-instance pass can re-resolve them against the instance's own
+/// constructor arguments instead of stamping the entity default onto every
+/// instance. Dotted `const` paths and literals don't vary per instance and are
+/// deliberately excluded.
+pub fn extract_module_attribute_param_refs(entity: &Entity) -> HashMap<String, String> {
+    let mut param_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for param_list in entity
+        .syntax()
+        .children()
+        .filter(|c| c.kind() == SyntaxKind::PARAM_LIST)
+    {
+        for pd in param_list.children().filter(|c| c.kind() == SyntaxKind::PARAM_DECL) {
+            if let Some(name) = pd
+                .children_with_tokens()
+                .filter_map(|el| el.into_token())
+                .find(|t| t.kind() == SyntaxKind::IDENT)
+            {
+                param_names.insert(name.text().to_string());
+            }
+        }
+    }
+    extract_module_attributes(entity)
+        .into_iter()
+        .filter_map(|(attr, value)| {
+            let v = value.trim();
+            param_names.contains(v).then(|| (attr, v.to_string()))
+        })
+        .collect()
+}
+
 /// The entity's generic parameters in declaration order:
 /// `(name, default-value-text-if-any)`. For
 /// `entity LinearRegulator<V_OUT: voltage, HAS_EN: bool = false>` this returns
@@ -591,5 +628,32 @@ entity Reg(f_sw: frequency = 570kHz) {
         assert_eq!(attrs.get("sf"), Some(&"500kHz".to_string()));
         assert_eq!(attrs.get("oc"), Some(&"3A".to_string()));
         assert_eq!(attrs.get("oi"), Some(&"0.05".to_string()));
+    }
+
+    #[test]
+    fn param_refs_map_only_bare_constructor_param_references() {
+        // `output_voltage = v_out` is a bare param ref → mapped;
+        // const paths, literals, and unknown identifiers are not.
+        let source = r#"
+entity Buck(v_out: voltage = 3.3V, v_in: voltage = 12V) {
+    pin VIN: power in;
+    const P: T = { switching_frequency: 500kHz };
+    attribute output_voltage = v_out;
+    attribute input_voltage = v_in;
+    attribute sf = P.switching_frequency;
+    attribute component_class = "switching_regulator";
+    attribute f_sw = 570kHz;
+}
+"#;
+        let parse = bhdl_parser::parse(source);
+        let sf = bhdl_ast::SourceFile::cast(parse.syntax()).unwrap();
+        let entity = sf.entities().next().unwrap();
+        let refs = extract_module_attribute_param_refs(&entity);
+        assert_eq!(refs.get("output_voltage"), Some(&"v_out".to_string()));
+        assert_eq!(refs.get("input_voltage"), Some(&"v_in".to_string()));
+        assert_eq!(refs.get("sf"), None);
+        assert_eq!(refs.get("component_class"), None);
+        assert_eq!(refs.get("f_sw"), None);
+        assert_eq!(refs.len(), 2);
     }
 }
