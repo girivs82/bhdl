@@ -144,6 +144,11 @@ enum Commands {
         /// Also write the V4 idiom-composed SVG schematic to this path
         #[arg(long, value_name = "SVG")]
         svg_v4: Option<String>,
+
+        /// Bind the sheet tree into a print-ready multipage HTML document
+        /// (index page + title blocks; print to PDF from any browser)
+        #[arg(long, value_name = "HTML")]
+        binder: Option<String>,
         /// Print ASCII schematic to terminal (requires Node.js)
         #[arg(long)]
         ascii: bool,
@@ -430,8 +435,8 @@ async fn main() -> Result<()> {
             run_freeze(&source_file, &cli.input, output, frozen_libraries).await?;
         }
         
-        Some(Commands::Visualize { output, json, validate, ascii, svg_v4 }) => {
-            run_visualization(&source_file, output, json, validate, ascii, &cli.input, svg_v4.as_deref()).await?;
+        Some(Commands::Visualize { output, json, validate, ascii, svg_v4, binder }) => {
+            run_visualization(&source_file, output, json, validate, ascii, &cli.input, svg_v4.as_deref(), binder.as_deref()).await?;
         }
         
         Some(Commands::Spice { analysis, output, use_metadata }) => {
@@ -1195,7 +1200,7 @@ async fn run_freeze(
     Ok(())
 }
 
-async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, json_output: bool, validate: bool, ascii: bool, source_path: &Path, svg_v4: Option<&str>) -> Result<()> {
+async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, json_output: bool, validate: bool, ascii: bool, source_path: &Path, svg_v4: Option<&str>, binder: Option<&str>) -> Result<()> {
     // Run full pipeline to get netlist
     let analysis = analyze(source_file);
 
@@ -1329,14 +1334,14 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
         let sheets = bhdl_schematic::v4::render_sheet_tree(&netlist, &title, &decor, &href_for);
         let n_sheets = sheets.len();
         let (mut unidiomized, mut collisions) = (0usize, 0usize);
-        for sheet in sheets {
+        for sheet in &sheets {
             unidiomized += sheet.unidiomized;
             collisions += sheet.collisions;
             if sheet.slug.is_empty() {
-                std::fs::write(out_path, sheet.svg)?;
+                std::fs::write(out_path, &sheet.svg)?;
             } else {
                 let child = out_path.with_file_name(format!("{stem}__{}.svg", slugify(&sheet.slug)));
-                std::fs::write(&child, sheet.svg)?;
+                std::fs::write(&child, &sheet.svg)?;
                 println!("    {} sheet: {}", "→".cyan(), child.display());
             }
         }
@@ -1345,6 +1350,31 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
             "  {} V4 SVG: {svg_path} ({unidiomized} unidiomized, {collisions} collisions{pages})",
             "✓".green(),
         );
+
+        // Second binding of the same sheets: a print-ready multipage
+        // document (browser prints it to PDF — no second rendering stack).
+        if let Some(binder_path) = binder {
+            let href_map: Vec<(String, String)> = sheets
+                .iter()
+                .filter(|s| !s.slug.is_empty())
+                .map(|s| {
+                    let slug = slugify(&s.slug);
+                    (format!("{stem}__{slug}.svg"), slug)
+                })
+                .collect();
+            let html = bhdl_schematic::v4::bind_sheets(
+                &title,
+                &sheets,
+                &href_map,
+                env!("CARGO_PKG_VERSION"),
+            );
+            std::fs::write(binder_path, html)?;
+            println!(
+                "  {} binder: {binder_path} ({} pages — print to PDF from a browser)",
+                "✓".green(),
+                n_sheets + 1,
+            );
+        }
     }
 
     // Auto-create input filter caps for rails with |> input_filtering in stage chain
