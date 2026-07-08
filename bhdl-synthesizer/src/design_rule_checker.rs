@@ -262,6 +262,12 @@ impl DesignRuleChecker {
                 "Expansion children on a net whose only other member is their parent's virtual pin — duplicated application circuitry the board never consumes (Error)",
                 crate::erc::check_floating_expansion_island,
             ),
+            (
+                "ERC030",
+                "Board part shadows an expansion child",
+                "Board-authored two-terminal part bridging the same net pair as a same-class expansion child — double-authored application circuit (Warning)",
+                crate::erc::check_expansion_shadow_parts,
+            ),
         ] {
             self.rules.push(DesignRule {
                 id: id.to_string(),

@@ -1426,6 +1426,114 @@ pub fn check_floating_expansion_island(
     out
 }
 
+// ─────────────── ERC030 — board part shadows an expansion child ───────────────
+
+/// ERC030 — a board-authored two-terminal part bridging EXACTLY the same
+/// net pair as an entity-expansion child of the same component class: the
+/// signature of a double-authored application circuit. Happens when a board
+/// wires an entity's virtual output pin (so the expansion mints its sized
+/// power stage) AND hand-authors the same stage on the physical pins — two
+/// inductors in parallel halve the effective inductance, two catch diodes
+/// share current, and the BOM carries both.
+///
+/// Warning, not Error: paralleling same-class parts on one net pair is
+/// occasionally deliberate (current-sharing diodes/inductors, trim
+/// resistors). Capacitors are excluded entirely — parallel caps on a rail
+/// are idiomatic (bulk + ceramic), and expansions themselves mint them
+/// (C_out ‖ C_out2).
+pub fn check_expansion_shadow_parts(
+    netlist: &Netlist,
+    _analysis: &AnalysisResult,
+) -> Vec<DRCViolation> {
+    const SHADOWABLE: &[&str] = &["inductor", "diode", "resistor", "ferrite", "ferrite_bead"];
+
+    // Two-terminal instances → (class, sorted net pair, expansion parent).
+    struct TwoTerminal {
+        inst_id: bhdl_netlist::InstanceId,
+        name: String,
+        class: String,
+        nets: (NetId, NetId),
+        expansion_parent: Option<String>,
+    }
+    let mut parts: Vec<TwoTerminal> = Vec::new();
+    for (inst_id, inst) in &netlist.instances {
+        let class = inst
+            .attributes
+            .get("component_class")
+            .or_else(|| {
+                netlist
+                    .modules
+                    .get(inst.definition)
+                    .and_then(|m| m.attributes.get("component_class"))
+            })
+            .map(String::as_str)
+            .unwrap_or("");
+        if !SHADOWABLE.contains(&class) {
+            continue;
+        }
+        let pin_nets: Vec<NetId> = netlist
+            .pin_instances
+            .values()
+            .filter(|pi| pi.instance == inst_id)
+            .filter_map(|pi| pi.net)
+            .collect();
+        let [a, b] = pin_nets.as_slice() else { continue };
+        let nets = if a <= b { (*a, *b) } else { (*b, *a) };
+        if nets.0 == nets.1 {
+            continue; // both ends on one net — not a bridge
+        }
+        parts.push(TwoTerminal {
+            inst_id,
+            name: inst.name.clone(),
+            class: class.to_string(),
+            nets,
+            expansion_parent: inst
+                .attributes
+                .get("expansion_parent")
+                .or_else(|| inst.attributes.get("vpin_parent"))
+                .cloned(),
+        });
+    }
+
+    let mut out = Vec::new();
+    for board_part in parts.iter().filter(|p| p.expansion_parent.is_none()) {
+        for child in parts.iter().filter(|p| p.expansion_parent.is_some()) {
+            if board_part.class != child.class || board_part.nets != child.nets {
+                continue;
+            }
+            let parent = child.expansion_parent.as_deref().unwrap_or("?");
+            let pair = format!(
+                "'{}' ↔ '{}'",
+                net_name(netlist, board_part.nets.0),
+                net_name(netlist, board_part.nets.1)
+            );
+            out.push(DRCViolation {
+                rule_id: "ERC030".into(),
+                rule_name: "Board part shadows an expansion child".into(),
+                category: RuleCategory::Electrical,
+                severity: ViolationSeverity::Warning,
+                description: format!(
+                    "'{}' ({}) bridges the same net pair {} as '{}', a part \
+                     '{}''s expansion minted — the application circuit is \
+                     authored twice and the parts sit in parallel (halved \
+                     inductance / shared diode current, duplicate BOM line)",
+                    board_part.name, board_part.class, pair, child.name, parent
+                ),
+                location: ViolationLocation::Component(board_part.inst_id),
+                fix_suggestion: format!(
+                    "delete '{}' and let '{}''s expansion own the circuit, or \
+                     stop wiring the entity's virtual output pin and keep the \
+                     hand-authored parts (the expansion then skips); if the \
+                     paralleling is deliberate (current sharing), waive this",
+                    board_part.name, parent
+                ),
+                standard_reference: None,
+            });
+        }
+    }
+    out
+}
+
 // ──────────────────── ERC026 — interface completeness ────────────────────
 
 /// ERC026 — a part using PART of a bus interface it declares pins for:
@@ -1996,6 +2104,81 @@ mod tests {
         let pis = nl.create_pin_instances(rl).unwrap();
         nl.connect(net, ConnectionPoint::PinInstance(pis[0])).unwrap();
         assert!(check_floating_expansion_island(&nl, &AnalysisResult::default())
+            .is_empty());
+    }
+
+    // ── ERC030 fixtures: expansion child + board part on a net pair ──
+
+    /// Build: two nets (SW, VOUT); an expansion-child part of `child_class`
+    /// (expansion_parent = "u1") bridging them; a board part of
+    /// `board_class` bridging `board_nets` (same pair or a different one).
+    fn shadow_fixture(
+        child_class: &str,
+        board_class: &str,
+        same_pair: bool,
+    ) -> Netlist {
+        use bhdl_netlist::types::ModuleKind;
+        let mut nl = Netlist::new();
+        let sw = nl.add_net(Some("SW".into()));
+        let vout = nl.add_net(Some("VOUT".into()));
+        let other = nl.add_net(Some("OTHER".into()));
+
+        let mut add_two_pin = |name: &str, class: &str, n1: NetId, n2: NetId, parent: Option<&str>| {
+            let m = nl.add_module(format!("M_{name}"), ModuleKind::Component);
+            nl.add_pin(m, "1".into(), PinDirection::InOut, PinType::Signal).unwrap();
+            nl.add_pin(m, "2".into(), PinDirection::InOut, PinType::Signal).unwrap();
+            let i = nl.add_instance(name.into(), m).unwrap();
+            let attrs = &mut nl.instances.get_mut(i).unwrap().attributes;
+            attrs.insert("component_class".into(), class.into());
+            if let Some(p) = parent {
+                attrs.insert("expansion_parent".into(), p.into());
+            }
+            let pis = nl.create_pin_instances(i).unwrap();
+            nl.connect(n1, ConnectionPoint::PinInstance(pis[0])).unwrap();
+            nl.connect(n2, ConnectionPoint::PinInstance(pis[1])).unwrap();
+        };
+        add_two_pin("u1_L_out", child_class, sw, vout, Some("u1"));
+        let board_n2 = if same_pair { vout } else { other };
+        add_two_pin("L1", board_class, sw, board_n2, None);
+        nl
+    }
+
+    #[test]
+    fn erc030_shadowing_inductor_warns() {
+        // Board inductor bridges the same SW↔VOUT pair as the expansion's —
+        // double-authored power stage.
+        let nl = shadow_fixture("inductor", "inductor", true);
+        let v = check_expansion_shadow_parts(&nl, &AnalysisResult::default());
+        assert_eq!(v.len(), 1, "expected exactly the shadow Warning");
+        assert_eq!(v[0].rule_id, "ERC030");
+        assert!(matches!(v[0].severity, ViolationSeverity::Warning));
+        assert!(v[0].description.contains("L1"));
+        assert!(v[0].description.contains("u1_L_out"));
+    }
+
+    #[test]
+    fn erc030_different_net_pair_silent() {
+        // Board inductor on a different pair — a second, distinct stage.
+        let nl = shadow_fixture("inductor", "inductor", false);
+        assert!(check_expansion_shadow_parts(&nl, &AnalysisResult::default())
+            .is_empty());
+    }
+
+    #[test]
+    fn erc030_capacitors_exempt() {
+        // Parallel caps on one pair are idiomatic (bulk + ceramic) — and
+        // expansions mint them themselves (C_out ‖ C_out2). Never flagged.
+        let nl = shadow_fixture("capacitor", "capacitor", true);
+        assert!(check_expansion_shadow_parts(&nl, &AnalysisResult::default())
+            .is_empty());
+    }
+
+    #[test]
+    fn erc030_class_mismatch_silent() {
+        // A board resistor across the expansion inductor's pair is a
+        // damper, not a duplicate.
+        let nl = shadow_fixture("inductor", "resistor", true);
+        assert!(check_expansion_shadow_parts(&nl, &AnalysisResult::default())
             .is_empty());
     }
 

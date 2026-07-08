@@ -3,7 +3,6 @@
 // 12V to 5V @ 2A using TPS54331's virtual VOUT pin
 
 import { TPS54331 } from "bhdl-stdlib/power/tps54331.bhdl";
-import { SS34, SchottkyDiode } from "bhdl-stdlib/components/power/protection/SS34.bhdl";
 import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
 import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 import { TestPoint } from "bhdl-stdlib/connectors/testpoint.bhdl";
@@ -26,12 +25,10 @@ board BuckConverterTPS54331 {
     U1.GND -> GND;
     U1.EN -> VIN;  // Always enabled
     
-    // Catch diode (required but not part of virtual pin)
-    GND -> D1: SS34().A;
-    D1.K -> U1.SW;
-    
     // Virtual pin connection - this should expand to:
     // - Output inductor (calculated ~15µH for 5V)
+    // - Catch diode (the expansion mints it; a hand-authored D1 here
+    //   would shadow U1_D_catch in parallel — ERC030)
     // - Bootstrap capacitor (100nF)
     // - Output capacitors (2×22µF)
     // - Feedback resistor divider
