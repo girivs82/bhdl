@@ -2,14 +2,14 @@
   "version": 1,
   "mappings": {
     "C": {
-      "U1_C_out": "C2",
-      "U1_C_in": "C1"
+      "u_ldo_C_out": "C2",
+      "u_ldo_C_in": "C1"
     },
     "R": {
-      "R_LOAD": "R1"
+      "r_load": "R1"
     },
     "U": {
-      "U1": "U1"
+      "u_ldo": "U1"
     }
   }
 }

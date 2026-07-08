@@ -1,0 +1,38 @@
+// Adversarial handle naming — the namespaces collide CROSSWISE.
+//
+// Handles here are deliberately chosen to look like reference designators
+// of the WRONG class: the resistor is handled 'C1', the capacitor 'R1',
+// the regulator 'U2'. The allocator (synthesizer phase 12.7) numbers by
+// component_class regardless of spelling, so the fab namespace comes out
+// crossed with the human one:
+//     handle C1 (a resistor)  → refdes R1
+//     handle R1 (a capacitor) → refdes C1
+//     handle U2 (the LM7805)  → refdes U1
+// Any consumer that conflates the namespaces doesn't just print a long
+// name here — it points at the WRONG PART. Report tables must show
+// 'C1 (R1)', the BOM must list the 1kΩ resistor under R1, and the
+// schematic label for the part the source calls C1 must read R1.
+// Doctrine: docs/spec/Handles_And_Refdes.md §5.
+
+import { LM7805 } from "bhdl-stdlib/power/lm7805.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+board AdversarialHandleNames {
+    power VIN = 12V @ 500mA;
+    port VOUT_5V: power out = 5V @ 400mA;
+    ground GND;
+
+    // 'U2' is the FIRST and only IC — its refdes allocates as U1.
+    @VIN -> U2: LM7805().VIN;
+    U2.GND -> @GND;
+    U2.VOUT -> @VOUT_5V;
+
+    // 'C1' is a RESISTOR (refdes R1): the output load.
+    @VOUT_5V -> C1: Res(100Ω, wattage=1W).1;
+    C1.2 -> @GND;
+
+    // 'R1' is a CAPACITOR (refdes C1): input bulk.
+    @VIN -> R1: Cap(10µF, voltage=25V).1;
+    R1.2 -> @GND;
+}

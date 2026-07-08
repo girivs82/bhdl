@@ -1,45 +1,45 @@
 {
   "version": 1,
   "mappings": {
-    "J": {
-      "TP1": "J1",
-      "TP3": "J3",
-      "TP2": "J2"
-    },
-    "C": {
-      "C_IN1_11": "C15",
-      "C_IN1_6": "C10",
-      "C_IN1_8": "C12",
-      "C_IN1_7": "C11",
-      "C_IN1_14": "C18",
-      "C_IN1_2": "C6",
-      "U1_C_ff": "C5",
-      "C_IN1_15": "C19",
-      "C_IN1_4": "C8",
-      "C_IN1_10": "C14",
-      "C_IN1_9": "C13",
-      "C_IN1_3": "C7",
-      "C_IN1_5": "C9",
-      "C_IN1_12": "C16",
-      "C_IN1": "C1",
-      "U1_C_out2": "C4",
-      "C_IN2": "C2",
-      "U1_C_out": "C3",
-      "C_IN1_13": "C17"
-    },
-    "L": {
-      "U1_L_out": "L1"
-    },
-    "D": {
-      "U1_D_catch": "D1"
-    },
     "U": {
-      "U1": "U1"
+      "u_buck": "U1"
     },
     "R": {
-      "U1_R_bot": "R3",
-      "R_LOAD": "R1",
-      "U1_R_top": "R2"
+      "u_buck_R_top": "R3",
+      "u_buck_R_bot": "R2",
+      "r_load": "R1"
+    },
+    "C": {
+      "input_bulk_cap_3": "C7",
+      "input_bulk_cap_7": "C11",
+      "input_bulk_cap_6": "C10",
+      "input_bulk_cap_11": "C15",
+      "input_bulk_cap_2": "C6",
+      "input_bulk_cap_13": "C17",
+      "input_bulk_cap_5": "C9",
+      "u_buck_C_out": "C4",
+      "input_bulk_cap": "C1",
+      "u_buck_C_ff": "C3",
+      "u_buck_C_out2": "C5",
+      "input_bulk_cap_12": "C16",
+      "input_bulk_cap_8": "C12",
+      "input_bulk_cap_15": "C19",
+      "input_bulk_cap_4": "C8",
+      "input_hf_cap": "C2",
+      "input_bulk_cap_9": "C13",
+      "input_bulk_cap_10": "C14",
+      "input_bulk_cap_14": "C18"
+    },
+    "J": {
+      "tp_vout": "J3",
+      "tp_feedback": "J1",
+      "tp_switch_node": "J2"
+    },
+    "L": {
+      "u_buck_L_out": "L1"
+    },
+    "D": {
+      "u_buck_D_catch": "D1"
     }
   }
 }

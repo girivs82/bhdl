@@ -1,23 +1,25 @@
 import { LM7805 } from "bhdl-stdlib/power/lm7805.bhdl";
 import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 
-// Test circuit for LM7805 linear regulator with virtual pin
+// Test circuit for LM7805 linear regulator with virtual pin.
+// Descriptive handles on purpose — regression-tests the
+// handle-vs-refdes split (docs/spec/Handles_And_Refdes.md).
 board LinearRegulatorBoard {
     power VIN = 12V @ 2A;
     port VOUT_5V: power out = 5V @ 1A;
     ground GND;
     
     // LM7805 linear regulator
-    U1: LM7805();
+    u_ldo: LM7805();
     
     // Input connections
-    @VIN -> U1.VIN;
-    U1.GND -> @GND;
+    @VIN -> u_ldo.VIN;
+    u_ldo.GND -> @GND;
     
     // Virtual pin - should expand to output capacitors
-    U1.VOUT -> @VOUT_5V;
+    u_ldo.VOUT -> @VOUT_5V;
     
     // Load resistor to test
-    @VOUT_5V -> R_LOAD: Res(10).1;
-    R_LOAD.2 -> @GND;
+    @VOUT_5V -> r_load: Res(10).1;
+    r_load.2 -> @GND;
 }

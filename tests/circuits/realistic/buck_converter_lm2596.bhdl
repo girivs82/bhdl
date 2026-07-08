@@ -1,4 +1,9 @@
 // Buck Converter using LM2596 with Virtual Pin
+// Handles are DESCRIPTIVE on purpose (u_buck, input_bulk_cap, …):
+// this board regression-tests the handle-vs-refdes split — any
+// consumer that leaks handles onto a fab surface (BOM, labels)
+// prints 'input_bulk_cap' instead of 'C1' and is caught on sight.
+// Doctrine: docs/spec/Handles_And_Refdes.md.
 // Tests virtual pin expansion for LM2596
 // 24V to 12V @ 2A
 
@@ -14,16 +19,16 @@ board BuckConverterLM2596 {
     ground GND;
     
     // Input filtering (required but not part of virtual pin)
-    VIN -> C_IN1: Cap(680µF, voltage=35V).1;
-    C_IN1.2 -> GND;
-    VIN -> C_IN2: Cap(0.1µF, voltage=35V).1;  
-    C_IN2.2 -> GND;
+    VIN -> input_bulk_cap: Cap(680µF, voltage=35V).1;
+    input_bulk_cap.2 -> GND;
+    VIN -> input_hf_cap: Cap(0.1µF, voltage=35V).1;  
+    input_hf_cap.2 -> GND;
     
     // Buck controller with virtual pin
-    U1: LM2596(vout_target=12V, v_in=24V, i_out_max=2A);
-    VIN -> U1.VIN;
-    U1.GND -> GND;
-    U1.EN -> VIN;  // Always enabled
+    u_buck: LM2596(vout_target=12V, v_in=24V, i_out_max=2A);
+    VIN -> u_buck.VIN;
+    u_buck.GND -> GND;
+    u_buck.EN -> VIN;  // Always enabled
     
     // Virtual pin connection - this should expand to:
     // - Output inductor (68µH for 12V)
@@ -31,14 +36,14 @@ board BuckConverterLM2596 {
     // - Output capacitors (470µF + 0.1µF)
     // - Feedback resistor divider
     // - Feedforward capacitor
-    U1.VOUT -> @VOUT_12V;
+    u_buck.VOUT -> @VOUT_12V;
     
     // Load for testing (6Ω = 2A at 12V)
-    @VOUT_12V -> R_LOAD: Res(6Ω, wattage=25W).1;
-    R_LOAD.2 -> GND;
+    @VOUT_12V -> r_load: Res(6Ω, wattage=25W).1;
+    r_load.2 -> GND;
     
     // Optional: Add test points
-    @VOUT_12V -> TP1: TestPoint();
-    U1.SW -> TP2: TestPoint();
-    U1.FB -> TP3: TestPoint();
+    @VOUT_12V -> tp_vout: TestPoint();
+    u_buck.SW -> tp_switch_node: TestPoint();
+    u_buck.FB -> tp_feedback: TestPoint();
 }

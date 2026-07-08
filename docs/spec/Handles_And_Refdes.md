@@ -109,3 +109,14 @@ to just the handle when the two coincide.
 
 Net names remain handle-derived (`U1_VOUT`, `fb_node`) — nets have no
 fab designator namespace.
+
+Living fixtures: `tests/circuits/realistic/buck_converter_lm2596.bhdl`
+and `linear_regulator_lm7805.bhdl` use descriptive handles (`u_buck`,
+`input_bulk_cap`) so a consumer leaking handles onto a fab surface is
+caught on sight, and `adversarial_handle_names.bhdl` names its parts
+CROSSWISE (a resistor handled `C1` → refdes `R1`, a capacitor handled
+`R1` → refdes `C1`, the IC `U2` → refdes `U1`) — a namespace-conflating
+consumer there doesn't merely print a long name, it points at the wrong
+part. The rest of the corpus keeps refdes-like handles deliberately:
+that IS the most common authoring style and must keep working, including
+the `handle (refdes)` collapse when the spellings coincide.
