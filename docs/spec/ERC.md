@@ -4,8 +4,8 @@
 > T2 part-carried `check {}` rules (ERC025), T3 policy plugins
 > (`BHDL_ERC_PLUGINS`), severity gating (`--erc-fail-on`), and reasoned
 > waivers (`erc_waive`), the T2 predicate extensions (exists / value-eq /
-> same_net), and the ERC024 absence ledger. The FULL catalog through ERC026 is
-> BUILT — batches 1-3, all three tiers, gating, waivers, the ERC024
+> same_net), and the ERC024 absence ledger. The FULL catalog through ERC030 is
+> BUILT — batches 1-4, all three tiers, gating, waivers, the ERC024
 > absence ledger, and the ERC019 solved-DC upgrade.
 
 ## 1. Why BHDL can check more than an EDA netlist tool
@@ -200,6 +200,58 @@ across all three tiers.
   and ERC008 exempts pins listed in multiple connection lists.
 - VIL/VIH-aware domain rule: replace ERC004's 5% rail comparison with pin
   `vih_min`/`vil_max`/`io_tolerant_v` attributes when declared.
+
+### Batch 4 — boundaries: rails and the expansion authoring line (BUILT)
+
+- **ERC027** stage-gain consistency — BUILT: the op-amp stage gain
+  triangle — derived (from the placed feedback network), measured (from
+  the stimulus-response transient), and declared (the gain intent) must
+  agree; any leg disagreeing is reported with all three numbers.
+- **ERC028** rail anchoring — BUILT: a Power-class rail must be anchored
+  at a boundary. No board port AND no on-board driver → the rail's
+  voltage is fiat (Error). A power-IN port on a rail an on-board output
+  pin drives → the declaration claims an external supply that doesn't
+  exist on the built board (Error). A power-in port whose net touches no
+  connector-class instance → nothing to solder the supply to (Warning).
+  INOUT ports (battery+charger buses) make no single-boundary claim and
+  are unchecked.
+
+The next two rules police the **expansion authoring boundary** — who owns
+a self-expanding entity's application circuit. The contract: wiring the
+entity's *virtual* output pin (`U1.VOUT -> @RAIL`) hands the circuit to
+the entity's `expansion { }`; wiring the *physical* path pins (SW, FB)
+while leaving the virtual pin unwired means the board authored it, and
+the expansion interpreter suppresses the virtual pin's delivery-path
+children (component-scoped: the recipe walk does not traverse through
+power-rail pins, so unrelated mandatory support like VIN decoupling still
+expands). These rules catch the two shapes the interpreter cannot resolve
+by itself:
+
+- **ERC029** floating duplicated support circuit — BUILT (Error): a net
+  whose only members are ONE instance's virtual pin plus that same
+  instance's own expansion children. A virtual pin is a logical port, not
+  copper, so the whole group is an electrically floating island — the
+  entity minted its application circuit onto a net the board never
+  consumes (output forgotten, or hand-authored without tripping the
+  interpreter's takeover detection). Dead copper on the board, and
+  anything reading the virtual pin's net (the input-draw fixpoint, rail
+  budgets) sees a phantom rail. Exempt: a net carrying any REAL parent
+  pin (the auto-created SW node between chip and expansion inductor is
+  legitimate internal wiring) or any board-authored member.
+- **ERC030** board part shadows an expansion child — BUILT (Warning): a
+  board-authored two-terminal part bridging EXACTLY the same net pair as
+  an expansion child of the same component class — the signature of a
+  double-authored circuit (virtual pin wired, so the expansion fired, AND
+  the same stage hand-authored on the physical pins: two inductors in
+  parallel halve the effective inductance, two catch diodes share
+  current, the BOM carries both). Warning, not Error — paralleling is
+  occasionally deliberate (current-sharing, trim resistors); waive those.
+  Capacitors are exempt entirely: parallel caps on a rail are idiomatic
+  (bulk + ceramic) and expansions mint them themselves (C_out ‖ C_out2).
+  Class + exact-pair matching keeps an RC snubber on the switch node
+  silent. First corpus scan caught a real one: buck_converter_tps54331's
+  hand-authored catch diode had silently paralleled the entity's own
+  after the TPS54331 expansion grew one.
 
 ## 4. Reporting
 
