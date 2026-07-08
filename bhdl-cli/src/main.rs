@@ -2798,6 +2798,11 @@ fn compute_port_currents(
                         .filter_map(|&n| circuit.get_node_name(n))
                         .any(|n| driven.contains(n)))
         };
+        // At most ONE member VoltageSource per net: on a declared rail that
+        // a regulator drives, the rail's own source and the decomposed
+        // regulator source can BOTH exist; counting both doubles the port
+        // current (buck_converter_simple read 4A into a 2A load).
+        let mut source_counted: std::collections::HashSet<String> = std::collections::HashSet::new();
         for (edge, b) in circuit.branches() {
             if b.nodes.len() != 2 {
                 continue;
@@ -2807,9 +2812,29 @@ fn compute_port_currents(
             // METADATA; missing them puts the source in the complement,
             // where it cancels against the very draw it supplies.
             let member = is_member(b);
-            let i = dc.branch_currents.get(&edge).copied().unwrap_or_else(|| {
+            if member && b.component_type == "VoltageSource" {
+                let key = b
+                    .nodes
+                    .iter()
+                    .filter_map(|&n| circuit.get_node_name(n))
+                    .collect::<Vec<_>>()
+                    .join("|");
+                if !source_counted.insert(key) {
+                    continue; // second parallel source on the same net
+                }
+            }
+            let mut i = dc.branch_currents.get(&edge).copied().unwrap_or_else(|| {
                 if b.component_type == "CurrentSource" { b.value } else { 0.0 }
             });
+            // The solver reports SOURCE currents in the delivery convention
+            // (positive = out of the + terminal), passives in the
+            // nodes[0]→nodes[1] convention — mixing them made a source and
+            // its load ADD in the injection sum instead of cancel (a 2A
+            // load read as a 4A port). Normalize sources to the passive
+            // convention.
+            if b.component_type == "VoltageSource" {
+                i = -i;
+            }
             let sink = if member { &mut inj_member } else { &mut inj_other };
             let name_of = |n| circuit.get_node_name(n).map(str::to_string);
             if let Some(a) = name_of(b.nodes[0]) {

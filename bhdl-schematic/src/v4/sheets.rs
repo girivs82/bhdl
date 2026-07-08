@@ -57,6 +57,111 @@ pub fn partition_sheets(netlist: &Netlist) -> Option<Vec<SheetGroup>> {
         groups.push(SheetGroup { parent: Some(parent.clone()), members });
     }
 
+    // ── Adoption: board-authored support parts that are electrically
+    // INSIDE a group's boundary belong on its sheet. A board that writes
+    // the catch diode / inductor / FB divider itself (while the entity's
+    // expansion contributes the rest) otherwise strands those parts on
+    // the top sheet as flag-pair columns — correct, but not what anyone
+    // would draw. Rule (conservative, never guess):
+    //   candidate  = unclaimed passive (≤2 pins) or single-pin part;
+    //   working nets of G = non-rail, non-ground nets touched by G's
+    //                       members (the SW node, the FB node, …);
+    //   adopt into G when EVERY net the part touches is a working net of
+    //   G, a rail, or ground — and ≥1 is a working net. A net claimed by
+    //   two groups adopts into neither. Closure iterates so a chain
+    //   (snubber R–C) follows its anchor in.
+    {
+        let net_class = |nid: bhdl_netlist::types::NetId| {
+            netlist.nets.get(nid).map(|n| &n.net_class)
+        };
+        let is_rail = |nid| matches!(net_class(nid), Some(bhdl_netlist::types::NetClass::Power { .. }));
+        let is_gnd = |nid| matches!(net_class(nid), Some(bhdl_netlist::types::NetClass::Ground));
+        let inst_nets = |iid: InstanceId| -> Vec<bhdl_netlist::types::NetId> {
+            let mut v: Vec<_> = netlist
+                .pin_instances
+                .values()
+                .filter(|pi| pi.instance == iid)
+                .filter_map(|pi| pi.net)
+                .collect();
+            v.sort();
+            v.dedup();
+            v
+        };
+        const PASSIVE: [&str; 8] = [
+            "resistor", "capacitor", "inductor", "diode", "led", "fuse",
+            "protection", "crystal",
+        ];
+        for _pass in 0..3 {
+            // Working nets per group, recomputed each pass so adopted
+            // parts extend the closure.
+            let working: Vec<HashSet<bhdl_netlist::types::NetId>> = groups
+                .iter()
+                .map(|g| {
+                    g.members
+                        .iter()
+                        .flat_map(|&m| inst_nets(m))
+                        .filter(|&n| !is_rail(n) && !is_gnd(n))
+                        .collect()
+                })
+                .collect();
+            let mut adopted = false;
+            let unclaimed: Vec<InstanceId> = netlist
+                .instances
+                .iter()
+                .filter(|(id, _)| !claimed.contains(id))
+                .map(|(id, _)| id)
+                .collect();
+            for iid in unclaimed {
+                let inst = &netlist.instances[iid];
+                let n_pins = netlist
+                    .pin_instances
+                    .values()
+                    .filter(|pi| pi.instance == iid)
+                    .count();
+                let class = inst
+                    .attributes
+                    .get("component_class")
+                    .map(String::as_str)
+                    .unwrap_or("");
+                let passive = PASSIVE.contains(&class) || (class.is_empty() && n_pins <= 2);
+                if n_pins > 2 || !passive {
+                    continue;
+                }
+                let nets = inst_nets(iid);
+                if nets.is_empty() {
+                    continue;
+                }
+                // Which child groups claim ≥1 of this part's working nets?
+                let mut home: Option<usize> = None;
+                let mut conflict = false;
+                for (gi, g) in groups.iter().enumerate() {
+                    if g.parent.is_none() {
+                        continue;
+                    }
+                    if nets.iter().any(|n| working[gi].contains(n)) {
+                        if home.replace(gi).is_some() {
+                            conflict = true;
+                        }
+                    }
+                }
+                let (Some(gi), false) = (home, conflict) else { continue };
+                // Every net must be inside the boundary vocabulary.
+                if !nets
+                    .iter()
+                    .all(|&n| is_rail(n) || is_gnd(n) || working[gi].contains(&n))
+                {
+                    continue;
+                }
+                groups[gi].members.insert(iid);
+                claimed.insert(iid);
+                adopted = true;
+            }
+            if !adopted {
+                break;
+            }
+        }
+    }
+
     // Top sheet: everything unclaimed.
     let top: HashSet<InstanceId> = netlist
         .instances
