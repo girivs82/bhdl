@@ -240,49 +240,82 @@ fn expand_one_instance(
 ) -> Result<ExpansionResult, String> {
     let base = &cand.instance_name;
 
-    // Board-authored application circuit: when the board leaves the entity's
-    // virtual output pin unwired but wires the expansion's other pins (the
+    // Board-authored application circuit: when the board leaves a virtual
+    // output pin unwired but wires that pin's delivery-path pins (the
     // switch node, the feedback pin) into its own hand-authored circuitry,
-    // the board has taken over the application circuit. Running the
+    // the board has taken over that application circuit. Running the
     // expansion anyway mints the datasheet support parts a second time —
     // the output-side copies land on the virtual pin's auto-net (connected
     // to nothing), while the switch/feedback-side copies pollute the LIVE
     // board nets (a second catch diode on SW, a parallel divider on FB).
-    // Skip the whole expansion — a half-fired expansion is not a coherent
-    // application circuit — and say loudly which parts were suppressed.
-    if let Some((vpin, wired_pins)) = board_authored_output_takeover(netlist, cand) {
-        let dupes: Vec<String> = cand.recipe.instances.iter()
-            .map(|i| format!("{}_{}", base, i.name))
+    // Suppress exactly the children in the virtual pin's recipe-connected
+    // component — unrelated mandatory support (decoupling on a supply pin)
+    // still expands — and say loudly which parts were suppressed.
+    let takeovers = board_authored_output_takeover(netlist, cand);
+    let takeover_skipped: HashSet<String> = takeovers.iter()
+        .flat_map(|t| t.children.iter().cloned())
+        .collect();
+    for t in &takeovers {
+        let mut dupes: Vec<String> = t.children.iter()
+            .map(|c| format!("{}_{}", base, c))
             .collect();
+        dupes.sort();
+        let kept = cand.recipe.instances.len()
+            - cand.recipe.instances.iter()
+                .filter(|i| takeover_skipped.contains(&i.name))
+                .count();
         warn!(
-            "Expansion of '{}' ({}) SKIPPED — the board hand-authors the entity's \
-             application circuit: virtual pin '{}' is unwired while pin(s) [{}] are \
-             wired into board-authored parts. Expanding anyway would mint duplicated \
-             support circuitry ({}) floating on '{}_{}'. Either wire '{}.{}' to the \
-             output rail and delete the hand-authored copies (the entity sizes its \
-             own application circuit), or keep the board-authored circuit and this \
-             skip stands.",
-            base, cand.recipe.entity_name, vpin, wired_pins.join(", "),
-            dupes.join(", "), base, vpin, base, vpin,
+            "Expansion of '{}' ({}): virtual pin '{}''s delivery path SKIPPED — the \
+             board hand-authors the application circuit: '{}' is unwired while pin(s) \
+             [{}] are wired into board-authored parts. Expanding it would mint \
+             duplicated support circuitry ({}) floating on '{}_{}'.{} Either wire \
+             '{}.{}' to the output rail and delete the hand-authored copies (the \
+             entity sizes its own application circuit), or keep the board-authored \
+             circuit and this skip stands.",
+            base, cand.recipe.entity_name, t.vpin, t.vpin, t.wired_pins.join(", "),
+            dupes.join(", "), base, t.vpin,
+            if kept > 0 {
+                format!(" {kept} unrelated support part(s) still expand.")
+            } else {
+                String::new()
+            },
+            base, t.vpin,
         );
+    }
+    if !takeovers.is_empty() {
         if let Some(parent) = netlist.instances.get_mut(cand.instance_id) {
-            parent.attributes.insert("expansion_applied".to_string(), "true".to_string());
+            let mut summary: Vec<String> = takeovers.iter()
+                .map(|t| format!("virtual '{}' unwired, [{}] wired",
+                    t.vpin, t.wired_pins.join(", ")))
+                .collect();
+            summary.sort();
             parent.attributes.insert(
                 "expansion_skipped".to_string(),
-                format!("board-authored output path (virtual '{}' unwired, [{}] wired)",
-                    vpin, wired_pins.join(", ")),
+                format!("board-authored output path ({})", summary.join("; ")),
             );
         }
-        return Ok(ExpansionResult {
-            parent_instance: base.clone(),
-            child_instances: Vec::new(),
-            internal_nets: Vec::new(),
-        });
     }
 
-    // 1. Create internal nets
+    // 1. Create internal nets — except those referenced ONLY by connections
+    // touching takeover-suppressed children (they'd be dead, memberless nets).
     let mut internal_net_map: HashMap<String, NetId> = HashMap::new();
     for net_name in &cand.recipe.internal_nets {
+        let survives = cand.recipe.connections.iter().any(|conn| {
+            let refs_net = |ep: &ExpansionEndpoint| {
+                matches!(ep, ExpansionEndpoint::InternalNet(n) if n == net_name)
+            };
+            let skipped_child = |ep: &ExpansionEndpoint| match ep {
+                ExpansionEndpoint::InstancePin(c, _) => takeover_skipped.contains(c),
+                _ => false,
+            };
+            (refs_net(&conn.from) || refs_net(&conn.to))
+                && !skipped_child(&conn.from)
+                && !skipped_child(&conn.to)
+        });
+        if !survives {
+            debug!("Internal net '{}' suppressed with its takeover-skipped children", net_name);
+            continue;
+        }
         let full_name = format!("{}_{}", base, net_name);
         let net_id = netlist.add_net(Some(full_name.clone()));
         internal_net_map.insert(net_name.clone(), net_id);
@@ -322,8 +355,10 @@ fn expand_one_instance(
     //       instance shares a net with at least one other pin).
     // Otherwise the child is dropped, along with all connections
     // referring to it.
-    let live_children: HashSet<String> =
-        compute_live_children(netlist, cand);
+    let live_children: HashSet<String> = compute_live_children(netlist, cand)
+        .difference(&takeover_skipped)
+        .cloned()
+        .collect();
 
     if live_children.len() < cand.recipe.instances.len() {
         info!(
@@ -625,7 +660,13 @@ fn expand_one_instance(
     let interpositions = detect_interpositions(&cand.recipe);
     let mut rewired_original_nets: HashMap<String, NetId> = HashMap::new();
 
-    for (pin_name, internal_net_name) in &interpositions {
+    for (pin_name, internal_net_name, via_child) in &interpositions {
+        // A child that didn't materialise (pin-gated or takeover-suppressed)
+        // can't interpose — rewiring the parent pin would cut its board net.
+        if !live_children.contains(via_child) {
+            debug!("Interposition via '{}' skipped — child not live", via_child);
+            continue;
+        }
         if let Some(&pi_id) = cand.pin_instances.get(pin_name) {
             if let Some(original_net) = find_net_for_pin_instance(netlist, pi_id) {
                 let internal_net = *internal_net_map.get(internal_net_name)
@@ -1276,8 +1317,19 @@ fn compute_live_children(
     live
 }
 
+/// A board-authored takeover of one virtual pin's delivery path.
+struct OutputTakeover {
+    /// The unwired virtual pin whose delivery path the board authored.
+    vpin: String,
+    /// The non-power parent pins in that path the board wired.
+    wired_pins: Vec<String>,
+    /// Recipe-local names of the expansion children in the virtual
+    /// pin's delivery path — the ones to suppress.
+    children: HashSet<String>,
+}
+
 /// Detect a board-authored application circuit that supersedes the
-/// entity's own expansion.
+/// entity's own expansion of a virtual pin's delivery path.
 ///
 /// Trigger — BOTH must hold for some virtual parent pin V that the
 /// expansion recipe references:
@@ -1289,14 +1341,19 @@ fn compute_live_children(
 ///      IS wired at board level to at least one pin of another instance
 ///      (the board built its own series parts there).
 ///
-/// Returns `(virtual_pin_name, board_wired_pins)` when the expansion
-/// should be skipped, `None` to expand normally. The intended use
-/// (board wires `U1.VOUT -> @RAIL`, leaves SW/FB to the expansion)
-/// never triggers: V is wired, condition 1 fails.
+/// The component is walked WITHOUT traversing through power-rail pins:
+/// GND/VCC connect every child in the recipe, so crossing them would
+/// smear unrelated support parts (a decoupling cap on VIN) into the
+/// output path. Only the children genuinely in V's delivery path are
+/// suppressed; unrelated mandatory support still expands.
+///
+/// Returns one takeover per triggering virtual pin, empty to expand
+/// normally. The intended use (board wires `U1.VOUT -> @RAIL`, leaves
+/// SW/FB to the expansion) never triggers: V is wired, condition 1 fails.
 fn board_authored_output_takeover(
     netlist: &Netlist,
     cand: &ExpansionCandidate,
-) -> Option<(String, Vec<String>)> {
+) -> Vec<OutputTakeover> {
     // Bipartite recipe graph: parent pin ↔ child adjacency.
     let mut pin_children: HashMap<&str, HashSet<&str>> = HashMap::new();
     let mut child_pins: HashMap<&str, HashSet<&str>> = HashMap::new();
@@ -1330,6 +1387,7 @@ fn board_authored_output_takeover(
         })
     };
 
+    let mut takeovers = Vec::new();
     for (pin_name, &pi_id) in &cand.pin_instances {
         let is_virtual = netlist.pin_instances.get(pi_id)
             .and_then(|pi| netlist.pins.get(pi.pin_def))
@@ -1340,7 +1398,10 @@ fn board_authored_output_takeover(
         if find_net_for_pin_instance(netlist, pi_id).is_some() { continue; }
 
         // BFS the recipe-connected component around the virtual pin,
-        // collecting the parent pins the application circuit hangs off.
+        // collecting the parent pins the delivery path hangs off and the
+        // children that build it. Power-rail pins are dead ends: the path
+        // may TOUCH GND (catch diode, output caps) but never continues
+        // through it.
         let mut seen_pins: HashSet<&str> = HashSet::new();
         let mut seen_children: HashSet<&str> = HashSet::new();
         let mut frontier: Vec<&str> = vec![pin_name.as_str()];
@@ -1349,23 +1410,28 @@ fn board_authored_output_takeover(
             for &c in pin_children.get(p).into_iter().flatten() {
                 if !seen_children.insert(c) { continue; }
                 for &p2 in child_pins.get(c).into_iter().flatten() {
-                    if seen_pins.insert(p2) { frontier.push(p2); }
+                    if seen_pins.insert(p2) && !is_power_rail_pin(p2) {
+                        frontier.push(p2);
+                    }
                 }
             }
         }
 
-        let wired: Vec<String> = seen_pins.iter()
+        let mut wired: Vec<String> = seen_pins.iter()
             .filter(|p| **p != pin_name.as_str() && !is_power_rail_pin(p))
             .filter(|p| board_wired(p))
             .map(|p| p.to_string())
             .collect();
         if !wired.is_empty() {
-            let mut wired = wired;
             wired.sort();
-            return Some((pin_name.clone(), wired));
+            takeovers.push(OutputTakeover {
+                vpin: pin_name.clone(),
+                wired_pins: wired,
+                children: seen_children.iter().map(|c| c.to_string()).collect(),
+            });
         }
     }
-    None
+    takeovers
 }
 
 fn component_type_pins(component_type: &str) -> Option<Vec<(&'static str, bool)>> {
@@ -1433,8 +1499,10 @@ fn create_child_pin_instances(
 /// and the child's other side connects to an internal net. This means the child
 /// is "interposed" between the parent pin's board net and the internal net.
 ///
-/// Returns: Vec<(parent_pin_name, internal_net_name)> for pins that should be rewired.
-fn detect_interpositions(recipe: &ExpansionRecipe) -> Vec<(String, String)> {
+/// Returns: Vec<(parent_pin_name, internal_net_name, interposing_child)> for
+/// pins that should be rewired. Callers gate on the child being live — a
+/// dropped or takeover-suppressed child must not rewire the parent pin.
+fn detect_interpositions(recipe: &ExpansionRecipe) -> Vec<(String, String, String)> {
     let mut result = Vec::new();
 
     for conn_a in &recipe.connections {
@@ -1446,10 +1514,10 @@ fn detect_interpositions(recipe: &ExpansionRecipe) -> Vec<(String, String)> {
                         if child2 == child && child_pin_b != _child_pin_a {
                             if let ExpansionEndpoint::InternalNet(net) = &conn_b.to {
                                 // Found interposition: ParentPin(P) → Child.a, Child.b → InternalNet(N)
-                                if !result.iter().any(|(p, _)| p == pin) {
+                                if !result.iter().any(|(p, _, _)| p == pin) {
                                     debug!("Detected interposition: parent pin '{}' → internal net '{}' via child '{}'",
                                         pin, net, child);
-                                    result.push((pin.clone(), net.clone()));
+                                    result.push((pin.clone(), net.clone(), child.clone()));
                                 }
                             }
                         }
@@ -1849,7 +1917,9 @@ mod tests {
         netlist.connect(sw_net, ConnectionPoint::PinInstance(pi_ids[2])).unwrap();
         netlist.connect(sw_net, ConnectionPoint::PinInstance(l1_pis[0])).unwrap();
 
-        // Recipe: SW -> L.1, L.2 -> VOUT, VOUT -> C.1, C.2 -> GND
+        // Recipe: output path SW -> L.1, L.2 -> VOUT, VOUT -> C.1, C.2 -> GND
+        // plus UNRELATED mandatory decoupling VIN -> C_dec.1, C_dec.2 -> GND
+        // (not in VOUT's delivery-path component — GND is not traversed).
         let mut recipes = HashMap::new();
         let mut recipe = ExpansionRecipe::new("BuckRegulator".to_string());
         recipe.instances = vec![
@@ -1864,6 +1934,13 @@ mod tests {
                 name: "C".to_string(),
                 component_type: "Cap".to_string(),
                 params: vec!["220µF".to_string()],
+                attributes: HashMap::new(),
+                layout_intents: Vec::new(),
+            },
+            bhdl_common::ExpansionInstance {
+                name: "C_dec".to_string(),
+                component_type: "Cap".to_string(),
+                params: vec!["100nF".to_string()],
                 attributes: HashMap::new(),
                 layout_intents: Vec::new(),
             },
@@ -1885,6 +1962,14 @@ mod tests {
                 from: ExpansionEndpoint::InstancePin("C".to_string(), "2".to_string()),
                 to: ExpansionEndpoint::ParentPin("GND".to_string()),
             },
+            ExpansionConnection {
+                from: ExpansionEndpoint::ParentPin("VIN".to_string()),
+                to: ExpansionEndpoint::InstancePin("C_dec".to_string(), "1".to_string()),
+            },
+            ExpansionConnection {
+                from: ExpansionEndpoint::InstancePin("C_dec".to_string(), "2".to_string()),
+                to: ExpansionEndpoint::ParentPin("GND".to_string()),
+            },
         ];
         recipes.insert("BuckRegulator".to_string(), recipe);
 
@@ -1892,14 +1977,16 @@ mod tests {
     }
 
     #[test]
-    fn test_board_authored_output_skips_expansion() {
+    fn test_board_authored_output_skips_delivery_path() {
         // Virtual VOUT unwired + SW wired to a board part → the board owns
-        // the application circuit; the expansion must not mint duplicates.
+        // that application circuit; the delivery-path children (L, C) must
+        // not mint duplicates. The UNRELATED decoupling cap (C_dec on
+        // VIN/GND, outside VOUT's component) still expands.
         let (mut netlist, inst_id, recipes) = setup_board_authored_buck(false);
         let results = expand_entity_instances(&mut netlist, &recipes);
         assert_eq!(results.len(), 1);
-        assert!(results[0].child_instances.is_empty(),
-            "expansion should be skipped, got children: {:?}", results[0].child_instances);
+        assert_eq!(results[0].child_instances, vec!["buck_C_dec".to_string()],
+            "only the decoupling cap should materialise");
         let parent = netlist.instances.get(inst_id).unwrap();
         assert!(parent.attributes.contains_key("expansion_skipped"));
         // No floating auto-net was minted for the virtual pin.
@@ -1913,8 +2000,8 @@ mod tests {
         let (mut netlist, inst_id, recipes) = setup_board_authored_buck(true);
         let results = expand_entity_instances(&mut netlist, &recipes);
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].child_instances.len(), 2,
-            "expansion should materialise L and C");
+        assert_eq!(results[0].child_instances.len(), 3,
+            "expansion should materialise L, C and C_dec");
         let parent = netlist.instances.get(inst_id).unwrap();
         assert!(!parent.attributes.contains_key("expansion_skipped"));
     }
