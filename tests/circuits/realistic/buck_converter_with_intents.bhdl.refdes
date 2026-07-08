@@ -2,20 +2,20 @@
   "version": 1,
   "mappings": {
     "C": {
-      "Cout": "C2",
       "Cin": "C1",
       "Cin_2": "C3",
-      "Cin_3": "C4"
-    },
-    "R": {
-      "R1": "R1",
-      "Rload": "R2"
+      "Cin_3": "C4",
+      "Cout": "C2"
     },
     "D": {
       "tvs": "D1"
     },
     "L": {
       "L1": "L1"
+    },
+    "R": {
+      "R1": "R1",
+      "Rload": "R2"
     },
     "U": {
       "ctrl": "U2",

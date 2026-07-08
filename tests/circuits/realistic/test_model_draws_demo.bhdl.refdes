@@ -1,11 +1,11 @@
 {
   "version": 1,
   "mappings": {
-    "R": {
-      "r_load": "R1"
-    },
     "C": {
       "c_out": "C1"
+    },
+    "R": {
+      "r_load": "R1"
     },
     "U": {
       "reg": "U1"

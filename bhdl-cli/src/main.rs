@@ -1750,16 +1750,27 @@ async fn run_pipeline(source_file: &SourceFile, _input_path: &PathBuf, output_di
     if !no_viz {
         println!("\n{}", "3. Visualization".blue().bold());
 
-        // V4 bound document (the JS canvas viewer is retired).
+        // V4 bound document (the JS canvas viewer is retired). Labels READ
+        // the `refdes` attribute the synthesizer's allocator stamped —
+        // never a second allocator here, or the schematic's R1 and the
+        // BOM's R1 could name different parts. Minting is a fallback for
+        // unstamped instances only, and walks name-sorted so even the
+        // fallback numbers deterministically.
         let mut lut = bhdl_schematic::RefDesLut::default();
         let mut refdes_map = std::collections::HashMap::new();
-        for inst in netlist.instances.values() {
+        let mut insts: Vec<_> = netlist.instances.values().collect();
+        insts.sort_by(|a, b| a.name.cmp(&b.name));
+        for inst in insts {
             let is_phantom = netlist
                 .modules
                 .get(inst.definition)
                 .map(|m| m.name == inst.name)
                 .unwrap_or(false);
             if is_phantom {
+                continue;
+            }
+            if let Some(rd) = inst.attributes.get("refdes") {
+                refdes_map.insert(inst.name.clone(), rd.clone());
                 continue;
             }
             let class = inst

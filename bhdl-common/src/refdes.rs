@@ -10,16 +10,18 @@
 //! The sidecar is a COMMITTED artifact (like a lockfile): once a handle
 //! gets a refdes it keeps it even as parts are added or removed.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::Path;
 use serde::{Serialize, Deserialize};
 
-/// Persistent handle → refdes mapping, grouped by prefix.
+/// Persistent handle → refdes mapping, grouped by prefix. BTreeMap, not
+/// HashMap: a committed lockfile must serialize deterministically, or
+/// every synthesis run rewrites every sidecar with key-order noise.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct RefDesLut {
     pub version: u32,
     /// prefix → (handle → refdes), e.g. "R" → {"r_load" → "R1", "r_led" → "R2"}
-    pub mappings: HashMap<String, HashMap<String, String>>,
+    pub mappings: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 impl RefDesLut {
@@ -31,10 +33,14 @@ impl RefDesLut {
         }
     }
 
-    /// Write the LUT to disk as pretty-printed JSON.
+    /// Write the LUT to disk as pretty-printed JSON. No-op when the file
+    /// already holds identical content, so re-synthesis leaves mtimes alone.
     pub fn save(&self, path: &Path) -> Result<(), std::io::Error> {
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        if std::fs::read_to_string(path).is_ok_and(|old| old == json) {
+            return Ok(());
+        }
         std::fs::write(path, json)
     }
 

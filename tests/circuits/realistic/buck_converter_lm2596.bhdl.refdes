@@ -1,45 +1,45 @@
 {
   "version": 1,
   "mappings": {
-    "U": {
-      "u_buck": "U1"
-    },
-    "R": {
-      "u_buck_R_top": "R3",
-      "u_buck_R_bot": "R2",
-      "r_load": "R1"
-    },
     "C": {
-      "input_bulk_cap_3": "C7",
-      "input_bulk_cap_7": "C11",
-      "input_bulk_cap_6": "C10",
-      "input_bulk_cap_11": "C15",
-      "input_bulk_cap_2": "C6",
-      "input_bulk_cap_13": "C17",
-      "input_bulk_cap_5": "C9",
-      "u_buck_C_out": "C4",
       "input_bulk_cap": "C1",
-      "u_buck_C_ff": "C3",
-      "u_buck_C_out2": "C5",
-      "input_bulk_cap_12": "C16",
-      "input_bulk_cap_8": "C12",
-      "input_bulk_cap_15": "C19",
-      "input_bulk_cap_4": "C8",
-      "input_hf_cap": "C2",
-      "input_bulk_cap_9": "C13",
       "input_bulk_cap_10": "C14",
-      "input_bulk_cap_14": "C18"
+      "input_bulk_cap_11": "C15",
+      "input_bulk_cap_12": "C16",
+      "input_bulk_cap_13": "C17",
+      "input_bulk_cap_14": "C18",
+      "input_bulk_cap_15": "C19",
+      "input_bulk_cap_2": "C6",
+      "input_bulk_cap_3": "C7",
+      "input_bulk_cap_4": "C8",
+      "input_bulk_cap_5": "C9",
+      "input_bulk_cap_6": "C10",
+      "input_bulk_cap_7": "C11",
+      "input_bulk_cap_8": "C12",
+      "input_bulk_cap_9": "C13",
+      "input_hf_cap": "C2",
+      "u_buck_C_ff": "C3",
+      "u_buck_C_out": "C4",
+      "u_buck_C_out2": "C5"
+    },
+    "D": {
+      "u_buck_D_catch": "D1"
     },
     "J": {
-      "tp_vout": "J3",
       "tp_feedback": "J1",
-      "tp_switch_node": "J2"
+      "tp_switch_node": "J2",
+      "tp_vout": "J3"
     },
     "L": {
       "u_buck_L_out": "L1"
     },
-    "D": {
-      "u_buck_D_catch": "D1"
+    "R": {
+      "r_load": "R1",
+      "u_buck_R_bot": "R2",
+      "u_buck_R_top": "R3"
+    },
+    "U": {
+      "u_buck": "U1"
     }
   }
 }

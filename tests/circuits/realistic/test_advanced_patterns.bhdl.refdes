@@ -2,22 +2,22 @@
   "version": 1,
   "mappings": {
     "U": {
+      "sensor_0": "U12",
+      "sensor_1": "U9",
+      "sensor_10": "U6",
+      "sensor_11": "U3",
       "sensor_12": "U11",
       "sensor_13": "U16",
-      "sensor_6": "U4",
-      "sensor_5": "U2",
-      "sensor_4": "U14",
+      "sensor_14": "U8",
       "sensor_15": "U1",
-      "sensor_10": "U6",
-      "sensor_3": "U13",
-      "sensor_7": "U10",
-      "sensor_0": "U12",
-      "sensor_8": "U7",
-      "sensor_9": "U5",
-      "sensor_1": "U9",
-      "sensor_11": "U3",
       "sensor_2": "U15",
-      "sensor_14": "U8"
+      "sensor_3": "U13",
+      "sensor_4": "U14",
+      "sensor_5": "U2",
+      "sensor_6": "U4",
+      "sensor_7": "U10",
+      "sensor_8": "U7",
+      "sensor_9": "U5"
     }
   }
 }

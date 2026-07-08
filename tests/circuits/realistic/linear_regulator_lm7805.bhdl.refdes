@@ -2,8 +2,8 @@
   "version": 1,
   "mappings": {
     "C": {
-      "u_ldo_C_out": "C2",
-      "u_ldo_C_in": "C1"
+      "u_ldo_C_in": "C1",
+      "u_ldo_C_out": "C2"
     },
     "R": {
       "r_load": "R1"

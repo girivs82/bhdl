@@ -1,36 +1,36 @@
 {
   "version": 1,
   "mappings": {
-    "U": {
-      "fuse": "U1",
-      "reg": "U3",
-      "protected_vin": "U2"
-    },
-    "J": {
-      "tp_vin": "J1",
-      "tp_vout": "J2",
-      "tp_gnd": "J3"
+    "C": {
+      "c_in1": "C1",
+      "c_in1_2": "C7",
+      "c_in1_3": "C8",
+      "c_in2": "C2",
+      "c_out1": "C3",
+      "c_out2": "C4",
+      "reg_C_in": "C5",
+      "reg_C_out": "C6"
     },
     "D": {
       "led": "D1",
       "protected_vin": "D2"
     },
-    "R": {
-      "r_led": "R1",
-      "fuse": "R2"
-    },
-    "C": {
-      "c_out1": "C3",
-      "c_in1_2": "C7",
-      "c_in2": "C2",
-      "c_in1": "C1",
-      "reg_C_out": "C6",
-      "reg_C_in": "C5",
-      "c_out2": "C4",
-      "c_in1_3": "C8"
-    },
     "F": {
       "fuse": "F1"
+    },
+    "J": {
+      "tp_gnd": "J3",
+      "tp_vin": "J1",
+      "tp_vout": "J2"
+    },
+    "R": {
+      "fuse": "R2",
+      "r_led": "R1"
+    },
+    "U": {
+      "fuse": "U1",
+      "protected_vin": "U2",
+      "reg": "U3"
     }
   }
 }

@@ -1,22 +1,22 @@
 {
   "version": 1,
   "mappings": {
+    "C": {
+      "psu_vcc_3v3_C_in": "C2",
+      "psu_vcc_3v3_C_out": "C1"
+    },
     "D": {
       "psu_vcc_3v3_D_catch": "D1"
-    },
-    "R": {
-      "psu_vcc_3v3_R_top": "R1",
-      "psu_vcc_3v3_R_bot": "R2"
     },
     "L": {
       "psu_vcc_3v3_L_out": "L1"
     },
+    "R": {
+      "psu_vcc_3v3_R_bot": "R2",
+      "psu_vcc_3v3_R_top": "R1"
+    },
     "U": {
       "psu_vcc_3v3": "U1"
-    },
-    "C": {
-      "psu_vcc_3v3_C_in": "C2",
-      "psu_vcc_3v3_C_out": "C1"
     }
   }
 }

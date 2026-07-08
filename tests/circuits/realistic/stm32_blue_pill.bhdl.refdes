@@ -1,23 +1,23 @@
 {
   "version": 1,
   "mappings": {
-    "U": {
-      "mcu": "U1"
+    "C": {
+      "mcu_C_bulk": "C2",
+      "mcu_C_nrst": "C8",
+      "mcu_C_vbat": "C7",
+      "mcu_C_vdd1": "C1",
+      "mcu_C_vdd2": "C3",
+      "mcu_C_vdd3": "C4",
+      "mcu_C_vdda1": "C5",
+      "mcu_C_vdda2": "C6"
     },
     "R": {
       "mcu_R_nrst": "R1",
       "mcu_R_pu_scl1": "R3",
       "mcu_R_pu_sda1": "R2"
     },
-    "C": {
-      "mcu_C_vdda1": "C5",
-      "mcu_C_vbat": "C7",
-      "mcu_C_nrst": "C8",
-      "mcu_C_vdd2": "C3",
-      "mcu_C_bulk": "C2",
-      "mcu_C_vdd1": "C1",
-      "mcu_C_vdd3": "C4",
-      "mcu_C_vdda2": "C6"
+    "U": {
+      "mcu": "U1"
     }
   }
 }
