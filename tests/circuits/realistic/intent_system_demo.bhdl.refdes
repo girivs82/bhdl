@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "mappings": {
+    "Q": {
+      "mosfet": "Q1"
+    },
+    "R": {
+      "rc": "R5",
+      "rfilter": "R6",
+      "rterm": "R4",
+      "rdiv2": "R8",
+      "rsense": "R1",
+      "rpull_sda": "R2",
+      "rpull_scl": "R3",
+      "rdiv1": "R7"
+    },
+    "Y": {
+      "osc": "Y1"
+    },
+    "J": {
+      "tp_3v3": "J2",
+      "tp_5v": "J1"
+    },
+    "C": {
+      "reg5v_C_out": "C6",
+      "cfilter": "C4",
+      "cin": "C1",
+      "creset": "C3",
+      "cout": "C2",
+      "reg5v_C_in": "C5"
+    },
+    "U": {
+      "buf": "U15",
+      "sense_amp": "U8",
+      "wdt": "U13",
+      "emi_filter": "U18",
+      "reg3v3": "U10",
+      "battery": "U3",
+      "dcdc": "U16",
+      "flash": "U14",
+      "mux": "U20",
+      "primary": "U2",
+      "backup": "U1",
+      "supervisor": "U9",
+      "reg5v": "U7",
+      "sensor": "U12",
+      "mosfet": "U17",
+      "tvs": "U11",
+      "iso": "U19",
+      "osc": "U6",
+      "peripherals": "U4",
+      "mcu": "U5"
+    },
+    "D": {
+      "tvs": "D1"
+    }
+  }
+}

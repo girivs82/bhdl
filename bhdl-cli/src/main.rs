@@ -1162,6 +1162,7 @@ async fn run_freeze(
 
     let analysis = analyze(source_file);
     let mut generator = NetlistGenerator::new();
+    generator.set_refdes_lut_path(source_path.with_extension("bhdl.refdes"));
     let netlist = generator
         .generate_from_ast_and_analysis(source_file, &analysis)
         .await
@@ -1198,6 +1199,7 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
     let analysis = analyze(source_file);
 
     let mut generator = NetlistGenerator::new();
+    generator.set_refdes_lut_path(source_path.with_extension("bhdl.refdes"));
     let mut netlist = generator.generate_from_ast_and_analysis(source_file, &analysis).await?;
 
     // Stamp intent attributes from FlowTracker onto netlist instances
@@ -1277,36 +1279,15 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
-        // Refdes labels: same persistent sidecar LUT the HTML extraction
-        // uses, so both views agree on R1/C3/U1 numbering.
-        let lut_path = source_path.with_extension("bhdl.refdes");
-        let mut lut = bhdl_schematic::RefDesLut::load(&lut_path);
-        lut.version = 1;
+        // Refdes labels: READ the `refdes` attribute the synthesizer's
+        // phase-12.7 allocator stamped (single authority, persistent
+        // sidecar) — the schematic never mints its own numbering.
         let mut refdes_map = std::collections::HashMap::new();
         for inst in netlist.instances.values() {
-            let is_phantom = netlist
-                .modules
-                .get(inst.definition)
-                .map(|m| m.name == inst.name)
-                .unwrap_or(false);
-            if is_phantom {
-                continue;
+            if let Some(rd) = inst.attributes.get("refdes") {
+                refdes_map.insert(inst.name.clone(), rd.clone());
             }
-            let class = inst
-                .attributes
-                .get("component_class")
-                .map(String::as_str)
-                .unwrap_or("");
-            let category = match class {
-                "voltage_regulator" | "ldo" | "switching_regulator" => "regulator",
-                "" => "ic",
-                other => other,
-            };
-            let prefix = bhdl_schematic::category_to_prefix(category);
-            let prefix = if prefix == "X" { "U" } else { prefix };
-            refdes_map.insert(inst.name.clone(), lut.assign(prefix, &inst.name));
         }
-        let _ = lut.save(&lut_path);
 
         let decor = bhdl_schematic::v4::svg::SheetDecor {
             sim: sim_annotations.as_ref(),
@@ -1442,6 +1423,14 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
         }
     }
 
+    // Cap-bank sizers may have minted new instances (C1_2, …) after the
+    // synthesizer's phase-12.7 allocation — stamp their refdes now, from
+    // the same sidecar (idempotent for everything already stamped).
+    bhdl_synthesizer::refdes_alloc::assign_refdes(
+        &mut netlist,
+        Some(&source_path.with_extension("bhdl.refdes")),
+    );
+
     // Apply GLACIER-driven physical selection (package, voltage rating, etc.)
     if let Some(ref annotations) = sim_annotations {
         let results = bhdl_synthesizer::glacier_physical_selection::apply_glacier_physical_selection(
@@ -1537,6 +1526,7 @@ async fn run_layout(
 
     // 2. Synthesize
     let mut generator = NetlistGenerator::new();
+    generator.set_refdes_lut_path(source_path.with_extension("bhdl.refdes"));
     let mut netlist = generator.generate_from_ast_and_analysis(source_file, &analysis).await?;
     println!("  {} Synthesis: {} instances", "✓".green(), netlist.instances.len());
 
@@ -1749,6 +1739,7 @@ async fn run_pipeline(source_file: &SourceFile, _input_path: &PathBuf, output_di
     // Step 2: Synthesis
     println!("\n{}", "2. Synthesis".blue().bold());
     let mut generator = NetlistGenerator::new();
+    generator.set_refdes_lut_path(_input_path.with_extension("bhdl.refdes"));
     let netlist = generator.generate_from_ast_and_analysis(source_file, &analysis).await?;
     
     let netlist_path = output_dir.join("netlist.json");
@@ -2176,6 +2167,7 @@ async fn cmd_bom(
 
     // 2. Build the netlist (logical instances).
     let mut generator = NetlistGenerator::new();
+    generator.set_refdes_lut_path(source_path.with_extension("bhdl.refdes"));
     let mut netlist = generator.generate_from_ast_and_analysis(source_file, &analysis).await
         .context("Failed to synthesize netlist")?;
 

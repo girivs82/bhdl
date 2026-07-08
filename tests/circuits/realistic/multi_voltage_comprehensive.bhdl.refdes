@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "mappings": {
+    "C": {
+      "psu_vcc_5v_c_in1": "C2",
+      "psu_vcc_1v8_C_in": "C10",
+      "psu_vcc_3v3_C_out": "C7",
+      "psu_vcc_3v3_C_in": "C8",
+      "psu_vcc_1v8_C_out": "C9",
+      "c_dec_3v3": "C5",
+      "psu_vcc_5v_c_boot": "C1",
+      "psu_vcc_5v_c_out1": "C3",
+      "c_dec_5v": "C4",
+      "c_dec_1v8": "C6"
+    },
+    "R": {
+      "psu_vcc_5v_r_fb_top": "R1",
+      "psu_vcc_3v3_R_top": "R3",
+      "psu_vcc_1v8_R_top": "R5",
+      "psu_vcc_1v8_R_bot": "R6",
+      "psu_vcc_5v_r_fb_bot": "R2",
+      "psu_vcc_3v3_R_bot": "R4"
+    },
+    "U": {
+      "psu_vcc_1v8": "U6",
+      "radio": "U2",
+      "psu_vcc_3v3": "U5",
+      "psu_vcc_5v": "U4",
+      "mcu": "U1",
+      "core": "U3"
+    },
+    "L": {
+      "psu_vcc_1v8_L_out": "L3",
+      "psu_vcc_3v3_L_out": "L2",
+      "psu_vcc_5v_l_out": "L1"
+    },
+    "D": {
+      "psu_vcc_3v3_D_catch": "D1",
+      "psu_vcc_1v8_D_catch": "D2"
+    },
+    "J": {
+      "tp_status": "J1"
+    }
+  }
+}

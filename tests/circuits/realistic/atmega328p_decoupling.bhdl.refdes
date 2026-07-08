@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "mappings": {
+    "C": {
+      "mcu_C_vcc": "C1",
+      "mcu_C_avcc": "C3",
+      "mcu_C_bulk": "C2",
+      "mcu_C_aref": "C4"
+    },
+    "U": {
+      "mcu": "U1"
+    }
+  }
+}

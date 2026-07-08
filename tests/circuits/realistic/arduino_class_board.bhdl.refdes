@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "mappings": {
+    "C": {
+      "MCU_C_aref": "C4",
+      "MCU_C_bulk": "C2",
+      "U_REG_C_in": "C5",
+      "MCU_C_avcc": "C3",
+      "U_REG_C_out": "C6",
+      "MCU_C_vcc": "C1"
+    },
+    "U": {
+      "MCU": "U1",
+      "U_REG": "U2"
+    },
+    "R": {
+      "U_REG_R2": "R4",
+      "MCU_R_pu_sda": "R1",
+      "U_REG_R1": "R3",
+      "MCU_R_pu_scl": "R2"
+    }
+  }
+}

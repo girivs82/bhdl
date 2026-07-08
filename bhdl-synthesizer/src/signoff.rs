@@ -58,7 +58,12 @@ impl Verdict {
 
 #[derive(Debug, Clone)]
 pub struct SignoffRow {
+    /// Instance HANDLE (user-authored name) — the identity key; override
+    /// maps and expansion-child lookups match on this.
     pub refdes: String,
+    /// Table ink: `handle (refdes)` when a phase-12.7 refdes was stamped
+    /// and differs from the handle, else just the handle.
+    pub display: String,
     pub class: String,
     /// Stress axis for this class: `"V"`, `"P"`, or `"I"`.
     pub axis: &'static str,
@@ -1376,6 +1381,7 @@ pub fn compute_signoff(
 
         rows.push(SignoffRow {
             refdes: inst.name.clone(),
+            display: display_label(inst),
             class,
             axis,
             value,
@@ -1435,6 +1441,7 @@ pub fn compute_signoff(
         };
         rows.push(SignoffRow {
             refdes: inst.name.clone(),
+            display: display_label(inst),
             class,
             axis: "P",
             value,
@@ -1484,6 +1491,7 @@ pub fn compute_signoff(
             };
             rows.push(SignoffRow {
                 refdes: inst.name.clone(),
+                display: display_label(inst),
                 class: class_of("ripple"),
                 axis: "V",
                 value: fmt_si(spec, "V"),
@@ -1520,6 +1528,7 @@ pub fn compute_signoff(
             };
             rows.push(SignoffRow {
                 refdes: inst.name.clone(),
+                display: display_label(inst),
                 class: class_of("i_q"),
                 axis: "I",
                 value: fmt_si(spec, "A"),
@@ -1549,6 +1558,7 @@ pub fn compute_signoff(
         if let Some(spec_txt) = get("supply_efficiency_min") {
             rows.push(SignoffRow {
                 refdes: inst.name.clone(),
+                display: display_label(inst),
                 class: class_of("efficiency"),
                 axis: "P",
                 value: spec_txt.clone(),
@@ -1607,6 +1617,15 @@ fn fmt_opt(v: Option<f64>, unit: &str) -> String {
     }
 }
 
+/// `handle (refdes)` table label — refdes from the phase-12.7 stamped
+/// attribute; falls back to the bare handle when absent or identical.
+fn display_label(inst: &bhdl_netlist::Instance) -> String {
+    match inst.attributes.get("refdes") {
+        Some(rd) if rd != &inst.name => format!("{} ({})", inst.name, rd),
+        _ => inst.name.clone(),
+    }
+}
+
 /// Render the sign-off rows as a Markdown table plus a one-line summary.
 /// Returns `None` if there are no stress-bearing passives to report.
 pub fn format_signoff_report(rows: &[SignoffRow]) -> Option<String> {
@@ -1643,7 +1662,7 @@ pub fn format_signoff_report(rows: &[SignoffRow]) -> Option<String> {
         };
         out.push_str(&format!(
             "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
-            r.refdes,
+            r.display,
             r.class,
             r.axis,
             if r.value.is_empty() { "—" } else { &r.value },
@@ -1696,7 +1715,7 @@ pub fn format_signoff_report(rows: &[SignoffRow]) -> Option<String> {
             };
             out.push_str(&format!(
                 "| {} | {} | {} | {} |\n",
-                r.refdes, r.class, r.axis, why
+                r.display, r.class, r.axis, why
             ));
             log::info!(
                 "DRC ERC024 [Unchecked axis] Info: {} {} axis {} — {}",

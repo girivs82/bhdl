@@ -27,16 +27,16 @@ def main() -> None:
     for inst in summary.get("instances", []):
         cls = inst.get("attributes", {}).get("component_class", "")
         want = PREFIX.get(cls)
-        if want and not inst["refdes"].lower().startswith(want):
+        if want and not inst.get("handle", inst["refdes"]).lower().startswith(want):
             findings.append({
                 "rule_id": "NAMING-001",
                 "severity": "warning",
                 "description": (
-                    f"{inst['refdes']} is a {cls} but does not follow the "
+                    f"{inst.get('handle', inst['refdes'])} is a {cls} but does not follow the "
                     f"house prefix convention ('{want}…')"
                 ),
-                "fix": f"rename to {want}_{inst['refdes']} or similar",
-                "instance": inst["refdes"],
+                "fix": f"rename to {want}_{inst.get('handle', inst['refdes'])} or similar",
+                "instance": inst.get("handle", inst["refdes"]),
             })
 
     for net in summary.get("nets", []):

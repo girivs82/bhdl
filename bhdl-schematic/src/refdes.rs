@@ -1,56 +1,9 @@
-//! Reference Designator LUT — persistent handle → refdes mapping.
-//!
-//! A sidecar `.refdes` JSON file alongside each `.bhdl` source persists
-//! the mapping from user-declared handles (e.g. `r_load`) to standard
-//! reference designators (e.g. `R1`). This ensures refdes stability:
-//! once a handle gets a refdes it keeps it even if other components
-//! are added or removed.
+//! Schematic-side refdes surface. The LUT itself moved to
+//! `bhdl_common::refdes` so the SYNTHESIZER can own allocation (phase 4.7,
+//! stamping the `refdes` instance attribute); this module re-exports it and
+//! keeps the schematic-category → prefix mapping.
 
-use std::collections::HashMap;
-use std::path::Path;
-use serde::{Serialize, Deserialize};
-
-/// Persistent handle → refdes mapping, grouped by prefix.
-#[derive(Debug, Default, Serialize, Deserialize)]
-pub struct RefDesLut {
-    pub version: u32,
-    /// prefix → (handle → refdes), e.g. "R" → {"r_load" → "R1", "r_led" → "R2"}
-    pub mappings: HashMap<String, HashMap<String, String>>,
-}
-
-impl RefDesLut {
-    /// Load a LUT from disk. Returns `Default` on missing file or parse error.
-    pub fn load(path: &Path) -> Self {
-        match std::fs::read_to_string(path) {
-            Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
-            Err(_) => Self::default(),
-        }
-    }
-
-    /// Write the LUT to disk as pretty-printed JSON.
-    pub fn save(&self, path: &Path) -> Result<(), std::io::Error> {
-        let json = serde_json::to_string_pretty(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-        std::fs::write(path, json)
-    }
-
-    /// Assign a refdes for a handle. Returns the existing refdes if already
-    /// mapped, otherwise assigns the next available number for the prefix.
-    pub fn assign(&mut self, prefix: &str, handle: &str) -> String {
-        let group = self.mappings.entry(prefix.to_string()).or_default();
-        if let Some(existing) = group.get(handle) {
-            return existing.clone();
-        }
-        // Find max number already used in this prefix group
-        let max_num = group.values()
-            .filter_map(|rd| rd.get(prefix.len()..).and_then(|s| s.parse::<usize>().ok()))
-            .max()
-            .unwrap_or(0);
-        let refdes = format!("{}{}", prefix, max_num + 1);
-        group.insert(handle.to_string(), refdes.clone());
-        refdes
-    }
-}
+pub use bhdl_common::refdes::RefDesLut;
 
 /// Map a component category string to the standard refdes prefix.
 pub fn category_to_prefix(category: &str) -> &str {

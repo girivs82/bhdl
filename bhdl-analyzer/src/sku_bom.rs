@@ -127,19 +127,30 @@ pub fn walk(netlist: &Netlist) -> Vec<BomRow> {
             }
         }
 
-        // Pick a reference-designator prefix: explicit override on the
-        // entity wins, otherwise the class-based default.
-        let prefix_attr = get(attr::REFDES_PREFIX);
-        let prefix: &str = if !prefix_attr.is_empty() {
-            // Leak to &'static str — tiny, bounded by the
-            // (component_class) ↔ prefix map cardinality.
-            Box::leak(prefix_attr.into_boxed_str())
+        // Reference designator: READ what the synthesizer's phase-12.7
+        // allocator stamped — the BOM must agree with the schematic and
+        // sign-off on which physical part R1 names, so it never mints its
+        // own numbering for stamped instances. The counter path survives
+        // only as a fallback for netlists that never went through
+        // synthesis (unit tests, hand-built netlists).
+        let stamped = get("refdes");
+        let refdes = if !stamped.is_empty() {
+            stamped
         } else {
-            refdes_prefix_for_class(&component_class)
+            // Prefix: explicit override on the entity wins, otherwise the
+            // class-based default.
+            let prefix_attr = get(attr::REFDES_PREFIX);
+            let prefix: &str = if !prefix_attr.is_empty() {
+                // Leak to &'static str — tiny, bounded by the
+                // (component_class) ↔ prefix map cardinality.
+                Box::leak(prefix_attr.into_boxed_str())
+            } else {
+                refdes_prefix_for_class(&component_class)
+            };
+            let n = counters.entry(prefix).or_insert(0);
+            *n += 1;
+            format!("{}{}", prefix, *n)
         };
-        let n = counters.entry(prefix).or_insert(0);
-        *n += 1;
-        let refdes = format!("{}{}", prefix, *n);
 
         // value falls back through several possible attributes —
         // useful because passives use `value`, ICs use `mpn`/

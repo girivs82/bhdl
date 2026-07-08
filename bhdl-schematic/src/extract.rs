@@ -397,22 +397,40 @@ pub fn extract_schematic_data(
         });
     }
 
-    // --- 4b. Assign reference designators using persistent LUT ---
+    // --- 4b. Reference designators: READ the `refdes` attribute the
+    // synthesizer's phase-12.7 allocator stamped. The sidecar LUT is only
+    // a fallback for netlists that never went through synthesis (unit
+    // tests, hand-built netlists) — never a second allocator for stamped
+    // instances, or the schematic's R1 and the BOM's R1 could diverge.
+    let refdes_by_handle: std::collections::HashMap<String, String> = netlist
+        .instances
+        .values()
+        .filter_map(|i| i.attributes.get("refdes").map(|rd| (i.name.clone(), rd.clone())))
+        .collect();
     let lut_path = source_path.map(|p| p.with_extension("bhdl.refdes"));
     let mut lut = lut_path.as_ref()
         .map(|p| RefDesLut::load(p))
         .unwrap_or_default();
     lut.version = 1;
+    let mut lut_dirty = false;
 
     for inst in &mut instances {
-        let prefix = category_to_prefix(&inst.category);
-        inst.refdes = Some(lut.assign(prefix, &inst.name));
+        inst.refdes = Some(match refdes_by_handle.get(&inst.name) {
+            Some(rd) => rd.clone(),
+            None => {
+                let prefix = category_to_prefix(&inst.category);
+                lut_dirty = true;
+                lut.assign(prefix, &inst.name)
+            }
+        });
     }
 
-    // Persist updated LUT
-    if let Some(ref path) = lut_path {
-        if let Err(e) = lut.save(path) {
-            log::warn!("Failed to write refdes LUT: {}", e);
+    // Persist the LUT only when the fallback actually assigned something.
+    if lut_dirty {
+        if let Some(ref path) = lut_path {
+            if let Err(e) = lut.save(path) {
+                log::warn!("Failed to write refdes LUT: {}", e);
+            }
         }
     }
 

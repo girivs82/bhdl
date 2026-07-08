@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "mappings": {
+    "L": {
+      "inductor": "L1"
+    },
+    "C": {
+      "C_DECOUP_6": "C6",
+      "C_DECOUP_4": "C4",
+      "C_DECOUP_5": "C5",
+      "C_DECOUP_1": "C1",
+      "C_DECOUP_1_2": "C7",
+      "C_DECOUP_3": "C3",
+      "C_DECOUP_2": "C2",
+      "C_DECOUP_1_3": "C8"
+    },
+    "R": {
+      "resistor_3": "R2",
+      "resistor_0": "R1",
+      "resistor_1": "R3",
+      "resistor_2": "R4"
+    }
+  }
+}

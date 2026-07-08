@@ -13,6 +13,7 @@ pub mod bhdl_type;
 pub mod diagnostic;
 pub mod generics;
 pub mod safety;
+pub mod refdes;
 pub mod expansion;
 pub mod design;
 pub mod stress;

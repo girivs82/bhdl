@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "mappings": {
+    "R": {
+      "fuse": "R2",
+      "r_led": "R1"
+    },
+    "C": {
+      "c_out2": "C4",
+      "c_in1": "C1",
+      "reg_C_out": "C6",
+      "c_in2": "C2",
+      "c_in1_3": "C8",
+      "reg_C_in": "C5",
+      "c_in1_2": "C7",
+      "c_out1": "C3"
+    },
+    "J": {
+      "tp_vin": "J1",
+      "tp_vout": "J2",
+      "tp_gnd": "J3"
+    },
+    "U": {
+      "reg": "U2",
+      "fuse": "U1"
+    },
+    "F": {
+      "fuse": "F1"
+    },
+    "D": {
+      "led": "D1"
+    }
+  }
+}

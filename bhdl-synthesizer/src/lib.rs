@@ -29,7 +29,7 @@ pub mod hierarchical_connectivity;
 pub mod entity_variants;
 
 // Hierarchical reference designator generation
-pub mod hierarchical_refdes;
+pub mod refdes_alloc;
 
 // Interface synthesis
 pub mod interface_synthesis;
@@ -207,6 +207,9 @@ pub struct NetlistConfig {
     pub enable_predictive_analytics: bool,
     /// Enable manufacturing and assembly optimization (DFM/DFA)
     pub enable_manufacturing_optimization: bool,
+    /// Persistent refdes sidecar (`<board>.bhdl.refdes`) for phase 12.7
+    /// allocation. None = allocate in-memory only (tests).
+    pub refdes_lut_path: Option<std::path::PathBuf>,
 }
 
 /// Database integration statistics
@@ -238,6 +241,7 @@ impl Default for NetlistConfig {
             enable_reliability_analysis: false, // Off by default for performance
             enable_predictive_analytics: false, // Off by default for performance
             enable_manufacturing_optimization: false, // Off by default for performance
+            refdes_lut_path: None,
         }
     }
 }
@@ -352,6 +356,13 @@ impl NetlistGenerator {
     }
 
     /// Create a new netlist generator with custom configuration
+    /// Point phase 12.7 refdes allocation at the board's persistent
+    /// sidecar (`<board>.bhdl.refdes`). Callers with a source path set
+    /// this before generating; without it allocation is in-memory only.
+    pub fn set_refdes_lut_path(&mut self, path: std::path::PathBuf) {
+        self.config.refdes_lut_path = Some(path);
+    }
+
     pub fn with_config(config: NetlistConfig) -> Self {
         
         // Initialize import loader with current directory as base.
@@ -646,6 +657,16 @@ impl NetlistGenerator {
         if let Some(ft) = analysis.flow_tracker.as_ref() {
             crate::intent_attribute_stamper::stamp_intent_attributes(&mut self.netlist, ft);
         }
+
+        // Phase 12.7: allocate reference designators. After every phase
+        // that mints instances (expansion 4.5, entity attrs 4.6), before
+        // DRC so ERC plugin summaries carry real designators. Instances
+        // minted post-generation (CLI cap-bank sizers) get theirs from the
+        // CLI re-invoking assign_refdes — idempotent, LUT-stable.
+        crate::refdes_alloc::assign_refdes(
+            &mut self.netlist,
+            self.config.refdes_lut_path.as_deref(),
+        );
 
         // Phase 13: Run design rule checking (DRC)
         if self.config.enable_design_rule_check {

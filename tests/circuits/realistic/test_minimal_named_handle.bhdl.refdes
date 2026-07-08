@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "mappings": {
+    "F": {
+      "fuse": "F1"
+    },
+    "U": {
+      "fuse": "U1"
+    },
+    "R": {
+      "fuse": "R1"
+    }
+  }
+}

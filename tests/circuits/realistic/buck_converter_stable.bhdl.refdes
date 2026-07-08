@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "mappings": {
+    "U": {
+      "u1": "U1"
+    },
+    "R": {
+      "r_fb_top": "R1",
+      "r_load": "R4",
+      "r_comp": "R3",
+      "r_fb_bot": "R2"
+    },
+    "C": {
+      "c_out_mid": "C5",
+      "c_out_hf": "C6",
+      "c_in_bulk": "C1",
+      "c_in_hf": "C2",
+      "c_comp1": "C7",
+      "c_comp2": "C8",
+      "c_out_bulk": "C4",
+      "c_boot": "C3"
+    },
+    "L": {
+      "l1": "L1"
+    }
+  }
+}

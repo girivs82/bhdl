@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "mappings": {
+    "U": {
+      "u1": "U1"
+    },
+    "C": {
+      "u1_C_bulk": "C3",
+      "u1_C_vpp": "C1",
+      "u1_C_vddq": "C4",
+      "u1_C_vref": "C5",
+      "u1_C_vdd": "C2"
+    },
+    "R": {
+      "u1_R_zq": "R1"
+    }
+  }
+}

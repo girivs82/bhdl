@@ -49,6 +49,11 @@ pub struct DesignSummary {
 
 #[derive(Debug, Serialize)]
 pub struct SummaryInstance {
+    /// User-authored instance HANDLE (`r_load`, `U1_C_out`) — the identity
+    /// used in net member lists and finding anchors.
+    pub handle: String,
+    /// Fab reference designator stamped by the phase-12.7 allocator
+    /// (`R1`, `C3`); falls back to the handle for unstamped netlists.
     pub refdes: String,
     pub entity: String,
     pub attributes: HashMap<String, String>,
@@ -164,13 +169,18 @@ pub fn build_summary(netlist: &Netlist, _analysis: &AnalysisResult) -> DesignSum
         }
         pins.sort_by(|a, b| a.name.cmp(&b.name));
         instances.push(SummaryInstance {
-            refdes: inst.name.clone(),
+            handle: inst.name.clone(),
+            refdes: inst
+                .attributes
+                .get("refdes")
+                .cloned()
+                .unwrap_or_else(|| inst.name.clone()),
             entity,
             attributes: inst.attributes.clone().into_iter().collect(),
             pins,
         });
     }
-    instances.sort_by(|a, b| a.refdes.cmp(&b.refdes));
+    instances.sort_by(|a, b| a.handle.cmp(&b.handle));
 
     let mut nets = Vec::new();
     for (net_id, net) in &netlist.nets {

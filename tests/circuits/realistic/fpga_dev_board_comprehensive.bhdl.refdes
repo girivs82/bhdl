@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "mappings": {
+    "Y": {
+      "osc": "Y1"
+    },
+    "R": {
+      "psu_vcc_1v2_R_bot": "R5",
+      "r_led": "R1",
+      "psu_vcc_3v3_R_top": "R2",
+      "psu_vcc_3v3_R_bot": "R3",
+      "psu_vcc_1v2_R_top": "R4"
+    },
+    "J": {
+      "tp_done": "J1"
+    },
+    "C": {
+      "c_dec_5v": "C1",
+      "psu_vcc_3v3_C_out": "C4",
+      "c_dec_3v3": "C2",
+      "psu_vcc_1v2_C_in": "C7",
+      "psu_vcc_3v3_C_in": "C5",
+      "psu_vcc_1v2_C_out": "C6",
+      "c_dec_1v2": "C3"
+    },
+    "U": {
+      "osc": "U1",
+      "psu_vcc_3v3": "U3",
+      "fpga": "U2",
+      "psu_vcc_1v2": "U4"
+    },
+    "D": {
+      "psu_vcc_1v2_D_catch": "D3",
+      "d_led": "D1",
+      "psu_vcc_3v3_D_catch": "D2"
+    },
+    "L": {
+      "psu_vcc_1v2_L_out": "L2",
+      "psu_vcc_3v3_L_out": "L1"
+    }
+  }
+}

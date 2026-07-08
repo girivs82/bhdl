@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "mappings": {
+    "C": {
+      "psu_vcc_3v3_c_in1": "C1",
+      "psu_vcc_3v3_c_out1": "C2"
+    },
+    "U": {
+      "psu_vcc_3v3": "U1"
+    }
+  }
+}

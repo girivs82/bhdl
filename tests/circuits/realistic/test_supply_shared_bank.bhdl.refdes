@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "mappings": {
+    "R": {
+      "psu_vcc_5v_r_fb_bot": "R2",
+      "psu_vcc_5v_r_fb_top": "R1",
+      "psu_vcc_3v3_r_fb_bot": "R4",
+      "psu_vcc_3v3_r_fb_top": "R3"
+    },
+    "U": {
+      "psu_vcc_3v3": "U2",
+      "psu_vcc_5v": "U1"
+    },
+    "C": {
+      "psu_vcc_3v3_c_boot": "C4",
+      "psu_vcc_3v3_c_out1": "C5",
+      "psu_vcc_5v_c_boot": "C1",
+      "psu_vcc_5v_c_in1": "C2",
+      "psu_vcc_5v_c_out1": "C3"
+    },
+    "L": {
+      "psu_vcc_5v_l_out": "L1",
+      "psu_vcc_3v3_l_out": "L2"
+    }
+  }
+}

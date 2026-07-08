@@ -83,8 +83,10 @@ rules never need to live in-tree. — **BUILT.**
 
 Configuration: `BHDL_ERC_PLUGINS` — colon-separated executable paths. Each
 plugin receives one DesignSummary (`protocol_version`, `kind:
-"erc_policy_check"`, `instances[{refdes, entity, attributes, pins[{name,
-direction, net?}]}]`, `nets[{name, class, voltage?, budget_a?, members}]`)
+"erc_policy_check"`, `instances[{handle, refdes, entity, attributes,
+pins[{name, direction, net?}]}]` — `handle` is the user-authored instance
+name (identity; anchor findings on it), `refdes` the fab designator stamped
+by the synthesizer's allocator, `nets[{name, class, voltage?, budget_a?, members}]`)
 on stdin and replies `{protocol_version, findings[{rule_id, severity,
 description, fix?, instance?, net?}], warnings[]}` on stdout. Findings are
 anchored back onto the named instance/net (Global fallback) and enter the
