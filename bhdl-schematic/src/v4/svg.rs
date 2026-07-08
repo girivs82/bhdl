@@ -64,6 +64,12 @@ impl Rect {
     fn overlaps(&self, o: &Rect) -> bool {
         self.x0 < o.x1 && o.x0 < self.x1 && self.y0 < o.y1 && o.y0 < self.y1
     }
+    /// Chebyshev gap between two rects (0 when touching/overlapping).
+    fn gap(&self, o: &Rect) -> f64 {
+        let dx = (o.x0 - self.x1).max(self.x0 - o.x1).max(0.0);
+        let dy = (o.y0 - self.y1).max(self.y0 - o.y1).max(0.0);
+        dx.max(dy)
+    }
 }
 
 struct Svg {
@@ -82,6 +88,10 @@ struct Svg {
     /// to an overlapping position. The sweep gates on this — sheet
     /// quality as a NUMBER, like the unidiomized count.
     collisions: usize,
+    /// Worst label displacement from its preferred slot, in px — the
+    /// "how far did a label wander from its element" gate. A label far
+    /// from its owner reads as someone else's.
+    max_drift: f64,
     /// Reserved WIRING CHANNELS: the stage declares its loop-under lane
     /// and riser lane up front. Labels must stay out (a label parked in a
     /// channel blocks the route that needs it — the chicken-and-egg that
@@ -91,7 +101,7 @@ struct Svg {
 
 impl Svg {
     fn new() -> Self {
-        Svg { body: String::new(), w: 0.0, h: 0.0, solids: Vec::new(), wire_segs: Vec::new(), channels: Vec::new(), pending_sims: Vec::new(), collisions: 0 }
+        Svg { body: String::new(), w: 0.0, h: 0.0, solids: Vec::new(), wire_segs: Vec::new(), channels: Vec::new(), pending_sims: Vec::new(), collisions: 0, max_drift: 0.0 }
     }
     fn solid(&mut self, r: Rect) {
         self.solids.push(r);
@@ -148,6 +158,13 @@ impl Svg {
             (8.0, 40.0),
         ];
         let len_w = 6.8 * t.len() as f64;
+        // Score every CLEAR candidate: distance from the anchor (a label
+        // far from its element reads as someone else's) plus a crowding
+        // penalty for hugging foreign ink (a clear slot pressed against a
+        // neighbour's symbol claims the wrong owner). Take the minimum —
+        // first-clear-wins made labels jump to far escape slots whenever
+        // the near ones were blocked.
+        let mut best: Option<(f64, f64, f64, f64)> = None; // (score, x, y, drift)
         for (dx, dy) in CAND {
             let x = if dx < 0.0 { ax + dx - len_w } else { ax + dx };
             let y = ay + dy;
@@ -155,10 +172,25 @@ impl Svg {
             let clear = !self.solids.iter().any(|s| s.overlaps(&r.pad(1.0)))
                 && !self.wire_segs.iter().any(|w| w.overlaps(&r))
                 && !self.channels.iter().any(|c| c.overlaps(&r));
-            if clear {
-                self.text(x, y, t, cls);
-                return;
+            if !clear {
+                continue;
             }
+            let drift = dx.abs() + dy.abs();
+            let crowd = self
+                .solids
+                .iter()
+                .map(|sld| sld.gap(&r))
+                .fold(f64::INFINITY, f64::min)
+                .min(24.0);
+            let score = drift + (14.0 - crowd).max(0.0) * 1.5;
+            if best.map(|b| score < b.0).unwrap_or(true) {
+                best = Some((score, x, y, drift));
+            }
+        }
+        if let Some((_, x, y, drift)) = best {
+            self.max_drift = self.max_drift.max(drift - 12.0).max(0.0);
+            self.text(x, y, t, cls);
+            return;
         }
         self.text(ax + 8.0, ay + 4.0, t, cls);
     }
@@ -182,6 +214,7 @@ impl Svg {
             (18.0, 58.0),
         ];
         let w = 6.8 * l1.len().max(l2.len()) as f64;
+        let mut best: Option<(f64, f64, f64, f64)> = None; // (score, x, y, drift)
         for (dx, dy) in CAND {
             let x = if dx < 0.0 { ax + dx - w } else { ax + dx };
             let y = ay + dy;
@@ -189,13 +222,28 @@ impl Svg {
             let clear = !self.solids.iter().any(|s| s.overlaps(&r.pad(1.0)))
                 && !self.wire_segs.iter().any(|wr| wr.overlaps(&r))
                 && !self.channels.iter().any(|c| c.overlaps(&r));
-            if clear {
-                self.text(x, y, l1, c1);
-                if !l2.is_empty() {
-                    self.text(x, y + 13.0, l2, c2);
-                }
-                return;
+            if !clear {
+                continue;
             }
+            let drift = dx.abs() + dy.abs();
+            let crowd = self
+                .solids
+                .iter()
+                .map(|sld| sld.gap(&r))
+                .fold(f64::INFINITY, f64::min)
+                .min(24.0);
+            let score = drift + (14.0 - crowd).max(0.0) * 1.5;
+            if best.map(|b| score < b.0).unwrap_or(true) {
+                best = Some((score, x, y, drift));
+            }
+        }
+        if let Some((_, x, y, drift)) = best {
+            self.max_drift = self.max_drift.max(drift - 12.0).max(0.0);
+            self.text(x, y, l1, c1);
+            if !l2.is_empty() {
+                self.text(x, y + 13.0, l2, c2);
+            }
+            return;
         }
         self.collisions += 1;
         if std::env::var("BHDL_V4_DEBUG").is_ok() {
@@ -2044,7 +2092,8 @@ pub fn render_sheet_svg(
     title: &str,
     decor: &SheetDecor,
 ) -> (String, usize, usize) {
-    render_sheet_svg_with_blocks(netlist, title, decor, &[])
+    let (svg, u, c, _) = render_sheet_svg_with_blocks(netlist, title, decor, &[]);
+    (svg, u, c)
 }
 
 /// One rendered sheet of a hierarchical board.
@@ -2055,6 +2104,9 @@ pub struct SheetOut {
     pub svg: String,
     pub unidiomized: usize,
     pub collisions: usize,
+    /// Worst label displacement from its preferred slot (px) — the
+    /// readability gate: labels that wander read as another element's.
+    pub label_drift: usize,
 }
 
 /// Render a hierarchical board as a sheet tree: a top sheet with each
@@ -2070,8 +2122,9 @@ pub fn render_sheet_tree(
     href_for: &dyn Fn(&str) -> String,
 ) -> Vec<SheetOut> {
     let Some(groups) = super::sheets::partition_sheets(netlist) else {
-        let (svg, unidiomized, collisions) = render_sheet_svg(netlist, title, decor);
-        return vec![SheetOut { slug: String::new(), title: title.to_string(), svg, unidiomized, collisions }];
+        let (svg, unidiomized, collisions, label_drift) =
+            render_sheet_svg_with_blocks(netlist, title, decor, &[]);
+        return vec![SheetOut { slug: String::new(), title: title.to_string(), svg, unidiomized, collisions, label_drift }];
     };
     let blocks = super::sheets::block_specs(netlist, &groups, href_for);
     let mut out = Vec::new();
@@ -2079,15 +2132,15 @@ pub fn render_sheet_tree(
         let sub = super::sheets::subset_netlist(netlist, &g.members);
         match &g.parent {
             None => {
-                let (svg, unidiomized, collisions) =
+                let (svg, unidiomized, collisions, label_drift) =
                     render_sheet_svg_with_blocks(&sub, title, decor, &blocks);
-                out.push(SheetOut { slug: String::new(), title: title.to_string(), svg, unidiomized, collisions });
+                out.push(SheetOut { slug: String::new(), title: title.to_string(), svg, unidiomized, collisions, label_drift });
             }
             Some(parent) => {
                 let sheet_title = format!("{title} · {parent}");
-                let (svg, unidiomized, collisions) =
+                let (svg, unidiomized, collisions, label_drift) =
                     render_sheet_svg_with_blocks(&sub, &sheet_title, decor, &[]);
-                out.push(SheetOut { slug: parent.clone(), title: sheet_title, svg, unidiomized, collisions });
+                out.push(SheetOut { slug: parent.clone(), title: sheet_title, svg, unidiomized, collisions, label_drift });
             }
         }
     }
@@ -2099,7 +2152,7 @@ fn render_sheet_svg_with_blocks(
     title: &str,
     decor: &SheetDecor,
     blocks: &[super::sheets::BlockSpec],
-) -> (String, usize, usize) {
+) -> (String, usize, usize, usize) {
     let plan = classify_sheet(netlist);
     log::info!(
         "v4 plan: {} rails, {} grounds, {} stages, {} residue",
@@ -2457,13 +2510,43 @@ fn render_sheet_svg_with_blocks(
         let bus_y = y + 40.0;
         let box_w = 96.0;
         let box_h = 60.0;
-        let pitch = 130.0;
         let x0 = 60.0;
         svg.rail_flag(x0 - 20.0, bus_y, &net_label(netlist, load.rail), true);
         if let Some(v) = solved_v(decor, netlist, load.rail) {
             svg.queue_sim(x0 - 16.0, bus_y + 18.0, &format!("= {}", fmt_sim_v(v)), "sim");
         }
-        let boxes_end = x0 + load.insts.len() as f64 * pitch;
+        // Adaptive cell per consumer: the box plus its LONGEST right-side
+        // net flag — a fixed pitch let flag text plow through the next
+        // column (the FPGA's three VCC_3V3 flags overprinted C3's labels).
+        let cell_w = |inst: &str| -> f64 {
+            let flag = netlist
+                .instances
+                .iter()
+                .find(|(_, i)| i.name == inst)
+                .map(|(iid, _)| {
+                    netlist
+                        .pin_instances
+                        .values()
+                        .filter(|p| p.instance == iid)
+                        .filter_map(|p| {
+                            let pin = netlist.pins.get(p.pin_def)?;
+                            let nid = p.net?;
+                            if pin.is_virtual
+                                || nid == load.rail
+                                || matches!(pin.direction, bhdl_netlist::types::PinDirection::Ground)
+                            {
+                                return None;
+                            }
+                            netlist.nets.get(nid).and_then(|n| n.name.as_ref().map(|s| s.len()))
+                        })
+                        .max()
+                        .unwrap_or(0)
+                })
+                .unwrap_or(0);
+            box_w + 26.0 + if flag > 0 { 6.8 * flag as f64 + 18.0 } else { 8.0 }
+        };
+        let cells: Vec<f64> = load.insts.iter().map(|i| cell_w(i)).collect();
+        let boxes_end = x0 + cells.iter().sum::<f64>();
         let bus_end = boxes_end + load.shunts.len() as f64 * SHUNT_PITCH;
         svg.wire(&[(x0 - 20.0, bus_y), (bus_end, bus_y)]);
         // Decoupling bank: shunt columns continue along the consumer bus.
@@ -2474,8 +2557,11 @@ fn render_sheet_svg_with_blocks(
                 sx += SHUNT_PITCH;
             }
         }
+        let mut bx = x0;
         for (k, inst) in load.insts.iter().enumerate() {
-            let bx = x0 + k as f64 * pitch;
+            if k > 0 {
+                bx += cells[k - 1];
+            }
             let by = bus_y + 26.0;
             let _ = writeln!(
                 svg.body,
@@ -2582,6 +2668,7 @@ fn render_sheet_svg_with_blocks(
 
     let n_res = plan.residue.len();
     let n_coll = svg.collisions;
+    let drift = svg.max_drift.round() as usize;
     svg.grow(200.0, y);
-    (svg.finish(title), n_res, n_coll)
+    (svg.finish(title), n_res, n_coll, drift)
 }

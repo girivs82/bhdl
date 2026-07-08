@@ -1327,10 +1327,11 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
         let href_for = |parent: &str| format!("{stem}__{}.svg", slugify(parent));
         let sheets = bhdl_schematic::v4::render_sheet_tree(&netlist, &title, &decor, &href_for);
         let n_sheets = sheets.len();
-        let (mut unidiomized, mut collisions) = (0usize, 0usize);
+        let (mut unidiomized, mut collisions, mut drift) = (0usize, 0usize, 0usize);
         for sheet in &sheets {
             unidiomized += sheet.unidiomized;
             collisions += sheet.collisions;
+            drift = drift.max(sheet.label_drift);
         }
         if let Some(svg_path) = svg_v4 {
             let out_path = std::path::Path::new(svg_path);
@@ -1345,7 +1346,7 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
             }
             let pages = if n_sheets > 1 { format!(", {n_sheets} sheets") } else { String::new() };
             println!(
-                "  {} V4 SVG: {svg_path} ({unidiomized} unidiomized, {collisions} collisions{pages})",
+                "  {} V4 SVG: {svg_path} ({unidiomized} unidiomized, {collisions} collisions, drift {drift}px{pages})",
                 "✓".green(),
             );
         }
