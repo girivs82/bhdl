@@ -137,10 +137,6 @@ enum Commands {
         #[arg(long)]
         json: bool,
 
-        /// Run layout validation checks (requires Node.js)
-        #[arg(long)]
-        validate: bool,
-
         /// Also write the V4 idiom-composed SVG schematic to this path
         #[arg(long, value_name = "SVG")]
         svg_v4: Option<String>,
@@ -149,9 +145,6 @@ enum Commands {
         /// (index page + title blocks; print to PDF from any browser)
         #[arg(long, value_name = "HTML")]
         binder: Option<String>,
-        /// Print ASCII schematic to terminal (requires Node.js)
-        #[arg(long)]
-        ascii: bool,
     },
     
     /// Run SPICE analysis
@@ -435,8 +428,8 @@ async fn main() -> Result<()> {
             run_freeze(&source_file, &cli.input, output, frozen_libraries).await?;
         }
         
-        Some(Commands::Visualize { output, json, validate, ascii, svg_v4, binder }) => {
-            run_visualization(&source_file, output, json, validate, ascii, &cli.input, svg_v4.as_deref(), binder.as_deref()).await?;
+        Some(Commands::Visualize { output, json, svg_v4, binder }) => {
+            run_visualization(&source_file, output, json, &cli.input, svg_v4.as_deref(), binder.as_deref()).await?;
         }
         
         Some(Commands::Spice { analysis, output, use_metadata }) => {
@@ -1200,7 +1193,7 @@ async fn run_freeze(
     Ok(())
 }
 
-async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, json_output: bool, validate: bool, ascii: bool, source_path: &Path, svg_v4: Option<&str>, binder: Option<&str>) -> Result<()> {
+async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, json_output: bool, source_path: &Path, svg_v4: Option<&str>, binder: Option<&str>) -> Result<()> {
     // Run full pipeline to get netlist
     let analysis = analyze(source_file);
 
@@ -1273,10 +1266,13 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
         }
     };
 
-    // V4 idiom-composed SVG (docs/spec/Schematic_V4.md) — rendered from the
-    // same netlist AFTER the DC solve, so the sheet carries the solved
-    // operating point and the stdlib symbol declarations.
-    if let Some(svg_path) = svg_v4 {
+    // V4 idiom-composed sheet tree (docs/spec/Schematic_V4.md) — rendered
+    // from the same netlist AFTER the DC solve, so the sheets carry the
+    // solved operating point and the stdlib symbol declarations. This IS
+    // the schematic view now: --svg-v4 writes the interactive SVG binding,
+    // and the default HTML output is the bound multipage document (the
+    // 4.7k-line JS layout engine is retired).
+    let v4_sheets = {
         let title = source_path
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
@@ -1320,11 +1316,9 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
         // Hierarchical boards render as a SHEET TREE: the top sheet's
         // entity blocks hyperlink (native SVG <a>) to per-entity sheets
         // written as sibling files "{stem}__{entity}.svg".
-        let out_path = std::path::Path::new(svg_path);
-        let stem = out_path
-            .file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| "sheet".into());
+        let stem = svg_v4
+            .and_then(|p| std::path::Path::new(p).file_stem().map(|s| s.to_string_lossy().to_string()))
+            .unwrap_or_else(|| title.clone());
         let slugify = |s: &str| -> String {
             s.chars()
                 .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
@@ -1337,45 +1331,53 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
         for sheet in &sheets {
             unidiomized += sheet.unidiomized;
             collisions += sheet.collisions;
-            if sheet.slug.is_empty() {
-                std::fs::write(out_path, &sheet.svg)?;
-            } else {
-                let child = out_path.with_file_name(format!("{stem}__{}.svg", slugify(&sheet.slug)));
-                std::fs::write(&child, &sheet.svg)?;
-                println!("    {} sheet: {}", "→".cyan(), child.display());
-            }
         }
-        let pages = if n_sheets > 1 { format!(", {n_sheets} sheets") } else { String::new() };
-        println!(
-            "  {} V4 SVG: {svg_path} ({unidiomized} unidiomized, {collisions} collisions{pages})",
-            "✓".green(),
-        );
-
-        // Second binding of the same sheets: a print-ready multipage
-        // document (browser prints it to PDF — no second rendering stack).
-        if let Some(binder_path) = binder {
-            let href_map: Vec<(String, String)> = sheets
-                .iter()
-                .filter(|s| !s.slug.is_empty())
-                .map(|s| {
-                    let slug = slugify(&s.slug);
-                    (format!("{stem}__{slug}.svg"), slug)
-                })
-                .collect();
-            let html = bhdl_schematic::v4::bind_sheets(
-                &title,
-                &sheets,
-                &href_map,
-                env!("CARGO_PKG_VERSION"),
+        if let Some(svg_path) = svg_v4 {
+            let out_path = std::path::Path::new(svg_path);
+            for sheet in &sheets {
+                if sheet.slug.is_empty() {
+                    std::fs::write(out_path, &sheet.svg)?;
+                } else {
+                    let child = out_path.with_file_name(format!("{stem}__{}.svg", slugify(&sheet.slug)));
+                    std::fs::write(&child, &sheet.svg)?;
+                    println!("    {} sheet: {}", "→".cyan(), child.display());
+                }
+            }
+            let pages = if n_sheets > 1 { format!(", {n_sheets} sheets") } else { String::new() };
+            println!(
+                "  {} V4 SVG: {svg_path} ({unidiomized} unidiomized, {collisions} collisions{pages})",
+                "✓".green(),
             );
-            std::fs::write(binder_path, html)?;
+        }
+
+        // Bound multipage document: the same sheets, one self-contained
+        // HTML (interactive via internal anchors; print to PDF from any
+        // browser). Written to --binder when given, and it IS the default
+        // HTML output below.
+        let href_map: Vec<(String, String)> = sheets
+            .iter()
+            .filter(|s| !s.slug.is_empty())
+            .map(|s| {
+                let slug = slugify(&s.slug);
+                (format!("{stem}__{slug}.svg"), slug)
+            })
+            .collect();
+        let bound = bhdl_schematic::v4::bind_sheets(
+            &title,
+            &sheets,
+            &href_map,
+            env!("CARGO_PKG_VERSION"),
+        );
+        if let Some(binder_path) = binder {
+            std::fs::write(binder_path, &bound)?;
             println!(
                 "  {} binder: {binder_path} ({} pages — print to PDF from a browser)",
                 "✓".green(),
                 n_sheets + 1,
             );
         }
-    }
+        (bound, n_sheets)
+    };
 
     // Auto-create input filter caps for rails with |> input_filtering in stage chain
     if let Some(ref flow_tracker) = analysis.flow_tracker {
@@ -1494,87 +1496,22 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
     let schematic_data = bhdl_schematic::extract_schematic_data(&netlist, Some(&analysis), sim_annotations, Some(source_path))
         .map_err(|e| anyhow::anyhow!("Schematic extraction failed: {}", e))?;
 
-    // Run layout validation and/or ASCII rendering if requested (requires Node.js)
-    if validate || ascii {
-        // Write SchematicData JSON to temp file for Node.js scripts
-        let json_path = std::env::temp_dir().join("bhdl_validate.json");
-        let json = serde_json::to_string_pretty(&schematic_data)?;
-        fs::write(&json_path, &json)?;
-
-        // Locate the viewer scripts directory
-        let viewer_dir = {
-            let candidates = vec![
-                PathBuf::from("bhdl-schematic/viewer"),
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../bhdl-schematic/viewer"),
-            ];
-            candidates.into_iter().find(|p| p.join("layout_engine.mjs").exists())
-                .ok_or_else(|| anyhow::anyhow!(
-                    "Cannot find bhdl-schematic/viewer/ directory (layout_engine.mjs not found). \
-                     Run from the workspace root or set the correct path."
-                ))?
-        };
-
-        if validate {
-            let script = viewer_dir.join("validate_layout.mjs");
-            println!("\n{}", "Running layout validation...".cyan());
-            let result = std::process::Command::new("node")
-                .arg(&script)
-                .arg("--verbose")
-                .arg(&json_path)
-                .status();
-            match result {
-                Ok(status) => {
-                    if status.success() {
-                        println!("{}", "✓ Layout validation passed".green().bold());
-                    } else {
-                        println!("{}", "✗ Layout validation found errors".red().bold());
-                    }
-                }
-                Err(e) => {
-                    eprintln!("{}", format!("  Failed to run node: {} (is Node.js installed?)", e).yellow());
-                }
-            }
-        }
-
-        if ascii {
-            let script = viewer_dir.join("ascii_schematic.mjs");
-            println!("\n{}", "ASCII Schematic:".cyan());
-            let result = std::process::Command::new("node")
-                .arg(&script)
-                .arg(&json_path)
-                .status();
-            match result {
-                Ok(status) => {
-                    if !status.success() {
-                        eprintln!("{}", "  ASCII renderer exited with error".yellow());
-                    }
-                }
-                Err(e) => {
-                    eprintln!("{}", format!("  Failed to run node: {} (is Node.js installed?)", e).yellow());
-                }
-            }
-        }
-
-        // Clean up temp file
-        let _ = fs::remove_file(&json_path);
-    }
-
     // Output file generation:
-    // --json       → write JSON file
-    // (default)    → write HTML file (unless --validate/--ascii was used standalone)
+    // --json       → machine-readable SchematicData JSON
+    // (default)    → the V4 bound document (multipage HTML; print → PDF)
     if json_output {
         let json = serde_json::to_string_pretty(&schematic_data)?;
         let output_path = output.unwrap_or_else(|| PathBuf::from("circuit.json"));
         fs::write(&output_path, &json)?;
         println!("{}", "✓ Schematic JSON generated".green().bold());
         println!("  Output: {}", output_path.display());
-    } else if !validate && !ascii {
-        let html = bhdl_schematic::generate_standalone_html(&schematic_data);
+    } else {
+        let (bound, n_sheets) = v4_sheets;
         let output_path = output.unwrap_or_else(|| PathBuf::from("circuit.html"));
-        fs::write(&output_path, &html)?;
-        println!("{}", "✓ Schematic viewer generated".green().bold());
-        println!("  Output: {}", output_path.display());
-        println!("  Open in a browser for interactive viewing (zoom, pan, hover)");
+        fs::write(&output_path, &bound)?;
+        println!("{}", "✓ V4 schematic document generated".green().bold());
+        println!("  Output: {} ({} sheet{})", output_path.display(), n_sheets, if n_sheets == 1 { "" } else { "s" });
+        println!("  Open in a browser (internal links navigate sheets; ⌘P prints to PDF)");
     }
 
     Ok(())
@@ -1821,15 +1758,51 @@ async fn run_pipeline(source_file: &SourceFile, _input_path: &PathBuf, output_di
     if !no_viz {
         println!("\n{}", "3. Visualization".blue().bold());
 
-        let schematic_data = bhdl_schematic::extract_schematic_data(&netlist, Some(&analysis), None, None)
-            .map_err(|e| anyhow::anyhow!("Schematic extraction failed: {}", e))?;
-        let html = bhdl_schematic::generate_standalone_html(&schematic_data);
-
+        // V4 bound document (the JS canvas viewer is retired).
+        let mut lut = bhdl_schematic::RefDesLut::default();
+        let mut refdes_map = std::collections::HashMap::new();
+        for inst in netlist.instances.values() {
+            let is_phantom = netlist
+                .modules
+                .get(inst.definition)
+                .map(|m| m.name == inst.name)
+                .unwrap_or(false);
+            if is_phantom {
+                continue;
+            }
+            let class = inst
+                .attributes
+                .get("component_class")
+                .map(String::as_str)
+                .unwrap_or("");
+            let category = match class {
+                "voltage_regulator" | "ldo" | "switching_regulator" => "regulator",
+                "" => "ic",
+                other => other,
+            };
+            let prefix = bhdl_schematic::category_to_prefix(category);
+            let prefix = if prefix == "X" { "U" } else { prefix };
+            refdes_map.insert(inst.name.clone(), lut.assign(prefix, &inst.name));
+        }
+        let decor = bhdl_schematic::v4::svg::SheetDecor {
+            sim: None,
+            symbols: Some(&analysis.symbol_definitions),
+            refdes: Some(&refdes_map),
+        };
+        let board = output_dir
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "board".into());
+        let href_for = |parent: &str| format!("#sheet-{parent}");
+        let sheets = bhdl_schematic::v4::render_sheet_tree(&netlist, &board, &decor, &href_for);
+        let html = bhdl_schematic::v4::bind_sheets(&board, &sheets, &[], env!("CARGO_PKG_VERSION"));
         let html_path = output_dir.join("circuit.html");
         fs::write(&html_path, html)?;
-        println!("  ✓ Schematic viewer saved to {}", html_path.display());
+        println!("  ✓ V4 schematic document saved to {}", html_path.display());
 
         // Also save SchematicData JSON for tooling
+        let schematic_data = bhdl_schematic::extract_schematic_data(&netlist, Some(&analysis), None, None)
+            .map_err(|e| anyhow::anyhow!("Schematic extraction failed: {}", e))?;
         let json_path = output_dir.join("schematic.json");
         fs::write(&json_path, serde_json::to_string_pretty(&schematic_data)?)?;
         println!("  ✓ Schematic JSON saved to {}", json_path.display());
