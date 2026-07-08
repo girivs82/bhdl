@@ -2717,10 +2717,28 @@ fn regulator_hints(
             })
         };
         let vin = net_of(&|p| p.name.eq_ignore_ascii_case("VIN") || p.name.eq_ignore_ascii_case("IN"));
+        // The output rail. Normally the VOUT pin's net — but when the board
+        // hand-authors the application circuit, the (virtual) VOUT pin is
+        // unwired (its expansion skipped, see expansion_interpreter's
+        // board-authored takeover), so fall back to the rail the regulator
+        // actually drives: trace from the switch/output pin through the
+        // board's series parts (inductor) to a Power-class net.
         let vout = net_of(&|p| {
             p.name.eq_ignore_ascii_case("VOUT")
                 || p.name.eq_ignore_ascii_case("OUT")
                 || p.name.eq_ignore_ascii_case("VO")
+        })
+        .or_else(|| {
+            let traced = driven_output_rail(netlist, iid);
+            if let Some(rail) = &traced {
+                info!(
+                    "regulator hint for '{}': VOUT pin unwired (board-authored \
+                     output path) — traced the driven rail '{}' through the \
+                     board's series parts",
+                    inst.name, rail
+                );
+            }
+            traced
         });
         let eff = inst
             .attributes
@@ -2740,6 +2758,92 @@ fn regulator_hints(
         }
     }
     out
+}
+
+/// The Power-class rail a regulator drives THROUGH board-authored series
+/// parts, for when its VOUT pin has no net (virtual pin, expansion skipped
+/// because the board hand-authored the application circuit). Breadth-first
+/// from the regulator's output-direction pins (the buck's SW node), crossing
+/// only two-pin series passives (inductor/resistor/ferrite) authored on the
+/// board, at most two hops — enough for SW → L → rail without wandering the
+/// whole board. Returns the first Power-class net name reached.
+fn driven_output_rail(
+    netlist: &bhdl_netlist::netlist::Netlist,
+    iid: bhdl_netlist::InstanceId,
+) -> Option<String> {
+    use bhdl_netlist::types::PinDirection;
+    // Pin-instance membership per net is scanned repeatedly; a regulator has
+    // a handful of pins and we visit ≤ a dozen nets, so linear scans are fine.
+    let start_nets: Vec<bhdl_netlist::NetId> = netlist
+        .pin_instances
+        .values()
+        .filter(|pi| pi.instance == iid)
+        .filter(|pi| {
+            netlist
+                .pins
+                .get(pi.pin_def)
+                .map(|p| matches!(p.direction, PinDirection::Out))
+                .unwrap_or(false)
+        })
+        .filter_map(|pi| pi.net)
+        .collect();
+
+    let series_hop = |nid: bhdl_netlist::NetId| -> Vec<bhdl_netlist::NetId> {
+        let mut next = Vec::new();
+        for pi in netlist.pin_instances.values() {
+            if pi.net != Some(nid) || pi.instance == iid {
+                continue;
+            }
+            let Some(inst) = netlist.instances.get(pi.instance) else { continue };
+            let class = inst
+                .attributes
+                .get("component_class")
+                .or_else(|| {
+                    netlist
+                        .modules
+                        .get(inst.definition)
+                        .and_then(|m| m.attributes.get("component_class"))
+                })
+                .map(String::as_str)
+                .unwrap_or("");
+            if !matches!(class, "inductor" | "resistor" | "ferrite" | "ferrite_bead") {
+                continue;
+            }
+            // The series part's OTHER pin's net.
+            for pi2 in netlist.pin_instances.values() {
+                if pi2.instance == pi.instance && pi2.id != pi.id {
+                    if let Some(n2) = pi2.net {
+                        if n2 != nid {
+                            next.push(n2);
+                        }
+                    }
+                }
+            }
+        }
+        next
+    };
+
+    let mut frontier = start_nets;
+    let mut seen: std::collections::HashSet<bhdl_netlist::NetId> =
+        frontier.iter().copied().collect();
+    for _hop in 0..2 {
+        let mut next_frontier = Vec::new();
+        for nid in frontier.drain(..) {
+            for n2 in series_hop(nid) {
+                if !seen.insert(n2) {
+                    continue;
+                }
+                if let Some(net) = netlist.nets.get(n2) {
+                    if matches!(net.net_class, bhdl_netlist::NetClass::Power { .. }) {
+                        return net.name.clone();
+                    }
+                }
+                next_frontier.push(n2);
+            }
+        }
+        frontier = next_frontier;
+    }
+    None
 }
 
 /// EXACT block-port currents: for every hierarchical sheet group, the net

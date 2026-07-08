@@ -256,6 +256,12 @@ impl DesignRuleChecker {
                 "Power rails with neither a board port nor an on-board driver (Error); power-in ports whose net touches no connector-class instance (Warning)",
                 crate::erc::check_rail_anchoring,
             ),
+            (
+                "ERC029",
+                "Floating duplicated support circuit",
+                "Expansion children on a net whose only other member is their parent's virtual pin — duplicated application circuitry the board never consumes (Error)",
+                crate::erc::check_floating_expansion_island,
+            ),
         ] {
             self.rules.push(DesignRule {
                 id: id.to_string(),

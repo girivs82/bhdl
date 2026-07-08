@@ -1340,6 +1340,92 @@ pub fn check_polarized_orientation(
     out
 }
 
+// ─────────────── ERC029 — floating duplicated support circuit ───────────────
+
+/// ERC029 — an entity expansion's support parts on a net the board never
+/// consumes: the net's only members are one instance's VIRTUAL pin plus that
+/// same instance's own expansion children. A virtual pin is a logical port —
+/// no physical copper — so such a net is an electrically floating island of
+/// duplicated circuitry: the entity minted its application circuit onto its
+/// virtual pin's auto-net while the board authored (or forgot) the real
+/// output path. Error: dead copper on the board, and anything reading the
+/// virtual pin's net (input-draw fixpoint, rail budgets) sees a phantom rail.
+///
+/// A net carrying the parent's REAL pin (SW's auto-net between chip and
+/// expansion inductor) or any board-authored member is legitimate internal
+/// wiring and exempt.
+pub fn check_floating_expansion_island(
+    netlist: &Netlist,
+    _analysis: &AnalysisResult,
+) -> Vec<DRCViolation> {
+    let mut out = Vec::new();
+    for (net_id, net) in &netlist.nets {
+        // Gather live members: (instance, pin, is_virtual, expansion_parent).
+        let mut members: Vec<(String, String, bool, Option<String>)> = Vec::new();
+        for cp in &net.connections {
+            let ConnectionPoint::PinInstance(pi_id) = cp else { continue };
+            let Some(pi) = netlist.pin_instances.get(*pi_id) else { continue };
+            if pi.net != Some(net_id) {
+                continue; // stale duplicate-net reference (see net_members)
+            }
+            let Some(pin) = netlist.pins.get(pi.pin_def) else { continue };
+            let Some(inst) = netlist.instances.get(pi.instance) else { continue };
+            let parent = inst.attributes.get("expansion_parent")
+                .or_else(|| inst.attributes.get("vpin_parent"))
+                .cloned();
+            members.push((inst.name.clone(), pin.name.clone(), pin.is_virtual, parent));
+        }
+        // Exactly one instance's virtual pin(s), nothing real of its own.
+        let owners: std::collections::HashSet<&str> = members.iter()
+            .filter(|(_, _, v, _)| *v)
+            .map(|(i, _, _, _)| i.as_str())
+            .collect();
+        if owners.len() != 1 { continue; }
+        let owner = owners.into_iter().next().unwrap().to_string();
+        let vpin = members.iter()
+            .find(|(i, _, v, _)| *v && i == &owner)
+            .map(|(_, p, _, _)| p.clone())
+            .unwrap();
+        // Every non-virtual member must be an expansion child OF that owner.
+        let mut child_names: Vec<String> = Vec::new();
+        let mut foreign = false;
+        for (inst, _, is_virt, parent) in &members {
+            if *is_virt { continue; }
+            match parent {
+                Some(p) if p == &owner => child_names.push(inst.clone()),
+                _ => { foreign = true; break; }
+            }
+        }
+        if foreign || child_names.is_empty() {
+            continue;
+        }
+        child_names.sort();
+        out.push(DRCViolation {
+            rule_id: "ERC029".into(),
+            rule_name: "Floating duplicated support circuit".into(),
+            category: RuleCategory::Electrical,
+            severity: ViolationSeverity::Error,
+            description: format!(
+                "Net '{}' connects only '{}''s virtual pin '{}' and its own \
+                 expansion children ({}) — the entity's application circuit \
+                 was minted onto a net the board never consumes. A virtual \
+                 pin is no physical copper: these parts are electrically \
+                 floating duplicates of the board-authored output path",
+                net_name(netlist, net_id), owner, vpin, child_names.join(", ")
+            ),
+            location: ViolationLocation::Net(net_id),
+            fix_suggestion: format!(
+                "wire '{}.{}' to the board's output rail (and delete any \
+                 hand-authored copies of the support parts), or hand-author \
+                 the full application circuit so the expansion skips",
+                owner, vpin
+            ),
+            standard_reference: None,
+        });
+    }
+    out
+}
+
 // ──────────────────── ERC026 — interface completeness ────────────────────
 
 /// ERC026 — a part using PART of a bus interface it declares pins for:
@@ -1847,6 +1933,98 @@ mod tests {
         let (mut nl, net) = anchoring_fixture("", PinDirection::Power, PinType::Power);
         add_board_port(&mut nl, net, bhdl_netlist::types::PortDirection::InOut);
         assert!(check_rail_anchoring(&nl, &AnalysisResult::default()).is_empty());
+    }
+
+    // ── ERC029 fixtures: a regulator's virtual VOUT net + expansion caps ──
+
+    /// Build: instance "u1" with a virtual VOUT pin on net "U1_VOUT",
+    /// plus `n_children` expansion-child caps (expansion_parent = "u1")
+    /// each with one pin on that net. Returns the netlist and the net.
+    fn island_fixture(n_children: usize) -> (Netlist, NetId) {
+        use bhdl_netlist::types::ModuleKind;
+        let mut nl = Netlist::new();
+        let reg = nl.add_module("Reg".into(), ModuleKind::Component);
+        let vpin = nl
+            .add_pin(reg, "VOUT".into(), PinDirection::Out, PinType::Power)
+            .unwrap();
+        nl.pins.get_mut(vpin).unwrap().is_virtual = true;
+        let u1 = nl.add_instance("u1".into(), reg).unwrap();
+        let u1_pis = nl.create_pin_instances(u1).unwrap();
+
+        let net = nl.add_net(Some("U1_VOUT".into()));
+        nl.connect(net, ConnectionPoint::PinInstance(u1_pis[0])).unwrap();
+
+        let cap = nl.add_module("Cap".into(), ModuleKind::Component);
+        nl.add_pin(cap, "1".into(), PinDirection::InOut, PinType::Passive)
+            .unwrap();
+        for i in 0..n_children {
+            let c = nl.add_instance(format!("u1_C{i}"), cap).unwrap();
+            nl.instances
+                .get_mut(c)
+                .unwrap()
+                .attributes
+                .insert("expansion_parent".into(), "u1".into());
+            let pis = nl.create_pin_instances(c).unwrap();
+            nl.connect(net, ConnectionPoint::PinInstance(pis[0])).unwrap();
+        }
+        (nl, net)
+    }
+
+    #[test]
+    fn erc029_floating_island_errors() {
+        // Virtual VOUT + only its own expansion children: floating
+        // duplicated support circuitry.
+        let (nl, _) = island_fixture(2);
+        let v = check_floating_expansion_island(&nl, &AnalysisResult::default());
+        assert_eq!(v.len(), 1, "expected exactly the floating-island Error");
+        assert_eq!(v[0].rule_id, "ERC029");
+        assert!(matches!(v[0].severity, ViolationSeverity::Error));
+        assert!(v[0].description.contains("u1_C0"));
+        assert!(v[0].description.contains("u1_C1"));
+    }
+
+    #[test]
+    fn erc029_board_consumed_net_silent() {
+        // Same shape, but the board also wired a load onto the net —
+        // the expansion's deliverable is consumed; legitimate.
+        let (mut nl, net) = island_fixture(2);
+        use bhdl_netlist::types::ModuleKind;
+        let load = nl.add_module("Load".into(), ModuleKind::Component);
+        nl.add_pin(load, "1".into(), PinDirection::In, PinType::Power)
+            .unwrap();
+        let rl = nl.add_instance("RL".into(), load).unwrap();
+        let pis = nl.create_pin_instances(rl).unwrap();
+        nl.connect(net, ConnectionPoint::PinInstance(pis[0])).unwrap();
+        assert!(check_floating_expansion_island(&nl, &AnalysisResult::default())
+            .is_empty());
+    }
+
+    #[test]
+    fn erc029_real_pin_auto_net_silent() {
+        // An auto-net around a REAL parent pin (the SW node between chip
+        // and expansion inductor) is legitimate internal wiring.
+        let (mut nl, _) = island_fixture(0);
+        use bhdl_netlist::types::ModuleKind;
+        let reg2 = nl.add_module("Reg2".into(), ModuleKind::Component);
+        nl.add_pin(reg2, "SW".into(), PinDirection::Out, PinType::Signal)
+            .unwrap();
+        let u2 = nl.add_instance("u2".into(), reg2).unwrap();
+        let u2_pis = nl.create_pin_instances(u2).unwrap();
+        let sw_net = nl.add_net(Some("u2_SW".into()));
+        nl.connect(sw_net, ConnectionPoint::PinInstance(u2_pis[0])).unwrap();
+        let ind = nl.add_module("Ind".into(), ModuleKind::Component);
+        nl.add_pin(ind, "1".into(), PinDirection::InOut, PinType::Passive)
+            .unwrap();
+        let l = nl.add_instance("u2_L".into(), ind).unwrap();
+        nl.instances
+            .get_mut(l)
+            .unwrap()
+            .attributes
+            .insert("expansion_parent".into(), "u2".into());
+        let l_pis = nl.create_pin_instances(l).unwrap();
+        nl.connect(sw_net, ConnectionPoint::PinInstance(l_pis[0])).unwrap();
+        assert!(check_floating_expansion_island(&nl, &AnalysisResult::default())
+            .is_empty());
     }
 }
 

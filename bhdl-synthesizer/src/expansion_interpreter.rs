@@ -240,6 +240,46 @@ fn expand_one_instance(
 ) -> Result<ExpansionResult, String> {
     let base = &cand.instance_name;
 
+    // Board-authored application circuit: when the board leaves the entity's
+    // virtual output pin unwired but wires the expansion's other pins (the
+    // switch node, the feedback pin) into its own hand-authored circuitry,
+    // the board has taken over the application circuit. Running the
+    // expansion anyway mints the datasheet support parts a second time —
+    // the output-side copies land on the virtual pin's auto-net (connected
+    // to nothing), while the switch/feedback-side copies pollute the LIVE
+    // board nets (a second catch diode on SW, a parallel divider on FB).
+    // Skip the whole expansion — a half-fired expansion is not a coherent
+    // application circuit — and say loudly which parts were suppressed.
+    if let Some((vpin, wired_pins)) = board_authored_output_takeover(netlist, cand) {
+        let dupes: Vec<String> = cand.recipe.instances.iter()
+            .map(|i| format!("{}_{}", base, i.name))
+            .collect();
+        warn!(
+            "Expansion of '{}' ({}) SKIPPED — the board hand-authors the entity's \
+             application circuit: virtual pin '{}' is unwired while pin(s) [{}] are \
+             wired into board-authored parts. Expanding anyway would mint duplicated \
+             support circuitry ({}) floating on '{}_{}'. Either wire '{}.{}' to the \
+             output rail and delete the hand-authored copies (the entity sizes its \
+             own application circuit), or keep the board-authored circuit and this \
+             skip stands.",
+            base, cand.recipe.entity_name, vpin, wired_pins.join(", "),
+            dupes.join(", "), base, vpin, base, vpin,
+        );
+        if let Some(parent) = netlist.instances.get_mut(cand.instance_id) {
+            parent.attributes.insert("expansion_applied".to_string(), "true".to_string());
+            parent.attributes.insert(
+                "expansion_skipped".to_string(),
+                format!("board-authored output path (virtual '{}' unwired, [{}] wired)",
+                    vpin, wired_pins.join(", ")),
+            );
+        }
+        return Ok(ExpansionResult {
+            parent_instance: base.clone(),
+            child_instances: Vec::new(),
+            internal_nets: Vec::new(),
+        });
+    }
+
     // 1. Create internal nets
     let mut internal_net_map: HashMap<String, NetId> = HashMap::new();
     for net_name in &cand.recipe.internal_nets {
@@ -1236,6 +1276,98 @@ fn compute_live_children(
     live
 }
 
+/// Detect a board-authored application circuit that supersedes the
+/// entity's own expansion.
+///
+/// Trigger — BOTH must hold for some virtual parent pin V that the
+/// expansion recipe references:
+///   1. V has no board net (the board never consumes the expansion's
+///      deliverable — its children would auto-net onto a floating
+///      `{inst}_{V}` island), AND
+///   2. some other non-power-rail parent pin in V's recipe-connected
+///      component (SW, FB — the pins the application circuit hangs off)
+///      IS wired at board level to at least one pin of another instance
+///      (the board built its own series parts there).
+///
+/// Returns `(virtual_pin_name, board_wired_pins)` when the expansion
+/// should be skipped, `None` to expand normally. The intended use
+/// (board wires `U1.VOUT -> @RAIL`, leaves SW/FB to the expansion)
+/// never triggers: V is wired, condition 1 fails.
+fn board_authored_output_takeover(
+    netlist: &Netlist,
+    cand: &ExpansionCandidate,
+) -> Option<(String, Vec<String>)> {
+    // Bipartite recipe graph: parent pin ↔ child adjacency.
+    let mut pin_children: HashMap<&str, HashSet<&str>> = HashMap::new();
+    let mut child_pins: HashMap<&str, HashSet<&str>> = HashMap::new();
+    for conn in &cand.recipe.connections {
+        let mut pins: Vec<&str> = Vec::new();
+        let mut children: Vec<&str> = Vec::new();
+        for ep in [&conn.from, &conn.to] {
+            match ep {
+                ExpansionEndpoint::ParentPin(p) => pins.push(p),
+                ExpansionEndpoint::InstancePin(c, _) => children.push(c),
+                _ => {}
+            }
+        }
+        for p in &pins {
+            pin_children.entry(p).or_default().extend(children.iter().copied());
+        }
+        for c in &children {
+            child_pins.entry(c).or_default().extend(pins.iter().copied());
+        }
+    }
+
+    // Is this parent pin wired at board level to some OTHER instance's pin?
+    // (The expansion hasn't run for this candidate yet, so every foreign
+    // pin on the net is board-authored — or another entity's circuit,
+    // which is board-level all the same.)
+    let board_wired = |pin_name: &str| -> bool {
+        let Some(&pi_id) = cand.pin_instances.get(pin_name) else { return false };
+        let Some(net_id) = find_net_for_pin_instance(netlist, pi_id) else { return false };
+        netlist.pin_instances.iter().any(|(_, pi)| {
+            pi.net == Some(net_id) && pi.instance != cand.instance_id
+        })
+    };
+
+    for (pin_name, &pi_id) in &cand.pin_instances {
+        let is_virtual = netlist.pin_instances.get(pi_id)
+            .and_then(|pi| netlist.pins.get(pi.pin_def))
+            .map(|p| p.is_virtual)
+            .unwrap_or(false);
+        if !is_virtual { continue; }
+        if !pin_children.contains_key(pin_name.as_str()) { continue; }
+        if find_net_for_pin_instance(netlist, pi_id).is_some() { continue; }
+
+        // BFS the recipe-connected component around the virtual pin,
+        // collecting the parent pins the application circuit hangs off.
+        let mut seen_pins: HashSet<&str> = HashSet::new();
+        let mut seen_children: HashSet<&str> = HashSet::new();
+        let mut frontier: Vec<&str> = vec![pin_name.as_str()];
+        seen_pins.insert(pin_name.as_str());
+        while let Some(p) = frontier.pop() {
+            for &c in pin_children.get(p).into_iter().flatten() {
+                if !seen_children.insert(c) { continue; }
+                for &p2 in child_pins.get(c).into_iter().flatten() {
+                    if seen_pins.insert(p2) { frontier.push(p2); }
+                }
+            }
+        }
+
+        let wired: Vec<String> = seen_pins.iter()
+            .filter(|p| **p != pin_name.as_str() && !is_power_rail_pin(p))
+            .filter(|p| board_wired(p))
+            .map(|p| p.to_string())
+            .collect();
+        if !wired.is_empty() {
+            let mut wired = wired;
+            wired.sort();
+            return Some((pin_name.clone(), wired));
+        }
+    }
+    None
+}
+
 fn component_type_pins(component_type: &str) -> Option<Vec<(&'static str, bool)>> {
     Some(match component_type {
         "Ind" | "Inductor"  => vec![("1", true), ("2", true)],
@@ -1666,6 +1798,125 @@ mod tests {
         // (though currently it would try again — expansion_parent isn't set on parent)
         // The child instances have expansion_parent set so they won't match
         assert!(results2.len() <= 1, "Should not expand children");
+    }
+
+    /// Board-authored-output fixture: like the buck fixture, but the
+    /// entity's VOUT is a VIRTUAL pin the board left unwired, while the
+    /// recipe's SW pin is wired at board level to a hand-authored part.
+    fn setup_board_authored_buck(
+        wire_vout: bool,
+    ) -> (Netlist, InstanceId, HashMap<String, ExpansionRecipe>) {
+        let mut netlist = Netlist::new();
+
+        let buck_mod = netlist.add_module("BuckRegulator".to_string(), ModuleKind::PhysicalComponent);
+        netlist.add_pin(buck_mod, "VIN".to_string(), PinDirection::In, PinType::Power);
+        let vout_pin = netlist
+            .add_pin(buck_mod, "VOUT".to_string(), PinDirection::Out, PinType::Power)
+            .expect("add_pin VOUT");
+        netlist.pins.get_mut(vout_pin).unwrap().is_virtual = true;
+        netlist.add_pin(buck_mod, "SW".to_string(), PinDirection::Out, PinType::Signal);
+        netlist.add_pin(buck_mod, "GND".to_string(), PinDirection::Ground, PinType::Ground);
+
+        let inst_id = netlist.instances.insert(bhdl_netlist::Instance {
+            name: "buck".to_string(),
+            definition: buck_mod,
+            attributes: HashMap::new(),
+            layout_intents: Vec::new(),
+        });
+        let pi_ids = netlist.create_pin_instances(inst_id).expect("create_pin_instances");
+        // Order: VIN, VOUT, SW, GND
+        let vin_net = netlist.add_net(Some("VIN".to_string()));
+        netlist.connect(vin_net, ConnectionPoint::PinInstance(pi_ids[0])).unwrap();
+        let gnd_net = netlist.add_net(Some("GND".to_string()));
+        netlist.connect(gnd_net, ConnectionPoint::PinInstance(pi_ids[3])).unwrap();
+        if wire_vout {
+            let vout_net = netlist.add_net(Some("VOUT".to_string()));
+            netlist.connect(vout_net, ConnectionPoint::PinInstance(pi_ids[1])).unwrap();
+        }
+
+        // Board hand-authors the output path: its own inductor on SW.
+        let ind_mod = netlist.add_module("Ind".to_string(), ModuleKind::PhysicalComponent);
+        netlist.add_pin(ind_mod, "1".to_string(), PinDirection::InOut, PinType::Signal);
+        netlist.add_pin(ind_mod, "2".to_string(), PinDirection::InOut, PinType::Signal);
+        let l1 = netlist.instances.insert(bhdl_netlist::Instance {
+            name: "L1".to_string(),
+            definition: ind_mod,
+            attributes: HashMap::new(),
+            layout_intents: Vec::new(),
+        });
+        let l1_pis = netlist.create_pin_instances(l1).expect("create L1 pins");
+        let sw_net = netlist.add_net(Some("SW_NODE".to_string()));
+        netlist.connect(sw_net, ConnectionPoint::PinInstance(pi_ids[2])).unwrap();
+        netlist.connect(sw_net, ConnectionPoint::PinInstance(l1_pis[0])).unwrap();
+
+        // Recipe: SW -> L.1, L.2 -> VOUT, VOUT -> C.1, C.2 -> GND
+        let mut recipes = HashMap::new();
+        let mut recipe = ExpansionRecipe::new("BuckRegulator".to_string());
+        recipe.instances = vec![
+            bhdl_common::ExpansionInstance {
+                name: "L".to_string(),
+                component_type: "Ind".to_string(),
+                params: vec!["33µH".to_string()],
+                attributes: HashMap::new(),
+                layout_intents: Vec::new(),
+            },
+            bhdl_common::ExpansionInstance {
+                name: "C".to_string(),
+                component_type: "Cap".to_string(),
+                params: vec!["220µF".to_string()],
+                attributes: HashMap::new(),
+                layout_intents: Vec::new(),
+            },
+        ];
+        recipe.connections = vec![
+            ExpansionConnection {
+                from: ExpansionEndpoint::ParentPin("SW".to_string()),
+                to: ExpansionEndpoint::InstancePin("L".to_string(), "1".to_string()),
+            },
+            ExpansionConnection {
+                from: ExpansionEndpoint::InstancePin("L".to_string(), "2".to_string()),
+                to: ExpansionEndpoint::ParentPin("VOUT".to_string()),
+            },
+            ExpansionConnection {
+                from: ExpansionEndpoint::ParentPin("VOUT".to_string()),
+                to: ExpansionEndpoint::InstancePin("C".to_string(), "1".to_string()),
+            },
+            ExpansionConnection {
+                from: ExpansionEndpoint::InstancePin("C".to_string(), "2".to_string()),
+                to: ExpansionEndpoint::ParentPin("GND".to_string()),
+            },
+        ];
+        recipes.insert("BuckRegulator".to_string(), recipe);
+
+        (netlist, inst_id, recipes)
+    }
+
+    #[test]
+    fn test_board_authored_output_skips_expansion() {
+        // Virtual VOUT unwired + SW wired to a board part → the board owns
+        // the application circuit; the expansion must not mint duplicates.
+        let (mut netlist, inst_id, recipes) = setup_board_authored_buck(false);
+        let results = expand_entity_instances(&mut netlist, &recipes);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].child_instances.is_empty(),
+            "expansion should be skipped, got children: {:?}", results[0].child_instances);
+        let parent = netlist.instances.get(inst_id).unwrap();
+        assert!(parent.attributes.contains_key("expansion_skipped"));
+        // No floating auto-net was minted for the virtual pin.
+        assert!(netlist.nets.iter().all(|(_, n)| n.name.as_deref() != Some("buck_VOUT")));
+    }
+
+    #[test]
+    fn test_wired_vout_still_expands() {
+        // Intended use: the board consumes VOUT — the expansion fires even
+        // though SW carries a board part too (e.g. a snubber).
+        let (mut netlist, inst_id, recipes) = setup_board_authored_buck(true);
+        let results = expand_entity_instances(&mut netlist, &recipes);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].child_instances.len(), 2,
+            "expansion should materialise L and C");
+        let parent = netlist.instances.get(inst_id).unwrap();
+        assert!(!parent.attributes.contains_key("expansion_skipped"));
     }
 
     #[test]
