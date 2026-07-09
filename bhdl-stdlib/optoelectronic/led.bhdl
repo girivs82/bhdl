@@ -1,4 +1,10 @@
 // Simplified LED - v2.0 compatible
+//
+// `color` is deliberately NOT domain-constrained (`where color in ...`):
+// the analyzer maps common colors (red/green/blue/white/yellow/ir) to a
+// forward voltage, but the color space is OPEN — orange/amber/UV/RGB LEDs
+// are all real, and an unlisted color falls to a sensible 2.0 V default,
+// not a mistake. Constraining it would reject valid parts.
 
 entity LED(color: string) {
     pin A: signal in;

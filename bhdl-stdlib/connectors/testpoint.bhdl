@@ -1,7 +1,12 @@
 // Test Point Component Module
 // For measurement and debugging access
 
-entity TestPoint(style: string = "pad") {
+entity TestPoint(style: string = "pad")
+    // Closed enum: the footprint ternary below recognizes exactly these
+    // five styles and silently defaults anything else to a 1.5 mm pad —
+    // so an unrecognized style is a wrong-footprint mistake, not a variant.
+    where style in ("pad", "hole", "loop", "pin", "keystone")
+{
     pin 1: signal inout @metadata(
         function="TestPoint",
         description="Test point for measurement",
