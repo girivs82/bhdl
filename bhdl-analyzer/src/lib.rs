@@ -67,7 +67,7 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
     let mut resolved_constants = ResolvedConstants::new();
 
     // Pass 1: Build scope registry with base path for imports
-    let (mut scope_registry, alias_specializations, imported_expansion_recipes, imported_symbol_definitions, imported_layout_definitions, imported_placement_recipes, imported_design_recipes, imported_stress_recipes, imported_model_recipes, imported_entity_attr_index, imported_entity_param_index) = pass1::build_scope_registry_with_base(source_file, base_path);
+    let (mut scope_registry, alias_specializations, imported_expansion_recipes, imported_symbol_definitions, imported_layout_definitions, imported_placement_recipes, imported_design_recipes, imported_stress_recipes, imported_model_recipes, imported_entity_attr_index, imported_entity_param_index, imported_entity_value_domains) = pass1::build_scope_registry_with_base(source_file, base_path);
     // Extract legacy data structures for backward compatibility with existing passes
     let global_scope = scope_registry.extract_global_scope();
     let definition_scopes = scope_registry.extract_definition_scopes();
@@ -301,11 +301,18 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
         entity_param_names.insert(name, params);
     }
 
-    // Reject constructor args that bind to no declared parameter (they used
-    // to pass through as dead attributes, swallowing intent). Emitted as
-    // Error-severity diagnostics; the CLI refuses to synthesize when any
-    // are present.
-    for diag in validate_constructor_args(source_file, &entity_param_names) {
+    // Per-entity parameter value domains (`where <param> in (...)`),
+    // imported files + main file.
+    let mut entity_value_domains = imported_entity_value_domains.clone();
+    for (name, doms) in extract_entity_value_domains(source_file) {
+        entity_value_domains.insert(name, doms);
+    }
+
+    // Reject constructor args that bind to no declared parameter, and
+    // values outside a parameter's declared allowed set. Both used to pass
+    // silently; emitted as Error-severity diagnostics the CLI refuses to
+    // build on.
+    for diag in validate_constructor_args(source_file, &entity_param_names, &entity_value_domains) {
         diagnostics.push(diag);
     }
 
@@ -1594,6 +1601,59 @@ pub fn extract_entity_param_names(
     idx
 }
 
+/// Extract per-entity parameter value domains from `where <param> in
+/// (<literal>, ...)` membership constraints — the allowed-value set for a
+/// string/enum parameter. Returns entity name → param name → allowed
+/// values (quotes trimmed). Same shape and import-merge path as
+/// [`extract_entity_param_names`], so an instantiation validates its
+/// argument values against the imported entity's declared domain.
+pub fn extract_entity_value_domains(
+    source_file: &SourceFile,
+) -> std::collections::HashMap<String, std::collections::HashMap<String, Vec<String>>> {
+    use bhdl_ast::{Entity, HasName};
+    use rowan::ast::AstNode;
+    let mut idx = std::collections::HashMap::new();
+    for item in source_file.items() {
+        let Some(entity) = Entity::cast(item.syntax().clone()) else { continue };
+        let Some(name_token) = entity.name() else { continue };
+        let mut domains: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        for m in entity
+            .syntax()
+            .descendants()
+            .filter(|n| n.kind() == bhdl_ast::SyntaxKind::MEMBERSHIP_CONSTRAINT)
+        {
+            // First IDENT = the parameter; STRING/NUMBER/IDENT tokens after
+            // the `in (` are the allowed values.
+            let toks: Vec<_> = m
+                .children_with_tokens()
+                .filter_map(|e| e.into_token())
+                .filter(|t| {
+                    matches!(
+                        t.kind(),
+                        bhdl_ast::SyntaxKind::IDENT
+                            | bhdl_ast::SyntaxKind::STRING
+                            | bhdl_ast::SyntaxKind::NUMBER
+                    )
+                })
+                .collect();
+            let Some((param_tok, value_toks)) = toks.split_first() else { continue };
+            let param = param_tok.text().to_string();
+            let values: Vec<String> = value_toks
+                .iter()
+                .map(|t| t.text().trim_matches('"').to_string())
+                .collect();
+            if !values.is_empty() {
+                domains.insert(param, values);
+            }
+        }
+        if !domains.is_empty() {
+            idx.insert(name_token.text().to_string(), domains);
+        }
+    }
+    idx
+}
+
 /// Character edit distance (for "did you mean" parameter suggestions).
 fn arg_edit_distance(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
@@ -1622,6 +1682,10 @@ fn arg_edit_distance(a: &str, b: &str) -> usize {
 pub fn validate_constructor_args(
     source_file: &SourceFile,
     entity_param_names: &std::collections::HashMap<String, Vec<String>>,
+    value_domains: &std::collections::HashMap<
+        String,
+        std::collections::HashMap<String, Vec<String>>,
+    >,
 ) -> Vec<types::Diagnostic> {
     use bhdl_ast::{ComponentInst, HasName};
     use rowan::ast::AstNode;
@@ -1632,6 +1696,38 @@ pub fn validate_constructor_args(
         let entity = type_tok.text().to_string();
         let Some(params) = entity_param_names.get(&entity) else { continue };
         let Some(block) = inst.param_assign_block() else { continue };
+        let domains = value_domains.get(&entity);
+
+        // A value against its parameter's declared allowed set (`where
+        // <param> in (...)`), if one exists. `channel = "P"` on a MOSFET
+        // whose `where channel in ("nmos", "pmos")` rejects "P" — the name
+        // binds fine, the value is out of domain.
+        let value_diag = |param: &str, assign: &bhdl_ast::ParamAssign| -> Option<types::Diagnostic> {
+            let allowed = domains?.get(param)?;
+            let raw = assign.value()?.syntax().text().to_string();
+            let val = raw.trim().trim_matches('"').to_string();
+            if allowed.iter().any(|a| a == &val) {
+                return None;
+            }
+            Some(types::Diagnostic::with_kind(
+                bhdl_common::DiagnosticKind::ParameterValueNotAllowed {
+                    param: param.to_string(),
+                    entity: entity.clone(),
+                    value: val.clone(),
+                    allowed: allowed.clone(),
+                },
+                format!(
+                    "'{entity}' parameter '{param}' = \"{val}\" is not one of its \
+                     allowed values ({}) — declared by `where {param} in (...)`",
+                    allowed
+                        .iter()
+                        .map(|a| format!("\"{a}\""))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                assign.syntax().text_range(),
+            ))
+        };
 
         let mut positional = 0usize;
         for assign in block.assignments() {
@@ -1639,6 +1735,9 @@ pub fn validate_constructor_args(
                 Some(name_tok) => {
                     let arg = name_tok.text().to_string();
                     if params.iter().any(|p| p == &arg) {
+                        if let Some(d) = value_diag(&arg, &assign) {
+                            out.push(d);
+                        }
                         continue;
                     }
                     // Toolchain-reserved attribute namespace: the supply
@@ -1712,6 +1811,12 @@ pub fn validate_constructor_args(
                                 assign.syntax().text_range(),
                             ),
                         );
+                    } else if let Some(param) = params.get(positional - 1) {
+                        // Positional value against the param at this slot's
+                        // domain — the SKU aliases pass channel positionally.
+                        if let Some(d) = value_diag(param, &assign) {
+                            out.push(d);
+                        }
                     }
                 }
             }

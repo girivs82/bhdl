@@ -2796,6 +2796,17 @@ impl<'t> Parser<'t> {
 
             match self.peek() {
                 Some(SyntaxKind::L_BRACE) | None => break,
+                // Value-set membership: `channel in ("nmos", "pmos")`. A
+                // parameter's allowed-value set; scoped to the where clause
+                // so `in` never enters the general expression grammar.
+                Some(SyntaxKind::IDENT)
+                    if self.peek_nth(1) == Some(SyntaxKind::IN_KW) =>
+                {
+                    self.parse_membership_constraint();
+                    if self.peek() == Some(SyntaxKind::COMMA) {
+                        self.bump();
+                    }
+                }
                 _ => {
                     // Parse a constraint expression (continues until comma or '{')
                     self.parse_expression();
@@ -2807,6 +2818,33 @@ impl<'t> Parser<'t> {
             }
         }
 
+        self.builder.finish_node();
+    }
+
+    /// Parse `<param> in ( <literal>, <literal>, ... )` — a parameter's
+    /// allowed value set. The IDENT is the parameter; the parenthesized
+    /// list holds the string/number/ident literals the value must be one of.
+    fn parse_membership_constraint(&mut self) {
+        self.builder.start_node(SyntaxKind::MEMBERSHIP_CONSTRAINT.into());
+        self.expect(SyntaxKind::IDENT); // the parameter name
+        self.skip_trivia();
+        self.expect(SyntaxKind::IN_KW);
+        self.skip_trivia();
+        self.expect(SyntaxKind::L_PAREN);
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_PAREN) | None => break,
+                Some(SyntaxKind::COMMA) => {
+                    self.bump();
+                }
+                Some(_) => {
+                    // A single value literal (STRING / NUMBER / IDENT / …).
+                    self.bump();
+                }
+            }
+        }
+        self.expect(SyntaxKind::R_PAREN);
         self.builder.finish_node();
     }
 

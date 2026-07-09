@@ -1065,33 +1065,36 @@ async fn run_intents_analysis(
     Ok(())
 }
 
-/// Refuse to build when the analyzer flagged constructor arguments that
-/// bind to no declared parameter (E0402). These used to pass through as
-/// dead instance attributes, silently swallowing design intent; the user
-/// chose to make them a hard error, so every netlist-producing command
-/// aborts before synthesis with the offending args listed.
+/// Refuse to build when the analyzer flagged a constructor argument that
+/// binds to no declared parameter (E0402) or a value outside a parameter's
+/// declared allowed set (E0403). Both used to pass silently; the user chose
+/// to make them hard errors, so every netlist-producing command aborts
+/// before synthesis with the offending args listed.
 fn gate_constructor_args(analysis: &bhdl_analyzer::AnalysisResult) -> Result<()> {
     let bad: Vec<&bhdl_analyzer::Diagnostic> = analysis
         .diagnostics
         .iter()
-        .filter(|d| matches!(d.kind, bhdl_common::DiagnosticKind::UnknownConstructorArg { .. }))
+        .filter(|d| {
+            matches!(
+                d.kind,
+                bhdl_common::DiagnosticKind::UnknownConstructorArg { .. }
+                    | bhdl_common::DiagnosticKind::ParameterValueNotAllowed { .. }
+            )
+        })
         .collect();
     if bad.is_empty() {
         return Ok(());
     }
     eprintln!(
         "{}",
-        format!(
-            "Refusing to build: {} unrecognized constructor argument(s)",
-            bad.len()
-        )
-        .red()
-        .bold()
+        format!("Refusing to build: {} constructor argument error(s)", bad.len())
+            .red()
+            .bold()
     );
     for d in &bad {
         eprintln!("  {} {} [{}]", "•".red(), d.message, d.code);
     }
-    anyhow::bail!("unrecognized constructor arguments (E0402)");
+    anyhow::bail!("constructor argument errors (E0402/E0403)");
 }
 
 async fn run_synthesis(source_file: &SourceFile, output: Option<PathBuf>, format: &str) -> Result<()> {

@@ -104,6 +104,18 @@ pub enum DiagnosticKind {
         /// Fuzzy-matched declared parameter names ("did you mean").
         suggestions: Vec<String>,
     },
+    /// A parameter was given a value outside its declared allowed set
+    /// (`where <param> in (...)`). The name binds fine; the value is wrong.
+    ParameterValueNotAllowed {
+        /// Parameter name.
+        param: String,
+        /// The entity being instantiated.
+        entity: String,
+        /// The supplied (rejected) value.
+        value: String,
+        /// The declared allowed values.
+        allowed: Vec<String>,
+    },
 
     // --- Electrical errors ---
     /// Component current exceeds its rating.
@@ -167,6 +179,7 @@ impl DiagnosticKind {
             DiagnosticKind::UndefinedSymbol { .. } => "E0400",
             DiagnosticKind::AmbiguousReference { .. } => "E0401",
             DiagnosticKind::UnknownConstructorArg { .. } => "E0402",
+            DiagnosticKind::ParameterValueNotAllowed { .. } => "E0403",
 
             // Electrical errors: E05xx
             DiagnosticKind::ExceededCurrentRating { .. } => "E0500",
@@ -196,7 +209,8 @@ impl DiagnosticKind {
 
             DiagnosticKind::UndefinedSymbol { .. }
             | DiagnosticKind::AmbiguousReference { .. }
-            | DiagnosticKind::UnknownConstructorArg { .. } => "resolution",
+            | DiagnosticKind::UnknownConstructorArg { .. }
+            | DiagnosticKind::ParameterValueNotAllowed { .. } => "resolution",
 
             DiagnosticKind::ExceededCurrentRating { .. }
             | DiagnosticKind::ExceededVoltageRating { .. }

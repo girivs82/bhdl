@@ -26,7 +26,9 @@ entity MOSFET(
     rds_on:  resistance = 5Ω,        // on-resistance at datasheet V_GS
     vgs_th_max: voltage = 3V,        // gate threshold, max (magnitude)
     power_rating: power = 400mW      // package dissipation
-) {
+)
+    where channel in ("nmos", "pmos")   // enum domain — reject e.g. "P"/"N"
+{
     pin G: signal in;     // Gate
     pin D: signal inout;  // Drain
     pin S: signal inout;  // Source

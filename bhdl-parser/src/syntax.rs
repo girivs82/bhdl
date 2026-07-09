@@ -211,6 +211,7 @@ pub enum SyntaxKind {
     GENERIC_PARAMS, // <T: Type, V: voltage where V > 0> generic parameter block
     GENERIC_PARAM,  // Single generic parameter with optional type + constraints
     WHERE_CLAUSE,   // where V_IN >= 4.5V && V_IN <= 40V
+    MEMBERSHIP_CONSTRAINT, // where channel in ("nmos", "pmos") — a param's allowed value set
     TRAIT_DEF,      // trait TraitName { pin ...; const ...; }
     TRAIT_IMPL,     // impl TraitName for Component { ... }  or  component X impl Trait { ... }
     TRAIT_PIN,      // pin declaration within a trait
