@@ -1065,10 +1065,40 @@ async fn run_intents_analysis(
     Ok(())
 }
 
+/// Refuse to build when the analyzer flagged constructor arguments that
+/// bind to no declared parameter (E0402). These used to pass through as
+/// dead instance attributes, silently swallowing design intent; the user
+/// chose to make them a hard error, so every netlist-producing command
+/// aborts before synthesis with the offending args listed.
+fn gate_constructor_args(analysis: &bhdl_analyzer::AnalysisResult) -> Result<()> {
+    let bad: Vec<&bhdl_analyzer::Diagnostic> = analysis
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.kind, bhdl_common::DiagnosticKind::UnknownConstructorArg { .. }))
+        .collect();
+    if bad.is_empty() {
+        return Ok(());
+    }
+    eprintln!(
+        "{}",
+        format!(
+            "Refusing to build: {} unrecognized constructor argument(s)",
+            bad.len()
+        )
+        .red()
+        .bold()
+    );
+    for d in &bad {
+        eprintln!("  {} {} [{}]", "•".red(), d.message, d.code);
+    }
+    anyhow::bail!("unrecognized constructor arguments (E0402)");
+}
+
 async fn run_synthesis(source_file: &SourceFile, output: Option<PathBuf>, format: &str) -> Result<()> {
     // First run analysis
     let analysis = analyze(source_file);
-    
+    gate_constructor_args(&analysis)?;
+
     // Note: Simple diagnostics don't have severity, so we can't check for errors specifically
     if !analysis.diagnostics.is_empty() {
         eprintln!("{}", "Warning: Analysis found issues".yellow().bold());
@@ -1161,6 +1191,7 @@ async fn run_freeze(
     use bhdl_synthesizer::freeze::{freeze_netlist, Provenance};
 
     let analysis = analyze(source_file);
+    gate_constructor_args(&analysis)?;
     let mut generator = NetlistGenerator::new();
     generator.set_refdes_lut_path(source_path.with_extension("bhdl.refdes"));
     let netlist = generator
@@ -1197,6 +1228,7 @@ async fn run_freeze(
 async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, json_output: bool, source_path: &Path, svg_v4: Option<&str>, binder: Option<&str>) -> Result<()> {
     // Run full pipeline to get netlist
     let analysis = analyze(source_file);
+    gate_constructor_args(&analysis)?;
 
     let mut generator = NetlistGenerator::new();
     generator.set_refdes_lut_path(source_path.with_extension("bhdl.refdes"));
@@ -1522,6 +1554,7 @@ async fn run_layout(
 
     // 1. Analyze
     let analysis = analyze(source_file);
+    gate_constructor_args(&analysis)?;
     println!("  {} Analysis complete ({} diagnostics)", "✓".green(), analysis.diagnostics.len());
 
     // 2. Synthesize
@@ -1647,6 +1680,7 @@ async fn run_layout(
 async fn run_spice(source_file: &SourceFile, analysis_type: &str, _output: Option<PathBuf>, use_metadata: bool, sku: Option<&str>) -> Result<()> {
     // Run pipeline to get netlist
     let analysis_result = analyze(source_file);
+    gate_constructor_args(&analysis_result)?;
 
     let mut generator = NetlistGenerator::new();
     let mut netlist = generator.generate_from_ast_and_analysis(source_file, &analysis_result).await?;
@@ -1729,6 +1763,7 @@ async fn run_pipeline(source_file: &SourceFile, _input_path: &PathBuf, output_di
     // Step 1: Analysis
     println!("\n{}", "1. Analysis".blue().bold());
     let analysis = analyze(source_file);
+    gate_constructor_args(&analysis)?;
     
     // TODO: AnalysisResult doesn't implement Serialize
     // let analysis_path = output_dir.join("analysis.json");
@@ -1863,6 +1898,7 @@ async fn run_simulation(source_file: &SourceFile, testbench_path: PathBuf, outpu
     // Step 1: Run analysis on circuit
     println!("\n{}", "1. Analyzing circuit".blue().bold());
     let analysis = analyze(source_file);
+    gate_constructor_args(&analysis)?;
     
     if !analysis.diagnostics.is_empty() {
         eprintln!("{}", "Warning: Circuit has diagnostics".yellow());
@@ -2172,6 +2208,7 @@ async fn cmd_bom(
 
     // 1. Analysis pass.
     let analysis = analyze(source_file);
+    gate_constructor_args(&analysis)?;
     if !analysis.diagnostics.is_empty() {
         eprintln!("{}", "Warning: Analysis found issues".yellow().bold());
     }
@@ -2599,6 +2636,7 @@ async fn cmd_doc(
     // Step 1: Run analysis to get power domain expansion
     println!("\n{}", "1. Analyzing circuit".blue().bold());
     let analysis = analyze(source_file);
+    gate_constructor_args(&analysis)?;
 
     if !analysis.diagnostics.is_empty() {
         eprintln!("{}", "Warning: Circuit has diagnostics".yellow());

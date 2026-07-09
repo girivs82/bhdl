@@ -301,6 +301,14 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
         entity_param_names.insert(name, params);
     }
 
+    // Reject constructor args that bind to no declared parameter (they used
+    // to pass through as dead attributes, swallowing intent). Emitted as
+    // Error-severity diagnostics; the CLI refuses to synthesize when any
+    // are present.
+    for diag in validate_constructor_args(source_file, &entity_param_names) {
+        diagnostics.push(diag);
+    }
+
     // Extract design recipes from the main source file. (Imported-file
     // Merge vendor `design { }` recipes: imported files (loaded by pass1)
     // overlaid with the main file's blocks.
@@ -1555,7 +1563,161 @@ pub fn extract_entity_param_names(
             }
         }
     }
+
+    // Same-file simple aliases (`alias Resistor = Res;`) inherit their
+    // target's parameter list, so an instantiation through the alias
+    // (`Capacitor(value, voltage)`) validates against the real entity's
+    // parameters. Type-arg aliases (`alias LM7805 = Reg<5V>`) are handled
+    // by monomorphization and skipped here.
+    for node in source_file.syntax().descendants() {
+        if node.kind() != bhdl_ast::SyntaxKind::ALIAS {
+            continue;
+        }
+        if node
+            .descendants()
+            .any(|n| n.kind() == bhdl_ast::SyntaxKind::TYPE_ARGS)
+        {
+            continue;
+        }
+        let idents: Vec<String> = node
+            .children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .filter(|t| t.kind() == bhdl_ast::SyntaxKind::IDENT)
+            .map(|t| t.text().to_string())
+            .collect();
+        if let [alias_name, target] = idents.as_slice() {
+            if let Some(params) = idx.get(target).cloned() {
+                idx.entry(alias_name.clone()).or_insert(params);
+            }
+        }
+    }
     idx
+}
+
+/// Character edit distance (for "did you mean" parameter suggestions).
+fn arg_edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0usize; b.len() + 1];
+    for (i, ca) in a.iter().enumerate() {
+        cur[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let cost = if ca == cb { 0 } else { 1 };
+            cur[j + 1] = (prev[j + 1] + 1).min(cur[j] + 1).min(prev[j] + cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
+}
+
+/// Reject constructor arguments that bind to no declared parameter — a
+/// named arg whose name is not a parameter, or a positional arg beyond the
+/// parameter count. Such args used to pass through as dead instance
+/// attributes nothing reads, silently swallowing design intent (a
+/// `Res(2.5Ω, wattage=10W)` whose 10 W never reached the part). Only
+/// entities whose parameters are known (indexed from this file or an
+/// import, aliases resolved) are checked; an unknown type is left to
+/// symbol resolution rather than guessed at.
+pub fn validate_constructor_args(
+    source_file: &SourceFile,
+    entity_param_names: &std::collections::HashMap<String, Vec<String>>,
+) -> Vec<types::Diagnostic> {
+    use bhdl_ast::{ComponentInst, HasName};
+    use rowan::ast::AstNode;
+    let mut out = Vec::new();
+    for node in source_file.syntax().descendants() {
+        let Some(inst) = ComponentInst::cast(node.clone()) else { continue };
+        let Some(type_tok) = inst.component_type_name() else { continue };
+        let entity = type_tok.text().to_string();
+        let Some(params) = entity_param_names.get(&entity) else { continue };
+        let Some(block) = inst.param_assign_block() else { continue };
+
+        let mut positional = 0usize;
+        for assign in block.assignments() {
+            match assign.name() {
+                Some(name_tok) => {
+                    let arg = name_tok.text().to_string();
+                    if params.iter().any(|p| p == &arg) {
+                        continue;
+                    }
+                    // Toolchain-reserved attribute namespace: the supply
+                    // desugarer stamps `supply_*` / `i_supply` metadata that
+                    // sign-off, ERC016, and the part chooser read back off
+                    // the instance, and the expansion interpreter stamps
+                    // `expansion_*` / `vpin_parent` provenance. These are
+                    // deliberate machine-authored attribute passthrough, not
+                    // user parameters, and never appear on an entity's
+                    // declared list.
+                    if arg.starts_with("supply_")
+                        || arg == "i_supply"
+                        || arg.starts_with("expansion_")
+                        || arg == "vpin_parent"
+                    {
+                        continue;
+                    }
+                    let suggestions: Vec<String> = params
+                        .iter()
+                        .filter(|p| arg_edit_distance(p, &arg) <= 2)
+                        .cloned()
+                        .collect();
+                    let did_you_mean = if suggestions.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" — did you mean {}?", suggestions.join(" / "))
+                    };
+                    let params_list = if params.is_empty() {
+                        "no parameters".to_string()
+                    } else {
+                        params.join(", ")
+                    };
+                    out.push(
+                        types::Diagnostic::with_kind(
+                            bhdl_common::DiagnosticKind::UnknownConstructorArg {
+                                arg: arg.clone(),
+                                entity: entity.clone(),
+                                suggestions,
+                            },
+                            format!(
+                                "'{entity}' has no parameter '{arg}'{did_you_mean} \
+                                 (declared: {params_list}). An unrecognized argument \
+                                 is not a free annotation — it never reaches the part; \
+                                 add the parameter to the entity or remove the argument",
+                            ),
+                            assign.syntax().text_range(),
+                        ),
+                    );
+                }
+                None => {
+                    positional += 1;
+                    if positional > params.len() {
+                        out.push(
+                            types::Diagnostic::with_kind(
+                                bhdl_common::DiagnosticKind::UnknownConstructorArg {
+                                    arg: format!("#{positional}"),
+                                    entity: entity.clone(),
+                                    suggestions: Vec::new(),
+                                },
+                                format!(
+                                    "'{entity}' takes {} parameter(s) but a {}th \
+                                     positional argument was supplied (declared: {})",
+                                    params.len(),
+                                    positional,
+                                    if params.is_empty() {
+                                        "none".to_string()
+                                    } else {
+                                        params.join(", ")
+                                    },
+                                ),
+                                assign.syntax().text_range(),
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Substitute attribute values that are bare references to one of the

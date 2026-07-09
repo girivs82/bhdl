@@ -92,6 +92,18 @@ pub enum DiagnosticKind {
         name: String,
         candidates: Vec<String>,
     },
+    /// A constructor argument names a parameter the entity does not declare
+    /// (or supplies more positional args than the entity has parameters).
+    /// Unknown args used to pass through as dead instance attributes,
+    /// silently swallowing design intent.
+    UnknownConstructorArg {
+        /// The offending argument (named: the arg name; positional: `#<n>`).
+        arg: String,
+        /// The entity being instantiated.
+        entity: String,
+        /// Fuzzy-matched declared parameter names ("did you mean").
+        suggestions: Vec<String>,
+    },
 
     // --- Electrical errors ---
     /// Component current exceeds its rating.
@@ -154,6 +166,7 @@ impl DiagnosticKind {
             // Resolution errors: E04xx
             DiagnosticKind::UndefinedSymbol { .. } => "E0400",
             DiagnosticKind::AmbiguousReference { .. } => "E0401",
+            DiagnosticKind::UnknownConstructorArg { .. } => "E0402",
 
             // Electrical errors: E05xx
             DiagnosticKind::ExceededCurrentRating { .. } => "E0500",
@@ -182,7 +195,8 @@ impl DiagnosticKind {
             | DiagnosticKind::InsufficientDiagnosticCoverage { .. } => "safety",
 
             DiagnosticKind::UndefinedSymbol { .. }
-            | DiagnosticKind::AmbiguousReference { .. } => "resolution",
+            | DiagnosticKind::AmbiguousReference { .. }
+            | DiagnosticKind::UnknownConstructorArg { .. } => "resolution",
 
             DiagnosticKind::ExceededCurrentRating { .. }
             | DiagnosticKind::ExceededVoltageRating { .. }

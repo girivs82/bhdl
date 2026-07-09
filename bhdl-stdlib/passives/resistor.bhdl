@@ -4,15 +4,21 @@
 // the historical 5% default; `Res(22kΩ, 1%)` (or the `Resistor` alias, kept
 // for the older generic-style call sites) declares a tighter grade, which the
 // part-selection grade gate reads.
+//
+// `wattage` is the power rating (third optional param); a bare `Res(10kΩ)`
+// keeps the 0.25 W chip-resistor default, `Res(2.5Ω, wattage=10W)` declares a
+// power resistor. It feeds `power_rating`, which part selection reads against
+// the resistor's dissipation — so the "10 W" now reaches the part instead of
+// being silently swallowed as an unknown argument.
 
-entity Res(value: resistance, tolerance: percentage = 5%) {
+entity Res(value: resistance, tolerance: percentage = 5%, wattage: power = 0.25W) {
     pin 1: signal inout;
     pin 2: signal inout;
 
     attribute component_class = "resistor";
     attribute resistance = value;
     attribute tolerance = tolerance;
-    attribute power_rating = 0.25W;
+    attribute power_rating = wattage;
     attribute kicad_symbol = "Device:R";
 }
 
