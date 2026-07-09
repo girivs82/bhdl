@@ -39,10 +39,10 @@ board SimpleBuckConverter {
     VOUT -> C4: Cap(0.1µF).1;
     C4.2 -> GND;
     
-    // Feedback divider (5V output)
+    // Feedback divider (5V output): VREF 1.23V · (1 + 10k/3.24k) = 5.03V
     VOUT -> R1: Res(10kΩ, tolerance=1%).1;
     R1.2 -> fb_node;
-    fb_node -> R2: Res(1.87kΩ, tolerance=1%).1;
+    fb_node -> R2: Res(3.24kΩ, tolerance=1%).1;
     R2.2 -> GND;
     fb_node -> U1.FB;
     

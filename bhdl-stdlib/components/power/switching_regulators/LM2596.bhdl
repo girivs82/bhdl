@@ -52,6 +52,7 @@ entity LM2596(
     attribute output_current      = 3A;     // rated continuous
     attribute switching_frequency = f_sw;
     attribute feedback_voltage    = 1.23V;  // internal FB reference
+    attribute efficiency          = "80%";  // datasheet typical, 12V in / 5V out
     attribute rds_on              = rds_on;
     attribute t_sw                = t_sw;
     attribute i_quiescent         = i_quiescent;

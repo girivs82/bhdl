@@ -1534,6 +1534,143 @@ pub fn check_expansion_shadow_parts(
     out
 }
 
+// ─────────────── ERC031 — feedback divider vs declared rail ───────────────
+
+/// ERC031 — the closed-loop output the PLACED feedback divider actually
+/// programs disagrees with the rail voltage the board declares. An
+/// FB-referenced regulator regulates VOUT = VREF·(1 + Rtop/Rbot); the
+/// declaration (`power VOUT = 5V`) is intent, the divider is what ships.
+/// A divider programming 7.8V onto a "5V" rail overvolts every load on it,
+/// so a >10% disagreement is an Error carrying both numbers and the
+/// resistor value that would close it. Snap error from E-series rounding
+/// is ~1-2% and never trips this.
+///
+/// Scope (Real-Data, never guess): pins literally named FB with a declared
+/// `feedback_voltage`, and an unambiguous divider — exactly one resistor
+/// from the FB net to a Power-class net (Rtop, the rail whose declaration
+/// we compare) and one to ground (Rbot). ADJ-style parts (LM317) obey the
+/// INVERSE ratio and are deliberately not covered here.
+pub fn check_feedback_divider(
+    netlist: &Netlist,
+    analysis: &AnalysisResult,
+) -> Vec<DRCViolation> {
+    let mut out = Vec::new();
+    for (iid, inst) in &netlist.instances {
+        let class = attr_of(netlist, analysis, inst, "component_class").unwrap_or_default();
+        if !matches!(class.as_str(), "voltage_regulator" | "ldo" | "switching_regulator") {
+            continue;
+        }
+        let Some(vref) = attr_of(netlist, analysis, inst, "feedback_voltage")
+            .and_then(|v| parse_si_txt(&v))
+            .filter(|v| *v > 0.0)
+        else {
+            continue;
+        };
+        let Some(fb_net) = netlist.pin_instances.values().find_map(|pi| {
+            (pi.instance == iid
+                && netlist
+                    .pins
+                    .get(pi.pin_def)
+                    .map(|p| p.name.eq_ignore_ascii_case("FB"))
+                    .unwrap_or(false))
+            .then_some(pi.net)
+            .flatten()
+        }) else {
+            continue;
+        };
+
+        // The divider: exactly one leg to a Power rail, one to ground.
+        let mut top: Option<(String, f64, NetId, f64)> = None; // (name, R, rail net, rail V)
+        let mut bot: Option<(String, f64)> = None;
+        let mut ambiguous = false;
+        for (rid, r) in &netlist.instances {
+            if attr_of(netlist, analysis, r, "component_class").as_deref() != Some("resistor") {
+                continue;
+            }
+            let pins: Vec<NetId> = netlist
+                .pin_instances
+                .values()
+                .filter(|pi| pi.instance == rid)
+                .filter_map(|pi| pi.net)
+                .collect();
+            if pins.len() != 2 {
+                continue;
+            }
+            let other = match (pins[0] == fb_net, pins[1] == fb_net) {
+                (true, false) => pins[1],
+                (false, true) => pins[0],
+                _ => continue,
+            };
+            let Some(val) = r
+                .attributes
+                .get("value")
+                .and_then(|v| parse_si_txt(v))
+                .filter(|v| *v > 0.0)
+            else {
+                continue;
+            };
+            match netlist.nets.get(other).map(|n| &n.net_class) {
+                Some(NetClass::Ground) => {
+                    if bot.replace((r.name.clone(), val)).is_some() {
+                        ambiguous = true;
+                    }
+                }
+                Some(NetClass::Power { voltage, .. }) => {
+                    if top.replace((r.name.clone(), val, other, *voltage)).is_some() {
+                        ambiguous = true;
+                    }
+                }
+                _ => {} // leg to a working net (feedforward node, …) — not the divider frame
+            }
+        }
+        let (Some((rt_name, rt, rail_net, declared)), Some((rb_name, rb)), false) =
+            (top, bot, ambiguous)
+        else {
+            continue;
+        };
+        if declared <= 0.0 {
+            continue;
+        }
+        let derived = vref * (1.0 + rt / rb);
+        let ratio = (derived - declared).abs() / declared;
+        if ratio <= 0.10 {
+            continue;
+        }
+        let rb_needed = rt / (declared / vref - 1.0);
+        out.push(DRCViolation {
+            rule_id: "ERC031".into(),
+            rule_name: "Feedback divider contradicts declared rail".into(),
+            category: RuleCategory::Electrical,
+            severity: ViolationSeverity::Error,
+            description: format!(
+                "'{}' regulates '{}' to {:.2}V through its FB divider \
+                 ({} = {:.1}Ω / {} = {:.1}Ω, VREF {:.3}V) but the board \
+                 declares the rail {:.2}V — {:.0}% apart; every load on \
+                 the rail sees the divider's voltage, not the declaration",
+                inst.name,
+                net_name(netlist, rail_net),
+                derived,
+                rt_name,
+                rt,
+                rb_name,
+                rb,
+                vref,
+                declared,
+                ratio * 100.0
+            ),
+            location: ViolationLocation::Component(iid),
+            fix_suggestion: format!(
+                "size the divider for the declared rail: with {} = {:.1}Ω, \
+                 {} must be ≈{:.1}Ω ({}V·(1 + {:.1}/{:.1}) = {:.2}V) — or \
+                 declare the rail at the voltage the divider programs",
+                rt_name, rt, rb_name, rb_needed, vref, rt, rb_needed, declared
+            ),
+            standard_reference: None,
+        });
+    }
+    out
+}
+
 // ──────────────────── ERC026 — interface completeness ────────────────────
 
 /// ERC026 — a part using PART of a bus interface it declares pins for:
@@ -2208,6 +2345,93 @@ mod tests {
         nl.connect(sw_net, ConnectionPoint::PinInstance(l_pis[0])).unwrap();
         assert!(check_floating_expansion_island(&nl, &AnalysisResult::default())
             .is_empty());
+    }
+
+    // ── ERC031 fixtures: regulator FB divider vs declared rail ──
+
+    /// Build: regulator "u1" (feedback_voltage = 1.23 V) with FB on
+    /// "fb_node", Rtop = 10 kΩ from fb_node to rail "VOUT" (declared
+    /// `declared_v`), Rbot = `rb` from fb_node to GND.
+    fn divider_fixture(declared_v: f64, rb: &str) -> Netlist {
+        use bhdl_netlist::types::ModuleKind;
+        let mut nl = Netlist::new();
+        let reg = nl.add_module("Buck".into(), ModuleKind::Component);
+        nl.add_pin(reg, "FB".into(), PinDirection::In, PinType::Signal)
+            .unwrap();
+        let u1 = nl.add_instance("u1".into(), reg).unwrap();
+        nl.instances.get_mut(u1).unwrap().attributes.extend([
+            ("component_class".to_string(), "switching_regulator".to_string()),
+            ("feedback_voltage".to_string(), "1.23V".to_string()),
+        ]);
+        let u1_pis = nl.create_pin_instances(u1).unwrap();
+
+        let fb = nl.add_net(Some("fb_node".into()));
+        nl.connect(fb, ConnectionPoint::PinInstance(u1_pis[0])).unwrap();
+        let rail = nl.add_net(Some("VOUT".into()));
+        nl.nets.get_mut(rail).unwrap().net_class =
+            NetClass::Power { voltage: declared_v, current: None };
+        let gnd = nl.add_net(Some("GND".into()));
+        nl.nets.get_mut(gnd).unwrap().net_class = NetClass::Ground;
+
+        let res = nl.add_module("Res".into(), ModuleKind::Component);
+        nl.add_pin(res, "1".into(), PinDirection::InOut, PinType::Passive)
+            .unwrap();
+        nl.add_pin(res, "2".into(), PinDirection::InOut, PinType::Passive)
+            .unwrap();
+        for (name, value, far) in [("r_top", "10kΩ", rail), ("r_bot", rb, gnd)] {
+            let r = nl.add_instance(name.into(), res).unwrap();
+            nl.instances.get_mut(r).unwrap().attributes.extend([
+                ("component_class".to_string(), "resistor".to_string()),
+                ("value".to_string(), value.to_string()),
+            ]);
+            let pis = nl.create_pin_instances(r).unwrap();
+            nl.connect(fb, ConnectionPoint::PinInstance(pis[0])).unwrap();
+            nl.connect(far, ConnectionPoint::PinInstance(pis[1])).unwrap();
+        }
+        nl
+    }
+
+    #[test]
+    fn erc031_divider_contradiction_errors() {
+        // 1.23·(1 + 10k/1.87k) = 7.81 V programmed onto a declared-5V rail.
+        let nl = divider_fixture(5.0, "1.87kΩ");
+        let v = check_feedback_divider(&nl, &AnalysisResult::default());
+        assert_eq!(v.len(), 1, "expected exactly the divider contradiction");
+        assert_eq!(v[0].rule_id, "ERC031");
+        assert!(matches!(v[0].severity, ViolationSeverity::Error));
+        assert!(v[0].description.contains("7.81"), "{}", v[0].description);
+        assert!(v[0].description.contains("5.00"), "{}", v[0].description);
+        // The fix carries the Rbot that closes the loop: 10k/(5/1.23 − 1).
+        assert!(v[0].fix_suggestion.contains("3262"), "{}", v[0].fix_suggestion);
+    }
+
+    #[test]
+    fn erc031_matched_divider_silent() {
+        // E96 snap: 1.23·(1 + 10k/3.24k) = 5.03 V on a 5 V rail — 0.5%.
+        let nl = divider_fixture(5.0, "3.24kΩ");
+        assert!(check_feedback_divider(&nl, &AnalysisResult::default()).is_empty());
+    }
+
+    #[test]
+    fn erc031_ambiguous_divider_silent() {
+        // A second grounded leg makes the divider frame ambiguous —
+        // never guessed into a violation (Real-Data).
+        use bhdl_netlist::types::ModuleKind;
+        let mut nl = divider_fixture(5.0, "1.87kΩ");
+        let fb = nl.nets.iter().find(|(_, n)| n.name.as_deref() == Some("fb_node")).map(|(id, _)| id).unwrap();
+        let gnd = nl.nets.iter().find(|(_, n)| n.name.as_deref() == Some("GND")).map(|(id, _)| id).unwrap();
+        let res2 = nl.add_module("Res2".into(), ModuleKind::Component);
+        nl.add_pin(res2, "1".into(), PinDirection::InOut, PinType::Passive).unwrap();
+        nl.add_pin(res2, "2".into(), PinDirection::InOut, PinType::Passive).unwrap();
+        let r = nl.add_instance("r_trim".into(), res2).unwrap();
+        nl.instances.get_mut(r).unwrap().attributes.extend([
+            ("component_class".to_string(), "resistor".to_string()),
+            ("value".to_string(), "47kΩ".to_string()),
+        ]);
+        let pis = nl.create_pin_instances(r).unwrap();
+        nl.connect(fb, ConnectionPoint::PinInstance(pis[0])).unwrap();
+        nl.connect(gnd, ConnectionPoint::PinInstance(pis[1])).unwrap();
+        assert!(check_feedback_divider(&nl, &AnalysisResult::default()).is_empty());
     }
 }
 

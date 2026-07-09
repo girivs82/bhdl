@@ -4,7 +4,7 @@
 > T2 part-carried `check {}` rules (ERC025), T3 policy plugins
 > (`BHDL_ERC_PLUGINS`), severity gating (`--erc-fail-on`), and reasoned
 > waivers (`erc_waive`), the T2 predicate extensions (exists / value-eq /
-> same_net), and the ERC024 absence ledger. The FULL catalog through ERC030 is
+> same_net), and the ERC024 absence ledger. The FULL catalog through ERC031 is
 > BUILT — batches 1-4, all three tiers, gating, waivers, the ERC024
 > absence ledger, and the ERC019 solved-DC upgrade.
 
@@ -254,6 +254,21 @@ by itself:
   silent. First corpus scan caught a real one: buck_converter_tps54331's
   hand-authored catch diode had silently paralleled the entity's own
   after the TPS54331 expansion grew one.
+- **ERC031** feedback divider contradicts declared rail — BUILT (Error):
+  an FB-referenced regulator regulates VOUT = VREF·(1 + Rtop/Rbot); the
+  `power VOUT = 5V` declaration is intent, the placed divider is what
+  ships, and every load on the rail sees the divider's voltage. A >10%
+  disagreement is an Error carrying both voltages and the resistor value
+  that would close the loop; E-series snap error (~1-2%) never trips it.
+  Scope is deliberately narrow (Real-Data, never guess): a pin literally
+  named FB, a declared `feedback_voltage`, and an unambiguous divider —
+  exactly one resistor from the FB net to a Power-class net and one to
+  ground; feedforward legs to working nets are ignored, second legs of
+  either kind make it ambiguous and silent. ADJ-style parts (LM317)
+  obey the INVERSE ratio (VREF·(1 + Rgnd/Rout)) and are NOT covered.
+  First corpus scan caught a real one: buck_converter_simple's divider
+  (10k/1.87k) programmed 7.81V onto its declared-5V rail — the "5V
+  output" comment had been false since the fixture was authored.
 
 ## 4. Reporting
 

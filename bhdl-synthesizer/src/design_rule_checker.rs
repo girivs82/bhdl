@@ -268,6 +268,12 @@ impl DesignRuleChecker {
                 "Board-authored two-terminal part bridging the same net pair as a same-class expansion child — double-authored application circuit (Warning)",
                 crate::erc::check_expansion_shadow_parts,
             ),
+            (
+                "ERC031",
+                "Feedback divider contradicts declared rail",
+                "Closed-loop output the placed FB divider programs (VREF·(1+Rtop/Rbot)) vs the rail's declared voltage — >10% apart is a shipped overvolt/undervolt (Error)",
+                crate::erc::check_feedback_divider,
+            ),
         ] {
             self.rules.push(DesignRule {
                 id: id.to_string(),
