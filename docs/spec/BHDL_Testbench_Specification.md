@@ -1,3 +1,8 @@
+> **SUPERSEDED by [BHDL_Testbench_Specification_v2.md](BHDL_Testbench_Specification_v2.md)
+> (2026-07-09).** This is the earlier testbench draft. The v2 spec carries the
+> current syntax and an honest implemented/pending feature status; the
+> `simulate` CLI command runs against it.
+
 # BHDL Testbench Specification
 
 ## Overview

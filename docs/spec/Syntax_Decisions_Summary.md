@@ -1,3 +1,11 @@
+> **Early decision notes (2026-02), partly stale — verified 2026-07-09.**
+> The high-level decisions here (`@` for nets, `:` for handles, `for` intents,
+> no `net` keyword) still hold, but specifics have moved: notably, the `@`
+> prefix is **optional** on a declared rail in the shipped grammar
+> (`VIN -> …` and `@VIN -> …` both work; the corpus uses the bare form), not
+> mandatory as stated below. The current, verified net model is in
+> [BHDL_Complete_Specification.md](BHDL_Complete_Specification.md) §3.2.
+
 # BHDL Syntax Decisions Summary
 
 ## Final Syntax Rules

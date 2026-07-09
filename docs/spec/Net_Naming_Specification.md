@@ -1,3 +1,11 @@
+> **Historical (2026-02) — core doctrine current, verify specifics against
+> the main spec (2026-07-09).** The handle/net separation described here (`@` =
+> net, `:` = handle, distinct namespaces) is correct and shipped, and the
+> `@NAME->` named-net form still parses. But the `@` prefix is **optional** on
+> a declared rail (the corpus writes bare `VIN -> …`), and named nets are more
+> commonly introduced by a bare identifier (`R1.2 -> fb_node`). The current
+> reference is [BHDL_Complete_Specification.md](BHDL_Complete_Specification.md) §3.2.
+
 # BHDL v2.0 Net Naming Specification
 
 ## Overview

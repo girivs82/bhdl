@@ -87,7 +87,7 @@ board MyAmp {
     ground GND;
 
     U1: SignalTubeStage();
-    net amp_in: SIGIN -> U1.IN for amplifier(gain: 14);
+    SIGIN -> U1.IN for amplifier(gain: 14);
     VBB -> U1.VBB;
     U1.GND -> GND;
 }
@@ -329,9 +329,9 @@ board MyProduct {
 
     // Plate sees a load. Intent could drive sizing, but here
     // we declare it directly.
-    net plate_load: VBB -> Rload: Res(22000).1 -> Rload.2 -> V1.P;
-    net cathode:    V1.K -> Rk: Res(820).1 -> Rk.2 -> GND;
-    net grid:       V1.G -> Rg: Res(1000000).1 -> Rg.2 -> GND;
+    VBB -> Rload: Res(22000).1 -> Rload.2 -> V1.P;
+    V1.K -> Rk: Res(820).1 -> Rk.2 -> GND;
+    V1.G -> Rg: Res(1000000).1 -> Rg.2 -> GND;
 
     HTR -> V1.H1;
     V1.H2 -> GND;
