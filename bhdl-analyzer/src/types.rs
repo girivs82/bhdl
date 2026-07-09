@@ -492,6 +492,11 @@ pub struct AnalysisResult {
     /// capacitance = value;`) into the argument supplied at the
     /// instantiation site, instead of leaking the literal param name.
     pub entity_param_names: HashMap<String, Vec<String>>,
+    /// Per-entity attribute → constructor-param bare-reference linkage
+    /// (see `extract_entity_attr_param_refs`): lets expansion-child
+    /// substitution thread explicit args into attrs whose defaulted
+    /// param-refs were resolved away at extraction time.
+    pub entity_attr_param_refs: HashMap<String, HashMap<String, String>>,
     /// Placement recipes extracted from entity `placement { }` blocks
     pub placement_recipes: HashMap<String, bhdl_common::PlacementRecipe>,
     /// Symbol definitions extracted from `symbol EntityName { }` blocks
@@ -532,6 +537,7 @@ impl Default for AnalysisResult {
             variants: HashMap::new(),
             entity_attribute_index: HashMap::new(),
             entity_param_names: HashMap::new(),
+            entity_attr_param_refs: HashMap::new(),
             placement_recipes: HashMap::new(),
             symbol_definitions: HashMap::new(),
             layout_definitions: HashMap::new(),

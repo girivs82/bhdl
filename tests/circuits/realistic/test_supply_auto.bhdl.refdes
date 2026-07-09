@@ -2,6 +2,7 @@
   "version": 1,
   "mappings": {
     "C": {
+      "psu_vcc_3v3_C_boot": "C3",
       "psu_vcc_3v3_C_in": "C2",
       "psu_vcc_3v3_C_out": "C1"
     },

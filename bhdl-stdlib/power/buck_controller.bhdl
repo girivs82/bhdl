@@ -1,0 +1,154 @@
+// Generic synchronous buck CONTROLLER — external power-stage MOSFETs.
+//
+// The external-FET idiom: unlike a converter (LM2596/TPS54302, integrated
+// switch), a controller drives the gates of FETs the AUTHOR chooses. The
+// power-stage FETs are ordinary expansion children of the parameterized
+// MOSFET entity, and the choice threads through constructor params — three
+// tiers of control, all existing machinery:
+//
+//   A. Defaults:   u1: BuckController(v_out=5V, v_in=24V, i_out_max=5A);
+//                  → the declared default FET pair mints.
+//   B. Your FETs:  u1: BuckController(v_out=5V, v_in=24V, i_out_max=5A,
+//                        hs_fet="BSC0902NS", ls_fet="BSC0902NS",
+//                        fet_rds_on=2.3mΩ, fet_vds_max=30V);
+//                  → the expansion mints YOUR parts (Real-Data: the axes
+//                    the loss/stress models need travel WITH the choice).
+//   C. Your stage: wire HO/LO/SW to board-authored FET instances and leave
+//                  the virtual VOUT unwired — the board-authored takeover
+//                  stands the expansion's power stage down (bootstrap, VCC
+//                  bias and input decoupling still expand); ERC029/030
+//                  backstop double-authoring.
+//
+// Gate-drive pins (HO/LO) are `signal out`: a drive OUTPUT referenced by an
+// expansion child is always live (the FETs are the chip's own load, never an
+// optional peripheral) — conditional-gating rule 4.
+//
+// This is the generic tier (like LinearRegulator/BuckRegulator): the
+// datasheet axes are parameters the instantiation must supply. A concrete
+// controller SKU wraps it in an alias binding real numbers, or ships its own
+// entity when its application circuit diverges.
+
+entity BuckController(
+    v_out:        voltage    = 5V,       // regulated output target
+    v_in:         voltage    = 24V,      // nominal input for sizing
+    i_out_max:    current    = 5A,       // rated load the stage is sized for
+    f_sw:         frequency  = 300kHz,
+    v_ref:        voltage    = 0.8V,     // FB reference (datasheet)
+    i_quiescent:  current    = 4mA,
+    ripple_ratio: float      = 0.35,     // ΔI_L / I_out
+    ripple_v:     voltage    = 50mV,     // output ripple budget
+    r_fb_bot:     resistance = 1kΩ,
+    // ── The author's power stage (tier B): part numbers + the axes the
+    //    loss and stress models consume. Defaults are a placeholder pair;
+    //    a real design supplies its chosen FETs' datasheet values.
+    hs_fet:       string     = "GENERIC-NFET",
+    ls_fet:       string     = "GENERIC-NFET",
+    fet_vds_max:  voltage    = 60V,
+    fet_id_max:   current    = 20A,
+    fet_rds_on:   resistance = 10mΩ,
+    fet_vgs_th:   voltage    = 3V,
+    fet_p_rating: power      = 2W,
+    c_boot:       capacitance = 100nF,   // HB↔SW bootstrap
+    c_vcc:        capacitance = 1µF      // gate-drive bias decoupling
+) {
+    pin VIN:  power in;
+    // Logical output node — the datasheet application circuit's output.
+    // Wire it to your rail (tiers A/B) or leave it unwired and author the
+    // stage yourself (tier C).
+    pin VOUT: power out virtual;
+    pin HO:   signal out;     // high-side gate drive
+    pin LO:   signal out;     // low-side gate drive
+    pin HB:   signal inout;   // bootstrap supply (cap to SW)
+    pin VCC:  signal inout;   // internal gate-drive bias (needs decoupling)
+    pin SW:   switch out;     // switch node (HS source / LS drain)
+    pin FB:   feedback in;
+    pin COMP: signal inout;   // error-amp compensation
+    pin EN:   signal in;
+    pin GND:  ground;
+
+    attribute component_class = "switching_regulator";
+    attribute topology        = "buck_controller";
+    // Generic tier: instantiate directly with your FETs' numbers; never a
+    // candidate in automatic `supply` part selection (no orderable MPN).
+    attribute supply_choosable = false;
+    attribute output_voltage  = v_out;
+    attribute switching_frequency = f_sw;
+    attribute f_sw            = f_sw;
+    attribute feedback_voltage = v_ref;
+    attribute i_quiescent     = i_quiescent;
+    // The conduction/switching loss axes come from the CHOSEN FETs — the
+    // stage's rds_on is the FETs', not the controller's.
+    attribute rds_on          = fet_rds_on;
+    attribute t_sw            = 30ns;
+    attribute ripple_ratio    = ripple_ratio;
+
+    // Same proven buck sizing forms as LM2596 (one binary op per const).
+    design {
+        const vout = self.v_out;
+        require vout < self.v_in
+            else "buck V_OUT must be below V_IN";
+
+        const duty  = vout / self.v_in;
+        const vdiff = self.v_in - vout;
+
+        // L_out = (V_IN−V_OUT)·D / (f_sw·ΔI_L),  ΔI_L = ripple_ratio·I_out.
+        const d_il  = self.ripple_ratio * self.i_out_max;
+        const l_num = vdiff * duty;
+        const l_den = self.f_sw * d_il;
+        l_value     = l_num / l_den;
+
+        const il_half   = d_il / 2.0;
+        const i_peak    = self.i_out_max + il_half;
+        l_rated_current = i_peak * 1.3;
+
+        // C_out = ΔI_L / (8·f_sw·ΔV_out).
+        const co_d0 = self.f_sw * self.ripple_v;
+        const co_d  = co_d0 * 8.0;
+        c_out_value = d_il / co_d;
+
+        // FB divider: R_top = R_bot·(V_OUT − V_REF)/V_REF.
+        const vov     = vout - self.feedback_voltage;
+        const r_scale = self.r_fb_bot / self.feedback_voltage;
+        r_top_value   = vov * r_scale;
+    }
+
+    expansion {
+        // Power stage — the author's FETs (threaded constructor params).
+        HO -> M_hs: MOSFET(hs_fet, "nmos", fet_vds_max, fet_id_max, fet_rds_on, fet_vgs_th, fet_p_rating).G;
+        VIN -> M_hs.D; M_hs.S -> SW;
+        LO -> M_ls: MOSFET(ls_fet, "nmos", fet_vds_max, fet_id_max, fet_rds_on, fet_vgs_th, fet_p_rating).G;
+        SW -> M_ls.D; M_ls.S -> GND;
+        // Gate-drive support: bootstrap rides SW; bias decoupled to GND.
+        HB -> C_hb: Cap(c_boot).1; C_hb.2 -> SW;
+        VCC -> C_vcc_cap: Cap(c_vcc).1; C_vcc_cap.2 -> GND;
+        // Delivery path + filters + feedback (design-sized).
+        SW -> L_out: Ind(l_value, rated_current = l_rated_current).1; L_out.2 -> VOUT;
+        VOUT -> C_out: Cap(c_out_value).1; C_out.2 -> GND;
+        VIN -> C_in: Cap(10µF).1; C_in.2 -> GND;
+        VOUT -> R_top: Res(r_top_value, tolerance = 1%, supply_profile = "grade").1; R_top.2 -> FB;
+        FB -> R_bot: Res(r_fb_bot, tolerance = 1%, supply_profile = "grade").1; R_bot.2 -> GND;
+    }
+
+    // Buck device-stress on the expansion children at the solved operating
+    // point (same forms the sizing used, run forward on snapped values).
+    simulation {
+        stress {
+            const duty = vout / vin;
+            const d_il = (vin - vout) * duty / (self.f_sw * L_out.value);
+            L_out.i_peak   = i_out + d_il / 2;
+            C_out.v_ripple = d_il / (8 * self.f_sw * C_out.value);
+        }
+        check {
+            require connected(FB)
+                else "FB must close the loop — an open feedback pin runs the stage open-loop to V_IN";
+            require connected(HB)
+                else "HB needs its bootstrap cap to the switch node — the high-side gate cannot drive without it (when the board authors the power stage, it owns the bootstrap too)";
+        }
+    }
+}
+
+symbol BuckController {
+    left   { VIN, EN, VCC }
+    right  { HB, HO, SW, LO, FB, COMP }
+    bottom { GND }
+}

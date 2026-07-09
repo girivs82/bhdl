@@ -36,6 +36,7 @@
       "C_DECOUP_7": "C7",
       "C_DECOUP_8": "C8",
       "C_DECOUP_9": "C9",
+      "reg_C_in": "C36",
       "reg_C_out": "C35"
     },
     "U": {

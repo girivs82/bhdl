@@ -70,6 +70,9 @@ struct Pass1Context {
     // (...)`), accumulated from every imported file so an instantiation
     // validates its argument values against an imported entity's set.
     entity_value_domains: HashMap<String, HashMap<String, Vec<String>>>,
+    // Cross-file: per-entity attribute → param bare-reference linkage
+    // (see lib.rs::extract_entity_attr_param_refs).
+    entity_attr_param_refs: HashMap<String, HashMap<String, String>>,
 }
 
 impl Pass1Context {
@@ -92,6 +95,7 @@ impl Pass1Context {
             entity_attribute_index: HashMap::new(),
             entity_param_index: HashMap::new(),
             entity_value_domains: HashMap::new(),
+            entity_attr_param_refs: HashMap::new(),
         }
     }
 
@@ -136,7 +140,7 @@ pub fn populate_global_scope_and_build_definition_scopes_with_base(
     source_file: &SourceFile,
     base_path: &Path
 ) -> (SymbolTable, HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>) {
-    let (registry, _alias_specializations, _expansion_recipes, _symbol_defs, _layout_defs, _placement_recipes, _design_recipes, _stress_recipes, _model_recipes, _entity_attr_index, _entity_param_index, _entity_value_domains) = build_scope_registry_with_base(source_file, base_path);
+    let (registry, _alias_specializations, _expansion_recipes, _symbol_defs, _layout_defs, _placement_recipes, _design_recipes, _stress_recipes, _model_recipes, _entity_attr_index, _entity_param_index, _entity_value_domains, _entity_attr_param_refs) = build_scope_registry_with_base(source_file, base_path);
     // Extract legacy data structures for backward compatibility
     let global_scope = registry.extract_global_scope();
     let definition_scopes = registry.extract_definition_scopes();
@@ -181,6 +185,8 @@ pub fn build_scope_registry_with_base(
     // Cross-file: per-entity parameter value domains (see
     // Pass1Context::entity_value_domains).
     HashMap<String, HashMap<String, Vec<String>>>,
+    // Cross-file: per-entity attribute → param bare-reference linkage.
+    HashMap<String, HashMap<String, String>>,
 ) {
     println!("Building scope registry (Pass 1)...");
     let mut context = Pass1Context::new();
@@ -231,7 +237,8 @@ pub fn build_scope_registry_with_base(
     let entity_attribute_index = context.entity_attribute_index;
     let entity_param_index = context.entity_param_index;
     let entity_value_domains = context.entity_value_domains;
-    (context.registry, alias_specializations, expansion_recipes, symbol_definitions, layout_definitions, placement_recipes, design_recipes, stress_recipes, model_recipes, entity_attribute_index, entity_param_index, entity_value_domains)
+    let entity_attr_param_refs = context.entity_attr_param_refs;
+    (context.registry, alias_specializations, expansion_recipes, symbol_definitions, layout_definitions, placement_recipes, design_recipes, stress_recipes, model_recipes, entity_attribute_index, entity_param_index, entity_value_domains, entity_attr_param_refs)
 }
 
 // Pass 1 recursive helper (takes Pass1Context)
@@ -1151,6 +1158,9 @@ fn process_import(import: &ImportStmt, context: &mut Pass1Context) {
             }
             for (name, doms) in crate::extract_entity_value_domains(&imported_source) {
                 context.entity_value_domains.insert(name, doms);
+            }
+            for (name, refs) in crate::extract_entity_attr_param_refs(&imported_source) {
+                context.entity_attr_param_refs.insert(name, refs);
             }
             // Extract expansion recipes from imported entities, threading
             // the accumulated cross-file index in so children carry

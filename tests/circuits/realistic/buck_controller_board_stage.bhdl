@@ -1,0 +1,46 @@
+// Synchronous buck controller with a fully BOARD-AUTHORED power stage —
+// the external-FET idiom, tier C: the author instantiates their own FETs
+// and inductor wired to the controller's gate-drive pins, and leaves the
+// virtual VOUT unwired. The board-authored takeover stands the expansion's
+// power stage down; the mandatory chip support (bootstrap cap, VCC bias,
+// input decoupling) still expands. ERC029/030 backstop double-authoring;
+// ERC031 gates the hand-authored FB divider against the declared rail.
+//
+// 24V → 12V @ 2A with IRF7469 FETs (40V, 10A, 9mΩ — author-declared axes).
+
+import { BuckController } from "bhdl-stdlib/power/buck_controller.bhdl";
+import { MOSFET } from "bhdl-stdlib/actives/mosfet.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Ind } from "bhdl-stdlib/passives/inductor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+board BuckControllerBoardStage {
+    port VIN_24V: power in = 24V @ 2A;
+    port VCC_12V: power out = 12V @ 2A;
+    ground GND;
+
+    @VIN_24V -> u1: BuckController(v_out=12V, v_in=24V, i_out_max=2A).VIN;
+    u1.GND -> @GND;
+    @VIN_24V -> u1.EN;
+    // Virtual VOUT deliberately UNWIRED — the board authors the stage.
+
+    // ── Board-authored power stage: the author's FETs ──
+    u1.HO -> q_hs: MOSFET("IRF7469", "nmos", 40V, 10A, 9mΩ, 2V, 2.5W).G;
+    @VIN_24V -> q_hs.D; q_hs.S -> sw_node;
+    u1.LO -> q_ls: MOSFET("IRF7469", "nmos", 40V, 10A, 9mΩ, 2V, 2.5W).G;
+    sw_node -> q_ls.D; q_ls.S -> @GND;
+    sw_node -> u1.SW;
+    // The author's bootstrap: the HB cap rides THIS stage's switch node.
+    u1.HB -> c_hb: Cap(100nF).1; c_hb.2 -> sw_node;
+    sw_node -> l1: Ind(22µH, 3.5A).1; l1.2 -> @VCC_12V;
+    @VCC_12V -> c_out: Cap(47µF, voltage=25V).1; c_out.2 -> @GND;
+
+    // Hand-authored FB divider: 0.8V·(1 + 14k/1k) = 12.0V.
+    @VCC_12V -> r_top: Res(14kΩ, tolerance=1%).1; r_top.2 -> fb;
+    fb -> r_bot: Res(1kΩ, tolerance=1%).1; r_bot.2 -> @GND;
+    fb -> u1.FB;
+
+    // Load for verification (12V @ 1A).
+    @VCC_12V -> r_load: Res(12Ω, wattage=15W).1;
+    r_load.2 -> @GND;
+}

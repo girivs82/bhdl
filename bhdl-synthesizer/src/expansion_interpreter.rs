@@ -46,7 +46,8 @@ pub fn expand_entity_instances(
     let empty_designs = HashMap::new();
     let empty_attrs = HashMap::new();
     let empty_params = HashMap::new();
-    expand_entity_instances_with_designs(netlist, recipes, &empty_designs, &empty_attrs, &empty_params)
+    let empty_refs = HashMap::new();
+    expand_entity_instances_with_designs(netlist, recipes, &empty_designs, &empty_attrs, &empty_params, &empty_refs)
 }
 
 /// As [`expand_entity_instances`] but with vendor `design { }` recipes
@@ -67,6 +68,7 @@ pub fn expand_entity_instances_with_designs(
     design_recipes: &HashMap<String, HashMap<String, bhdl_common::design::DesignRecipe>>,
     entity_attr_index: &HashMap<String, HashMap<String, String>>,
     entity_param_names: &HashMap<String, Vec<String>>,
+    entity_attr_param_refs: &HashMap<String, HashMap<String, String>>,
 ) -> Vec<ExpansionResult> {
     if recipes.is_empty() {
         return Vec::new();
@@ -82,7 +84,7 @@ pub fn expand_entity_instances_with_designs(
 
     let mut results = Vec::new();
     for cand in candidates {
-        match expand_one_instance(netlist, &cand, entity_attr_index, entity_param_names) {
+        match expand_one_instance(netlist, &cand, entity_attr_index, entity_param_names, entity_attr_param_refs) {
             Ok(result) => {
                 info!("Expanded '{}' → {} child instance(s)",
                     result.parent_instance, result.child_instances.len());
@@ -244,6 +246,7 @@ fn expand_one_instance(
     cand: &ExpansionCandidate,
     entity_attr_index: &HashMap<String, HashMap<String, String>>,
     entity_param_names: &HashMap<String, Vec<String>>,
+    entity_attr_param_refs: &HashMap<String, HashMap<String, String>>,
 ) -> Result<ExpansionResult, String> {
     let base = &cand.instance_name;
 
@@ -458,6 +461,16 @@ fn expand_one_instance(
         let comp_class = exp_inst.attributes
             .get("component_class")
             .cloned()
+            // Cross-file child entities have empty recipe-time attribute
+            // maps — read the class from the global entity index before
+            // falling back to the hardcoded table (a MOSFET child was
+            // landing as "passive" and clobbering the entity's class).
+            .or_else(|| {
+                entity_attr_index
+                    .get(&exp_inst.component_type)
+                    .and_then(|a| a.get("component_class"))
+                    .cloned()
+            })
             .unwrap_or_else(|| component_type_to_class(&exp_inst.component_type).to_string());
         attrs.push(("component_class", comp_class));
 
@@ -555,6 +568,43 @@ fn expand_one_instance(
             }).collect();
             bhdl_analyzer::substitute_value_params(
                 &mut entity_attrs_owned, param_names, &resolved_args);
+
+            // Defaulted-param threading: the attribute index resolves
+            // `attribute part_number = part_no;` to the param's DEFAULT at
+            // extraction time (stress blocks need real numbers), which
+            // erases the bare-reference anchor substitute_value_params keys
+            // on — so a child entity whose params all have defaults (the
+            // MOSFET axes) never received an explicitly-passed arg. The
+            // attr→param linkage index records the reference; when THIS
+            // call site supplies the param (positionally or named), the
+            // resolved arg overwrites the pre-resolved default.
+            if let Some(refs) = entity_attr_param_refs.get(&exp_inst.component_type) {
+                for (attr, param) in refs {
+                    let pos = param_names.iter().position(|n| n == param);
+                    let arg_text: Option<&str> = pos
+                        .and_then(|i| exp_inst.params.get(i))
+                        .map(String::as_str)
+                        .filter(|p| !p.contains('='))
+                        .or_else(|| {
+                            exp_inst.params.iter().find_map(|p| {
+                                let eq = p.find('=')?;
+                                (p[..eq].trim() == param)
+                                    .then(|| p[eq + 1..].trim())
+                            })
+                        });
+                    let Some(arg) = arg_text else { continue };
+                    let val = if let Some(dv) = intent_design.get(arg) {
+                        format_designed_value(*dv)
+                    } else {
+                        resolve_param_expression(
+                            arg, &cand.param_values, &cand.recipe.param_defaults)
+                    };
+                    let val = val.trim().trim_matches('"').to_string();
+                    if !val.is_empty() && &val != param {
+                        entity_attrs_owned.insert(attr.clone(), val);
+                    }
+                }
+            }
         }
 
         // Call-site named-arg overrides. The expansion extractors put named
@@ -1168,6 +1218,8 @@ fn component_type_to_class(component_type: &str) -> &'static str {
         "TVSDiode" => "tvs_diode",
         "LED" => "led",
         "Triode" => "triode",
+        "MOSFET" => "mosfet",
+        "BJT" => "bjt",
         _ => "passive", // generic fallback
     }
 }
@@ -1216,6 +1268,8 @@ fn is_power_rail_pin(name: &str) -> bool {
         || u.starts_with("AVCC")
         || u.starts_with("VDD")     // VDD, VDD_1..VDD_3, VDDA (STM32), VDDQ (DDR)
         || u.starts_with("VSS")     // VSS, VSS_1..VSS_3, VSSA (STM32), VSSQ (DDR)
+        || u.starts_with("VIN")     // regulator/controller unregulated input
+        || u == "VI"                // NCP1117-style input pin name
         || u.starts_with("VPP")     // DDR4 activation pump rail (2.5 V supply)
         || u.starts_with("VREF")    // VREFCA / VREFDQ / VREF — reference inputs
         || u == "AGND"
@@ -1223,6 +1277,9 @@ fn is_power_rail_pin(name: &str) -> bool {
         || u == "UVCC"
         || u == "UGND"
         || u == "UCAP"
+        || u == "HB"                // high-side bootstrap supply (buck controller)
+        || u == "BOOT"              // bootstrap pin (TPS54302-style naming)
+        || u == "BST"
         || u == "VBUS"
         || u == "VBAT"              // STM32 backup-domain rail
         || u == "V3OUT"
@@ -1296,9 +1353,26 @@ fn compute_live_children(
     // power rail — the recipe declared it as an interface
     // augmentation point (e.g. `SDA -> R_pu: Res(4.7kΩ).1`) that
     // the board didn't wire, so the child should be dropped.
+    //
+    //   4. The entity DRIVES the pin (declared direction `out` in the
+    //      recipe's pin_info — a controller's HO/LO gate drives, a
+    //      switch node). The wire-it-if-you-use-it logic exists for
+    //      pins where the BOARD initiates use (an MCU's SDA); a child
+    //      hanging off a drive OUTPUT is the chip's own load — a
+    //      controller cannot function without its power-stage FETs —
+    //      and is never an optional interface augmentation.
     let parent_pin_is_live = |pin_name: &str| -> bool {
         if is_power_rail_pin(pin_name) { return true; }
         if parent_ref_counts.get(pin_name).copied().unwrap_or(0) >= 2 {
+            return true;
+        }
+        if cand
+            .recipe
+            .pin_info
+            .get(pin_name)
+            .map(|(_, dir)| dir == "out")
+            .unwrap_or(false)
+        {
             return true;
         }
         let Some(&pi_id) = cand.pin_instances.get(pin_name) else { return false; };

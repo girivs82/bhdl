@@ -67,7 +67,7 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
     let mut resolved_constants = ResolvedConstants::new();
 
     // Pass 1: Build scope registry with base path for imports
-    let (mut scope_registry, alias_specializations, imported_expansion_recipes, imported_symbol_definitions, imported_layout_definitions, imported_placement_recipes, imported_design_recipes, imported_stress_recipes, imported_model_recipes, imported_entity_attr_index, imported_entity_param_index, imported_entity_value_domains) = pass1::build_scope_registry_with_base(source_file, base_path);
+    let (mut scope_registry, alias_specializations, imported_expansion_recipes, imported_symbol_definitions, imported_layout_definitions, imported_placement_recipes, imported_design_recipes, imported_stress_recipes, imported_model_recipes, imported_entity_attr_index, imported_entity_param_index, imported_entity_value_domains, imported_entity_attr_param_refs) = pass1::build_scope_registry_with_base(source_file, base_path);
     // Extract legacy data structures for backward compatibility with existing passes
     let global_scope = scope_registry.extract_global_scope();
     let definition_scopes = scope_registry.extract_definition_scopes();
@@ -301,6 +301,14 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
         entity_param_names.insert(name, params);
     }
 
+    // Per-entity attribute→param bare-reference linkage (imported files +
+    // main file), the substitution anchor the default-resolved attribute
+    // index erases.
+    let mut entity_attr_param_refs = imported_entity_attr_param_refs.clone();
+    for (name, refs) in extract_entity_attr_param_refs(source_file) {
+        entity_attr_param_refs.insert(name, refs);
+    }
+
     // Per-entity parameter value domains (`where <param> in (...)`),
     // imported files + main file.
     let mut entity_value_domains = imported_entity_value_domains.clone();
@@ -505,6 +513,7 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
         variants,
         entity_attribute_index,
         entity_param_names,
+        entity_attr_param_refs,
         placement_recipes, // Move ownership (Pass 8.5)
         symbol_definitions, // Move ownership (Pass 8.5)
         layout_definitions, // Move ownership (Pass 8.5)
@@ -1649,6 +1658,32 @@ pub fn extract_entity_value_domains(
         }
         if !domains.is_empty() {
             idx.insert(name_token.text().to_string(), domains);
+        }
+    }
+    idx
+}
+
+/// Per-entity map of attribute → the constructor PARAM it bare-references
+/// (`attribute part_number = part_no;` → {"part_number": "part_no"}).
+/// The attribute index resolves defaulted param-refs at extraction time
+/// (stress blocks need real numbers), which erases the bare-reference
+/// anchor the expansion-child substitution keys on — so entities whose
+/// params ALL have defaults (MOSFET) could never receive threaded
+/// constructor args. This parallel index records the linkage so the
+/// expansion interpreter can overwrite the attr when an explicit arg is
+/// supplied. Same import-merged contract as `entity_param_names`.
+pub fn extract_entity_attr_param_refs(
+    source_file: &SourceFile,
+) -> std::collections::HashMap<String, std::collections::HashMap<String, String>> {
+    use bhdl_ast::{Entity, HasName};
+    use rowan::ast::AstNode;
+    let mut idx = std::collections::HashMap::new();
+    for item in source_file.items() {
+        let Some(entity) = Entity::cast(item.syntax().clone()) else { continue };
+        let Some(name_token) = entity.name() else { continue };
+        let refs = crate::attribute_extraction::extract_module_attribute_param_refs(&entity);
+        if !refs.is_empty() {
+            idx.insert(name_token.text().to_string(), refs);
         }
     }
     idx

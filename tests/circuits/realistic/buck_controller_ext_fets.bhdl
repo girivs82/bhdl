@@ -1,0 +1,36 @@
+// Synchronous buck CONTROLLER with author-chosen external MOSFETs — the
+// external-FET idiom, tier B: the controller's expansion mints the power
+// stage, but the FETs are the AUTHOR's choice, threaded through constructor
+// params together with the datasheet axes the loss/stress models consume.
+//
+// 24V → 5V @ 5A. The Infineon BSC0902NS pair (30V, 40A, 2.3mΩ) replaces
+// the entity's generic default; everything else (bootstrap, VCC bias,
+// design-sized L/C, precision FB divider) comes from the expansion as with
+// any integrated-switch regulator. Tier C (board-authored full stage via
+// the virtual-VOUT takeover) is exercised by buck_converter_simple.
+
+import { BuckController } from "bhdl-stdlib/power/buck_controller.bhdl";
+import { MOSFET } from "bhdl-stdlib/actives/mosfet.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Ind } from "bhdl-stdlib/passives/inductor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+board BuckControllerExtFets {
+    port VIN_24V: power in = 24V @ 2A;
+    port VCC_5V: power out = 5V @ 5A;
+    ground GND;
+
+    @VIN_24V -> u1: BuckController(
+        v_out=5V, v_in=24V, i_out_max=5A, f_sw=300kHz,
+        hs_fet="BSC0902NS", ls_fet="BSC0902NS",
+        fet_vds_max=30V, fet_id_max=40A, fet_rds_on=2.3mΩ,
+        fet_vgs_th=2.4V, fet_p_rating=42W
+    ).VIN;
+    u1.GND -> @GND;
+    u1.VOUT -> @VCC_5V;
+    @VIN_24V -> u1.EN;                 // always enabled
+
+    // Load for verification (5V @ 5A).
+    @VCC_5V -> r_load: Res(1Ω, wattage=25W).1;
+    r_load.2 -> @GND;
+}

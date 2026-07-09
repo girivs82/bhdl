@@ -987,6 +987,13 @@ fn choose_part(
             if !matches!(class, "voltage_regulator" | "ldo" | "switching_regulator") {
                 continue;
             }
+            // Explicit opt-out: a generic-tier entity (BuckController) is a
+            // template the author instantiates DIRECTLY with their part's
+            // numbers — it names no orderable device, so it must never win
+            // an automatic selection over a real part.
+            if attrs.get("supply_choosable").map(String::as_str) == Some("false") {
+                continue;
+            }
             // Generic templates (no package → no honest power_rating; generic
             // `<V_OUT>` entities) are not selectable parts.
             if src[find_entity_decl(&src, &name).unwrap_or(0)..]

@@ -1250,6 +1250,7 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
         &analysis.expansion_recipes,
         &analysis.design_recipes, &analysis.entity_attribute_index,
         &analysis.entity_param_names,
+        &analysis.entity_attr_param_refs,
     );
     if !recipe_results.is_empty() {
         println!("  {} expansion blocks applied for {} entity instance(s)",
@@ -1575,6 +1576,7 @@ async fn run_layout(
     bhdl_synthesizer::expansion_interpreter::expand_entity_instances_with_designs(
         &mut netlist, &analysis.expansion_recipes, &analysis.design_recipes, &analysis.entity_attribute_index,
         &analysis.entity_param_names,
+        &analysis.entity_attr_param_refs,
     );
     println!("  {} Expansion: {} instances", "✓".green(), netlist.instances.len());
 
@@ -1697,7 +1699,7 @@ async fn run_spice(source_file: &SourceFile, analysis_type: &str, _output: Optio
     }
     bhdl_synthesizer::expansion_interpreter::expand_entity_instances_with_designs(
         &mut netlist, &analysis_result.expansion_recipes, &analysis_result.design_recipes, &analysis_result.entity_attribute_index,
-        &analysis_result.entity_param_names);
+        &analysis_result.entity_param_names, &analysis_result.entity_attr_param_refs);
 
     // Apply the selected SKU variant's patches AFTER expansion (so
     // patches address post-expansion instance names). Without this,
@@ -2235,6 +2237,7 @@ async fn cmd_bom(
         &analysis.expansion_recipes,
         &analysis.design_recipes, &analysis.entity_attribute_index,
         &analysis.entity_param_names,
+        &analysis.entity_attr_param_refs,
     );
     if !recipe_results.is_empty() {
         println!("  {} expansion blocks applied for {} entity instance(s)",

@@ -4,6 +4,7 @@
     "C": {
       "mcu_C_bulk": "C4",
       "mcu_C_hf": "C5",
+      "psu_vcc_3v3_C_boot": "C8",
       "psu_vcc_3v3_C_in": "C7",
       "psu_vcc_3v3_C_out": "C6",
       "psu_vcc_5v_c_boot": "C1",

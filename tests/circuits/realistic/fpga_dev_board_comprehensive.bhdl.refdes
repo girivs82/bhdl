@@ -5,8 +5,10 @@
       "c_dec_1v2": "C3",
       "c_dec_3v3": "C2",
       "c_dec_5v": "C1",
+      "psu_vcc_1v2_C_boot": "C8",
       "psu_vcc_1v2_C_in": "C7",
       "psu_vcc_1v2_C_out": "C6",
+      "psu_vcc_3v3_C_boot": "C9",
       "psu_vcc_3v3_C_in": "C5",
       "psu_vcc_3v3_C_out": "C4"
     },

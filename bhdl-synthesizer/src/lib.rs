@@ -588,6 +588,7 @@ impl NetlistGenerator {
                 &analysis.design_recipes,
                 &analysis.entity_attribute_index,
                 &analysis.entity_param_names,
+                &analysis.entity_attr_param_refs,
             );
             info!(
                 "Phase 4.5: expansion produced {} expanded instance(s)",
