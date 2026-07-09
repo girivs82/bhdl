@@ -1,337 +1,145 @@
-> **STATUS: aspirational — not implemented (verified 2026-07-09).** The
-> behavioral-attribute surface here (`when (cond) { … += … }` blocks,
-> expression attributes recomputed each timestep, usage-inferred mutability)
-> does not parse and is not built. Shipped attributes are static
-> `attribute name = value;` bindings (main spec §6.3). Dynamic/behavioral
-> modeling is tracked separately in [Behavioral_Models.md](Behavioral_Models.md)
-> (also a proposal). Design intent, not current syntax.
-
-# Unified Attribute System Technical Specification
-
-## Abstract
-
-This specification defines the unified attribute system for BHDL v2.1, which extends the existing `attribute` keyword to support behavioral modeling without introducing new keywords. The system enables both static metadata and dynamic behavioral expressions through a single, consistent syntax.
-
-## 1. Attribute Categories
-
-### 1.1 Static Attributes (Existing)
-```bhdl
-attribute title = "Buck Converter";
-attribute version = "1.0";
-attribute author = "Jane Doe";
-```
-
-**Characteristics:**
-- Evaluated at compile time
-- Immutable
-- String or numeric literals only
-- Used for metadata and documentation
-
-### 1.2 Expression Attributes (New)
-```bhdl
-attribute error = vref - FB;
-attribute duty = clamp(0.5 + error * 0.1, 0.1, 0.9);
-attribute temp_c = (TEMP_SENSE - 0.5V) / 10mV;
-```
-
-**Characteristics:**
-- Can reference pins and other attributes
-- Evaluated at simulation time
-- Immutable (recomputed each timestep)
-- Support full expression syntax
-
-### 1.3 Mutable Attributes (New)
-```bhdl
-attribute vref = 0V;  // Becomes mutable when modified
-
-when (ENABLE && vref < 3.3V) {
-    vref += 3.3V / 10ms * dt;  // Modification makes it mutable
-}
-```
-
-**Characteristics:**
-- Mutability inferred from usage
-- Maintain state across timesteps
-- Can be modified in `when` blocks
-- Support compound assignment operators
-
-## 2. Syntax Definition
-
-### 2.1 Grammar Extensions
-
-```ebnf
-attribute_decl ::= 'attribute' IDENTIFIER ':' type_spec? '=' expression ';'
-
-expression ::= literal
-             | identifier
-             | pin_reference
-             | binary_expression
-             | unary_expression
-             | conditional_expression
-             | function_call
-             | parenthesized_expression
-
-pin_reference ::= IDENTIFIER  // Resolved based on context
-
-assignment_stmt ::= target '=' expression ';'
-                  | target compound_op expression ';'
-
-compound_op ::= '+=' | '-=' | '*=' | '/='
-
-target ::= identifier | pin_reference
-```
-
-### 2.2 Type Inference Rules
-
-1. **Literal Types**:
-   - `3.3V` → `voltage`
-   - `10mA` → `current`
-   - `1.5` → `ratio` or `number`
-   - `"text"` → `string`
-
-2. **Expression Types**:
-   - Binary operators preserve unit types
-   - Pin references inherit pin types
-   - Conditionals require matching branch types
-
-3. **Implicit Conversions**:
-   - `ratio` → PWM duty cycle
-   - `voltage` → analog output
-   - `boolean` → digital output
-
-## 3. Semantic Rules
-
-### 3.1 Mutability Detection
-
-An attribute is considered mutable if:
-1. It appears as the target of an assignment in a `when` block
-2. It appears as the target of a compound assignment anywhere
-3. It is explicitly declared with `var` (future extension)
-
-```bhdl
-entity Example {
-    attribute static_val = 3.3V;        // Immutable
-    attribute computed = a + b;         // Immutable (recomputed)
-    attribute counter = 0;              // Mutable (modified below)
-    
-    when (condition) {
-        counter += 1;  // Makes 'counter' mutable
-    }
-}
-```
-
-### 3.2 Dependency Analysis
-
-The analyzer must track dependencies between attributes:
-
-```bhdl
-attribute a = pin1 + pin2;
-attribute b = a * 2;
-attribute c = b + a;  // Depends on both a and b
-```
-
-**Evaluation Order**: Topological sort based on dependency graph
-
-### 3.3 Pin Assignment Rules
-
-Attributes can be assigned to output pins:
-
-```bhdl
-pin PWM: digital out;
-attribute duty = calculate_duty();
-
-PWM = duty;  // Implicit conversion from ratio to PWM
-```
-
-**Restrictions**:
-- Only output pins can be assigned from attributes
-- Type must be compatible or implicitly convertible
-- Assignment creates a continuous connection
-
-## 4. Built-in Variables
-
-### 4.1 The `dt` Variable
-
-```bhdl
-when (ramping) {
-    value += rate * dt;  // dt is simulation timestep in seconds
-}
-```
-
-**Properties**:
-- Type: `time` (seconds)
-- Scope: Global
-- Value: Set by simulation engine
-- Read-only
-
-## 5. Evaluation Semantics
-
-### 5.1 Evaluation Phases
-
-1. **Static Evaluation** (Compile Time):
-   - Static attributes with literal values
-   - Constant expressions
-   - Type checking
-
-2. **Dynamic Evaluation** (Simulation Time):
-   ```
-   for each timestep:
-       1. Read all pin values
-       2. Evaluate expression attributes (dependency order)
-       3. Execute when blocks
-       4. Update mutable attributes
-       5. Write pin assignments
-   ```
-
-### 5.2 When Block Execution
-
-```bhdl
-when (condition_expr) {
-    // Statements execute if condition is true
-    mutable_attr = new_value;
-    mutable_attr += increment;
-}
-```
-
-**Execution Rules**:
-- Conditions evaluated every timestep
-- Statements execute in order when condition is true
-- Multiple when blocks execute in source order
-
-## 6. Examples
-
-### 6.1 Thermal Protection
-```bhdl
-entity ThermalProtection {
-    pin TEMP_SENSE: analog in;
-    pin ENABLE_OUT: digital out;
-    
-    // Convert sensor voltage to temperature
-    attribute temp_c = (TEMP_SENSE - 0.5V) / 10mV;
-    
-    // Hysteresis logic
-    attribute shutdown_temp = 125;
-    attribute restart_temp = 100;
-    attribute is_shutdown = false;  // Mutable
-    
-    when (temp_c > shutdown_temp) {
-        is_shutdown = true;
-    }
-    
-    when (temp_c < restart_temp) {
-        is_shutdown = false;
-    }
-    
-    ENABLE_OUT = !is_shutdown;
-}
-```
-
-### 6.2 Soft-Start Controller
-```bhdl
-entity SoftStart {
-    pin ENABLE: digital in;
-    pin FB: analog in;
-    pin COMP: analog out;
-    
-    // Soft-start voltage reference
-    attribute vref = 0V;  // Mutable
-    attribute target = 3.3V;
-    attribute ramp_time = 10ms;
-    
-    // Control loop
-    attribute error = vref - FB;
-    attribute comp_voltage = clamp(2.5V + error * 10, 0.5V, 4.5V);
-    
-    // Ramp vref when enabled
-    when (ENABLE && vref < target) {
-        vref += target / ramp_time * dt;
-    }
-    
-    when (!ENABLE) {
-        vref = 0V;  // Reset on disable
-    }
-    
-    COMP = comp_voltage;
-}
-```
-
-### 6.3 PWM Generator
-```bhdl
-entity SimplePWM {
-    pin FREQ_SET: analog in;
-    pin DUTY_SET: analog in;
-    pin PWM_OUT: digital out;
-    
-    // Configuration from analog inputs
-    attribute frequency = 100kHz * FREQ_SET / 3.3V;
-    attribute duty = DUTY_SET / 3.3V;
-    
-    // Internal counter (mutable)
-    attribute counter = 0.0;
-    attribute period = 1.0 / frequency;
-    
-    // Update counter
-    when (true) {  // Always execute
-        counter += dt;
-        when (counter >= period) {
-            counter -= period;  // Wrap around
-        }
-    }
-    
-    // Generate PWM
-    attribute pwm_high = (counter / period) < duty;
-    PWM_OUT = pwm_high;
-}
-```
-
-## 7. Implementation Notes
-
-### 7.1 Parser Modifications
-
-1. Extend `parse_attribute` to accept expressions
-2. Add compound assignment operators
-3. Ensure `dt` is recognized as built-in identifier
-
-### 7.2 Analyzer Requirements
-
-1. Track attribute dependencies
-2. Detect mutable attributes from usage
-3. Type check all expressions
-4. Validate pin assignments
-
-### 7.3 Simulator Integration
-
-1. Maintain attribute state table
-2. Implement expression evaluator
-3. Execute when blocks efficiently
-4. Handle dt injection
-
-## 8. Backward Compatibility
-
-All existing BHDL code remains valid:
-- Static attributes work unchanged
-- No new keywords introduced
-- Existing entities need no modifications
-
-## 9. Future Extensions
-
-### 9.1 Explicit Mutability (Optional)
-```bhdl
-attribute var counter = 0;  // Explicitly mutable
-```
-
-### 9.2 Attribute Arrays (Future)
-```bhdl
-attribute var samples[10] = [0; 10];  // Array of 10 zeros
-```
-
-### 9.3 Attribute Functions (Future)
-```bhdl
-attribute fn calculate_duty(error: voltage) -> ratio {
-    return clamp(0.5 + error * 0.1, 0.1, 0.9);
-}
-```
-
-## 10. Conclusion
-
-The unified attribute system provides a clean, extensible mechanism for behavioral modeling in BHDL without adding complexity. By reusing the existing `attribute` keyword and inferring properties from usage, we maintain simplicity while enabling powerful new capabilities.
+# Attribute Vocabulary, Resolution, and Consumers
+
+> Implementation-grounded (2026-07). This document is the *system* view of
+> attributes: the canonical vocabulary (which attribute names the toolchain
+> acts on and what they mean), how an attribute's value is resolved for a given
+> instance, and which passes consume which attributes. The *declaration* syntax
+> and value/typing rules are in the companion
+> [BHDL_Attribute_Type_System.md](BHDL_Attribute_Type_System.md); the language
+> summary is [BHDL_Complete_Specification.md](BHDL_Complete_Specification.md) §6.3.
+>
+> ("Unified" is historical — before this convention, identity attributes were
+> used ad-hoc by some passes and ignored by others with no agreed naming. The
+> unification is that producers and consumers now share one vocabulary.)
+
+## 1. Two entity granularities
+
+An attribute means different things depending on the kind of entity that
+carries it (`bhdl-common::sku` header):
+
+- **Concrete part entity** — names one specific orderable part
+  (`NPN_2N3904`, `LM358_DIP8`). It should declare a full SKU: `manufacturer` +
+  `mpn` + `physical_package`, ideally with distributor part numbers.
+- **Abstract type entity** — names a category (`Res`, `Cap`, `Ind`). The user
+  supplies a value at instantiation (`Res(575Ω)`); the entity declares the
+  *shape* attributes (`component_class = "resistor"`) but no MPN, and the part
+  chooser resolves a concrete part. A board instance may pin a specific part
+  with an explicit `attribute mpn = …` override.
+
+## 2. Canonical SKU vocabulary
+
+The identity/manufacturing attributes are defined as constants in
+`bhdl-common::sku::attr`, so a misspelling fails to line up at the consumer
+boundary rather than silently disappearing:
+
+| Attribute | Meaning |
+|-----------|---------|
+| `manufacturer` | Manufacturer name as they spell it (e.g. "Yageo"). |
+| `mpn` | Canonical manufacturer part number — the orderable identifier (preferred over the historic `part_number`). |
+| `physical_package` | Package/case (e.g. `SOT-23-6`). Named thus because `package` is a reserved word. |
+| `footprint` | PCB footprint identifier. |
+| `kicad_symbol` | Schematic symbol identifier for KiCad export. |
+| `datasheet` | Datasheet URL/reference. |
+| `tolerance` | Value tolerance (`1%`). |
+| `voltage_rating`, `power_rating`, `temp_coeff` | Stress ratings / temperature coefficient. |
+| `component_class` | The semantic class — see §3. |
+| `refdes_prefix` | Overrides the class-derived reference-designator prefix. |
+| `digikey_pn`, `mouser_pn`, `lcsc_pn`, `arrow_pn`, `nexar_pn` | Distributor part numbers (`<distributor>_pn` pattern). |
+
+`manufacturer` + `mpn` + `physical_package` together are the
+**order-ready** set — the minimum for the BOM walker to emit an orderable
+row (`sku::required_for_order_ready`). A consumer can check which of these is
+missing and report it, rather than emit a half-specified row.
+
+## 3. `component_class` — the semantic anchor
+
+`component_class` is the most-read attribute in the toolchain. It states what
+a part *is*, and drives:
+
+- **Reference-designator prefix** via `refdes_prefix_for_class` (overridable
+  with `refdes_prefix`):
+
+  | Class(es) | Prefix |
+  |-----------|--------|
+  | `resistor` | `R` |
+  | `capacitor` | `C` |
+  | `inductor` | `L` |
+  | `diode`, `led`, `tvs_diode` | `D` |
+  | `fuse` | `F` |
+  | `bjt`, `mosfet`, `jfet`, `triode`, … | `Q` |
+  | `ic_opamp`, `ic_regulator`, `ic_mcu`, `switching_regulator`, … | `U` |
+  | `crystal`, `oscillator` | `Y` |
+  | `connector`, `header` | `J` |
+  | `test_point` | `TP` |
+  | `switch`, `relay` | `SW` |
+
+- **Device-family discovery** — the part chooser and the SPICE model builder
+  find candidate parts and select a model by class.
+- **Schematic symbol** choice and **ERC applicability** — which rules apply to
+  a part (a `voltage_regulator` gets dropout/rail checks; a `capacitor` gets
+  the polarized-reversal check).
+
+## 4. Resolution and late-binding
+
+The value of an attribute for a given instance is resolved in layers:
+
+- **Entity default** — the attribute as the entity declares it, with
+  parameter references (`attribute resistance = value;`) resolved against the
+  instance's constructor arguments and any entity-parameter defaults. The
+  synthesizer stamps constructor arguments (and defaults) onto the instance so
+  `design {}` / `simulation {}` blocks can read them via `self.<param>`.
+- **Instance / board override** — a board may attach an attribute to a
+  specific instance (e.g. `attribute mpn = "…"` to pin a part), overriding the
+  entity default for that instance only.
+- **Order-independent late-binding** — attribute defaults for every entity are
+  gathered into a global index across *all* imported files, so an entity
+  referenced from a sibling file gets its attributes attached regardless of
+  import order. A late-binding pass fills in attributes the extraction-time
+  overlay missed. This is why import order never changes the result.
+
+## 5. Toolchain-stamped attributes
+
+Beyond the user-authored vocabulary, synthesis *stamps* attributes onto
+instances to carry provenance and control. These are read by the toolchain,
+not typically hand-authored:
+
+- **Provenance**: `refdes` (the allocated designator — §Handles_And_Refdes),
+  `expansion_parent` / `vpin_parent` / `vpin_role` (which parent an expansion
+  child belongs to), `auto_created`, `abstract_origin` / `selected_sku` (which
+  concrete SKU an abstract entity resolved to), `socketed_in`, `stage_name` /
+  `stage_order` / `stage_rail` (supply-tree position).
+- **Control**: `do_not_populate` + `dnp_reason` (a DNP part stays in the
+  structural netlist but every electrical/BOM consumer skips it —
+  [Board_SKU_Variants.md](Board_SKU_Variants.md)), `erc_waive` (a reasoned ERC
+  waiver, printed in a separate table — [ERC.md](ERC.md)), `expansion_skipped`.
+- **Model surface**: the `spice_*` family (`spice_type`, `spice_model`,
+  `spice_is`, `spice_rs`, `spice_vsat_p`, …) — device model parameters the
+  DC/transient solver stamps for the active-device model
+  ([Vendor_Simulation_Blocks.md](Vendor_Simulation_Blocks.md)).
+- **Intent**: the `intent_*` family (`intent_name`, `intent_max_ripple`, …) —
+  carried from a flow's `for INTENT(...)` clause (main spec §3.4) for
+  synthesis and ERC to read.
+- **Supply metadata**: `supply_*` / `i_supply` — stamped by the `supply`
+  desugarer and read by sign-off and ERC016; these are exempt from the
+  constructor-argument check (main spec §7.3).
+
+## 6. Consumers are read-only
+
+Every consumer reads attributes; none but the synthesis passes that own a
+stamp *write* them. The BOM walker reads SKU identity; the part chooser reads
+`component_class` + ratings + `tolerance`; ERC reads class + electrical facts +
+`erc_waive`; the model builder reads `spice_*`; sign-off reads ratings and
+`supply_*`; the schematic reads `component_class`, `refdes`, `kicad_symbol`,
+and display-equation strings; refdes allocation reads `component_class` /
+`refdes_prefix`; PnR/KiCad export reads `footprint` / `physical_package` /
+`socketed_in`. Because attributes feed analysis and manufacturing, an
+attribute a consumer needs but cannot find yields UNCHECKED or a loud error —
+never a fabricated value (Real-Data Policy).
+
+## 7. Not yet implemented
+
+A *typed* attribute-declaration surface (schemas, capabilities, validation
+rules) and a *behavioral* per-timestep attribute surface were designed but are
+not built. See [BHDL_Attribute_Type_System.md](BHDL_Attribute_Type_System.md)
+§7 and [Behavioral_Models.md](Behavioral_Models.md). Today's attributes are
+static bindings, resolved once at synthesis, read by the consumers above.
