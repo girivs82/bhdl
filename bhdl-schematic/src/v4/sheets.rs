@@ -87,9 +87,10 @@ pub fn partition_sheets(netlist: &Netlist) -> Option<Vec<SheetGroup>> {
             v.dedup();
             v
         };
-        const PASSIVE: [&str; 8] = [
+        const PASSIVE: [&str; 12] = [
             "resistor", "capacitor", "inductor", "diode", "led", "fuse",
-            "protection", "crystal",
+            "protection", "crystal", "tvs_diode", "varistor", "pushbutton",
+            "solder-jumper",
         ];
         for _pass in 0..3 {
             // Working nets per group, recomputed each pass so adopted

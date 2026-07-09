@@ -101,6 +101,13 @@ entity ATmega16U2_QFN32(part_no: string = "ATMEGA16U2-MU") {
     }
 
     attribute component_class = "microcontroller";
+    attribute i_supply        = 10mA;   // active, 16 MHz / 5 V (datasheet typ)
+
+    simulation {
+        model {
+            node VCC draws = 0.010;
+        }
+    }
     attribute family          = "AVR";
     attribute architecture    = "8-bit RISC";
     attribute flash_kb        = 16;
@@ -122,8 +129,8 @@ entity ATmega16U2_QFN32(part_no: string = "ATMEGA16U2-MU") {
         UVCC -> C_uvcc:  Cap(100nF).1;  C_uvcc.2  -> UGND;
         // UCAP needs 1µF low-ESR (datasheet §22.2.1).
         UCAP -> C_ucap:  Cap(1µF).1;    C_ucap.2  -> UGND;
-        // USB D+/D- ESD protection.
-        D_P  -> TVS_dp:  TVSDiode(5V).1; TVS_dp.2 -> UGND;
-        D_N  -> TVS_dn:  TVSDiode(5V).1; TVS_dn.2 -> UGND;
+        // USB D+/D- ESD protection (cathode faces the protected line).
+        D_P  -> TVS_dp:  TVSDiode(5V).K; TVS_dp.A -> UGND;
+        D_N  -> TVS_dn:  TVSDiode(5V).K; TVS_dn.A -> UGND;
     }
 }

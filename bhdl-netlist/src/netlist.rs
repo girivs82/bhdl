@@ -56,11 +56,15 @@ impl Netlist {
 
     // Add a net to the netlist
     pub fn add_net(&mut self, name: Option<String>) -> NetId {
-        // Determine net class based on name
+        // Ground-by-name is safe (no invented quantity; expansions rely on
+        // it for their GND stubs). Power-by-name is NOT: it used to stamp a
+        // fabricated `Power { voltage: 5.0 }` on any net whose NAME merely
+        // contained VCC/VDD/VIN, and the DC solve then pinned that net with
+        // a fiat 5 V source — Real-Data violation (first exposed by the
+        // Arduino Uno R3 board, whose VIN is 8.3 V DERIVED through the
+        // barrel-jack diode). Power class comes from declarations only.
         let net_class = if let Some(ref n) = name {
-            if n.contains("VCC") || n.contains("VDD") || n.contains("VIN") {
-                NetClass::Power { voltage: 5.0, current: None } // Default voltage, should be updated
-            } else if n.contains("GND") || n.contains("VSS") {
+            if n.contains("GND") || n.contains("VSS") {
                 NetClass::Ground
             } else {
                 NetClass::Signal

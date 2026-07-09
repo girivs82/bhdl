@@ -79,10 +79,17 @@ pub fn solve_dc_with_input_draws(
                     changed = true;
                 }
                 None if *i_in > 1e-6 => {
+                    // CurrentSource convention: positive current is INJECTED
+                    // into nodes[0] (residual[v1] -= i). A draw REMOVES from
+                    // the input net, so nodes = [GND, VIN]. On rail-clamped
+                    // inputs the wrong order was invisible (the ideal source
+                    // absorbed it); on a series-fed input (Uno R3: diode →
+                    // VIN, no source) it drove VIN UP and the fixpoint
+                    // diverged 8.5 V → 76 V.
                     circuit.add_branch(
                         bname,
-                        &hint.vin_net,
                         &gnd_name,
+                        &hint.vin_net,
                         "CurrentSource".to_string(),
                         *i_in,
                         Some(hint.instance),

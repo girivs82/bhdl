@@ -488,9 +488,10 @@ pub fn classify_sheet(netlist: &Netlist) -> SheetPlan {
     // per-pin net flags (how every digital section is drawn), and support
     // passives draw as flagged columns. A part only lands in residue when
     // it can't even be drawn THAT way (no connected pins at all).
-    const PASSIVE_CLASSES: [&str; 8] = [
+    const PASSIVE_CLASSES: [&str; 12] = [
         "resistor", "capacitor", "inductor", "diode", "led", "fuse",
-        "protection", "crystal",
+        "protection", "crystal", "tvs_diode", "varistor", "pushbutton",
+        "solder-jumper",
     ];
     for (id, inst) in &netlist.instances {
         if claimed.contains(&id) || is_phantom(netlist, id) {

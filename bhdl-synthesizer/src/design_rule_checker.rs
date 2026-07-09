@@ -670,12 +670,77 @@ impl DesignRuleChecker {
 
 // ============= Design Rule Check Functions =============
 
-fn check_unconnected_pins(_netlist: &Netlist, _analysis: &AnalysisResult) -> Vec<DRCViolation> {
+/// DRC001 — floating and half-wired parts. Was a stub for its whole life
+/// (registered, reported, checked NOTHING) until the Arduino Uno R3 board
+/// exposed it: a failed expansion left two TVS diodes with zero
+/// connections and every gate stayed green. Scope (never guess):
+/// - an instance with real pins, NONE connected → Error (it's on the BOM
+///   and does nothing);
+/// - a TWO-pin part with exactly one side wired → Error (a series element
+///   to nowhere). Multi-pin ICs with some unconnected pins are normal and
+///   not judged here. Virtual pins are logical ports and don't count.
+fn check_unconnected_pins(netlist: &Netlist, _analysis: &AnalysisResult) -> Vec<DRCViolation> {
     let mut violations = Vec::new();
-    
-    // TODO: Implement actual unconnected pin checking
-    // For now, return empty to allow compilation
-    
+    for (iid, inst) in &netlist.instances {
+        // Phantom definition-instances are synthesis bookkeeping.
+        let is_phantom = netlist
+            .modules
+            .get(inst.definition)
+            .map(|m| m.name == inst.name)
+            .unwrap_or(false);
+        if is_phantom {
+            continue;
+        }
+        let pins: Vec<_> = netlist
+            .pin_instances
+            .values()
+            .filter(|pi| pi.instance == iid)
+            .filter(|pi| {
+                netlist
+                    .pins
+                    .get(pi.pin_def)
+                    .map(|p| !p.is_virtual)
+                    .unwrap_or(false)
+            })
+            .collect();
+        if pins.is_empty() {
+            continue; // pinless (mechanical) — nothing to wire
+        }
+        let connected = pins.iter().filter(|pi| pi.net.is_some()).count();
+        if connected == 0 {
+            violations.push(DRCViolation {
+                rule_id: "DRC001".to_string(),
+                rule_name: "Unconnected Pins Check".to_string(),
+                category: RuleCategory::Electrical,
+                severity: ViolationSeverity::Error,
+                description: format!(
+                    "'{}' ({} pin{}) has no pin connected to any net — a part                      on the BOM that does nothing; commonly the residue of a                      failed expansion or a forgotten wiring section",
+                    inst.name,
+                    pins.len(),
+                    if pins.len() == 1 { "" } else { "s" }
+                ),
+                location: ViolationLocation::Component(iid),
+                fix_suggestion: "wire the part or delete it; if an expansion                      failed (see synthesis log), fix the recipe's pin names"
+                    .to_string(),
+                standard_reference: None,
+            });
+        } else if pins.len() == 2 && connected == 1 {
+            violations.push(DRCViolation {
+                rule_id: "DRC001".to_string(),
+                rule_name: "Unconnected Pins Check".to_string(),
+                category: RuleCategory::Electrical,
+                severity: ViolationSeverity::Error,
+                description: format!(
+                    "two-pin part '{}' has one side wired and the other                      floating — a series element to nowhere conducts nothing",
+                    inst.name
+                ),
+                location: ViolationLocation::Component(iid),
+                fix_suggestion: "wire the floating side (or delete the part)"
+                    .to_string(),
+                standard_reference: None,
+            });
+        }
+    }
     violations
 }
 

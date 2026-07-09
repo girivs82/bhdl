@@ -132,7 +132,14 @@ entity ATmega328P_DIP28(part_no: string = "ATMEGA328P-PU") {
     }
 
     attribute component_class = "microcontroller";
+    attribute i_supply        = 12mA;   // active, 16 MHz / 5 V (datasheet typ)
     attribute family          = "AVR";
+
+    simulation {
+        model {
+            node VCC draws = 0.012;
+        }
+    }
     attribute architecture    = "8-bit RISC";
     attribute flash_kb        = 32;
     attribute sram_kb         = 2;

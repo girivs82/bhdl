@@ -4,6 +4,8 @@
     "C": {
       "cfilter": "C4",
       "cin": "C1",
+      "cin_2": "C7",
+      "cin_3": "C8",
       "cout": "C2",
       "creset": "C3",
       "reg5v_C_in": "C5",

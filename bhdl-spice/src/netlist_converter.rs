@@ -958,9 +958,12 @@ impl NetlistToSpiceConverter {
             }
 
             // Classify pins by their type and direction from stdlib definitions
+            // `power in` lowers to PinDirection::Power (the ERC convention);
+            // In/InOut kept for legacy signal-typed declarations.
             let vin_net = pin_info.iter()
                 .find(|p| p.pin_type == bhdl_netlist::PinType::Power
-                       && (p.pin_direction == bhdl_netlist::PinDirection::In
+                       && (p.pin_direction == bhdl_netlist::PinDirection::Power
+                           || p.pin_direction == bhdl_netlist::PinDirection::In
                            || p.pin_direction == bhdl_netlist::PinDirection::InOut))
                 .map(|p| p.net_name.clone());
             let vout_net = pin_info.iter()
@@ -1036,7 +1039,8 @@ impl NetlistToSpiceConverter {
                 // supersedes the generic computation only when explicitly given.
                 let vin_pin_name = pin_info.iter()
                     .find(|p| p.pin_type == bhdl_netlist::PinType::Power
-                           && (p.pin_direction == bhdl_netlist::PinDirection::In
+                           && (p.pin_direction == bhdl_netlist::PinDirection::Power
+                               || p.pin_direction == bhdl_netlist::PinDirection::In
                                || p.pin_direction == bhdl_netlist::PinDirection::InOut))
                     .map(|p| p.pin_name.clone());
                 if let (Some(ent), Some(pin)) = (&entity_name, &vin_pin_name) {

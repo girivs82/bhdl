@@ -2719,7 +2719,20 @@ fn regulator_hints(
                     .and_then(|n| n.name.clone())
             })
         };
-        let vin = net_of(&|p| p.name.eq_ignore_ascii_case("VIN") || p.name.eq_ignore_ascii_case("IN"));
+        // Pin TYPES first (`power in` lowers to PinDirection::Power — the
+        // datasheet truth stdlib entities declare), pin names second (VI is
+        // what the NCP1117 datasheet calls its input; VIN what most others do).
+        let vin = net_of(&|p| {
+            p.pin_type == bhdl_netlist::types::PinType::Power
+                && p.direction == bhdl_netlist::types::PinDirection::Power
+        })
+        .or_else(|| {
+            net_of(&|p| {
+                p.name.eq_ignore_ascii_case("VIN")
+                    || p.name.eq_ignore_ascii_case("IN")
+                    || p.name.eq_ignore_ascii_case("VI")
+            })
+        });
         // The output rail. Normally the VOUT pin's net — but when the board
         // hand-authors the application circuit, the (virtual) VOUT pin is
         // unwired (its expansion skipped, see expansion_interpreter's
@@ -2727,9 +2740,16 @@ fn regulator_hints(
         // actually drives: trace from the switch/output pin through the
         // board's series parts (inductor) to a Power-class net.
         let vout = net_of(&|p| {
-            p.name.eq_ignore_ascii_case("VOUT")
-                || p.name.eq_ignore_ascii_case("OUT")
-                || p.name.eq_ignore_ascii_case("VO")
+            p.pin_type == bhdl_netlist::types::PinType::Power
+                && p.direction == bhdl_netlist::types::PinDirection::Out
+                && !p.is_virtual
+        })
+        .or_else(|| {
+            net_of(&|p| {
+                p.name.eq_ignore_ascii_case("VOUT")
+                    || p.name.eq_ignore_ascii_case("OUT")
+                    || p.name.eq_ignore_ascii_case("VO")
+            })
         })
         .or_else(|| {
             let traced = driven_output_rail(netlist, iid);

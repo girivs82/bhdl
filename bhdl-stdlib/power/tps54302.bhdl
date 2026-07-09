@@ -5,7 +5,7 @@ entity TPS54302() {
     // Power pins
     pin VIN: power in;
     pin GND: ground;
-    pin SW: power out;
+    pin SW: switch out;
     // Logical output port: no package pin — the output leaves through the
     // external inductor — but the ENTITY's interface has a named output
     // (block diagrams, closed-loop DC, the S4 emitter's rail tie).
@@ -17,7 +17,7 @@ entity TPS54302() {
     
     // Bootstrap and internal supply pins
     pin BOOT: signal inout;
-    pin PH: signal out;
+    pin PH: switch out;
     
     // Component attributes
     attribute component_class = "voltage_regulator";

@@ -28,7 +28,13 @@ entity LMV358(part_no: string = "LMV358IDGKR") {
     pin V_MINUS: signal inout; // negative supply / GND          (pin 4)
     pin V_PLUS:  signal inout; // positive supply / VCC          (pin 8)
 
-    attribute component_class    = "op-amp";
+    attribute component_class    = "opamp";
+    attribute open_loop_gain     = 100000;   // 100 dB typ
+    attribute gain_bandwidth     = 1MHz;
+    attribute input_resistance   = 100MΩ;
+    attribute output_resistance  = 100Ω;
+    attribute input_offset       = 1.7mV;
+    attribute slew_rate          = 1V;       // 1 V/µs
     attribute family             = "dual-supply-rail-to-rail";
     attribute channels           = 2;
     attribute supply_voltage_min = 2.7;

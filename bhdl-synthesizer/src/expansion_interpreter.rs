@@ -89,7 +89,14 @@ pub fn expand_entity_instances_with_designs(
                 results.push(result);
             }
             Err(e) => {
-                warn!("Failed to expand '{}': {}", cand.instance_name, e);
+                // A failed expansion is NOT a skipped expansion: children
+                // minted before the failing connection stay in the netlist,
+                // partially wired or floating. Say so loudly — DRC001
+                // backstops the floating parts, but the recipe is broken.
+                error!(
+                    "Expansion of '{}' FAILED mid-application: {} — children                      created before the failure remain in the netlist,                      partially wired; fix the entity's expansion recipe",
+                    cand.instance_name, e
+                );
             }
         }
     }

@@ -16,12 +16,13 @@ entity TVSDiode(voltage: voltage) {
 alias TVS = TVSDiode;
 alias TransientSuppressor = TVSDiode;
 
-entity Fuse(current: current) {
+entity Fuse(current: current, resistance: resistance = 10mΩ) {
     pin 1: signal inout;
     pin 2: signal inout;
 
     attribute component_class = "fuse";
     attribute rated_current = current;
+    attribute resistance = resistance;   // cold resistance (DC model); polyfuses run 30-500mΩ
     attribute voltage_rating = 250V;
     attribute kicad_symbol = "Device:Fuse";
 }

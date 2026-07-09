@@ -1,0 +1,256 @@
+// Arduino Uno R3 — a real, shipping design transcribed from the published
+// schematic (arduino.cc, Uno R3 reference design). USB-C in place of the
+// original USB-B (the one liberty taken; modern clones ship exactly this).
+//
+// This board exists as the generality test: the corpus grew up alongside
+// the toolchain, this design did not. Everything here is faithful to the
+// R3: the barrel-jack → M7 → NCP1117 5V path, the LMV358 power-mux
+// comparator driving the FDN340P that gates USB VBUS onto the 5V rail,
+// the LP2985 3.3V LDO, the ATmega16U2 USB bridge with its 16 MHz crystal,
+// the ATmega328P with its ceramic resonator, the auto-reset DTR network,
+// the crossed UART with series 1k resistors, the pin-13 LED buffered by
+// the LMV358's second half, and all seven headers.
+
+import { NCP1117 } from "bhdl-stdlib/power/ncp1117.bhdl";
+import { LP2985 } from "bhdl-stdlib/power/lp2985.bhdl";
+import { LMV358 } from "bhdl-stdlib/actives/lmv358.bhdl";
+import { ATmega328P_DIP28 } from "bhdl-stdlib/actives/atmega328p.bhdl";
+import { ATmega16U2_QFN32 } from "bhdl-stdlib/actives/atmega16u2.bhdl";
+import { MOSFET } from "bhdl-stdlib/actives/mosfet.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Diode } from "bhdl-stdlib/passives/diode.bhdl";
+import { Crystal, Crystal_GND2 } from "bhdl-stdlib/passives/crystal.bhdl";
+import { Varistor } from "bhdl-stdlib/passives/varistor.bhdl";
+import { Fuse } from "bhdl-stdlib/protection/tvs.bhdl";
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
+import { SW_Push } from "bhdl-stdlib/electromechanical/switch.bhdl";
+import { Barrel_Jack_Switch } from "bhdl-stdlib/connectors/barrel_jack.bhdl";
+import { USB_C_Receptacle_USB2_16P } from "bhdl-stdlib/connectors/usb_c.bhdl";
+import { Pin_Header_01x06, Pin_Header_01x08, Pin_Header_01x10, Pin_Header_02x03 } from "bhdl-stdlib/connectors/pin_header.bhdl";
+
+board ArduinoUnoR3 {
+    // ── Boundary (ports doctrine: direction tells the truth) ──
+    port DC_IN:   power in  = 9V @ 1A;      // barrel jack, 7-12 V adapter
+    port VBUS:    power in  = 5V @ 500mA;   // USB VBUS
+    port VCC_5V:  power out = 5V @ 1A;      // main rail (POWER header pin 5)
+    port VCC_3V3: power out = 3.3V @ 150mA; // LP2985 rail (POWER header pin 4)
+    port GND: ground;
+
+    // ── Barrel-jack input: jack → M7 reverse-protection diode → VIN ──
+    X1: Barrel_Jack_Switch();
+    @DC_IN -> X1.TIP;
+    X1.SLEEVE -> @GND;
+    X1.SWITCH -> @GND;
+    @DC_IN -> D1: Diode(vf=0.7V).A;   // M7 (SMA) on the R3
+    D1.K -> VIN;
+
+    // ── 5V regulator: NCP1117-5.0 with the R3's bulk caps ──
+    U1: NCP1117();
+    VIN -> U1.VI;
+    U1.VO -> @VCC_5V;
+    U1.GND -> @GND;
+    VIN -> PC1: Cap(47µF, voltage=25V).1;   // input bulk
+    PC1.2 -> @GND;
+    @VCC_5V -> PC2: Cap(47µF, voltage=16V).1;  // output bulk
+    PC2.2 -> @GND;
+    VIN -> C6: Cap(100nF).1;
+    C6.2 -> @GND;
+    @VCC_5V -> C7: Cap(100nF).1;
+    C7.2 -> @GND;
+
+    // ── 3.3V LDO: LP2985-3.3 fed from the 5V rail ──
+    U2: LP2985();
+    @VCC_5V -> U2.VIN;
+    U2.VOUT -> @VCC_3V3;
+    U2.GND -> @GND;
+    @VCC_5V -> U2.EN;                  // enabled whenever 5V is up
+    U2.BP -> C8: Cap(10nF).1;          // reference bypass
+    C8.2 -> @GND;
+    @VCC_3V3 -> C9: Cap(1µF).1;
+    C9.2 -> @GND;
+
+    // ── USB power path: VBUS → polyfuse → USBVCC → FDN340P → 5V rail ──
+    F1: Fuse(current=500mA, resistance=150mΩ);  // MF-MSMF050-2 polyfuse (cold R, datasheet typ)
+    @VBUS -> F1.1;
+    F1.2 -> USBVCC;
+    // FDN340P P-FET: on (USB powers the board) only when the comparator
+    // says no barrel power is present.
+    T1: MOSFET(part_no="FDN340P", channel="pmos", vds_max=20V, id_max=2A, rds_on=50mΩ, vgs_th_max=1V);
+    USBVCC -> T1.S;
+    T1.D -> @VCC_5V;
+
+    // ── Power-mux comparator (LMV358 half A):
+    //    IN+ = VIN/2, IN− = 3V3; barrel power present ⇒ output high ⇒
+    //    P-FET off ⇒ USB disconnected from the 5V rail. ──
+    U5: LMV358();
+    @VCC_5V -> U5.V_PLUS;
+    U5.V_MINUS -> @GND;
+    VIN -> R10: Res(10kΩ).1;
+    R10.2 -> CMP;
+    CMP -> R11: Res(10kΩ).1;
+    R11.2 -> @GND;
+    CMP -> U5.IN_A_P;
+    @VCC_3V3 -> U5.IN_A_N;
+    U5.OUT_A -> T1.G;
+
+    // ── Pin-13 LED buffered by the LMV358's half B (unity follower) ──
+    U5.OUT_B -> U5.IN_B_N;             // unity feedback
+    SCK -> U5.IN_B_P;                  // PB5 / digital 13
+    U5.OUT_B -> RL1: Res(1kΩ).1;
+    RL1.2 -> LED_L: LED(color="yellow").A;
+    LED_L.K -> @GND;
+
+    // ── ON LED ──
+    @VCC_5V -> R_on: Res(1kΩ).1;
+    R_on.2 -> LED_ON: LED(color="green").A;
+    LED_ON.K -> @GND;
+
+    // ── USB-C receptacle (16-pin USB2): VBUS / D± / CC pulldowns ──
+    J_USB: USB_C_Receptacle_USB2_16P();
+    J_USB.A4 -> @VBUS;  J_USB.B4 -> @VBUS;
+    J_USB.A9 -> @VBUS;  J_USB.B9 -> @VBUS;
+    J_USB.A1 -> @GND;   J_USB.B1 -> @GND;
+    J_USB.A12 -> @GND;  J_USB.B12 -> @GND;
+    J_USB.S1 -> @GND;
+    J_USB.A5 -> R_cc1: Res(5.1kΩ).1;   // CC1: UFP sink advertisement
+    R_cc1.2 -> @GND;
+    J_USB.B5 -> R_cc2: Res(5.1kΩ).1;   // CC2
+    R_cc2.2 -> @GND;
+    J_USB.A6 -> USB_DP;  J_USB.B6 -> USB_DP;
+    J_USB.A7 -> USB_DM;  J_USB.B7 -> USB_DM;
+    // Transient suppression on the data lines (CG0603MLC-05E on the R3).
+    USB_DP -> Z1: Varistor(part_no="CG0603MLC-05E").A;
+    Z1.B -> @GND;
+    USB_DM -> Z2: Varistor(part_no="CG0603MLC-05E").A;
+    Z2.B -> @GND;
+
+    // ── ATmega16U2 USB bridge ──
+    U3: ATmega16U2_QFN32();
+    @VCC_5V -> U3.VCC;
+    @VCC_5V -> U3.AVCC;
+    @VCC_5V -> U3.UVCC;
+    U3.GND -> @GND;
+    U3.UGND -> @GND;
+    U3.PAD -> @GND;
+    U3.UCAP -> C10: Cap(1µF).1;        // internal USB regulator decoupling
+    C10.2 -> @GND;
+    // USB data through 22Ω series resistors.
+    USB_DP -> R22A: Res(22Ω).1;
+    R22A.2 -> U3.D_P;
+    USB_DM -> R22B: Res(22Ω).1;
+    R22B.2 -> U3.D_N;
+    // 16 MHz crystal with 22 pF load caps and 1 MΩ bias.
+    U3.XTAL1 -> Y1: Crystal(part_no="16MHz").A;
+    Y1.B -> U3.PC0;                    // XTAL2 is PC0's alternate function
+    U3.XTAL1 -> C11: Cap(22pF).1;
+    C11.2 -> @GND;
+    U3.PC0 -> C12: Cap(22pF).1;
+    C12.2 -> @GND;
+    U3.XTAL1 -> R_xt: Res(1MΩ).1;
+    R_xt.2 -> U3.PC0;
+    // Reset: pullup + its own ICSP header.
+    @VCC_5V -> R_rst2: Res(10kΩ).1;
+    R_rst2.2 -> RESET2;
+    RESET2 -> U3.PC1;
+    // HWB/DTR (PD7): boot-mode pulldown; also sources the auto-reset pulse.
+    U3.PD7 -> R_hwb: Res(10kΩ).1;
+    R_hwb.2 -> @GND;
+    // ICSP2 (2×3): MISO / 5V / SCK / MOSI / RESET2 / GND.
+    ICSP2: Pin_Header_02x03();
+    U3.PB3 -> ICSP2.1;                 // MISO
+    @VCC_5V -> ICSP2.2;
+    U3.PB1 -> ICSP2.3;                 // SCK
+    U3.PB2 -> ICSP2.4;                 // MOSI
+    RESET2 -> ICSP2.5;
+    ICSP2.6 -> @GND;
+
+    // ── ATmega328P ──
+    U4: ATmega328P_DIP28();
+    @VCC_5V -> U4.VCC;
+    @VCC_5V -> U4.AVCC;
+    U4.GND1 -> @GND;
+    U4.GND2 -> @GND;
+    U4.AREF -> C13: Cap(100nF).1;
+    C13.2 -> @GND;
+    // 16 MHz ceramic resonator (CSTCE16M0V53 — 3-terminal, grounded case).
+    U4.PB6 -> Y2: Crystal_GND2(part_no="CSTCE16M0V53-R0").A;
+    Y2.B -> U4.PB7;
+    Y2.GND2 -> @GND;
+    // Reset network: 10k pullup, protection diode, button, DTR cap.
+    @VCC_5V -> R_rst1: Res(10kΩ).1;
+    R_rst1.2 -> RESET;
+    RESET -> U4.PC6;
+    RESET -> D2: Diode(vf=0.7V).A;     // clamps the DTR pulse overshoot
+    D2.K -> @VCC_5V;
+    RESET -> S1: SW_Push().A;
+    S1.B -> @GND;
+    U3.PD7 -> C14: Cap(100nF).1;       // DTR auto-reset coupling
+    C14.2 -> RESET;
+
+    // ── Crossed UART between the two MCUs, 1k series (RN4 on the R3) ──
+    U3.PD3 -> R_tx1: Res(1kΩ).1;       // 16U2 TXD1 → 328P RXD
+    R_tx1.2 -> U4.PD0;
+    U4.PD1 -> R_rx1: Res(1kΩ).1;       // 328P TXD → 16U2 RXD1
+    R_rx1.2 -> U3.PD2;
+
+    // ── TX/RX LEDs (active-low from 16U2 PD5/PD4) ──
+    @VCC_5V -> LED_TX: LED(color="yellow").A;
+    LED_TX.K -> R_tx2: Res(1kΩ).1;
+    R_tx2.2 -> U3.PD5;
+    @VCC_5V -> LED_RX: LED(color="yellow").A;
+    LED_RX.K -> R_rx2: Res(1kΩ).1;
+    R_rx2.2 -> U3.PD4;
+
+    // ── Digital 13 / SPI net names used above ──
+    U4.PB5 -> SCK;
+
+    // ── Headers ──
+    // POWER (1×8): NC, IOREF, RESET, 3V3, 5V, GND, GND, VIN.
+    J_PWR: Pin_Header_01x08();
+    @VCC_5V -> J_PWR.2;                // IOREF is tied to the 5V rail
+    RESET -> J_PWR.3;
+    @VCC_3V3 -> J_PWR.4;
+    @VCC_5V -> J_PWR.5;
+    J_PWR.6 -> @GND;
+    J_PWR.7 -> @GND;
+    VIN -> J_PWR.8;
+    // ANALOG IN (1×6): A0..A5.
+    J_AD: Pin_Header_01x06();
+    U4.PC0 -> J_AD.1;
+    U4.PC1 -> J_AD.2;
+    U4.PC2 -> J_AD.3;
+    U4.PC3 -> J_AD.4;
+    U4.PC4 -> J_AD.5;
+    U4.PC5 -> J_AD.6;
+    // DIGITAL 0-7 (1×8).
+    J_D1: Pin_Header_01x08();
+    U4.PD0 -> J_D1.1;
+    U4.PD1 -> J_D1.2;
+    U4.PD2 -> J_D1.3;
+    U4.PD3 -> J_D1.4;
+    U4.PD4 -> J_D1.5;
+    U4.PD5 -> J_D1.6;
+    U4.PD6 -> J_D1.7;
+    U4.PD7 -> J_D1.8;
+    // DIGITAL 8-13 + GND + AREF + SDA + SCL (1×10).
+    J_D2: Pin_Header_01x10();
+    U4.PB0 -> J_D2.1;
+    U4.PB1 -> J_D2.2;
+    U4.PB2 -> J_D2.3;
+    U4.PB3 -> J_D2.4;
+    U4.PB4 -> J_D2.5;
+    SCK -> J_D2.6;                     // digital 13
+    J_D2.7 -> @GND;
+    U4.AREF -> J_D2.8;
+    U4.PC4 -> J_D2.9;                  // SDA
+    U4.PC5 -> J_D2.10;                 // SCL
+    // ICSP (2×3) for the 328P.
+    ICSP1: Pin_Header_02x03();
+    U4.PB4 -> ICSP1.1;                 // MISO
+    @VCC_5V -> ICSP1.2;
+    SCK -> ICSP1.3;
+    U4.PB3 -> ICSP1.4;                 // MOSI
+    RESET -> ICSP1.5;
+    ICSP1.6 -> @GND;
+}

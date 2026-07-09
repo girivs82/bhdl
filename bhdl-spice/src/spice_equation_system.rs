@@ -320,6 +320,15 @@ impl SpiceEquationSystem {
     }
 }
 
+/// Shunt conductance from every node to ground (SPICE `gshunt`). Real
+/// boards are full of DC-floating islands — two unmodeled MCU pins joined
+/// by a series resistor make a 2×2 KCL block that is EXACTLY singular
+/// (healthy diagonals, so the near-zero-diagonal perturbation never fires;
+/// first exposed by the Arduino Uno R3's crossed UART). 1 nS anchors such
+/// islands at 0 V while perturbing driven nodes by ~nV. Stamped in BOTH the
+/// residual and the Jacobian so Newton sees a consistent system.
+const GSHUNT: f64 = 1e-9;
+
 impl EquationSystem for SpiceEquationSystem {
     fn evaluate_residuals(&self, variables: &[Variable]) -> DVector<f64> {
         let mut residual = DVector::zeros(self.num_vars);
@@ -442,7 +451,14 @@ impl EquationSystem for SpiceEquationSystem {
                 }
             }
         }
-        
+
+        // gshunt: every node leaks to ground (see GSHUNT doc).
+        for i in 0..self.num_vars {
+            if let Some(VariableElement::NodeVoltage(_)) = self.var_to_element.get(&i) {
+                residual[i] += GSHUNT * x[i];
+            }
+        }
+
         residual
     }
     
@@ -573,7 +589,14 @@ impl EquationSystem for SpiceEquationSystem {
                 }
             }
         }
-        
+
+        // gshunt diagonal — must match the residual stamp exactly.
+        for i in 0..self.num_vars {
+            if let Some(VariableElement::NodeVoltage(_)) = self.var_to_element.get(&i) {
+                jacobian[(i, i)] += GSHUNT;
+            }
+        }
+
         jacobian
     }
     
