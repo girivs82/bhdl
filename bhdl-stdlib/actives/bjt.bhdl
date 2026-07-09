@@ -22,7 +22,9 @@ entity BJT(
     ic_max: current     = 600mA,     // continuous collector current (magnitude)
     hfe_min: float      = 100,       // DC gain, min
     power_rating: power = 625mW      // package dissipation
-) {
+)
+    where polarity in ("npn", "pnp")    // enum domain — reject e.g. "PNP"/"n"
+{
     pin C: signal inout;  // Collector
     pin B: signal inout;  // Base
     pin E: signal inout;  // Emitter
