@@ -1,3 +1,11 @@
+> **STATUS: aspirational — not implemented (verified 2026-07-09).** The
+> behavioral-attribute surface here (`when (cond) { … += … }` blocks,
+> expression attributes recomputed each timestep, usage-inferred mutability)
+> does not parse and is not built. Shipped attributes are static
+> `attribute name = value;` bindings (main spec §6.3). Dynamic/behavioral
+> modeling is tracked separately in [Behavioral_Models.md](Behavioral_Models.md)
+> (also a proposal). Design intent, not current syntax.
+
 # Unified Attribute System Technical Specification
 
 ## Abstract

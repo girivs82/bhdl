@@ -1,3 +1,10 @@
+> **SUPERSEDED by [Interfaces.md](Interfaces.md) (2026-07-09).** This earlier
+> draft describes interface features that were redesigned or retired —
+> `require pullup(...)`/`require esd_protection(...)` (replaced by vendor
+> `expansion {}` + conditional gating), `~Interface` reversal (replaced by
+> `:role` perspectives), `extends` inheritance, and inline `level_shift()`.
+> Use Interfaces.md as the current interface reference.
+
 # BHDL Interface Specification
 
 ## 1. Introduction

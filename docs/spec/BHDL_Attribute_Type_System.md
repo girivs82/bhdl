@@ -1,3 +1,13 @@
+> **STATUS: aspirational — not implemented (verified 2026-07-09).** This
+> document describes a typed-attribute system (`attribute_type` declarations,
+> `capability {}`, `import stdlib.attributes.*`, `enum`/`struct` attribute
+> types) that the parser does not accept and the toolchain does not build.
+> The **shipped** attribute surface is the plain `attribute name = value;`
+> form documented in [BHDL_Complete_Specification.md](BHDL_Complete_Specification.md)
+> §6.3, with the canonical attribute vocabulary in
+> [Product_Description_Model.md](Product_Description_Model.md). Treat this file
+> as design intent for a future type system, not current syntax.
+
 # BHDL Attribute Type System
 ## Core Language Feature for Typed Attributes
 

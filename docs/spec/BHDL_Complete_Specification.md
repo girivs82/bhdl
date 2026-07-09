@@ -368,10 +368,16 @@ Attributes carry the datasheet and toolchain-facing facts of a part:
 `kicad_symbol`, `output_voltage`, `i_quiescent`, `feedback_voltage`,
 `efficiency`, `rds_on`, and so on. Values may be literals, quantities,
 booleans, references to a parameter (`attribute resistance = value;`), or
-computed expressions (the ternary table above). The canonical attribute set
-and its meaning are specified in
+computed expressions (the ternary table above). Attributes are **static**:
+`attribute name = value;`. The canonical attribute *vocabulary* (the agreed
+names like `manufacturer`, `mpn`, `footprint`, `component_class`) lives in
+`bhdl-common::sku` and is documented in
+[Product_Description_Model.md](Product_Description_Model.md). A richer *typed*
+attribute system and a *behavioral* (per-timestep) attribute surface are
+designed but not yet implemented — see
 [BHDL_Attribute_Type_System.md](BHDL_Attribute_Type_System.md) and
-[Unified_Attribute_System_Specification.md](Unified_Attribute_System_Specification.md).
+[Unified_Attribute_System_Specification.md](Unified_Attribute_System_Specification.md)
+(both marked aspirational).
 
 ### 6.4 Generics *(compile-time parameters)*
 
@@ -1015,7 +1021,8 @@ current specifications:
 | Source resolvers (auto-fetch) | [Source_Resolvers.md](Source_Resolvers.md) |
 | Schematic engine | [Schematic_V4.md](Schematic_V4.md) |
 | Interfaces (SPI/I2C/UART/DDR) | [Interfaces.md](Interfaces.md) |
-| Attribute type system | [BHDL_Attribute_Type_System.md](BHDL_Attribute_Type_System.md), [Unified_Attribute_System_Specification.md](Unified_Attribute_System_Specification.md) |
+| Attribute vocabulary (shipped) | [Product_Description_Model.md](Product_Description_Model.md) |
+| Typed / behavioral attributes *(aspirational)* | [BHDL_Attribute_Type_System.md](BHDL_Attribute_Type_System.md), [Unified_Attribute_System_Specification.md](Unified_Attribute_System_Specification.md) |
 | Net naming | [Net_Naming_Specification.md](Net_Naming_Specification.md) |
 | Board SKU variants | [Board_SKU_Variants.md](Board_SKU_Variants.md) |
 | Behavioral / dynamic models *(proposal)* | [Behavioral_Models.md](Behavioral_Models.md) |
