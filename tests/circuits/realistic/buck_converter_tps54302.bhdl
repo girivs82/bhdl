@@ -13,8 +13,8 @@ board BuckConverterTPS54302 {
     ground GND;
     
     // Main regulator IC
-    @VIN -> c_in1: Capacitor(22uF, 25V).1;
-    @VIN -> c_in2: Capacitor(100nF, 25V).1;
+    @VIN -> c_in1: Capacitor(22uF, 35V).1;
+    @VIN -> c_in2: Capacitor(100nF, 35V).1;
     
     // Connect input caps to ground
     c_in1.2 -> @GND;
@@ -29,12 +29,12 @@ board BuckConverterTPS54302 {
     u1.BOOT -> c_boot: Capacitor(100nF, 10V).1; c_boot.2 -> u1.PH;
     
     // Power stage - inductor from SW to output
-    u1.SW -> l1: Inductor(4.7uH, 3A).1;
+    u1.SW -> l1: Inductor(4.7uH, 4A).1;
     l1.2 -> @VOUT;
     
     // Output capacitors
-    @VOUT -> c_out1: Capacitor(47uF, 10V).1;
-    @VOUT -> c_out2: Capacitor(100nF, 10V).1;
+    @VOUT -> c_out1: Capacitor(47uF, 16V).1;
+    @VOUT -> c_out2: Capacitor(100nF, 16V).1;
     c_out1.2 -> @GND;
     c_out2.2 -> @GND;
     

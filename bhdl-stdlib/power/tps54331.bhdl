@@ -118,16 +118,19 @@ entity TPS54331(
         l_value     = l_num / l_den;
 
         // Inductor SATURATION-CURRENT requirement, sized from the operating
-        // point: I_peak = I_out + ΔI_L/2, with 1.3× headroom over peak (the
+        // point: I_peak = I_out + ΔI_L/2, with 1.6× headroom over peak (the
         // part's Isat/Irms must clear this or it saturates in the power
-        // path). Flows to the inductor as `rated_current` → the supply
-        // provider's current gate. This is the L analogue of the divider /
+        // path; sign-off derates I_pk by 1.25× and wants 1.2× margin on
+        // top, so 1.5× is the policy floor — 1.6× leaves slack for the
+        // GLACIER-refined peak exceeding this closed form). Flows to the
+        // inductor as `rated_current` → the supply provider's current
+        // gate. This is the L analogue of the divider /
         // L / C sizing already done here — a sizing output, not a board
         // parameter. (A GLACIER-refined I_peak supersedes this closed form
         // once the in-loop stress model lands.)
         const il_half     = d_il / 2.0;
         const i_peak      = self.i_out_max + il_half;
-        l_rated_current   = i_peak * 1.3;
+        l_rated_current   = i_peak * 1.6;
 
         // C_out = ΔI_L / (8·f_sw·ΔV_out).
         const co_d0 = self.f_sw * self.ripple_v;

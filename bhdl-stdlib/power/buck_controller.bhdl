@@ -99,7 +99,7 @@ entity BuckController(
 
         const il_half   = d_il / 2.0;
         const i_peak    = self.i_out_max + il_half;
-        l_rated_current = i_peak * 1.3;
+        l_rated_current = i_peak * 1.6;
 
         // C_out = ΔI_L / (8·f_sw·ΔV_out).
         const co_d0 = self.f_sw * self.ripple_v;

@@ -30,7 +30,7 @@ board PowerSupply_7805 {
     reg.VOUT -> VCC;
     
     // Output filtering
-    VCC -> c_out1: ElectrolyticCap(10µF, 10V).pos;
+    VCC -> c_out1: ElectrolyticCap(10µF, 16V).pos;
     VCC -> c_out2: Cap(0.1µF).1;
     
     // LED power indicator

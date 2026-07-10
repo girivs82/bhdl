@@ -39,7 +39,7 @@ board PowerSupply_7805_Intent {
     reg.GND -> GND;
 
     // CENTER ZONE: Output filtering with intent
-    VCC -> c_out1: ElectrolyticCap(10µF, 10V).pos
+    VCC -> c_out1: ElectrolyticCap(10µF, 16V).pos
         for noise_filtering(10kHz, 60dB);
 
     VCC -> c_out2: Cap(0.1µF).1;

@@ -2187,7 +2187,7 @@ impl NetlistGenerator {
             .collect();
         let stdlib_attrs = Self::stdlib_entity_attribute_index(&fallback_names);
 
-        let updates: Vec<(InstanceId, std::collections::HashMap<String, String>)> = id_names
+        let updates: Vec<(InstanceId, std::collections::HashMap<String, String>, std::collections::HashMap<String, Vec<String>>)> = id_names
             .into_iter()
             .filter_map(|(id, name)| {
                 // The instance's already-stamped constructor args (Phase 4.4)
@@ -2199,6 +2199,33 @@ impl NetlistGenerator {
                     .instances
                     .get(id)
                     .map(|i| i.attributes.clone())
+                    .unwrap_or_default();
+                // Stale-placeholder forms: instance creation copies the
+                // module's attributes, which carry either the raw reference
+                // text for param refs with no default (`voltage_rating =
+                // voltage`) or the entity-DEFAULT resolution for defaulted
+                // params (`current_rating = rated_current` → "1A" before the
+                // instance's `Ind(8.2uH, 6A)` arg is known). Collect both
+                // forms per key so the apply step below can recognise a
+                // value that is still just the entity-level copy and replace
+                // it with the per-instance resolution; a value matching
+                // neither is a genuine per-instance choice and is kept.
+                let stale_attrs: std::collections::HashMap<String, Vec<String>> = self
+                    .import_loader
+                    .get_entity(&name)
+                    .map(|e| {
+                        let mut stale: std::collections::HashMap<String, Vec<String>> =
+                            std::collections::HashMap::new();
+                        for (k, v) in bhdl_analyzer::attribute_extraction::extract_module_attributes(e) {
+                            stale.entry(k).or_default().push(v);
+                        }
+                        for (k, v) in
+                            bhdl_analyzer::attribute_extraction::extract_module_attributes_resolved(e)
+                        {
+                            stale.entry(k).or_default().push(v);
+                        }
+                        stale
+                    })
                     .unwrap_or_default();
                 let mut attrs = self
                     .import_loader
@@ -2229,19 +2256,40 @@ impl NetlistGenerator {
                 if attrs.is_empty() {
                     None
                 } else {
-                    Some((id, attrs))
+                    Some((id, attrs, stale_attrs))
                 }
             })
             .collect();
-        // Step 3: apply — mutates instances.
+        // Step 3: apply — mutates instances. An attribute the instance
+        // already carries is kept — UNLESS its value is still one of the
+        // entity-level copies stamped at instance creation before the ctor
+        // args were known (the raw unresolved reference text
+        // `voltage_rating = "voltage"`, or the entity default
+        // `current_rating = "1A"`) and we now have a real per-instance
+        // resolution: positional args bound to declared param names
+        // (ElectrolyticCap(100µF, 25V) → voltage=25V, Ind(8.2uH, 6A) →
+        // rated_current=6A) only land on the instance after creation, so
+        // the stale placeholder must yield to the resolved value here.
         let (mut total, mut touched) = (0usize, 0usize);
-        for (id, attrs) in updates {
+        for (id, attrs, stale_attrs) in updates {
             if let Some(inst) = self.netlist.instances.get_mut(id) {
                 let before = total;
                 for (k, v) in attrs {
-                    if !inst.attributes.contains_key(&k) {
-                        inst.attributes.insert(k, v);
-                        total += 1;
+                    match inst.attributes.get(&k) {
+                        None => {
+                            inst.attributes.insert(k, v);
+                            total += 1;
+                        }
+                        Some(existing)
+                            if *existing != v
+                                && stale_attrs
+                                    .get(&k)
+                                    .is_some_and(|forms| forms.iter().any(|f| f == existing)) =>
+                        {
+                            inst.attributes.insert(k, v);
+                            total += 1;
+                        }
+                        Some(_) => {}
                     }
                 }
                 if total > before {

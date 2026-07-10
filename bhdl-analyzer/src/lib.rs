@@ -151,6 +151,19 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
              power_errors_count,
              power_warnings_count);
 
+    // Build the global entity constructor-parameter-name index (imported
+    // files + main file), the order-independent companion to
+    // entity_attribute_index. The synthesizer's expansion interpreter
+    // uses it to resolve attribute values that reference a child entity's
+    // own parameter into the instantiation argument. Built BEFORE Pass 6
+    // so component inference can bind positional constructor args to the
+    // entity's declared parameter names (ElectrolyticCap(100µF, 25V) →
+    // value/voltage, not value/param_1).
+    let mut entity_param_names = imported_entity_param_index.clone();
+    for (name, params) in extract_entity_param_names(source_file) {
+        entity_param_names.insert(name, params);
+    }
+
     // Pass 6: Component Inference
     println!("Analyzer: Starting Pass 6 - Component Inference...");
     let mut component_inference = ComponentInferenceContext::new();
@@ -179,7 +192,7 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
         println!("  - {} -> {}", comp, domain);
     }
     
-    analyze_components_for_inference(source_file.syntax(), &mut component_inference, &power_context);
+    analyze_components_for_inference(source_file.syntax(), &mut component_inference, &power_context, &entity_param_names);
     let inferred_components_count = component_inference.get_inferred_components().len();
     let inference_warnings_count = component_inference.warnings.len();
     println!("Analyzer: Pass 6 complete. Components inferred: {}, Warnings: {}", 
@@ -293,16 +306,6 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
     let mut entity_attribute_index = imported_entity_attr_index.clone();
     for (name, attrs) in extract_entity_attribute_index(source_file) {
         entity_attribute_index.insert(name, attrs);
-    }
-
-    // Build the global entity constructor-parameter-name index (imported
-    // files + main file), the order-independent companion to
-    // entity_attribute_index. The synthesizer's expansion interpreter
-    // uses it to resolve attribute values that reference a child entity's
-    // own parameter into the instantiation argument.
-    let mut entity_param_names = imported_entity_param_index.clone();
-    for (name, params) in extract_entity_param_names(source_file) {
-        entity_param_names.insert(name, params);
     }
 
     // Per-entity attribute→param bare-reference linkage (imported files +
@@ -530,12 +533,13 @@ fn analyze_components_for_inference(
     syntax: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>,
     component_inference: &mut ComponentInferenceContext,
     power_context: &PowerAnalysisContext,
+    entity_param_names: &std::collections::HashMap<String, Vec<String>>,
 ) {
-    
-    
+
+
 
     // Walk through the syntax tree looking for component instantiations
-    visit_node_for_component_inference(syntax, component_inference, power_context);
+    visit_node_for_component_inference(syntax, component_inference, power_context, entity_param_names);
 }
 
 /// Visit nodes for component inference
@@ -543,6 +547,7 @@ fn visit_node_for_component_inference(
     node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>,
     component_inference: &mut ComponentInferenceContext,
     power_context: &PowerAnalysisContext,
+    entity_param_names: &std::collections::HashMap<String, Vec<String>>,
 ) {
     use bhdl_ast::SyntaxKind;
     use component_inference::CircuitContext;
@@ -560,7 +565,7 @@ fn visit_node_for_component_inference(
                     match &element {
                         FlowElement::ComponentInstantiation(comp_inst) => {
                             println!("DEBUG: Found ComponentInstantiation in flow");
-                            process_component_instantiation_v2(&comp_inst, component_inference, power_context);
+                            process_component_instantiation_v2(&comp_inst, component_inference, power_context, entity_param_names);
                         }
                         FlowElement::Identifier(token) => {
                             println!("DEBUG: Found Identifier in flow: {}", token.text());
@@ -581,7 +586,7 @@ fn visit_node_for_component_inference(
             
             // Look for inline component instantiations in the connection
             // Pattern: ComponentType(params) or name: ComponentType(params)
-            process_connection_for_components(node, component_inference, power_context);
+            process_connection_for_components(node, component_inference, power_context, entity_param_names);
             
             // Don't recursively call visit_node_for_component_inference here
             // The normal traversal will handle visiting child nodes
@@ -621,7 +626,7 @@ fn visit_node_for_component_inference(
                     // Process as v2.0 inline instantiation
                     use bhdl_ast::flow::ComponentInstantiation;
                     if let Some(comp_inst) = ComponentInstantiation::cast(node.clone()) {
-                        process_component_instantiation_v2(&comp_inst, component_inference, power_context);
+                        process_component_instantiation_v2(&comp_inst, component_inference, power_context, entity_param_names);
                         return;
                     }
                 }
@@ -782,7 +787,7 @@ fn visit_node_for_component_inference(
 
     // Recursively visit children
     for child in node.children() {
-        visit_node_for_component_inference(&child, component_inference, power_context);
+        visit_node_for_component_inference(&child, component_inference, power_context, entity_param_names);
     }
 }
 
@@ -791,6 +796,7 @@ fn process_component_instantiation_v2(
     comp_inst: &bhdl_ast::flow::ComponentInstantiation,
     component_inference: &mut ComponentInferenceContext,
     power_context: &PowerAnalysisContext,
+    entity_param_names: &std::collections::HashMap<String, Vec<String>>,
 ) {
     use component_inference::{CircuitContext, ParameterValue, InferredParameter};
     use bhdl_ast::HasName;
@@ -826,10 +832,16 @@ fn process_component_instantiation_v2(
     if !has_placeholder {
         println!("DEBUG: Extracting normal parameters for {}", component_type);
         // Only extract normal parameters if there's no placeholder.
-        // Positional parameters are named by INDEX against the known
-        // passive signatures — naming EVERY positional "value" silently
-        // dropped the second one (Res(10k, 1%) lost its tolerance,
-        // Cap(22uF, 35V) its voltage rating).
+        // Positional parameters bind to the entity's DECLARED parameter
+        // names in order (ElectrolyticCap(100µF, 25V) → value, voltage) —
+        // the entity_param_names index carries every imported + same-file
+        // entity's ordered param list. The hardcoded passive signatures
+        // remain as a fallback for types the index doesn't know (naming
+        // EVERY positional "value" silently dropped the second one:
+        // Res(10k, 1%) lost its tolerance, Cap(22uF, 35V) its voltage
+        // rating; an unbound name like "param_1" left the entity's
+        // attribute expressions referencing that param unevaluated).
+        let declared_params = entity_param_names.get(&component_type);
         let mut positional_idx = 0usize;
         for param_assign in comp_inst.parameter_assignments() {
             if let Some(value) = param_assign.value() {
@@ -845,10 +857,10 @@ fn process_component_instantiation_v2(
                             "TVSDiode" => &["voltage_rating"],
                             _ => &["value"],
                         };
-                        let name = sig
-                            .get(positional_idx)
-                            .copied()
-                            .map(str::to_string)
+                        let name = declared_params
+                            .and_then(|d| d.get(positional_idx))
+                            .cloned()
+                            .or_else(|| sig.get(positional_idx).copied().map(str::to_string))
                             .unwrap_or_else(|| format!("param_{positional_idx}"));
                         positional_idx += 1;
                         name
@@ -1323,6 +1335,7 @@ fn process_connection_for_components(
     node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>,
     component_inference: &mut ComponentInferenceContext,
     power_context: &PowerAnalysisContext,
+    entity_param_names: &std::collections::HashMap<String, Vec<String>>,
 ) {
     use bhdl_ast::flow::{FlowExpr, FlowElement};
     
@@ -1336,7 +1349,7 @@ fn process_connection_for_components(
             for element in flow_expr.elements() {
                 if let FlowElement::ComponentInstantiation(comp_inst) = element {
                     println!("DEBUG: Found ComponentInstantiation in flow");
-                    process_component_instantiation_v2(&comp_inst, component_inference, power_context);
+                    process_component_instantiation_v2(&comp_inst, component_inference, power_context, entity_param_names);
                 }
             }
         }

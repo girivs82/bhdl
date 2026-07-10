@@ -1068,6 +1068,25 @@ pub fn stamp_inductor_sim_current(
             format!("{:.0}mA", required * 1e3)
         };
         if let Some(inst_mut) = netlist.instances.get_mut(id) {
+            // Same declared-rating stash contract as `stamp_rating` in the
+            // catalog pass: the value stamped here is the 80%-saturation
+            // REQUIREMENT for the supply-chain gate, not a datasheet claim —
+            // preserve the author's declared rating (Ind(8.2uH, 6A)) so
+            // sign-off compares stress against the declaration for an
+            // unresolved/DNP part instead of the requirement echo (which
+            // reads as a self-fulfilling ~0.8× over-stress). Parse-aware:
+            // an unevaluated expression is not a declaration.
+            if let Some(declared) = inst_mut
+                .attributes
+                .get("current_rating")
+                .filter(|s| parse_unit_value(s).is_some())
+                .cloned()
+            {
+                inst_mut
+                    .attributes
+                    .entry("declared_current_rating".to_string())
+                    .or_insert(declared);
+            }
             inst_mut.attributes.insert("current_rating".to_string(), s);
             n += 1;
         }

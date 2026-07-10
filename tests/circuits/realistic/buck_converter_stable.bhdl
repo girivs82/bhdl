@@ -19,9 +19,9 @@ board BuckConverterStable {
     ground GND;
 
     // ── Input bank: bulk electrolytic + HF ceramic ──
-    @VIN_12V -> c_in_bulk: ElectrolyticCap(470uF, 25V).pos;
+    @VIN_12V -> c_in_bulk: ElectrolyticCap(470uF, 35V).pos;
     c_in_bulk.neg -> @GND;
-    @VIN_12V -> c_in_hf: Cap(10uF, 25V).1; c_in_hf.2 -> @GND;
+    @VIN_12V -> c_in_hf: Cap(10uF, 35V).1; c_in_hf.2 -> @GND;
 
     // ── Regulator ──
     @VIN_12V -> u1: TPS54302().VIN;
@@ -32,14 +32,14 @@ board BuckConverterStable {
     u1.BOOT -> c_boot: Cap(100nF).1; c_boot.2 -> u1.PH;
 
     // ── Power stage: SW → 8.2µH → VOUT ──
-    u1.SW -> l1: Ind(8.2uH, 5A).1;
+    u1.SW -> l1: Ind(8.2uH, 6A).1;
     l1.2 -> @VOUT_5V;
 
     // ── Staged output bank: bulk electrolytic + mid/HF ceramics ──
-    @VOUT_5V -> c_out_bulk: ElectrolyticCap(100uF, 10V).pos;
+    @VOUT_5V -> c_out_bulk: ElectrolyticCap(100uF, 16V).pos;
     c_out_bulk.neg -> @GND;
-    @VOUT_5V -> c_out_mid: Cap(47uF, 10V).1; c_out_mid.2 -> @GND;
-    @VOUT_5V -> c_out_hf: Cap(10uF, 10V).1; c_out_hf.2 -> @GND;
+    @VOUT_5V -> c_out_mid: Cap(47uF, 16V).1; c_out_mid.2 -> @GND;
+    @VOUT_5V -> c_out_hf: Cap(10uF, 16V).1; c_out_hf.2 -> @GND;
 
     // ── Feedback divider: Vout = 0.596V · (1 + 22k/3k) ≈ 5V ──
     @VOUT_5V -> r_fb_top: Res(22k, tolerance=1%).1;
@@ -54,5 +54,5 @@ board BuckConverterStable {
     u1.FB -> c_comp2: Cap(47pF).1; c_comp2.2 -> r_comp.2;
 
     // ── Load ──
-    @VOUT_5V -> r_load: Res(1.67).1; r_load.2 -> @GND;
+    @VOUT_5V -> r_load: Res(1.67, wattage=50W).1; r_load.2 -> @GND;
 }
