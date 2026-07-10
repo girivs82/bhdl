@@ -52,10 +52,18 @@ fn test_undefined_interface_error() {
     let parsed = parse(source);
     let source_file = SourceFile::cast(parsed.syntax()).unwrap();
     let result = analyze(&source_file);
-    
-    // Should have diagnostic about undefined interface
+
+    // v2 unified grammar: interfaces are instantiated exactly like
+    // components (`name: Type()` is a COMPONENT_INST either way), so an
+    // undefined name surfaces through the unified diagnostic — the
+    // analyzer cannot know the author meant an interface.
     assert!(result.diagnostics.len() > 0);
-    assert!(result.diagnostics[0].message.contains("Undefined interface type: SPI"));
+    assert!(
+        result.diagnostics.iter()
+            .any(|d| d.message.contains("Undefined component type: SPI")),
+        "Expected undefined-type diagnostic for SPI, got: {:?}",
+        result.diagnostics.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -122,26 +130,35 @@ fn test_interface_signal_resolution() {
 
 #[test]
 fn test_non_interface_type_error() {
+    // v2 unified grammar: `bus: Entity()` is a legal component
+    // instantiation (interfaces and entities share the syntax), so the
+    // v1-era "component used as interface" misuse no longer exists — and
+    // the v1 `component` keyword itself is no longer a top-level item.
+    // The surviving kind misuse is instantiating a symbol that is not
+    // instantiable at all (enum, typedef, …).
     let source = r#"
-    component Resistor {
-        pin 1: signal inout;
-        pin 2: signal inout;
-    }
-    
+    enum Color { Red, Green }
+
     board TestBoard {
         power VCC = 3.3V @ 1A;
         ground GND;
-        
-        // Trying to use component as interface
-        bus: Resistor();
+
+        // Trying to instantiate a non-instantiable symbol
+        bus: Color();
     }
     "#;
-    
+
     let parsed = parse(source);
+    assert_eq!(parsed.errors().len(), 0, "Parse errors: {:?}", parsed.errors());
     let source_file = SourceFile::cast(parsed.syntax()).unwrap();
     let result = analyze(&source_file);
-    
-    // Should have diagnostic about wrong symbol type
+
+    // Should have diagnostic about wrong symbol kind
     assert!(result.diagnostics.len() > 0);
-    assert!(result.diagnostics[0].message.contains("is not an interface"));
+    assert!(
+        result.diagnostics.iter()
+            .any(|d| d.message.contains("Symbol 'Color' is not a valid component type")),
+        "Expected kind-misuse diagnostic for Color, got: {:?}",
+        result.diagnostics.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
 }
