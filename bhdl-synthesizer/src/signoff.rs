@@ -1371,15 +1371,17 @@ pub fn compute_signoff(
         // author's DECLARED rating, preserved by the catalog pass as
         // `declared_<axis>_rating` — for an unresolved/hand-pinned part the
         // declaration IS the datasheet claim (Real-Data), not the catalog
-        // family's blind fallback stamp.
+        // family's blind fallback stamp. Parse-aware: a declaration that
+        // never evaluated (an unbound param leaves the raw expression, e.g.
+        // `"voltage"`) must not eclipse a parseable stamped rating.
         let rating = if inst.attributes.contains_key("mpn") {
-            inst.attributes.get(rating_key)
+            inst.attributes.get(rating_key).and_then(|s| parse_si(s))
         } else {
             inst.attributes
                 .get(&format!("declared_{rating_key}"))
-                .or_else(|| inst.attributes.get(rating_key))
-        }
-        .and_then(|s| parse_si(s));
+                .and_then(|s| parse_si(s))
+                .or_else(|| inst.attributes.get(rating_key).and_then(|s| parse_si(s)))
+        };
         let derated = stress.map(|s| s * derate);
         let margin = match (rating, derated) {
             (Some(r), Some(d)) if d > 0.0 => Some(r / d),

@@ -1154,9 +1154,16 @@ pub fn apply_catalog_physical_selection(
             // declaration IS the datasheet claim (Real-Data), and sign-off
             // falls back to it. `or_insert` keeps the original declaration
             // across re-stamps (this pass runs again after sign-off
-            // value-stepping).
+            // value-stepping). An attribute expression that never evaluated
+            // (an unbound param leaves the raw identifier, e.g. `"voltage"`)
+            // is not a declaration — don't stash garbage over a real stamp.
             let mut stamp_rating = |inst: &mut bhdl_netlist::Instance, key: &str, r: f64| {
-                if let Some(declared) = inst.attributes.get(key).cloned() {
+                if let Some(declared) = inst
+                    .attributes
+                    .get(key)
+                    .filter(|s| parse_unit_value(s).is_some())
+                    .cloned()
+                {
                     inst.attributes
                         .entry(format!("declared_{key}"))
                         .or_insert(declared);
