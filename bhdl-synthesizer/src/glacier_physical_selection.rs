@@ -573,6 +573,21 @@ pub struct ResolvedPart {
     /// The selected part's dielectric (e.g. `"X7R"`) — written onto the
     /// instance's `dielectric` attribute so sign-off can identify a ceramic.
     pub dielectric: Option<String>,
+    /// The selected part's rated power (watts, resistors), when the provider
+    /// supplied it. Written onto the instance's `power_rating` attribute so
+    /// sign-off checks the REAL part's rating instead of the catalog
+    /// family's fallback stamp (a 10 W wirewound resolves to 10+ W, not the
+    /// 0603 family's 0.1 W).
+    pub power_rating_w: Option<f64>,
+    /// The selected part's rated voltage (volts, capacitors), when the
+    /// provider supplied it. Written onto the instance's `voltage_rating`
+    /// attribute for the same reason as `power_rating_w` (a 50 V MLCC must
+    /// not sign off as the family's 16 V fallback stamp).
+    pub voltage_rating_v: Option<f64>,
+    /// The selected part's rated current (amps, inductors; conservative min
+    /// of Irms/Isat), when the provider supplied it. Written onto the
+    /// instance's `current_rating` attribute for the same reason.
+    pub current_rating_a: Option<f64>,
 }
 
 /// Write a part's real ESR (ohms) onto an instance as the `esr` attribute (the
@@ -585,6 +600,18 @@ fn write_esr_attr(inst: &mut bhdl_netlist::Instance, esr_ohms: Option<f64>, esr_
         if let Some(f) = esr_freq.filter(|f| *f > 0.0) {
             inst.attributes.insert("esr_test_freq_hz".to_string(), format!("{f}"));
         }
+    }
+}
+
+/// Write a resolved part's real rating (power W / voltage V / current A) onto
+/// an instance as the given `<axis>_rating` attribute — the value sign-off
+/// reads when an `mpn` is present. Overwrites the catalog family's fallback
+/// stamp (the author's declaration was already preserved as
+/// `declared_<axis>_rating` by `apply_catalog_physical_selection`). No-op
+/// when the part states no rating.
+fn write_rating_attr(inst: &mut bhdl_netlist::Instance, key: &str, rating: Option<f64>) {
+    if let Some(r) = rating.filter(|r| *r > 0.0) {
+        inst.attributes.insert(key.to_string(), format!("{r}"));
     }
 }
 
@@ -612,6 +639,9 @@ pub fn apply_locked_parts(netlist: &mut Netlist, parts: &[ResolvedPart]) -> usiz
         if let Some(d) = &p.dielectric {
             inst.attributes.insert("dielectric".to_string(), d.clone());
         }
+        write_rating_attr(inst, "power_rating", p.power_rating_w);
+        write_rating_attr(inst, "voltage_rating", p.voltage_rating_v);
+        write_rating_attr(inst, "current_rating", p.current_rating_a);
         n += 1;
     }
     n
@@ -910,10 +940,16 @@ pub fn apply_supply_chain_mpns(
                 let esr_ohms = sel.and_then(|s| s.esr_ohms);
                 let esr_test_freq_hz = sel.and_then(|s| s.esr_test_freq_hz);
                 let dielectric = sel.and_then(|s| s.dielectric.clone());
+                let power_rating_w = sel.and_then(|s| s.power_rating_w);
+                let voltage_rating_v = sel.and_then(|s| s.voltage_rating_v);
+                let current_rating_a = sel.and_then(|s| s.current_rating_a);
                 write_esr_attr(inst, esr_ohms, esr_test_freq_hz);
                 if let Some(d) = &dielectric {
                     inst.attributes.insert("dielectric".to_string(), d.clone());
                 }
+                write_rating_attr(inst, "power_rating", power_rating_w);
+                write_rating_attr(inst, "voltage_rating", voltage_rating_v);
+                write_rating_attr(inst, "current_rating", current_rating_a);
                 resolved.push(ResolvedPart {
                     refdes: inst.name.clone(),
                     mpn: mpn.clone(),
@@ -923,6 +959,9 @@ pub fn apply_supply_chain_mpns(
                     esr_ohms,
                     esr_test_freq_hz,
                     dielectric,
+                    power_rating_w,
+                    voltage_rating_v,
+                    current_rating_a,
                 });
             }
             None => {
@@ -1110,14 +1149,28 @@ pub fn apply_catalog_physical_selection(
                 inst.attributes.insert("package".to_string(), p.clone());
                 inst.attributes.insert("physical_package".to_string(), p);
             }
+            // Preserve the author's declared rating before the family stamp
+            // overwrites it: for a part the supply chain never resolves, the
+            // declaration IS the datasheet claim (Real-Data), and sign-off
+            // falls back to it. `or_insert` keeps the original declaration
+            // across re-stamps (this pass runs again after sign-off
+            // value-stepping).
+            let mut stamp_rating = |inst: &mut bhdl_netlist::Instance, key: &str, r: f64| {
+                if let Some(declared) = inst.attributes.get(key).cloned() {
+                    inst.attributes
+                        .entry(format!("declared_{key}"))
+                        .or_insert(declared);
+                }
+                inst.attributes.insert(key.to_string(), format!("{r}"));
+            };
             if let Some(v) = vr {
-                inst.attributes.insert("voltage_rating".to_string(), format!("{v}"));
+                stamp_rating(inst, "voltage_rating", v);
             }
             if let Some(i) = ir {
-                inst.attributes.insert("current_rating".to_string(), format!("{i}"));
+                stamp_rating(inst, "current_rating", i);
             }
             if let Some(w) = pw {
-                inst.attributes.insert("power_rating".to_string(), format!("{w}"));
+                stamp_rating(inst, "power_rating", w);
             }
             inst.attributes.insert("value".to_string(), value_str);
         }

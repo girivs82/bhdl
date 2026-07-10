@@ -159,6 +159,18 @@ struct Selection {
     /// per-MPN data — lets sign-off identify a ceramic (structurally low ESR).
     #[serde(skip_serializing_if = "Option::is_none")]
     dielectric: Option<String>,
+    /// The selected resistor's rated power (watts), from the `Power (Watts)`
+    /// parametric. Real per-MPN data for the downstream sign-off margin check.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    power_rating_w: Option<f64>,
+    /// The selected capacitor's rated voltage (volts), from the
+    /// `Voltage - Rated` parametric.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    voltage_rating_v: Option<f64>,
+    /// The selected inductor's rated current (amps, conservative min of the
+    /// `Current Rating (Amps)` / `Current - Saturation (Amps)` parametrics).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    current_rating_a: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     note: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -396,6 +408,9 @@ struct Cand {
     esr_ohms: Option<f64>,
     esr_freq_hz: Option<f64>,
     dielectric: Option<String>,
+    power_w: Option<f64>,
+    voltage_v: Option<f64>,
+    current_a: Option<f64>,
     pkg_confirmed: bool,
 }
 
@@ -454,6 +469,9 @@ fn score_and_pick(req: &Requirement, cands: &[Cand], w: Weights, tol: f64) -> Op
         esr_ohms: c.esr_ohms,
         esr_test_freq_hz: c.esr_freq_hz,
         dielectric: c.dielectric.clone(),
+        power_rating_w: c.power_w,
+        voltage_rating_v: c.voltage_v,
+        current_rating_a: c.current_a,
         note: Some(note),
         error: None,
     })
@@ -599,9 +617,35 @@ fn resolve(
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty() && s != "-");
 
+        // Per-class ratings for downstream sign-off — real per-MPN
+        // parametrics, honestly absent when DigiKey doesn't state them.
+        let power_w = if req.class == "resistor" {
+            pm.get("Power (Watts)").and_then(|s| parse_si(s))
+        } else {
+            None
+        };
+        let voltage_v = if req.class == "capacitor" {
+            pm.get("Voltage - Rated").and_then(|s| parse_si(s))
+        } else {
+            None
+        };
+        let current_a = if req.class == "inductor" {
+            // conservative: min of the thermal (Irms) and saturation ratings
+            [
+                pm.get("Current Rating (Amps)").and_then(|s| parse_si(s)),
+                pm.get("Current - Saturation (Amps)").and_then(|s| parse_si(s)),
+            ]
+            .into_iter()
+            .flatten()
+            .fold(None, |m: Option<f64>, v| Some(m.map_or(v, |m| m.min(v))))
+        } else {
+            None
+        };
+
         cands.push(Cand {
             mpn, manufacturer, dk_part, unit_price, stock, lead_weeks,
-            value_err, tol_pct, esr_ohms, esr_freq_hz, dielectric, pkg_confirmed,
+            value_err, tol_pct, esr_ohms, esr_freq_hz, dielectric,
+            power_w, voltage_v, current_a, pkg_confirmed,
         });
     }
 

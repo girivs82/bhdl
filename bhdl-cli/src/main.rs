@@ -2400,6 +2400,9 @@ async fn cmd_bom(
                     esr_ohms: p.esr_ohms,
                     esr_test_freq_hz: p.esr_test_freq_hz,
                     dielectric: p.dielectric.clone(),
+                    power_rating_w: p.power_rating_w,
+                    voltage_rating_v: p.voltage_rating_v,
+                    current_rating_a: p.current_rating_a,
                 })
                 .collect();
             let n = gps::apply_locked_parts(&mut netlist, &pins);
@@ -2460,6 +2463,9 @@ async fn cmd_bom(
                                 esr_ohms: r.esr_ohms,
                                 esr_test_freq_hz: r.esr_test_freq_hz,
                                 dielectric: r.dielectric.clone(),
+                                power_rating_w: r.power_rating_w,
+                                voltage_rating_v: r.voltage_rating_v,
+                                current_rating_a: r.current_rating_a,
                             })
                             .collect(),
                     );

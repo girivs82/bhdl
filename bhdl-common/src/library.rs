@@ -216,6 +216,20 @@ pub struct LockedPart {
     /// locked rebuild keeps the real ceramic-vs-bulk stability classification.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dielectric: Option<String>,
+    /// The pinned part's rated power (watts, resistors) — pinned so a locked
+    /// rebuild's sign-off checks the real part's rating instead of the
+    /// catalog family's fallback stamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub power_rating_w: Option<f64>,
+    /// The pinned part's rated voltage (volts, capacitors) — pinned so a
+    /// locked rebuild's sign-off checks the real part's rating instead of
+    /// the catalog family's fallback stamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voltage_rating_v: Option<f64>,
+    /// The pinned part's rated current (amps, inductors) — pinned for the
+    /// same reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_rating_a: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -950,6 +964,9 @@ mod tests {
                 esr_ohms: None,
                 esr_test_freq_hz: None,
                 dielectric: None,
+                power_rating_w: Some(0.1),
+                voltage_rating_v: None,
+                current_rating_a: None,
             }],
         };
         let p = t.join("bhdl.lock");

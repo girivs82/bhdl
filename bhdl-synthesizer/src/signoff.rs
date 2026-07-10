@@ -1366,7 +1366,20 @@ pub fn compute_signoff(
             }
         }
 
-        let rating = inst.attributes.get(rating_key).and_then(|s| parse_si(s));
+        // Rating source: the catalog-selected part's rating when supply-chain
+        // selection resolved a real part (`mpn` present); otherwise the
+        // author's DECLARED rating, preserved by the catalog pass as
+        // `declared_<axis>_rating` — for an unresolved/hand-pinned part the
+        // declaration IS the datasheet claim (Real-Data), not the catalog
+        // family's blind fallback stamp.
+        let rating = if inst.attributes.contains_key("mpn") {
+            inst.attributes.get(rating_key)
+        } else {
+            inst.attributes
+                .get(&format!("declared_{rating_key}"))
+                .or_else(|| inst.attributes.get(rating_key))
+        }
+        .and_then(|s| parse_si(s));
         let derated = stress.map(|s| s * derate);
         let margin = match (rating, derated) {
             (Some(r), Some(d)) if d > 0.0 => Some(r / d),

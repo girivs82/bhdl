@@ -77,6 +77,24 @@ pub struct PluginSelection {
     /// identify a ceramic output cap (structurally low ESR) without an estimate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dielectric: Option<String>,
+    /// The selected part's rated power (watts), when the provider/catalogue
+    /// carries it (resistors). Real per-MPN data — stamped as the instance's
+    /// `power_rating` so sign-off checks the dissipation margin against the
+    /// actual part, not the stdlib family's fallback stamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub power_rating_w: Option<f64>,
+    /// The selected part's rated voltage (volts), when the provider/catalogue
+    /// carries it (capacitors). Real per-MPN data — stamped as the instance's
+    /// `voltage_rating` so sign-off checks the voltage margin against the
+    /// actual part, not the stdlib family's fallback stamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voltage_rating_v: Option<f64>,
+    /// The selected part's rated current (amps), when the provider/catalogue
+    /// carries it (inductors; conservative min of Irms/Isat). Real per-MPN
+    /// data — stamped as the instance's `current_rating` so sign-off checks
+    /// the current margin against the actual part.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_rating_a: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

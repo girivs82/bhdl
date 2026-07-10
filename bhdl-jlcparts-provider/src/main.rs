@@ -243,6 +243,23 @@ struct Selection {
     /// (structurally low ESR) from real per-MPN data.
     #[serde(skip_serializing_if = "Option::is_none")]
     dielectric: Option<String>,
+    /// The selected resistor's rated power (watts), parsed from the
+    /// catalogue description. Real per-MPN data — lets downstream sign-off
+    /// check the dissipation margin against the actual part's rating instead
+    /// of the stdlib family's fallback stamp.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    power_rating_w: Option<f64>,
+    /// The selected capacitor's rated voltage (volts), parsed from the
+    /// catalogue description. Real per-MPN data — lets downstream sign-off
+    /// check the voltage margin against the actual part's rating instead
+    /// of the stdlib family's fallback stamp.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    voltage_rating_v: Option<f64>,
+    /// The selected inductor's rated current (amps, conservative min of
+    /// Irms/Isat), parsed from the catalogue description. Real per-MPN data
+    /// for the downstream sign-off current-margin check.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    current_rating_a: Option<f64>,
 }
 
 // ── Class → catalogue mapping ────────────────────────────────────
@@ -893,6 +910,21 @@ impl Catalogue {
             } else {
                 None
             };
+            let power_w = if req.class == "resistor" {
+                parse_power_w(&description)
+            } else {
+                None
+            };
+            let voltage_v = if req.class == "capacitor" {
+                parse_voltage_v(&description)
+            } else {
+                None
+            };
+            let current_a = if req.class == "inductor" {
+                parse_current_a(&description)
+            } else {
+                None
+            };
             let basic: i64 = row.get(2).unwrap_or(0);
             let preferred: i64 = row.get(3).unwrap_or(0);
             let stock: i64 = row.get(4).unwrap_or(0);
@@ -906,6 +938,9 @@ impl Catalogue {
                 tol_pct,
                 tempco,
                 dielectric,
+                power_w,
+                voltage_v,
+                current_a,
                 // assembly-fee proxy: basic parts are free to place, preferred
                 // mid, extended carries the per-part fee + feeder setup
                 assembly: if basic == 1 {
@@ -945,6 +980,12 @@ struct Cand {
     tempco: Option<f64>,
     /// ceramic dielectric code parsed from the description (real per-MPN data)
     dielectric: Option<String>,
+    /// resistor rated power (watts) parsed from the description (real per-MPN data)
+    power_w: Option<f64>,
+    /// capacitor rated voltage (volts) parsed from the description (real per-MPN data)
+    voltage_v: Option<f64>,
+    /// inductor rated current (amps, min of Irms/Isat) parsed from the description
+    current_a: Option<f64>,
     note: &'static str,
 }
 
@@ -1044,6 +1085,9 @@ fn score_and_pick(req: &Requirement, cands: &[Cand], w: Weights, tol: f64) -> Op
         note: Some(c.note.to_string()),
         error: None,
         dielectric: c.dielectric.clone(),
+        power_rating_w: c.power_w,
+        voltage_rating_v: c.voltage_v,
+        current_rating_a: c.current_a,
     })
 }
 
@@ -1255,6 +1299,9 @@ mod tests {
             tol_pct: None,
             tempco: None,
             dielectric: None,
+            power_w: None,
+            voltage_v: None,
+            current_a: None,
             note,
         }
     }
@@ -1272,6 +1319,9 @@ mod tests {
             tol_pct: Some(tol),
             tempco: Some(tempco),
             dielectric: None,
+            power_w: None,
+            voltage_v: None,
+            current_a: None,
             note,
         }
     }
@@ -1303,6 +1353,51 @@ mod tests {
         assert!(close(parse_power_w("100mW 10kΩ 75V ±1% 0603").unwrap(), 0.1));
         assert!(close(parse_power_w("1W 0.1Ω 2512 ±5%").unwrap(), 1.0));
         assert!(close(parse_power_w("250mW 1kΩ").unwrap(), 0.25));
+    }
+
+    #[test]
+    fn selection_carries_resistor_power_rating() {
+        // The winning candidate's parsed power rating must ride the reply as
+        // `power_rating_w` so sign-off checks the REAL part, not the stdlib
+        // family's fallback stamp (a 20 W PWR220T must not read as 0.1 W).
+        let mut c = cand(0.0, 0.01, 0.0, 100_000, "basic");
+        c.power_w = Some(20.0);
+        let sel = score_and_pick(&req(), &[c], Weights::profile("balanced"), 0.02).unwrap();
+        assert!(close(sel.power_rating_w.unwrap(), 20.0));
+        // no rating stated → honest absence, never a guess
+        let sel = score_and_pick(
+            &req(),
+            &[cand(0.0, 0.01, 0.0, 100_000, "basic")],
+            Weights::profile("balanced"),
+            0.02,
+        )
+        .unwrap();
+        assert_eq!(sel.power_rating_w, None);
+    }
+
+    #[test]
+    fn selection_carries_cap_voltage_and_inductor_current_ratings() {
+        // Same contract as the resistor power rating, for the other two
+        // sign-off axes: the winning candidate's parsed ratings must ride
+        // the reply so sign-off checks the REAL part (a 50 V MLCC must not
+        // read as the stdlib family's 16 V; a 3 A power inductor must not
+        // read as 100 mA).
+        let mut c = cand(0.0, 0.01, 0.0, 100_000, "basic");
+        c.voltage_v = Some(50.0);
+        c.current_a = Some(3.0);
+        let sel = score_and_pick(&req(), &[c], Weights::profile("balanced"), 0.02).unwrap();
+        assert!(close(sel.voltage_rating_v.unwrap(), 50.0));
+        assert!(close(sel.current_rating_a.unwrap(), 3.0));
+        // no rating stated → honest absence, never a guess
+        let sel = score_and_pick(
+            &req(),
+            &[cand(0.0, 0.01, 0.0, 100_000, "basic")],
+            Weights::profile("balanced"),
+            0.02,
+        )
+        .unwrap();
+        assert_eq!(sel.voltage_rating_v, None);
+        assert_eq!(sel.current_rating_a, None);
     }
 
     #[test]
