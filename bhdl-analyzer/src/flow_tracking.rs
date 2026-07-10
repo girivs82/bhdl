@@ -304,7 +304,7 @@ impl FlowTracker {
     /// by looking for IDENT_REF node followed by COLON token in named handle patterns.
     ///
     /// Parse tree structure for `VIN -> tvs: TVSDiode(15V).K`:
-    /// ```
+    /// ```text
     /// BINARY_EXPR
     ///   IDENT_REF { IDENT "VIN" }
     ///   ARROW "->"

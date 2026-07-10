@@ -599,10 +599,12 @@ fn split_top_level_commas(s: &str) -> Vec<String> {
 
 /// Parse a single pattern-element text into a [`PatternElement`].
 /// Recognised forms:
-///   *               → Wildcard
-///   IDENT : *       → NamedWildcard(IDENT)
-///   "..."           → Literal::String
-///   number+unit     → Literal::<physical-quantity>
+/// ```text
+/// *               → Wildcard
+/// IDENT : *       → NamedWildcard(IDENT)
+/// "..."           → Literal::String
+/// number+unit     → Literal::<physical-quantity>
+/// ```
 pub(crate) fn parse_pattern_element_pub(text: &str) -> PatternElement {
     parse_pattern_element(text)
 }

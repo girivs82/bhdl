@@ -9,7 +9,9 @@
 //! solve, each regulator's input draw is computed from its SOLVED output
 //! current
 //!
-//!     i_in = v_out · i_out / (η · v_in)
+//! ```text
+//! i_in = v_out · i_out / (η · v_in)
+//! ```
 //!
 //! (η from the part's datasheet efficiency; absent → 1.0, the linear-
 //! regulator law i_in ≈ i_out) and upserted as a CurrentSource on the

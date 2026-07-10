@@ -7,7 +7,9 @@
 //!
 //! Sign convention for transient companions: the device current is modeled as
 //!
-//!     i = G_eq * v + I_eq
+//! ```text
+//! i = G_eq * v + I_eq
+//! ```
 //!
 //! where `v` is the voltage across the device at the *new* timestep (the unknown
 //! being solved for) and `I_eq` is the contribution to the RHS coming from the

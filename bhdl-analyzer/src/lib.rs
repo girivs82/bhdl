@@ -2735,7 +2735,9 @@ fn parse_expansion_element(
 /// Extract a standalone component declaration inside an `expansion { }`
 /// block — the P&R-intent form:
 ///
-///     C_vcc: Cap(100nF) for high_freq_bypass(rail: VCC, return: GND1, loop_area_max: 1.5mm2);
+/// ```text
+/// C_vcc: Cap(100nF) for high_freq_bypass(rail: VCC, return: GND1, loop_area_max: 1.5mm2);
+/// ```
 ///
 /// This parses as a COMPONENT_INST node (not a CONNECTION_STMT), so it
 /// isn't picked up by the flow-chain extractor. The wiring is written

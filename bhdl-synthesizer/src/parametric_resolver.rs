@@ -2,15 +2,19 @@
 //!
 //! Recognises template declarations of the form
 //!
+//! ```text
 //!     interface SPI<lanes: int = 1> {
 //!         perspective master { signal SCK: out; signal CS: out; signal IO<lanes>: inout; }
 //!         perspective slave  { signal SCK: in;  signal CS: in;  signal IO<lanes>: inout; }
 //!     }
+//! ```
 //!
 //! and per-use specialisations
 //!
+//! ```text
 //!     interface SPI<lanes=4>:slave qspi;
 //!     interface SPI flash;                  // uses defaults
+//! ```
 //!
 //! For every distinct argument tuple, the preprocessor emits a
 //! monomorphisation `interface SPI__lanes_4 { ... }` with
@@ -397,7 +401,9 @@ fn expand_template(tpl: &Template, args: &BTreeMap<String, String>, mangled: &st
 
 /// Tier-2 generative loops.
 ///
-///     generate for IDENT in BOUND..BOUND { body }
+/// ```text
+/// generate for IDENT in BOUND..BOUND { body }
+/// ```
 ///
 /// Each loop is unrolled to N copies of `body`, with `<IDENT>`
 /// replaced by each integer in the half-open range. A bound is

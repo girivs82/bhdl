@@ -179,7 +179,9 @@ impl<'t> Parser<'t> {
     /// `expansion { }` blocks with an optional trailing P&R layout
     /// intent clause:
     ///
-    ///     C_vcc: Cap(100nF) for high_freq_bypass(rail: VCC, ...);
+    /// ```text
+    /// C_vcc: Cap(100nF) for high_freq_bypass(rail: VCC, ...);
+    /// ```
     ///
     /// The `for INTENT(...)` clause attaches to the COMPONENT_INST node
     /// so the analyzer can lower it to a typed `LayoutIntent`.

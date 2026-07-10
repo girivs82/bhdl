@@ -856,11 +856,13 @@ impl<'t> Parser<'t> {
     /// length match, skew bounds). The parser records each statement
     /// as a coarse-grained tree:
     ///
-    ///     CONSTRAINTS_BLOCK
-    ///       CONSTRAINT_STMT
-    ///         CONSTRAINT_LHS    (target list text)
-    ///         CONSTRAINT_RHS    (only for `A -> B:` relations)
-    ///         CONSTRAINT_PROPS  (property list text)
+    /// ```text
+    /// CONSTRAINTS_BLOCK
+    ///   CONSTRAINT_STMT
+    ///     CONSTRAINT_LHS    (target list text)
+    ///     CONSTRAINT_RHS    (only for `A -> B:` relations)
+    ///     CONSTRAINT_PROPS  (property list text)
+    /// ```
     ///
     /// LHS/RHS/PROPS are uninterpreted token streams; the synthesizer
     /// re-parses them with its own mini-parser. This keeps the parser

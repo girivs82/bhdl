@@ -2,6 +2,7 @@
 //!
 //! User syntax:
 //!
+//! ```text
 //!     abstract entity ATmega328P {
 //!         family {
 //!             ATmega328P_DIP28 {
@@ -21,6 +22,7 @@
 //!         mcu: ATmega328P();         // abstract instance
 //!         mcu.adc7 -> @THERMISTOR;   // ← uses an abstract alias
 //!     }
+//! ```
 //!
 //! Each family entry declares its own `pin_map` mapping abstract
 //! alias names to the concrete entity's own pin names. The
@@ -385,11 +387,15 @@ fn parse_port_decls(body: &str) -> HashSet<String> {
 
 /// Inside a `family { ... }` block body, parse each entry of the form:
 ///
-///     CONCRETE_NAME { alias1 = pin1; alias2 = pin2; ... };
+/// ```text
+/// CONCRETE_NAME { alias1 = pin1; alias2 = pin2; ... };
+/// ```
 ///
 /// or the (compat) bare form:
 ///
-///     CONCRETE_NAME;
+/// ```text
+/// CONCRETE_NAME;
+/// ```
 ///
 /// The bare form is allowed for "no pin_map needed" cases — boards
 /// using it can only reference pins that exist on the concrete
