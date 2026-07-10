@@ -206,7 +206,13 @@ pub fn run_monomorphization(
     println!(
         "Pass 2.5: Found {} generic entity/entities: {:?}",
         result.generic_modules.len(),
-        result.generic_modules.keys().collect::<Vec<_>>()
+        {
+            // Sorted — generic_modules is a HashMap; keep the line stable
+            // run-to-run.
+            let mut names: Vec<_> = result.generic_modules.keys().collect();
+            names.sort();
+            names
+        }
     );
 
     // Step 2: Fixed-point iteration

@@ -167,11 +167,15 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
     
     // Debug: Print available power domains
     println!("DEBUG: Available power domains for component inference:");
-    for (name, domain) in &power_context.domains {
+    let mut domains_sorted: Vec<_> = power_context.domains.iter().collect();
+    domains_sorted.sort_by_key(|(name, _)| name.as_str());
+    for (name, domain) in domains_sorted {
         println!("  - {}: {}V @ {}A", name, domain.voltage, domain.max_current);
     }
     println!("DEBUG: Component domain assignments:");
-    for (comp, domain) in &power_context.component_domains {
+    let mut assignments_sorted: Vec<_> = power_context.component_domains.iter().collect();
+    assignments_sorted.sort();
+    for (comp, domain) in assignments_sorted {
         println!("  - {} -> {}", comp, domain);
     }
     

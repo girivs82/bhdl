@@ -619,16 +619,22 @@ impl PassiveComponentCalculator {
         0.020 // 20mA default
     }
     
-    /// Estimate voltage from power domain analysis  
+    /// Estimate voltage from power domain analysis
     fn estimate_voltage_from_power_domains(&self, analysis_result: &bhdl_analyzer::AnalysisResult) -> f64 {
         let power_domains = &analysis_result.power_analysis.domains;
-        
-        // Use the first power domain voltage as default
-        if let Some((_, domain_info)) = power_domains.iter().next() {
-            domain_info.voltage
-        } else {
-            5.0 // 5V default
-        }
+
+        // Conservative default: the highest domain voltage (name-tie-broken so
+        // the estimate is deterministic — domains is a HashMap).
+        power_domains
+            .iter()
+            .max_by(|(an, a), (bn, b)| {
+                a.voltage
+                    .partial_cmp(&b.voltage)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| an.cmp(bn))
+            })
+            .map(|(_, domain_info)| domain_info.voltage)
+            .unwrap_or(5.0) // 5V default
     }
     
     /// Extract ripple current from transient analysis (placeholder)
@@ -644,13 +650,20 @@ impl PassiveComponentCalculator {
     /// Estimate ripple current from power analysis
     fn estimate_ripple_from_power_analysis(&self, analysis_result: &bhdl_analyzer::AnalysisResult) -> f64 {
         let power_domains = &analysis_result.power_analysis.domains;
-        
-        // Estimate ripple as 10% of max current
-        if let Some((_, domain_info)) = power_domains.iter().next() {
-            domain_info.max_current * 0.1
-        } else {
-            0.010 // 10mA default ripple
-        }
+
+        // Estimate ripple as 10% of the largest domain's max current
+        // (name-tie-broken so the estimate is deterministic — domains is a
+        // HashMap).
+        power_domains
+            .iter()
+            .max_by(|(an, a), (bn, b)| {
+                a.max_current
+                    .partial_cmp(&b.max_current)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| an.cmp(bn))
+            })
+            .map(|(_, domain_info)| domain_info.max_current * 0.1)
+            .unwrap_or(0.010) // 10mA default ripple
     }
     
     /// Extract frequency requirements from analysis and intent

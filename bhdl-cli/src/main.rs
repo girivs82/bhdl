@@ -2543,13 +2543,18 @@ async fn cmd_bom(
                         // is dropped. Sign-off needs it. Work on a clone and
                         // re-derive the pruned endpoint: an inductor is a DC
                         // short, so propagate the surviving (canonical) node's
-                        // voltage across every inductor branch back onto the
-                        // pruned rail. Iterate to a fixpoint for inductor chains.
+                        // voltage across every DC-short branch (inductor, or
+                        // sub-1Ω resistor — a fuse/shunt, the same criterion
+                        // the pruning itself uses) back onto the pruned rail.
+                        // Iterate to a fixpoint for chains.
                         let mut sv = ann.net_voltages.clone();
                         for _ in 0..8 {
                             let pairs: Vec<(String, String)> = circuit_ref
                                 .branches()
-                                .filter(|(_, b)| b.component_type == "Inductor")
+                                .filter(|(_, b)| {
+                                    b.component_type == "Inductor"
+                                        || (b.component_type == "Resistor" && b.value < 1.0)
+                                })
                                 .filter_map(|(e, _)| {
                                     let (a, b) = circuit_ref.branch_nodes(e)?;
                                     Some((

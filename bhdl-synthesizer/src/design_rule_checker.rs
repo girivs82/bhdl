@@ -485,22 +485,33 @@ impl DesignRuleChecker {
         
         let mut all_violations = Vec::new();
         let mut rules_checked = 0;
-        
+
+        // Checks iterate netlist maps whose order is not stable run-to-run;
+        // sort each check's findings so report rows are deterministic while
+        // keeping the table in rule-registration order.
+        let sort_findings = |mut v: Vec<DRCViolation>| -> Vec<DRCViolation> {
+            v.sort_by(|a, b| {
+                (a.rule_id.as_str(), a.rule_name.as_str(), a.description.as_str())
+                    .cmp(&(b.rule_id.as_str(), b.rule_name.as_str(), b.description.as_str()))
+            });
+            v
+        };
+
         // Run standard rules
         for rule in &self.rules {
             if rule.enabled {
                 rules_checked += 1;
                 let violations = (rule.check_function)(netlist, analysis);
-                all_violations.extend(violations);
+                all_violations.extend(sort_findings(violations));
             }
         }
-        
+
         // Run custom rules
         for rule in &self.custom_rules {
             if rule.enabled {
                 rules_checked += 1;
                 let violations = (rule.check_function)(netlist, analysis);
-                all_violations.extend(violations);
+                all_violations.extend(sort_findings(violations));
             }
         }
 
@@ -515,7 +526,7 @@ impl DesignRuleChecker {
                 plugin_violations.len()
             );
             rules_checked += plugins_ran;
-            all_violations.extend(plugin_violations);
+            all_violations.extend(sort_findings(plugin_violations));
         }
         
         // Count violations by severity

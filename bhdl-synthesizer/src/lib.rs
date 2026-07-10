@@ -895,7 +895,13 @@ impl NetlistGenerator {
             }
         }
         
-        for (name, symbol) in &all_symbols {
+        // Iterate name-sorted: all_symbols is a HashMap, and this loop's order
+        // decides module/instance/pin creation order — hash order here made
+        // the whole downstream netlist (and every report derived from it)
+        // nondeterministic run-to-run.
+        let mut sorted_symbols: Vec<_> = all_symbols.iter().collect();
+        sorted_symbols.sort_by_key(|(name, _)| name.as_str());
+        for (name, symbol) in sorted_symbols {
             if matches!(symbol.kind, bhdl_analyzer::symbol_table::SymbolKind::Instance) {
                 debug!("Processing component instance: {} of kind {:?}", name, symbol.kind);
 
@@ -1421,7 +1427,11 @@ impl NetlistGenerator {
             // regulator entities own their own pins. The named net is
             // just the wire those pins terminate on. See discussion
             // documented in Phase J of the KiCad import work.
-            for (domain_name, domain_info) in &power_context.domains {
+            // Name-sorted: domains is a HashMap, and this loop fixes the
+            // power nets' creation (NetId) order for the whole netlist.
+            let mut domains_sorted: Vec<_> = power_context.domains.iter().collect();
+            domains_sorted.sort_by_key(|(name, _)| name.as_str());
+            for (domain_name, domain_info) in domains_sorted {
                 let net_class = if domain_name.contains("GND") || domain_info.voltage == 0.0 {
                     NetClass::Ground
                 } else {
@@ -1555,7 +1565,10 @@ impl NetlistGenerator {
 
         let power_context = &analysis.power_analysis;
 
-        for (domain_name, domain_info) in &power_context.domains {
+        // Name-sorted for deterministic component_instances order.
+        let mut domains_sorted: Vec<_> = power_context.domains.iter().collect();
+        domains_sorted.sort_by_key(|(name, _)| name.as_str());
+        for (domain_name, domain_info) in domains_sorted {
             // Determine symbol name
             let symbol_name = if domain_name.contains("GND") || domain_info.voltage == 0.0 {
                 "GND".to_string()

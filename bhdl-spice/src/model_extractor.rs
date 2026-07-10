@@ -110,19 +110,21 @@ impl ComponentModelExtractor {
             .map(|s| s.to_string());
 
         // Build parameters ONLY from entity-supplied values.
-        for (key, value) in &data {
+        //
+        // Iterate in SORTED key order — `data` is a HashMap and several
+        // distinct keys write the SAME parameter (a Fuse carries both
+        // `resistance = 10mΩ` and a `value` of "1A" that the Resistor arm
+        // maps to resistance), so hash-order iteration made the winner
+        // random per run. The generic `value` arm is deferred below the
+        // loop and only fills a parameter no explicit key already set:
+        // an explicit attribute name always beats the generic value.
+        let mut sorted_keys: Vec<&String> = data.keys().collect();
+        sorted_keys.sort();
+        for key in sorted_keys {
+            let value = &data[key];
             if let Some(num_value) = self.parse_value(value) {
                 // Map common attribute names to parameter names
                 match key.as_str() {
-                    "value" => {
-                        // Determine which parameter to set based on component type
-                        match &component_type {
-                            ComponentType::Resistor => parameters.insert("resistance".to_string(), num_value),
-                            ComponentType::Capacitor => parameters.insert("capacitance".to_string(), num_value),
-                            ComponentType::Inductor => parameters.insert("inductance".to_string(), num_value),
-                            _ => None,
-                        };
-                    }
                     "resistance" | "r" => { parameters.insert("resistance".to_string(), num_value); }
                     "capacitance" | "c" => { parameters.insert("capacitance".to_string(), num_value); }
                     "inductance" | "l" => { parameters.insert("inductance".to_string(), num_value); }
@@ -160,7 +162,20 @@ impl ComponentModelExtractor {
                 }
             }
         }
-        
+        // Generic `value` → the type's primary parameter, only when no
+        // explicit attribute (resistance/capacitance/inductance) set it.
+        if let Some(num_value) = data.get("value").and_then(|v| self.parse_value(v)) {
+            let primary = match &component_type {
+                ComponentType::Resistor => Some("resistance"),
+                ComponentType::Capacitor => Some("capacitance"),
+                ComponentType::Inductor => Some("inductance"),
+                _ => None,
+            };
+            if let Some(p) = primary {
+                parameters.entry(p.to_string()).or_insert(num_value);
+            }
+        }
+
         // Hard-gate (Real-Data Policy): every parameter the SPICE model needs
         // must be a real, entity-declared value. Any missing ⇒ hard error,
         // naming the component and the missing parameter(s). No fabrication.
