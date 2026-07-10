@@ -173,8 +173,16 @@ mod tests {
     fn test_parse_error() {
         let mut parser = ExpressionParser::new();
         
-        // Test invalid expression
-        let result = parser.parse("2 + + 3");
+        // Note: "2 + + 3" is now VALID — the grammar supports unary +/-
+        // (prefix_binding_power in bhdl-parser/src/expressions.rs), so it
+        // parses as `2 + (+3)`. Use genuinely malformed inputs instead.
+
+        // Trailing binary operator with no right-hand operand
+        let result = parser.parse("2 +");
+        assert!(result.is_err());
+
+        // `*` has no prefix form, so this cannot parse
+        let result = parser.parse("2 + * 3");
         assert!(result.is_err());
     }
 }

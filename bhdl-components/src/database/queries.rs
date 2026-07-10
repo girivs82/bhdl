@@ -95,15 +95,29 @@ pub fn get_component_by_id(conn: &Connection, id: ComponentId) -> anyhow::Result
 
 /// Search components using full-text search
 pub fn search_components(conn: &Connection, query: &str) -> anyhow::Result<Vec<Component>> {
+    // Callers pass raw user text and part/symbol names, not FTS5 syntax —
+    // an unescaped hyphenated name like "EQC50-D9" parses as a column
+    // filter and fails with "no such column". Escape each whitespace-
+    // separated term as a quoted phrase (embedded quotes doubled), joined
+    // as an AND-of-phrases match.
+    let fts_query = query
+        .split_whitespace()
+        .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if fts_query.is_empty() {
+        return Ok(Vec::new());
+    }
+
     let mut stmt = conn.prepare(
-        "SELECT c.id FROM components c 
-         JOIN components_fts fts ON c.id = fts.rowid 
-         WHERE components_fts MATCH ?1 
-         ORDER BY bm25(components_fts) 
+        "SELECT c.id FROM components c
+         JOIN components_fts fts ON c.id = fts.rowid
+         WHERE components_fts MATCH ?1
+         ORDER BY bm25(components_fts)
          LIMIT 100"
     )?;
-    
-    let component_ids: Vec<ComponentId> = stmt.query_map([query], |row| {
+
+    let component_ids: Vec<ComponentId> = stmt.query_map([fts_query], |row| {
         Ok(row.get(0)?)
     })?.collect::<Result<Vec<_>, _>>()?;
     

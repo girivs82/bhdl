@@ -68,6 +68,8 @@ struct ActivityTracker {
     event_count: usize,
     /// Window start time
     window_start: f64,
+    /// Whether at least one full measurement window has completed
+    completed_window: bool,
 }
 
 impl DomainSynchronizer {
@@ -102,13 +104,15 @@ impl DomainSynchronizer {
         let next_time = next_analog.min(next_digital).min(next_forced);
         
         // Determine sync type
-        let sync_type = match next_time {
-            t if (t - next_analog).abs() < 1e-15 && (t - next_digital).abs() < 1e-15 => {
-                SyncType::Synchronized
-            }
-            t if (t - next_analog).abs() < 1e-15 => SyncType::AnalogStep,
-            t if (t - next_digital).abs() < 1e-15 => SyncType::DigitalEvent,
-            _ => unreachable!("Invalid sync point calculation"),
+        let at_analog = (next_time - next_analog).abs() < 1e-15;
+        let at_digital = (next_time - next_digital).abs() < 1e-15;
+        let sync_type = match (at_analog, at_digital) {
+            (true, true) => SyncType::Synchronized,
+            (true, false) => SyncType::AnalogStep,
+            (false, true) => SyncType::DigitalEvent,
+            // Neither domain naturally lands here, so this is a forced sync
+            // point (e.g. a measurement): both domains must be brought to it.
+            (false, false) => SyncType::Synchronized,
         };
         
         // Check if iteration is needed (coupling between domains)
@@ -123,16 +127,17 @@ impl DomainSynchronizer {
     
     /// Advance time to the specified point
     pub fn advance_time(&mut self, time: f64) {
-        assert!(time >= self.current_time, 
+        assert!(time >= self.current_time,
                 "Cannot advance time backwards: {} -> {}", self.current_time, time);
-        
+
+        let dt = time - self.current_time;
         self.current_time = time;
-        
+
         // Update activity tracking
         self.recent_activity.update(time);
-        
+
         // Adapt timestep based on activity
-        self.adapt_analog_timestep();
+        self.adapt_analog_timestep(dt);
         
         // Remove passed sync points
         self.sync_points.retain(|&OrderedFloat(t)| t > time);
@@ -187,17 +192,28 @@ impl DomainSynchronizer {
     }
     
     /// Adapt analog timestep based on activity
-    fn adapt_analog_timestep(&mut self) {
+    ///
+    /// `dt` is the amount of simulation time covered by the advance that
+    /// triggered this adaptation.
+    fn adapt_analog_timestep(&mut self, dt: f64) {
         // Calculate desired timestep based on activity
         let activity_factor = self.recent_activity.get_activity_factor();
-        
+
         // High activity -> smaller timestep
-        let desired_timestep = if activity_factor > 0.8 {
+        let desired_timestep = if !self.recent_activity.has_measurement() {
+            // No activity data recorded yet: "no information" is not the
+            // same as "measured low activity", so keep the current timestep.
+            self.analog_timestep
+        } else if activity_factor > 0.8 {
             self.analog_timestep * 0.5
         } else if activity_factor > 0.5 {
             self.analog_timestep * 0.8
         } else if activity_factor < 0.2 {
-            self.analog_timestep * 1.5
+            // Low activity -> relax the timestep: one 1.5x growth step per
+            // activity window covered by this advance, so long quiet
+            // advances relax proportionally more.
+            let quiet_windows = (dt / self.recent_activity.window_size).max(1.0);
+            self.analog_timestep * 1.5_f64.powf(quiet_windows)
         } else {
             self.analog_timestep
         };
@@ -226,20 +242,42 @@ impl ActivityTracker {
             window_size: 100e-9,  // 100ns window
             event_count: 0,
             window_start: 0.0,
+            completed_window: false,
         }
     }
-    
+
     fn update(&mut self, current_time: f64) {
+        let elapsed = current_time - self.window_start;
         // Check if we need to start a new window
-        if current_time - self.window_start > self.window_size {
-            // Calculate rate for completed window
-            self.digital_event_rate = self.event_count as f64 / self.window_size;
-            
+        if elapsed >= self.window_size {
+            // Calculate rate for the completed window. Events recorded in it
+            // only count as *recent* activity if we haven't advanced more
+            // than another full window past them; beyond that the recent
+            // past was quiet.
+            self.digital_event_rate = if elapsed >= 2.0 * self.window_size {
+                0.0
+            } else {
+                self.event_count as f64 / elapsed
+            };
+            self.completed_window = true;
+
             // Start new window
             self.window_start = current_time;
             self.event_count = 0;
             self.active_nets.clear();
+        } else {
+            // In-progress window: expose activity immediately instead of
+            // only at window rollover. Rating over the full window span is
+            // conservative; take the max so a fresh rollover measurement is
+            // not instantly discarded by a near-empty new window.
+            let in_progress_rate = self.event_count as f64 / self.window_size;
+            self.digital_event_rate = self.digital_event_rate.max(in_progress_rate);
         }
+    }
+
+    /// Whether any activity data has been recorded at all
+    fn has_measurement(&self) -> bool {
+        self.completed_window || self.event_count > 0 || self.analog_change_rate > 0.0
     }
     
     fn register_event(&mut self, net: NetId) {
@@ -294,11 +332,24 @@ mod tests {
         assert_eq!(result.sync_type, SyncType::AnalogStep);
         assert_eq!(result.next_time, 2e-9);
         
-        // Eventually hit the digital event
+        // Eventually hit the digital event. Near the event the analog
+        // timestep is refined (see test_timestep_near_event), so we approach
+        // it with shrinking analog steps before the event itself fires.
         sync.advance_time(4e-9);
-        let result = sync.get_next_sync_point();
-        assert_eq!(result.sync_type, SyncType::DigitalEvent);
-        assert_eq!(result.next_time, 5e-9);
+        let mut fired = false;
+        for _ in 0..50 {
+            let result = sync.get_next_sync_point();
+            assert!(result.next_time <= 5e-9,
+                    "sync point overshot digital event: {}", result.next_time);
+            if result.sync_type == SyncType::DigitalEvent {
+                assert_eq!(result.next_time, 5e-9);
+                fired = true;
+                break;
+            }
+            assert_eq!(result.sync_type, SyncType::AnalogStep);
+            sync.advance_time(result.next_time);
+        }
+        assert!(fired, "digital event at 5ns never fired");
     }
     
     #[test]

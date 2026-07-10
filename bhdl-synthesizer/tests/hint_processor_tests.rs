@@ -35,7 +35,7 @@ fn test_rc_network_hint_recommendation() {
             power VCC = 5V;
             ground GND;
 
-            net rc_filter: @VCC -> Res(1k).1 -> Cap(100n).1 -> @GND
+            @VCC -> Res(1k).1 -> Cap(100n).1 -> @GND
                 for delay(1ms);
         }
     "#;
@@ -54,7 +54,7 @@ fn test_current_limiting_value_suggestion() {
             power VCC = 5V;
             ground GND;
 
-            net led_current: @VCC -> Res(?).1 -> LED(red).A
+            @VCC -> Res(?).1 -> LED(red).A
                 for current_limiting(max: 20mA);
             LED(red).K -> @GND;
         }
@@ -84,7 +84,7 @@ fn test_filter_topology_recommendation() {
             power VCC = 5V;
             ground GND;
 
-            net filtered: @VCC -> Res(1k).1 -> Cap(100n).1 -> @GND
+            @VCC -> Res(1k).1 -> Cap(100n).1 -> @GND
                 for anti_alias(before: adc, cutoff: 10kHz);
         }
     "#;
@@ -108,7 +108,7 @@ fn test_optimization_priority_low_noise() {
             power VCC = 5V;
             ground GND;
 
-            net sig: @VCC -> Res(10k).1 -> @GND
+            @VCC -> Res(10k).1 -> @GND
                 for low_noise(max_ripple: 1mV);
         }
     "#;
@@ -134,7 +134,7 @@ fn test_optimization_priority_precision() {
             power VCC = 5V;
             ground GND;
 
-            net measurement: @VCC -> Res(10k).1 -> @GND
+            @VCC -> Res(10k).1 -> @GND
                 for precision_measurement(accuracy: 0.1%);
         }
     "#;
@@ -162,7 +162,7 @@ fn test_optimization_priority_speed() {
             power VCC = 5V;
             ground GND;
 
-            net fast_path: @VCC -> Res(100).1 -> @GND
+            @VCC -> Res(100).1 -> @GND
                 for delay(10ns);
         }
     "#;
@@ -186,7 +186,7 @@ fn test_validation_rules_from_hints() {
             power VCC = 5V;
             ground GND;
 
-            net protected: @VCC -> TVSDiode(6V).K -> Res(1k).1 -> @GND
+            @VCC -> TVSDiode(6V).K -> Res(1k).1 -> @GND
                 for input_protection(overvoltage: 6V, current_limit: 5mA);
         }
     "#;
@@ -210,7 +210,7 @@ fn test_component_recommendation_alternatives() {
             power VCC = 5V;
             ground GND;
 
-            net filter: @VCC -> Res(1k).1 -> Cap(100n).1 -> @GND
+            @VCC -> Res(1k).1 -> Cap(100n).1 -> @GND
                 for noise_filtering(cutoff: 1kHz, attenuation: 40dB);
         }
     "#;
@@ -239,7 +239,7 @@ fn test_hierarchical_hints_propagation() {
 
             amp: Amplifier { }
 
-            net sig_path: @VCC -> Res(10k).1 -> @GND
+            @VCC -> Res(10k).1 -> @GND
                 for low_noise(max_ripple: 5mV);
         }
     "#;
@@ -255,8 +255,8 @@ fn test_hierarchical_hints_propagation() {
 
 #[test]
 fn test_intent_emits_multiple_hints() {
-    // The current grammar allows a single `for` intent clause per net (a net
-    // statement parses one optional intent clause, then `;`). A single intent
+    // The current grammar allows a single `for` intent clause per connection
+    // statement (one optional intent clause, then `;`). A single intent
     // can still contribute several synthesis hints — low_noise emits "Use
     // low-noise components", "Consider shielding", and "Star grounding
     // recommended" — which is what we verify here.
@@ -265,7 +265,7 @@ fn test_intent_emits_multiple_hints() {
             power VCC = 5V;
             ground GND;
 
-            net combo: @VCC -> Res(1k).1 -> Cap(1u).1 -> @GND
+            @VCC -> Res(1k).1 -> Cap(1u).1 -> @GND
                 for low_noise(max_ripple: 10mV);
         }
     "#;
@@ -290,7 +290,7 @@ fn test_custom_hint_parsing() {
             power VCC = 5V;
             ground GND;
 
-            net amplified: @VCC -> Res(1k).1 -> @GND
+            @VCC -> Res(1k).1 -> @GND
                 for signal_amplification(gain: 10);
         }
     "#;
@@ -316,7 +316,7 @@ fn test_value_constraint_extraction() {
             power VCC = 5V;
             ground GND;
 
-            net limited: @VCC -> Res(?).1 -> LED(red).A
+            @VCC -> Res(?).1 -> LED(red).A
                 for current_limiting(max: 30mA);
             LED(red).K -> @GND;
         }
@@ -354,8 +354,8 @@ fn test_hint_processor_performance() {
         };
 
         source.push_str(&format!(
-            "    net n{}: @VCC -> Res(1k).1 -> @GND {};\n",
-            i, intent
+            "    @VCC -> Res(1k).1 -> @GND {};\n",
+            intent
         ));
     }
 
@@ -379,7 +379,7 @@ fn test_validation_result_warnings() {
             power VCC = 5V;
             ground GND;
 
-            net test: @VCC -> Res(1k).1 -> @GND
+            @VCC -> Res(1k).1 -> @GND
                 for current_limiting(max: 20mA);
         }
     "#;
@@ -402,11 +402,11 @@ fn test_tool_scope_filtering() {
             ground GND;
 
             // Debug signal - simulation only
-            net debug: @VCC -> Res(1k).1 -> @GND
+            @VCC -> Res(1k).1 -> @GND
                 for debug_only();
 
             // Production signal - all tools
-            net production: @VCC -> Res(330).1 -> LED(red).A
+            @VCC -> Res(330).1 -> LED(red).A
                 for current_limiting(max: 20mA);
             LED(red).K -> @GND;
         }

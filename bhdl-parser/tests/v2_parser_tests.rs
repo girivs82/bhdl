@@ -13,7 +13,7 @@ board TestBoard {
 }
 "#;
     let result = parse(input);
-    assert!(result.errors().is_empty());
+    assert!(result.errors().is_empty(), "Parse errors: {:?}", result.errors());
 }
 
 #[test]
@@ -41,7 +41,7 @@ board TestBoard {
 }
 "#;
     let result = parse(input);
-    assert!(result.errors().is_empty());
+    assert!(result.errors().is_empty(), "Parse errors: {:?}", result.errors());
 }
 
 #[test]
@@ -63,7 +63,7 @@ board TestBoard {
 }
 "#;
     let result = parse(input);
-    assert!(result.errors().is_empty());
+    assert!(result.errors().is_empty(), "Parse errors: {:?}", result.errors());
 }
 
 #[test]
@@ -73,9 +73,11 @@ board TestBoard {
     power VCC = 5V @ 1A;
     ground GND;
     
-    // Flow specification
-    power_flow: VCC |> protection |> regulation |> distribution;
-    signal_flow: input |> amplification |> filtering |> output;
+    // Flow specification. Note: `distribution`, `input` and `output` are
+    // reserved keywords in the current v2 grammar, so flow stages must use
+    // non-reserved identifiers.
+    power_flow: VCC |> protection |> regulation |> power_dist;
+    signal_flow: sig_in |> amplification |> filtering |> sig_out;
     
     // Unidirectional connection
     VCC -> LED.A;
@@ -88,7 +90,7 @@ board TestBoard {
 }
 "#;
     let result = parse(input);
-    assert!(result.errors().is_empty());
+    assert!(result.errors().is_empty(), "Parse errors: {:?}", result.errors());
 }
 
 #[test]
@@ -109,7 +111,7 @@ board TestBoard {
 }
 "#;
     let result = parse(input);
-    assert!(result.errors().is_empty());
+    assert!(result.errors().is_empty(), "Parse errors: {:?}", result.errors());
 }
 
 #[test]
@@ -130,7 +132,7 @@ board TestBoard {
 }
 "#;
     let result = parse(input);
-    assert!(result.errors().is_empty());
+    assert!(result.errors().is_empty(), "Parse errors: {:?}", result.errors());
 }
 
 #[test]
@@ -155,7 +157,7 @@ board TestBoard {
 }
 "#;
     let result = parse(input);
-    assert!(result.errors().is_empty());
+    assert!(result.errors().is_empty(), "Parse errors: {:?}", result.errors());
 }
 
 #[test]
@@ -165,12 +167,15 @@ board TestBoard {
     power VCC = 3.3V @ 1A;
     ground GND;
     
-    if (debug_mode) {
+    // Conditional elaboration in v2 is spelled `generate if`; a bare
+    // board-level `if` statement is not part of the grammar (the board
+    // body only dispatches on `generate`, `when`, `with`, etc.).
+    generate if (debug_mode) {
         VCC -> Res(1k).1 -> debug_led: LED(yellow).A;
         debug_led.K -> GND;
     }
-    
-    if (high_speed) {
+
+    generate if (high_speed) {
         VCC -> clk: Oscillator(100M).VDD;
     } else {
         VCC -> clk: Oscillator(10M).VDD;
@@ -178,32 +183,16 @@ board TestBoard {
 }
 "#;
     let result = parse(input);
-    assert!(result.errors().is_empty());
+    assert!(result.errors().is_empty(), "Parse errors: {:?}", result.errors());
 }
 
-#[test]
-fn test_module_definitions() {
-    let input = r#"
-board TestBoard {
-    power VCC = 3.3V @ 1A;
-    ground GND;
-    
-    // Module with parameters
-    module PowerFilter(input, output, gnd) {
-        flow: input |> filtering |> output;
-        
-        // Module implementation with explicit component reference
-        input -> cap: Cap(100u).+ -> output;
-        cap.- -> gnd;
-    }
-    
-    // Module instantiation would be done through flow or connection syntax
-    // e.g., VCC |> Filter1 |> VCC_FILTERED;
-}
-"#;
-    let result = parse(input);
-    assert!(result.errors().is_empty());
-}
+// NOTE: test_module_definitions was deleted. The `module` keyword was a
+// v1-era construct that no longer exists in the v2 grammar: the lexer has
+// no MODULE_KW and parse_source_file's top-level items are board, entity,
+// alias, typedef, type, import, interface, testbench, const, enum, trait,
+// impl, safety_goal, fault_inject, symbol, layout, part_family. Reusable
+// sub-circuits are now `entity` definitions, which are covered by the
+// entity tests in the other parser suites.
 
 #[test]
 fn test_named_handles() {
@@ -223,7 +212,7 @@ board TestBoard {
 }
 "#;
     let result = parse(input);
-    assert!(result.errors().is_empty());
+    assert!(result.errors().is_empty(), "Parse errors: {:?}", result.errors());
 }
 
 #[test]
@@ -245,7 +234,7 @@ board TestBoard {
 }
 "#;
     let result = parse(input);
-    assert!(result.errors().is_empty());
+    assert!(result.errors().is_empty(), "Parse errors: {:?}", result.errors());
 }
 
 #[test]
@@ -263,7 +252,7 @@ board TestBoard {
 }
 "#;
     let result = parse(input);
-    assert!(result.errors().is_empty());
+    assert!(result.errors().is_empty(), "Parse errors: {:?}", result.errors());
 }
 
 #[test]
@@ -291,15 +280,16 @@ board MixedTest {
         button[i].2 -> GND;
     }
     
-    // Conditional with connections
-    if (use_filter) {
+    // Conditional with connections (`generate if` — see
+    // test_conditional_statements)
+    generate if (use_filter) {
         VCC -> filter_cap: Cap(100u).+ -> VCC_FILTERED;
         filter_cap.- -> GND;
     }
 }
 "#;
     let result = parse(input);
-    assert!(result.errors().is_empty());
+    assert!(result.errors().is_empty(), "Parse errors: {:?}", result.errors());
 }
 
 #[test]

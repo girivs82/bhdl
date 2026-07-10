@@ -119,7 +119,18 @@ impl HierarchicalContext {
             if parts.len() == 2 {
                 let interface_name = parts[0];
                 let signal_name = parts[1];
-                
+
+                // Exact match first: interface synthesis names its nets
+                // "<instance>_<signal>" (e.g. `i2c_bus: I2C();` yields
+                // "i2c_bus_SDA"), so `i2c_bus.SDA` maps directly.
+                let exact = format!("{}_{}", interface_name, signal_name);
+                for (net_id, net) in netlist.nets.iter() {
+                    if net.name.as_deref() == Some(exact.as_str()) {
+                        info!("Resolved interface signal {} to net {}", net_name, exact);
+                        return Ok(net_id);
+                    }
+                }
+
                 // Look for any existing net that ends with _<signal_name>
                 // This will catch interface nets created by interface synthesis
                 for (net_id, net) in netlist.nets.iter() {
@@ -730,9 +741,27 @@ fn process_port_mapping(
             let pin_inst_id = netlist.find_pin_instance(instance_id, &pin_name)
                 .ok_or_else(|| anyhow::anyhow!(
                     "Port mapping: pin {} not found on instance {}", pin_name, instance_name))?;
-            let tgt_pin_inst_id = netlist.find_pin_instance(tgt_inst_id, tgt_pin_name)
-                .ok_or_else(|| anyhow::anyhow!(
-                    "Port mapping: pin {} not found on instance {}", tgt_pin_name, tgt_inst_name))?;
+            let tgt_pin_inst_id = match netlist.find_pin_instance(tgt_inst_id, tgt_pin_name) {
+                Some(id) => id,
+                None => {
+                    // The target may be an interface instance: those are
+                    // synthesized as nets named "<instance>_<signal>", not
+                    // as pins (see interface_synthesis.rs). If such a net
+                    // exists, wire this pin to it instead of erroring.
+                    let iface_net_name = format!("{}_{}", tgt_inst_name, tgt_pin_name);
+                    if let Some((net_id, _)) = netlist.nets.iter()
+                        .find(|(_, n)| n.name.as_deref() == Some(iface_net_name.as_str()))
+                    {
+                        netlist.connect(net_id, ConnectionPoint::PinInstance(pin_inst_id))
+                            .map_err(|e| anyhow::anyhow!("Failed to connect pin to net: {}", e))?;
+                        debug!("Connected {}:{} to interface net {}",
+                               instance_name, pin_name, iface_net_name);
+                        return Ok(());
+                    }
+                    return Err(anyhow::anyhow!(
+                        "Port mapping: pin {} not found on instance {}", tgt_pin_name, tgt_inst_name));
+                }
+            };
             // Share whichever net either pin already sits on (connect()
             // merges if both have one); only connect pins not already
             // on it, so a pin mapped earlier isn't double-entered.
@@ -1020,6 +1049,21 @@ fn create_component_instance(
     let component_type = comp_inst.component_type_name()
         .map(|t| t.text().to_string())
         .ok_or_else(|| anyhow::anyhow!("Component instance missing type"))?;
+
+    // Interface instances (`i2c_bus: I2C();`) are synthesized as signal
+    // nets by interface_synthesis.rs, not as components. Materializing a
+    // component instance here would put a phantom part in the netlist
+    // (polluting BOM/ERC and name-based instance lookups). The main
+    // synthesis pass already skips these via is_interface_type; mirror
+    // that here.
+    let is_interface = analysis.global_scope.lookup(&component_type)
+        .map(|sym| sym.kind == bhdl_analyzer::symbol_table::SymbolKind::Interface)
+        .unwrap_or(false);
+    if is_interface {
+        debug!("Skipping interface instance '{}' in hierarchical pass (nets \
+                already created by interface synthesis)", comp_inst.syntax().text());
+        return Ok(());
+    }
 
     // If the user wrote `<name>: <Type>(...)`, prefer that name. The instance
     // was (or will be) created by the inference-driven path under this name;
@@ -1455,60 +1499,59 @@ fn get_binary_operator(binary_expr: &BinaryExpr) -> String {
 /// This merges the signal nets from both interfaces
 fn process_interface_to_interface_connection(
     left_interface: &str,
-    right_interface: &str, 
+    right_interface: &str,
     netlist: &mut Netlist,
-    context: &mut HierarchicalContext,
+    _context: &mut HierarchicalContext,
 ) -> Result<()> {
     info!("Merging interface signals between {} and {}", left_interface, right_interface);
-    
-    // Find interface signal nets for both interfaces
-    let mut left_nets = Vec::new();
-    let mut right_nets = Vec::new();
-    
+
+    // Interface synthesis creates one net per interface signal, named
+    // "<instance>_<signal>" (interface_synthesis.rs). Collect the signal
+    // set of each side and merge pairwise by signal name: the left net
+    // survives, the right net's connections (and pin_instance pointers)
+    // move onto it via merge_nets.
+    let left_prefix = format!("{}_", left_interface);
+    let right_prefix = format!("{}_", right_interface);
+
+    let mut left_signals: std::collections::HashMap<String, NetId> = std::collections::HashMap::new();
+    let mut right_signals: std::collections::HashMap<String, NetId> = std::collections::HashMap::new();
+
     for (net_id, net) in netlist.nets.iter() {
         if let Some(net_name) = &net.name {
-            // Check if this net belongs to the left interface
-            if net_name.starts_with("U") && net_name.contains("_") {
-                // Extract signal name (everything after _)
-                if let Some(underscore_pos) = net_name.rfind('_') {
-                    let signal_name = &net_name[underscore_pos + 1..];
-                    let instance_prefix = &net_name[..underscore_pos];
-                    
-                    // We need to map the original interface names to the generated names
-                    // For now, collect all interface nets and match by signal name
-                    left_nets.push((net_id, signal_name.to_string(), net_name.clone()));
-                }
+            if let Some(signal) = net_name.strip_prefix(&left_prefix) {
+                left_signals.insert(signal.to_string(), net_id);
+            } else if let Some(signal) = net_name.strip_prefix(&right_prefix) {
+                right_signals.insert(signal.to_string(), net_id);
             }
         }
     }
-    
-    // Copy the vector to avoid borrow issues
-    right_nets = left_nets.clone();
-    
-    // Group nets by signal name
-    let mut signal_groups: std::collections::HashMap<String, Vec<(NetId, String)>> = std::collections::HashMap::new();
-    
-    for (net_id, signal_name, net_name) in &left_nets {
-        signal_groups.entry(signal_name.clone())
-            .or_insert_with(Vec::new)
-            .push((*net_id, net_name.clone()));
+
+    if left_signals.is_empty() || right_signals.is_empty() {
+        warn!("Interface connection {} <=> {}: no interface nets found for {}",
+              left_interface, right_interface,
+              if left_signals.is_empty() { left_interface } else { right_interface });
+        return Ok(());
     }
-    
-    // For each signal, merge the nets if there are multiple
-    for (signal_name, nets) in signal_groups {
-        if nets.len() > 1 {
-            info!("Merging {} nets for signal {}", nets.len(), signal_name);
-            
-            // Use the first net as the target and merge others into it
-            let target_net_id = nets[0].0;
-            
-            for i in 1..nets.len() {
-                let source_net_id = nets[i].0;
-                merge_nets(target_net_id, source_net_id, netlist)?;
-            }
+
+    let mut merged = 0usize;
+    // Deterministic order for stable netlists.
+    let mut signals: Vec<_> = left_signals.keys().cloned().collect();
+    signals.sort();
+    for signal in signals {
+        let target_net_id = left_signals[&signal];
+        if let Some(&source_net_id) = right_signals.get(&signal) {
+            info!("Merging interface signal {}: {}{} <= {}{}",
+                  signal, left_prefix, signal, right_prefix, signal);
+            merge_nets(target_net_id, source_net_id, netlist)?;
+            merged += 1;
+        } else {
+            debug!("Interface signal {} has no counterpart on {}", signal, right_interface);
         }
     }
-    
+
+    info!("Interface connection {} <=> {}: merged {} signal net(s)",
+          left_interface, right_interface, merged);
+
     Ok(())
 }
 
@@ -1650,6 +1693,26 @@ fn process_connection_stmt_as_flow(
     let flow_text = text[..flow_end].trim();
 
     if flow_text.is_empty() {
+        return Ok(());
+    }
+
+    // Interface-to-interface connection: `left <=> right;` merges the
+    // per-signal nets of two interface instances. The flow-chain parser
+    // below only splits on -> / <->, so without this dispatch the whole
+    // statement text would be treated as a single (garbage) net name.
+    let has_interface_op = node.descendants_with_tokens()
+        .filter_map(|e| e.into_token())
+        .any(|t| t.kind() == SyntaxKind::INTERFACE_OP);
+    if has_interface_op {
+        let mut sides = flow_text.split("<=>");
+        let left = sides.next().unwrap_or("").trim();
+        let right = sides.next().unwrap_or("").trim();
+        if !left.is_empty() && !right.is_empty() {
+            info!("Processing interface-to-interface connection: {} <=> {}", left, right);
+            process_interface_to_interface_connection(left, right, netlist, context)?;
+        } else {
+            warn!("Malformed interface connection statement: '{}'", flow_text);
+        }
         return Ok(());
     }
 

@@ -32,11 +32,11 @@ import simple.path.module;
 
 #[test] 
 fn test_stdlib_imports() {
-    // Test actual stdlib import patterns
+    // Test actual stdlib import patterns (v2: entities, not v1 modules)
     let source = r#"
 import { ResistorParams, RESISTOR_0402_PARAMS, RESISTOR_0603_PARAMS } from "../electrical_params.bhdl";
 
-module Resistor(value: resistance, package: string = "0402") {
+entity Resistor(value: resistance, package: string = "0402") {
     pin 1: signal inout;
     pin 2: signal inout;
 }

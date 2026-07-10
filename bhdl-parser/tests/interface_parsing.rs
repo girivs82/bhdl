@@ -84,22 +84,29 @@ interface SPI {
 
 #[test]
 fn test_hierarchical_interface() {
+    // v0.8 hierarchical interfaces: sub-interfaces are FIELDS referencing
+    // top-level definitions (`interface SubName fieldName;`). Nested
+    // interface *definitions* inside an interface body are unsupported by
+    // design (see parse_interface_def in top_level.rs).
     let code = r#"
+interface SuperSpeed {
+    signal TXP: out;
+    signal TXN: out;
+    signal RXP: in;
+    signal RXN: in;
+}
+
+interface USB2 {
+    signal DP: inout;
+    signal DN: inout;
+}
+
 interface USB3 {
-    interface SuperSpeed {
-        signal TXP: out;
-        signal TXN: out;
-        signal RXP: in;
-        signal RXN: in;
-    }
-    
-    interface USB2 {
-        signal DP: inout;
-        signal DN: inout;
-    }
+    interface SuperSpeed ss;
+    interface USB2 usb2;
 }
 "#;
-    
+
     let parse_result = parse(code);
     assert!(parse_result.errors().is_empty(), "Parse errors: {:?}", parse_result.errors());
 }

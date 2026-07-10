@@ -1,12 +1,13 @@
 //! Test that the parser correctly creates PIN_DECL nodes
 
 use bhdl_parser::{parse, SyntaxKind};
-use rowan::ast::AstNode;
 
 #[test]
 fn test_pin_decl_parsing() {
+    // The v1 `module` keyword no longer exists in the v2 grammar; pin
+    // declarations live inside `entity` bodies.
     let source = r#"
-module TestModule {
+entity TestEntity {
     pin test_pin: signal inout;
 }"#;
 

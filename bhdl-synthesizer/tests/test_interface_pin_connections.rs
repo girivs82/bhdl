@@ -11,7 +11,7 @@ async fn test_pin_to_interface_connection() {
         signal SCL: out;
     }
     
-    module STM32F4 {
+    entity STM32F4() {
         pin PA4: signal inout;
         pin PA5: signal inout;
     }
@@ -102,14 +102,14 @@ async fn test_bidirectional_interface_connections() {
         signal CS: out optional;
     }
     
-    module MCU {
+    entity MCU() {
         pin PB3: signal out;
         pin PB4: signal in;
         pin PB5: signal out;
         pin PB6: signal out;
     }
-    
-    module Sensor {
+
+    entity Sensor() {
         pin MOSI: signal in;
         pin MISO: signal out;
         pin SCK: signal in;

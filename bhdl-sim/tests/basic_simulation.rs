@@ -1,29 +1,19 @@
 //! Basic simulation integration test
 
-use bhdl_sim::{
-    SimulationEngine, SimulationConfig, CircuitLoader,
-};
+use bhdl_sim::{SimulationEngine, SimulationConfig};
 use bhdl_netlist::Netlist;
-use bhdl_analyzer::AnalysisResult;
 
 #[tokio::test]
 async fn test_basic_simulation_setup() {
     // Create a simple netlist
     let netlist = Netlist::new();
-    
-    // Create empty analysis result
-    let analysis_result = AnalysisResult::default();
-    
-    // Load circuit
-    let loader = CircuitLoader::new(netlist, analysis_result);
-    let circuit = loader.load_circuit().unwrap();
-    
+
     // Create simulation config
     let config = SimulationConfig::fast();
-    
-    // Create engine
-    let mut engine = SimulationEngine::new(config, circuit);
-    
+
+    // Create engine (current API takes the netlist directly)
+    let engine = SimulationEngine::new(config, netlist, "test".to_string()).unwrap();
+
     // Check initial state
     assert_eq!(engine.current_time(), 0.0);
     assert!(!engine.state().is_terminal());

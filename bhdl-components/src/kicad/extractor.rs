@@ -417,7 +417,14 @@ impl KiCadExtractor {
                 let parts: Vec<&str> = viewbox.split_whitespace().collect();
                 if parts.len() >= 4 {
                     if let (Ok(width), Ok(height)) = (parts[2].parse::<f64>(), parts[3].parse::<f64>()) {
-                        return Some((width, height));
+                        // A geometry-less symbol yields a NaN viewBox
+                        // ("NaN".parse::<f64>() succeeds); rusqlite binds
+                        // NaN as SQL NULL, which violates the NOT NULL
+                        // constraint on component_symbols dimensions —
+                        // fall through to the caller's default instead.
+                        if width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0 {
+                            return Some((width, height));
+                        }
                     }
                 }
             }

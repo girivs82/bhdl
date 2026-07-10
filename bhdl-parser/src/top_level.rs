@@ -1806,6 +1806,22 @@ impl<'t> Parser<'t> {
             // Component reference
             self.expect(SyntaxKind::IDENT);
 
+            // Optional array indexing directly on the component reference:
+            // near each io_banks[0..3]: ...
+            if self.peek() == Some(SyntaxKind::L_BRACKET) {
+                self.bump(); // [
+                if self.peek() == Some(SyntaxKind::STAR) {
+                    self.bump(); // *
+                } else {
+                    self.parse_expression(); // Start index
+                    if self.peek() == Some(SyntaxKind::DOT_DOT) {
+                        self.bump(); // ..
+                        self.parse_expression(); // End index
+                    }
+                }
+                self.expect(SyntaxKind::R_BRACKET);
+            }
+
             // Optional pin reference with dots and arrays
             while self.peek() == Some(SyntaxKind::DOT) {
                 self.bump(); // .

@@ -28,8 +28,8 @@ use bhdl_synthesizer::NetlistGenerator;
 //   C_in   = 2*0.275*0.725 / (570e3*0.15)        ≈ 4.664e-6 F  (~4.7µF)
 //   R_top  = 10k*(3.3-0.8)/0.8                    = 31250 Ω
 const BOARD: &str = r#"
-import { Ind } from "bhdl-stdlib/passive/inductor.bhdl";
-import { Diode } from "bhdl-stdlib/passive/diode.bhdl";
+import { Ind } from "bhdl-stdlib/passives/inductor.bhdl";
+import { Diode } from "bhdl-stdlib/passives/diode.bhdl";
 import { TPS54331_3V3 } from "bhdl-stdlib/power/tps54331.bhdl";
 
 board BuckSizing {

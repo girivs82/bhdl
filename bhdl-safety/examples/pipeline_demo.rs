@@ -57,6 +57,7 @@ board DangerousLED {
         include_power_domains: true,
         include_component_inference: true,
         database_path: Some("/Users/girivs/src/bhdl-new/components.db".to_string()),
+        ..NetlistConfig::default()
     };
     
     let mut generator = NetlistGenerator::with_config(config);

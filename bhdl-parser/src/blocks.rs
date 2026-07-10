@@ -36,9 +36,16 @@ impl<'t> Parser<'t> {
         self.expect(SyntaxKind::IDENT);
         self.expect(SyntaxKind::IN_KW);
         
-        // Range expression
+        // Range expression: `0..8` (start .. end). The expression parser
+        // does not treat `..` as an operator, so consume it here — the AST
+        // layer (bhdl_ast::ForLoopGenerate::range_bounds) expects the
+        // range tokens `NUMBER DOT_DOT NUMBER` inside FOR_LOOP_GENERATE.
         self.parse_expression();
-        
+        if self.peek() == Some(SyntaxKind::DOT_DOT) {
+            self.bump(); // ..
+            self.parse_expression(); // end bound
+        }
+
         self.expect(SyntaxKind::L_BRACE);
         self.parse_block_contents();
         self.expect(SyntaxKind::R_BRACE);

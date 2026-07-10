@@ -2,7 +2,7 @@
 
 use bhdl_components::{
     Component, ComponentLibrary, ElectricalSpec, ComponentSymbol, SupplierData,
-    types::{PriceBreak, ComponentCategory, PackagingType}
+    types::{PriceBreak, ComponentCategory, PackagingType, SupplierInfo}
 };
 use tempfile::TempDir;
 
@@ -137,30 +137,38 @@ fn test_component_types() {
 #[test]
 fn test_supplier_calculations() {
     let supplier_data = SupplierData {
-        id: 1,
         component_id: 1,
-        supplier_name: "Test Supplier".to_string(),
-        part_number: "SUPPLIER-123".to_string(),
-        manufacturer_part_number: "MFG-123".to_string(),
-        price_breaks: vec![
-            PriceBreak { quantity: 1, unit_price: 1.00 },
-            PriceBreak { quantity: 10, unit_price: 0.90 },
-            PriceBreak { quantity: 100, unit_price: 0.80 },
-        ],
-        stock_quantity: 1000,
-        lead_time_days: 5,
-        minimum_order_quantity: 1,
-        packaging: PackagingType::Reel,
+        suppliers: vec![SupplierInfo {
+            supplier_name: "Test Supplier".to_string(),
+            supplier_part_number: "SUPPLIER-123".to_string(),
+            manufacturer_part_number: "MFG-123".to_string(),
+            manufacturer: "Test Manufacturer".to_string(),
+            availability: 1000,
+            lead_time_days: Some(5),
+            moq: 1,
+            price_breaks: vec![
+                PriceBreak { quantity: 1, unit_price: 1.00, currency: "USD".to_string() },
+                PriceBreak { quantity: 10, unit_price: 0.90, currency: "USD".to_string() },
+                PriceBreak { quantity: 100, unit_price: 0.80, currency: "USD".to_string() },
+            ],
+            datasheet_url: None,
+            last_updated: chrono::Utc::now(),
+        }],
         last_updated: chrono::Utc::now(),
-        currency: "USD".to_string(),
     };
-    
-    // Test price calculation
-    assert_eq!(supplier_data.get_price_for_quantity(1), 1.00);
-    assert_eq!(supplier_data.get_price_for_quantity(10), 0.90);
-    assert_eq!(supplier_data.get_price_for_quantity(100), 0.80);
-    
+
+    // Test price calculation (best price picks the applicable break)
+    assert_eq!(supplier_data.get_best_price(1), Some(1.00));
+    assert_eq!(supplier_data.get_best_price(10), Some(0.90));
+    assert_eq!(supplier_data.get_best_price(100), Some(0.80));
+
     // Test stock checking
     assert!(supplier_data.has_stock(500));
     assert!(!supplier_data.has_stock(2000));
+
+    // Best-supplier ranking returns the single configured supplier
+    let choices = supplier_data.get_best_suppliers(10, 3);
+    assert_eq!(choices.len(), 1);
+    assert_eq!(choices[0].supplier_info.supplier_name, "Test Supplier");
+    assert_eq!(choices[0].unit_price, 0.90);
 }

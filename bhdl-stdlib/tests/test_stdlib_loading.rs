@@ -28,10 +28,9 @@ fn test_stdlib_loads_entities() {
     let resistor = reader.get_component("Resistor");
     assert!(resistor.is_some(), "Should find Resistor alias");
     
-    // Test Power/Ground components
-    let power = reader.get_component("Power");
-    assert!(power.is_some(), "Should find Power entity");
-    
+    // Test Ground component. (The v1 `Power` entity was deleted in the
+    // stdlib consolidation (bfaa4ed) — power rails are language-level
+    // `power VIN = 5V;` declarations now, not a stdlib entity.)
     let ground = reader.get_component("Ground");
     assert!(ground.is_some(), "Should find Ground entity");
     

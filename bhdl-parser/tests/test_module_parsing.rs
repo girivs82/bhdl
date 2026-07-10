@@ -2,14 +2,15 @@ use bhdl_parser;
 
 #[test]
 fn test_entity_definition_parsing() {
+    // Current v2 entity grammar (matches bhdl-stdlib/passives/capacitor.bhdl):
+    // per-pin `pin` declarations and `attribute` statements.
     let entity_code = r#"
 entity Cap(value: capacitance) {
-    pins {
-        +: passive;
-        -: passive;
-    }
+    pin 1: signal inout;
+    pin 2: signal inout;
 
-    @component_class = "capacitor";
+    attribute component_class = "capacitor";
+    attribute capacitance = value;
 }
 "#;
 

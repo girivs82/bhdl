@@ -44,6 +44,9 @@ fn test_led_without_resistor() {
         forward_voltage: 2.0,
         forward_current: 0.020,
         dynamic_resistance: 10.0,
+        saturation_current: None,
+        emission_coefficient: None,
+        thermal_voltage: None,
         limits: ElectricalLimits {
             max_current: Some(0.030),
             max_power: Some(0.100),
@@ -78,7 +81,7 @@ fn test_led_without_resistor() {
     assert!(led_current > 0.1, "LED current should be dangerously high");
     
     // Now run inference to detect the problem
-    let mut inference = ComponentInference::new(circuit);
+    let mut inference = bhdl_spice::LegacyComponentInference::new(circuit);
     inference.add_model("V1".to_string(), ComponentModel::VoltageSource {
         voltage: 5.0,
         internal_resistance: Some(0.001),
@@ -89,6 +92,9 @@ fn test_led_without_resistor() {
         forward_voltage: 2.0,
         forward_current: 0.020,
         dynamic_resistance: 10.0,
+        saturation_current: None,
+        emission_coefficient: None,
+        thermal_voltage: None,
         limits: ElectricalLimits {
             max_current: Some(0.030),
             max_power: Some(0.100),
@@ -148,6 +154,9 @@ fn test_led_with_proper_resistor() {
         forward_voltage: 2.0,
         forward_current: 0.020,
         dynamic_resistance: 10.0,
+        saturation_current: None,
+        emission_coefficient: None,
+        thermal_voltage: None,
         limits: ElectricalLimits {
             max_current: Some(0.030),
             max_power: Some(0.100),
@@ -185,7 +194,7 @@ fn test_led_with_proper_resistor() {
             "LED current {:.3}A should be close to 20mA with nonlinear model", led_current.abs());
     
     // Run inference - should not suggest any additional components
-    let mut inference = ComponentInference::new(circuit);
+    let mut inference = bhdl_spice::LegacyComponentInference::new(circuit);
     inference.add_model("V1".to_string(), ComponentModel::VoltageSource {
         voltage: 5.0,
         internal_resistance: Some(0.001),
@@ -203,6 +212,9 @@ fn test_led_with_proper_resistor() {
         forward_voltage: 2.0,
         forward_current: 0.020,
         dynamic_resistance: 10.0,
+        saturation_current: None,
+        emission_coefficient: None,
+        thermal_voltage: None,
         limits: ElectricalLimits {
             max_current: Some(0.030),
             max_power: Some(0.100),

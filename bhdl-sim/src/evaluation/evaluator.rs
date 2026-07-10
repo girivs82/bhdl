@@ -95,14 +95,24 @@ impl SimulationAttributeEvaluator {
     ) -> SimulationResult<(AttributeUpdateResult, RuntimeValue)> {
         let start = std::time::Instant::now();
         
-        // Get attribute info
-        let attr_info = self.attribute_analysis.attributes.get(attr_name)
-            .ok_or_else(|| SimulationError::EvaluationError(
-                format!("Unknown attribute: {}", attr_name)
-            ))?;
-        
+        // Get attribute type. Attributes with analyzer-produced info use their
+        // analyzed type; attributes supplied only via `with_expressions` are
+        // treated as expression attributes (the expression text is the source
+        // of truth for how to evaluate them).
+        let attr_type = match self.attribute_analysis.attributes.get(attr_name) {
+            Some(info) => info.attribute_type.clone(),
+            None if self.expression_texts.contains_key(attr_name) => {
+                bhdl_ast::attributes::AttributeType::Expression(vec![])
+            }
+            None => {
+                return Err(SimulationError::EvaluationError(
+                    format!("Unknown attribute: {}", attr_name)
+                ));
+            }
+        };
+
         // Check if it's an expression attribute
-        let new_value = match &attr_info.attribute_type {
+        let new_value = match &attr_type {
             bhdl_ast::attributes::AttributeType::Expression(_dependencies) => {
                 // Get expression text
                 if let Some(expr_text) = self.expression_texts.get(attr_name) {

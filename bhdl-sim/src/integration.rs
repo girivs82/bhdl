@@ -226,14 +226,16 @@ impl SimulationExecutor {
     }
     
     /// Create digital simulation engine for a partition
-    fn create_digital_engine(_partition: &SimPartition, netlist: &Netlist) -> SimulationResult<SimulationEngine> {
-        // Simplified engine creation for demonstration
-        // In a real implementation, this would configure the engine based on the netlist subset
+    fn create_digital_engine(partition: &SimPartition, netlist: &Netlist) -> SimulationResult<SimulationEngine> {
+        // In a fuller implementation, this would restrict the engine to the
+        // netlist subset owned by the partition; for now the engine is built
+        // over the full netlist.
         let config = crate::engine::SimulationConfig::default();
-        let netlist_arc = std::sync::Arc::new(netlist.clone());
-        
-        // For now, return a placeholder error since the full engine setup is complex
-        Err(SimulationError::EngineError("Digital engine creation simplified for demo".to_string()))
+        SimulationEngine::new(
+            config,
+            netlist.clone(),
+            format!("partition_{}", partition.id),
+        )
     }
     
     /// Create timed digital simulation engine

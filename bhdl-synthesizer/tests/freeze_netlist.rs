@@ -54,13 +54,16 @@ async fn freezes_atmega_decoupling_as_fabbed() {
     assert_eq!(f.provenance.tool_version, "test");
 
     // The MCU plus its always-on decoupling caps materialised as
-    // concrete components with resolved values.
-    let by_refdes = |r: &str| f.components.iter().find(|c| c.refdes == r);
-    let mcu = by_refdes("mcu").expect("mcu present");
+    // concrete components with resolved values. Handles live in `name`;
+    // `refdes` is the fab designator minted by the phase-12.7 allocator
+    // (e.g. "U1", "C3") — look components up by handle.
+    let by_name = |n: &str| f.components.iter().find(|c| c.name == n);
+    let mcu = by_name("mcu").expect("mcu present");
     assert_eq!(mcu.component_type, "ATmega328P_DIP28");
+    assert_ne!(mcu.refdes, "", "mcu should carry an allocated refdes");
 
     for cap in ["mcu_C_vcc", "mcu_C_avcc", "mcu_C_aref"] {
-        let c = by_refdes(cap).unwrap_or_else(|| panic!("{cap} present"));
+        let c = by_name(cap).unwrap_or_else(|| panic!("{cap} present"));
         assert_eq!(c.component_type, "Cap");
         assert!(c.value.is_some(), "{cap} should carry a resolved value");
     }

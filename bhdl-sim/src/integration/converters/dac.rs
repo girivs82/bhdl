@@ -288,9 +288,10 @@ mod tests {
         }
         
         // Low input should produce low voltage
-        if let AnalogUpdate::Voltage(v) = dac.update(LogicLevel::Low, 0.0) {
-            // Voltage should start transitioning
-            assert!(v < 2.5);
+        dac.update(LogicLevel::Low, 0.0);
+        // Shortly after the transition starts, voltage should be falling
+        if let AnalogUpdate::Voltage(v) = dac.update(LogicLevel::Low, 0.5e-9) {
+            assert!(v < 2.5 && v > 0.0);
         }
         
         // After sufficient time, should reach v_ol

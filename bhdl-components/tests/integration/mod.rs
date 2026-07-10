@@ -57,7 +57,7 @@ pub fn print_test_environment() {
     }
     
     // Check for KiCad libraries
-    if let Ok(libs) = crate::real_world_test::find_kicad_libraries() {
+    if let Ok(libs) = self::real_world_test::find_kicad_libraries() {
         if !libs.is_empty() {
             println!("   ✅ KiCad libraries: {} found", libs.len());
         } else {

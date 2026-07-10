@@ -909,6 +909,16 @@ impl NetlistGenerator {
                 if let Some(ref type_name) = symbol.instance_type_name {
                     debug!("Component {} is of type: {}", name, type_name);
 
+                    // Interface instances (`i2c_bus: I2C();`) are synthesized
+                    // as signal nets by interface_synthesis.rs, never as
+                    // component instances — creating one here puts a phantom
+                    // part in the netlist. Mirrors the is_interface_type skip
+                    // in generate_instances_with_semantics.
+                    if self.is_interface_type(type_name, analysis) {
+                        debug!("Skipping interface instance {} of type {}", name, type_name);
+                        continue;
+                    }
+
                     // Create module for the component type if it doesn't exist
                     let module_id = self.get_or_create_module(type_name, ModuleKind::Component)?;
                     

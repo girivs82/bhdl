@@ -146,11 +146,11 @@ impl ADConverter {
     fn determine_logic_level(&mut self, voltage: f64, time: f64) -> LogicLevel {
         match self.last_output {
             LogicLevel::Low => {
-                if voltage > self.config.v_ih + self.config.hysteresis {
-                    // Clear transition to high
+                if voltage > self.config.v_ih {
+                    // Crossed the rising threshold: clear transition to high
                     LogicLevel::High
-                } else if voltage > self.config.v_ih {
-                    // In metastable region above v_ih
+                } else if voltage > self.config.v_il {
+                    // In the undefined region between v_il and v_ih
                     if self.in_metastable_region_too_long(time) {
                         LogicLevel::Unknown
                     } else {
@@ -161,11 +161,12 @@ impl ADConverter {
                 }
             }
             LogicLevel::High => {
-                if voltage < self.config.v_il - self.config.hysteresis {
-                    // Clear transition to low
+                if voltage < self.config.v_ih - self.config.hysteresis {
+                    // Fell below the hysteresis band under the switching
+                    // threshold: clear transition to low
                     LogicLevel::Low
-                } else if voltage < self.config.v_il {
-                    // In metastable region below v_il
+                } else if voltage < self.config.v_ih {
+                    // Within the hysteresis band just below v_ih
                     if self.in_metastable_region_too_long(time) {
                         LogicLevel::Unknown
                     } else {
@@ -300,17 +301,18 @@ mod tests {
         assert_eq!(adc.get_output(), LogicLevel::Low);
         
         // Move to metastable region
-        let event = adc.convert(1.5, 1e-6);
+        let t0 = 1e-6;
+        let event = adc.convert(1.5, t0);
         assert!(event.is_none()); // No immediate change
-        
-        // Stay in metastable region for a while
+
+        // Stay in metastable region for a while (still under metastable_time)
         for i in 1..5 {
-            let event = adc.convert(1.5, i as f64 * 5e-9);
+            let event = adc.convert(1.5, t0 + i as f64 * 2e-9);
             assert!(event.is_none());
         }
-        
+
         // After metastable_time, should transition to X
-        let event = adc.convert(1.5, 15e-9);
+        let event = adc.convert(1.5, t0 + 15e-9);
         assert!(event.is_some());
         let event = event.unwrap();
         assert_eq!(event.new_value, LogicLevel::Unknown);

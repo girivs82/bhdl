@@ -10,15 +10,11 @@ fn test_power_and_ground_components_loaded() {
     let mut reader = StdlibReader::new(stdlib_path.to_str().unwrap());
     reader.load_all_components().expect("Failed to load components");
     
-    // Test Power component
-    let power_component = reader.get_component("Power");
-    assert!(power_component.is_some(), "Power component should be loaded");
-    
-    let power = power_component.unwrap();
-    assert_eq!(power.module_name, "Power");
-    assert_eq!(power.pins.len(), 1);
-    assert_eq!(power.pins[0].name, "OUT");
-    
+    // NOTE: the v1 `Power` entity (power/power.bhdl) was deleted in the
+    // stdlib consolidation (bfaa4ed) — power rails are language-level
+    // `power VIN = 5V;` declarations, not a stdlib entity. Only Ground
+    // remains as a real entity.
+
     // Test Ground component
     let ground_component = reader.get_component("Ground");
     assert!(ground_component.is_some(), "Ground component should be loaded");
@@ -28,9 +24,8 @@ fn test_power_and_ground_components_loaded() {
     assert_eq!(ground.pins.len(), 1);
     assert_eq!(ground.pins[0].name, "GND");
     
-    // Test aliases
-    assert!(reader.get_component("PWR").is_some(), "PWR alias should work");
+    // Test alias (PWR aliased the deleted Power entity; only GND remains)
     assert!(reader.get_component("GND").is_some(), "GND alias should work");
-    
-    println!("Power and Ground components loaded successfully!");
+
+    println!("Ground component loaded successfully!");
 }
