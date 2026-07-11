@@ -220,7 +220,11 @@ impl ExpressionEvaluator {
             } else if let Ok(float_val) = text.parse::<f64>() {
                 Ok(RuntimeValue::Real(float_val))
             } else {
-                Err(EvaluationError::InvalidOperation(format!("Unknown value: {}", text)))
+                match text.trim() {
+                    "true" => Ok(RuntimeValue::Boolean(true)),
+                    "false" => Ok(RuntimeValue::Boolean(false)),
+                    _ => Err(EvaluationError::InvalidOperation(format!("Unknown value: {}", text))),
+                }
             }
         }
     }
@@ -803,7 +807,6 @@ mod tests {
     }
     
     #[test]
-    #[ignore] // TODO: function calls parsed as component instantiation in attribute context
     fn test_function_calls() {
         let sim_ctx = SimulationContext::new(0.001);
         let eval_ctx = EvaluationContext::new(&sim_ctx);
@@ -819,5 +822,29 @@ mod tests {
         let expr = parse_and_get_expr("sqrt(16)").unwrap();
         let result = ExpressionEvaluator::evaluate(&expr, &eval_ctx).unwrap();
         assert_eq!(result, RuntimeValue::Real(4.0));
+
+        // Multi-argument builtin
+        let expr = parse_and_get_expr("pow(2, 10)").unwrap();
+        let result = ExpressionEvaluator::evaluate(&expr, &eval_ctx).unwrap();
+        assert_numeric_eq(result, 1024.0);
+
+        // Nested calls with an expression argument
+        let expr = parse_and_get_expr("sqrt(pow(3, 2) + pow(4, 2))").unwrap();
+        let result = ExpressionEvaluator::evaluate(&expr, &eval_ctx).unwrap();
+        assert_numeric_eq(result, 5.0);
+    }
+
+    #[test]
+    fn test_boolean_literals() {
+        let sim_ctx = SimulationContext::new(0.001);
+        let eval_ctx = EvaluationContext::new(&sim_ctx);
+
+        let expr = parse_and_get_expr("true").unwrap();
+        let result = ExpressionEvaluator::evaluate(&expr, &eval_ctx).unwrap();
+        assert_eq!(result, RuntimeValue::Boolean(true));
+
+        let expr = parse_and_get_expr("false").unwrap();
+        let result = ExpressionEvaluator::evaluate(&expr, &eval_ctx).unwrap();
+        assert_eq!(result, RuntimeValue::Boolean(false));
     }
 }

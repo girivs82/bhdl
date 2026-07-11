@@ -29,13 +29,6 @@ fn test_voltage_controlled_oscillator() {
     circuit_state.update_attribute("output", RuntimeValue::Real(0.0));
     
     // Expression texts for VCO behavior.
-    //
-    // Note: function calls (e.g. sin()) cannot currently be evaluated:
-    // bhdl-parser emits PARAM_LIST for builtin call arguments, but
-    // bhdl-ast's FunctionCallExpr::argument_list() only reads
-    // ARGUMENT_LIST nodes, so evaluation sees zero args (the analyzer's
-    // own test_function_calls is #[ignore]d for this area). Model the
-    // output as accumulated phase (frequency * t) instead of a sinusoid.
     let mut expression_texts = HashMap::new();
     expression_texts.insert(
         "frequency".to_string(),
@@ -43,7 +36,7 @@ fn test_voltage_controlled_oscillator() {
     );
     expression_texts.insert(
         "output".to_string(),
-        "frequency * t".to_string()
+        "sin(2 * pi * frequency * t)".to_string()
     );
     
     // Create evaluator
@@ -81,19 +74,20 @@ fn test_voltage_controlled_oscillator() {
             RuntimeValue::Real(f) => assert!((f - 1.25e6).abs() < 1e-3, "freq={}", f),
             other => panic!("expected Real frequency, got {:?}", other),
         }
-        // output = frequency * t. evaluate_batch is two-pass (all attributes
-        // read pre-batch state), so output uses the frequency from the
-        // PREVIOUS batch: 1 MHz (initial) on the first iteration, 1.25 MHz
-        // afterwards.
+        // output = sin(2*pi*frequency*t). evaluate_batch is two-pass (all
+        // attributes read pre-batch state), so output uses the frequency
+        // from the PREVIOUS batch: 1 MHz (initial) on the first iteration,
+        // 1.25 MHz afterwards.
         let expected_freq = if i == 0 { 1e6 } else { 1.25e6 };
+        let expected = (2.0 * std::f64::consts::PI * expected_freq * time).sin();
         match output {
             RuntimeValue::Real(v) => {
-                assert!((v - expected_freq * time).abs() < 1e-9, "t={} output={}", time, v)
+                assert!((v - expected).abs() < 1e-9, "t={} output={} expected={}", time, v, expected)
             }
             other => panic!("expected Real output, got {:?}", other),
         }
 
-        println!("  t={:.0}ns: freq={:?} Hz, phase={:?}",
+        println!("  t={:.0}ns: freq={:?} Hz, output={:?}",
                 time * 1e9, freq, output);
     }
 }
@@ -173,16 +167,12 @@ fn test_temperature_sensor_model() {
     circuit_state.update_attribute("noise_amplitude", RuntimeValue::Real(1e-3)); // 1mV noise
     circuit_state.update_attribute("output_voltage", RuntimeValue::Real(0.0));
     
-    // Expression for temperature sensor.
-    // Note: the original model added a `noise_amplitude * sin(1000 * t)`
-    // term, but function calls cannot currently be evaluated (bhdl-parser
-    // emits PARAM_LIST for builtin call args while bhdl-ast's
-    // FunctionCallExpr::argument_list() only reads ARGUMENT_LIST), so the
-    // model is the noiseless linear transfer function.
+    // Expression for temperature sensor: linear transfer function plus a
+    // small sinusoidal noise term.
     let mut expression_texts = HashMap::new();
     expression_texts.insert(
         "output_voltage".to_string(),
-        "offset + sensitivity * temperature".to_string()
+        "offset + sensitivity * temperature + noise_amplitude * sin(1000 * t)".to_string()
     );
     
     let analysis = AttributeAnalysisResult {
@@ -200,10 +190,11 @@ fn test_temperature_sensor_model() {
     let test_temps = vec![0.0, 25.0, 50.0, 75.0, 100.0];
     
     println!("Temperature sensor response:");
-    for temp in test_temps {
+    for (i, temp) in test_temps.into_iter().enumerate() {
         circuit_state.update_attribute("temperature", RuntimeValue::Real(temp));
-        
+
         time_manager.advance_by(1e-3).unwrap();
+        let t = (i as f64 + 1.0) * 1e-3;
 
         let attr_ids = vec![
             bhdl_sim::evaluation::scheduler::AttributeId("output_voltage".to_string()),
@@ -211,8 +202,8 @@ fn test_temperature_sensor_model() {
 
         evaluator.evaluate_batch(&attr_ids, &mut circuit_state, &time_manager).unwrap();
 
-        // V_out = offset + sensitivity * T = 0.5 + 0.01 * T
-        let expected = 0.5 + 10e-3 * temp;
+        // V_out = offset + sensitivity * T + noise = 0.5 + 0.01 * T + 1mV * sin(1000 t)
+        let expected = 0.5 + 10e-3 * temp + 1e-3 * (1000.0 * t).sin();
         match circuit_state.get_attribute("output_voltage") {
             Some(RuntimeValue::Real(v)) => {
                 assert!((v - expected).abs() < 1e-9,
@@ -252,10 +243,7 @@ fn test_digital_filter_behavioral() {
     // When blocks to shift samples
     let when_blocks = vec![
         WhenBlockInfo {
-            // Always-true condition. Note: a bare `true` literal parses as a
-            // Value node, which the analyzer's ExpressionEvaluator does not
-            // evaluate as a boolean, so use a comparison instead.
-            condition: "1 > 0".to_string(), // Always execute
+            condition: "true".to_string(), // Always execute
             assignments: {
                 let mut map = HashMap::new();
                 map.insert("sample3".to_string(), "sample2".to_string());

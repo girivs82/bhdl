@@ -232,11 +232,29 @@ impl FunctionCallExpr {
     pub fn argument_list(&self) -> Option<ArgumentList> {
         self.0.children().find_map(ArgumentList::cast)
     }
-    
+
     pub fn arguments(&self) -> impl Iterator<Item = Expr> {
-        self.argument_list()
-            .into_iter()
-            .flat_map(|list| list.arguments())
+        // The parser emits ARGUMENT_LIST for plain call syntax, but
+        // PARAM_LIST for calls parsed via parse_param_list_expr (builtin
+        // math functions and component-style calls with named-parameter
+        // support). Accept both: positional args are direct Expr children,
+        // named args carry their value inside a PARAM_ASSIGN.
+        let args: Vec<Expr> = if let Some(list) = self.argument_list() {
+            list.arguments().collect()
+        } else if let Some(params) = self.0.children().find(|n| n.kind() == SyntaxKind::PARAM_LIST) {
+            params.children()
+                .filter_map(|child| {
+                    if child.kind() == SyntaxKind::PARAM_ASSIGN {
+                        child.children().find_map(Expr::cast)
+                    } else {
+                        Expr::cast(child)
+                    }
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        args.into_iter()
     }
 }
 
