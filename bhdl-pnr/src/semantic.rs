@@ -99,6 +99,29 @@ pub fn build_board(
     } else {
         netlist.instances.keys().collect()
     };
+    // Phantom entity-definition stubs: an instance named exactly like its
+    // module with ZERO net-connected pins is a template artifact, not a
+    // part — each one duplicated a real footprint in the KiCad export
+    // (same refdes, no nets); the DRC oracle flagged the ghosts as
+    // shorts. A real (connected) part is never filtered.
+    let top_instances: Vec<InstanceId> = top_instances
+        .into_iter()
+        .filter(|&inst_id| {
+            let Some(instance) = netlist.instances.get(inst_id) else {
+                return false;
+            };
+            let Some(module) = netlist.modules.get(instance.definition) else {
+                return false;
+            };
+            if instance.name != module.name {
+                return true;
+            }
+            netlist
+                .pin_instances
+                .values()
+                .any(|pi| pi.instance == inst_id && pi.net.is_some())
+        })
+        .collect();
 
     if top_instances.is_empty() {
         return Err(SemanticError::EmptyNetlist);
@@ -514,21 +537,7 @@ fn extract_interface_constraints(
         if module.attributes.is_empty() {
             continue;
         }
-        // Phantom entity-definition stubs: an instance named exactly like
-        // its module with ZERO net-connected pins is a template artifact,
-        // not a part — it duplicated every real footprint in the KiCad
-        // export (same refdes, no nets) until the DRC oracle flagged the
-        // ghosts as shorts. A REAL floating part keeps its (connected)
-        // siblings' company via the name guard and still gets placed.
-        if instance.name == module.name {
-            let has_connection = netlist
-                .pin_instances
-                .values()
-                .any(|pi| pi.instance == inst_id && pi.net.is_some());
-            if !has_connection {
-                continue;
-            }
-        }
+
         let attrs: Vec<(&str, &str)> = module
             .attributes
             .iter()
