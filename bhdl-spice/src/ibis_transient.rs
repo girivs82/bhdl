@@ -97,6 +97,25 @@ impl IbisDrive {
         })
     }
 
+    /// Latest instant at which this drive is still mid-transition: the
+    /// last event's time plus that edge's coefficient span. 0 with no
+    /// events. Callers use this to pick a default simulation duration.
+    pub fn horizon(&self) -> f64 {
+        self.events
+            .iter()
+            .map(|e| {
+                let span = if e.rising {
+                    self.rising_coeffs.as_ref()
+                } else {
+                    self.falling_coeffs.as_ref()
+                }
+                .and_then(|c| c.last().map(|r| r.0))
+                .unwrap_or(0.0);
+                e.t + span
+            })
+            .fold(0.0, f64::max)
+    }
+
     /// Drive weights at simulation time `t`: the initial state's weights
     /// before the first event; inside an event window, the extracted
     /// coefficients interpolated at `t − t_event`; held at the final row
@@ -139,6 +158,56 @@ impl IbisDrive {
     }
 }
 
+/// Parse a time literal with SI suffix — "2n", "0.5u", "10p", "3e-9",
+/// optionally with a trailing 's' ("2ns"). None on malformed input.
+pub fn parse_time(tok: &str) -> Option<f64> {
+    let t = tok.trim();
+    let t = t.strip_suffix(['s', 'S']).unwrap_or(t);
+    let split = t
+        .find(|c: char| {
+            !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+' || c == 'e' || c == 'E')
+        })
+        .unwrap_or(t.len());
+    let (mantissa, suffix) = t.split_at(split);
+    let base: f64 = mantissa.parse().ok()?;
+    let scale = match suffix {
+        "" => 1.0,
+        "m" => 1e-3,
+        "u" | "µ" => 1e-6,
+        "n" => 1e-9,
+        "p" => 1e-12,
+        "f" => 1e-15,
+        _ => return None,
+    };
+    Some(base * scale)
+}
+
+/// Parse an `ibis_wave_<PIN>` directive: whitespace/comma-separated
+/// `rise@<time>` / `fall@<time>` events, e.g. `"rise@2n fall@10n"`.
+pub fn parse_wave_spec(spec: &str) -> std::result::Result<Vec<IbisEdgeEvent>, String> {
+    let mut events = Vec::new();
+    for tok in spec.split([' ', ',', '\t']).filter(|t| !t.is_empty()) {
+        let (kind, t_str) = tok
+            .split_once('@')
+            .ok_or_else(|| format!("bad edge '{tok}' (expected rise@<time> or fall@<time>)"))?;
+        let rising = match kind.to_ascii_lowercase().as_str() {
+            "rise" | "rising" | "r" => true,
+            "fall" | "falling" | "f" => false,
+            other => return Err(format!("bad edge kind '{other}' (expected rise/fall)")),
+        };
+        let t = parse_time(t_str)
+            .ok_or_else(|| format!("bad time '{t_str}' in edge '{tok}'"))?;
+        if t < 0.0 {
+            return Err(format!("negative edge time in '{tok}'"));
+        }
+        events.push(IbisEdgeEvent { t, rising });
+    }
+    if events.is_empty() {
+        return Err("wave directive has no edges".to_string());
+    }
+    Ok(events)
+}
+
 /// Transient simulation of a circuit containing IBIS buffer branches,
 /// any of which may switch state mid-run per `drives`.
 ///
@@ -153,6 +222,20 @@ pub fn run_transient_ibis(
     circuit: &Circuit,
     params: &TransientParams,
     drives: &[IbisDrive],
+) -> Result<TransientResult> {
+    run_transient_ibis_ic(circuit, params, drives, None)
+}
+
+/// [`run_transient_ibis`] with explicit initial conditions: node-name →
+/// voltage at t = 0⁻ (typically the board's solved DC operating point).
+/// Capacitor state initializes from it instead of 0V — without this, a
+/// powered board starts with every rail cap discharged and the first
+/// step is an unsolvable inrush.
+pub fn run_transient_ibis_ic(
+    circuit: &Circuit,
+    params: &TransientParams,
+    drives: &[IbisDrive],
+    initial_v: Option<&HashMap<String, f64>>,
 ) -> Result<TransientResult> {
     if params.timestep <= 0.0 || params.duration <= 0.0 {
         return Err(SpiceError::InvalidModel(
@@ -171,7 +254,10 @@ pub fn run_transient_ibis(
         .ok_or(SpiceError::NoGroundNode)?;
     let names: std::collections::HashSet<&str> =
         node_name.values().map(|s| s.as_str()).collect();
-    if !names.contains(params.input_node.as_str()) {
+    // An empty input_node means "no external stimulus" — board circuits
+    // carry their own rail sources, and the buffer edges ARE the stimulus.
+    let has_stimulus = !params.input_node.is_empty();
+    if has_stimulus && !names.contains(params.input_node.as_str()) {
         return Err(SpiceError::NodeNotFound(params.input_node.clone()));
     }
     for p in &params.probe_nodes {
@@ -189,25 +275,27 @@ pub fn run_transient_ibis(
             )));
         }
     }
-    for (_, b) in circuit.branches() {
-        match b.component_type.as_str() {
-            "Resistor" | "Capacitor" | "Inductor" | "VoltageSource"
-            | "CurrentSource" | "IbisBuffer" => {}
-            other => {
-                return Err(SpiceError::InvalidModel(format!(
-                    "run_transient_ibis: component type '{other}' \
-                     (branch '{}') is not supported on this route",
-                    b.name
-                )))
-            }
-        }
-    }
-
+    let ic_at = |idx: &petgraph::graph::NodeIndex| -> f64 {
+        initial_v
+            .and_then(|m| node_name.get(idx).and_then(|n| m.get(n)))
+            .copied()
+            .unwrap_or(0.0)
+    };
     let mut cap_v: HashMap<EdgeIndex, f64> = HashMap::new();
     let mut ind_i: HashMap<EdgeIndex, f64> = HashMap::new();
     for (edge, branch) in circuit.branches() {
         match branch.component_type.as_str() {
-            "Capacitor" => { cap_v.insert(edge, 0.0); }
+            "Capacitor" => {
+                let v0 = if branch.nodes.len() == 2 {
+                    ic_at(&branch.nodes[0]) - ic_at(&branch.nodes[1])
+                } else {
+                    0.0
+                };
+                cap_v.insert(edge, v0);
+            }
+            // Inductors carry no IC map entry (a DC current extraction
+            // would need branch currents, which the DC result doesn't
+            // expose by name) — they start at 0A as before.
             "Inductor" => { ind_i.insert(edge, 0.0); }
             _ => {}
         }
@@ -225,7 +313,11 @@ pub fn run_transient_ibis(
     times.push(0.0);
     let v0 = params.stimulus.at(0.0);
     for name in &params.probe_nodes {
-        let v = if name == &params.input_node { v0 } else { 0.0 };
+        let v = if name == &params.input_node {
+            v0
+        } else {
+            initial_v.and_then(|m| m.get(name)).copied().unwrap_or(0.0)
+        };
         probe_voltages.get_mut(name).unwrap().push(v);
     }
 
@@ -239,14 +331,16 @@ pub fn run_transient_ibis(
         for nm in node_name.values() {
             c.add_node(nm.clone(), None);
         }
-        c.add_branch(
-            "__VIN__".to_string(),
-            &params.input_node,
-            &ground_name,
-            "VoltageSource".to_string(),
-            params.stimulus.at(t_clamped),
-            None,
-        );
+        if has_stimulus {
+            c.add_branch(
+                "__VIN__".to_string(),
+                &params.input_node,
+                &ground_name,
+                "VoltageSource".to_string(),
+                params.stimulus.at(t_clamped),
+                None,
+            );
+        }
 
         for (edge, branch) in circuit.branches() {
             if branch.nodes.len() != 2 { continue; }
@@ -303,7 +397,17 @@ pub fn run_transient_ibis(
                         }
                     }
                 }
-                _ => unreachable!("rejected above"),
+                // Everything else in equation-system land is memoryless
+                // (diodes, LEDs, transistors, behavioral sources) — carry
+                // verbatim; the per-step DC solve stamps it exactly as the
+                // board's operating-point solve does.
+                _ => {
+                    c.add_branch_with_metadata(
+                        branch.name.clone(), &na, &nb,
+                        branch.component_type.clone(), branch.value, None,
+                        branch.metadata.clone(),
+                    );
+                }
             }
         }
 
@@ -378,6 +482,25 @@ fn add_companion(c: &mut Circuit, name: &str, a: &str, b: &str, comp: Companion)
 mod tests {
     use super::*;
     use crate::transient::Stimulus;
+
+    #[test]
+    fn time_and_wave_spec_parsing() {
+        assert_eq!(parse_time("2n"), Some(2e-9));
+        assert_eq!(parse_time("0.5u"), Some(5e-7));
+        assert_eq!(parse_time("10ns"), Some(1e-8));
+        assert_eq!(parse_time("3e-9"), Some(3e-9));
+        assert_eq!(parse_time("bogus"), None);
+        assert_eq!(parse_time("2x"), None);
+
+        let evs = parse_wave_spec("rise@2n fall@10n").unwrap();
+        assert_eq!(evs.len(), 2);
+        assert!(evs[0].rising && (evs[0].t - 2e-9).abs() < 1e-18);
+        assert!(!evs[1].rising && (evs[1].t - 1e-8).abs() < 1e-18);
+        assert_eq!(parse_wave_spec("rise@2n,fall@10n").unwrap().len(), 2);
+        assert!(parse_wave_spec("wiggle@2n").is_err());
+        assert!(parse_wave_spec("rise@sideways").is_err());
+        assert!(parse_wave_spec("").is_err());
+    }
 
     /// The canonical companion-sign check: RC step response through this
     /// route must match `v(t) = V·(1 − e^{−t/τ})` — validates that the

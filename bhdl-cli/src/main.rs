@@ -162,6 +162,26 @@ enum Commands {
         use_metadata: bool,
     },
     
+    /// Time-domain simulation of scheduled IBIS buffer edges
+    /// (`ibis_wave_<PIN>="rise@2n fall@10n"` instance directives)
+    Transient {
+        /// Output CSV file for the probe traces (time + one column per net)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Extra nets to probe (driven pins' nets are always probed)
+        #[arg(long)]
+        probe: Vec<String>,
+
+        /// Simulation duration, e.g. "50n" (default: latest edge horizon + 50%)
+        #[arg(long)]
+        duration: Option<String>,
+
+        /// Fixed timestep, e.g. "0.05n" (default: duration / 2000)
+        #[arg(long)]
+        timestep: Option<String>,
+    },
+
     /// Run complete pipeline (parse -> analyze -> synthesize -> visualize)
     Pipeline {
         /// Output directory for all artifacts
@@ -431,6 +451,9 @@ async fn main() -> Result<()> {
             run_spice(&source_file, &analysis, output, use_metadata, cli.sku.as_deref()).await?;
         }
         
+        Some(Commands::Transient { output, probe, duration, timestep }) => {
+            cmd_transient(&source_file, &cli.input, output, probe, duration, timestep).await?;
+        }
         Some(Commands::Pipeline { output_dir, no_viz, no_spice }) => {
             run_pipeline(&source_file, &cli.input, output_dir, no_viz, no_spice).await?;
         }
@@ -2193,6 +2216,177 @@ async fn cmd_list_skus(source_file: &SourceFile) -> Result<()> {
         for n in &all_names {
             println!("{n}");
         }
+    }
+    Ok(())
+}
+
+/// `transient` — solve the board through time while its IBIS buffers
+/// switch per their `ibis_wave_<PIN>` directives. The board's own rail
+/// sources power the circuit; the edges are the stimulus.
+async fn cmd_transient(
+    source_file: &SourceFile,
+    source_path: &Path,
+    output: Option<PathBuf>,
+    extra_probes: Vec<String>,
+    duration: Option<String>,
+    timestep: Option<String>,
+) -> Result<()> {
+    println!("{}", "Transient IBIS simulation...".bold());
+
+    let analysis = analyze(source_file);
+    gate_constructor_args(&analysis)?;
+    if !analysis.diagnostics.is_empty() {
+        eprintln!("{}", "Warning: Analysis found issues".yellow().bold());
+    }
+
+    let mut generator = NetlistGenerator::new();
+    generator.set_refdes_lut_path(source_path.with_extension("bhdl.refdes"));
+    let mut netlist = generator
+        .generate_from_ast_and_analysis(source_file, &analysis)
+        .await
+        .context("Failed to synthesize netlist")?;
+    if let Some(ref flow_tracker) = analysis.flow_tracker {
+        bhdl_synthesizer::intent_attribute_stamper::stamp_intent_attributes(&mut netlist, flow_tracker);
+    }
+    bhdl_synthesizer::expansion_interpreter::expand_entity_instances_with_designs(
+        &mut netlist,
+        &analysis.expansion_recipes,
+        &analysis.design_recipes,
+        &analysis.entity_attribute_index,
+        &analysis.entity_param_names,
+        &analysis.entity_attr_param_refs,
+    );
+    snap_catalog_values(&mut netlist);
+
+    let mut converter = NetlistToSpiceConverter::new();
+    converter.set_model_overrides(bhdl_synthesizer::model_evaluator::evaluate_model_overrides(
+        &netlist,
+        &analysis.model_recipes,
+        &analysis.entity_attribute_index,
+    ));
+    converter.set_ibis_models(
+        analysis.model_recipes.iter()
+            .filter_map(|(e, r)| (!r.ibis.is_empty()).then(|| (e.clone(), r.ibis.clone())))
+            .collect(),
+        source_path.parent().map(|p| p.to_path_buf()).unwrap_or_default(),
+    );
+    let circuit = converter.convert(&netlist).context("Circuit conversion failed")?;
+    let drives = converter.take_ibis_drives();
+    if drives.is_empty() {
+        anyhow::bail!(
+            "no scheduled edges: no instance carries an ibis_wave_<PIN> directive              (e.g. u1: Part(ibis_wave_OUT=\"rise@2n\"))"
+        );
+    }
+
+    // Probes: every driven pin's net, plus whatever the user asked for.
+    let mut probes: Vec<String> = Vec::new();
+    for d in &drives {
+        let net = circuit
+            .branches()
+            .find(|(_, b)| b.name == d.branch)
+            .and_then(|(_, b)| {
+                let idx = b.nodes[0];
+                circuit.nodes().find(|(i, _)| *i == idx).map(|(_, n)| n.name.clone())
+            });
+        if let Some(n) = net {
+            if !probes.contains(&n) {
+                probes.push(n);
+            }
+        }
+    }
+    let node_names: std::collections::HashSet<String> =
+        circuit.nodes().map(|(_, n)| n.name.clone()).collect();
+    for p in extra_probes {
+        if !node_names.contains(&p) {
+            anyhow::bail!("probe net '{p}' is not in the circuit");
+        }
+        if !probes.contains(&p) {
+            probes.push(p);
+        }
+    }
+
+    let parse_t = |s: &Option<String>, what: &str| -> Result<Option<f64>> {
+        match s {
+            None => Ok(None),
+            Some(v) => bhdl_spice::ibis_transient::parse_time(v)
+                .filter(|t| *t > 0.0)
+                .map(Some)
+                .ok_or_else(|| anyhow::anyhow!("bad {what} '{v}' (e.g. \"50n\", \"0.5u\")")),
+        }
+    };
+    let horizon = drives.iter().map(|d| d.horizon()).fold(0.0, f64::max);
+    let duration = parse_t(&duration, "duration")?.unwrap_or(horizon * 1.5);
+    let timestep = parse_t(&timestep, "timestep")?.unwrap_or(duration / 2000.0);
+    println!(
+        "  {} {} drive(s), horizon {:.3}ns — simulating {:.3}ns at {:.4}ns steps",
+        "✓".green(), drives.len(), horizon * 1e9, duration * 1e9, timestep * 1e9
+    );
+
+    // DC operating point first: the board settles (rails up, caps
+    // charged, regulator draws in place) before any edge fires. The
+    // input-draw pass also returns the final circuit WITH the draw
+    // branches, which is what must be integrated.
+    let (dc_result, circuit) = bhdl_spice::input_draw::solve_dc_with_input_draws(
+        circuit,
+        &regulator_hints(&netlist),
+    )
+    .context("DC operating-point solve failed (needed for initial conditions)")?;
+    let ic: std::collections::HashMap<String, f64> = circuit
+        .nodes()
+        .map(|(idx, n)| {
+            let v = if n.is_ground {
+                0.0
+            } else {
+                dc_result.node_voltages.get(&idx).copied().unwrap_or(0.0)
+            };
+            (n.name.clone(), v)
+        })
+        .collect();
+    println!(
+        "  {} DC operating point solved ({} iterations) — initial conditions set",
+        "✓".green(), dc_result.iterations
+    );
+
+    let params = bhdl_spice::transient::TransientParams::new(
+        "", // no external stimulus: rails + edges drive the board
+        bhdl_spice::transient::Stimulus::Constant(0.0),
+        probes.clone(),
+        duration,
+        timestep,
+    );
+    let result =
+        bhdl_spice::ibis_transient::run_transient_ibis_ic(&circuit, &params, &drives, Some(&ic))
+            .context("transient solve failed")?;
+
+    println!();
+    println!("  {:<24} {:>10} {:>10} {:>10} {:>10}", "net", "v(0)", "v(end)", "min", "max");
+    for p in &probes {
+        let tr = &result.probe_voltages[p];
+        let min = tr.iter().cloned().fold(f64::MAX, f64::min);
+        let max = tr.iter().cloned().fold(f64::MIN, f64::max);
+        println!(
+            "  {:<24} {:>9.4}V {:>9.4}V {:>9.4}V {:>9.4}V",
+            p, tr.first().unwrap_or(&0.0), tr.last().unwrap_or(&0.0), min, max
+        );
+    }
+
+    if let Some(path) = output {
+        let mut csv = String::from("time_s");
+        for p in &probes {
+            csv.push(',');
+            csv.push_str(p);
+        }
+        csv.push('\n');
+        for (i, t) in result.times.iter().enumerate() {
+            csv.push_str(&format!("{t:.6e}"));
+            for p in &probes {
+                csv.push_str(&format!(",{:.6e}", result.probe_voltages[p][i]));
+            }
+            csv.push('\n');
+        }
+        fs::write(&path, csv)?;
+        println!();
+        println!("  {} trace written to {} ({} samples)", "✓".green(), path.display(), result.times.len());
     }
     Ok(())
 }

@@ -119,6 +119,10 @@ pub struct NetlistToSpiceConverter {
     ibis_models: HashMap<String, Vec<bhdl_common::model::IbisRef>>,
     /// Directory .ibs paths resolve against.
     ibis_base_dir: Option<std::path::PathBuf>,
+    /// Scheduled buffer transitions collected from `ibis_wave_<PIN>`
+    /// directives during convert(); consumed by the transient command
+    /// via [`take_ibis_drives`][Self::take_ibis_drives].
+    ibis_drives: Vec<crate::ibis_transient::IbisDrive>,
 }
 
 impl NetlistToSpiceConverter {
@@ -133,7 +137,14 @@ impl NetlistToSpiceConverter {
             model_overrides: HashMap::new(),
             ibis_models: HashMap::new(),
             ibis_base_dir: None,
+            ibis_drives: Vec::new(),
         }
+    }
+
+    /// Take the IBIS drives built from `ibis_wave_<PIN>` directives during
+    /// the last convert() — the input to `run_transient_ibis`.
+    pub fn take_ibis_drives(&mut self) -> Vec<crate::ibis_transient::IbisDrive> {
+        std::mem::take(&mut self.ibis_drives)
     }
 
     /// Set symbol table data from analyzer
@@ -163,6 +174,7 @@ impl NetlistToSpiceConverter {
     
     /// Convert BHDL netlist to SPICE circuit with proper models
     pub fn convert(&mut self, netlist: &Netlist) -> Result<Circuit> {
+        self.ibis_drives.clear();
         let mut circuit = Circuit::new();
 
         info!("Converting netlist to SPICE circuit with {} instances", netlist.instances.len());
@@ -417,12 +429,43 @@ impl NetlistToSpiceConverter {
                         .unwrap_or(pin.name.as_str());
                     let Some(pin_row) = component.pin_for(target) else { continue };
                     let Some(model) = file.resolve_model(&pin_row.model_name) else { continue };
+                    // Scheduled transitions: `ibis_wave_<PIN>="rise@2n fall@10n"`
+                    // (ibis_* passthrough namespace, like ibis_state_*). A
+                    // malformed spec or an edge the file has no data for is
+                    // a hard error — a directive that can't be honored must
+                    // not degrade into a silent static buffer.
+                    let wave_attr = format!("ibis_wave_{}", pin.name);
+                    let wave_events = match instance.attributes.get(&wave_attr) {
+                        Some(spec) => Some(
+                            crate::ibis_transient::parse_wave_spec(spec).map_err(|e| {
+                                crate::errors::SpiceError::InvalidModel(format!(
+                                    "{}.{}: {wave_attr}: {e}",
+                                    instance.name, pin.name
+                                ))
+                            })?,
+                        ),
+                        None => None,
+                    };
                     let state_attr = format!("ibis_state_{}", pin.name);
-                    let state = instance
+                    let explicit_state = instance
                         .attributes
                         .get(&state_attr)
-                        .and_then(|s| crate::ibis::BufferState::parse(s))
-                        .unwrap_or_default();
+                        .and_then(|s| crate::ibis::BufferState::parse(s));
+                    // Initial state: explicit ibis_state wins; else a waved
+                    // pin starts in the state its first edge leaves (rise ⇒
+                    // Low, fall ⇒ High); else honest Hi-Z.
+                    let state = explicit_state.unwrap_or_else(|| match &wave_events {
+                        Some(evs) => {
+                            if evs.iter().min_by(|a, b| a.t.partial_cmp(&b.t).unwrap())
+                                .map(|e| e.rising).unwrap_or(true)
+                            {
+                                crate::ibis::BufferState::Low
+                            } else {
+                                crate::ibis::BufferState::High
+                            }
+                        }
+                        None => Default::default(),
+                    });
                     let Some(points) = model.composed_iv(state, corner) else { continue };
                     let mut meta = HashMap::new();
                     meta.insert(crate::circuit::META_IV_TABLE.to_string(), crate::circuit::encode_iv_table(&points));
@@ -431,8 +474,9 @@ impl NetlistToSpiceConverter {
                         "sim_model_provenance".to_string(),
                         format!("ibis:{}#{}:{}", path.display(), model.name, ibis_ref.corner),
                     );
+                    let branch_name = format!("{}_{}_ibis", instance.name, pin.name);
                     circuit.add_branch_with_metadata(
-                        format!("{}_{}_ibis", instance.name, pin.name),
+                        branch_name.clone(),
                         &net_name,
                         &gnd_name,
                         "IbisBuffer".to_string(),
@@ -440,6 +484,11 @@ impl NetlistToSpiceConverter {
                         Some(instance_id),
                         meta,
                     );
+                    if let Some(events) = wave_events {
+                        self.ibis_drives.push(crate::ibis_transient::IbisDrive::new(
+                            branch_name, model.clone(), corner, state, events,
+                        )?);
+                    }
                     // Die capacitance: C_comp as a real Capacitor branch
                     // at the pin. Invisible to the DC solve (caps are
                     // open), integrated by the transient routes.
