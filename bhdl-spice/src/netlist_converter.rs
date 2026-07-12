@@ -115,6 +115,10 @@ pub struct NetlistToSpiceConverter {
     /// replace the hardcoded regulator decomposition's output voltage. Empty
     /// ⇒ every regulator uses the hardcoded fallback.
     model_overrides: HashMap<String, bhdl_common::model::EvaluatedModel>,
+    /// Vendor IBIS references by entity name (§5 vendor-model form #1).
+    ibis_models: HashMap<String, bhdl_common::model::IbisRef>,
+    /// Directory .ibs paths resolve against.
+    ibis_base_dir: Option<std::path::PathBuf>,
 }
 
 impl NetlistToSpiceConverter {
@@ -127,6 +131,8 @@ impl NetlistToSpiceConverter {
             symbol_table: HashMap::new(),
             component_registry: crate::component_registry::ComponentRegistry::new(),
             model_overrides: HashMap::new(),
+            ibis_models: HashMap::new(),
+            ibis_base_dir: None,
         }
     }
 
@@ -136,6 +142,18 @@ impl NetlistToSpiceConverter {
     }
 
     /// Set pre-evaluated device-model overrides (§5), keyed by entity name.
+    /// Register vendor IBIS model references (§5 form #1): entity name →
+    /// IbisRef, plus the directory .ibs paths resolve against (the board
+    /// source's dir). Files are parsed lazily at convert() and cached.
+    pub fn set_ibis_models(
+        &mut self,
+        refs: std::collections::HashMap<String, bhdl_common::model::IbisRef>,
+        base_dir: std::path::PathBuf,
+    ) {
+        self.ibis_models = refs;
+        self.ibis_base_dir = Some(base_dir);
+    }
+
     pub fn set_model_overrides(
         &mut self,
         overrides: HashMap<String, bhdl_common::model::EvaluatedModel>,
@@ -320,6 +338,106 @@ impl NetlistToSpiceConverter {
                 );
             } else {
                 info!("Added declared power rail {} as VoltageSource {}V → GND", name, v);
+            }
+        }
+
+        // ── Vendor IBIS buffers (§5 form #1). For every instance whose
+        // entity carries an `ibis` model reference: parse the .ibs (cached
+        // per path), resolve each wired entity pin to its buffer model via
+        // the [Pin] table (explicit `map` entries first, then signal-name
+        // match), compose the DC I-V for the pin's declared state
+        // (`ibis_state_<PIN>` instance attribute; default Hi-Z — clamps
+        // only), and stamp a TableIV branch pin→GND. Real-Data ladder: a
+        // missing/unparseable file or unmatched component degrades with a
+        // WARN to no stamp — never a fabricated model.
+        if !self.ibis_models.is_empty() {
+            let mut file_cache: HashMap<std::path::PathBuf, Option<crate::ibis::IbisFile>> =
+                HashMap::new();
+            let gnd_name = "GND".to_string();
+            circuit.add_node(gnd_name.clone(), None);
+            for (instance_id, instance) in &netlist.instances {
+                let Some(entity) = netlist.modules.get(instance.definition).map(|m| m.name.clone())
+                else { continue };
+                let Some(ibis_ref) = self.ibis_models.get(&entity) else { continue };
+                // Resolve the file: as-written, then relative to base dir.
+                let raw = std::path::PathBuf::from(&ibis_ref.path);
+                let path = if raw.exists() {
+                    raw
+                } else if let Some(base) = &self.ibis_base_dir {
+                    base.join(&ibis_ref.path)
+                } else {
+                    raw
+                };
+                let parsed = file_cache.entry(path.clone()).or_insert_with(|| {
+                    match crate::ibis::parse_file(&path) {
+                        Ok(f) => Some(f),
+                        Err(e) => {
+                            warn!(
+                                "ibis model for '{}': cannot read {} ({e}) — \
+                                 falling through to the next model form (§5 ladder)",
+                                entity, path.display()
+                            );
+                            None
+                        }
+                    }
+                });
+                let Some(file) = parsed.as_ref() else { continue };
+                let Some(component) = (if ibis_ref.component.is_empty() {
+                    file.components.first()
+                } else {
+                    file.component(&ibis_ref.component)
+                }) else {
+                    warn!(
+                        "ibis model for '{}': component '{}' not in {} — skipping",
+                        entity, ibis_ref.component, path.display()
+                    );
+                    continue;
+                };
+                let corner = crate::ibis::Corner::parse(&ibis_ref.corner).unwrap_or_default();
+
+                for pi in netlist.pin_instances.values() {
+                    if pi.instance != instance_id { continue; }
+                    let Some(net_id) = pi.net else { continue };
+                    let Some(pin) = netlist.pins.get(pi.pin_def) else { continue };
+                    let Some(net_name) = netlist.nets.get(net_id).and_then(|n| n.name.clone())
+                    else { continue };
+                    // Explicit map overrides, then the .ibs [Pin] table.
+                    let target = ibis_ref
+                        .pin_map
+                        .iter()
+                        .find(|(p, _)| p.eq_ignore_ascii_case(&pin.name))
+                        .map(|(_, sig)| sig.as_str())
+                        .unwrap_or(pin.name.as_str());
+                    let Some(pin_row) = component.pin_for(target) else { continue };
+                    let Some(model) = file.resolve_model(&pin_row.model_name) else { continue };
+                    let state_attr = format!("ibis_state_{}", pin.name);
+                    let state = instance
+                        .attributes
+                        .get(&state_attr)
+                        .and_then(|s| crate::ibis::BufferState::parse(s))
+                        .unwrap_or_default();
+                    let Some(points) = model.composed_iv(state, corner) else { continue };
+                    let mut meta = HashMap::new();
+                    meta.insert(crate::circuit::META_IV_TABLE.to_string(), crate::circuit::encode_iv_table(&points));
+                    meta.insert(META_PARENT_INSTANCE.to_string(), instance.name.clone());
+                    meta.insert(
+                        "sim_model_provenance".to_string(),
+                        format!("ibis:{}#{}:{}", path.display(), model.name, ibis_ref.corner),
+                    );
+                    circuit.add_branch_with_metadata(
+                        format!("{}_{}_ibis", instance.name, pin.name),
+                        &net_name,
+                        &gnd_name,
+                        "IbisBuffer".to_string(),
+                        0.0,
+                        Some(instance_id),
+                        meta,
+                    );
+                    info!(
+                        "ibis: stamped {}.{} on '{}' as {} buffer (state {:?}, model {})",
+                        instance.name, pin.name, net_name, model.model_type, state, model.name
+                    );
+                }
             }
         }
 

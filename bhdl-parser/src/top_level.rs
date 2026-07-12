@@ -2380,6 +2380,50 @@ impl<'t> Parser<'t> {
     // `vendor` forms (§5.1 forms 1–2) are deferred: any non-`node` content is
     // consumed with loose recovery (skip to the next `;` at brace-depth 0) so
     // it round-trips without cascading errors.
+    /// `ibis "path.ibs" component "NAME" [corner <ident>] [map { PIN = sig; … }] ;`
+    /// — the §5 vendor-model form. `ibis`/`component`/`corner`/`map` are
+    /// contextual identifiers.
+    fn parse_model_ibis_stmt(&mut self) {
+        self.builder.start_node(SyntaxKind::MODEL_IBIS_STMT.into());
+        self.bump(); // `ibis`
+        self.skip_trivia();
+        self.expect(SyntaxKind::STRING); // file path
+        self.skip_trivia();
+        if self.peek_text().as_deref() == Some("component") {
+            self.bump();
+            self.skip_trivia();
+            self.expect(SyntaxKind::STRING); // component name
+        }
+        self.skip_trivia();
+        if self.peek_text().as_deref() == Some("corner") {
+            self.bump();
+            self.skip_trivia();
+            if self.peek() == Some(SyntaxKind::IDENT) {
+                self.bump();
+            }
+        }
+        self.skip_trivia();
+        if self.peek_text().as_deref() == Some("map") {
+            self.bump();
+            self.skip_trivia();
+            self.expect(SyntaxKind::L_BRACE);
+            loop {
+                self.skip_trivia();
+                match self.peek() {
+                    Some(SyntaxKind::R_BRACE) | None => break,
+                    Some(SyntaxKind::SEMI) | Some(SyntaxKind::COMMA) => {
+                        self.bump();
+                    }
+                    Some(_) => self.bump_any(), // PIN = signal tokens
+                }
+            }
+            self.expect(SyntaxKind::R_BRACE);
+        }
+        self.skip_trivia();
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+
     fn parse_model_block(&mut self) {
         self.builder.start_node(SyntaxKind::MODEL_BLOCK.into());
         self.bump(); // consume the `model` IDENT
@@ -2390,6 +2434,9 @@ impl<'t> Parser<'t> {
                 Some(SyntaxKind::R_BRACE) => break,
                 Some(SyntaxKind::IDENT) if self.peek_text().as_deref() == Some("node") => {
                     self.parse_model_node_stmt();
+                }
+                Some(SyntaxKind::IDENT) if self.peek_text().as_deref() == Some("ibis") => {
+                    self.parse_model_ibis_stmt();
                 }
                 Some(_) => {
                     // Deferred builtin/vendor form — skip to the statement end

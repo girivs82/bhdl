@@ -212,6 +212,7 @@ pub enum SyntaxKind {
     GENERIC_PARAM,  // Single generic parameter with optional type + constraints
     WHERE_CLAUSE,   // where V_IN >= 4.5V && V_IN <= 40V
     MEMBERSHIP_CONSTRAINT, // where channel in ("nmos", "pmos") — a param's allowed value set
+    MODEL_IBIS_STMT, // ibis "file.ibs" component "NAME" [corner typ] [map { PIN = sig; }];
     TRAIT_DEF,      // trait TraitName { pin ...; const ...; }
     TRAIT_IMPL,     // impl TraitName for Component { ... }  or  component X impl Trait { ... }
     TRAIT_PIN,      // pin declaration within a trait

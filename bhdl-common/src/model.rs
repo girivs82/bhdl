@@ -34,11 +34,28 @@ pub struct ModelNode {
 }
 
 /// The device-model recipe for one entity: the set of branches its
-/// `model { }` block contributes (primitive-composition form).
+/// `model { }` block contributes (primitive-composition form), plus an
+/// optional vendor IBIS reference (§5 vendor-model form #1).
 #[derive(Debug, Clone)]
 pub struct ModelRecipe {
     pub entity_name: String,
     pub nodes: Vec<ModelNode>,
+    /// `ibis "path" component "NAME" [corner typ] [map { PIN = signal; }];`
+    pub ibis: Option<IbisRef>,
+}
+
+/// A vendor IBIS model reference from a `model { }` block.
+#[derive(Debug, Clone, Default)]
+pub struct IbisRef {
+    /// .ibs path, resolved relative to the declaring source file's dir.
+    pub path: String,
+    /// `[Component]` name inside the file.
+    pub component: String,
+    /// Corner keyword text ("typ"/"min"/"max"); empty → typ.
+    pub corner: String,
+    /// Optional explicit entity-pin → .ibs signal/pin overrides. Pins not
+    /// listed match the .ibs `[Pin]` signal names by name.
+    pub pin_map: Vec<(String, String)>,
 }
 
 /// The evaluated branches a model recipe contributes at circuit-build time.
@@ -54,7 +71,7 @@ pub struct EvaluatedModel {
 
 impl ModelRecipe {
     pub fn new(entity_name: String) -> Self {
-        Self { entity_name, nodes: Vec::new() }
+        Self { entity_name, nodes: Vec::new(), ibis: None }
     }
 
     pub fn has_nodes(&self) -> bool {

@@ -1271,6 +1271,14 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
             &analysis.model_recipes,
             &analysis.entity_attribute_index,
         ));
+        // §5 vendor-model form #1: IBIS references, resolved against the
+        // board source's directory.
+        converter.set_ibis_models(
+            analysis.model_recipes.iter()
+                .filter_map(|(e, r)| r.ibis.clone().map(|i| (e.clone(), i)))
+                .collect(),
+            source_path.parent().map(|p| p.to_path_buf()).unwrap_or_default(),
+        );
         match converter.convert(&netlist) {
             Ok(circuit) => {
                 // Input-draw fixpoint: regulators pull their efficiency-
@@ -2522,6 +2530,12 @@ async fn cmd_bom(
             &analysis.model_recipes,
             &analysis.entity_attribute_index,
         ));
+        conv.set_ibis_models(
+            analysis.model_recipes.iter()
+                .filter_map(|(e, r)| r.ibis.clone().map(|i| (e.clone(), i)))
+                .collect(),
+            std::env::current_dir().unwrap_or_default(),
+        );
         match conv.convert(&netlist) {
             Ok(circuit) => {
                 let circuit_ref = match bhdl_spice::input_draw::solve_dc_with_input_draws(circuit.clone(), &regulator_hints(&netlist)) {

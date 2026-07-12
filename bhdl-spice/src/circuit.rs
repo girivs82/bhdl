@@ -28,6 +28,30 @@ pub const META_I_QUIESCENT: &str = "i_quiescent";
 /// the vendor's datasheet-specific efficiency model is the correction. Power
 /// is then `P_in − P_out = i_in·V_in − i_out·V_out`.
 pub const META_MODEL_I_IN: &str = "model_i_in";
+/// Piecewise-linear I-V table for a `TableIV` branch (an IBIS buffer's
+/// composed DC curve, a varistor, …), encoded `v:i;v:i;…` in SI volts/amps.
+/// Kept as branch metadata so the generic `Branch` needs no new field.
+pub const META_IV_TABLE: &str = "iv_table";
+
+/// Encode PWL points for [`META_IV_TABLE`].
+pub fn encode_iv_table(points: &[(f64, f64)]) -> String {
+    points
+        .iter()
+        .map(|(v, i)| format!("{v}:{i}"))
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
+/// Decode [`META_IV_TABLE`] points. None on any malformed pair — a
+/// half-parseable table is not a model.
+pub fn decode_iv_table(s: &str) -> Option<Vec<(f64, f64)>> {
+    let mut out = Vec::new();
+    for pair in s.split(';') {
+        let (v, i) = pair.split_once(':')?;
+        out.push((v.trim().parse().ok()?, i.trim().parse().ok()?));
+    }
+    (!out.is_empty()).then_some(out)
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SPICE-relevant stdlib attribute keys (P0 metadata bridge).

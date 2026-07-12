@@ -1,0 +1,40 @@
+// IBIS vendor-model simulation — the §5 vendor-model form #1, end to end.
+//
+// TestDriver's `simulation { model { ibis ... } }` block references the
+// hand-authored test_buffer.ibs beside this board (clearly-synthetic test
+// data, not any vendor's part). Its OUT1 pin drives a 125Ω load HIGH; the
+// DC operating point is the load-line intersection on the pullup segment:
+//   i_buf(v) = 0.016·v − 0.08  against  i_load = v/125  ⇒  v = 3.3333V.
+// GLACIER solves the buffer's composed piecewise-linear I-V directly
+// (TableIV branch) — the schematic's OUT net flag shows the MEASURED 3.33V.
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+entity TestDriver() {
+    pin VCC:  power in;
+    pin OUT1: signal out;
+    pin GND:  ground;
+
+    attribute component_class = "ic_logic";
+    attribute i_quiescent = 1mA;
+
+    simulation {
+        model {
+            ibis "test_buffer.ibs" component "TESTCHIP" corner typ;
+        }
+    }
+}
+
+board IbisDriver {
+    power VCC = 5V @ 100mA;
+    ground GND;
+
+    // The pin's DC drive state is a simulation directive (ibis_* namespace),
+    // stamped as an instance attribute for the SPICE converter.
+    u1: TestDriver(ibis_state_OUT1="high");
+    @VCC -> u1.VCC;
+    u1.GND -> @GND;
+    u1.OUT1 -> load_node;
+    load_node -> r_load: Res(125Ω).1;
+    r_load.2 -> @GND;
+}

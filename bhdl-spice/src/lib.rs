@@ -5,6 +5,7 @@
 //! inference based on electrical constraints.
 
 pub mod circuit;
+pub mod ibis;
 pub mod components;
 pub mod components_v2;
 pub mod analysis;

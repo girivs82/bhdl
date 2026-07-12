@@ -1,0 +1,53 @@
+[IBIS Ver]   4.2
+[File Name]  test_buffer.ibs
+|
+[Component]  TESTCHIP
+[Manufacturer] BHDL Test Suite
+[Pin]  signal_name  model_name
+1      OUT1         CMOS_OUT
+2      IN1          CMOS_IN
+3      GND          GND
+4      VCC          POWER
+5      SEL          SELPIN
+|
+[Model Selector] SELPIN
+CMOS_OUT   default output
+CMOS_IN    alternate input
+|
+[Model]  CMOS_OUT
+Model_type   Output
+C_comp       3.5pF  3.0pF  4.0pF
+[Voltage Range]  5.0V  4.5V  5.5V
+[Pulldown]
+| V        I(typ)     I(min)    I(max)
+-5.0V     -0.080     -0.060    -0.100
+ 0.0V      0.000      0.000     0.000
+ 2.5V      0.040      0.030     0.050
+ 5.0V      0.060      0.045     0.075
+ 10.0V     0.062      NA        0.078
+[Pullup]
+| V(=Vcc-Vpin)  I(typ)   I(min)   I(max)
+-5.0V      0.080      0.060     0.100
+ 0.0V      0.000      0.000     0.000
+ 2.5V     -0.040     -0.030    -0.050
+ 5.0V     -0.060     -0.045    -0.075
+[GND Clamp]
+-5.0V     -1.000     -0.800    -1.200
+-0.7V     -0.001     -0.001    -0.001
+ 0.0V      0.000      0.000     0.000
+[POWER Clamp]
+-5.0V      1.000      0.800     1.200
+-0.7V      0.001      0.001     0.001
+ 0.0V      0.000      0.000     0.000
+[Ramp]
+dV/dt_r    2.0/1.0n   1.5/1.2n  2.5/0.8n
+dV/dt_f    2.0/1.1n   1.5/1.3n  2.5/0.9n
+|
+[Model]  CMOS_IN
+Model_type   Input
+[Voltage Range]  5.0V  4.5V  5.5V
+[GND Clamp]
+-5.0V     -1.000     -0.800    -1.200
+ 0.0V      0.000      0.000     0.000
+|
+[End]

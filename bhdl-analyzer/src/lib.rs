@@ -1804,6 +1804,11 @@ pub fn validate_constructor_args(
                         || arg == "i_supply"
                         || arg.starts_with("expansion_")
                         || arg == "vpin_parent"
+                        // Simulation directives (IBIS buffer states etc.):
+                        // stamped as instance attributes, consumed by the
+                        // SPICE converter — same machine-passthrough class
+                        // as supply_*.
+                        || arg.starts_with("ibis_")
                     {
                         continue;
                     }
@@ -2368,9 +2373,50 @@ pub fn extract_model_recipes(
                     let Some(expr) = text_between(&stmt, SyntaxKind::EQ, SyntaxKind::SEMI) else { continue };
                     recipe.nodes.push(ModelNode { net: net.clone(), role, expr });
                 }
-                if recipe.has_nodes() {
-                    println!("  Extracted model recipe for '{entity_name}': {} node(s)",
-                             recipe.nodes.len());
+                // Vendor IBIS reference (§5 form #1):
+                // `ibis "path" component "NAME" [corner c] [map { P = sig; }];`
+                for stmt in model_node.children()
+                    .filter(|n| n.kind() == SyntaxKind::MODEL_IBIS_STMT)
+                {
+                    let strings: Vec<String> = stmt.children_with_tokens()
+                        .filter_map(|el| el.into_token())
+                        .filter(|t| t.kind() == SyntaxKind::STRING)
+                        .map(|t| t.text().trim_matches('"').to_string())
+                        .collect();
+                    let idents: Vec<String> = stmt.children_with_tokens()
+                        .filter_map(|el| el.into_token())
+                        .filter(|t| t.kind() == SyntaxKind::IDENT)
+                        .map(|t| t.text().to_string())
+                        .collect();
+                    let Some(path) = strings.first() else { continue };
+                    let component = strings.get(1).cloned().unwrap_or_default();
+                    // corner = the ident following "corner", if any.
+                    let corner = idents.iter().position(|t| t == "corner")
+                        .and_then(|i| idents.get(i + 1))
+                        .cloned()
+                        .unwrap_or_default();
+                    // map { PIN = sig; … } — pairs of idents around EQ inside
+                    // the brace run after "map".
+                    let mut pin_map = Vec::new();
+                    if let Some(mi) = idents.iter().position(|t| t == "map") {
+                        let pairs = &idents[mi + 1..];
+                        for w in pairs.chunks(2) {
+                            if let [a, b] = w {
+                                pin_map.push((a.clone(), b.clone()));
+                            }
+                        }
+                    }
+                    recipe.ibis = Some(bhdl_common::model::IbisRef {
+                        path: path.clone(),
+                        component,
+                        corner,
+                        pin_map,
+                    });
+                }
+                if recipe.has_nodes() || recipe.ibis.is_some() {
+                    println!("  Extracted model recipe for '{entity_name}': {} node(s){}",
+                             recipe.nodes.len(),
+                             if recipe.ibis.is_some() { " + ibis ref" } else { "" });
                     all.insert(entity_name.clone(), recipe);
                 }
             }

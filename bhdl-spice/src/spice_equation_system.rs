@@ -30,6 +30,40 @@ pub enum ComponentEquation {
     
     /// Current source: i = I
     CurrentSource { current: f64 },
+
+    /// Piecewise-linear tabulated I-V element (an IBIS buffer's composed
+    /// DC curve): i = interp(points, v1 - v2), clamped to the end currents
+    /// outside the table. Stamped like a voltage-dependent conductance —
+    /// KCL contribution direct, Jacobian = local segment slope.
+    TableIV { points: Vec<(f64, f64)> },
+}
+
+/// PWL interpolation shared by the TableIV residual and Jacobian.
+fn table_iv_interp(points: &[(f64, f64)], v: f64) -> f64 {
+    if points.is_empty() {
+        return 0.0;
+    }
+    if v <= points[0].0 {
+        return points[0].1;
+    }
+    if v >= points[points.len() - 1].0 {
+        return points[points.len() - 1].1;
+    }
+    for w in points.windows(2) {
+        let (v0, i0) = w[0];
+        let (v1, i1) = w[1];
+        if v <= v1 {
+            return i0 + (v - v0) / (v1 - v0) * (i1 - i0);
+        }
+    }
+    points[points.len() - 1].1
+}
+
+/// Local dI/dV — central difference over the interpolant (smooths the
+/// breakpoint kinks the way GLACIER's IbisTable gradient does).
+fn table_iv_slope(points: &[(f64, f64)], v: f64) -> f64 {
+    let d = 1e-6;
+    (table_iv_interp(points, v + d) - table_iv_interp(points, v - d)) / (2.0 * d)
 }
 
 /// Circuit equation system for SPICE analysis
@@ -153,6 +187,27 @@ impl SpiceEquationSystem {
                 "CurrentSource" => {
                     ComponentEquation::CurrentSource {
                         current: branch.value,
+                    }
+                }
+                // IBIS buffer (or any tabulated element): the composed PWL
+                // rides branch metadata. A missing/malformed table is NOT
+                // silently opened — the converter only stamps this type
+                // with a valid table, so failure here is a programming
+                // error worth a loud warning + open-circuit fallback.
+                "IbisBuffer" => {
+                    match branch
+                        .metadata
+                        .get(crate::circuit::META_IV_TABLE)
+                        .and_then(|s| crate::circuit::decode_iv_table(s))
+                    {
+                        Some(points) => ComponentEquation::TableIV { points },
+                        None => {
+                            warn!(
+                                "IbisBuffer branch {} has no decodable iv_table — open circuit",
+                                branch.name
+                            );
+                            ComponentEquation::Linear { conductance: 1e-9 }
+                        }
                     }
                 }
                 // Capacitor: DC open circuit modeled as large leakage resistance.
@@ -368,6 +423,16 @@ impl EquationSystem for SpiceEquationSystem {
                             residual[idx] -= current;
                         }
                     }
+
+                    ComponentEquation::TableIV { points } => {
+                        let current = table_iv_interp(points, v_diff);
+                        if let Some(idx) = v1_idx {
+                            residual[idx] += current;
+                        }
+                        if let Some(idx) = v2_idx {
+                            residual[idx] -= current;
+                        }
+                    }
                     
                     ComponentEquation::Exponential { is, n, vt } => {
                         if let Some(idx) = i_idx {
@@ -496,6 +561,25 @@ impl EquationSystem for SpiceEquationSystem {
                             jacobian[(j, j)] += conductance;
                             if let Some(i) = v1_idx {
                                 jacobian[(j, i)] -= conductance;
+                            }
+                        }
+                    }
+
+                    // Tabulated element: identical stamp with the LOCAL
+                    // slope as the conductance (linearization at the
+                    // current operating point).
+                    ComponentEquation::TableIV { points } => {
+                        let g = table_iv_slope(points, v_diff);
+                        if let Some(i) = v1_idx {
+                            jacobian[(i, i)] += g;
+                            if let Some(j) = v2_idx {
+                                jacobian[(i, j)] -= g;
+                            }
+                        }
+                        if let Some(j) = v2_idx {
+                            jacobian[(j, j)] += g;
+                            if let Some(i) = v1_idx {
+                                jacobian[(j, i)] -= g;
                             }
                         }
                     }
@@ -650,6 +734,11 @@ pub fn extract_solution(
                     let v2 = node_voltages.get(&n2).copied().unwrap_or(0.0);
                     let current = conductance * (v1 - v2);
                     branch_currents.insert(edge_idx, current);
+                } else if let ComponentEquation::TableIV { points } = equation {
+                    let (n1, n2) = system.circuit.branch_nodes(edge_idx).unwrap();
+                    let v1 = node_voltages.get(&n1).copied().unwrap_or(0.0);
+                    let v2 = node_voltages.get(&n2).copied().unwrap_or(0.0);
+                    branch_currents.insert(edge_idx, table_iv_interp(points, v1 - v2));
                 }
             }
         }
